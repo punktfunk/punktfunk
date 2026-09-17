@@ -36,6 +36,7 @@ impl StreamState {
     /// the ack and the encoder never disagree. Clamping again here would make an ack the client
     /// already holds a promise the encoder was never given.
     pub(super) fn on_bitrate_request(&mut self) {
+        self.settle_applied_rate();
         let mut want_kbps = None;
         while let Ok(k) = self.bitrate_rx.try_recv() {
             want_kbps = Some(k);
@@ -123,12 +124,47 @@ impl StreamState {
         }
     }
 
+    /// The rate the encoder settled on, read back after the fact.
+    ///
+    /// An encoder that applies a retarget on its own thread — the Windows IDD
+    /// driver, whose bitrate control is a queued message with no reply —
+    /// answers a frame later, so the read taken beside the request cannot see a
+    /// decline. Only a retarget is read back this way, and only a rate below
+    /// the session's own is acted on: an encoder that answers in place cannot
+    /// trip it, because the session rate came from this same read-back.
+    fn settle_applied_rate(&mut self) {
+        if !self.retargeted {
+            return;
+        }
+        let ed = self.enc_now();
+        let Some(applied) = self
+            .enc
+            .applied_bitrate_bps()
+            .map(|b| (b / 1000) as u32)
+            .filter(|&k| k > 0)
+            .map(|k| ed.applied_budget_kbps(self.bitrate_kbps, k))
+            .filter(|&k| k < self.bitrate_kbps)
+        else {
+            return;
+        };
+        tracing::info!(
+            from_kbps = self.bitrate_kbps,
+            to_kbps = applied,
+            "the encoder settled below the rate it was given — the session follows it"
+        );
+        self.note_applied_rate(self.bitrate_kbps, applied);
+        self.counters.note_bitrate(applied);
+        self.bitrate_kbps = applied;
+        self.live_bitrate.store(applied, Ordering::Relaxed);
+    }
+
     /// What the encoder made of `want`: the ceiling learns it, and a client that
     /// was promised `want` is corrected.
     ///
     /// A failed rebuild reports the rate it kept, so a refusal that costs no
     /// encoder at all still teaches the ceiling.
     fn note_applied_rate(&mut self, want: u32, applied: u32) {
+        self.retargeted = true;
         self.encoder_ceiling
             .lock()
             .unwrap_or_else(|e| e.into_inner())

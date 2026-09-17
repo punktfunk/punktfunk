@@ -83,7 +83,8 @@ impl AuView {
             published_total: u64_at(offset_of!(AuHeader, published_total)),
             driver_status: u32_at(offset_of!(AuHeader, driver_status)),
             driver_status_detail: u32_at(offset_of!(AuHeader, driver_status_detail)),
-            _reserved: [0; 32],
+            applied_bitrate_kbps: u32_at(offset_of!(AuHeader, applied_bitrate_kbps)),
+            _reserved: [0; 28],
         }
     }
 

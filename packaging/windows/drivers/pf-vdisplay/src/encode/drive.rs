@@ -81,6 +81,7 @@ impl<'a> Drive<'a> {
         stop: HANDLE,
         live: &'a AtomicBool,
         fps: u32,
+        opened_kbps: u32,
     ) -> Self {
         let (heap_offset, heap_bytes) = session.section.heap();
         Self {
@@ -103,6 +104,7 @@ impl<'a> Drive<'a> {
             ready_latch: false,
             timer: None,
             report: Report::new(qpc_frequency()),
+            applied_kbps: opened_kbps,
             state: au::ENCODER_OPEN,
             stop,
             live,
@@ -174,6 +176,10 @@ pub struct Drive<'a> {
     /// The one timed wake ([`Drive::park`]); built on first use, `None` if the OS refused one.
     timer: Option<OwnedHandle>,
     report: Report,
+    /// Rate the backend is encoding at, kbps. Seeded from the open and rewritten by every
+    /// drained bitrate ctl, including a declined one — the host reads it back rather than
+    /// assuming the ask landed.
+    applied_kbps: u32,
     state: u32,
     stop: HANDLE,
     live: &'a AtomicBool,
@@ -250,9 +256,21 @@ impl Drive<'_> {
                 }
                 Ctl::DistrustReferences => self.enc.distrust_references(),
                 Ctl::ReconfigureBitrate(kbps) => {
-                    if !self.enc.reconfigure_bitrate(u64::from(kbps) * 1000) {
+                    if self.enc.reconfigure_bitrate(u64::from(kbps) * 1000) {
+                        // A backend that tracks its own clamp reports it; the rest took the ask.
+                        self.applied_kbps = self
+                            .enc
+                            .applied_bitrate_bps()
+                            .map_or(kbps, |bps| (bps / 1000) as u32);
+                    } else {
                         dbglog!("[pf-vd] encode: backend declined bitrate {kbps} kbps in place");
                     }
+                    // Declined or clamped, the host must see what is encoding: the ctl has no
+                    // reply, so this stamp is the only thing that can contradict the ask.
+                    self.session.section.store_u32(
+                        offset_of!(AuHeader, applied_bitrate_kbps),
+                        self.applied_kbps,
+                    );
                 }
                 Ctl::SetHdrMeta(bytes) => self.enc.set_hdr_meta(Some(hdr_meta(&bytes))),
                 Ctl::Flush => {

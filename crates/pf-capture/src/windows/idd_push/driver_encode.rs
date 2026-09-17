@@ -328,6 +328,7 @@ pub fn open_driver_encoder(
         ctl: encode_ctl,
         caps,
         applied_bps: u64::from(reply.applied_bitrate_kbps) * 1000,
+        retarget_after: 0,
         hdr_meta: params.hdr_meta,
         wire_chunk: params.wire_chunk_bytes as usize,
         wire_chunk_warned: false,
@@ -366,7 +367,11 @@ pub struct EncoderProxy {
     target_id: u32,
     ctl: EncodeCtlSender,
     caps: EncoderCaps,
+    /// The rate this side last asked for. It stands until the driver has published past
+    /// [`Self::retarget_after`], because its stamp until then describes the rate before the ask.
     applied_bps: u64,
+    /// `published_total` when the last bitrate ctl was queued.
+    retarget_after: u64,
     hdr_meta: Option<pf_frame::HdrMeta>,
     /// Decided at `SET_ENCODE`; a later `set_wire_chunking` that differs is logged once.
     wire_chunk: usize,
@@ -651,11 +656,22 @@ impl Encoder for EncoderProxy {
             return false;
         }
         self.applied_bps = u64::from(kbps) * 1000;
+        self.retarget_after = self.snapshot().published_total;
         true
     }
 
+    /// What the driver's backend is encoding at.
+    ///
+    /// The ctl is queued for the driver's encode thread and has no reply, so the ask stands
+    /// until that thread has published an access unit past it — only then does the header
+    /// stamp describe the new rate. `0` is a driver that predates the stamp, whose declines
+    /// stay invisible as they always were.
     fn applied_bitrate_bps(&self) -> Option<u64> {
-        Some(self.applied_bps)
+        let h = self.snapshot();
+        if h.applied_bitrate_kbps == 0 || h.published_total <= self.retarget_after {
+            return Some(self.applied_bps);
+        }
+        Some(u64::from(h.applied_bitrate_kbps) * 1000)
     }
 
     fn set_wire_chunking(&mut self, shard_payload: usize) {

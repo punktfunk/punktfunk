@@ -245,11 +245,15 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         reply.backend_opened,
     );
     section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_OPEN);
+    // The rate the backend opened at seeds the header stamp, so a retarget the backend
+    // declines before it ever accepts one still reads back as the rate that is encoding.
+    let opened_kbps = reply.applied_bitrate_kbps;
+    section.store_u32(offset_of!(AuHeader, applied_bitrate_kbps), opened_kbps);
     if ctx.opened.send(reply).is_err() {
         // The caller gave up waiting: nothing will install this session.
         return;
     }
-    Drive::new(enc, &pool, &ctx.session, stop, &live, spec.fps).run();
+    Drive::new(enc, &pool, &ctx.session, stop, &live, spec.fps, opened_kbps).run();
     if live.load(Ordering::Acquire) {
         section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_CLOSED);
     }

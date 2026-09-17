@@ -1604,8 +1604,15 @@ pub mod encode {
             pub driver_status: u32,
             /// Raw detail for `driver_status`.
             pub driver_status_detail: u32,
+            /// Rate the backend is actually encoding at, kbps, rewritten every time the driver
+            /// drains an [`ENCODE_CTL_RECONFIGURE_BITRATE`](super::ENCODE_CTL_RECONFIGURE_BITRATE).
+            /// The ctl is queued for the encode thread and has no reply, so a backend that
+            /// declines or clamps one is otherwise invisible: the host would go on reporting a
+            /// rate nothing encodes. Occupies the old `_reserved` at offset 96; `0` is a driver
+            /// that predates the stamp, and the host keeps the rate it asked for.
+            pub applied_bitrate_kbps: u32,
             /// Pads the header to [`AU_HEADER_SIZE`]; zero.
-            pub _reserved: [u8; 32],
+            pub _reserved: [u8; 28],
         }
 
         /// One slot: where an access unit (or one chunk of one) sits in the heap, and what the host
@@ -1788,7 +1795,8 @@ pub mod encode {
             assert!(offset_of!(AuHeader, published_total) == 80);
             assert!(offset_of!(AuHeader, driver_status) == 88);
             assert!(offset_of!(AuHeader, driver_status_detail) == 92);
-            assert!(offset_of!(AuHeader, _reserved) == 96);
+            assert!(offset_of!(AuHeader, applied_bitrate_kbps) == 96);
+            assert!(offset_of!(AuHeader, _reserved) == 100);
 
             assert!(size_of::<AuSlot>() == AU_SLOT_SIZE);
             assert!(offset_of!(AuSlot, offset) == 0);
@@ -4072,7 +4080,9 @@ mod tests {
         assert_eq!(offset_of!(AuHeader, published_total), 80);
         assert_eq!(offset_of!(AuHeader, driver_status), 88);
         assert_eq!(offset_of!(AuHeader, driver_status_detail), 92);
-        assert_eq!(offset_of!(AuHeader, _reserved), 96);
+        // Carved out of `_reserved`, which the host still zeroes: an older driver leaves it 0.
+        assert_eq!(offset_of!(AuHeader, applied_bitrate_kbps), 96);
+        assert_eq!(offset_of!(AuHeader, _reserved), 100);
 
         assert_eq!(size_of::<AuSlot>(), 48);
         assert_eq!(offset_of!(AuSlot, offset), 0);
