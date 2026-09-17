@@ -88,10 +88,10 @@ ip netns exec c iperf3 -c $HOST_IP -u -b "${RATE_KBIT}k" -t 3 -f k 2>&1 | tail -
 wait %2 2>/dev/null || true
 
 # ---- the session ------------------------------------------------------------
-say "host: --source synthetic-abr --content $CONTENT --fill $FILL --recovery-ms $RECOVERY_MS"
+say "host: --content $CONTENT --fill $FILL --recovery-ms $RECOVERY_MS --keyframe-answer $KEYFRAME_ANSWER"
 ip netns exec h "$BIN/punktfunk-host" punktfunk1-host \
   --port $PORT --source synthetic-abr --content "$CONTENT" --fill "$FILL" \
-  --recovery-ms "$RECOVERY_MS" \
+  --recovery-ms "$RECOVERY_MS" --keyframe-answer "$KEYFRAME_ANSWER" \
   --seconds $(( SECONDS_RUN + 30 )) --pairing-pin "$PIN" --no-mdns \
   > "$OUT/$PROFILE-host.log" 2>&1 &
 HOST_PID=$!
@@ -135,12 +135,14 @@ if [ -n "$TRACE" ] || [ "$WANDER_PCT" != 0 ]; then
   WANDER_PID=$!
 fi
 
-say "streaming $SECONDS_RUN s on $PROFILE"
+say "streaming $SECONDS_RUN s on $PROFILE (decoder-hold=$DECODER_HOLD)"
+HOLD_ARG=""
+if [ "$DECODER_HOLD" = 1 ]; then HOLD_ARG="--decoder-hold"; fi
 run_probe() {
   local n=$1
   ip netns exec c "$BIN/punktfunk-probe" \
     --connect $HOST_IP:$PORT --pin "$FP" --name "abr-rig-$n" \
-    --mode "$MODE" --seconds "$SECONDS_RUN" \
+    --mode "$MODE" --seconds "$SECONDS_RUN" $HOLD_ARG \
     --trajectory "$OUT/$PROFILE-$n.jsonl" \
     --link "$ACHIEVABLE_KBPS:$RATE_KBIT" --profile "$PROFILE" \
     > "$OUT/$PROFILE-$n.log" 2>&1
