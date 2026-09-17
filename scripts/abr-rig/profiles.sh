@@ -67,7 +67,9 @@ profile() {
       WANDER_PCT=20; WANDER_S=20
       MODE=1920x1080x30; ACHIEVABLE_KBPS=18000
       ;;
-    # F: two Automatic sessions over one tunnel, one host.
+    # F: two Automatic sessions over one tunnel, one host. Each probe scores
+    # only itself, so both rows read fairness 1000 — the Jain share needs both
+    # sessions' windows in one run, which nothing merges yet.
     shared_two_auto)
       RATE_KBIT=12500; DELAY_MS=10; BUFFER_MS=450; LOSS_PCT=0.7
       MODE=1920x1080x30; ACHIEVABLE_KBPS=12000
