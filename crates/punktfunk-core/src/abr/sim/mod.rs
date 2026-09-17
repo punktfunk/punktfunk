@@ -17,6 +17,7 @@ mod host;
 mod link;
 mod scenarios;
 
+use crate::abr::metrics::{self, Metrics};
 use client::{Action, Client, ClientCfg, WindowRec, PROBE_FRAME};
 use host::{Host, HostCfg};
 use link::{Link, LinkCfg};
@@ -72,27 +73,6 @@ struct Scenario {
     /// One unrecoverable frame injected here, for the recovery metric.
     pub blip_at_ms: Option<u64>,
 }
-
-/// One scenario's integer metrics. Every number is a whole unit so the
-/// baseline can be compared for equality.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Metrics {
-    pub under5_pct: u32,
-    pub to90_s: u32,
-    pub cuts_per_10min: u32,
-    pub lost_per_10min: u32,
-    pub queue_p95_ms: u32,
-    pub over_cap_kb_10s: u32,
-    pub blip_recover_s: u32,
-    pub fairness_x1000: u32,
-    /// FNV-1a over every session's `(window index, requested kbps)`. Eight
-    /// coarse metrics cannot see a retarget that moved by one window; this
-    /// can, so "bit-identical" means the whole decision sequence.
-    pub decisions_fnv1a: u32,
-}
-
-/// A metric that never happened. Visible in the table rather than silent.
-const NEVER: u32 = 99_999;
 
 struct Run {
     pub metrics: Metrics,
@@ -240,32 +220,9 @@ fn run(sc: &Scenario) -> Run {
     }
 }
 
-/// FNV-1a over the decisions every session made, in order.
-fn decision_checksum(sessions: &[Session]) -> u32 {
-    let mut h: u32 = 0x811c_9dc5;
-    for s in sessions {
-        for (i, w) in s.client.windows.iter().enumerate() {
-            let Some(kbps) = w.request_kbps else { continue };
-            for b in (i as u32)
-                .to_le_bytes()
-                .into_iter()
-                .chain(kbps.to_le_bytes())
-            {
-                h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
-            }
-        }
-    }
-    h
-}
-
-fn percentile(samples: &mut [u32], pct: usize) -> u32 {
-    if samples.is_empty() {
-        return 0;
-    }
-    samples.sort_unstable();
-    samples[(samples.len() - 1) * pct / 100]
-}
-
+/// Score the run with the metrics the netem rig also prints
+/// ([`crate::abr::metrics`]): the two tiers stay comparable because neither
+/// owns a definition.
 fn measure(
     sc: &Scenario,
     sessions: &[Session],
@@ -273,75 +230,21 @@ fn measure(
     offered_10s: u64,
     capacity_10s: u64,
 ) -> Metrics {
-    let first = &sessions[0].client;
-    let live: Vec<&WindowRec> = first.windows.iter().filter(|w| !w.discarded).collect();
-    let under5 = live.iter().filter(|w| w.rate_kbps < 5_000).count();
-    let under5_pct = if live.is_empty() {
-        0
-    } else {
-        (under5 * 100 / live.len()) as u32
-    };
-    let want = sc.achievable_kbps / 10 * 9;
-    let to90_s = live
+    let per_session: Vec<Vec<metrics::MetricWindow>> = sessions
         .iter()
-        .find(|w| w.rate_kbps >= want)
-        .map_or(NEVER, |w| (w.t_ms / 1_000) as u32);
-    let scale = |n: u64| (n * 600_000 / sc.duration_ms.max(1)) as u32;
-    let cuts = live.iter().filter(|w| w.cut_from_kbps.is_some()).count() as u64;
-    let lost: u64 = live.iter().map(|w| w.dropped).sum();
-    let mut owd = first.owd_samples.clone();
-    let queue_p95_ms = percentile(&mut owd, 95).saturating_sub(link.base_delay_ms() as u32);
-    let over_cap_kb_10s = offered_10s.saturating_sub(capacity_10s) / 1_000;
-    // Recovery is measured from the blip to the first window back at the rate
-    // it was holding — but only once the blip has actually cost something.
-    // The window the verdict lands in still reports the old rate.
-    let blip_recover_s = match sc.blip_at_ms {
-        None => 0,
-        Some(at) => {
-            let before = live
-                .iter()
-                .rev()
-                .find(|w| w.t_ms <= at)
-                .map_or(0, |w| w.rate_kbps);
-            match live.iter().find(|w| w.t_ms > at && w.rate_kbps < before) {
-                None => 0,
-                Some(dip) => live
-                    .iter()
-                    .find(|w| w.t_ms > dip.t_ms && w.rate_kbps >= before)
-                    .map_or(NEVER, |w| ((w.t_ms - at) / 1_000) as u32),
-            }
-        }
-    };
-    // Jain over the sessions' mean rate. One session is fair by definition.
-    let means: Vec<u64> = sessions
-        .iter()
-        .map(|s| {
-            let w = &s.client.windows;
-            if w.is_empty() {
-                0
-            } else {
-                w.iter().map(|w| u64::from(w.rate_kbps)).sum::<u64>() / w.len() as u64
-            }
-        })
+        .map(|s| s.client.windows.iter().map(WindowRec::metric).collect())
         .collect();
-    let sum: u64 = means.iter().sum();
-    let sq: u64 = means.iter().map(|m| m * m).sum();
-    let fairness_x1000 = if sq == 0 {
-        1_000
-    } else {
-        (sum * sum * 1_000 / (means.len() as u64 * sq)) as u32
-    };
-    Metrics {
-        under5_pct,
-        to90_s,
-        cuts_per_10min: scale(cuts),
-        lost_per_10min: scale(lost),
-        queue_p95_ms,
-        over_cap_kb_10s: over_cap_kb_10s as u32,
-        blip_recover_s,
-        fairness_x1000,
-        decisions_fnv1a: decision_checksum(sessions),
-    }
+    let refs: Vec<&[metrics::MetricWindow]> = per_session.iter().map(Vec::as_slice).collect();
+    metrics::measure(&metrics::Run {
+        sessions: &refs,
+        owd_ms: &sessions[0].client.owd_samples,
+        base_delay_ms: link.base_delay_ms() as u32,
+        duration_ms: sc.duration_ms,
+        achievable_kbps: sc.achievable_kbps,
+        offered_10s,
+        capacity_10s,
+        blip_at_ms: sc.blip_at_ms,
+    })
 }
 
 #[cfg(test)]

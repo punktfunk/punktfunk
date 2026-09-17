@@ -26,6 +26,7 @@ mod controller;
 mod growth;
 #[cfg(test)]
 mod harness;
+pub mod metrics;
 mod probe;
 mod sample;
 mod verdict;
@@ -105,6 +106,39 @@ pub struct ClosedWindow {
     /// frame, and not discarded. A standing-latency detector needs exactly
     /// that.
     pub loss_free: bool,
+}
+
+/// A closed window with what the controller did about it, for an embedder
+/// that writes a session's trajectory down.
+///
+/// The netem rig reads these rather than re-deriving a window from the wire:
+/// a trajectory that disagreed with the controller would be measuring the
+/// recorder.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowRecord {
+    /// Milliseconds from the session's start to this window's close.
+    pub t_ms: u64,
+    /// Rate the session was running at for this window.
+    pub rate_kbps: u32,
+    /// What the controller asked for on this window, if it asked.
+    pub request_kbps: Option<u32>,
+    pub sample: WindowSample,
+    pub discarded: bool,
+    /// What the window was judged to be, and so what named any rate change.
+    pub reason: Reason,
+}
+
+impl WindowRecord {
+    /// This window as the metrics read it.
+    pub fn metric(&self) -> metrics::MetricWindow {
+        metrics::MetricWindow {
+            t_ms: self.t_ms,
+            rate_kbps: self.rate_kbps,
+            request_kbps: self.request_kbps,
+            dropped: self.sample.dropped,
+            discarded: self.discarded,
+        }
+    }
 }
 
 /// Automatic bitrate, whole: the window the embedder feeds, the controller
@@ -276,6 +310,12 @@ impl Driver {
     /// shows and a field report quotes.
     pub fn reason(&self) -> Reason {
         self.abr.last_reason()
+    }
+
+    /// The rate the session is running at — the host's latest ack, or the
+    /// Welcome rate before one. What a window is judged against.
+    pub fn target_kbps(&self) -> u32 {
+        self.abr.current_kbps
     }
 
     /// A measured link capacity. Never lowers the climb ceiling: a

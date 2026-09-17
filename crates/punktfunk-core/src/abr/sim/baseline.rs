@@ -5,34 +5,16 @@
 //! diff (`ABR_SIM_BLESS=1 cargo test …`) and the reviewer reads which rows
 //! moved and why.
 
-use super::{run, scenarios, Metrics};
+use super::{run, scenarios};
+use crate::abr::metrics::HEADER;
 
 const BASELINE: &str = include_str!("baseline.tsv");
-
-const HEADER: &str = "scenario\tunder5_pct\tto90_s\tcuts_10min\tlost_10min\t\
-                      queue_p95_ms\tover_cap_kb_10s\tblip_recover_s\tfairness_x1000\t\
-                      decisions_fnv1a";
-
-fn row(name: &str, m: &Metrics) -> String {
-    format!(
-        "{name}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:08x}",
-        m.under5_pct,
-        m.to90_s,
-        m.cuts_per_10min,
-        m.lost_per_10min,
-        m.queue_p95_ms,
-        m.over_cap_kb_10s,
-        m.blip_recover_s,
-        m.fairness_x1000,
-        m.decisions_fnv1a
-    )
-}
 
 fn table() -> String {
     let mut out = String::from(HEADER);
     for sc in scenarios::all() {
         out.push('\n');
-        out.push_str(&row(sc.name, &run(&sc).metrics));
+        out.push_str(&run(&sc).metrics.row(sc.name));
     }
     out.push('\n');
     out

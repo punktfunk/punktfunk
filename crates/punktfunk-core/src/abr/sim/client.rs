@@ -116,6 +116,19 @@ pub(super) struct WindowRec {
     pub encode_disarmed: bool,
 }
 
+impl WindowRec {
+    /// This window as [`crate::abr::metrics`] reads it.
+    pub(super) fn metric(&self) -> crate::abr::metrics::MetricWindow {
+        crate::abr::metrics::MetricWindow {
+            t_ms: self.t_ms,
+            rate_kbps: self.rate_kbps,
+            request_kbps: self.request_kbps,
+            dropped: self.dropped,
+            discarded: self.discarded,
+        }
+    }
+}
+
 struct InFlight {
     id: u32,
     capture_ms: u64,
