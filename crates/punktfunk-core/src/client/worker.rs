@@ -101,6 +101,8 @@ pub(crate) struct WorkerArgs {
     pub(crate) decode_lat: Arc<Mutex<DecodeLatAcc>>,
     /// Encoder-target mirror. Seeded from Welcome; updated on every `BitrateChanged` ack.
     pub(crate) live_bitrate: Arc<AtomicU32>,
+    /// Closed ABR windows, newest last, for an embedder recording a trajectory.
+    pub(crate) abr_windows: Arc<Mutex<std::collections::VecDeque<crate::abr::WindowRecord>>>,
     /// Mute mask the control task ORs [`crate::client::AUDIO_MUTE_HOST`] into on every
     /// `AudioState`. The embedder's own bit rides the same cell.
     pub(crate) audio_mute: Arc<AtomicU8>,

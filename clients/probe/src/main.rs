@@ -9,8 +9,11 @@
 //!
 //! Usage: `punktfunk-probe [--connect HOST:PORT] [--mode WxHxFPS] [--out FILE]
 //! [--bitrate KBPS] [--codec auto|h264|hevc|av1] [--input-test|--mic-test|--touch-test]
-//! [--pin HEX|--pair -] [--compositor NAME] [--gamepad NAME] | --discover [SECS]`
+//! [--pin HEX|--pair -] [--compositor NAME] [--gamepad NAME] [--trajectory FILE] |
+//! --discover [SECS]`
 #![forbid(unsafe_code)]
+
+mod trajectory;
 
 use anyhow::{anyhow, Context, Result};
 use punktfunk_core::config::GamepadPref;
@@ -110,6 +113,15 @@ struct Args {
     /// `--discover [SECS]` — browse the LAN for native (`_punktfunk._udp`) hosts for `SECS`
     /// seconds (default 4), print what's found, and exit. No connection is made.
     discover: Option<u64>,
+    /// `--trajectory FILE` — stream on the shared client pump (the one the desktop and TV
+    /// clients run) in Automatic and write one JSON line per ABR report window, plus a
+    /// summary carrying the link simulator's metrics. The netem rig's client half.
+    trajectory: Option<String>,
+    /// `--link <achievable_kbps>[:<capacity_kbps>]` — what the shaped path is, for the two
+    /// summary metrics a client cannot measure from inside its own session.
+    link: trajectory::Link,
+    /// `--profile NAME` — the row name the trajectory summary prints under.
+    profile: String,
     /// `--clock-resync` — after the connect-time skew handshake, immediately run a SECOND
     /// handshake on the same control stream and assert both estimates are sane and consistent:
     /// the headless validator for the host answering `ClockProbe` at any time (what the native
@@ -314,6 +326,18 @@ fn parse_args() -> Args {
             .iter()
             .any(|a| a == "--discover")
             .then(|| get("--discover").and_then(|s| s.parse().ok()).unwrap_or(4)),
+        trajectory: get("--trajectory").map(String::from),
+        link: match get("--link") {
+            None => trajectory::Link::default(),
+            Some(s) => match trajectory::Link::parse(s) {
+                Some(l) => l,
+                None => {
+                    eprintln!("--link takes <achievable_kbps>[:<capacity_kbps>], both numbers");
+                    std::process::exit(2);
+                }
+            },
+        },
+        profile: get("--profile").unwrap_or("rig").to_string(),
         clock_resync: argv.iter().any(|a| a == "--clock-resync"),
         cursor_capture: argv.iter().any(|a| a == "--cursor-capture"),
         cursor_nochannel: argv.iter().any(|a| a == "--cursor-nochannel"),
@@ -382,6 +406,20 @@ fn run(args: Args) -> Result<()> {
             hex(&fp)
         );
         return Ok(());
+    }
+    // Trajectory mode: the shared pump runs its own runtime and its own controller.
+    if let Some(path) = args.trajectory.as_deref() {
+        return trajectory::run(
+            &args.connect,
+            args.mode,
+            args.pin,
+            load_or_create_identity().ok(),
+            &args.name,
+            args.seconds.unwrap_or(60),
+            path,
+            args.link,
+            &args.profile,
+        );
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
