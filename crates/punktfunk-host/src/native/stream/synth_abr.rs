@@ -83,16 +83,14 @@ enum Shot {
     Repeat,
 }
 
-/// Bytes for one frame of this budget.
+/// Bytes for one frame at an encoder rate.
 ///
 /// The per-frame allowance is the session's refresh, not the rate the source manages: a
-/// frame-driven source spends a slice of the budget and the controller must see that. Parity
-/// and the audio reservation come off the budget first — a frame's bytes are what is left for
-/// the picture, which is what [`encoder_kbps_for_budget`] answers.
+/// frame-driven source spends a slice of the budget and the controller must see that. The
+/// caller derives `enc_kbps` from the wire budget through [`encoder_kbps_for_budget`], so
+/// parity and the audio reservation are already off it.
 fn frame_bytes(
-    budget_kbps: u32,
-    audio_kbps: u32,
-    fec_percent: u8,
+    enc_kbps: u32,
     shard_payload: u16,
     fps: u32,
     fill_pct: u32,
@@ -102,7 +100,6 @@ fn frame_bytes(
     if shot == Shot::Repeat {
         return (REPEAT_SHARDS * u64::from(shard_payload)) as usize;
     }
-    let enc_kbps = encoder_kbps_for_budget(budget_kbps, audio_kbps, fec_percent, shard_payload);
     let allowance = u64::from(enc_kbps) * 1_000 / 8 / u64::from(fps.max(1));
     let mut b = allowance * u64::from(fill_pct) / 100;
     if idr {
@@ -266,16 +263,15 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
             if idr {
                 idr_due = None;
             }
-            let len = frame_bytes(
+            // Re-derived per frame: an adaptive-FEC move changes the picture's share of the
+            // budget without the budget moving.
+            let enc_kbps = encoder_kbps_for_budget(
                 budget_kbps,
                 audio_reserved_kbps,
                 fec_target.load(Ordering::Relaxed),
                 shard_payload,
-                fps,
-                content.fill_pct(),
-                shot,
-                idr,
             );
+            let len = frame_bytes(enc_kbps, shard_payload, fps, content.fill_pct(), shot, idr);
             let flags = if idr {
                 u32::from(FLAG_PIC | FLAG_SOF)
             } else {
@@ -341,7 +337,7 @@ mod tests {
             for fec in [5u8, 10, 25] {
                 for fps in [30u32, 60, 165] {
                     let enc = encoder_kbps_for_budget(budget, 512, fec, 1408);
-                    let one = frame_bytes(budget, 512, fec, 1408, fps, 100, Shot::New, false);
+                    let one = frame_bytes(enc, 1408, fps, 100, Shot::New, false);
                     let second = one as u64 * u64::from(fps);
                     let want = u64::from(enc) * 1_000 / 8;
                     assert!(
@@ -358,7 +354,8 @@ mod tests {
     /// whatever the budget — the three shapes the controller reads differently.
     #[test]
     fn fill_idr_and_repeat_each_size_their_own_frame() {
-        let at = |fill, shot, idr| frame_bytes(20_000, 512, 10, 1408, 60, fill, shot, idr);
+        let enc = encoder_kbps_for_budget(20_000, 512, 10, 1408);
+        let at = |fill, shot, idr| frame_bytes(enc, 1408, 60, fill, shot, idr);
         let full = at(100, Shot::New, false);
         assert_eq!(at(50, Shot::New, false), full / 2, "fill halves the frame");
         assert_eq!(
