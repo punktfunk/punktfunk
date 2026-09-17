@@ -3,7 +3,7 @@
 //!
 //! Dedicated user-interactive thread. Newest-frame drop on embedder lag.
 //! [`FLAG_PROBE`] filler never enters the decoder. Tests here pin the
-//! delivery-report cadence, ABR window activity, probe targets, and
+//! delivery-report cadence, ABR window activity, probe targets and aftermath, and
 //! pipeline-gap window discard.
 
 use super::super::*;
@@ -156,6 +156,9 @@ impl DataPump {
         // Burst aftermath: queue + QUIC loss-recovery sit between host
         // "complete" and our receipt. A late result is discarded.
         const CAPACITY_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+        // 8 windows = 6 s: a probe freeze's keyframe asks (one per 100 ms on
+        // webOS) plus a lost IDR's retry.
+        const PROBE_AFTERMATH_WINDOWS: u32 = 8;
         let mut capacity_probe_at: Option<Instant> = (bitrate_kbps == 0
             && !rate_pinned
             && resolved_bitrate_kbps > 0
@@ -173,6 +176,9 @@ impl DataPump {
         // host pipeline rebuild both describe something other than the
         // link; one bogus congestion verdict ends slow start for good.
         let mut discard_abr_window = false;
+        // Windows whose keyframe asks still belong to the burst
+        // ([`probe_aftermath`]).
+        let mut probe_aftermath_left: u32 = 0;
         let mut probe_watchdog: Option<Instant> = None;
         let (mut owd_sum_ns, mut owd_frames) = (0i128, 0u32);
         // Completed video AUs vs host-marked idle repeats. Meaningful only
@@ -300,6 +306,7 @@ impl DataPump {
                 last_bytes = wire_bytes(&st);
                 last_report = Instant::now();
                 discard_abr_window = true;
+                probe_aftermath_left = PROBE_AFTERMATH_WINDOWS;
                 flush_in_window = false;
                 // Burst may have taken the keyframe with it. Compare
                 // against the count snapshotted at the leading edge, not
@@ -416,8 +423,24 @@ impl DataPump {
                 if skipped > 0 {
                     tracing::debug!(skipped, "all-intra frame channel drained to newest");
                 }
-                let discard = std::mem::take(&mut discard_abr_window);
                 let window_dropped = st.frames_dropped.wrapping_sub(last_dropped);
+                // Always drain so a discard window cannot leak its
+                // count into the next one.
+                let recovery_kf_asked = pump_recovery_kf.swap(0, Ordering::Relaxed);
+                let discard = std::mem::take(&mut discard_abr_window);
+                // The forced tail window neither spends nor ends the
+                // aftermath: its asks may not have surfaced yet.
+                let recovery_kf_reqs = if !discard
+                    && probe_aftermath(&mut probe_aftermath_left, recovery_kf_asked > 0)
+                {
+                    tracing::debug!(
+                        recovery_kf = recovery_kf_asked,
+                        "keyframe asks in the probe's aftermath — not judged as congestion"
+                    );
+                    0
+                } else {
+                    recovery_kf_asked
+                };
                 let loss_ppm = window_loss_ppm(
                     st.fec_recovered_shards.wrapping_sub(last_recovered),
                     st.fec_late_shards.wrapping_sub(last_late),
@@ -536,9 +559,6 @@ impl DataPump {
                     *acc = Default::default();
                     (count > 0).then(|| (sum / count as u64) as i64)
                 };
-                // Always drain so a discard window cannot leak its
-                // count into the next one.
-                let recovery_kf_reqs = pump_recovery_kf.swap(0, Ordering::Relaxed);
                 // Wire throughput vs target: headers, seals, FEC parity
                 // included (they spend the budget), minus probe filler,
                 // plus the audio reservation (spent whether video flows).
@@ -822,6 +842,27 @@ fn probe_target_kbps(stream_cap_kbps: u32) -> u32 {
     stream_cap_kbps.saturating_mul(2).min(2_000_000)
 }
 
+/// Whether this window's keyframe asks still belong to the capacity probe.
+///
+/// Video shares the link with the burst, so an overdriven link drops frames
+/// beside it and the client asks for keyframes until one lands — past the
+/// discarded tail window. Two asks in a window end slow start and four cut the
+/// rate, yet they say nothing about the link after the burst. Only the asks are
+/// disowned: drops, loss and a flush in the same window are still judged, which
+/// is what keeps a link the start rate overloads from hiding here. Each window
+/// with asks spends one of `windows_left`; the first without ends the aftermath.
+fn probe_aftermath(windows_left: &mut u32, asked: bool) -> bool {
+    if *windows_left == 0 {
+        return false;
+    }
+    if asked {
+        *windows_left -= 1;
+    } else {
+        *windows_left = 0;
+    }
+    asked
+}
+
 /// Classify this window's new-content evidence for ABR.
 ///
 /// No arrivals are [`WindowActivity::Empty`]: quiet like idle, not an
@@ -903,6 +944,28 @@ mod tests {
         }
         assert_eq!(probe_target_kbps(u32::MAX), 2_000_000);
         assert_eq!(probe_target_kbps(1_500_000), 2_000_000);
+    }
+
+    /// The burst's keyframe asks are disowned until a window has none, never
+    /// past the budget.
+    #[test]
+    fn probe_keyframe_asks_are_disowned_until_the_stream_recovers() {
+        let mut left = 8;
+        assert!(probe_aftermath(&mut left, true));
+        assert!(probe_aftermath(&mut left, true));
+        assert!(!probe_aftermath(&mut left, false), "no asks ends it");
+        assert!(
+            !probe_aftermath(&mut left, true),
+            "asks after recovery are congestion"
+        );
+
+        let mut left = 2;
+        assert!(probe_aftermath(&mut left, true));
+        assert!(probe_aftermath(&mut left, true));
+        assert!(
+            !probe_aftermath(&mut left, true),
+            "a client that never recovers is judged once the budget is spent"
+        );
     }
 
     #[test]
