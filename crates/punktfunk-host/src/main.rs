@@ -589,6 +589,24 @@ fn real_main() -> Result<()> {
             };
             let source = match get("--source") {
                 Some("virtual") => native::Punktfunk1Source::Virtual,
+                Some("synthetic-abr") => {
+                    let fill = get("--fill")
+                        .and_then(|s| s.parse().ok())
+                        .filter(|&p: &u32| p > 0 && p <= 100)
+                        .unwrap_or(100);
+                    let spec = get("--content").unwrap_or("steady");
+                    let recovery = std::time::Duration::from_millis(
+                        get("--recovery-ms")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                    );
+                    match native::Content::parse(spec, fill) {
+                        Some(c) => native::Punktfunk1Source::SyntheticAbr(c, recovery),
+                        None => {
+                            bail!("--content takes steady, idle-then-motion or frame-driven:<fps>")
+                        }
+                    }
+                }
                 _ => native::Punktfunk1Source::Synthetic,
             };
             // Empty would arm SPAKE2 with an empty password (same trap as `--mgmt-token`).
@@ -992,8 +1010,20 @@ SERVE OPTIONS:
 
 PUNKTFUNK1-HOST OPTIONS:
     --port <N>                   QUIC listen port (default: 9777)
-    --source <synthetic|virtual> test frames, or virtual display + NVENC (default: synthetic)
-    --seconds <N>                per-session stream duration, virtual source (default: 30)
+    --source <synthetic|synthetic-abr|virtual>
+                                 test frames, frames sized from the live Automatic rate, or a
+                                 virtual display + NVENC (default: synthetic). synthetic-abr
+                                 needs no display and no GPU
+    --content <SCRIPT>           what synthetic-abr encodes: steady, idle-then-motion, or
+                                 frame-driven:<fps> for a source slower than the session
+                                 (default: steady)
+    --fill <PCT>                 share of each frame's bit allowance synthetic-abr fills,
+                                 1-100 (default: 100)
+    --recovery-ms <MS>           how long synthetic-abr takes to answer a keyframe request.
+                                 0 (the default) answers on the next frame; a GPU host that
+                                 rebuilds its pipeline takes about a second
+    --seconds <N>                per-session stream duration, virtual and synthetic-abr
+                                 sources (default: 30)
     --frames <N>                 per-session frame count, synthetic source (default: 300)
     --max-sessions <N>           exit after N sessions; 0 = serve forever (default: 0)
     --max-concurrent <N>         stream at most N sessions at once (NVENC bound); overflow waits

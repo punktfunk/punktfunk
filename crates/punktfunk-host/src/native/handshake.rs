@@ -597,7 +597,9 @@ pub(super) async fn negotiate(
         frames: match source {
             Punktfunk1Source::Synthetic => frames,
             // Unbounded; the client streams until we close.
-            Punktfunk1Source::Virtual | Punktfunk1Source::Software => 0,
+            Punktfunk1Source::SyntheticAbr(..)
+            | Punktfunk1Source::Virtual
+            | Punktfunk1Source::Software => 0,
         },
         // Auto for the synthetic source (no compositor).
         compositor: compositor
@@ -836,7 +838,9 @@ async fn negotiate_compositor(
                     .context("resolve compositor task")??,
             )
         }
-        Punktfunk1Source::Synthetic | Punktfunk1Source::Software => None,
+        Punktfunk1Source::Synthetic
+        | Punktfunk1Source::SyntheticAbr(..)
+        | Punktfunk1Source::Software => None,
     };
     // Split the pair: compositor for Welcome/cursor; gamescope route as a value, not process env.
     let gamescope_route = compositor.as_ref().and_then(|(_, r)| r.clone());

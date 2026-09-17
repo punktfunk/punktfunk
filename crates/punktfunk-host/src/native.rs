@@ -70,12 +70,20 @@ mod control;
 mod cursor_fwd;
 
 mod stream;
-use stream::{reconfig_allowed, software_stream, synthetic_stream, virtual_stream, SessionContext};
+pub use stream::Content;
+use stream::{
+    reconfig_allowed, software_stream, synthetic_abr_stream, synthetic_stream, virtual_stream,
+    SessionContext, SynthAbrContext,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Punktfunk1Source {
     /// Protocol-test frames; the client byte-checks the payload.
     Synthetic,
+    /// Frames sized from the live wire budget, on the real paced send path. No display and no
+    /// GPU: what the netem rig streams so Automatic can be judged on a shaped link. The
+    /// duration is how long a keyframe ask takes to reach the wire.
+    SyntheticAbr(Content, std::time::Duration),
     /// Virtual display at the requested mode → NVENC.
     Virtual,
     /// A moving test picture through the software H.264 encoder, unbounded. No display and no
@@ -1929,9 +1937,13 @@ pub(crate) async fn run_admitted(
         )
     };
 
-    // Not for the byte-pattern source, which has a test client that wants nothing else on the
-    // wire. Best-effort: a spawn error must not early-return (threads already up).
-    let audio_handle = if opts.source != Punktfunk1Source::Synthetic {
+    // Not for the two frame-arithmetic sources: their clients want nothing else on the wire,
+    // and the rig's budget carries the audio reservation without a capture behind it.
+    // Best-effort: a spawn error must not early-return (threads already up).
+    let audio_handle = if !matches!(
+        opts.source,
+        Punktfunk1Source::Synthetic | Punktfunk1Source::SyntheticAbr(..)
+    ) {
         let conn = conn.clone();
         let stop = stop.clone();
         let cap = audio_cap.clone();
@@ -2284,6 +2296,35 @@ pub(crate) async fn run_admitted(
                     timing_conn.as_ref(),
                     probe_seq,
                 ),
+                Punktfunk1Source::SyntheticAbr(content, recovery) => {
+                    synthetic_abr_stream(SynthAbrContext {
+                    session,
+                    mode,
+                    seconds,
+                    content,
+                    recovery,
+                    stop: stop_stream,
+                    counters: counters_stream,
+                    keyframe: keyframe_rx,
+                    rfi: rfi_rx,
+                    bitrate_rx,
+                    shard_rx: shard_apply_rx,
+                    bitrate_kbps,
+                    audio_reserved_kbps,
+                    shard_payload: welcome.shard_payload,
+                    live_bitrate,
+                    fec_target: fec_target_dp,
+                    probe_rx,
+                    probe_result_tx,
+                    timing_conn,
+                    phase: phase_ctl,
+                    probe_seq,
+                    stats: stats_dp,
+                    client_label,
+                    bringup: bringup_dp,
+                    wire_sock,
+                    })
+                }
                 Punktfunk1Source::Virtual => {
                     let compositor = compositor
                         .expect("the Virtual source resolves a compositor during the handshake");

@@ -23,6 +23,7 @@ mod resize;
 mod send;
 mod session_watch;
 mod state;
+mod synth_abr;
 use self::phase_lock::{phase_lock_enabled, PhaseController};
 // `native.rs` builds it and `control.rs` holds it: the 0xCF ACK hold crosses the module.
 pub(crate) use self::phase_lock::PhaseCtl;
@@ -32,6 +33,9 @@ use self::send::{send_loop, ChunkMsg, FrameMsg, SendMsg, SendStats};
 pub(crate) use self::send::reconfig_allowed;
 use self::session_watch::{session_watch_enabled, session_watcher_loop, SessionSwitch};
 use self::state::StreamState;
+// `main.rs` parses the content script; `native.rs` builds the context and dispatches.
+pub use self::synth_abr::Content;
+pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn synthetic_stream(
