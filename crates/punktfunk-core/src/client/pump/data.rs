@@ -746,6 +746,7 @@ mod tests {
             fec_recovered: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             bitrate_ack: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             recovery_kf: Arc::new(AtomicU32::new(0)),
+            abr_windows: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             pipeline_gap: pipeline_gap.clone(),
             bitrate_kbps: 20_000,
             resolved_bitrate_kbps: 20_000,
