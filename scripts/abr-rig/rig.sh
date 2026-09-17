@@ -104,17 +104,24 @@ if [ -n "$TRACE" ] || [ "$WANDER_PCT" != 0 ]; then
   (
     at=0
     base=$RATE_KBIT
+    live=$RATE_KBIT
     while [ $at -lt "$SECONDS_RUN" ]; do
-      step=1; sleep 1; at=$(( at + step ))
+      sleep 1; at=$(( at + 1 ))
+      want=$live
       for t in $TRACE; do
-        [ "$at" = "${t%%:*}" ] && base=${t##*:}
+        if [ "$at" = "${t%%:*}" ]; then base=${t##*:}; want=$base; fi
       done
-      kbit=$base
+      # A drawn rate holds until the next draw — capacity wanders over minutes,
+      # it does not step back a second later.
       if [ "$WANDER_PCT" != 0 ] && [ $(( at % WANDER_S )) = 0 ]; then
-        kbit=$(( base * (100 - WANDER_PCT + RANDOM % (2 * WANDER_PCT + 1)) / 100 ))
+        want=$(( base * (100 - WANDER_PCT + RANDOM % (2 * WANDER_PCT + 1)) / 100 ))
       fi
-      shape h vh "$kbit" change 2>/dev/null || true
-      shape c vc "$kbit" change 2>/dev/null || true
+      if [ "$want" != "$live" ]; then
+        live=$want
+        echo "[rig] capacity now ${live}kbit at ${at}s"
+        shape h vh "$live" change 2>/dev/null || true
+        shape c vc "$live" change 2>/dev/null || true
+      fi
     done
   ) &
   WANDER_PID=$!
