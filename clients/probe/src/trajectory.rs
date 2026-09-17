@@ -161,14 +161,24 @@ pub fn run(
     let deadline = started + std::time::Duration::from_secs(seconds);
     let mut windows: Vec<WindowRecord> = Vec::new();
     let mut frames = 0u64;
+    let mut dropped = client.frames_dropped();
     while std::time::Instant::now() < deadline && !client.is_session_ended() {
         // Pull at the wire's pace: a client that lets the frame channel back up
         // makes the pump drop frames, which would read as a damaged link.
-        if client
-            .next_frame(std::time::Duration::from_millis(20))
-            .is_ok()
-        {
+        if let Ok(f) = client.next_frame(std::time::Duration::from_millis(20)) {
             frames += 1;
+            // What a decoder loop does with each AU: a forward gap asks for an
+            // intra refresh or a keyframe. Those asks are half of what a report
+            // window is judged on, so a recorder that skipped them would show a
+            // damaged link as a clean one.
+            client.note_frame_index(f.frame_index);
+        }
+        // Backstop for an AU parity could not repair: infinite GOP conceals a
+        // reference-missing frame, so nothing else would ask.
+        let now_dropped = client.frames_dropped();
+        if now_dropped > dropped {
+            dropped = now_dropped;
+            let _ = client.request_keyframe();
         }
         windows.extend(client.take_abr_windows());
     }
