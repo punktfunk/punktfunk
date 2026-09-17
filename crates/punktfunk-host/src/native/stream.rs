@@ -34,8 +34,8 @@ pub(crate) use self::send::reconfig_allowed;
 use self::session_watch::{session_watch_enabled, session_watcher_loop, SessionSwitch};
 use self::state::StreamState;
 // `main.rs` parses the content script; `native.rs` builds the context and dispatches.
-pub use self::synth_abr::Content;
 pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};
+pub use self::synth_abr::{Content, KeyframeAnswer};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn synthetic_stream(

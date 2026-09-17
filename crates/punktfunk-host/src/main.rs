@@ -600,8 +600,14 @@ fn real_main() -> Result<()> {
                             .and_then(|s| s.parse().ok())
                             .unwrap_or(0),
                     );
+                    let answer = match native::KeyframeAnswer::parse(
+                        get("--keyframe-answer").unwrap_or("idr"),
+                    ) {
+                        Some(a) => a,
+                        None => bail!("--keyframe-answer takes idr or wave:<n>"),
+                    };
                     match native::Content::parse(spec, fill) {
-                        Some(c) => native::Punktfunk1Source::SyntheticAbr(c, recovery),
+                        Some(c) => native::Punktfunk1Source::SyntheticAbr(c, recovery, answer),
                         None => {
                             bail!("--content takes steady, idle-then-motion or frame-driven:<fps>")
                         }
@@ -1022,6 +1028,9 @@ PUNKTFUNK1-HOST OPTIONS:
     --recovery-ms <MS>           how long synthetic-abr takes to answer a keyframe request.
                                  0 (the default) answers on the next frame; a GPU host that
                                  rebuilds its pipeline takes about a second
+    --keyframe-answer <KIND>     what synthetic-abr answers a keyframe request with: idr
+                                 (the default), or wave:<n> to answer only every n-th ask
+                                 with one, as a host that prefers an intra-refresh wave does
     --seconds <N>                per-session stream duration, virtual and synthetic-abr
                                  sources (default: 30)
     --frames <N>                 per-session frame count, synthetic source (default: 300)

@@ -75,6 +75,40 @@ impl Content {
     }
 }
 
+/// How the source answers a keyframe request.
+///
+/// The field shows both: `host173` 09-17 09:53 logged `keyframe_req=9 idr=2 rfi=8` in one
+/// minute — most asks answered with an intra-refresh wave, which does not re-anchor a client
+/// that lost its reference, and only some with a real IDR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyframeAnswer {
+    /// Every ask gets an IDR.
+    Idr,
+    /// Every n-th ask gets an IDR; the rest get an intra-refresh wave, which this source
+    /// sends as nothing at all. A wave costs bits a real encoder spends and this one does
+    /// not — the conservative direction, since extra bytes would only damage the link more.
+    Wave(u32),
+}
+
+impl KeyframeAnswer {
+    /// `idr` or `wave:<n>`.
+    pub fn parse(spec: &str) -> Option<KeyframeAnswer> {
+        match spec.split_once(':') {
+            None if spec == "idr" => Some(KeyframeAnswer::Idr),
+            Some(("wave", n)) => n.parse().ok().filter(|&n| n > 0).map(KeyframeAnswer::Wave),
+            _ => None,
+        }
+    }
+
+    /// Whether the `n`th ask of this session is answered with an IDR.
+    fn answers(self, asks: u32) -> bool {
+        match self {
+            KeyframeAnswer::Idr => true,
+            KeyframeAnswer::Wave(every) => asks % every == 0,
+        }
+    }
+}
+
 /// What one tick puts on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shot {
@@ -120,6 +154,7 @@ pub(crate) struct SynthAbrContext {
     /// A GPU host that answers with a pipeline rebuild takes about a second, and the asks
     /// that pile up in the meantime are what a report window reads as damage.
     pub(crate) recovery: std::time::Duration,
+    pub(crate) answer: KeyframeAnswer,
     pub(crate) stop: Arc<AtomicBool>,
     pub(crate) counters: Arc<crate::session_status::SessionCounters>,
     pub(crate) keyframe: std::sync::mpsc::Receiver<()>,
@@ -152,6 +187,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         seconds,
         content,
         recovery,
+        answer,
         stop,
         counters,
         keyframe,
@@ -226,7 +262,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
     let started = std::time::Instant::now();
     let deadline = (seconds > 0).then(|| started + std::time::Duration::from_secs(seconds.into()));
     let mut due = started;
-    let (mut au_seq, mut tick) = (0u32, 0u64);
+    let (mut au_seq, mut tick, mut asks) = (0u32, 0u64, 0u32);
     // An IDR at start, then whenever one comes due. `None` = none owed.
     let mut idr_due: Option<std::time::Instant> = Some(started);
     while !stop.load(Ordering::SeqCst) {
@@ -252,9 +288,11 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         // Both mean the picture needs re-anchoring, and arithmetic has no reference chain to
         // invalidate: an RFI costs the same IDR here. The first ask sets the clock; asks
         // while one is already owed do not move it, as a rebuild in flight does not restart.
-        let asked = keyframe.try_iter().count() + rfi.try_iter().count();
-        if asked > 0 {
-            idr_due.get_or_insert_with(|| std::time::Instant::now() + recovery);
+        for _ in 0..(keyframe.try_iter().count() + rfi.try_iter().count()) {
+            asks += 1;
+            if answer.answers(asks) {
+                idr_due.get_or_insert_with(|| std::time::Instant::now() + recovery);
+            }
         }
 
         let elapsed = started.elapsed();
@@ -319,6 +357,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
     tracing::info!(
         frames = au_seq,
         budget_kbps,
+        keyframe_asks = asks,
         "synthetic-abr stream complete"
     );
     Ok(())
@@ -369,6 +408,23 @@ mod tests {
             1408,
             "even when an IDR is owed"
         );
+    }
+
+    /// A host that answers with an intra-refresh wave re-anchors only every n-th ask; the
+    /// client holding its picture through the others is what C6 is about.
+    #[test]
+    fn a_wave_answers_only_every_nth_ask() {
+        let idr = KeyframeAnswer::parse("idr").expect("idr parses");
+        assert!((1..=8).all(|n| idr.answers(n)), "every ask gets one");
+        let wave = KeyframeAnswer::parse("wave:4").expect("wave parses");
+        assert_eq!(
+            (1..=8).filter(|&n| wave.answers(n)).collect::<Vec<_>>(),
+            [4, 8],
+            "every fourth ask, and no other"
+        );
+        assert_eq!(KeyframeAnswer::parse("wave:0"), None);
+        assert_eq!(KeyframeAnswer::parse("wave"), None);
+        assert_eq!(KeyframeAnswer::parse("nothing"), None);
     }
 
     /// A frame-driven source produces its own rate, not the session's, and every other
