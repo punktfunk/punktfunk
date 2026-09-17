@@ -200,7 +200,10 @@ punktfunk-host punktfunk1-host --source virtual
 | Flag | Meaning |
 |---|---|
 | `--port <N>` | QUIC listen port (default `9777`). |
-| `--source synthetic` · `virtual` | `virtual` uses a real virtual display + NVENC; `synthetic` emits test frames. |
+| `--source synthetic` · `synthetic-abr` · `virtual` | `virtual` uses a real virtual display + NVENC; `synthetic` emits fixed test frames; `synthetic-abr` sizes every frame from the rate the session is running at, so Automatic can be measured on a box with no display and no GPU. |
+| `--content <SCRIPT>` | What `synthetic-abr` encodes: `steady`, `idle-then-motion`, or `frame-driven:<fps>` for a source slower than the session (default `steady`). |
+| `--fill <PCT>` | Share of each frame's bit allowance `synthetic-abr` fills, 1–100 (default 100). |
+| `--recovery-ms <MS>` | How long `synthetic-abr` takes to answer a keyframe request. `0` (the default) answers on the next frame; a host that rebuilds its pipeline takes about a second. |
 | `--seconds <N>` / `--frames <N>` | Bound each session by wall-clock seconds or frame count. |
 | `--max-concurrent <N>` | Stream at most N sessions at once (default 4); overflow waits in the queue. |
 | `--max-sessions <N>` | Exit after N sessions (0 = serve forever). |
