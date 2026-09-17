@@ -122,6 +122,10 @@ struct Args {
     link: trajectory::Link,
     /// `--profile NAME` — the row name the trajectory summary prints under.
     profile: String,
+    /// `--decoder-hold` — hold the picture after a lost frame until one that re-anchors it
+    /// arrives, asking for a keyframe while held, as the shipped TV client does. Without it
+    /// the rig resumes as soon as frame indexes line up, which no decoder can do.
+    decoder_hold: bool,
     /// `--clock-resync` — after the connect-time skew handshake, immediately run a SECOND
     /// handshake on the same control stream and assert both estimates are sane and consistent:
     /// the headless validator for the host answering `ClockProbe` at any time (what the native
@@ -338,6 +342,7 @@ fn parse_args() -> Args {
             },
         },
         profile: get("--profile").unwrap_or("rig").to_string(),
+        decoder_hold: argv.iter().any(|a| a == "--decoder-hold"),
         clock_resync: argv.iter().any(|a| a == "--clock-resync"),
         cursor_capture: argv.iter().any(|a| a == "--cursor-capture"),
         cursor_nochannel: argv.iter().any(|a| a == "--cursor-nochannel"),
@@ -419,6 +424,7 @@ fn run(args: Args) -> Result<()> {
             path,
             args.link,
             &args.profile,
+            args.decoder_hold,
         );
     }
     let rt = tokio::runtime::Builder::new_multi_thread()

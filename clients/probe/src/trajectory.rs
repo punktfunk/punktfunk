@@ -39,16 +39,91 @@ impl Link {
     }
 }
 
+/// One ask per this, while the picture is held. `punktfunk-webos`
+/// `KEYFRAME_REQUEST_MIN_INTERVAL`.
+const KEYFRAME_REQUEST_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+/// Resume without a clean re-anchor after this. `punktfunk-webos` `HOLD_GIVE_UP`:
+/// a permanent freeze is worse than a broken picture.
+const HOLD_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The picture a real decoder cannot show, modelled on the shipped webOS client
+/// (`src/session.rs`, the `holding` state).
+///
+/// A P-frame whose reference is gone is undecodable, so contiguous frame
+/// indexes do not end a freeze — only a frame carrying the re-anchor does, or
+/// [`HOLD_GIVE_UP`]. The rig has no decoder; without this it resumes the
+/// instant indexes line up again and the burst's cost disappears from the
+/// window the controller judges.
+#[derive(Default)]
+struct Hold {
+    holding: bool,
+    since: Option<std::time::Instant>,
+    last_ask: Option<std::time::Instant>,
+}
+
+impl Hold {
+    /// One arrived AU at `now`. Returns the freeze this frame ended, zero
+    /// otherwise, and `true` in `ask` when a keyframe request is owed.
+    fn step(
+        &mut self,
+        gap: bool,
+        lost: bool,
+        flags: u32,
+        now: std::time::Instant,
+    ) -> (std::time::Duration, bool) {
+        if (gap || lost) && !self.holding {
+            self.holding = true;
+            self.since = Some(now);
+        }
+        let ask = self.holding
+            && self
+                .last_ask
+                .is_none_or(|t| now.duration_since(t) >= KEYFRAME_REQUEST_MIN_INTERVAL);
+        if ask {
+            self.last_ask = Some(now);
+        }
+        let re_anchor = flags & u32::from(punktfunk_core::packet::FLAG_SOF) != 0
+            || flags & punktfunk_core::packet::USER_FLAG_RECOVERY_ANCHOR != 0;
+        let gave_up = self
+            .since
+            .is_some_and(|t| now.duration_since(t) >= HOLD_GIVE_UP);
+        if !self.holding || re_anchor || gave_up {
+            let was = self
+                .since
+                .map_or(std::time::Duration::ZERO, |t| now.duration_since(t));
+            self.holding = false;
+            self.since = None;
+            return (was, ask);
+        }
+        (std::time::Duration::ZERO, ask)
+    }
+
+    /// [`Hold::step`] against the clock, sending what it asks for.
+    fn on_frame(
+        &mut self,
+        client: &NativeClient,
+        gap: bool,
+        lost: bool,
+        flags: u32,
+    ) -> std::time::Duration {
+        let (held, ask) = self.step(gap, lost, flags, std::time::Instant::now());
+        if ask {
+            let _ = client.request_keyframe();
+        }
+        held
+    }
+}
+
 /// One window as a JSON object. Hand-written: one line of output does not earn
 /// a serialization dependency.
-fn window_json(w: &WindowRecord) -> String {
+fn window_json(w: &WindowRecord, held_ms: u64) -> String {
     let opt = |v: Option<i64>| v.map_or("null".to_string(), |v| v.to_string());
     format!(
         concat!(
             r#"{{"t_ms":{},"target_kbps":{},"request_kbps":{},"delivered_kbps":{},"#,
             r#""loss_ppm":{},"lost_frames":{},"owd_mean_us":{},"decode_mean_us":{},"#,
-            r#""encode_mean_us":{},"keyframe_asks":{},"flushed":{},"discarded":{},"#,
-            r#""reason":"{:?}"}}"#
+            r#""encode_mean_us":{},"keyframe_asks":{},"held_ms":{},"flushed":{},"#,
+            r#""discarded":{},"reason":"{:?}"}}"#
         ),
         w.t_ms,
         w.rate_kbps,
@@ -60,6 +135,7 @@ fn window_json(w: &WindowRecord) -> String {
         opt(w.sample.decode_mean_us),
         opt(w.sample.encode_mean_us),
         w.sample.recovery_kf,
+        held_ms,
         w.sample.flushed,
         w.discarded,
         w.reason,
@@ -122,6 +198,7 @@ pub fn run(
     path: &str,
     link: Link,
     profile: &str,
+    decoder_hold: bool,
 ) -> Result<()> {
     let (host, port) = connect
         .rsplit_once(':')
@@ -160,8 +237,11 @@ pub fn run(
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_secs(seconds);
     let mut windows: Vec<WindowRecord> = Vec::new();
+    let mut held: Vec<u64> = Vec::new();
     let mut frames = 0u64;
     let mut dropped = client.frames_dropped();
+    let mut hold = Hold::default();
+    let mut held_since_window = std::time::Duration::ZERO;
     while std::time::Instant::now() < deadline && !client.is_session_ended() {
         // Pull at the wire's pace: a client that lets the frame channel back up
         // makes the pump drop frames, which would read as a damaged link.
@@ -171,22 +251,39 @@ pub fn run(
             // intra refresh or a keyframe. Those asks are half of what a report
             // window is judged on, so a recorder that skipped them would show a
             // damaged link as a clean one.
-            client.note_frame_index(f.frame_index);
-        }
-        // Backstop for an AU parity could not repair: infinite GOP conceals a
-        // reference-missing frame, so nothing else would ask.
-        let now_dropped = client.frames_dropped();
-        if now_dropped > dropped {
+            let gap = client.note_frame_index(f.frame_index) > 0;
+            let now_dropped = client.frames_dropped();
+            let lost = now_dropped > dropped;
             dropped = now_dropped;
-            let _ = client.request_keyframe();
+            if decoder_hold {
+                held_since_window += hold.on_frame(&client, gap, lost, f.flags);
+            } else if lost {
+                // Backstop for an AU parity could not repair: infinite GOP
+                // conceals a reference-missing frame, so nothing else asks.
+                let _ = client.request_keyframe();
+            }
         }
-        windows.extend(client.take_abr_windows());
+        let batch = client.take_abr_windows();
+        if !batch.is_empty() {
+            held.resize(held.len() + batch.len(), 0);
+            // The drain runs every ≤20 ms and a window closes every 750 ms, so a
+            // batch is one window in all but a stall; the held time goes to its
+            // last member.
+            if let Some(last) = held.last_mut() {
+                *last = held_since_window.as_millis() as u64;
+            }
+            held_since_window = std::time::Duration::ZERO;
+            windows.extend(batch);
+        }
     }
-    windows.extend(client.take_abr_windows());
+    let tail = client.take_abr_windows();
+    held.resize(held.len() + tail.len(), 0);
+    windows.extend(tail);
+    held.resize(windows.len(), 0);
     let duration_ms = started.elapsed().as_millis() as u64;
 
     let out = std::fs::File::create(path).with_context(|| format!("create {path}"))?;
-    let row = write_trajectory(out, &windows, profile, duration_ms, frames, link)?;
+    let row = write_trajectory(out, &windows, &held, profile, duration_ms, frames, link)?;
     println!("{}", metrics::HEADER);
     println!("{row}");
     Ok(())
@@ -197,13 +294,14 @@ pub fn run(
 fn write_trajectory(
     mut out: impl Write,
     windows: &[WindowRecord],
+    held: &[u64],
     profile: &str,
     duration_ms: u64,
     frames: u64,
     link: Link,
 ) -> Result<String> {
-    for w in windows {
-        writeln!(out, "{}", window_json(w)).context("write a window")?;
+    for (w, held_ms) in windows.iter().zip(held.iter().chain(std::iter::repeat(&0))) {
+        writeln!(out, "{}", window_json(w, *held_ms)).context("write a window")?;
     }
     let (m, row) = summary(profile, windows, duration_ms, link);
     writeln!(
@@ -289,7 +387,7 @@ mod tests {
         };
         let path = std::env::temp_dir().join("pf-abr-rig-trajectory-test.jsonl");
         let file = std::fs::File::create(&path).expect("create the trajectory");
-        write_trajectory(file, &ws, "wan_wg_12", 6_000, 400, link).expect("write it");
+        write_trajectory(file, &ws, &[], "wan_wg_12", 6_000, 400, link).expect("write it");
         let text = std::fs::read_to_string(&path).expect("read it back");
         let _ = std::fs::remove_file(&path);
 
@@ -351,7 +449,7 @@ mod tests {
         let mut w = rec(1_500, 9_800, Some(6_800), 2);
         w.discarded = true;
         w.reason = Reason::Owd;
-        let line = window_json(&w);
+        let line = window_json(&w, 480);
         for want in [
             r#""t_ms":1500"#,
             r#""target_kbps":9800"#,
@@ -361,10 +459,63 @@ mod tests {
             r#""owd_mean_us":12000"#,
             r#""decode_mean_us":null"#,
             r#""discarded":true"#,
+            r#""held_ms":480"#,
             r#""reason":"Owd""#,
         ] {
             assert!(line.contains(want), "{want} missing from {line}");
         }
+    }
+
+    /// A lost frame freezes the picture; the P-frames after it do not thaw it,
+    /// however many arrive and however contiguous their indexes. Only a frame
+    /// carrying the re-anchor does — and while frozen the client asks once per
+    /// [`KEYFRAME_REQUEST_MIN_INTERVAL`], which is what the controller counts.
+    #[test]
+    fn a_held_picture_thaws_on_a_keyframe_and_not_on_p_frames() {
+        const PIC: u32 = 0x1;
+        const IDR: u32 = PIC | (punktfunk_core::packet::FLAG_SOF as u32);
+        let t0 = std::time::Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        let mut h = Hold::default();
+
+        // Clean stream: nothing held, nothing asked.
+        assert_eq!(
+            h.step(false, false, PIC, at(0)),
+            (std::time::Duration::ZERO, false)
+        );
+        // A lost frame freezes it and asks straight away.
+        let (held, ask) = h.step(false, true, PIC, at(10));
+        assert!(ask && held.is_zero(), "the loss freezes and asks");
+        // Eight P-frames over 250 ms: still frozen, and the ask is throttled to
+        // one per 100 ms rather than one per frame.
+        let asks = (1..=8)
+            .map(|i| h.step(false, false, PIC, at(10 + i * 30)))
+            .filter(|(held, ask)| {
+                assert!(held.is_zero(), "a P-frame does not thaw a broken reference");
+                *ask
+            })
+            .count();
+        assert_eq!(asks, 2, "one ask per 100 ms over 240 ms, not one per frame");
+        // The keyframe thaws it, and reports the freeze it ended.
+        let (held, _) = h.step(false, false, IDR, at(300));
+        assert_eq!(held.as_millis(), 290);
+        // Thawed: the next P-frame is ordinary again.
+        assert_eq!(
+            h.step(false, false, PIC, at(320)),
+            (std::time::Duration::ZERO, false)
+        );
+    }
+
+    /// A host that never answers must not freeze the picture for ever: the
+    /// client gives up after [`HOLD_GIVE_UP`] and shows what it has.
+    #[test]
+    fn a_hold_nobody_answers_gives_up() {
+        let t0 = std::time::Instant::now();
+        let mut h = Hold::default();
+        h.step(true, false, 0x1, t0);
+        assert!(h.step(false, false, 0x1, t0 + HOLD_GIVE_UP / 2).0.is_zero());
+        let (held, _) = h.step(false, false, 0x1, t0 + HOLD_GIVE_UP);
+        assert_eq!(held, HOLD_GIVE_UP, "gave up and resumed on a P-frame");
     }
 
     #[test]
