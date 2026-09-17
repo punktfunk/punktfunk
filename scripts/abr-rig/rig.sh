@@ -38,10 +38,18 @@ cleanup() {
 trap cleanup EXIT
 
 # ---- build ------------------------------------------------------------------
-say "building"
+# `punktfunk-core`'s build script rewrites include/punktfunk_core.h into the
+# source tree, so cargo re-runs it and everything downstream on every run: ~2.5
+# minutes before a 20-second measurement. PF_RIG_SKIP_BUILD=1 reuses what is
+# already in /target — for a run of A/B profiles over unchanged code.
 cd /w
-cargo build --release -p punktfunk-host --bin punktfunk-host
-cargo build --release -p punktfunk-probe --bin punktfunk-probe
+if [ "${PF_RIG_SKIP_BUILD:-0}" = 1 ] && [ -x "$BIN/punktfunk-host" ] && [ -x "$BIN/punktfunk-probe" ]; then
+  say "reusing the binaries in $BIN (PF_RIG_SKIP_BUILD=1)"
+else
+  say "building"
+  cargo build --release -p punktfunk-host --bin punktfunk-host
+  cargo build --release -p punktfunk-probe --bin punktfunk-probe
+fi
 
 # ---- the shaped link --------------------------------------------------------
 # A veth pair is lossless and unqueued; netem with an explicit rate is what
