@@ -71,6 +71,7 @@ mod windows {
         pub(crate) fn hw_cursor_capable() -> bool {
             false
         }
+        #[allow(clippy::too_many_arguments)]
         pub(crate) fn open_driver_encoder(
             _plan: &crate::session_plan::SessionPlan,
             _capturer: &dyn crate::capture::Capturer,
@@ -78,6 +79,7 @@ mod windows {
             _fps: u32,
             _bitrate_bps: u64,
             _bit_depth: u8,
+            _client_hdr: Option<pf_frame::HdrMeta>,
             _wire_seq_base: u32,
         ) -> Result<Box<dyn crate::encode::Encoder>> {
             anyhow::bail!("the in-driver encoder is Windows IDD-push only")

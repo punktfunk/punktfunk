@@ -85,12 +85,11 @@ defaults_case debian-desk  "$DEB"  desktop '' 'Full controller (joins the punktf
 defaults_case debian-desk2 "$DEB"  desktop '' 'Third-party clients (Moonlight, Artemis): no'
 defaults_case debian-desk3 "$DEB"  desktop '' 'Shared clipboard: yes'
 defaults_case debian-desk4 "$DEB"  desktop '' 'Start at boot with nobody logged in: no'
-# The console's reach is the one default whose wrong value is a security hole rather than a
-# nuisance: it used to answer on every interface with nothing saying so (issue #1067). Under --yes
-# nobody is asked, so this line is the whole consent surface, and it must never read otherwise.
-defaults_case debian-desk5 "$DEB"  desktop '' 'Web console reachable from: this machine only'
-defaults_case bazzite-desk5 "$BAZ" desktop '' 'Web console reachable from: this machine only'
-defaults_case debian-bind  "$DEB"  desktop '' 'Web console reachable from: this local network' --web-bind=lan
+# The console's reach: under --yes nobody is asked, so this line is the whole consent surface
+# (issue #1067). The console refuses internet peers on any bind.
+defaults_case debian-desk5 "$DEB"  desktop '' 'Web console reachable from: this local network'
+defaults_case bazzite-desk5 "$BAZ" desktop '' 'Web console reachable from: this local network'
+defaults_case debian-bind  "$DEB"  desktop '' 'Web console reachable from: this machine only' --web-bind=localhost
 defaults_case debian-bind2 "$DEB"  desktop '' 'would set PUNKTFUNK_UI_BIND=100.64.0.3' --web-bind=100.64.0.3
 defaults_case fedora-desk  "$FED"  desktop '' 'Full controller (joins the punktfunk group — grants usbip attach): yes'
 defaults_case fedora-desk2 "$FED"  desktop '' 'Start at boot with nobody logged in: no'

@@ -460,7 +460,8 @@ impl SharedRing {
             .context("CreateVideoProcessor")?;
         // DXVA-aligned surfaces are taller than the frame (HEVC/AV1 round to 128); without a
         // source rect the padding blits too (uninit NV12 shows green, picture squashed). The
-        // output space follows the slot flavour. Both are fixed for the ring's life.
+        // output space follows the slot flavour. Both are fixed for the ring's life. Driver
+        // auto-processing (on by default: denoise, edge, colour enhancement) is forced off.
         let source = RECT {
             left: 0,
             top: 0,
@@ -471,6 +472,7 @@ impl SharedRing {
         // borrowed local rect.
         unsafe {
             video_context1.VideoProcessorSetStreamSourceRect(&vp, 0, true, Some(&source));
+            video_context1.VideoProcessorSetStreamAutoProcessingMode(&vp, 0, false);
             video_context1.VideoProcessorSetOutputColorSpace1(
                 &vp,
                 if pq_out {
@@ -1095,8 +1097,8 @@ impl HandoffRing {
             })?
             .clone();
         // Per-frame CICP → DXGI (host flips PQ in-band). Matrix 5/6 is BT.601; mapping
-        // it to P709 is a hue error (NVENC's RGB→YUV is BT.601). DXGI has no full-range
-        // G2084 YCbCr enum, so PQ is studio regardless of range.
+        // it to P709 is a hue error. DXGI has no full-range G2084 YCbCr enum, so PQ is
+        // studio regardless of range.
         let in_cs = match (color.transfer, color.matrix, color.full_range) {
             (16, _, _) => DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020,
             (_, 9 | 10, false) => DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P2020,

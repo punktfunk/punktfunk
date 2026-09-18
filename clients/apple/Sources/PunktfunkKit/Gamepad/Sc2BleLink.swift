@@ -141,13 +141,19 @@ final class Sc2BleLink: NSObject {
     /// The teardown itself, once the restore has had its window. Idempotent.
     private func finishStop() {
         pendingStop = false
-        if let inputChar, let controller {
-            controller.setNotifyValue(false, for: inputChar)
+        // CoreBluetooth takes these three only while the radio is on. A teardown lands before
+        // that whenever the session ends with the permission alert still up, and the frameworks
+        // then log "API MISUSE ... powered on state". Dropping the state clears everything below
+        // anyway, and a central that never powered on holds no connection to cancel.
+        if central?.state == .poweredOn {
+            if let inputChar, let controller {
+                controller.setNotifyValue(false, for: inputChar)
+            }
+            if let controller {
+                central?.cancelPeripheralConnection(controller)
+            }
+            central?.stopScan()
         }
-        if let controller {
-            central?.cancelPeripheralConnection(controller)
-        }
-        central?.stopScan()
         controller = nil
         inputChar = nil
         reportChar = nil

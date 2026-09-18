@@ -488,6 +488,12 @@ pub fn set_advanced_color(key: CcdTargetKey, enable: bool) -> bool {
     false
 }
 
+/// `DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO` bits: 1 = advancedColorEnabled, 2 = wideColorEnforced.
+/// Advanced colour with wide colour enforced is SDR auto colour management, not HDR.
+fn hdr_active(bits: u32) -> bool {
+    bits & 0x2 != 0 && bits & 0x4 == 0
+}
+
 /// Read the virtual-display target's CURRENT advanced-color (HDR) state via the CCD API — i.e. whether HDR is
 /// actually ON for the virtual display right now (e.g. because the user toggled it in Windows display
 /// settings). The capture/encode pipeline follows the monitor's real colorspace (WGC → FP16 → NVENC
@@ -509,39 +515,7 @@ pub fn advanced_color_enabled(key: CcdTargetKey) -> Option<bool> {
             // that many bytes. The local outlives this synchronous call.
             if unsafe { DisplayConfigGetDeviceInfo(&mut info.header) } == 0 {
                 // SAFETY: POD union — `value` overlays a same-sized bitfield.
-                // Bit 1 = advancedColorEnabled (bit 0 = advancedColorSupported).
-                return Some((unsafe { info.Anonymous.value } & 0x2) != 0);
-            }
-            return None;
-        }
-    }
-    None
-}
-
-/// The target's SDR white level as a SCALE relative to 80 nits (`1.0` = 80 nits): where DWM
-/// places SDR-white when composing SDR content onto this HDR desktop. An SDR-authored overlay
-/// (the composited cursor) must be multiplied by this in scRGB space or it renders visibly
-/// darker than the surrounding SDR desktop content (the Windows "SDR content brightness"
-/// slider default alone is ~2.5x). `None` = query failed / target not active (callers keep
-/// their last value or 1.0).
-///
-/// Read-only, over owned locals — same shape as [`advanced_color_enabled`].
-pub fn sdr_white_level_scale(key: CcdTargetKey) -> Option<f32> {
-    let (paths, _modes) = query_display_config(QDC_ONLY_ACTIVE_PATHS).ok()?;
-    for p in &paths {
-        if path_target_key(p) == key {
-            let mut info = DISPLAYCONFIG_SDR_WHITE_LEVEL::default();
-            info.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
-            info.header.size = size_of::<DISPLAYCONFIG_SDR_WHITE_LEVEL>() as u32;
-            info.header.adapterId = p.targetInfo.adapterId;
-            info.header.id = p.targetInfo.id;
-            // SAFETY: `header.size` is this struct's size_of; the OS may touch
-            // that many bytes. The local outlives this synchronous call.
-            if unsafe { DisplayConfigGetDeviceInfo(&mut info.header) } == 0
-                && info.SDRWhiteLevel > 0
-            {
-                // SDRWhiteLevel/1000 * 80 = nits; /1000 is the 80-nit scale.
-                return Some(info.SDRWhiteLevel as f32 / 1000.0);
+                return Some(hdr_active(unsafe { info.Anonymous.value }));
             }
             return None;
         }
@@ -987,6 +961,7 @@ pub fn target_inventory_checked() -> Result<Vec<TargetInventory>, CcdError> {
         let (mut gdi_name, mut x, mut y, mut width, mut height) =
             (String::new(), 0i32, 0i32, 0u32, 0u32);
         let (mut hdr, mut source_id, mut source_adapter_luid) = (None, 0u32, 0i64);
+        let mut sdr_white_level = None;
         if is_active {
             source_id = p.sourceInfo.id;
             source_adapter_luid = pack_luid_parts(
@@ -1001,9 +976,20 @@ pub fn target_inventory_checked() -> Result<Vec<TargetInventory>, CcdError> {
             // SAFETY: `header.size` is this struct's size_of; the OS may touch that many bytes.
             // The local outlives this synchronous call.
             if unsafe { DisplayConfigGetDeviceInfo(&mut ac.header) } == 0 {
-                // SAFETY: POD union — `value` overlays a same-sized bitfield. Bit 1 =
-                // advancedColorEnabled (the same read as `advanced_color_enabled`).
-                hdr = Some((unsafe { ac.Anonymous.value } & 0x2) != 0);
+                // SAFETY: POD union — `value` overlays a same-sized bitfield.
+                hdr = Some(hdr_active(unsafe { ac.Anonymous.value }));
+            }
+            let mut white = DISPLAYCONFIG_SDR_WHITE_LEVEL::default();
+            white.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+            white.header.size = size_of::<DISPLAYCONFIG_SDR_WHITE_LEVEL>() as u32;
+            white.header.adapterId = t.adapterId;
+            white.header.id = t.id;
+            // SAFETY: `header.size` is this struct's size_of; the OS may touch that many bytes.
+            // The local outlives this synchronous call.
+            if unsafe { DisplayConfigGetDeviceInfo(&mut white.header) } == 0
+                && white.SDRWhiteLevel > 0
+            {
+                sdr_white_level = Some(white.SDRWhiteLevel);
             }
             // SAFETY: POD union — `modeInfoIdx` overlays a same-sized bitfield;
             // every bit pattern is valid. Bounds-checked index below.
@@ -1053,6 +1039,7 @@ pub fn target_inventory_checked() -> Result<Vec<TargetInventory>, CcdError> {
             height,
             refresh_mhz,
             hdr,
+            sdr_white_level,
             source_id,
             source_adapter_luid,
         });
@@ -2022,6 +2009,13 @@ fn restore_displays_ccd_inner(saved: &SavedConfig) -> bool {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+
+    #[test]
+    fn auto_colour_management_is_not_hdr() {
+        assert!(hdr_active(0b0011), "enabled, not enforced: HDR");
+        assert!(!hdr_active(0b0111), "wide colour enforced: SDR under ACM");
+        assert!(!hdr_active(0b0001), "supported only");
+    }
 
     /// Path match is case-insensitive; unknown is not ours.
     #[test]

@@ -53,8 +53,8 @@ Sunshine/Apollo host opts into Moonlight compat; the clipboard is shared. The fu
 `--host` and `--client` choose what to install; `--client` alone installs just the client, from
 your distro's repo where it carries one and as a user-scope flatpak where it does not — so a
 distro with no punktfunk repo can still run the client. After the password step it asks where the
-web console should be reachable — this machine (the default), your local network, or one address
-such as a VPN interface; `--web-bind=localhost|lan|ADDR` answers it without the question and writes
+web console should be reachable — your local network (the default), this machine only, or one
+address such as a VPN interface; `--web-bind=localhost|lan|ADDR` answers it without the question and writes
 [`PUNKTFUNK_UI_BIND`](/docs/configuration) to `host.env`. `--channel stable|canary`, `--mgmt-port`,
 `--no-start`, `--dry-run` and `--uninstall` work as before, and each has an environment twin
 (`PUNKTFUNK_INSTALL_YES`, `PUNKTFUNK_INSTALL_CHANNEL`, `PUNKTFUNK_INSTALL_GAMESTREAM`,

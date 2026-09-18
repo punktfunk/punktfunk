@@ -114,6 +114,9 @@ pub(crate) async fn set_session_audio(
     let Some(controls) = crate::session_status::controls(id) else {
         return no_such_session();
     };
+    if crate::session_status::has_native_lanes(id) == Some(false) {
+        return not_on_this_plane();
+    }
     controls.set_muted(req.muted);
     tracing::info!(
         session = id,
@@ -182,6 +185,9 @@ pub(crate) async fn set_session_access(
     let Some(controls) = crate::session_status::controls(id) else {
         return no_such_session();
     };
+    if crate::session_status::has_native_lanes(id) == Some(false) {
+        return not_on_this_plane();
+    }
     let grants = controls.set_grants(requested);
     tracing::info!(
         session = id,
@@ -256,6 +262,9 @@ pub(crate) async fn set_session_player(
     let Some(controls) = crate::session_status::controls(id) else {
         return no_such_session();
     };
+    if crate::session_status::has_native_lanes(id) == Some(false) {
+        return not_on_this_plane();
+    }
     let reserved = controls.set_player(req.slot);
     // Remember it against the pairing, so the next connect is the same player. A
     // session with no record (anonymous) keeps the pick for this session only.
@@ -352,6 +361,9 @@ pub(crate) async fn get_session_windows(Path(id): Path<u64>) -> Response {
     let Some(controls) = crate::session_status::controls(id) else {
         return no_such_session();
     };
+    if crate::session_status::has_native_lanes(id) == Some(false) {
+        return not_on_this_plane();
+    }
     Json(session_windows(&controls)).into_response()
 }
 
@@ -387,6 +399,9 @@ pub(crate) async fn act_on_session_window(
     let Some(controls) = crate::session_status::controls(id) else {
         return no_such_session();
     };
+    if crate::session_status::has_native_lanes(id) == Some(false) {
+        return not_on_this_plane();
+    }
     // The live mask, read now: a console re-point or an expiry between the
     // client's fetch and this call must land before the verb does.
     let grants = controls.grants.load(Ordering::Relaxed);
@@ -497,6 +512,9 @@ pub(crate) async fn stream_session_pads(Path(id): Path<u64>) -> Response {
     let Some(controls) = crate::session_status::controls(id) else {
         return no_such_session();
     };
+    if crate::session_status::has_native_lanes(id) == Some(false) {
+        return not_on_this_plane();
+    }
     let Some(slot) = super::events::try_acquire_slot() else {
         return super::events::stream_cap_reached();
     };
@@ -537,6 +555,15 @@ fn no_such_session() -> Response {
     api_error(
         StatusCode::NOT_FOUND,
         "No session with that id is streaming.",
+    )
+}
+
+/// The session is live but its plane cannot carry this. GameStream has no message for a
+/// mute, an access change or a player slot, so the honest answer is that it did not happen.
+fn not_on_this_plane() -> Response {
+    api_error(
+        StatusCode::CONFLICT,
+        "This session is a GameStream one, which can't do that. Stop it or ask its client.",
     )
 }
 

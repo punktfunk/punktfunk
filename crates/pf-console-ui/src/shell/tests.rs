@@ -2255,7 +2255,7 @@ mod launch_hold {
     }
 
     #[test]
-    fn the_hold_ignores_state_read_before_the_launch_and_gives_up_without_a_lease() {
+    fn the_hold_ignores_state_read_before_the_launch_and_says_so_without_a_lease() {
         let (mut s, library, _bus) = on_shelf();
         // The shelf's own refresh, from before this launch: the previous copy exited.
         library.set_running(&running("steam:570", "exited"));
@@ -2268,10 +2268,42 @@ mod launch_hold {
         );
         at(&mut s, 100.0 + LAUNCH_NO_LEASE);
         s.sync();
+        // Sliding away here is what #1072 calls the silence: the player lands on a desktop
+        // they did not ask for and cannot tell a refusal from a slow start.
         assert!(
-            s.in_stream,
-            "the host never listed it — nothing to wait for"
+            !s.in_stream && s.holds_stream(),
+            "the hold keeps the screen"
         );
+        assert_eq!(
+            s.launching.as_ref().and_then(|l| l.failed.as_deref()),
+            Some("The host didn't start Dota 2 — nothing is running for it.")
+        );
+        s.handle_menu(MenuEvent::Confirm);
+        assert!(s.in_stream, "and a press is \"show the desktop anyway\"");
+    }
+
+    /// The three sentences, against the host's own `games[]` words. The touch shell's
+    /// `launchGaveUp` answers the same way; a report quotes one line either way.
+    #[test]
+    fn the_hold_gives_up_on_the_states_that_produced_no_game() {
+        let long = LAUNCH_HOLD_MAX + 1.0;
+        assert_eq!(
+            crate::shell::launch_gave_up("Eden", Some("exited"), 0.5).as_deref(),
+            Some("Eden closed right after starting.")
+        );
+        assert_eq!(
+            crate::shell::launch_gave_up("Eden", Some("launching"), long).as_deref(),
+            Some("Eden is still starting after 2 minutes.")
+        );
+        assert!(crate::shell::launch_gave_up("Eden", Some("launching"), 1.0).is_none());
+        assert!(crate::shell::launch_gave_up("Eden", None, 1.0).is_none());
+        // A launch that worked never produces a sentence, whatever it is doing.
+        for word in ["running", "window", "untracked", "grace"] {
+            assert!(
+                crate::shell::launch_gave_up("Eden", Some(word), long).is_none(),
+                "{word} is a launch that worked"
+            );
+        }
     }
 
     /// A host that can see windows keeps the hold up past `running` until `window`, and a
@@ -2492,5 +2524,69 @@ fn the_announcement_stays_quiet_where_it_cannot_name_the_focus() {
     assert!(
         s.focus_announcement().is_none(),
         "a takeover owns the input"
+    );
+}
+
+/// Mean red of each column over the top `rows`, where the takeover draws its field and
+/// nothing else. Aurora plus vignette is a smooth gradient, so neighbouring columns differ
+/// by a fraction of a level and a backdrop that stops somewhere shows up as one big step.
+fn column_means(surface: &mut skia_safe::Surface, w: i32, h: i32, rows: i32) -> Vec<f64> {
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    let info = skia_safe::ImageInfo::new_n32_premul((w, h), None);
+    assert!(
+        surface.read_pixels(&info, &mut pixels, (w * 4) as usize, (0, 0)),
+        "raster surface read-back"
+    );
+    (0..w)
+        .map(|x| {
+            let sum: u32 = (0..rows)
+                .map(|y| u32::from(pixels[((y * w + x) * 4) as usize]))
+                .sum();
+            f64::from(sum) / f64::from(rows)
+        })
+        .collect()
+}
+
+/// The takeover's backdrop covers the surface, not the safe rect. It used to paint at the
+/// inset size under the layout translate, so the cutout strip kept the frame's first aurora
+/// with no vignette over it and seamed down the inset edge — barely visible in a capture,
+/// obvious on the glass.
+#[test]
+fn the_takeover_field_reaches_past_a_side_cutout() {
+    let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.fake_clock = Some((100.0, 1.0 / 60.0));
+    s.set_connecting(Some("Living Room PC".into()));
+    let fonts = crate::theme::build_fonts().unwrap();
+    let (w, h, left) = (400_i32, 240_i32, 60_i32);
+    let viewport = crate::console::Viewport {
+        width: w as u32,
+        height: h as u32,
+        insets: crate::console::Insets {
+            left: left as f32,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+        },
+        scale: None,
+    };
+    let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
+    // Past the takeover's fade-in: a partly-arrived field is drawn through one alpha layer,
+    // which scales down every step it makes along with it.
+    for _ in 0..90 {
+        s.render_in(surface.canvas(), &viewport, &fonts, None, None, &[]);
+    }
+
+    let mean = column_means(&mut surface, w, h, 24);
+    let step = |x: usize| (mean[x] - mean[x - 1]).abs();
+    let seam = step(left as usize);
+    let elsewhere = (1..w as usize)
+        .filter(|x| x.abs_diff(left as usize) > 1)
+        .map(step)
+        .fold(0.0_f64, f64::max);
+    assert!(
+        seam <= elsewhere,
+        "column {left} is the cutout edge and steps {seam:.3} levels from its neighbour, more \
+         than the biggest step anywhere else ({elsewhere:.3}) — the field is stopping at the \
+         safe rect again"
     );
 }

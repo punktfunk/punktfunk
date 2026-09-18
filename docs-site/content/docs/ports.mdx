@@ -54,10 +54,10 @@ so a normal update is enough.
 
 ## Who can reach the console
 
-The web console (47992) and the plugin-UI origin beside it (47993) listen on **this machine only**
-unless you say otherwise: `PUNKTFUNK_UI_BIND` in `host.env`, `0.0.0.0` for your whole network or one
-address for a single interface. The guided installer asks. Opening the firewall is not enough on its
-own — the console has to be listening there too.
+The web console (47992) and the plugin-UI origin beside it (47993) answer **your local network**:
+this machine, private and link-local addresses, and a Tailscale tailnet. A peer from the internet is
+refused even with the port forwarded. `PUNKTFUNK_UI_BIND=127.0.0.1` in `host.env` keeps both to this
+machine, and one address limits them to a single interface. The guided installer asks.
 
 ## Moving a port
 

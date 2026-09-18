@@ -563,7 +563,7 @@ impl Presenter {
             hdr_metadata = has_hdr_metadata,
             "swapchain config"
         );
-        let overlay_pipe = OverlayPipe::new(&device, format.format)?;
+        let overlay_pipe = OverlayPipe::new(&device, format.format, false)?;
         let scale = crate::scale::ScalePass::new(&device, format.format)?;
 
         // SAFETY: CREATE — CreateInfo is a local; the pool is owned by the Presenter being built.
@@ -906,7 +906,7 @@ fn pick_device(
     bail!("no Vulkan device with a graphics+present queue family")
 }
 
-/// SDR: BGRA8 UNORM, then RGBA8, else the surface's first format. UNORM not SRGB —
+/// SDR: BGRA8 UNORM, then RGBA8, then any sRGB-space UNORM, else the first format. UNORM not SRGB —
 /// decoded RGBA is already display-referred; an SRGB blit would re-encode it.
 /// HDR: a 10-bit UNORM + HDR10/ST.2084 colorspace when the instance ext and surface
 /// offer one; otherwise the shader tonemaps.
@@ -933,7 +933,23 @@ pub(super) fn pick_formats(
             break;
         }
     }
+    let srgb_encoded = |f: vk::Format| {
+        matches!(
+            f,
+            vk::Format::B8G8R8A8_SRGB
+                | vk::Format::R8G8B8A8_SRGB
+                | vk::Format::A8B8G8R8_SRGB_PACK32
+        )
+    };
     let sdr = sdr
+        .or_else(|| {
+            formats
+                .iter()
+                .find(|f| {
+                    f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR && !srgb_encoded(f.format)
+                })
+                .copied()
+        })
         .or_else(|| formats.first().copied())
         .ok_or_else(|| anyhow!("surface offers no formats"))?;
     let hdr10 = colorspace_ext

@@ -89,7 +89,9 @@ The device then appears under **Paired devices**, and Moonlight remembers the ho
 Moonlight lists **Desktop** plus the games the host found installed (Steam, Epic, GOG, Xbox), with
 cover art — the same [library](/docs/game-library) the native clients show. Pick one and start
 streaming. While a session of yours is running, Moonlight offers **Resume** and **Quit** for it —
-resuming re-attaches to the session you left (only the device that started it sees this). The host
+resuming re-attaches to the session you left (only the device that started it sees this). The
+console lists that session beside any native ones, and its **Stop** ends that one; mute, access
+level and player slot are native-only, because GameStream has no message for them. The host
 creates a virtual display at the resolution and frame rate Moonlight requests (set these in
 Moonlight's settings), encodes it on the GPU, and streams it. Mouse, keyboard, and
 controllers flow back to the host — and a Moonlight client that sends pen events, an iPad's Apple

@@ -3993,8 +3993,8 @@ fn hdr_args(hdr: bool) -> Vec<String> {
     ]
 }
 
-/// BT.2408 HDR Reference White. gamescope's default is 400 — nearly a stop above what clients
-/// decode against. `PUNKTFUNK_GAMESCOPE_SDR_NITS` still exists; moving it off 203 re-opens the gap.
+/// BT.2408 HDR Reference White, the level clients anchor SDR white at. It is the starting value:
+/// from `+pfhdr16` the capture follows Steam's SDR brightness setting when Steam changes it.
 const SDR_REFERENCE_WHITE_NITS: u32 = 203;
 
 /// Must agree with [`crate::gamescope_composites_cursor`] — both read the same probe.

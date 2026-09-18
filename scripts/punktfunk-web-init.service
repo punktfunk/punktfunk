@@ -2,8 +2,8 @@
 #
 # Three jobs, all of which must happen BEFORE the console's exec:
 #
-#  0. Write host.env's PUNKTFUNK_UI_BIND once, so a console that already served this box's LAN
-#     keeps that reach when the shipped default changes under it (see web-init.sh).
+#  0. Write host.env's PUNKTFUNK_UI_BIND once, so the operator finds where the console listens
+#     (see web-init.sh).
 #  1. Generate the console login password (PUNKTFUNK_UI_PASSWORD) in the streaming user's
 #     ~/.config/punktfunk on first start, surfaced to the --user journal for retrieval. A .deb
 #     postinst runs as root (wrong $HOME), so credential generation must happen as the user —

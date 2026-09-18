@@ -13,7 +13,7 @@
 #   bash scripts/steamdeck/install.sh --gamestream    # ALSO serve Moonlight clients (opt-in; #5/#9 caveats)
 #   bash scripts/steamdeck/install.sh --open          # trusted LAN: accept unpaired clients (TOFU)
 #   bash scripts/steamdeck/install.sh --no-web        # skip the management web console
-#   bash scripts/steamdeck/install.sh --web-bind=0.0.0.0  # console on your network (default: this Deck)
+#   bash scripts/steamdeck/install.sh --web-bind=127.0.0.1  # console on this Deck only (default: your network)
 #   PUNKTFUNK_SRC=~/src/punktfunk bash scripts/steamdeck/install.sh   # source elsewhere
 #
 set -euo pipefail
@@ -37,9 +37,9 @@ BOX="${PUNKTFUNK_BOX:-pf2}"
 BOX_IMAGE="${PUNKTFUNK_BOX_IMAGE:-docker.io/library/debian:trixie}"
 MGMT_PORT="${PUNKTFUNK_MGMT_PORT:-47990}"
 WEB_PORT="${PUNKTFUNK_WEB_PORT:-47992}"
-# Where the console listens. Loopback unless asked: a Deck on hotel wi-fi should not hand its
-# console to the network by default. --web-bind=0.0.0.0 (or one address) opens it.
-WEB_BIND="${PUNKTFUNK_UI_BIND:-127.0.0.1}"
+# Where the console listens. Your network by default, since a Deck in Game Mode has no browser;
+# the console refuses peers off the local network. --web-bind=127.0.0.1 keeps it to this Deck.
+WEB_BIND="${PUNKTFUNK_UI_BIND:-0.0.0.0}"
 [ -n "${PUNKTFUNK_UI_BIND:-}" ] && WEB_BIND_SET=1 || WEB_BIND_SET=0
 OPEN=0
 WITH_WEB=1
@@ -318,13 +318,11 @@ elif [ "$WITH_WEB" = 1 ] && [ -f "$CONFIG/web.env" ]; then
     else
         ok "web.env exists (login password unchanged, mode already 0600)"
     fi
-    # This Deck ran a console that answered on every interface, and the console now binds loopback
-    # unless told otherwise. Write down the reach it already had rather than take it away here;
-    # --web-bind on a re-run says otherwise. An existing line always wins — edit web.env to change it.
+    # Name the bind once so the operator finds it; --web-bind on a re-run picks the value. An
+    # existing line always wins — edit web.env to change it.
     if ! grep -q '^[[:space:]]*PUNKTFUNK_UI_BIND=' "$CONFIG/web.env"; then
-        [ "$WEB_BIND_SET" = 1 ] && KEEP="$WEB_BIND" || KEEP=0.0.0.0
-        printf '# Where the console listens: this install already served your network.\nPUNKTFUNK_UI_BIND=%s\n' "$KEEP" >> "$CONFIG/web.env"
-        ok "web.env: console bind is now $KEEP"
+        printf '# Where the console listens: 0.0.0.0 (your network), 127.0.0.1 (this Deck), or one address.\nPUNKTFUNK_UI_BIND=%s\n' "$WEB_BIND" >> "$CONFIG/web.env"
+        ok "web.env: console bind is now $WEB_BIND"
     elif [ "$WEB_BIND_SET" = 1 ]; then
         warn "web.env already names PUNKTFUNK_UI_BIND — --web-bind was ignored; edit $CONFIG/web.env"
     fi

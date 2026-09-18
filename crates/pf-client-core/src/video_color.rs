@@ -32,6 +32,7 @@ impl ColorDesc {
 /// 64/940/960 over 1023. Those are not the same normalized values (~½ code).
 /// `msb_packed` is P010/X6 (10 bits in the MSBs of 16): a UNORM16 sample is
 /// `code·64/65535`; multiply by `65535/65472` to recover `code/1023`.
+/// Neutral chroma is code 128 (512 at 10 bits) in both ranges, not 0.5.
 pub fn csc_rows(desc: ColorDesc, depth: u8, msb_packed: bool) -> [[f32; 4]; 3] {
     // H.273 5/6 = BT.601, 9/10 = BT.2020; unspecified and the rest are BT.709.
     let (kr, kb) = match desc.matrix {
@@ -53,7 +54,8 @@ pub fn csc_rows(desc: ColorDesc, depth: u8, msb_packed: bool) -> [[f32; 4]; 3] {
         )
     };
     // Fold M*(yuv+off) into w. Sampled `yuv` is already packed, so off / pack.
-    let off = [oy / pack, -0.5 / pack, -0.5 / pack];
+    let oc = -(128.0 * step) / max;
+    let off = [oy / pack, oc / pack, oc / pack];
     let m = [
         [sy, 0.0, 2.0 * (1.0 - kr) * sc],
         [
@@ -95,8 +97,8 @@ mod tests {
         let white = apply(&rows, [s(940), s(512), s(512)]);
         let black = apply(&rows, [s(64), s(512), s(512)]);
         for (w, b) in white.iter().zip(black) {
-            assert!((w - 1.0).abs() < 0.002, "white {white:?}");
-            assert!(b.abs() < 0.002, "black {black:?}");
+            assert!((w - 1.0).abs() < 1e-4, "white {white:?}");
+            assert!(b.abs() < 1e-4, "black {black:?}");
         }
     }
 
@@ -106,25 +108,69 @@ mod tests {
         let white = apply(&rows, [235.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0]);
         let black = apply(&rows, [16.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0]);
         for (w, b) in white.iter().zip(black) {
-            assert!((w - 1.0).abs() < 0.005, "white {white:?}");
-            assert!(b.abs() < 0.005, "black {black:?}");
+            assert!((w - 1.0).abs() < 1e-4, "white {white:?}");
+            assert!(b.abs() < 1e-4, "black {black:?}");
         }
     }
 
     #[test]
     fn full_range_and_red_excursion() {
         let rows = csc_rows(desc(5, true), 8, false);
-        let white = apply(&rows, [1.0, 0.5, 0.5]);
+        let c0 = 128.0 / 255.0;
+        let white = apply(&rows, [1.0, c0, c0]);
         assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-5), "{white:?}");
-        let red = apply(&rows, [0.0, 0.5, 1.0]);
-        assert!((red[0] - 2.0 * (1.0 - 0.299) * 0.5).abs() < 1e-4, "{red:?}");
-        let rows709 = csc_rows(desc(1, true), 8, false);
-        let red709 = apply(&rows709, [0.0, 0.5, 1.0]);
+        let red = apply(&rows, [0.0, c0, 1.0]);
         assert!(
-            (red709[0] - 2.0 * (1.0 - 0.2126) * 0.5).abs() < 1e-4,
+            (red[0] - 2.0 * (1.0 - 0.299) * (1.0 - c0)).abs() < 1e-4,
+            "{red:?}"
+        );
+        let rows709 = csc_rows(desc(1, true), 8, false);
+        let red709 = apply(&rows709, [0.0, c0, 1.0]);
+        assert!(
+            (red709[0] - 2.0 * (1.0 - 0.2126) * (1.0 - c0)).abs() < 1e-4,
             "{red709:?}"
         );
         assert!((red[0] - red709[0]).abs() > 0.05);
+    }
+
+    /// RGB → the hosts' BT.709 limited 8-bit CSC (`rgb2yuv.comp`, rounded to codes) → rows.
+    /// Greys come back neutral and black exactly black; primaries within quantization.
+    #[test]
+    fn host_bt709_limited_round_trip() {
+        let rows = csc_rows(desc(1, false), 8, false);
+        let code = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) / 255.0;
+        for rgb in [
+            [0.0f64, 0.0, 0.0],
+            [0.18, 0.18, 0.18],
+            [0.5, 0.5, 0.5],
+            [1.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ] {
+            let [r, g, b] = rgb;
+            let y = code(16.0 / 255.0 + 0.1826 * r + 0.6142 * g + 0.0620 * b);
+            let cb = code(128.0 / 255.0 - 0.1006 * r - 0.3386 * g + 0.4392 * b);
+            let cr = code(128.0 / 255.0 + 0.4392 * r - 0.3989 * g - 0.0403 * b);
+            let out = apply(&rows, [y as f32, cb as f32, cr as f32]);
+            let grey = r == g && g == b;
+            for c in 0..3 {
+                let err = (f64::from(out[c].clamp(0.0, 1.0)) - rgb[c]) * 255.0;
+                // Greys land on one code; saturated colours carry the 8-bit rounding.
+                let tol = if grey { 0.6 } else { 2.0 };
+                assert!(err.abs() <= tol, "{rgb:?} -> {out:?} ({err:+.2} codes)");
+            }
+            if grey {
+                let spread = (out[0] - out[1]).abs().max((out[2] - out[1]).abs()) * 255.0;
+                assert!(
+                    spread < 0.05,
+                    "{rgb:?} tinted by {spread:.2} codes: {out:?}"
+                );
+            }
+        }
     }
 
     /// Same coefficients as `video_gl::yuv_to_rgb`, column-major packing.
@@ -156,7 +202,7 @@ mod tests {
                 -2.0 * (1.0 - kr) * kr / kg * sc,
                 0.0,
             ];
-            let off = [oy, -0.5, -0.5];
+            let off = [oy, -128.0 / 255.0, -128.0 / 255.0];
             for yuv in [
                 [0.1f32, 0.3, 0.7],
                 [0.9, 0.5, 0.5],

@@ -1,5 +1,5 @@
 # punktfunk management web console — systemd USER unit (Nitro SSR on bun, port 47992, HTTPS,
-# loopback unless host.env's PUNKTFUNK_UI_BIND says otherwise).
+# local network only unless host.env's PUNKTFUNK_UI_BIND says otherwise).
 #
 # Installed by the punktfunk-web .deb to /usr/lib/systemd/user/. AUTO-WIRED — no env editing:
 # it sources the host's mgmt token + the generated login password, serves HTTPS (HTTP/1.1 over TLS)
@@ -30,10 +30,9 @@ StartLimitIntervalSec=0
 Type=simple
 # The host's configuration file, read for ONE key: PUNKTFUNK_UI_BIND — where the console listens
 # (127.0.0.1, 0.0.0.0, or one address). First, so the console's own three files below still win
-# any key they share. No `Environment=HOST=` line answers it, because the server's own default is
-# loopback: a missing file and a missing key then mean the same thing, and no directive order
-# decides it. web-init.sh writes the key before this unit starts — an upgrade from a console that
-# served the LAN keeps that reach, stated in the file instead of baked into this unit.
+# any key they share. No `Environment=HOST=` line answers it: the server's own default is every
+# interface, local peers only, so a missing file and a missing key mean the same thing. web-init.sh
+# writes the key before this unit starts, so the operator finds it in the file.
 EnvironmentFile=-%h/.config/punktfunk/host.env
 # Both are KEY=VALUE files. mgmt-token is REQUIRED (written by the host's `serve`) — a console with
 # no token cannot reach the mgmt API at all, so failing closed beats serving a login page that 401s

@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use super::asc_presenter::{asc_backend_selected, AscBackend};
 use super::display::{
-    apply_hdr_dataspace, color_dataspace, hdr_dataspace, install_render_callback,
-    release_render_callback, DisplayTracker,
+    apply_reported_dataspace, color_dataspace, install_render_callback, release_render_callback,
+    reported_dataspace, DisplayTracker,
 };
 use super::latency::{
     note_decoded_pts, note_received_frame, now_realtime_ns, take_flags, take_stamp,
@@ -456,6 +456,10 @@ fn bring_up(
                 priority,
                 overlay,
             )
+            .map(|mut a| {
+                a.set_hdr_meta(hdr_static);
+                a
+            })
         });
         // The decoder's output surface: the reader's window when ASC is active, else the SurfaceView.
         let configure_window: &NativeWindow = asc.as_ref().map_or(window, |a| a.reader_window());
@@ -702,16 +706,15 @@ impl State {
                     .store(crate::session::pack_surface_size(w, h), Ordering::Relaxed);
             }
             match self.asc.as_mut() {
-                // ASC carries the HDR signal on the transaction, not the SurfaceView window.
-                // Refine only when the codec actually reports an HDR transfer — a `None` echo
-                // (decoders commonly omit `color-transfer`) must not clobber the negotiated
-                // dataspace back to SDR before the first present.
+                // ASC carries the colour on the transaction, not the SurfaceView window. Refine
+                // only when the codec reports a transfer — a `None` echo (decoders commonly omit
+                // `color-transfer`) must not clobber the negotiated dataspace.
                 Some(a) => {
-                    if let Some(ds) = hdr_dataspace(&ctx.codec) {
+                    if let Some(ds) = reported_dataspace(&ctx.codec) {
                         a.set_dataspace(i32::from(ds));
                     }
                 }
-                None => apply_hdr_dataspace(&ctx.codec, &ctx.window, &mut self.applied_ds),
+                None => apply_reported_dataspace(&ctx.codec, &ctx.window, &mut self.applied_ds),
             }
         }
         self.feed(ctx);

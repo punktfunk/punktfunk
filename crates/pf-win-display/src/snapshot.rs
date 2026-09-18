@@ -87,8 +87,11 @@ pub struct TargetInventory {
     pub refresh_mhz: u32,
     /// Desktop origin sits on this head — Windows' "primary".
     pub primary: bool,
-    /// Advanced colour (HDR) enabled on the target; `None` when inactive or the query failed.
+    /// HDR active on the target; `None` when inactive or the query failed.
     pub hdr: Option<bool>,
+    /// `SDRWhiteLevel` (1000 = 80 nits): where DWM puts SDR white on an HDR desktop. `None` when
+    /// inactive or not reported.
+    pub sdr_white_level: Option<u32>,
     /// The SOURCE side of the active path (VidPn source id + its adapter) — what `D3DKMTGetScanLine`
     /// and the scanline probe address. Zero when inactive.
     pub source_id: u32,
@@ -306,6 +309,7 @@ mod tests {
             refresh_mhz: 60_000,
             primary: active && x == 0 && y == 0,
             hdr: active.then_some(false),
+            sdr_white_level: None,
             source_id: key,
             source_adapter_luid: 0x1f,
         }

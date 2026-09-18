@@ -448,6 +448,7 @@ mod tests {
             refresh_mhz: 0,
             primary: false,
             hdr: None,
+            sdr_white_level: None,
             source_id: 0,
             source_adapter_luid: 0,
         }

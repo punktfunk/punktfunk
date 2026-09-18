@@ -106,11 +106,11 @@ pub(crate) type EglImageTargetFn = unsafe extern "system" fn(u32, *mut c_void);
 pub(crate) const VERT_SRC: &[u8] = b"#version 330 core\nout vec2 v_tex;\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));v_tex=p;gl_Position=vec4(p*2.0-1.0,0.0,1.0);}\n";
 pub(crate) const FRAG_SRC: &[u8] = b"#version 330 core\nuniform sampler2D image;\nin vec2 v_tex;\nout vec4 o_color;\nvoid main(){o_color=texture(image,v_tex).bgra;}\n";
 
-// NV12 BT.709 studio (16+219 / 128±112) from RGB in [0,1]. UV is half-res: `GL_LINEAR`
-// averages the 2×2; RG8 (R=U, G=V) is NV12's interleaved chroma. Same matrix as the
-// Windows VideoConverter so both hosts match.
+// NV12 BT.709 studio (16+219 / 128±112) from RGB in [0,1]. UV is half-res and left-sited
+// (H.273 type 0): two `GL_LINEAR` taps one texel apart give [1 2 1] across columns 2i-1..2i+1
+// over both rows. RG8 (R=U, G=V) is NV12's interleaved chroma. Same matrix as Windows.
 pub(crate) const FRAG_Y_SRC: &[u8] = b"#version 330 core\nuniform sampler2D image;\nin vec2 v_tex;\nout vec4 o_color;\nvoid main(){vec3 c=texture(image,v_tex).rgb;float Y=(16.0+219.0*(0.2126*c.r+0.7152*c.g+0.0722*c.b))/255.0;o_color=vec4(clamp(Y,0.0,1.0),0.0,0.0,1.0);}\n";
-pub(crate) const FRAG_UV_SRC: &[u8] = b"#version 330 core\nuniform sampler2D image;\nin vec2 v_tex;\nout vec4 o_color;\nvoid main(){vec3 c=texture(image,v_tex).rgb;float U=(128.0+224.0*(-0.1146*c.r-0.3854*c.g+0.5000*c.b))/255.0;float V=(128.0+224.0*(0.5000*c.r-0.4542*c.g-0.0458*c.b))/255.0;o_color=vec4(clamp(U,0.0,1.0),clamp(V,0.0,1.0),0.0,1.0);}\n";
+pub(crate) const FRAG_UV_SRC: &[u8] = b"#version 330 core\nuniform sampler2D image;\nin vec2 v_tex;\nout vec4 o_color;\nvoid main(){float w=float(textureSize(image,0).x);vec3 c=0.5*(texture(image,v_tex).rgb+texture(image,vec2(max(v_tex.x-1.0/w,0.5/w),v_tex.y)).rgb);float U=(128.0+224.0*(-0.1146*c.r-0.3854*c.g+0.5000*c.b))/255.0;float V=(128.0+224.0*(0.5000*c.r-0.4542*c.g-0.0458*c.b))/255.0;o_color=vec4(clamp(U,0.0,1.0),clamp(V,0.0,1.0),0.0,1.0);}\n";
 
 /// Planar YUV444 (three full-res `R8` shaders). Same BT.709 matrix as NV12; `full_range`
 /// switches studio (16+219 / 128±112) to 0..255. The encoder reads `PUNKTFUNK_444_FULLRANGE`

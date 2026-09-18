@@ -147,6 +147,8 @@ public final class StreamViewController: StreamViewControllerBase {
     /// The window's display manager the session's mode request was set on — held weakly so
     /// stop() can clear the request even after the view has left the window.
     private weak var sessionDisplayManager: AVDisplayManager?
+    /// The decoded frames are HDR — what the display-mode request follows.
+    private var frameHDR = false
     #endif
     #if os(iOS)
     private var inputCapture: InputCapture?
@@ -654,6 +656,9 @@ public final class StreamViewController: StreamViewControllerBase {
             onDecodedSize: { [weak self] w, h in
                 DispatchQueue.main.async { self?.noteDecodedContentSize(width: w, height: h) }
                 overlayDecodedSize?(w, h)
+            },
+            onFrameHDR: { [weak self] hdr in
+                DispatchQueue.main.async { self?.noteFrameHDR(hdr) }
             })
         layoutMetalLayer()
 
@@ -770,6 +775,7 @@ public final class StreamViewController: StreamViewControllerBase {
         // session's HDR10/refresh mode.
         sessionDisplayManager?.preferredDisplayCriteria = nil
         sessionDisplayManager = nil
+        frameHDR = false
         #endif
         presenter.stop()
         lastDecodedContentSize = nil // the next session re-derives it from its first frame
@@ -805,18 +811,20 @@ public final class StreamViewController: StreamViewControllerBase {
     /// Applied once per session, as soon as the window and the negotiated mode both exist; the
     /// stop() teardown clears it.
     ///
-    /// ⚠️ Gated on the STREAM being HDR (`connection.isHDR`), not just on the user's HDR setting.
-    /// The criteria below hardcode BT.2020 + ST.2084 PQ, so without that check an ordinary SDR
-    /// session drove an HDR-capable TV into PQ output — which is a standard way to raise the black
-    /// floor, since the Apple TV switches HDMI to limited-range levels in its HDR modes and a set
-    /// configured for full-range then renders code 16 as grey. Layout re-runs this, so a session
-    /// that flips to HDR mid-stream still picks the mode up on the next pass.
+    /// ⚠️ Keyed on the decoded frames being HDR (`frameHDR`), not the Welcome or the setting alone.
+    /// The criteria hardcode BT.2020 PQ, and in its HDR modes the Apple TV sends limited-range
+    /// HDMI, so SDR frames on a full-range set show code 16 as grey. Frames that turn SDR hand the
+    /// TV back its own mode.
     private func applyDisplayCriteriaIfNeeded() {
-        guard let manager = view.window?.avDisplayManager, let connection,
-              manager.preferredDisplayCriteria == nil,
-              connection.settings.hdrEnabled,
-              connection.isHDR
-        else { return }
+        guard let manager = view.window?.avDisplayManager, let connection else { return }
+        guard frameHDR, connection.settings.hdrEnabled else {
+            if sessionDisplayManager != nil {
+                manager.preferredDisplayCriteria = nil
+                sessionDisplayManager = nil
+            }
+            return
+        }
+        guard manager.preferredDisplayCriteria == nil else { return }
         let mode = connection.currentMode()
         guard mode.width > 0, mode.height > 0, mode.refreshHz > 0 else { return }
         // A synthetic HDR10-HEVC format description carrying the negotiated mode — what the
@@ -874,6 +882,14 @@ public final class StreamViewController: StreamViewControllerBase {
         return streamView.displayLayer
     }
 
+    /// The decoded frames turned HDR or SDR. tvOS follows them with the display mode. Main thread.
+    private func noteFrameHDR(_ hdr: Bool) {
+        #if os(tvOS)
+        frameHDR = hdr
+        applyDisplayCriteriaIfNeeded()
+        #endif
+    }
+
     /// A new decoded size landed (a scene/mode resize's new IDR, or the first frame): push it to the
     /// presenter's aspect-fit and re-layout NOW. A resize-END triggers no `viewDidLayoutSubviews`, so
     /// this is what makes the metal sublayer track the new content aspect instead of stretching the
@@ -882,12 +898,6 @@ public final class StreamViewController: StreamViewControllerBase {
         let size = CGSize(width: width, height: height)
         guard size.width > 0, size.height > 0, size != lastDecodedContentSize else { return }
         lastDecodedContentSize = size
-        #if os(tvOS)
-        // A mid-stream flip to HDR reaches us as a new decoded format, and the display-criteria
-        // request is otherwise only attempted from layout — which a full-screen tvOS session
-        // never runs again, so the TV stayed in its SDR mode for the rest of the session.
-        applyDisplayCriteriaIfNeeded()
-        #endif
         presenter.setContentSize(size)
         layoutMetalLayer()
     }
@@ -1189,11 +1199,14 @@ final class StreamLayerUIView: UIView {
     /// Trackpad two-finger / wheel scroll (no lock) → host scroll deltas, WHEEL(120)-scaled.
     /// `precise` = a continuous (trackpad) device, not a notched wheel.
     var onScroll: ((_ dx: Float, _ dy: Float, _ precise: Bool) -> Void)?
-    /// The two-finger twist turning the quick-action ring.
+    /// The two-finger twist turning the quick-action ring, or the passthrough edge pull.
     var onDial: ((DialEvent) -> Void)?
 
     /// Wire touch ids per active direct UITouch; ids are reused after the touch ends.
     private var touchIDs: [ObjectIdentifier: UInt32] = [:]
+    /// Live fingers that landed on a side bezel, for the passthrough dial opener
+    /// ([`EdgeDial`]). Only in the `touch` model — every other model has the twist.
+    private var edgeTracks: [ObjectIdentifier: EdgeTrack] = [:]
     /// GameStream button held per active indirect-pointer touch (one click/drag session);
     /// released when that touch ends.
     private var pointerButtons: [ObjectIdentifier: UInt32] = [:]
@@ -1337,6 +1350,10 @@ final class StreamLayerUIView: UIView {
             // A cancellation lifts the wire touch like a normal up — the host just sees the
             // contact end.
             forwardTouches(touches, kind: kind == .cancel ? .up : kind)
+            // …then read the same fingers for the edge pull, which is this model's only way to
+            // the dial. Forwarding first is deliberate: a pull that never completes must not
+            // have cost the host a contact.
+            trackEdgePull(touches, kind: kind)
         case .trackpad, .pointer:
             switch kind {
             case .down: touchMouse.began(touches, in: self, trackpad: mode == .trackpad)
@@ -1393,6 +1410,55 @@ final class StreamLayerUIView: UIView {
                     ? .touchDown(id: id, x: h.x, y: h.y, surfaceWidth: h.w, surfaceHeight: h.h)
                     : .touchMove(id: id, x: h.x, y: h.y, surfaceWidth: h.w, surfaceHeight: h.h))
         }
+    }
+
+    /// The passthrough dial opener: follow fingers that landed on a side bezel, and when two of
+    /// them have been pulled in together, lift those contacts on the host and open the dial.
+    ///
+    /// The lift is what keeps the host honest — it already saw the touches go down, so ending
+    /// them is the difference between a stray tap and two fingers stuck at the edge of the game.
+    private func trackEdgePull(_ touches: Set<UITouch>, kind: TouchKind) {
+        guard onDial != nil else { return }
+        switch kind {
+        case .down:
+            let width = bounds.width
+            for touch in touches {
+                let p = touch.location(in: self)
+                guard let edge = EdgeDial.edge(of: p, width: width) else { continue }
+                edgeTracks[ObjectIdentifier(touch)] = EdgeTrack(edge: edge, start: p, now: p)
+            }
+        case .move:
+            for touch in touches {
+                let key = ObjectIdentifier(touch)
+                guard var track = edgeTracks[key] else { continue }
+                track.now = touch.location(in: self)
+                edgeTracks[key] = track
+            }
+            guard let (a, b) = firstCompletedPull() else { return }
+            // End the pull's own contacts, by the wire ids they were given. Dropping them from
+            // `touchIDs` is also what makes the rest of this gesture invisible: `forwardTouches`
+            // skips a touch it has no id for, so the later moves and the real lift send nothing.
+            for key in edgeTracks.keys {
+                if let id = touchIDs.removeValue(forKey: key) {
+                    onTouchEvent?(.touchUp(id: id))
+                }
+            }
+            edgeTracks.removeAll()
+            onDial?(.open(at: EdgeDial.centre(a, b)))
+        case .up, .cancel:
+            for touch in touches { edgeTracks.removeValue(forKey: ObjectIdentifier(touch)) }
+        }
+    }
+
+    /// The first pair of tracked fingers that satisfies [`EdgeDial.completes`].
+    private func firstCompletedPull() -> (EdgeTrack, EdgeTrack)? {
+        let tracks = Array(edgeTracks.values)
+        for i in tracks.indices {
+            for j in (i + 1)..<tracks.count where EdgeDial.completes(tracks[i], tracks[j]) {
+                return (tracks[i], tracks[j])
+            }
+        }
+        return nil
     }
 
     /// Button-less mouse/trackpad movement (no lock) → absolute cursor move — unless it is a

@@ -207,6 +207,11 @@ impl SystemRunner {
             crate::platform::windows::sys::system32(&exe)
         };
         let mut c = std::process::Command::new(program);
+        // CREATE_NO_WINDOW: a fresh hidden console per child. The one inherited from the
+        // updater's host dies with the service this run stops, and a child born into a
+        // dead console exits 0xC0000142.
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
         for (key, value) in &self.exports {
             c.env(key, value);
         }

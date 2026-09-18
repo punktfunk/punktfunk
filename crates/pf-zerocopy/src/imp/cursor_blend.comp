@@ -13,12 +13,9 @@
 // rgb2nv12_buf.comp and the retired .cu, so the cursor colour matches the frame regardless of
 // backend.
 //
-// The 10-bit modes are the HDR path: the surface holds PQ-encoded BT.2020 samples and NVENC does
-// the CSC itself, so the blend stays in RGB — it scales the 8-bit cursor to 10 bits and blends in
-// the destination's own (PQ) encoding. That is display-referred, i.e. an approximation, exactly
-// like the 8-bit gamma-space blend above and byte-for-byte what the CPU path's
-// `composite_cursor_rgb10` does. A real sRGB→PQ cursor LUT is polish, not correctness for a
-// pointer.
+// The 10-bit modes are the HDR path: the surface holds PQ BT.2020 samples and NVENC does the CSC.
+// The host uploads the cursor already PQ-encoded (`CursorOverlay::pq_rgba`), so the blend scales
+// it to 10 bits and mixes PQ codes, byte-for-byte what `composite_cursor_rgb10` does.
 //
 // The surface SSBO is uint[] (no 8-bit storage dependency — maximum driver reach): every
 // invocation exclusively owns the 32-bit words it read-modify-writes. ARGB: one invocation per

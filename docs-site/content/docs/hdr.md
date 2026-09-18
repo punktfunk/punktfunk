@@ -86,11 +86,14 @@ deliberately stay on attach, set `PUNKTFUNK_GAMESCOPE_HDR=0` so the failed attem
 Attach also leaves the stream with no cursor; [HDR on gamescope](/docs/gamescope#hdr-on-gamescope)
 has the fix for that half.
 
-SDR content — the desktop, the Steam overlay, an SDR game — rides the same PQ container, mapped in
-at `PUNKTFUNK_GAMESCOPE_SDR_NITS`, default **203 nits**. That is BT.2408 reference white and the
-level our clients decode against, so the two ends agree out of the box. gamescope's own default is
-400, nearly a stop brighter; hosts that let it float showed a glaring, over-saturated Steam UI and
-washed-out HDR game content on the same stream. Moving the knob re-opens that gap.
+SDR content — the desktop, the Steam overlay, an SDR game — rides the same PQ container at
+`PUNKTFUNK_GAMESCOPE_SDR_NITS`, default **203 nits**. That is BT.2408 reference white and the level
+our clients decode against, so the two ends agree out of the box. Steam's SDR brightness setting
+moves it during the session; a higher value makes SDR brighter next to HDR content.
+
+That needs `punktfunk-gamescope` at `+pfhdr16` or newer. Older builds ignore both the variable and
+Steam's setting, and stretch SDR colours to the BT.2020 gamut, so the Steam UI and SDR games look
+oversaturated in an HDR stream.
 
 ### Linux + GNOME
 
@@ -194,7 +197,7 @@ Host, in [`host.env`](/docs/configuration):
 |---|---|---|
 | `PUNKTFUNK_10BIT` | **on** | Allow 10-bit (HEVC Main10 / AV1 10-bit) at all. `0`, `false`, `off` or `no` forces every session to 8-bit SDR. |
 | `PUNKTFUNK_GAMESCOPE_HDR` | **on** | Allow HDR on the gamescope backend. It only decides whether HDR is *attempted* — a host without `punktfunk-gamescope` stays SDR either way. `0` is the escape hatch that puts the gamescope backend back on the old SDR path, spawn flags included. |
-| `PUNKTFUNK_GAMESCOPE_SDR_NITS` | **203** | How bright SDR content is inside the PQ container of an HDR gamescope session. |
+| `PUNKTFUNK_GAMESCOPE_SDR_NITS` | **203** | How bright SDR content starts inside the PQ container of an HDR gamescope session. Steam's SDR brightness setting replaces it. |
 | `PUNKTFUNK_VIDEO_SOURCE=portal` | unset | Required for the GNOME 50+ monitor-mirror route. GameStream/Moonlight only — no effect on `punktfunk/1` sessions. |
 
 Client: one toggle, in Settings under **Quality** with

@@ -4,13 +4,13 @@
   Third-party clients (Moonlight, Artemis): no
   Shared clipboard: yes
   Start at boot with nobody logged in: no
-  Web console reachable from: this machine only
+  Web console reachable from: this local network
 ==> host, web console and plugin runner are already installed (punktfunk-host 0.34.0, canary channel) — updating to the current build
   + sudo pacman -Syu --noconfirm punktfunk-host punktfunk-web punktfunk-scripting
 ==> Checking for Sunshine / Apollo / Vibeshine
   ok No conflicting game-streaming host detected.
 ==> Options (each one can be changed later)
-  ok would set PUNKTFUNK_UI_BIND=127.0.0.1 in /box/config/punktfunk/host.env
+  ok would set PUNKTFUNK_UI_BIND=0.0.0.0 in /box/config/punktfunk/host.env
   ok would set clipboard="files" in /box/config/punktfunk/host-settings.json
 ==> Controller access
   ok already in the input group
@@ -24,7 +24,7 @@
 
   Done. Next: let a device in.
   On the device you play on, open punktfunk and pick this host. Approve it in the notification here, or in the console.
-  Console: https://127.0.0.1:47992  (this machine only — PUNKTFUNK_UI_BIND in host.env opens it up)
+  Console: https://192.168.1.10:47992  (its certificate is this host's own)
   Password — this prints it, until you first sign in: sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' ~/.config/punktfunk/web-password
   Group changes apply after you log out and back in (controllers won't work until then).
   https://docs.punktfunk.unom.io/docs/troubleshooting · https://docs.punktfunk.unom.io/docs/arch

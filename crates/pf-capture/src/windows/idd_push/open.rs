@@ -345,7 +345,8 @@ impl IddPushCapturer {
             composite_cursor: composite_forced,
             composite_forced,
             cursor_shm_latched: false,
-            sdr_white_scale: 1.0,
+            sdr_white_scale: 2.5,
+            sdr_white_logged: false,
             // Taken at open so the display cannot idle off under the session;
             // held until the capturer drops.
             _display_wake: pf_frame::session_tuning::DisplayWakeRequest::new(),

@@ -715,13 +715,20 @@ pub(crate) fn resolve_art_bytes(v: &str) -> Option<(Vec<u8>, String)> {
 /// (a client cannot reach `C:\…`) and a remote URL (the host stores it once, for all of them).
 /// A URL a fetch already refused stays verbatim so the client can still try it, and an
 /// already-proxied path is left alone.
+///
+/// Each path carries `?v=`, the head of the source value's own hash. Without it the path stayed
+/// the same when the operator pointed an entry at a different cover, and nothing in front of the
+/// host — a browser holding `max-age`, a client's disk cache keyed by URL — ever asked again. It
+/// costs no I/O and moves exactly when the source does; the same source serving new bytes is
+/// still the ETag's job.
 pub fn proxy_art(id: &str, art: &mut Artwork) {
     let rw = |field: &mut Option<String>, kind: &str| {
-        let servable = field.as_deref().is_some_and(|v| {
-            is_local_art_path(v) || (is_remote_art_url(v) && !remote_art_refused(v))
-        });
-        if servable {
-            *field = Some(format!("/api/v1/library/art/{id}/{kind}"));
+        let proxied = field
+            .as_deref()
+            .filter(|v| is_local_art_path(v) || (is_remote_art_url(v) && !remote_art_refused(v)))
+            .map(|v| format!("/api/v1/library/art/{id}/{kind}?v={}", &art_key(v)[..16]));
+        if let Some(path) = proxied {
+            *field = Some(path);
         }
     };
     rw(&mut art.portrait, "portrait");
@@ -843,12 +850,13 @@ mod tests {
             header: Some("/api/v1/library/art/custom:x/header".into()),
         };
         proxy_art("custom:abc", &mut art);
+        let path = |v: Option<&str>| v.and_then(|s| s.split('?').next()).map(str::to_owned);
         assert_eq!(
-            art.portrait.as_deref(),
+            path(art.portrait.as_deref()).as_deref(),
             Some("/api/v1/library/art/custom:abc/portrait")
         );
         assert_eq!(
-            art.hero.as_deref(),
+            path(art.hero.as_deref()).as_deref(),
             Some("/api/v1/library/art/custom:abc/hero"),
             "the host stores a CDN cover once for every client"
         );
@@ -856,6 +864,37 @@ mod tests {
         assert_eq!(
             art.header.as_deref(),
             Some("/api/v1/library/art/custom:x/header")
+        );
+    }
+
+    /// The whole point of the version tag: point the entry at a different cover and every cache
+    /// in front of the host is looking at a URL it has never seen. A cover that did not change
+    /// keeps its URL, so a warm cache stays warm.
+    #[test]
+    fn a_replaced_cover_gets_a_url_no_cache_is_holding() {
+        let store = tempfile::tempdir().expect("temp store");
+        let _env = store_in(store.path());
+        let proxied = |url: &str| {
+            let mut art = Artwork {
+                portrait: Some(url.into()),
+                hero: None,
+                logo: None,
+                header: None,
+            };
+            proxy_art("custom:b0f3c03f8a50", &mut art);
+            art.portrait.expect("a servable cover is proxied")
+        };
+        let first = proxied("https://cdn2.steamgriddb.com/thumb/585a84e4.jpg");
+        let second = proxied("https://cdn2.steamgriddb.com/thumb/b109fe84.jpg");
+        assert!(
+            first.starts_with("/api/v1/library/art/custom:b0f3c03f8a50/portrait?v="),
+            "{first}"
+        );
+        assert_ne!(first, second, "a new cover has to be a new URL");
+        assert_eq!(
+            first,
+            proxied("https://cdn2.steamgriddb.com/thumb/585a84e4.jpg"),
+            "and an unchanged one must not move, or every shelf refetches on every listing"
         );
     }
 
@@ -879,17 +918,18 @@ mod tests {
         };
         assert!(is_local_art_path(&path));
         proxy_art("lutris:42", &mut art);
+        let route = |v: Option<&str>| v.and_then(|s| s.split('?').next()).map(str::to_owned);
         assert_eq!(
-            art.portrait.as_deref(),
+            route(art.portrait.as_deref()).as_deref(),
             Some("/api/v1/library/art/lutris:42/portrait")
         );
         assert_eq!(
-            art.hero.as_deref(),
+            route(art.hero.as_deref()).as_deref(),
             Some("/api/v1/library/art/lutris:42/hero"),
             "a file:// value is local art too"
         );
         assert_eq!(
-            art.logo.as_deref(),
+            route(art.logo.as_deref()).as_deref(),
             Some("/api/v1/library/art/lutris:42/logo")
         );
 
@@ -1300,9 +1340,12 @@ mod tests {
             ..Default::default()
         };
         proxy_art("custom:abc", &mut art);
-        assert_eq!(
-            art.portrait.as_deref(),
-            Some("/api/v1/library/art/custom:abc/portrait")
+        assert!(
+            art.portrait
+                .as_deref()
+                .is_some_and(|v| v.starts_with("/api/v1/library/art/custom:abc/portrait?v=")),
+            "{:?}",
+            art.portrait
         );
     }
 

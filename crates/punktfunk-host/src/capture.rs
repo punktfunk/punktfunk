@@ -367,8 +367,10 @@ pub fn capture_virtual_output(
 /// Open the in-driver encoder for an IDD-push session: the plan as the driver numbers it, the
 /// resolved Windows backend ahead of any fallback rung, the two IOCTL senders over the
 /// manager's control handle, and the `pf_gpu` session record. The heap is sized from the
-/// opening rate; ABR climbs past twice it eat the burst margin.
+/// opening rate; ABR climbs past twice it eat the burst margin. `client_hdr` replaces the
+/// capturer's HDR baseline, as the stream loop does, so the first IDR carries the client's panel.
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 pub fn open_driver_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn Capturer,
@@ -376,6 +378,7 @@ pub fn open_driver_encoder(
     fps: u32,
     bitrate_bps: u64,
     bit_depth: u8,
+    client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
 ) -> Result<Box<dyn crate::encode::Encoder>> {
     use crate::encode::{Codec, WindowsBackend};
@@ -447,7 +450,7 @@ pub fn open_driver_encoder(
         fps,
         bitrate_kbps: (bitrate_bps / 1000).min(u64::from(u32::MAX)) as u32,
         hdr: plan.hdr,
-        hdr_meta: capturer.hdr_meta(),
+        hdr_meta: capturer.hdr_meta().map(|m| client_hdr.unwrap_or(m)),
         wire_chunk_bytes: plan.wire_chunk.unwrap_or(0) as u32,
         backends: [backend, fallback, 0, 0],
         wire_seq_base,

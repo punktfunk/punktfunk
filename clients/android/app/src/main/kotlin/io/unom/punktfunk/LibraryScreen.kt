@@ -202,9 +202,11 @@ fun LibraryScreen(
      */
     pinnedPresetId: String? = null,
     /**
-     * Stream this host's desktop as soon as the shelf can dial (`start_in = stream`). One attempt,
-     * once per screen: a refusal leaves the shelf on screen and nothing retries. Goes through the
-     * same [launch] every tap does, so the auto-start and a tap on the Desktop tile cannot drift.
+     * Stream this host's desktop as soon as the shelf can dial (`start_in = stream`). One attempt
+     * per app start: a refusal leaves the shelf on screen and nothing retries, and [onLaunched]
+     * disarms the caller's flag, so a shelf composed again after a stream stays a shelf. Goes
+     * through the same [launch] every tap does, so the auto-start and a tap on the Desktop tile
+     * cannot drift.
      */
     autoStream: Boolean = false,
 ) {

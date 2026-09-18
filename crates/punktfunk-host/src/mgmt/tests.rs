@@ -462,6 +462,7 @@ fn fake_native_session(
         quit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         force_idr: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client: "test-client".into(),
+        plane: crate::events::Plane::Native,
         client_name: Some("studio-deck".into()),
         hdr: false,
         ttff_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -475,6 +476,7 @@ fn fake_native_session(
         chroma: crate::encode::ChromaFormat::Yuv420,
         end_reason: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         counters: Arc::new(crate::session_status::SessionCounters::default()),
+        peer: None,
     })
 }
 
@@ -512,6 +514,7 @@ fn fake_session_with_flags(
         force_idr: idr.clone(),
         client: client.into(),
         client_name: None,
+        plane: crate::events::Plane::Native,
         hdr: false,
         ttff_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         last_resize_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -523,6 +526,7 @@ fn fake_session_with_flags(
         chroma: crate::encode::ChromaFormat::Yuv420,
         end_reason: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         counters: Arc::new(crate::session_status::SessionCounters::default()),
+        peer: None,
     });
     (guard, stop, quit, idr)
 }
@@ -3795,6 +3799,7 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
                 title: "Stats Run".into(),
             },
             client: "test".into(),
+            fingerprint: None,
             plane: crate::events::Plane::Native,
             spec: crate::library::DetectSpec::dir(tmp.path()),
             nested: false,
@@ -3879,6 +3884,26 @@ async fn provider_reconcile_validation() {
         .unwrap();
     let (s, _) = send(&app, del).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+/// The plugin runner starts every store at once, so their first syncs land together.
+#[test]
+fn concurrent_provider_syncs_keep_every_row() {
+    let _dir = ConfigDirOverride::new();
+    std::thread::scope(|s| {
+        for p in 0..8 {
+            s.spawn(move || {
+                for _ in 0..20 {
+                    let row = serde_json::json!({"external_id": "a", "title": "A"});
+                    let inputs = vec![serde_json::from_value(row).unwrap()];
+                    crate::library::reconcile_provider(&format!("p{p}"), None, inputs)
+                        .expect("sync saved");
+                }
+            });
+        }
+    });
+    let rows = crate::library::load_custom();
+    assert_eq!(rows.len(), 8, "one row per provider: {rows:?}");
 }
 
 /// Unknown titles are counted, not refused: a report races its own reconcile, and 400-ing

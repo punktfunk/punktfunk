@@ -59,11 +59,8 @@ enum WindowedPresentMode: String, Sendable {
 /// render "way too bright" (no `edrMetadata` → no reference-white anchoring); a LARGER value renders
 /// dimmer.
 ///
-/// ⚠️ This is one half of a pair: the host has to map SDR content into the PQ container at the SAME
-/// luminance, and pins it to 203 in `pf-vdisplay`'s `SDR_REFERENCE_WHITE_NITS`. When they disagree
-/// every pixel is off by the ratio — a gamescope host left on gamescope's own 400-nit default put
-/// the stream nearly a stop bright, which read as a glaring, over-saturated Steam UI and washed-out
-/// HDR game content at the same time. Change one end without the other and that gap re-opens.
+/// ⚠️ One half of a pair: hosts map SDR into the PQ container at the same 203 nits (gamescope's
+/// `SDR_REFERENCE_WHITE_NITS`). A host-side SDR brightness setting deliberately moves SDR off it.
 private let hdrReferenceWhiteNits: Float = 203.0
 
 /// The SDR layer's colour tag. `colorspace = nil` means NO colour matching: the BT.709-encoded
@@ -236,39 +233,44 @@ fragment float4 pf_frag_hdr(VOut in [[stage_in]],
     return float4(sampleRgb(lumaTex, chromaTex, in.luv, in.uv, csc), 1.0);
 }
 
-// HDR on tvOS when the display is composited WITHOUT HDR headroom (SDR output mode, or the user
-// disabled Match Dynamic Range): no Metal EDR API exists there (CAEDRMetadata /
-// wantsExtendedDynamicRangeContent are API_UNAVAILABLE(tvos)), and a bare PQ colour-space tag
-// composites UNtone-mapped — the CAMetalLayer header says so outright — which showed as a badly
-// overblown picture on Apple TV. So this variant finishes the job in-shader: PQ EOTF → linear
-// light, 203-nit reference white (BT.2408) anchored at display white, extended-Reinhard highlight
-// rolloff with a 1000-nit knee, BT.2020→BT.709 primaries, BT.709 OETF — into the proven SDR layer
-// config. The 10-bit BT.2020 stream keeps its full decode depth; only the final presentation is
-// display-referred SDR. (When the display IS in an HDR mode — requested per session via
-// AVDisplayManager, see StreamViewIOS — tvOS presents pf_frag_hdr's PQ passthrough instead:
-// in a genuine HDR10 output, PQ passthrough is the correct emission and the TV tone-maps.)
-// The shared PQ→display-referred-SDR tail (see pf_frag_hdr_tv's rationale above): ST 2084
-// EOTF → 203-nit-anchored scene light → BT.2020→709 primaries → extended-Reinhard rolloff →
-// BT.709 OETF. Used by the tvOS biplanar tone-map and the tvOS planar (PyroWave) tone-map (the
-// no-HDR-headroom fallback). macOS keeps real HDR windowed now — see `WindowedPresentMode`.
+// tvOS without HDR headroom has no EDR API and composites a PQ tag untone-mapped, so PQ becomes
+// SDR in-shader for the sRGB-tagged layer. Same curve as pf-client-core's tonemap.glsl and the
+// host's gamescope capture: BT.2390 EETF in PQ from a 1000-nit source onto 203-nit white, on
+// max(R,G,B) in linear BT.709, then the sRGB OETF.
+static inline float pqEotf(float e) {
+    float p = pow(max(e, 0.0), 1.0 / 78.84375);
+    return pow(max(p - 0.8359375, 0.0) / (18.8515625 - 18.6875 * p), 1.0 / 0.1593017578125);
+}
+
+static inline float pqOetf(float y) {
+    float p = pow(clamp(y, 0.0, 1.0), 0.1593017578125);
+    return pow((0.8359375 + 18.8515625 * p) / (1.0 + 18.6875 * p), 78.84375);
+}
+
 static inline float3 pqToSdr(float3 pq) {
-    const float m1 = 2610.0/16384.0;
-    const float m2 = 78.84375;
-    const float c1 = 3424.0/4096.0;
-    const float c2 = 18.8515625;
-    const float c3 = 18.6875;
-    float3 p = pow(pq, 1.0/m2);
-    float3 lin = pow(max(p - c1, 0.0) / (c2 - c3 * p), 1.0/m1);
-    float3 t = lin * (10000.0/203.0);
-    float3 t709 = float3(
-        dot(t, float3( 1.6605, -0.5876, -0.0728)),
-        dot(t, float3(-0.1246,  1.1329, -0.0083)),
-        dot(t, float3(-0.0182, -0.1006,  1.1187)));
-    t709 = max(t709, 0.0);
-    const float w = 1000.0/203.0;
-    float3 mapped = saturate(t709 * (1.0 + t709 / (w * w)) / (1.0 + t709));
-    float3 e = select(1.099 * pow(mapped, 0.45) - 0.099, 4.5 * mapped, mapped < 0.018);
-    return e;
+    float3 lin = float3(pqEotf(pq.r), pqEotf(pq.g), pqEotf(pq.b));
+    lin = max(float3(
+        dot(lin, float3( 1.6605, -0.5876, -0.0728)),
+        dot(lin, float3(-0.1246,  1.1329, -0.0083)),
+        dot(lin, float3(-0.0182, -0.1006,  1.1187))), 0.0);
+    float l = max(lin.r, max(lin.g, lin.b));
+    const float white = 203.0 / 10000.0;
+    if (l > 0.0) {
+        float src = pqOetf(1000.0 / 10000.0);
+        float maxLum = pqOetf(white) / src;
+        float ks = 1.5 * maxLum - 0.5;
+        float e = min(pqOetf(l) / src, 1.0);
+        if (e > ks) {
+            float t = (e - ks) / (1.0 - ks);
+            float t2 = t * t;
+            float t3 = t2 * t;
+            e = (2.0 * t3 - 3.0 * t2 + 1.0) * ks + (t3 - 2.0 * t2 + t) * (1.0 - ks)
+                + (-2.0 * t3 + 3.0 * t2) * maxLum;
+        }
+        lin *= pqEotf(e * src) / l;
+    }
+    float3 c = saturate(lin / white);
+    return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, 12.92 * c, c <= 0.0031308);
 }
 
 fragment float4 pf_frag_hdr_tv(VOut in [[stage_in]],
@@ -1267,10 +1269,10 @@ public final class MetalVideoPresenter {
                 surfacePool.removeAll()
                 return
             }
-            if hdr, let name = CGColorSpace(name: CGColorSpace.itur_2100_PQ)?.name {
-                // Tag the surface BT.2100 PQ so the compositor interprets the half-float
-                // samples as PQ-encoded HDR (the CALayer-contents analogue of the metal
-                // layer's colorspace).
+            // Tag the surface like the metal layer (BT.2100 PQ, or `sdrColorspace`), so the
+            // compositor colour-matches the contents instead of drawing them in the panel's space.
+            let space = hdr ? CGColorSpace(name: CGColorSpace.itur_2100_PQ) : sdrColorspace
+            if let name = space?.name {
                 IOSurfaceSetValue(surface, "IOSurfaceColorSpace" as CFString, name)
             }
             surfacePool.append(SurfaceSlot(surface: surface, texture: texture))

@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Thu, 17 Sep 2026 18:00:00 +0200
+Subject: [PATCH] color: extrapolate the inverse shaper past its range
+
+calcColorTransform places the 3D LUT grid in shaper space and finds each
+grid point's source value with ApplyLut1D_Inverse_Linear, which clamps to
+the shaper's last entry. A Gamma 2.2 -> PQ shaper for SDR at 203 nits ends
+at PQ 0.581, so every grid point above it holds SDR white and the cell
+below interpolates toward that plateau. SDR white leaves the LUT at PQ
+0.568 (about 181 nits), and every bright colour dims the same way. The
+same LUT pair drives HDR scanout of SDR content.
+
+Continue the shaper's last segment past its end instead. Grid points above
+the range then hold the colour they stand for, and SDR white lands within
+1.5 10-bit codes of 203 nits. Shapers that reach 1.0 (PQ -> Gamma 2.2, PQ
+passthrough) never look past their end and do not change.
+---
+ src/color_helpers.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
+index 64430a5f..11c7bef4 100644
+--- a/src/color_helpers.cpp
++++ b/src/color_helpers.cpp
+@@ -476,6 +476,11 @@ inline float FindLutInv(const float * start,
+     // regardless of whether the original LUT was increasing or decreasing because
+     // this function uses std::lower_bound().
+ 
++    // Past the last entry, continue the last segment. A 3D LUT grid point above the shaper's
++    // range still bounds the cell below it, so it needs the source value that point stands for.
++    if ( val > *end && end > start && *end > *( end - 1 ) )
++        return ( (float)( end - start ) + startOffset + ( val - *end ) / ( *end - *( end - 1 ) ) ) * scale;
++
+     // Clamp the value to the range of the LUT.
+     const float cv = std::min( std::max( val, *start ), *end );
+ 

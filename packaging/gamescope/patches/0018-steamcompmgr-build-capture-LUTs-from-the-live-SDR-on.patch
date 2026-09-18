@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Thu, 17 Sep 2026 18:00:00 +0200
+Subject: [PATCH] steamcompmgr: build capture LUTs from the live SDR-on-HDR
+ state
+
+paint_pipewire() composites a 10-bit or P010 capture with the screenshot
+LUT sets, which are built once at startup from static descriptions. Every
+field but the colorimetry keeps its struct default, so:
+
+- sdrGamutWideness -1 on a BT.2020 "display" means native, and
+  buildSDRColorimetry reads sRGB content as BT.2020 primaries. Steam's UI
+  and every SDR window reach an HDR stream stretched to the 2020 gamut
+  and look heavily oversaturated. PQ content passes through and looks
+  right.
+- --hdr-sdr-content-nits and GAMESCOPE_SDR_ON_HDR_CONTENT_BRIGHTNESS write
+  g_ColorMgmt.pending, which these LUTs never read. SDR lands at the
+  203-nit default whatever was asked.
+
+Build both sets from the live flSDROnHDRBrightness and rebuild them when
+it changes. The HDR set uses wideness 0: BT.709 primaries converted to
+BT.2020 in linear light. The container is BT.2020, not a panel, so
+widening SDR toward its primaries only oversaturates. The SDR set, which
+takes PQ content into an 8-bit capture, anchors on the same luminance and
+rolls highlights off with BT.2390 from a 1000-nit source. It used to clip
+at the 500-nit default, which put HDR reference white at 66% grey.
+---
+ src/meson.build      |  3 ++-
+ src/steamcompmgr.cpp | 30 ++++++++++++++++++++++++++----
+ 2 files changed, 28 insertions(+), 5 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index ced13ab0..1374066c 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -196,7 +196,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr13 — …and a P010 capture format (BT.2020 PQ, 4:2:0)
+ #   +pfhdr14 — …and the headless connector reports HDR10 under --hdr-debug-force-support
+ #   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
+-version_tag = vcs_tag + '+pfhdr15' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
++version_tag = vcs_tag + '+pfhdr16' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 7479efe6..27d7aafe 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -526,11 +526,31 @@ update_color_mgmt()
+ 	g_ColorMgmt.current = g_ColorMgmt.pending;
+ }
+ 
++// Screenshot and capture LUTs follow the live SDR-on-HDR luminance and rebuild when it changes.
++// SDR maps into the BT.2020 container colorimetrically (wideness 0): the container is not a
++// panel, so widening SDR toward its primaries only oversaturates. PQ into an SDR target rolls
++// onto SDR white with BT.2390, so HDR reference white lands just below it.
+ static void
+ update_screenshot_color_mgmt()
+ {
+-	create_color_mgmt_luts(k_ScreenshotColorMgmt, g_ScreenshotColorMgmtLuts);
+-	create_color_mgmt_luts(k_ScreenshotColorMgmtHDR, g_ScreenshotColorMgmtLutsHDR);
++	static float s_flBuiltSDRNits = 0.f;
++	const float flSDRNits = g_ColorMgmt.pending.flSDROnHDRBrightness;
++	if ( flSDRNits == s_flBuiltSDRNits )
++		return;
++	s_flBuiltSDRNits = flSDRNits;
++
++	gamescope_color_mgmt_t sdr = k_ScreenshotColorMgmt;
++	sdr.flInternalDisplayBrightness = flSDRNits;
++	sdr.hdrTonemapOperator = ETonemapOperator_EETF2390_MaxChan;
++	// A fixed 1000-nit source: content mastered brighter clips above it.
++	sdr.hdrTonemapSourceMetadata = { 0.f, 1000.f };
++	sdr.hdrTonemapDisplayMetadata = { 0.f, flSDRNits };
++	create_color_mgmt_luts(sdr, g_ScreenshotColorMgmtLuts);
++
++	gamescope_color_mgmt_t hdr = k_ScreenshotColorMgmtHDR;
++	hdr.sdrGamutWideness = 0.f;
++	hdr.flSDROnHDRBrightness = flSDRNits;
++	create_color_mgmt_luts(hdr, g_ScreenshotColorMgmtLutsHDR);
+ }
+ 
+ bool set_color_sdr_gamut_wideness( float flVal )
+@@ -2357,8 +2377,9 @@ static void paint_pipewire()
+ 	// Deliberately NOT conditional on the focused app being HDR, unlike bHDRScreenshot: the
+ 	// stream's colorimetry is fixed for the lifetime of the negotiation, so it must not follow
+ 	// what the app happens to render. g_ScreenshotColorMgmtLutsHDR is built for EVERY input EOTF
+-	// (see update_screenshot_color_mgmt), so SDR content lands in the PQ container at
+-	// --hdr-sdr-content-nits, HDR content passes through, and mixed scenes composite correctly.
++	// (see update_screenshot_color_mgmt), so SDR content lands in the PQ container at the live
++	// SDR-on-HDR luminance, HDR content passes through, and mixed scenes composite correctly.
++	update_screenshot_color_mgmt();
+ 	const uint32_t uStreamDrmFormat = s_pPipewireBuffer->texture->drmFormat();
+ 	const bool bHDRStream = uStreamDrmFormat == DRM_FORMAT_XRGB2101010 ||
+ 	                        uStreamDrmFormat == DRM_FORMAT_XBGR2101010 ||
+@@ -3034,6 +3055,7 @@ paint_all( global_focus_t *pFocus, bool async )
+ 
+ 		if ( pScreenshotTexture )
+ 		{
++			update_screenshot_color_mgmt();
+ 			bool bHDRScreenshot = path.extension() == ".avif" &&
+ 								  frameInfo.layerCount > 0 &&
+ 								  ColorspaceIsHDR( frameInfo.layers[0].colorspace ) &&

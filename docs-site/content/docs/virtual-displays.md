@@ -189,6 +189,9 @@ whatever has focus then — clicking a physical monitor mid-launch can still pul
   same audio: the second one reads the sink the first one captures, and keeps it if the first
   one leaves. The console's **Session** card mutes either one, and a custom entry's **Who hears
   this title** picks per game. A same-client *reconnect* never conflicts — it resumes.
+  Moonlight clients are the exception: that plane holds one session on fixed ports, so it
+  cannot share a display. **Join** there keeps the client that is streaming and turns the
+  second one away; **steal** and **separate** both hand the box over.
 - **Identity** — whether each client gets a **stable display identity** so your desktop environment
   remembers its settings (see [Persistent scaling](#persistent-scaling)): one shared identity, one
   **per client**, or one **per client + resolution**.

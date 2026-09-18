@@ -1736,13 +1736,15 @@ impl LibraryScreen {
 
     /// Shared by shelf and grid so the title line cannot drift between arrangements.
     fn draw_detail_band(&self, canvas: &Canvas, rect: Rect, k: f64, fonts: &Fonts) {
-        // Cache note describes the shelf, not the focused title — leading, not centred.
+        // Cache note describes the shelf, not the focused title — leading, not centred, and
+        // above it: the title is anchored by its TOP edge, so its line reaches the band's
+        // floor and anything placed under it lands inside the glyphs.
         if let Some(note) = self.stale.note() {
             fonts.draw(
                 canvas,
                 note,
                 f64::from(rect.left) + EDGE_INSET * k,
-                f64::from(rect.bottom) - 12.0 * k,
+                f64::from(rect.bottom) - NOTE_BASE * k,
                 W::Regular,
                 12.0 * k,
                 fg(0.55),
@@ -1765,11 +1767,18 @@ impl LibraryScreen {
             27.0 * k,
             fg(1.0),
             cx,
-            f64::from(rect.bottom) - 34.0 * k,
+            f64::from(rect.bottom) - TITLE_TOP * k,
             w * 0.8,
         );
     }
 }
+
+/// Baseline of the cache note, up from the detail band's floor. It clears [`TITLE_TOP`] by
+/// its own 12 dp line, and both stay inside [`DETAIL_BAND`].
+const NOTE_BASE: f64 = 48.0;
+/// TOP edge of the focused title, same origin — `Fonts::centered` anchors a paragraph's
+/// top, not its baseline, so a 27 dp line from here reaches the floor.
+const TITLE_TOP: f64 = 34.0;
 
 #[cfg(test)]
 mod tests {

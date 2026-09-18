@@ -400,8 +400,8 @@ final class SessionModel: ObservableObject {
         // The host never tracks a launcher tile, so there is nothing to wait for.
         launchSeq += 1
         launchHold = launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
-        launchWindowWait = false
             .flatMap { $0.entry.isLauncher ? nil : $0 }
+        launchWindowWait = false
         errorMessage = nil
         settings = effective
         statsVerbosity = StatsVerbosity(rawValue: effective.statsVerbosity) ?? .normal

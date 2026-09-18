@@ -521,6 +521,7 @@ mod tests {
             bit_depth,
             av1_input_depth_minus8: 0,
             hdr: false,
+            full_range: false,
             rfi_supported: false,
             intra_refresh_cnt: 0,
             slices: 0,
@@ -975,6 +976,8 @@ pub struct LowLatencyConfig {
     /// it from the surface format. `u32` matches the SDK setter.
     pub av1_input_depth_minus8: u32,
     pub hdr: bool,
+    /// The input samples are full range (only Linux's `PUNKTFUNK_444_FULLRANGE` YUV444).
+    pub full_range: bool,
     pub rfi_supported: bool,
     /// Arm the on-demand intra refresh wave: the mode on with a period that never fires, so
     /// a per-picture `forceIntraRefreshWithFrameCnt` runs one when an RFI declines. The
@@ -1142,9 +1145,9 @@ pub unsafe fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatenc
         }
     }
 
-    // Colour signaling is unconditional: the input is already CSC'd (BT.709
-    // limited SDR or BT.2020 PQ). A decoder whose "unspecified" default is 601
-    // otherwise mis-renders. HEVC/H.264: VUI; AV1: sequence-header CICP.
+    // Colour signaling is unconditional. NVENC converts RGB input with this same matrix
+    // (BT.601, 709 and 2020 alike); YUV input is already CSC'd. Limited unless
+    // `full_range`. HEVC/H.264: VUI; AV1: sequence-header CICP.
     {
         let (prim, trc, mat) = if c.hdr {
             (
@@ -1165,7 +1168,7 @@ pub unsafe fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatenc
                 // arm; the borrow is dropped before any other union access.
                 let vui = unsafe { &mut cfg.encodeCodecConfig.hevcConfig.hevcVUIParameters };
                 vui.videoSignalTypePresentFlag = 1;
-                vui.videoFullRangeFlag = 0;
+                vui.videoFullRangeFlag = u32::from(c.full_range);
                 vui.colourDescriptionPresentFlag = 1;
                 vui.colourPrimaries = prim;
                 vui.transferCharacteristics = trc;
@@ -1176,7 +1179,7 @@ pub unsafe fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatenc
                 // arm; the borrow is dropped before any other union access.
                 let vui = unsafe { &mut cfg.encodeCodecConfig.h264Config.h264VUIParameters };
                 vui.videoSignalTypePresentFlag = 1;
-                vui.videoFullRangeFlag = 0;
+                vui.videoFullRangeFlag = u32::from(c.full_range);
                 vui.colourDescriptionPresentFlag = 1;
                 vui.colourPrimaries = prim;
                 vui.transferCharacteristics = trc;
@@ -1189,7 +1192,7 @@ pub unsafe fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatenc
                 av1.colorPrimaries = prim;
                 av1.transferCharacteristics = trc;
                 av1.matrixCoefficients = mat;
-                av1.colorRange = 0; // studio/limited swing
+                av1.colorRange = u32::from(c.full_range);
             }
             Codec::PyroWave => unreachable!("PyroWave never opens the direct-NVENC backend"),
         }

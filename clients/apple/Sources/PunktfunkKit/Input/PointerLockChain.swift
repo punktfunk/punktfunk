@@ -82,13 +82,19 @@ enum PointerLockChain {
     }
 
     /// Clear the forced forwarding on every stamped ancestor (so the SwiftUI parents stop retaining
-    /// the anchor's subtree) and re-resolve to drop the lock.
+    /// the anchor's subtree) and re-resolve to drop the lock. The ancestors re-resolve too: a
+    /// session ends after its controller has left the window, where the anchor's own request never
+    /// reaches the scene, and the lock would keep the pointer hidden on the hosts screen.
     static func disengage(_ anchor: UIViewController) {
-        for parent in stampedParents.allObjects {
+        let parents = stampedParents.allObjects
+        for parent in parents {
             setForcedChild(nil, on: parent)
         }
         stampedParents.removeAllObjects()
         anchor.setNeedsUpdateOfPrefersPointerLocked()
+        for parent in parents {
+            parent.setNeedsUpdateOfPrefersPointerLocked()
+        }
     }
 }
 #endif

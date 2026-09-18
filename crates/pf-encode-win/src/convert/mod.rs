@@ -104,8 +104,8 @@ float3 pq_oetf(float3 L) {
 // PQ BT.2020 RGB in [0,1] — the same pixels the R10 path stores before quantize.
 // Both P010 passes use this so they match HdrConverter and the Rust reference.
 float3 scrgb_to_pq2020(float2 uv) {
-    float3 scrgb = max(tx.Sample(sm, uv).rgb, 0.0); // scRGB can be negative (wide gamut); clamp
-    float3 nits = scrgb * 80.0;                      // scRGB 1.0 = 80 nits
+    // Negative scRGB is wide-gamut colour: convert first, clamp after (pq_oetf saturates).
+    float3 nits = tx.Sample(sm, uv).rgb * 80.0;      // scRGB 1.0 = 80 nits
     float3 lin2020 = mul(BT709_TO_BT2020, nits);
     return pq_oetf(lin2020 / 10000.0);               // normalize to 10k nits, encode PQ -> [0,1]
 }
@@ -128,8 +128,8 @@ float2 studio_cbcr_code(float3 rgb_pq) {
     return float2(clamp(cbc, 64.0, 960.0), clamp(crc, 64.0, 960.0));
 }
 // P010 stores the 10-bit code in the high 10 bits (code10 << 6). As R16_UNORM
-// the float that maps to that u16 is code10*64 / 65535.0.
-float code10_to_unorm(float code10) { return (code10 * 64.0) / 65535.0; }
+// the float that maps to that u16 is code10*64 / 65535.0; round first, a decoder truncates.
+float code10_to_unorm(float code10) { return (round(code10) * 64.0) / 65535.0; }
 ";
 
 /// P010 luma: full-res Y′ into plane 0 (`R16_UNORM`).
@@ -154,8 +154,8 @@ float2 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     // `uv` is the chroma texel centre (middle of the 2×2 luma block). Left-cosite
     // is the LEFT column: the two centres sit at uv + (-h.x, ±h.y).
     float2 h = inv_src * 0.5;
-    float3 a = max(tx.Sample(sm, uv + float2(-h.x, -h.y)).rgb, 0.0);
-    float3 b = max(tx.Sample(sm, uv + float2(-h.x,  h.y)).rgb, 0.0);
+    float3 a = tx.Sample(sm, uv + float2(-h.x, -h.y)).rgb;
+    float3 b = tx.Sample(sm, uv + float2(-h.x,  h.y)).rgb;
     float3 scrgb = (a + b) * 0.5;
     float3 nits = scrgb * 80.0;
     float3 lin2020 = mul(BT709_TO_BT2020, nits);
@@ -490,18 +490,21 @@ float main(float4 pos : SV_POSITION) : SV_TARGET {
 }
 ";
 
-/// PyroWave chroma: half-res interleaved CbCr into `R8G8_UNORM`. Centre-sited
-/// 2×2 box, then BT.709 limited Cb/Cr — byte-identical to `rgb2yuv.comp`.
-/// Even dimensions keep the 2×2 block in-bounds.
+/// PyroWave chroma: half-res interleaved CbCr into `R8G8_UNORM`. Left-sited
+/// (H.273 type 0) [1 2 1] over columns p.x-1..p.x+1, then BT.709 limited Cb/Cr —
+/// the same as `rgb2yuv.comp`. Even dimensions keep p.x+1 in-bounds.
 const PYRO_UV_PS: &str = r"
 Texture2D<float4> tx : register(t0);
 float2 main(float4 pos : SV_POSITION) : SV_TARGET {
     int2 p = int2(pos.xy) * 2;
+    int2 l = int2(max(p.x - 1, 0), p.y);
     float3 c00 = tx.Load(int3(p,             0)).rgb;
     float3 c10 = tx.Load(int3(p + int2(1,0), 0)).rgb;
     float3 c01 = tx.Load(int3(p + int2(0,1), 0)).rgb;
     float3 c11 = tx.Load(int3(p + int2(1,1), 0)).rgb;
-    float3 a = (c00 + c10 + c01 + c11) * 0.25;
+    float3 cl0 = tx.Load(int3(l,             0)).rgb;
+    float3 cl1 = tx.Load(int3(l + int2(0,1), 0)).rgb;
+    float3 a = (cl0 + 2.0 * c00 + c10 + cl1 + 2.0 * c01 + c11) * 0.125;
     float u = 128.0/255.0 - 0.1006*a.r - 0.3386*a.g + 0.4392*a.b;
     float v = 128.0/255.0 + 0.4392*a.r - 0.3989*a.g - 0.0403*a.b;
     return float2(u, v);
@@ -539,21 +542,21 @@ float3 pq_oetf(float3 L) {
     return pow((c1 + c2 * Lp) / (1.0 + c3 * Lp), m2);
 }
 float3 scrgb_to_pq2020_rgb(float3 scrgb) {
-    float3 nits = max(scrgb, 0.0) * 80.0;
-    return pq_oetf(mul(BT709_TO_BT2020, nits) / 10000.0);
+    // Negative scRGB is wide-gamut colour: convert first, pq_oetf clamps after.
+    return pq_oetf(mul(BT709_TO_BT2020, scrgb * 80.0) / 10000.0);
 }
 static const float KR = 0.2627;
 static const float KG = 0.6780;
 static const float KB = 0.0593;
 float y_unorm(float3 pq) {
     float y = KR * pq.r + KG * pq.g + KB * pq.b;
-    float code = clamp(64.0 + 876.0 * y, 64.0, 940.0);
+    float code = clamp(round(64.0 + 876.0 * y), 64.0, 940.0);
     return (code * 64.0) / 65535.0;
 }
 float2 cbcr_unorm(float3 pq) {
     float y = KR * pq.r + KG * pq.g + KB * pq.b;
-    float cbc = clamp(512.0 + 896.0 * (pq.b - y) / 1.8814, 64.0, 960.0);
-    float crc = clamp(512.0 + 896.0 * (pq.r - y) / 1.4746, 64.0, 960.0);
+    float cbc = clamp(round(512.0 + 896.0 * (pq.b - y) / 1.8814), 64.0, 960.0);
+    float crc = clamp(round(512.0 + 896.0 * (pq.r - y) / 1.4746), 64.0, 960.0);
     return float2((cbc * 64.0) / 65535.0, (crc * 64.0) / 65535.0);
 }
 ";
@@ -567,17 +570,20 @@ float main(float4 pos : SV_POSITION) : SV_TARGET {
 }
 ";
 
-/// PyroWave HDR 4:2:0 chroma: half-res, centre-sited 2×2 in scRGB-linear
-/// (matches SDR + `rgb2yuv.comp`, not the P010 left-cosite), then PQ + studio Cb/Cr.
+/// PyroWave HDR 4:2:0 chroma: half-res, left-sited [1 2 1] like the SDR pass, averaged
+/// in scRGB-linear, then PQ + studio Cb/Cr.
 const PYRO_HDR_UV_PS: &str = r"
 #include_common
 float2 main(float4 pos : SV_POSITION) : SV_TARGET {
     int2 p = int2(pos.xy) * 2;
-    float3 a = max(tx.Load(int3(p,             0)).rgb, 0.0);
-    float3 b = max(tx.Load(int3(p + int2(1,0), 0)).rgb, 0.0);
-    float3 c = max(tx.Load(int3(p + int2(0,1), 0)).rgb, 0.0);
-    float3 d = max(tx.Load(int3(p + int2(1,1), 0)).rgb, 0.0);
-    float3 pq = scrgb_to_pq2020_rgb((a + b + c + d) * 0.25);
+    int2 l = int2(max(p.x - 1, 0), p.y);
+    float3 a = tx.Load(int3(p,             0)).rgb;
+    float3 b = tx.Load(int3(p + int2(1,0), 0)).rgb;
+    float3 c = tx.Load(int3(p + int2(0,1), 0)).rgb;
+    float3 d = tx.Load(int3(p + int2(1,1), 0)).rgb;
+    float3 e = tx.Load(int3(l,             0)).rgb;
+    float3 f = tx.Load(int3(l + int2(0,1), 0)).rgb;
+    float3 pq = scrgb_to_pq2020_rgb((e + 2.0 * a + b + f + 2.0 * c + d) * 0.125);
     return cbcr_unorm(pq);
 }
 ";

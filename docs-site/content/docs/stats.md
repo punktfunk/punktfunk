@@ -25,7 +25,7 @@ one below it shows. Settings picks the level a stream starts at; cycle it live i
 | macOS / iPad (pointer or trackpad) | **⌃⌥⇧S** or a **three-finger tap** |
 | Android · iPhone | a **three-finger tap** |
 | Apple TV | **hold Play/Pause** on the Siri Remote |
-| Any Apple or Android client, controller in hand | **Select + X** |
+| Any client with a controller in hand | **Select + X** |
 | LG TV (webOS) | the **green** button on the remote |
 | Browser (preview) | **Ctrl+Alt+Shift+S**; the quality dot shows or hides the overlay |
 

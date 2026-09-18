@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Thu, 17 Sep 2026 22:48:30 +0200
+Subject: [PATCH 22/22] pipewire: make the capture stream reliable and keep it
+ cycling
+
+On an async link, which is what a consumer without RT_PROCESS gets, this
+stream reclaims every buffer one cycle after sending it. Only the busy meta
+protects a buffer the consumer still holds, and the consumer raises it when
+it processes the frame. A consumer that runs a cycle late raises it after
+gamescope has reclaimed, repainted and re-sent the buffer, and then receives
+a buffer it already holds. pw_stream lets it return that buffer once, so the
+busy count never reaches zero again and the pool is one buffer short for
+good. A few of those and nothing is left to paint into: the stream stays
+"streaming" and delivers nothing until the consumer reconnects.
+
+node.reliable (PipeWire 1.6) closes that: a frame is handed over only once
+the consumer took the previous one, and a buffer returns only when the
+consumer returns it. It needs a driver that cycles on its own, though. This
+stream only started a cycle when it queued a frame, and a reliable stream
+gets no buffer while the last frame is unconsumed, so one late consumer
+stopped it forever.
+
+request_buffer() now asks the PipeWire thread for a cycle whenever it gets no
+buffer, at most once a millisecond, and every push triggers its cycle with
+pw_stream_trigger_process(). The per-vblank "out of buffers" error goes: on a
+reliable stream that state is routine, and an uncapped game logged it twenty
+thousand times a second. Older PipeWire ignores the key and keeps the pump.
+Stamp pfhdr18: nothing for a caller to gate on.
+---
+ src/meson.build  |  3 ++-
+ src/pipewire.cpp | 25 ++++++++++++++++++++++++-
+ 2 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 7e2b07f..ce37037 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -198,7 +198,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
+ #   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
+ #   +pfhdr17 — …and a capture push never drops a buffer the PipeWire thread has not taken
+-version_tag = vcs_tag + '+pfhdr17' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr18 — …and the capture stream is reliable and cycles while it waits for its consumer
++version_tag = vcs_tag + '+pfhdr18' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index e3fffab..f5f2ac3 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -7,6 +7,7 @@
+ #include <unistd.h>
+ 
+ #include <atomic>
++#include <chrono>
+ #include <mutex>
+ #include <thread>
+ #include <vector>
+@@ -277,11 +278,22 @@ static std::vector<const struct spa_pod *> build_format_params(struct spa_pod_bu
+ 	return params;
+ }
+ 
++// steamcompmgr found no buffer to paint into; the PipeWire thread answers with a cycle that
++// carries no new frame. Frames and returned buffers move only inside a cycle and only this stream
++// starts one, so a stream waiting on its consumer has to keep cycling or it waits forever.
++static std::atomic<bool> s_bPumpCycle;
++
+ static void request_buffer(struct pipewire_state *state)
+ {
+ 	struct pw_buffer *pw_buffer = pw_stream_dequeue_buffer(state->stream);
+ 	if (!pw_buffer) {
+-		pwr_log.errorf("warning: out of buffers");
++		// Routine on a reliable stream. 1 ms between pumps: an uncapped game spins this loop.
++		static std::chrono::steady_clock::time_point s_lastPump;
++		const auto now = std::chrono::steady_clock::now();
++		if (now - s_lastPump >= std::chrono::milliseconds(1) && !s_bPumpCycle.exchange(true)) {
++			s_lastPump = now;
++			nudge_pipewire();
++		}
+ 		return;
+ 	}
+ 
+@@ -425,10 +437,16 @@ static void dispatch_nudge(struct pipewire_state *state, int fd)
+ 			if (ret < 0) {
+ 				pwr_log.errorf("pw_stream_queue_buffer failed");
+ 			}
++			// Queueing stops starting the cycle once a stream has triggered one itself.
++			s_bPumpCycle = false;
++			pw_stream_trigger_process(state->stream);
+ 		} else {
+ 			bury_buffer(buffer);
+ 		}
+ 	}
++
++	if (state->streaming && s_bPumpCycle.exchange(false))
++		pw_stream_trigger_process(state->stream);
+ }
+ 
+ static void stream_handle_state_changed(void *data, enum pw_stream_state old_stream_state, enum pw_stream_state stream_state, const char *error)
+@@ -842,6 +860,11 @@ bool init_pipewire(void)
+ 	state->stream = pw_stream_new(state->core, "gamescope",
+ 		pw_properties_new(
+ 			PW_KEY_MEDIA_CLASS, "Video/Source",
++			// PipeWire 1.6: a frame goes out once the consumer took the last one, and a buffer comes
++			// back when the consumer returns it. Otherwise this stream reclaims every buffer a cycle
++			// after sending it, and a consumer running late gets one that was repainted and re-sent.
++			// Older PipeWire ignores the key.
++			"node.reliable", "true",
+ 			nullptr));
+ 	if (!state->stream) {
+ 		pwr_log.errorf("pw_stream_new failed");

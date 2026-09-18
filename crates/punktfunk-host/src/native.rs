@@ -1757,22 +1757,28 @@ pub(crate) async fn run_admitted(
         counters: counters.clone(),
         stats: stats.clone(),
     }));
+    // Trust-store name (a console rename wins), else the sanitized Hello name. `None` if
+    // nameless. Events, hook filters, the stream marker and the tray all show this one.
+    let client_name = session_fp_hex
+        .as_deref()
+        .and_then(|fp| np.list().into_iter().find(|c| c.fingerprint == fp))
+        .map(|c| c.name)
+        .or_else(|| {
+            let raw = hello.name.as_deref().unwrap_or("").trim();
+            (!raw.is_empty()).then(|| {
+                crate::native_pairing::sanitize_device_name(
+                    raw,
+                    session_fp_hex.as_deref().unwrap_or(""),
+                )
+            })
+        });
     // Only a fingerprint has a record to watch; with no record there is nothing to expire.
     match (session_fp_hex.clone(), access_watch) {
         (Some(fp_hex), Some(watch_rx)) => {
-            // Trust-store name (rename at approval wins), else the sanitized Hello name.
             let device = crate::events::DeviceRef {
-                name: np
-                    .list()
-                    .into_iter()
-                    .find(|c| c.fingerprint == fp_hex)
-                    .map(|c| c.name)
-                    .unwrap_or_else(|| {
-                        crate::native_pairing::sanitize_device_name(
-                            hello.name.as_deref().unwrap_or(""),
-                            &fp_hex,
-                        )
-                    }),
+                name: client_name
+                    .clone()
+                    .unwrap_or_else(|| crate::native_pairing::sanitize_device_name("", &fp_hex)),
                 fingerprint: fp_hex,
                 plane: crate::events::Plane::Native,
             };
@@ -1983,8 +1989,8 @@ pub(crate) async fn run_admitted(
 
     // Handshake complete: CONNECTED. A client rejected earlier never emits either.
     let event_client = crate::events::ClientRef {
-        name: hello.name.clone().unwrap_or_default(),
-        fingerprint: conn.peer_fingerprint().map(|fp| fingerprint_hex(&fp)),
+        name: client_name.clone().unwrap_or_default(),
+        fingerprint: session_fp_hex.clone(),
         plane: crate::events::Plane::Native,
     };
     crate::events::emit(crate::events::EventKind::ClientConnected {
@@ -2150,7 +2156,8 @@ pub(crate) async fn run_admitted(
         height: mode.height,
         refresh_hz: mode.refresh_hz,
         hdr: welcome.color.is_hdr(),
-        client: hello.name.clone().unwrap_or_default(),
+        client: client_name.clone().unwrap_or_default(),
+        fingerprint: session_fp_hex.clone(),
         launch: hello.launch.clone(),
         plane: crate::events::Plane::Native,
     });
@@ -2265,21 +2272,6 @@ pub(crate) async fn run_admitted(
         .as_deref()
         .and_then(crate::library::audio_sessions_for)
         .map(|policy| crate::session_status::apply_audio_policy(policy, &client_label));
-    // Tray toast: trust-store name (rename at approval wins), else sanitized Hello. `None` if nameless.
-    let client_name = conn
-        .peer_fingerprint()
-        .map(|fp| fingerprint_hex(&fp))
-        .and_then(|fp_hex| {
-            np.list()
-                .into_iter()
-                .find(|c| c.fingerprint == fp_hex)
-                .map(|c| c.name)
-                .or_else(|| {
-                    let raw = hello.name.as_deref().unwrap_or("").trim();
-                    (!raw.is_empty())
-                        .then(|| crate::native_pairing::sanitize_device_name(raw, &fp_hex))
-                })
-        });
     // Punch + virtual-stream stages on the same trace; resizes write into the shared slot.
     let bringup_dp = bringup.clone();
     let resize_ms_dp = resize_ms.clone();
@@ -2568,7 +2560,7 @@ impl Drop for GamescopeHold {
 const INJECTOR_REOPEN_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Pack `(w, h, hz)` into one atomic word (16|16|16) — one store, not three racy ones.
-fn pack_mode(width: u32, height: u32, refresh_hz: u32) -> u64 {
+pub(crate) fn pack_mode(width: u32, height: u32, refresh_hz: u32) -> u64 {
     ((width as u64 & 0xffff) << 32)
         | ((height as u64 & 0xffff) << 16)
         | (refresh_hz as u64 & 0xffff)
@@ -3493,6 +3485,31 @@ mod tests {
             "approval must pin the knocking fingerprint"
         );
         assert_eq!(np.list()[0].name, "Approved Device");
+        // Hook filters match `client.connected` by name, so it must carry the approval rename.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let connected_name = loop {
+            let found = crate::events::bus()
+                .subscribe(0)
+                .catch_up
+                .into_iter()
+                .find_map(|e| match e.kind {
+                    crate::events::EventKind::ClientConnected { client }
+                        if client.fingerprint.as_deref() == Some(expected_fp.as_str()) =>
+                    {
+                        Some(client.name)
+                    }
+                    _ => None,
+                });
+            if let Some(name) = found {
+                break name;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "client.connected must fire for the approved device"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        };
+        assert_eq!(connected_name, "Approved Device");
         drop(client);
         let _ = std::fs::remove_file(&store);
         host.join().unwrap().unwrap();

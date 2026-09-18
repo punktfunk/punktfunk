@@ -568,6 +568,7 @@ mod plat {
             opts.fps,
             opts.bitrate_bps,
             bit_depth,
+            None,
             0,
         )
         .context("open the in-driver encoder")

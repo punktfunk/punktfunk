@@ -764,14 +764,7 @@ echo "A login password is generated on first start. Read it once, before you sig
 echo "    sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' \${XDG_CONFIG_HOME:-\$HOME/.config}/punktfunk/web-password"
 echo "After that the console keeps only a salted hash, so a forgotten password is reset: put a"
 echo "PUNKTFUNK_UI_PASSWORD=<your-password> line in that file and restart punktfunk-web."
-echo "Then open https://127.0.0.1:47992"
-# $1 > 1 is an upgrade. The console used to answer on every interface with no setting for it, so
-# say where that reach now lives before anyone restarts it.
-if [ "$1" -gt 1 ]; then
-echo "The console now listens on this machine only unless PUNKTFUNK_UI_BIND says otherwise."
-echo "Yours already served the network, so the next start writes PUNKTFUNK_UI_BIND=0.0.0.0 into"
-echo "host.env and keeps it that way. Change it to 127.0.0.1 and restart punktfunk-web to close it."
-fi
+echo "Then open https://<host-ip>:47992"
 %endif
 
 %if %{with scripting}

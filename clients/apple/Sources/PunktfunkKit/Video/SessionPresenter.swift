@@ -255,7 +255,8 @@ final class SessionPresenter {
         makeDisplayLink: @escaping (AnyObject, Selector) -> CADisplayLink,
         onFrame: (@Sendable (AccessUnit) -> Void)?,
         onSessionEnd: (@Sendable () -> Void)?,
-        onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil
+        onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil,
+        onFrameHDR: (@Sendable (Bool) -> Void)? = nil
     ) {
         stop()
         self.connection = connection
@@ -264,7 +265,8 @@ final class SessionPresenter {
             self?.start(
                 connection: connection, baseLayer: layer, endToEndMeter: endToEndMeter,
                 makeDisplayLink: makeDisplayLink,
-                onFrame: onFrame, onSessionEnd: onSessionEnd, onDecodedSize: onDecodedSize)
+                onFrame: onFrame, onSessionEnd: onSessionEnd, onDecodedSize: onDecodedSize,
+                onFrameHDR: onFrameHDR)
         }
 
         // Explicit decode stays default so loss recovery and decode metering survive. Presentation
@@ -348,7 +350,7 @@ final class SessionPresenter {
             syncFrameRate(hz: connection.currentMode().refreshHz)
             pipeline.start(
                 connection: connection, onFrame: onFrame, onSessionEnd: onSessionEnd,
-                onDecodedSize: onDecodedSize)
+                onDecodedSize: onDecodedSize, onFrameHDR: onFrameHDR)
         } else {
             let pump = StreamPump()
             pump.start(

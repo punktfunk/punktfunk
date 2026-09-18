@@ -253,7 +253,6 @@ async fn launch_under(
     let req_fp: Option<[u8; 32]> = peer_fp(&peer);
 
     // Snapshot owner + mode (Copy) so the launch lock is not held over admission.
-    let mut forced_mode: Option<(u32, u32, u32)> = None;
     let mut steal = false;
     {
         let live = st
@@ -265,15 +264,10 @@ async fn launch_under(
         match gamestream_admission(live, req_fp, conflict) {
             GsDecision::Serve => {}
             GsDecision::Steal => steal = true,
-            GsDecision::Join((w, h, f)) => {
-                forced_mode = Some((w, h, f));
-                tracing::info!(
-                    "GameStream launch JOIN — admitting at the live session's mode {w}x{h}@{f}"
-                );
-            }
-            GsDecision::Reject => {
+            GsDecision::Reject(why) => {
                 tracing::warn!(
-                    "GameStream launch REJECTED — host busy (mode_conflict=reject, session owned by another client)"
+                    why,
+                    "GameStream launch REJECTED — the session belongs to another client"
                 );
                 return (StatusCode::SERVICE_UNAVAILABLE, xml(error_xml())).into_response();
             }
@@ -296,11 +290,6 @@ async fn launch_under(
             // Bind unauthenticated RTSP/UDP to this paired client's source IP.
             session.peer_ip = addr.map(|Extension(PeerAddr(a))| a.ip());
             session.owner_fp = req_fp;
-            if let Some((w, h, f)) = forced_mode {
-                session.width = w;
-                session.height = h;
-                session.fps = f;
-            }
             // New session: last quit reason does not apply (`AppState::quit`).
             st.quit.store(false, std::sync::atomic::Ordering::SeqCst);
             // Mint ping before RTSP SETUP. Media planes use it to tell this client's first
@@ -481,21 +470,24 @@ enum GsDecision {
     Serve,
     /// End the live session, then serve (`steal`/`separate`: there is one session).
     Steal,
-    /// Admit at the live mode (`join`).
-    Join((u32, u32, u32)),
-    /// 503 (`reject`).
-    Reject,
+    /// 503, and why — the line an operator reads when a second client is turned away.
+    Reject(&'static str),
 }
 
 /// Single-session mode-conflict. No session or same client → Serve. A different client
 /// applies `policy`; GameStream has no `separate`, so `steal`/`separate` both Steal.
+///
+/// `join` cannot be honored here: this plane holds one launch on fixed media ports, so two
+/// clients cannot share a display the way the native one lets them. Refusing keeps the
+/// client that is already streaming, which is what asking for `join` asked for — stealing
+/// its session would be the opposite.
 fn gamestream_admission(
     live: Option<LiveGs>,
     req_fp: Option<[u8; 32]>,
     policy: crate::vdisplay::policy::ModeConflict,
 ) -> GsDecision {
     use crate::vdisplay::policy::ModeConflict;
-    let Some((owner, mode)) = live else {
+    let Some((owner, _mode)) = live else {
         return GsDecision::Serve;
     };
     let different = match (owner, req_fp) {
@@ -506,8 +498,10 @@ fn gamestream_admission(
         return GsDecision::Serve;
     }
     match policy {
-        ModeConflict::Reject => GsDecision::Reject,
-        ModeConflict::Join => GsDecision::Join(mode),
+        ModeConflict::Reject => GsDecision::Reject("mode_conflict=reject"),
+        ModeConflict::Join => {
+            GsDecision::Reject("mode_conflict=join, which this plane cannot do — one session")
+        }
         ModeConflict::Steal | ModeConflict::Separate => GsDecision::Steal,
     }
 }
@@ -776,11 +770,13 @@ mod tests {
         ));
         assert!(matches!(
             gamestream_admission(live, Some(b), ModeConflict::Reject),
-            GsDecision::Reject
+            GsDecision::Reject(_)
         ));
+        // Sharing is what `join` asks for and what this plane cannot do, so the client that
+        // is streaming keeps its session rather than losing it to the newcomer.
         assert!(matches!(
             gamestream_admission(live, Some(b), ModeConflict::Join),
-            GsDecision::Join((2560, 1440, 120))
+            GsDecision::Reject(_)
         ));
         assert!(matches!(
             gamestream_admission(live, Some(b), ModeConflict::Steal),
@@ -793,7 +789,7 @@ mod tests {
         // No cert: treat as a different client.
         assert!(matches!(
             gamestream_admission(live, None, ModeConflict::Reject),
-            GsDecision::Reject
+            GsDecision::Reject(_)
         ));
     }
 

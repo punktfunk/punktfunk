@@ -41,17 +41,19 @@ use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
     IMFShutdown, IMFTransform, METransformHaveOutput, METransformNeedInput, MFCreateAttributes,
     MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType, MFCreateSample,
-    MFMediaType_Video, MFSampleExtension_CleanPoint, MFStartup, MFTEnum2,
+    MFMediaType_Video, MFNominalRange_16_235, MFSampleExtension_CleanPoint, MFStartup, MFTEnum2,
     MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_NV12,
-    MFVideoInterlace_Progressive, MFSTARTUP_LITE, MFT_CATEGORY_VIDEO_ENCODER,
-    MFT_ENUM_ADAPTER_LUID, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
-    MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
+    MFVideoTransferMatrix_BT709, MFSTARTUP_LITE, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_ADAPTER_LUID,
+    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_MESSAGE_COMMAND_DRAIN,
+    MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_END_STREAMING,
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER,
     MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
     MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
     MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO,
-    MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION,
+    MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
+    MF_MT_YUV_MATRIX, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK, MF_VERSION,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::System::Variant::VARIANT;
@@ -298,6 +300,19 @@ const fn pack2(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
+/// The capture video processor's NV12 is BT.709 limited range. Tagged on both types so the
+/// MFT writes it into the SPS colour description.
+fn tag_bt709_limited(t: &IMFMediaType) -> Result<()> {
+    // SAFETY: plain attribute writes with static GUID keys on a live media type.
+    unsafe {
+        t.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+        t.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
+        t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+        t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
+    }
+    Ok(())
+}
+
 /// Output (bitstream) media type. Set before the input type — the MFT derives what input
 /// it will accept from it.
 fn output_type(cfg: &EncodeConfig) -> Result<IMFMediaType> {
@@ -315,6 +330,7 @@ fn output_type(cfg: &EncodeConfig) -> Result<IMFMediaType> {
         if cfg.codec == Codec::H264 {
             t.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
         }
+        tag_bt709_limited(&t)?;
         Ok(t)
     }
 }
@@ -330,6 +346,7 @@ fn input_type(cfg: &EncodeConfig) -> Result<IMFMediaType> {
         t.SetUINT64(&MF_MT_FRAME_RATE, pack2(cfg.fps.max(1), 1))?;
         t.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack2(1, 1))?;
         t.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+        tag_bt709_limited(&t)?;
         Ok(t)
     }
 }
@@ -1341,7 +1358,7 @@ mod tests {
     struct AuMeta {
         keyframe: bool,
         annexb_start: bool,
-        len: usize,
+        data: Vec<u8>,
     }
 
     /// Live encode on whatever MFT this box has. `None` = skip. `on_frame` runs before
@@ -1424,7 +1441,7 @@ mod tests {
             aus.push(AuMeta {
                 keyframe: au.keyframe,
                 annexb_start: au.data.starts_with(&[0, 0, 0, 1]) || au.data.starts_with(&[0, 0, 1]),
-                len: au.data.len(),
+                data: au.data,
             });
         };
         for i in 0..frames {
@@ -1461,7 +1478,7 @@ mod tests {
             aus.len()
         );
         assert!(aus[0].keyframe, "first AU must be a keyframe");
-        assert!(aus[0].len > 0);
+        assert!(!aus[0].data.is_empty());
         assert!(aus[0].annexb_start, "first AU is not Annex-B");
     }
 
@@ -1471,6 +1488,35 @@ mod tests {
             return;
         };
         assert_stream_shape(&aus, 30);
+    }
+
+    /// The first IDR's SPS carries BT.709 limited range, the capture's own colour.
+    #[test]
+    fn mf_live_colour_description() {
+        use pf_bitstream::h264::ColourDescription;
+        let bt709 = ColourDescription {
+            colour_primaries: 1,
+            transfer_characteristics: 1,
+            matrix_coefficients: 1,
+            video_full_range: false,
+        };
+        for codec in [Codec::H264, Codec::H265] {
+            let Some(aus) = drive_live(codec, 5, |_, _| {}) else {
+                continue;
+            };
+            let colour = match codec {
+                Codec::H264 => pf_bitstream::h264::H264Planner::new()
+                    .plan_au(&aus[0].data)
+                    .ok()
+                    .map(|p| p.picture.colour),
+                _ => pf_bitstream::h265::H265Planner::new()
+                    .plan_au(&aus[0].data)
+                    .ok()
+                    .map(|p| p.picture.colour),
+            }
+            .expect("first AU parses");
+            assert_eq!(colour, bt709, "{codec:?} colour description");
+        }
     }
 
     #[test]

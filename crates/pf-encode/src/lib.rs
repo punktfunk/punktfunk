@@ -365,7 +365,7 @@ fn open_video_backend_linux(
         // the open makes). Gamescope has no embedded cursor — CSC blend is the
         // only pointer path. A `no` goes to VAAPI here, not a failed open.
         #[cfg(feature = "vulkan-encode")]
-        let is_hdr = format.is_hdr_rgb10();
+        let is_hdr = format.is_hdr();
         // 10-bit SDR (8-bit capture, depth 10). HEVC stays on VAAPI (Main10 under BT.709); AV1 has
         // no VAAPI path, so it takes Vulkan with the depth forced (Vulkan gets `bit_depth`) and the
         // BT.709 colour axis (`rgb2yuv10_709.comp`).
@@ -405,7 +405,7 @@ fn open_video_backend_linux(
             }
         }
         // The native session takes every capture shape, NV12 dmabufs included.
-        // H.264 and HEVC; AV1 on AMD/Intel is Vulkan Video's. HDR is the packed 10-bit
+        // H.264 and HEVC; AV1 on AMD/Intel is Vulkan Video's. HDR is the packed 10-bit or P010
         // capture; 10-bit SDR arrives as an 8-bit surface at depth 10.
         vaapi_native::NativeVaapiEncoder::open(
             codec,
@@ -415,7 +415,7 @@ fn open_video_backend_linux(
             bitrate_bps,
             bit_depth,
             chroma,
-            format.is_hdr_rgb10(),
+            format.is_hdr(),
         )
         .map(|e| (Box::new(e) as Box<dyn Encoder>, "vaapi-native"))
     };

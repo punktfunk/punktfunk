@@ -101,7 +101,9 @@ fun App(forceGamepadUi: Boolean = false) {
     var touchLibrary by remember { mutableStateOf<Pair<KnownHost, String?>?>(null) }
     // …and whether that shelf should dial the host's desktop as it opens (`start_in = stream`).
     // Only the cold-start effect below ever sets it; every other route to the library is a
-    // deliberate press and must not start a stream on its own.
+    // deliberate press and must not start a stream on its own. Any launch off the shelf disarms
+    // it: the stream screen replaces the shelf, so ending one composes a fresh shelf that would
+    // otherwise read this as a cold start and dial again.
     var touchAutoStream by remember { mutableStateOf(false) }
 
     // A stream's capture hides the pad it claims (a Sony pad's forced USB claim, the paused SC2
@@ -324,7 +326,7 @@ fun App(forceGamepadUi: Boolean = false) {
             library != null -> LibraryScreen(
                 host = library.first,
                 settings = settings,
-                onLaunched = { session = it },
+                onLaunched = { touchAutoStream = false; session = it },
                 onBack = {
                     touchLibrary = null
                     touchAutoStream = false

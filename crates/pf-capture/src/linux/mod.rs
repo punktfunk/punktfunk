@@ -92,6 +92,10 @@ struct CaptureSignals {
     broken: Arc<AtomicBool>,
     /// The stream reached `Error` (e.g. "no more input formats"). Terminal: it never delivers.
     errored: Arc<AtomicBool>,
+    /// The producer sent a buffer this capture still holds, so the pool's ownership is broken:
+    /// pw_stream takes that buffer back once, its busy count never clears, and the pool is a
+    /// buffer short for good. Never cleared; only a new stream gets a whole pool back.
+    resent: Arc<AtomicBool>,
     hdr_negotiated: Arc<AtomicBool>,
     /// Thread actually advertised the EGL→CUDA dmabuf-only offer. `plan.build_importer`
     /// is not enough: a failed importer means no dmabuf was offered, so a
@@ -120,6 +124,7 @@ impl CaptureSignals {
             driving: Arc::new(AtomicBool::new(false)),
             broken: Arc::new(AtomicBool::new(false)),
             errored: Arc::new(AtomicBool::new(false)),
+            resent: Arc::new(AtomicBool::new(false)),
             hdr_negotiated: Arc::new(AtomicBool::new(false)),
             gpu_dmabuf_offer: Arc::new(AtomicBool::new(false)),
             cursor_live: Arc::new(std::sync::Mutex::new(None)),
@@ -566,6 +571,13 @@ impl Capturer for PortalCapturer {
                 self.node_id
             ));
         }
+        if self.signals.resent.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "producer re-sent a held buffer (node {}): the pool is a buffer short until the \
+                 stream is rebuilt — rebuilding capture",
+                self.node_id
+            ));
+        }
         // Drain wakeup edges first — stale ones must not make the next
         // `wait_arrival` return early. `Disconnected` is a dead thread;
         // a leftover frame is still served first.
@@ -624,6 +636,7 @@ impl Capturer for PortalCapturer {
     /// static desktop stays `Streaming` (no buffers) and is not reported dead.
     fn is_alive(&self) -> bool {
         !self.signals.broken.load(Ordering::Relaxed)
+            && !self.signals.resent.load(Ordering::Relaxed)
             && self.signals.streaming.load(Ordering::Relaxed)
             && self.join.as_ref().is_some_and(|j| !j.is_finished())
     }

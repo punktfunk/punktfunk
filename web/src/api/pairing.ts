@@ -65,16 +65,26 @@ export function useSubmitPairingPin() {
 			uniqueid,
 			fingerprint,
 			peerIp,
+			label,
 		}: {
 			pin: string;
 			password: string;
 			uniqueid: string;
 			fingerprint: string;
 			peerIp: string;
+			/** Name for the device; the host stores it once the pairing completes. */
+			label?: string;
 		}) =>
 			apiFetch<void>(
 				"/api/v1/pair/pin",
-				json({ pin, password, uniqueid, fingerprint, peer_ip: peerIp }),
+				json({
+					pin,
+					password,
+					uniqueid,
+					fingerprint,
+					peer_ip: peerIp,
+					...(label?.trim() ? { label: label.trim() } : {}),
+				}),
 			),
 	});
 }

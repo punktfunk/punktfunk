@@ -27,6 +27,7 @@ import "#nitro-internal-pollyfills";
 import wsAdapter from "crossws/adapters/bun";
 import { useNitroApp } from "nitropack/runtime";
 import { startScheduleRunner } from "nitropack/runtime/internal";
+import { isLocalPeer } from "./peer-scope.mjs";
 import { resolveUiTlsPaths } from "./tls-paths.mjs";
 
 const nitroApp = useNitroApp();
@@ -121,14 +122,14 @@ if (!tls && secureFlag) {
 }
 
 // Where BOTH listeners bind. `PUNKTFUNK_UI_BIND` (host.env, the file every other host setting
-// lives in) first, then whatever a launcher set, then loopback. A console the LAN can reach is a
-// decision the operator makes, not the default it used to be; the plugin-UI origin inherits this
-// through `listenerOptions`, so 47993 is never wider than 47992.
+// lives in) first, then whatever a launcher set, then every interface. `fetch` refuses any peer
+// off the local network, so a wide bind is the LAN, never the internet. The plugin-UI origin
+// inherits both through `listenerOptions`, so 47993 is never wider than 47992.
 const bind =
 	process.env.PUNKTFUNK_UI_BIND?.trim() ||
 	process.env.NITRO_HOST ||
 	process.env.HOST ||
-	"127.0.0.1";
+	"0.0.0.0";
 // Read back by the app (server/routes/_auth/ui-config.get.ts) so Settings can say when the console
 // is reachable from the network. Set here, never trusted from the environment we started with.
 process.env.PUNKTFUNK_UI_BIND_ACTIVE = bind;
@@ -155,6 +156,14 @@ const listenerOptions = (lane) => ({
 	tls,
 	websocket: import.meta._websocket ? ws.websocket : undefined,
 	async fetch(req, server) {
+		// Before the body is buffered or a socket upgraded: an internet peer gets nothing to hold.
+		const peer = server.requestIP(req)?.address;
+		if (!isLocalPeer(peer)) {
+			return new Response(
+				"This console only answers on its own network. Connect from that network or over a VPN.\n",
+				{ status: 403 },
+			);
+		}
 		if (import.meta._websocket && req.headers.get("upgrade") === "websocket") {
 			return ws.handleUpgrade(req, server);
 		}
@@ -167,8 +176,7 @@ const listenerOptions = (lane) => ({
 		const headers = new Headers(req.headers);
 		headers.delete(PEER_IP_HEADER);
 		headers.delete(LISTENER_HEADER);
-		const peer = server.requestIP(req)?.address;
-		if (peer) headers.set(PEER_IP_HEADER, peer);
+		headers.set(PEER_IP_HEADER, peer);
 		headers.set(LISTENER_HEADER, lane);
 		return nitroApp.localFetch(url.pathname + url.search, {
 			host: url.hostname,

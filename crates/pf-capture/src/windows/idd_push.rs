@@ -261,6 +261,8 @@ pub struct IddPushCapturer {
     /// HDR cursor match to desktop SDR white (vs 80 nits). 2.5 ≈ Windows default; stamped into
     /// the cursor section because session 0 cannot query it.
     sdr_white_scale: f32,
+    /// The scale has been logged once; later lines only on change.
+    sdr_white_logged: bool,
     width: u32,
     height: u32,
     /// Handshake advertised `VIDEO_CAP_HDR` (not merely 10-bit). Pins composition

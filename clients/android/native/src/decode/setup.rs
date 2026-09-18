@@ -269,14 +269,14 @@ pub(super) fn android_hdr_static_info(m: &punktfunk_core::quic::HdrMeta) -> [u8;
 /// host sends a 0xCE right after the handshake, so it's typically already queued; wait briefly
 /// otherwise. The Surface DataSpace (applied on the format change) carries transfer/primaries
 /// regardless — this adds the luminance the tone-mapper needs. `None` on an SDR session.
-pub(super) fn hdr_static(client: &NativeClient) -> Option<[u8; 25]> {
+pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::HdrMeta> {
     if !client.color.is_hdr() {
         return None;
     }
     match client.next_hdr_meta(Duration::from_millis(250)) {
         Ok(meta) => {
             log::info!("decode: HDR static metadata applied (KEY_HDR_STATIC_INFO)");
-            Some(android_hdr_static_info(&meta))
+            Some(meta)
         }
         Err(_) => {
             log::info!("decode: HDR session but no mastering metadata yet — DataSpace only");
@@ -292,7 +292,7 @@ pub(super) fn low_latency_format(
     mode: &Mode,
     codec_name: &str,
     aggressive: bool,
-    hdr_static: Option<&[u8; 25]>,
+    hdr_static: Option<&punktfunk_core::quic::HdrMeta>,
 ) -> MediaFormat {
     let mut format = MediaFormat::new();
     format.set_str("mime", mime);
@@ -303,8 +303,8 @@ pub(super) fn low_latency_format(
         (mode.width * mode.height).max(2_000_000) as i32,
     );
     configure_low_latency(&mut format, codec_name, aggressive);
-    if let Some(info) = hdr_static {
-        format.set_buffer("hdr-static-info", info);
+    if let Some(meta) = hdr_static {
+        format.set_buffer("hdr-static-info", &android_hdr_static_info(meta));
     }
     format
 }

@@ -40,9 +40,7 @@ const float CODE10 = 64.0 / 65535.0;
 float lumaY(vec3 c) { return 64.0 + 230.1252*c.r + 593.9280*c.g + 51.9468*c.b; }
 
 // Blend the cursor over `col` at frame pixel `p`, when `p` falls inside the cursor rectangle.
-// The cursor bitmap is 8-bit sRGB and the frame is PQ, so this is a display-referred
-// approximation — the same one the CPU path (`pw_cursor.rs::composite_cursor_rgb10`) and the
-// CUDA path (`cursor_blend.comp` MODE 3/4) already make. Fine for a pointer.
+// The host uploads the cursor PQ-encoded (`CursorOverlay::pq_rgba`), so this mixes PQ codes.
 vec3 withCursor(ivec2 p, vec3 col) {
     if (pc.curSize.x <= 0) return col;
     ivec2 cp = p - pc.curOrigin;
@@ -67,7 +65,11 @@ void main() {
     imageStore(yImg, p + ivec2(1, 0), vec4(lumaY(c10) * CODE10, 0, 0, 1));
     imageStore(yImg, p + ivec2(0, 1), vec4(lumaY(c01) * CODE10, 0, 0, 1));
     imageStore(yImg, p + ivec2(1, 1), vec4(lumaY(c11) * CODE10, 0, 0, 1));
-    vec3 a = (c00 + c10 + c01 + c11) * 0.25;
+    // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] over columns p.x-1..p.x+1.
+    ivec2 pl = max(p + ivec2(-1, 0), ivec2(0));
+    vec3 cl0 = withCursor(pl,               texelFetch(rgb, min(pl,               rmax), 0).rgb);
+    vec3 cl1 = withCursor(pl + ivec2(0, 1), texelFetch(rgb, min(pl + ivec2(0, 1), rmax), 0).rgb);
+    vec3 a = (cl0 + 2.0 * c00 + c10 + cl1 + 2.0 * c01 + c11) * 0.125;
     float U = 512.0 - 125.1085*a.r - 322.8915*a.g + 448.0000*a.b;
     float V = 512.0 + 448.0000*a.r - 411.9680*a.g -  36.0320*a.b;
     imageStore(uvImg, uvc, vec4(U * CODE10, V * CODE10, 0, 1));

@@ -91,12 +91,11 @@ pinned. The layers, from the outside in:
   paired clients over the LAN (authenticated by their certificate), but every state-changing action —
   arming pairing, removing devices, session control — is honored **only from the host machine
   itself**.
-- **The web console is the admin surface, and it starts local.** It binds `127.0.0.1` unless you
-  set `PUNKTFUNK_UI_BIND` (`punktfunk-host web bind lan`), because it performs those local-only
-  actions on your behalf once you have logged in. Open it to the network when you want to administer
-  the host from another machine — and then treat anyone who can reach port 47992 as a candidate
-  administrator. SteamOS is the exception: its installer opens the console, since a Deck has no
-  other way in.
+- **The web console is the admin surface, and it stays on your network.** It answers peers on the
+  local network or a VPN (private and link-local addresses, Tailscale's `100.64.0.0/10`) and
+  refuses the internet, because it performs those local-only actions on your behalf once you have
+  logged in. Treat anyone who can reach port 47992 as a candidate administrator. To keep it to the
+  host machine, set `PUNKTFUNK_UI_BIND=127.0.0.1` in `host.env`; the installers ask.
 - **The web console has its own password**, on every platform — which makes it the real remote-admin
   credential. Linux packages and the SteamOS installer generate a random one into
   `~/.config/punktfunk/web-password`; on Windows the wizard lets you choose it (a strong random

@@ -314,6 +314,30 @@ final class DecodedVideoSink: @unchecked Sendable {
     }
 }
 
+/// Reports the decoded frames' HDR state each time it changes. The Welcome only says what was
+/// negotiated; the host's encoder can deliver SDR inside it, or flip mid-session. Sendable;
+/// lock-guarded.
+final class FrameHDRReporter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: Bool?
+    private var onChange: (@Sendable (Bool) -> Void)?
+
+    func bind(_ onChange: (@Sendable (Bool) -> Void)?) {
+        lock.lock()
+        last = nil
+        self.onChange = onChange
+        lock.unlock()
+    }
+
+    func note(_ hdr: Bool) {
+        lock.lock()
+        let callback = last == hdr ? nil : onChange
+        last = hdr
+        lock.unlock()
+        callback?(hdr)
+    }
+}
+
 /// Newest-wins 1-slot hand-off box (the generic sibling of `ReadyRing`): deadline pacing's
 /// drawable stash — the link thread `put`s each update's vended drawable (replacing an
 /// unpresented older one, which just returns to the layer's pool), the render thread `take`s.
@@ -577,6 +601,7 @@ public final class Stage2Pipeline {
     /// Feeds the core Automatic-bitrate controller's decode signal from the decode callback; `start`
     /// binds the live connection + arming flag (see DecodeReport).
     private let decodeReport = DecodeReport()
+    private let frameHDR = FrameHDRReporter()
     private let phaseReporter = PhaseReporter()
     /// Post-loss freeze-until-reanchor gate (shared core policy via the C ABI). Created here seeded 0;
     /// `start` reseeds it to the live connection's drop count. Captured by the decoder callbacks
@@ -663,6 +688,7 @@ public final class Stage2Pipeline {
         let renderSignal = renderSignal
         let gate = gate
         let decodeReport = decodeReport
+        let frameHDR = frameHDR
         let hud = hud
         let phaseReporter = phaseReporter
         let cadence = cadence
@@ -687,6 +713,7 @@ public final class Stage2Pipeline {
                 // present) on a proven clean re-anchor (IDR / RFI anchor / 2nd recovery mark) or the
                 // bounded backstop. decoderKeyframe=false: VT doesn't flag IDRs, the wire FLAG_SOF does.
                 guard gate.onDecoded(flags: frame.flags) else { return }
+                if case .video(_, let isHDR) = frame.image { frameHDR.note(isHDR) }
                 if let decodedSink {
                     decodedSink.submit(frame)
                     return
@@ -715,7 +742,8 @@ public final class Stage2Pipeline {
     /// Start the AU pump, decoder, and selected presentation loop on the main thread.
     ///
     /// `onFrame` fires at receipt for host/network metering. `onDecodedSize` reports coded-size
-    /// changes, and `onSessionEnd` reports transport closure. Presentation records the live
+    /// changes, `onFrameHDR` the decoded frames' HDR state as it changes, and `onSessionEnd`
+    /// transport closure. Presentation records the live
     /// host-minus-client clock offset at each on-glass callback so end-to-end samples remain valid
     /// after clock resynchronization.
     ///
@@ -724,9 +752,11 @@ public final class Stage2Pipeline {
         connection: PunktfunkConnection,
         onFrame: (@Sendable (AccessUnit) -> Void)?,
         onSessionEnd: (@Sendable () -> Void)?,
-        onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil
+        onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil,
+        onFrameHDR: (@Sendable (Bool) -> Void)? = nil
     ) {
         clockOffset = { connection.clockOffsetNs } // live (re-synced) — see the field doc
+        frameHDR.bind(onFrameHDR)
         recovery.bind(connection) // arm host-keyframe recovery for this session
         decodeReport.bind(connection) // arm the Automatic-bitrate decode signal for this session
         hud.bind(connection) // the overlay's decode, display and floor stamps
@@ -767,6 +797,7 @@ public final class Stage2Pipeline {
                 device: presenter.metalDevice, queue: presenter.metalQueue,
                 hud: hud, cadence: cadence, rateHint: frameRateHint,
                 onFrame: onFrame, onSessionEnd: onSessionEnd, onDecodedSize: onDecodedSize,
+                frameHDR: frameHDR,
                 onHdrMeta: { [weak presenter] meta in presenter?.setHdrMeta(meta) })
         } else {
             thread = Thread {
@@ -1398,6 +1429,7 @@ public final class Stage2Pipeline {
         onFrame: (@Sendable (AccessUnit) -> Void)?,
         onSessionEnd: (@Sendable () -> Void)?,
         onDecodedSize: (@Sendable (Int, Int) -> Void)?,
+        frameHDR: FrameHDRReporter,
         onHdrMeta: (@Sendable (PunktfunkConnection.HdrMeta) -> Void)?
     ) -> Thread {
         // The chunk-aligned parse window = the session's negotiated shard payload (Welcome);
@@ -1460,6 +1492,7 @@ public final class Stage2Pipeline {
                                 Int64(ts.tv_sec) * 1_000_000_000 + Int64(ts.tv_nsec)
                             hud.decoded(
                                 ptsNs: ptsNs, receivedNs: receivedNs, decodedNs: decodedNs)
+                            frameHDR.note(planes.pq)
                             // Same cadence sample as the VideoToolbox half: the wavelet decode's
                             // completion IS this frame's presentable instant.
                             ring.submit(

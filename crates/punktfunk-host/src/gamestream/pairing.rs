@@ -45,9 +45,13 @@ pub enum SubmitOutcome {
     NoMatch,
 }
 
+/// What the operator submits: the PIN, and the name to give the device. Moonlight sends no
+/// usable name of its own, so this is the only one it will ever have.
+pub type PinSubmission = (String, Option<String>);
+
 pub struct PinGate {
     /// PIN slot (`None` until submit). Lives only while `take` is parked; Drop removes it.
-    waiters: Mutex<HashMap<CeremonyId, Option<String>>>,
+    waiters: Mutex<HashMap<CeremonyId, Option<PinSubmission>>>,
     notify: Notify,
 }
 
@@ -59,7 +63,7 @@ impl PinGate {
         }
     }
 
-    pub fn submit(&self, pin: String, target: &CeremonyId) -> SubmitOutcome {
+    pub fn submit(&self, pin: String, label: Option<String>, target: &CeremonyId) -> SubmitOutcome {
         let mut waiters = self.waiters.lock().unwrap();
         if waiters.is_empty() {
             return SubmitOutcome::NoWaiter;
@@ -75,7 +79,7 @@ impl PinGate {
         else {
             return SubmitOutcome::NoMatch;
         };
-        *slot = Some(pin);
+        *slot = Some((pin, label));
         drop(waiters);
         self.notify.notify_waiters();
         tracing::info!(
@@ -100,7 +104,7 @@ impl PinGate {
         v
     }
 
-    async fn take(&self, timeout: Duration, id: &CeremonyId) -> Option<String> {
+    async fn take(&self, timeout: Duration, id: &CeremonyId) -> Option<PinSubmission> {
         {
             let mut w = self.waiters.lock().unwrap();
             if w.len() >= MAX_PARKED_WAITERS
@@ -119,6 +123,16 @@ impl PinGate {
             }
             w.insert(id.clone(), None);
         }
+        // Parked, so it is a knock the operator can answer: the same event the native side
+        // fires. The name is the client's own identity — Moonlight sends nothing better, and
+        // the operator names the device when they submit the PIN.
+        crate::events::emit(crate::events::EventKind::PairingPending {
+            device: crate::events::DeviceRef {
+                name: crate::native_pairing::sanitize_device_name(&id.uniqueid, &id.fingerprint),
+                fingerprint: id.fingerprint.clone(),
+                plane: crate::events::Plane::Gamestream,
+            },
+        });
         // Drop removes the slot on every exit so an unconsumed PIN cannot outlive this waiter.
         struct WaiterGuard<'a> {
             gate: &'a PinGate,
@@ -137,14 +151,14 @@ impl PinGate {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(pin) = self
+            if let Some(submission) = self
                 .waiters
                 .lock()
                 .unwrap()
                 .get_mut(id)
                 .and_then(Option::take)
             {
-                return Some(pin);
+                return Some(submission);
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
                 return None;
@@ -172,6 +186,9 @@ struct Session {
     responded: bool,
     /// Phase 1 time. A client that stops after phase 1 never reaches the phase-4 removal.
     started: std::time::Instant,
+    /// Name submitted with the PIN. Stored only once phase 4 pins the cert, so a ceremony
+    /// that fails leaves no label behind for a device that never paired.
+    label: Option<String>,
 }
 
 /// A ceremony that has not reached phase 4 by then is abandoned and pruned on the next phase 1.
@@ -239,7 +256,7 @@ impl Pairing {
             "pairing phase 1 (getservercert) — awaiting PIN: deliver it via the management \
              API `POST /api/v1/pair/pin` (operator reads the PIN off the Moonlight client)"
         );
-        let pin = self
+        let (pin, label) = self
             .pin
             .take(PAIRING_PIN_TIMEOUT, &ceremony)
             .await
@@ -261,6 +278,7 @@ impl Pairing {
                 client_hash: Vec::new(),
                 responded: false,
                 started: std::time::Instant::now(),
+                label,
             },
         );
         drop(map);
@@ -353,6 +371,7 @@ impl Pairing {
         let hash_ok = crypto::ct_eq(&expected, &s.client_hash);
         let sig_ok = verify256(&s.client_pubkey, client_secret, client_sig).is_ok();
         let client_cert_der = s.client_cert_der.clone();
+        let label = s.label.clone();
         // Drop the session now, any outcome. Phase 4 is plain HTTP; a replay would re-pin the cert.
         map.remove(uniqueid);
         if hash_ok && sig_ok {
@@ -364,11 +383,22 @@ impl Pairing {
                 }
             }
             tracing::info!(uniqueid, "pairing phase 4 complete — client cert pinned");
-            // GameStream has no device name; uniqueid is the identity the client presents.
+            let fingerprint = hex::encode(crypto::sha256(&[client_cert_der.as_slice()]));
+            // Every Moonlight client calls itself the same thing, so the name the operator
+            // gave this one at the PIN is the device's name from here on. `uniqueid` is the
+            // fallback: an identity, not a name.
+            let name = match label.as_deref() {
+                Some(l) => super::set_client_label(&fingerprint, Some(l)),
+                None => None,
+            };
             crate::events::emit(crate::events::EventKind::PairingCompleted {
                 device: crate::events::DeviceRef {
-                    name: uniqueid.to_string(),
-                    fingerprint: hex::encode(crypto::sha256(&[client_cert_der.as_slice()])),
+                    // The fallback is client-chosen and reaches hooks and the event stream, so
+                    // it is scrubbed like every other device name.
+                    name: name.unwrap_or_else(|| {
+                        crate::native_pairing::sanitize_device_name(uniqueid, &fingerprint)
+                    }),
+                    fingerprint,
                     plane: crate::events::Plane::Gamestream,
                 },
             });
@@ -445,10 +475,14 @@ mod tests {
 
         let target = cid("dev-a");
         assert_eq!(
-            pairing.pin.submit("1234".into(), &target),
+            pairing.pin.submit("1234".into(), None, &target),
             SubmitOutcome::Delivered(target)
         );
-        assert_eq!(waiter.await.unwrap().as_deref(), Some("1234"));
+        assert_eq!(
+            waiter.await.unwrap(),
+            Some(("1234".to_string(), None)),
+            "a PIN submitted without a name still pairs"
+        );
         assert!(!pairing.pin.awaiting_pin());
 
         assert_eq!(
@@ -461,11 +495,65 @@ mod tests {
         assert!(!pairing.pin.awaiting_pin());
     }
 
+    /// A parked ceremony is a knock an automation can act on, exactly as a native one is.
+    #[tokio::test]
+    async fn a_parked_ceremony_announces_itself() {
+        let pairing = Arc::new(Pairing::new());
+        let since = crate::events::bus().subscribe(0).catch_up.len() as u64;
+        let waiter = {
+            let p = pairing.clone();
+            tokio::spawn(async move { p.pin.take(Duration::from_millis(200), &cid("dev-a")).await })
+        };
+        while !pairing.pin.awaiting_pin() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let pending = crate::events::bus()
+            .subscribe(since)
+            .catch_up
+            .into_iter()
+            .find_map(|e| match e.kind {
+                crate::events::EventKind::PairingPending { device }
+                    if device.fingerprint == cid("dev-a").fingerprint =>
+                {
+                    Some(device)
+                }
+                _ => None,
+            })
+            .expect("a parked ceremony fires `pairing.pending`");
+        assert_eq!(pending.plane, crate::events::Plane::Gamestream);
+        assert_eq!(waiter.await.unwrap(), None, "no PIN, so it times out");
+    }
+
+    /// Moonlight names every client the same, so the name the operator types beside the PIN
+    /// is the one the device gets — it has to reach the parked ceremony to be stored.
+    #[tokio::test]
+    async fn a_name_submitted_with_the_pin_reaches_its_ceremony() {
+        let pairing = Arc::new(Pairing::new());
+        let waiter = {
+            let p = pairing.clone();
+            tokio::spawn(async move { p.pin.take(Duration::from_secs(5), &cid("dev-a")).await })
+        };
+        while !pairing.pin.awaiting_pin() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let target = cid("dev-a");
+        assert_eq!(
+            pairing
+                .pin
+                .submit("1234".into(), Some("Living Room TV".into()), &target),
+            SubmitOutcome::Delivered(target)
+        );
+        assert_eq!(
+            waiter.await.unwrap(),
+            Some(("1234".to_string(), Some("Living Room TV".to_string())))
+        );
+    }
+
     #[tokio::test]
     async fn pin_without_a_waiter_is_refused_and_never_stored() {
         let pairing = Pairing::new();
         assert_eq!(
-            pairing.pin.submit("1234".into(), &cid("dev-a")),
+            pairing.pin.submit("1234".into(), None, &cid("dev-a")),
             SubmitOutcome::NoWaiter
         );
         assert_eq!(
@@ -496,14 +584,14 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
         assert_eq!(
-            pairing.pin.submit("1234".into(), &cid("nobody")),
+            pairing.pin.submit("1234".into(), None, &cid("nobody")),
             SubmitOutcome::NoMatch
         );
         assert_eq!(
-            pairing.pin.submit("1234".into(), &legit_id),
+            pairing.pin.submit("1234".into(), None, &legit_id),
             SubmitOutcome::Delivered(legit_id)
         );
-        assert_eq!(legit.await.unwrap().as_deref(), Some("1234"));
+        assert_eq!(legit.await.unwrap(), Some(("1234".to_string(), None)));
         assert_eq!(racer.await.unwrap(), None);
     }
 
@@ -533,10 +621,10 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
         assert_eq!(
-            pairing.pin.submit("1234".into(), &a),
+            pairing.pin.submit("1234".into(), None, &a),
             SubmitOutcome::Delivered(a)
         );
-        assert_eq!(wa.await.unwrap().as_deref(), Some("1234"));
+        assert_eq!(wa.await.unwrap(), Some(("1234".to_string(), None)));
         assert_eq!(wb.await.unwrap(), None);
     }
 

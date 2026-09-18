@@ -24,6 +24,8 @@ pub struct StreamInfo {
     pub client: String,
     /// Lifecycle events only — the marker's key set is stable.
     pub launch: Option<String>,
+    /// Device id for the lifecycle events' hook filter; never in the marker file.
+    pub fingerprint: Option<String>,
     /// On lifecycle events and hook filters; never in the marker file.
     pub plane: crate::events::Plane,
 }
@@ -33,6 +35,7 @@ fn stream_ref(info: &StreamInfo) -> crate::events::StreamRef {
         mode: crate::events::mode_str(info.width, info.height, info.refresh_hz),
         hdr: info.hdr,
         client: info.client.clone(),
+        fingerprint: info.fingerprint.clone(),
         app: info.launch.clone(),
         plane: info.plane,
     }
@@ -226,6 +229,7 @@ mod imp {
                 refresh_hz: 120,
                 hdr: true,
                 client: "Couch'TV".to_string(),
+                fingerprint: None,
                 launch: None,
                 plane: crate::events::Plane::Native,
             });
@@ -244,6 +248,7 @@ mod imp {
                 refresh_hz: 60,
                 hdr: false,
                 client: "Phone".to_string(),
+                fingerprint: None,
                 launch: None,
                 plane: crate::events::Plane::Gamestream,
             });
@@ -281,6 +286,7 @@ mod tests {
             refresh_hz: 60,
             hdr: false,
             client: String::new(),
+            fingerprint: None,
             launch: Some("Hades".to_string()),
             plane: Plane::Gamestream,
         };

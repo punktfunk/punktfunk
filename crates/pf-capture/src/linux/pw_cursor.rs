@@ -257,7 +257,7 @@ pub(super) fn dst_offsets(fmt: PixelFormat) -> Option<(usize, usize, usize, usiz
 
 /// Alpha-blend the cached cursor into a packed 10-bit (`X2Rgb10`/`X2Bgr10`)
 /// CPU frame: unpack, blend 8-bit channels scaled to 10 (`v<<2 | v>>6`),
-/// repack. Frame samples are PQ; this is a display-referred approximation.
+/// repack. The frame is PQ, so the bitmap is re-encoded as PQ first.
 /// `r_shift` is R's bit offset (20 for x:R:G:B, 0 for x:B:G:R); G is always
 /// at 10 and B mirrors R.
 pub(super) fn composite_cursor_rgb10(
@@ -269,6 +269,7 @@ pub(super) fn composite_cursor_rgb10(
 ) {
     let b_shift = 20 - r_shift; // 0 or 20 — opposite end from R
     let (bw, bh) = (cursor.bw as i32, cursor.bh as i32);
+    let rgba = pf_frame::hdr::pq_rgba_cached(&cursor.rgba);
     for cy in 0..bh {
         let dy = cursor.y + cy;
         if dy < 0 || dy as usize >= h {
@@ -280,17 +281,13 @@ pub(super) fn composite_cursor_rgb10(
                 continue;
             }
             let s = ((cy * bw + cx) as usize) * 4;
-            let a = cursor.rgba[s + 3] as u32;
+            let a = rgba[s + 3] as u32;
             if a == 0 {
                 continue;
             }
             // 8-bit → 10-bit: replicate the top bits into the bottom.
             let up10 = |v: u8| ((v as u32) << 2) | ((v as u32) >> 6);
-            let (sr, sg, sb) = (
-                up10(cursor.rgba[s]),
-                up10(cursor.rgba[s + 1]),
-                up10(cursor.rgba[s + 2]),
-            );
+            let (sr, sg, sb) = (up10(rgba[s]), up10(rgba[s + 1]), up10(rgba[s + 2]));
             let di = (dy as usize * w + dx as usize) * 4;
             let px = u32::from_le_bytes(tight[di..di + 4].try_into().unwrap());
             let blend = |dst: u32, src: u32| (src * a + dst * (255 - a)) / 255;
@@ -589,8 +586,8 @@ mod tests {
     }
 
     #[test]
-    fn the_10bit_path_writes_the_right_channel_at_the_right_shift() {
-        // Opaque 8-bit 255 → 10-bit 1023 (`v<<2 | v>>6`).
+    fn the_10bit_path_writes_pq_at_the_right_shift() {
+        // Opaque sRGB red → PQ BT.2020 at 203 nits (136, 83, 56) → 10-bit (`v<<2 | v>>6`).
         let mut buf = pack_x2rgb10(0, 0, 0).to_vec();
         composite_cursor(
             &mut buf,
@@ -600,9 +597,9 @@ mod tests {
             &cursor(0, 0, 1, 1, (255, 0, 0), 255),
         );
         let v = u32::from_le_bytes(buf[..4].try_into().unwrap());
-        assert_eq!((v >> 20) & 0x3ff, 1023, "R");
-        assert_eq!((v >> 10) & 0x3ff, 0, "G");
-        assert_eq!(v & 0x3ff, 0, "B");
+        assert_eq!((v >> 20) & 0x3ff, 546, "R");
+        assert_eq!((v >> 10) & 0x3ff, 333, "G");
+        assert_eq!(v & 0x3ff, 224, "B");
         assert_eq!(v & 0xc000_0000, 0xc000_0000, "alpha bits preserved");
 
         // X2Bgr10: R at bit 0, B at 20 — same cursor, other end.
@@ -615,8 +612,8 @@ mod tests {
             &cursor(0, 0, 1, 1, (255, 0, 0), 255),
         );
         let v = u32::from_le_bytes(buf[..4].try_into().unwrap());
-        assert_eq!(v & 0x3ff, 1023, "R at bit 0 for x:B:G:R");
-        assert_eq!((v >> 20) & 0x3ff, 0, "B untouched");
+        assert_eq!(v & 0x3ff, 546, "R at bit 0 for x:B:G:R");
+        assert_eq!((v >> 20) & 0x3ff, 224, "B at bit 20");
     }
 
     #[test]
@@ -642,7 +639,8 @@ mod tests {
         );
         let p0 = u32::from_le_bytes(buf[0..4].try_into().unwrap());
         let p1 = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        assert_eq!((p0 >> 20) & 0x3ff, 1023);
+        // sRGB white is 203 nits in PQ: code 148 → 594.
+        assert_eq!((p0 >> 20) & 0x3ff, 594);
         assert_eq!((p1 >> 20) & 0x3ff, 0);
     }
 

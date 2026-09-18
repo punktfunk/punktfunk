@@ -204,6 +204,28 @@ struct Launching {
     poll_gen: u64,
     /// The game is up and the host is waiting for its window.
     window_wait: bool,
+    /// Why the hold gave up, once it has. Latched: the hold holds the screen and says this
+    /// instead of sliding away onto a desktop nobody asked for.
+    failed: Option<String>,
+}
+
+/// Why the hold is giving up, in one sentence, or `None` while it should keep waiting.
+///
+/// `state` is the host's own `games[]` word for this title, `None` when the host lists nothing
+/// for it at all — which is what a refused launch looks like from here. The touch shell's
+/// `launchGaveUp` says the same three sentences, so a report quotes one line whichever shell
+/// it came from. `running`, `untracked` and `grace` keep waiting or reveal: those launches worked.
+fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> Option<String> {
+    match state {
+        None if elapsed >= LAUNCH_NO_LEASE => Some(format!(
+            "The host didn't start {title} — nothing is running for it."
+        )),
+        Some("launching") if elapsed >= LAUNCH_HOLD_MAX => {
+            Some(format!("{title} is still starting after 2 minutes."))
+        }
+        Some("exited") => Some(format!("{title} closed right after starting.")),
+        _ => None,
+    }
 }
 
 /// Poll interval for the launch hold, and the retry when an answer never lands.
@@ -366,6 +388,9 @@ pub(crate) struct Shell {
     /// (left, top) inset of the last layout. Pointer coords arrive in surface
     /// pixels; hit boxes were published in this space.
     last_insets: (f32, f32),
+    /// Full surface of the last layout, insets included. A backdrop paints here,
+    /// not in the safe rect, or it seams at the cutout edge.
+    last_full: (f32, f32),
     /// Design-unit scale of the last frame. Touch slop and drag ticks grow with it.
     last_k: f64,
     gesture: Option<TouchGesture>,
@@ -447,6 +472,7 @@ impl Shell {
             pads: Vec::new(),
             hint_rects: Vec::new(),
             last_insets: (0.0, 0.0),
+            last_full: (0.0, 0.0),
             last_k: 1.0,
             gesture: None,
             gpu_cache_bytes: opts.gpu_cache_bytes,
@@ -762,6 +788,7 @@ impl Shell {
             base_gen: reads,
             poll_gen: reads,
             window_wait: false,
+            failed: None,
         })
     }
 
@@ -784,7 +811,7 @@ impl Shell {
         // Nothing to ask about yet: the lease is the SESSION's, and a title that was
         // already up would otherwise read as "running" and reveal a stream that does
         // not exist.
-        if !l.connected {
+        if !l.connected || l.failed.is_some() {
             return;
         }
         let state = (reads > l.base_gen)
@@ -792,13 +819,23 @@ impl Shell {
             .flatten();
         let elapsed = t - l.since;
         let window_wait = matches!(&state, Some((s, true)) if s == "running");
-        let done = match state.as_ref().map(|(s, _)| s.as_str()) {
-            Some("launching") => elapsed >= LAUNCH_HOLD_MAX,
+        let word = state.as_ref().map(|(s, _)| s.as_str());
+        // A launch that produced no game ends with a sentence, not by sliding away: a bare
+        // desktop reads the same whether the host refused it or the game is merely slow.
+        if let Some(why) = launch_gave_up(&l.title, word, elapsed) {
+            if let Some(l) = &mut self.launching {
+                l.failed = Some(why);
+            }
+            return;
+        }
+        let done = match word {
+            // Both handled above, once they run out of patience.
+            Some("launching") => false,
             // A Proton prefix or a splash can sit behind a running process for a minute.
             Some("running") if window_wait => elapsed >= LAUNCH_HOLD_MAX,
-            // window, running, exited, untracked, grace: the host has said all it will.
+            // window, running, untracked, grace: the host has said all it will.
             Some(_) => true,
-            None => elapsed >= LAUNCH_NO_LEASE,
+            None => false,
         };
         if done {
             self.reveal_stream();
@@ -1359,9 +1396,7 @@ impl Shell {
         }
     }
 
-    /// Push a command with no screen (in-stream ring host actions). The Vulkan overlay's
-    /// only; every GL host draws the ring as the settings editor.
-    #[cfg_attr(not(feature = "vulkan-overlay"), allow(dead_code))]
+    /// Push a command with no screen: in-stream ring host actions, a re-rooted shelf's fetch.
     pub(crate) fn send_cmd(&self, cmd: ConsoleCmd) {
         self.bus.send(cmd);
     }

@@ -28,8 +28,8 @@ desktop (UAC prompts, the lock screen).
   21H2 are **not supported**: the virtual-display driver needs the IddCx 1.10 driver framework,
   which first shipped in Windows 11 22H2. On older Windows the driver installs but can't start
   ("Punktfunk Virtual Display" shows **Code 10** in Device Manager and streaming fails); the
-  installer therefore refuses to run there. ARM64 is not built either (no ARM64 NVIDIA driver, and
-  the virtual-display driver is x64-only).
+  installer therefore refuses to run there. ARM64 ships only as a canary build — video only, with
+  Media Foundation as the sole encoder and no host audio.
 - **A GPU for hardware encode** — the host auto-detects the vendor:
   - **NVIDIA** → NVENC
   - **AMD** → AMF
@@ -319,8 +319,10 @@ label can outrun the picture, and what to check when a stream comes out SDR.
 - **AMD / Intel encode is newer.** All three encoders ship in the installer and all three have been
   validated on real hardware — AMF on a Ryzen 7000 iGPU (1080p120 HDR P010), QSV on Arc. NVENC still
   has much the most field time, and several of QSV's newer arms are marked unvalidated in the code.
-  Software H.264 is the GPU-less fallback.
-- **x64-only.** No ARM64 build — no ARM64 NVIDIA driver, and the virtual-display driver is x64-only.
+  There is no software fallback on Windows: the virtual-display driver encodes, so a host needs a
+  render adapter.
+- **x64 for stable.** ARM64 exists only as a canary build: Media Foundation encode, no host audio,
+  and neither winget nor the stable feed carries it.
 - **Newer than the Linux host.** The Linux host is the most battle-tested path; the Windows host is
   more recent, with the virtual-mic and AMD/Intel encode backends the youngest pieces.
 

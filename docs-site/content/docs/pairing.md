@@ -28,8 +28,8 @@ open **Pairing** and click **Pair a device**. The host shows a **4-digit PIN** a
 - **Steam Deck (Decky plugin):** pick the host in the Quick Access panel — an unpaired one offers
   **Request access** (the console approval above) or **Use a PIN instead**.
 - **Moonlight:** it runs the other way round — Moonlight shows a PIN, and you type it into the
-  console's **Moonlight (GameStream) pairing** card. Arming doesn't apply. (Moonlight needs
-  [GameStream compat on](/docs/moonlight) first.)
+  console's **Moonlight (GameStream) pairing** card, along with a name for the device. Arming
+  doesn't apply. (Moonlight needs [GameStream compat on](/docs/moonlight) first.)
 
 If the window lapses, arm it again. A `punktfunk://` link can't pair for you: one carrying an
 address opens the client's trust prompt, pre-filled and with any fingerprint the link named, but
@@ -66,10 +66,10 @@ From there you can change the level, extend or cut the expiry, or **remove** the
 revokes it immediately, even mid-session. Re-pairing a removed device is just the PIN ceremony again.
 
 **Naming a Moonlight device.** Every Moonlight-compatible client identifies itself with the same
-built-in name, so several of them look identical in the list. Use the pencil on the row to give it
-one of your own ("Living room TV") — the name is stored on the host, so every browser sees it, and
-removing the device forgets it. Devices paired with Punktfunk's own apps send a real name already
-and have no pencil.
+built-in name, so several of them look identical in the list. Name it as you pair it — the field
+sits beside the PIN — or later, with the pencil on its row ("Living room TV"). Either way the name
+is stored on the host, so every browser sees it, and removing the device forgets it. Devices paired
+with Punktfunk's own apps send a real name already and have no pencil.
 
 Can't pair at all? [Troubleshooting → Pairing is rejected](/docs/troubleshooting#pairing-is-rejected--the-client-cant-connect).
 

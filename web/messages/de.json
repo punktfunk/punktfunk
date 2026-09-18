@@ -780,7 +780,7 @@
 	"plugin_uis_title": "Plugin-Oberflächen",
 	"plugin_installed_toast": "{name} hinzugefügt — unter Plugins zu finden, oder anheften.",
 	"settings_reach_title": "Netzwerkzugriff",
-	"settings_reach_lan": "Diese Konsole ist aus deinem Netzwerk unter {url} erreichbar — wer diesen Rechner erreicht, sieht die Anmeldeseite.",
+	"settings_reach_lan": "Diese Konsole ist aus deinem lokalen Netzwerk unter {url} erreichbar, nie aus dem Internet — wer in diesem Netzwerk ist, sieht die Anmeldeseite.",
 	"settings_reach_change": "Setze PUNKTFUNK_UI_BIND=127.0.0.1 in host.env und starte die Konsole neu, damit sie nur auf diesem Rechner antwortet.",
 	"settings_account": "Konto",
 	"display_says_each": "Jedes Gerät bekommt {screen}, {kept}.",

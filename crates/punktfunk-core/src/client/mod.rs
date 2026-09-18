@@ -62,6 +62,22 @@ pub fn audio_mute_label(mask: u8) -> Option<&'static str> {
     }
 }
 
+/// How long a mute the player made themselves names itself on screen.
+pub const LOCAL_MUTE_NOTICE: Duration = Duration::from_secs(5);
+
+/// [`audio_mute_label`] with the badge's lifetime applied, `since` the mask last changed.
+///
+/// A host mute stands for the whole session: an operator silencing a client must not be
+/// able to hide behind a local unmute. A local mute is the player's own press from the dial
+/// that still shows its state, so it says so long enough to read and then leaves the picture
+/// alone — a standing badge over the game is the operator's language, not the player's.
+pub fn audio_mute_notice(mask: u8, since: Duration) -> Option<&'static str> {
+    if mask & AUDIO_MUTE_HOST == 0 && since >= LOCAL_MUTE_NOTICE {
+        return None;
+    }
+    audio_mute_label(mask)
+}
+
 /// Set or clear one bit of a mute mask. Read-modify-write on the atomic: the embedder and
 /// the control task own different bits and never wait on each other.
 pub(crate) fn set_mute_bit(cell: &AtomicU8, bit: u8, on: bool) {
@@ -333,6 +349,8 @@ pub struct NativeClient {
     /// Live encoder target (kbps), follows `BitrateChanged`. [`resolved_bitrate_kbps`] is the
     /// frozen session-start value. `0` = old host that never reported a rate.
     live_bitrate_kbps: Arc<AtomicU32>,
+    /// [`crate::hud::RateCut`] code the pump publishes each window; `0` = no standing cut.
+    rate_cut: Arc<AtomicU8>,
     /// ABR armed (Automatic, not rate-pinned PyroWave). Skip per-frame decode measurement when
     /// false ([`wants_decode_latency`](Self::wants_decode_latency)).
     wants_decode: bool,
@@ -707,6 +725,7 @@ impl NativeClient {
         let decode_lat = Arc::new(Mutex::new(DecodeLatAcc::default()));
         // Pump seeds from Welcome before ready_tx, then follows every ack.
         let live_bitrate = Arc::new(AtomicU32::new(0));
+        let rate_cut = Arc::new(AtomicU8::new(0));
         // Same seeding: Welcome before ready_tx, then every AccessUpdate. GRANT_ALL /
         // permanent here is the pre-handshake placeholder.
         let access_grants = Arc::new(AtomicU32::new(crate::quic::GRANT_ALL));
@@ -731,6 +750,7 @@ impl NativeClient {
         let rtt_us_w = rtt_us.clone();
         let decode_lat_w = decode_lat.clone();
         let live_bitrate_w = live_bitrate.clone();
+        let rate_cut_w = rate_cut.clone();
         let pad_audio_caps_w = pad_audio_caps.clone();
         let pad_mouse_w = pad_mouse.clone();
         let audio_mute_w = audio_mute.clone();
@@ -816,6 +836,7 @@ impl NativeClient {
                     rtt_us: rtt_us_w,
                     decode_lat: decode_lat_w,
                     live_bitrate: live_bitrate_w,
+                    rate_cut: rate_cut_w,
                     audio_mute: audio_mute_w,
                     pad_slots: pad_slots_w,
                     launch_outcome: launch_outcome_w,
@@ -903,6 +924,7 @@ impl NativeClient {
             hud,
             decode_lat,
             live_bitrate_kbps: live_bitrate,
+            rate_cut,
             // Match the pump: Automatic, not rate-pinned PyroWave, AND host echoed a rate.
             // Dropping the last term over-advertises against an old host that reports no rate.
             wants_decode: bitrate_kbps == 0
@@ -1186,6 +1208,7 @@ impl NativeClient {
                 .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
             rtt_us: self.rtt_us(),
             target_kbps: self.current_bitrate_kbps(),
+            rate_cut: self.rate_cut.load(Ordering::Relaxed),
             pad_slots: self.pad_slots(),
         }
     }
@@ -1853,5 +1876,28 @@ mod mute_tests {
 
         set_mute_bit(&m, AUDIO_MUTE_HOST, false);
         assert_eq!(audio_mute_label(m.load(Ordering::Relaxed)), None);
+    }
+
+    /// The badge's lifetime, not its wording: the player's own mute says itself once and
+    /// gets out of the picture; the operator's stands for as long as it does.
+    #[test]
+    fn only_the_players_own_mute_stops_naming_itself() {
+        let old = LOCAL_MUTE_NOTICE + Duration::from_secs(1);
+        assert_eq!(
+            audio_mute_notice(AUDIO_MUTE_LOCAL, Duration::ZERO),
+            Some("Muted on this device")
+        );
+        assert_eq!(audio_mute_notice(AUDIO_MUTE_LOCAL, old), None);
+
+        // Anything the host muted keeps the badge, however long it has stood.
+        assert_eq!(
+            audio_mute_notice(AUDIO_MUTE_HOST, old),
+            Some("Muted by the host")
+        );
+        assert_eq!(
+            audio_mute_notice(AUDIO_MUTE_HOST | AUDIO_MUTE_LOCAL, old),
+            Some("Muted by the host and on this device")
+        );
+        assert_eq!(audio_mute_notice(0, Duration::ZERO), None);
     }
 }

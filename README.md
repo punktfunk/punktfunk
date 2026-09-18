@@ -163,9 +163,8 @@ additional terms or conditions. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Punktfunk's own source is MIT/Apache-2.0. Shipped binaries additionally link third-party components
 under their own (permissive) licenses — see [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt)
-(regenerate with `scripts/gen-third-party-notices.sh`). The Windows **host** build also bundles
-FFmpeg under the **LGPL v2.1+** (dynamically linked, replaceable DLLs; the license text ships in the
-installed `licenses/` folder). The **clients** link no FFmpeg at all — they decode natively.
+(regenerate with `scripts/gen-third-party-notices.sh`). Nothing links FFmpeg any more: host encode
+went native in 2026-09, and the clients decode natively.
 
 ### Trademarks
 

@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Thu, 17 Sep 2026 22:48:30 +0200
+Subject: [PATCH 21/22] pipewire: recycle a pushed buffer the PipeWire thread
+ has not taken
+
+push_pipewire_buffer() hands a painted buffer to the PipeWire thread through
+the one-slot in_buffer. A second push before that thread runs dispatch_nudge()
+displaces the first buffer and only logs "Already had a buffer?!". The
+displaced buffer is still dequeued from the stream and still marked copying,
+so nothing queues, buries or reuses it: it is gone from the pool until the
+stream renegotiates, and its texture leaks when it does.
+
+Adaptive sync pushes on every game commit, so a stream that runs for long
+enough keeps losing buffers until one is left. A consumer that holds that
+last frame while it waits for the next one never gets it.
+
+push_pipewire_buffer() now returns the displaced buffer and paint_pipewire()
+keeps it as the target of its next paint. The newest frame is still pushed at
+once, no paint is skipped, and a stale recycled buffer is destroyed by the
+existing IsStale() check. Stamp pfhdr17: nothing for a caller to gate on.
+---
+ src/meson.build      | 3 ++-
+ src/pipewire.cpp     | 7 +++++--
+ src/pipewire.hpp     | 4 +++-
+ src/steamcompmgr.cpp | 4 ++--
+ 4 files changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 1374066..7e2b07f 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -197,7 +197,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr14 — …and the headless connector reports HDR10 under --hdr-debug-force-support
+ #   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
+ #   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
+-version_tag = vcs_tag + '+pfhdr16' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr17 — …and a capture push never drops a buffer the PipeWire thread has not taken
++version_tag = vcs_tag + '+pfhdr17' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index 0ba573a..e3fffab 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -911,14 +911,17 @@ struct pipewire_buffer *dequeue_pipewire_buffer(void)
+ 	return out_buffer.exchange(nullptr);
+ }
+ 
+-void push_pipewire_buffer(struct pipewire_buffer *buffer)
++struct pipewire_buffer *push_pipewire_buffer(struct pipewire_buffer *buffer)
+ {
++	// A displaced buffer is still dequeued and still `copying`: dropping it would take it out of
++	// the pool until the stream renegotiates.
+ 	struct pipewire_buffer *old = in_buffer.exchange(buffer);
+ 	if ( old != nullptr )
+ 	{
+-		pwr_log.errorf_errno("push_pipewire_buffer: Already had a buffer?!");
++		pwr_log.debugf("push_pipewire_buffer: recycling a buffer the PipeWire thread had not taken");
+ 	}
+ 	nudge_pipewire();
++	return old;
+ }
+ 
+ void nudge_pipewire(void)
+diff --git a/src/pipewire.hpp b/src/pipewire.hpp
+index d0b510c..378b33a 100644
+--- a/src/pipewire.hpp
++++ b/src/pipewire.hpp
+@@ -63,5 +63,7 @@ void pipewire_destroy_buffer(struct pipewire_buffer *buffer);
+ // Destroy textures queued by the PipeWire thread. Must run on steamcompmgr —
+ // CVulkanTexture's dtor talks to the Vulkan device.
+ void pipewire_reap_dead_buffers(void);
+-void push_pipewire_buffer(struct pipewire_buffer *buffer);
++// Returns the buffer this push displaced, which the PipeWire thread never took; the caller owns
++// it again. nullptr when the slot was empty.
++struct pipewire_buffer *push_pipewire_buffer(struct pipewire_buffer *buffer);
+ void nudge_pipewire(void);
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 27d7aaf..e5bbccd 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -2611,8 +2611,8 @@ static void paint_pipewire()
+ 	{
+ 		vulkan_wait( *oPipewireSequence, true );
+ 
+-		push_pipewire_buffer( s_pPipewireBuffer );
+-		s_pPipewireBuffer = nullptr;
++		// A buffer this push displaced never reached the stream; it is the next paint's target.
++		s_pPipewireBuffer = push_pipewire_buffer( s_pPipewireBuffer );
+ 	}
+ }
+ #endif

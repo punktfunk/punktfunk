@@ -125,9 +125,11 @@ void main() {
     if (pc.mode == 1u) {
         uint uvw = 0u;
         for (uint s = 0u; s < 2u; s++) {
+            // Left-sited (H.273 type 0): [1 2 1] across columns cx-1..cx+1 over both rows.
             uint cx = x0 + s * 2u;
-            vec3 a = (fetch(cx, y0) + fetch(cx + 1u, y0) + fetch(cx, y0 + 1u) + fetch(cx + 1u, y0 + 1u))
-                * 0.25;
+            uint xl = cx == 0u ? 0u : cx - 1u;
+            vec3 a = (fetch(xl, y0) + 2.0 * fetch(cx, y0) + fetch(cx + 1u, y0)
+                + fetch(xl, y0 + 1u) + 2.0 * fetch(cx, y0 + 1u) + fetch(cx + 1u, y0 + 1u)) * 0.125;
             uvw |= (cbB(a) | (crB(a) << 8)) << (16u * s);
         }
         dw[pc.pitch_w * pc.plane_rows + by * pc.pitch_w + bx] = uvw;

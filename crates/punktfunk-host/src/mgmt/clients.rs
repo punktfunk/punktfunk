@@ -54,6 +54,11 @@ pub(crate) struct SubmitPin {
     uniqueid: String,
     fingerprint: String,
     peer_ip: String,
+    /// Name for this device, scrubbed like `PATCH /clients/{fp}` and stored once the pairing
+    /// completes. Every Moonlight client names itself the same, so without one the device is
+    /// listed by fingerprint until somebody renames it.
+    #[schema(example = "Living Room TV")]
+    label: Option<String>,
 }
 
 /// List paired clients
@@ -367,13 +372,20 @@ pub(crate) async fn submit_pairing_pin(
     let Ok(peer_ip) = req.peer_ip.parse() else {
         return api_error(StatusCode::BAD_REQUEST, "invalid pairing ceremony peer_ip");
     };
+    // All-whitespace is no name, as in `rename_client`. The sanitizer caps the length.
+    let label = req
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string);
     let target = crate::gamestream::pairing::CeremonyId {
         uniqueid: req.uniqueid,
         fingerprint: req.fingerprint,
         peer_ip,
     };
     use crate::gamestream::pairing::SubmitOutcome;
-    match st.app.pairing.pin.submit(pin.to_string(), &target) {
+    match st.app.pairing.pin.submit(pin.to_string(), label, &target) {
         SubmitOutcome::Delivered(_) => StatusCode::NO_CONTENT.into_response(),
         SubmitOutcome::NoWaiter => api_error(
             StatusCode::CONFLICT,

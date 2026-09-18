@@ -36,15 +36,26 @@ export function hookAction(h: HookEntry): string {
 	return "";
 }
 
-/** Human summary of a hook's filter, or "" when it matches everything. */
-export function hookFilterSummary(h: HookEntry): string {
+/**
+ * Human summary of a hook's filter, or "" when it matches everything.
+ *
+ * A device filter stores the certificate, so `names` turns it back into the name the operator
+ * picked; without a match it stays a fingerprint, which is still what the config file says.
+ */
+export function hookFilterSummary(
+	h: HookEntry,
+	names?: Map<string, string>,
+): string {
 	const f = h.filter;
 	if (!f) return "";
+	const device =
+		f.fingerprint &&
+		(names?.get(f.fingerprint) ?? `${f.fingerprint.slice(0, 12)}…`);
 	return [
 		f.client && `client=${f.client}`,
+		device && `device=${device}`,
 		f.app && `app=${f.app}`,
 		f.plane && `plane=${f.plane}`,
-		f.fingerprint && `fp=${f.fingerprint.slice(0, 12)}…`,
 	]
 		.filter(Boolean)
 		.join(" · ");

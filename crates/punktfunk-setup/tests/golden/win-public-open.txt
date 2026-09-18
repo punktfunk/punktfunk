@@ -7,7 +7,7 @@
   Public-network firewall rules: yes
   Start the service: yes
   Tray autostart: yes
-  Web console reachable from: this PC only
+  Web console reachable from: this local network
 ==> Files → C:\Program Files\punktfunk
   ok would unpack the payload into C:\Program Files\punktfunk
 ==> Register the uninstaller
@@ -26,7 +26,7 @@
   + "C:\Program Files\punktfunk\punktfunk-host.exe" driver install --dir <staging>\pfvdisplay
   + "C:\Program Files\punktfunk\punktfunk-host.exe" driver install --gamepad --dir <staging>\gamepad
 ==> Service
-  + "C:\Program Files\punktfunk\punktfunk-host.exe" service install --gamestream=off --allow-public-network=on --web-bind=127.0.0.1
+  + "C:\Program Files\punktfunk\punktfunk-host.exe" service install --gamestream=off --allow-public-network=on --web-bind=0.0.0.0
   + "C:\Program Files\punktfunk\punktfunk-host.exe" service start
 ==> Web console
   + "C:\Program Files\punktfunk\punktfunk-host.exe" web setup --app-dir "C:\Program Files\punktfunk" --password-file "<temp>\webpw.txt"
@@ -39,8 +39,7 @@
   + "C:\Program Files\punktfunk\punktfunk-host.exe" driver check
 
   Done. Next:
-  1. Open the web console:  https://127.0.0.1:47992  (the certificate is the host's own — continue past the warning)
-     It answers on this PC only. Set PUNKTFUNK_UI_BIND in host.env to reach it from another device.
+  1. Open the web console:  https://<this-PC>:47992  (the certificate is the host's own — continue past the warning)
      password: punktfunk-host web password  (from an elevated PowerShell)
   2. Install a client on the device you stream to (https://docs.punktfunk.unom.io/docs/install-client), connect, and click Approve in the console.
   Stuck? https://docs.punktfunk.unom.io/docs/troubleshooting

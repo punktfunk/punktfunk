@@ -463,7 +463,7 @@ const runSandboxed = (
 			resume(
 				Effect.fail(
 					new Error(
-						`no per-plugin token for ${id} — the host mints them for installed plugins on its next start`,
+						`no token for ${id} in plugin-tokens.json — the host mints one per installed plugin on its next start, and under the runner's unit that file has to be bound into the home it replaces`,
 					),
 				),
 			);

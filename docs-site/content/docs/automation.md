@@ -23,12 +23,12 @@ and nothing configured here runs anywhere near the streaming path.
 | Kind | Fires when | Carries |
 |---|---|---|
 | `client.connected` / `client.disconnected` | a client session is admitted / goes away | device name, cert fingerprint, plane (`native`/`gamestream`); disconnect adds `reason`: `quit` (user stop), `timeout` (vanished), `error` |
-| `session.started` / `session.ended` | an A/V session registers / ends | session id, client label, mode (`3840x2160@120`), HDR. `session.ended` adds a `summary`: duration, codec / bit depth / chroma, the bitrate span (min/avg/max + how many times it moved), frames sent and dropped, input datagram counts, gyro cadence, audio egress totals, bring-up ms, path MTU, and `ended` — `local`, `game_exited`, `host_ended`, `host_error`, `lost` or `stopped_by_operator`. The same shape `GET /api/v1/session/last` returns for the last eight |
-| `stream.started` / `stream.stopped` | video actually starts / stops | mode, HDR, client name, launched app id/title (when one was requested), plane |
-| `game.running` | a launched game's own process is seen running (not merely its launcher) | app id, title, store, client, plane |
+| `session.started` / `session.ended` | an A/V session registers / ends | session id, client label, cert fingerprint, plane, mode (`3840x2160@120`), HDR. `session.ended` adds a `summary`: duration, codec / bit depth / chroma, the bitrate span (min/avg/max + how many times it moved), frames sent and dropped, input datagram counts, gyro cadence, audio egress totals, bring-up ms, path MTU, and `ended` — `local`, `game_exited`, `host_ended`, `host_error`, `lost` or `stopped_by_operator`. The same shape `GET /api/v1/session/last` returns for the last eight |
+| `stream.started` / `stream.stopped` | video actually starts / stops | mode, HDR, client name, cert fingerprint, launched app id/title (when one was requested), plane |
+| `game.running` | a launched game's own process is seen running (not merely its launcher) | app id, title, store, client, cert fingerprint, plane |
 | `game.window` | the game's own window reaches the screen — often 5-40 s after `game.running`, while Proton builds a prefix or a splash sits on a black window | the same, plus `title` and `app_id` of that window |
 | `game.exited` | a launched game is gone | the same, plus `reason`: `exited` (the player quit it) or `terminated` (the host closed it, per your [session⇄game settings](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does)) |
-| `pairing.pending` | an unpaired device knocks (once per device, not per retry) | device name, fingerprint, plane |
+| `pairing.pending` | an unpaired device knocks — a native one once per device, not per retry; a Moonlight one when its PIN ceremony parks | device name, fingerprint, plane |
 | `pairing.completed` / `pairing.denied` | a pairing is approved+stored / denied | device name, fingerprint, plane |
 | `display.created` / `display.released` | a virtual display is minted / kept displays are released | backend + mode / count |
 | `library.changed` | the game library is mutated | source: `manual`, or the provider id that reconciled (`PUT /api/v1/library/provider/{p}`) |
@@ -46,7 +46,8 @@ version (additive-only — fields get added, never renamed), and the fields abov
 { "seq": 42, "ts_ms": 1784227449526, "schema": 1,
   "kind": "stream.started",
   "stream": { "mode": "2560x1440@120", "hdr": true,
-              "client": "Living Room TV", "app": "steam:570", "plane": "native" } }
+              "client": "Living Room TV", "fingerprint": "9f86d081…",
+              "app": "steam:570", "plane": "native" } }
 ```
 
 ## Hooks: `hooks.json`
@@ -59,7 +60,8 @@ the same document to `/api/v1/hooks` from a script — changes apply immediately
   "hooks": [
     { "on": "stream.started",  "run": "/home/me/.config/punktfunk/scripts/on-stream.sh" },
     { "on": "stream.stopped",  "run": "/home/me/.config/punktfunk/scripts/off-stream.sh" },
-    { "on": "client.connected", "filter": { "client": "Living Room TV" },
+    { "on": "client.connected",
+      "filter": { "fingerprint": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },
       "run": "kscreen-doctor output.HDMI-A-1.mode.3840x2160@60" },
     { "on": "pairing.pending",
       "webhook": "https://ha.local/api/webhook/punktfunk",
@@ -75,10 +77,15 @@ Each entry:
 | `on` | Which events fire it: an exact kind (`stream.started`) or a `domain.*` prefix (`pairing.*`). |
 | `run` | A shell command (`sh -c` on Linux). Gets the event JSON on **stdin** and flat **`PF_EVENT_*`** env vars. |
 | `webhook` | A URL the event JSON is POSTed to. TLS-verified, redirects are never followed, no Punktfunk credentials attached. |
-| `filter` | Optional exact-match constraints: `client` (device name), `fingerprint`, `plane` (`native`/`gamestream`), `app`. All present fields must match. |
+| `filter` | Optional exact-match constraints: `fingerprint` (the device's certificate — what the console writes when you pick a device), `client` (its display name), `plane` (`native`/`gamestream`), `app`. All present fields must match. |
 | `timeout_s` | Command timeout (default 30, max 600) — on expiry the whole process group is killed. |
 | `debounce_ms` | Minimum interval between firings of this hook (0 = every event). |
 | `hmac_secret_file` | File with a secret; the webhook gains `X-Punktfunk-Signature: sha256=<hex HMAC-SHA256 of the body>` so your receiver can authenticate the host. |
+
+Target a device by `fingerprint`, not by name: two devices can share a name, and renaming one
+changes what a `client` filter matches. The console's device picker shows names and stores the
+fingerprint; `GET /api/v1/clients` and `…/native/clients` list both. A `client` filter that goes
+quiet is logged — the host names the event's own client so the mismatch is visible.
 
 ### What the host refuses
 

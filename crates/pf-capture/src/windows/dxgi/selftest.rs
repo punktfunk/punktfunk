@@ -43,8 +43,8 @@ fn p010_reference(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
         let lp = l.powf(m1);
         ((c1 + c2 * lp) / (1.0 + c3 * lp)).powf(m2)
     }
-    // scRGB -> nits -> BT.2020 linear (row-major matrix, mul(M, v)).
-    let (r, g, b) = (r.max(0.0) * 80.0, g.max(0.0) * 80.0, b.max(0.0) * 80.0);
+    // scRGB -> nits -> BT.2020 linear (row-major matrix, mul(M, v)); pq_oetf clamps after.
+    let (r, g, b) = (r * 80.0, g * 80.0, b * 80.0);
     let m = [
         [0.627403914, 0.329283038, 0.043313048],
         [0.069097292, 0.919540405, 0.011362303],

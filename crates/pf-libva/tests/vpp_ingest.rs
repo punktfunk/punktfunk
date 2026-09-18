@@ -414,3 +414,119 @@ fn a_larger_picture_encodes_at_the_session_size() {
         );
     }
 }
+
+/// Chroma sits on the left luma column (H.273 type 0), the siting decoders assume. A red|white
+/// edge between columns 160 and 161 leaves the chroma sample at column 160 fully red when it is
+/// point-sited left, 75% red for a left [1 2 1], and 50% red for a centre-sited 2×2 box.
+#[test]
+#[ignore = "needs a VAAPI device"]
+fn chroma_is_sited_on_the_left_column() {
+    let display = display();
+    let vpp = Vpp::new(&display, W, H).expect("VideoProc");
+    let src = display
+        .create_surface(VA_RT_FORMAT_RGB32, Some(VA_FOURCC_BGRA), W, H)
+        .expect("a BGRA surface");
+    let dst = display
+        .create_surface(VA_RT_FORMAT_YUV420, Some(VA_FOURCC_NV12), W, H)
+        .expect("an NV12 surface");
+    let picture: Vec<u8> = (0..(W * H) as usize)
+        .flat_map(|i| {
+            if i % W as usize <= 160 {
+                [0, 0, 255, 255]
+            } else {
+                [255, 255, 255, 255]
+            }
+        })
+        .collect();
+    display
+        .write_packed(src, &picture, W as usize * 4)
+        .expect("upload the edge");
+    vpp.convert(
+        &display,
+        src,
+        (W, H),
+        true,
+        pf_vaapi::hevc::COLOUR_BT709,
+        dst,
+    )
+    .expect("convert");
+    let (_, _, cr) = yuv_at(&display, dst, 160, H as usize / 2);
+    let red = (f64::from(cr) - 128.0) / (240.0 - 128.0);
+    println!("chroma at column 160: Cr {cr}, {:.0}% red", red * 100.0);
+    assert!(
+        red > 0.65,
+        "centre-sited chroma ({:.0}% red at column 160)",
+        red * 100.0
+    );
+    display.destroy_surface(src);
+    display.destroy_surface(dst);
+    vpp.destroy(&display);
+}
+
+/// Rows below the picture in a macroblock-aligned target: what does a convert leave there?
+/// The encoder codes them and deblocks across the edge, so they must not be stale.
+#[test]
+#[ignore = "needs a VAAPI device"]
+fn padding_rows_below_the_picture_are_written() {
+    let (w, h, coded_h) = (320u32, 250u32, 256u32);
+    let display = display();
+    let vpp = Vpp::new(&display, w, h).expect("VideoProc");
+    let src = display
+        .create_surface(VA_RT_FORMAT_RGB32, Some(VA_FOURCC_BGRA), w, h)
+        .expect("a BGRA surface");
+    let dst = display
+        .create_surface(VA_RT_FORMAT_YUV420, Some(VA_FOURCC_NV12), w, coded_h)
+        .expect("an aligned NV12 surface");
+    // A sentinel the convert has to overwrite.
+    display
+        .map_image(dst, |image, ptr| {
+            for y in 0..usize::from(image.height) {
+                // SAFETY: inside the mapped image, by the driver's own pitches and offsets.
+                unsafe {
+                    let luma = image.offsets[0] as usize + y * image.pitches[0] as usize;
+                    std::ptr::write_bytes(ptr.add(luma), 7, w as usize);
+                    if y % 2 == 0 {
+                        let uv = image.offsets[1] as usize + (y / 2) * image.pitches[1] as usize;
+                        std::ptr::write_bytes(ptr.add(uv), 7, w as usize);
+                    }
+                }
+            }
+            Ok(())
+        })
+        .expect("fill the sentinel");
+    display
+        .write_packed(
+            src,
+            &[255, 255, 255, 255].repeat((w * h) as usize),
+            w as usize * 4,
+        )
+        .expect("upload white");
+    vpp.convert(
+        &display,
+        src,
+        (w, h),
+        true,
+        pf_vaapi::hevc::COLOUR_BT709,
+        dst,
+    )
+    .expect("convert");
+    for y in [h as usize - 1, h as usize, coded_h as usize - 1] {
+        println!("row {y}: {:?}", yuv_at(&display, dst, w as usize / 2, y));
+    }
+    near(
+        yuv_at(&display, dst, w as usize / 2, h as usize - 1),
+        (235, 128, 128),
+        "last row",
+    );
+    for y in h as usize..coded_h as usize {
+        let got = yuv_at(&display, dst, w as usize / 2, y);
+        assert_ne!(
+            got,
+            (7, 7, 7),
+            "row {y} kept the sentinel: the convert never wrote it"
+        );
+    }
+    display.destroy_surface(src);
+    display.destroy_surface(dst);
+    vpp.destroy(&display);
+}

@@ -117,15 +117,6 @@ pub fn run(target: Option<&str>) -> u8 {
             }
         }
     };
-    let initial_fetch = match &entry {
-        ConsoleEntry::Library(h) | ConsoleEntry::Stream(h) => Some(ConsoleCmd::FetchLibrary {
-            addr: h.addr.clone(),
-            mgmt: h.mgmt_port,
-            fp_hex: h.fp_hex.clone(),
-        }),
-        ConsoleEntry::Home => None,
-    };
-
     let opts = ConsoleOptions::desktop(trust::device_name(), is_steam_deck());
     let (overlay, handles) = match SkiaOverlay::console(opts, entry) {
         Ok(v) => v,
@@ -148,9 +139,6 @@ pub fn run(target: Option<&str>) -> u8 {
         identity.clone(),
         seed,
     );
-    if let Some(cmd) = initial_fetch {
-        bus.send(cmd);
-    }
 
     // `--json-status`: a shell parent is reading stdout (the WinUI shell hides itself on
     // `{"ready":true}` and restores on exit) — plain CLI/gamescope runs stay silent.

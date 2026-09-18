@@ -419,6 +419,7 @@ mod windows_tests {
             refresh_mhz: 59940,
             primary: active,
             hdr: active.then_some(false),
+            sdr_white_level: None,
             source_id: target_id,
             source_adapter_luid: 0,
         }

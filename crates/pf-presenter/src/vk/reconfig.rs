@@ -263,7 +263,7 @@ impl Presenter {
         // the swapchain rides `recreate_swapchain` below.
         let mut old_pipe = std::mem::replace(
             &mut self.overlay_pipe,
-            OverlayPipe::new(&self.device, target.format)?,
+            OverlayPipe::new(&self.device, target.format, on)?,
         );
         let (overlay_views, overlay_framebuffers) = old_pipe.take_targets();
         // SAFETY: fence quiesce above; these views/framebuffers are only in our cmd bufs.

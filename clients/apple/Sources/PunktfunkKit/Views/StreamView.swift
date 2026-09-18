@@ -670,7 +670,8 @@ public final class StreamLayerView: NSView {
               let provider = CGDataProvider(data: ev.rgba as CFData),
               let cg = CGImage(
                   width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
-                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                  bytesPerRow: w * 4,
+                  space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                   bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
                   provider: provider, decode: nil, shouldInterpolate: false,
                   intent: .defaultIntent)

@@ -101,11 +101,22 @@ impl WinExecutor<'_> {
         Ok(())
     }
 
-    /// A failed upgrade owes back the tasks its stop disabled: run the plan's `RestoreTasks`
-    /// wherever it sits, so the plugin runner is not silently off afterwards.
+    /// A failed upgrade owes back what its stop took: run the plan's `RestoreTasks` and its
+    /// `service start` wherever they sit. A host that can't start is no worse off than one
+    /// left stopped. A fresh install stopped nothing and starts nothing here.
     fn restore_after_failure(&self, plan: &WinPlan) {
-        for step in plan.phases.iter().flat_map(|p| &p.steps) {
-            if matches!(step, WinAction::RestoreTasks { .. }) {
+        let stopped = plan
+            .steps()
+            .any(|s| matches!(s, WinAction::StopHostRuntime { .. }));
+        for step in plan.steps() {
+            let owed = match step {
+                WinAction::RestoreTasks { .. } => true,
+                WinAction::Run(argv) => {
+                    stopped && argv.ends_with(&["service".into(), "start".into()])
+                }
+                _ => false,
+            };
+            if owed {
                 let _ = self.step(step);
             }
         }
@@ -886,6 +897,42 @@ mod tests {
         )
         .unwrap();
         assert!(buf.borrow().contains(r"C:\stage\pfvdisplay"));
+    }
+
+    #[test]
+    fn a_failed_upgrade_starts_the_service_it_stopped() {
+        let start = r"C:\app\punktfunk-host.exe service start";
+        let run = FakeRunner::new().answer(start, 0, "");
+        let (net, payload) = (FakeNet::default(), FakePayload::default());
+        let paths = BasePaths::rooted(Path::new("/box"));
+        let phase = |step: WinAction| super::super::plan::WinPhase {
+            title: "t".into(),
+            steps: vec![step],
+        };
+        let fails = phase(WinAction::Run(vec!["no-such-tool".into()]));
+        let starts = phase(WinAction::Run(
+            start.split(' ').map(str::to_string).collect(),
+        ));
+        let stops = phase(WinAction::StopHostRuntime {
+            app_dir: r"C:\app".into(),
+        });
+
+        let (ui, buf) = Plain::capture();
+        let upgrade = WinPlan {
+            phases: vec![fails.clone(), stops, starts.clone()],
+        };
+        let exec = executor(&run, &net, &payload, &paths, &ui);
+        assert!(exec.execute(&upgrade).is_err());
+        assert!(buf.borrow().contains("service start"), "{}", buf.borrow());
+
+        // A fresh install stopped nothing, so its failure starts nothing.
+        let (ui, buf) = Plain::capture();
+        let fresh = WinPlan {
+            phases: vec![fails, starts],
+        };
+        let exec = executor(&run, &net, &payload, &paths, &ui);
+        assert!(exec.execute(&fresh).is_err());
+        assert!(!buf.borrow().contains("service start"), "{}", buf.borrow());
     }
 
     #[test]

@@ -140,14 +140,14 @@ fn the_demo_walks_from_the_settings_screen_to_the_outro() {
         text.contains("PUNKTFUNK_UI_PASSWORD"),
         "the step did not say how to print the password:\n{text}"
     );
-    // And the bind question right after it. Taking its default must leave the console on this
-    // machine — the whole point of asking is that nobody gets the LAN without saying so.
+    // And the bind question right after it. Taking its default leaves the console on the local
+    // network, where devices pair from; asking is how an operator keeps it to this machine.
     assert!(
         text.contains("Where should the web console be reachable?"),
         "the bind step never showed:\n{text}"
     );
     assert!(
-        text.contains("PUNKTFUNK_UI_BIND=127.0.0.1"),
+        text.contains("PUNKTFUNK_UI_BIND=0.0.0.0"),
         "the default answer did not reach host.env:\n{text}"
     );
     assert!(

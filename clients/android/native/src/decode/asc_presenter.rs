@@ -192,6 +192,8 @@ pub(super) struct AscBackend {
 
     /// `ADataSpace` for the transaction (BT709 for SDR — never untagged; see `color_dataspace`).
     dataspace: i32,
+    /// The session's HDR10 volume, sent with every transaction. `None` on SDR.
+    hdr_meta: Option<punktfunk_core::quic::HdrMeta>,
     /// Layer frame-rate vote (source Hz), applied once.
     frame_rate: f32,
     src_w: i32,
@@ -343,6 +345,7 @@ impl AscBackend {
             #[cfg(debug_assertions)]
             rng: 0x9E37_79B9_7F4A_7C15,
             dataspace,
+            hdr_meta: None,
             frame_rate: if source_hz > 0 { source_hz as f32 } else { 0.0 },
             src_w: src_w.max(1),
             src_h: src_h.max(1),
@@ -517,6 +520,7 @@ impl AscBackend {
             &mut frame.fence,
             target,
             self.dataspace,
+            self.hdr_meta.as_ref(),
             // The layer's fixed-source rate — applied once, at layer config (see `Layer::present`).
             self.frame_rate,
             seq,
@@ -881,9 +885,14 @@ impl AscBackend {
 }
 
 impl AscBackend {
+    /// The HDR10 volume sent with every subsequent transaction.
+    pub(super) fn set_hdr_meta(&mut self, meta: Option<punktfunk_core::quic::HdrMeta>) {
+        self.hdr_meta = meta;
+    }
+
     /// Update the `ADataSpace` applied to every subsequent transaction (a refinement from the
-    /// codec's output format — the analogue of the SurfaceView path's `apply_hdr_dataspace`; the
-    /// negotiated colour set the initial value at create).
+    /// codec's output format — the analogue of the SurfaceView path's `apply_reported_dataspace`;
+    /// the negotiated colour set the initial value at create).
     pub(super) fn set_dataspace(&mut self, dataspace: i32) {
         if self.dataspace != dataspace {
             self.dataspace = dataspace;

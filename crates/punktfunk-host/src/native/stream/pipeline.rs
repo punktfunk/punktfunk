@@ -95,6 +95,7 @@ pub(in crate::native) fn prepare_display(
         None,
         8,
         Some(trace),
+        client_hdr,
         0,
     )?;
     Ok(PreparedDisplay { vd, pipeline })
@@ -119,6 +120,7 @@ pub(super) fn build_pipeline_with_retry(
     supersedes: Option<u64>,
     max_attempts: u32,
     trace: Option<&crate::bringup::Trace>,
+    client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
 ) -> Result<Pipeline> {
     // IDD-push: hold one lease across attempts so a failed capturer drop does not Lingering-preempt.
@@ -153,6 +155,7 @@ pub(super) fn build_pipeline_with_retry(
             supersedes,
             first_frame_budget,
             trace,
+            client_hdr,
             wire_seq_base,
         ) {
             Ok(pipe) => {
@@ -283,6 +286,7 @@ pub(super) fn open_session_encoder(
     hz: u32,
     bitrate_bps: impl Fn(u32, u32) -> u64,
     bit_depth: u8,
+    client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
 ) -> Result<(
     Box<dyn crate::encode::Encoder>,
@@ -296,6 +300,7 @@ pub(super) fn open_session_encoder(
             hz,
             bitrate_bps(frame.width, frame.height),
             bit_depth,
+            client_hdr,
             wire_seq_base,
         )
         .map(|e| {
@@ -345,6 +350,7 @@ pub(super) fn build_pipeline(
     supersedes: Option<u64>,
     first_frame_budget: Option<std::time::Duration>,
     trace: Option<&crate::bringup::Trace>,
+    client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
 ) -> Result<Pipeline> {
     let display_mode = display_mode_for(mode);
@@ -444,6 +450,7 @@ pub(super) fn build_pipeline(
         effective_hz,
         |w, h| enc_of.enc_kbps(kbps_for(w, h)) as u64 * 1000,
         bit_depth,
+        client_hdr,
         wire_seq_base,
     )
     .context("open video encoder")?;

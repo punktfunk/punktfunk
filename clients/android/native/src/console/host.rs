@@ -442,6 +442,11 @@ impl Glass {
         let (Some(s), Some(g)) = (self.surface.as_mut(), self.gpu.as_mut()) else {
             return;
         };
+        // Every frame, not only when `Cmd::SurfaceChanged` lands: that command crosses a channel,
+        // and a frame built between the window's resize and its arrival carries the old size into
+        // the new buffer. A rotation then presents the previous layout read at the new stride,
+        // with whatever the allocator returned showing through the rows nobody covered.
+        s.refresh_size();
         let (w, h) = (s.width, s.height);
         let need_wrap = match &self.skia {
             Some((_, sw, sh)) => *sw != w || *sh != h,
@@ -450,7 +455,11 @@ impl Glass {
         if need_wrap {
             self.skia = None;
             match g.wrap_window(&self.egl, w, h) {
-                Ok(surf) => {
+                Ok(mut surf) => {
+                    // A buffer at a new size comes back from the allocator holding whatever was
+                    // last in it. The shell covers the frame, so this only matters for the pixels
+                    // a partial first frame leaves — and a wrap happens on rotation, not per frame.
+                    surf.canvas().clear(skia_safe::Color::BLACK);
                     // The console's real render resolution — the one number a bug report
                     // from a TV never carried. A 4K panel is 4× the fragment work of 1080p
                     // for every pass the shell draws.
@@ -614,11 +623,9 @@ impl Ui {
                     self.nav.reset();
                 }
             }
-            Cmd::SurfaceChanged => {
-                if let Some(s) = glass.surface.as_mut() {
-                    s.refresh_size();
-                }
-            }
+            // Only a wake-up: `Glass::draw` re-reads the size every frame, so the resize does not
+            // wait on this and cannot be missed if it arrives late.
+            Cmd::SurfaceChanged => {}
             Cmd::SurfaceDestroyed => {
                 glass.detach();
                 shared.ack_surface_gone();

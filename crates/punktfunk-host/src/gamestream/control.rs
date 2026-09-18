@@ -411,8 +411,8 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
             // One host→client seq for every outbound message (rumble + HDR). The GCM nonce
             // is derived from `seq`; a per-type counter would reuse (key, nonce) pairs.
             let mut host_seq: u32 = 0;
-            // One-shot latch for HDR-mode (0x010e); re-armed on Disconnect.
-            let mut hdr_sent = false;
+            // What the client last heard over HDR-mode (0x010e). A client starts in SDR.
+            let mut hdr_signalled: Option<HdrMeta> = None;
             let mut peer: Option<PeerID> = None;
             // Last live GCM key. Ending a session clears `launch` (where the key lives), so
             // without this copy the termination that must go out because it ended cannot seal.
@@ -512,7 +512,7 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                                 detected = None;
                                 decrypt_fails = 0;
                                 peer = None;
-                                hdr_sent = false;
+                                hdr_signalled = None;
                                 // Drop pads + tablet: destroying the uinput pen releases any
                                 // held tool/tip kernel-side.
                                 pads = SessionPads::new();
@@ -589,7 +589,7 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                         peer = None;
                         detected = None;
                         decrypt_fails = 0;
-                        hdr_sent = false;
+                        hdr_signalled = None;
                         pads = SessionPads::new();
                         pointer = super::pen::GsPointer::new();
                         drops.end_of_session();
@@ -607,25 +607,20 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                     }
                     if let Some(key) = key {
                         let mut out: Vec<Vec<u8>> = Vec::new();
-                        // One-shot HDR-mode (0x010e / `IDX_HDR_MODE`). Stock Moonlight
-                        // flips the TV into HDR only on this async cue; video is already
-                        // BT.2020 PQ. Sent before rumble so the client sees it first.
-                        if !hdr_sent {
-                            // ANNOUNCE usually precedes this stream, but only latch once a
-                            // config exists — a missing stream must not lock us out of HDR.
-                            // A non-HDR session latches too (it never needs the message).
-                            if let Some(hdr) = state.stream.lock().unwrap().map(|s| s.hdr) {
-                                if hdr {
-                                    let pt =
-                                        hdr_mode_plaintext(true, &pf_frame::hdr::generic_hdr10());
-                                    out.push(encrypt_control(&key, &scheme, host_seq, &pt));
-                                    host_seq = host_seq.wrapping_add(1);
-                                    tracing::info!(
-                                        "control: signaled HDR mode ON to client (0x010e)"
-                                    );
-                                }
-                                hdr_sent = true;
-                            }
+                        // HDR-mode (0x010e / `IDX_HDR_MODE`) follows the frames the video thread
+                        // encodes, off again when they turn SDR. Stock Moonlight switches the
+                        // TV only on this cue. Sent before rumble so the client sees it first.
+                        let encoded_hdr = *state.video_hdr.lock().unwrap();
+                        if encoded_hdr != hdr_signalled {
+                            let meta = encoded_hdr.or(hdr_signalled).unwrap_or_default();
+                            let pt = hdr_mode_plaintext(encoded_hdr.is_some(), &meta);
+                            out.push(encrypt_control(&key, &scheme, host_seq, &pt));
+                            host_seq = host_seq.wrapping_add(1);
+                            tracing::info!(
+                                on = encoded_hdr.is_some(),
+                                "control: signaled HDR mode to client (0x010e)"
+                            );
+                            hdr_signalled = encoded_hdr;
                         }
                         // Handle motors only. `0x010B` has no trigger-rumble id on this
                         // plane, and uinput `FF_RUMBLE` has two fields anyway.
@@ -766,6 +761,7 @@ fn on_receive(
     if let Some(gp) = super::gamepad::decode(&pt) {
         crate::sleep_inhibit::note_input();
         if permitted(grants, GrantClass::Gamepad, drops) {
+            state.counters.input_rich.fetch_add(1, Ordering::Relaxed);
             pads.handle(&gp);
         }
         return;
@@ -776,6 +772,7 @@ fn on_receive(
     if let Some(p) = super::input::decode_pointer(&pt) {
         crate::sleep_inhibit::note_input();
         if permitted(grants, GrantClass::Pointer, drops) {
+            state.counters.input_rich.fetch_add(1, Ordering::Relaxed);
             pointer.apply(&p, |ev| {
                 let _ = inj_tx.send(ev);
             });
@@ -813,6 +810,7 @@ fn on_receive(
     // died at startup; input is lossy, so drop silently.
     for ev in events {
         if permitted(grants, classify(ev.kind), drops) {
+            state.counters.input_events.fetch_add(1, Ordering::Relaxed);
             let _ = inj_tx.send(ev);
         }
     }

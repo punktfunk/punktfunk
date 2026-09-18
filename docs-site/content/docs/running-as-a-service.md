@@ -45,7 +45,8 @@ its own mechanism — see [Windows](#windows).
 ## The browser client (preview)
 
 Punktfunk can also accept a browser over WebTransport. It is **off** by default and still a
-preview — it connects and carries no session yet — so turn it on only if you are trying it out:
+preview — a browser that connects now runs a full session — so turn it on only if you are trying
+it out:
 
 ```ini
 PUNKTFUNK_WEBTRANSPORT=1

@@ -20,7 +20,7 @@ AVIF screenshot path already allocates. When such a format is negotiated,
 paint_pipewire() switches to g_ScreenshotColorMgmtLutsHDR and EOTF_PQ: exactly
 the bHDRScreenshot branch, which is a fixed BT.2020+PQ target whose LUT set is
 built unconditionally for every input EOTF, so SDR content lands in the PQ
-container at --hdr-sdr-content-nits and HDR content passes through.
+container and HDR content passes through.
 
 The new formats are listed last, so every consumer that negotiates the 8-bit
 stream today keeps negotiating it bit-for-bit; the MANDATORY colorimetry props

@@ -283,9 +283,9 @@ pub struct HostConfig {
     /// punktfunk build (`packaging/gamescope`) and stays SDR if missing; this only
     /// decides whether HDR is *attempted*. **Default ON**, matching `PUNKTFUNK_10BIT`.
     pub gamescope_hdr: bool,
-    /// `PUNKTFUNK_GAMESCOPE_SDR_NITS` — SDR luminance inside the PQ container
+    /// `PUNKTFUNK_GAMESCOPE_SDR_NITS` — starting SDR luminance inside the PQ container
     /// (`--hdr-sdr-content-nits`). `None` = 203 nits (BT.2408), what our clients
-    /// decode against — not gamescope's 400. See `SDR_REFERENCE_WHITE_NITS`.
+    /// decode against. See `SDR_REFERENCE_WHITE_NITS`.
     pub gamescope_sdr_nits: Option<u32>,
     /// `PUNKTFUNK_GAMESCOPE_BIND` — bind patched gamescope over `/usr/bin/gamescope`
     /// in the session unit's mount namespace. `gamescope-session-plus` hardcodes

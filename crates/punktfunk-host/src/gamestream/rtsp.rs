@@ -309,12 +309,14 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                         state.force_idr.clone(),
                         state.rfi_range.clone(),
                         state.loss_stats.clone(),
+                        state.video_hdr.clone(),
                         // Rikey reaches the video plane only when `SS_ENC_VIDEO` was negotiated.
                         cfg.encrypt_video.then_some(ls.gcm_key),
                         state.video_cap.clone(),
                         state.stats.clone(),
                         on_lost.clone(),
                         state.media_exited.clone(),
+                        state.counters.clone(),
                         // Game exit is a deliberate end (player finished), not a drop. Same
                         // distinction as the native close code; teardown policy keys off it.
                         stream::GameLifetime {

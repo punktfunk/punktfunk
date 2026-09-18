@@ -186,7 +186,7 @@ newer on AMD, Arc and newer on Intel).
 | Windows · AMD | AMF (native) | probed | ✅ probed | ❌ ³ |
 | Windows · Intel | QSV (native) | probed | ⚠️ ⁴ | ❌ |
 | Windows · any | PyroWave | wavelet ⁵ | ✅ | ✅ |
-| Windows · none | software H.264 | H.264 only | ❌ | ❌ |
+| Windows · none | no encode path | — | ❌ | ❌ |
 | Linux · NVIDIA | NVENC (direct SDK) | probed ¹ | ✅ ⁶ | ⚠️ ² |
 | Linux · AMD, Intel | Vulkan Video | HEVC, AV1 ⁷ | ⚠️ probed | ❌ |
 | Linux · AMD, Intel | VAAPI | probed | ⚠️ probed | ❌ ⁹ |
@@ -224,8 +224,9 @@ newer on AMD, Arc and newer on Intel).
    unconditionally and the session is negotiated as 4:2:0.
 10. Explicit-only on Linux. `auto` never resolves here — a box with no usable GPU driver fails the
     session at encoder open rather than quietly encoding on the CPU, so set
-    `PUNKTFUNK_ENCODER=software` deliberately if that is what you want. On Windows, by contrast, an
-    unrecognised adapter does resolve to software on its own.
+    `PUNKTFUNK_ENCODER=software` deliberately if that is what you want. Windows has no software
+    encoder at all — the pf-vdisplay driver encodes, so a host without a usable render adapter
+    fails at encoder open.
 
 **4:4:4 across the whole project:** only HEVC and PyroWave can carry it, and only NVENC and
 PyroWave can produce it — so on the HEVC side full chroma means an NVIDIA host. Asking for it is a

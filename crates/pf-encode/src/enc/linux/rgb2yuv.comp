@@ -44,7 +44,11 @@ void main() {
     imageStore(yImg, p + ivec2(1, 0), vec4(lumaY(c10), 0, 0, 1));
     imageStore(yImg, p + ivec2(0, 1), vec4(lumaY(c01), 0, 0, 1));
     imageStore(yImg, p + ivec2(1, 1), vec4(lumaY(c11), 0, 0, 1));
-    vec3 a = (c00 + c10 + c01 + c11) * 0.25;
+    // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] over columns p.x-1..p.x+1.
+    ivec2 pl = max(p + ivec2(-1, 0), ivec2(0));
+    vec3 cl0 = withCursor(pl,               texelFetch(rgb, min(pl,               rmax), 0).rgb);
+    vec3 cl1 = withCursor(pl + ivec2(0, 1), texelFetch(rgb, min(pl + ivec2(0, 1), rmax), 0).rgb);
+    vec3 a = (cl0 + 2.0 * c00 + c10 + cl1 + 2.0 * c01 + c11) * 0.125;
     float U = 128.0/255.0 - 0.1006*a.r - 0.3386*a.g + 0.4392*a.b;
     float V = 128.0/255.0 + 0.4392*a.r - 0.3989*a.g - 0.0403*a.b;
     imageStore(uvImg, uvc, vec4(U, V, 0, 1));

@@ -154,14 +154,6 @@ if [ -f "$CONFIG/web.env" ] && find "$CONFIG/web.env" -maxdepth 0 -perm /0077 2>
     warn "  systemctl --user restart punktfunk-web"
 fi
 
-# The console binds loopback unless PUNKTFUNK_UI_BIND says otherwise, and this Deck's console has
-# been answering on every interface. Write that down before install.sh's new unit (which no longer
-# exports HOST=0.0.0.0) ever runs here, so a later re-run cannot take the console off the network.
-if [ -f "$CONFIG/web.env" ] && ! grep -q '^[[:space:]]*PUNKTFUNK_UI_BIND=' "$CONFIG/web.env"; then
-    printf '# Where the console listens: this install already served your network.\nPUNKTFUNK_UI_BIND=0.0.0.0\n' >> "$CONFIG/web.env"
-    ok "web.env: kept the console on your network (PUNKTFUNK_UI_BIND=0.0.0.0)"
-fi
-
 # Retrofit config that install.sh now writes but older installs predate (both idempotent):
 # RADV_PERFTEST — Van Gogh RADV still gates VK_KHR_video_encode_* behind it; without it the
 # Vulkan backend can't open and sessions silently fall back to VAAPI. The KWin .desktop —

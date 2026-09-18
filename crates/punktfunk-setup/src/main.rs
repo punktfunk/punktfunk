@@ -52,7 +52,7 @@ usage: punktfunk-setup [options]
   --omarchy-idle | --no-omarchy-idle     keep the screen awake while a stream runs
   --omarchy-theme | --no-omarchy-theme   follow the Omarchy theme in the console
   --mgmt-port N         port to move the management API to if Sunshine/Apollo holds 47990 (default 47991)
-  --web-bind ADDR       where the web console listens: localhost (default), lan, or one address
+  --web-bind ADDR       where the web console listens: lan (default), localhost, or one address
   --no-start            install and configure, but don't enable the services
   -v, --verbose         echo every command instead of collapsing to a progress line
   --uninstall           stop the services and remove the packages + repo (config stays)

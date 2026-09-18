@@ -510,6 +510,7 @@ impl StreamState {
                     None,
                     8,
                     Some(bringup.as_ref()),
+                    client_hdr,
                     0,
                 )?;
                 (vd, pipe)
@@ -741,6 +742,7 @@ impl StreamState {
                 crate::gamelease::LeaseRequest {
                     game: target.game.clone(),
                     client: client_label.clone(),
+                    fingerprint: controls.fingerprint.clone(),
                     plane: crate::events::Plane::Native,
                     spec: target.detect.clone(),
                     nested,
@@ -849,6 +851,7 @@ impl StreamState {
             force_idr: force_idr.clone(),
             client: client_label,
             client_name,
+            plane: crate::events::Plane::Native,
             hdr: plan.hdr,
             ttff_ms: bringup.total_slot(),
             last_resize_ms: resize_ms.clone(),
@@ -860,6 +863,7 @@ impl StreamState {
             chroma: plan.chroma,
             end_reason: end_reason.clone(),
             counters: counters.clone(),
+            peer: Some(conn.remote_address().ip()),
         });
 
         // Replaced by `spawn_session_watcher` inside the session span; disconnected until then.

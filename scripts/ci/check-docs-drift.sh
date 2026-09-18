@@ -245,10 +245,8 @@ if [ "$wi_secs" -lt 2 ] || [ "$wi_secs" -ge 30 ]; then
 fi
 # ------------------------------------- the bind line, which decides whether the console disappears
 #
-# The console binds loopback unless host.env's PUNKTFUNK_UI_BIND says otherwise, and before 0.38 it
-# bound every interface with no way to say so. web-init.sh is where an upgrade writes that down, so
-# a box someone reaches from another device keeps working. Getting this branch backwards either
-# takes a live console off the LAN or puts a fresh one on it — both silent, hence a gate.
+# web-init.sh names PUNKTFUNK_UI_BIND in host.env once. A missing line becomes the LAN default on
+# a fresh box and an upgrade alike, and a line the operator wrote is never touched.
 bind_of() { sed -n 's/^PUNKTFUNK_UI_BIND=//p' "$1/punktfunk/host.env" 2>/dev/null | tail -n1; }
 bind_case() {
     _got=$(bind_of "$2")
@@ -257,20 +255,18 @@ bind_case() {
     fail=1
 }
 
-# A first start — no console has run here, so nothing is taken away by binding loopback.
 mkdir -p "$wi/bind-fresh/punktfunk"
 seed_token "$wi/bind-fresh"
 seed_pair "$wi/bind-fresh" native-
 run_web_init 1 "$wi/bind-fresh"
-bind_case "fresh install" "$wi/bind-fresh" 127.0.0.1
+bind_case "fresh install" "$wi/bind-fresh" 0.0.0.0
 
-# An upgrade: web-password is already there, so a console served this box under the old default.
 mkdir -p "$wi/bind-upgrade/punktfunk"
 seed_token "$wi/bind-upgrade"
 seed_pair "$wi/bind-upgrade" native-
 printf 'PUNKTFUNK_UI_PASSWORD=hunter2\n' > "$wi/bind-upgrade/punktfunk/web-password"
 run_web_init 1 "$wi/bind-upgrade"
-bind_case "upgrade keeps the reach it had" "$wi/bind-upgrade" 0.0.0.0
+bind_case "upgrade" "$wi/bind-upgrade" 0.0.0.0
 
 # An operator's answer is never rewritten, and a second run never appends a second line.
 mkdir -p "$wi/bind-set/punktfunk"

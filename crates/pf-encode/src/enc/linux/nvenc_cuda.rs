@@ -1318,6 +1318,7 @@ impl NvencCudaEncoder {
                     0
                 },
                 hdr: self.hdr,
+                full_range: yuv444_input && pf_zerocopy::egl::yuv444_full_range(),
                 rfi_supported: self.rfi_supported,
                 intra_refresh_cnt: self.wave_cycle(),
                 slices: self.slices,
@@ -2023,7 +2024,13 @@ impl NvencCudaEncoder {
         let cursor = match &captured.cursor {
             Some(ov) if ov.visible && ov.w > 0 && ov.h > 0 && !ov.rgba.is_empty() => {
                 if self.worker_cursor_serial != ov.serial {
-                    worker.set_cursor(ov.serial, ov.w, ov.h, &ov.rgba)?;
+                    // A PQ frame takes the cursor re-encoded as PQ; sRGB bytes would be read as PQ.
+                    let rgba = if captured.format.is_hdr() {
+                        ov.pq_rgba()
+                    } else {
+                        ov.rgba.clone()
+                    };
+                    worker.set_cursor(ov.serial, ov.w, ov.h, &rgba)?;
                     self.worker_cursor_serial = ov.serial;
                 }
                 Some(pf_zerocopy::CursorRect {
@@ -2094,6 +2101,19 @@ impl NvencCudaEncoder {
         }
     }
 
+    /// AV1 keyframes carry the HDR volume as metadata OBUs after the sequence header; NVENC
+    /// writes none itself.
+    fn av1_hdr_obus(&self, mut data: Vec<u8>, keyframe: bool) -> Vec<u8> {
+        if let Some(m) = self
+            .hdr_meta
+            .filter(|_| keyframe && self.hdr && self.codec == Codec::Av1)
+        {
+            let obus = pf_frame::hdr::av1_hdr_metadata_obus(&m);
+            pf_frame::hdr::av1_insert_before_frame(&mut data, &obus);
+        }
+        data
+    }
+
     /// Absorb one retrieve completion: FIFO-check, unmap on the encode thread (retrieve never
     /// touches input resources), queue the AU.
     fn absorb_done(&mut self, done: RetrieveDone) -> Result<()> {
@@ -2111,6 +2131,7 @@ impl NvencCudaEncoder {
             }
         }
         let (data, keyframe) = done.result.map_err(|e| anyhow!("{e}"))?;
+        let data = self.av1_hdr_obus(data, keyframe);
         self.async_rt
             .as_mut()
             .expect("absorb_done is only reachable in two-thread mode")
@@ -2337,7 +2358,12 @@ impl NvencCudaEncoder {
                     if r.cursor.as_ref().map(|c| c.0) != Some(ov.serial) {
                         let tw = (u64::from(ov.w) * u64::from(ow) / u64::from(w)).max(1) as u32;
                         let th = (u64::from(ov.h) * u64::from(oh) / u64::from(h)).max(1) as u32;
-                        let scaled = shrink_rgba(&ov.rgba, ov.w, ov.h, tw, th);
+                        let src = if captured.format.is_hdr() {
+                            ov.pq_rgba()
+                        } else {
+                            ov.rgba.clone()
+                        };
+                        let scaled = shrink_rgba(&src, ov.w, ov.h, tw, th);
                         r.cursor = Some((ov.serial, scaled, tw, th));
                     }
                     let (_, _, tw, th) = r.cursor.as_ref().expect("set above");
@@ -2355,9 +2381,10 @@ impl NvencCudaEncoder {
             {
                 if self.cursor_serial != ov.serial {
                     // Quiesces in-flight ordered blends before touching staging.
+                    let pq = captured.format.is_hdr().then(|| ov.pq_rgba());
                     let bitmap = match &self.reframe {
                         Some(r) => r.cursor.as_ref().map_or(&[][..], |c| c.1.as_slice()),
-                        None => ov.rgba.as_slice(),
+                        None => pq.as_deref().unwrap_or(&ov.rgba).as_slice(),
                     };
                     vk.upload_cursor(bitmap, cw, ch);
                     self.cursor_serial = ov.serial;
@@ -2798,6 +2825,7 @@ impl Encoder for NvencCudaEncoder {
             if let Some(us) = encode_us {
                 self.feed_split_arbiter(us);
             }
+            let data = self.av1_hdr_obus(data, keyframe);
             Ok(Some(EncodedFrame {
                 data,
                 pts_ns,

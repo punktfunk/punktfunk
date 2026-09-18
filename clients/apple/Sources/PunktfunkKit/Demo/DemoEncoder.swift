@@ -46,6 +46,10 @@ final class DemoEncoder {
         set(kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: bitrateKbps * 1000))
         set(kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: fps))
         set(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, NSNumber(value: 4))
+        // BT.709, as every real host signals; untagged the client would guess.
+        set(kVTCompressionPropertyKey_ColorPrimaries, kCMFormatDescriptionColorPrimaries_ITU_R_709_2)
+        set(kVTCompressionPropertyKey_TransferFunction, kCMFormatDescriptionTransferFunction_ITU_R_709_2)
+        set(kVTCompressionPropertyKey_YCbCrMatrix, kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2)
         VTCompressionSessionPrepareToEncodeFrames(session)
     }
 

@@ -22,18 +22,17 @@ pub fn packet_boundary(wire_chunk: Option<usize>, dense_cap: usize) -> usize {
     wire_chunk.map(|c| c - WINDOW_PREFIX).unwrap_or(dense_cap)
 }
 
-/// Stamp `ycbcr_range = LIMITED` (and, when `bt2020_pq`, BT.2020/PQ/matrix) on
-/// the frame's 8-byte `BitstreamSequenceHeader`.
+/// Stamp `ycbcr_range = LIMITED`, `chroma_siting = LEFT` (and, when `bt2020_pq`,
+/// BT.2020/PQ/matrix) on the frame's 8-byte `BitstreamSequenceHeader`.
 ///
-/// Pyrowave's C API zero-fills VUI, so it signals FULL; both host CSCs emit
-/// BT.709 LIMITED (black = Y′16). `seq_offset` is the SOF packet's start.
-/// Colour bits live in the LE second word's top byte (`seq_offset + 7`):
-/// primaries bit 27 (`0x08`), transfer bit 28 (`0x10`), transform bit 29
-/// (`0x20`), range bit 30 (`0x40`). `chroma_siting` bit 31 stays 0 (CENTER —
-/// the pyrowave CSCs use a centre-sited 2×2 box, unlike left-cosited P010).
+/// Pyrowave's C API zero-fills VUI, so it signals FULL and CENTER; both host CSCs
+/// emit BT.709 LIMITED (black = Y′16) with left-sited chroma. `seq_offset` is the
+/// SOF packet's start. Colour bits live in the LE second word's top byte
+/// (`seq_offset + 7`): primaries bit 27 (`0x08`), transfer bit 28 (`0x10`),
+/// transform bit 29 (`0x20`), range bit 30 (`0x40`), siting bit 31 (`0x80`).
 pub fn stamp_color_bits(bitstream: &mut [u8], seq_offset: usize, bt2020_pq: bool) {
     if let Some(b) = bitstream.get_mut(seq_offset + 7) {
-        *b |= 0x40;
+        *b |= 0x40 | 0x80;
         if bt2020_pq {
             *b |= 0x08 | 0x10 | 0x20;
         }
@@ -463,17 +462,16 @@ mod tests {
     fn stamp_color_bits_sets_range_and_hdr_bits() {
         let mut bs = vec![0u8; 16];
         stamp_color_bits(&mut bs, 0, false);
-        // Range = bit 30 of the LE second word = bit 6 of byte 7 (`0x40`).
-        assert_eq!(bs[7], 0x40);
+        // Range = bit 30 (`0x40`) and LEFT siting = bit 31 (`0x80`) of the LE second word.
+        assert_eq!(bs[7], 0xc0);
         assert!(bs[..7].iter().all(|&b| b == 0));
         assert!(bs[8..].iter().all(|&b| b == 0));
         stamp_color_bits(&mut bs, 0, false);
-        assert_eq!(bs[7], 0x40);
+        assert_eq!(bs[7], 0xc0);
         stamp_color_bits(&mut bs, 100, false);
-        // HDR: BT.2020 primaries (`0x08`) + PQ (`0x10`) + matrix (`0x20`);
-        // chroma_siting (`0x80`) stays CENTER.
+        // HDR adds BT.2020 primaries (`0x08`) + PQ (`0x10`) + matrix (`0x20`).
         stamp_color_bits(&mut bs, 0, true);
-        assert_eq!(bs[7], 0x78);
+        assert_eq!(bs[7], 0xf8);
     }
 
     fn frame(data: Vec<u8>) -> crate::EncodedFrame {

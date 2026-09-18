@@ -234,6 +234,12 @@ jobs:
       - name: Unsafe-hygiene grep gates
         run: sh scripts/ci/check-unsafe-hygiene.sh
 
+      # The plugin runner's unit replaces the home with a tmpfs, so a config file it reads and the
+      # unit does not bind is ENOENT at runtime — which is how plugin-tokens.json shipped unbound
+      # and no Linux plugin could start. Reads the names out of the SDK, not a second list.
+      - name: Plugin-runner bind gate
+        run: sh scripts/ci/check-runner-binds.sh
+
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 

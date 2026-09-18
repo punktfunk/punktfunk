@@ -67,6 +67,26 @@ impl PixelFormat {
     pub fn is_hdr_rgb10(self) -> bool {
         matches!(self, PixelFormat::X2Rgb10 | PixelFormat::X2Bgr10)
     }
+
+    /// BT.2020 PQ capture: packed 10-bit RGB or the producer's `P010`. Encoder colour and
+    /// HDR metadata key on this, not on the packed-RGB layout.
+    pub fn is_hdr(self) -> bool {
+        self.is_hdr_rgb10() || self == PixelFormat::P010
+    }
+}
+
+#[cfg(test)]
+mod pixel_format_tests {
+    use super::PixelFormat;
+
+    #[test]
+    fn p010_is_hdr_but_not_packed_rgb() {
+        assert!(PixelFormat::P010.is_hdr());
+        assert!(!PixelFormat::P010.is_hdr_rgb10());
+        assert!(PixelFormat::X2Bgr10.is_hdr());
+        assert!(!PixelFormat::Nv12.is_hdr());
+        assert!(!PixelFormat::Bgrx.is_hdr());
+    }
 }
 
 /// DRM FourCC from a 4-byte name, little-endian (`b"XR24"`).
@@ -172,6 +192,13 @@ pub struct CursorOverlay {
     /// Compositor pointer visibility. `false` = host app hid the pointer. The encode loop
     /// strips invisible overlays before any blend, so encoders may treat `Some` as "draw it".
     pub visible: bool,
+}
+
+impl CursorOverlay {
+    /// The bitmap to blend into a BT.2020 PQ frame ([`hdr::srgb_rgba_to_pq`]), cached per bitmap.
+    pub fn pq_rgba(&self) -> std::sync::Arc<Vec<u8>> {
+        hdr::pq_rgba_cached(&self.rgba)
+    }
 }
 
 /// Where a captured frame's pixels came from. Host wall-clock PTS advances on every delivered

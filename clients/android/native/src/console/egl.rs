@@ -274,7 +274,8 @@ impl EglSurface {
         }
     }
 
-    /// Re-read the surface's pixel size (after a `surfaceChanged`).
+    /// Re-read the surface's pixel size. Called once per frame: the window resizes on the
+    /// system's schedule, not on the one command that announces it.
     pub(super) fn refresh_size(&mut self) {
         let (mut w, mut h) = (0, 0);
         // SAFETY: valid display + surface owned by this object.

@@ -613,25 +613,31 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Resolve the panel's highest-refresh mode (same resolution) once, for [setConsoleHighRefreshRate].
+     * Resolve the panel's highest-refresh mode at the user's resolution once, for
+     * [setConsoleHighRefreshRate].
+     *
+     * Same resolution only: a pin to another size is a non-seamless mode switch that rescales every
+     * app on open and again on exit, and `display.mode` is what [nativeDisplayMode] reads at connect.
      *
      * NEVER on a TV, which leaves the id at `0` and makes every [setConsoleHighRefreshRate] call a
-     * no-op. The pin exists for phone refresh governors that cap third-party apps at 60 Hz; a TV has
-     * no such governor, and there it does active harm. `display.mode` is what [nativeDisplayMode]
-     * reads to resolve "Native" refresh at connect, so a menu-time pin makes the session negotiate
-     * the PINNED rate rather than the TV's real HDMI output — and [StreamScreen] then releases the
-     * pin on TV (the decoder's own mode switch governs there), dropping the panel back to 60 while
-     * the host is already serving 120. Every frame then waits out that mismatch, which is the
-     * "latency explodes unless I set the refresh by hand" field report: picking a refresh explicitly
-     * is precisely what bypasses the corrupted `nativeDisplayMode` answer.
+     * no-op. A TV has no 60 Hz governor to defeat, and a menu-time pin makes "Native" negotiate the
+     * pinned rate while [StreamScreen] releases the pin for the decoder's own HDMI switch — the panel
+     * drops back under a host already serving the higher rate.
      */
     private fun resolveHighRefreshMode() {
         if (isTvDevice(this)) return
+        highRefreshModeId = sameResolutionModes().maxByOrNull { it.refreshRate }?.modeId ?: 0
+    }
+
+    /** The display's modes at its current resolution, which is the one the user picked: no pin
+     * this activity sets ever leaves it. */
+    private fun sameResolutionModes(): List<android.view.Display.Mode> {
         @Suppress("DEPRECATION")
         val disp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
-        highRefreshModeId = disp?.supportedModes?.maxWithOrNull(
-            compareBy({ it.refreshRate }, { it.physicalWidth * it.physicalHeight }),
-        )?.modeId ?: 0
+        val current = disp?.mode ?: return emptyList()
+        return disp.supportedModes.filter {
+            it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
+        }
     }
 
     /**
@@ -681,12 +687,7 @@ class MainActivity : ComponentActivity() {
     /** The same-resolution display mode [setStreamDisplayMode] pins for a [hz] stream. */
     private fun streamModeFor(hz: Int): android.view.Display.Mode? {
         if (hz <= 0) return null
-        @Suppress("DEPRECATION")
-        val disp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay
-        val current = disp?.mode ?: return null
-        val sameRes = disp.supportedModes.filter {
-            it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
-        }
+        val sameRes = sameResolutionModes()
         fun multiple(rate: Float): Int {
             val k = (rate / hz).toInt()
             return if (k >= 2 && kotlin.math.abs(rate - hz * k) < 1f) k else 0

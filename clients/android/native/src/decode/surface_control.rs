@@ -58,6 +58,30 @@ const TRANSFORM_IDENTITY: i32 = 0;
 /// `ASURFACE_TRANSACTION_VISIBILITY_SHOW`.
 const VISIBILITY_SHOW: i8 = 1;
 
+/// [`HdrMeta`](punktfunk_core::quic::HdrMeta) (ST.2086 G, B, R in 1/50000; mastering luminance in
+/// 0.0001 nits) as the NDK's float structs.
+fn hdr_metadata(m: &punktfunk_core::quic::HdrMeta) -> (AHdrMetadataSmpte2086, AHdrMetadataCta8613) {
+    let xy = |[x, y]: [u16; 2]| AColorXy {
+        x: f32::from(x) / 50_000.0,
+        y: f32::from(y) / 50_000.0,
+    };
+    let [g, b, r] = m.display_primaries;
+    (
+        AHdrMetadataSmpte2086 {
+            red: xy(r),
+            green: xy(g),
+            blue: xy(b),
+            white: xy(m.white_point),
+            max_luminance: m.max_display_mastering_luminance as f32 / 10_000.0,
+            min_luminance: m.min_display_mastering_luminance as f32 / 10_000.0,
+        },
+        AHdrMetadataCta8613 {
+            max_content_light_level: f32::from(m.max_cll),
+            max_frame_average_light_level: f32::from(m.max_fall),
+        },
+    )
+}
+
 // ---- The `dlsym`-resolved entry-point table ----------------------------------------------------
 
 type CreateFromWindowFn = unsafe extern "C" fn(
@@ -88,6 +112,41 @@ type TxnSetBufferDataSpaceFn =
     unsafe extern "C" fn(*mut ASurfaceTransaction, *mut ASurfaceControl, i32);
 type TxnSetFrameRateFn =
     unsafe extern "C" fn(*mut ASurfaceTransaction, *mut ASurfaceControl, f32, i8);
+
+#[repr(C)]
+struct AColorXy {
+    x: f32,
+    y: f32,
+}
+
+/// `AHdrMetadata_smpte2086`: chromaticities as floats, luminance in nits.
+#[repr(C)]
+struct AHdrMetadataSmpte2086 {
+    red: AColorXy,
+    green: AColorXy,
+    blue: AColorXy,
+    white: AColorXy,
+    max_luminance: f32,
+    min_luminance: f32,
+}
+
+/// `AHdrMetadata_cta861_3`, in nits.
+#[repr(C)]
+struct AHdrMetadataCta8613 {
+    max_content_light_level: f32,
+    max_frame_average_light_level: f32,
+}
+
+type TxnSetHdrSmpte2086Fn = unsafe extern "C" fn(
+    *mut ASurfaceTransaction,
+    *mut ASurfaceControl,
+    *const AHdrMetadataSmpte2086,
+);
+type TxnSetHdrCta8613Fn = unsafe extern "C" fn(
+    *mut ASurfaceTransaction,
+    *mut ASurfaceControl,
+    *const AHdrMetadataCta8613,
+);
 type OnCompleteCb = unsafe extern "C" fn(*mut c_void, *mut ASurfaceTransactionStats);
 type TxnSetOnCompleteFn = unsafe extern "C" fn(*mut ASurfaceTransaction, *mut c_void, OnCompleteCb);
 type StatsGetLatchTimeFn = unsafe extern "C" fn(*mut ASurfaceTransactionStats) -> i64;
@@ -111,6 +170,9 @@ struct Api {
     txn_set_dataspace: Option<TxnSetBufferDataSpaceFn>,
     /// `setFrameRate` is **API 30** — optional, `None` on API 29.
     txn_set_frame_rate: Option<TxnSetFrameRateFn>,
+    /// The HDR10 static metadata setters (API 29), optional like `setBufferDataSpace`.
+    txn_set_hdr_smpte2086: Option<TxnSetHdrSmpte2086Fn>,
+    txn_set_hdr_cta861_3: Option<TxnSetHdrCta8613Fn>,
     txn_set_on_complete: TxnSetOnCompleteFn,
     stats_latch_time: StatsGetLatchTimeFn,
     stats_prev_release_fence: StatsGetPrevReleaseFenceFn,
@@ -168,6 +230,10 @@ impl Api {
                     .map(|p| std::mem::transmute::<*mut c_void, TxnSetBufferDataSpaceFn>(p)),
                 txn_set_frame_rate: req(c"ASurfaceTransaction_setFrameRate")
                     .map(|p| std::mem::transmute::<*mut c_void, TxnSetFrameRateFn>(p)),
+                txn_set_hdr_smpte2086: req(c"ASurfaceTransaction_setHdrMetadata_smpte2086")
+                    .map(|p| std::mem::transmute::<*mut c_void, TxnSetHdrSmpte2086Fn>(p)),
+                txn_set_hdr_cta861_3: req(c"ASurfaceTransaction_setHdrMetadata_cta861_3")
+                    .map(|p| std::mem::transmute::<*mut c_void, TxnSetHdrCta8613Fn>(p)),
                 txn_set_on_complete: std::mem::transmute::<*mut c_void, TxnSetOnCompleteFn>(req(
                     c"ASurfaceTransaction_setOnComplete",
                 )?),
@@ -368,8 +434,9 @@ impl Layer {
     /// the caller keeps it to release the unused image safely. The completion reports the latch
     /// and previous-buffer release fence on `ev_tx`, tagged with `seq`.
     ///
-    /// `dataspace` is the `ADataSpace` value (`0` leaves the layer default). `frame_rate` votes
-    /// once (`0.0` skips). `false` means the caller still owns the buffer and fence.
+    /// `dataspace` is the `ADataSpace` value (`0` leaves the layer default). `hdr` is the
+    /// session's HDR10 volume for SurfaceFlinger's tone-mapper. `frame_rate` votes once (`0.0`
+    /// skips). `false` means the caller still owns the buffer and fence.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn present(
         &mut self,
@@ -379,6 +446,7 @@ impl Layer {
         acquire_fence: &mut Option<OwnedFd>,
         desired_present_ns: i64,
         dataspace: i32,
+        hdr: Option<&punktfunk_core::quic::HdrMeta>,
         frame_rate: f32,
         seq: u64,
         ev_tx: &mpsc::Sender<DecodeEvent>,
@@ -412,6 +480,15 @@ impl Layer {
             if dataspace != 0 {
                 if let Some(f) = self.api.txn_set_dataspace {
                     f(txn, sc, dataspace);
+                }
+            }
+            if let Some(m) = hdr {
+                let (mdcv, cll) = hdr_metadata(m);
+                if let Some(f) = self.api.txn_set_hdr_smpte2086 {
+                    f(txn, sc, &mdcv);
+                }
+                if let Some(f) = self.api.txn_set_hdr_cta861_3 {
+                    f(txn, sc, &cll);
                 }
             }
             if !self.configured {

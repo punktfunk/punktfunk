@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Thu, 17 Sep 2026 16:41:57 +0200
+Subject: [PATCH] wlserver: bound the pointer by the X window, not its
+ swapchain
+
+wlserver_clampcursor() bounds the pointer with wlserver_get_surface_extent(),
+which answers for an X11 surface with its WSI override surface: the swapchain
+the gamescope WSI layer presents. Pointer events still go to the X window's
+own surface, in that window's coordinates, and MouseCursor::paint places the
+cursor by the window's geometry.
+
+A game whose swapchain is smaller than its window therefore fences the pointer
+into the swapchain-sized top-left of the window, and the right and bottom of
+the picture cannot be reached. Before the 2024 cursor rework the bound was the
+window geometry (XFixes pointer barriers).
+
+steamcompmgr now reports the input focus window's X geometry on every focus
+pass, keyed by its main surface, and the cursor bound uses it for that surface.
+A ConfigureNotify dirties focus, so a resize re-bounds the pointer. XDG windows
+and any other surface keep the old extent. Stamp pfhdr15: nothing for a caller
+to gate on.
+
+diff --git a/src/meson.build b/src/meson.build
+index f8288d9..ced13ab 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -195,7 +195,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr12 — …and the capture push honours the consumer's maxFramerate
+ #   +pfhdr13 — …and a P010 capture format (BT.2020 PQ, 4:2:0)
+ #   +pfhdr14 — …and the headless connector reports HDR10 under --hdr-debug-force-support
+-version_tag = vcs_tag + '+pfhdr14' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
++version_tag = vcs_tag + '+pfhdr15' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 7ee2520..7479efe 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -4515,6 +4515,17 @@ determine_and_apply_focus( global_focus_t *pFocus )
+ 	{
+ 		static gamescope::VirtualConnectorKey_t s_ulPreviousGlobalFocusKey;
+ 
++		// The pointer moves in the input window's X coordinates. Runs on every focus pass, so a
++		// ConfigureNotify (which dirties focus) re-bounds it after a resize.
++		if ( pFocus->inputFocusWindow && pFocus->inputFocusWindow->type == steamcompmgr_win_type_t::XWAYLAND &&
++		     pFocus->inputFocusWindow->main_surface() != nullptr )
++		{
++			Rect geometry = pFocus->inputFocusWindow->GetGeometry();
++			wlserver_lock();
++			wlserver_set_cursor_extent( pFocus->inputFocusWindow->main_surface(), geometry.nWidth, geometry.nHeight );
++			wlserver_unlock();
++		}
++
+ 		// Tell wlserver about our keyboard/mouse focus.
+ 		if ( pFocus->inputFocusWindow   != previousLocalFocus.inputFocusWindow ||
+ 			pFocus->overrideWindow      != previousLocalFocus.overrideWindow ||
+diff --git a/src/wlserver.cpp b/src/wlserver.cpp
+index 3354da7..aec7668 100644
+--- a/src/wlserver.cpp
++++ b/src/wlserver.cpp
+@@ -2527,9 +2527,22 @@ void wlserver_oncursorevent()
+ 	}
+ }
+ 
++// The X window size steamcompmgr reported for an X11 mouse-focus surface. Pointer coordinates are
++// that window's, while wlserver_get_surface_extent() answers with a WSI override surface: the
++// game's swapchain, which can be smaller than the window and would fence the pointer into a corner.
++static struct wlr_surface *s_pCursorExtentSurface = nullptr;
++static int s_nCursorExtentWidth = 0;
++static int s_nCursorExtentHeight = 0;
++
+ static std::pair<int, int> wlserver_get_cursor_bounds()
+ {
+ 	auto [nWidth, nHeight] = wlserver_get_surface_extent( wlserver.mouse_focus_surface );
++	if ( wlserver.mouse_focus_surface && wlserver.mouse_focus_surface == s_pCursorExtentSurface &&
++	     s_nCursorExtentWidth > 0 && s_nCursorExtentHeight > 0 )
++	{
++		nWidth = s_nCursorExtentWidth;
++		nHeight = s_nCursorExtentHeight;
++	}
+ 	for ( auto iter : wlserver.current_dropdown_surfaces )
+ 	{
+ 		auto [nDropdownX, nDropdownY] = iter.second;
+@@ -2549,6 +2562,21 @@ static void wlserver_clampcursor()
+ 	wlserver.mouse_surface_cursory = std::clamp( wlserver.mouse_surface_cursory, 0.0, double( std::max( nHeight - 1, 0 ) ) );
+ }
+ 
++void wlserver_set_cursor_extent( struct wlr_surface *pSurface, int nWidth, int nHeight )
++{
++	assert( wlserver_is_lock_held() );
++
++	if ( s_pCursorExtentSurface == pSurface && s_nCursorExtentWidth == nWidth && s_nCursorExtentHeight == nHeight )
++		return;
++
++	s_pCursorExtentSurface = pSurface;
++	s_nCursorExtentWidth = nWidth;
++	s_nCursorExtentHeight = nHeight;
++
++	if ( pSurface && pSurface == wlserver.mouse_focus_surface )
++		wlserver_clampcursor();
++}
++
+ void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y /* = 0 */ )
+ {
+ 	assert( wlserver_is_lock_held() );
+@@ -2561,7 +2589,7 @@ void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y
+ 	{
+ 		wlserver.mouse_focus_surface = wlrsurface;
+ 
+-		auto [nWidth, nHeight] = wlserver_get_surface_extent( wlrsurface );
++		auto [nWidth, nHeight] = wlserver_get_cursor_bounds();
+ 
+ 		if ( x < nWidth && y < nHeight )
+ 		{
+diff --git a/src/wlserver.hpp b/src/wlserver.hpp
+index b8bda18..dd47c45 100644
+--- a/src/wlserver.hpp
++++ b/src/wlserver.hpp
+@@ -249,6 +249,7 @@ void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain = true
+ void wlserver_key( uint32_t key, bool press, uint32_t time );
+ 
+ void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x = 0, int y = 0 );
++void wlserver_set_cursor_extent( struct wlr_surface *pSurface, int nWidth, int nHeight );
+ void wlserver_clear_dropdowns();
+ void wlserver_notify_dropdown( struct wlr_surface *wlrsurface, int nX, int nY );
+ void wlserver_mousemotion( double x, double y, uint32_t time );

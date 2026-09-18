@@ -25,7 +25,7 @@ use crate::present_pace::{
 use crate::touch::{Abs, Act};
 use crate::vk::{FrameInput, Presenter};
 use anyhow::{Context as _, Result};
-use pf_client_core::gamepad::GamepadService;
+use pf_client_core::gamepad::{GamepadService, SelectChord};
 use pf_client_core::session::{self, DecodeFacts, SessionEvent, SessionHandle, SessionParams};
 use pf_client_core::trust::{MouseMode, PresentPriority, StatsVerbosity, TouchMode};
 use pf_client_core::video::VulkanDecodeDevice;
@@ -643,12 +643,18 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
     let gamepad_subsystem = sdl.gamepad().context("SDL gamepad")?;
     let (gamepad, mut pump) = GamepadService::pumped(gamepad_subsystem);
     let escape_rx = gamepad.escape_events();
-    let ring_rx = gamepad.ring_events();
+    let chord_rx = gamepad.chord_events();
+    // A Select chord eats the button pressed with Select, so it is only worth claiming where
+    // the overlay it drives exists — a build without the console UI leaves A and X to the game.
+    gamepad.set_chords_live(overlay.is_some());
     // Ring pad ownership, edge-tracked: open masks the pads (a held trigger is released
     // on the host) and polls them into menu events; close re-adopts them.
     let mut ring_was_open = false;
     // The pad whose Select+A opened the ring; `None` for a keyboard, touch or closed ring.
     let mut ring_opener: Option<u8> = None;
+    // Last audio-mute mask drawn and when it changed: a local mute's badge is timed off it.
+    let mut audio_mute_seen: u8 = 0;
+    let mut audio_mute_at = Instant::now();
     let disconnect_rx = gamepad.disconnect_events();
     let menu_rx = gamepad.menu_events();
     if matches!(mode, ModeCtl::Browse(_)) {
@@ -1280,16 +1286,28 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
             }
         }
 
-        // `Select+A` on a pad: the ring at the window centre. The pad highlight starts
-        // on the centre, so `Select+A` then `A` opens the sheet.
-        while let Ok(pad) = ring_rx.try_recv() {
-            if let (Some(o), true) = (overlay.as_mut(), stream.is_some()) {
-                ring_opener = Some(pad);
-                let (pw, ph) = window.size_in_pixels();
-                o.ring_input(RingInput::Toggle {
-                    x: pw as f32 / 2.0,
-                    y: ph as f32 / 2.0,
-                });
+        // Select chords on a pad. `Select+A` puts the ring at the window centre, where its
+        // highlight starts on the centre so `Select+A` then `A` opens the sheet; `Select+X`
+        // steps the stats tier, the same move the keyboard chord and the dial's own slot make.
+        while let Ok((pad, chord)) = chord_rx.try_recv() {
+            if overlay.is_none() || stream.is_none() {
+                continue;
+            }
+            match chord {
+                SelectChord::Ring => {
+                    if let Some(o) = overlay.as_mut() {
+                        ring_opener = Some(pad);
+                        let (pw, ph) = window.size_in_pixels();
+                        o.ring_input(RingInput::Toggle {
+                            x: pw as f32 / 2.0,
+                            y: ph as f32 / 2.0,
+                        });
+                    }
+                }
+                SelectChord::Stats => {
+                    bump_stats_tier(&mut stats_verbosity, &mut stream);
+                    tracing::info!(tier = ?stats_verbosity, "chord: stats verbosity");
+                }
             }
         }
         // While the ring is up, or the console holds a launch over the live stream, the
@@ -1305,12 +1323,21 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
             if !ring_open {
                 ring_opener = None;
             }
-            // The ring takes the pointer plane too: it eats every event while open, so a
-            // button already down would never see its release forwarded and would stay
-            // pressed on the host.
-            if ring_open {
-                if let Some(cap) = stream.as_mut().and_then(|s| s.capture.as_mut()) {
+            // The ring eats every pointer event, so a button already down would stay pressed
+            // on the host without a flush. It also needs a pointer to aim with: under a lock
+            // the cursor is hidden and every event carries the position the lock froze, so
+            // capture hands the local one back while it is up and takes the window on close.
+            if let Some(cap) = stream.as_mut().and_then(|s| s.capture.as_mut()) {
+                if ring_open {
                     cap.flush_held();
+                }
+                if cap.captured() {
+                    let (on, desktop, grants) = if ring_open {
+                        (false, false, 0)
+                    } else {
+                        (true, cap.desktop(), cap.grants())
+                    };
+                    apply_capture(&mut window, &mouse, on, desktop, inhibit_shortcuts, grants);
                 }
             }
         }
@@ -1810,10 +1837,19 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
             // the pump knows whether an uplink exists, and a mirrored copy would go stale
             // at session end.
             let mic_muted = stream.as_ref().is_some_and(|st| st.handle.mic.muted());
+            // The badge clears itself once a local mute has been read; the mask's own clock
+            // lives here because only the frame loop knows when it last moved.
             let audio_mute = stream
                 .as_ref()
                 .and_then(|st| st.connector.as_ref())
-                .and_then(|c| punktfunk_core::client::audio_mute_label(c.audio_mute()));
+                .and_then(|c| {
+                    let mask = c.audio_mute();
+                    if mask != audio_mute_seen {
+                        audio_mute_seen = mask;
+                        audio_mute_at = Instant::now();
+                    }
+                    punktfunk_core::client::audio_mute_notice(mask, audio_mute_at.elapsed())
+                });
             let ring_facts = stream
                 .as_ref()
                 .filter(|st| st.connector.is_some())

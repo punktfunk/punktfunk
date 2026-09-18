@@ -531,13 +531,21 @@ fn dur_us(us: f64) -> String {
     }
 }
 
-/// The last closed link-health minute per session — the same counters as the host log's
-/// `link health` line. Silent until a session has run a full minute.
+/// Per session: other sessions on its client address, then the last closed link-health minute —
+/// the same counters as the host log's `link health` line, silent until a full minute has run.
 fn render_link(v: &Value) {
     let Some(sessions) = v["sessions"].as_array() else {
         return;
     };
     for s in sessions {
+        if let Some(others) = s["shared_path_with"].as_array() {
+            let ids: Vec<String> = others.iter().map(|o| o.to_string()).collect();
+            println!(
+                "path      session {} shares its client address with session {}",
+                s["id"],
+                ids.join(", ")
+            );
+        }
         let l = &s["link"];
         if l.is_null() {
             continue;

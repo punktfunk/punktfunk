@@ -16,7 +16,7 @@ pkgname=punktfunk-gamescope
 # Bump pkgrel for packaging changes that keep the same capability level.
 _gsver=3.16.25
 _gsrev=5fb8dce4a09d0a68d097b9faf9513782106bc843
-pkgver="${_gsver}.pfhdr14"
+pkgver="${_gsver}.pfhdr18"
 pkgrel=1
 pkgdesc="gamescope with 10-bit BT.2020/PQ PipeWire capture, for punktfunk HDR streaming"
 arch=('x86_64' 'aarch64')

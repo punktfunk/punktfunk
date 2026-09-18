@@ -31,6 +31,7 @@ const ceremonyKey = (c: PairingStatus["pending"][number]) =>
 export const MoonlightPairingSection: FC = () => {
 	const qc = useQueryClient();
 	const [pin, setPin] = useState("");
+	const [label, setLabel] = useState("");
 	const [password, setPassword] = useState("");
 	const [wrongPassword, setWrongPassword] = useState(false);
 	// Fingerprint of the ceremony the PIN is addressed to; "" = the first (sole) one.
@@ -51,6 +52,7 @@ export const MoonlightPairingSection: FC = () => {
 		if (pending && !wasPending.current) {
 			submit.reset();
 			setPin("");
+			setLabel("");
 			setPassword("");
 			setWrongPassword(false);
 			setTarget("");
@@ -74,10 +76,12 @@ export const MoonlightPairingSection: FC = () => {
 				uniqueid: chosen.uniqueid,
 				fingerprint: chosen.fingerprint,
 				peerIp: chosen.peer_ip,
+				label,
 			},
 			{
 				onSuccess: () => {
 					setPin("");
+					setLabel("");
 					setPassword("");
 					qc.invalidateQueries({ queryKey: getGetPairingStatusQueryKey() });
 					// The success message tells the operator to check the paired list, so refresh it —
@@ -96,6 +100,8 @@ export const MoonlightPairingSection: FC = () => {
 			pairing={pairing}
 			pin={pin}
 			onPinChange={setPin}
+			label={label}
+			onLabelChange={setLabel}
 			password={password}
 			onPasswordChange={setPassword}
 			wrongPassword={wrongPassword}
@@ -114,6 +120,9 @@ export const MoonlightPairing: FC<{
 	pairing: Loadable<PairingStatus>;
 	pin: string;
 	onPinChange: (v: string) => void;
+	/** Name for the device being paired. Optional, and the only name it will have. */
+	label: string;
+	onLabelChange: (v: string) => void;
 	/** The console password, re-confirmed because delivering the PIN completes a pairing. */
 	password: string;
 	onPasswordChange: (v: string) => void;
@@ -129,6 +138,8 @@ export const MoonlightPairing: FC<{
 	pairing,
 	pin,
 	onPinChange,
+	label,
+	onLabelChange,
 	password,
 	onPasswordChange,
 	wrongPassword,
@@ -219,6 +230,20 @@ export const MoonlightPairing: FC<{
 									}
 									placeholder="0000"
 									className="font-mono text-lg tracking-widest"
+								/>
+							</div>
+							{/* Moonlight identifies every client as the same device, so a name typed
+							    here is the only one this one gets. Optional: skipping it lists the
+							    device by fingerprint, renameable later from Paired devices. */}
+							<div className="space-y-2">
+								<Label htmlFor="pair-label">{m.clients_rename_label()}</Label>
+								<Input
+									id="pair-label"
+									autoComplete="off"
+									maxLength={64}
+									value={label}
+									onChange={(e) => onLabelChange(e.target.value)}
+									placeholder={m.pairing_pending_name_prompt()}
 								/>
 							</div>
 							{/* Delivering the PIN completes the handshake and pairs the client, which is the

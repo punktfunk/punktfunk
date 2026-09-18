@@ -313,24 +313,16 @@ in
 
       bind = mkOption {
         type = types.str;
-        default = if cfg.web.openFirewall then "0.0.0.0" else "127.0.0.1";
-        defaultText = literalExpression ''if openFirewall then "0.0.0.0" else "127.0.0.1"'';
-        example = "100.64.0.3";
+        default = "0.0.0.0";
+        example = "127.0.0.1";
         description = ''
-          The address the console listens on: `127.0.0.1` for this machine only, `0.0.0.0` for
-          every interface, or one address such as a VPN interface. The plugin-UI origin on 47993
-          follows it, always.
+          The address the console listens on: `0.0.0.0` for every interface, `127.0.0.1` for this
+          machine only, or one address such as a VPN interface. The plugin-UI origin on 47993
+          follows it, always. On any bind the console answers only peers on the local network or a
+          VPN (RFC 1918, link-local, IPv6 unique-local, Tailscale's 100.64/10), never the internet.
 
           This is the imperative install's `PUNKTFUNK_UI_BIND` in `host.env`; on NixOS the option
-          is the source and `host.env` is not read by the console. The default follows
-          `openFirewall`, because a configuration that opened 47992 asked for the LAN in so many
-          words, while one that did not was only reachable there by accident — so a rebuild onto
-          this release never takes a console off a network its owner declared.
-
-          The one case that signal misses is `networking.firewall.enable = false`, where nothing
-          was opened because nothing is closed. A rebuild moves that console to loopback with no
-          warning; set this to `"0.0.0.0"` to keep it. There is no imperative migration step on
-          NixOS, so the option is the only place this can be said.
+          is the source and `host.env` is not read by the console.
         '';
       };
 
@@ -718,8 +710,7 @@ in
           # Hardcoding it here would have to out-rank the file, which is a directive-ordering
           # question in the generated unit — so we simply do not create the conflict.
           PORT = "47992";
-          # Where both listeners bind (`web.bind`). The server's own default is loopback, so this
-          # is the only thing standing between a NixOS console and this machine only.
+          # Where both listeners bind (`web.bind`).
           PUNKTFUNK_UI_BIND = cfg.web.bind;
           # Serve HTTPS with the host's own identity cert (the anchor native clients already pin) and
           # mark the session cookie Secure. The host's `serve` writes these PEMs.
@@ -841,6 +832,10 @@ in
           # the home and points ExecStart at it. Every path is '-' because none is guaranteed.
           BindReadOnlyPaths = [
             "-%h/.config/punktfunk/plugin-token"
+            # What the supervisor hands each sandbox: that plugin's own minted token, and the roots
+            # `plugins grant` added. Without them no plugin with a manifest starts at all.
+            "-%h/.config/punktfunk/plugin-tokens.json"
+            "-%h/.config/punktfunk/plugin-grants.json"
             "-%h/.config/punktfunk/native-cert.pem"
             "-%h/.config/punktfunk/cert.pem"
             "-%h/.config/punktfunk/mgmt-endpoint"

@@ -150,6 +150,21 @@ enum Ctl {
     /// In-stream ring is up: first forwarded pad → [`MenuEvent`]s. Pair with
     /// [`Ctl::Mask`] so the same presses never reach the host.
     RingNav(bool),
+    /// Whether anything is listening for a Select chord ([`GamepadService::set_chords_live`]).
+    ChordsLive(bool),
+}
+
+/// What a Select+button chord on a forwarded pad asks the client for.
+///
+/// [`Ring`](Self::Ring) withholds the press it takes, because A is the dial's own confirm. That
+/// is why the client says whether anything is listening ([`GamepadService::set_chords_live`]):
+/// a chord nothing receives would eat a face button the game was owed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectChord {
+    /// Select+A — open the quick-action dial. The A press is withheld.
+    Ring,
+    /// Select+X — step the stats overlay's tier. Both presses still reach the game.
+    Stats,
 }
 
 #[derive(Clone)]
@@ -160,8 +175,9 @@ pub struct GamepadService {
     escape_rx: async_channel::Receiver<()>,
     disconnect_rx: async_channel::Receiver<()>,
     menu_rx: async_channel::Receiver<MenuEvent>,
-    /// Select+A while streaming — swallowed; opens the ring. Carries the pad's wire index.
-    ring_rx: async_channel::Receiver<u8>,
+    /// A Select chord while streaming — the second button swallowed. Carries the pad's wire
+    /// index and what it asked for.
+    chord_rx: async_channel::Receiver<(u8, SelectChord)>,
 }
 
 impl GamepadService {
@@ -172,7 +188,7 @@ impl GamepadService {
         let (escape_tx, escape_rx) = async_channel::unbounded();
         let (disconnect_tx, disconnect_rx) = async_channel::unbounded();
         let (menu_tx, menu_rx) = async_channel::unbounded();
-        let (ring_tx, ring_rx) = async_channel::unbounded();
+        let (chord_tx, chord_rx) = async_channel::unbounded();
         let (p, a) = (pads.clone(), active.clone());
         if let Err(e) = std::thread::Builder::new()
             .name("punktfunk-gamepad".into())
@@ -184,7 +200,7 @@ impl GamepadService {
                     &escape_tx,
                     &disconnect_tx,
                     &menu_tx,
-                    &ring_tx,
+                    &chord_tx,
                 ) {
                     tracing::warn!(error = %e, "gamepad service ended — pads disabled");
                 }
@@ -199,7 +215,7 @@ impl GamepadService {
             escape_rx,
             disconnect_rx,
             menu_rx,
-            ring_rx,
+            chord_rx,
         }
     }
 
@@ -218,7 +234,7 @@ impl GamepadService {
         let (escape_tx, escape_rx) = async_channel::unbounded();
         let (disconnect_tx, disconnect_rx) = async_channel::unbounded();
         let (menu_tx, menu_rx) = async_channel::unbounded();
-        let (ring_tx, ring_rx) = async_channel::unbounded();
+        let (chord_tx, chord_rx) = async_channel::unbounded();
         let worker = Worker::new(
             subsystem,
             pads.clone(),
@@ -226,7 +242,7 @@ impl GamepadService {
             escape_tx,
             disconnect_tx,
             menu_tx,
-            ring_tx,
+            chord_tx,
         );
         (
             GamepadService {
@@ -236,7 +252,7 @@ impl GamepadService {
                 escape_rx,
                 disconnect_rx,
                 menu_rx,
-                ring_rx,
+                chord_rx,
             },
             GamepadPump { worker, ctl_rx },
         )
@@ -257,10 +273,19 @@ impl GamepadService {
         self.menu_rx.clone()
     }
 
-    /// Select+A on a forwarded pad — both buttons swallowed. One event per chord, carrying the
-    /// pad's wire index.
-    pub fn ring_events(&self) -> async_channel::Receiver<u8> {
-        self.ring_rx.clone()
+    /// Select chords on a forwarded pad — both buttons swallowed. One event per chord, carrying
+    /// the pad's wire index and what it asked for. Silent until [`Self::set_chords_live`].
+    pub fn chord_events(&self) -> async_channel::Receiver<(u8, SelectChord)> {
+        self.chord_rx.clone()
+    }
+
+    /// Whether this client can act on a Select chord at all.
+    ///
+    /// Off by default, and off for good on a build with no console UI: the chord swallows the
+    /// button pressed with Select, so claiming one nothing receives eats a face button the game
+    /// was owed. The client turns it on once it has somewhere to send them.
+    pub fn set_chords_live(&self, on: bool) {
+        let _ = self.ctl.send(Ctl::ChordsLive(on));
     }
 
     /// Pair with [`Self::set_masked`] so the same presses never reach the host.
@@ -635,8 +660,9 @@ struct Slot {
     held_buttons: Vec<u32>,
     /// Host-believed contacts `(surface, finger)`; lifted on close. 0 = legacy pad, 1/2 = Steam.
     held_touches: std::collections::HashSet<(u8, u8)>,
-    /// A opened the ring while Select was pending: neither press went out, so the release must not.
-    swallow_a: bool,
+    /// The button a Select chord took while Select was pending: neither press went out, so
+    /// the release must not either.
+    swallow_btn: Option<u32>,
     /// Per Steam surface (0 = left, 1 = right): last wire coords + finger-down. Clicks have no
     /// position, so the click forward reuses the live contact.
     surface_last: [(i16, i16, bool); 2],
@@ -674,7 +700,7 @@ impl Slot {
             last_axis: [i32::MIN; 6],
             held_buttons: Vec::new(),
             held_touches: std::collections::HashSet::new(),
-            swallow_a: false,
+            swallow_btn: None,
             surface_last: [(0, 0, false); 2],
             held_clicks: [false; 2],
             last_accel: [0; 3],
@@ -694,11 +720,18 @@ impl Slot {
     }
 }
 
-/// A pressed with Select already held opens the quick-action ring, whether or not the guide
-/// gesture is on. Select-first only: A is the ring's confirm. Once the hold became Guide, A
-/// belongs to whatever that opened on the host.
-fn opens_ring(held: &[u32], bit: u32, select_as_guide: bool) -> bool {
-    bit == wire::BTN_A && held.contains(&wire::BTN_BACK) && !select_as_guide
+/// What a button pressed with Select already held asks for, whether or not the guide gesture
+/// is on. Select-first only: A is the ring's own confirm, and X is a face button a game wants.
+/// Once the hold became Guide, both belong to whatever that opened on the host.
+fn select_chord(held: &[u32], bit: u32, select_as_guide: bool) -> Option<SelectChord> {
+    if select_as_guide || !held.contains(&wire::BTN_BACK) {
+        return None;
+    }
+    match bit {
+        wire::BTN_A => Some(SelectChord::Ring),
+        wire::BTN_X => Some(SelectChord::Stats),
+        _ => None,
+    }
 }
 
 /// Hold-Select→guide ([`GUIDE_HOLD`]). Pure: transitions + clock emit `(bit, down)`
@@ -813,6 +846,9 @@ struct Worker {
     pinned: Option<String>,
     /// Off: [`Self::forwarded_ids`] is empty so a session opens no slot (hidraw stays free).
     forwarding: bool,
+    /// Whether a Select chord has anywhere to go. Off until the client says so, because a
+    /// chord swallows the button pressed with Select.
+    chords_live: bool,
     /// Applied at open to the kind DECLARED to the host, never to [`Slot::pref`].
     kind_override: GamepadPref,
     system_forward: bool,
@@ -831,7 +867,7 @@ struct Worker {
     menu_mode: bool,
     menu_nav: MenuNav,
     menu_tx: async_channel::Sender<MenuEvent>,
-    ring_tx: async_channel::Sender<u8>,
+    chord_tx: async_channel::Sender<(u8, SelectChord)>,
     /// Overlay owns input: pads held neutral, slots still OPEN.
     masked: bool,
     /// In-stream ring: first slot → [`MenuEvent`]s even while masked.
@@ -1236,10 +1272,10 @@ impl Worker {
         // Gesture first: synthetic Guide is not in `held_buttons`; a pending Select was never sent.
         let mut due = Vec::new();
         slot.gesture.flush(&mut due);
-        // The ring chord's pending A-up is host-held state too. Its own `ButtonUp` is what
+        // A chord's pending button-up is host-held state too. Its own `ButtonUp` is what
         // clears it, and masking the pad is exactly what stops that arriving — so it would
-        // survive and eat the release of the NEXT real A, leaving A down on the host.
-        slot.swallow_a = false;
+        // survive and eat the release of the NEXT real press, leaving that button down.
+        slot.swallow_btn = None;
         for (b, down) in due {
             send(c, InputKind::GamepadButton, b, down as i32, pad);
         }
@@ -1612,6 +1648,7 @@ impl Worker {
                     self.refresh_active();
                 }
                 Ok(Ctl::KindOverride(pref)) => self.kind_override = pref,
+                Ok(Ctl::ChordsLive(on)) => self.chords_live = on,
                 Ok(Ctl::SystemButtons {
                     forward_raw,
                     gesture,
@@ -1773,14 +1810,25 @@ impl Worker {
                     if !self.system_forward && matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1) {
                         return;
                     }
-                    // Select+A: A is withheld. A pending Select is dropped with it; one already
-                    // on the wire is lifted by the ring's mask flush.
-                    if opens_ring(&slot.held_buttons, bit, slot.gesture.as_guide) {
-                        slot.gesture.swallow_for_ring();
-                        slot.swallow_a = true;
-                        slot.held_buttons.push(bit);
-                        let _ = self.ring_tx.try_send(slot.index);
-                        return;
+                    // Claimed only where the client can act on it: the ring withholds the press
+                    // it takes, and eating a face button nothing receives is worse than the
+                    // chord not working.
+                    let chord = self
+                        .chords_live
+                        .then(|| select_chord(&slot.held_buttons, bit, slot.gesture.as_guide))
+                        .flatten();
+                    if let Some(chord) = chord {
+                        let _ = self.chord_tx.try_send((slot.index, chord));
+                        // A is the ring's own confirm, so the host must not also see it — a
+                        // pending Select goes with it, and one already on the wire is lifted by
+                        // the ring's mask flush. Stats changes nothing on the host, so that
+                        // press carries on to the game, as it does on the Apple clients.
+                        if chord == SelectChord::Ring {
+                            slot.gesture.swallow_for_ring();
+                            slot.swallow_btn = Some(bit);
+                            slot.held_buttons.push(bit);
+                            return;
+                        }
                     }
                     let mut due = Vec::new();
                     let held_back = if !self.guide_gesture {
@@ -1819,8 +1867,8 @@ impl Worker {
                         return;
                     }
                     slot.held_buttons.retain(|&b| b != bit);
-                    if bit == wire::BTN_A && slot.swallow_a {
-                        slot.swallow_a = false;
+                    if slot.swallow_btn == Some(bit) {
+                        slot.swallow_btn = None;
                         return;
                     }
                     let mut due = Vec::new();
@@ -2112,7 +2160,7 @@ impl Worker {
         escape_tx: async_channel::Sender<()>,
         disconnect_tx: async_channel::Sender<()>,
         menu_tx: async_channel::Sender<MenuEvent>,
-        ring_tx: async_channel::Sender<u8>,
+        chord_tx: async_channel::Sender<(u8, SelectChord)>,
     ) -> Worker {
         Worker {
             subsystem,
@@ -2126,6 +2174,7 @@ impl Worker {
             order: Vec::new(),
             pinned: None,
             forwarding: true,
+            chords_live: false,
             kind_override: GamepadPref::Auto,
             system_forward: true,
             guide_gesture: false,
@@ -2140,7 +2189,7 @@ impl Worker {
             menu_mode: false,
             menu_nav: MenuNav::new(),
             menu_tx,
-            ring_tx,
+            chord_tx,
             masked: false,
             ring_nav: false,
         }
@@ -2154,7 +2203,7 @@ fn run(
     escape_tx: &async_channel::Sender<()>,
     disconnect_tx: &async_channel::Sender<()>,
     menu_tx: &async_channel::Sender<MenuEvent>,
-    ring_tx: &async_channel::Sender<u8>,
+    chord_tx: &async_channel::Sender<(u8, SelectChord)>,
 ) -> Result<(), String> {
     // Off-main-thread, no video: keep SDL away from signals; poll pads on this thread.
     sdl3::hint::set("SDL_NO_SIGNAL_HANDLERS", "1");
@@ -2172,7 +2221,7 @@ fn run(
         escape_tx.clone(),
         disconnect_tx.clone(),
         menu_tx.clone(),
-        ring_tx.clone(),
+        chord_tx.clone(),
     );
 
     loop {
@@ -2267,20 +2316,27 @@ mod select_gesture_tests {
     }
 
     #[test]
-    fn select_then_a_opens_the_ring_without_the_guide_gesture() {
-        assert!(opens_ring(&[wire::BTN_BACK], wire::BTN_A, false));
-        assert!(opens_ring(
-            &[wire::BTN_LB, wire::BTN_BACK],
-            wire::BTN_A,
-            false
-        ));
-        assert!(!opens_ring(&[], wire::BTN_A, false), "A alone");
-        assert!(
-            !opens_ring(&[wire::BTN_A], wire::BTN_BACK, false),
+    fn select_then_a_or_x_is_a_chord_without_the_guide_gesture() {
+        let held = |b: u32| select_chord(&[wire::BTN_BACK], b, false);
+        assert_eq!(held(wire::BTN_A), Some(SelectChord::Ring));
+        assert_eq!(held(wire::BTN_X), Some(SelectChord::Stats));
+        // Every other face button is the game's, held Select or not.
+        assert_eq!(held(wire::BTN_B), None);
+        assert_eq!(held(wire::BTN_Y), None);
+        assert_eq!(
+            select_chord(&[wire::BTN_LB, wire::BTN_BACK], wire::BTN_A, false),
+            Some(SelectChord::Ring),
+            "other buttons held alongside do not disqualify it"
+        );
+        assert_eq!(select_chord(&[], wire::BTN_A, false), None, "A alone");
+        assert_eq!(
+            select_chord(&[wire::BTN_A], wire::BTN_BACK, false),
+            None,
             "A first"
         );
-        assert!(
-            !opens_ring(&[wire::BTN_BACK], wire::BTN_A, true),
+        assert_eq!(
+            select_chord(&[wire::BTN_BACK], wire::BTN_X, true),
+            None,
             "Select became Guide"
         );
     }

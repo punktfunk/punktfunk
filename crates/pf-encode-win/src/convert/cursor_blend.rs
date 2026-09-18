@@ -29,9 +29,8 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
 /// Straight-alpha sample of the cursor bitmap. `linear_scale` = 0 is SDR passthrough;
-/// non-zero linearizes sRGB→scRGB and multiplies by the target's SDR-white scale.
-/// `1.0` would put cursor-white at 80 nits, darker than DWM's desktop at the user's
-/// SDR-brightness setting.
+/// non-zero decodes sRGB (the piecewise curve DWM uses for SDR content) to scRGB and
+/// multiplies by the target's SDR-white scale, so cursor white matches desktop white.
 const CURSOR_PS: &str = r"
 Texture2D<float4> tx : register(t0);
 SamplerState sm : register(s0);
@@ -39,7 +38,9 @@ cbuffer C : register(b0) { float linear_scale; float3 pad; };
 float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
     float4 c = tx.Sample(sm, uv);
     if (linear_scale != 0.0) {
-        c.rgb = pow(abs(c.rgb), 2.2) * linear_scale;
+        float3 v = saturate(c.rgb);
+        float3 lin = lerp(pow((v + 0.055) / 1.055, 2.4), v / 12.92, step(v, 0.04045));
+        c.rgb = lin * linear_scale;
     }
     return c;
 }

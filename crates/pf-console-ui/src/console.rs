@@ -5,7 +5,7 @@
 //! [`crate::SkiaOverlay`] and the Android GL host both sit on this; nothing here
 //! knows a `VkImage`, an SDL event, or a JNI env.
 
-use crate::model::{ConsoleBus, ConsoleShared, HostRow};
+use crate::model::{ConsoleBus, ConsoleCmd, ConsoleShared, HostRow};
 use crate::screens::Screen;
 use crate::shell::{ConsoleOptions, Shell};
 use crate::theme::Fonts;
@@ -99,7 +99,11 @@ impl Console {
         handles: &ConsoleHandles,
     ) -> Result<Console> {
         let stream = stream_intent(&entry);
+        let fetch = entry_fetch(&entry);
         let stack = entry_stack(entry, &handles.library);
+        if let Some(cmd) = fetch {
+            handles.bus.send(cmd);
+        }
         let mut shell = Shell::new(
             handles.console.clone(),
             handles.library.clone(),
@@ -176,13 +180,17 @@ impl Console {
 
     /// Replace the stack with `entry` (deep link, or return to the shelf a game launched from).
     /// A return to the shelf already on top keeps it: the stack outlives the stream, and a
-    /// rebuilt shelf has no posters and nothing that fetches them again.
+    /// rebuilt shelf starts empty and fetches again.
     pub fn navigate(&mut self, entry: ConsoleEntry) {
         if already_showing(self.shell.top(), &entry) {
             return;
         }
         let stream = stream_intent(&entry);
+        let fetch = entry_fetch(&entry);
         let stack = entry_stack(entry, self.shell.library());
+        if let Some(cmd) = fetch {
+            self.shell.send_cmd(cmd);
+        }
         self.shell.replace_stack(stack);
         if let Some(intent) = stream {
             self.shell.start_connect(intent);
@@ -217,6 +225,19 @@ fn stream_intent(entry: &ConsoleEntry) -> Option<crate::screens::ConnectIntent> 
         title: host.name.clone(),
         request_access: false,
         preset: None,
+    })
+}
+
+/// The fetch a shelf entry needs. Nothing else loads a pushed shelf, so send it after
+/// [`entry_stack`] snapshots the epoch.
+fn entry_fetch(entry: &ConsoleEntry) -> Option<ConsoleCmd> {
+    let (ConsoleEntry::Library(host) | ConsoleEntry::Stream(host)) = entry else {
+        return None;
+    };
+    Some(ConsoleCmd::FetchLibrary {
+        addr: host.addr.clone(),
+        mgmt: host.mgmt_port,
+        fp_hex: host.fp_hex.clone(),
     })
 }
 
@@ -286,6 +307,24 @@ mod tests {
         assert_eq!(intent.preset, None);
         assert!(!intent.request_access);
         assert_eq!(intent.title, "Desk");
+    }
+
+    /// A shelf entry loads its own library; the host list fetches nothing.
+    #[test]
+    fn a_shelf_entry_carries_its_fetch() {
+        assert!(entry_fetch(&ConsoleEntry::Home).is_none());
+        for entry in [
+            ConsoleEntry::Library(Box::new(row())),
+            ConsoleEntry::Stream(Box::new(row())),
+        ] {
+            let Some(ConsoleCmd::FetchLibrary { addr, mgmt, fp_hex }) = entry_fetch(&entry) else {
+                panic!("a shelf entry fetches its library");
+            };
+            assert_eq!(
+                (addr.as_str(), mgmt, fp_hex.as_str()),
+                ("10.0.0.5", 47990, "aa")
+            );
+        }
     }
 
     /// Both host entries land on the same two screens, so B leaves a cancelled stream

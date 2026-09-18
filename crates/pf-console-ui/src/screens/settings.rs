@@ -1023,10 +1023,10 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
         // concept is real there too (punktfunk-webos docs/NOTES.md).
         RowId::DsCapture => &[Android, WebOS],
-        // Which pad is player 1 — a question only a client that forwards ONE pad has to answer.
-        // Android's router and the browser's Gamepad API both give every controller its own wire
-        // slot, so there is nothing to pick; webOS is still single-pad and keeps the row.
-        RowId::Pad => &[Desktop, WebOS],
+        // Which pad is player 1 — a question only a client that can narrow forwarding to one pad
+        // has to answer. Android's router, webOS's slot table and the browser's Gamepad API give
+        // every controller its own wire slot, so there is nothing to pick.
+        RowId::Pad => &[Desktop],
         // That client's own audio plane and its remote's missing second button.
         RowId::AudioRoute | RowId::CursorGestures => &[WebOS],
         // Main10 at BT.709 asks nothing of the panel, and MediaCodec and NDL both decode it from

@@ -15,10 +15,11 @@ use super::args::{InnoArgs, TaskFlag};
 use super::plan::Artifact;
 use super::{NetCategory, WinFacts};
 
-/// The console's default listen address: this PC only.
+/// What "this PC only" means to the console's listener.
 pub const LOOPBACK_BIND: &str = "127.0.0.1";
 
-/// What "this local network" means to the console's listener.
+/// The console's default listen address: every interface. The console answers only peers on the
+/// local network or a VPN, never the internet.
 pub const LAN_BIND: &str = "0.0.0.0";
 
 /// `/WEBBIND` and its env twin, in the Linux installer's spelling.
@@ -129,11 +130,12 @@ impl WinChoices {
             tray_autostart: if upgrade { facts.tray_autostart } else { true },
             desktop_icon: false,
             web_password: None,
-            // Fresh boxes are asked and answer loopback by default; an upgrade keeps host.env's.
+            // Fresh boxes are asked and answer the local network by default; an upgrade keeps
+            // host.env's.
             web_bind: if upgrade {
                 None
             } else {
-                Some(LOOPBACK_BIND.to_string())
+                Some(LAN_BIND.to_string())
             },
             dir: installed
                 .and_then(|i| i.location.clone())

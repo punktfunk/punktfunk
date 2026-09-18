@@ -17,8 +17,9 @@
 //! `Driver` against modelled links and pins every decision in a checked-in
 //! baseline.
 
-/// The link simulator and the checked-in baseline (`abr/sim/`).
-#[cfg(test)]
+/// The link simulator and the checked-in baseline (`abr/sim/`). It drives the
+/// client's frame channel constants, so it builds with the client.
+#[cfg(all(test, feature = "quic"))]
 mod sim;
 
 pub mod budget;
@@ -279,6 +280,13 @@ impl Driver {
     /// shows and a field report quotes.
     pub fn reason(&self) -> Reason {
         self.abr.last_reason()
+    }
+
+    /// What the last rate cut was for, until the host grants a climb. Narrower
+    /// than [`reason`](Self::reason), which follows every window: an overlay
+    /// shows why the rate is where it is, not what just went by.
+    pub fn last_cut(&self) -> Option<Reason> {
+        self.abr.last_cut()
     }
 
     /// A measured link capacity. Never lowers the climb ceiling: a

@@ -222,8 +222,7 @@ foreach ($p in @($exe, $trayExe, $hostEnvSrc, $readmeSrc, $brandIco)) {
 }
 
 # License/attribution payload bundled into {app}\licenses: the project's own MIT/Apache texts and the
-# generated third-party crate notices. The FFmpeg LGPL notice + license text are added to this same
-# dir below when the AMF/QSV FFmpeg DLLs are bundled. THIRD-PARTY-NOTICES.txt ships verbatim from
+# generated third-party crate notices. THIRD-PARTY-NOTICES.txt ships verbatim from
 # the committed copy; nothing regenerates it here. ci.yml's THIRD-PARTY-NOTICES drift gate is
 # what keeps that copy true.
 $licStage = Join-Path $OutDir 'licenses'

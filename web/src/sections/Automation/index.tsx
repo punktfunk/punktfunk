@@ -1,10 +1,12 @@
 import Section from "@unom/ui/section";
 import { toast } from "@unom/ui/toast";
 import { Pencil, Plus, Terminal, Trash2, Webhook, Zap } from "lucide-react";
-import { type FC, useEffect, useState } from "react";
+import { type FC, useEffect, useMemo, useState } from "react";
 import { ApiError } from "@/api/fetcher";
+import { useListPairedClients } from "@/api/gen/clients/clients";
 import { useGetHooks } from "@/api/gen/hooks/hooks";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
+import { useListNativeClients } from "@/api/gen/native/native";
 import { hookAction, hookFilterSummary, useSaveHooks } from "@/api/hooks";
 import { useDialogs } from "@/components/dialogs";
 import { QueryState } from "@/components/query-state";
@@ -40,6 +42,23 @@ export const SectionAutomation: FC = () => {
 	const { confirm } = useDialogs();
 	const query = useGetHooks();
 	const save = useSaveHooks();
+	// Filters store the certificate; these two lists are what turn one back into a device name.
+	const native = useListNativeClients();
+	const moonlight = useListPairedClients();
+	const deviceNames = useMemo(
+		() =>
+			new Map([
+				...(native.data ?? []).map((c): [string, string] => [
+					c.fingerprint,
+					c.name,
+				]),
+				...(moonlight.data ?? []).map((c): [string, string] => [
+					c.fingerprint,
+					c.label ?? c.fingerprint.slice(0, 8),
+				]),
+			]),
+		[native.data, moonlight.data],
+	);
 
 	const [hooks, setHooks] = useState<HookEntry[] | null>(null);
 	const [editing, setEditing] = useState<{
@@ -155,9 +174,9 @@ export const SectionAutomation: FC = () => {
 											<div className="min-w-0 flex-1 space-y-1">
 												<div className="flex flex-wrap items-center gap-2">
 													<Badge variant="secondary">{h.on}</Badge>
-													{hookFilterSummary(h) && (
+													{hookFilterSummary(h, deviceNames) && (
 														<Badge variant="outline">
-															{hookFilterSummary(h)}
+															{hookFilterSummary(h, deviceNames)}
 														</Badge>
 													)}
 													{!!h.debounce_ms && (

@@ -4,13 +4,9 @@
 // (CscRowsTests.swift ↔ the Rust `csc_rows` tests), and a coefficient change lands in both or
 // neither.
 //
-// Why this exists: the stage-2 Metal shaders used to hardcode BT.709 (SDR) / BT.2020 (HDR)
-// matrices, silently ignoring the stream's signaled matrix. A Linux host's RGB-input NVENC paths
-// signal BT.601 limited (NVENC's fixed internal RGB→YUV conversion; ffmpeg force-writes that
-// VUI), so those streams rendered with the wrong coefficients — a constant hue error. The rows
-// are now computed per frame from the decoded buffer's actual signaling (VideoToolbox propagates
-// the HEVC VUI / AV1 colour config onto the CVPixelBuffer's attachments) and handed to the
-// fragment shaders as bytes.
+// The rows follow each decoded buffer's signalled matrix (VideoToolbox propagates the HEVC VUI /
+// AV1 colour config onto the CVPixelBuffer's attachments), so a BT.601-tagged stream renders
+// with BT.601 coefficients instead of a hardcoded BT.709/BT.2020.
 
 import CoreVideo
 import simd
@@ -104,10 +100,10 @@ public enum CscRows {
                 pack * max / (224.0 * step)
             )
         }
-        // rgb = M * (yuv + off) = M*yuv + M*off — rows of M with the offset dot folded into
-        // w. `yuv` is the SAMPLED (packed) value, so the offsets divide by the packing
-        // factor to land on the same scale.
-        let off = [oy / pack, -0.5 / pack, -0.5 / pack]
+        // rgb = M * (yuv + off). `yuv` is the sampled (packed) value, so offsets divide by the
+        // packing factor. Neutral chroma is code 128 (512 at 10 bits) in both ranges, not 0.5.
+        let oc = -(128.0 * step) / max
+        let off = [oy / pack, oc / pack, oc / pack]
         let m: [[Double]] = [
             [sy, 0.0, 2.0 * (1.0 - kr) * sc],
             [

@@ -90,6 +90,7 @@ impl IddPushCapturer {
             return;
         }
         self.desc_seq = seq;
+        self.refresh_sdr_white_scale();
         // Exclusive-watchdog reassert in flight: a sample here is the transient eviction.
         if pf_win_display::topology_churn::held() {
             self.pending_desc = None;
@@ -181,28 +182,32 @@ impl IddPushCapturer {
         }
     }
 
-    /// Where DWM places SDR white on this HDR desktop. 2.5× at the Windows default.
-    /// Stamped into the cursor section: the driver's blend needs it and session 0
-    /// cannot query it. The CCD read takes the display-config lock, so this runs at
-    /// open and on a descriptor change only.
+    /// Where DWM places SDR white on this HDR desktop (2.5× = 200 nits at the Windows default),
+    /// stamped into the cursor section for the driver's blend. Read from the display actor's
+    /// snapshot, so it follows the SDR brightness slider without a CCD call on this thread.
     pub(super) fn refresh_sdr_white_scale(&mut self) {
+        let Some(cs) = self.cursor_shared.as_ref() else {
+            return;
+        };
         if !self.display_hdr {
-            if let Some(cs) = self.cursor_shared.as_ref() {
-                cs.set_sdr_white_scale(0.0);
-            }
+            cs.set_sdr_white_scale(0.0);
             return;
         }
-        let queried = pf_win_display::win_display::sdr_white_level_scale(self.ccd);
-        self.sdr_white_scale = queried.unwrap_or(self.sdr_white_scale);
-        if let Some(cs) = self.cursor_shared.as_ref() {
-            cs.set_sdr_white_scale(self.sdr_white_scale);
+        let queried = pf_win_display::display_events::snapshot()
+            .target(self.ccd)
+            .and_then(|t| t.sdr_white_level)
+            .map(|level| level as f32 / 1000.0);
+        let scale = queried.unwrap_or(self.sdr_white_scale);
+        cs.set_sdr_white_scale(scale);
+        if scale != self.sdr_white_scale || !self.sdr_white_logged {
+            self.sdr_white_logged = true;
+            tracing::info!(
+                target_id = self.target_id,
+                queried = ?queried,
+                applied = scale,
+                "cursor composite: HDR SDR-white scale (1.0 = 80 nits; None keeps the prior value)"
+            );
         }
-        tracing::info!(
-            target_id = self.target_id,
-            queried = ?queried,
-            applied = self.sdr_white_scale,
-            "cursor composite: HDR SDR-white scale (1.0 = 80 nits; None = query failed — keeping \
-             the prior value)"
-        );
+        self.sdr_white_scale = scale;
     }
 }

@@ -1,4 +1,5 @@
 import { type FC, useEffect, useMemo, useState } from "react";
+import { useListPairedClients } from "@/api/gen/clients/clients";
 import { useGetLibrary } from "@/api/gen/library/library";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
@@ -27,6 +28,9 @@ import { EVENT_KINDS, eventKindLabel } from "@/lib/event-kinds";
 import { m } from "@/paraglide/messages";
 
 const EMPTY: HookEntry = { on: "session.started", run: "" };
+
+// Radix reserves the empty string, so "no device filter" needs a value of its own.
+const ANY_DEVICE = "any";
 
 /**
  * Add or edit one hook.
@@ -60,6 +64,7 @@ export const HookForm: FC<{
 	// a library that can run to five figures.
 	const library = useGetLibrary(undefined, { query: { enabled: filtered } });
 	const clients = useListNativeClients({ query: { enabled: filtered } });
+	const moonlight = useListPairedClients({ query: { enabled: filtered } });
 	const appOptions: ComboboxOption[] = useMemo(
 		() =>
 			(library.data ?? []).map((g) => ({
@@ -77,10 +82,25 @@ export const HookForm: FC<{
 			})),
 		[library.data],
 	);
-	const clientOptions: ComboboxOption[] = useMemo(
-		() => (clients.data ?? []).map((c) => ({ value: c.name })),
-		[clients.data],
+	// Both planes' paired devices, keyed by the certificate — a device name is neither unique
+	// nor fixed, so renaming one would otherwise stop its hooks matching. The name is what the
+	// operator reads; the fingerprint is what gets stored.
+	const deviceOptions = useMemo(
+		() => [
+			...(clients.data ?? []).map((c) => ({
+				fingerprint: c.fingerprint,
+				name: c.name,
+			})),
+			...(moonlight.data ?? []).map((c) => ({
+				fingerprint: c.fingerprint,
+				name: c.label ?? c.fingerprint.slice(0, 8),
+			})),
+		],
+		[clients.data, moonlight.data],
 	);
+	// A hook written before device filters keyed on the certificate. Keep its name selectable,
+	// so editing anything else here cannot quietly drop the filter.
+	const legacyClient = draft.filter?.fingerprint ? null : draft.filter?.client;
 
 	const action = kind === "run" ? (draft.run ?? "") : (draft.webhook ?? "");
 	const ready = draft.on.trim().length > 0 && action.trim().length > 0;
@@ -233,15 +253,37 @@ export const HookForm: FC<{
 							<Label htmlFor="hook-client">
 								{m.automation_filter_client()}
 							</Label>
-							<Combobox
-								id="hook-client"
-								options={clientOptions}
-								empty={m.automation_filter_none()}
-								value={draft.filter?.client ?? ""}
-								onChange={(client) =>
-									set({ filter: { ...draft.filter, client } })
+							<Select
+								value={draft.filter?.fingerprint ?? legacyClient ?? ANY_DEVICE}
+								onValueChange={(v) =>
+									set({
+										filter: {
+											...draft.filter,
+											// One device handle, never both: picking here replaces a
+											// name a previous version of the console stored.
+											client: undefined,
+											fingerprint: v === ANY_DEVICE ? undefined : v,
+										},
+									})
 								}
-							/>
+							>
+								<SelectTrigger id="hook-client">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={ANY_DEVICE}>
+										{m.automation_filter_none()}
+									</SelectItem>
+									{legacyClient && (
+										<SelectItem value={legacyClient}>{legacyClient}</SelectItem>
+									)}
+									{deviceOptions.map((d) => (
+										<SelectItem key={d.fingerprint} value={d.fingerprint}>
+											{d.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="hook-app">{m.automation_filter_app()}</Label>

@@ -4,9 +4,10 @@
 //! sees a warning path, never a lie.
 
 /// A GUI-subsystem exe launched from a terminal: bind the parent's console and open its
-/// output end. `None` when no parent console exists (the updater's spawn), which is the
-/// common case and simply means no console output. `CONOUT$` rather than `stdout()`: the
-/// std handles were fixed at startup, before the attach.
+/// output end. `None` when no parent console exists (a double-click), which simply means
+/// no console output. The updater's spawn does attach: the service host owns a hidden
+/// console, and that one dies when the upgrade stops the service. `CONOUT$` rather than
+/// `stdout()`: the std handles were fixed at startup, before the attach.
 #[cfg(windows)]
 pub fn attach_parent_console() -> Option<std::fs::File> {
     use ::windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};

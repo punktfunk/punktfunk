@@ -27,13 +27,17 @@ import { levelLabel } from "@/sections/Pairing/access";
  * one only ever showed the first of them.
  *
  * The actions are per row and reach exactly that session: stop, keyframe, mute, access level,
- * player slot. A compat-plane row carries no id (the host has no per-session handle for it), so
- * its actions are off and the card header's host-wide Stop is what ends it.
+ * player slot. Both planes register a session, so a compat row stops and takes a keyframe like
+ * any other; the lanes GameStream has no wire for — per-session mute, access, player slot — stay
+ * off there rather than promising something the protocol cannot carry.
  *
  * The player picker is what makes couch co-op over JOIN usable: the slot a session's controllers
  * take is the player number a local co-op game reads, and left alone it goes to whoever moves a
  * stick first. `pads` is what it holds now; `preferred_pad_slot` is what was asked for, and the
  * two differ until a live pad re-plugs.
+ *
+ * A row names the sessions arriving from its address (`shared_path_with`): one NAT or tunnel,
+ * most likely one network path, and each adapts its bitrate alone.
  *
  * One column is still absent: who owns the audio device (#1093). It has no field on `SessionRow`.
  */
@@ -66,6 +70,10 @@ export const SessionList: FC<{
 						onMute={() => onMute(s, !s.muted)}
 						onAccess={(level) => onAccess(s, level)}
 						onPlayer={(slot) => onPlayer(s, slot)}
+						sharedWith={(s.shared_path_with ?? []).map((id) => {
+							const other = sessions.find((o) => o.id === id);
+							return other?.client_name || other?.client || `#${id}`;
+						})}
 						busy={busy}
 					/>
 				))}
@@ -81,15 +89,22 @@ const Row: FC<{
 	onMute: () => void;
 	onAccess: (level: string) => void;
 	onPlayer: (slot: number | null) => void;
+	/** Names of the other sessions on this row's client address. */
+	sharedWith: string[];
 	busy: boolean;
-}> = ({ row, onStop, onIdr, onMute, onAccess, onPlayer, busy }) => {
-	// No id means the compat plane: the host holds no per-session handle for it, so every
-	// action here would silently become host-wide. Off is honest; the card below still stops it.
+}> = ({ row, onStop, onIdr, onMute, onAccess, onPlayer, sharedWith, busy }) => {
+	// Every registered session has an id, so stop and keyframe always reach exactly this one.
 	const perSession = row.id != null;
+	// Mute and the player slot ride native-only lanes: the compat plane's audio has no
+	// per-session mute, and its pads are not placed through the host's pad pool.
+	const nativeLanes = row.plane === "native";
 	const facts = [
 		row.mode,
 		row.join ? m.sessions_joined() : m.sessions_own_display(),
 		m.sessions_uptime({ time: formatUptime(row.uptime_s) }),
+		sharedWith.length > 0
+			? m.sessions_shared_path({ names: sharedWith.join(", ") })
+			: undefined,
 		row.plane === "gamestream" ? "GameStream" : undefined,
 	].filter(Boolean);
 	return (
@@ -117,7 +132,7 @@ const Row: FC<{
 			<div className="flex flex-wrap items-center gap-2">
 				{/* Which player this session is. Four, not the host's sixteen slots: local
 				    co-op seats four, and the picker exists for the couch. */}
-				{perSession && (
+				{perSession && nativeLanes && (
 					<Select
 						value={row.preferred_pad_slot?.toString() ?? AUTO_PLAYER}
 						onValueChange={(v) =>
@@ -175,7 +190,7 @@ const Row: FC<{
 				<Button
 					variant="outline"
 					size="sm"
-					disabled={!perSession || busy}
+					disabled={!perSession || !nativeLanes || busy}
 					onClick={onMute}
 				>
 					{row.muted ? (

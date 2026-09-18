@@ -265,6 +265,13 @@ pub(crate) fn art_field(art: &Artwork, kind: ArtKind) -> Option<String> {
     }
 }
 
+/// Held across load-modify-save: two providers syncing at once share one `library.json.tmp`,
+/// and the later save would drop the earlier one's rows.
+fn catalog_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Every mutation path goes through here, so the first write upgrades v1.
 fn save_catalog(catalog: &Catalog) -> Result<()> {
     let dir = pf_paths::config_dir();
@@ -303,6 +310,7 @@ pub enum MutateOutcome<T> {
 }
 
 pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
+    let _serial = catalog_lock();
     let mut catalog = load_catalog();
     let entry = CustomEntry {
         id: new_id(&input.title),
@@ -328,6 +336,7 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
 
 /// Replace a manual row (id kept). Provider-owned rows are refused — they belong to reconcile.
 pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<CustomEntry>> {
+    let _serial = catalog_lock();
     let mut catalog = load_catalog();
     let Some(slot) = catalog.entries.iter_mut().find(|e| e.id == id) else {
         return Ok(MutateOutcome::NotFound);
@@ -362,6 +371,7 @@ pub fn update_custom(id: &str, input: CustomInput) -> Result<MutateOutcome<Custo
 
 /// Delete a manual row. Provider-owned rows are refused (see [`update_custom`]).
 pub fn delete_custom(id: &str) -> Result<MutateOutcome<()>> {
+    let _serial = catalog_lock();
     let mut catalog = load_catalog();
     let Some(entry) = catalog.entries.iter().find(|e| e.id == id) else {
         return Ok(MutateOutcome::NotFound);
@@ -623,6 +633,7 @@ pub fn reconcile_provider(
     store: Option<&str>,
     inputs: Vec<ProviderEntryInput>,
 ) -> Result<MutateOutcome<Vec<CustomEntry>>> {
+    let _serial = catalog_lock();
     let mut catalog = load_catalog();
     if let Some(store) = store {
         if let Some(holder) = catalog.claims.get(store) {
@@ -661,6 +672,7 @@ pub fn reconcile_provider(
 /// nothing changed. This is the only release path, so uninstalling a library plugin restores
 /// the built-in scanner without a restart.
 pub fn delete_provider(provider: &str) -> Result<usize> {
+    let _serial = catalog_lock();
     let mut catalog = load_catalog();
     let before = catalog.entries.len();
     catalog

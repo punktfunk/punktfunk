@@ -214,7 +214,8 @@ punktfunk — with it on, Steam hands the app its own virtual Xbox pad.
 
 **Forwarded controller** (*Use controller* on Apple and the console home) — *default: Automatic*,
 which forwards *every* connected controller, each as its own player. Pinning one restricts the
-session to that controller alone. Linux, Windows, Apple, console home; not Android.
+session to that controller alone. Linux, Windows, Apple, the desktop console home; not Android or
+webOS.
 
 **Steam / guide button** (*Guide button* on Apple and Android) — *default: Automatic*, everywhere.
 Where guide (Xbox/PS/Steam) and quick-access presses go while streaming: **Send to host** forwards

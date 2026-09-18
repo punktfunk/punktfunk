@@ -102,6 +102,7 @@ impl Shell {
             full_h - f64::from(ins.top) - f64::from(ins.bottom),
         );
         self.last_insets = (ins.left, ins.top);
+        self.last_full = (full_w as f32, full_h as f32);
         self.last_k = k;
         let t = self.t();
 

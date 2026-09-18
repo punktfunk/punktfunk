@@ -83,6 +83,9 @@ BindPaths=-%h/.bun
 BindReadOnlyPaths=-%h/.config/punktfunk/scripts -%h/.config/punktfunk/ingest
 BindReadOnlyPaths=-%h/.config/punktfunk/plugin-token -%h/.config/punktfunk/mgmt-endpoint
 BindReadOnlyPaths=-%h/.config/punktfunk/native-cert.pem -%h/.config/punktfunk/cert.pem
+# What the supervisor hands each sandbox: the token the host minted for that plugin, and the roots
+# `punktfunk-host plugins grant` added. Without them no plugin with a manifest starts at all.
+BindReadOnlyPaths=-%h/.config/punktfunk/plugin-tokens.json -%h/.config/punktfunk/plugin-grants.json
 # ProtectHome empties /run/user too. %t is where the host publishes its live-stream marker
 # (punktfunk/stream, which scripts source) and where the session bus and compositor sockets live.
 BindPaths=%t

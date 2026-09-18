@@ -417,17 +417,27 @@ fn build_params(cfg: &EncodeConfig) -> ParamSet {
         b.Header.BufferId = vpl::MFX_EXTBUFF_MASTERING_DISPLAY_COLOUR_VOLUME as u32;
         b.Header.BufferSz = std::mem::size_of::<vpl::mfxExtMasteringDisplayColourVolume>() as u32;
         b.InsertPayloadToggle = vpl::MFX_PAYLOAD_IDR as u16;
-        // HdrMeta is ST.2086 G,B,R in 1/50000 units — same order and units as the SEI fields.
-        for (i, p) in m.display_primaries.iter().enumerate() {
-            b.DisplayPrimariesX[i] = p[0];
-            b.DisplayPrimariesY[i] = p[1];
+        // Encode copies the fields into the bitstream in that codec's semantics: HEVC Annex D
+        // (G,B,R, 1/50000, both luminances 0.0001 cd/m², as HdrMeta) or AV1 6.7.4.
+        if cfg.codec == Codec::Av1 {
+            let a = pf_frame::hdr::av1_mdcv(&m);
+            for (i, [x, y]) in a.primaries.into_iter().enumerate() {
+                b.DisplayPrimariesX[i] = x;
+                b.DisplayPrimariesY[i] = y;
+            }
+            [b.WhitePointX, b.WhitePointY] = a.white_point;
+            b.MaxDisplayMasteringLuminance = a.luminance_max;
+            b.MinDisplayMasteringLuminance = a.luminance_min;
+        } else {
+            for (i, p) in m.display_primaries.iter().enumerate() {
+                b.DisplayPrimariesX[i] = p[0];
+                b.DisplayPrimariesY[i] = p[1];
+            }
+            b.WhitePointX = m.white_point[0];
+            b.WhitePointY = m.white_point[1];
+            b.MaxDisplayMasteringLuminance = m.max_display_mastering_luminance;
+            b.MinDisplayMasteringLuminance = m.min_display_mastering_luminance;
         }
-        b.WhitePointX = m.white_point[0];
-        b.WhitePointY = m.white_point[1];
-        // Both luminance fields are 0.0001 cd/m² — do not scale the max. VPP headers
-        // use whole cd/m²; encode copies these into HEVC Annex D SEI as-is.
-        b.MaxDisplayMasteringLuminance = m.max_display_mastering_luminance;
-        b.MinDisplayMasteringLuminance = m.min_display_mastering_luminance;
         b
     });
     let cll = cfg

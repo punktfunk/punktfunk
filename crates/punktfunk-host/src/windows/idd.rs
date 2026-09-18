@@ -40,6 +40,7 @@ pub(crate) fn topology_reassert_gen() -> u64 {
 }
 
 /// The in-driver encoder for an IDD-push session ([`crate::capture::open_driver_encoder`]).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_driver_encoder(
     plan: &crate::session_plan::SessionPlan,
     capturer: &dyn crate::capture::Capturer,
@@ -47,6 +48,7 @@ pub(crate) fn open_driver_encoder(
     fps: u32,
     bitrate_bps: u64,
     bit_depth: u8,
+    client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
 ) -> Result<Box<dyn crate::encode::Encoder>> {
     crate::capture::open_driver_encoder(
@@ -56,6 +58,7 @@ pub(crate) fn open_driver_encoder(
         fps,
         bitrate_bps,
         bit_depth,
+        client_hdr,
         wire_seq_base,
     )
 }

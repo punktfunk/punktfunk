@@ -228,20 +228,20 @@ unsafe extern "C" fn on_frame_rendered(
         .note_displayed(pts_us * 1000, decoded_ns, released_ns, displayed_ns);
 }
 
-/// React to an output-format change by signalling the stream's HDR dataspace on the Surface (SDR
-/// streams leave the default alone). The AMediaCodec analogue of the sync loop's `OutputFormatChanged`
-/// handling; safe to call repeatedly (`applied_ds` dedups).
-pub(super) fn apply_hdr_dataspace(
+/// React to an output-format change by tagging the Surface with the dataspace the decoder reports,
+/// so a switch between HDR and SDR moves it both ways. The AMediaCodec analogue of the sync loop's
+/// `OutputFormatChanged` handling; safe to call repeatedly (`applied_ds` dedups).
+pub(super) fn apply_reported_dataspace(
     codec: &MediaCodec,
     window: &NativeWindow,
     applied_ds: &mut Option<DataSpace>,
 ) {
-    if let Some(ds) = hdr_dataspace(codec) {
+    if let Some(ds) = reported_dataspace(codec) {
         if *applied_ds != Some(ds) {
             match window.set_buffers_data_space(ds) {
                 Ok(()) => {
                     *applied_ds = Some(ds);
-                    log::info!("decode: HDR stream → Surface dataspace {ds}");
+                    log::info!("decode: Surface dataspace {ds}");
                 }
                 Err(e) => {
                     log::warn!("decode: set_buffers_data_space({ds}) failed (non-fatal): {e}")
@@ -268,10 +268,11 @@ pub(super) fn picture_size(codec: &MediaCodec) -> Option<(i32, i32)> {
     })
 }
 
-/// Map the decoder's reported output colour to a BT.2020 HDR dataspace, or `None` for SDR. The
-/// integer values are the Android MediaFormat colour constants the NDK shares: COLOR_TRANSFER
+/// Map the decoder's reported output colour to a dataspace: BT.2020 PQ or HLG, BT.709 for
+/// limited-range SDR, `None` when the decoder reports no transfer (many omit it). The integer
+/// values are the Android MediaFormat colour constants the NDK shares: COLOR_TRANSFER SDR_VIDEO = 3,
 /// ST2084 = 6 (PQ/HDR10), HLG = 7; COLOR_RANGE FULL = 1, LIMITED = 2 (the host encodes limited).
-pub(super) fn hdr_dataspace(codec: &MediaCodec) -> Option<DataSpace> {
+pub(super) fn reported_dataspace(codec: &MediaCodec) -> Option<DataSpace> {
     let fmt = codec.output_format();
     let full_range = fmt.i32("color-range") == Some(1);
     match fmt.i32("color-transfer") {
@@ -285,7 +286,8 @@ pub(super) fn hdr_dataspace(codec: &MediaCodec) -> Option<DataSpace> {
         } else {
             DataSpace::Bt2020ItuHlg
         }),
-        _ => None, // SDR (BT.709 / SDR_VIDEO) or unspecified
+        Some(3) if !full_range => Some(DataSpace::Bt709),
+        _ => None, // unspecified, or full-range SDR (no named dataspace)
     }
 }
 

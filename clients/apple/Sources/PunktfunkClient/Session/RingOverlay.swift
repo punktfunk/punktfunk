@@ -90,6 +90,9 @@ final class RingState: ObservableObject {
         case .cancel:
             // Lifted short of commit, or wound back after one: the ring winds back in.
             close()
+        case .open(let at):
+            // The edge pull, which arrives already decided — there is no turn behind it.
+            openAt(at)
         }
     }
 

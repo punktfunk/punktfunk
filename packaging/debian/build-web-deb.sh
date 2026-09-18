@@ -133,15 +133,7 @@ if [ "$1" = "configure" ]; then
     echo "After that the console keeps only a salted hash, so a forgotten password is reset:"
     echo "put a PUNKTFUNK_UI_PASSWORD=<your-password> line in that file, then"
     echo "    systemctl --user restart punktfunk-web"
-    echo "Then open https://127.0.0.1:47992 (self-signed host cert — trust it once)"
-    # $2 is the version being replaced: set means upgrade. The console used to answer on every
-    # interface with no setting for it, so say where that reach now lives before anyone restarts.
-    if [ -n "$2" ]; then
-        echo "The console now listens on this machine only unless PUNKTFUNK_UI_BIND says otherwise."
-        echo "Your console already served the network, so the next start writes"
-        echo "PUNKTFUNK_UI_BIND=0.0.0.0 into ~/.config/punktfunk/host.env and keeps it that way."
-        echo "Change that line to 127.0.0.1 and restart punktfunk-web to close it."
-    fi
+    echo "Then open https://<host-ip>:47992 (self-signed host cert — trust it once)"
 fi
 exit 0
 EOF

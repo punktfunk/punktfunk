@@ -269,7 +269,7 @@ struct Nv12Blit {
     y_tex: u32,
     /// Immutable `GL_RG8` chroma, W/2 × H/2.
     uv_tex: u32,
-    /// Retargeted per frame. `GL_LINEAR` so the UV pass averages 2×2.
+    /// Retargeted per frame. `GL_LINEAR` so the UV pass's two taps each average two texels.
     src_tex: u32,
     width: u32,
     height: u32,
@@ -433,6 +433,12 @@ impl Drop for Nv12Blit {
     }
 }
 
+/// `PUNKTFUNK_444_FULLRANGE=1`: the YUV444 convert writes full range. The encoder signals the
+/// same answer in the VUI, so both read it here.
+pub fn yuv444_full_range() -> bool {
+    std::env::var("PUNKTFUNK_444_FULLRANGE").is_ok_and(|v| v.trim() == "1")
+}
+
 /// Per-size planar YUV444 convert (BT.709; studio or full range via `PUNKTFUNK_444_FULLRANGE`).
 /// Three full-res `GL_R8` passes share `src_tex`. The pool is one stacked allocation
 /// (`BufferPool::new_yuv444`) so the worker↔host wire stays single-plane.
@@ -460,8 +466,7 @@ impl Yuv444Blit {
                 width % 2 == 0 && height % 2 == 0,
                 "YUV444 convert needs even dimensions (got {width}x{height})"
             );
-            let full_range =
-                std::env::var("PUNKTFUNK_444_FULLRANGE").is_ok_and(|v| v.trim() == "1");
+            let full_range = yuv444_full_range();
             let (y_src, u_src, v_src) = yuv444_frag_sources(full_range);
             // Guard first so it drops last on unwind, after CUDA unregisters.
             let mut guard = GlNameGuard::default();

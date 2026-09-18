@@ -347,6 +347,12 @@ mod tests {
             }),
             Some(14_000)
         );
+        assert_eq!(c.last_cut(), Some(Reason::Owd));
+        // A climb the host grants clears it; a cut it grants does not.
+        c.on_ack(14_000, None);
+        assert_eq!(c.last_cut(), Some(Reason::Owd));
+        c.on_ack(15_000, None);
+        assert_eq!(c.last_cut(), None);
     }
 
     #[test]

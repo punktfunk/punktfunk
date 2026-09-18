@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Thu, 17 Sep 2026 20:00:00 +0200
+Subject: [PATCH] shaders: site 4:2:0 capture chroma on the left column
+
+cs_rgb_to_nv12 and cs_rgb_to_p010 average each 2x2 luma block, which puts
+the chroma sample at the block centre (H.273 chroma location 1). H.264,
+HEVC and AV1 decoders that see no chroma location assume type 0, sited on
+the left luma column, and AV1 has no way to signal centre siting at all.
+Every colour edge in a PipeWire capture then decodes shifted half a luma
+pixel to the right.
+
+Filter [1 2 1] across the left column and its neighbours over both rows.
+The chroma now sits where decoders put it, and the extra tap also
+low-passes horizontally before the 2x decimation.
+---
+ src/shaders/cs_rgb_to_nv12.comp | 6 +++++-
+ src/shaders/cs_rgb_to_p010.comp | 6 +++++-
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/shaders/cs_rgb_to_nv12.comp b/src/shaders/cs_rgb_to_nv12.comp
+index 18844248..a706aea3 100644
+--- a/src/shaders/cs_rgb_to_nv12.comp
++++ b/src/shaders/cs_rgb_to_nv12.comp
+@@ -63,7 +63,11 @@ void main() {
+       sampleLayer(0, vec2(luma_uv.x + offset_table[3].x, luma_uv.y + offset_table[3].y)).rgb,
+     };
+ 
+-    vec3 avg_color = (color[0] + color[1] + color[2] + color[3]) / 4.0f;
++    // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] across columns x-1..x+1.
++    vec3 left_top = sampleLayer(0, vec2(luma_uv.x - 1.0f, luma_uv.y)).rgb;
++    vec3 left_bottom = sampleLayer(0, vec2(luma_uv.x - 1.0f, luma_uv.y + 1.0f)).rgb;
++    vec3 avg_color = (left_top + 2.0f * color[0] + color[1] +
++                      left_bottom + 2.0f * color[2] + color[3]) / 8.0f;
+     vec2 uv = applyColorMatrix(avg_color, u_outputCTM).yz;
+     imageStore(dst_chroma, chroma_uv, vec4(uv, 0.0f, 1.0f));
+ 
+diff --git a/src/shaders/cs_rgb_to_p010.comp b/src/shaders/cs_rgb_to_p010.comp
+index ed6ea1c3..04cab51b 100644
+--- a/src/shaders/cs_rgb_to_p010.comp
++++ b/src/shaders/cs_rgb_to_p010.comp
+@@ -70,7 +70,11 @@ void main() {
+       fetchLayer(luma_uv + offset_table[3]),
+     };
+ 
+-    vec3 avg_color = (color[0] + color[1] + color[2] + color[3]) / 4.0f;
++    // Left-sited chroma (H.273 type 0, what decoders assume): [1 2 1] across columns x-1..x+1.
++    vec3 left_top = fetchLayer(luma_uv + vec2(-1, 0));
++    vec3 left_bottom = fetchLayer(luma_uv + vec2(-1, 1));
++    vec3 avg_color = (left_top + 2.0f * color[0] + color[1] +
++                      left_bottom + 2.0f * color[2] + color[3]) / 8.0f;
+     vec3 uv = toCodes(vec4(avg_color, 1.0f) * u_outputCTM);
+     imageStore(dst_chroma, chroma_uv, vec4(uv.yz, 0.0f, 1.0f));
+ 

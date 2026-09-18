@@ -52,6 +52,8 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
+# Reads the SPS colour description back in the live Media Foundation test.
+pf-bitstream = { path = "../pf-bitstream" }
 # A test writer for the NVENC backend's unit tests (`with_test_writer().try_init()`).
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

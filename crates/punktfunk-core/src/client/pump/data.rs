@@ -65,6 +65,8 @@ pub(super) struct DataPump {
     /// Accepted mode, written by the control task. Read when `mode_gen`
     /// moves so the driver follows the new geometry.
     pub(super) mode_slot: Arc<Mutex<crate::config::Mode>>,
+    /// Published each window from [`crate::abr::Driver::last_cut`].
+    pub(super) rate_cut: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl DataPump {
@@ -97,6 +99,7 @@ impl DataPump {
             stream_cap_kbps,
             refresh_hz,
             mode_slot: pump_mode_slot,
+            rate_cut,
         } = self;
         pin_thread_user_interactive(); // frame channel → user-interactive video pump
         register_hot_tid(&pump_hot_tids); // UDP receive + FEC reassembly
@@ -376,6 +379,14 @@ impl DataPump {
                         );
                     }
                 }
+                // The overlay names why Automatic sits low; the cut
+                // stands until the host grants a climb.
+                rate_cut.store(
+                    abr.last_cut()
+                        .and_then(crate::hud::RateCut::of_reason)
+                        .map_or(0, |c| c as u8),
+                    Ordering::Relaxed,
+                );
                 if pump_perf_on {
                     if let Some(p) = session.take_pump_perf() {
                         let per_pkt_ns = |ns: u64| ns.checked_div(p.packets).unwrap_or(0);
@@ -731,6 +742,7 @@ mod tests {
                 height: 1080,
                 refresh_hz: 60,
             })),
+            rate_cut: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         };
         let started = Instant::now();
         let pump_thread = std::thread::spawn(move || pump.run());

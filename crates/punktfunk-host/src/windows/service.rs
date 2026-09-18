@@ -1335,7 +1335,7 @@ fn ensure_default_host_env() -> Result<()> {
         // Re-lock the file: an owner can rewrite the DACL it inherited. `planted` files fall
         // through and are overwritten even if the rename-aside failed.
         pf_paths::restrict_existing_secret_file(&path);
-        keep_web_console_reach(&path);
+        name_web_console_bind(&path);
         return Ok(());
     }
     let default = "# punktfunk host configuration (read by the Windows service).\n\
@@ -1359,9 +1359,9 @@ fn ensure_default_host_env() -> Result<()> {
         # Set to off to disable it:\n\
         # PUNKTFUNK_WEB_CONSOLE=off\n\
         \n\
-        # Where that console listens: 127.0.0.1 (this PC), 0.0.0.0 (your network), or one address,\n\
-        # e.g. a VPN interface. The plugin-UI origin on 47993 follows it.\n\
-        PUNKTFUNK_UI_BIND=127.0.0.1\n\
+        # Where that console listens: 0.0.0.0 (your network, never the internet), 127.0.0.1 (this\n\
+        # PC only), or one address, e.g. a VPN interface. The plugin-UI origin on 47993 follows it.\n\
+        PUNKTFUNK_UI_BIND=0.0.0.0\n\
         \n\
         # Force a specific render GPU by name substring (multi-GPU boxes only):\n\
         # PUNKTFUNK_RENDER_ADAPTER=4090\n\
@@ -1376,13 +1376,11 @@ fn ensure_default_host_env() -> Result<()> {
     Ok(())
 }
 
-/// Name the console's bind in an existing host.env, once.
+/// Name the console's bind in a host.env that predates `PUNKTFUNK_UI_BIND`, once.
 ///
-/// This file predates `PUNKTFUNK_UI_BIND`, and the console it configures answered on every
-/// interface. The new default is loopback, so an upgrade that said nothing would take the console
-/// off the LAN of every box already using it from another device. Write down the reach it has;
-/// `--web-bind` (applied after this) is how an operator changes it in the same run.
-fn keep_web_console_reach(path: &Path) {
+/// The value is the default the console already runs with, so nothing moves; the line is there so
+/// the operator finds the setting. `--web-bind` (applied after this) changes it in the same run.
+fn name_web_console_bind(path: &Path) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return;
     };
@@ -1394,12 +1392,12 @@ fn keep_web_console_reach(path: &Path) {
     }
     let mut next = text;
     next.push_str(concat!(
-        "\n# Where the web console listens. This PC already served it on every interface, so that\n",
-        "# is preserved here. 127.0.0.1 keeps the console to this machine.\n",
+        "\n# Where the web console listens: 0.0.0.0 (your network, never the internet), 127.0.0.1\n",
+        "# (this PC only), or one address, e.g. a VPN interface.\n",
         "PUNKTFUNK_UI_BIND=0.0.0.0\n",
     ));
     match pf_paths::write_secret_file(path, next.as_bytes()) {
-        Ok(()) => println!("PUNKTFUNK_UI_BIND=0.0.0.0 (kept) → {}", path.display()),
+        Ok(()) => println!("PUNKTFUNK_UI_BIND=0.0.0.0 → {}", path.display()),
         Err(e) => {
             tracing::warn!(error = %e, path = %path.display(), "name the console bind in host.env")
         }

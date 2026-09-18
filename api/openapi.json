@@ -6754,7 +6754,7 @@
           },
           "name": {
             "type": "string",
-            "description": "Client-supplied; empty for anonymous or compat-plane clients."
+            "description": "Display name: the trust-store name (a console rename wins), else the name the client\nsent. On the compat plane it is the name the operator gave the device, since Moonlight\nsends none. Empty when there is no name at all."
           },
           "plane": {
             "$ref": "#/components/schemas/Plane"
@@ -8150,6 +8150,13 @@
           },
           "client": {
             "type": "string"
+          },
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable id of the device that launched it; the filter handle a name cannot be."
           },
           "plane": {
             "$ref": "#/components/schemas/Plane"
@@ -10712,12 +10719,20 @@
           "id",
           "client",
           "mode",
-          "hdr"
+          "hdr",
+          "plane"
         ],
         "properties": {
           "client": {
             "type": "string",
             "description": "Cert-fingerprint prefix, or peer IP for an anonymous client — not [`ClientRef::name`]."
+          },
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device's full stable id, for a hook filter. Absent for an anonymous client."
           },
           "hdr": {
             "type": "boolean"
@@ -10730,6 +10745,10 @@
           "mode": {
             "type": "string",
             "description": "`WxH@Hz`, e.g. `\"3840x2160@120\"`."
+          },
+          "plane": {
+            "$ref": "#/components/schemas/Plane",
+            "description": "Which plane serves it, as `stream.*` and `game.*` also report."
           }
         }
       },
@@ -10815,6 +10834,15 @@
             "format": "int32",
             "description": "Player slot the operator picked for this session, 0-based (`PUT\n/session/{id}/player`). `null` = the slot is whichever comes free.",
             "minimum": 0
+          },
+          "shared_path_with": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Other live sessions from this client's address — one NAT or tunnel, so most likely one\nnetwork path. Their bitrates adapt independently. Absent when there are none."
           },
           "uptime_s": {
             "type": "integer",
@@ -11541,6 +11569,13 @@
           "client": {
             "type": "string"
           },
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device's stable id — what a hook filter should key on, since a display name is\nneither unique nor fixed. Absent for an anonymous client."
+          },
           "hdr": {
             "type": "boolean"
           },
@@ -11565,6 +11600,14 @@
         "properties": {
           "fingerprint": {
             "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name for this device, scrubbed like `PATCH /clients/{fp}` and stored once the pairing\ncompletes. Every Moonlight client names itself the same, so without one the device is\nlisted by fingerprint until somebody renames it.",
+            "example": "Living Room TV"
           },
           "peer_ip": {
             "type": "string"

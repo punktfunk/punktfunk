@@ -10,7 +10,8 @@ use anyhow::{Context as _, Result};
 use ash::vk;
 
 impl OverlayPipe {
-    pub(super) fn new(device: &ash::Device, format: vk::Format) -> Result<OverlayPipe> {
+    /// `pq`: the target is an HDR10 swapchain, so the sRGB UI is re-encoded as PQ.
+    pub(super) fn new(device: &ash::Device, format: vk::Format, pq: bool) -> Result<OverlayPipe> {
         // This pass owns the last layout transition on overlay frames (LOAD, end PRESENT-ready).
         let attachment = [vk::AttachmentDescription::default()
             .format(format)
@@ -104,8 +105,12 @@ impl OverlayPipe {
             device,
             render_pass,
             pipeline_layout,
-            pf_client_core::video_csc_spv::OVERLAY_FRAG,
-            true, // overlay.frag writes premultiplied alpha
+            if pq {
+                pf_client_core::video_csc_spv::OVERLAY_PQ_FRAG
+            } else {
+                pf_client_core::video_csc_spv::OVERLAY_FRAG
+            },
+            true, // both overlay shaders write premultiplied alpha
         )?;
         Ok(OverlayPipe {
             render_pass,

@@ -18,9 +18,6 @@ DIR="${XDG_CONFIG_HOME:-$HOME/.config}/punktfunk"
 mkdir -p "$DIR"
 chmod 700 "$DIR" 2>/dev/null || true
 PWFILE="$DIR/web-password"
-# Captured BEFORE the password is generated below: this file is what tells a first start apart
-# from an upgrade, and generating it would erase the answer.
-[ -s "$PWFILE" ] && CONSOLE_RAN_HERE=1 || CONSOLE_RAN_HERE=0
 
 # The generated password is written in clear and read back ONCE. The console salts and hashes it
 # the first time it signs someone in and rewrites this file with the hash alone, so the window to
@@ -42,24 +39,14 @@ fi
 
 # ------------------------------------------------------------------------- name the bind, once
 #
-# The console binds loopback unless PUNKTFUNK_UI_BIND says otherwise, and until 0.38 it bound
-# 0.0.0.0 with no way to say so. An upgrade that just took the new default would drop every
-# console its operator reaches from another device, silently and with nothing to read. So write
-# the line the box is already living by: 0.0.0.0 where a console has run here before, loopback on
-# a first start. Once the line exists this never runs again, and the operator owns the value.
-#
-# Runs before punktfunk-web.service reads host.env as an EnvironmentFile — that ordering is what
-# punktfunk-web-init.service is for.
+# The console listens on every interface and answers only peers on the local network or a VPN.
+# Write that down once so the operator finds the setting in host.env; an existing line always wins.
+# Runs before punktfunk-web.service reads host.env — the ordering punktfunk-web-init.service is for.
 HOST_ENV="$DIR/host.env"
 if ! grep -q '^[[:space:]]*PUNKTFUNK_UI_BIND=' "$HOST_ENV" 2>/dev/null; then
-    if [ "$CONSOLE_RAN_HERE" = 1 ]; then
-        printf '\n# Where the web console listens. This box ran a console that answered on every\n# interface, so that is preserved here. 127.0.0.1 keeps it to this machine.\nPUNKTFUNK_UI_BIND=0.0.0.0\n' >> "$HOST_ENV"
-        echo "host.env: kept this console on your network (PUNKTFUNK_UI_BIND=0.0.0.0)."
-        echo "To reach it from this machine only, set PUNKTFUNK_UI_BIND=127.0.0.1 there and restart punktfunk-web."
-    else
-        printf '\n# Where the web console listens: 127.0.0.1 (this machine), 0.0.0.0 (your network),\n# or one address, e.g. a VPN interface.\nPUNKTFUNK_UI_BIND=127.0.0.1\n' >> "$HOST_ENV"
-        echo "host.env: the web console answers on this machine only (PUNKTFUNK_UI_BIND=127.0.0.1)."
-    fi
+    printf '\n# Where the web console listens: 0.0.0.0 (your network, never the internet), 127.0.0.1\n# (this machine only), or one address, e.g. a VPN interface.\nPUNKTFUNK_UI_BIND=0.0.0.0\n' >> "$HOST_ENV"
+    echo "host.env: the web console answers on your local network (PUNKTFUNK_UI_BIND=0.0.0.0)."
+    echo "To keep it to this machine, set PUNKTFUNK_UI_BIND=127.0.0.1 there and restart punktfunk-web."
 fi
 
 # ---------------------------------------------------------------- wait for the host's first run

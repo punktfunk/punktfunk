@@ -24,8 +24,8 @@ final class CscRowsTests: XCTestCase {
         let white = apply(rows, SIMD3(s(940), s(512), s(512)))
         let black = apply(rows, SIMD3(s(64), s(512), s(512)))
         for i in 0..<3 {
-            XCTAssertEqual(white[i], 1.0, accuracy: 0.002, "white \(white)")
-            XCTAssertEqual(black[i], 0.0, accuracy: 0.002, "black \(black)")
+            XCTAssertEqual(white[i], 1.0, accuracy: 1e-4, "white \(white)")
+            XCTAssertEqual(black[i], 0.0, accuracy: 1e-4, "black \(black)")
         }
     }
 
@@ -35,8 +35,8 @@ final class CscRowsTests: XCTestCase {
         let white = apply(rows, SIMD3(235.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0))
         let black = apply(rows, SIMD3(16.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0))
         for i in 0..<3 {
-            XCTAssertEqual(white[i], 1.0, accuracy: 0.005, "white \(white)")
-            XCTAssertEqual(black[i], 0.0, accuracy: 0.005, "black \(black)")
+            XCTAssertEqual(white[i], 1.0, accuracy: 1e-4, "white \(white)")
+            XCTAssertEqual(black[i], 0.0, accuracy: 1e-4, "black \(black)")
         }
     }
 
@@ -45,16 +45,44 @@ final class CscRowsTests: XCTestCase {
     /// class this port fixes).
     func testFullRangeAndRedExcursion() {
         let rows601 = CscRows.rows(.init(matrix: 5, fullRange: true), depth: 8, msbPacked: false)
-        let white = apply(rows601, SIMD3(1.0, 0.5, 0.5))
+        let c0: Float = 128.0 / 255.0
+        let white = apply(rows601, SIMD3(1.0, c0, c0))
         for i in 0..<3 {
             XCTAssertEqual(white[i], 1.0, accuracy: 1e-5, "\(white)")
         }
-        let red601 = apply(rows601, SIMD3(0.0, 0.5, 1.0))
-        XCTAssertEqual(red601[0], 2.0 * (1.0 - 0.299) * 0.5, accuracy: 1e-4, "\(red601)")
+        let red601 = apply(rows601, SIMD3(0.0, c0, 1.0))
+        XCTAssertEqual(red601[0], 2.0 * (1.0 - 0.299) * (1.0 - c0), accuracy: 1e-4, "\(red601)")
         let rows709 = CscRows.rows(.init(matrix: 1, fullRange: true), depth: 8, msbPacked: false)
-        let red709 = apply(rows709, SIMD3(0.0, 0.5, 1.0))
-        XCTAssertEqual(red709[0], 2.0 * (1.0 - 0.2126) * 0.5, accuracy: 1e-4, "\(red709)")
+        let red709 = apply(rows709, SIMD3(0.0, c0, 1.0))
+        XCTAssertEqual(red709[0], 2.0 * (1.0 - 0.2126) * (1.0 - c0), accuracy: 1e-4, "\(red709)")
         XCTAssertGreaterThan(abs(red601[0] - red709[0]), 0.05)
+    }
+
+    /// RGB → the hosts' BT.709 limited 8-bit CSC (rounded to codes) → rows. Mirrors the Rust
+    /// `host_bt709_limited_round_trip`: greys neutral, black black, primaries within rounding.
+    func testHostBt709LimitedRoundTrip() {
+        let rows = CscRows.rows(.init(matrix: 1, fullRange: false), depth: 8, msbPacked: false)
+        func code(_ v: Double) -> Float { Float(min(max((v * 255).rounded(), 0), 255) / 255) }
+        let patches: [[Double]] = [
+            [0, 0, 0], [0.18, 0.18, 0.18], [0.5, 0.5, 0.5], [1, 1, 1],
+            [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 1, 1], [1, 0, 1], [1, 1, 0],
+        ]
+        for p in patches {
+            let (r, g, b) = (p[0], p[1], p[2])
+            let yuv = SIMD3(
+                code(16.0 / 255 + 0.1826 * r + 0.6142 * g + 0.0620 * b),
+                code(128.0 / 255 - 0.1006 * r - 0.3386 * g + 0.4392 * b),
+                code(128.0 / 255 + 0.4392 * r - 0.3989 * g - 0.0403 * b))
+            let out = apply(rows, yuv)
+            let grey = r == g && g == b
+            for c in 0..<3 {
+                let err = (Double(min(max(out[c], 0), 1)) - p[c]) * 255
+                XCTAssertLessThanOrEqual(abs(err), grey ? 0.6 : 2.0, "\(p) -> \(out)")
+            }
+            if grey {
+                XCTAssertLessThan(max(abs(out[0] - out[1]), abs(out[2] - out[1])) * 255, 0.05, "\(p) -> \(out)")
+            }
+        }
     }
 
     /// Unspecified (2) and unknown matrix codes fall back to BT.709 — the same default as the

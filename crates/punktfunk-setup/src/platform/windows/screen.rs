@@ -208,7 +208,7 @@ impl WinScreen {
             Field::StartService => "Start streaming as soon as the install finishes.".into(),
             Field::Tray => "The status icon next to the clock, for every user.".into(),
             Field::WebBind => {
-                "Where the console answers: this PC only, your local network, or one address such as a VPN interface. It is how you pair devices and change every setting.".into()
+                "Where the console answers: your local network (never the internet), this PC only, or one address such as a VPN interface. It is how you pair devices and change every setting.".into()
             }
             Field::Password => {
                 "Generated for you — keep it or type your own. It signs you into the web console and is shown again on the finish page.".into()
@@ -383,12 +383,12 @@ mod tests {
     // The bind row survives an upgrade, unlike the password: it is how an operator opens or
     // closes the console later, and `None` is the "keep what host.env says" face it needs.
     #[test]
-    fn the_bind_row_is_on_every_host_run_and_defaults_to_loopback_when_fresh() {
+    fn the_bind_row_is_on_every_host_run_and_defaults_to_the_lan_when_fresh() {
         let fresh = screen_of(fresh_facts(), Artifact::Host);
         assert!(fresh.rows().contains(&Field::WebBind));
         assert_eq!(
             fresh.editor(Field::WebBind),
-            Editor::Bind(Some("127.0.0.1".into()))
+            Editor::Bind(Some("0.0.0.0".into()))
         );
         let upgrade = screen_of(upgrade_facts(), Artifact::Host);
         assert!(upgrade.rows().contains(&Field::WebBind));

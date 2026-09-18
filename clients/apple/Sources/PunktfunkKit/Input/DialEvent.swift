@@ -10,4 +10,8 @@ public enum DialEvent: Equatable, Sendable {
     case turn(progress: CGFloat, clockwise: Bool, at: CGPoint)
     case commit
     case cancel
+    /// Straight to open at `at`, with no turn behind it — the edge pull, which is the only
+    /// opener a passthrough session has (`EdgeDial`). It cannot preview the way a twist does:
+    /// the fingers belong to the host until the pull completes.
+    case open(at: CGPoint)
 }

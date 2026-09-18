@@ -88,6 +88,7 @@ impl StreamState {
                 None,
                 8,
                 None,
+                self.client_hdr,
                 self.au_seq,
             )?;
             Ok((new_vd, pipe))
@@ -162,6 +163,7 @@ impl StreamState {
                 self.cur_display_gen,
                 None,
                 Some(resize_trace.as_ref()),
+                self.client_hdr,
                 self.au_seq,
             ) {
                 Ok(next_pipe) => {
@@ -256,6 +258,7 @@ impl StreamState {
                 self.cur_display_gen,
                 None,
                 Some(trace.as_ref()),
+                self.client_hdr,
                 self.au_seq,
             ) {
                 Ok(next_pipe) => {
@@ -356,6 +359,7 @@ impl StreamState {
                 self.cur_display_gen,
                 1,
                 None,
+                self.client_hdr,
                 self.au_seq,
             ) {
                 Ok(p) => break p,
@@ -486,6 +490,7 @@ impl StreamState {
             actual.refresh_hz,
             |_, _| src_kbps as u64 * 1000,
             self.bit_depth,
+            self.client_hdr,
             self.au_seq,
         )
         .with_context(|| {

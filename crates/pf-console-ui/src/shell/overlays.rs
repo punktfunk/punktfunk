@@ -327,14 +327,23 @@ impl Shell {
     /// The takeover's ground: an opaque aurora — the home field, so this reads as the
     /// console taking over — with a shade pool under the centre so text separates from a
     /// bright field.
+    ///
+    /// Painted in SURFACE space, like the base aurora it covers: a backdrop that stops at
+    /// the safe rect leaves the cutout strip carrying the frame's first aurora with no
+    /// vignette over it, which reads as a lighter band with a hard edge. The pool still
+    /// centres on the safe rect, because that is where the text it separates sits.
     fn draw_takeover_field(&self, canvas: &Canvas, w: f64, h: f64, t: f64) {
-        self.draw_aurora(canvas, w, h, t, 0.0);
+        let (left, top) = self.last_insets;
+        let (fw, fh) = (f64::from(self.last_full.0), f64::from(self.last_full.1));
+        canvas.save();
+        canvas.translate((-left, -top));
+        self.draw_aurora(canvas, fw, fh, t, 0.0);
         let mut vignette = crate::theme::shaded();
         let shades = [crate::theme::shade(0.5), crate::theme::shade(0.0)];
         vignette.set_shader(gradient::shaders::radial_gradient(
             (
-                Point::new((w / 2.0) as f32, (h / 2.0) as f32),
-                (w.max(h) * 0.42) as f32,
+                Point::new(left + (w / 2.0) as f32, top + (h / 2.0) as f32),
+                (fw.max(fh) * 0.42) as f32,
             ),
             &gradient::Gradient::new(
                 gradient::Colors::new_evenly_spaced(&shades, TileMode::Clamp, None),
@@ -342,7 +351,8 @@ impl Shell {
             ),
             None,
         ));
-        canvas.draw_rect(Rect::from_wh(w as f32, h as f32), &vignette);
+        canvas.draw_rect(Rect::from_wh(fw as f32, fh as f32), &vignette);
+        canvas.restore();
     }
 
     /// The takeover's legend, centered where every console screen's sits.
@@ -496,26 +506,44 @@ impl Shell {
             fonts.leading(canvas, text, W::Regular, size * k, fg(alpha * a), dx, y, dw);
             y += (size + 7.0) * k;
         }
-        crate::theme::spinner(canvas, dx + 8.0 * k, y + 30.0 * k, 8.0 * k, t);
-        fonts.leading(
-            canvas,
-            if l.window_wait {
-                "Waiting for the game's window\u{2026}"
-            } else if l.connected {
-                "Starting the game\u{2026}"
-            } else {
-                "Connecting\u{2026}"
-            },
-            W::Regular,
-            12.5 * k,
-            fg(0.5 * a),
-            dx + 24.0 * k,
-            y + 22.0 * k,
-            dw,
-        );
+        match l.failed.as_deref() {
+            // Where the spinner was, because the wait is what ended. Brighter than the status
+            // line it replaces: this is the one thing on screen the player has to read.
+            Some(why) => fonts.leading(
+                canvas,
+                why,
+                W::Regular,
+                12.5 * k,
+                fg(0.85 * a),
+                dx,
+                y + 26.0 * k,
+                dw,
+            ),
+            None => {
+                crate::theme::spinner(canvas, dx + 8.0 * k, y + 30.0 * k, 8.0 * k, t);
+                fonts.leading(
+                    canvas,
+                    if l.window_wait {
+                        "Waiting for the game's window\u{2026}"
+                    } else if l.connected {
+                        "Starting the game\u{2026}"
+                    } else {
+                        "Connecting\u{2026}"
+                    },
+                    W::Regular,
+                    12.5 * k,
+                    fg(0.5 * a),
+                    dx + 24.0 * k,
+                    y + 22.0 * k,
+                    dw,
+                );
+            }
+        }
         // Before the dial lands B cancels it, exactly as it does on the connect card;
         // after, the only thing left to ask for is the picture.
-        let hint = if l.connected {
+        let hint = if l.failed.is_some() {
+            Hint::new(HintKey::Confirm, "Show the desktop anyway")
+        } else if l.connected {
             Hint::new(HintKey::Confirm, "Show stream")
         } else {
             Hint::new(HintKey::Back, "Cancel")

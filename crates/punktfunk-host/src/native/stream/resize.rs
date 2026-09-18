@@ -69,6 +69,7 @@ impl StreamState {
                     effective_hz,
                     enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
                     self.bit_depth,
+                    self.client_hdr,
                     self.au_seq,
                 ) {
                     Ok(e) => break Some(e),
@@ -168,6 +169,7 @@ impl StreamState {
                 effective_hz,
                 |_, _| enc_of.enc_kbps(bitrate_kbps) as u64 * 1000,
                 self.bit_depth,
+                self.client_hdr,
                 self.au_seq,
             ) {
                 Ok((e, reframe)) => {

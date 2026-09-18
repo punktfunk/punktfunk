@@ -408,6 +408,11 @@ pub(crate) struct SessionRow {
     /// and bitrate bands. `null` in a session's first minute, and on the compat plane.
     #[serde(skip_serializing_if = "Option::is_none")]
     link: Option<crate::link_health::LinkMinute>,
+    /// Other live sessions from this client's address — one NAT or tunnel, so most likely one
+    /// network path. Their bitrates adapt independently. Absent when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    shared_path_with: Vec<u64>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -614,49 +619,34 @@ pub(crate) async fn get_status(State(st): State<Arc<MgmtState>>) -> Json<Runtime
     // Native plane, published by the video loop; lives outside `AppState` (see `session_status`).
     let native = crate::session_status::snapshot();
 
-    // One row per live session, for the Dashboard's list and the per-session routes. The
-    // compat plane keeps its `id: null` row: it is counted in `active_sessions`, so leaving
-    // it out would read as a session the host lost.
-    let mut sessions: Vec<SessionRow> = native
+    // One row per live session, for the Dashboard's list and the per-session routes. Both
+    // planes register, so a compat session carries an id like any other and its stop and
+    // keyframe reach it. The lanes it does not have stay absent rather than reading as off.
+    let sessions: Vec<SessionRow> = native
         .iter()
-        .map(|s| SessionRow {
-            id: Some(s.id),
-            plane: crate::events::Plane::Native,
-            client: s.client.clone(),
-            client_name: s.client_name.clone(),
-            mode: crate::events::mode_str(s.width, s.height, s.fps),
-            hdr: s.hdr,
-            join: s.join,
-            muted: s.muted,
-            access_level: Some(super::native::access_level(Some(s.grants)).to_string()),
-            pads: s.pads.clone(),
-            preferred_pad_slot: s.preferred_pad_slot,
-            uptime_s: s.uptime_s,
-            link: s.link.clone(),
+        .map(|s| {
+            let native_plane = s.plane == crate::events::Plane::Native;
+            SessionRow {
+                id: Some(s.id),
+                plane: s.plane,
+                client: s.client.clone(),
+                client_name: s.client_name.clone(),
+                mode: crate::events::mode_str(s.width, s.height, s.fps),
+                hdr: s.hdr,
+                join: s.join,
+                muted: s.muted,
+                // Per-session access is a native lane: the compat plane checks its grants per
+                // nvhttp request and has no channel to tell a client they changed.
+                access_level: native_plane
+                    .then(|| super::native::access_level(Some(s.grants)).to_string()),
+                pads: s.pads.clone(),
+                preferred_pad_slot: s.preferred_pad_slot,
+                uptime_s: s.uptime_s,
+                link: s.link.clone(),
+                shared_path_with: s.shared_path_with.clone(),
+            }
         })
         .collect();
-    if gs_video {
-        sessions.push(SessionRow {
-            id: None,
-            plane: crate::events::Plane::Gamestream,
-            client: gs_launch
-                .and_then(|l| l.peer_ip.map(|ip| ip.to_string()))
-                .unwrap_or_default(),
-            client_name: None,
-            mode: gs_launch
-                .map(|l| crate::events::mode_str(l.width, l.height, l.fps))
-                .unwrap_or_default(),
-            hdr: false,
-            join: false,
-            muted: false,
-            access_level: None,
-            // The compat plane has no per-session pad map to report.
-            pads: Vec::new(),
-            preferred_pad_slot: None,
-            uptime_s: 0,
-            link: None,
-        });
-    }
     // Detail card is singular: GameStream if live, else the first native session. `active_sessions` is the true count.
     let session = gs_launch
         .map(|l| SessionInfo {
@@ -714,12 +704,21 @@ pub(crate) async fn get_status(State(st): State<Arc<MgmtState>>) -> Json<Runtime
             .unwrap_or_else(|e| e.into_inner())
             .len() as u32,
         native_paired_clients: st.native.as_ref().map_or(0, |n| n.status().paired_clients),
-        active_sessions: native.len() as u32 + u32::from(gs_video),
-        // A GameStream launch takes the singular slot and has no id; otherwise it is the
-        // first native session, and naming its id is what makes the two readings agree.
-        session_id: (gs_launch.is_none())
-            .then(|| native.first().map(|s| s.id))
-            .flatten(),
+        // Both planes register, so the rows are the count.
+        active_sessions: sessions.len() as u32,
+        // The singular slot is the compat session while one streams — it has an id now. A
+        // launch that has not reached PLAY has no session yet, and naming a native id there
+        // would disagree with the card above.
+        session_id: native
+            .iter()
+            .find(|s| s.plane == crate::events::Plane::Gamestream)
+            .map(|s| s.id)
+            .or_else(|| {
+                gs_launch
+                    .is_none()
+                    .then(|| native.first().map(|s| s.id))
+                    .flatten()
+            }),
         sessions,
         session,
         stream,

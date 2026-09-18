@@ -34,6 +34,7 @@ import io.unom.punktfunk.kit.discovery.PresenceTracker
 import io.unom.punktfunk.kit.library.LibraryCache
 import io.unom.punktfunk.kit.link.StartScreen
 import io.unom.punktfunk.kit.link.host
+import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.LibraryClient
 import io.unom.punktfunk.kit.library.LibraryResult
 import io.unom.punktfunk.kit.library.RunningGame
@@ -48,6 +49,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import okhttp3.Cache
+import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -109,6 +111,8 @@ object SkiaConsole {
     private lateinit var presetStore: PresetStore
     private lateinit var settingsStore: SettingsStore
     private var identity: ClientIdentity? = null
+    /** The identity load has ended, with or without one. Main-thread only. */
+    private var identityLoaded = false
     private var discovery: HostDiscovery? = null
     private var discovered: List<DiscoveredHost> = emptyList()
 
@@ -370,17 +374,19 @@ object SkiaConsole {
 
     private fun startServices(app: Context) {
         ioPool.execute {
-            identity = runCatching { obtainIdentity(IdentityStore(app)) }
+            val id = runCatching { obtainIdentity(IdentityStore(app)) }
                 .onFailure { Log.w(TAG, "identity unavailable: ${it.message}") }
                 .getOrNull()
+            main.post { identity = id; identityLoaded = true }
         }
         discovery = HostDiscovery.shared(app).also { it.addNetworkListener(onNetworkChanged) }
         resumeDiscovery()
-        // Commands from the console, drained on a short cadence.
+        // Commands from the console, drained on a short cadence once the identity load ends:
+        // a start entry queues its shelf fetch or desktop dial before that.
         main.post(object : Runnable {
             override fun run() {
                 if (handle == 0L) return
-                drainCommands()
+                if (identityLoaded) drainCommands()
                 main.postDelayed(this, 100)
             }
         })
@@ -1091,39 +1097,68 @@ object SkiaConsole {
                         NativeBridge.nativeConsoleLibraryStale(handle, 0)
                         NativeBridge.nativeConsoleLibraryRunning(handle, ConsoleJson.runningGames(up))
                     }
-                    for (g in games) {
-                        val candidates = g.art.posterCandidates
-                        if (candidates.isEmpty()) continue
-                        artPool.execute {
-                            if (gen != fetchGen.get()) return@execute
-                            val bytes = fetchArt(candidates, id, addr, fp) ?: return@execute
-                            main.post { if (gen == fetchGen.get() && handle != 0L) NativeBridge.nativeConsoleLibraryArt(handle, g.id, bytes) }
-                        }
+                    pumpArt(games, gen, id, addr, fp, offline = false)
+                }
+                is LibraryResult.Unauthorized -> {
+                    if (cached != null) pumpArt(cached, gen, id, addr, fp, offline = true)
+                    main.post {
+                        if (gen != fetchGen.get()) return@post
+                        if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
+                        else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError("Not paired", r.message, false))
                     }
                 }
-                is LibraryResult.Unauthorized -> main.post {
-                    if (gen != fetchGen.get()) return@post
-                    if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError("Not paired", r.message, false))
-                }
-                is LibraryResult.Error -> main.post {
-                    if (gen != fetchGen.get()) return@post
-                    if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
-                    else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError("Couldn't load the library", r.message, true))
+                is LibraryResult.Error -> {
+                    if (cached != null) pumpArt(cached, gen, id, addr, fp, offline = true)
+                    main.post {
+                        if (gen != fetchGen.get()) return@post
+                        if (cached != null) NativeBridge.nativeConsoleLibraryStale(handle, 2)
+                        else NativeBridge.nativeConsoleLibraryPhase(handle, ConsoleJson.libraryError("Couldn't load the library", r.message, true))
+                    }
                 }
                 null -> {}
             }
         }
     }
 
+    /**
+     * Every poster on this shelf, one job each.
+     *
+     * Also runs when the host did not answer: the shelf is drawn from the library cache and
+     * the covers for it are on disk too, so a lettered placeholder next to "last known
+     * library" is a picture thrown away rather than one we never had.
+     */
+    private fun pumpArt(
+        games: List<GameEntry>,
+        gen: Long,
+        id: ClientIdentity,
+        addr: String,
+        fp: String,
+        offline: Boolean,
+    ) {
+        for (g in games) {
+            val candidates = g.art.posterCandidates
+            if (candidates.isEmpty()) continue
+            artPool.execute {
+                if (gen != fetchGen.get()) return@execute
+                val bytes = fetchArt(candidates, id, addr, fp, offline) ?: return@execute
+                main.post { if (gen == fetchGen.get() && handle != 0L) NativeBridge.nativeConsoleLibraryArt(handle, g.id, bytes) }
+            }
+        }
+    }
+
     /** One poster: the candidates in order, first success wins; the host's art proxy over mTLS. */
-    private fun fetchArt(candidates: List<String>, id: ClientIdentity, addr: String, fp: String): ByteArray? {
+    private fun fetchArt(candidates: List<String>, id: ClientIdentity, addr: String, fp: String, offline: Boolean): ByteArray? {
         for (url in candidates) {
             val client = if (url.contains(addr)) {
                 runCatching { io.unom.punktfunk.kit.library.mtlsHttpClient(id.certPem, id.privateKeyPem, addr, fp, artCache) }.getOrNull() ?: continue
             } else artHttp
+            val req = Request.Builder().url(url)
+            // With the host down the cache is the only answer there is. Left to itself OkHttp
+            // honours the proxy's `max-age`, goes to revalidate once it lapses, fails to
+            // connect, and reports a miss on bytes that are sitting on disk.
+            if (offline) req.cacheControl(CacheControl.FORCE_CACHE)
             val bytes = runCatching {
-                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                client.newCall(req.build()).execute().use { resp ->
                     if (resp.code == 200) resp.body?.bytes()?.takeIf { it.isNotEmpty() && it.size <= 16 shl 20 } else null
                 }
             }.getOrNull()
