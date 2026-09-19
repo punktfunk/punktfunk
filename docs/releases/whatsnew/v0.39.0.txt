@@ -1,0 +1,5 @@
+• A launch holds the cover until the game's window is up — and says so when it didn't start.
+• Mute this stream from the quick-action ring.
+• Bitrate takes a typed rate in whole Mbps, and stream sizes group by aspect family with Screen and Safe area shapes.
+• Steam Controller 2 raw passthrough, a capture test in Settings, and phone gyro driving the on-screen pad.
+• The safe area follows the window's real insets; offline shelves keep their covers.

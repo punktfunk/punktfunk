@@ -14,6 +14,81 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.39.0
+
+337 commits since v0.38.0. Wire stays 2. **C ABI 37**, additive. Driver protocol floor stays 9.
+Deep dive: `git log v0.38.0..v0.39.0`
+
+### Versions
+
+| | v0.38.0 | v0.39.0 | Notes |
+|---|---|---|---|
+| Wire protocol | 2 | **2** | unchanged; optional tagged extension block (`PUNKTFUNK_CLIENT_CAP_EXT` on Hello, `PUNKTFUNK_HOST_CAP2_EXT` on Welcome), message ids 89 `AUDIO_STATE`, 90 `LAUNCH_OUTCOME`, 91 `PAD_SLOTS`, input kind 16 `SCROLL` with `PunktfunkScroll{Source,Phase}`, a client label on `Start` — all opt-in, so an older peer's handshake is byte-identical |
+| C ABI | 32 | **37** | Additive: `punktfunk_connection_{set_audio_muted,audio_mute,set_invert_scroll,launch_notice}`, the scroll enums, the extension/message constants. `PunktfunkConnectOpts` stays at the v35 layout — the bitrate-limit field is `reserved1`, always ignored |
+| Rust edition | 2024 | **2024** | unchanged |
+| MSRV (`rust-version`) | 1.85 | **1.85** | unchanged |
+| Workspace crate dirs | 32 | **32** | unchanged |
+| Virtual-display driver protocol | 9 | **9** | unchanged; a 0.38.0 driver serves a 0.39.0 host |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged |
+| Plugin index schema | 1 | **1** | unchanged |
+| Host event schema | 1 | **1** | unchanged; `settings.changed`, `pairing.pending` from the GameStream gate and compat-plane `session.*` are additive payloads |
+| `api/openapi.json` | 0.38.0 | **0.39.0** | `GET/PATCH /host/settings`, `/host/audio/apps`, `/plugin-access{,/requests,/{plugin}/decide}`, `/session/{id}` with `audio`/`idr`/`pads`/`player`/`access`, `/session/last`, `/game/end` takes an id |
+| gamescope patch level (`+pfhdrN`) | 11 | **21** | Patches 0014–0025: capture honors maxFramerate, P010 format, headless HDR10 advert, pointer bounded by the input window, SDR→BT.2020 mapping, reliable capture, runtime output mode (a host asks only at +pfhdr19), device-memory dmabufs, tiled modifiers |
+| `@punktfunk/host` (SDK) | 0.2.0 | **0.2.0** | version unchanged; `connect()` no longer falls back to the admin `mgmt-token` file — Breaking |
+| `@punktfunk/plugin-kit` | 0.4.6 | **0.5.1** | Sandbox contract: manifest required, per-plugin token, ACL re-read on respawn, `reg.exe` respawn |
+
+### Breaking
+
+- **C ABI 37.** Additive: per-session audio mute, scroll inversion, the launch notice and the
+  scroll enums. An embedder that checks `punktfunk_abi_version()` must rebuild against the new
+  header.
+- **The web console refuses non-local peers** on every bind — loopback, RFC 1918, link-local,
+  ULA and Tailscale's 100.64/10 pass; the internet does not. `PUNKTFUNK_UI_BIND=127.0.0.1`
+  keeps it to the machine. NixOS: `services.punktfunk.web.bind` follows `web.openFirewall` —
+  set it to pin either way.
+- **Windows: a second client gets its own display** instead of a refusal (conflict handling
+  `reject` restores it), and a second Moonlight client steals the session as on Linux.
+- **Plugin `launch.kind: "plugin"` is gone** — `exec` or `desktop_id` — and a package with no
+  manifest does not start while `PUNKTFUNK_PLUGIN_SANDBOX` is on.
+- **The management token leaves argv and the environment.** `--mgmt-token` is removed;
+  `PUNKTFUNK_MGMT_TOKEN` is read once, persisted to `mgmt-token`, then scrubbed. Windows
+  host.env skips keys whose name carries TOKEN or PASSWORD; the NixOS module refuses a
+  credential in `settings`; the SDK's `connect()` drops its admin-token fallback.
+- **SDK `@punktfunk/host` 0.2.0 unchanged in version** but the `connect()` admin fallback is
+  gone — a host whose plugin token was missing no longer hands every plugin full admin.
+
+### Knobs
+
+- **Host → Settings in the web console** edits ~45 registry rows — encoder, capture, audio
+  routing, gamepads, Game Mode, discovery, updates — resolving flag, then env, then
+  `host-settings.json`, then default. Installer answers (GameStream, shared clipboard) land in
+  `host-settings.json`, not host.env, so the console can change them.
+- `PUNKTFUNK_GS_ENCRYPT`/`PUNKTFUNK_GS_ADAPT` are now `PUNKTFUNK_GAMESTREAM_ENCRYPT` /
+  `PUNKTFUNK_GAMESTREAM_ADAPT`; the old names still work and warn. `PUNKTFUNK_HOST_AUDIO` and
+  `PUNKTFUNK_KEEP_DEFAULT` are aliases of the audio output-mode row.
+- `PUNKTFUNK_UI_BIND` (console bind), `PUNKTFUNK_UI_PASSWORD_HASH` / `PUNKTFUNK_UI_PASSWORD_FILE`
+  (argon2id), `PUNKTFUNK_INSTALL_WEB_BIND` (installer's Configure page;
+  `punktfunk-host service install --web-bind=ADDR` on Windows).
+- `PUNKTFUNK_STEAM_SEAT_HOME` gives each seat a Steam of its own, `PUNKTFUNK_STEAM_SEAT_SANDBOX`
+  filters a seat's `/dev/input` to its own pads, `PUNKTFUNK_STEAM_PREWARM` caps warm seats
+  (default 1; ~1.8 GB RAM, 300 MB VRAM, a third of a core each).
+- `PUNKTFUNK_AUDIO_VOICE_CHAT=host` now pins voice apps on Windows too;
+  `PUNKTFUNK_AUDIO_VOICE_APPS` adds to the built-in list.
+- `PUNKTFUNK_LIBRARY_ART_CACHE` / `PUNKTFUNK_LIBRARY_ART_CACHE_MB` — the host-side cover store.
+- `PUNKTFUNK_NVENC_RAW`, `PUNKTFUNK_VULKAN_DIRECT_PLANES`, `PUNKTFUNK_PLUGIN_SANDBOX` — escape
+  hatches for the new lanes and the plugin sandbox. `PUNKTFUNK_SDR10_DRAWABLE=8` returns the
+  Apple presenter to the 8-bit drawable.
+- `PUNKTFUNK_CLIENT_HDR` makes the probe ask for an HDR session.
+- JNI: `nativeAudioMute`, `nativeSetStreamMuted`, `nativeSetInvertScroll`,
+  `nativeSendNormalizedScroll`, `nativeLogWifiLink`. Rebuild the kit.
+- A custom library entry's `audio.sessions` (`all` · `owner` · `joined` · `launcher`) picks who
+  hears the title.
+- Wire constants, not knobs: `PUNKTFUNK_EXT_*` bounds, `PUNKTFUNK_MSG_*` ids,
+  `PUNKTFUNK_SCROLL_SCALE`/`_DIP_PER_DETENT`. Skipped on purpose: `PUNKTFUNK_SERVICE_CHILD`,
+  `PUNKTFUNK_MGMT_UNIX`, `PUNKTFUNK_REPO`, `PUNKTFUNK_RUNNER_ENTRY`,
+  `PUNKTFUNK_CONCEALMENT_INTACT`, `PUNKTFUNK_UI_BIND_ACTIVE` — internal and test seams.
+- Packagers: bun is vendored once in a shared `punktfunk-bun` package instead of per-consumer.
+
 ## v0.38.0
 
 99 commits since v0.37.0. Wire stays 2. **C ABI 32**, additive. Driver protocol floor stays 9.
