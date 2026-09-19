@@ -114,4 +114,4 @@ jobs:
           test -n "$NODE_AUTH_TOKEN" || { echo "REGISTRY_TOKEN secret is empty"; exit 1; }
           printf '//git.unom.io/api/packages/unom/npm/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> .npmrc
           # A maintenance line: `latest` stays on the newest minor.
-          bun publish --tag v0-4
+          bun publish --tag maintenance-0-4
