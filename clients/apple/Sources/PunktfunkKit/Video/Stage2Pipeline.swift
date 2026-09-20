@@ -201,6 +201,44 @@ private final class VsyncClock: @unchecked Sendable {
         if target >= now { return target }
         return target + ceil((now - target) / period) * period
     }
+
+    /// The last reported refresh period, for the pf-present `linkMs` field — 0 until the first
+    /// tick (and forever under deadline pacing, which has no ordinary link).
+    func lastPeriod() -> CFTimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return period
+    }
+}
+
+/// Selects immediate adaptive presents for sparse input and display-slot presents for dense input.
+/// It observes source spacing only; it never computes a due time or delays a frame. Hysteresis keeps
+/// 42–48 fps in its current regime, and the 50 ms sample cap prevents one transport hitch from
+/// disabling slot pacing at high rate.
+struct AdaptiveSlotRegime {
+    private var previousPtsNs: UInt64?
+    private var intervalNs: Double?
+    private(set) var isSlotted = true
+
+    mutating func update(ptsNs: UInt64) -> Bool {
+        guard let previousPtsNs else {
+            self.previousPtsNs = ptsNs
+            return isSlotted
+        }
+        if ptsNs == previousPtsNs { return isSlotted }
+        guard ptsNs > previousPtsNs else {
+            self.previousPtsNs = ptsNs
+            intervalNs = nil
+            isSlotted = true
+            return isSlotted
+        }
+        self.previousPtsNs = ptsNs
+        let sample = Double(min(ptsNs - previousPtsNs, 50_000_000))
+        let estimate = intervalNs.map { $0 * 0.75 + sample * 0.25 } ?? sample
+        intervalNs = estimate
+        if isSlotted, estimate >= 24_000_000 { isSlotted = false }
+        if !isSlotted, estimate <= 21_000_000 { isSlotted = true }
+        return isSlotted
+    }
 }
 
 /// Selects when a decoded frame enters the layer; decode and the newest-wins store are shared.
@@ -589,10 +627,11 @@ public final class Stage2Pipeline {
     /// macOS smoothness: schedule at most one present on each display-link target so the FIFO
     /// store drains at display cadence. Deadline pacing has its own link and ignores this policy.
     private let vsyncPaced: Bool
+    /// macOS adaptive-refresh latency path: immediate sparse input, one drawable per dense slot.
+    private let adaptiveSlotPaced: Bool
     /// Source-timestamp playout for the SMOOTHNESS intent: every decoded frame is stamped with
-    /// when it is due on the host's own cadence, and the present decision aims there instead of at
-    /// the moment the frame happened to decode. `nil` under `latency`, whose path keeps no cadence
-    /// arithmetic in it at all — see the intent gate in `init`.
+    /// when it is due on the host's own cadence. `nil` under latency, whose path presents on
+    /// arrival without cadence arithmetic.
     private let cadence: CadenceClock?
     private let endToEndMeter: LatencyMeter?
     /// The stats overlay's decode, display and OS-floor stamps; `start` binds the connection.
@@ -650,14 +689,15 @@ public final class Stage2Pipeline {
     /// presenter choice. Returns nil if Metal can't be set up (headless / no GPU) — caller
     /// falls back to the stage-1 presenter. `pacing` also selects the decoded video sink when its
     /// `displayLayer` is supplied. `gateDepth` bounds glass presents; `vsyncPaced` schedules macOS
-    /// smoothness onto the ordinary display-link grid.
+    /// smoothness, while `adaptiveSlotPaced` schedules latency onto the ordinary display-link grid.
     public init?(
         endToEndMeter: LatencyMeter?,
         displayLayer: AVSampleBufferDisplayLayer? = nil,
         pacing: PresentPacing = .arrival,
         gateDepth: Int = 1,
         storePolicy: FrameStorePolicy = .newestWins,
-        vsyncPaced: Bool = false
+        vsyncPaced: Bool = false,
+        adaptiveSlotPaced: Bool = false
     ) {
         let decodedSink: DecodedVideoSink?
         if pacing == .decoded {
@@ -671,14 +711,10 @@ public final class Stage2Pipeline {
         self.pacing = pacing
         self.gateDepth = gateDepth
         self.vsyncPaced = vsyncPaced
+        self.adaptiveSlotPaced = adaptiveSlotPaced
         self.ring = FrameStore(policy: storePolicy)
         self.endToEndMeter = endToEndMeter
         self.decodedSink = decodedSink
-        // The intent gate: source-timestamp playout is what `smooth` MEANS now, and `latency` is
-        // defined as arrival-driven with no cushion — so the store policy, which is the intent's
-        // only other expression (`PresentPriority.storePolicy`: smooth → fifo, latency →
-        // newest-wins), is what decides whether a clock exists at all. A latency session runs the
-        // same present path it ran before this existed.
         switch storePolicy {
         case .newestWins: self.cadence = nil
         case .fifo: self.cadence = CadenceClock(tuning: .snapping())
@@ -925,13 +961,38 @@ public final class Stage2Pipeline {
 
         if decodedSink != nil { return }
 
+        // Present policy, resolved once per session before the stats so each line names it.
+        // Adaptive-refresh latency chooses immediate sparse or slotted dense input. The env selects
+        // slot, immediate or legacy scheduled V-Sync explicitly for A/B.
+        let presentMode = ProcessInfo.processInfo.environment["PUNKTFUNK_PRESENT_MODE"]
+        let forcedSlot = presentMode == "slot"
+        let adaptiveSlot = adaptiveSlotPaced && !connection.settings.vsync
+            && presentMode != "immediate" && presentMode != "vsync" && !forcedSlot
+        let fixedSlot = vsyncPaced || forcedSlot
+        let fixedVsync = presentMode == "vsync"
+            || (presentMode != "immediate" && connection.settings.vsync)
+        let vsyncClock = vsyncClock
+        let pace = pacing == .deadline ? "deadline"
+            : adaptiveSlot ? "adaptive" : fixedSlot ? "slot" : fixedVsync ? "vsync" : "immediate"
+        #if os(macOS)
+        // The windowed mechanism can flip mid-session (fullscreen ↔ composited), so the suffix
+        // is read live per line rather than baked into the resolved name.
+        let paceName = { presenter.presentsComposited ? pace + "(composited)" : pace }
+        #else
+        let paceName = { pace }
+        #endif
+
         // The present half. Deadline pacing (stage-4) swaps it wholesale: a CAMetalDisplayLink
         // vends the drawables and its per-refresh updates co-drive the render thread — see
-        // startDeadlinePresenter. The V-Sync policy below doesn't apply there (the link deadline-
+        // startDeadlinePresenter. The V-Sync policy above doesn't apply there (the link deadline-
         // times every present). Deadline sessions ALWAYS carry the stats (their pf-present line
         // streams to Console.app via presentLog — the on-device pacing decomposition).
         let debugStats =
-            (presentDebug || pacing == .deadline) ? PresentDebugStats(cadence: cadence) : nil
+            (presentDebug || pacing == .deadline)
+            ? PresentDebugStats(
+                cadence: cadence, pace: paceName,
+                linkPeriod: { vsyncClock.lastPeriod() })
+            : nil
         if pacing == .deadline {
             startDeadlinePresenter(debugStats: debugStats)
             return
@@ -947,31 +1008,20 @@ public final class Stage2Pipeline {
         let clockOffset = clockOffset
         let renderSignal = renderSignal
         let renderStopped = renderStopped
-        // Present policy — the user's V-Sync setting (default OFF = immediate, the long-proven
-        // lowest-latency behavior); PUNKTFUNK_PRESENT_MODE=immediate|vsync overrides it for A/B.
-        // Resolved once per session.
-        let presentMode = ProcessInfo.processInfo.environment["PUNKTFUNK_PRESENT_MODE"]
-        // `vsyncPaced` (macOS smoothness) FORCES vsync scheduling — the FIFO store must drain
-        // on the display cadence, one frame per vsync, or the buffer degenerates to arrival.
-        let vsyncPaced = vsyncPaced
-        let vsyncEnabled = vsyncPaced || presentMode == "vsync"
-            || (presentMode != "immediate"
-                && connection.settings.vsync)
-        let vsyncClock = vsyncClock
         // Stage-3's bounded in-flight present gate; nil = stage-2's present-on-arrival. A local
         // (like the ring) so neither the render thread nor the presented handlers capture `self`.
         let gate: PresentGate? = pacing == .glass ? PresentGate(capacity: gateDepth) : nil
-        // Cadence targeting turns the store into a holding buffer: a frame comes out once it is
-        // DUE, not once a present opportunity exists (§4.3). The latency intent has no clock and
-        // keeps the unconditional take, byte for byte.
+        // Smoothness turns the FIFO into a holding buffer: a frame comes out once it is due.
+        // Latency has no cadence clock and keeps the unconditional arrival-driven take.
         let takeReady: () -> ReadyFrame? = cadence == nil
             ? { ring.take() }
             : { ring.take(dueBy: CACurrentMediaTime(), due: { $0.dueMediaTime }) }
         let renderThread = Thread {
             defer { renderStopped.signal() }
-            // macOS smoothness: the vsync this thread last presented onto — at most ONE present
-            // per vsync so the FIFO drains on the display's cadence. Thread-confined.
+            // Slot-paced modes record the display-link target they last used: at most one frame
+            // enters each link slot. The adaptive regime is thread-confined with it.
             var lastPresentTarget: CFTimeInterval = 0
+            var adaptiveRegime = AdaptiveSlotRegime()
             // Every iteration drains its own autorelease pool (`return` = the old `continue`):
             // this thread has no runloop, and `nextDrawable()` AUTORELEASES each CAMetalDrawable —
             // without a per-iteration pool every presented frame's drawable object (plus its
@@ -981,11 +1031,11 @@ public final class Stage2Pipeline {
                     debugStats?.flushIfDue(ring: ring, gate: gate)
                     return
                 }
-                // Smoothness pacing: this vsync's present slot already taken — the frame stays
-                // in the store, and the next display-link tick re-signals. (Tolerance well under
-                // any refresh period; a stale clock ⇒ nil target ⇒ no dedup, present flows.)
-                if vsyncPaced, let t = vsyncClock.nextVsync(after: CACurrentMediaTime()),
-                   abs(t - lastPresentTarget) < 0.002 {
+                // Fixed slot pacing can reject the wake before touching the store. Adaptive pacing
+                // resolves after taking a frame because its source stamp selects the regime.
+                let fixedSlotTarget =
+                    fixedSlot ? vsyncClock.nextVsync(after: CACurrentMediaTime()) : nil
+                if let fixedSlotTarget, abs(fixedSlotTarget - lastPresentTarget) < 0.002 {
                     debugStats?.gatedWake()
                     debugStats?.flushIfDue(ring: ring, gate: gate)
                     return
@@ -1005,16 +1055,24 @@ public final class Stage2Pipeline {
                     debugStats?.flushIfDue(ring: ring, gate: gate)
                     return
                 }
-                // V-Sync ON: flip on the next predicted vsync (< one period out, stale link ⇒
-                // immediate — see VsyncClock). OFF: flip as soon as the GPU finishes.
-                //
-                // Under cadence targeting the grid is entered at the frame's DUE time rather than
-                // at this instant, so two frames the host emitted one period apart land one period
-                // apart on glass however unevenly they arrived. Never before `now`: a due time in
-                // the past means the frame is late, not that the grid moves back.
                 let now = CACurrentMediaTime()
-                let presentAt = vsyncEnabled
-                    ? vsyncClock.nextVsync(after: max(now, frame.dueMediaTime ?? now)) : nil
+                let adaptiveSlotActive = adaptiveSlot && adaptiveRegime.update(ptsNs: frame.ptsNs)
+                let slotTarget = fixedSlotTarget
+                    ?? (adaptiveSlotActive ? vsyncClock.nextVsync(after: now) : nil)
+                if adaptiveSlotActive, let slotTarget,
+                   abs(slotTarget - lastPresentTarget) < 0.002 {
+                    gate?.release()
+                    ring.putBack(frame)
+                    debugStats?.gatedWake()
+                    debugStats?.flushIfDue(ring: ring, gate: gate)
+                    return
+                }
+                // A stale grid yields no target and falls back to an immediate present.
+                let scheduleOnGrid = fixedSlot || fixedVsync || adaptiveSlotActive
+                let presentAt = scheduleOnGrid
+                    ? slotTarget
+                        ?? vsyncClock.nextVsync(after: max(now, frame.dueMediaTime ?? now))
+                    : nil
                 let renderStarted = CACurrentMediaTime()
                 let issuedNs = Stage2Pipeline.realtimeNs(forDisplayLinkTimestamp: renderStarted)
                 let onGlass: (Int64?) -> Void = { presentedNs in
@@ -1053,8 +1111,8 @@ public final class Stage2Pipeline {
                 if !rendered {
                     gate?.release() // no present registered — its handler will never fire
                     ring.putBack(frame)
-                } else if vsyncPaced, let presentAt {
-                    lastPresentTarget = presentAt // this vsync's slot is now taken
+                } else if let slotTarget {
+                    lastPresentTarget = slotTarget
                 }
                 debugStats?.flushIfDue(ring: ring, gate: gate)
             } }

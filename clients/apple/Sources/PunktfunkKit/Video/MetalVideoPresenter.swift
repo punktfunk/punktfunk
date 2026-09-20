@@ -785,6 +785,14 @@ public final class MetalVideoPresenter {
         if mode != .surface { surfaceEpoch.bump() }
     }
 
+    /// Whether the staged mechanism is a COMPOSITED (windowed) one — transaction/surface vs the
+    /// fullscreen async image queue — for the pf-present pace line's "(composited)" suffix.
+    /// Lock-safe, same staged read the render thread makes.
+    var presentsComposited: Bool {
+        stagingLock.lock(); defer { stagingLock.unlock() }
+        return windowedPresentStaged != .async
+    }
+
     /// Generation of the surface-present target, so a completion handler can tell whether the
     /// layer it is about to write to is still the one it rendered for. Its own object because the
     /// handler must not retain the presenter.
@@ -848,25 +856,14 @@ public final class MetalVideoPresenter {
         if layer.drawableSize != targetSize { layer.drawableSize = targetSize }
     }
 
-    /// Draw one decoded frame to the next drawable and present it. RENDER THREAD (Stage2Pipeline's;
-    /// `nextDrawable()` may block up to a frame — that wait belongs here, never on main). `isHDR`
-    /// selects the 10-bit BT.2020 PQ path vs the 8-bit BT.709 path and is reconciled with the
-    /// layer config via `configure`. Returns true on success; false when there's no drawable yet, a
-    /// texture couldn't be made, or Metal errored — the caller then doesn't stamp a present (and can
-    /// requeue the frame). `onPresented` fires once the drawable actually reached glass, with the
-    /// `CLOCK_REALTIME` instant from the drawable's `presentedTime` — or nil when the system reports
-    /// none (a dropped drawable). It runs on a Metal callback thread; keep the handler thread-safe.
+    /// Draw one decoded frame to the next drawable and present it. RENDER THREAD;
+    /// `nextDrawable()` may block, so it never runs on main. `isHDR` selects and reconciles the
+    /// HDR/SDR layer path. Returns false when no drawable or texture is available or Metal fails.
     ///
-    /// `presentAtMediaTime` (a `CACurrentMediaTime`-basis host time — the display link's
-    /// `targetTimestamp`) schedules the flip ON the vsync instead of "as soon as the GPU finishes":
-    /// with the layer's own sync disabled (mandatory on macOS — see init) an immediate present hits
-    /// glass mid-refresh whenever the layer is direct-scanout promoted (fullscreen, no HUD), which
-    /// is the "frametimes are off with the stats HUD closed" report. nil presents immediately
-    /// (`PUNKTFUNK_PRESENT_MODE=immediate` — the pre-fix behavior, kept as a diagnostic A/B).
-    ///
-    /// `into drawable` (deadline pacing) supplies the CAMetalDisplayLink-vended drawable to
-    /// render into instead of calling `nextDrawable()` — see `encodePresent` for the format
-    /// guard that skips a vend the layer's config outran.
+    /// `onPresented` fires on a Metal callback with the drawable's CLOCK_REALTIME on-glass stamp,
+    /// or nil when the system drops it. `presentAtMediaTime` schedules an absolute display-link
+    /// target; nil presents when the GPU finishes. `into` supplies a CAMetalDisplayLink drawable
+    /// for deadline pacing instead of calling `nextDrawable()`.
     @discardableResult
     public func render(
         _ pixelBuffer: CVPixelBuffer, isHDR: Bool = false,
@@ -1079,31 +1076,9 @@ public final class MetalVideoPresenter {
         commandBuffer.addCompletedHandler { _ in _ = keepAlive }
         #if os(macOS)
         if windowedPresentActive == .transaction {
-            // Windowed DCP mitigation: present the drawable THROUGH a Core Animation transaction
-            // (`presentsWithTransaction`, set above) instead of the async image queue, so the swap
-            // commits with the layer tree and stays in lockstep with the compositor (no out-of-band
-            // flip to race WindowServer's swaps). Wait until the GPU work is scheduled (contents
-            // will be ready — p50 ~0.1 ms), then present inside an EXPLICIT CATransaction ON THIS
-            // RENDER THREAD and `flush()`. `presentAtMediaTime` does not apply — the transaction
-            // paces.
-            //
-            // Threading history, because BOTH failure modes shipped or nearly shipped:
-            // • A bare `present()` from this thread (no transaction) never flushes — nothing
-            //   commits a runloop-less thread's implicit transaction, so drawables are never
-            //   released; after maximumDrawableCount vends `nextDrawable()` blocks forever and
-            //   the stream FREEZES (the fullscreen→windowed switch did exactly this).
-            // • The explicit begin/commit alone is NOT enough either: this thread has an ACTIVE
-            //   implicit transaction (the layer mutations above — drawableSize/colour — created
-            //   it), so the explicit transaction NESTS inside it and its commit defers to the
-            //   implicit one that never comes. The harness reproduced the exact freeze: every
-            //   present reported presentedTime=0, nothing reached glass. `CATransaction.flush()`
-            //   pushes the implicit transaction (present included) to the render server NOW.
-            // • The original fix hopped to MAIN and presented there — correct, but slow in the
-            //   field (presents=55 @ fps=240, display_p50 18.6 ms on the 240 Hz Studio): each
-            //   present lands a runloop turn late, and main's own implicit transaction batches
-            //   enrolled presents at runloop-iteration rate. Kept as PUNKTFUNK_TXN_PRESENT=main.
-            //   The off-main commit measured immune to main-thread churn in the harness
-            //   (2026-07-21: glass p50 ~10 ms at 240 Hz full-size, cadence a clean 4.17 ms).
+            // A runloop-less render thread must flush its explicit transaction: layer mutations
+            // otherwise keep the present inside an uncommitted implicit transaction and retain every
+            // drawable. The main-thread A/B commits on its runloop instead. Transactions own pacing.
             commandBuffer.commit()
             let schedStart = CACurrentMediaTime()
             commandBuffer.waitUntilScheduled()
@@ -1130,8 +1105,7 @@ public final class MetalVideoPresenter {
             return true
         }
         #endif
-        // Scheduled on the vsync when the pipeline gave us the link's target (see the doc comment);
-        // immediate otherwise. A target already in the past presents immediately — same thing.
+        // An absolute link target is the fixed-grid path; without one, present when the GPU finishes.
         if let presentAtMediaTime {
             commandBuffer.present(drawable, atTime: presentAtMediaTime)
         } else {

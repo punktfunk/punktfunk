@@ -405,6 +405,59 @@ final class PresentPacingTests: XCTestCase {
     }
     #endif
 
+    // MARK: - macOS adaptive display
+
+    #if os(macOS)
+    func testAdaptiveSlotPacingResolution() {
+        XCTAssertTrue(SessionPresenter.adaptiveSlotPaced(
+            adaptiveSync: true, priority: .latency, pacing: .arrival))
+        XCTAssertFalse(SessionPresenter.adaptiveSlotPaced(
+            adaptiveSync: false, priority: .latency, pacing: .arrival))
+        XCTAssertFalse(SessionPresenter.adaptiveSlotPaced(
+            adaptiveSync: true, priority: .smooth(buffer: 2), pacing: .arrival))
+        XCTAssertFalse(SessionPresenter.adaptiveSlotPaced(
+            adaptiveSync: true, priority: .latency, pacing: .glass))
+    }
+
+    func testAdaptiveSlotRegimeUsesSparseImmediateAndDenseSlots() {
+        var sparse = AdaptiveSlotRegime()
+        XCTAssertTrue(sparse.update(ptsNs: 1_000_000_000))
+        XCTAssertFalse(sparse.update(ptsNs: 1_028_571_429))
+        XCTAssertFalse(sparse.update(ptsNs: 1_028_571_429), "a put-back is not a new sample")
+
+        var dense = AdaptiveSlotRegime()
+        XCTAssertTrue(dense.update(ptsNs: 1_000_000_000))
+        XCTAssertTrue(dense.update(ptsNs: 1_016_666_667))
+
+        var hitched = AdaptiveSlotRegime()
+        XCTAssertTrue(hitched.update(ptsNs: 1_000_000_000))
+        XCTAssertTrue(hitched.update(ptsNs: 1_008_333_333))
+        XCTAssertTrue(hitched.update(ptsNs: 1_058_333_333), "one capped hitch keeps slots")
+
+        var recoveryPts: UInt64 = 1_028_571_429
+        for _ in 0..<4 {
+            recoveryPts += 16_666_667
+            _ = sparse.update(ptsNs: recoveryPts)
+        }
+        XCTAssertTrue(sparse.isSlotted, "sustained 60 fps returns to slots")
+    }
+
+    /// The macOS display-link hint: VRR-on asks for the stream rate down to a 24 Hz floor with
+    /// callbacks capped at the stream rate; VRR-off pins the link at exactly the stream rate.
+    func testMacFrameRateRangesAt60And120() {
+        for hz: Float in [60, 120] {
+            let vrr = SessionPresenter.frameRateRange(hz: hz, allowVRR: true)
+            XCTAssertEqual(vrr.minimum, min(hz, 24))
+            XCTAssertEqual(vrr.maximum, hz)
+            XCTAssertEqual(vrr.preferred, hz)
+            let fixed = SessionPresenter.frameRateRange(hz: hz, allowVRR: false)
+            XCTAssertEqual(fixed.minimum, hz)
+            XCTAssertEqual(fixed.maximum, hz)
+            XCTAssertEqual(fixed.preferred, hz)
+        }
+    }
+    #endif
+
     // MARK: - Glass-gate depth
 
     /// The in-flight present budget is 1 EVERYWHERE: any deeper gate keeps a standing queue —

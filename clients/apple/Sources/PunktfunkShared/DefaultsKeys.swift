@@ -143,8 +143,9 @@ public enum DefaultsKey {
     public static let smoothBuffer = "punktfunk.smoothBuffer"
     /// macOS: V-Sync the stream's presents — each decoded frame flips on the next display vsync
     /// (evenly paced, no tearing under direct scanout) instead of as soon as the GPU finishes
-    /// (lowest latency — the default, OFF). Resolved once per session;
-    /// PUNKTFUNK_PRESENT_MODE=immediate|vsync overrides it for A/B. See Stage2Pipeline's header.
+    /// (lowest latency — the default, OFF). Adaptive-refresh Macs present sparse input immediately
+    /// and dense input once per link target. PUNKTFUNK_PRESENT_MODE=immediate|vsync|slot overrides
+    /// that path for A/B. Resolved once per session; see Stage2Pipeline's header.
     public static let vsync = "punktfunk.vsync"
     /// macOS: present WINDOWED sessions in lockstep with the system compositor (the DCP
     /// "mismatched swapID's" kernel-panic mitigation — see SessionPresenter.windowedPresentMode
@@ -158,9 +159,10 @@ public enum DefaultsKey {
     public static let windowedSafePresent = "punktfunk.windowedSafePresent"
     /// Allow variable refresh rate: hand the display link a wide frame-rate RANGE (low floor,
     /// preferred = stream rate) so a ProMotion / adaptive-sync display can vary its physical
-    /// refresh to match the stream. On by default; a no-op on fixed-refresh displays. When off,
-    /// macOS lets the link free-run at the display's native rate and iOS keeps its proven 30 Hz
-    /// floor. Read per session/reconfigure by `SessionPresenter.syncFrameRate`.
+    /// refresh to match the stream. On by default; a no-op on fixed-refresh displays. On macOS,
+    /// VRR-on requests 24 Hz through the stream rate with the stream rate preferred; VRR-off
+    /// fixes the link at the stream rate. iOS keeps its proven 30 Hz floor when off.
+    /// Read per session/reconfigure by `SessionPresenter.syncFrameRate`.
     public static let allowVRR = "punktfunk.allowVRR"
     /// Request a 10-bit BT.2020 PQ (HDR10) stream. On by default; only takes effect when the host
     /// has HDR content AND this display supports HDR — otherwise the stream stays 8-bit SDR.

@@ -350,6 +350,13 @@ public final class StreamLayerView: NSView {
         ) { [weak self] _ in
             self?.attemptPendingCapture()
         })
+        // A move between screens can change the link's available refresh range; re-layout so
+        // the stream-rate hint is re-applied to the display link that follows this view.
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            self?.layoutPresenter()
+        })
         attemptPendingCapture()
     }
 
@@ -1034,7 +1041,8 @@ public final class StreamLayerView: NSView {
             onDecodedSize: { [weak self] w, h in // resize overlay END signal (new-mode IDR dims)
                 DispatchQueue.main.async { self?.noteDecodedContentSize(width: w, height: h) }
                 overlayDecodedSize?(w, h)
-            })
+            },
+            adaptiveSync: Self.isAdaptiveSync(window?.screen ?? NSScreen.main))
         // Match-window (C3): when ON, follow the window's pixel size so a windowed session streams
         // 1:1 (pixel-exact) instead of the presenter resampling a fixed-mode frame into a
         // non-matching window. The first real `layout()` feeds the initial size, so the stream
@@ -1057,7 +1065,7 @@ public final class StreamLayerView: NSView {
     /// except under a camera housing); refresh contentsScale on a retina↔non-retina move (see
     /// SessionPresenter.layout). Also feeds the Match-window follower the WINDOW's physical-pixel
     /// size (bounds → backing) — it follows the window, not the box — so a resize / retina move
-    /// follows.
+    /// follows. A screen-change observer re-runs this so the display-link range follows the view.
     private func layoutPresenter() {
         // Refresh BEFORE the fit below reads it. Enumerating display modes costs ~150 µs, and
         // `videoBounds` is read on every mouse event — that belongs on layout, not on input.
@@ -1081,6 +1089,13 @@ public final class StreamLayerView: NSView {
         if captured, desktopMouse, cursorChannelActive {
             window?.invalidateCursorRects(for: self)
         }
+    }
+
+    /// A variable-refresh screen reports a range of valid frame intervals; a fixed screen's
+    /// minimum and maximum are equal. nil is not adaptive.
+    static func isAdaptiveSync(_ screen: NSScreen?) -> Bool {
+        guard let screen else { return false }
+        return screen.maximumRefreshInterval - screen.minimumRefreshInterval > 0.001
     }
 
     public override func viewDidChangeBackingProperties() {

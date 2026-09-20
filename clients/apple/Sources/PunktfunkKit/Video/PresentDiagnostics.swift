@@ -270,9 +270,20 @@ final class PresentDebugStats: @unchecked Sendable {
     /// 120 Hz panel saturates this at ~maximumDrawableCount; stage-3 pegs it at the gate depth).
     private var inFlight = 0
     private var maxInFlight = 0
+    /// The session's pace name for the line's `pace=` field — a closure because the macOS
+    /// "(composited)" suffix tracks the windowed present routing live.
+    private let pace: () -> String
+    /// The ordinary link's last reported period in seconds, for `linkMs` — 0 before the first
+    /// tick and under deadline pacing (no ordinary link).
+    private let linkPeriod: () -> CFTimeInterval
 
-    init(cadence: CadenceClock?) {
+    init(
+        cadence: CadenceClock?, pace: @escaping () -> String,
+        linkPeriod: @escaping () -> CFTimeInterval
+    ) {
         self.cadence = cadence
+        self.pace = pace
+        self.linkPeriod = linkPeriod
     }
 
     func emptyWake() { lock.lock(); empty += 1; lock.unlock() }
@@ -345,10 +356,11 @@ final class PresentDebugStats: @unchecked Sendable {
                     $0.skewNs)
             } ?? ""
         let line = String(
-            format: "pf-present decoded=%d ok=%d fail=%d empty=%d gated=%d noDrawable=%d "
-                + "dropped=%d qDrop=%d qDry=%d maxRenderMs=%.1f inflightMax=%d forced=%d "
-                + "glassDeltaMs p50=%.2f max=%.2f n=%d latchMs p50=%.2f max=%.2f "
-                + "vendLeadMs p50=%.2f max=%.2f",
+            format: "pf-present pace=%@ linkMs=%.2f decoded=%d ok=%d fail=%d empty=%d "
+                + "gated=%d noDrawable=%d dropped=%d qDrop=%d qDry=%d maxRenderMs=%.1f "
+                + "inflightMax=%d forced=%d glassDeltaMs p50=%.2f max=%.2f n=%d "
+                + "latchMs p50=%.2f max=%.2f vendLeadMs p50=%.2f max=%.2f",
+            pace(), linkPeriod() * 1000,
             decoded, ok, failed, empty, gated, noDrawable, dropped,
             smoothing.overflowDrops, smoothing.underflows, maxRenderMs, inflightMax,
             gate?.drainForced() ?? 0, p50, dMax, deltas.count, latchP50, latchMax,

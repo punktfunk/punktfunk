@@ -189,6 +189,14 @@ final class SessionPresenter {
         if let env, let mode = WindowedPresentMode(rawValue: env) { return mode }
         return (setting ?? true) ? .transaction : .async
     }
+
+    /// Adaptive-refresh latency sessions choose immediate sparse presents or one dense present per
+    /// display-link target. Smoothness and the other presenters keep their own pacing mechanisms.
+    static func adaptiveSlotPaced(
+        adaptiveSync: Bool, priority: PresentPriority, pacing: PresentPacing
+    ) -> Bool {
+        adaptiveSync && priority == .latency && pacing == .arrival
+    }
     #endif
 
     /// `PUNKTFUNK_GATE_DEPTH` (1…3) still overrides on iOS/tvOS so the standing-queue ladder
@@ -201,6 +209,20 @@ final class SessionPresenter {
         #else
         if let env, let depth = Int(env), (1...3).contains(depth) { return depth }
         return 1
+        #endif
+    }
+
+    /// The display-link frame-rate hint for a stream of `hz` (see `syncFrameRate`). iOS/tvOS
+    /// keep a 120 ceiling (mandatory, or ProMotion caps the link at 60) with a 24/30 Hz VRR
+    /// floor. macOS spans 24…`hz` with VRR on and fixes min = max at `hz` with it off.
+    /// Internal (not private) for unit tests.
+    static func frameRateRange(hz: Float, allowVRR: Bool) -> CAFrameRateRange {
+        #if os(macOS)
+        let minimum = allowVRR ? min(hz, 24) : hz
+        return CAFrameRateRange(minimum: minimum, maximum: hz, preferred: hz)
+        #else
+        let floor = allowVRR ? min(hz, 24) : min(hz, 30)
+        return CAFrameRateRange(minimum: floor, maximum: max(hz, 120), preferred: hz)
         #endif
     }
 
@@ -248,6 +270,7 @@ final class SessionPresenter {
     /// metering; deadline pacing owns a CAMetalDisplayLink instead.
     ///
     /// Call `layout(in:contentsScale:)` after start so any Metal sublayer has valid geometry.
+    /// `adaptiveSync` is the hosting screen's fixed-vs-adaptive verdict on macOS.
     func start(
         connection: PunktfunkConnection,
         baseLayer: AVSampleBufferDisplayLayer,
@@ -256,7 +279,8 @@ final class SessionPresenter {
         onFrame: (@Sendable (AccessUnit) -> Void)?,
         onSessionEnd: (@Sendable () -> Void)?,
         onDecodedSize: (@Sendable (Int, Int) -> Void)? = nil,
-        onFrameHDR: (@Sendable (Bool) -> Void)? = nil
+        onFrameHDR: (@Sendable (Bool) -> Void)? = nil,
+        adaptiveSync: Bool = false
     ) {
         stop()
         self.connection = connection
@@ -266,7 +290,7 @@ final class SessionPresenter {
                 connection: connection, baseLayer: layer, endToEndMeter: endToEndMeter,
                 makeDisplayLink: makeDisplayLink,
                 onFrame: onFrame, onSessionEnd: onSessionEnd, onDecodedSize: onDecodedSize,
-                onFrameHDR: onFrameHDR)
+                onFrameHDR: onFrameHDR, adaptiveSync: adaptiveSync)
         }
 
         // Explicit decode stays default so loss recovery and decode metering survive. Presentation
@@ -298,8 +322,11 @@ final class SessionPresenter {
             selectedPacing, priority: priority, videoLayerCompatible: !connection.isChroma444)
         #if os(macOS)
         let vsyncPaced = priority != .latency && pacing == .arrival
+        let adaptiveSlotPaced = Self.adaptiveSlotPaced(
+            adaptiveSync: adaptiveSync, priority: priority, pacing: pacing)
         #else
         let vsyncPaced = false
+        let adaptiveSlotPaced = false
         #endif
         if choice != .stage1,
            let pipeline = Stage2Pipeline(
@@ -309,7 +336,8 @@ final class SessionPresenter {
                gateDepth: Self.gateDepth(
                    env: ProcessInfo.processInfo.environment["PUNKTFUNK_GATE_DEPTH"]),
                storePolicy: priority.storePolicy,
-               vsyncPaced: vsyncPaced) {
+               vsyncPaced: vsyncPaced,
+               adaptiveSlotPaced: adaptiveSlotPaced) {
             pipeline.onPresentWedged = { [weak self] in
                 DispatchQueue.main.async { self?.rebuildPresentation() }
             }
@@ -369,9 +397,8 @@ final class SessionPresenter {
     ///
     /// The `allowVRR` setting (default on) widens that hint into a true variable-refresh request:
     /// `preferred` = the stream rate with a low floor, so a ProMotion / adaptive-sync display can
-    /// drop its physical refresh to match the content. With VRR off we fall back to the proven
-    /// behavior — iOS keeps a 30 Hz floor; macOS leaves the NSView link at its display's native
-    /// rate (it already tracks the display and must NOT be capped to the stream rate).
+    /// drop its physical refresh to match the content. VRR off falls back to a fixed floor:
+    /// iOS keeps 30 Hz; macOS pins the link at the stream rate (see `frameRateRange`).
     /// Re-applied from `layout` so a mid-session `Reconfigure` picks up a new refresh.
     /// Pen-proximity panel-rate boost pass-through (Stage2Pipeline.setInteractionBoost):
     /// deadline pacing only — under arrival/glass the staged hint feeds no link, so this
@@ -387,22 +414,21 @@ final class SessionPresenter {
         // under arrival/glass pacing, where the CADisplayLink below is the one hinted link.
         stage2?.setFrameRateHint(hz: Float(hz))
         guard let link = stage2Link else { return }
-        let hzF = Float(hz)
-        let allowVRR = connection?.settings.allowVRR ?? true
-        #if os(macOS)
-        // Off: `.default` = the link free-runs at the display's native rate (pre-VRR behavior).
-        // On: request the content rate with a 24 Hz floor — capped at the display, never at the
-        // stream rate, so an adaptive-sync panel can track the stream.
-        let range: CAFrameRateRange = allowVRR
-            ? CAFrameRateRange(minimum: min(hzF, 24), maximum: max(hzF, 120), preferred: hzF)
-            : .default
-        #else
-        // A range is mandatory here (see above); VRR only lowers the floor (24 vs 30) so the
-        // panel can drop deeper to match content on a sub-rate or momentarily stalling stream.
-        let floor = allowVRR ? min(hzF, 24) : min(hzF, 30)
-        let range = CAFrameRateRange(minimum: floor, maximum: max(hzF, 120), preferred: hzF)
-        #endif
+        let range = Self.frameRateRange(
+            hz: Float(hz), allowVRR: connection?.settings.allowVRR ?? true)
         if link.preferredFrameRateRange != range { link.preferredFrameRateRange = range }
+        #if os(macOS)
+        // The requested range and its readback on every sync (layout, fullscreen and screen
+        // transitions re-apply it) — diagnostics only, the readback is the API's one clamp signal.
+        if presentDebug {
+            let actual = link.preferredFrameRateRange
+            print(String(
+                format: "pf-present-range requested=%.0f-%.0f@%.0f actual=%.0f-%.0f@%.0f",
+                range.minimum, range.maximum, range.preferred ?? 0,
+                actual.minimum, actual.maximum, actual.preferred ?? 0))
+            fflush(stdout)
+        }
+        #endif
     }
 
     /// Refresh display timing and position a Metal presentation layer.
@@ -549,16 +575,23 @@ final class SessionPresenter {
         contentSize = size // the view drops the new pipeline's repeat of this size
     }
 
-    /// The pipeline's `onPresentWedged` cure, hopped to MAIN: rebuild the presentation the way
-    /// a reconnect does — fresh pipeline, presenter and CAMetalLayer — on the SAME connection.
-    /// The old pipeline stops (its `token` silences its `onSessionEnd`), the new pump asks the
-    /// host for an IDR because it starts without a format, and the replayed layout gives the
-    /// new sublayer its frame before the first vend. A relink alone does not unwedge it. The
-    /// cost is ~1 s of freeze plus one IDR, against a session that otherwise never moves again.
+    /// `onPresentWedged`'s cure, hopped to MAIN: a fresh pipeline, presenter and CAMetalLayer on
+    /// the SAME connection — the new pump asks the host for one IDR. Main thread.
     private func rebuildPresentation() {
-        guard let restart, let baseLayer else { return }
+        guard restart != nil, baseLayer != nil else { return }
         presentLog.error("presenter wedged — rebuilding pipeline, presenter and layer")
+        restartPresentation()
+    }
+
+    /// Re-run `start` on the live base layer and replay the last layout so the new sublayer has
+    /// a frame before the first present. `start`→`stop` clears `contentSize`, and the view dedups
+    /// the repeated decoded-size callback — so the known size is restored here, same as
+    /// `move(to:)`, or layout falls back to a stale negotiated aspect. Main thread.
+    private func restartPresentation() {
+        guard let restart, let baseLayer else { return }
+        let size = contentSize
         restart(baseLayer)
+        contentSize = size
         if let lastLayout { layout(in: lastLayout.bounds, contentsScale: lastLayout.contentsScale) }
     }
 
