@@ -30,7 +30,7 @@ pub(crate) struct BindPresetScreen {
     /// Set when the menu was raised on a title rather than the host tile. Same catalog
     /// and same radio behaviour either way — only the binding it writes differs.
     game: Option<GameSubject>,
-    list: MenuList,
+    pub(super) list: MenuList,
 }
 
 impl BindPresetScreen {

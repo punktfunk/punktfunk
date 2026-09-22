@@ -74,7 +74,7 @@ pub(crate) struct OptionsScreen {
     /// this is up; an index or borrow would retarget Forget onto whatever slid
     /// into the slot.
     subject: Subject,
-    list: MenuList,
+    pub(super) list: MenuList,
     /// Destructive row armed on first press, fires on second. `Option<Action>`
     /// not a bool: arming Forget must not fire Restart if the cursor moved.
     armed: Option<Action>,

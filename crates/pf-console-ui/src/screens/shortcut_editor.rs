@@ -415,6 +415,11 @@ impl ShortcutEditorScreen {
         self.editing_name
     }
 
+    /// The field list, while neither tray covers it.
+    pub(super) fn pan_list(&mut self) -> Option<&mut MenuList> {
+        (!self.editing_name && !self.picking_key).then_some(&mut self.list)
+    }
+
     fn open_keys(&mut self) {
         self.keys.seat_on(self.draft.key.as_deref());
         self.picking_key = true;

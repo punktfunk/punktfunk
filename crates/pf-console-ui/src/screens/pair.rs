@@ -35,7 +35,7 @@ pub(crate) struct PairScreen {
     port: u16,
     /// Empty = typed host with no advert, so no Request access row.
     fp_hex: String,
-    list: MenuList,
+    pub(super) list: MenuList,
     keyboard: Keyboard,
     pin: String,
     device: String,

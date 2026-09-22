@@ -10,7 +10,7 @@
 //! [`row_on`]. Availability this frame: [`row_applies`].
 
 use crate::glyphs::{Hint, HintKey};
-use crate::pointer::{Pointer, PointerKind};
+use crate::pointer::Pointer;
 use crate::screens::{Ctx, Outbox, Screen};
 use crate::theme::{fg, Fonts, W};
 use crate::widgets::{
@@ -474,7 +474,7 @@ const SYSTEM_BUTTONS: [(&str, &str); 3] = [
 const GUIDE_GESTURE: [(&str, &str); 3] = [("auto", "Automatic"), ("on", "On"), ("off", "Off")];
 
 pub(crate) struct SettingsScreen {
-    list: MenuList,
+    pub(super) list: MenuList,
     strip: TabStrip,
     tab: usize,
     /// Per-tab cursor so a detour does not reset the one you left.
@@ -669,11 +669,6 @@ impl SettingsScreen {
 
     /// Strip first: pills sit above the list, so a press there is never a row.
     pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        if let PointerKind::PanStart { .. } | PointerKind::Pan { .. } | PointerKind::Fling { .. } =
-            p.kind
-        {
-            return self.custom_bitrate.is_none() && self.list.pan(p);
-        }
         if self.custom_bitrate.is_some() && !ctx.deck {
             if !self.keyboard.covers(p) {
                 if p.press() {

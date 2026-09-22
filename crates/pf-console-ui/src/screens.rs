@@ -201,10 +201,24 @@ impl Screen {
         }
     }
 
-    /// Takes finger pans: its list is on the element tree. Any other screen scrolls a
-    /// drag by ticks.
-    pub(crate) fn pans(&self) -> bool {
-        matches!(self, Screen::Settings(_))
+    /// The menu list a finger pan scrolls, while no keyboard or tray covers it. The
+    /// carousels and the library grid scroll a drag by ticks.
+    pub(crate) fn pan_list(&mut self) -> Option<&mut crate::widgets::MenuList> {
+        if self.editing() {
+            return None;
+        }
+        match self {
+            Screen::Settings(s) => Some(&mut s.list),
+            Screen::AddHost(s) => Some(&mut s.list),
+            Screen::Pair(s) => Some(&mut s.list),
+            Screen::PinHosts(s) => Some(&mut s.list),
+            Screen::BindPreset(s) => Some(&mut s.list),
+            Screen::Controllers(s) => Some(&mut s.list),
+            Screen::HostOptions(s) => Some(&mut s.list),
+            Screen::ShortcutEditor(s) => s.pan_list(),
+            Screen::RingEditor(s) => Some(s.pan_list()),
+            Screen::Home(_) | Screen::Library(_) | Screen::Collections(_) => None,
+        }
     }
 
     /// Mouse/touch in device pixels. `true` if the point landed on this screen's
