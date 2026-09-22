@@ -13,8 +13,9 @@ use super::egl::{EglContext, EglSurface, GlesVersion};
 use super::gpu::Gpu;
 use anyhow::{bail, Result};
 use ndk::native_window::NativeWindow;
-use pf_client_core::console::{OverlayAction, PointerInput, SessionPhase};
-use pf_client_core::menu_nav::{MenuEvent, MenuNav, MenuPulse, MenuSample, PadInfo};
+use pf_client_core::console::{PointerInput, SessionPhase};
+use pf_client_core::menu_nav::{MenuEvent, MenuNav, MenuSample, PadInfo};
+use pf_console_ui::bridge::{Event, Published};
 use pf_console_ui::console::FrameCost;
 use pf_console_ui::{
     Console, ConsoleEntry, ConsoleHandles, ConsoleOptions, InputSource, Insets, Key, SnapshotStore,
@@ -69,14 +70,9 @@ pub(super) enum Cmd {
 
 /// What the render thread raises for Kotlin.
 pub(super) enum HostEvent {
-    Action(OverlayAction),
-    Pulse(MenuPulse),
-    Editing(bool),
-    /// What the console's focus now reads as. Raised only when it changes; Kotlin speaks it
-    /// through `announceForAccessibility`, which is a no-op with no screen reader running.
-    Announce(String),
-    /// The shell saved settings: here is the whole snapshot to persist.
-    Settings(Box<pf_client_core::trust::Settings>),
+    /// What the shell raised; Kotlin speaks `announce` through `announceForAccessibility`,
+    /// which is a no-op with no screen reader running.
+    Console(Event),
     /// The GLES generation the context came up with — Kotlin logs it, nothing more.
     Gles(GlesVersion),
     /// The render thread died (EGL/Skia init failed). Kotlin falls back to its own console.
@@ -84,31 +80,10 @@ pub(super) enum HostEvent {
 }
 
 impl HostEvent {
-    /// The JSON Kotlin parses. Hand-rolled for the small variants; the two model payloads
-    /// ride serde.
+    /// The JSON Kotlin parses.
     pub(super) fn to_json(&self) -> String {
         match self {
-            HostEvent::Action(a) => format!(
-                "{{\"action\":{}}}",
-                serde_json::to_string(a).unwrap_or_else(|_| "null".into())
-            ),
-            HostEvent::Pulse(p) => format!(
-                "{{\"pulse\":\"{}\"}}",
-                match p {
-                    MenuPulse::Move => "move",
-                    MenuPulse::Confirm => "confirm",
-                    MenuPulse::Boundary => "boundary",
-                }
-            ),
-            HostEvent::Editing(e) => format!("{{\"editing\":{e}}}"),
-            HostEvent::Announce(text) => format!(
-                "{{\"announce\":{}}}",
-                serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
-            ),
-            HostEvent::Settings(s) => format!(
-                "{{\"settings\":{}}}",
-                serde_json::to_string(s).unwrap_or_else(|_| "null".into())
-            ),
+            HostEvent::Console(e) => e.to_json(),
             HostEvent::Gles(v) => format!(
                 "{{\"gles\":{}}}",
                 match v {
@@ -328,7 +303,7 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
             ui.nav.poll(&ui.sample, Instant::now(), &mut menu_out);
             for ev in menu_out.drain(..) {
                 if let Some(p) = console.menu(ev, InputSource::Pad) {
-                    shared.emit(HostEvent::Pulse(p));
+                    shared.emit(HostEvent::Console(Event::Pulse(p)));
                 }
             }
         }
@@ -347,7 +322,7 @@ fn render_loop(mut console: Console, shared: Arc<Shared>, store: Arc<SnapshotSto
                 glass.gl_failures
             );
         }
-        published.publish(&mut console, &shared, &store);
+        published.publish(&mut console, &store, |e| shared.emit(HostEvent::Console(e)));
     }
 }
 
@@ -545,7 +520,7 @@ impl Ui {
                 // arrives here (SkiaConsoleShell's ▲-on-Home shortcut), briefly
                 // reading as keys. The next real pad press corrects the legend.
                 if let Some(p) = console.menu(ev, InputSource::Keys) {
-                    shared.emit(HostEvent::Pulse(p));
+                    shared.emit(HostEvent::Console(Event::Pulse(p)));
                 }
             }
             Cmd::PadSample(s) => {
@@ -612,47 +587,5 @@ impl Ui {
             }
         }
         Ok(true)
-    }
-}
-
-/// The last of each edge-triggered event the render thread raised, so a repeat is silence.
-struct Published {
-    was_editing: bool,
-    /// Last string handed to the screen reader. Repeating one is worse than silence.
-    spoken: Option<String>,
-    saved_gen: u64,
-}
-
-impl Published {
-    fn new(console: &Console, store: &SnapshotStore) -> Published {
-        Published {
-            was_editing: console.editing(),
-            spoken: None,
-            saved_gen: store.saved_gen(),
-        }
-    }
-
-    /// Publish what the console raised this frame.
-    fn publish(&mut self, console: &mut Console, shared: &Shared, store: &SnapshotStore) {
-        while let Some(a) = console.take_action() {
-            shared.emit(HostEvent::Action(a));
-        }
-        let editing = console.editing();
-        if editing != self.was_editing {
-            self.was_editing = editing;
-            shared.emit(HostEvent::Editing(editing));
-        }
-        let announce = console.focus_announcement();
-        if announce != self.spoken {
-            self.spoken = announce;
-            if let Some(text) = &self.spoken {
-                shared.emit(HostEvent::Announce(text.clone()));
-            }
-        }
-        if store.saved_gen() != self.saved_gen {
-            let (settings, current_gen) = store.snapshot();
-            self.saved_gen = current_gen;
-            shared.emit(HostEvent::Settings(Box::new(settings)));
-        }
     }
 }
