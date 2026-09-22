@@ -1184,8 +1184,10 @@ impl Shell {
                 self.handle_menu(MenuEvent::Secondary);
                 return true;
             }
-            // No screen pans yet: a drag scrolls by ticks.
-            PointerKind::PanStart { .. } | PointerKind::Pan { .. } | PointerKind::Fling { .. } => {
+            // A screen that does not pan scrolls a drag by ticks.
+            PointerKind::PanStart { .. } | PointerKind::Pan { .. } | PointerKind::Fling { .. }
+                if !self.stack.last().is_some_and(Screen::pans) =>
+            {
                 return false;
             }
             _ => {}

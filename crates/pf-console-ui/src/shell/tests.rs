@@ -547,6 +547,75 @@ fn a_touch_swipe_scrolls_settings_without_changing_a_value() {
     );
 }
 
+/// A finger drags the Settings rows one to one; a flick keeps them going after the lift,
+/// and that lift is no tap.
+#[test]
+fn a_finger_pans_and_flings_the_settings_list() {
+    use pf_client_core::console::{PointerButton, PointerInput};
+    let (mut s, _) = rendered_settings();
+    for _ in 0..5 {
+        s.handle_menu(MenuEvent::JumpForward);
+    }
+    // A short window, so the nine rows overflow the list by a few rows.
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 400)).unwrap();
+    let mut frame = |s: &mut Shell| s.render(surface.canvas(), 1280, 400, &fonts, None, None, &[]);
+    s.fake_clock = Some((100.0, 1.0 / 60.0));
+    frame(&mut s);
+    frame(&mut s);
+    // Row 3 stays on screen across the whole scroll range.
+    let top = |s: &Shell| match s.stack.last() {
+        Some(Screen::Settings(scr)) => scr.row_rect_for_test(3).map_or(f32::NAN, |r| r.top),
+        _ => panic!("settings is not on top"),
+    };
+    let before = (top(&s), s.settings.clone());
+    let (x, y) = match s.stack.last() {
+        Some(Screen::Settings(scr)) => {
+            assert_eq!(scr.tab_for_test(), 5, "Interface, the longest tab");
+            let r = scr.row_rect_for_test(2).expect("row 2 drew");
+            (r.center_x(), r.center_y())
+        }
+        _ => unreachable!(),
+    };
+    s.pointer_input(PointerInput::Down {
+        x,
+        y,
+        button: PointerButton::Primary,
+        touch: true,
+    });
+    // 20 px up a frame: the first step leaves slop, the next three move the rows.
+    for i in 1..=4 {
+        s.pointer_input(PointerInput::Move {
+            x,
+            y: y - 20.0 * i as f32,
+        });
+        frame(&mut s);
+    }
+    let panned = top(&s);
+    assert!(
+        (before.0 - 60.0 - panned).abs() < 0.01,
+        "{} → {panned}",
+        before.0
+    );
+    // Lifted mid-flick at 1200 px/s: the rows keep going, then stop.
+    s.pointer_input(PointerInput::Up {
+        x,
+        y: y - 80.0,
+        button: PointerButton::Primary,
+    });
+    for _ in 0..180 {
+        frame(&mut s);
+    }
+    let flung = top(&s);
+    assert!(
+        flung < panned - 30.0,
+        "the fling carried on: {panned} → {flung}"
+    );
+    frame(&mut s);
+    assert_eq!(top(&s), flung, "and came to rest");
+    assert_eq!(s.settings, before.1, "a drag's lift changes nothing");
+}
+
 /// A finger held still on a row is the pad's Secondary on that row: on Bitrate that
 /// opens the typed field. The lift is no tap, or it would commit and close the field.
 #[test]

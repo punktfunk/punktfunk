@@ -201,6 +201,12 @@ impl Screen {
         }
     }
 
+    /// Takes finger pans: its list is on the element tree. Any other screen scrolls a
+    /// drag by ticks.
+    pub(crate) fn pans(&self) -> bool {
+        matches!(self, Screen::Settings(_))
+    }
+
     /// Mouse/touch in device pixels. `true` if the point landed on this screen's
     /// furniture, even when the press is a no-op — a stray tap must not fall through.
     /// `false` only for the empty backdrop.
