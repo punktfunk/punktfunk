@@ -555,6 +555,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     #[test]
     fn running_games_decode_and_untracked_counts_as_up() {
         // Host `/status` shape: extra operator fields present; typed command omits `app_id`.

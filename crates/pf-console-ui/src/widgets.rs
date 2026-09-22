@@ -1748,9 +1748,15 @@ mod tests {
             .collect()
     }
 
+    /// BGRA bytes whatever the platform's n32 is: Apple's Skia is RGBA.
     fn read_back(surface: &mut skia_safe::Surface, w: i32, h: i32) -> Vec<u8> {
         let mut px = vec![0u8; (w * h * 4) as usize];
-        let info = skia_safe::ImageInfo::new_n32_premul((w, h), None);
+        let info = skia_safe::ImageInfo::new(
+            (w, h),
+            skia_safe::ColorType::BGRA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
         assert!(
             surface.read_pixels(&info, &mut px, (w * 4) as usize, (0, 0)),
             "raster surface read-back"
@@ -2053,7 +2059,7 @@ mod tests {
             px(&on, knob_on)
         );
         // The track under the knob's old seat is now accent-coloured, not grey. `read_back`
-        // is n32, so the bytes come out B, G, R here — the accent's blue leads.
+        // is BGRA, so the accent's blue leads.
         let seat = px(&on, knob_off);
         assert!(seat[0] > seat[1] + 20, "accent track while on: {seat:?}");
         // Slider: the fill at a quarter is dark past the midpoint, lit at three quarters.
