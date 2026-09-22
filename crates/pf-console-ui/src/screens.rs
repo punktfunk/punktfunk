@@ -201,23 +201,24 @@ impl Screen {
         }
     }
 
-    /// The menu list a finger pan scrolls, while no keyboard or tray covers it. The
-    /// carousels and the library grid scroll a drag by ticks.
-    pub(crate) fn pan_list(&mut self) -> Option<&mut crate::widgets::MenuList> {
+    /// A finger drag, offered to what the screen scrolls: its menu list, or the library
+    /// grid. `false` scrolls it by ticks, as on the carousels or over a keyboard tray.
+    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
         if self.editing() {
-            return None;
+            return false;
         }
         match self {
-            Screen::Settings(s) => Some(&mut s.list),
-            Screen::AddHost(s) => Some(&mut s.list),
-            Screen::Pair(s) => Some(&mut s.list),
-            Screen::PinHosts(s) => Some(&mut s.list),
-            Screen::BindPreset(s) => Some(&mut s.list),
-            Screen::Controllers(s) => Some(&mut s.list),
-            Screen::HostOptions(s) => Some(&mut s.list),
-            Screen::ShortcutEditor(s) => s.pan_list(),
-            Screen::RingEditor(s) => Some(s.pan_list()),
-            Screen::Home(_) | Screen::Library(_) | Screen::Collections(_) => None,
+            Screen::Settings(s) => s.list.pan(p),
+            Screen::AddHost(s) => s.list.pan(p),
+            Screen::Pair(s) => s.list.pan(p),
+            Screen::PinHosts(s) => s.list.pan(p),
+            Screen::BindPreset(s) => s.list.pan(p),
+            Screen::Controllers(s) => s.list.pan(p),
+            Screen::HostOptions(s) => s.list.pan(p),
+            Screen::ShortcutEditor(s) => s.pan_list().is_some_and(|l| l.pan(p)),
+            Screen::RingEditor(s) => s.pan_list().pan(p),
+            Screen::Library(s) => s.pan(p),
+            Screen::Home(_) | Screen::Collections(_) => false,
         }
     }
 
