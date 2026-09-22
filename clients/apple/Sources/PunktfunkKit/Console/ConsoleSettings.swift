@@ -11,15 +11,14 @@
 // wire integer the app sends and as a name in the console, so they carry a table.
 
 import Foundation
-import PunktfunkKit
 import PunktfunkShared
 
-enum ConsoleSettings {
+public enum ConsoleSettings {
     /// Where the console's own document is kept, whole, between sessions.
-    static let documentKey = "punktfunk.consoleSettings"
+    public static let documentKey = "punktfunk.consoleSettings"
 
     /// What the console is handed: the base document with every key this app owns over it.
-    static func document(_ defaults: UserDefaults = .standard) -> [String: Any] {
+    public static func document(_ defaults: UserDefaults = .standard) -> [String: Any] {
         var j = base(defaults)
         for field in fields { field.write(&j, defaults) }
         j["compositor"] = compositorName(defaults.object(forKey: DefaultsKey.compositor) as? Int ?? 0)
@@ -34,14 +33,14 @@ enum ConsoleSettings {
         return j
     }
 
-    static func json(_ defaults: UserDefaults = .standard) -> String {
+    public static func json(_ defaults: UserDefaults = .standard) -> String {
         let data = try? JSONSerialization.data(withJSONObject: document(defaults))
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
     /// The console saved a document: keep it whole as the next base, and fold every key this
     /// app owns back into its own defaults. An unknown value is left alone rather than stored.
-    static func apply(_ j: [String: Any], _ defaults: UserDefaults = .standard) {
+    public static func apply(_ j: [String: Any], _ defaults: UserDefaults = .standard) {
         defaults.set(j, forKey: documentKey)
         for field in fields { field.read(j, defaults) }
         if let name = j["compositor"] as? String, let tag = compositorTag(name) {
