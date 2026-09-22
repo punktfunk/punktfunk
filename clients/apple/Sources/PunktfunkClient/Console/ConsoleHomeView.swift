@@ -15,6 +15,12 @@ struct ConsoleHomeView: View {
     /// A shelf to open: at first mount it is where the console starts, later it is a
     /// navigation inside it. Cleared once taken, so it never lingers as an open layer.
     @Binding var entry: LibraryTarget?
+    /// Something to say that has no screen of its own — a deep link that went nowhere. The
+    /// console shows it as a toast; the app's alert stays out of the way while the console is up.
+    @Binding var notice: String?
+    /// An app modal the console has no screen for is up: stand down rather than let one press
+    /// drive both.
+    var suspended = false
     let onPaired: (StoredHost, Data) -> Void
     let connect: (StoredHost, PresetSelection) -> Void
     let connectDiscovered: (DiscoveredHost) -> Void
@@ -36,6 +42,19 @@ struct ConsoleHomeView: View {
                 console = nil
             }
             .onChange(of: model.phase) { was, now in report(from: was, to: now) }
+            .onChange(of: model.errorMessage) { _, message in
+                // The app's "Connection failed" alert stays down while the console is up, so the
+                // console says it — on the card that asked for the connect.
+                guard let message, !message.isEmpty else { return }
+                console?.session(.failed, message: message)
+                model.errorMessage = nil
+            }
+            .onChange(of: notice) { _, text in
+                guard let text, !text.isEmpty else { return }
+                console?.notice(text)
+                notice = nil
+            }
+            .onChange(of: suspended) { _, held in console?.suspend(held) }
             .onChange(of: entry) { _, shelf in
                 guard let shelf, let console else { return }
                 console.navigate(to: shelf, pin: preset(of: shelf))

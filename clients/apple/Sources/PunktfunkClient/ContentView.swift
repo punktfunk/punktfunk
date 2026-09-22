@@ -204,6 +204,14 @@ struct ContentView: View {
         .platformDefault
         #endif
     }
+    /// While the console fronts the app and no stream is up, the console draws every screen:
+    /// connect, wake, pairing, the approval wait, a failed dial. The app's own alerts and sheets
+    /// would be a second interface over it — and on a TV, a focus trap the pad cannot reach. Once
+    /// a stream exists the app owns the screen again, which is where the trust card belongs.
+    private var consoleOwnsScreen: Bool {
+        gamepadUIActive && (model.phase == .idle || model.phase == .connecting)
+    }
+
     private var gamepadUIActive: Bool {
         GamepadUIEnvironment.isActive(
             gamepadConnected: gamepadManager.uiPadConnected, enabledSetting: gamepadUIEnabled,
@@ -635,7 +643,7 @@ struct ContentView: View {
 
     private var deepLinkNoticePresented: Binding<Bool> {
         Binding(
-            get: { deepLinkNotice != nil && !consolePromptShowing },
+            get: { deepLinkNotice != nil && !consolePromptShowing && !consoleOwnsScreen },
             set: { if !$0 { deepLinkNotice = nil } })
     }
 
@@ -669,7 +677,9 @@ struct ContentView: View {
     /// the one case that must stay with the system alert — there the pad belongs to
     /// `GamepadCapture` and is being forwarded to the host.
     private var consolePrompt: GamepadPrompt? {
-        guard gamepadUIActive, model.phase != .streaming else { return nil }
+        // Nothing while the console owns the screen: its Home opens the pair screen on an
+        // unpaired host, and its connect card narrates the approval wait.
+        guard gamepadUIActive, !consoleOwnsScreen, model.phase != .streaming else { return nil }
         if let req = approvalChoice {
             return GamepadPrompt(
                 id: "pairing-required",
@@ -814,7 +824,7 @@ struct ContentView: View {
     /// macOS has no shell, so the sheet stays and switches its CONTENT by mode instead.
     private var touchPairingTarget: Binding<StoredHost?> {
         #if os(macOS)
-        Binding(get: { pairingTarget }, set: { pairingTarget = $0 })
+        Binding(get: { consoleOwnsScreen ? nil : pairingTarget }, set: { pairingTarget = $0 })
         #else
         Binding(
             get: { gamepadUIActive ? nil : pairingTarget },
@@ -824,13 +834,13 @@ struct ContentView: View {
 
     private var approvalChoicePresented: Binding<Bool> {
         Binding(
-            get: { approvalChoice != nil && !consolePromptShowing },
+            get: { approvalChoice != nil && !consolePromptShowing && !consoleOwnsScreen },
             set: { if !$0 { approvalChoice = nil } })
     }
 
     private var awaitingApprovalPresented: Binding<Bool> {
         Binding(
-            get: { awaitingApproval != nil && !consolePromptShowing },
+            get: { awaitingApproval != nil && !consolePromptShowing && !consoleOwnsScreen },
             set: { if !$0 { awaitingApproval = nil } })
     }
 
@@ -851,7 +861,7 @@ struct ContentView: View {
 
     private var connectionErrorPresented: Binding<Bool> {
         Binding(
-            get: { connectionErrorReady && !consolePromptShowing },
+            get: { connectionErrorReady && !consolePromptShowing && !consoleOwnsScreen },
             set: { if !$0 { model.errorMessage = nil } })
     }
 
@@ -975,18 +985,25 @@ struct ContentView: View {
             #if os(tvOS)
             // The focus engine only enters the takeover once nothing under it can hold focus;
             // then Menu reaches the overlay's `.onExitCommand` instead of the launcher — or the app.
+            // Never while the console owns the screen: disabling its view would stop the very
+            // input it draws the connect card for.
             .disabled(
-                connectingOverlayName != nil || waker.waking != nil || model.launchHold != nil)
+                !consoleOwnsScreen
+                    && (connectingOverlayName != nil || waker.waking != nil
+                        || model.launchHold != nil))
             #endif
             .overlay {
-                ConnectOverlay(
-                    connectingHostName: connectingOverlayName,
-                    waker: waker,
-                    gamepadUI: gamepadUIActive,
-                    onCancelConnect: { model.disconnect() })
-                    // The takeover mounts OUTSIDE the gamepad screens (it covers the whole home),
-                    // so it publishes the palette's ink itself rather than inheriting it.
-                    .gamepadPaletteInk()
+                // The console draws its own dial, wake wait and launch hold.
+                if !consoleOwnsScreen {
+                    ConnectOverlay(
+                        connectingHostName: connectingOverlayName,
+                        waker: waker,
+                        gamepadUI: gamepadUIActive,
+                        onCancelConnect: { model.disconnect() })
+                        // The takeover mounts OUTSIDE the gamepad screens (it covers the whole
+                        // home), so it publishes the palette's ink itself rather than inheriting it.
+                        .gamepadPaletteInk()
+                }
             }
     }
 
@@ -1044,7 +1061,8 @@ struct ContentView: View {
     private var console: some View {
         ConsoleHomeView(
             store: store, model: model, discovery: discovery, waker: waker,
-            entry: $libraryTarget, onPaired: handlePaired,
+            entry: $libraryTarget, notice: $deepLinkNotice,
+            suspended: deepLinkConfirm != nil, onPaired: handlePaired,
             connect: { connect($0, preset: $1) }, connectDiscovered: connectDiscovered,
             launchTitle: launchTitle, connectShelf: connectFromShelf,
             wakeOnly: { wakeOnly($0) })

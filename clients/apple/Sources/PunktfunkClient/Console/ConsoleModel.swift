@@ -116,6 +116,11 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         bridge.push(.navigate, ConsoleJSON.entry(shelf.host, pin: pin, presets: presets.presets))
     }
 
+    /// Hold the pad while something the console did not draw is up.
+    func suspend(_ held: Bool) {
+        if held { pads.stop() } else { pads.start() }
+    }
+
     /// Where the session the console asked for stands, so the takeover can narrate it.
     func session(_ phase: ConsoleBridge.Phase, message: String = "") {
         bridge.phase(phase, message: message)
