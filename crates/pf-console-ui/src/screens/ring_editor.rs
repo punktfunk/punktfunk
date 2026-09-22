@@ -161,6 +161,14 @@ impl RingEditorScreen {
         fx.toast = Some("Quick actions reset".into());
     }
 
+    /// The picker's list while it is open, else the slot list.
+    pub(super) fn pan_list(&mut self) -> &mut MenuList {
+        match &mut self.picker {
+            Some(pk) => &mut pk.list,
+            None => &mut self.list,
+        }
+    }
+
     fn open_picker(&mut self, slot: usize) {
         let current = self.cfg.ring[slot]
             .as_ref()

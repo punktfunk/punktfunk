@@ -17,7 +17,7 @@ use skia_safe::{Canvas, Rect};
 pub(crate) struct PinHostsScreen {
     preset_id: String,
     preset_name: String,
-    list: MenuList,
+    pub(super) list: MenuList,
 }
 
 /// Saved hosts, primary tiles only: a pinned card is this screen's output, not a row.

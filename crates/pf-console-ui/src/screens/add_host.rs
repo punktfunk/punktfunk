@@ -22,7 +22,7 @@ enum Field {
 const FIELDS: [Field; 3] = [Field::Name, Field::Address, Field::Port];
 
 pub(crate) struct AddHostScreen {
-    list: MenuList,
+    pub(super) list: MenuList,
     keyboard: Keyboard,
     name: String,
     address: String,
@@ -432,6 +432,17 @@ mod tests {
         s.text_input("123456789");
         assert_eq!(s.port, "12345");
         assert!(!s.type_char('x'), "digits only");
+    }
+
+    /// A drag over the tray must not scroll the form under it.
+    #[test]
+    fn the_list_pans_only_while_no_field_is_edited() {
+        let mut screen = crate::screens::Screen::AddHost(AddHostScreen::new());
+        assert!(screen.pan_list().is_some());
+        if let crate::screens::Screen::AddHost(s) = &mut screen {
+            s.editing = Some(Field::Port);
+        }
+        assert!(screen.pan_list().is_none());
     }
 
     #[test]

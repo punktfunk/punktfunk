@@ -83,7 +83,7 @@ fn rows_for(ctx: &Ctx) -> Vec<Row> {
 }
 
 pub(crate) struct ControllersScreen {
-    list: MenuList,
+    pub(super) list: MenuList,
 }
 
 impl ControllersScreen {
