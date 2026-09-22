@@ -40,9 +40,10 @@ public final class ConsoleMetalView: ConsolePlatformView {
         self.queue = queue
         self.delegate = delegate
         super.init(frame: .zero)
-        #if canImport(UIKit)
+        #if os(iOS)
+        // The console takes one finger; a second would only fight the first for the cursor.
         isMultipleTouchEnabled = false
-        #else
+        #elseif canImport(AppKit)
         wantsLayer = true
         #endif
         let metal = metalLayer

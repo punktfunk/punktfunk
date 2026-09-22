@@ -371,6 +371,22 @@ pub unsafe extern "C" fn punktfunk_console_menu(
     })
 }
 
+/// Whether a Back would leave the console rather than pop a screen. A tvOS host binds the
+/// Menu button only while this is false, so at the root the press reaches the system.
+///
+/// # Safety
+/// `c` is live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_console_at_root(c: *const PunktfunkConsole) -> bool {
+    guard(true, || {
+        // SAFETY: live per the contract.
+        let Some(c) = (unsafe { c.as_ref() }) else {
+            return true;
+        };
+        c.shell().is_none_or(|shell| shell.console.at_root())
+    })
+}
+
 /// Touch or mouse in texture pixels: kind 0 move, 1 primary down (a mouse, acts at once),
 /// 2 primary up, 3 secondary down (= Back), 4 wheel (`dy` steps, + = up), 5 cancel,
 /// 6 primary down from a finger — deferred, so a swipe scrolls instead. `true` = consumed.

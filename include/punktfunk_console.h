@@ -114,6 +114,13 @@ bool punktfunk_console_frame(const PunktfunkConsole *c,
 // `c` is live.
 bool punktfunk_console_menu(const PunktfunkConsole *c, uint8_t event, uint8_t source);
 
+// Whether a Back would leave the console rather than pop a screen. A tvOS host binds the
+// Menu button only while this is false, so at the root the press reaches the system.
+//
+// # Safety
+// `c` is live.
+bool punktfunk_console_at_root(const PunktfunkConsole *c);
+
 // Touch or mouse in texture pixels: kind 0 move, 1 primary down (a mouse, acts at once),
 // 2 primary up, 3 secondary down (= Back), 4 wheel (`dy` steps, + = up), 5 cancel,
 // 6 primary down from a finger — deferred, so a swipe scrolls instead. `true` = consumed.

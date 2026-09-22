@@ -106,6 +106,11 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         discovery.stop()
     }
 
+    /// Re-root the console on a shelf — a deep link, or the shelf a game was launched from.
+    func navigate(to shelf: LibraryTarget, pin: StreamPreset?) {
+        bridge.push(.navigate, ConsoleJSON.entry(shelf.host, pin: pin, presets: presets.presets))
+    }
+
     /// Where the session the console asked for stands, so the takeover can narrate it.
     func session(_ phase: ConsoleBridge.Phase, message: String = "") {
         bridge.phase(phase, message: message)

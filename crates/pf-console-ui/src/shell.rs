@@ -542,6 +542,16 @@ impl Shell {
         self.t0.elapsed().as_secs_f64()
     }
 
+    /// Nothing to back out of: one screen, no modal, no takeover. A host whose Back belongs
+    /// to the system when the console does not want it (tvOS's Menu) asks before it binds.
+    pub(crate) fn at_root(&self) -> bool {
+        self.stack.len() == 1
+            && self.connecting.is_none()
+            && self.launching.is_none()
+            && self.wake.is_none()
+            && self.speed.is_none()
+    }
+
     pub(crate) fn editing(&self) -> bool {
         !self.in_stream
             && self.connecting.is_none()
