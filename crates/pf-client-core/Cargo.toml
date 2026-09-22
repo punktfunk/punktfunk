@@ -22,8 +22,8 @@ repository.workspace = true
 # audio, SDL gamepad service and the ureq fetches stay desktop-only, so this block carries
 # only what the portable modules touch. `quic` (not `ureq-tls`): `trust` names
 # `NativeClient`/`endpoint` for identity + pairing; nothing here fetches over HTTPS.
-# macOS takes the same subset so `pf-console-ui` builds and tests on the Mac.
-[target.'cfg(any(target_os = "android", target_os = "macos"))'.dependencies]
+# Apple targets take the same subset: the console crate builds for the Mac, iOS and tvOS.
+[target.'cfg(any(target_os = "android", target_vendor = "apple"))'.dependencies]
 punktfunk-core = { path = "../punktfunk-core", features = ["quic", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

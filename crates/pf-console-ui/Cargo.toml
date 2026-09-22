@@ -38,6 +38,10 @@ desktop = ["pf-client-core/desktop"]
 # armeabi-v7a one is (see the provenance note in clients/android/kit/build.gradle.kts).
 gl = ["skia-safe/gl"]
 
+# Skia's Metal backend for an Apple host (`clients/apple/native`). Take it with
+# `default-features = false`: rust-skia publishes no archive that has both `metal` and `vulkan`.
+metal = ["skia-safe/metal"]
+
 # Same Linux+Windows gating as the rest of the client stack.
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 pf-presenter = { path = "../pf-presenter", optional = true }
@@ -94,16 +98,21 @@ pf-client-core = { path = "../pf-client-core", default-features = false }
 skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
-# macOS: the shell builds and its tests run on the Mac; no host draws it there yet. CPU raster
-# is all the tests use. With this crate's default features the key is
-# `jpegd-jpege-pdf-textlayout-vulkan`, which rust-skia publishes for both darwin arches at 0.99.0:
-#   skia-binaries-a25a0fdb7d90429aa2d1-aarch64-apple-darwin-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
-[target.'cfg(target_os = "macos")'.dependencies]
+# Apple: the Mac runs the tests on CPU raster; an Apple host draws through `metal`. With this
+# crate's default features the darwin key is `jpegd-jpege-pdf-textlayout-vulkan`, and with
+# `default-features = false, features = ["metal"]` it is `jpegd-jpege-metal-pdf-textlayout`.
+# rust-skia publishes both for darwin and iOS at 0.99.0. tvOS has no rust-skia archive: its two
+# are ours, built by `scripts/skia-tvos/build.sh` (a patched skia-bindings), fetched through
+# `SKIA_BINARIES_URL` from git.unom.io/unom/skia-binaries/releases/download/0.99.0/, and
+# `build.rs` names the system libraries skia-bindings does not link there. SHA-256:
+#   904aedec99d84fe65c76f7d435642b5cadcee2290284a8ebe3b5a9383e6cfb78  …-aarch64-apple-tvos-…
+#   f664eb840eed925dc55071a07a4a542e63a4fd5f7cba41d667b1c6d4ad593c72  …-aarch64-apple-tvos-sim-…
+[target.'cfg(target_vendor = "apple")'.dependencies]
 skia-safe = { version = "0.99", features = ["textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
 # Everything the shell itself needs, on every platform it runs on.
-[target.'cfg(any(target_os = "linux", windows, target_os = "android", target_os = "macos", target_family = "wasm"))'.dependencies]
+[target.'cfg(any(target_os = "linux", windows, target_os = "android", target_vendor = "apple", target_family = "wasm"))'.dependencies]
 anyhow = "1"
 tracing = "0.1"
 # The host-facing model types (`HostRow`, `ConsoleCmd`, `LibraryGame`, …) derive serde so a host

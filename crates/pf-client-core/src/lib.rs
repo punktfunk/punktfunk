@@ -1,6 +1,6 @@
 //! UI-agnostic client plumbing for the desktop shells and the Vulkan session binary
-//! (Linux and Windows). macOS builds only the portable modules the console crate needs;
-//! `clients/apple` is the client there.
+//! (Linux and Windows). Apple targets build only the portable modules the console crate
+//! needs; `clients/apple` is the client there.
 //!
 //! Nothing here may depend on a UI toolkit. Frames reach the screen through `session`'s
 //! `SessionHandle` channels and `video`'s `DecodedImage` (RGBA, dmabuf fds, or a decoded
@@ -34,7 +34,7 @@ pub mod gamepad;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod menu_nav;
@@ -43,7 +43,7 @@ pub mod menu_nav;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod audio_format;
@@ -51,7 +51,7 @@ pub mod audio_format;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod decoder_pref;
@@ -60,7 +60,7 @@ pub mod decoder_pref;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod console;
@@ -71,7 +71,7 @@ pub mod keymap;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod library;
@@ -81,7 +81,7 @@ pub mod library;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod collate;
@@ -96,7 +96,7 @@ pub mod art_cache;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod host_actions;
@@ -105,7 +105,7 @@ pub mod host_actions;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod logring;
@@ -114,7 +114,7 @@ pub mod logring;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod deeplink;
@@ -123,7 +123,7 @@ pub mod deeplink;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod start;
@@ -162,7 +162,7 @@ mod sc2_capture;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod presets;
@@ -177,7 +177,7 @@ pub mod speed;
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 pub mod trust;
