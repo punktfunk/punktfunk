@@ -1,0 +1,39 @@
+[package]
+name = "punktfunk-client-apple"
+description = "punktfunk Apple client's static library: punktfunk-core's C ABI plus the Skia console on Metal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+# `libpunktfunk_apple.a` — scripts/build-xcframework.sh ships it as PunktfunkCore.xcframework's
+# library. It links punktfunk-core whole, so core's `punktfunk_*` C ABI is in it unchanged.
+name = "punktfunk_apple"
+crate-type = ["staticlib"]
+
+[dependencies]
+punktfunk-core = { path = "../../../crates/punktfunk-core", features = ["quic"] }
+
+# The console: the shell every other client shows, drawn through Skia's Metal backend into a
+# texture Swift hands over (`src/console.rs`). `metal` + `textlayout` = the prebuilt key
+# `jpegd-jpege-metal-pdf-textlayout`; build-xcframework.sh fetches and SHA-verifies each slice's.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+pf-console-ui = { path = "../../../crates/pf-console-ui", default-features = false, features = [
+    "metal",
+] }
+pf-client-core = { path = "../../../crates/pf-client-core", default-features = false }
+skia-safe = { version = "0.99", features = ["metal", "textlayout"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The shell logs through `tracing`; with no subscriber, its `log` feature forwards each event
+# to core's `log` backend, which is what `punktfunk_set_log_callback` hands Swift.
+tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[lints]
+workspace = true
