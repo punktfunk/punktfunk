@@ -9,11 +9,13 @@
 //! and a slip on one row does not blank the rest of the column.
 
 use crate::anim::{approach, entrances, springs, Entrance, EntranceAt, Spring, TRAY_C, TRAY_K};
+use crate::el::{Axis, El, Id, Tree};
 use crate::library::{BUMP_C, BUMP_K};
 use crate::pointer::{Pointer, PointerKind};
 use crate::theme::{accent, fg, fill, stroke, Fonts, PanelStroke, EDGE_INSET, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use skia_safe::{Canvas, Paint, PathBuilder, RRect, Rect};
+use std::cell::RefCell;
 
 // Menu list
 
@@ -200,6 +202,50 @@ const ROW_GAP: f64 = 6.0;
 const HEADER_H: f64 = 34.0;
 pub const ROW_MAX_W: f64 = 620.0;
 
+/// The list's scroll node, and row `i`'s cell in it.
+const LIST: &str = "menu-list";
+fn row_id(i: usize) -> Id {
+    Id::new("menu-row", i)
+}
+
+/// A row's trailing button rects at `cell`, in order. Drawing and hit-testing share it.
+fn button_rects(cell: Rect, row: &RowSpec, k: f64) -> impl Iterator<Item = Rect> + '_ {
+    let (x0, row_w, cy) = (
+        f64::from(cell.left),
+        f64::from(cell.width()),
+        f64::from(cell.center_y()),
+    );
+    let buttons_w = row.buttons.len() as f64 * BUTTON_PITCH * k;
+    let d = BUTTON_D * k;
+    (0..row.buttons.len()).map(move |j| {
+        let cx = x0 + row_w - 16.0 * k - buttons_w + (j as f64 + 0.5) * BUTTON_PITCH * k;
+        Rect::from_xywh(
+            (cx - d / 2.0) as f32,
+            (cy - d / 2.0) as f32,
+            d as f32,
+            d as f32,
+        )
+    })
+}
+
+/// A slider row's track at `cell`, inside its value field; empty on any other row.
+fn track_rect(cell: Rect, row: &RowSpec, k: f64, dot_gutter: f64) -> Rect {
+    if row.value.is_none() || !matches!(row.control, Control::Slider(_)) {
+        return Rect::new_empty();
+    }
+    let buttons_w = row.buttons.len() as f64 * BUTTON_PITCH * k;
+    let row_w = f64::from(cell.width()) - buttons_w - dot_gutter;
+    let chevron_w = if row.adjustable { 18.0 * k } else { 0.0 };
+    let (tw, th) = (120.0 * k, 6.0 * k);
+    let right = f64::from(cell.left) + row_w - 16.0 * k - chevron_w;
+    Rect::from_xywh(
+        (right - tw) as f32,
+        (f64::from(cell.center_y()) - th / 2.0) as f32,
+        tw as f32,
+        th as f32,
+    )
+}
+
 /// How far a stepped value slips before springing back, design units.
 /// One sprung offset plus a crossfade: rows draw a single text run, not neighbouring values.
 const SLIP_DP: f64 = 14.0;
@@ -228,7 +274,11 @@ struct SlipPrev {
 pub struct MenuList {
     pub cursor: usize,
     bump: Spring,
-    scroll: f64,
+    /// Layout, scroll and hit rects. A cell: the row painters borrow the list while
+    /// the tree lays them out.
+    tree: RefCell<Tree>,
+    /// The scroll centres the focused row. A finger pan lets go until focus moves.
+    follow: bool,
     /// Colour channel of focus (tint, alpha, chevrons), eased. Not sprung:
     /// overshoot would leave the palette.
     focus: Vec<f64>,
@@ -255,7 +305,7 @@ pub struct MenuList {
     age: f64,
     /// Next render seats scroll and focus instantly; see [`MenuList::jump_to`].
     snap: bool,
-    /// Last-drawn row rects, device px. Empty for rows scrolled out of view, so
+    /// Last-drawn row cells, device px. Empty for rows scrolled out of view, so
     /// an index here is an index into `rows`.
     geom: Vec<Rect>,
     /// Last-drawn trailing button rects per row, same indexing.
@@ -278,7 +328,8 @@ impl MenuList {
         MenuList {
             cursor: 0,
             bump: Spring::rest(0.0),
-            scroll: 0.0,
+            tree: RefCell::new(Tree::new()),
+            follow: true,
             focus: Vec::new(),
             focus_pop: Vec::new(),
             press: Spring::rest(1.0),
@@ -315,6 +366,7 @@ impl MenuList {
     pub fn jump_to(&mut self, cursor: usize) {
         self.cursor = cursor;
         self.snap = true;
+        self.follow = true;
     }
 
     /// Up/down move focus (Boundary = recoil). Left/right → [`ListMsg::Adjust`],
@@ -415,7 +467,34 @@ impl MenuList {
         }
     }
 
+    /// A finger drag: the rows follow it and a lift flings them. `false` when the drag
+    /// did not start on the list, so it scrolls by ticks instead.
+    pub fn pan(&mut self, p: Pointer) -> bool {
+        let tree = self.tree.get_mut();
+        match p.kind {
+            PointerKind::PanStart { horizontal: false } => {
+                let list = Id::new(LIST, 0);
+                if tree.scroll_at(p.x as f32, p.y as f32, Axis::Vertical) != Some(list) {
+                    return false;
+                }
+                tree.pan(list, 0.0);
+                self.follow = false;
+                true
+            }
+            PointerKind::Pan { dy, .. } => {
+                tree.pan(Id::new(LIST, 0), -dy as f32);
+                true
+            }
+            PointerKind::Fling { vy, .. } => {
+                tree.release(Id::new(LIST, 0), -vy as f32);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn step(&mut self, delta: i32, len: usize) -> Option<MenuPulse> {
+        self.follow = true;
         let target = self.cursor as i32 + delta;
         if len == 0 || target < 0 || target >= len as i32 {
             // End of the list: Boundary pulse plus 14 dp vertical recoil.
@@ -558,29 +637,81 @@ impl MenuList {
         self.shown
             .extend(rows.iter().map(|r| r.value.clone().unwrap_or_default()));
 
-        // Row tops in design units, headers included, so scroll and draw share one list.
-        let mut tops = Vec::with_capacity(rows.len());
-        let mut y = 0.0;
-        for row in rows {
-            if row.header.is_some() {
-                y += HEADER_H;
-            }
-            tops.push(y);
-            y += ROW_H + ROW_GAP;
-        }
-        let content_h = (y - ROW_GAP).max(0.0) * k;
-        let view_h = f64::from(rect.height());
-
-        let focused_center = tops.get(self.cursor).map_or(0.0, |t| (t + ROW_H / 2.0) * k);
-        let target = (focused_center - view_h / 2.0).clamp(0.0, (content_h - view_h).max(0.0));
-        self.scroll = if std::mem::take(&mut self.snap) {
-            target
+        // Rows are cells in a scroll column, `ROW_GAP` apart, a header band above a
+        // sectioned row. Each cell's painter draws the row as it always has.
+        let list = Id::new(LIST, 0);
+        let row_w = (ROW_MAX_W * k).min(f64::from(rect.width()) - 48.0 * k);
+        let dot_gutter = if rows.iter().any(|r| r.dot) {
+            16.0 * k
         } else {
-            approach(self.scroll, target, dt, 0.08)
+            0.0
         };
-        if (self.scroll - target).abs() < 0.25 {
-            self.scroll = target;
+        let snap = std::mem::take(&mut self.snap);
+        self.tree.get_mut().tick(dt as f32);
+        let this = &*self;
+        let root = El::scroll(list, Axis::Vertical)
+            .gap((ROW_GAP * k) as f32)
+            .style(|s| s.align_items = Some(taffy::AlignItems::CENTER))
+            .children(rows.iter().enumerate().map(|(i, row)| {
+                let cell = El::paint(move |canvas, cell| {
+                    this.paint_row(canvas, fonts, i, row, cell, k, dot_gutter);
+                })
+                .id(row_id(i))
+                .size(row_w as f32, (ROW_H * k) as f32);
+                match row.header {
+                    Some(_) => cell.style(|s| {
+                        s.margin.top = taffy::LengthPercentageAuto::length((HEADER_H * k) as f32);
+                    }),
+                    None => cell,
+                }
+            }));
+        let mut tree = this.tree.borrow_mut();
+        let frame = tree.layout(root, rect);
+        // Centre the focused row, eased, while the list follows focus and no finger has it.
+        let (view, max) = frame.scroll(list).expect("the list is a scroll");
+        let target = frame.rect(row_id(this.cursor)).map_or(0.0, |r| {
+            (r.center_y() - view.top - view.height() / 2.0).clamp(0.0, max)
+        });
+        let following = this.follow && !tree.moving(list);
+        if following {
+            let next = if snap {
+                target
+            } else {
+                approach(f64::from(tree.offset(list)), f64::from(target), dt, 0.08) as f32
+            };
+            let next = if (next - target).abs() < 0.25 {
+                target
+            } else {
+                next
+            };
+            tree.set_offset(list, next);
         }
+        let scroll_settled = !tree.moving(list) && (!following || tree.offset(list) == target);
+        tree.paint(canvas, frame);
+        drop(tree);
+
+        // What a pointer hits: the cells as painted, not the drawing's ease.
+        let tree = self.tree.get_mut();
+        self.geom = (0..rows.len())
+            .map(|i| tree.rect(row_id(i)).unwrap_or_else(Rect::new_empty))
+            .collect();
+        self.buttons_geom = rows
+            .iter()
+            .zip(&self.geom)
+            .map(|(row, cell)| match cell.is_empty() {
+                true => Vec::new(),
+                false => button_rects(*cell, row, k).collect(),
+            })
+            .collect();
+        self.tracks_geom = rows
+            .iter()
+            .zip(&self.geom)
+            .map(|(row, cell)| match cell.is_empty() {
+                true => Rect::new_empty(),
+                false => track_rect(*cell, row, k, dot_gutter),
+            })
+            .collect();
+
         let cursor = if active { Some(self.cursor) } else { None };
         let focus_target = |i: usize| if Some(i) == cursor { 1.0 } else { 0.0 };
         self.settled = self.entrance.is_none()
@@ -599,407 +730,366 @@ impl MenuList {
             && self.press.pos == 1.0
             && self.press.vel == 0.0
             && self.slip.pos == 0.0
-            && self.scroll == target
+            && scroll_settled
             && self
                 .knobs
                 .iter()
                 .zip(rows)
                 .all(|(knob, r)| !matches!(r.control, Control::Toggle(on) if *knob != f64::from(u8::from(on))));
+    }
 
-        let row_w = (ROW_MAX_W * k).min(f64::from(rect.width()) - 48.0 * k);
-        let x0 = f64::from(rect.left) + (f64::from(rect.width()) - row_w) / 2.0;
-
-        canvas.save();
-        canvas.clip_rect(rect, None, true);
-        self.geom.clear();
-        self.geom.resize(rows.len(), Rect::new_empty());
-        self.buttons_geom.clear();
-        self.buttons_geom.resize(rows.len(), Vec::new());
-        self.tracks_geom.clear();
-        self.tracks_geom.resize(rows.len(), Rect::new_empty());
-        let dot_gutter = if rows.iter().any(|r| r.dot) {
-            16.0 * k
+    /// One row at `cell`, its laid-out rect. Bump, entrance rise and focus scale move
+    /// the drawing, never the rect a pointer hits.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_row(
+        &self,
+        canvas: &Canvas,
+        fonts: &Fonts,
+        i: usize,
+        row: &RowSpec,
+        cell: Rect,
+        k: f64,
+        dot_gutter: f64,
+    ) {
+        let f = self.focus[i];
+        let (x0, row_w) = (f64::from(cell.left), f64::from(cell.width()));
+        let ent = self
+            .entrance
+            .map_or(EntranceAt::SETTLED, |e| e.at(i, self.age));
+        let top = f64::from(cell.top) + self.bump.pos * k + (1.0 - ent.travel) * ROW_RISE * k;
+        if let Some(header) = row.header {
+            fonts.draw_tracked(
+                canvas,
+                &header.to_uppercase(),
+                x0 + 16.0 * k,
+                top - 12.0 * k,
+                W::SemiBold,
+                12.0 * k,
+                1.4 * k,
+                fg(0.45),
+            );
+        }
+        // Scale 0.98 → 1.0 about the centre, times the confirm dip. Two
+        // channels: pop = this is the row, dip = you just pressed it.
+        let pop = self.focus_pop.get(i).map_or(f, |s| s.pos);
+        // A switch is its own feedback: squashing the row around it reads as the list
+        // lurching on what is one control moving.
+        let dip = if i == self.cursor && !matches!(row.control, Control::Toggle(_)) {
+            self.press.pos
         } else {
-            0.0
+            1.0
         };
-        for (i, row) in rows.iter().enumerate() {
-            let f = self.focus[i];
-            let top = f64::from(rect.top) + tops[i] * k - self.scroll + self.bump.pos * k;
-            if top + ROW_H * k < f64::from(rect.top) - 8.0 * k
-                || top > f64::from(rect.bottom) + 8.0 * k
-            {
-                continue;
+        let scale = (0.98 + 0.02 * pop) * dip;
+        let (cx, cy) = (x0 + row_w / 2.0, top + ROW_H * k / 2.0);
+        canvas.save();
+        canvas.translate((cx as f32, cy as f32));
+        canvas.scale((scale as f32, scale as f32));
+        canvas.translate((-cx as f32, -cy as f32));
+        // Per-row layer only while arriving (panel + two text runs). Bounds
+        // are the row rect so this is never a full-screen pass.
+        let fading = ent.fade < 1.0;
+        if fading {
+            let bounds = Rect::from_xywh(x0 as f32, top as f32, row_w as f32, (ROW_H * k) as f32);
+            canvas.save_layer_alpha_f(bounds, ent.fade as f32);
+        }
+        let r = Rect::from_xywh(x0 as f32, top as f32, row_w as f32, (ROW_H * k) as f32);
+        let stroke = if row.caret {
+            PanelStroke::Brand(0.7)
+        } else {
+            PanelStroke::Plain(0.06 + 0.22 * f as f32)
+        };
+        let tint = if row.caret {
+            Some(accent(0.30))
+        } else if f > 0.01 {
+            Some(accent(0.30 * f as f32))
+        } else {
+            None
+        };
+        crate::theme::panel(canvas, r, 14.0, tint, stroke, k as f32);
+        // Specular only on the focused row; a settings screen paints dozens of idle rows.
+        if f > 0.5 {
+            crate::theme::panel_highlight(canvas, r, 14.0, k as f32);
+        }
+
+        // A note under the label lifts the label; the two share the row's height. The value
+        // stays on the row's centre line with the switch and the chevrons — lifted with the
+        // label it sat visibly above them on every row that carries a note.
+        let centred = cy + 16.0 * k * 0.36;
+        let baseline = if row.note.is_some() {
+            cy - 2.0 * k
+        } else {
+            centred
+        };
+        let tone = |on: skia_safe::Color4f, off: skia_safe::Color4f| {
+            if row.danger {
+                crate::theme::ERROR
+            } else if row.enabled {
+                on
+            } else {
+                off
             }
-            // Cull before the entrance: off-screen rows skip the rise, which is < 8 dp anyway.
-            let ent = self
-                .entrance
-                .map_or(EntranceAt::SETTLED, |e| e.at(i, self.age));
-            let top = top + (1.0 - ent.travel) * ROW_RISE * k;
-            if let Some(header) = row.header {
-                fonts.draw_tracked(
+        };
+        // Leading marks shift the label: a Lucide icon.
+        let mut label_x = x0 + 16.0 * k;
+        if let Some(icon) = row.icon.and_then(crate::icons::by_name) {
+            crate::icons::draw_icon(
+                canvas,
+                icon,
+                (label_x + 10.0 * k) as f32,
+                cy as f32,
+                (20.0 * k) as f32,
+                tone(fg(0.85), fg(0.4)),
+            );
+            label_x += 32.0 * k;
+        }
+        if row.handle {
+            if let Some(grip) = crate::icons::by_name("grip-vertical") {
+                let grip_tone = if row.held {
+                    accent(1.0)
+                } else {
+                    tone(fg(0.7), fg(0.3))
+                };
+                crate::icons::draw_icon(
                     canvas,
-                    &header.to_uppercase(),
-                    x0 + 16.0 * k,
-                    top - 12.0 * k,
-                    W::SemiBold,
-                    12.0 * k,
-                    1.4 * k,
-                    fg(0.45),
+                    grip,
+                    (label_x + 8.0 * k) as f32,
+                    cy as f32,
+                    (20.0 * k) as f32,
+                    grip_tone,
                 );
             }
-            // Scale 0.98 → 1.0 about the centre, times the confirm dip. Two
-            // channels: pop = this is the row, dip = you just pressed it.
-            let pop = self.focus_pop.get(i).map_or(f, |s| s.pos);
-            // A switch is its own feedback: squashing the row around it reads as the list
-            // lurching on what is one control moving.
-            let dip = if i == self.cursor && !matches!(row.control, Control::Toggle(_)) {
-                self.press.pos
+            label_x += 28.0 * k;
+        }
+        // Trailing buttons take the row's right end; the value field ends before them.
+        let buttons_w = row.buttons.len() as f64 * BUTTON_PITCH * k;
+        for (j, (name, b)) in row.buttons.iter().zip(button_rects(r, row, k)).enumerate() {
+            let (cx, d) = (f64::from(b.center_x()), BUTTON_D * k);
+            let lit = row.button == Some(j) && f > 0.5;
+            if lit {
+                canvas.draw_circle((cx as f32, cy as f32), (d / 2.0) as f32, &fill(accent(1.0)));
             } else {
-                1.0
-            };
-            let scale = (0.98 + 0.02 * pop) * dip;
-            let (cx, cy) = (x0 + row_w / 2.0, top + ROW_H * k / 2.0);
-            canvas.save();
-            canvas.translate((cx as f32, cy as f32));
-            canvas.scale((scale as f32, scale as f32));
-            canvas.translate((-cx as f32, -cy as f32));
-            // Per-row layer only while arriving (panel + two text runs). Bounds
-            // are the row rect so this is never a full-screen pass.
-            let fading = ent.fade < 1.0;
-            if fading {
-                let bounds =
-                    Rect::from_xywh(x0 as f32, top as f32, row_w as f32, (ROW_H * k) as f32);
-                canvas.save_layer_alpha_f(bounds, ent.fade as f32);
+                canvas.draw_circle(
+                    (cx as f32, cy as f32),
+                    (d / 2.0) as f32,
+                    &fill(fg(0.04 + 0.06 * f as f32)),
+                );
             }
-            let r = Rect::from_xywh(x0 as f32, top as f32, row_w as f32, (ROW_H * k) as f32);
-            // Hit-test the unscaled rect: 2 % scale is inside finger slop; click must not depend on the ease.
-            self.geom[i] = r;
-            let stroke = if row.caret {
-                PanelStroke::Brand(0.7)
-            } else {
-                PanelStroke::Plain(0.06 + 0.22 * f as f32)
-            };
-            let tint = if row.caret {
-                Some(accent(0.30))
-            } else if f > 0.01 {
-                Some(accent(0.30 * f as f32))
-            } else {
-                None
-            };
-            crate::theme::panel(canvas, r, 14.0, tint, stroke, k as f32);
-            // Specular only on the focused row; a settings screen paints dozens of idle rows.
-            if f > 0.5 {
-                crate::theme::panel_highlight(canvas, r, 14.0, k as f32);
-            }
-
-            // A note under the label lifts the label; the two share the row's height. The value
-            // stays on the row's centre line with the switch and the chevrons — lifted with the
-            // label it sat visibly above them on every row that carries a note.
-            let centred = cy + 16.0 * k * 0.36;
-            let baseline = if row.note.is_some() {
-                cy - 2.0 * k
-            } else {
-                centred
-            };
-            let tone = |on: skia_safe::Color4f, off: skia_safe::Color4f| {
-                if row.danger {
-                    crate::theme::ERROR
-                } else if row.enabled {
-                    on
+            if let Some(icon) = crate::icons::by_name(name) {
+                let icon_tone = if lit {
+                    crate::theme::on_accent()
                 } else {
-                    off
-                }
-            };
-            // Leading marks shift the label: a Lucide icon.
-            let mut label_x = x0 + 16.0 * k;
-            if let Some(icon) = row.icon.and_then(crate::icons::by_name) {
+                    tone(fg(0.9), fg(0.45))
+                };
                 crate::icons::draw_icon(
                     canvas,
                     icon,
-                    (label_x + 10.0 * k) as f32,
+                    cx as f32,
                     cy as f32,
-                    (20.0 * k) as f32,
-                    tone(fg(0.85), fg(0.4)),
-                );
-                label_x += 32.0 * k;
-            }
-            if row.handle {
-                if let Some(grip) = crate::icons::by_name("grip-vertical") {
-                    let grip_tone = if row.held {
-                        accent(1.0)
-                    } else {
-                        tone(fg(0.7), fg(0.3))
-                    };
-                    crate::icons::draw_icon(
-                        canvas,
-                        grip,
-                        (label_x + 8.0 * k) as f32,
-                        cy as f32,
-                        (20.0 * k) as f32,
-                        grip_tone,
-                    );
-                }
-                label_x += 28.0 * k;
-            }
-            // Trailing buttons take the row's right end; the value field ends before them.
-            let buttons_w = row.buttons.len() as f64 * BUTTON_PITCH * k;
-            for (j, name) in row.buttons.iter().enumerate() {
-                let cx = x0 + row_w - 16.0 * k - buttons_w + (j as f64 + 0.5) * BUTTON_PITCH * k;
-                let d = BUTTON_D * k;
-                let r = Rect::from_xywh(
-                    (cx - d / 2.0) as f32,
-                    (cy - d / 2.0) as f32,
-                    d as f32,
-                    d as f32,
-                );
-                self.buttons_geom[i].push(r);
-                let lit = row.button == Some(j) && f > 0.5;
-                if lit {
-                    canvas.draw_circle(
-                        (cx as f32, cy as f32),
-                        (d / 2.0) as f32,
-                        &fill(accent(1.0)),
-                    );
-                } else {
-                    canvas.draw_circle(
-                        (cx as f32, cy as f32),
-                        (d / 2.0) as f32,
-                        &fill(fg(0.04 + 0.06 * f as f32)),
-                    );
-                }
-                if let Some(icon) = crate::icons::by_name(name) {
-                    let icon_tone = if lit {
-                        crate::theme::on_accent()
-                    } else {
-                        tone(fg(0.9), fg(0.45))
-                    };
-                    crate::icons::draw_icon(
-                        canvas,
-                        icon,
-                        cx as f32,
-                        cy as f32,
-                        (18.0 * k) as f32,
-                        icon_tone,
-                    );
-                }
-            }
-            let row_w = row_w - buttons_w;
-            // The dot marks the row's value, so it reads as part of that group: outboard of
-            // the value, inboard of the buttons. The gutter is reserved on every row, or one
-            // marked row pulls its own value in past its neighbours'.
-            if row.dot {
-                canvas.draw_circle(
-                    ((x0 + row_w - 12.0 * k) as f32, cy as f32),
-                    (4.0 * k) as f32,
-                    &fill(accent(1.0)),
+                    (18.0 * k) as f32,
+                    icon_tone,
                 );
             }
-            let row_w = row_w - dot_gutter;
-            if let Some(note) = &row.note {
-                fonts.draw_clipped(
-                    canvas,
-                    note,
-                    label_x,
-                    cy + 14.0 * k,
-                    W::Regular,
-                    11.5 * k,
-                    fg(0.5),
-                    row_w * 0.6,
-                );
-            }
-            if row.value.is_none() {
-                let color = tone(accent(1.0), fg(0.35));
-                let tw = fonts.measure(&row.label, W::SemiBold, 16.0 * k) as f64;
-                fonts.draw(
-                    canvas,
-                    &row.label,
-                    cx - tw / 2.0,
-                    baseline,
-                    W::SemiBold,
-                    16.0 * k,
-                    color,
-                );
-            } else if let Control::Toggle(_) = row.control {
-                fonts.draw(
-                    canvas,
-                    &row.label,
-                    label_x,
-                    baseline,
-                    W::SemiBold,
-                    16.0 * k,
-                    tone(fg(1.0), fg(0.55)),
-                );
-                // The switch: a 36×20 track, the knob eased across it, accent when on.
-                let knob = self.knobs.get(i).copied().unwrap_or(0.0);
-                let (tw, th) = (36.0 * k, 20.0 * k);
-                let track = Rect::from_xywh(
-                    (x0 + row_w - 16.0 * k - tw) as f32,
-                    (cy - th / 2.0) as f32,
-                    tw as f32,
-                    th as f32,
-                );
-                let on_alpha = if row.enabled { 1.0 } else { 0.35 };
-                let track_color = skia_safe::Color4f::new(
-                    accent(1.0).r * knob as f32 + fg(0.25).r * (1.0 - knob as f32),
-                    accent(1.0).g * knob as f32 + fg(0.25).g * (1.0 - knob as f32),
-                    accent(1.0).b * knob as f32 + fg(0.25).b * (1.0 - knob as f32),
-                    (0.25 + 0.75 * knob as f32) * on_alpha,
-                );
+        }
+        let row_w = row_w - buttons_w;
+        // The dot marks the row's value, so it reads as part of that group: outboard of
+        // the value, inboard of the buttons. The gutter is reserved on every row, or one
+        // marked row pulls its own value in past its neighbours'.
+        if row.dot {
+            canvas.draw_circle(
+                ((x0 + row_w - 12.0 * k) as f32, cy as f32),
+                (4.0 * k) as f32,
+                &fill(accent(1.0)),
+            );
+        }
+        let row_w = row_w - dot_gutter;
+        if let Some(note) = &row.note {
+            fonts.draw_clipped(
+                canvas,
+                note,
+                label_x,
+                cy + 14.0 * k,
+                W::Regular,
+                11.5 * k,
+                fg(0.5),
+                row_w * 0.6,
+            );
+        }
+        if row.value.is_none() {
+            let color = tone(accent(1.0), fg(0.35));
+            let tw = fonts.measure(&row.label, W::SemiBold, 16.0 * k) as f64;
+            fonts.draw(
+                canvas,
+                &row.label,
+                cx - tw / 2.0,
+                baseline,
+                W::SemiBold,
+                16.0 * k,
+                color,
+            );
+        } else if let Control::Toggle(_) = row.control {
+            fonts.draw(
+                canvas,
+                &row.label,
+                label_x,
+                baseline,
+                W::SemiBold,
+                16.0 * k,
+                tone(fg(1.0), fg(0.55)),
+            );
+            // The switch: a 36×20 track, the knob eased across it, accent when on.
+            let knob = self.knobs.get(i).copied().unwrap_or(0.0);
+            let (tw, th) = (36.0 * k, 20.0 * k);
+            let track = Rect::from_xywh(
+                (x0 + row_w - 16.0 * k - tw) as f32,
+                (cy - th / 2.0) as f32,
+                tw as f32,
+                th as f32,
+            );
+            let on_alpha = if row.enabled { 1.0 } else { 0.35 };
+            let track_color = skia_safe::Color4f::new(
+                accent(1.0).r * knob as f32 + fg(0.25).r * (1.0 - knob as f32),
+                accent(1.0).g * knob as f32 + fg(0.25).g * (1.0 - knob as f32),
+                accent(1.0).b * knob as f32 + fg(0.25).b * (1.0 - knob as f32),
+                (0.25 + 0.75 * knob as f32) * on_alpha,
+            );
+            canvas.draw_rrect(
+                RRect::new_rect_xy(track, th as f32 / 2.0, th as f32 / 2.0),
+                &fill(track_color),
+            );
+            let kx = track.left as f64 + th / 2.0 + knob * (tw - th);
+            canvas.draw_circle(
+                (kx as f32, cy as f32),
+                (th / 2.0 - 3.0 * k) as f32,
+                &fill(skia_safe::Color4f::new(1.0, 1.0, 1.0, on_alpha)),
+            );
+        } else {
+            fonts.draw(
+                canvas,
+                &row.label,
+                label_x,
+                baseline,
+                W::SemiBold,
+                16.0 * k,
+                tone(fg(1.0), fg(0.55)),
+            );
+            let value = row.value.as_deref().unwrap_or_default();
+            let vcolor = if row.danger {
+                crate::theme::ERROR
+            } else if row.value_dim || !row.enabled {
+                fg(0.35)
+            } else if f > 0.5 {
+                fg(1.0)
+            } else {
+                fg(0.6 + 0.4 * f as f32)
+            };
+            let chevron_w = if row.adjustable { 18.0 * k } else { 0.0 };
+            let caret_w = if row.caret { 8.0 * k } else { 0.0 };
+            // A slider's track sits inside the value field, the readout to its left.
+            let track_w = if let Control::Slider(_) = row.control {
+                120.0 * k
+            } else {
+                0.0
+            };
+            if let Control::Slider(frac) = row.control {
+                let th = 6.0 * k;
+                let track = track_rect(r, row, k, dot_gutter);
                 canvas.draw_rrect(
                     RRect::new_rect_xy(track, th as f32 / 2.0, th as f32 / 2.0),
-                    &fill(track_color),
+                    &fill(fg(0.18)),
                 );
-                let kx = track.left as f64 + th / 2.0 + knob * (tw - th);
-                canvas.draw_circle(
-                    (kx as f32, cy as f32),
-                    (th / 2.0 - 3.0 * k) as f32,
-                    &fill(skia_safe::Color4f::new(1.0, 1.0, 1.0, on_alpha)),
+                let filled =
+                    Rect::from_xywh(track.left, track.top, track.width() * frac, track.height());
+                canvas.draw_rrect(
+                    RRect::new_rect_xy(filled, th as f32 / 2.0, th as f32 / 2.0),
+                    &fill(if row.enabled { accent(1.0) } else { fg(0.35) }),
                 );
+            }
+            // Each string right-aligns on its own measured width against a
+            // fixed right edge. Sharing the incoming string's anchor left-
+            // aligns the outgoing one by the width delta and hangs it past
+            // the field.
+            let vmax = row_w * 0.55 - track_w;
+            let val_right = x0 + row_w
+                - 16.0 * k
+                - chevron_w
+                - caret_w
+                - track_w
+                - if track_w > 0.0 { 12.0 * k } else { 0.0 };
+            let place = |s: &str| val_right - f64::from(fonts.measure(s, W::Medium, 15.0 * k));
+            // Gate on index AND label: an index is not identity across a rebuild.
+            let slipping = self
+                .slip_prev
+                .as_ref()
+                .filter(|p| p.row == i && p.label == row.label);
+            let dx = if slipping.is_some() {
+                self.slip.pos * k
             } else {
-                fonts.draw(
-                    canvas,
-                    &row.label,
-                    label_x,
-                    baseline,
-                    W::SemiBold,
-                    16.0 * k,
-                    tone(fg(1.0), fg(0.55)),
+                0.0
+            };
+            // Same row-gate as `dx`: one slip spring for the list, so an
+            // ungated fade blanks every value. Signed, not `.abs()`, so
+            // overshoot through zero does not fade the ghost back in.
+            let gone = slipping.map_or(0.0, |p| (self.slip.pos / p.arm).clamp(0.0, 1.0) as f32);
+            let alpha =
+                |c: skia_safe::Color4f, a: f32| skia_safe::Color4f::new(c.r, c.g, c.b, c.a * a);
+            // Truncate the head before placing: right-align the drawn string.
+            // Measuring the untruncated one floats long values short of the edge.
+            let shown = truncate_head(fonts, value, W::Medium, 15.0 * k, vmax);
+            // Clip the field only while slipping: the list clip is the full
+            // window, and a settled value already fits.
+            if slipping.is_some() {
+                canvas.save();
+                canvas.clip_rect(
+                    Rect::from_ltrb((val_right - vmax) as f32, r.top, val_right as f32, r.bottom),
+                    None,
+                    true,
                 );
-                let value = row.value.as_deref().unwrap_or_default();
-                let vcolor = if row.danger {
-                    crate::theme::ERROR
-                } else if row.value_dim || !row.enabled {
-                    fg(0.35)
-                } else if f > 0.5 {
-                    fg(1.0)
-                } else {
-                    fg(0.6 + 0.4 * f as f32)
-                };
-                let chevron_w = if row.adjustable { 18.0 * k } else { 0.0 };
-                let caret_w = if row.caret { 8.0 * k } else { 0.0 };
-                // A slider's track sits inside the value field, the readout to its left.
-                let track_w = if let Control::Slider(_) = row.control {
-                    120.0 * k
-                } else {
-                    0.0
-                };
-                if let Control::Slider(frac) = row.control {
-                    let (th, right) = (6.0 * k, x0 + row_w - 16.0 * k - chevron_w);
-                    let track = Rect::from_xywh(
-                        (right - track_w) as f32,
-                        (cy - th / 2.0) as f32,
-                        track_w as f32,
-                        th as f32,
-                    );
-                    self.tracks_geom[i] = track;
-                    canvas.draw_rrect(
-                        RRect::new_rect_xy(track, th as f32 / 2.0, th as f32 / 2.0),
-                        &fill(fg(0.18)),
-                    );
-                    let filled = Rect::from_xywh(
-                        track.left,
-                        track.top,
-                        track.width() * frac,
-                        track.height(),
-                    );
-                    canvas.draw_rrect(
-                        RRect::new_rect_xy(filled, th as f32 / 2.0, th as f32 / 2.0),
-                        &fill(if row.enabled { accent(1.0) } else { fg(0.35) }),
-                    );
-                }
-                // Each string right-aligns on its own measured width against a
-                // fixed right edge. Sharing the incoming string's anchor left-
-                // aligns the outgoing one by the width delta and hangs it past
-                // the field.
-                let vmax = row_w * 0.55 - track_w;
-                let val_right = x0 + row_w
-                    - 16.0 * k
-                    - chevron_w
-                    - caret_w
-                    - track_w
-                    - if track_w > 0.0 { 12.0 * k } else { 0.0 };
-                let place = |s: &str| val_right - f64::from(fonts.measure(s, W::Medium, 15.0 * k));
-                // Gate on index AND label: an index is not identity across a rebuild.
-                let slipping = self
-                    .slip_prev
-                    .as_ref()
-                    .filter(|p| p.row == i && p.label == row.label);
-                let dx = if slipping.is_some() {
-                    self.slip.pos * k
-                } else {
-                    0.0
-                };
-                // Same row-gate as `dx`: one slip spring for the list, so an
-                // ungated fade blanks every value. Signed, not `.abs()`, so
-                // overshoot through zero does not fade the ghost back in.
-                let gone = slipping.map_or(0.0, |p| (self.slip.pos / p.arm).clamp(0.0, 1.0) as f32);
-                let alpha =
-                    |c: skia_safe::Color4f, a: f32| skia_safe::Color4f::new(c.r, c.g, c.b, c.a * a);
-                // Truncate the head before placing: right-align the drawn string.
-                // Measuring the untruncated one floats long values short of the edge.
-                let shown = truncate_head(fonts, value, W::Medium, 15.0 * k, vmax);
-                // Clip the field only while slipping: the list clip is the full
-                // window, and a settled value already fits.
-                if slipping.is_some() {
-                    canvas.save();
-                    canvas.clip_rect(
-                        Rect::from_ltrb(
-                            (val_right - vmax) as f32,
-                            r.top,
-                            val_right as f32,
-                            r.bottom,
-                        ),
-                        None,
-                        true,
-                    );
-                }
-                if let Some(p) = slipping {
-                    let prev_text = truncate_head(fonts, &p.text, W::Medium, 15.0 * k, vmax);
-                    fonts.draw(
-                        canvas,
-                        &prev_text,
-                        place(&prev_text) + dx + p.offset * k,
-                        centred,
-                        W::Medium,
-                        15.0 * k,
-                        alpha(vcolor, gone),
-                    );
-                }
+            }
+            if let Some(p) = slipping {
+                let prev_text = truncate_head(fonts, &p.text, W::Medium, 15.0 * k, vmax);
                 fonts.draw(
                     canvas,
-                    &shown,
-                    place(&shown) + dx,
+                    &prev_text,
+                    place(&prev_text) + dx + p.offset * k,
                     centred,
                     W::Medium,
                     15.0 * k,
-                    alpha(vcolor, 1.0 - gone),
+                    alpha(vcolor, gone),
                 );
-                if slipping.is_some() {
-                    canvas.restore(); // value-field clip
-                }
-                if row.caret {
-                    // Ride `dx` so the caret stays on the text end mid-slip.
-                    canvas.draw_rect(
-                        Rect::from_xywh(
-                            (val_right + 3.0 * k + dx) as f32,
-                            (cy - 9.0 * k) as f32,
-                            (2.0 * k) as f32,
-                            (18.0 * k) as f32,
-                        ),
-                        &fill(accent(1.0)),
-                    );
-                }
-                if row.adjustable && f > 0.01 {
-                    let alpha = 0.6 * f as f32;
-                    // After, outside the field clip: a moving value passes under the chevrons.
-                    chevron(canvas, place(&shown) - 11.0 * k, cy, 4.0 * k, true, alpha);
-                    chevron(canvas, x0 + row_w - 16.0 * k, cy, 4.0 * k, false, alpha);
-                }
             }
-            if fading {
-                canvas.restore(); // entrance layer
+            fonts.draw(
+                canvas,
+                &shown,
+                place(&shown) + dx,
+                centred,
+                W::Medium,
+                15.0 * k,
+                alpha(vcolor, 1.0 - gone),
+            );
+            if slipping.is_some() {
+                canvas.restore(); // value-field clip
             }
-            canvas.restore();
+            if row.caret {
+                // Ride `dx` so the caret stays on the text end mid-slip.
+                canvas.draw_rect(
+                    Rect::from_xywh(
+                        (val_right + 3.0 * k + dx) as f32,
+                        (cy - 9.0 * k) as f32,
+                        (2.0 * k) as f32,
+                        (18.0 * k) as f32,
+                    ),
+                    &fill(accent(1.0)),
+                );
+            }
+            if row.adjustable && f > 0.01 {
+                let alpha = 0.6 * f as f32;
+                // After, outside the field clip: a moving value passes under the chevrons.
+                chevron(canvas, place(&shown) - 11.0 * k, cy, 4.0 * k, true, alpha);
+                chevron(canvas, x0 + row_w - 16.0 * k, cy, 4.0 * k, false, alpha);
+            }
+        }
+        if fading {
+            canvas.restore(); // entrance layer
         }
         canvas.restore();
     }
