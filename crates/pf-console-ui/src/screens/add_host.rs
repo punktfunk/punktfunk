@@ -436,13 +436,34 @@ mod tests {
 
     /// A drag over the tray must not scroll the form under it.
     #[test]
-    fn the_list_pans_only_while_no_field_is_edited() {
-        let mut screen = crate::screens::Screen::AddHost(AddHostScreen::new());
-        assert!(screen.pan_list().is_some());
+    fn the_form_takes_a_drag_only_while_no_field_is_edited() {
+        use crate::pointer::{Pointer, PointerKind};
+        let mut settings = Settings::default();
+        let library = crate::library::LibraryShared::default();
+        let fonts = crate::theme::build_fonts().unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+        let mut s = AddHostScreen::new();
+        s.render(
+            surface.canvas(),
+            Rect::from_xywh(0.0, 0.0, 1280.0, 800.0),
+            1.0,
+            1.0 / 60.0,
+            &fonts,
+            &mut ctx(&mut settings, &[], &library, false),
+        );
+        let row = s.list.row_rect(0).expect("the form drew");
+        let drag = Pointer {
+            x: f64::from(row.center_x()),
+            y: f64::from(row.center_y()),
+            kind: PointerKind::PanStart { horizontal: false },
+        };
+        s.editing = Some(Field::Port);
+        let mut screen = crate::screens::Screen::AddHost(s);
+        assert!(!screen.pan(drag), "the tray is up");
         if let crate::screens::Screen::AddHost(s) = &mut screen {
-            s.editing = Some(Field::Port);
+            s.editing = None;
         }
-        assert!(screen.pan_list().is_none());
+        assert!(screen.pan(drag), "the form takes it");
     }
 
     #[test]

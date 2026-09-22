@@ -2,6 +2,7 @@
 
 use super::{Axis, El, Id, Kind, Painter, Virtual};
 use crate::anim::{springs, Spring};
+use crate::pointer::{Pointer, PointerKind};
 use skia_safe::{Canvas, Rect};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, Dimension, NodeId, Size, TaffyTree};
@@ -230,6 +231,29 @@ impl Tree {
         } else {
             delta
         };
+    }
+
+    /// A finger drag on the vertical scroll `scroll`: taken at `PanStart` when its anchor
+    /// is on it, its steps then move the offset and its lift flings it.
+    pub fn drag(&mut self, scroll: Id, p: Pointer) -> bool {
+        match p.kind {
+            PointerKind::PanStart { horizontal: false } => {
+                let on = self.scroll_at(p.x as f32, p.y as f32, Axis::Vertical) == Some(scroll);
+                if on {
+                    self.pan(scroll, 0.0);
+                }
+                on
+            }
+            PointerKind::Pan { dy, .. } => {
+                self.pan(scroll, -dy as f32);
+                true
+            }
+            PointerKind::Fling { vy, .. } => {
+                self.release(scroll, -vy as f32);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The finger lifted with the offset moving at `vel` px/s.

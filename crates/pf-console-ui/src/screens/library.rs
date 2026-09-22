@@ -12,6 +12,7 @@
 //! and collections hand-over.
 
 use crate::anim::{approach, entrances, Entrance, EntranceAt, Spring};
+use crate::el::{Axis, El, Id, Tree};
 use crate::glyphs::{Hint, HintKey};
 use crate::library::{
     card_matrix, grid_col_hint, grid_step, initials, step_cursor, store_label, GridDir, GridShape,
@@ -27,9 +28,15 @@ use crate::theme::{accent, art_sampling, fg, fill, Fonts, EDGE_INSET, W};
 use crate::widgets::{TabStrip, TAB_PILL_H, TAB_PILL_TOP, TAB_STRIP_H};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use skia_safe::{Canvas, Color4f, Data, Image, Matrix, Point, RRect, Rect, TileMode, M44};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 const GRID_MARGIN: f64 = 48.0;
+/// The grid's scroll node, and title `i`'s cell in it.
+const GRID: &str = "library-grid";
+fn grid_cell(i: usize) -> Id {
+    Id::new("library-cell", i)
+}
 /// Row air only; the title lives in the shared detail band.
 const GRID_LABEL: f64 = 10.0;
 const GRID_HEADING: f64 = 30.0;
@@ -390,9 +397,15 @@ pub(crate) struct LibraryScreen {
     view_mode: LibraryView,
     /// Boxed: `Screen` moves by value and this variant is already the largest.
     bar: Box<LibraryBar>,
+    /// The grid's scroll while it follows focus; after a pan, where the finger left it.
     scroll: Spring,
     /// Seat scroll next frame; the two arrangements do not share a position.
     snap_scroll: bool,
+    /// The grid's layout, scroll and hit rects. A cell: the card painters borrow the
+    /// screen while the tree lays them out.
+    grid: RefCell<Tree>,
+    /// The grid scroll keeps the focus row in view. A finger pan lets go until focus moves.
+    follow: bool,
     /// Columns the last grid frame drew. `None` until then — do not invent a count.
     grid_cols_last: Option<usize>,
     /// Last chosen column, carried across vertical moves ([`grid_col_hint`]).
@@ -439,6 +452,8 @@ impl LibraryScreen {
             bar: Box::new(LibraryBar::new()),
             scroll: Spring::rest(0.0),
             snap_scroll: true,
+            grid: RefCell::new(Tree::new()),
+            follow: true,
             grid_cols_last: None,
             grid_col: 0,
             bump_vertical: false,
@@ -875,7 +890,21 @@ impl LibraryScreen {
         }
     }
 
+    /// A finger drag on the grid: the cards follow it and a lift flings them. The shelf
+    /// declines, so a drag there steps cards by ticks.
+    pub(crate) fn pan(&mut self, p: Pointer) -> bool {
+        if self.view_mode != LibraryView::Grid {
+            return false;
+        }
+        let taken = self.grid.get_mut().drag(Id::new(GRID, 0), p);
+        if taken && matches!(p.kind, PointerKind::PanStart { .. }) {
+            self.follow = false;
+        }
+        taken
+    }
+
     fn grid_move(&mut self, dir: GridDir) -> Option<MenuPulse> {
+        self.follow = true;
         // Last drawn shape. Before the first grid frame there is nothing to guess from.
         let shape = self.grid_shape()?;
         match grid_step(self.cursor, shape, self.grid_col, dir) {
@@ -1235,7 +1264,7 @@ impl LibraryScreen {
                 );
                 match self.view_mode {
                     LibraryView::Shelf => self.draw_carousel(canvas, field, k, fonts, ctx.t),
-                    LibraryView::Grid => self.draw_grid(canvas, field, k, fonts, ctx.t),
+                    LibraryView::Grid => self.draw_grid(canvas, field, k, dt, fonts, ctx.t),
                 }
                 // After the cards. Bounded layer: unbounded allocates a surface-sized offscreen.
                 if reveal > 0.01 {
@@ -1396,7 +1425,7 @@ impl LibraryScreen {
     }
 
     /// Same cursor, order, detail band, and art cache as the shelf; only placement differs.
-    fn draw_grid(&mut self, canvas: &Canvas, rect: Rect, k: f64, fonts: &Fonts, t: f64) {
+    fn draw_grid(&mut self, canvas: &Canvas, rect: Rect, k: f64, dt: f64, fonts: &Fonts, t: f64) {
         let cols = self.grid_cols(rect, k);
         // Navigation reads last-drawn columns. A resize is a different grid; re-seat.
         if self.grid_cols_last != Some(cols) {
@@ -1428,150 +1457,195 @@ impl LibraryScreen {
         let (focus_row, _) = shape.cell_of(self.cursor.max(0) as usize);
         // 0.34 keeps a row of context above and below the focus.
         let want = (row_top(focus_row) - view_h * 0.34).clamp(0.0, (content_h - view_h).max(0.0));
-        if std::mem::take(&mut self.snap_scroll) || crate::theme::reduce_motion() {
-            self.scroll = Spring::rest(want);
+        let grid = Id::new(GRID, 0);
+        let snap = std::mem::take(&mut self.snap_scroll);
+        self.follow |= snap;
+        let tree = self.grid.get_mut();
+        tree.tick(dt as f32);
+        // Follow focus while no finger has the grid. After a pan the spring starts from
+        // wherever the finger left it, so the next move glides instead of jumping.
+        if self.follow && !tree.moving(grid) {
+            if snap || crate::theme::reduce_motion() {
+                self.scroll = Spring::rest(want);
+            } else {
+                self.scroll
+                    .step_spec(want, crate::anim::springs::FOCUS, 1.0 / 60.0);
+                self.scroll.settle(want, 0.05, 0.5);
+            }
+            tree.set_offset(grid, self.scroll.pos as f32);
         } else {
-            self.scroll
-                .step_spec(want, crate::anim::springs::FOCUS, 1.0 / 60.0);
-            self.scroll.settle(want, 0.05, 0.5);
+            self.scroll = Spring::rest(f64::from(tree.offset(grid)));
         }
 
+        // The recoil moves the drawing on its axis, never the cells a pointer hits.
         let bump = self.bump.pos * k;
-        let (bump_x, scroll) = if self.bump_vertical {
-            (0.0, self.scroll.pos - bump)
+        let (bump_x, bump_y) = if self.bump_vertical {
+            (0.0, bump)
         } else {
-            (bump, self.scroll.pos)
+            (bump, 0.0)
         };
-
         let grid_w = cols as f64 * pitch_x - GRID_GAP * k * fit;
-        let x0 = f64::from(rect.left) + (f64::from(rect.width()) - grid_w) / 2.0 + bump_x;
-        let y0 = f64::from(rect.top);
+        let gap_y = pitch_y - ch;
         let viewport = Rect::from_xywh(rect.left, rect.top, rect.width(), (view_h.max(0.0)) as f32);
+        let (anchor_row, anchor_col) =
+            shape.cell_of(self.entrance_anchor.min(self.len().saturating_sub(1)));
+        let painted = RefCell::new(Vec::new());
+        let this = &*self;
 
-        self.geom.clear();
-        self.geom.resize(self.len(), Rect::new_empty());
-        canvas.save();
-        canvas.clip_rect(viewport, None, true);
-        if let Some(_s) = split_row {
-            let head = |canvas: &Canvas, label: &str, y: f64| {
+        // A section heading in its band, `down` of the band's height above its bottom.
+        let heading = |label: &'static str, down: f64| {
+            El::paint(move |canvas, band| {
                 fonts.draw_tracked(
                     canvas,
                     label,
-                    x0,
-                    y,
+                    f64::from(band.left) + bump_x,
+                    f64::from(band.top) + down + bump_y,
                     W::SemiBold,
                     12.0 * k,
                     1.4 * k,
                     fg(0.45),
                 );
-            };
-            head(canvas, "LAUNCHERS", y0 + heading_h * 0.62 - scroll);
-            head(
-                canvas,
-                "GAMES",
-                y0 + row_top(split_row.expect("checked")) - heading_h * 0.38 - scroll,
-            );
-        }
-
-        // Entrance lift + 6 % focus swell. Settled cards sit on berth; cull can match the clip.
-        let reach = if self.entrance.is_some() {
-            ENTER_RISE * k + 0.06 * ch
-        } else {
-            0.0
+            })
         };
-        let (anchor_row, anchor_col) =
-            shape.cell_of(self.entrance_anchor.min(self.len().saturating_sub(1)));
-        for i in 0..self.len() {
-            let (row, col) = shape.cell_of(i);
-            let top = y0 + row_top(row) - scroll;
-            if top + ch + reach < f64::from(rect.top) || top > y0 + view_h {
-                continue; // not drawn, not stamped — cull must not keep covers warm
-            }
-            let ent = self.entrance_at(anchor_row.abs_diff(row) + anchor_col.abs_diff(col), t);
-            let f = if i == self.cursor.max(0) as usize {
-                1.0
-            } else {
-                0.0
-            };
-            let arrive = ENTER_SCALE + (1.0 - ENTER_SCALE) * ent.travel;
-            let scale = (1.0 + 0.06 * f) * arrive;
-            let cx = x0 + col as f64 * pitch_x + cw / 2.0;
-            let cy = top + ch / 2.0 + (1.0 - ent.travel) * ENTER_RISE * k;
-            let cell = Rect::from_xywh(
-                (cx - cw * scale / 2.0) as f32,
-                (cy - ch * scale / 2.0) as f32,
-                (cw * scale) as f32,
-                (ch * scale) as f32,
-            );
-            self.geom[i] = cell;
-            let Some(game) = self.game(i) else { continue };
-            let id = game.id.clone();
-            // Stamp at the end needs `&mut self`; drop the `&LibraryGame` first.
-            let running = game.running;
+        let painted = &painted;
+        let card = move |i: usize, row: usize, col: usize| {
+            El::paint(move |canvas, slot| {
+                painted.borrow_mut().push(i);
+                let ent = this.entrance_at(anchor_row.abs_diff(row) + anchor_col.abs_diff(col), t);
+                let f = if i == this.cursor.max(0) as usize {
+                    1.0
+                } else {
+                    0.0
+                };
+                let arrive = ENTER_SCALE + (1.0 - ENTER_SCALE) * ent.travel;
+                let scale = (1.0 + 0.06 * f) * arrive;
+                let cx = f64::from(slot.center_x()) + bump_x;
+                let cy = f64::from(slot.center_y()) + bump_y + (1.0 - ent.travel) * ENTER_RISE * k;
+                let cell = Rect::from_xywh(
+                    (cx - cw * scale / 2.0) as f32,
+                    (cy - ch * scale / 2.0) as f32,
+                    (cw * scale) as f32,
+                    (ch * scale) as f32,
+                );
+                let Some(game) = this.game(i) else { return };
+                let id = game.id.clone();
+                let running = game.running;
 
-            crate::theme::focus_halo(canvas, cell, 12.0, k as f32, f as f32);
-            let art = self.art.get(&id);
-            let rr = RRect::new_rect_xy(cell, (12.0 * k) as f32, (12.0 * k) as f32);
-            // Layer only for multi-piece fades (placeholder, focus ring). Paint alpha otherwise.
-            let layered = ent.fade < 1.0 && (art.is_none() || f > 0.0);
-            if layered {
-                canvas.save_layer_alpha_f(cell, ent.fade as f32);
-            }
-            match art {
-                Some(img) => {
-                    let (iw, ih) = (img.width() as f32, img.height() as f32);
-                    let aspect = cell.width() / cell.height();
-                    let src = if iw / ih > aspect {
-                        let sw = ih * aspect;
-                        Rect::from_xywh((iw - sw) / 2.0, 0.0, sw, ih)
-                    } else {
-                        let sh = iw / aspect;
-                        Rect::from_xywh(0.0, (ih - sh) / 2.0, iw, sh)
-                    };
-                    // Shader rrect, not clip+image: coverage AA, no clip-stack per card.
-                    let (sx, sy) = (cell.width() / src.width(), cell.height() / src.height());
-                    let mut local = Matrix::scale((sx, sy));
-                    local.post_translate((cell.left - src.left * sx, cell.top - src.top * sy));
-                    if let Some(shader) = img.to_shader(
-                        (TileMode::Clamp, TileMode::Clamp),
-                        art_sampling(),
-                        Some(&local),
-                    ) {
-                        // Opaque: Skia modulates the shader by paint alpha; 0 draws nothing.
-                        let mut p = crate::theme::shaded();
-                        p.set_shader(shader);
-                        if !layered {
-                            p.set_alpha_f(ent.fade as f32);
+                crate::theme::focus_halo(canvas, cell, 12.0, k as f32, f as f32);
+                let art = this.art.get(&id);
+                let rr = RRect::new_rect_xy(cell, (12.0 * k) as f32, (12.0 * k) as f32);
+                // Layer only for multi-piece fades (placeholder, focus ring). Paint alpha otherwise.
+                let layered = ent.fade < 1.0 && (art.is_none() || f > 0.0);
+                if layered {
+                    canvas.save_layer_alpha_f(cell, ent.fade as f32);
+                }
+                match art {
+                    Some(img) => {
+                        let (iw, ih) = (img.width() as f32, img.height() as f32);
+                        let aspect = cell.width() / cell.height();
+                        let src = if iw / ih > aspect {
+                            let sw = ih * aspect;
+                            Rect::from_xywh((iw - sw) / 2.0, 0.0, sw, ih)
+                        } else {
+                            let sh = iw / aspect;
+                            Rect::from_xywh(0.0, (ih - sh) / 2.0, iw, sh)
+                        };
+                        // Shader rrect, not clip+image: coverage AA, no clip-stack per card.
+                        let (sx, sy) = (cell.width() / src.width(), cell.height() / src.height());
+                        let mut local = Matrix::scale((sx, sy));
+                        local.post_translate((cell.left - src.left * sx, cell.top - src.top * sy));
+                        if let Some(shader) = img.to_shader(
+                            (TileMode::Clamp, TileMode::Clamp),
+                            art_sampling(),
+                            Some(&local),
+                        ) {
+                            // Opaque: Skia modulates the shader by paint alpha; 0 draws nothing.
+                            let mut p = crate::theme::shaded();
+                            p.set_shader(shader);
+                            if !layered {
+                                p.set_alpha_f(ent.fade as f32);
+                            }
+                            canvas.draw_rrect(rr, &p);
                         }
-                        canvas.draw_rrect(rr, &p);
+                    }
+                    None => {
+                        canvas.save();
+                        canvas.clip_rrect(rr, None, true);
+                        draw_poster_placeholder(canvas, fonts, this.game(i), cell, k);
+                        canvas.restore();
                     }
                 }
-                None => {
-                    canvas.save();
-                    canvas.clip_rrect(rr, None, true);
-                    draw_poster_placeholder(canvas, fonts, self.game(i), cell, k);
+                if f > 0.0 {
+                    crate::theme::panel(
+                        canvas,
+                        cell,
+                        12.0,
+                        None,
+                        crate::theme::PanelStroke::Brand(0.9),
+                        k as f32,
+                    );
+                }
+                if running {
+                    draw_running_badge(canvas, fonts, cell, k);
+                }
+                if layered {
                     canvas.restore();
                 }
-            }
-            if f > 0.0 {
-                crate::theme::panel(
-                    canvas,
-                    cell,
-                    12.0,
-                    None,
-                    crate::theme::PanelStroke::Brand(0.9),
-                    k as f32,
-                );
-            }
-            if running {
-                draw_running_badge(canvas, fonts, cell, k);
-            }
-            if layered {
-                canvas.restore();
-            }
-            self.art_seen.insert(id, self.frame);
+            })
+            .id(grid_cell(i))
+            .size(cw as f32, ch as f32)
+        };
+        // Rows `from..to` of the grid, built only while in view.
+        let rows = move |from: usize, to: usize| {
+            El::virtual_list(
+                Axis::Vertical,
+                to - from,
+                ch as f32,
+                gap_y as f32,
+                move |r| {
+                    let row = from + r;
+                    let start = shape.row_start(row);
+                    El::row()
+                        .gap((pitch_x - cw) as f32)
+                        .children((0..shape.row_len(row)).map(|col| card(start + col, row, col)))
+                },
+            )
+            .width(grid_w as f32)
+        };
+        let mut root = El::scroll(grid, Axis::Vertical)
+            .style(|s| s.align_items = Some(taffy::AlignItems::CENTER));
+        root = match split_row {
+            Some(split) => root
+                .child(heading("LAUNCHERS", heading_h * 0.62).size(grid_w as f32, heading_h as f32))
+                .child(rows(0, split))
+                .child(
+                    heading("GAMES", gap_y + heading_h * 0.62)
+                        .size(grid_w as f32, (gap_y + heading_h) as f32),
+                )
+                .child(rows(split, shape.rows())),
+            None => root
+                .child(El::column().size(grid_w as f32, heading_h as f32))
+                .child(rows(0, shape.rows())),
+        };
+        root = root.child(El::column().size(grid_w as f32, heading_h as f32));
+        let mut tree = this.grid.borrow_mut();
+        let frame = tree.layout(root, viewport);
+        tree.paint(canvas, frame);
+        drop(tree);
+
+        // Hit rects are the cells as laid out; covers drawn this frame stay warm.
+        let painted = painted.take();
+        self.geom.clear();
+        self.geom.resize(self.len(), Rect::new_empty());
+        let tree = self.grid.get_mut();
+        for &i in &painted {
+            self.geom[i] = tree.rect(grid_cell(i)).unwrap_or_else(Rect::new_empty);
         }
-        canvas.restore();
+        for i in painted {
+            if let Some(id) = self.game(i).map(|g| g.id.clone()) {
+                self.art_seen.insert(id, self.frame);
+            }
+        }
     }
 
     fn draw_carousel(&mut self, canvas: &Canvas, rect: Rect, k: f64, fonts: &Fonts, t: f64) {
@@ -2371,6 +2445,130 @@ mod tests {
     }
 
     /// Platform-less Steam collates as store: `[None, None]` is one collection, `[Some, None]` two.
+    /// 200 titles in the grid, the desktop tile's band above them.
+    fn long_grid() -> (
+        LibraryScreen,
+        LibraryShared,
+        pf_client_core::trust::Settings,
+    ) {
+        crate::screens::settings::tests::fake_home();
+        let library = LibraryShared::default();
+        let titles: Vec<String> = (0..200).map(|i| format!("Title {i:03}")).collect();
+        let spec: Vec<(&str, Option<&str>)> = titles.iter().map(|t| (t.as_str(), None)).collect();
+        library.set_games(games(&spec));
+        let mut s = LibraryScreen::new(&host(), 0);
+        s.sync(&library);
+        s.entrance_armed = true;
+        let settings = pf_client_core::trust::Settings {
+            library_view: LibraryView::Grid.id().to_string(),
+            ..Default::default()
+        };
+        (s, library, settings)
+    }
+
+    /// Frames at 60 Hz; the drawn cells' indices. `PF_GRID_DUMP=<dir>` also writes the frame.
+    fn grid_frames(
+        s: &mut LibraryScreen,
+        library: &LibraryShared,
+        settings: &mut pf_client_core::trust::Settings,
+        frames: usize,
+        name: &str,
+    ) -> Vec<usize> {
+        let fonts = crate::theme::build_fonts().unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+        let rect = Rect::from_xywh(0.0, 0.0, 1280.0, 800.0);
+        for _ in 0..frames {
+            surface
+                .canvas()
+                .clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 1.0));
+            s.render(
+                surface.canvas(),
+                rect,
+                1.0,
+                1.0 / 60.0,
+                &fonts,
+                &mut ctx(library, settings),
+            );
+        }
+        if let Ok(dir) = std::env::var("PF_GRID_DUMP") {
+            let png = surface
+                .image_snapshot()
+                .encode(None, skia_safe::EncodedImageFormat::PNG, None)
+                .expect("png");
+            std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).expect("write");
+        }
+        (0..s.geom.len())
+            .filter(|i| !s.geom[*i].is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn a_long_grid_draws_only_the_rows_in_view() {
+        let (mut s, library, mut settings) = long_grid();
+        let drawn = grid_frames(&mut s, &library, &mut settings, 60, "grid-top");
+        assert_eq!(drawn.first(), Some(&0), "the desktop tile");
+        assert!(drawn.len() < 40, "a screenful, not the library: {drawn:?}");
+        assert!(!drawn.contains(&200));
+
+        s.cursor = 57;
+        s.seat_grid_col();
+        let drawn = grid_frames(&mut s, &library, &mut settings, 90, "grid-mid");
+        assert!(drawn.contains(&57) && !drawn.contains(&0), "{drawn:?}");
+
+        s.cursor = 200;
+        s.seat_grid_col();
+        let drawn = grid_frames(&mut s, &library, &mut settings, 90, "grid-end");
+        assert_eq!(drawn.last(), Some(&200), "the last title in view");
+        assert!(drawn.len() < 40, "{drawn:?}");
+    }
+
+    /// A finger drags the grid one to one and a flick carries on; the pad's next move
+    /// brings the focus row back into view.
+    #[test]
+    fn a_finger_pans_the_grid_until_the_pad_moves_focus() {
+        let (mut s, library, mut settings) = long_grid();
+        grid_frames(&mut s, &library, &mut settings, 30, "pan-0");
+        let offset = |s: &LibraryScreen| s.grid.borrow().offset(Id::new(GRID, 0));
+        // Title 8 opens the grid's third row, on screen at the top.
+        let cell = s.geom[8];
+        assert!(!cell.is_empty());
+        let finger = |kind| Pointer {
+            x: f64::from(cell.center_x()),
+            y: f64::from(cell.center_y()),
+            kind,
+        };
+        assert!(s.pan(finger(PointerKind::PanStart { horizontal: false })));
+        assert!(s.pan(finger(PointerKind::Pan {
+            dx: 0.0,
+            dy: -120.0
+        })));
+        grid_frames(&mut s, &library, &mut settings, 1, "pan-1");
+        assert_eq!(offset(&s), 120.0);
+        assert_eq!(
+            s.geom[8].top,
+            cell.top - 120.0,
+            "the cards follow the finger"
+        );
+
+        assert!(s.pan(finger(PointerKind::Fling {
+            vx: 0.0,
+            vy: -1500.0
+        })));
+        grid_frames(&mut s, &library, &mut settings, 120, "pan-2");
+        assert!(offset(&s) > 500.0, "the flick carried on: {}", offset(&s));
+        assert!(s.geom[0].is_empty(), "the focus row is left behind");
+
+        let mut fx = Outbox::default();
+        s.menu(
+            MenuEvent::Move(MenuDir::Down),
+            &mut ctx(&library, &mut settings),
+            &mut fx,
+        );
+        grid_frames(&mut s, &library, &mut settings, 120, "pan-3");
+        let focus = s.cursor as usize;
+        assert!(!s.geom[focus].is_empty(), "focus {focus} back in view");
+    }
+
     fn games(spec: &[(&str, Option<&str>)]) -> Vec<LibraryGame> {
         spec.iter()
             .enumerate()

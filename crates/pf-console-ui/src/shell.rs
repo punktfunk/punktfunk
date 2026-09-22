@@ -1186,11 +1186,7 @@ impl Shell {
             }
             // A drag on a screen's menu list pans it; anywhere else it scrolls by ticks.
             PointerKind::PanStart { .. } | PointerKind::Pan { .. } | PointerKind::Fling { .. } => {
-                return self
-                    .stack
-                    .last_mut()
-                    .and_then(Screen::pan_list)
-                    .is_some_and(|list| list.pan(p));
+                return self.stack.last_mut().is_some_and(|s| s.pan(p));
             }
             _ => {}
         }

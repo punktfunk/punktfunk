@@ -470,27 +470,11 @@ impl MenuList {
     /// A finger drag: the rows follow it and a lift flings them. `false` when the drag
     /// did not start on the list, so it scrolls by ticks instead.
     pub fn pan(&mut self, p: Pointer) -> bool {
-        let tree = self.tree.get_mut();
-        match p.kind {
-            PointerKind::PanStart { horizontal: false } => {
-                let list = Id::new(LIST, 0);
-                if tree.scroll_at(p.x as f32, p.y as f32, Axis::Vertical) != Some(list) {
-                    return false;
-                }
-                tree.pan(list, 0.0);
-                self.follow = false;
-                true
-            }
-            PointerKind::Pan { dy, .. } => {
-                tree.pan(Id::new(LIST, 0), -dy as f32);
-                true
-            }
-            PointerKind::Fling { vy, .. } => {
-                tree.release(Id::new(LIST, 0), -vy as f32);
-                true
-            }
-            _ => false,
+        let taken = self.tree.get_mut().drag(Id::new(LIST, 0), p);
+        if taken && matches!(p.kind, PointerKind::PanStart { .. }) {
+            self.follow = false;
         }
+        taken
     }
 
     fn step(&mut self, delta: i32, len: usize) -> Option<MenuPulse> {
