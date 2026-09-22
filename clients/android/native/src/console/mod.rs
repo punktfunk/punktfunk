@@ -20,12 +20,12 @@ use jni::EnvUnowned;
 
 use crate::session::jni_guard;
 use pf_client_core::console::{PointerButton, PointerInput};
-use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuSample, PadBattery, PadInfo};
+use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuSample};
+use pf_console_ui::bridge::{CreateOptions, EntryJson, PadsJson, PresetJson};
 use pf_console_ui::{
-    ConsoleEntry, ConsoleOptions, HostRow, Insets, Key, LibraryGame, LibraryPhase, PairPhase,
-    Platform, SnapshotStore, SpeedPhase, Stale, WakeStatus,
+    HostRow, Insets, Key, LibraryGame, LibraryPhase, PairPhase, Platform, SpeedPhase, Stale,
+    WakeStatus,
 };
-use punktfunk_core::config::GamepadPref;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -34,101 +34,6 @@ use std::time::Duration;
 /// How long `nativeConsoleNextEvent` blocks at most — short enough that Kotlin's poll thread
 /// notices `running = false` promptly on teardown (the rumble poll's cadence).
 const EVENT_TIMEOUT: Duration = Duration::from_millis(100);
-
-/// What Kotlin hands `nativeConsoleCreate`.
-#[derive(serde::Deserialize)]
-struct CreateOptions {
-    device_name: String,
-    /// Skia's resource budget, bytes (Kotlin sizes it from `ActivityManager.memoryClass`).
-    gpu_cache_bytes: usize,
-    /// Whether the touch shell exists as a fallback (phones/tablets; false on a TV) —
-    /// gates the console-off settings row. Default false: absent means don't offer it.
-    #[serde(default)]
-    fallback_ui: bool,
-    /// Whether a real `video/av01` decoder exists (Kotlin's `MediaCodecList` answer, the
-    /// same one that sets the `CODEC_AV1` advertisement bit). Absent means don't claim the
-    /// device lacks it, so the codec row stays unmarked.
-    #[serde(default = "yes")]
-    av1_ok: bool,
-    /// The settings snapshot the shell starts from (`pf_client_core::trust::Settings` JSON).
-    settings: pf_client_core::trust::Settings,
-    /// The preset catalog as `[{id, name, overrides}, …]`.
-    #[serde(default)]
-    presets: Vec<PresetJson>,
-    /// The known-hosts records (`KnownHosts` JSON) — for building `punktfunk://` links.
-    #[serde(default)]
-    known_hosts: pf_client_core::trust::KnownHosts,
-    /// Where to start: `{"home": true}` or `{"library": <HostRow>}`.
-    #[serde(default)]
-    entry: EntryJson,
-    /// This device's screen and its safe area as landscape `[w, h]`, for the Aspect row.
-    /// Absent on a TV and from an older caller.
-    #[serde(default)]
-    screen: Option<(u32, u32)>,
-    #[serde(default)]
-    safe_area: Option<(u32, u32)>,
-}
-
-/// `#[serde(default)]` for a bool an older caller may omit and that must read `true`.
-fn yes() -> bool {
-    true
-}
-
-#[derive(serde::Deserialize, Default)]
-struct EntryJson {
-    #[serde(default)]
-    library: Option<HostRow>,
-    /// The same row, plus a connect to its desktop before the first frame. `library`
-    /// wins if a caller sends both — a shelf is the safe half of the pair.
-    #[serde(default)]
-    stream: Option<HostRow>,
-}
-
-impl EntryJson {
-    fn into_entry(self) -> ConsoleEntry {
-        match (self.library, self.stream) {
-            (Some(h), _) => ConsoleEntry::Library(Box::new(h)),
-            (None, Some(h)) => ConsoleEntry::Stream(Box::new(h)),
-            (None, None) => ConsoleEntry::Home,
-        }
-    }
-}
-
-/// One controller as Kotlin describes it — `PadInfo` with the pref as its wire byte.
-#[derive(serde::Deserialize)]
-struct PadJson {
-    name: String,
-    key: String,
-    pref: u8,
-    #[serde(default)]
-    steam_virtual: bool,
-    #[serde(default)]
-    battery: Option<BatteryJson>,
-    /// `VID:PID · gamepad · dpad` — what the controllers screen prints under the name.
-    #[serde(default)]
-    detail: String,
-    #[serde(default)]
-    forwarded: bool,
-    #[serde(default)]
-    rumble: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct BatteryJson {
-    percent: u8,
-    charging: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct PadsJson {
-    #[serde(default)]
-    label: Option<String>,
-    /// The glyph style's pref as its wire byte; absent = keyboard glyphs.
-    #[serde(default)]
-    pref: Option<u8>,
-    #[serde(default)]
-    pads: Vec<PadJson>,
-}
 
 static NEXT_CONSOLE_HANDLE: AtomicU64 = AtomicU64::new(0x2000_0000_0000_0001);
 
@@ -210,34 +115,14 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleCrea
     options: JString,
 ) -> jlong {
     env.with_env(|env| -> jni::errors::Result<jlong> {
-        let Some(opts) = json_arg::<CreateOptions>(env, &options) else {
+        let Some(mut opts) = json_arg::<CreateOptions>(env, &options) else {
             return Ok(0);
         };
-        let store = Arc::new(SnapshotStore::new(
-            opts.settings,
-            opts.presets.into_iter().map(Into::into).collect(),
-        ));
-        store.set_known_hosts(opts.known_hosts);
-        let console_opts = ConsoleOptions {
-            device_name: opts.device_name,
-            deck: false,
-            fallback_ui: opts.fallback_ui,
-            // The same probe that gates the `CODEC_PYROWAVE` advertisement, so the codec
-            // row cannot offer a picture this GPU would never decode. Cached per process.
-            pyrowave_ok: crate::pyro::available(),
-            // MediaCodec's answer, from the side that owns the enumeration: the NDK has no
-            // codec list. Marks the codec row's AV1 value on a device the Hello never
-            // advertises AV1 for.
-            av1_ok: opts.av1_ok,
-            store: Some(store.clone()),
-            platform: Platform::Android,
-            gpu_cache_bytes: opts.gpu_cache_bytes.max(16 << 20),
-            screen: opts.screen.map(|full| pf_console_ui::DeviceScreen {
-                full,
-                safe: opts.safe_area.unwrap_or(full),
-            }),
-        };
-        let host = match ConsoleHost::start(console_opts, opts.entry.into_entry(), store) {
+        // The same probe that gates the `CODEC_PYROWAVE` advertisement, so the codec
+        // row cannot offer a picture this GPU would never decode. Cached per process.
+        opts.pyrowave_ok = crate::pyro::available();
+        let (console_opts, entry, store) = opts.into_console(Platform::Android);
+        let host = match ConsoleHost::start(console_opts, entry, store) {
             Ok(host) => host,
             Err(e) => {
                 log::error!("console: render thread spawn failed: {e}");
@@ -565,28 +450,8 @@ json_pusher!(
     Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetPads,
     PadsJson,
     |h, p| {
-        let pads = p
-            .pads
-            .into_iter()
-            .map(|j| PadInfo {
-                name: j.name,
-                key: j.key,
-                pref: GamepadPref::from_u8(j.pref),
-                steam_virtual: j.steam_virtual,
-                battery: j.battery.map(|b| PadBattery {
-                    percent: b.percent.min(100),
-                    charging: b.charging,
-                }),
-                detail: j.detail,
-                forwarded: j.forwarded,
-                rumble: j.rumble,
-            })
-            .collect();
-        h.shared.send(Cmd::Pads {
-            label: p.label,
-            pref: p.pref.map(GamepadPref::from_u8),
-            pads,
-        })
+        let (label, pref, pads) = p.into_pads();
+        h.shared.send(Cmd::Pads { label, pref, pads })
     }
 );
 
@@ -808,26 +673,6 @@ json_pusher!(
     Vec<PresetJson>,
     |h, p| h.store.set_presets(p.into_iter().map(Into::into).collect())
 );
-
-/// One catalog entry as Kotlin sends it. `overrides` is the console's settings encoding;
-/// an overlay the console cannot read leaves that one preset unmarked, not the catalog empty.
-#[derive(serde::Deserialize)]
-struct PresetJson {
-    id: String,
-    name: String,
-    #[serde(default)]
-    overrides: serde_json::Value,
-}
-
-impl From<PresetJson> for pf_console_ui::store::PresetEntry {
-    fn from(p: PresetJson) -> Self {
-        pf_console_ui::store::PresetEntry {
-            id: p.id,
-            name: p.name,
-            overrides: serde_json::from_value(p.overrides).unwrap_or_default(),
-        }
-    }
-}
 
 json_pusher!(
 /// `NativeBridge.nativeConsoleSetKnownHosts(handle, json)` — the known-hosts records
