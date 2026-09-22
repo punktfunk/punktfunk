@@ -55,11 +55,6 @@ struct ConsoleHomeView: View {
                 bridge: console.bridge, device: console.device, queue: console.queue,
                 delegate: console
             )
-            #if os(tvOS)
-            // Bound only while the console has somewhere to go back to: at its root the Menu
-            // press belongs to tvOS, which is what takes the player Home (the HIG's rule).
-            .onExitCommand(perform: console.bridge.atRoot ? nil : { _ = console.back() })
-            #endif
         } else {
             // No Metal device, or the shell refused to build: the app's own UI is the fallback,
             // and `ConsoleModel` has already said why in the log.

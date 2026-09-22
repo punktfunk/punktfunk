@@ -172,6 +172,93 @@ public final class ConsoleMetalView: ConsolePlatformView {
         let p = touch.location(in: self)
         bridge.pointer(kind, x: Float(p.x * scale), y: Float(p.y * scale))
     }
+
+    // MARK: - presses
+
+    // A Siri Remote's clicks and a hardware keyboard's keys arrive here, not through
+    // GameController: the remote is a `GCMicroGamepad`, which the pad poller does not read, and
+    // the focus engine hands presses to whoever is in the responder chain. So the view takes it.
+
+    public override var canBecomeFirstResponder: Bool { true }
+    #if os(tvOS)
+    public override var canBecomeFocused: Bool { true }
+    #endif
+
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { becomeFirstResponder() }
+    }
+
+    public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unclaimed = presses.filter { !claim($0, repeated: false) }
+        if !unclaimed.isEmpty || presses.isEmpty { super.pressesBegan(unclaimed, with: event) }
+    }
+
+    public override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // Claimed on the way down, so the matching release is ours to swallow.
+        let unclaimed = presses.filter { !claims($0) }
+        if !unclaimed.isEmpty || presses.isEmpty { super.pressesEnded(unclaimed, with: event) }
+    }
+
+    public override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let unclaimed = presses.filter { !claims($0) }
+        if !unclaimed.isEmpty || presses.isEmpty { super.pressesCancelled(unclaimed, with: event) }
+    }
+
+    /// Whether this press is the console's at all — the same answer `claim` acts on, so a press
+    /// we took on the way down is not handed to the system on the way up.
+    private func claims(_ press: UIPress) -> Bool {
+        if press.key != nil { return key(for: press) != nil }
+        switch press.type {
+        case .select, .upArrow, .downArrow, .leftArrow, .rightArrow, .playPause: return true
+        // Back is ours only while there is something to go back to: at the root the press
+        // belongs to the system, which is what takes a TV player Home.
+        case .menu: return !bridge.atRoot
+        default: return false
+        }
+    }
+
+    /// Hand the press to the console. `false` = not ours, let the system have it.
+    private func claim(_ press: UIPress, repeated: Bool) -> Bool {
+        if let key = key(for: press) {
+            let shift = press.key?.modifierFlags.contains(.shift) ?? false
+            bridge.key(key, shift: shift, repeated: repeated)
+            return true
+        }
+        let event: ConsoleBridge.Menu
+        switch press.type {
+        case .select: event = .confirm
+        case .upArrow: event = .up
+        case .downArrow: event = .down
+        case .leftArrow: event = .left
+        case .rightArrow: event = .right
+        case .playPause: event = .secondary
+        case .menu where !bridge.atRoot: event = .back
+        default: return false
+        }
+        bridge.menu(event, from: .keys)
+        return true
+    }
+
+    /// A hardware keyboard's key, when the console has a use for it.
+    private func key(for press: UIPress) -> ConsoleBridge.Key? {
+        switch press.key?.keyCode {
+        case .keyboardLeftArrow: return .left
+        case .keyboardRightArrow: return .right
+        case .keyboardUpArrow: return .up
+        case .keyboardDownArrow: return .down
+        case .keyboardReturnOrEnter: return .return
+        case .keyboardSpacebar: return .space
+        case .keyboardEscape: return .escape
+        case .keyboardDeleteOrBackspace: return .backspace
+        case .keyboardPageUp: return .pageUp
+        case .keyboardPageDown: return .pageDown
+        case .keyboardTab: return .tab
+        case .keyboardY: return .y
+        case .keyboardX: return .x
+        default: return nil
+        }
+    }
     #else
     public override func mouseDown(with event: NSEvent) { send(.down, event) }
     public override func mouseDragged(with event: NSEvent) { send(.move, event) }
