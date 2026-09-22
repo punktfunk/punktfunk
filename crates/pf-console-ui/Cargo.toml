@@ -104,9 +104,8 @@ pf-client-core = { path = "../pf-client-core", default-features = false }
 # rust-skia publishes both for darwin and iOS at 0.99.0. tvOS has no rust-skia archive: its two
 # are ours, built by `scripts/skia-tvos/build.sh` (a patched skia-bindings), fetched through
 # `SKIA_BINARIES_URL` from git.unom.io/unom/skia-binaries/releases/download/0.99.0/, and
-# `build.rs` names the system libraries skia-bindings does not link there. SHA-256:
-#   904aedec99d84fe65c76f7d435642b5cadcee2290284a8ebe3b5a9383e6cfb78  …-aarch64-apple-tvos-…
-#   f664eb840eed925dc55071a07a4a542e63a4fd5f7cba41d667b1c6d4ad593c72  …-aarch64-apple-tvos-sim-…
+# `build.rs` names the system libraries skia-bindings does not link there. Their SHA-256s
+# are pinned in scripts/build-xcframework.sh, which fetches and verifies every Apple slice's.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 skia-safe = { version = "0.99", features = ["textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }

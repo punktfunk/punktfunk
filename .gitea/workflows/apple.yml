@@ -23,14 +23,13 @@
 # and the two files' `paths:` filters had already drifted apart, so it was possible for one to fire
 # without the other. Merging is what makes `needs: swift` expressible. Do not split them again.
 #
-# The trigger list is deliberately NARROW on crates/: everything here is built from
-# `crates/punktfunk-core` (via scripts/build-xcframework.sh) and nothing else in the workspace.
-# VERIFY THAT BEFORE WIDENING OR TRUSTING IT — punktfunk-core's only path dependency is its own
-# vendored fec-rs, under crates/punktfunk-core/vendor/:
-#     sed -n '/^\[dependencies\]/,/^\[/p' crates/punktfunk-core/Cargo.toml | grep path
-# If punktfunk-core ever gains a path dep on a sibling crate, add that crate here. Cargo.lock is a
-# partial safety net (it moves when the dep is ADDED) but not a complete one — later edits to that
-# crate would not fire this workflow. This is the same class of gap flatpak.yml documents.
+# The trigger list is deliberately NARROW on crates/: scripts/build-xcframework.sh builds
+# `clients/apple/native`, whose path deps on Apple are `punktfunk-core`, `pf-console-ui` and
+# `pf-client-core` (default features off: no further path deps). VERIFY THAT BEFORE TRUSTING IT:
+#     grep -n 'path = ' clients/apple/native/Cargo.toml crates/pf-console-ui/Cargo.toml
+# A new path dep on the Apple side means a new line here. Cargo.lock is a partial safety net (it
+# moves when the dep is ADDED) but not a complete one — later edits to that crate would not fire
+# this workflow. This is the same class of gap flatpak.yml documents.
 #
 # ── Signing / distribution notes (all of these belong to `distribute`) ────────────────────────────
 #
@@ -99,6 +98,8 @@ on:
     branches: [main]
     paths:
       - 'crates/punktfunk-core/**'
+      - 'crates/pf-console-ui/**'
+      - 'crates/pf-client-core/**'
       - 'clients/apple/**'
       - 'scripts/build-xcframework.sh'
       - 'scripts/ci/ensure-sccache.sh'
@@ -116,6 +117,8 @@ on:
   pull_request:
     paths:
       - 'crates/punktfunk-core/**'
+      - 'crates/pf-console-ui/**'
+      - 'crates/pf-client-core/**'
       - 'clients/apple/**'
       - 'scripts/build-xcframework.sh'
       - 'scripts/ci/ensure-sccache.sh'

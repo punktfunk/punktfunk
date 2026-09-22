@@ -3739,6 +3739,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "punktfunk-client-apple"
+version = "0.39.0"
+dependencies = [
+ "cbindgen",
+ "pf-client-core",
+ "pf-console-ui",
+ "punktfunk-core",
+ "serde",
+ "serde_json",
+ "skia-safe",
+ "tracing",
+]
+
+[[package]]
 name = "punktfunk-client-linux"
 version = "0.39.0"
 dependencies = [

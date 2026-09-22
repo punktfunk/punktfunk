@@ -60,6 +60,15 @@ let package = Package(
                 .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedLibrary("resolv"),
+                // Skia, for the console (clients/apple/native).
+                .linkedLibrary("c++"),
+                .linkedFramework("Metal"),
+                .linkedFramework("CoreText"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("ImageIO"),
+                .linkedFramework("ApplicationServices", .when(platforms: [.macOS])),
+                .linkedFramework("UIKit", .when(platforms: [.iOS, .tvOS])),
+                .linkedFramework("MobileCoreServices", .when(platforms: [.iOS, .tvOS])),
             ]
         ),
         // Development app shell (swift run PunktfunkClient): connect form → stream + input.
