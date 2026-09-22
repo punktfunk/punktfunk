@@ -34,7 +34,7 @@ if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --no-modify-path --profile minimal
 fi
-"$HOME/.cargo/bin/rustup" target add aarch64-apple-darwin x86_64-apple-darwin
+"$HOME/.cargo/bin/rustup" target add aarch64-apple-darwin
 
 # --- Node.js (actions runtime; sudo-free tarball install) --------------------------------
 NODE_VERSION="${NODE_VERSION:-22.22.3}"

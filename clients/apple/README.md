@@ -15,7 +15,7 @@ swaps the whole home for. What the app can do for a user is
 Xcode 26.5 / Swift 6.3. Build the Rust core into an xcframework first:
 
 ```sh
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
+rustup target add aarch64-apple-darwin
 bash scripts/build-xcframework.sh     # → clients/apple/PunktfunkCore.xcframework
 #   BUILD_IOS=1 / BUILD_TVOS=1 add those slices
 

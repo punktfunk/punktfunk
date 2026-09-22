@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build PunktfunkCore.xcframework for the Apple clients — run ON A MAC with Xcode + rustup.
 #
-#   rustup target add aarch64-apple-darwin x86_64-apple-darwin   # + aarch64-apple-ios for iOS
+#   rustup target add aarch64-apple-darwin   # + aarch64-apple-ios for iOS
 #   bash scripts/build-xcframework.sh
 #
 # Output: clients/apple/PunktfunkCore.xcframework (consumed by clients/apple/Package.swift).
@@ -12,7 +12,8 @@ cd "$(dirname "$0")/.."
 # CI points CARGO_TARGET_DIR at a dir that outlives the job (scripts/ci/mac-cargo-target.sh).
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 
-TARGETS_MAC=(aarch64-apple-darwin x86_64-apple-darwin)
+# Apple silicon only: Intel Macs are discontinued, so no slice is built for them.
+TARGETS_MAC=(aarch64-apple-darwin)
 BUILD_IOS="${BUILD_IOS:-0}" # BUILD_IOS=1 adds iOS device + simulator slices (rustup targets aarch64-apple-ios{,-sim})
 BUILD_TVOS="${BUILD_TVOS:-0}" # BUILD_TVOS=1 adds tvOS slices — TIER-3 Rust targets, built with $NIGHTLY
 
@@ -88,7 +89,6 @@ done
 if [[ "$BUILD_IOS" == "1" ]]; then
     IPHONEOS_DEPLOYMENT_TARGET=17.0 cargo build --release -p punktfunk-core --features quic --target aarch64-apple-ios
     IPHONEOS_DEPLOYMENT_TARGET=17.0 cargo build --release -p punktfunk-core --features quic --target aarch64-apple-ios-sim
-    IPHONEOS_DEPLOYMENT_TARGET=17.0 cargo build --release -p punktfunk-core --features quic --target x86_64-apple-ios
 fi
 if [[ "$BUILD_TVOS" == "1" ]]; then
     # Tier-3 targets: no prebuilt std — $NIGHTLY + -Zbuild-std compiles it from rust-src.
@@ -96,19 +96,13 @@ if [[ "$BUILD_TVOS" == "1" ]]; then
         -Z build-std=std,panic_abort --target aarch64-apple-tvos
     TVOS_DEPLOYMENT_TARGET=17.0 cargo "+$NIGHTLY" build --release -p punktfunk-core --features quic \
         -Z build-std=std,panic_abort --target aarch64-apple-tvos-sim
-    TVOS_DEPLOYMENT_TARGET=17.0 cargo "+$NIGHTLY" build --release -p punktfunk-core --features quic \
-        -Z build-std=std,panic_abort --target x86_64-apple-tvos
 fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-# Universal macOS static lib.
 mkdir -p "$STAGE/macos"
-lipo -create \
-    "$TARGET_DIR"/aarch64-apple-darwin/release/libpunktfunk_core.a \
-    "$TARGET_DIR"/x86_64-apple-darwin/release/libpunktfunk_core.a \
-    -output "$STAGE/macos/libpunktfunk_core.a"
+cp "$TARGET_DIR"/aarch64-apple-darwin/release/libpunktfunk_core.a "$STAGE/macos/"
 
 # Headers dir: the generated C header (with the quic API force-enabled) + a modulemap so
 # Swift can `import PunktfunkCore`.
@@ -126,36 +120,24 @@ EOF
 
 ARGS=(-library "$STAGE/macos/libpunktfunk_core.a" -headers "$STAGE/include")
 if [[ "$BUILD_IOS" == "1" ]]; then
-    # Universal simulator lib (arm64 Macs run arm64 sims, but generic builds link x86_64 too).
-    mkdir -p "$STAGE/iossim"
-    lipo -create \
-        "$TARGET_DIR"/aarch64-apple-ios-sim/release/libpunktfunk_core.a \
-        "$TARGET_DIR"/x86_64-apple-ios/release/libpunktfunk_core.a \
-        -output "$STAGE/iossim/libpunktfunk_core.a"
     ARGS+=(-library "$TARGET_DIR"/aarch64-apple-ios/release/libpunktfunk_core.a -headers "$STAGE/include")
-    ARGS+=(-library "$STAGE/iossim/libpunktfunk_core.a" -headers "$STAGE/include")
+    ARGS+=(-library "$TARGET_DIR"/aarch64-apple-ios-sim/release/libpunktfunk_core.a -headers "$STAGE/include")
 fi
 if [[ "$BUILD_TVOS" == "1" ]]; then
-    mkdir -p "$STAGE/tvossim"
-    lipo -create \
-        "$TARGET_DIR"/aarch64-apple-tvos-sim/release/libpunktfunk_core.a \
-        "$TARGET_DIR"/x86_64-apple-tvos/release/libpunktfunk_core.a \
-        -output "$STAGE/tvossim/libpunktfunk_core.a"
     ARGS+=(-library "$TARGET_DIR"/aarch64-apple-tvos/release/libpunktfunk_core.a -headers "$STAGE/include")
-    ARGS+=(-library "$STAGE/tvossim/libpunktfunk_core.a" -headers "$STAGE/include")
+    ARGS+=(-library "$TARGET_DIR"/aarch64-apple-tvos-sim/release/libpunktfunk_core.a -headers "$STAGE/include")
 fi
 
 # Cargo does NOT fingerprint MACOSX_DEPLOYMENT_TARGET — units cached from a build without
 # it keep their old minos forever. Refuse to ship anything newer than the package floor
 # (objects BELOW it, e.g. rustup's precompiled std at 11.0, are fine and unavoidable).
-for obj in "$STAGE"/macos/libpunktfunk_core.a; do
-    bad=$(otool -l "$obj" 2>/dev/null | awk '/minos/ {print $2}' | sort -uV | awk -F. '$1 > 14' | head -1)
-    if [[ -n "$bad" ]]; then
-        echo "ERROR: $obj contains objects built for macOS $bad (> 14.0)." >&2
-        echo "Stale cache — rm -rf $TARGET_DIR/{aarch64,x86_64}-apple-darwin and rebuild." >&2
-        exit 1
-    fi
-done
+obj="$STAGE/macos/libpunktfunk_core.a"
+bad=$(otool -l "$obj" 2>/dev/null | awk '/minos/ {print $2}' | sort -uV | awk -F. '$1 > 14' | head -1)
+if [[ -n "$bad" ]]; then
+    echo "ERROR: $obj contains objects built for macOS $bad (> 14.0)." >&2
+    echo "Stale cache — rm -rf $TARGET_DIR/aarch64-apple-darwin and rebuild." >&2
+    exit 1
+fi
 
 # -create-xcframework needs a full Xcode (CLT has no xcodebuild) but does NO linking —
 # it only copies the libs and writes the bundle plist, so a beta Xcode is safe here.
