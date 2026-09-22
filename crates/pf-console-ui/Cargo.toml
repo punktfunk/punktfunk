@@ -94,9 +94,16 @@ pf-client-core = { path = "../pf-client-core", default-features = false }
 skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
-# Everything the shell itself needs, on every platform it runs on (macOS stays an empty crate:
-# the Mac client is clients/apple).
-[target.'cfg(any(target_os = "linux", windows, target_os = "android", target_family = "wasm"))'.dependencies]
+# macOS: the shell builds and its tests run on the Mac; no host draws it there yet. CPU raster
+# is all the tests use. With this crate's default features the key is
+# `jpegd-jpege-pdf-textlayout-vulkan`, which rust-skia publishes for both darwin arches at 0.99.0:
+#   skia-binaries-a25a0fdb7d90429aa2d1-aarch64-apple-darwin-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+[target.'cfg(target_os = "macos")'.dependencies]
+skia-safe = { version = "0.99", features = ["textlayout"] }
+pf-client-core = { path = "../pf-client-core", default-features = false }
+
+# Everything the shell itself needs, on every platform it runs on.
+[target.'cfg(any(target_os = "linux", windows, target_os = "android", target_os = "macos", target_family = "wasm"))'.dependencies]
 anyhow = "1"
 tracing = "0.1"
 # The host-facing model types (`HostRow`, `ConsoleCmd`, `LibraryGame`, …) derive serde so a host

@@ -104,3 +104,9 @@ workspace. See `docs/agents/domain.md`.
 - Scope ripwire source reviews with `--exclude=clients/apple/.build`
   `--exclude=clients/apple/PunktfunkCore.xcframework`; downloaded sources and packaged headers
   otherwise pollute the symbol graph and clone findings.
+
+## Console verification
+
+- `cargo test -p pf-console-ui` runs the console's tests on macOS; CPU raster, no GPU.
+- `PF_CONSOLE_DUMP=<dir> cargo test -p pf-console-ui --lib -- --ignored dump` writes every
+  screen as a PNG.

@@ -258,7 +258,7 @@ impl Console {
 
     /// Shell and fonts for the Vulkan overlay: stream chrome uses the same fonts; the
     /// overlay holds the shell as `Option`.
-    #[cfg(feature = "vulkan-overlay")]
+    #[cfg(all(any(target_os = "linux", windows), feature = "vulkan-overlay"))]
     pub(crate) fn into_parts(self) -> (Shell, Fonts) {
         (self.shell, self.fonts)
     }
