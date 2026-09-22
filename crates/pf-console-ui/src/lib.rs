@@ -20,13 +20,13 @@
 //! pointer UI (`webos-pointer-ui-overhaul.md` D3). No stability promise; a
 //! kit change there is a re-pin plus a compile fix, by design.
 
-// The shell runs on Linux, Windows, Android and wasm, and builds on macOS for its
-// tests. Cargo.toml gates every dependency on the same list.
+// The shell runs on Linux, Windows, Android, wasm and Apple's platforms (Metal there; the
+// Mac also runs the tests). Cargo.toml gates every dependency on the same list.
 #![cfg(any(
     target_os = "linux",
     windows,
     target_os = "android",
-    target_os = "macos",
+    target_vendor = "apple",
     target_family = "wasm"
 ))]
 
