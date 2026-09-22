@@ -3,10 +3,10 @@
 //! presenter may still sample the previous image), and damage-driven redraws.
 //!
 //! Two personas on one `Overlay`: the console shell (home, library, settings,
-//! pairing — always dirty; the aurora animates) and stream chrome (stats OSD,
+//! pairing — redrawn every frame, at 30 Hz once idle) and stream chrome (stats OSD,
 //! capture hint, auto-fading start banner).
 
-use crate::console::{Console, ConsoleEntry, ConsoleHandles};
+use crate::console::{Console, ConsoleEntry, ConsoleHandles, FrameCost};
 use crate::shell::{ConsoleOptions, Shell};
 use crate::theme::{fill, match_first_family, Fonts};
 use anyhow::{anyhow, Context as _, Result};
@@ -20,7 +20,10 @@ use pf_presenter::overlay::{
 use skia_safe::gpu::vk as skvk;
 use skia_safe::gpu::{self, DirectContext, SurfaceOrigin};
 use skia_safe::{Canvas, Color4f, Font, FontMgr, Point, RRect, Rect, Surface};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// An idle console redraws at most this often. 30 Hz keeps the aurora moving.
+const IDLE_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
 
 /// Long enough to read the leave/stats chords; the last `BANNER_FADE_S` fade out.
 const BANNER_S: f64 = 6.0;
@@ -33,6 +36,17 @@ struct Slot {
     view: avk::ImageView,
     width: u32,
     height: u32,
+}
+
+impl Slot {
+    fn frame(&self) -> OverlayFrame {
+        OverlayFrame {
+            image: self.image,
+            view: self.view,
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// Damage key for the current ring slot — re-render only when this changes.
@@ -97,6 +111,9 @@ pub struct SkiaOverlay {
     ring_touch: crate::pointer::Touch,
     /// Scale the ring last drew at; its touch slop and drag ticks grow with it.
     ring_k: f64,
+    /// Last console render, for the idle rate. `None` once stream chrome took the slots.
+    console_at: Option<Instant>,
+    console_cost: FrameCost,
 }
 
 struct Gpu {
@@ -130,6 +147,8 @@ impl SkiaOverlay {
             ring_touch: crate::pointer::Touch::default(),
             ring_k: 1.0,
             resizing_since: None,
+            console_at: None,
+            console_cost: FrameCost::default(),
         }
     }
 
@@ -372,8 +391,18 @@ impl Overlay for SkiaOverlay {
     }
 
     fn frame(&mut self, ctx: &FrameCtx) -> Result<Option<OverlayFrame>> {
-        // Full-screen, opaque, always dirty — the aurora animates every frame.
+        // Full-screen and opaque; the aurora animates every frame. Idle, the slot on glass
+        // is handed back until `IDLE_FRAME` passes, and the presenter skips its present.
         if self.console_visible() {
+            let idle = self.shell.as_ref().is_some_and(Shell::idle)
+                && self.console_at.is_some_and(|t| t.elapsed() < IDLE_FRAME);
+            if let Some(slot) = self.slots[self.current]
+                .as_ref()
+                .filter(|s| idle && (s.width, s.height) == (ctx.width, ctx.height))
+            {
+                return Ok(Some(slot.frame()));
+            }
+            let drew = Instant::now();
             let next = 1 - self.current;
             self.ensure_slot(next, ctx.width, ctx.height)?;
             let Self {
@@ -410,14 +439,25 @@ impl Overlay for SkiaOverlay {
             }
             self.current = next;
             self.drawn = Drawn::default(); // stream chrome re-renders when it returns
-            let slot = self.slots[next].as_ref().expect("just rendered");
-            return Ok(Some(OverlayFrame {
-                image: slot.image,
-                view: slot.view,
-                width: slot.width,
-                height: slot.height,
-            }));
+            let now = Instant::now();
+            self.console_at = Some(now);
+            if let Some(r) = self.console_cost.add(now - drew, now) {
+                tracing::debug!(
+                    width = ctx.width,
+                    height = ctx.height,
+                    frames = r.frames,
+                    mean_ms = %format_args!("{:.1}", r.mean_ms),
+                    peak_ms = %format_args!("{:.1}", r.peak_ms),
+                    "console frame cost"
+                );
+            }
+            return Ok(Some(
+                self.slots[next].as_ref().expect("just rendered").frame(),
+            ));
         }
+        // A cost window never spans a stream: it would report minutes for a few frames.
+        self.console_at = None;
+        self.console_cost = FrameCost::default();
 
         let banner_alpha = self.banner_alpha(ctx);
         let banner_step = (banner_alpha * 32.0).round() as u8;
@@ -467,12 +507,7 @@ impl Overlay for SkiaOverlay {
             ring: ring_key,
         };
         if want == self.drawn {
-            return Ok(self.slots[self.current].as_ref().map(|s| OverlayFrame {
-                image: s.image,
-                view: s.view,
-                width: s.width,
-                height: s.height,
-            }));
+            return Ok(self.slots[self.current].as_ref().map(Slot::frame));
         }
 
         // Other slot: the presenter may still be sampling this one (one frame in flight).
@@ -555,13 +590,9 @@ impl Overlay for SkiaOverlay {
 
         self.current = next;
         self.drawn = want;
-        let slot = self.slots[next].as_ref().expect("just rendered");
-        Ok(Some(OverlayFrame {
-            image: slot.image,
-            view: slot.view,
-            width: slot.width,
-            height: slot.height,
-        }))
+        Ok(Some(
+            self.slots[next].as_ref().expect("just rendered").frame(),
+        ))
     }
 }
 
