@@ -37,6 +37,7 @@ pub mod brand;
 // than growing a second order. Aliased here because every screen names `crate::collate`.
 pub(crate) use pf_client_core::collate;
 pub mod console;
+pub mod el;
 pub mod glyphs;
 pub mod icons;
 pub mod input;
