@@ -384,6 +384,8 @@ pub(crate) struct Shell {
     pub(crate) gpu_cache_bytes: usize,
     t0: Instant,
     last_frame: Option<Instant>,
+    /// Last menu, pointer, key or text input — the idle clock ([`crate::console::IDLE_AFTER`]).
+    last_input: Instant,
     /// Test-only `(t, step)`: clock reads `t` and each frame adds `step`.
     /// The aurora phase *is* the clock; wall time never agrees across dumps.
     #[cfg(test)]
@@ -469,6 +471,7 @@ impl Shell {
             gpu_cache_bytes: opts.gpu_cache_bytes,
             t0: Instant::now(),
             last_frame: None,
+            last_input: Instant::now(),
             #[cfg(test)]
             fake_clock: None,
             field: RefCell::new(None),
@@ -502,6 +505,7 @@ impl Shell {
     /// Host pointer events through the shared touch model ([`Touch`]): a finger acts
     /// on its lift or scrolls, a mouse acts on press.
     pub(crate) fn pointer_input(&mut self, input: pf_client_core::console::PointerInput) -> bool {
+        self.last_input = Instant::now();
         let mut touch = std::mem::take(&mut self.touch);
         let consumed = touch.feed(input, self.last_k, |p| self.pointer(p));
         self.touch = touch;
@@ -576,6 +580,11 @@ impl Shell {
     /// pad as menu events, masked off the wire.
     pub(crate) fn holds_stream(&self) -> bool {
         self.launching.is_some()
+    }
+
+    /// No input for [`crate::console::IDLE_AFTER`].
+    pub(crate) fn idle(&self) -> bool {
+        self.last_input.elapsed() >= crate::console::IDLE_AFTER
     }
 
     pub(crate) fn take_action(&mut self) -> Option<OverlayAction> {
@@ -1009,6 +1018,7 @@ impl Shell {
     }
 
     pub(crate) fn handle_menu(&mut self, ev: MenuEvent) -> Option<MenuPulse> {
+        self.last_input = Instant::now();
         self.sync();
         // The launch hold owns the buttons while it is up: before the dial lands B
         // cancels it, as the connect card's B does; after, any press shows the stream.
@@ -1214,6 +1224,7 @@ impl Shell {
     /// `shift` only affects Tab.
     pub(crate) fn key(&mut self, key: crate::input::Key, shift: bool, repeat: bool) -> bool {
         use crate::input::Key as S;
+        self.last_input = Instant::now();
         self.input_source = Some(crate::console::InputSource::Keys);
         if self.editing() {
             let mut ctx = Ctx {
@@ -1261,6 +1272,7 @@ impl Shell {
     }
 
     pub(crate) fn text_input(&mut self, text: &str) {
+        self.last_input = Instant::now();
         if let Some(top) = self.stack.last_mut() {
             top.text_input(text);
         }

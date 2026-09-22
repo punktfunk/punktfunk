@@ -14,6 +14,7 @@ use pf_client_core::console::{OverlayAction, PointerInput, SessionPhase};
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse, PadInfo};
 use punktfunk_core::config::GamepadPref;
 use skia_safe::Canvas;
+use std::time::{Duration, Instant};
 
 pub use crate::input::Key;
 
@@ -83,6 +84,54 @@ impl Viewport {
             insets: Insets::default(),
             scale: None,
         }
+    }
+}
+
+/// No input for this long: the console is being looked at, not used, and a host may
+/// draw it at a reduced rate. Any input restores full rate on its own frame.
+pub(crate) const IDLE_AFTER: Duration = Duration::from_secs(60);
+
+/// What console frames cost, closed once a [`FrameCost::WINDOW`]. Time the draw and its
+/// flush, never the swap: a swap blocks on vsync and always reads as one panel period.
+#[derive(Default)]
+pub struct FrameCost {
+    frames: u32,
+    sum: Duration,
+    peak: Duration,
+    since: Option<Instant>,
+}
+
+/// One closed [`FrameCost`] window.
+#[derive(Debug, PartialEq)]
+pub struct FrameReport {
+    pub frames: u32,
+    pub window: Duration,
+    pub mean_ms: f64,
+    pub peak_ms: f64,
+}
+
+impl FrameCost {
+    /// One line a minute is cheap enough to leave on for everyone.
+    pub const WINDOW: Duration = Duration::from_secs(60);
+
+    /// Adds one frame's cost; returns the window once it has run [`Self::WINDOW`].
+    pub fn add(&mut self, cost: Duration, now: Instant) -> Option<FrameReport> {
+        let since = *self.since.get_or_insert(now);
+        self.frames += 1;
+        self.sum += cost;
+        self.peak = self.peak.max(cost);
+        let window = now.duration_since(since);
+        if window < Self::WINDOW {
+            return None;
+        }
+        let report = FrameReport {
+            frames: self.frames,
+            window,
+            mean_ms: self.sum.as_secs_f64() * 1000.0 / f64::from(self.frames),
+            peak_ms: self.peak.as_secs_f64() * 1000.0,
+        };
+        *self = FrameCost::default();
+        Some(report)
     }
 }
 
@@ -171,6 +220,11 @@ impl Console {
     /// holding the input), and the host then says nothing at all.
     pub fn focus_announcement(&mut self) -> Option<String> {
         self.shell.focus_announcement()
+    }
+
+    /// No menu, pointer, key or text input for `IDLE_AFTER` (a minute).
+    pub fn idle(&self) -> bool {
+        self.shell.idle()
     }
 
     /// Console is off screen; the shell keeps its stack for return.
@@ -268,6 +322,20 @@ fn already_showing(top: Option<&Screen>, entry: &ConsoleEntry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_cost_closes_once_a_window() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let mut c = FrameCost::default();
+        assert_eq!(c.add(ms(2), t0), None);
+        assert_eq!(c.add(ms(6), t0 + Duration::from_secs(30)), None);
+        let r = c.add(ms(4), t0 + FrameCost::WINDOW).expect("window closed");
+        assert_eq!((r.frames, r.window), (3, FrameCost::WINDOW));
+        assert!((r.mean_ms - 4.0).abs() < 1e-9 && (r.peak_ms - 6.0).abs() < 1e-9);
+        // The next frame opens a fresh window.
+        assert_eq!(c.add(ms(1), t0 + FrameCost::WINDOW * 2), None);
+    }
 
     fn row() -> HostRow {
         HostRow {

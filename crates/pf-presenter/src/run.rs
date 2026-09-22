@@ -2379,15 +2379,17 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
             }
         }
 
-        // Present the overlay alone when no video frame carried it: every pass while it
-        // animates over no video (browse-idle, or a resize scrim across the host's rebuild
-        // gap), and once per change after a mid-stream picture has gone still.
+        // Present the overlay alone when no video frame carried it: every pass across a
+        // resize scrim (the host's rebuild gap), and once per change while browsing or
+        // after a mid-stream picture has gone still. An idle console hands back the same
+        // image, so browsing presents only what the overlay re-rendered.
         let resize_scrim = stream.as_ref().is_some_and(|s| s.resize_overlay.active());
         let browse_idle = matches!(mode, ModeCtl::Browse(_))
             && stream.as_ref().is_none_or(|s| s.connector.is_none());
         let still_picture = stream.as_ref().is_some_and(|s| s.last_video.is_some())
             && overlay_damage.take_due(Instant::now());
-        if !presented_video && (resize_scrim || browse_idle || still_picture) {
+        let browse_changed = browse_idle && overlay_damage.take_dirty();
+        if !presented_video && (resize_scrim || browse_changed || still_picture) {
             // The UI owns the screen: hand the swapchain back to SDR. A finished PQ stream
             // leaves HDR10 live, and UI presents carry no frame. Not applied to
             // `resize_scrim`: that gap is still an HDR session, and flipping would rebuild
@@ -2572,7 +2574,7 @@ fn resize_decision(
     ResizeAction::Settled(Some(target))
 }
 
-/// Overlay changes no video present has carried to the glass. A still host desktop sends
+/// Overlay changes no present has carried to the glass yet. A still host desktop sends
 /// no frames, so an opened ring or a new OSD line would stay invisible while the ring
 /// holds the pad, and the menu would read as frozen.
 #[derive(Default)]
@@ -2597,6 +2599,11 @@ impl OverlayDamage {
     fn video_presented(&mut self, now: Instant) {
         self.dirty = false;
         self.video_at = Some(now);
+    }
+
+    /// Browsing: the overlay changed since the last present.
+    fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
     }
 
     /// The overlay changed over a picture that has gone still: present it once.
@@ -3430,6 +3437,20 @@ mod tests {
         assert!(!d.take_due(t0 + quiet * 2));
         d.rendered(None);
         assert!(d.take_due(t0 + quiet * 2));
+    }
+
+    /// Browsing presents each overlay change once; an idle console hands back the same image.
+    #[test]
+    fn overlay_damage_browse_presents_only_a_changed_overlay() {
+        use ash::vk::Handle as _;
+        let (a, b) = (ash::vk::Image::from_raw(1), ash::vk::Image::from_raw(2));
+        let mut d = OverlayDamage::default();
+        d.rendered(Some(a));
+        assert!(d.take_dirty());
+        d.rendered(Some(a));
+        assert!(!d.take_dirty());
+        d.rendered(Some(b));
+        assert!(d.take_dirty());
     }
 
     /// KDE fractional scaling advertises points; "Native" must recover the panel pixels.
