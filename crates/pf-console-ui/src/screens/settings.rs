@@ -385,7 +385,8 @@ pub(crate) fn bitrate_ceiling_kbps(platform: crate::platform::Platform) -> u32 {
         crate::platform::Platform::WebOS => 200_000,
         crate::platform::Platform::Desktop
         | crate::platform::Platform::Android
-        | crate::platform::Platform::Web => CUSTOM_MAX_MBPS * 1_000,
+        | crate::platform::Platform::Web
+        | crate::platform::Platform::Apple => CUSTOM_MAX_MBPS * 1_000,
     }
 }
 
@@ -1038,25 +1039,31 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
     // Rows name the platforms that OFFER them. "Everything except the other one's rows" is
     // well defined for two platforms and ambiguous for three: a new host would inherit every
     // row nobody weighed it against. Unlisted here means universal, as it always did.
-    use Platform::{Android, Desktop, WebOS};
+    use Platform::{Android, Apple, Desktop, WebOS};
     let on: &[Platform] = match id {
         // Phone sensors and the Steam Controller 2 dongle: hardware a TV does not have.
-        RowId::PhoneRumble | RowId::PhoneGyro | RowId::Sc2Passthrough => &[Android],
+        // Apple keeps them for the iPhone and iPad (`rumbleOnDevice`, `gyroFromDevice`,
+        // `sc2Capture`); an Apple TV simply has no sensor to report.
+        RowId::PhoneRumble | RowId::PhoneGyro | RowId::Sc2Passthrough => &[Android, Apple],
         // The weak-GPU row. On Android it also shrinks the surface; webOS's compositor
         // already hands a 1080p buffer, so there it is the cheaper backdrop alone.
         RowId::ReduceUiResolution => &[Android, WebOS],
         // A MediaCodec decoder flag; nothing else has the knob.
         RowId::LowLatency => &[Android],
         // The clients whose presenters place the picture through `video_fit`.
-        RowId::VideoFit => &[Desktop, Android],
+        RowId::VideoFit => &[Desktop, Android, Apple],
         // Offered wherever there is a second UI to fall back to: Android's touch home,
         // webOS's cursor shell. `row_applies` still needs `fallback_ui` from the host.
-        RowId::GamepadUi | RowId::GamepadUiMode => &[Android, WebOS],
-        // A pad list and a licences screen: both real on a TV.
-        RowId::Controllers | RowId::Licenses => &[Android, WebOS],
+        RowId::GamepadUi | RowId::GamepadUiMode => &[Android, WebOS, Apple],
+        // A pad list and a licences screen: both real on a TV, and both already in the
+        // Apple client (its Controllers screen and the Acknowledgements it ships).
+        RowId::Controllers | RowId::Licenses => &[Android, WebOS, Apple],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
         // concept is real there too (punktfunk-webos docs/NOTES.md).
-        RowId::DsCapture => &[Android, WebOS],
+        RowId::DsCapture => &[Android, WebOS, Apple],
+        // Apple reads `UIAccessibility.isReduceMotionEnabled` and follows it, so the shell has
+        // nothing to ask. The others carry a row because they cannot see the OS switch.
+        RowId::ReduceMotion => &[Desktop, Android, WebOS, Platform::Web],
         // Which pad is player 1 — a question only a client that can narrow forwarding to one pad
         // has to answer. Android's router, webOS's slot table and the browser's Gamepad API give
         // every controller its own wire slot, so there is nothing to pick.
@@ -1065,18 +1072,17 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::AudioRoute | RowId::CursorGestures => &[WebOS],
         // Main10 at BT.709 asks nothing of the panel, and MediaCodec and NDL both decode it from
         // the SPS.
-        RowId::TenBitSdr => &[Desktop, Android, WebOS],
-        // Decoder choice, chroma and the window-manager knobs: the TV decodes through NDL and has
-        // no window manager, so none of these is a control it could obey. The browser is out for
-        // the same shape of reason — WebCodecs picks the decoder, a page binds no system chord,
-        // and fullscreen needs a gesture. VRR is desktop-only because Android pins a fixed mode
-        // on purpose (`trust::Settings::allow_vrr`).
-        RowId::Decoder
-        | RowId::Chroma444
+        RowId::TenBitSdr => &[Desktop, Android, WebOS, Apple],
+        // VideoToolbox and the Metal wavelet path follow the codec, so Apple picks no decoder
+        // either. The TV decodes through NDL and the browser through WebCodecs.
+        RowId::Decoder => &[Desktop],
+        // Chroma and the window-manager knobs: the TV has no window manager and the browser
+        // binds no system chord, while Android pins a fixed mode on purpose (`allow_vrr`).
+        RowId::Chroma444
         | RowId::Vsync
         | RowId::AllowVrr
         | RowId::Fullscreen
-        | RowId::Shortcuts => &[Desktop],
+        | RowId::Shortcuts => &[Desktop, Apple],
         _ => &Platform::ALL,
     };
     on.contains(&platform)
@@ -1684,7 +1690,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
                  Ctrl+Alt+Shift+M switches live while streaming."
             }
             // No live chord to name: none of these hosts binds one.
-            Platform::Android | Platform::WebOS | Platform::Web => {
+            Platform::Android | Platform::WebOS | Platform::Web | Platform::Apple => {
                 "How a physical mouse drives the host: Capture locks the pointer (relative, \
                  for games), Desktop leaves it free and sends absolute positions."
             }
@@ -1746,7 +1752,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
                 "How much the overlay shows: Compact (one line) → Normal → Detailed. \
                  Ctrl+Alt+Shift+S cycles it live while streaming."
             }
-            Platform::Android | Platform::WebOS | Platform::Web => {
+            Platform::Android | Platform::WebOS | Platform::Web | Platform::Apple => {
                 "How much the overlay shows: Compact (one line) → Normal → Detailed."
             }
         },
@@ -1790,9 +1796,9 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
              the plain immediate left click."
         }
         RowId::GamepadUi => match platform {
-            // `row_on` offers this to Android and webOS only; Desktop and Web are here for
-            // exhaustiveness, never to be read.
-            Platform::Desktop | Platform::Android | Platform::Web => {
+            // `row_on` offers this to Android, webOS and Apple; Desktop and Web are here
+            // for exhaustiveness, never to be read.
+            Platform::Desktop | Platform::Android | Platform::Web | Platform::Apple => {
                 "Front the app with this console instead of the touch interface. Off returns \
                  to the touch home immediately — switch it back on there."
             }
@@ -1802,7 +1808,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             }
         },
         RowId::GamepadUiMode => match platform {
-            Platform::Desktop | Platform::Android | Platform::Web => {
+            Platform::Desktop | Platform::Android | Platform::Web | Platform::Apple => {
                 "When this console fronts the app: whenever a controller is attached, or \
                  always — for a device that lives docked to a TV. The switch above turns it \
                  off altogether."
@@ -3449,7 +3455,11 @@ pub(crate) mod tests {
         for p in Platform::ALL {
             // Exhaustive on purpose: a new variant must be weighed here and added to `ALL`.
             match p {
-                Platform::Desktop | Platform::Android | Platform::WebOS | Platform::Web => {}
+                Platform::Desktop
+                | Platform::Android
+                | Platform::WebOS
+                | Platform::Web
+                | Platform::Apple => {}
             }
             let n = TABS
                 .iter()

@@ -17,17 +17,22 @@ pub enum Platform {
     /// so it takes the desktop's glyphs and ring — but the page binds no live chords, so the
     /// rows that name one describe the setting alone.
     Web,
+    /// The Apple clients' Metal host (`design/console-ui-element-layer.md` WP4): iPhone, iPad,
+    /// Mac and Apple TV behind one shell. Touch and pads like Android, but the OS answers for
+    /// motion and text, so those rows are not the shell's to offer.
+    Apple,
 }
 
 impl Platform {
     /// Every variant. A platform absent from a universal row list offers no settings
     /// row at all, which is a blank screen rather than a missing control — walk this
     /// instead of retyping the set.
-    pub const ALL: [Platform; 4] = [
+    pub const ALL: [Platform; 5] = [
         Platform::Desktop,
         Platform::Android,
         Platform::WebOS,
         Platform::Web,
+        Platform::Apple,
     ];
 }
 

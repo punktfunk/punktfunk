@@ -39,7 +39,10 @@ pub(crate) fn ring_platform(platform: crate::platform::Platform) -> RingPlatform
         crate::platform::Platform::Desktop | crate::platform::Platform::Web => {
             RingPlatform::Desktop
         }
-        crate::platform::Platform::Android => RingPlatform::Touch,
+        // Glass either way: a phone or iPad's screen, and the Siri Remote's trackpad.
+        crate::platform::Platform::Android | crate::platform::Platform::Apple => {
+            RingPlatform::Touch
+        }
         // Not `Touch`: the TV's ring is driven by a pad or the remote's D-pad, so it wants the
         // keyboard/pad default blob. The Magic Remote is a pointer, but it never makes the
         // ring a touch surface.
