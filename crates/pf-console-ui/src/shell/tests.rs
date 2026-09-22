@@ -547,6 +547,38 @@ fn a_touch_swipe_scrolls_settings_without_changing_a_value() {
     );
 }
 
+/// A finger held still on a row is the pad's Secondary on that row: on Bitrate that
+/// opens the typed field. The lift is no tap, or it would commit and close the field.
+#[test]
+fn a_long_press_is_secondary_on_the_row_under_the_finger() {
+    use pf_client_core::console::{PointerButton, PointerInput};
+    let (mut s, _) = rendered_settings();
+    let bitrate = match s.stack.last() {
+        Some(Screen::Settings(scr)) => scr.row_rect_for_test(5).expect("Bitrate drew"),
+        _ => panic!("settings is not on top"),
+    };
+    let (x, y) = (bitrate.center_x(), bitrate.center_y());
+    s.fake_clock = Some((10.0, 0.0));
+    s.pointer_input(PointerInput::Down {
+        x,
+        y,
+        button: PointerButton::Primary,
+        touch: true,
+    });
+    s.fake_clock = Some((10.4, 0.0));
+    s.tick_touch();
+    assert!(!s.editing(), "not held long enough yet");
+    s.fake_clock = Some((10.6, 0.0));
+    s.tick_touch();
+    assert!(s.editing(), "held on Bitrate opens its typed field");
+    s.pointer_input(PointerInput::Up {
+        x,
+        y,
+        button: PointerButton::Primary,
+    });
+    assert!(s.editing(), "the lift after a long press does not tap");
+}
+
 /// A mouse press still acts on contact. Only touch defers to the lift.
 #[test]
 fn a_mouse_press_still_acts_on_contact() {

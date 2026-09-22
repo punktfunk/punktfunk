@@ -506,10 +506,19 @@ impl Shell {
     /// on its lift or scrolls, a mouse acts on press.
     pub(crate) fn pointer_input(&mut self, input: pf_client_core::console::PointerInput) -> bool {
         self.last_input = Instant::now();
+        let now = self.t();
         let mut touch = std::mem::take(&mut self.touch);
-        let consumed = touch.feed(input, self.last_k, |p| self.pointer(p));
+        let consumed = touch.feed(input, self.last_k, now, |p| self.pointer(p));
         self.touch = touch;
         consumed
+    }
+
+    /// Once a frame: a finger held still becomes a long press.
+    pub(crate) fn tick_touch(&mut self) {
+        let now = self.t();
+        let mut touch = std::mem::take(&mut self.touch);
+        touch.tick(now, |p| self.pointer(p));
+        self.touch = touch;
     }
 
     /// Host session edge. `Connecting` is a no-op: the shell already showed
@@ -1165,6 +1174,22 @@ impl Shell {
         if !matches!(self.motion, Motion::None) {
             return true;
         }
+        match p.kind {
+            // The pad's Secondary on whatever the finger rests on: hover it, then press.
+            PointerKind::LongPress => {
+                self.screen_pointer(Pointer {
+                    kind: PointerKind::Move,
+                    ..p
+                });
+                self.handle_menu(MenuEvent::Secondary);
+                return true;
+            }
+            // No screen pans yet: a drag scrolls by ticks.
+            PointerKind::PanStart { .. } | PointerKind::Pan { .. } | PointerKind::Fling { .. } => {
+                return false;
+            }
+            _ => {}
+        }
         if p.press() {
             if let Some((key, _)) = self.hint_rects.iter().find(|(_, r)| p.hits(*r)) {
                 // Click only hints that name an action. Shoulders/Adjust name
@@ -1187,7 +1212,11 @@ impl Shell {
                 return true;
             }
         }
+        self.screen_pointer(p)
+    }
 
+    /// The top screen's turn at a pointer already in safe-area space.
+    fn screen_pointer(&mut self, p: Pointer) -> bool {
         let mut fx = Outbox::default();
         let consumed = {
             let mut ctx = Ctx {

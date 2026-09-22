@@ -1,17 +1,48 @@
 //! Layout, paint and hit-test for an [`El`] tree.
 
 use super::{Axis, El, Id, Kind, Painter, Virtual};
+use crate::anim::{springs, Spring};
 use skia_safe::{Canvas, Rect};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, Dimension, NodeId, Size, TaffyTree};
 
-/// What outlives a frame: scroll offsets and the rects last painted, keyed by [`Id`].
+/// A released fling loses 1/e of its speed every this many seconds.
+const FLING_TAU: f32 = 0.4;
+/// Slower than this, px/s, a fling has stopped.
+const FLING_STOP: f32 = 20.0;
+/// Past an end, a pan moves the content at most this fraction of the finger...
+const RUBBER: f32 = 0.5;
+/// ...halving again once the stretch reaches this fraction of the viewport.
+const RUBBER_SPAN: f32 = 0.25;
+
+/// What outlives a frame: scroll state and the rects last painted, keyed by [`Id`].
 pub struct Tree {
     taffy: TaffyTree,
     /// Virtual items, each laid out as its own root at its item size.
     items: TaffyTree,
-    offsets: HashMap<Id, f32>,
+    scrolls: HashMap<Id, Scroll>,
     placed: Vec<Placed>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Scroll {
+    offset: f32,
+    /// px/s: a fling, or a bounce back from past an end.
+    vel: f32,
+    /// A finger is panning it.
+    held: bool,
+    /// The end it is springing back to, until the spring settles there.
+    bounce: Option<f32>,
+    /// Furthest in-range offset and the viewport's length, as of the last layout.
+    max: f32,
+    view: f32,
+}
+
+impl Scroll {
+    /// Signed distance past the nearest end; zero in range.
+    fn excess(&self) -> f32 {
+        self.offset - self.offset.clamp(0.0, self.max)
+    }
 }
 
 struct Placed {
@@ -19,6 +50,8 @@ struct Placed {
     rect: Rect,
     /// `rect` inside every scroll viewport around it: what a pointer can reach.
     visible: Rect,
+    /// Set on a scroll viewport.
+    axis: Option<Axis>,
 }
 
 /// One laid-out tree: nodes in paint order at content-space rects, before scroll offsets.
@@ -29,6 +62,8 @@ pub struct Frame<'a> {
 
 struct Node<'a> {
     id: Option<Id>,
+    /// Set on a scroll viewport.
+    axis: Option<Axis>,
     rect: Rect,
     /// Innermost scroll around the node, an index into [`Frame::scrolls`].
     scroll: Option<usize>,
@@ -60,13 +95,13 @@ impl Tree {
         Tree {
             taffy,
             items,
-            offsets: HashMap::new(),
+            scrolls: HashMap::new(),
             placed: Vec::new(),
         }
     }
 
-    /// Lay `root` out to fill `rect`. Offsets clamp to this frame's content; a scroll
-    /// absent from it forgets its offset.
+    /// Lay `root` out to fill `rect`. A resting offset clamps to this frame's content; a
+    /// scroll absent from it forgets its state.
     pub fn layout<'a>(&mut self, mut root: El<'a>, rect: Rect) -> Frame<'a> {
         self.taffy.clear();
         root.style.size = definite(rect.width(), rect.height());
@@ -81,11 +116,11 @@ impl Tree {
         let mut walk = Walk {
             tree: &self.taffy,
             items: Some(&mut self.items),
-            offsets: &mut self.offsets,
+            scrolls: &mut self.scrolls,
             frame: &mut frame,
         };
         walk.node(root, node, (rect.left, rect.top), None);
-        self.offsets
+        self.scrolls
             .retain(|id, _| frame.scrolls.iter().any(|s| s.id == *id));
         frame
     }
@@ -122,7 +157,12 @@ impl Tree {
                 continue;
             }
             if let Some(id) = n.id {
-                self.placed.push(Placed { id, rect, visible });
+                self.placed.push(Placed {
+                    id,
+                    rect,
+                    visible,
+                    axis: n.axis,
+                });
             }
             if let Some(p) = n.paint {
                 canvas.save();
@@ -152,13 +192,88 @@ impl Tree {
         self.placed.iter().find(|p| p.id == id).map(|p| p.rect)
     }
 
-    pub fn offset(&self, scroll: Id) -> f32 {
-        self.offsets.get(&scroll).copied().unwrap_or(0.0)
+    /// The innermost scroll on `axis` painted under `(x, y)` last frame.
+    pub fn scroll_at(&self, x: f32, y: f32, axis: Axis) -> Option<Id> {
+        self.placed
+            .iter()
+            .rev()
+            .filter(|p| p.axis == Some(axis))
+            .find(|p| {
+                let v = p.visible;
+                x >= v.left && x < v.right && y >= v.top && y < v.bottom
+            })
+            .map(|p| p.id)
     }
 
-    /// Clamped to the content on the next [`Self::layout`].
+    pub fn offset(&self, scroll: Id) -> f32 {
+        self.scrolls.get(&scroll).map_or(0.0, |s| s.offset)
+    }
+
+    /// Jump there and stop; clamped to the content on the next [`Self::layout`].
     pub fn set_offset(&mut self, scroll: Id, offset: f32) {
-        self.offsets.insert(scroll, offset);
+        let s = self.scrolls.entry(scroll).or_default();
+        s.offset = offset;
+        s.vel = 0.0;
+        s.bounce = None;
+    }
+
+    /// A finger moved the offset by `delta`. Past an end the content lags the finger,
+    /// more the further it is stretched.
+    pub fn pan(&mut self, scroll: Id, delta: f32) {
+        let s = self.scrolls.entry(scroll).or_default();
+        s.held = true;
+        s.vel = 0.0;
+        s.bounce = None;
+        let excess = s.excess();
+        s.offset += if excess * delta > 0.0 {
+            delta * RUBBER / (1.0 + excess.abs() / (RUBBER_SPAN * s.view.max(1.0)))
+        } else {
+            delta
+        };
+    }
+
+    /// The finger lifted with the offset moving at `vel` px/s.
+    pub fn release(&mut self, scroll: Id, vel: f32) {
+        let s = self.scrolls.entry(scroll).or_default();
+        s.held = false;
+        s.vel = vel;
+    }
+
+    /// Advance flings and bounces by `dt` seconds.
+    pub fn tick(&mut self, dt: f32) {
+        for s in self.scrolls.values_mut().filter(|s| !s.held) {
+            // Past an end: spring back to it, the fling's speed carried into the bounce.
+            // The spring owns the offset until it settles, swings into range included.
+            if s.bounce.is_none() && s.excess() != 0.0 {
+                s.bounce = Some(s.offset - s.excess());
+            }
+            if let Some(end) = s.bounce {
+                let mut sp = Spring {
+                    pos: f64::from(s.offset - end),
+                    vel: f64::from(s.vel),
+                };
+                sp.step_spec(0.0, springs::FOCUS, f64::from(dt));
+                sp.settle(0.0, 0.5, 5.0);
+                s.offset = end + sp.pos as f32;
+                s.vel = sp.vel as f32;
+                if sp.pos == 0.0 && sp.vel == 0.0 {
+                    s.bounce = None;
+                }
+            } else if s.vel != 0.0 {
+                s.offset += s.vel * dt;
+                s.vel *= (-dt / FLING_TAU).exp();
+                if s.vel.abs() < FLING_STOP {
+                    s.vel = 0.0;
+                }
+            }
+        }
+    }
+
+    /// Held, flinging or bouncing: not the moment for a widget to move it.
+    pub fn moving(&self, scroll: Id) -> bool {
+        self.scrolls
+            .get(&scroll)
+            .is_some_and(|s| s.held || s.vel != 0.0 || s.bounce.is_some() || s.excess() != 0.0)
     }
 }
 
@@ -189,7 +304,7 @@ struct Walk<'t, 'a> {
     tree: &'t TaffyTree,
     /// `None` inside a virtual item: its tree is the one being walked.
     items: Option<&'t mut TaffyTree>,
-    offsets: &'t mut HashMap<Id, f32>,
+    scrolls: &'t mut HashMap<Id, Scroll>,
     frame: &'t mut Frame<'a>,
 }
 
@@ -207,6 +322,7 @@ impl<'a> Walk<'_, 'a> {
         } = el;
         let mut inner = scroll;
         let mut items = None;
+        let mut scroll_axis = None;
         let paint = match kind {
             Kind::Box => None,
             Kind::Paint(p) => Some(p),
@@ -218,8 +334,16 @@ impl<'a> Walk<'_, 'a> {
                     Axis::Horizontal => o.right - l.size.width,
                 }
                 .max(0.0);
-                let off = self.offsets.entry(id).or_insert(0.0);
-                *off = off.clamp(0.0, max);
+                let s = self.scrolls.entry(id).or_default();
+                s.max = max;
+                s.view = match axis {
+                    Axis::Vertical => l.size.height,
+                    Axis::Horizontal => l.size.width,
+                };
+                if !s.held && s.vel == 0.0 && s.bounce.is_none() {
+                    s.offset = s.offset.clamp(0.0, max);
+                }
+                scroll_axis = Some(axis);
                 self.frame.scrolls.push(ScrollBox {
                     id,
                     axis,
@@ -238,6 +362,7 @@ impl<'a> Walk<'_, 'a> {
         if id.is_some() || paint.is_some() {
             self.frame.nodes.push(Node {
                 id,
+                axis: scroll_axis,
                 rect,
                 scroll,
                 paint,
@@ -266,7 +391,7 @@ impl<'a> Walk<'_, 'a> {
         }
         let view = match scroll.map(|i| &self.frame.scrolls[i]) {
             Some(s) => {
-                let off = self.offsets.get(&s.id).copied().unwrap_or(0.0);
+                let off = self.scrolls.get(&s.id).map_or(0.0, |s| s.offset);
                 match s.axis {
                     Axis::Vertical => s.viewport.with_offset((0.0, off)),
                     Axis::Horizontal => s.viewport.with_offset((off, 0.0)),
@@ -297,7 +422,7 @@ impl<'a> Walk<'_, 'a> {
             Walk {
                 tree: items,
                 items: None,
-                offsets: &mut *self.offsets,
+                scrolls: &mut *self.scrolls,
                 frame: &mut *self.frame,
             }
             .node(el, n, (x, y), scroll);

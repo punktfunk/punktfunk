@@ -759,6 +759,11 @@ impl Ring {
             return self.edit_pointer(p);
         }
         match p.kind {
+            // Not the ring's: a drag falls back to Scroll ticks, a slow tap stays a tap.
+            PointerKind::PanStart { .. }
+            | PointerKind::Pan { .. }
+            | PointerKind::Fling { .. }
+            | PointerKind::LongPress => return false,
             PointerKind::Back => {
                 if self.sheet {
                     self.sheet = false;
@@ -848,7 +853,12 @@ impl Ring {
                 ed.drag = None;
                 false
             }
-            PointerKind::Scroll { .. } | PointerKind::Back => false,
+            PointerKind::Scroll { .. }
+            | PointerKind::Back
+            | PointerKind::PanStart { .. }
+            | PointerKind::Pan { .. }
+            | PointerKind::Fling { .. }
+            | PointerKind::LongPress => false,
         }
     }
 
@@ -1988,7 +1998,7 @@ mod tests {
         let (mut r, row) = rendered_sheet();
         let (cx, cy) = (row.center_x(), row.center_y());
         let mut touch = Touch::default();
-        let mut feed = |r: &mut Ring, input| touch.feed(input, 1.0, |p| r.pointer(p));
+        let mut feed = |r: &mut Ring, input| touch.feed(input, 1.0, 0.0, |p| r.pointer(p));
         let down = PointerInput::Down {
             x: cx,
             y: cy,
