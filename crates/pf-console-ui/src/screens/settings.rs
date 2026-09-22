@@ -118,8 +118,10 @@ pub enum RowId {
     Licenses,
 }
 
-/// `Settings::extra` keys the Android rows share with Kotlin (`ConsoleJson.settings`).
-mod android_keys {
+/// `Settings::extra` keys for the rows about the device in your hand, not the host. The
+/// `android.` prefix is where they were first written and stays for the stores that hold it;
+/// the Apple client reads the same keys from its own document.
+mod device_keys {
     pub const LOW_LATENCY: &str = "android.low_latency";
     pub const PHONE_RUMBLE: &str = "android.rumble_on_phone";
     pub const PHONE_GYRO: &str = "android.gyro_on_phone";
@@ -194,7 +196,7 @@ fn reduce_ui_key(platform: crate::platform::Platform) -> &'static str {
     use crate::platform::Platform;
     match platform {
         Platform::WebOS => webos_keys::REDUCE_UI_RES,
-        _ => android_keys::REDUCE_UI_RES,
+        _ => device_keys::REDUCE_UI_RES,
     }
 }
 
@@ -353,7 +355,7 @@ fn safe_area(s: &pf_client_core::trust::Settings, platform: crate::platform::Pla
     platform == crate::platform::Platform::Android
         && s.width == 0
         && !s.match_window
-        && extra_bool(s, android_keys::SAFE_AREA_MODE, false)
+        && extra_bool(s, device_keys::SAFE_AREA_MODE, false)
 }
 /// `0` = the panel's native refresh, resolved at connect. Must cover every value the desktop
 /// shells can write: on Linux both write the same client-gtk-settings.json, so a box that set
@@ -1060,7 +1062,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::Controllers | RowId::Licenses => &[Android, WebOS, Apple],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
         // concept is real there too (punktfunk-webos docs/NOTES.md).
-        RowId::DsCapture => &[Android, WebOS, Apple],
+        RowId::DsCapture => &[Android, WebOS],
         // Apple reads `UIAccessibility.isReduceMotionEnabled` and follows it, so the shell has
         // nothing to ask. The others carry a row because they cannot see the OS switch.
         RowId::ReduceMotion => &[Desktop, Android, WebOS, Platform::Web],
@@ -1489,27 +1491,27 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::LowLatency => (
             Some("Decoding"),
             "Low-latency mode",
-            on_off(extra_bool(s, android_keys::LOW_LATENCY, true)).into(),
+            on_off(extra_bool(s, device_keys::LOW_LATENCY, true)).into(),
         ),
         RowId::PhoneRumble => (
             Some("This device"),
             "Rumble on this phone",
-            on_off(extra_bool(s, android_keys::PHONE_RUMBLE, false)).into(),
+            on_off(extra_bool(s, device_keys::PHONE_RUMBLE, false)).into(),
         ),
         RowId::PhoneGyro => (
             None,
             "Gyro from this phone",
-            on_off(extra_bool(s, android_keys::PHONE_GYRO, false)).into(),
+            on_off(extra_bool(s, device_keys::PHONE_GYRO, false)).into(),
         ),
         RowId::Sc2Passthrough => (
             Some("Passthrough"),
             "Steam Controller 2",
-            on_off(extra_bool(s, android_keys::SC2, true)).into(),
+            on_off(extra_bool(s, device_keys::SC2, true)).into(),
         ),
         RowId::DsCapture => (
             None,
             "DualSense over USB",
-            on_off(extra_bool(s, android_keys::DS_CAPTURE, true)).into(),
+            on_off(extra_bool(s, device_keys::DS_CAPTURE, true)).into(),
         ),
         RowId::AudioRoute => (
             None,
@@ -1905,7 +1907,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
             step_option(cur, sizes.len() + matching + 1, delta, wrap).map(|i| {
                 s.match_window = i == matching;
                 if android {
-                    set_extra_bool(s, android_keys::SAFE_AREA_MODE, i == 1);
+                    set_extra_bool(s, device_keys::SAFE_AREA_MODE, i == 1);
                 }
                 (s.width, s.height) = if i <= matching {
                     (0, 0)
@@ -2110,11 +2112,11 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         }
         RowId::Fullscreen => toggle(&mut s.fullscreen_on_stream, delta, wrap),
         RowId::AutoWake => toggle(&mut s.auto_wake, delta, wrap),
-        RowId::LowLatency => toggle_extra(s, android_keys::LOW_LATENCY, true, delta, wrap),
-        RowId::PhoneRumble => toggle_extra(s, android_keys::PHONE_RUMBLE, false, delta, wrap),
-        RowId::PhoneGyro => toggle_extra(s, android_keys::PHONE_GYRO, false, delta, wrap),
-        RowId::Sc2Passthrough => toggle_extra(s, android_keys::SC2, true, delta, wrap),
-        RowId::DsCapture => toggle_extra(s, android_keys::DS_CAPTURE, true, delta, wrap),
+        RowId::LowLatency => toggle_extra(s, device_keys::LOW_LATENCY, true, delta, wrap),
+        RowId::PhoneRumble => toggle_extra(s, device_keys::PHONE_RUMBLE, false, delta, wrap),
+        RowId::PhoneGyro => toggle_extra(s, device_keys::PHONE_GYRO, false, delta, wrap),
+        RowId::Sc2Passthrough => toggle_extra(s, device_keys::SC2, true, delta, wrap),
+        RowId::DsCapture => toggle_extra(s, device_keys::DS_CAPTURE, true, delta, wrap),
         RowId::CursorGestures => toggle_extra(s, webos_keys::CURSOR_GESTURES, false, delta, wrap),
         RowId::AudioRoute => {
             let mut v = extra_str(s, webos_keys::AUDIO_ROUTE, "software").to_string();
@@ -2619,7 +2621,7 @@ pub(crate) mod tests {
         let (mut settings, pads) = ctx_parts();
         settings
             .extra
-            .insert(android_keys::SAFE_AREA_MODE.into(), true.into());
+            .insert(device_keys::SAFE_AREA_MODE.into(), true.into());
         let library = crate::library::LibraryShared::default();
         let mut ctx = Ctx {
             hosts: &[],
@@ -2637,7 +2639,7 @@ pub(crate) mod tests {
             t: 0.0,
         };
         let value = |ctx: &Ctx| row_spec(RowId::Resolution, ctx, &[], &Default::default()).value;
-        let safe = |ctx: &Ctx| extra_bool(ctx.settings, android_keys::SAFE_AREA_MODE, false);
+        let safe = |ctx: &Ctx| extra_bool(ctx.settings, device_keys::SAFE_AREA_MODE, false);
         assert_eq!(value(&ctx).as_deref(), Some("Native (safe area)"));
         assert!(adjust(RowId::Resolution, 1, false, &mut ctx));
         assert!(ctx.settings.match_window, "safe area → Match window");
@@ -2650,7 +2652,7 @@ pub(crate) mod tests {
         assert!(adjust(RowId::Resolution, -1, false, &mut ctx));
         assert_eq!((ctx.settings.width, safe(&ctx)), (0, false), "Native");
         assert_eq!(value(&ctx).as_deref(), Some("Native"));
-        set_extra_bool(ctx.settings, android_keys::SAFE_AREA_MODE, true);
+        set_extra_bool(ctx.settings, device_keys::SAFE_AREA_MODE, true);
         (ctx.settings.width, ctx.settings.height) = (1280, 720);
         assert_eq!(value(&ctx).as_deref(), Some("1280 × 720"), "a size wins");
     }
@@ -2733,7 +2735,7 @@ pub(crate) mod tests {
                 .unwrap_or_default()
         };
         assert_eq!(aspect(&ctx), "Screen", "Native lists the screen");
-        set_extra_bool(ctx.settings, android_keys::SAFE_AREA_MODE, true);
+        set_extra_bool(ctx.settings, device_keys::SAFE_AREA_MODE, true);
         assert_eq!(aspect(&ctx), "Safe area");
         assert!(adjust(RowId::Aspect, -1, false, &mut ctx));
         assert_eq!(
@@ -3475,9 +3477,9 @@ pub(crate) mod tests {
         with_ctx(|ctx| {
             ctx.platform = crate::platform::Platform::Android;
             let before = ctx.settings.clone();
-            assert!(extra_bool(ctx.settings, android_keys::LOW_LATENCY, true));
+            assert!(extra_bool(ctx.settings, device_keys::LOW_LATENCY, true));
             assert!(adjust(RowId::LowLatency, 1, true, ctx));
-            assert!(!extra_bool(ctx.settings, android_keys::LOW_LATENCY, true));
+            assert!(!extra_bool(ctx.settings, device_keys::LOW_LATENCY, true));
             assert!(adjust(RowId::GamepadUiMode, 1, true, ctx));
             assert_eq!(
                 extra_str(ctx.settings, GAMEPAD_UI_MODE_KEY, "connected"),
