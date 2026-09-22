@@ -41,8 +41,13 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     let actions: Actions
     /// The pairing ceremony the console's PIN screen drives.
     let ceremony = PairCeremony()
-    /// A screen the app owns and the console asked for (`PlatformScreen`), by id.
-    @Published var platformScreen: String?
+    /// A screen the app owns and the console asked for (`PlatformScreen`), by id. The shell
+    /// holds its own input while one is up; the pad poller is ours to hold.
+    @Published var platformScreen: String? {
+        didSet {
+            if platformScreen == nil { pads.start() } else { pads.stop() }
+        }
+    }
     private let pads = GamepadMenuInput(manager: .shared)
     private var watching: [AnyCancellable] = []
     /// The shelf the console has open, so a fetch knows whose catalog it is filling.

@@ -42,6 +42,11 @@ struct ConsoleHomeView: View {
                 entry = nil
             }
             .onChange(of: waker.waking) { _, _ in console?.pushWake() }
+            // A screen this app owns, asked for by a console row (`PlatformScreen`). The console
+            // keeps drawing underneath and takes no input while one is up.
+            .sheet(isPresented: platformScreen) {
+                platformScreenBody.onDisappear { console?.platformScreen = nil }
+            }
     }
 
     @ViewBuilder private var content: some View {
@@ -78,6 +83,17 @@ struct ConsoleHomeView: View {
                 paired: onPaired, quit: onQuit))
         model?.attach()
         console = model
+    }
+
+    private var platformScreen: Binding<Bool> {
+        Binding(get: { console?.platformScreen != nil }, set: { if !$0 { console?.platformScreen = nil } })
+    }
+
+    @ViewBuilder private var platformScreenBody: some View {
+        switch console?.platformScreen {
+        case "licenses": AcknowledgementsView()
+        default: EmptyView()
+        }
     }
 
     private func preset(of shelf: LibraryTarget) -> StreamPreset? {

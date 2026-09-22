@@ -62,6 +62,43 @@ final class ConsoleABITests: XCTestCase {
         XCTAssertGreaterThan(Set(pixels).count, 100, "Home paints a backdrop and text, not a flat fill")
     }
 
+    /// What a TV binds its Menu button on: at the root the press is the system's, and one
+    /// screen deeper it is the console's. Screens arrive and leave on a spring, so this runs
+    /// the frames that carry it, the way the display link does.
+    func testRootIsWhereBackLeaves() throws {
+        let texture = try offscreen(width: 320, height: 180)
+        XCTAssertTrue(punktfunk_console_at_root(console))
+        // X opens Settings from Home, so Back then has somewhere to go.
+        XCTAssertTrue(punktfunk_console_menu(console, 7, 1))
+        draw(texture, frames: 20)
+        XCTAssertFalse(punktfunk_console_at_root(console), "a pushed screen is not the root")
+        // Backing out can take more than one press — the tab strip claims the first — so what
+        // matters is that Back stays the console's until it is home again.
+        for _ in 0..<4 where !punktfunk_console_at_root(console) {
+            XCTAssertTrue(punktfunk_console_menu(console, 5, 1), "Back is the console's here")
+            draw(texture, frames: 20)
+        }
+        XCTAssertTrue(punktfunk_console_at_root(console), "Back walks back to the root")
+    }
+
+    private func offscreen(width: Int, height: Int) throws -> MTLTexture {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        desc.storageMode = .private
+        return try XCTUnwrap(device.makeTexture(descriptor: desc))
+    }
+
+    /// Frames at roughly a display's cadence: the springs advance on the clock, not on calls.
+    private func draw(_ texture: MTLTexture, frames: Int) {
+        for _ in 0..<frames {
+            _ = punktfunk_console_frame(
+                console, Unmanaged.passUnretained(texture).toOpaque(),
+                UInt32(texture.width), UInt32(texture.height), PunktfunkInsets(), 0)
+            Thread.sleep(forTimeInterval: 1.0 / 60)
+        }
+    }
+
     /// A pad's Back at Home is not the console's: tvOS hands Menu to the system, and the shell
     /// says why with a Quit action.
     func testBackAtTheRootGoesToTheSystem() {
