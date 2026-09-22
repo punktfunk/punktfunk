@@ -208,9 +208,9 @@ jobs:
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
-          "$RUSTUP" target add aarch64-apple-darwin x86_64-apple-darwin
+          "$RUSTUP" target add aarch64-apple-darwin
           # The iOS/tvOS simulator slices the two scheme builds below link against.
-          "$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          "$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim
           # tvOS is tier-3 (no prebuilt std) — build-xcframework.sh compiles it with the PINNED
           # nightly + -Zbuild-std, the same way the distribute and screenshots jobs do. The
           # date lives in the script; rust-src must land on that toolchain, not the channel.
@@ -346,8 +346,8 @@ jobs:
         run: |
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
-          "$RUSTUP" target add aarch64-apple-darwin x86_64-apple-darwin \
-            aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          "$RUSTUP" target add aarch64-apple-darwin \
+            aarch64-apple-ios aarch64-apple-ios-sim
           # tvOS targets are tier-3 (no prebuilt std) — build-xcframework.sh compiles them with a
           # PINNED nightly + -Zbuild-std. Read the date from the script so it lives in one place.
           NIGHTLY="$(sed -n 's/^NIGHTLY=//p' scripts/build-xcframework.sh)"
@@ -812,8 +812,8 @@ jobs:
           fi
           RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
           dirname "$RUSTUP" >> "$GITHUB_PATH"
-          "$RUSTUP" target add aarch64-apple-darwin x86_64-apple-darwin \
-            aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          "$RUSTUP" target add aarch64-apple-darwin \
+            aarch64-apple-ios aarch64-apple-ios-sim
           # tvOS targets are tier-3 (no prebuilt std) — build-xcframework.sh compiles them with a
           # PINNED nightly + -Zbuild-std; the date comes from the script (see the swift job).
           NIGHTLY="$(sed -n 's/^NIGHTLY=//p' scripts/build-xcframework.sh)"
