@@ -125,6 +125,79 @@ fn a_virtual_list_builds_only_what_is_in_view() {
     assert_eq!(tree.hit(10.0, 5.0), Some(Id::new("cell", 1000)));
 }
 
+/// Layout and paint 20 rows at a 100 px pitch in a 300 px viewport.
+fn frame_of(tree: &mut Tree, list: Id) {
+    let drawn = RefCell::new(Vec::new());
+    let frame = tree.layout(
+        tall_list(list, 20, &drawn),
+        Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
+    );
+    tree.paint(canvas().canvas(), frame);
+}
+
+fn run(tree: &mut Tree, list: Id, seconds: f32) {
+    for _ in 0..(seconds * 120.0) as usize {
+        tree.tick(1.0 / 120.0);
+        frame_of(tree, list);
+    }
+}
+
+#[test]
+fn a_pan_follows_the_finger_and_rubber_bands_past_an_end() {
+    let list = Id::new("list", 0);
+    let mut tree = Tree::new();
+    frame_of(&mut tree, list);
+    assert_eq!(tree.scroll_at(10.0, 150.0, Axis::Vertical), Some(list));
+    assert_eq!(tree.scroll_at(10.0, 150.0, Axis::Horizontal), None);
+
+    tree.pan(list, 100.0);
+    assert_eq!(tree.offset(list), 100.0);
+    tree.pan(list, -150.0);
+    assert_eq!(tree.offset(list), -50.0, "in range, one to one");
+    tree.pan(list, -50.0);
+    let stretched = tree.offset(list);
+    assert!(
+        (-70.0..-55.0).contains(&stretched),
+        "past the top it lags: {stretched}"
+    );
+    // Held past the end, layout leaves it there.
+    frame_of(&mut tree, list);
+    assert_eq!(tree.offset(list), stretched);
+    assert!(tree.moving(list));
+
+    tree.release(list, 0.0);
+    run(&mut tree, list, 1.0);
+    assert_eq!(tree.offset(list), 0.0, "springs back to the top");
+    assert!(!tree.moving(list));
+}
+
+#[test]
+fn a_fling_decays_to_a_stop_and_bounces_off_an_end() {
+    let list = Id::new("list", 0);
+    let mut tree = Tree::new();
+    frame_of(&mut tree, list);
+    tree.release(list, 1000.0);
+    run(&mut tree, list, 3.0);
+    // ∫ 1000·e^(−t/0.4) until it drops under 20 px/s: 0.4 × 1000 × 0.98.
+    let travel = tree.offset(list);
+    assert!((370.0..400.0).contains(&travel), "{travel}");
+    assert!(!tree.moving(list));
+
+    tree.set_offset(list, 1600.0);
+    frame_of(&mut tree, list);
+    tree.release(list, 3000.0);
+    let mut furthest = 0.0f32;
+    for _ in 0..360 {
+        tree.tick(1.0 / 120.0);
+        frame_of(&mut tree, list);
+        furthest = furthest.max(tree.offset(list));
+    }
+    assert!(furthest > 1690.0, "overshoots the end: {furthest}");
+    assert!(furthest < 1690.0 + 150.0, "but not by a screen: {furthest}");
+    assert_eq!(tree.offset(list), 1690.0);
+    assert!(!tree.moving(list));
+}
+
 #[test]
 fn ids_are_stable_and_distinct() {
     assert_eq!(Id::new("row", 3), Id::new("row", 3));

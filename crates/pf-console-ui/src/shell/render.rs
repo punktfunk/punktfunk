@@ -68,6 +68,7 @@ impl Shell {
         // Shaped-paragraph cache clock, before anything draws.
         fonts.begin_frame();
         self.sync();
+        self.tick_touch();
         // Publish ink before any draw. Widgets read `theme::set_ink`; skipping this
         // paints the previous palette's text on the new field.
         crate::theme::set_ink(self.ink);

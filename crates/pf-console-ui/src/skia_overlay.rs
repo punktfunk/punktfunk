@@ -351,8 +351,9 @@ impl Overlay for SkiaOverlay {
             return false;
         }
         let ring = &mut self.ring;
+        // The ring takes no pans or long presses, so its finger needs no clock.
         self.ring_touch
-            .feed(input, self.ring_k, |p| ring.pointer(p))
+            .feed(input, self.ring_k, 0.0, |p| ring.pointer(p))
     }
 
     fn take_action(&mut self) -> Option<OverlayAction> {
