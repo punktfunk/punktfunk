@@ -97,6 +97,16 @@ export const dirAccess = (p: string): Access =>
 export const fileAccess = (p: string): Access =>
 	classify(p, (st) => st.isFile() && st.size > 0);
 
+/**
+ * The command granting the Windows plugin runner (`NT AUTHORITY\LocalService`, SID `S-1-5-19`)
+ * read on `p`'s directory; `null` elsewhere. Kept for plugins built against 0.4.7 and earlier,
+ * which import it — folder access requests replace it.
+ */
+export const grantCommand = (p: string): string | null =>
+	process.platform === "win32"
+		? `icacls "${path.win32.dirname(p)}" /grant "*S-1-5-19:(OI)(CI)(RX)"`
+		: null;
+
 /** Does this path exist as a directory? */
 export const isDir = (p: string): boolean => dirAccess(p) === "ok";
 

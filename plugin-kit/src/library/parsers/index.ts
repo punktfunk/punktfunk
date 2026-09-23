@@ -18,6 +18,7 @@ export {
 	confinedJoin,
 	dirAccess,
 	fileAccess,
+	grantCommand,
 	isDir,
 	isFile,
 	listDir,

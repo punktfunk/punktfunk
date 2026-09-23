@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import {
+	Cause,
 	Duration,
 	Effect,
 	Exit,
@@ -223,8 +224,10 @@ export const makeSyncEngine = <
 		// Errors must never kill a loop — log and carry on (the original's catch).
 		const safeSync = (reason: SyncReason): Effect.Effect<void> =>
 			sync(reason).pipe(
-				Effect.catch((e: SyncError) =>
-					Effect.logWarning(`sync (${reason}) failed: ${e.cause}`),
+				Effect.catchCause((cause) =>
+					Effect.logWarning(
+						`sync (${reason}) failed: ${Cause.pretty(cause).split("\n").slice(0, 8).join("\n")}`,
+					),
 				),
 				Effect.asVoid,
 			);
