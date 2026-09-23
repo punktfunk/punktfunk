@@ -49,6 +49,29 @@ describe("folder access", () => {
 		expect(result).toEqual([]);
 	});
 
+	test("a host that refuses the request is never a plugin failure", async () => {
+		for (const status of [403, 500]) {
+			const result = await Effect.runPromise(
+				requestAccess(["/one"]).pipe(
+					Effect.provide(
+						hostLayer((method, path) =>
+							Effect.fail(
+								new HostRequestError({ method, path, cause: { status } }),
+							),
+						),
+					),
+				),
+			);
+			expect([status, result]).toEqual([status, []]);
+		}
+	});
+
+	test("the library entry still exports what 0.4.7 plugins import", async () => {
+		// xbox, amazon and ubisoft bundles import it; a missing export fails them at load.
+		const library = await import("../src/library/index.js");
+		expect(typeof library.grantCommand).toBe("function");
+	});
+
 	test("missing counts only inside the sandbox", () => {
 		const missing = `/definitely-missing-punktfunk-${process.pid}`;
 		const previous = process.env.PUNKTFUNK_MGMT_UNIX;

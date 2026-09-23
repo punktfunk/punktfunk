@@ -10,10 +10,13 @@
 import * as fs from "node:fs";
 import type { PluginDef } from "@punktfunk/host";
 import { Duration, Effect, type Schema, Stream } from "effect";
-import { requestAccess, unreachable } from "../access.js";
+import {
+	type AccessRequestOutcome,
+	requestAccess,
+	unreachable,
+} from "../access.js";
 import { type CliCommand, runPluginCli } from "../cli.js";
 import { type ConfigService, makeConfigService } from "../config.js";
-import type { HostRequestError } from "../errors.js";
 import { HostClient, type PluginInfo } from "../host-client.js";
 import { ProviderClient, type ProviderClientService } from "../reconcile.js";
 import { definePluginKit, type PluginKitDef } from "../runtime.js";
@@ -124,12 +127,37 @@ export interface LibraryPlugin {
 	readonly cli: (argv?: ReadonlyArray<string>) => Promise<void>;
 }
 
+/** One line per folder the host answered; a launcher that is simply not installed stays quiet. */
+const logOutcomes = (outcomes: ReadonlyArray<AccessRequestOutcome>) =>
+	Effect.forEach(
+		outcomes,
+		({ path, outcome }) => {
+			if (outcome === "pending")
+				return Effect.logInfo(`asked the operator for ${path}`);
+			if (outcome === "denied")
+				return Effect.logInfo(`the operator did not allow ${path}`);
+			if (outcome === "granted")
+				return Effect.logWarning(
+					`${path} is allowed but not visible to this plugin — a folder that appeared after the runner started needs a runner restart`,
+				);
+			if (outcome === "refused:not_directory") return Effect.void;
+			return Effect.logInfo(
+				`the host won't offer ${path} (${outcome.replace(/^refused:/, "")})`,
+			);
+		},
+		{ discard: true },
+	);
+
+/**
+ * Ask for the wanted folders the plugin can't reach, once per distinct set, then scan. A request
+ * the host never answered is asked again on the next scan; it never fails the scan.
+ */
 const accessAwareCompute = <Cfg, A, E, R>(
 	wants: ((cfg: Cfg) => ReadonlyArray<string>) | undefined,
 	title: string,
 	load: Effect.Effect<Cfg, E, R>,
 	compute: (cfg: Cfg) => Effect.Effect<A, E, R>,
-): (() => Effect.Effect<A, E | HostRequestError, R | HostClient>) => {
+): (() => Effect.Effect<A, E, R | HostClient>) => {
 	let lastAsked: string | undefined;
 	return () =>
 		load.pipe(
@@ -143,10 +171,8 @@ const accessAwareCompute = <Cfg, A, E, R>(
 				}
 				return requestAccess(dirs, title).pipe(
 					Effect.tap((outcomes) => {
-						lastAsked = key;
-						return outcomes.length > 0
-							? Effect.logInfo(`asked the operator for ${dirs.length} folders`)
-							: Effect.void;
+						if (outcomes.length === dirs.length) lastAsked = key;
+						return logOutcomes(outcomes);
 					}),
 					Effect.andThen(compute(cfg)),
 				);
