@@ -5,6 +5,7 @@
 //! [`thread`] opens a backend, reports, and publishes. The S5 probe (`encode_probe.rs`) is a
 //! thin client of the same pieces. [`set_encode`] is the control-plane verb.
 
+mod content_probe;
 pub mod convert;
 pub mod drive;
 pub mod pool;

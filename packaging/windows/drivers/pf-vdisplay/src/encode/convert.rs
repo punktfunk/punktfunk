@@ -27,6 +27,7 @@ use windows62::Win32::Graphics::Direct3D11 as d3d;
 use windows62::Win32::Graphics::Dxgi::Common as dxgi;
 use windows62::core::{Interface as _, PCWSTR};
 
+use super::content_probe::ContentProbe;
 use crate::cursor_cell::CursorImage;
 use crate::direct_3d_device::Direct3DDevice;
 use crate::registry::lock;
@@ -294,6 +295,8 @@ pub struct Targets {
     /// owner: a blend on another slot replaces it, and only the newest blended slot is ever
     /// restored — it is the pool's stash.
     under: Option<(usize, (u32, u32, u32, u32))>,
+    /// The video-engine kinds only: whether their output still moves with the source.
+    probe: Option<ContentProbe>,
 }
 
 impl Targets {
@@ -398,7 +401,23 @@ impl Targets {
             blend_failed: false,
             patch: None,
             under: None,
+            probe: match kind {
+                InputKind::Nv12 => Some(ContentProbe::new("nv12")),
+                InputKind::P010Sdr => Some(ContentProbe::new("p010sdr")),
+                _ => None,
+            },
         })
+    }
+
+    /// Hand slot `i`'s fresh conversion and the source it came from to the content probe.
+    fn probe_after(&mut self, src: &Tex, i: usize) {
+        let out = match &self.planes {
+            Planes::Nv12 { out, .. } | Planes::P010Sdr { out, .. } => &out[i],
+            _ => return,
+        };
+        if let Some(p) = self.probe.as_mut() {
+            p.after_convert(&self.dev, &self.ctx, src, out);
+        }
     }
 
     /// Undo the last cursor blend on slot `i`, so the next one draws the pointer onto a
@@ -467,7 +486,9 @@ impl Targets {
             return Ok(());
         }
         if !defer {
-            return self.convert(src, None, i);
+            self.convert(src, None, i)?;
+            self.probe_after(src, i);
+            return Ok(());
         }
         if self.rgb[i].is_none() {
             let bind = (d3d::D3D11_BIND_RENDER_TARGET.0 | d3d::D3D11_BIND_SHADER_RESOURCE.0) as u32;
@@ -661,6 +682,7 @@ impl Targets {
             self.deferred[i] = false;
             let (t, v) = self.rgb[i].clone().ok_or((-2, "scratch"))?;
             self.convert(&t, Some(&v), i)?;
+            self.probe_after(&t, i);
         }
         let (texture, pyro) = match &mut self.planes {
             Planes::Bgra(slots) => (slots[i].clone(), None),
