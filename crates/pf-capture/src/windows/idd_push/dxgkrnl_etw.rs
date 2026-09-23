@@ -21,8 +21,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
+use pf_win_display::display_events::process_name;
 use windows::core::{GUID, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS};
+use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Diagnostics::Etw::{
     CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW, ProcessTrace, StartTraceW,
     CONTROLTRACE_HANDLE, ENABLE_TRACE_PARAMETERS, ENABLE_TRACE_PARAMETERS_VERSION_2,
@@ -33,9 +34,6 @@ use windows::Win32::System::Diagnostics::Etw::{
     WNODE_FLAG_TRACED_GUID,
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-};
 
 /// `Microsoft-Windows-DxgKrnl`.
 const DXGKRNL: GUID = GUID::from_u128(0x802EC45A_1E99_4B83_9920_87C98277BA9D);
@@ -535,37 +533,6 @@ fn enable_provider(session: CONTROLTRACE_HANDLE, guid: &GUID, ids: &[u16]) -> bo
         )
     };
     rc == ERROR_SUCCESS
-}
-
-/// Image base name for `pid` (Present attribution). `None` when the process is gone
-/// or protected. Stall-report time only — a rare, already-degraded moment.
-fn process_name(pid: u32) -> Option<String> {
-    // SAFETY: plain FFI; a refused open returns Err (checked via `ok()?`), and the returned
-    // handle is closed exactly once below.
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
-    let mut buf = [0u16; 512];
-    let mut len = buf.len() as u32;
-    // SAFETY: `process` is the live handle just opened with QUERY_LIMITED;
-    // `buf`/`len` are a valid out-buffer and its capacity; `len` is the written UTF-16
-    // length (no NUL) on success.
-    let ok = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            PWSTR(buf.as_mut_ptr()),
-            &mut len,
-        )
-    }
-    .is_ok();
-    // SAFETY: `process` is the handle opened above, closed exactly once here.
-    unsafe {
-        let _ = CloseHandle(process);
-    }
-    if !ok {
-        return None;
-    }
-    let path = String::from_utf16_lossy(&buf[..len as usize]);
-    Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string())
 }
 
 /// `Duration` in QPC ticks. Saturating; diagnostic precision.

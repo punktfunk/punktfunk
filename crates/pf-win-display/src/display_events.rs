@@ -10,6 +10,8 @@
 //!   probe with no mode delta does not fire this.
 //! - `EVENT_SYSTEM_DESKTOPSWITCH` (WinEvent): the input desktop moved (UAC / lock / logon and
 //!   back). Not logged; it refreshes [`crate::secure_desktop`] for the capturer's cursor guard.
+//! - `EVENT_SYSTEM_FOREGROUND` (WinEvent): another window took the foreground. Logged with its
+//!   process and class: a game that loses focus stops drawing while the stream keeps running.
 //!
 //! A driver-internal probe (EDID/DDC, DP retrain) emits none of these. Pair that silence with
 //! metronomic stalls to tell a KMD-below-OS sink from a Windows re-enumeration.
@@ -25,18 +27,22 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Devices::Display::GUID_DEVINTERFACE_MONITOR;
-use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer, PostMessageW,
-    RegisterClassW, RegisterDeviceNotificationW, SetTimer, DBT_DEVICEARRIVAL,
-    DBT_DEVICEREMOVECOMPLETE, DBT_DEVNODES_CHANGED, DBT_DEVTYP_DEVICEINTERFACE,
-    DEVICE_NOTIFY_WINDOW_HANDLE, DEV_BROADCAST_DEVICEINTERFACE_W, DEV_BROADCAST_HDR,
-    EVENT_SYSTEM_DESKTOPSWITCH, MSG, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WM_APP,
-    WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClassNameW, GetMessageW,
+    GetWindowThreadProcessId, KillTimer, PostMessageW, RegisterClassW, RegisterDeviceNotificationW,
+    SetTimer, DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE, DBT_DEVNODES_CHANGED,
+    DBT_DEVTYP_DEVICEINTERFACE, DEVICE_NOTIFY_WINDOW_HANDLE, DEV_BROADCAST_DEVICEINTERFACE_W,
+    DEV_BROADCAST_HDR, EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND, MSG, WINDOW_EX_STYLE,
+    WINEVENT_OUTOFCONTEXT, WM_APP, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_TIMER, WNDCLASSW,
+    WS_OVERLAPPED,
 };
 
 use crate::snapshot::{self, DisplaySnapshot, SnapshotCache};
@@ -469,6 +475,20 @@ fn pump() {
                  stays on the cursor poller's cadence"
             );
         }
+        let hook = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(on_foreground),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
+        if hook.0.is_null() {
+            tracing::warn!(
+                "display-event listener: foreground hook failed — focus changes go unlogged"
+            );
+        }
         crate::input_desktop::refresh_secure_desktop();
         tracing::debug!(
             "display actor running (cached snapshot + monitor hot-plug / display-change attribution)"
@@ -491,4 +511,63 @@ unsafe extern "system" fn on_desktop_switch(
     _time: u32,
 ) {
     crate::input_desktop::refresh_secure_desktop();
+}
+
+/// Names the process and window class that took the foreground. The title stays out: it can
+/// carry a document or page name into a log the operator shares.
+unsafe extern "system" fn on_foreground(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if hwnd.is_invalid() {
+        return;
+    }
+    let mut pid = 0u32;
+    let mut class = [0u16; 128];
+    // SAFETY: `hwnd` came from the WinEvent and may already be gone; both calls then fail
+    // (pid 0, length 0) rather than fault. `pid` and `class` are live locals.
+    let len = unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        GetClassNameW(hwnd, &mut class)
+    };
+    let class = String::from_utf16_lossy(&class[..len.max(0) as usize]);
+    let exe = process_name(pid).unwrap_or_else(|| "?".into());
+    tracing::debug!(pid, exe = %exe, class = %class, "foreground window changed");
+}
+
+/// Image base name for `pid`; `None` when the process is gone or protected.
+pub fn process_name(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: plain FFI; a refused open returns Err (checked via `ok()?`), and the returned
+    // handle is closed exactly once below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut buf = [0u16; 512];
+    let mut len = buf.len() as u32;
+    // SAFETY: `process` is the live handle just opened with QUERY_LIMITED; `buf`/`len` are a
+    // valid out-buffer and its capacity; `len` is the written UTF-16 length on success.
+    let ok = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
+    }
+    .is_ok();
+    // SAFETY: `process` is the handle opened above, closed exactly once here.
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    if !ok {
+        return None;
+    }
+    let path = String::from_utf16_lossy(&buf[..len as usize]);
+    Some(path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string())
 }
