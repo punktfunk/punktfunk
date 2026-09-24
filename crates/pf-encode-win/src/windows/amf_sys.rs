@@ -162,6 +162,9 @@ impl AmfVariant {
     pub fn as_i64(&self) -> Option<i64> {
         (self.vtype == AMF_VARIANT_INT64).then_some(self.payload[0] as i64)
     }
+    pub fn as_bool(&self) -> Option<bool> {
+        (self.vtype == AMF_VARIANT_BOOL).then_some(self.payload[0] != 0)
+    }
 }
 
 /// Uncalled vtable slot. Same size/align as a function pointer; keeps later slots at their C offsets.

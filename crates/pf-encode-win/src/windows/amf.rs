@@ -262,6 +262,8 @@ struct CodecProps {
     vbv_size: PCWSTR,
     enforce_hrd: PCWSTR,
     filler_data: PCWSTR,
+    /// Rate-control frame skip; the latency usages default it on.
+    skip_frame: PCWSTR,
     quality_preset: PCWSTR,
     /// `QUALITY_PRESET_SPEED` — 1 on AVC, **10** on HEVC, **100** on AV1.
     quality_speed: i64,
@@ -335,6 +337,7 @@ fn codec_props(codec: Codec) -> CodecProps {
             vbv_size: w!("VBVBufferSize"),
             enforce_hrd: w!("EnforceHRD"),
             filler_data: w!("FillerDataEnable"),
+            skip_frame: w!("RateControlSkipFrameEnable"),
             quality_preset: w!("QualityPreset"),
             quality_speed: 1,
             lowlatency: w!("LowLatencyInternal"),
@@ -369,6 +372,7 @@ fn codec_props(codec: Codec) -> CodecProps {
             vbv_size: w!("HevcVBVBufferSize"),
             enforce_hrd: w!("HevcEnforceHRD"),
             filler_data: w!("HevcFillerDataEnable"),
+            skip_frame: w!("HevcRateControlSkipFrameEnable"),
             quality_preset: w!("HevcQualityPreset"),
             quality_speed: 10,
             lowlatency: w!("LowLatencyInternal"),
@@ -403,6 +407,7 @@ fn codec_props(codec: Codec) -> CodecProps {
             vbv_size: w!("Av1VBVBufferSize"),
             enforce_hrd: w!("Av1EnforceHRD"),
             filler_data: w!("Av1FillerData"),
+            skip_frame: w!("Av1RateControlSkipFrameEnable"),
             quality_preset: w!("Av1QualityPreset"),
             quality_speed: 100,
             lowlatency: w!("Av1EncodingLatencyMode"),
@@ -551,6 +556,16 @@ unsafe fn set_prop(
         );
         Ok(false)
     }
+}
+
+/// `GetProperty` BOOL. `None` on decline or non-BOOL.
+unsafe fn get_prop_bool(comp: *mut sys::AmfComponent, name: PCWSTR) -> Option<bool> {
+    let mut v = AmfVariant::zeroed();
+    let r = ((*(*comp).vtbl).get_property)(comp, name.0, &mut v);
+    if r != sys::AMF_OK {
+        return None;
+    }
+    v.as_bool()
 }
 
 /// `GetProperty` INT64 after any internal clamp. `None` on decline or non-INT64 — never treat as 0.
@@ -978,6 +993,12 @@ impl AmfEncoder {
         )?;
         set_prop(comp, p.enforce_hrd, AmfVariant::from_bool(true), false)?;
         set_prop(comp, p.filler_data, AmfVariant::from_bool(false), false)?;
+        // The latency usages default this on: a frame over the one-frame VBV is then skipped
+        // and the reference stays stale, so the next frame is over budget too — a scene cut
+        // freezes the picture until the content drifts back to it.
+        let usage_default = get_prop_bool(comp, p.skip_frame);
+        set_prop(comp, p.skip_frame, AmfVariant::from_bool(false), false)?;
+        tracing::info!(?usage_default, "AMF rate-control frame skip disabled");
         // Latency-first quality; low-latency submit (optional on older VCN).
         set_prop(
             comp,
@@ -2299,6 +2320,53 @@ mod tests {
     ///
     /// Hardware-independent: it compares the two reads rather than demanding LTR, so a GPU that
     /// genuinely declines still passes (and the printed values say which happened).
+    /// A skipped frame repeats the reference; under the one-frame VBV that is the picture
+    /// freezing on a scene cut, so the open must leave the switch off whatever the usage set.
+    #[test]
+    fn amf_frame_skip_is_off_after_open_live() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        if let Err(e) = try_factory() {
+            eprintln!("skipping: AMF runtime unavailable ({e})");
+            return;
+        }
+        let Some(device) = amd_d3d11_device() else {
+            eprintln!("skipping: no AMD adapter on this box");
+            return;
+        };
+        let mut enc = match AmfEncoder::open(
+            Codec::H265,
+            PixelFormat::Nv12,
+            640,
+            480,
+            60,
+            2_000_000,
+            8,
+            ChromaFormat::Yuv420,
+            false,
+            None,
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("skipping: native AMF open declined ({e:#})");
+                return;
+            }
+        };
+        enc.prepare(&device).expect("prepare");
+        let comp = enc
+            .inner
+            .as_ref()
+            .expect("prepare opened the component")
+            .comp
+            .0;
+        // SAFETY: a live component on this thread; `get_property` only reads it.
+        let skip = unsafe { get_prop_bool(comp, enc.props.skip_frame) };
+        assert_eq!(
+            skip,
+            Some(false),
+            "rate-control frame skip must be off after open"
+        );
+    }
+
     #[test]
     fn amf_caps_do_not_change_at_the_first_submit_live() {
         if let Err(e) = try_factory() {
