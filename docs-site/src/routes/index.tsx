@@ -23,6 +23,23 @@ function Home() {
         >
           Read the docs
         </Link>
+        <nav className="flex gap-4 text-sm text-fd-muted-foreground">
+          {[
+            ['Quick Start', 'quickstart'],
+            ['Troubleshooting', 'troubleshooting'],
+            ['Reference', 'support-matrix'],
+            ['Developers', 'developers'],
+          ].map(([label, slug]) => (
+            <Link
+              key={slug}
+              to="/docs/$"
+              params={{ _splat: slug }}
+              className="underline-offset-4 hover:text-fd-foreground hover:underline"
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
       </main>
     </HomeLayout>
   )

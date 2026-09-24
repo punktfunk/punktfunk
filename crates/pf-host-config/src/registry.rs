@@ -7,13 +7,19 @@
 
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
     Bool,
     /// Inclusive range. An env value outside it is clamped; a store value is refused.
     Int {
         min: i64,
         max: i64,
+        unit: &'static str,
+    },
+    /// [`Kind::Int`] for a value that takes a fraction.
+    Decimal {
+        min: f64,
+        max: f64,
         unit: &'static str,
     },
     /// Canonical spellings, lowercase snake_case.
@@ -74,6 +80,7 @@ impl Apply {
 pub enum DefaultValue {
     Bool(bool),
     Int(i64),
+    Decimal(f64),
     Str(&'static str),
     List(&'static [&'static str]),
     /// Linux, then everything else.
@@ -85,6 +92,7 @@ impl DefaultValue {
         match self {
             DefaultValue::Bool(b) => Value::Bool(b),
             DefaultValue::Int(n) => Value::from(n),
+            DefaultValue::Decimal(x) => Value::from(x),
             DefaultValue::Str(s) => Value::from(s),
             DefaultValue::List(l) => Value::from(l.to_vec()),
             DefaultValue::PerOs(linux, other) => {
@@ -148,6 +156,14 @@ impl Setting {
                 let n: i64 = s.parse().map_err(|_| format!("{s:?} is not a number"))?;
                 Value::from(n.clamp(min, max))
             }
+            Kind::Decimal { min, max, .. } => {
+                let x = s
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|x| x.is_finite())
+                    .ok_or_else(|| format!("{s:?} is not a number"))?;
+                Value::from(x.clamp(min, max))
+            }
             Kind::Enum(options) => {
                 let norm = lower.replace('-', "_");
                 let hit = [lower.as_str(), norm.as_str()].into_iter().find_map(|c| {
@@ -186,6 +202,10 @@ impl Setting {
                 Some(i) if (min..=max).contains(&i) => Ok(v.clone()),
                 _ => Err(format!("must be a whole number from {min} to {max}")),
             },
+            (Kind::Decimal { min, max, .. }, Value::Number(n)) => match n.as_f64() {
+                Some(x) if (min..=max).contains(&x) => Ok(Value::from(x)),
+                _ => Err(format!("must be a number from {min} to {max}")),
+            },
             (Kind::Enum(options), Value::String(s)) if options.contains(&s.as_str()) => {
                 Ok(v.clone())
             }
@@ -209,7 +229,7 @@ impl Setting {
                 Ok(Value::Array(out))
             }
             (Kind::Bool, _) => Err("must be true or false".into()),
-            (Kind::Int { .. }, _) => Err("must be a number".into()),
+            (Kind::Int { .. } | Kind::Decimal { .. }, _) => Err("must be a number".into()),
             (Kind::Text { .. }, _) => Err("must be text".into()),
             (Kind::List, _) => Err("must be a list".into()),
         }
@@ -231,6 +251,8 @@ pub fn find(id: &str) -> Option<&'static Setting> {
 
 const LINUX: &[&str] = &["linux"];
 const LINUX_WINDOWS: &[&str] = &["linux", "windows"];
+/// Row `pyrowave_bpp`'s default: Themaister's clean point for 4:2:0, 200 Mbps at 1080p60.
+pub const PYROWAVE_BPP: f64 = 1.6;
 const TRI: Kind = Kind::Enum(&["auto", "on", "off"]);
 const TRI_SPELLINGS: &[(&str, &str)] = &[
     ("1", "on"),
@@ -409,6 +431,7 @@ pub static SETTINGS: &[Setting] = &[
     row("direct_capture", "PUNKTFUNK_DIRECT_CAPTURE", Kind::Bool, D::Bool(true), Video, NextSession, "Direct capture", "configuration").advanced().only(LINUX),
     row("lazy_capture", "PUNKTFUNK_LAZY_CAPTURE", Kind::Bool, D::Bool(true), Video, NextSession, "On-demand capture", "configuration").advanced().only(LINUX),
     row("kwin_paced", "PUNKTFUNK_KWIN_PACED", Kind::Bool, D::Bool(false), Video, NextSession, "KWin capture pacing", "kde").advanced().only(LINUX),
+    row("pyrowave_bpp", "PUNKTFUNK_PYROWAVE_BPP", Kind::Decimal { min: 0.25, max: 4.0, unit: "bits/pixel" }, D::Decimal(PYROWAVE_BPP), Video, NextSession, "PyroWave quality", "pyrowave"),
     row("pyrowave_max_mbps", "PUNKTFUNK_PYROWAVE_MAX_MBPS", Kind::Int { min: 0, max: 10_000, unit: "Mbps" }, D::Int(0), Video, NextSession, "PyroWave bitrate cap", "pyrowave").advanced(),
     // --- Audio
     row("audio_output_mode", "PUNKTFUNK_AUDIO_OUTPUT_MODE", Kind::Enum(&["client_only", "host_and_client", "follow_default"]), D::Str("client_only"), Audio, NextSession, "Where audio plays", "configuration")
@@ -517,6 +540,7 @@ mod tests {
             let values = match s.kind {
                 Kind::Bool => "`on` · `off`".to_string(),
                 Kind::Int { min, max, unit } => format!("{min}–{max} {unit}"),
+                Kind::Decimal { min, max, unit } => format!("{min}–{max} {unit}"),
                 Kind::Enum(o) => o.iter().map(|x| code(x)).collect::<Vec<_>>().join(" · "),
                 Kind::Text { max_len } => format!("text, up to {max_len} characters"),
                 Kind::List => "comma list".to_string(),
@@ -567,7 +591,7 @@ mod tests {
     fn docs_table_is_current() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../docs-site/content/docs/configuration.md"
+            "/../../docs-site/content/docs/(reference)/configuration.md"
         );
         let doc = std::fs::read_to_string(path).expect("read configuration.md");
         let start = doc
@@ -650,6 +674,10 @@ mod tests {
         let fps = find("max_fps").unwrap();
         assert_eq!(fps.parse_env("500"), Ok(Some(Value::from(240))));
         assert!(fps.parse_env("sixty").is_err());
+        let bpp = find("pyrowave_bpp").unwrap();
+        assert_eq!(bpp.parse_env("0.8"), Ok(Some(Value::from(0.8))));
+        assert_eq!(bpp.parse_env("9"), Ok(Some(Value::from(4.0))));
+        assert!(bpp.parse_env("NaN").is_err());
     }
 
     #[test]
@@ -658,6 +686,9 @@ mod tests {
         assert!(fps.validate(&Value::from(60)).is_ok());
         assert!(fps.validate(&Value::from(500)).is_err());
         assert!(fps.validate(&Value::from("60")).is_err());
+        let bpp = find("pyrowave_bpp").unwrap();
+        assert_eq!(bpp.validate(&Value::from(2)), Ok(Value::from(2.0)));
+        assert!(bpp.validate(&Value::from(5.0)).is_err());
         let apps = find("audio_voice_apps").unwrap();
         assert_eq!(
             apps.validate(&serde_json::json!([" discord ", ""])),

@@ -867,13 +867,13 @@ fn verify_or_reassert(our_prefix: &str, width: u32, height: u32) -> ((u32, u32),
                 }
             }
         }
-        // Management unavailable, or a same-name supersede in flight. Do not reconfigure an
+        // Management unavailable, or our output still mid-announce. Do not reconfigure an
         // output we cannot identify.
         None => {
             tracing::debug!(
                 our_prefix,
                 "KWin: could not read back the virtual output's actual mode (management \
-                 unavailable or a same-named supersede in flight) — proceeding unverified"
+                 unavailable or the output still announcing) — proceeding unverified"
             );
             ((width, height), false)
         }

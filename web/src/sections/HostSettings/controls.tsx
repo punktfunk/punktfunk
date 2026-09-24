@@ -103,10 +103,11 @@ const EnumControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 	);
 };
 
-const IntControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
+const NumberControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 	const committed = Number(row.value);
 	const [draft, setDraft] = useState(committed);
 	useEffect(() => setDraft(committed), [committed]);
+	const decimal = row.kind === "decimal";
 	return (
 		<div className="flex items-center gap-2">
 			<InputNumber
@@ -115,6 +116,8 @@ const IntControl: FC<ControlProps> = ({ row, disabled, onSet }) => {
 				value={draft}
 				min={row.min ?? undefined}
 				max={row.max ?? undefined}
+				step={decimal ? 0.1 : 1}
+				inputMode={decimal ? "decimal" : "numeric"}
 				disabled={disabled}
 				onChange={setDraft}
 				onBlur={() => draft !== committed && onSet(draft)}
@@ -230,7 +233,8 @@ const ListControl: FC<ControlProps> = ({
 
 const BY_KIND: Record<SettingState["kind"], FC<ControlProps>> = {
 	bool: BoolControl,
-	int: IntControl,
+	int: NumberControl,
+	decimal: NumberControl,
 	enum: EnumControl,
 	text: TextControl,
 	list: ListControl,

@@ -1,0 +1,126 @@
+---
+title: "SteamOS (Host)"
+description: "Run a Punktfunk host on SteamOS: one script builds it on the device, then streams Game Mode or the desktop to your other devices."
+---
+
+Stream *from* a Steam Deck or any SteamOS 3 box to your other devices. To stream *to* a Steam Deck
+instead, see [Install a Client](/docs/install-client).
+
+SteamOS is read-only, so the host isn't a package: a script builds it on the device inside a
+distrobox and runs it as user services, and a check at boot rebuilds it if a SteamOS update breaks
+it. A host is remote control of the machine, so keep it on a trusted LAN or VPN
+([Security & Safe Use](/docs/security)).
+
+## What you need
+
+- **SteamOS 3**, such as a Steam Deck (LCD or OLED). A wired dock beats Wi-Fi.
+- **A `sudo` password.** A stock `deck` account has none, so set one once with `passwd`. Without
+  it the installer skips every root step: gamepad passthrough, UDP buffers, surviving OS updates,
+  and running without a login.
+- **A real terminal:** Konsole in Desktop Mode, or `ssh -t`. Without a TTY for the `sudo` prompt
+  the same steps are skipped.
+- **distrobox.** If `distrobox` isn't found, install it without root, then reopen the terminal so
+  `~/.local/bin` is on your `PATH`:
+  ```sh
+  curl -sfL https://raw.githubusercontent.com/89luca89/distrobox/main/install | sh -s -- --prefix ~/.local
+  ```
+- **About 20 minutes and 1 GB** for the first build: ~15 minutes for the host, ~5 for the HDR
+  gamescope. A re-run takes about a minute.
+
+## 1. Install
+
+<Install platform="steamos" />
+
+**One command instead?** The [guided installer](/docs/install#guided-install-preview) (preview)
+runs the same two lines and also asks about Moonlight compatibility and the shared clipboard:
+
+<Installer />
+
+The script asks for your `sudo` password first, then builds; it is safe to re-run. It builds the
+host, the web console and the plugin runner, sets up gamepad access, UDP buffers and the `input`
+and `punktfunk` groups so they survive SteamOS updates, and starts the `punktfunk-host` and
+`punktfunk-web` user services, which run without anyone logged in.
+
+| Flag | Effect |
+| --- | --- |
+| `--gamestream` | Also serve stock [Moonlight](/docs/moonlight) clients. Trusted LAN only. |
+| `--open` | Accept unpaired clients. Trusted LAN only. |
+| `--no-web` | Skip the web console. |
+| `--web-bind=ADDR` | Where the console listens: `0.0.0.0` (your network, the default), `127.0.0.1` (this device only) or one address. Once set, change it in `~/.config/punktfunk/web.env`. |
+| `--src=DIR` | Build from `DIR` instead of `~/punktfunk`. **Update now** and the boot rebuild check only look in `~/punktfunk`, so link it: `ln -s DIR ~/punktfunk`. |
+
+<Callout type="warn">
+**Reboot once after the first install.** Desktop-mode capture and the new groups only apply to a
+fresh login. Until then Game Mode streams with a generic Xbox pad, Desktop sessions end with
+`KWin does not expose zkde_screencast_unstable_v1`, and a Steam Deck pad arrives as an Xbox 360
+controller.
+</Callout>
+
+## 2. Pair
+
+1. Open `https://<device-ip>:47992` from a browser on your network. It warns once about the
+   self-signed certificate; continue.
+2. Sign in with the `PUNKTFUNK_UI_PASSWORD` in `~/.config/punktfunk/web.env`. Read it before your
+   first sign-in: the console then keeps only a hash. To set your own, see
+   [Login password](/docs/web-console#login-password).
+3. Go to **Devices** → **Pair a device** and enter the PIN on your client
+   ([Pairing](/docs/pairing)).
+
+Check the host with `systemctl --user status punktfunk-host`, and watch a client connect with
+`journalctl --user -u punktfunk-host -f`. The host streams Game Mode or the KDE desktop, whichever
+is live when a client connects; see [Steam / gamescope](/docs/gamescope).
+
+## HDR
+
+The installer also builds `punktfunk-gamescope`, gamescope with 10-bit capture, and points the host
+at it. A 10-bit client with HDR on then streams HDR10 from Game Mode; anything else streams SDR. If
+that build fails, the rest works in SDR; run `update.sh` to retry. `PUNKTFUNK_GAMESCOPE_HDR=0` in
+`~/.config/punktfunk/host.env` forces SDR.
+
+Check what the host resolved. Load `host.env` first, as the service does, or the probe describes
+the wrong environment:
+
+```sh
+( set -a; . ~/.config/punktfunk/host.env; set +a
+  ~/punktfunk/target-steamos/release/punktfunk-host hdr-probe )
+```
+
+More in [HDR on gamescope](/docs/gamescope#hdr-on-gamescope).
+
+## Updating
+
+Press **Update now** on the console's **Updates** card, or run:
+
+```sh
+bash ~/punktfunk/scripts/steamdeck/update.sh --pull
+```
+
+Both rebuild on the device and keep your config and pairings. The build tracks `main`, the
+[canary channel](/docs/channels). After [going back to a release](/docs/channels), run
+`git -C ~/punktfunk checkout main` before the next update, which otherwise stops with *"You are not
+currently on a branch."* More in [Updating](/docs/updating).
+
+## Good to know
+
+- **SteamOS updates.** The system tuning is on SteamOS's atomic-update keep list, and
+  `punktfunk-rebuild-check` rebuilds the host at boot only if an update broke it. That first start
+  takes a few minutes longer.
+- **Encoder.** Picked automatically: Vulkan Video on the Deck's AMD GPU with VAAPI as fallback,
+  NVENC on NVIDIA. The installer writes `RADV_PERFTEST=video_encode` to `host.env`; without it the
+  Deck uses VAAPI. `PUNKTFUNK_VULKAN_ENCODE=0` forces VAAPI.
+- **Wi-Fi.** A Deck's Wi-Fi sends about 250 Mbps at best: enough for 1080p or 1440p60, not 4K.
+  A wired dock lifts it.
+- **Keep it awake.** Game Mode suspends on idle and drops the host off the network. Turn
+  auto-suspend off under **Settings** → **Power**.
+- **Steam Deck controller.** After the first-install reboot a client's pad arrives as a real Steam
+  Deck controller, with paddles, trackpads and gyro. It needs the `input` and `punktfunk` groups;
+  check with `id -nG`. Streaming to another Deck? [Turn Steam Input off](/docs/steam-deck) there.
+- **One mode at a time.** Two clients asking for different resolutions fight over the Game Mode
+  session.
+- **Plugins.** The runner is installed but off. Turn it on with
+  `systemctl --user enable --now punktfunk-scripting` when you use [plugins](/docs/plugins).
+
+## Uninstalling
+
+There is no uninstall script. The steps are in
+[Uninstall → SteamOS](/docs/uninstall#steamos--steam-deck-host-on-device-build).

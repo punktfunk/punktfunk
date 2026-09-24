@@ -7,7 +7,7 @@
 //!
 //! The id is untrusted process input, so it is validated once here rather than
 //! at each use: it reaches a device-parameter marker and log lines.
-//! `docs-site/content/docs/multi-seat-contract.md` is the contract of record.
+//! `docs-site/content/docs/developers/multi-seat-contract.md` is the contract of record.
 
 /// Whether an add-on-managed seat owns this host rather than the console.
 pub(crate) fn is_seat_host() -> bool {

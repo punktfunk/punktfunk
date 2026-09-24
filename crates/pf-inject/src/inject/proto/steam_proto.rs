@@ -39,6 +39,8 @@ pub const ID_TRIGGER_RUMBLE_CMD: u8 = 0xEB;
 pub const ID_TRIGGER_HAPTIC_PULSE: u8 = 0x8F;
 pub const ID_CONTROLLER_STATE: u8 = 0x01;
 pub const ID_CONTROLLER_DECK_STATE: u8 = 0x09;
+/// Deck state header length byte: 64, as a real Deck sends. SDL drops any other value.
+pub const DECK_STATE_LEN: u8 = 64;
 
 /// Controller is the dual-trackpad, report-id-1 identity on the same path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -309,7 +311,8 @@ pub fn serialize_deck_state(r: &mut [u8; STEAM_REPORT_LEN], st: &SteamState, seq
     r[0] = 0x01;
     r[1] = 0x00;
     r[2] = ID_CONTROLLER_DECK_STATE;
-    r[3] = 0x3C; // payload length; the kernel ignores it
+    // SDL drops a Deck frame whose length byte is not 64; the kernel ignores it.
+    r[3] = DECK_STATE_LEN;
     r[4..8].copy_from_slice(&seq.to_le_bytes());
     // Rich clicks live outside `buttons` so a button-only frame cannot wipe
     // them. OR with `from_gamepad`'s `RPAD_CLICK` so each source releases
@@ -547,7 +550,7 @@ pub fn neutral_deck_report() -> [u8; STEAM_REPORT_LEN] {
     let mut r = [0u8; STEAM_REPORT_LEN];
     r[0] = 0x01;
     r[2] = ID_CONTROLLER_DECK_STATE;
-    r[3] = 0x3C;
+    r[3] = DECK_STATE_LEN;
     r
 }
 
@@ -642,7 +645,9 @@ mod tests {
         st.rpad_pressure = 0x1516;
         let mut r = [0u8; STEAM_REPORT_LEN];
         serialize_deck_state(&mut r, &st, 0xAABB_CCDD);
-        assert_eq!(&r[0..4], &[0x01, 0x00, 0x09, 0x3C]);
+        // SDL's `ucLength == 64` check (SDL_hidapi_steamdeck.c) drops anything else.
+        assert_eq!(&r[0..4], &[0x01, 0x00, 0x09, 0x40]);
+        assert_eq!(neutral_deck_report()[..4], r[..4]);
         assert_eq!(&r[4..8], &[0xDD, 0xCC, 0xBB, 0xAA]);
         // A=bit7 (byte8), L4=bit41 (byte13.1), R5=bit16 (byte10.0), QAM=bit50 (byte14.2).
         assert_eq!(r[8], 0x80); // A

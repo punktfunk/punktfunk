@@ -7,10 +7,12 @@
 // so there is nothing to reach through.
 //
 // Each plugin gets: an empty home, its own state dir, the paths its manifest declares, its own
-// token, and a unix socket to the host. No network unless it declared one. Pin: `sandbox.test.ts`.
+// token, and a unix socket to the host. No network unless it declared one; then its UI reaches the
+// console through a second socket (`ui-forward.ts`). Pin: `sandbox.test.ts`.
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { UI_DIR } from "./ui-forward.js";
 
 /** A plugin's `punktfunk` block — the half of it a sandbox is built from. */
 export interface PluginManifest {
@@ -21,14 +23,19 @@ export interface PluginManifest {
 	network?: boolean;
 }
 
-/** Read `package.json`'s `punktfunk` block, or `undefined` when there is none. */
+/** An id names the plugin's state dir and socket: one lowercase path component. */
+const PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** Read `package.json`'s `punktfunk` block, or `undefined` when there is none or its id is unusable. */
 export const readManifest = (packageDir: string): PluginManifest | undefined => {
 	try {
 		const pkg = JSON.parse(
 			fs.readFileSync(path.join(packageDir, "package.json"), "utf8"),
 		) as { punktfunk?: PluginManifest };
 		const m = pkg.punktfunk;
-		return m && m.schema === 1 && typeof m.id === "string" ? m : undefined;
+		return m && m.schema === 1 && typeof m.id === "string" && PLUGIN_ID.test(m.id)
+			? m
+			: undefined;
 	} catch {
 		return undefined;
 	}
@@ -57,6 +64,8 @@ export interface SandboxPaths {
 	bun: string;
 	runner: string;
 	home: string;
+	/** A plugin without network: the runner's dir its UI socket goes in, and the forwarded port. */
+	ui?: { dir: string; port: number };
 }
 
 /**
@@ -136,27 +145,77 @@ export const bwrapArgv = (
 	argv.push("--ro-bind", paths.pluginsDir, paths.pluginsDir);
 	argv.push("--ro-bind", paths.bun, paths.bun);
 	argv.push("--ro-bind", paths.runner, paths.runner);
-	argv.push("--bind", paths.stateDir, "/run/punktfunk/plugin-state");
+	// A Nix-built bun loads its libc from the store, and NixOS tools live under the system
+	// profile. Both are world-readable already.
+	if (paths.bun.startsWith("/nix/store/")) {
+		argv.push("--ro-bind", "/nix/store", "/nix/store");
+		argv.push("--ro-bind-try", "/run/current-system", "/run/current-system");
+	}
+	// Where `pluginStateDir(<id>)` resolves inside: `PUNKTFUNK_CONFIG_DIR/plugin-state/<id>`.
+	argv.push(
+		"--bind",
+		paths.stateDir,
+		path.join("/run/punktfunk/plugin-state", path.basename(paths.stateDir)),
+	);
 	argv.push("--ro-bind", paths.tokenFile, "/run/punktfunk/plugin-token");
 	argv.push("--bind", paths.socket, "/run/punktfunk/host.sock");
+	// Its own loopback is unreachable, so its UI listens where the runner can forward to.
+	if (paths.ui && !manifest.network) {
+		argv.push("--bind", paths.ui.dir, UI_DIR);
+		argv.push("--setenv", "PUNKTFUNK_UI_PORT", String(paths.ui.port));
+	}
 	// What it said it needs. `-try` so an uninstalled launcher's dir is simply absent rather
 	// than a sandbox that refuses to start.
 	for (const p of manifest.reads ?? []) {
 		const abs = expandHome(p, paths.home);
-		if (path.isAbsolute(abs)) argv.push("--ro-bind-try", abs, abs);
+		if (bindable(abs, paths.home)) argv.push("--ro-bind-try", abs, abs);
 	}
 	for (const p of manifest.writes ?? []) {
 		const abs = expandHome(p, paths.home);
-		if (path.isAbsolute(abs)) argv.push("--bind-try", abs, abs);
+		if (bindable(abs, paths.home)) argv.push("--bind-try", abs, abs);
 	}
 	// Operator grants are read-only unless one opts into write.
 	for (const grant of grants) {
 		const abs = expandHome(grant.path, paths.home);
-		if (path.isAbsolute(abs))
+		if (bindable(abs, paths.home))
 			argv.push(grant.write ? "--bind-try" : "--ro-bind-try", abs, abs);
 	}
 	return argv;
 };
+
+/**
+ * A root no manifest or grant may bind: the host's processes, devices, the session bus and
+ * runtime sockets, the home or anything above it, keys, and punktfunk's own config, which holds
+ * every plugin's token. Checked on the path and on what it resolves to in the runner's view.
+ */
+export const refusedRoot = (abs: string, home: string): boolean => {
+	const refused = (p: string, h: string) => {
+		const under = (base: string) => p === base || p.startsWith(`${base}/`);
+		return (
+			p === "/" ||
+			`${h}/`.startsWith(`${p}/`) ||
+			["/proc", "/sys", "/dev"].some(under) ||
+			(under("/run") && !p.startsWith("/run/media/")) ||
+			[".ssh", ".gnupg"].some((d) => under(path.join(h, d))) ||
+			p.startsWith(path.join(h, ".config", "punktfunk"))
+		);
+	};
+	const real = (p: string) => {
+		try {
+			return fs.realpathSync(p);
+		} catch {
+			return p;
+		}
+	};
+	// Both spellings of both sides: on Fedora Atomic `/home` is a link to `/var/home`.
+	const p = path.resolve(abs);
+	const paths = [p, real(p)];
+	const homes = [home, real(home)];
+	return paths.some((x) => homes.some((h) => refused(x, h)));
+};
+
+const bindable = (abs: string, home: string): boolean =>
+	path.isAbsolute(abs) && !refusedRoot(abs, home);
 
 /**
  * A seccomp program refusing netlink sockets, as the bytes bwrap reads from `--add-seccomp-fd`.
@@ -206,7 +265,8 @@ export const sandboxEnv = (
 	// with os.homedir(); pointing this at the state dir sends every scanner somewhere empty.
 	// Writable state is PUNKTFUNK_CONFIG_DIR's job, not this one's.
 	HOME: home,
-	PATH: "/usr/bin:/bin:/usr/local/bin",
+	// sbin: Debian ships VirtualHere's client there. The system profile is NixOS's /usr/bin.
+	PATH: "/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/run/current-system/sw/bin",
 	PUNKTFUNK_CONFIG_DIR: "/run/punktfunk",
 	// Reached through the supervisor's socket, so plain HTTP with no credential of its own.
 	PUNKTFUNK_MGMT_URL: "http://punktfunk.host",

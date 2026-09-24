@@ -178,7 +178,7 @@ pub fn preset(name: &str) -> Option<Facts> {
         "unsupported-client" => {
             let mut f = box_of("void", "Void Linux", "", Family::Flatpak, "install");
             f.host_punt = Some(
-                "no package repo for 'Void Linux' yet — https://docs.punktfunk.unom.io/docs/build-from-source"
+                "no package repo for 'Void Linux' yet — https://docs.punktfunk.unom.io/docs/developers/build-from-source"
                     .into(),
             );
             f

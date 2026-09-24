@@ -310,7 +310,7 @@ let
         && has appliance "punktfunk-scripting" "BindReadOnlyPaths=-%h/.config/punktfunk/plugin-token"
         # A directory bind keeps atomic replacements visible; ExecStartPre makes it exist.
         && has appliance "punktfunk-scripting" "BindReadOnlyPaths=%h/.config/punktfunk/plugin-run"
-        && has appliance "punktfunk-scripting" "bin/mkdir -p -m 0700 %h/.config/punktfunk/plugin-run"
+        && has appliance "punktfunk-scripting" "bin/mkdir -p -m 0700 %h/.config/punktfunk/plugin-run %h/.config/punktfunk/plugin-state"
         # The TLS pin is native-cert.pem after the identity split, cert.pem before it.
         && has appliance "punktfunk-scripting" "BindReadOnlyPaths=-%h/.config/punktfunk/native-cert.pem"
         && has appliance "punktfunk-scripting" "BindReadOnlyPaths=-%h/.config/punktfunk/cert.pem"

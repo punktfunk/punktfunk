@@ -4,12 +4,16 @@ The Punktfunk documentation site: [Fumadocs](https://fumadocs.dev) on
 [TanStack Start](https://tanstack.com/start) (Vite + Nitro/bun preset).
 
 Content lives in [`content/docs/`](content/docs) as `.md`/`.mdx`. This site is the source of truth
-for the **user-facing** guides; design rationale lives in the internal punktfunk-planning repo, and
-READMEs and the marketing site link here instead of restating anything — see "Where facts live" in
-[CONTRIBUTING.md](../CONTRIBUTING.md). Pages serve one of two audiences, not both at once: the
-**get-started track** (quickstart, install, pairing) assumes no Linux expertise — short pages, one
-task each, happy path only; the **reference track** (configuration, CLI, API, per-compositor
-pages) is allowed to be dense.
+for user-facing guides and the developer guide; design rationale lives in the internal
+punktfunk-planning repo, and READMEs and the marketing site link here instead of restating
+anything — see "Where facts live" in [CONTRIBUTING.md](../CONTRIBUTING.md). How to write a page:
+[docs/writing.md §4c](../docs/writing.md#4c-docs-pages).
+
+The sidebar has three tabs, one folder each with `"root": true` in its `meta.json`: `(guide)`,
+`(reference)` and `developers`. A folder in parentheses is a **group**: it shapes the sidebar but
+adds no URL segment, so `(guide)/(install)/ubuntu.mdx` serves `/docs/ubuntu`. Move a page between
+groups freely; move it out of a group and its URL changes, so add the old slug to `moved` in
+`src/routes/docs/$.tsx`.
 
 ## API reference
 

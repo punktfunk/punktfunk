@@ -19,7 +19,7 @@ Ordinary PRs do not run this and do not edit `CHANGELOG.md`.
    - C ABI: `ABI_VERSION` / `PUNKTFUNK_ABI_VERSION` in that file and `include/punktfunk_core.h`
    - Driver protocol: `MIN_DRIVER_PROTOCOL_VERSION` in `crates/pf-driver-proto/src/lib.rs`
    - Gamepad channel, plugin schema, OpenAPI (`api/openapi.json` info.version), gamescope `+pfhdrN`, SDK / plugin-kit tags — copy the rows the previous CHANGELOG section already lists; mark unchanged.
-5. Knobs, mechanically: `git grep -ohE 'PUNKTFUNK_[A-Z0-9_]+' vPrev -- crates | sort -u` against the same at HEAD; every new name is a Knobs line or a conscious skip. Same for new `punktfunk` / `punktfunk-host` subcommands (`docs-site/content/docs/host-cli.md` diff).
+5. Knobs, mechanically: `git grep -ohE 'PUNKTFUNK_[A-Z0-9_]+' vPrev -- crates | sort -u` against the same at HEAD; every new name is a Knobs line or a conscious skip. Same for new `punktfunk` / `punktfunk-host` subcommands (`docs-site/content/docs/(reference)/host-cli.md` diff).
 6. `git diff --stat vPrev HEAD -- docs-site/content` — every changed page is a user-facing fact; a new page is a bullet.
 
 ## Outputs (same bump commit; drafts may exist earlier)

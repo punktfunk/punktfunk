@@ -81,6 +81,14 @@ enum PointerLockChain {
         anchor.setNeedsUpdateOfPrefersPointerLocked()
     }
 
+    /// Whether the system's downward walk can reach `anchor` at all: the containment chain must
+    /// end at the window's root or at a presented controller. A diagnostic, not a gate.
+    static func reachesScene(from anchor: UIViewController) -> Bool {
+        var top = anchor
+        while let parent = top.parent { top = parent }
+        return top === anchor.view.window?.rootViewController || top.presentingViewController != nil
+    }
+
     /// Clear the forced forwarding on every stamped ancestor (so the SwiftUI parents stop retaining
     /// the anchor's subtree) and re-resolve to drop the lock. The ancestors re-resolve too: a
     /// session ends after its controller has left the window, where the anchor's own request never

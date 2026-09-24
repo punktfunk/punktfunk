@@ -62,9 +62,18 @@ pub(super) fn create_codec(mime: &str, preferred: Option<&str>) -> Option<MediaC
 /// picture-order + low-latency, Exynos (also Google Tensor), Amlogic, HiSilicon, MediaTek. NVIDIA
 /// Tegra / Rockchip / Realtek expose no such key (nor does Moonlight) — they're covered by the
 /// standard key + clock hint + being ranked first in `VideoDecoders`.
-pub(super) fn configure_low_latency(format: &mut MediaFormat, codec_name: &str, aggressive: bool) {
+///
+/// `standard_key` = false leaves out the standard `low-latency` key (see [`low_latency_format`]).
+pub(super) fn configure_low_latency(
+    format: &mut MediaFormat,
+    codec_name: &str,
+    aggressive: bool,
+    standard_key: bool,
+) {
     // Standard key: request the no-reorder low-latency path where the platform decoder supports it.
-    format.set_i32("low-latency", 1);
+    if standard_key {
+        format.set_i32("low-latency", 1);
+    }
     if !aggressive {
         // The original profile: the Qualcomm vendor twin set blind (unknown keys are ignored by
         // other vendors' codecs), realtime priority, and the AOSP "unbounded" operating-rate
@@ -285,10 +294,37 @@ pub(super) fn hdr_static(client: &NativeClient) -> Option<punktfunk_core::quic::
     }
 }
 
+/// Overrides the low-latency profile: `standard` (the default), `off` (no standard `low-latency`
+/// key), `mtk-tv` (no standard key; the TV decoder's game keys and `operating-rate` = fps instead).
+/// `adb shell setprop debug.punktfunk.low_latency_key standard`.
+pub(super) const LOW_LATENCY_KEY_PROP: &std::ffi::CStr = c"debug.punktfunk.low_latency_key";
+
+/// TV platforms that show half the stream rate, as (`ro.product.manufacturer`, `ro.product.device`):
+/// Philips' Pentonic 1000 sets (OLED809/810/888, PUS8508) and TCL's Pentonic 700 `G08` (C6K, C755,
+/// C805). Under the standard `low-latency` key their display stack registers the stream at the
+/// 120 Hz panel maximum, runs VRR only for HDMI inputs, and drops every other frame to fit the
+/// 60 Hz app output (HWC log `PqLink … => 1/2`). They get the `mtk-tv` profile.
+const HALF_RATE_TVS: &[(&str, &str)] = &[("TPV", "PH1M_WW_9972"), ("TCL", "G08")];
+
+fn half_rate_tv() -> bool {
+    use super::asc_presenter::sysprop;
+    let (Some(maker), Some(device)) = (
+        sysprop(c"ro.product.manufacturer"),
+        sysprop(c"ro.product.device"),
+    ) else {
+        return false;
+    };
+    HALF_RATE_TVS
+        .iter()
+        .any(|(m, d)| maker.eq_ignore_ascii_case(m) && device == *d)
+}
+
 /// The decoder's configure format: the mode, an input buffer generous enough that a large keyframe
 /// AU is never truncated, the HDR static info, and the low-latency keys for `codec_name`.
 /// `keys` is `Some(aggressive)` for [`configure_low_latency`]'s profile, `None` for no
-/// low-latency key at all. ACodec ignores a refused `max-input-size`, so that key stays.
+/// low-latency key at all. A `c2.mtk` decoder on a [`HALF_RATE_TVS`] platform swaps the `Some`
+/// profile for `mtk-tv`; [`LOW_LATENCY_KEY_PROP`] overrides either way.
+/// ACodec ignores a refused `max-input-size`, so that key stays.
 pub(super) fn low_latency_format(
     mime: &str,
     mode: &Mode,
@@ -305,7 +341,23 @@ pub(super) fn low_latency_format(
         (mode.width * mode.height).max(2_000_000) as i32,
     );
     if let Some(aggressive) = keys {
-        configure_low_latency(&mut format, codec_name, aggressive);
+        let forced = super::asc_presenter::sysprop(LOW_LATENCY_KEY_PROP);
+        let profile = match forced.as_deref() {
+            Some(p @ ("standard" | "off" | "mtk-tv")) => p,
+            _ if codec_name.to_ascii_lowercase().starts_with("c2.mtk") && half_rate_tv() => {
+                "mtk-tv"
+            }
+            _ => "standard",
+        };
+        configure_low_latency(&mut format, codec_name, aggressive, profile == "standard");
+        if profile != "standard" {
+            log::info!("decode: low-latency profile {profile} — standard low-latency key left out");
+        }
+        if profile == "mtk-tv" {
+            format.set_i32("vendor.mtk-codec2.game-mode", 1);
+            format.set_i32("vendor.mtk-codec2.low-latency-mode", 1);
+            format.set_i32("operating-rate", mode.refresh_hz as i32);
+        }
     }
     if let Some(meta) = hdr_static {
         format.set_buffer("hdr-static-info", &android_hdr_static_info(meta));

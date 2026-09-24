@@ -261,7 +261,8 @@ fn bearer(req: &Request) -> Option<&str> {
 }
 
 /// Allowlist of routes the plugin token may reach. A later route is denied until classified
-/// (`plugin_lane_classifies_every_route` in `mgmt::tests` fails the build otherwise).
+/// (`every_route_is_classified_for_the_plugin_and_cert_lanes` in `mgmt::tests` fails the
+/// build otherwise).
 ///
 /// Out of the list: hooks (operator commands + webhook secrets), `GET /logs` (those secrets
 /// unredacted), pairing admin, UI-proxy credentials, the plugin store, the update surface,

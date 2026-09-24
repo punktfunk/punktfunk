@@ -3,7 +3,7 @@
 Run a punktfunk **host** on a Steam Deck — stream its Game Mode (or KDE desktop) *to* other devices.
 (Streaming *to* a Deck is the client; use the Flatpak + [Decky plugin](../../clients/decky/) instead.)
 
-User-facing guide: **docs-site → "SteamOS (Host)"** (`docs-site/content/docs/steamos-host.md`).
+User-facing guide: **docs-site → "SteamOS (Host)"** (`docs-site/content/docs/(guide)/(install)/steamos-host.mdx`).
 This README is the deep reference for what the scripts do and how to operate them by hand.
 
 ## Why build on-device (not a package or prebuilt binary)

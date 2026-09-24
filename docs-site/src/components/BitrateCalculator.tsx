@@ -1,9 +1,8 @@
-// Interactive PyroWave bitrate estimator for the docs. The formula mirrors the host's
-// `resolve_bitrate_kbps_for` (crates/punktfunk-host/src/native.rs): the Automatic pin is
-// ~1.6 bits/pixel for 4:2:0, ~2.6 bpp for 4:4:4, +15% for a 10-bit/HDR session, clamped to
-// [0.5 Mbps, 8 Gbps]. Self-contained (no design-system imports) so it renders even where the
-// full workspace UI packages are unavailable; themed via Fumadocs' `--color-fd-*` variables.
-import { useState } from 'react'
+// PyroWave bitrate for a mode at a chosen bits per pixel, and what each link leaves of it. The
+// formula mirrors the host's `pyrowave_pin_kbps` (crates/punktfunk-host/src/native.rs): 4:4:4
+// ×1.625, 10-bit ×1.15, clamped to [0.5 Mbps, 8 Gbps]. A link that cannot carry the pin gets
+// `min(pin, 0.7 × delivered)` (`abr::probe::wall_ceiling_kbps`).
+import { useId, useState, type ReactNode } from 'react'
 
 type Preset = { label: string; w: number; h: number }
 
@@ -26,309 +25,295 @@ const LINKS = [
   { label: '10 GbE', mbps: 9400 },
 ]
 
-// On top of the pin: a 64-byte seal per 1408-byte shard (~4.5 %) and the 10 % FEC a session
-// starts at. Past ~90 % of a link, packets drop and FEC climbs to cover them.
-const WIRE_FACTOR = 1.15
-const LINK_HEADROOM = 0.9
-
+const DEFAULT_BPP = 1.6
+const WALL_SHARE = 0.7
 const MIN_MBPS = 0.5
 const MAX_MBPS = 8000
 
-function pyrowaveMbps(
-  w: number,
-  h: number,
-  fps: number,
-  chroma444: boolean,
-  hdr: boolean,
-): number {
-  if (!(w > 0) || !(h > 0) || !(fps > 0)) return 0
-  const bppX10 = chroma444 ? 26 : 16
-  let kbps = (w * h * fps * bppX10) / 10 / 1000
-  if (hdr) kbps = (kbps * 115) / 100
-  kbps = Math.min(Math.max(kbps, MIN_MBPS * 1000), MAX_MBPS * 1000)
-  return kbps / 1000
+function pinMbps(pxPerSec: number, bpp: number, chroma444: boolean, tenBit: boolean): number {
+  let b = bpp
+  if (chroma444) b *= 1.625
+  if (tenBit) b *= 1.15
+  return Math.min(Math.max((pxPerSec * b) / 1e6, MIN_MBPS), MAX_MBPS)
 }
 
-const card: React.CSSProperties = {
-  border: '1px solid var(--color-fd-border, #e5e7eb)',
-  borderRadius: '0.75rem',
-  background: 'var(--color-fd-card, transparent)',
-  padding: '1.25rem',
-  margin: '1.5rem 0',
-}
-const label: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.75rem',
-  fontWeight: 600,
-  letterSpacing: '0.02em',
-  textTransform: 'uppercase',
-  color: 'var(--color-fd-muted-foreground, #6b7280)',
-  marginBottom: '0.35rem',
-}
-const field: React.CSSProperties = {
-  width: '100%',
-  padding: '0.45rem 0.6rem',
-  borderRadius: '0.5rem',
-  border: '1px solid var(--color-fd-border, #e5e7eb)',
-  background: 'var(--color-fd-background, transparent)',
-  color: 'var(--color-fd-foreground, inherit)',
-  fontSize: '0.9rem',
-}
+const fmtRate = (mbps: number) =>
+  mbps >= 1000 ? `${(mbps / 1000).toFixed(2)} Gbps` : `${Math.round(mbps)} Mbps`
 
-function Toggle({
-  active,
-  onClick,
+const control =
+  'h-9 w-full rounded-lg border border-fd-border bg-fd-background px-3 text-sm text-fd-foreground outline-none transition-colors focus-visible:border-fd-ring focus-visible:ring-2 focus-visible:ring-fd-ring/30'
+
+function Field({
+  label,
+  htmlFor,
+  aside,
+  className = '',
   children,
 }: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
+  label: string
+  htmlFor?: string
+  aside?: ReactNode
+  className?: string
+  children: ReactNode
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      style={{
-        flex: 1,
-        padding: '0.45rem 0.6rem',
-        borderRadius: '0.5rem',
-        border: '1px solid var(--color-fd-border, #e5e7eb)',
-        cursor: 'pointer',
-        fontSize: '0.9rem',
-        fontWeight: 600,
-        background: active
-          ? 'var(--color-fd-primary, #6c5bf3)'
-          : 'var(--color-fd-background, transparent)',
-        color: active
-          ? 'var(--color-fd-primary-foreground, #fff)'
-          : 'var(--color-fd-foreground, inherit)',
-      }}
-    >
+    <div className={className}>
+      <div className="mb-1.5 flex h-5 items-center justify-between gap-2">
+        <label
+          htmlFor={htmlFor}
+          className="text-xs font-medium uppercase leading-none tracking-wide text-fd-muted-foreground"
+        >
+          {label}
+        </label>
+        {aside}
+      </div>
       {children}
-    </button>
+    </div>
+  )
+}
+
+function Select({
+  id,
+  value,
+  onChange,
+  children,
+}: {
+  id: string
+  value: string
+  onChange: (value: string) => void
+  children: ReactNode
+}) {
+  return (
+    <div className="relative">
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${control} cursor-pointer appearance-none pr-9`}
+      >
+        {children}
+      </select>
+      <svg
+        aria-hidden
+        viewBox="0 0 16 16"
+        className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-fd-muted-foreground"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="m4 6 4 4 4-4" />
+      </svg>
+    </div>
+  )
+}
+
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (value: T) => void
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="flex h-9 gap-0.5 rounded-lg border border-fd-border bg-fd-background p-0.5"
+    >
+      {options.map((o) => {
+        const active = o.value === value
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(o.value)}
+            className={`flex-1 whitespace-nowrap rounded-md px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fd-ring/50 ${
+              active
+                ? 'bg-fd-primary text-fd-background shadow-sm'
+                : 'text-fd-muted-foreground hover:bg-fd-accent hover:text-fd-foreground'
+            }`}
+          >
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
 export default function BitrateCalculator() {
-  const [presetIdx, setPresetIdx] = useState(1) // 1080p
-  const [custom, setCustom] = useState(false)
+  const id = useId()
+  const [preset, setPreset] = useState('1')
   const [cw, setCw] = useState(1920)
   const [ch, setCh] = useState(1080)
   const [fps, setFps] = useState(60)
-  const [chroma444, setChroma444] = useState(false)
-  const [hdr, setHdr] = useState(false)
+  const [chroma, setChroma] = useState<'420' | '444'>('420')
+  const [depth, setDepth] = useState<'8' | '10'>('8')
+  const [bpp, setBpp] = useState(DEFAULT_BPP)
 
-  const preset = RES_PRESETS[presetIdx] ?? RES_PRESETS[1]!
-  const w = custom ? cw : preset.w
-  const h = custom ? ch : preset.h
+  const custom = preset === 'custom'
+  const p = RES_PRESETS[Number(preset)] ?? RES_PRESETS[1]!
+  const w = custom ? cw : p.w
+  const h = custom ? ch : p.h
 
-  const mbps = pyrowaveMbps(w, h, fps, chroma444, hdr)
-  const gbps = mbps / 1000
-  const bpp = w > 0 && h > 0 && fps > 0 ? (mbps * 1e6) / (w * h * fps) : 0
-  const frameKB = fps > 0 ? (mbps * 1e6) / 8 / fps / 1024 : 0
-  const wireMbps = mbps * WIRE_FACTOR
-  const fitsLink = (l: { mbps: number }) => wireMbps <= l.mbps * LINK_HEADROOM
-  const needed = LINKS.find(fitsLink)
-
-  const big =
-    mbps >= 1000 ? `${gbps.toFixed(2)} Gbps` : `${Math.round(mbps)} Mbps`
+  const pxPerSec = w > 0 && h > 0 && fps > 0 ? w * h * fps : 0
+  const pin = pxPerSec > 0 ? pinMbps(pxPerSec, bpp, chroma === '444', depth === '10') : 0
+  const frameKB = fps > 0 ? (pin * 1e6) / 8 / fps / 1000 : 0
 
   return (
-    <div style={card}>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: '0.9rem',
-        }}
-      >
-        <div style={{ gridColumn: '1 / -1' }}>
-          <label style={label}>Resolution</label>
-          <select
-            style={field}
-            value={custom ? 'custom' : String(presetIdx)}
-            onChange={(e) => {
-              if (e.target.value === 'custom') {
-                setCustom(true)
-              } else {
-                setCustom(false)
-                setPresetIdx(Number(e.target.value))
-              }
-            }}
-          >
-            {RES_PRESETS.map((p, i) => (
-              <option key={p.label} value={i}>
-                {p.label}
+    <div className="not-prose my-6 rounded-xl border border-fd-border bg-fd-card p-5 text-fd-card-foreground">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Resolution" htmlFor={`${id}-res`} className="sm:col-span-2">
+          <Select id={`${id}-res`} value={preset} onChange={setPreset}>
+            {RES_PRESETS.map((r, i) => (
+              <option key={r.label} value={String(i)}>
+                {r.label}
               </option>
             ))}
             <option value="custom">Custom…</option>
-          </select>
-        </div>
+          </Select>
+        </Field>
 
         {custom && (
           <>
-            <div>
-              <label style={label}>Width</label>
+            <Field label="Width" htmlFor={`${id}-w`}>
               <input
-                style={field}
+                id={`${id}-w`}
+                className={control}
                 type="number"
+                inputMode="numeric"
                 min={128}
                 value={cw}
                 onChange={(e) => setCw(Math.max(0, Number(e.target.value)))}
               />
-            </div>
-            <div>
-              <label style={label}>Height</label>
+            </Field>
+            <Field label="Height" htmlFor={`${id}-h`}>
               <input
-                style={field}
+                id={`${id}-h`}
+                className={control}
                 type="number"
+                inputMode="numeric"
                 min={128}
                 value={ch}
                 onChange={(e) => setCh(Math.max(0, Number(e.target.value)))}
               />
-            </div>
+            </Field>
           </>
         )}
 
-        <div>
-          <label style={label}>Frame rate</label>
-          <select
-            style={field}
-            value={fps}
-            onChange={(e) => setFps(Number(e.target.value))}
-          >
+        <Field label="Frame rate" htmlFor={`${id}-fps`}>
+          <Select id={`${id}-fps`} value={String(fps)} onChange={(v) => setFps(Number(v))}>
             {FPS_PRESETS.map((f) => (
               <option key={f} value={f}>
                 {f} fps
               </option>
             ))}
-          </select>
-        </div>
+          </Select>
+        </Field>
 
-        <div>
-          <label style={label}>Chroma</label>
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            <Toggle active={!chroma444} onClick={() => setChroma444(false)}>
-              4:2:0
-            </Toggle>
-            <Toggle active={chroma444} onClick={() => setChroma444(true)}>
-              4:4:4
-            </Toggle>
+        <Field
+          label="Bits per pixel"
+          htmlFor={`${id}-bpp`}
+          aside={
+            <span className="flex items-center gap-2 text-sm leading-none tabular-nums">
+              {bpp !== DEFAULT_BPP && (
+                <button
+                  type="button"
+                  onClick={() => setBpp(DEFAULT_BPP)}
+                  className="text-xs text-fd-muted-foreground underline-offset-2 hover:text-fd-foreground hover:underline"
+                >
+                  reset
+                </button>
+              )}
+              <span className="font-semibold text-fd-foreground">{bpp.toFixed(2)}</span>
+            </span>
+          }
+        >
+          <div className="flex h-9 items-center">
+            <input
+              id={`${id}-bpp`}
+              type="range"
+              min={0.25}
+              max={4}
+              step={0.05}
+              value={bpp}
+              onChange={(e) => setBpp(Number(e.target.value))}
+              className="w-full cursor-pointer rounded-full accent-fd-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fd-ring/50"
+            />
           </div>
-        </div>
+        </Field>
 
-        <div>
-          <label style={label}>Dynamic range</label>
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            <Toggle active={!hdr} onClick={() => setHdr(false)}>
-              SDR (8-bit)
-            </Toggle>
-            <Toggle active={hdr} onClick={() => setHdr(true)}>
-              HDR (10-bit)
-            </Toggle>
-          </div>
+        <Field label="Chroma">
+          <Segmented
+            label="Chroma"
+            value={chroma}
+            onChange={setChroma}
+            options={[
+              { value: '420', label: '4:2:0' },
+              { value: '444', label: '4:4:4' },
+            ]}
+          />
+        </Field>
+
+        <Field label="Bit depth">
+          <Segmented
+            label="Bit depth"
+            value={depth}
+            onChange={setDepth}
+            options={[
+              { value: '8', label: '8-bit' },
+              { value: '10', label: '10-bit / HDR' },
+            ]}
+          />
+        </Field>
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-fd-border pt-5">
+        <div className="text-3xl font-bold tabular-nums text-fd-primary">≈ {fmtRate(pin)}</div>
+        <div className="text-sm tabular-nums text-fd-muted-foreground">
+          {frameKB >= 1000 ? `${(frameKB / 1000).toFixed(2)} MB` : `${Math.round(frameKB)} KB`}{' '}
+          per frame
         </div>
       </div>
 
-      <div
-        style={{
-          marginTop: '1.1rem',
-          paddingTop: '1.1rem',
-          borderTop: '1px solid var(--color-fd-border, #e5e7eb)',
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'baseline',
-          gap: '0.4rem 1.4rem',
-        }}
-      >
-        <div
-          style={{
-            fontSize: '2rem',
-            fontWeight: 700,
-            color: 'var(--color-fd-primary, #6c5bf3)',
-            lineHeight: 1.1,
-          }}
-        >
-          ≈ {big}
-        </div>
-        <div
-          style={{
-            fontSize: '0.85rem',
-            color: 'var(--color-fd-muted-foreground, #6b7280)',
-          }}
-        >
-          {bpp.toFixed(2)} bits/pixel · {Math.round(frameKB)} KB per frame ·{' '}
-          {needed ? `needs ${needed.label}` : 'over 10 GbE — lower the mode'}
-        </div>
-      </div>
-
-      <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.4rem' }}>
+      <div className="mt-4 grid grid-cols-[4.5rem_1fr_auto] items-center gap-x-3 gap-y-2.5">
         {LINKS.map((l) => {
-          const fits = fitsLink(l)
+          const rate = Math.min(pin, l.mbps * WALL_SHARE)
+          const kept = pin > 0 ? rate / pin : 0
+          const full = kept >= 1
           return (
-            <div
-              key={l.label}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}
-            >
-              <span
-                style={{
-                  width: '4.5rem',
-                  fontSize: '0.8rem',
-                  fontWeight: 600,
-                  color: 'var(--color-fd-muted-foreground, #6b7280)',
-                }}
-              >
-                {l.label}
-              </span>
-              <div
-                style={{
-                  flex: 1,
-                  height: '0.5rem',
-                  borderRadius: '999px',
-                  background: 'var(--color-fd-muted, #eef0f4)',
-                  overflow: 'hidden',
-                }}
-              >
+            <div key={l.label} className="contents">
+              <span className="text-xs font-medium text-fd-muted-foreground">{l.label}</span>
+              <div className="h-2 overflow-hidden rounded-full bg-fd-muted-foreground/15">
                 <div
-                  style={{
-                    width: `${Math.min(100, (wireMbps / l.mbps) * 100)}%`,
-                    height: '100%',
-                    background: fits
-                      ? 'var(--color-fd-primary, #6c5bf3)'
-                      : '#e5484d',
-                  }}
+                  className={`h-full rounded-full bg-fd-primary ${full ? '' : 'opacity-50'}`}
+                  style={{ width: `${Math.min(100, kept * 100)}%` }}
                 />
               </div>
               <span
-                style={{
-                  width: '2.5rem',
-                  textAlign: 'right',
-                  fontSize: '0.75rem',
-                  color: fits
-                    ? 'var(--color-fd-muted-foreground, #6b7280)'
-                    : '#e5484d',
-                }}
+                className={`w-28 text-right text-xs tabular-nums ${
+                  full ? 'text-fd-muted-foreground' : 'font-semibold text-fd-foreground'
+                }`}
               >
-                {Math.round((wireMbps / l.mbps) * 100)}%
+                {(bpp * kept).toFixed(2)} bits/pixel
               </span>
             </div>
           )
         })}
       </div>
 
-      <p
-        style={{
-          marginTop: '0.9rem',
-          marginBottom: 0,
-          fontSize: '0.75rem',
-          color: 'var(--color-fd-muted-foreground, #6b7280)',
-        }}
-      >
-        Estimate of the Automatic bitrate a PyroWave session pins for this mode. Link bars add ~15 %
-        for packet framing and FEC against a practical payload ceiling, and a link fits only with
-        10 % to spare. The pin is capped at 8 Gbps; on a constrained
-        link a host can cap it lower with <code>PUNKTFUNK_PYROWAVE_MAX_MBPS</code>.
+      <p className="mt-4 text-xs leading-relaxed text-fd-muted-foreground">
+        Each bar is what an Automatic session keeps on that link. A link that can't carry the rate
+        with room to spare gets 70 % of what it delivered in the test before the first frame. Link
+        figures assume a payload ceiling a bit under line rate.
       </p>
     </div>
   )

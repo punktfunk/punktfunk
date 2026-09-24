@@ -100,7 +100,7 @@ interface GameRow {
 	directory: string | null;
 }
 
-export default defineLibraryPlugin({
+const plugin = defineLibraryPlugin({
 	// One string: plugin id, provider id, store claim, and the id of the built-in scanner this
 	// replaces. That identity chain is what keeps entry ids, GameStream app ids and the operator's
 	// existing enable/disable state intact across the migration.
@@ -167,3 +167,5 @@ export default defineLibraryPlugin({
 		return db ? [path.dirname(db)] : [];
 	},
 });
+
+export default plugin.def;

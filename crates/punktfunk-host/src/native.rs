@@ -948,10 +948,10 @@ fn resolve_bitrate_kbps(requested: u32) -> u32 {
     }
 }
 
-/// PyroWave Automatic (`0`) pins ~1.6 bpp for the negotiated mode, not the 20 Mbps H.26x
-/// default. ABR stays off; mid-stream retargets are refused. An explicit client rate is
-/// ignored — kbps is ill-defined for all-intra bpp; every rate still goes through
-/// `PUNKTFUNK_PYROWAVE_MAX_MBPS`. H.26x/AV1 explicit rates stand.
+/// PyroWave pins the host's bits per pixel (row `pyrowave_bpp`) for the negotiated mode, not
+/// the 20 Mbps H.26x default. ABR stays off; mid-stream retargets are refused. A client rate
+/// is ignored: bits per pixel is the quality knob, and it holds across modes. Every pin goes
+/// through `PUNKTFUNK_PYROWAVE_MAX_MBPS`. H.26x/AV1 explicit rates stand.
 fn resolve_bitrate_kbps_for(
     codec: crate::encode::Codec,
     requested: u32,
@@ -963,22 +963,11 @@ fn resolve_bitrate_kbps_for(
         if requested != 0 {
             tracing::warn!(
                 requested_kbps = requested,
-                "an explicit bitrate is ill-defined under PyroWave (all-intra bpp semantics) — \
-                 treating it as Automatic and resolving the per-mode pin"
+                "a client bitrate does not apply to PyroWave — using the host's bits per pixel"
             );
         }
-        // ~1.6 bpp 4:2:0. 4:4:4 is ×1.625 ≈ 2.6 bpp (chroma compresses better than luma);
-        // 10-bit planes add ~15 %. See `design/pyrowave-444-hdr.md`.
-        let bpp_x10: u64 = if chroma.is_444() { 26 } else { 16 };
-        let mut bps =
-            mode.width as u64 * mode.height as u64 * u64::from(mode.refresh_hz.max(1)) * bpp_x10
-                / 10;
-        if bit_depth >= 10 {
-            bps = bps * 115 / 100;
-        }
-        let pin = u32::try_from(bps / 1000)
-            .unwrap_or(MAX_BITRATE_KBPS)
-            .clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+        let bpp = pf_host_config::config().pyrowave_bpp;
+        let pin = pyrowave_pin_kbps(mode, chroma, bit_depth, bpp);
         // Open-loop pin can outrun the link. `PUNKTFUNK_PYROWAVE_MAX_MBPS` caps it;
         // unset ⇒ no cap.
         if let Some(ceiling) = pyrowave_auto_pin_ceiling_kbps() {
@@ -986,8 +975,7 @@ fn resolve_bitrate_kbps_for(
                 tracing::warn!(
                     pin_kbps = pin,
                     ceiling_kbps = ceiling,
-                    "PyroWave Automatic bitrate pin exceeds PUNKTFUNK_PYROWAVE_MAX_MBPS — capping \
-                     to the link ceiling (set an explicit client bitrate to choose your own)"
+                    "PyroWave bitrate pin exceeds PUNKTFUNK_PYROWAVE_MAX_MBPS — capping to it"
                 );
                 return ceiling.max(MIN_BITRATE_KBPS);
             }
@@ -1068,6 +1056,27 @@ fn audio_reserved_kbps(welcome: &punktfunk_core::quic::Welcome) -> u32 {
         )
         .kbps
     }
+}
+
+/// `bpp` bits per pixel for a 4:2:0 SDR frame. 4:4:4 carries twice the samples but costs
+/// ×1.625, since chroma compresses better than luma; 10-bit planes add 15 %.
+fn pyrowave_pin_kbps(
+    mode: &punktfunk_core::config::Mode,
+    chroma: crate::encode::ChromaFormat,
+    bit_depth: u8,
+    bpp: f64,
+) -> u32 {
+    let mut bpp = bpp;
+    if chroma.is_444() {
+        bpp *= 1.625;
+    }
+    if bit_depth >= 10 {
+        bpp *= 1.15;
+    }
+    let px_per_s =
+        f64::from(mode.width) * f64::from(mode.height) * f64::from(mode.refresh_hz.max(1));
+    // `as` saturates, so a huge mode lands on the clamp.
+    ((px_per_s * bpp / 1000.0) as u32).clamp(MIN_BITRATE_KBPS, MAX_BITRATE_KBPS)
 }
 
 /// `PUNKTFUNK_PYROWAVE_MAX_MBPS` (Mb/s) → kbps. `None` when unset/zero/invalid (no cap).
@@ -3036,7 +3045,7 @@ mod tests {
             ),
             (1920u64 * 1080 * 60 * 26 / 10 * 115 / 100 / 1000) as u32
         );
-        // Explicit client rate is overridden to the same pin (kbps is ill-defined for all-intra).
+        // A client rate is ignored; the host's bits per pixel sets the pin.
         assert_eq!(
             resolve_bitrate_kbps_for(
                 crate::encode::Codec::PyroWave,
@@ -3057,6 +3066,37 @@ mod tests {
                 8
             ),
             DEFAULT_BITRATE_KBPS
+        );
+    }
+
+    #[test]
+    fn pyrowave_pin_follows_the_host_bpp() {
+        use crate::encode::ChromaFormat;
+        use punktfunk_core::config::Mode;
+        let mode = Mode {
+            width: 3840,
+            height: 2160,
+            refresh_hz: 120,
+        };
+        let px = 3840 * 2160 * 120;
+        // 0.5 bpp is Steam's 500 Mbps ceiling at 4K120.
+        assert_eq!(
+            pyrowave_pin_kbps(&mode, ChromaFormat::Yuv420, 8, 0.5),
+            px / 2 / 1000
+        );
+        // 4:4:4 and 10-bit scale from the operator's value, not from 1.6.
+        assert_eq!(
+            pyrowave_pin_kbps(&mode, ChromaFormat::Yuv444, 10, 1.0),
+            (f64::from(px) * 1.625 * 1.15 / 1000.0) as u32
+        );
+        let tiny = Mode {
+            width: 64,
+            height: 64,
+            refresh_hz: 1,
+        };
+        assert_eq!(
+            pyrowave_pin_kbps(&tiny, ChromaFormat::Yuv420, 8, 0.25),
+            MIN_BITRATE_KBPS
         );
     }
 

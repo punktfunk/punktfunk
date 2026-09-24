@@ -223,9 +223,9 @@ extern "C" fn evt_timer(_timer: WDFTIMER) {
     let live = CHANNEL.pump(&channel_cfg()).is_some();
     HOST_LIVE.store(live, Ordering::Relaxed);
 
-    // Release one pended `WAIT_FOR_INPUT` per tick, but only on a real edge — the host bumps
-    // `dwPacketNumber` whenever it publishes new state, so an unchanged packet means nothing moved
-    // and a waiter that is completed anyway would just spin its caller at timer rate.
+    // On a new `dwPacketNumber`, release every pended `WAIT_FOR_INPUT`: each client (WGI,
+    // GameInput, Steam) parks its own, and releasing one per packet starves the rest. An unchanged
+    // packet releases none, or the waiters would spin at timer rate.
     let data = CHANNEL.data();
     let (packet, ..) = read_state(data);
     if packet == WAIT_LAST_PACKET.load(Ordering::Relaxed) {
@@ -235,15 +235,24 @@ extern "C" fn evt_timer(_timer: WDFTIMER) {
     if wq.is_null() {
         return;
     }
+    let state = build_wait_state(data);
     // SAFETY: `wq` is the live manual queue created in EvtDeviceAdd — the contract
     // `retrieve_next_request` requires. `None` simply means nobody is waiting.
-    if let Some(request) = unsafe { wdf::retrieve_next_request(wq) } {
+    while let Some(request) = unsafe { wdf::retrieve_next_request(wq) } {
         WAIT_LAST_PACKET.store(packet, Ordering::Relaxed);
-        // Answer with the same 29-byte GET_STATE payload the synchronous path serves, so a caller
-        // that waits and a caller that polls observe byte-identical state.
-        let st = request.copy_to_output(&build_get_state(data));
+        let st = request.copy_to_output(&state);
         request.complete(st);
     }
+}
+
+/// The `GET_STATE` bytes plus the two WGI's XUSB parser gates on: `[2] = 3` (resumed; until one
+/// arrives WGI drops vibration) and `[10] = 0x14` (payload marker; zero skips the reading).
+/// Layout from HIDMaestro's decomp of `XusbDevice::ProcessInput`.
+fn build_wait_state(data: Option<&MappedView>) -> [u8; 29] {
+    let mut s = build_get_state(data);
+    s[2] = 0x03;
+    s[10] = 0x14;
+    s
 }
 
 /// The current controller state from the attached DATA section (zeros / neutral when unattached).

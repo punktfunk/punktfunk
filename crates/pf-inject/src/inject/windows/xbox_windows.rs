@@ -17,11 +17,13 @@
 //! decoded and dropped (`GamepadPref::motion_reaches`).
 
 use super::dualsense_windows::{
-    create_swdevice, publish_input, OutputDrain, SwDeviceProfile, OFF_DEVTYPE, OFF_DRIVER_PROTO,
+    create_swdevice, driver_marks, publish_input, OutputDrain, SwDeviceProfile, OFF_DEVTYPE,
     OFF_INPUT, OFF_OUT_RING_VER, OFF_PAD_INDEX, SHM_MAGIC, SHM_SIZE,
 };
 use super::gamepad_raii::PadChannel;
-use super::xbox_proto::{neutral_xbox_report, serialize_xbox_state, XboxState, XBOX_REPORT_LEN};
+use super::xbox_proto::{
+    neutral_xbox_report, parse_xbox_output, serialize_xbox_state, XboxState, XBOX_REPORT_LEN,
+};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use punktfunk_core::quic::RichInput;
@@ -172,6 +174,8 @@ pub struct XboxWinPad {
     input_gen: u32,
     /// Ring drain (v2.1+) or legacy latest-slot seq (old driver).
     drain: OutputDrain,
+    /// Rumble `enable` bytes already logged for this pad — see [`XboxWinPad::service`].
+    seen_enable: Vec<u8>,
 }
 
 impl XboxWinPad {
@@ -234,6 +238,7 @@ impl XboxWinPad {
             ),
             input_gen: 0,
             drain: OutputDrain::new(),
+            seen_enable: Vec::new(),
         })
     }
 
@@ -247,52 +252,30 @@ impl XboxWinPad {
 
     fn service(&mut self) -> (Option<(u16, u16, u16, u16)>, bool) {
         self.channel.pump();
-        // SAFETY: base points at SHM_SIZE bytes.
-        let proto = unsafe {
-            std::ptr::read_unaligned(self.channel.data_base().add(OFF_DRIVER_PROTO) as *const u32)
-        };
-        self.attach.observe(proto);
+        // SAFETY: the channel's section is live and SHM_SIZE bytes.
+        let (proto, rev) = unsafe { driver_marks(self.channel.data_base()) };
+        self.attach.observe_pad(proto, rev);
         let mut rumble = None;
         let base = self.channel.data_base();
+        let seen = &mut self.seen_enable;
+        let mailbox = self.channel.boot_name();
         let resync = self.drain.drain(base, |bytes| {
             if let Some(r) = parse_xbox_output(bytes) {
+                // Which motor bits xinputhid sets is unmeasured; log each new mask once.
+                if !seen.contains(&bytes[1]) {
+                    seen.push(bytes[1]);
+                    tracing::debug!(
+                        mailbox,
+                        enable = %format!("{:#04x}", bytes[1]),
+                        raw = ?bytes,
+                        "xbox rumble enable byte"
+                    );
+                }
                 rumble = Some(r); // last rumble-carrying report wins
             }
         });
         (rumble, resync)
     }
-}
-
-/// Xbox output report → `(low, high, left_trigger, right_trigger)` on 0..65535.
-///
-/// Bluetooth rumble report id `0x03`:
-/// `[id, enable, left_trigger, right_trigger, left, right, duration, delay, loop]`.
-/// Magnitudes are **0..100**, not 0..255 — treating them as 0..255 silently
-/// costs 60 % of the range (`100` → ~39 %).
-///
-/// `enable` bit 2 = left (low) motor, bit 3 = right (high). Trigger motors
-/// ride the 0xCA plane's v3 tail (`design/trigger-rumble-plane.md`); this is
-/// the only backend that can source them.
-///
-/// Shape is from the documented protocol, not a capture. Trigger `enable`
-/// bits are conjecture: bits 2/3 (handles) are known; bit 0 = left trigger
-/// and bit 1 = right trigger are inferred from field order only. Tests use
-/// masks that hold whichever trigger bits turn out to be right.
-fn parse_xbox_output(bytes: &[u8]) -> Option<(u16, u16, u16, u16)> {
-    // Driver republishes output reports report-id-prefixed, like the PS backends.
-    if bytes.len() < 6 || bytes[0] != 0x03 {
-        return None;
-    }
-    let enable = bytes[1];
-    let scale = |v: u8| -> u16 { (v.min(100) as u32 * 65535 / 100) as u16 };
-    let gated = |bit: u8, v: u8| if enable & bit != 0 { scale(v) } else { 0 };
-    Some((
-        gated(0x04, bytes[4]),
-        gated(0x08, bytes[5]),
-        // Unverified trigger bits — see `parse_xbox_output`.
-        gated(0x01, bytes[2]),
-        gated(0x02, bytes[3]),
-    ))
 }
 
 /// Windows-Xbox `PadProto`. Lifecycle lives in [`UhidManager`]. Identity is a
@@ -392,66 +375,3 @@ impl PadProto for XboxWinProto {
 /// Session table of virtual Xbox pads, same surface as the other Windows pad
 /// managers via [`UhidManager`].
 pub type XboxWindowsManager = UhidManager<XboxWinProto>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Enable masks here must not pin conjectured trigger bits (see
-    // `parse_xbox_output`). `0xFF` / `0x00` enable all / none; `0x0C` / `0xF3`
-    // split the measured handle bits from every other bit.
-
-    #[test]
-    fn rumble_scales_off_the_zero_to_hundred_protocol_range() {
-        let full = [0x03, 0x0F, 0, 0, 100, 100, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&full), Some((65535, 65535, 0, 0)));
-        let half = [0x03, 0x04, 0, 0, 50, 100, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&half), Some((32767, 0, 0, 0)));
-    }
-
-    /// Trigger magnitudes share the handles' 0..100 range. A full-scale `100`
-    /// is `65535`, not `25700` (the 0..255 misread).
-    #[test]
-    fn trigger_magnitudes_are_not_a_zero_to_255_range() {
-        let full = [0x03, 0xFF, 100, 100, 0, 0, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&full), Some((0, 0, 65535, 65535)));
-        let half = [0x03, 0xFF, 50, 25, 0, 0, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&half), Some((0, 0, 32767, 16383)));
-    }
-
-    /// Values above 0..100 clamp, not wrap — all four actuators share the
-    /// scale closure.
-    #[test]
-    fn out_of_range_magnitudes_clamp() {
-        let over = [0x03, 0xFF, 255, 255, 255, 255, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&over), Some((65535, 65535, 65535, 65535)));
-    }
-
-    #[test]
-    fn the_enable_mask_gates_each_motor() {
-        let none = [0x03, 0x00, 100, 100, 100, 100, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&none), Some((0, 0, 0, 0)));
-        let right_only = [0x03, 0x08, 0, 0, 100, 100, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&right_only), Some((0, 65535, 0, 0)));
-    }
-
-    /// `0x0C` is the two measured handle bits; `0xF3` is every other bit.
-    /// Isolates handles from triggers without naming trigger enable bits.
-    #[test]
-    fn a_trigger_only_report_leaves_the_handles_silent() {
-        let triggers_only = [0x03, 0xF3, 100, 40, 100, 100, 0, 0, 1];
-        assert_eq!(
-            parse_xbox_output(&triggers_only),
-            Some((0, 0, 65535, 26214))
-        );
-        let handles_only = [0x03, 0x0C, 100, 100, 100, 100, 0, 0, 1];
-        assert_eq!(parse_xbox_output(&handles_only), Some((65535, 65535, 0, 0)));
-    }
-
-    #[test]
-    fn non_rumble_reports_are_ignored() {
-        assert_eq!(parse_xbox_output(&[0x01, 0x0F, 0, 0, 100, 100]), None);
-        assert_eq!(parse_xbox_output(&[0x03, 0x0F, 0]), None);
-        assert_eq!(parse_xbox_output(&[]), None);
-    }
-}

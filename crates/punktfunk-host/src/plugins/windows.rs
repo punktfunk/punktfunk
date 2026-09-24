@@ -55,6 +55,7 @@ pub(super) fn enable() -> Result<()> {
          Set-ScheduledTask -TaskName {TASK} -Principal $p -ErrorAction Stop | Out-Null"
     ))?;
     grant_runner_secret_reads();
+    let _ = std::fs::write(pf_paths::config_dir().join(RUNNER_ACL_MARKER), b"");
     powershell(&format!(
         "Enable-ScheduledTask -TaskName {TASK} -ErrorAction Stop | Out-Null; \
          Start-ScheduledTask -TaskName {TASK} -ErrorAction Stop"
@@ -71,6 +72,23 @@ pub(super) fn disable() -> Result<()> {
     revoke_runner_secret_reads();
     println!("Plugin runner stopped and disabled ({TASK}).");
     Ok(())
+}
+
+/// Present once the grants below are applied. `serve` applies them only while it is missing, so
+/// the plugin tree is re-ACL'd once per install, not on every boot.
+const RUNNER_ACL_MARKER: &str = "plugin-run/runner-acl";
+
+/// A fresh install registers and starts the task without `plugins enable`, which leaves the unit
+/// and state dirs unreadable to LocalService: every plugin import fails EPERM.
+pub(super) fn converge_runner_acls(status: &RuntimeStatus) {
+    let marker = pf_paths::config_dir().join(RUNNER_ACL_MARKER);
+    if !status.installed || !status.enabled || marker.exists() {
+        return;
+    }
+    grant_runner_secret_reads();
+    if let Err(e) = std::fs::write(&marker, b"") {
+        tracing::warn!(path = %marker.display(), error = %e, "runner grant marker not written");
+    }
 }
 
 /// Grant LocalService read on runner inputs. The data directory uses an inheritable ACE so atomic
@@ -248,6 +266,7 @@ fn runner_bundle_dir() -> Option<std::path::PathBuf> {
 /// Drop the LocalService grants when the runner is switched off. `enable` re-grants.
 fn revoke_runner_secret_reads() {
     let cfg = pf_paths::config_dir();
+    let _ = std::fs::remove_file(cfg.join(RUNNER_ACL_MARKER));
     for name in RUNNER_SECRET_FILES
         .iter()
         .chain(RUNNER_INPUT_DIRS.iter())
@@ -471,6 +490,26 @@ pub(super) fn grant(dir: &std::path::Path, write: bool) -> Result<()> {
     Ok(())
 }
 
+/// Remove the runner's ACE from one directory: the inverse of [`grant`]. A folder that is gone
+/// has nothing left to remove.
+pub(super) fn revoke(dir: &std::path::Path) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    let ok = Command::new(icacls_path())
+        .arg(dir)
+        .args(["/remove:g", LOCAL_SERVICE_SID])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("run icacls")?
+        .success();
+    if !ok {
+        bail!("remove the runner's ACE from {}", dir.display());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     /// Read grants are read-only ACEs; a write grant is the one that carries Modify.
@@ -508,6 +547,19 @@ pub(super) fn runtime_status() -> RuntimeStatus {
             }
         }
     }
+}
+
+/// Windows has no per-plugin sandbox to turn off; the diagnostic that asks is Linux's.
+pub(super) fn runner_sandbox_off() -> bool {
+    false
+}
+
+/// Nothing to converge: the task sees the whole disk, and a grant is an ACL ([`grant`]).
+pub(super) fn converge_runner_roots(
+    _roots: &[super::access::RunnerRoot],
+    _home: &std::path::Path,
+) -> Result<bool> {
+    Ok(false)
 }
 
 /// Stop then start: there is no `Restart-ScheduledTask`, and Start on a running task is a no-op.

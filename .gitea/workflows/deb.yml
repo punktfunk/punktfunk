@@ -224,14 +224,14 @@ jobs:
           key: cargo-home-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-
       - id: target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
           # `-release-`, never ci.yml's debug key: a job that hits a shared key exactly skips its
           # save, so this release tree would never be stored.
           key: cargo-target-release-v3-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-target-release-v3-${{ env.rustc }}-
-      # The post-step save still runs after a failed restore, once the whole job passes.
+      # A failed restore reads as a miss, so the save at the end of the job replaces the entry.
       - name: Drop a partial target restore
         run: sh scripts/ci/drop-partial-target.sh "${{ steps.target.outputs.cache-hit }}" "cargo-target-release-v3-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}"
 
@@ -399,6 +399,16 @@ jobs:
             upsert_asset "$RID" "$DEB"
           done
 
+      # Only main writes the target cache, so no branch dispatch feeds a published build. Only on
+      # a miss: the version-stamped binaries rebuild every run, so a save per push costs more
+      # than it saves.
+      - name: Save target
+        if: github.ref == 'refs/heads/main' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-target-release-v3-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
+
   # ---------------------------------------------------------------------------------------------
   # The HOST .deb — built on Ubuntu 24.04 (noble), so it installs on Ubuntu 24.04 LTS through
   # 26.04 (see the file header + packaging/debian/README.md). Runs in
@@ -452,7 +462,7 @@ jobs:
           key: cargo-home-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-
       - id: target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
           # Own key: this target dir is built against 24.04's glibc/toolchain and must NOT share
@@ -545,6 +555,14 @@ jobs:
           for DEB in dist/*.deb; do
             upsert_asset "$RID" "$DEB"
           done
+
+      # Same rule as build-publish's save.
+      - name: Save target
+        if: github.ref == 'refs/heads/main' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-target-noble-release-v1-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
 
   # ---------------------------------------------------------------------------------------------
   # `punktfunk-gamescope` for apt — the patched build that gives a gamescope session HDR, a cursor,
@@ -713,7 +731,7 @@ jobs:
           key: cargo-home-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-
       - id: target
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
           # Its OWN key: aarch64 artifacts never share the amd64 target cache, and `-release-`
@@ -773,6 +791,14 @@ jobs:
             upsert_asset "$RID" "$DEB"
           done
 
+      # Same rule as build-publish's save.
+      - name: Save target
+        if: github.ref == 'refs/heads/main' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-target-arm64-release-v1-${{ env.rustc }}-${{ hashFiles('Cargo.lock') }}
+
   # ---------------------------------------------------------------------------------------------
   # Does the thing we just published actually INSTALL? Nothing in this repo asked that before, and
   # the cost of not asking was two independent, long-lived facts nobody knew:
@@ -820,7 +846,7 @@ jobs:
       # The support matrix, asserted rather than asserted-in-prose. Each row names the packages
       # that MUST install on that distro; anything absent from the row is expected not to and is
       # not checked here (the client's glibc 2.43 floor keeps it off 24.04 and Debian 13 —
-      # see docs-site/content/docs/debian.md).
+      # see docs-site/content/docs/(guide)/(install)/debian.mdx).
       - name: Install from the apt registry on every supported distro
         run: bash scripts/ci/deb-install-smoke.sh
         env:

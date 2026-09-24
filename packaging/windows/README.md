@@ -76,8 +76,8 @@ canonical brand geometry in `web/src/components/brand-mark.tsx`. Re-run it only 
 
 ## Prerequisites on the target box
 
-The CI exe is built `--features nvenc,qsv`; AMD uses native AMF and a GPU-less box falls back to
-software H.264. Virtual gamepads need no prerequisite — the DualSense / DualShock 4 / Xbox 360 UMDF
+The CI exe is built `--features nvenc,qsv`; AMD uses native AMF. There is no software encoder:
+Media Foundation is the fallback, within 8-bit 4:2:0. Virtual gamepads need no prerequisite — the DualSense / DualShock 4 / Xbox 360 UMDF
 drivers are bundled and `pnputil`-installed, and ViGEmBus is no longer used.
 
 **Audio is the exception, and it is structural.** A Windows audio device can only be created by a

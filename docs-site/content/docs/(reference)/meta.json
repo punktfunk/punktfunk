@@ -1,0 +1,15 @@
+{
+  "title": "Reference",
+  "description": "Settings, commands, ports and support",
+  "root": true,
+  "pages": [
+    "support-matrix",
+    "configuration",
+    "host-cli",
+    "ports",
+    "security",
+    "how-it-works",
+    "roadmap",
+    "[API reference](/api)"
+  ]
+}

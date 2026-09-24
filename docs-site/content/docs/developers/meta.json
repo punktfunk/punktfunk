@@ -1,0 +1,18 @@
+{
+  "title": "Developers",
+  "description": "Build, test, contribute and extend",
+  "root": true,
+  "pages": [
+    "index",
+    "architecture",
+    "build-from-source",
+    "testing",
+    "contributing",
+    "releasing",
+    "---Extending Punktfunk---",
+    "management-api",
+    "writing-plugins",
+    "embedding",
+    "multi-seat-contract"
+  ]
+}

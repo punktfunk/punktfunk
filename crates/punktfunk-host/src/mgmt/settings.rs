@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 pub(crate) enum SettingKind {
     Bool,
     Int,
+    Decimal,
     Enum,
     Text,
     List,
@@ -57,11 +58,11 @@ pub(crate) struct SettingState {
     id: String,
     group: SettingGroup,
     kind: SettingKind,
-    /// `int` only.
-    min: Option<i64>,
-    /// `int` only.
-    max: Option<i64>,
-    /// `int` only, e.g. `fps`.
+    /// `int` and `decimal` only.
+    min: Option<f64>,
+    /// `int` and `decimal` only.
+    max: Option<f64>,
+    /// `int` and `decimal` only, e.g. `fps`.
     unit: Option<String>,
     /// `enum` only, canonical spellings in display order.
     options: Option<Vec<String>>,
@@ -116,6 +117,14 @@ pub(crate) fn state() -> HostSettingsState {
                 Kind::Bool => (SettingKind::Bool, None, None, None, None, None),
                 Kind::Int { min, max, unit } => (
                     SettingKind::Int,
+                    Some(min as f64),
+                    Some(max as f64),
+                    Some(unit.to_string()),
+                    None,
+                    None,
+                ),
+                Kind::Decimal { min, max, unit } => (
+                    SettingKind::Decimal,
                     Some(min),
                     Some(max),
                     Some(unit.to_string()),

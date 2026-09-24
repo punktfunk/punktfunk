@@ -9,6 +9,7 @@ import {
 	ensurePluginsDir,
 	listInstalled,
 	REGISTRY,
+	reconcileSharedSdk,
 	resolvePackage,
 	stripGroupWrite,
 } from "../src/plugins.js";
@@ -31,6 +32,31 @@ const writePkg = (dir: string, name: string, version: string) => {
 		JSON.stringify({ name, version }),
 	);
 };
+
+describe("reconcileSharedSdk", () => {
+	test("a refresh that failed is not repeated on the next start", () => {
+		const dir = tmp("sdk-refresh");
+		writePkg(dir, "@punktfunk/host", "0.0.1");
+		// A dependency bun can't resolve offline makes the install fail fast.
+		fs.writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ dependencies: { missing: "file:./not-there" } }),
+		);
+		const lines: string[] = [];
+		reconcileSharedSdk(dir, (l) => lines.push(l));
+		expect(lines.some((l) => l.includes("WARNING"))).toBe(true);
+		lines.length = 0;
+		reconcileSharedSdk(dir, (l) => lines.push(l));
+		expect(lines).toEqual([]);
+		// A changed plugin set retries.
+		fs.writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ dependencies: { missing: "file:./still-not-there" } }),
+		);
+		reconcileSharedSdk(dir, (l) => lines.push(l));
+		expect(lines.some((l) => l.includes("refreshing"))).toBe(true);
+	});
+});
 
 describe("resolvePackage", () => {
 	test("maps bare first-party names into the @punktfunk scope", () => {

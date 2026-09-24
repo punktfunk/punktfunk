@@ -330,6 +330,8 @@ pub struct HostConfig {
     /// compositor render rate, not the session: a 120 Hz session over a 60 fps cap
     /// still sends 120 frames (60 repeats). gamescope: `--nested-refresh`, 1..=240.
     pub max_fps: Option<u32>,
+    /// Row `pyrowave_bpp` — bits per pixel a PyroWave frame gets at 4:2:0 SDR.
+    pub pyrowave_bpp: f64,
     /// `PUNKTFUNK_VDISPLAY_HZ_MULT` — virtual-display refresh as a multiple of the
     /// session rate; the stream stays at the session rate. Default 1; 2 halves
     /// worst-case age (~16 ms at 60 Hz) without extra wire frames. Clamped 1..=4.
@@ -457,6 +459,9 @@ impl HostConfig {
             .as_u64()
             .filter(|&f| f > 0)
             .map(|f| f.min(240) as u32);
+        self.pyrowave_bpp = get("pyrowave_bpp")
+            .as_f64()
+            .unwrap_or(registry::PYROWAVE_BPP);
         self.audio_output_mode =
             AudioOutputMode::parse(&text("audio_output_mode")).unwrap_or_default();
         self.audio_voice_chat =

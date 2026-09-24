@@ -287,6 +287,39 @@ press its power button.` + `Docs ↗`
 
 ---
 
+## 4c. Docs pages
+
+`docs-site/content/docs/`. Three tabs, three readers:
+
+| Tab | Reader | Shape |
+|---|---|---|
+| Guide | Sets up a host or streams. Knows no Linux. | One task per page. Numbered steps, happy path first. |
+| Reference | Looks up one setting, flag, port or platform. | Tables. Dense is fine. |
+| Developers | Changes or extends Punktfunk. | Commands that work from a fresh clone. |
+
+- Open with one sentence: what the reader gets from this page. Never `This page describes`.
+- Say what to do. Add why only when skipping the step breaks something, in one clause.
+- No history: no `now`, `used to`, `as of 0.38`, `new in`. No incident, lab box or plan doc.
+- One home per fact. Link to it; do not restate a command, port, default or table.
+  Install lines and ports come from `<Install>` and `<Ports>`.
+- Name UI exactly as it renders, in bold: **Pairing** → **Approve**.
+- Platform differences go in a table or `<Tabs>`, not a paragraph per platform.
+- A troubleshooting entry is `### <symptom as the reader sees it>`, one line of cause, the fix.
+- `<Callout>` only for a step that breaks something when missed. Two per page at most.
+- A Guide page past 200 lines is two tasks, or it holds reference detail. Split or move it.
+- Every command, flag, env var, path, default and label matches the code at HEAD.
+- Headings are anchors. The console, setup and host logs link them — `check-docs-links.sh`
+  fails a link to a heading that is gone. Rename one, fix its links in the same diff.
+- The settings table in `configuration.md` is generated: `UPDATE_SETTINGS_DOCS=1 cargo test
+  -p pf-host-config docs_table_is_current`.
+
+Bad: `The repo is public and signed; this adds it and installs the host together with the
+console. They are named in the line rather than left to apt: punktfunk-host only recommends
+them, so a box with APT::Install-Recommends "0" would end up with a host you cannot pair with.`
+Good: `Add the repo and install the host, the console and the plugin runner:`
+
+---
+
 ## 5. Checklist (every PR)
 
 - [ ] Subject is `type(scope): summary`, ≤ 72 characters, imperative, no period

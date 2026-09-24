@@ -9,8 +9,8 @@
 
 use super::dualsense_proto::DsState;
 use super::dualsense_windows::{
-    create_swdevice, publish_input, OutputDrain, SwDeviceProfile, DEVTYPE_DUALSHOCK4, OFF_DEVTYPE,
-    OFF_DRIVER_PROTO, OFF_INPUT, OFF_OUT_RING_VER, OFF_PAD_INDEX, SHM_MAGIC, SHM_SIZE,
+    create_swdevice, driver_marks, publish_input, OutputDrain, SwDeviceProfile, DEVTYPE_DUALSHOCK4,
+    OFF_DEVTYPE, OFF_INPUT, OFF_OUT_RING_VER, OFF_PAD_INDEX, SHM_MAGIC, SHM_SIZE,
 };
 use super::dualshock4_proto::{
     parse_ds4_output, serialize_state, Ds4Feedback, DS4_INPUT_REPORT_LEN, DS4_TOUCH_H, DS4_TOUCH_W,
@@ -109,11 +109,9 @@ impl Ds4WinPad {
     fn service(&mut self) -> Ds4Feedback {
         self.channel.pump();
         let mut fb = Ds4Feedback::default();
-        // SAFETY: base points at SHM_SIZE bytes.
-        let proto = unsafe {
-            std::ptr::read_unaligned(self.channel.data_base().add(OFF_DRIVER_PROTO) as *const u32)
-        };
-        self.attach.observe(proto);
+        // SAFETY: the channel's section is live and SHM_SIZE bytes.
+        let (proto, rev) = unsafe { driver_marks(self.channel.data_base()) };
+        self.attach.observe_pad(proto, rev);
         let base = self.channel.data_base();
         fb.resync = self
             .drain

@@ -137,6 +137,10 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_kwin_paced,
 		hint: m.setting_kwin_paced_hint,
 	},
+	pyrowave_bpp: {
+		label: m.setting_pyrowave_bpp,
+		hint: m.setting_pyrowave_bpp_hint,
+	},
 	pyrowave_max_mbps: {
 		label: m.setting_pyrowave_max_mbps,
 		hint: m.setting_pyrowave_max_mbps_hint,

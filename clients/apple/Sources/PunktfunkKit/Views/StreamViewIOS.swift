@@ -171,65 +171,21 @@ public final class StreamViewController: StreamViewControllerBase {
         return view
     }()
     private var onExternal = false
-    // MARK: Escape-drop re-lock
-    //
-    // iPadOS releases the pointer lock BY ITSELF when the user presses Escape — the platform's
-    // built-in "let me out", mirroring the web Pointer Lock API's default unlock gesture. Nothing
-    // in our code does it: a bare Esc never touches `captured`, so it keeps forwarding to the host
-    // as the game key it is. But the lock going away flips the mouse onto the absolute UIKit path
-    // and un-hides the iPadOS cursor, so hitting Esc for an in-game menu silently costs the capture
-    // until the user clicks to win it back. Esc is a GAME key here, not a request to hand the
-    // pointer back to iPadOS, so an unwanted drop is re-requested below. The DELIBERATE releases
-    // (⌘⎋, ⌃⌥⇧Q, the Stream menu, backgrounding) all clear `captured` first, so `wantsPointerLock`
-    // is already false when their drop is observed and none of them are fought here.
-    //
-    // Recovery is TWO-STAGE, because either stage alone leaves a hole:
-    //   1. the burst below, fired the instant the drop is observed — wins back a lock the system
-    //      is willing to return immediately (a transient drop that wasn't Escape at all);
-    //   2. a CLICK into the video while still captured (`onPointerButton`) — the fallback for the
-    //      Escape case proper, where the platform declines during the moment right after its own
-    //      release gesture and the burst therefore expires having achieved nothing.
-    // Stage 2 is what keeps a lost burst from being permanent: `captured` is still true, so no
-    // other path would ever ask again, and the capture would spend the rest of its life on the
-    // absolute pointer — clicking correctly, aiming not at all.
-    /// Whether this capture ever actually held the lock. Only a lock we HELD is worth winning back
-    /// — never having been granted one means the scene doesn't qualify, not that Esc took it.
-    /// Cleared when capture ends, so each capture starts from a clean slate.
-    private var pointerLockWasEngaged = false
-    /// Attempts spent in the current re-lock burst, and when the burst began.
-    private var pointerRelockAttempt = 0
-    private var pointerRelockBurstStart: CFTimeInterval = 0
-    /// True from an unwanted drop until the lock is back (or the burst gives up). While pending,
-    /// the local cursor stays hidden and absolute pointer MOTION stays muted, so a re-lock that
-    /// lands a frame or two later is invisible instead of flashing the iPadOS cursor and
-    /// teleporting the host's to the pointer's absolute position.
-    private var pointerRelockPending = false
-    /// Forces `prefersPointerLocked` to report false for one resolve pass, so the escalated attempt
-    /// presents the system with a genuine false→true transition instead of re-asserting a value it
-    /// already holds. See `requestPointerRelock()`.
-    private var pointerLockForcedOff = false
-    /// A burst is 3 attempts, and a burst can't restart inside 2 s. A scene the system will never
-    /// lock (Stage Manager, Split View) therefore costs three cheap re-resolves and then falls back
-    /// to today's click-to-recapture, rather than retrying forever.
-    private static let pointerRelockAttemptLimit = 3
-    private static let pointerRelockBurstWindow: CFTimeInterval = 2
-    /// Gap between attempts in a burst — long enough for the system to answer the previous
-    /// re-resolve, short enough that the whole burst fits in ~0.6 s. Must exceed
-    /// `pointerLockForcedOffHold` so an escalated attempt is back to preferring the lock before the
-    /// next attempt evaluates.
-    private static let pointerRelockRetryDelay: TimeInterval = 0.2
-    /// How long an escalated attempt reports `prefersPointerLocked == false` before flipping back,
-    /// so the system observes a real transition instead of coalescing the flip away.
-    private static let pointerLockForcedOffHold: TimeInterval = 0.05
-    /// Attempts spent in the QUIET tail (see `scheduleQuietRelock()`), reset with the burst.
-    private var pointerRelockQuietAttempt = 0
-    /// When the quiet tail re-asks, measured from the drop. The visible burst above spends its whole
-    /// budget inside ~0.6 s — and the pointer-lock cooldown the platform applies right after its own
-    /// Escape gesture is about a second, so every one of those attempts asks while the answer can
-    /// only be no. These land AFTER it. They are "quiet" because unlike the burst they do not hide
-    /// the cursor or mute motion: the pointer behaves exactly as it does today while they run, so
-    /// stretching the recovery costs the user nothing if it also fails.
-    private static let pointerRelockQuietDelays: [TimeInterval] = [1.2, 2.4]
+    // `prefersPointerLocked` mirrors `wantsPointerLock`; SpringBoard grants or drops on its own
+    // terms. `requestPointerLock` re-asks only on an event that can change its answer: a drop
+    // while wanted, a click while unlocked, the scene going active, the window filling the screen
+    // again. Each is one false→true edge — re-asserting a value it already holds is ignored.
+
+    /// True while a re-ask holds `prefersPointerLocked` at false for `pointerLockEdgeHold`.
+    private var pointerLockSuppressed = false
+    /// Long enough for UIKit to push the false pass to the scene before the true one follows.
+    private static let pointerLockEdgeHold: TimeInterval = 0.05
+    /// When the last drop-triggered re-ask was scheduled. A grant SpringBoard revokes at once
+    /// would otherwise re-ask on every revoke; one a second keeps that bounded.
+    private var pointerLockDropRelockAt: CFTimeInterval = -.infinity
+    /// Whether the window filled its screen at the last layout pass (assumed so until a pass says
+    /// otherwise) — the pass that makes it fill again, a re-maximise, is the one that re-asks.
+    private var windowFilledScreen = true
     #endif
 
     /// Reads whether the scene's pointer is actually locked right now; nil = state
@@ -321,7 +277,7 @@ public final class StreamViewController: StreamViewControllerBase {
             && connection?.canSendPointer == true
     }
 
-    public override var prefersPointerLocked: Bool { wantsPointerLock && !pointerLockForcedOff }
+    public override var prefersPointerLocked: Bool { wantsPointerLock && !pointerLockSuppressed }
     public override var prefersHomeIndicatorAutoHidden: Bool { true }
 
     // NOTE: we deliberately do NOT override `childViewControllerForPointerLock`. The default
@@ -530,11 +486,6 @@ public final class StreamViewController: StreamViewControllerBase {
         // is the exact mirror of the GCMouse handlers, which fire only while locked.
         streamView.onPointerMoveAbs = { [weak self] p in
             guard let self, self.inputCapture?.gcMouseForwarding == false else { return }
-            // A re-lock is in flight after an Esc-drop: the absolute path would teleport the host
-            // cursor to wherever the local pointer sits, undoing the relative aiming we're about to
-            // resume. Motion only — BUTTONS still forward (they carry no position, so a click during
-            // the couple of frames a re-lock takes must not be swallowed mid-firefight).
-            guard !self.pointerRelockPending else { return }
             self.inputCapture?.sendMouseAbs(
                 x: p.x, y: p.y, surfaceWidth: p.w, surfaceHeight: p.h)
         }
@@ -553,32 +504,10 @@ public final class StreamViewController: StreamViewControllerBase {
             }
             guard self.inputCapture?.gcMouseForwarding == false else { return }
             self.inputCapture?.sendMouseButton(button, pressed: down)
-            // …and if we're captured but NOT locked, this click is also the recovery gesture for an
-            // Escape-drop the burst lost. iPadOS refuses to re-lock in the moment right after its
-            // own "let me out" gesture, so the burst fired at the drop can spend its whole budget
-            // and give up while the capture is still wanted. Nothing else would ever re-ask —
-            // setCaptured is the only other requester and a bare Esc never clears `captured` — so
-            // without this the session stays on the absolute path for the rest of the capture:
-            // clicks still land where you aim (absolute positions keep forwarding) but the game
-            // gets no relative deltas, so camera look is dead. A click is a real user gesture,
-            // which is exactly what the platform wants before it will hand the lock back.
-            //
-            // On the button UP, so the click has fully forwarded on ONE transport first: asking on
-            // the DOWN can flip `gcMouseForwarding` mid-click and strand the release on the GCMouse
-            // path. Gated on `pointerLockWasEngaged` exactly as the drop path is, so a scene that
-            // never qualifies (Stage Manager, Split View) is never bursted at, and on a burst not
-            // already being in flight — a pending burst mutes absolute motion, so re-arming one on
-            // every click of a menu the user is still aiming around would freeze the cursor between
-            // clicks. Only once it has settled does a further click buy a fresh budget (clearing the
-            // attempt counter, so a gesture isn't refused inside the 2 s window the drop's own burst
-            // may have just spent).
-            if !down, self.wantsPointerLock, self.pointerLockWasEngaged,
-                !self.pointerRelockPending, self.pointerLockEngaged() != true {
-                self.pointerRelockAttempt = 0
-                self.pointerRelockQuietAttempt = 0 // a real gesture buys a fresh tail too
-                self.updatePointerLockChain() // a reparent since the drop would break the walk to us
-                self.requestPointerRelock()
-            }
+            // Captured but unlocked: the click is the user gesture SpringBoard wants before it
+            // hands a declined or dropped lock back. On the UP, so the click has fully forwarded
+            // on one transport — a grant mid-click would strand the release on the GCMouse path.
+            if !down { self.requestPointerLock() }
         }
         // Trackpad gestures always use UIKit, including under pointer lock.
         // Only discrete pans yield to an attached, forwarding GCMouse wheel.
@@ -679,19 +608,33 @@ public final class StreamViewController: StreamViewControllerBase {
         ) { [weak self] _ in
             // inputCapture != nil: don't try to restore before this session's capture is wired
             // up — setForwarding would silently no-op on the nil handlers and leave input dead.
-            guard let self, self.wasCapturedOnResign, self.captureEnabled,
-                  self.connection != nil, self.inputCapture != nil
+            guard let self, self.captureEnabled, self.connection != nil, self.inputCapture != nil
             else { return }
-            self.setCaptured(true)
+            if self.wasCapturedOnResign {
+                self.setCaptured(true)
+            } else {
+                // Captured before the scene was active (a launch straight into a stream): the
+                // first ask found no frontmost scene, so ask again now there is one.
+                self.requestPointerLock()
+            }
         })
-        // The system can grant or drop the lock without us asking (Slide Over, Stage Manager,
-        // entering/leaving foregroundActive). Re-resolve the mouse routing on every change:
-        // GCMouse (locked) vs the absolute UIKit pointer path (unlocked), and the
-        // hidden-vs-visible local cursor.
+        // The system grants or drops the lock on its own terms (Slide Over, Stage Manager, the
+        // window leaving screen size). Re-resolve the routing on every change; a drop while the
+        // lock is still wanted asks once more, a turn later, so a drop that precedes the app's own
+        // resign finds `captured` already cleared and does nothing.
         observers.append(NotificationCenter.default.addObserver(
             forName: UIPointerLockState.didChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.syncPointerLock()
+        ) { [weak self] note in
+            guard let self else { return }
+            self.syncPointerLock()
+            guard (note.userInfo?[UIPointerLockState.sceneUserInfoKey] as? UIScene)
+                === self.view.window?.windowScene,
+                self.wantsPointerLock, self.pointerLockEngaged() == false
+            else { return }
+            let now = CACurrentMediaTime()
+            guard now - self.pointerLockDropRelockAt >= 1 else { return }
+            self.pointerLockDropRelockAt = now
+            DispatchQueue.main.async { [weak self] in self?.requestPointerLock() }
         })
         // The Stream menu's "Release Mouse" (⌃⌥⇧Q) posts this — the discoverable menu surface for
         // the RELEASED state. While CAPTURED the combo is recognized from the HID stream in
@@ -793,6 +736,10 @@ public final class StreamViewController: StreamViewControllerBase {
                 widthPx: Int((b.width * scale).rounded()),
                 heightPx: Int((b.height * scale).rounded()))
         }
+        // The window back at screen size (a windowed scene re-maximised) can hold the lock again.
+        let fills = windowFillsScreen
+        if fills, !windowFilledScreen { requestPointerLock() }
+        windowFilledScreen = fills
         #endif
         #if os(tvOS)
         applyDisplayCriteriaIfNeeded()
@@ -974,26 +921,6 @@ public final class StreamViewController: StreamViewControllerBase {
     /// change and capture toggle. Main queue.
     private func syncPointerLock() {
         let locked = pointerLockEngaged() == true
-        // Wanted, previously HELD, and now gone is the Esc-drop signature. The "previously held"
-        // half matters: a lock that was never granted is a scene that doesn't qualify (Stage
-        // Manager, Split View), and burst-requesting there would hide the cursor for the burst's
-        // duration to win a lock that isn't coming. A first grant is already driven by the chain
-        // engage in setCaptured/viewDidAppear.
-        if locked {
-            pointerLockWasEngaged = true
-            pointerRelockPending = false
-            pointerRelockAttempt = 0
-            pointerRelockQuietAttempt = 0 // granted — any scheduled tail finds nothing to do
-        } else if wantsPointerLock, pointerLockWasEngaged {
-            requestPointerRelock()
-        } else {
-            // Capture is gone (or the lock was never ours) — settle, and let the next capture
-            // start from a clean "never held" slate.
-            if !wantsPointerLock { pointerLockWasEngaged = false }
-            pointerRelockPending = false
-            pointerRelockAttempt = 0
-            pointerRelockQuietAttempt = 0
-        }
         let useGCMouse = captured && locked
         // Lock dropped (or capture ended) while the GCMouse path held a button down: once
         // gcMouseForwarding flips false its release handler is gated off, so flush any held
@@ -1008,128 +935,39 @@ public final class StreamViewController: StreamViewControllerBase {
                 """
                 pointer lock isLocked=\(locked, privacy: .public) \
                 captured=\(self.captured, privacy: .public) \
-                relockPending=\(self.pointerRelockPending, privacy: .public) \
-                relockAttempt=\(self.pointerRelockAttempt, privacy: .public)
+                wanted=\(self.wantsPointerLock, privacy: .public) \
+                sceneQualifies=\(self.sceneCanHoldPointerLock, privacy: .public) \
+                chainReachesScene=\(PointerLockChain.reachesScene(from: self), privacy: .public)
                 """)
         }
     }
 
-    /// SpringBoard grants the lock only to a frontmost scene that fills its screen. A windowed
-    /// scene — including the one its title-strip double-click leaves behind — is refused outright.
-    private var sceneCanHoldPointerLock: Bool {
-        guard let window = view.window, let scene = window.windowScene,
-              scene.activationState == .foregroundActive
-        else { return false }
+    /// The window at its screen's size. A windowed scene — including the one the title strip's
+    /// double-click leaves behind — is refused the lock outright.
+    private var windowFillsScreen: Bool {
+        guard let window = view.window, let scene = window.windowScene else { return false }
         return window.bounds.size == scene.screen.bounds.size
     }
 
-    /// Ask for the lock back after a drop we didn't want (see the Escape-drop note on the state
-    /// above), only while the scene can hold it. Bounded to a short burst; idempotent within it.
-    /// Main queue.
-    private func requestPointerRelock() {
-        // Anywhere else the drop is SpringBoard saying we don't qualify, not the Esc key. Asking
-        // would hide the cursor and mute motion for a lock that isn't coming; the qualifying
-        // states (foreground, appearance, reparent, full screen again) re-resolve on their own.
-        guard sceneCanHoldPointerLock else {
-            pointerRelockPending = false
-            return
-        }
-        let now = CACurrentMediaTime()
-        // attempt == 0 is a fresh burst (first drop, or one the settle branch cleared); the window
-        // is the backstop for the pathological case where a grant is immediately revoked again and
-        // re-arms us. Even then this stays timer-driven at a few Hz — never a spin.
-        if pointerRelockAttempt == 0 || now - pointerRelockBurstStart > Self.pointerRelockBurstWindow {
-            pointerRelockBurstStart = now
-            pointerRelockAttempt = 0
-        }
-        guard pointerRelockAttempt < Self.pointerRelockAttemptLimit else {
-            // Out of VISIBLE budget: give the cursor straight back (the caller invalidates the
-            // interaction, so it can never stay hidden on a lock the system won't grant) and hand
-            // off to the quiet tail, which keeps asking after the platform's post-Escape cooldown
-            // without costing the user anything while it does.
-            pointerRelockPending = false
-            scheduleQuietRelock()
-            return
-        }
-        pointerRelockAttempt += 1
-        pointerRelockPending = true
-        let escalate = pointerRelockAttempt > 1
-        // Deferred a turn so a ⌘⎋ whose GC keystroke lands after the system's unlock notification
-        // has already cleared `captured` — then the guard below drops this attempt instead of
-        // fighting the user's own release.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.pointerRelockPending else { return }
-            guard self.wantsPointerLock, self.pointerLockEngaged() != true else {
-                // The grant landed, or the capture went away under us (⌘⎋ / ⌃⌥⇧Q / resign).
-                // Settle through the one decision point rather than returning with `pending` still
-                // set — that flag hides the cursor, so it must never outlive the burst.
-                self.syncPointerLock()
-                return
-            }
-            if escalate {
-                // Re-asserting a value the system already holds didn't take. Present a real
-                // false→true transition instead — the documented way to change your mind about the
-                // lock — and re-anchor the chain in case a reparent broke the downward walk to us.
-                // Held for a beat rather than cleared on the next turn: the system resolves the
-                // property asynchronously, and a same-turn flip back to true can be coalesced into
-                // no transition at all. We are already unlocked, so the false pass costs nothing.
-                self.pointerLockForcedOff = true
-                self.setNeedsUpdateOfPrefersPointerLocked()
-                self.updatePointerLockChain()
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerLockForcedOffHold) {
-                    [weak self] in
-                    guard let self else { return }
-                    self.pointerLockForcedOff = false
-                    self.setNeedsUpdateOfPrefersPointerLocked()
-                }
-            } else {
-                self.setNeedsUpdateOfPrefersPointerLocked()
-            }
-            // A GRANT arrives as a didChange → syncPointerLock, which settles the burst and makes
-            // this retry a no-op. Routed back through syncPointerLock (not straight into another
-            // requestPointerRelock) so the give-up path re-resolves the cursor through the one
-            // place that does it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerRelockRetryDelay) {
-                [weak self] in
-                guard let self, self.pointerRelockPending else { return }
-                self.syncPointerLock()
-            }
-        }
+    /// SpringBoard grants the lock only to a frontmost scene that fills its screen.
+    private var sceneCanHoldPointerLock: Bool {
+        view.window?.windowScene?.activationState == .foregroundActive && windowFillsScreen
     }
 
-    /// Keep asking for the lock after the visible burst has given up — past the cooldown the
-    /// platform applies to its own Escape gesture, which is the window the burst spends entirely.
-    ///
-    /// Deliberately NOT a longer burst. `pointerRelockPending` hides the cursor and mutes absolute
-    /// motion, which is only tolerable for the couple of frames a fast re-grab takes; holding that
-    /// for seconds would trade a released pointer for a frozen one. These attempts leave the
-    /// pointer fully usable — if they all fail the user sees exactly today's behaviour, and a click
-    /// is still the immediate way back.
-    ///
-    /// Each attempt presents a real false→true transition (the same escalation the burst uses on
-    /// its later tries) because re-asserting a value the system already holds is what didn't take.
-    /// A grant arrives as a `didChange` → `syncPointerLock`, which resets the counters, so a
-    /// successful attempt silently ends the tail.
-    private func scheduleQuietRelock() {
-        guard pointerRelockQuietAttempt < Self.pointerRelockQuietDelays.count else { return }
-        let delay = Self.pointerRelockQuietDelays[pointerRelockQuietAttempt]
-        pointerRelockQuietAttempt += 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+    /// Ask again for a lock SpringBoard declined or dropped, while the scene can hold one: one
+    /// false→true edge, with the chain re-anchored in case a reparent broke the walk to us. A call
+    /// during the edge folds into it. No-op when the lock is held or no longer wanted. Main queue.
+    private func requestPointerLock() {
+        guard wantsPointerLock, pointerLockEngaged() != true, sceneCanHoldPointerLock,
+              !pointerLockSuppressed
+        else { return }
+        pointerLockSuppressed = true
+        updatePointerLockChain()
+        setNeedsUpdateOfPrefersPointerLocked()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerLockEdgeHold) { [weak self] in
             guard let self else { return }
-            // Still wanted, still grantable, and still not held — otherwise the tail is moot.
-            guard self.wantsPointerLock, self.pointerLockWasEngaged,
-                self.pointerLockEngaged() != true, self.sceneCanHoldPointerLock
-            else { return }
-            self.pointerLockForcedOff = true
+            self.pointerLockSuppressed = false
             self.setNeedsUpdateOfPrefersPointerLocked()
-            self.updatePointerLockChain()
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pointerLockForcedOffHold) {
-                [weak self] in
-                guard let self else { return }
-                self.pointerLockForcedOff = false
-                self.setNeedsUpdateOfPrefersPointerLocked()
-                self.scheduleQuietRelock() // no-op once the delays are spent, or once granted
-            }
         }
     }
     #endif
@@ -1145,15 +983,10 @@ extension StreamViewController: UIPointerInteractionDelegate {
     public func pointerInteraction(
         _ interaction: UIPointerInteraction, styleFor region: UIPointerRegion
     ) -> UIPointerStyle? {
-        // Hide the local cursor only when the scene is actually pointer-LOCKED — then the
-        // host renders its own cursor from GCMouse deltas and a visible local one would just
-        // diverge. When the lock isn't held the cursor stays VISIBLE so the user can aim; the
-        // pointer is forwarded as an absolute position, both cursors tracking together.
-        // …except across an Esc-drop we're actively re-locking (`pointerRelockPending`): staying
-        // hidden for those couple of frames is what turns the fix into "Esc did nothing to my
-        // mouse" rather than a cursor that blinks in and out. The burst is bounded and clears
-        // itself on give-up, so the cursor can never stay hidden on a lock that isn't coming.
-        captured && (pointerLockEngaged() == true || pointerRelockPending) ? .hidden() : nil
+        // Hide the local cursor only while the scene is actually pointer-LOCKED — the host draws
+        // its own from GCMouse deltas. Unlocked, it stays visible so the user can aim; the pointer
+        // forwards as an absolute position and both cursors track together.
+        captured && pointerLockEngaged() == true ? .hidden() : nil
     }
 }
 #endif

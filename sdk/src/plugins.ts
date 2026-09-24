@@ -3,6 +3,7 @@
 // subcommands. Everything a plugin needs to be installed — the plugins dir, the `@punktfunk`
 // registry scope in bunfig.toml, and the right bun — is handled here so the operator types one line
 // instead of the old create-dir / write-bunfig / `bun add` ritual.
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { configDir } from "./config.js";
@@ -238,6 +239,18 @@ export const installedSdkVersion = (
 	}
 };
 
+const REFRESH_FAILED = ".pf-sdk-refresh-failed";
+
+/** What a failed refresh is remembered by: the versions, and the plugin set that pinned them. */
+const refreshKey = (dir: string, have: string): string => {
+	let manifest = "";
+	try {
+		manifest = fs.readFileSync(path.join(dir, "package.json"), "utf8");
+	} catch {}
+	const hash = createHash("sha256").update(manifest).digest("hex").slice(0, 16);
+	return `${have}->${SDK_VERSION} ${hash}`;
+};
+
 /**
  * Bring the plugins tree's `@punktfunk/host` up to the version THIS runner was built from.
  *
@@ -264,7 +277,8 @@ export const installedSdkVersion = (
  * Safety: the plugins' own versions are pinned exactly in the root `package.json`, so a re-resolve
  * cannot move them; only shared transitive deps float within their declared ranges. The lockfile is
  * backed up first and restored if the install fails, and any failure is logged and swallowed — a
- * dependency refresh must never stop the plugins that are already working from loading.
+ * dependency refresh must never stop the plugins that are already working from loading. One that
+ * failed is not retried until the SDK or the installed plugin set changes.
  */
 export const reconcileSharedSdk = (
 	dir = pluginsDirDefault(),
@@ -273,6 +287,13 @@ export const reconcileSharedSdk = (
 	const have = installedSdkVersion(dir);
 	// Nothing installed = no plugins yet; the first `bun add` resolves the current SDK on its own.
 	if (have === undefined || have === SDK_VERSION) return;
+	// A refresh that could not deliver this SDK is not repeated on every start: it runs a
+	// lockless network install while every plugin waits. A new SDK or a changed plugin set retries.
+	const marker = path.join(dir, REFRESH_FAILED);
+	const key = refreshKey(dir, have);
+	try {
+		if (fs.readFileSync(marker, "utf8") === key) return;
+	} catch {}
 
 	const lock = path.join(dir, "bun.lock");
 	const backup = `${lock}.pf-bak`;
@@ -302,6 +323,7 @@ export const reconcileSharedSdk = (
 		}
 		restore = false;
 		if (fs.existsSync(backup)) fs.rmSync(backup);
+		fs.rmSync(marker, { force: true });
 		log(`[plugins] @punktfunk/host is now ${SDK_VERSION}`);
 	} catch (e) {
 		log(
@@ -309,6 +331,9 @@ export const reconcileSharedSdk = (
 				e instanceof Error ? e.message : e
 			}) — plugins keep running against ${have}`,
 		);
+		try {
+			fs.writeFileSync(marker, key);
+		} catch {}
 		if (restore && fs.existsSync(backup)) {
 			try {
 				fs.copyFileSync(backup, lock);

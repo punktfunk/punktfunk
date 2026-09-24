@@ -9,7 +9,7 @@
 //! [`hdr_p010_selftest_at`] and [`hdr_p010_convert_bars_on_luid`] are re-exported
 //! by the parent so `crate::capture::dxgi::…` / `pf_capture::dxgi::…` keep resolving.
 //! Evidence: `f16_tests`, ignored `hdr_p010_selftest_intel_1080_live`,
-//! `docs-site/content/docs/hdr.md`.
+//! `docs-site/content/docs/(guide)/(streaming)/hdr.md`.
 
 use anyhow::{bail, Context, Result};
 use pf_encode_win::convert::HdrP010Converter;

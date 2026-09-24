@@ -1,0 +1,14 @@
+{
+  "title": "Troubleshooting",
+  "pagesIndex": "troubleshooting",
+  "pages": [
+    "troubleshooting-startup",
+    "troubleshooting-connect",
+    "troubleshooting-stream",
+    "troubleshooting-input",
+    "troubleshooting-audio",
+    "echo",
+    "forgot-password",
+    "report-an-issue"
+  ]
+}

@@ -1,0 +1,77 @@
+---
+title: Ports & firewall
+description: Every port a Punktfunk host and its console use, the firewall profile that opens each, and how to move one.
+---
+
+Find the port a Punktfunk host uses, the firewall profile that opens it, and how to move it. The
+Linux packages install firewalld services and ufw profiles but never enable them.
+
+<Ports />
+
+- **`punktfunk-native`** is all a default host needs: paired clients, discovery and the management
+  API.
+- **`punktfunk-web`** only when you open the console from another device. Plugin interfaces use
+  its second port — see [Two ports, not one](/docs/web-console#two-ports-not-one).
+- **`punktfunk-gamestream`** only with [Moonlight](/docs/moonlight) compat on.
+- **Video needs no open port.** The client hole-punches an ephemeral UDP port and the host answers
+  through it. To open one fixed port instead, set `PUNKTFUNK_DATA_PORT`.
+- **The browser client** (preview, off by default) uses UDP 9778, which no profile opens — see
+  [The browser client](/docs/running-as-a-service#the-browser-client-preview).
+
+## Enable the profiles
+
+<Tabs items={['firewalld', 'ufw']}>
+<Tab value="firewalld">
+
+```sh
+sudo firewall-cmd --reload     # load the definitions the package installed
+sudo firewall-cmd --permanent --add-service=punktfunk-native --add-service=punktfunk-web
+sudo firewall-cmd --permanent --add-service=punktfunk-gamestream   # only with Moonlight compat on
+sudo firewall-cmd --reload
+```
+
+</Tab>
+<Tab value="ufw">
+
+```sh
+sudo ufw allow punktfunk-native
+sudo ufw allow punktfunk-web
+sudo ufw allow punktfunk-gamestream   # only with Moonlight compat on
+```
+
+</Tab>
+</Tabs>
+
+| System | Firewall as shipped |
+|---|---|
+| Fedora, Bazzite, most Fedora spins, EndeavourOS | firewalld, on |
+| CachyOS | ufw, on |
+| Ubuntu | ufw, installed but off |
+| Arch, Debian | none |
+| NixOS | `openFirewall = true` in the module opens the ports |
+| Windows | `service install` adds the rules |
+
+On Windows each rule names the Punktfunk executable as well as the port, and video gets an inbound
+UDP rule for the executable alone, because Windows drops the client's hole-punch. The rules cover
+Private and Domain networks; `service install --allow-public-network` adds Public — see
+[Host CLI](/docs/host-cli#service-windows). Another program that answered discovery through
+Punktfunk's 5353 rule needs a rule of its own.
+
+## Who can reach the console
+
+The web console (47992) and its plugin port (47993) answer this machine, private and link-local
+addresses, and a Tailscale tailnet. A peer from the internet is refused even with the port
+forwarded. `PUNKTFUNK_UI_BIND=127.0.0.1` in `host.env` keeps both to this machine; one address
+limits them to one interface.
+
+## Moving a port
+
+Set these in [`host.env`](/docs/configuration). Moving the management port is how you share a
+machine with Sunshine — see [Switching from Sunshine](/docs/switching-from-sunshine).
+
+| Port | Setting | Clients |
+|---|---|---|
+| Management API | `PUNKTFUNK_MGMT_BIND=IP:PORT` | Relearn it from discovery. The console, plugin runner and tray read it from `mgmt-endpoint`, which the host rewrites on every start. |
+| Native control | `PUNKTFUNK_NATIVE_PORT` | Relearn it over mDNS. A host added by address keeps the port it was added with. |
+| Video data | `PUNKTFUNK_DATA_PORT` | One fixed UDP port instead of one per session. |
+| Browser client | `PUNKTFUNK_WEBTRANSPORT_PORT` | Default 9778. |

@@ -31,6 +31,7 @@ import {
 	removePlugins,
 } from "./plugins.js";
 import { discoverUnits, runner, runOneUnit } from "./runner.js";
+import { redirectUiServe } from "./ui-forward.js";
 
 const arg = (flag: string): string | undefined => {
 	const i = process.argv.indexOf(flag);
@@ -159,6 +160,9 @@ switch (process.argv[2]) {
 const runUnit = arg("--run-unit");
 if (runUnit) {
 	const unit = { name: arg("--unit-name") ?? runUnit, file: runUnit };
+	// Set only for a plugin without network, whose UI the supervisor forwards.
+	const uiPort = Number(process.env.PUNKTFUNK_UI_PORT);
+	if (uiPort > 0) redirectUiServe(uiPort);
 	const unitShipper = installLogShipper();
 	const unitFiber = Effect.runFork(runOneUnit(unit));
 	const stopUnit = (): void => {

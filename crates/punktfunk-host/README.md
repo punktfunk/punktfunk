@@ -41,5 +41,5 @@ Windows.
 cargo test -p punktfunk-host        # Linux or Windows; several suites self-skip without a compositor
 ```
 
-The host does not build on macOS — its entry points fail at compile time on a client-only platform,
-which is deliberate. Run these on a Linux box.
+The host compiles on macOS (CI checks it) but has no capture or display backend there. Run these
+on Linux or Windows.

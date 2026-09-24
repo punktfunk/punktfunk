@@ -26,6 +26,26 @@ impl ChannelBroker {
         Ok(Self { process, wudf_pid })
     }
 
+    /// Raise WUDFHost's GPU scheduling class. The driver's encoder submits its GPU work
+    /// there, so the host's own class covers none of it. Best-effort. `self.process` keeps
+    /// the verified WUDFHost alive, so `wudf_pid` cannot name another process meanwhile.
+    pub(super) fn raise_gpu_priority(&self) {
+        // SAFETY: plain open by pid; the result is checked before use.
+        let h = match unsafe { OpenProcess(PROCESS_SET_INFORMATION, false, self.wudf_pid) } {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(wudf_pid = self.wudf_pid, error = %e, "WUDFHost GPU priority not raised");
+                return;
+            }
+        };
+        // SAFETY: `h` was just opened here; `OwnedHandle` becomes its sole owner.
+        let owned = unsafe { OwnedHandle::from_raw_handle(h.0 as _) };
+        // SAFETY: `owned` is live for the call and carries PROCESS_SET_INFORMATION.
+        unsafe {
+            pf_frame::dxgi::elevate_gpu_priority_of(HANDLE(owned.as_raw_handle()), "WUDFHost")
+        };
+    }
+
     /// `SYNCHRONIZE` wait: signaled ⇔ WUDFHost exited. A dead driver and an idle desktop
     /// both just stop advancing the source counter, so this is the only death signal.
     pub(super) fn driver_alive(&self) -> bool {

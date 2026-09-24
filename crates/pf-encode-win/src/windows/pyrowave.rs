@@ -61,8 +61,8 @@ fn budget_for(bitrate_bps: u64, fps: u32) -> usize {
     ((bitrate_bps / (8 * fps.max(1) as u64)) as usize).max(64 * 1024)
 }
 
-// Do not raise GPU scheduling here. `pf-frame`'s `dxgi::elevate_process_gpu_priority`
-// owns that process-wide (`PUNKTFUNK_GPU_PRIORITY_CLASS`); a second owner races it.
+// Do not raise GPU scheduling here. `pf-frame`'s `dxgi::elevate_gpu_priority_of` owns
+// that process-wide (`PUNKTFUNK_GPU_PRIORITY_CLASS`); a second owner races it.
 
 pub struct PyroWaveEncoder {
     pw_dev: pw::pyrowave_device,

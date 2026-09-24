@@ -1,0 +1,128 @@
+---
+title: "Windows Host"
+description: "Run the Punktfunk host on a Windows 11 PC: a signed installer with its own virtual display, gamepad drivers and web console."
+---
+
+Stream a Windows 11 PC's desktop or games to any Punktfunk client, at the client's exact
+resolution and refresh, HDR included, with no second monitor or dummy plug. To stream *to* a
+Windows PC, see the [Windows client](/docs/clients#windows-desktop-client).
+
+The host runs as a `LocalSystem` service, so it can capture UAC prompts and the lock screen and
+stream with nobody signed in. That makes it a high-privilege component: keep it on a trusted
+network and read [Security & Safe Use](/docs/security).
+
+## What you need
+
+- **Windows 11 22H2 (build 22621) or newer, x64.** Setup refuses anything older, Windows 10
+  included: the virtual-display driver needs IddCx 1.10, which first shipped in 22H2. ARM64 is a
+  canary build only, with video but no audio, and Media Foundation as its only encoder.
+- **A GPU with a hardware encoder:** NVIDIA (NVENC), AMD (AMF) or Intel (QSV), picked
+  automatically. Windows has no software encoder.
+- **Steam installed** for game audio and the microphone. It never has to run. Without it the host
+  streams video only, and picks Steam up once you install it.
+
+## Install
+
+Download `punktfunk-host-setup-<ver>.exe` from the
+[latest release](https://git.unom.io/unom/punktfunk/releases) and run it, or install with winget
+from an **elevated** terminal:
+
+<Install platform="windows" />
+
+The wizard's **Configure** step lists what it sets up. The defaults suit most PCs:
+
+| Row | What it is | Default | Task |
+| --- | --- | --- | --- |
+| **Virtual display driver** | The display the host streams from. Required. | on | `installdriver` |
+| **Gamepad drivers** | Controllers arrive as real gamepads. | on | `installgamepad` |
+| **HDR Vulkan layer** | HDR for Vulkan and DXVK games. | on | `installhdrlayer` |
+| **Moonlight compat** | GameStream for stock [Moonlight](/docs/moonlight). Trusted LAN only. | off | `gamestream` |
+| **Public-network firewall rules** | Opens the firewall on networks marked Public too. | off | `allowpublicfw` |
+| **Start the service** | Streams as soon as setup finishes. | on | `startservice` |
+| **Tray autostart** | The status icon next to the clock. | on | `trayicon` |
+| **Web console reachable from** | Your network, this PC only, or one address. | your network | — |
+| **Web console password** | Keep the generated one or type your own. | generated | — |
+
+- **Network set to Public?** The wizard offers to make it Private or to open the firewall there.
+  Skip both and clients can't connect ([Windows firewall](/docs/troubleshooting#windows-firewall)).
+- **Sunshine, Apollo, Vibeshine, Vibepollo or LuminalShine set to start on its own?** Setup moves
+  Punktfunk's management API to TCP 47991 and keeps Moonlight compat off
+  ([Switching from Sunshine](/docs/switching-from-sunshine)).
+
+### winget
+
+winget runs setup silently with the wizard's defaults. Before it downloads anything it asks you to
+accept two notes: audio needs Steam, and Moonlight compat is off. Add `--interactive` for the
+wizard. winget carries stable releases only; canary builds come as the setup `.exe`.
+
+### Unattended install
+
+```powershell
+punktfunk-host-setup-<ver>.exe /VERYSILENT /SUPPRESSMSGBOXES
+```
+
+Change a default with `/MERGETASKS` and the task names above: a bare name turns a task on, `!name`
+turns it off. `/WEBBIND=localhost` keeps the console on this PC (`lan` or an address also work).
+With winget, pass the whole line through `--override`; `--custom` appends and leaves two
+`/MERGETASKS`:
+
+```powershell
+winget install unom.PunktfunkHost --override "/VERYSILENT /SUPPRESSMSGBOXES /MERGETASKS=gamestream"
+```
+
+An upgrade always updates both drivers and keeps your earlier Moonlight, firewall, console,
+HDR-layer and tray choices. A silent install shows no console password: print it from an elevated
+PowerShell with `punktfunk-host web password` before your first sign-in.
+
+### About the signatures
+
+Setup and the Punktfunk programs are signed with a publicly trusted certificate. SmartScreen may
+still show *"Windows protected your PC"* for a new release: choose **More info** → **Run anyway**.
+The drivers carry a separate self-signed certificate (`CN=punktfunk-driver`, SHA-1
+`4B8493E7CD565758D335F8F4F05C5A7261A13E02`). Setup adds it to the machine's **Trusted Root** and
+**Trusted Publishers** stores, and uninstalling removes it.
+
+## Pair
+
+1. Open `https://<this-PC>:47992` from any browser on your network. It warns once about the
+   certificate; continue.
+2. Sign in with the console password. Lost it? See
+   [Login password](/docs/web-console#login-password).
+3. Go to **Devices** → **Pair a device** and enter the PIN on your [client](/docs/clients).
+
+## Good to know
+
+- **Status icon.** It shows whether the host is running. Its menu opens the console and the logs
+  folder, approves pairing, and starts, stops or restarts the host, each behind a UAC prompt. The
+  service restarts the icon if it closes; [`punktfunk-host tray`](/docs/host-cli#tray-windows)
+  controls it by hand.
+- **Settings.** Change them in the console under **Host** → **Settings**; Moonlight compat is
+  **GameStream** there. A line in `%ProgramData%\punktfunk\host.env` pins a setting. After editing
+  it, run `punktfunk-host service restart` from an elevated prompt. See
+  [Configuration](/docs/configuration).
+- **Encoder.** `PUNKTFUNK_ENCODER` in `host.env` forces `nvenc`, `amf`, `qsv` or `mf` (Media
+  Foundation). A pin that doesn't match the selected GPU's vendor is ignored. When the native
+  encoder can't open, an 8-bit SDR session falls back to Media Foundation. NVENC has the most field
+  time; AMF and QSV see less.
+- **HDR.** For a 10-bit session the host turns HDR on for its virtual display; you never touch
+  **Use HDR** in Windows. See [HDR → Windows](/docs/hdr#windows).
+- **Logs.** `%ProgramData%\punktfunk\logs\` holds `service.log` and `host.log`, each rotated at
+  10 MB. Only Administrators can read them, so use an elevated PowerShell or the console's
+  **Troubleshooting** page. `RUST_LOG=debug` in `host.env` adds detail.
+- **Two processes.** Task Manager shows two `punktfunk-host.exe`: the service and the worker it
+  starts in your session. Ending the worker only makes the service start another; stop the host
+  from the status icon or with `punktfunk-host service stop`.
+
+## Updating
+
+Press **Update now** on the console's **Updates** card, run `winget upgrade unom.PunktfunkHost`, or
+run a newer setup over the old one. All three keep your config, pairings and console password. See
+[Updating](/docs/updating).
+
+## Uninstalling
+
+Open **Settings** → **Apps** → **Installed apps** → **Punktfunk Host** → **Uninstall**, or run
+`winget uninstall unom.PunktfunkHost`. It removes the service, the status icon, the virtual display,
+gamepad and audio devices with the driver certificate, the scheduled task, the firewall rules, the
+HDR layer and the `PATH` entry. `%ProgramData%\punktfunk` stays, so a reinstall keeps your identity
+and pairings; [Uninstall → Windows host](/docs/uninstall#windows-host) clears it.

@@ -51,7 +51,7 @@ o.push(say("declared_ro", (() => { try { fs.writeFileSync(home + "/steamlike/w",
 o.push(say("granted", (() => { try { return fs.readFileSync(home + "/granted/marker", "utf8").trim(); } catch { return "UNREACHABLE"; } })()));
 o.push(say("granted_write", (() => { try { fs.writeFileSync(home + "/granted/w", "x"); return "WRITABLE"; } catch (e) { return e.code; } })()));
 o.push(say("dynamic", (() => { try { return fs.readFileSync(home + "/dynamic/marker", "utf8").trim(); } catch { return "UNREACHABLE"; } })()));
-o.push(say("state", (() => { try { fs.writeFileSync("/run/punktfunk/plugin-state/w", "x"); return "writable"; } catch { return "UNWRITABLE"; } })()));
+o.push(say("state", (() => { try { fs.writeFileSync("/run/punktfunk/plugin-state/probe/w", "x"); return "writable"; } catch { return "UNWRITABLE"; } })()));
 o.push(say("owntoken", (() => { try { fs.readFileSync("/run/punktfunk/plugin-token", "utf8"); return "present"; } catch { return "MISSING"; } })()));
 o.push(say("procs", fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d)).length));
 const ip = (await import("node:child_process")).spawnSync("ip", ["-o", "link"]);
@@ -118,6 +118,9 @@ else
   echo "  FAIL targeted restart count is $restart_count (want 1)"; fail=$((fail+1))
 fi
 want "its own state dir IS writable"     state       writable
+# The file must land in the plugin's state dir on the host, not one level below it.
+if [ -f "$CFG/plugin-state/probe/w" ]; then echo "  ok   state lands in plugin-state/probe"; pass=$((pass+1))
+else echo "  FAIL state did not land in plugin-state/probe"; fail=$((fail+1)); fi
 want "its own token IS there"            owntoken    present
 want "HOME is the real home"             homedir     /root
 want "the config dir is set"             cfgdir      /run/punktfunk

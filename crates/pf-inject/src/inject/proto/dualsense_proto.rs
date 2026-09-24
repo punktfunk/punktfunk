@@ -605,6 +605,10 @@ pub mod out_report {
 ///
 /// Gated on valid-flags: writers set only the bits they mean to change and zero the rest, so
 /// an ungated parse would turn a rumble write into lightbar-off + triggers-off.
+///
+/// A report with no valid-flag bit at all is a rumble stop. SDL stops rumble that way, and
+/// the pad leaves rumble emulation for audio haptics, where the motor bytes are ignored. An
+/// LED-only report says nothing about rumble, as `hid-playstation` writes it.
 pub fn parse_ds_output(pad: u8, data: &[u8], fb: &mut DsFeedback) {
     use out_report as o;
     if data.first() != Some(&0x02) || data.len() < 48 {
@@ -612,10 +616,14 @@ pub fn parse_ds_output(pad: u8, data: &[u8], fb: &mut DsFeedback) {
     }
     let flag0 = data[o::VALID_FLAG0];
     let flag1 = data[o::VALID_FLAG1];
+    let flag2 = data[o::VALID_FLAG2];
+    if flag0 == 0 && flag1 == 0 && flag2 == 0 {
+        fb.rumble = Some((0, 0));
+    }
     // Rumble on flag0 BIT0/BIT1 or valid_flag2 COMPATIBLE_VIBRATION2 (fw ≥ 2.24). Both must
     // land: a dropped stop is silent here and the 500 ms refresh then re-sends stale motors.
     // Widen `<< 8` to 0..=0xFF00 (see `DsFeedback::rumble`); (low, high) = (left, right).
-    if flag0 & 0x03 != 0 || data[o::VALID_FLAG2] & 0x04 != 0 {
+    if flag0 & 0x03 != 0 || flag2 & 0x04 != 0 {
         let high = (data[o::MOTOR_RIGHT] as u16) << 8;
         let low = (data[o::MOTOR_LEFT] as u16) << 8;
         fb.rumble = Some((low, high));
@@ -972,6 +980,58 @@ mod tests {
         let mut fb = DsFeedback::default();
         parse_ds_output(0, &data, &mut fb);
         assert_eq!(fb.rumble, Some((0, 0)));
+    }
+
+    /// SDL's `RumbleJoystick(0, 0)` sends report `0x02` with every byte zero: no vibration
+    /// flag, no LED flag (`SDL_hidapi_ps5.c` `UpdateEffects`). The pad drops rumble emulation
+    /// on it, so it must read as a stop, or the motors run until the idle force-off.
+    #[test]
+    fn an_sdl_stop_report_stops_the_motors() {
+        let mut stop = vec![0u8; 48];
+        stop[0] = 0x02;
+        let mut fb = DsFeedback::default();
+        parse_ds_output(0, &stop, &mut fb);
+        assert_eq!(fb.rumble, Some((0, 0)));
+        assert!(fb.hidout.is_empty(), "a stop is not an LED or audio write");
+
+        // The Edge's 63-byte output report carries the same header.
+        let mut edge = vec![0u8; 63];
+        edge[0] = 0x02;
+        let mut fb = DsFeedback::default();
+        parse_ds_output(0, &edge, &mut fb);
+        assert_eq!(fb.rumble, Some((0, 0)));
+
+        // SDL's enhanced-rumble write (fw ≥ 2.24): valid_flag2 BIT2 + haptics select.
+        let mut on = vec![0u8; 48];
+        on[0] = 0x02;
+        on[1] = 0x02;
+        on[39] = 0x04;
+        on[3] = 0x40;
+        on[4] = 0x80;
+        let mut fb = DsFeedback::default();
+        parse_ds_output(0, &on, &mut fb);
+        assert_eq!(fb.rumble, Some((0x8000, 0x4000)));
+    }
+
+    /// A kernel lightbar or player-LED update carries no vibration flag. It must not read as
+    /// a stop, or every LED change mid-effect would cut the rumble.
+    #[test]
+    fn an_led_only_report_leaves_rumble_alone() {
+        for (flag1, what) in [(0x04, "lightbar"), (0x10, "player LEDs")] {
+            let mut data = vec![0u8; 48];
+            data[0] = 0x02;
+            data[2] = flag1;
+            let mut fb = DsFeedback::default();
+            parse_ds_output(0, &data, &mut fb);
+            assert_eq!(fb.rumble, None, "{what}-only report");
+        }
+        // hid-playstation's probe-time lightbar setup rides valid_flag2 BIT1 alone.
+        let mut setup = vec![0u8; 48];
+        setup[0] = 0x02;
+        setup[39] = 0x02;
+        let mut fb = DsFeedback::default();
+        parse_ds_output(0, &setup, &mut fb);
+        assert_eq!(fb.rumble, None, "lightbar-setup report");
     }
 
     /// Sensor/touch bytes match `struct dualsense_input_report` (gyro 15, accel 21, timestamp

@@ -95,8 +95,9 @@ pub(crate) fn disabled_scanners() -> HashSet<String> {
 }
 
 /// Every source on this host with its enable state: claimed stores, then
-/// providers that have entries but never claimed a store (rom-manager, playnite).
-/// Sorted by id for the console.
+/// providers that have entries but never claimed a store (rom-manager, playnite), then
+/// plugins with nothing published yet whose folder requests wait for the operator — the
+/// source line is where those requests are shown. Sorted by id for the console.
 pub fn list_scanners() -> Vec<ScannerInfo> {
     let off = disabled_scanners();
     let claims = crate::library::claimed_stores();
@@ -112,6 +113,12 @@ pub fn list_scanners() -> Vec<ScannerInfo> {
         };
         if e.store.is_none() && !plugin_ids.iter().any(|(id, _)| id == provider) {
             plugin_ids.push((provider.to_string(), provider.to_string()));
+        }
+    }
+    let access = crate::plugins::access::AccessStore::open(pf_paths::config_dir());
+    for s in access.snapshot().unwrap_or_default() {
+        if !s.pending.is_empty() && !plugin_ids.iter().any(|(_, p)| *p == s.plugin) {
+            plugin_ids.push((s.plugin.clone(), s.plugin));
         }
     }
     plugin_ids.sort();

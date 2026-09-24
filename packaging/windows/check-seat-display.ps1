@@ -35,7 +35,7 @@ $os = Get-CimInstance Win32_OperatingSystem
 Say "OS        : $($os.Caption) (build $($os.BuildNumber), ProductType $($os.ProductType))"
 if ($os.ProductType -eq 1) {
     Write-Warning ("client SKU: Windows serves one session at a time here, so concurrent seats " +
-        "need Windows Server plus an RDS CAL per seat. See docs/multi-seat-contract.")
+        "need Windows Server plus an RDS CAL per seat. See https://docs.punktfunk.unom.io/docs/developers/multi-seat-contract.")
 }
 
 # --- 2. is the seats package even installed? ----------------------------------------------------

@@ -13,7 +13,7 @@
 //! picks a head when no name is published.
 //!
 //! Pin: install the host `.desktop` and re-login (KWin caches the grant per-exe).
-//! Same path as `krdpserver`. See `docs-site/content/docs/kde.md`.
+//! Same path as `krdpserver`. See `docs-site/content/docs/(guide)/(desktops)/kde.md`.
 
 #![allow(clippy::all, dead_code, non_camel_case_types, non_snake_case, unused)]
 

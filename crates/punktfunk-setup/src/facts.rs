@@ -133,7 +133,7 @@ impl Punt {
                 format!("NixOS: add the flake input and enable the module instead — {DOCS}/nixos")
             }
             Punt::Unsupported(pretty) => {
-                format!("no package repo for '{pretty}' yet — {DOCS}/build-from-source")
+                format!("no package repo for '{pretty}' yet — {DOCS}/developers/build-from-source")
             }
         }
     }
@@ -394,7 +394,7 @@ fn detect_family(os: &OsRelease, run: &dyn CommandRunner) -> Result<Detected, Pu
 pub fn floors(os: &OsRelease, family: Family) -> (Option<String>, Option<Floor>) {
     let floor = match os.id.as_str() {
         "debian" if os.major() < 13 => Some(Floor::Die(format!(
-            "Debian {} is below the glibc floor — {}, or build from source: {DOCS}/build-from-source",
+            "Debian {} is below the glibc floor — {}, or build from source: {DOCS}/developers/build-from-source",
             os.version_id,
             crate::platform::floor("debian")
         ))),
@@ -419,7 +419,7 @@ pub fn floors(os: &OsRelease, family: Family) -> (Option<String>, Option<Floor>)
         _ => (
             None,
             Some(Floor::Die(format!(
-                "no RPM group for Fedora {} yet — {DOCS}/build-from-source",
+                "no RPM group for Fedora {} yet — {DOCS}/developers/build-from-source",
                 os.version_id
             ))),
         ),

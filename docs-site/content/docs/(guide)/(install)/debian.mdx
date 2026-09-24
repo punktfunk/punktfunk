@@ -1,0 +1,84 @@
+---
+title: Debian
+description: Install the Punktfunk host on Debian 13 or newer with apt, including LMDE 7.
+---
+
+Install the host on **Debian 13 ("trixie") or newer** and **LMDE 7**. Debian 12 is too old for the
+package; [build from source](/docs/developers/build-from-source) there, or upgrade. Your desktop
+decides what can stream: GNOME and Sway can, KDE streams at up to 60 Hz, and Cinnamon needs
+[gamescope](#cinnamon-linux-mint-and-lmde)
+([Requirements](/docs/requirements#the-floor-for-a-working-host)).
+
+**One command instead?** The [guided installer](/docs/install#guided-install-preview) (preview)
+does steps 2 to 4 and warns when step 1 is missing:
+
+<Installer />
+
+## 1. GPU driver
+
+- **NVIDIA:** the driver lives in `non-free`, which a default install doesn't enable. Enable it,
+  install, reboot:
+
+  ```sh
+  sudo sed -i 's/^Components: .*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources
+  sudo apt update && sudo apt install nvidia-driver firmware-misc-nonfree
+  ```
+
+  If `nvidia-smi` can't reach the driver afterwards, Secure Boot is blocking it:
+  [Troubleshooting](/docs/troubleshooting#nvidia-smi-says-it-cant-communicate-with-the-driver).
+- **AMD / Intel:** nothing to install. The host package pulls in the VAAPI drivers, and Mesa
+  carries Vulkan Video.
+
+## 2. Install the host
+
+Add the repo and install the host, the console and the plugin runner. It's the same repo Ubuntu
+uses:
+
+<Install platform="debian" />
+
+`sudo apt upgrade` updates it from then on. Restart the host afterwards with
+`systemctl --user restart punktfunk-host`, or let the [console update it](/docs/updating).
+
+## 3. Let it use your controllers
+
+Join the groups, then **log out and back in**:
+
+```sh
+sudo usermod -aG input "$USER"       # virtual gamepads
+sudo usermod -aG punktfunk "$USER"   # virtual Steam Deck controller
+```
+
+## 4. Start it
+
+From a terminal inside your desktop session:
+
+```sh
+systemctl --user enable --now punktfunk-host punktfunk-web
+```
+
+Debian enables no firewall. If you run one, the package installed profiles for ufw and firewalld:
+[Ports & firewall](/docs/ports).
+
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
+
+## Cinnamon, Linux Mint and LMDE
+
+Cinnamon can't give the host a virtual display, so stream games through gamescope instead:
+
+```sh
+sudo apt install punktfunk-gamescope
+echo 'PUNKTFUNK_COMPOSITOR=gamescope' >> ~/.config/punktfunk/host.env
+systemctl --user restart punktfunk-host
+```
+
+Each client then gets its own headless gamescope: [Steam / gamescope](/docs/gamescope). Linux
+Mint 22 can't host at all ([why](/docs/requirements#cinnamon-linux-mint-and-lmde)).
+
+## More
+
+- Your desktop: [GNOME](/docs/gnome), [Sway](/docs/sway), [KDE](/docs/kde),
+  [gamescope](/docs/gamescope).
+- Stream with nobody logged in: [Running as a service](/docs/running-as-a-service).
+- Streaming *to* a Debian box: the Linux client isn't packaged for Debian, so use the
+  [Flatpak](/docs/install-client#linux-desktop-flatpak).

@@ -31,9 +31,9 @@ After=punktfunk-host.service
 [Service]
 Type=simple
 ExecStart=/usr/bin/punktfunk-scripting
-# `+` runs outside the namespace: the mandatory plugin-run bind below needs the directory to exist
-# before the host's first start has created it.
-ExecStartPre=+/bin/mkdir -p -m 0700 %h/.config/punktfunk/plugin-run
+# `+` runs outside the namespace: the plugin-run and plugin-state binds below need both
+# directories, and inside the read-only home nothing can create them.
+ExecStartPre=+/bin/mkdir -p -m 0700 %h/.config/punktfunk/plugin-run %h/.config/punktfunk/plugin-state
 Restart=on-failure
 RestartSec=2
 # Deliver the stop signal to the runner process itself (it orchestrates the structural shutdown of
@@ -48,9 +48,8 @@ TimeoutStopSec=30
 # They are not what confines a PLUGIN. These are mount-namespace options, and a mount namespace
 # does not hold against a process of the same uid: /proc/<host pid>/root reaches what it hides, as
 # /proc/<pid>/environ and kill(2) reach the rest. So each plugin runs in its own bwrap sandbox
-# (sdk/src/sandbox.ts) with its own pid namespace, which does hold, and sees the paths its manifest
-# declares plus `punktfunk-host plugins grant <plugin> <dir>` — never a drop-in widening the home
-# for everything installed.
+# (sdk/src/sandbox.ts) with its own pid namespace, which does hold, and sees only the paths its
+# manifest declares plus the folders the operator granted it. This unit sees the union of those.
 #
 # A loose script that must reach something else still gets a drop-in — `systemctl --user edit
 # punktfunk-scripting` — with `ReadWritePaths=/mnt/games`, or `BindPaths=` inside the home.
@@ -92,11 +91,9 @@ BindReadOnlyPaths=%h/.config/punktfunk/plugin-run
 # ProtectHome empties /run/user too. %t is where the host publishes its live-stream marker
 # (punktfunk/stream, which scripts source) and where the session bus and compositor sockets live.
 BindPaths=%t
-# On Linux a game library lives IN the home, so an empty home is an empty library: the scanner
-# plugins read these roots (plugin-kit steamRoots and friends). Read-only, and '-' because a box
-# has only the launchers it installed. A scanner for a launcher not listed here needs a drop-in.
-BindReadOnlyPaths=-%h/.local/share/Steam -%h/.steam -%h/.var/app
-BindReadOnlyPaths=-%h/.local/share/lutris -%h/.config/lutris -%h/.config/heroic
+# What the plugins read in the home — manifest paths and folder grants — the host writes into
+# punktfunk-scripting.service.d/50-plugin-roots.conf. bwrap binds from this unit's view, so a
+# path missing there never reaches a plugin.
 # SteamOS builds the runner under the home and points ExecStart at it (scripts/steamdeck/install.sh
 # rewrites that line only), so the binary has to survive the tmpfs.
 BindReadOnlyPaths=-%h/.local/bin/punktfunk-scripting -%h/.local/lib/punktfunk-scripting

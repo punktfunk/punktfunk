@@ -249,14 +249,22 @@ pub(crate) async fn list_library_scanners() -> Json<Vec<crate::library::ScannerI
     responses(
         (status = OK, description = "Toggle stored; the full scanner list", body = [crate::library::ScannerInfo]),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin toggled another plugin's source", body = ApiError),
         (status = NOT_FOUND, description = "No such scanner on this platform", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
     )
 )]
 pub(crate) async fn set_library_scanner(
+    who: Option<Extension<crate::mgmt::auth::PluginIdentity>>,
     Path(id): Path<String>,
     ApiJson(toggle): ApiJson<ScannerToggle>,
 ) -> Response {
+    if !crate::mgmt::auth::plugin_owns(who.as_ref().map(|e| &e.0), &id) {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "a plugin may only toggle its own source",
+        );
+    }
     match crate::library::set_scanner_enabled(&id, toggle.enabled) {
         Ok(Some(scanners)) => {
             tracing::info!(
@@ -475,8 +483,20 @@ pub(crate) async fn reconcile_provider_entries(
             return api_error(StatusCode::BAD_REQUEST, &e);
         }
     }
-    if let Err(e) = crate::library::validate_provider_payload(&provider, &inputs) {
-        return api_error(StatusCode::BAD_REQUEST, &e);
+    match crate::library::validate_provider_payload(&provider, &mut inputs) {
+        Err(e) => return api_error(StatusCode::BAD_REQUEST, &e),
+        // One warn per reconcile: a template that misses its roots misses every entry.
+        Ok(dropped) => {
+            if let Some((id, reason)) = dropped.first() {
+                tracing::warn!(
+                    provider,
+                    dropped = dropped.len(),
+                    first = %id,
+                    reason = %reason,
+                    "library reconcile dropped entries this host would not launch"
+                );
+            }
+        }
     }
     // Check every entry: one privileged field anywhere is one command the host would run.
     // Art is not in this refusal — an unservable cover is stripped below so one bad
@@ -635,12 +655,21 @@ pub(crate) struct ProviderRunningAccepted {
         (status = OK, description = "The report was accepted", body = ProviderRunningAccepted),
         (status = BAD_REQUEST, description = "Invalid provider id or payload", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin reported another plugin's titles", body = ApiError),
     )
 )]
 pub(crate) async fn report_provider_running(
+    who: Option<Extension<crate::mgmt::auth::PluginIdentity>>,
     Path(provider): Path<String>,
     ApiJson(input): ApiJson<ProviderRunningInput>,
 ) -> Response {
+    // Another plugin's report would end or prolong that provider's game lease.
+    if !crate::mgmt::auth::plugin_owns(who.as_ref().map(|e| &e.0), &provider) {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "a plugin may only report its own titles",
+        );
+    }
     if let Err(e) = crate::library::validate_provider_name(&provider) {
         return api_error(StatusCode::BAD_REQUEST, &e);
     }

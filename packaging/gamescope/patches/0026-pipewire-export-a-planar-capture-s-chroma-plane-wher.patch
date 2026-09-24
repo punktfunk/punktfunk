@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Wed, 23 Sep 2026 23:33:57 +0200
+Subject: [PATCH] pipewire: export a planar capture's chroma plane where the
+ driver put it
+
+An NV12 or P010 capture buffer is one LINEAR Vulkan image with two
+planes, exported as a single-plane dmabuf: plane 0's offset, and a
+stride from a COLOR_BIT subresource query, which is not a valid aspect
+for a multi-planar image. The PipeWire buffer has one data block, and
+its chunk size assumes the chroma rows start right after the luma rows,
+so every consumer has to assume the same. The driver is free to pad
+the first plane. When it does, the consumer reads luma bytes as chroma
+and the picture comes out in the wrong colours.
+
+Record both planes' subresource layouts for any LINEAR two-plane image,
+not only a mappable one, and hand a planar dmabuf buffer out as two
+data blocks on the one buffer object: plane 0 and plane 1, each at the
+offset and stride the driver reports. The MemFd copy already reads
+through these layouts and keeps its one contiguous block.
+
+Stamp pfhdr22. A consumer that reads the second block needs nothing
+else.
+---
+ src/meson.build      |  3 ++-
+ src/pipewire.cpp     | 55 ++++++++++++++++++++++++++++++++++++--------
+ src/pipewire.hpp     |  4 ++++
+ src/rendervulkan.cpp | 36 +++++++++++++++--------------
+ 4 files changed, 71 insertions(+), 27 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 4df3bfe..577c70e 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -202,7 +202,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr19 — …and GAMESCOPE_SET_OUTPUT_MODE changes a headless output's mode at runtime
+ #   +pfhdr20 — …and dmabuf capture buffers live in device memory, not system RAM
+ #   +pfhdr21 — …and a packed RGB capture dmabuf takes a tiled modifier its consumer accepts
+-version_tag = vcs_tag + '+pfhdr21' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr22 — …and a planar capture dmabuf exports its chroma plane where the driver put it
++version_tag = vcs_tag + '+pfhdr22' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index d6d2cc7..d16554d 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -63,8 +63,8 @@ static bool is_planar_video_format(uint32_t format)
+ 
+ uint32_t spa_format_to_drm(uint32_t spa_format);
+ 
+-// What a packed RGB capture texture can take besides LINEAR. Planar formats stay LINEAR: the
+-// dmabuf path exports one plane.
++// What a packed RGB capture texture can take besides LINEAR. Planar formats stay LINEAR: their
++// plane layouts come from the LINEAR image's subresource layout.
+ static std::vector<uint64_t> capture_modifiers(uint32_t format)
+ {
+ 	if (is_planar_video_format(format))
+@@ -103,7 +103,9 @@ static void destroy_buffer(struct pipewire_buffer *buffer) {
+ 		break;
+ 	}
+ 	case SPA_DATA_DmaBuf:
+-		break; // nothing to do
++		if (buffer->chroma_fd >= 0)
++			close(buffer->chroma_fd);
++		break;
+ 	default:
+ 		// A buffer that never reached the point of choosing a type owns nothing to
+ 		// release. The association fixes above should make this unreachable, but a
+@@ -408,11 +410,22 @@ static void copy_buffer(struct pipewire_state *state, struct pipewire_buffer *bu
+ 	case SPA_DATA_DmaBuf:
+ 		dmabuf = tex->dmabuf();
+ 		assert(dmabuf.n_planes == 1);
+-		chunk->offset = dmabuf.offset[0];
+-		chunk->stride = dmabuf.stride[0];
+-		chunk->size = dmabuf.height * chunk->stride;
+ 		if (is_planar_video_format(state->video_info.format)) {
+-			chunk->size += ((dmabuf.height + 1)/2 * chunk->stride);
++			// Each plane where the driver put it. Chroma is not always right after the luma rows,
++			// and a consumer that assumed so read luma bytes as chroma.
++			chunk->offset = tex->lumaOffset();
++			chunk->stride = tex->lumaRowPitch();
++			chunk->size = dmabuf.height * chunk->stride;
++
++			struct spa_chunk *chroma = spa_buffer->datas[1].chunk;
++			chroma->flags = chunk->flags;
++			chroma->offset = tex->chromaOffset();
++			chroma->stride = tex->chromaRowPitch();
++			chroma->size = ((dmabuf.height + 1) / 2) * chroma->stride;
++		} else {
++			chunk->offset = dmabuf.offset[0];
++			chunk->stride = dmabuf.stride[0];
++			chunk->size = dmabuf.height * chunk->stride;
+ 		}
+ 		break;
+ 	default:
+@@ -598,12 +611,15 @@ static void stream_handle_param_changed(void *data, uint32_t id, const struct sp
+ 		shm_size += ((state->video_info.size.height + 1) / 2) * state->shm_stride;
+ 	}
+ 	int data_type = state->dmabuf ? (1 << SPA_DATA_DmaBuf) : (1 << SPA_DATA_MemFd);
++	// A planar dmabuf carries each plane as its own data on the one buffer object. The MemFd
++	// copy lays chroma right after the luma rows itself, so it stays one block.
++	int blocks = state->dmabuf && is_planar_video_format(state->video_info.format) ? 2 : 1;
+ 
+ 	const struct spa_pod *buffers_param =
+ 		(const struct spa_pod *) spa_pod_builder_add_object(&builder,
+ 		SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+ 		SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(buffers, 1, 8),
+-		SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
++		SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(blocks),
+ 		SPA_PARAM_BUFFERS_size, SPA_POD_Int(shm_size),
+ 		SPA_PARAM_BUFFERS_stride, SPA_POD_Int(state->shm_stride),
+ 		SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(data_type));
+@@ -745,7 +761,6 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
+ 	if (is_dmabuf || drmFormat == DRM_FORMAT_NV12 || drmFormat == DRM_FORMAT_P010)
+ 	{
+ 		screenshotImageFlags.bExportable = true;
+-		// TODO: support multi-planar DMA-BUF export via PipeWire
+ 		if (is_dmabuf && !is_planar_video_format(state->video_info.format) && state->modifier != DRM_FORMAT_MOD_LINEAR)
+ 			screenshotImageFlags.ulDrmModifier = state->modifier;
+ 		else
+@@ -781,6 +796,28 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
+ 		spa_data->mapoffset = dmabuf.offset[0];
+ 		spa_data->maxsize = size;
+ 		spa_data->data = nullptr;
++
++		// The chroma plane: same buffer object, its offset and stride go out per push.
++		if (is_planar_video_format(state->video_info.format)) {
++			if (spa_buffer->n_datas < 2) {
++				pwr_log.errorf("planar dmabuf buffer has %u data blocks, need 2", spa_buffer->n_datas);
++				goto error;
++			}
++
++			buffer->chroma_fd = dup(dmabuf.fd[0]);
++			if (buffer->chroma_fd < 0) {
++				pwr_log.errorf_errno("dup failed");
++				goto error;
++			}
++
++			struct spa_data *chroma_data = &spa_buffer->datas[1];
++			chroma_data->type = SPA_DATA_DmaBuf;
++			chroma_data->flags = SPA_DATA_FLAG_READABLE;
++			chroma_data->fd = buffer->chroma_fd;
++			chroma_data->mapoffset = 0;
++			chroma_data->maxsize = size;
++			chroma_data->data = nullptr;
++		}
+ 	} else if (is_memfd) {
+ 		int fd = anonymous_shm_open();
+ 		if (fd < 0) {
+diff --git a/src/pipewire.hpp b/src/pipewire.hpp
+index 5ec3c1d..52ef316 100644
+--- a/src/pipewire.hpp
++++ b/src/pipewire.hpp
+@@ -44,6 +44,10 @@ struct pipewire_buffer {
+ 		int fd;
+ 	} shm;
+ 
++	// Only used for a two-plane SPA_DATA_DmaBuf: our dup of the texture's fd, handed out as the
++	// chroma plane's data. The texture owns plane 0's.
++	int chroma_fd = -1;
++
+ 	// The following fields are not thread-safe
+ 
+ 	// The PipeWire buffer, or nullptr if it's been destroyed.
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index c5defd9..5e87eb9 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -2480,27 +2480,29 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+ 		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &image_subresource, &image_layout);
+ 
+ 		m_unRowPitch = image_layout.rowPitch;
++	}
+ 
+-		if (isYcbcr())
+-		{
+-			const VkImageSubresource lumaSubresource = {
+-				.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
+-			};
+-			VkSubresourceLayout lumaLayout;
+-			g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &lumaSubresource, &lumaLayout);
++	// A LINEAR two-plane image has one layout per plane, and the driver may pad the first. The
++	// CPU copy reads through these, and a dmabuf export hands them on to the consumer.
++	if ( tiling == VK_IMAGE_TILING_LINEAR && isYcbcr() )
++	{
++		const VkImageSubresource lumaSubresource = {
++			.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
++		};
++		VkSubresourceLayout lumaLayout;
++		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &lumaSubresource, &lumaLayout);
+ 
+-			m_lumaOffset = lumaLayout.offset;
+-			m_lumaPitch = lumaLayout.rowPitch;
++		m_lumaOffset = lumaLayout.offset;
++		m_lumaPitch = lumaLayout.rowPitch;
+ 
+-			const VkImageSubresource chromaSubresource = {
+-				.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
+-			};
+-			VkSubresourceLayout chromaLayout;
+-			g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &chromaSubresource, &chromaLayout);
++		const VkImageSubresource chromaSubresource = {
++			.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
++		};
++		VkSubresourceLayout chromaLayout;
++		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &chromaSubresource, &chromaLayout);
+ 
+-			m_chromaOffset = chromaLayout.offset;
+-			m_chromaPitch = chromaLayout.rowPitch;
+-		}
++		m_chromaOffset = chromaLayout.offset;
++		m_chromaPitch = chromaLayout.rowPitch;
+ 	}
+ 	
+ 	if ( flags.bExportable == true )

@@ -219,6 +219,8 @@ pub(crate) async fn decide_plugin_access(
     };
     match st.access.decide(&plugin, &req.path, decision, "console") {
         Ok(m) => {
+            // Not awaited: a changed root restarts the runner, which this answer need not wait on.
+            tokio::task::spawn_blocking(crate::plugins::converge_runner_roots);
             emit(EventKind::PluginsChanged { id: plugin });
             Json(m.value).into_response()
         }

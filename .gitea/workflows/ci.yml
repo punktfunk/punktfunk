@@ -386,10 +386,19 @@ jobs:
             /usr/local/cargo/registry
             /usr/local/cargo/git
           key: cargo-home-ci-${{ hashFiles('Cargo.lock') }}
-      # Saves once Build passed, even when a later step failed, so a corrupt or missing entry is
-      # replaced by the first push that compiles. A cancelled job saves nothing.
+      # Every push that compiled anything saves, even on an exact hit, so pull requests start
+      # from main's tip rather than from the key's first save. src-mtimes writes its manifest
+      # before the first cargo step, and cargo rewrites a fingerprint only for a unit it rebuilds.
+      - name: Did this job compile anything
+        id: compiled
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.build.outcome == 'success' }}
+        run: |
+          if [ ! -e target/.src-mtimes ] || [ -n "$(find target -maxdepth 5 -path '*/.fingerprint/*' -newer target/.src-mtimes -print -quit)" ]; then
+            echo "save=true" >> "$GITHUB_OUTPUT"
+          fi
+      # Saves once Build passed, even when a later step failed. A cancelled job saves nothing.
       - name: Save target
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.build.outcome == 'success' && steps.target.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && steps.compiled.outputs.save == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
@@ -692,8 +701,8 @@ jobs:
       # still exist, data/platforms.json parses.
       - name: Docs drift gates
         run: sh scripts/ci/check-docs-drift.sh
-      # Internal links only: /docs/* page links in docs-site content, relative file links in
-      # the repo's markdown. External URLs and #anchors are deliberately not checked.
+      # Internal links only: /docs/* page links and their #anchors, relative file links in
+      # the repo's markdown. External URLs are deliberately not checked.
       - name: Docs link check
         run: sh scripts/ci/check-docs-links.sh
       # Touched Rust comments fail at 6 (`//`) / 24 (`//!`/`///`). Self-test plants

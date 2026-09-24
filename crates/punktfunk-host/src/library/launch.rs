@@ -16,7 +16,7 @@ mod desktop;
 #[cfg(not(windows))]
 pub use desktop::valid_desktop_id;
 mod exec;
-pub use exec::{publishable as exec_spec_is_publishable, ExecRecipe};
+pub use exec::{spec_is_valid as exec_spec_is_valid, ExecRecipe};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]

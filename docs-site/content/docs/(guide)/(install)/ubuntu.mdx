@@ -1,0 +1,71 @@
+---
+title: Ubuntu
+description: Install the Punktfunk host on Ubuntu 26.04 or newer with apt, in four steps.
+---
+
+Install the host on **Ubuntu 26.04 or newer**, Desktop or Server. Ubuntu 24.04 installs the
+package but can't stream: its desktop is too old
+([Requirements](/docs/requirements#the-floor-for-a-working-host)).
+
+**One command instead?** The [guided installer](/docs/install#guided-install-preview) (preview)
+does steps 2 to 4 and warns when step 1 is missing:
+
+<Installer />
+
+## 1. GPU driver
+
+- **NVIDIA:** install the recommended driver and its GL/EGL userspace, which Wayland needs, then
+  reboot:
+
+  ```sh
+  sudo ubuntu-drivers install
+  sudo apt install libnvidia-gl-<version>   # the number ubuntu-drivers picked, e.g. 580
+  ```
+
+  If `nvidia-smi` can't reach the driver afterwards, Secure Boot is blocking it:
+  [Troubleshooting](/docs/troubleshooting#nvidia-smi-says-it-cant-communicate-with-the-driver).
+- **AMD / Intel:** nothing to install. The host package pulls in the VAAPI drivers, and Mesa
+  carries Vulkan Video.
+
+## 2. Install the host
+
+Add the repo and install the host, the console and the plugin runner:
+
+<Install platform="debian" />
+
+`sudo apt upgrade` updates it from then on. Restart the host afterwards with
+`systemctl --user restart punktfunk-host`, or let the [console update it](/docs/updating).
+
+## 3. Let it use your controllers
+
+Join the groups, then **log out and back in**:
+
+```sh
+sudo usermod -aG input "$USER"       # virtual gamepads
+sudo usermod -aG punktfunk "$USER"   # virtual Steam Deck controller
+```
+
+## 4. Start it
+
+From a terminal inside your desktop session:
+
+```sh
+systemctl --user enable --now punktfunk-host punktfunk-web
+```
+
+Ubuntu ships `ufw` turned off. If you turned it on, open the host, and the console for other
+devices:
+
+```sh
+sudo ufw allow punktfunk-native && sudo ufw allow punktfunk-web
+```
+
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
+
+## More
+
+- Your desktop: [KDE](/docs/kde), [GNOME](/docs/gnome), [gamescope](/docs/gamescope),
+  [Hyprland](/docs/hyprland), [Sway](/docs/sway).
+- Stream with nobody logged in: [Running as a service](/docs/running-as-a-service).
+- Every port and firewall profile: [Ports & firewall](/docs/ports).

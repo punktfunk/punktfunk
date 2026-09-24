@@ -1,0 +1,13 @@
+{
+  "title": "Your host",
+  "pages": [
+    "web-console",
+    "virtual-displays",
+    "access-levels",
+    "friends-over-the-internet",
+    "wake-on-lan",
+    "host-power",
+    "plugins",
+    "automation"
+  ]
+}

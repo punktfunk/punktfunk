@@ -9,7 +9,7 @@
 //!   and round trip. No end-to-end figure, because Moonlight has none to compare it with.
 //! - **Advanced**: the capture→glass headline as p50/p95 and every stage that tiles it.
 //!
-//! Platforms draw the returned lines and nothing else. `docs-site/content/docs/stats.md`
+//! Platforms draw the returned lines and nothing else. `docs-site/content/docs/(guide)/(streaming)/stats.md`
 //! explains every number.
 
 use std::collections::VecDeque;
@@ -418,6 +418,20 @@ impl StatsSnapshot {
         pct(self.lost, self.received.saturating_add(self.lost))
     }
 
+    /// [`lost_pct`](Self::lost_pct), or `None` when the window held under
+    /// [`THIN_WINDOW_FRAMES`] frames and a share would mislead.
+    fn lost_share(&self) -> Option<f64> {
+        (self.received.saturating_add(self.lost) >= THIN_WINDOW_FRAMES).then(|| self.lost_pct())
+    }
+
+    /// `lost x.x%`, or `lost N` in a thin window.
+    fn lost_label(&self) -> String {
+        match self.lost_share() {
+            Some(p) => format!("lost {p:.1}%"),
+            None => format!("lost {}", self.lost),
+        }
+    }
+
     /// Where the Advanced headline stops: the furthest point this window measured.
     pub fn endpoint(&self) -> Option<Endpoint> {
         if self.e2e.is_measured() {
@@ -443,6 +457,10 @@ impl StatsSnapshot {
         }
     }
 }
+
+/// Below this many frames in a window, loss shows as a count. A still screen on a
+/// Windows host sends almost none, so one lost frame would read as tens of percent.
+const THIN_WINDOW_FRAMES: u32 = 30;
 
 fn pct(part: u32, whole: u32) -> f64 {
     if whole == 0 {
@@ -1098,7 +1116,7 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
         }
         f.push(mbps(s.mbps()));
         if s.lost > 0 {
-            f.push(format!("lost {:.1}%", s.lost_pct()));
+            f.push(s.lost_label());
         }
         f.extend(s.preset.clone());
         out.push(line(Role::Primary, f));
@@ -1184,7 +1202,10 @@ fn advanced_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
     out.extend(audio_format(s));
     let mut counters = Vec::new();
     if s.lost > 0 {
-        counters.push(format!("lost {} ({:.1}%)", s.lost, s.lost_pct()));
+        counters.push(match s.lost_share() {
+            Some(p) => format!("lost {} ({p:.1}%)", s.lost),
+            None => format!("lost {}", s.lost),
+        });
     }
     if detailed {
         match s.skipped {
@@ -1223,7 +1244,7 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
             f.push(format!("decode {} ms", ms(s.decode.mean_us)));
         }
         if s.lost > 0 {
-            f.push(format!("lost {:.1}%", s.lost_pct()));
+            f.push(s.lost_label());
         }
         f.extend(s.preset.clone());
         out.push(line(Role::Primary, f));
@@ -1258,7 +1279,7 @@ fn standard_lines(s: &StatsSnapshot, tier: StatsVerbosity) -> Vec<HudLine> {
         out.push(text(Role::Detail, format!("{} (avg)", times.join(" · "))));
     }
 
-    let mut link = vec![format!("lost {:.1}%", s.lost_pct())];
+    let mut link = vec![s.lost_label()];
     if let Some(k) = s.skipped {
         let shown = s.decoded.unwrap_or(s.received);
         link.push(format!("skipped {:.1}%", pct(k, shown.max(k))));
@@ -1652,6 +1673,28 @@ mod tests {
         s.fec = 0;
         assert!(!all(&s, StatsVerbosity::Detailed, true).contains("lost"));
         assert!(!all(&s, StatsVerbosity::Compact, true).contains("lost"));
+    }
+
+    /// A still screen sends few frames; one loss there shows as a count, not a share.
+    #[test]
+    fn thin_window_counts_loss() {
+        let mut s = desktop();
+        s.received = 4;
+        s.lost = 1;
+        for advanced in [true, false] {
+            for tier in [
+                StatsVerbosity::Compact,
+                StatsVerbosity::Normal,
+                StatsVerbosity::Detailed,
+            ] {
+                let text = all(&s, tier, advanced);
+                assert!(text.contains("lost 1"), "{tier:?} {advanced}: {text}");
+                assert!(!text.contains("lost 20.0%"), "{tier:?} {advanced}: {text}");
+                assert!(!text.contains("(20.0%)"), "{tier:?} {advanced}: {text}");
+            }
+        }
+        s.received = 29;
+        assert!(all(&s, StatsVerbosity::Compact, true).contains("lost 3.3%"));
     }
 
     #[test]

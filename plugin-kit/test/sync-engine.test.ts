@@ -159,6 +159,42 @@ describe("SyncEngine", () => {
 // on every event, so a launcher that keeps writing (Steam, while a game runs) drove one field log
 // to 102 fs-change syncs in 27 minutes. With the cap, sustained churn costs one sync per interval
 // and still lands one trailing sync for whatever changed inside it.
+describe("SyncEngine loop survives a throwing scan", () => {
+	test("a scan that throws once does not end the poll loop", async () => {
+		const computes = await run(
+			Effect.gen(function* () {
+				const n = yield* Ref.make(0);
+				const engine = yield* makeSyncEngine<
+					Report,
+					ReadonlyArray<string>,
+					never
+				>({
+					compute: () =>
+						Ref.updateAndGet(n, (x) => x + 1).pipe(
+							Effect.map((count) => {
+								// A plugin scan has no error channel: a throw is a defect.
+								if (count === 2) throw new Error("scan blew up");
+								return { entries: ["a"], report: { included: 1 } };
+							}),
+						),
+					apply: () => Effect.void,
+					lastSync: { get: Effect.succeed(undefined), set: () => Effect.void },
+					settings: Effect.succeed({
+						pollInterval: Duration.millis(20),
+						watch: false,
+						debounce: Duration.millis(10),
+						watchDirs: [],
+					}),
+				});
+				yield* engine.start;
+				yield* Effect.sleep(Duration.millis(300));
+				return yield* Ref.get(n);
+			}),
+		);
+		expect(computes).toBeGreaterThan(4);
+	});
+});
+
 describe("SyncEngine fs-change min-interval", () => {
 	test("sustained churn is capped to one fs-change sync per interval, plus one trailing", async () => {
 		const fs = await import("node:fs");

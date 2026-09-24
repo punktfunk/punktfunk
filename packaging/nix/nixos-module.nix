@@ -770,9 +770,9 @@ in
         serviceConfig = {
           Type = "simple";
           ExecStart = "${cfg.scripting.package}/bin/punktfunk-scripting";
-          # `+` runs outside the namespace: the mandatory plugin-run bind needs the directory before
-          # the host's first start has created it.
-          ExecStartPre = "+${pkgs.coreutils}/bin/mkdir -p -m 0700 %h/.config/punktfunk/plugin-run";
+          # `+` runs outside the namespace: the plugin-run and plugin-state binds need both
+          # directories, and inside the read-only home nothing can create them.
+          ExecStartPre = "+${pkgs.coreutils}/bin/mkdir -p -m 0700 %h/.config/punktfunk/plugin-run %h/.config/punktfunk/plugin-state";
           Restart = "on-failure";
           RestartSec = 2;
           # Deliver SIGTERM to the runner (it orchestrates the structural shutdown of its unit
@@ -807,8 +807,8 @@ in
           # unprivileged user namespaces. On a kernel/config that restricts those they fail the
           # unit rather than degrading — drop them via
           #   systemctl --user edit punktfunk-scripting
-          # which is also where a plugin that must reach elsewhere gets `ReadWritePaths=/mnt/games`
-          # (outside the home) or `BindReadOnlyPaths=` (inside it).
+          # which is also where a loose script that must reach elsewhere gets `ReadWritePaths=`
+          # (outside the home) or `BindReadOnlyPaths=` (inside it). Plugins get folder grants.
           ProtectHome = "tmpfs";
           InaccessiblePaths = [
             "-%h/.config/punktfunk/mgmt-token"
@@ -832,9 +832,8 @@ in
           # it), the port the host really bound, the operator's loose scripts, and the drop box
           # another local account fills.
           #
-          # The launcher roots are there because on Linux a game library lives IN the home, so an
-          # empty home is an EMPTY LIBRARY — the scanner plugins read exactly these. A scanner for
-          # a launcher not listed needs a drop-in.
+          # What the plugins read in the home — manifest paths and folder grants — the host writes
+          # into ~/.config/systemd/user/punktfunk-scripting.service.d/50-plugin-roots.conf.
           #
           # The punktfunk-scripting entries cover the SteamOS layout, which builds the runner under
           # the home and points ExecStart at it. Every path but plugin-run is `-`: ExecStartPre
@@ -849,12 +848,6 @@ in
             "-%h/.config/punktfunk/mgmt-endpoint"
             "-%h/.config/punktfunk/scripts"
             "-%h/.config/punktfunk/ingest"
-            "-%h/.local/share/Steam"
-            "-%h/.steam"
-            "-%h/.var/app"
-            "-%h/.local/share/lutris"
-            "-%h/.config/lutris"
-            "-%h/.config/heroic"
             "-%h/.local/bin/punktfunk-scripting"
             "-%h/.local/lib/punktfunk-scripting"
             "-%h/.local/share/punktfunk-scripting"

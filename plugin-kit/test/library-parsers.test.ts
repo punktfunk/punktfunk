@@ -590,3 +590,38 @@ describe("access classification", () => {
 		}
 	});
 });
+
+describe.skipIf(process.platform !== "linux")("steamRoots", () => {
+	test("one Steam install is one root, whichever link reaches it", () => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "pf-steam-home-"));
+		try {
+			const real = path.join(home, ".local", "share", "Steam");
+			fs.mkdirSync(path.join(real, "steamapps"), { recursive: true });
+			fs.mkdirSync(path.join(home, ".steam"));
+			fs.symlinkSync(real, path.join(home, ".steam", "steam"));
+			fs.symlinkSync(real, path.join(home, ".steam", "root"));
+			// A child with that HOME: this runtime's os.homedir() ignores a changed process.env.
+			const parsers = path.join(
+				import.meta.dir,
+				"..",
+				"src",
+				"library",
+				"parsers",
+				"index.ts",
+			);
+			const child = Bun.spawnSync(
+				[
+					process.execPath,
+					"-e",
+					`const { steamRoots } = await import(${JSON.stringify(parsers)}); console.log(JSON.stringify(steamRoots()));`,
+				],
+				{ env: { ...process.env, HOME: home } },
+			);
+			expect(JSON.parse(child.stdout.toString())).toEqual([
+				fs.realpathSync(real),
+			]);
+		} finally {
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	});
+});

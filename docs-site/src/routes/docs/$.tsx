@@ -10,7 +10,12 @@ import { Suspense } from 'react'
 import { useMDXComponents } from '@/components/mdx'
 
 /** Pages that moved, old slug → new, so an old link or bookmark still lands. */
-const moved: Record<string, string> = { 'profiles-and-links': 'presets-and-links' }
+const moved: Record<string, string> = {
+  'profiles-and-links': 'presets-and-links',
+  status: 'support-matrix',
+  'build-from-source': 'developers/build-from-source',
+  'multi-seat-contract': 'developers/multi-seat-contract',
+}
 
 export const Route = createFileRoute('/docs/$')({
   component: Page,

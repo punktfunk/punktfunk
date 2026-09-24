@@ -25,6 +25,7 @@ const TITLES: Record<string, () => string> = {
 	server_conflict: () => m.diag_server_conflict_title(),
 	vdisplay_driver: () => m.diag_vdisplay_driver_title(),
 	pad_audio: () => m.diag_pad_audio_title(),
+	pad_driver: () => m.diag_pad_driver_title(),
 	restart_pending: () => m.diag_restart_pending_title(),
 };
 

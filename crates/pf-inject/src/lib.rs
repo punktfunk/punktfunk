@@ -522,6 +522,130 @@ pub fn vhci_probe() -> VhciVerdict {
     }
 }
 
+/// The Windows virtual-gamepad driver as the last pad that met it saw it — [`pad_driver_probe`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PadDriverVerdict {
+    /// No virtual pad has met its driver this run.
+    Unseen,
+    /// The driver attached at this host's revision.
+    Current,
+    /// The driver attached with an older revision: an old package still serves the pads.
+    Stale { driver_rev: u32, host_rev: u32 },
+    /// The driver speaks another channel protocol, so it refuses every pad.
+    ProtocolMismatch { driver_proto: u32, host_proto: u32 },
+    /// The pad reports another controller's VID/PID than its hardware id names.
+    WrongIdentity { want: (u16, u16), got: (u16, u16) },
+    /// No driver attached to the pad within the grace period.
+    NotAttached,
+}
+
+/// Verdict for a pad whose driver just attached. `devtype` is the identity its hardware id
+/// names, `driver_rev` what the driver stamped, `vid_pid` what its HID collection reports.
+pub fn pad_attach_verdict(
+    devtype: u8,
+    driver_rev: u32,
+    vid_pid: Option<(u16, u16)>,
+) -> PadDriverVerdict {
+    use pf_driver_proto::gamepad::{identity_vid_pid, GAMEPAD_DRIVER_REV};
+    if let (Some(want), Some(got)) = (identity_vid_pid(devtype), vid_pid)
+        && want != got
+    {
+        return PadDriverVerdict::WrongIdentity { want, got };
+    }
+    if driver_rev < GAMEPAD_DRIVER_REV {
+        return PadDriverVerdict::Stale {
+            driver_rev,
+            host_rev: GAMEPAD_DRIVER_REV,
+        };
+    }
+    PadDriverVerdict::Current
+}
+
+/// Whether a pad devnode that failed to start (`CM_PROB_FAILED_START`, 10) is one the driver
+/// refused: its lowercase hardware ids name no identity. UMDF reports that refusal as
+/// `STATUS_DEVICE_DATA_ERROR`, not the driver's own status, so the ids are the evidence.
+pub fn pad_refused(problem: u32, hwids: &str) -> bool {
+    problem == 10 && pf_driver_proto::gamepad::devtype_from_hwids(hwids).is_none()
+}
+
+#[cfg(target_os = "windows")]
+static PAD_DRIVER: std::sync::Mutex<PadDriverVerdict> =
+    std::sync::Mutex::new(PadDriverVerdict::Unseen);
+
+/// The latest verdict a pad recorded this run; every pad binds the same driver package.
+#[cfg(target_os = "windows")]
+pub fn pad_driver_probe() -> PadDriverVerdict {
+    PAD_DRIVER
+        .lock()
+        .map_or(PadDriverVerdict::Unseen, |v| v.clone())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn note_pad_driver(verdict: PadDriverVerdict) {
+    if let Ok(mut v) = PAD_DRIVER.lock() {
+        *v = verdict;
+    }
+}
+
+#[cfg(test)]
+mod pad_driver_verdict_tests {
+    use super::*;
+    use pf_driver_proto::gamepad::{DEVTYPE_DUALSENSE, DEVTYPE_XBOX_ELITE, GAMEPAD_DRIVER_REV};
+
+    /// An attached driver below this host's revision still serves pads, with old behaviour.
+    /// Only the revision tells; the channel protocol matches.
+    #[test]
+    fn an_older_driver_revision_reads_as_stale() {
+        let ds = Some((0x054C, 0x0CE6));
+        assert_eq!(
+            pad_attach_verdict(DEVTYPE_DUALSENSE, GAMEPAD_DRIVER_REV, ds),
+            PadDriverVerdict::Current
+        );
+        assert_eq!(
+            pad_attach_verdict(DEVTYPE_DUALSENSE, 0, ds),
+            PadDriverVerdict::Stale {
+                driver_rev: 0,
+                host_rev: GAMEPAD_DRIVER_REV
+            },
+            "a driver older than the revision field stamps 0"
+        );
+        assert_eq!(
+            pad_attach_verdict(DEVTYPE_DUALSENSE, GAMEPAD_DRIVER_REV, None),
+            PadDriverVerdict::Current,
+            "an unread VID/PID is no evidence against the pad"
+        );
+    }
+
+    /// A failed start on a devnode whose ids carry no pf_* token is the driver's refusal; the
+    /// ids as the devnode reported them on .173.
+    #[test]
+    fn a_failed_pad_with_no_pf_id_reads_as_refused() {
+        let unknown =
+            "zz_unknown_pad;usb\\vid_054c&pid_0ce6&rev_0100&mi_03;usb\\vid_054c&pid_0ce6&mi_03;";
+        assert!(pad_refused(10, unknown));
+        assert!(!pad_refused(
+            10,
+            "pf_dualsense;usb\\vid_054c&pid_0ce6&mi_03;"
+        ));
+        assert!(
+            !pad_refused(28, unknown),
+            "no driver bound is not a refusal"
+        );
+    }
+
+    /// An old driver that does not know a hardware id answers as a DualSense.
+    #[test]
+    fn a_pad_answering_as_another_controller_is_named() {
+        assert_eq!(
+            pad_attach_verdict(DEVTYPE_XBOX_ELITE, 0, Some((0x054C, 0x0CE6))),
+            PadDriverVerdict::WrongIdentity {
+                want: (0x045E, 0x0B22),
+                got: (0x054C, 0x0CE6)
+            }
+        );
+    }
+}
+
 #[path = "inject/service.rs"]
 mod service;
 pub use service::InjectorService;

@@ -25,10 +25,13 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use windows::core::{w, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_DevNode_Status, CM_Locate_DevNodeW, CM_DEVNODE_STATUS_FLAGS, CM_LOCATE_DEVNODE_NORMAL,
-    CM_PROB, CR_SUCCESS, DN_DRIVER_LOADED, DN_HAS_PROBLEM, DN_STARTED,
+    CM_Get_DevNode_PropertyW, CM_Get_DevNode_Status, CM_Locate_DevNodeW, CM_DEVNODE_STATUS_FLAGS,
+    CM_LOCATE_DEVNODE_NORMAL, CM_PROB, CR_SUCCESS, DN_DRIVER_LOADED, DN_HAS_PROBLEM, DN_STARTED,
 };
 use windows::Win32::Devices::Enumeration::Pnp::{SwDeviceClose, HSWDEVICE};
+use windows::Win32::Devices::Properties::{
+    DEVPKEY_Device_HardwareIds, DEVPROPTYPE, DEVPROP_TYPE_STRING_LIST,
+};
 use windows::Win32::Foundation::{
     CloseHandle, DuplicateHandle, GetLastError, LocalFree, SetLastError, DUPLICATE_HANDLE_OPTIONS,
     ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
@@ -424,6 +427,10 @@ impl PadChannel {
         let drv_proto = self.boot_load(core::mem::offset_of!(PadBootstrap, driver_proto));
         if drv_proto != 0 && drv_proto != GAMEPAD_PROTO_VERSION && !self.warned_proto {
             self.warned_proto = true;
+            crate::note_pad_driver(crate::PadDriverVerdict::ProtocolMismatch {
+                driver_proto: drv_proto,
+                host_proto: GAMEPAD_PROTO_VERSION,
+            });
             tracing::warn!(
                 mailbox = %self.boot_name,
                 driver_proto = drv_proto,
@@ -704,8 +711,9 @@ impl Drop for SwDevice {
 const ATTACH_GRACE: Duration = Duration::from_secs(3);
 
 /// Per-pad attach watcher. Feed `driver_proto` every service tick; logs attach,
-/// version mismatch, or — after [`ATTACH_GRACE`] of silence — one diagnosis.
-/// States never repeat a log line, so the pump can call this at full rate.
+/// version mismatch, a pad that enumerated as another controller, or — after
+/// [`ATTACH_GRACE`] of silence — one diagnosis. States never repeat a log line, so the
+/// pump can call this at full rate.
 pub(super) struct DriverAttach {
     driver: &'static str,
     inf: &'static str,
@@ -713,6 +721,8 @@ pub(super) struct DriverAttach {
     shm_name: String,
     /// `None` on the out-of-band fallback path.
     instance_id: Option<String>,
+    /// The `device_type` the pad's hardware id names; `None` for the XUSB pad and the mouse.
+    identity: Option<u8>,
     created: Instant,
     state: AttachState,
 }
@@ -738,12 +748,20 @@ impl DriverAttach {
             driver_log,
             shm_name,
             instance_id,
+            identity: pf_driver_proto::gamepad::devtype_from_hwids(driver),
             created: Instant::now(),
             state: AttachState::Waiting,
         }
     }
 
+    /// For the XUSB pad and the mouse, whose sections carry no driver revision.
     pub(super) fn observe(&mut self, driver_proto: u32) {
+        self.observe_pad(driver_proto, 0);
+    }
+
+    /// `driver_rev` is read after `driver_proto` ([`crate::dualsense_windows::driver_marks`]);
+    /// only the attach tick uses it.
+    pub(super) fn observe_pad(&mut self, driver_proto: u32, driver_rev: u32) {
         match self.state {
             AttachState::Attached => {}
             AttachState::Waiting | AttachState::Warned if driver_proto != 0 => {
@@ -763,14 +781,54 @@ impl DriverAttach {
                         "gamepad driver/host protocol mismatch — update the drivers: punktfunk-host.exe driver install --gamepad"
                     );
                 }
+                self.check_pad(driver_rev);
                 self.state = AttachState::Attached;
             }
             AttachState::Waiting if self.created.elapsed() >= ATTACH_GRACE => {
+                if self.identity.is_some() {
+                    crate::note_pad_driver(crate::PadDriverVerdict::NotAttached);
+                }
                 self.diagnose();
                 self.state = AttachState::Warned;
             }
             _ => {}
         }
+    }
+
+    /// Judge a freshly attached pad's driver ([`crate::pad_attach_verdict`]) for the diagnostics
+    /// row, and WARN on an old revision or on a pad that reports another controller's VID/PID
+    /// than its hardware id names (an older driver that did not know the id).
+    fn check_pad(&self, driver_rev: u32) {
+        let Some(devtype) = self.identity else {
+            return;
+        };
+        let got = self
+            .instance_id
+            .as_deref()
+            .and_then(channel_proof::hid_vid_pid);
+        let verdict = crate::pad_attach_verdict(devtype, driver_rev, got);
+        let fix = "reinstall the host with its controller drivers";
+        match &verdict {
+            crate::PadDriverVerdict::WrongIdentity { want, got } => tracing::warn!(
+                driver = self.driver,
+                want = %format!("VID_{:04X}&PID_{:04X}", want.0, want.1),
+                got = %format!("VID_{:04X}&PID_{:04X}", got.0, got.1),
+                fix,
+                "virtual pad enumerated as another controller; games see the wrong pad"
+            ),
+            crate::PadDriverVerdict::Stale {
+                driver_rev,
+                host_rev,
+            } => tracing::warn!(
+                driver = self.driver,
+                driver_rev,
+                host_rev,
+                fix,
+                "gamepad driver is older than this host; pads run with its old behaviour"
+            ),
+            _ => {}
+        }
+        crate::note_pad_driver(verdict);
     }
 
     /// One-shot WARN: driver-store presence, devnode PnP problem, where to look next.
@@ -782,9 +840,10 @@ impl DriverAttach {
         let (driver, inf, driver_log) = (self.driver, self.inf, self.driver_log);
         let shm_name = self.shm_name.clone();
         let instance_id = self.instance_id.clone();
+        let pad = self.identity.is_some();
         std::thread::Builder::new()
             .name("pf-driver-diagnose".into())
-            .spawn(move || diagnose_blocking(driver, inf, driver_log, &shm_name, instance_id))
+            .spawn(move || diagnose_blocking(driver, inf, driver_log, &shm_name, instance_id, pad))
             .ok();
     }
 }
@@ -796,6 +855,7 @@ fn diagnose_blocking(
     driver_log: &'static str,
     shm_name: &str,
     instance_id: Option<String>,
+    pad: bool,
 ) {
     let store = match driver_store_has(inf) {
         Some(true) => "driver package present in the driver store",
@@ -805,7 +865,7 @@ fn diagnose_blocking(
         None => "driver store could not be queried (pnputil failed or still enumerating)",
     };
     let devnode = match &instance_id {
-        Some(id) => devnode_status_line(id),
+        Some(id) => devnode_status_line(id, pad),
         None => "no per-session devnode (SwDeviceCreate failed earlier — see the warning above)"
             .to_string(),
     };
@@ -871,7 +931,7 @@ fn driver_store_has(inf: &str) -> Option<bool> {
     Some(inv.contains(&inf.to_ascii_lowercase()))
 }
 
-fn devnode_status_line(instance_id: &str) -> String {
+fn devnode_status_line(instance_id: &str, pad: bool) -> String {
     let wide: Vec<u16> = instance_id
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -899,11 +959,17 @@ fn devnode_status_line(instance_id: &str) -> String {
         return format!("devnode {instance_id}: status query failed (CR={})", cr.0);
     }
     if status.0 & DN_HAS_PROBLEM.0 != 0 {
+        let refused =
+            pad && hardware_ids(devinst).is_some_and(|ids| crate::pad_refused(problem.0, &ids));
+        let hint = if refused {
+            "the gamepad driver refused it: no pf_* hardware id names this pad; the host and \
+             driver disagree on the controller list — reinstall both"
+        } else {
+            cm_problem_hint(problem.0)
+        };
         return format!(
-            "devnode {instance_id} has PnP problem code {} ({}) [status 0x{:08x}]",
-            problem.0,
-            cm_problem_hint(problem.0),
-            status.0
+            "devnode {instance_id} has PnP problem code {} ({hint}) [status 0x{:08x}]",
+            problem.0, status.0
         );
     }
     format!(
@@ -911,6 +977,36 @@ fn devnode_status_line(instance_id: &str) -> String {
         status.0,
         status.0 & DN_DRIVER_LOADED.0 != 0,
         status.0 & DN_STARTED.0 != 0,
+    )
+}
+
+/// A devnode's hardware ids, lowercase and `;`-terminated, the form the driver matches on.
+fn hardware_ids(devinst: u32) -> Option<String> {
+    let mut ty = DEVPROPTYPE(0);
+    let mut buf = [0u16; 512];
+    let mut size = std::mem::size_of_val(&buf) as u32;
+    // SAFETY: `devinst` is a located devnode; the key is a static const; `buf` holds `size`
+    // bytes and `ty` / `size` are valid out-params.
+    let cr = unsafe {
+        CM_Get_DevNode_PropertyW(
+            devinst,
+            &DEVPKEY_Device_HardwareIds,
+            &mut ty,
+            Some(buf.as_mut_ptr().cast()),
+            &mut size,
+            0,
+        )
+    };
+    if cr != CR_SUCCESS || ty != DEVPROP_TYPE_STRING_LIST {
+        return None;
+    }
+    let len = (size as usize / 2).min(buf.len());
+    Some(
+        buf[..len]
+            .split(|&c| c == 0)
+            .filter(|id| !id.is_empty())
+            .map(|id| String::from_utf16_lossy(id).to_ascii_lowercase() + ";")
+            .collect(),
     )
 }
 

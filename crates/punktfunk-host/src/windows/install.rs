@@ -277,6 +277,9 @@ fn driver_check() -> Result<()> {
     }
 }
 
+/// Stage the pad drivers, then verify the next pad can only bind them: the staged build in the
+/// store, no other build of the same package, no pad devnode left to revive an old one. One
+/// retry, then an error naming what is still wrong.
 fn install_gamepad(dir: &Path) -> Result<()> {
     let infs: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("read {}", dir.display()))?
@@ -287,23 +290,93 @@ fn install_gamepad(dir: &Path) -> Result<()> {
     if infs.is_empty() {
         bail!("no driver .inf in {}", dir.display());
     }
+    let staged: Vec<(String, String)> = infs
+        .iter()
+        .filter_map(|inf| inf_identity(&read_inf_text(inf)))
+        .collect();
     trust_cert(dir);
     // Hardware IDs did not move when `pf-dualsense` became `pf-gamepad`. Match the old INF on
     // `pf_dualsense.dll` — matching those IDs would also delete the package we are about to add.
     delete_store_drivers(&["pf_dualsense.dll"]);
-    // No `/install`, no device node: the host SwDeviceCreate's the per-session devnode when a
-    // client forwards a pad, so PnP binds the store driver on demand.
-    for inf in &infs {
-        if run_quiet("pnputil", &["/add-driver", &inf.to_string_lossy()]) {
-            println!("pnputil /add-driver {} ok", file_name(inf));
-        } else {
-            eprintln!("warning: pnputil /add-driver {} failed", inf.display());
+    let mut problems = Vec::new();
+    for attempt in 0..2 {
+        if attempt > 0 {
+            eprintln!(
+                "warning: gamepad drivers not settled ({}); retrying",
+                problems.join("; ")
+            );
+        }
+        // No `/install`, no device node: the host SwDeviceCreate's the per-session devnode when
+        // a client forwards a pad, so PnP binds the store driver on demand.
+        for inf in &infs {
+            if run_quiet("pnputil", &["/add-driver", &inf.to_string_lossy()]) {
+                println!("pnputil /add-driver {} ok", file_name(inf));
+            } else {
+                eprintln!("warning: pnputil /add-driver {} failed", inf.display());
+            }
+        }
+        // An older build left in the store outranks nothing, but a newer-dated one would win.
+        for (name, catalog, ver) in store_packages() {
+            if staged.iter().any(|(c, v)| *c == catalog && *v != ver) {
+                delete_store_driver(&name);
+            }
+        }
+        // Phantoms too: SwDeviceCreate with a known instance id revives the bound driver and
+        // never re-ranks the store. Per-session objects; the next pad binds the fresh package.
+        remove_pad_devnodes();
+        let store: Vec<(String, String)> = store_packages()
+            .into_iter()
+            .map(|(_, c, v)| (c, v))
+            .collect();
+        problems = pad_install_problems(&staged, &store, &pad_instance_ids());
+        if problems.is_empty() {
+            return Ok(());
         }
     }
-    // Phantoms too: SwDeviceCreate with a known instance id revives the bound driver and never
-    // re-ranks the store. Per-session objects; the next pad binds the fresh package.
-    remove_pad_devnodes();
-    Ok(())
+    bail!("gamepad drivers did not settle: {}", problems.join("; "))
+}
+
+/// `(catalog, DriverVer)` of an INF, lowercased and space-free: which package it is and which
+/// build. `None` for text without both lines.
+fn inf_identity(text: &str) -> Option<(String, String)> {
+    let value = |key: &str| {
+        text.lines().find_map(|line| {
+            let line = line.split(';').next()?;
+            let (k, v) = line.split_once('=')?;
+            k.trim().eq_ignore_ascii_case(key).then(|| {
+                v.chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>()
+                    .to_ascii_lowercase()
+            })
+        })
+    };
+    Some((value("CatalogFile")?, value("DriverVer")?))
+}
+
+/// What stops the next pad from binding the staged drivers: a staged build missing from the
+/// store, another build of the same package still there, or a pad devnode that would revive the
+/// driver it last bound. `store` is every `(catalog, DriverVer)` in the driver store.
+fn pad_install_problems(
+    staged: &[(String, String)],
+    store: &[(String, String)],
+    devnodes: &[String],
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (catalog, ver) in staged {
+        if !store.iter().any(|s| s.0 == *catalog && s.1 == *ver) {
+            problems.push(format!("{catalog} {ver} is not in the driver store"));
+        }
+        for (_, old) in store.iter().filter(|s| s.0 == *catalog && s.1 != *ver) {
+            problems.push(format!("{catalog} {old} is still in the driver store"));
+        }
+    }
+    problems.extend(
+        devnodes
+            .iter()
+            .map(|id| format!("pad devnode {id} is still present")),
+    );
+    problems
 }
 
 fn remove_pad_devnodes() {
@@ -441,32 +514,50 @@ fn pad_instance_ids() -> Vec<String> {
     ids
 }
 
-/// Delete each `%WINDIR%\INF\oem*.inf` whose text mentions a needle — content match, not
-/// `pnputil /enum-drivers` (localized). `/uninstall /force` also unbinds remaining devnodes.
-fn delete_store_drivers(needles: &[&str]) {
+/// `(file name, text)` of every `%WINDIR%\INF\oem*.inf` — the driver store's packages, read
+/// as content rather than through `pnputil /enum-drivers` (localized).
+fn store_infs() -> Vec<(String, String)> {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
     let inf_dir = Path::new(&windir).join("INF");
     let Ok(entries) = std::fs::read_dir(&inf_dir) else {
         eprintln!("warning: {} is unreadable", inf_dir.display());
-        return;
+        return Vec::new();
     };
-    for path in entries.flatten().map(|e| e.path()) {
-        let name = file_name(&path).to_ascii_lowercase();
-        if !name.starts_with("oem") || !name.ends_with(".inf") {
-            continue;
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter_map(|path| {
+            let name = file_name(&path).to_ascii_lowercase();
+            (name.starts_with("oem") && name.ends_with(".inf"))
+                .then(|| (name, read_inf_text(&path)))
+        })
+        .collect()
+}
+
+/// `(file name, catalog, DriverVer)` of each store package ([`inf_identity`]).
+fn store_packages() -> Vec<(String, String, String)> {
+    store_infs()
+        .into_iter()
+        .filter_map(|(name, text)| inf_identity(&text).map(|(c, v)| (name, c, v)))
+        .collect()
+}
+
+/// Delete each store package whose text mentions a needle. `/uninstall /force` also unbinds
+/// remaining devnodes.
+fn delete_store_drivers(needles: &[&str]) {
+    for (name, text) in store_infs() {
+        let text = text.to_ascii_lowercase();
+        if needles.iter().any(|n| text.contains(n)) {
+            delete_store_driver(&name);
         }
-        let text = read_inf_text(&path).to_ascii_lowercase();
-        if !needles.iter().any(|n| text.contains(n)) {
-            continue;
-        }
-        if run_quiet(
-            "pnputil",
-            &["/delete-driver", &name, "/uninstall", "/force"],
-        ) {
-            println!("deleted driver package {name}");
-        } else {
-            eprintln!("warning: pnputil /delete-driver {name} /uninstall /force failed");
-        }
+    }
+}
+
+fn delete_store_driver(name: &str) {
+    if run_quiet("pnputil", &["/delete-driver", name, "/uninstall", "/force"]) {
+        println!("deleted driver package {name}");
+    } else {
+        eprintln!("warning: pnputil /delete-driver {name} /uninstall /force failed");
     }
 }
 
@@ -737,4 +828,55 @@ fn file_name(p: &Path) -> String {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The staged INF as stampinf writes it, and the same package after pnputil stores it.
+    #[test]
+    fn inf_identity_reads_the_stamped_package() {
+        let inf = "[Version]\r\nSignature=\"$WINDOWS NT$\"\r\nClass=HIDClass\r\n\
+                   CatalogFile=pf_gamepad.cat ; signed\r\n\
+                   DriverVer = 09/24/2026,9.9.0924.1200\r\n";
+        assert_eq!(
+            inf_identity(inf),
+            Some(("pf_gamepad.cat".into(), "09/24/2026,9.9.0924.1200".into()))
+        );
+        assert_eq!(
+            inf_identity("CatalogFile=pf_gamepad.cat\n"),
+            None,
+            "unstamped"
+        );
+        assert_eq!(
+            inf_identity(";DriverVer=1\nCatalogFile=x.cat\n"),
+            None,
+            "commented out"
+        );
+    }
+
+    /// An older build of the package left in the store, a missing staged build, and a pad devnode
+    /// that survived removal are each named; a clean store is not a problem.
+    #[test]
+    fn pad_install_problems_names_what_keeps_the_old_driver() {
+        let gp = |v: &str| ("pf_gamepad.cat".to_string(), v.to_string());
+        let staged = [gp("new")];
+        assert!(pad_install_problems(&staged, &[gp("new")], &[]).is_empty());
+        let stale = pad_install_problems(&staged, &[gp("new"), gp("old")], &[]);
+        assert_eq!(stale, ["pf_gamepad.cat old is still in the driver store"]);
+        let missing = pad_install_problems(&staged, &[gp("old")], &[]);
+        assert_eq!(missing.len(), 2, "{missing:?}");
+        let other = [("pf_xusb.cat".to_string(), "old".to_string()), gp("new")];
+        assert!(
+            pad_install_problems(&staged, &other, &[]).is_empty(),
+            "other packages"
+        );
+        let live =
+            pad_install_problems(&staged, &[gp("new")], &["SWD\\PUNKTFUNK\\PF_PAD_0".into()]);
+        assert_eq!(
+            live,
+            ["pad devnode SWD\\PUNKTFUNK\\PF_PAD_0 is still present"]
+        );
+    }
 }

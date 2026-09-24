@@ -6,12 +6,12 @@
 #      Fumadocs 404s these at runtime only — a renamed page leaves silent dead links behind.
 #   2. Relative file links in the repo's markdown (READMEs, CONTRIBUTING, docs/): the target file
 #      must exist in the tree. Same failure mode: a moved file, a dead link, no CI signal.
+#   3. `/docs/<slug>#<anchor>` links in the docs and in code must name a heading on that page
+#      (check-docs-anchors.py).
 #
-# Deliberately NOT checked: external URLs (flaky third-party servers must not gate pushes),
-# `#anchor` fragments (heading anchors need a markdown renderer to verify; ponytail: add if dead
-# anchors actually bite), and site-absolute non-/docs paths like /api (three of them, all routes
-# in docs-site/src). Historical records — docs/releases/, CHANGELOG.md — are exempt from class 2:
-# they describe the tree as it was.
+# Deliberately NOT checked: external URLs (flaky third-party servers must not gate pushes) and
+# site-absolute non-/docs paths like /api (routes in docs-site/src). Historical records —
+# docs/releases/, CHANGELOG.md — are exempt from class 2: they describe the tree as it was.
 
 set -u
 LC_ALL=C
@@ -24,7 +24,8 @@ mkdir -p "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 
 # ---------------------------------------------------------------- class 1: /docs/* page links
-git ls-files 'docs-site/content/docs' > "$tmp/pages"
+# A `(group)` folder adds no URL segment, so drop it from the path before matching.
+git ls-files 'docs-site/content/docs' | sed -E 's#/\([^/]+\)##g' > "$tmp/pages"
 git grep -ohE '\]\(/docs[^)]*\)|href="/docs[^"]*"' -- docs-site/content \
     | sed -e 's/^](\(.*\))$/\1/' -e 's/^href="\(.*\)"$/\1/' \
     | sed -e 's/[#?].*$//' | sort -u > "$tmp/links"
@@ -62,5 +63,10 @@ while IFS= read -r f; do
         fi
     done < "$tmp/rels"
 done < "$tmp/mdfiles"
+
+# ---------------------------------------------------------------- class 3: #anchors
+# The console, the setup wizard and host log lines deep-link headings; a reworded heading
+# breaks them silently.
+python3 scripts/ci/check-docs-anchors.py || fail=1
 
 exit "$fail"

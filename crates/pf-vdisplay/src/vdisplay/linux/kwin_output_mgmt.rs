@@ -980,26 +980,36 @@ pub(crate) fn clear_replication_source(our_prefix: &str, our_w: u32, our_h: u32)
 /// per-output mode and scale from `kwinoutputconfig.json` by name, and ours is
 /// stable, so a previous session's mode can overlay the one we just requested.
 ///
-/// Resolve by name alone and decline unless exactly one output carries our
-/// prefix. Two matches is a supersede in flight; picking wrong would hand
-/// back the doomed output's size. (`-7` vs `-70` is the same decline.)
+/// Resolve by exact name alone ([`newest_named`]): a supersede or a kept display
+/// leaves a predecessor with our name, and KWin gives the new one its stored mode.
+/// `None` while our output is mid-announce.
 ///
 /// Returns `(width, height, refresh_mHz, scale)`. Scale is for the log:
 /// KWin's screencast streams pixel size, so a restored scale shifts logical
 /// layout without changing capture.
-pub(crate) fn actual_dims(our_prefix: &str) -> Option<(u32, u32, u32, f64)> {
+pub(crate) fn actual_dims(our_name: &str) -> Option<(u32, u32, u32, f64)> {
     let sess = Session::open("verify_dims").ok()?;
-    let mut matches = sess.state.devices.values().filter(|d| {
-        // Mid-announce has no coherent `current_mode`; reading one anyway is a
-        // 0×0 "correction" that stomps a healthy output.
-        d.seen_done && d.name.as_deref().is_some_and(|n| n.starts_with(our_prefix))
-    });
-    let ours = matches.next()?;
-    if matches.next().is_some() {
+    let ours = newest_named(sess.state.devices.values(), our_name)?;
+    // Mid-announce has no coherent `current_mode`; reading one anyway is a
+    // 0×0 "correction" that stomps a healthy output.
+    if !ours.seen_done {
         return None;
     }
     let (w, h, mhz) = sess.current_dims(ours)?;
     Some((w, h, mhz, ours.scale.filter(|s| *s > 0.0).unwrap_or(1.0)))
+}
+
+/// The newest output named exactly `name`. KWin announces a new output after every
+/// live one, so this is the one just created even when a predecessor shares its name
+/// and, after KWin restored the stored mode, its size.
+fn newest_named<'a>(
+    devices: impl IntoIterator<Item = &'a DeviceState>,
+    name: &str,
+) -> Option<&'a DeviceState> {
+    devices
+        .into_iter()
+        .filter(|d| d.name.as_deref() == Some(name))
+        .max_by_key(|d| (d.global, d.seq))
 }
 
 /// Install and select a `want_w`×`want_h`@`want_hz` custom mode on the virtual output
@@ -1353,5 +1363,37 @@ mod tests {
     #[test]
     fn registry_output_event_opcode_is_one() {
         assert_eq!(REGISTRY_OUTPUT_EVENT_OPCODE, 1);
+    }
+
+    fn device(name: &str, global: u32, seq: u32) -> DeviceState {
+        DeviceState {
+            name: Some(name.to_string()),
+            global,
+            seq,
+            ..Default::default()
+        }
+    }
+
+    /// A supersede leaves two outputs with our name. The new one is ours on both the
+    /// per-global model and the ≥ 6.7 registry model (`global` 0), and a longer slot
+    /// name that merely starts with ours is someone else's.
+    #[test]
+    fn a_same_named_predecessor_resolves_to_the_new_output() {
+        let classic = [
+            device("Virtual-punktfunk-1", 41, 1),
+            device("Virtual-punktfunk-12", 57, 2),
+            device("Virtual-punktfunk-1", 52, 3),
+        ];
+        let ours = newest_named(&classic, "Virtual-punktfunk-1").expect("resolved");
+        assert_eq!(ours.global, 52);
+
+        let registry = [
+            device("Virtual-punktfunk-1", 0, 4),
+            device("Virtual-punktfunk-1", 0, 2),
+        ];
+        let ours = newest_named(&registry, "Virtual-punktfunk-1").expect("resolved");
+        assert_eq!(ours.seq, 4);
+
+        assert!(newest_named(&classic, "Virtual-punktfunk").is_none());
     }
 }

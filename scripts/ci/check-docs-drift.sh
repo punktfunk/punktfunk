@@ -92,7 +92,7 @@ fi
 # ---------------------------------------------------------------- gate 4: documented CLI exists
 # First table cell of every row in host-cli.md: subcommands, sub-actions and flags. Multi-word
 # cells (flag + argument) are skipped — they don't map to one string literal.
-grep -E '^\|' docs-site/content/docs/host-cli.md | awk -F'|' '{print $2}' \
+grep -E '^\|' 'docs-site/content/docs/(reference)/host-cli.md' | awk -F'|' '{print $2}' \
     | grep -oE '`[a-z0-9-]+`|`--[a-z-]+`' | tr -d '`' | sort -u > "$tmp/cli-cmds"
 while IFS= read -r cmd; do
     if ! git grep -qF "\"$cmd\"" -- crates/punktfunk-host; then

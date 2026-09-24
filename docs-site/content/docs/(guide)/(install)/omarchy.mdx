@@ -1,0 +1,180 @@
+---
+title: Omarchy
+description: Install the Punktfunk host on Omarchy 4.x — the Arch repo, then one setup command for the firewall, autostart, the app menu and the bar widget.
+---
+
+Install the host on **Omarchy 4.x** and wire it into the desktop with one command. Omarchy is Arch
+underneath, so the repo and packages are the [Arch](/docs/arch) ones; only the install line and
+the desktop wiring differ.
+
+**One command instead?** The [guided installer](/docs/install#guided-install-preview) (preview)
+runs every step below, `punktfunk-omarchy setup` included:
+
+<Installer />
+
+## 1. GPU driver
+
+Same as [Arch](/docs/arch): `sudo pacman -S --needed nvidia-utils` on NVIDIA; on AMD and Intel,
+the Mesa stack you already have.
+
+## 2. Install and wire it in
+
+<Install platform="omarchy" />
+
+<Callout type="warn">
+Run `pacman -Sy`, then `pacman -S`, as shown. Omarchy aborts any `pacman -Syu <package>`
+(*"Woah partner…"*) and installs nothing, because system upgrades go through `omarchy update`.
+</Callout>
+
+The last line, `punktfunk-omarchy setup`, does the rest. Each step is safe to re-run:
+
+| Step | What it does |
+| --- | --- |
+| **Groups** | Adds you to `input` (virtual gamepads) and `punktfunk` (the virtual Steam Deck pad). Log out and back in before streaming. |
+| **Autostart** | Enables `punktfunk-host` and `punktfunk-web` as user services that start at login. |
+| **Firewall** | Opens the host's ufw profiles to your local networks and `tailscale0` (see [Firewall](#firewall)). |
+| **Browser trust** | Trusts the console's certificate in Chromium, so it opens without a warning. |
+| **App menu** | Adds **Punktfunk Web Console** to Apps (`Super`+`Space`), already signed in, plus a **Punktfunk Host** submenu. |
+| **Bar widget** | A Punktfunk widget in the bar. It replaces the tray icon. |
+| **Toasts** | Pairing requests (with **Approve** / **Deny**) and stream start/stop as Omarchy notifications. |
+| **Idle** | Keeps the screen awake while a stream runs, then restores your setting. |
+| **Theme** | The web console and the Linux client follow `omarchy-theme-set`. |
+| **Client menu** | With `punktfunk-client` installed: your saved hosts in the Omarchy menu. |
+
+To skip a part, pass `--groups=0`, `--cert=0`, `--toasts=0`, `--idle-guard=0`, `--theme=0` or
+`--menu=0`. The guided installer asks about toasts, idle and theme on its own settings screen.
+`punktfunk-omarchy status` shows what is on.
+
+## 3. Pair
+
+Open **Punktfunk Web Console** from Apps and [pair your first device](/docs/web-console#arm-pairing).
+From a terminal instead:
+
+```sh
+punktfunk-host ctl pair arm      # opens a pairing window and prints the PIN
+punktfunk-host ctl pending       # devices waiting, with name and fingerprint tail
+punktfunk-host ctl approve 1
+```
+
+The **Punktfunk Host** submenu has the same actions. Every verb: [`ctl`](/docs/host-cli#ctl).
+
+## Dedicated display or This screen
+
+| Mode | What streams |
+| --- | --- |
+| **Dedicated display** *(default)* | A virtual display at the client's size and refresh. |
+| **This screen** | This box's primary monitor, untouched. |
+
+Pick one from **Punktfunk Host** in Apps, from the bar widget's **Display** tab, or with
+`punktfunk-omarchy mode dedicated` / `mode mirror` (`mode --status` shows the current one).
+Switching restarts a running host and ends its stream. **This screen** is the
+[Streamed screen](/docs/virtual-displays#stream-a-real-monitor-instead) setting.
+
+## The bar widget
+
+Click the Punktfunk mark for a panel with five tabs: **Overview**, **Pair**, **Devices**,
+**Display** and **Stats**. A waiting device opens **Pair**. Right-click the mark to stop a live
+session, or to open the web console when nothing is streaming.
+
+Keys: `1`–`5` or `h` / `l` switch tabs, `j` / `k` move, Enter activates, Esc closes.
+
+## Firewall
+
+`setup` opens `punktfunk-native` and `punktfunk-web` to `192.168.0.0/16`, `10.0.0.0/8`,
+`172.16.0.0/12` and `tailscale0`. The Tailscale rule waits dormant until the interface exists.
+`punktfunk-gamestream` opens only when `host.env` has `PUNKTFUNK_GAMESTREAM=1`, which
+[**GameStream** in the menu](#moonlight-gamestream) sets. A management port moved off 47990 opens
+too. Video needs no rule; see [Ports](/docs/ports).
+
+## Updating
+
+`omarchy update` updates Punktfunk with the rest of the system, after its snapper snapshot. The
+console's Updates card shows that command instead of an **Update now** button. A rollback reverts
+the binaries only; your pairings and `~/.config/punktfunk` stay.
+
+## Next to Sunshine
+
+Omarchy can install Sunshine as a service. Both hosts want TCP 47990, and GameStream uses exactly
+Sunshine's ports.
+
+- The guided installer moves Punktfunk's management API to 47991 when Sunshine, Apollo or
+  Vibeshine is running or enabled, and `setup` opens that port. By hand: add
+  `PUNKTFUNK_MGMT_BIND=0.0.0.0:47991` to `~/.config/punktfunk/host.env`, then re-run
+  `punktfunk-omarchy setup`.
+- Leave GameStream off while Sunshine runs; only one host can bind those ports.
+
+To switch for good, run `omarchy remove service sunshine`. See
+[Switching from Sunshine](/docs/switching-from-sunshine).
+
+## Moonlight (GameStream)
+
+Punktfunk's own clients don't need it. For stock [Moonlight](/docs/moonlight) on a trusted LAN,
+choose **Punktfunk Host** → **GameStream** in Apps: it sets `PUNKTFUNK_GAMESTREAM=1`, restarts the
+host and opens the ufw profile. Enter the PIN a Moonlight client shows with **Punktfunk Host** →
+**Moonlight PIN**.
+
+## This box as a client
+
+The install line includes `punktfunk-client`. It follows the Omarchy theme live; turn that off with
+**Follow the Omarchy theme** in its preferences, or **Follow system theme** in the game console's
+settings. **Hosts in the Omarchy menu** in preferences (or `punktfunk-client --omarchy-menu on`)
+adds a **Punktfunk** submenu with a connect row per saved host, a wake row where the MAC is known,
+and the game console. `setup` turns it on for you.
+
+## Good to know
+
+- **Sessions.** The host starts at login on both Hyprland login sessions. Only
+  **Hyprland (uwsm-managed)** also restarts it with the session; `punktfunk-omarchy status` says
+  which one you run. It rarely matters: the host finds the live compositor on every connect.
+- **Keep-alive.** A disconnect keeps the virtual display for the
+  [keep-alive](/docs/virtual-displays#keep-alive) window, then moves its workspace to a physical
+  monitor. Release it early in the console (**Displays** → **Release**) or with
+  `punktfunk-host ctl display release`.
+- **Screen sharing.** During a stream the host borrows Omarchy's screen-share picker setting and
+  hands it back when the last stream ends. Browser shares keep working.
+- **Your own hooks.** If `~/.config/punktfunk/hooks.json` already exists, `setup` prints the toast
+  and idle entries for you to add instead of editing it.
+- **Snapshot mirror.** Omarchy pins Arch packages to a snapshot. If pacman reports an unsatisfiable
+  dependency, wait for the next `omarchy update`.
+- **Disk encryption.** Omarchy encrypts the disk by default, so a
+  [Wake-on-LAN](/docs/wake-on-lan) cold boot stops at the passphrase. Suspend the box instead.
+
+## Troubleshooting
+
+Run `punktfunk-omarchy status` first. It checks the units, ufw rules, groups, the portal and
+Hyprland's permission mode in one pass.
+
+### Black frames, or input does nothing
+
+Hyprland's permission enforcement is on and silently denies the host. Add to your Hyprland config:
+
+```lua
+o.permission("/usr/bin/punktfunk-host", "screencopy", "allow")
+o.permission("/usr/bin/punktfunk-host", "plugin", "allow")
+```
+
+### No picture at all
+
+Capture goes through `xdg-desktop-portal-hyprland`. Check it with
+`systemctl --user status xdg-desktop-portal-hyprland`.
+
+### The host isn't running after a reboot
+
+Autostart is off. Re-run `punktfunk-omarchy setup`.
+
+### Physical monitors stay dark after a disconnect
+
+The virtual display is still in its keep-alive window. Release it as above; see
+[Virtual displays](/docs/virtual-displays#troubleshooting).
+
+More in [Troubleshooting](/docs/troubleshooting) and on the [Hyprland page](/docs/hyprland).
+
+## Uninstall
+
+```sh
+punktfunk-omarchy remove
+sudo pacman -R punktfunk-host punktfunk-web punktfunk-scripting punktfunk-client   # the ones you have
+```
+
+`remove` undoes every `setup` step and restores the tray icon and the screen-share picker. Your
+groups, pairings and `~/.config/punktfunk` stay; [Uninstall](/docs/uninstall) clears them.

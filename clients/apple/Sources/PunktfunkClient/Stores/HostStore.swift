@@ -186,13 +186,25 @@ final class HostStore: ObservableObject {
 
     /// One reachability sweep, driving `probedOnline`: probe every saved host and publish the
     /// reachable set. Call in a loop from a home view's `.task` (cancelled on disappear).
+    ///
+    /// All hosts at once, as the desktop clients' `probe_known` does. Asked in turn, every silent
+    /// host cost a full probe timeout (1.7 s, twice for a pinned one with somewhere else to look)
+    /// before the next was asked, and nothing was published until the last — so a list holding a
+    /// few sleeping machines took half a minute to light the one that was up. A host lights the
+    /// moment it answers; the end of the lap drops the ones that stopped.
     func refreshReachability(discovery: HostDiscovery) async {
         #if DEBUG
         guard !probePinned else { return } // a seeded reachable set outranks the live LAN
         #endif
         var online: Set<StoredHost.ID> = []
-        for host in hosts {
-            if await isReachable(host, discovery: discovery) { online.insert(host.id) }
+        await withTaskGroup(of: (StoredHost.ID, Bool).self) { group in
+            for host in hosts {
+                group.addTask { (host.id, await self.isReachable(host, discovery: discovery)) }
+            }
+            for await (id, up) in group where up {
+                online.insert(id)
+                if !probedOnline.contains(id) { probedOnline.insert(id) }
+            }
         }
         probedOnline = online
     }

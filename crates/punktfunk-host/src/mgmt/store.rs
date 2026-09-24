@@ -251,7 +251,8 @@ fn build_catalog(force: bool) -> CatalogResponse {
                 min_host: e.min_host.clone(),
                 compatible: reason.is_none(),
                 incompatible_reason: reason,
-                update_available: installed_version.as_deref().is_some_and(|v| v != e.version),
+                update_available: installed_version.is_some()
+                    && newer(installed_version.as_deref(), &e.version),
                 installed_version,
                 blocked: store::advisory_for(&e.pkg, Some(&e.version)).map(|a| a.reason),
                 categories: e.categories.clone(),
@@ -316,8 +317,10 @@ fn build_installed(live: &[String]) -> Vec<InstalledView> {
                 running: plugin_id
                     .as_deref()
                     .is_some_and(|id| live.iter().any(|l| l == id)),
+                // Only a version this host can run: an incompatible one is refused at install.
                 update_available: entry.as_ref().and_then(|(e, _)| {
-                    (p.version.as_deref() != Some(e.version.as_str())).then(|| e.version.clone())
+                    (newer(p.version.as_deref(), &e.version) && e.incompatible_reason().is_none())
+                        .then(|| e.version.clone())
                 }),
                 blocked: store::advisory_for(&p.pkg, p.version.as_deref()).map(|a| a.reason),
                 plugin_id,
@@ -328,6 +331,31 @@ fn build_installed(live: &[String]) -> Vec<InstalledView> {
         .collect();
     out.sort_by(|a, b| a.pkg.cmp(&b.pkg));
     out
+}
+
+/// Is the catalog's `want` newer than the installed `have`? A CLI install can be ahead of the
+/// catalog, and offering its catalog version would be a downgrade. Unparseable versions fall
+/// back to "different".
+fn newer(have: Option<&str>, want: &str) -> bool {
+    match (
+        have.and_then(|v| semver::Version::parse(v).ok()),
+        semver::Version::parse(want).ok(),
+    ) {
+        (Some(have), Some(want)) => want > have,
+        _ => have != Some(want),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn an_update_is_only_ever_newer() {
+    assert!(newer(Some("0.6.0"), "0.6.1"));
+    assert!(
+        !newer(Some("0.6.2"), "0.6.1"),
+        "a CLI install ahead of the catalog"
+    );
+    assert!(!newer(Some("0.6.1"), "0.6.1"));
+    assert!(newer(None, "0.6.1"));
 }
 
 // ---------------------------------------------------------------- handlers

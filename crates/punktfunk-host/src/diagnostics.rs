@@ -30,6 +30,7 @@ pub mod ids {
     pub const OMARCHY_UPDATES: &str = "omarchy_updates";
     pub const VDISPLAY_DRIVER: &str = "vdisplay_driver";
     pub const PAD_AUDIO: &str = "pad_audio";
+    pub const PAD_DRIVER: &str = "pad_driver";
     pub const PLUGIN_SANDBOX: &str = "plugin_sandbox";
     pub const RESTART_PENDING: &str = "restart_pending";
 }

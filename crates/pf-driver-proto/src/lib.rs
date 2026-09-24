@@ -1899,6 +1899,12 @@ pub mod gamepad {
     /// Evidence: `design/gamepad-channel-sealing.md`.
     pub const GAMEPAD_PROTO_VERSION: u32 = 3;
 
+    /// Behaviour revision the driver stamps into [`PadShm::driver_rev`]. The protocol version
+    /// only moves when the layout breaks, so a driver with old behaviour still attaches; the host
+    /// compares this instead and flags an older driver. Bump it with any driver change a game or
+    /// the host depends on. `1`: devnode-index serials, Deck packet numbers, refused unknown ids.
+    pub const GAMEPAD_DRIVER_REV: u32 = 1;
+
     // Channel proof: who to hand the DATA section to. Do not take the duplication target from
     // the mailbox's `driver_pid` — LocalService can spawn a world-executable WUDFHost and publish
     // that pid. Ask the devnode the host created (`SwDeviceCreate` instance id). `pf_xusb` answers
@@ -2208,7 +2214,10 @@ pub mod gamepad {
         /// samples before and after and retries on a write in flight. An old host leaves this 0
         /// (constant even), so a new driver's re-check always passes. Inside the v2 legacy region.
         pub input_gen: u32,
-        pub _reserved1: [u8; 84],
+        /// [`GAMEPAD_DRIVER_REV`], stamped beside `driver_proto`. `0` = a driver older than the
+        /// field. Inside the v2 legacy region, so every map reaches it.
+        pub driver_rev: u32,
+        pub _reserved1: [u8; 80],
         /// Lossless output ring. [`OUT_RING_LEN`] under v2.1, [`OUT_RING_LEN_V22`] under v2.2
         /// (slots 8.. overlay what v2.1 called `_reserved2`, which no shipped binary touched).
         pub out_ring: [OutSlot; OUT_RING_LEN_V22_USIZE],
@@ -2257,6 +2266,7 @@ pub mod gamepad {
         assert!(offset_of!(PadShm, input_gen) == 168);
         assert!(offset_of!(PadShm, input_gen) % 4 == 0);
         assert!(offset_of!(PadShm, input_gen) < PAD_SHM_LEGACY_SIZE);
+        assert!(offset_of!(PadShm, driver_rev) == 172);
         assert!(
             PAD_SHM_LEGACY_SIZE + OUT_RING_LEN_USIZE * size_of::<OutSlot>() <= PAD_SHM_V21_SIZE
         );
@@ -2303,16 +2313,18 @@ pub mod gamepad {
         Some(from + REPORT_PERIOD_US)
     }
 
-    /// Write the pad's own clocks into a Sony report about to be served.
+    /// Write the pad's own clocks into a report about to be served.
     ///
     /// A USB `DualSense` advances four every report: the 8-bit counter (byte 7), a 32-bit packet
     /// sequence (12–15), `sensor_timestamp` (28–31) and a second 32-bit timer (49–52) about 2 ms
     /// after it. Motion code integrates gyro over `sensor_timestamp`, so it has to advance by the
-    /// real time between the reports a game receives. The host publishes at its client's rate and
-    /// the driver serves at the hardware's, so the driver owns every clock. `serial` is this
-    /// report's index, `elapsed_us` the time since the first report; every field wraps as hardware
-    /// does. Returns `false`, and leaves the report alone, for an identity that has no such fields.
-    pub fn stamp_sony_clock(
+    /// real time between the reports a game receives. A Deck frame carries `unPacketNum` (4–7),
+    /// and Valve's `controller_structs.h` tells readers to skip a repeated one. The host publishes
+    /// at its client's rate and the driver serves at the hardware's, so the driver owns every
+    /// clock. `serial` is this report's index, `elapsed_us` the time since the first report; every
+    /// field wraps as hardware does. Returns `false`, and leaves the report alone, for an identity
+    /// that has no such fields.
+    pub fn stamp_report_clock(
         device_type: u8,
         report: &mut [u8; 64],
         serial: u32,
@@ -2338,9 +2350,92 @@ pub mod gamepad {
                 report[34] = ts as u8;
                 true
             }
+            DEVTYPE_STEAMDECK => {
+                report[4..8].copy_from_slice(&serial.to_le_bytes());
+                true
+            }
             _ => false,
         }
     }
+
+    /// Low octet of a PlayStation pad's MAC: byte 1 of its pairing reply (feature 0x09 / 0x12)
+    /// and the last two hex digits of its USB serial. Each identity has its own base, so no
+    /// index of one identity lands on another's octet.
+    pub const fn ps_mac_low(device_type: u8, index: u8) -> u8 {
+        let base: u8 = match device_type {
+            DEVTYPE_DUALSHOCK4 => 0x01,
+            DEVTYPE_DUALSENSE_EDGE => 0x94,
+            _ => 0x74,
+        };
+        base.wrapping_add(index)
+    }
+
+    /// USB serial string of pad `index` presented as `device_type`. SDL and Steam dedup pads by
+    /// it, so no two (identity, index) pairs may share one. A PlayStation serial is the pairing
+    /// MAC, most significant octet first; each Xbox model has its own base octet.
+    pub fn pad_serial(device_type: u8, index: u8) -> String {
+        let low = ps_mac_low(device_type, index);
+        let xbox = |base: u8| alloc::format!("F4B0FC2A6C{:02X}", base.wrapping_add(index));
+        match device_type {
+            DEVTYPE_DUALSHOCK4 => alloc::format!("DEADBEEF00{low:02X}"),
+            DEVTYPE_STEAMDECK => alloc::format!("FVPF{:08X}", 0x5046_0000u32 | index as u32),
+            DEVTYPE_XBOX => xbox(0x10),
+            DEVTYPE_XBOX_ONE_S => xbox(0x30),
+            DEVTYPE_XBOX_ELITE => xbox(0x50),
+            DEVTYPE_TRITON => {
+                let mut s = [0u8; 13];
+                crate::triton::serial(index, &mut s);
+                String::from_utf8_lossy(&s).into_owned()
+            }
+            _ => alloc::format!("35533AD6E7{low:02X}"),
+        }
+    }
+
+    /// The `pf_*` hardware-id tokens the host puts first on a pad devnode, and the `device_type`
+    /// each names. A token that prefixes another comes after it (`pf_dualsense` after
+    /// `pf_dualsenseedge`), so the first match is the right one. Windows Server has no
+    /// `xinputhid`, so every Xbox kind binds `pf_xbox_nofilter`; the section fixes the PID.
+    pub const HWID_DEVTYPES: [(&str, u8); 9] = [
+        ("pf_xbox_nofilter", DEVTYPE_XBOX),
+        ("pf_xboxwireless", DEVTYPE_XBOX),
+        ("pf_xboxones", DEVTYPE_XBOX_ONE_S),
+        ("pf_xboxelite", DEVTYPE_XBOX_ELITE),
+        ("pf_triton", DEVTYPE_TRITON),
+        ("pf_steamdeck", DEVTYPE_STEAMDECK),
+        ("pf_dualsenseedge", DEVTYPE_DUALSENSE_EDGE),
+        ("pf_dualshock4", DEVTYPE_DUALSHOCK4),
+        ("pf_dualsense", DEVTYPE_DUALSENSE),
+    ];
+
+    /// The identity a devnode's lowercase hardware-id list names. `None` when no `pf_*` token is
+    /// in it: the driver refuses that devnode rather than guess one.
+    pub fn devtype_from_hwids(ids: &str) -> Option<u8> {
+        HWID_DEVTYPES
+            .iter()
+            .find(|(token, _)| ids.contains(token))
+            .map(|&(_, devtype)| devtype)
+    }
+
+    /// USB VID/PID the driver reports in each identity's HID attributes. SDL, Steam and Windows
+    /// key their stock mappings off them. `None` for a `device_type` this build does not know.
+    pub const fn identity_vid_pid(device_type: u8) -> Option<(u16, u16)> {
+        Some(match device_type {
+            DEVTYPE_DUALSENSE => (0x054C, 0x0CE6),
+            DEVTYPE_DUALSHOCK4 => (0x054C, 0x09CC),
+            DEVTYPE_DUALSENSE_EDGE => (0x054C, 0x0DF2),
+            DEVTYPE_STEAMDECK => (0x28DE, 0x1205),
+            DEVTYPE_XBOX => (0x045E, 0x0B13),
+            DEVTYPE_XBOX_ONE_S => (0x045E, 0x02FD),
+            DEVTYPE_XBOX_ELITE => (0x045E, 0x0B22),
+            DEVTYPE_TRITON => (0x28DE, 0x1302),
+            _ => return None,
+        })
+    }
+
+    /// NTSTATUS the driver fails `EvtDeviceAdd` with when no `pf_*` hardware id names the pad
+    /// (`STATUS_DEVICE_CONFIGURATION_ERROR`). UMDF does not pass it on: the devnode reports
+    /// `STATUS_DEVICE_DATA_ERROR`, so the host judges the devnode's hardware ids instead.
+    pub const STATUS_NO_PAD_IDENTITY: u32 = 0xC000_0182;
 }
 
 /// Steam Controller 2 (Triton) wire tables: UMDF driver (answers Steam synchronously) and
@@ -2801,7 +2896,7 @@ mod tests {
     fn sony_clock_advances_like_hardware() {
         use gamepad::*;
         let mut ds = [0xAAu8; 64];
-        assert!(stamp_sony_clock(DEVTYPE_DUALSENSE, &mut ds, 5, 8_000));
+        assert!(stamp_report_clock(DEVTYPE_DUALSENSE, &mut ds, 5, 8_000));
         assert_eq!(ds[7], 5);
         let le = |r: &[u8; 64], at: usize| u32::from_le_bytes(r[at..at + 4].try_into().unwrap());
         assert_eq!(le(&ds, 12), 5, "packet sequence");
@@ -2815,13 +2910,13 @@ mod tests {
 
         // Every clock advances on every report, as on hardware.
         let mut next = ds;
-        stamp_sony_clock(DEVTYPE_DUALSENSE, &mut next, 6, 12_000);
+        stamp_report_clock(DEVTYPE_DUALSENSE, &mut next, 6, 12_000);
         for at in [12, 28, 49] {
             assert!(le(&next, at) > le(&ds, at), "field at {at} did not advance");
         }
 
         let mut edge = [0u8; 64];
-        assert!(stamp_sony_clock(
+        assert!(stamp_report_clock(
             DEVTYPE_DUALSENSE_EDGE,
             &mut edge,
             256 + 3,
@@ -2831,7 +2926,7 @@ mod tests {
 
         let mut ds4 = [0u8; 64];
         ds4[7] = 0x03; // PS + touchpad click held
-        assert!(stamp_sony_clock(
+        assert!(stamp_report_clock(
             DEVTYPE_DUALSHOCK4,
             &mut ds4,
             64 + 2,
@@ -2846,8 +2941,88 @@ mod tests {
         assert_eq!(ds4[34], 3_000u16 as u8);
 
         let mut xbox = [0x11u8; 64];
-        assert!(!stamp_sony_clock(DEVTYPE_XBOX, &mut xbox, 1, 4_000));
+        assert!(!stamp_report_clock(DEVTYPE_XBOX, &mut xbox, 1, 4_000));
         assert_eq!(xbox, [0x11u8; 64]);
+    }
+
+    /// The driver re-serves a held Deck frame every 4 ms. Readers skip a frame whose
+    /// `unPacketNum` (bytes 4..8) repeats, so every served frame needs its own.
+    #[test]
+    fn deck_packet_number_advances_per_served_report() {
+        use gamepad::*;
+        let mut held = [0x5Au8; 64];
+        held[..4].copy_from_slice(&[0x01, 0x00, 0x09, 0x40]);
+        let (mut a, mut b) = (held, held);
+        assert!(stamp_report_clock(DEVTYPE_STEAMDECK, &mut a, 41, 4_000));
+        assert!(stamp_report_clock(DEVTYPE_STEAMDECK, &mut b, 42, 8_000));
+        assert_eq!(a[4..8], 41u32.to_le_bytes());
+        assert_eq!(b[4..8], 42u32.to_le_bytes());
+        assert_eq!(a[..4], held[..4], "the header stays the host's");
+        assert_eq!(a[8..], held[8..], "controls stay the host's");
+    }
+
+    /// SDL and Steam merge two pads that report one serial. Every identity at every host pad
+    /// index (`MAX_PADS` = 16) must be distinct; a DualSense in slot n+1 once matched an Edge in
+    /// slot n.
+    #[test]
+    fn no_two_pads_share_a_serial() {
+        use gamepad::*;
+        let mut seen = std::collections::HashMap::new();
+        for devtype in DEVTYPE_DUALSENSE..=DEVTYPE_TRITON {
+            for index in 0..16u8 {
+                let serial = pad_serial(devtype, index);
+                if let Some(prev) = seen.insert(serial.clone(), (devtype, index)) {
+                    panic!("{serial} is both {prev:?} and {:?}", (devtype, index));
+                }
+            }
+        }
+        // The pairing MAC's low octet is the serial's last two hex digits.
+        for devtype in [
+            DEVTYPE_DUALSENSE,
+            DEVTYPE_DUALSHOCK4,
+            DEVTYPE_DUALSENSE_EDGE,
+        ] {
+            let serial = pad_serial(devtype, 3);
+            let low = alloc::format!("{:02X}", ps_mac_low(devtype, 3));
+            assert!(serial.ends_with(&low), "{serial} vs {low}");
+        }
+        assert_eq!(pad_serial(DEVTYPE_DUALSENSE, 0), "35533AD6E774");
+        assert_eq!(pad_serial(DEVTYPE_DUALSHOCK4, 0), "DEADBEEF0001");
+        assert_eq!(pad_serial(DEVTYPE_STEAMDECK, 2), "FVPF50460002");
+        assert_eq!(pad_serial(DEVTYPE_TRITON, 12), "FVPF130212D03");
+    }
+
+    /// The driver settles its identity from the hardware ids before hidclass asks, and refuses
+    /// a devnode none of them names. A token tested before a longer one it prefixes would hand
+    /// the longer one's pad the wrong report descriptor.
+    #[test]
+    fn hardware_ids_name_exactly_one_identity() {
+        use gamepad::*;
+        for (i, (token, devtype)) in HWID_DEVTYPES.iter().enumerate() {
+            for (later, _) in &HWID_DEVTYPES[i + 1..] {
+                assert!(!later.starts_with(token), "{token} shadows {later}");
+            }
+            assert_eq!(devtype_from_hwids(token), Some(*devtype), "{token}");
+            // The devnode carries synthesized USB ids after ours, as the host creates it.
+            let ids = alloc::format!("{token};usb\\vid_054c&pid_0ce6&rev_0100;usb\\class_03");
+            assert_eq!(devtype_from_hwids(&ids), Some(*devtype), "{ids}");
+            assert!(
+                identity_vid_pid(*devtype).is_some(),
+                "{token} has no VID/PID"
+            );
+        }
+        assert_eq!(
+            devtype_from_hwids("root\\pf_dualsense"),
+            Some(DEVTYPE_DUALSENSE)
+        );
+        assert_eq!(devtype_from_hwids("usb\\vid_054c&pid_0ce6"), None);
+        assert_eq!(devtype_from_hwids(""), None, "a failed property query");
+        assert_eq!(identity_vid_pid(DEVTYPE_TRITON + 1), None);
+        assert_eq!(
+            identity_vid_pid(DEVTYPE_DUALSENSE_EDGE),
+            Some((0x054C, 0x0DF2))
+        );
+        assert_eq!(identity_vid_pid(DEVTYPE_XBOX_ELITE), Some((0x045E, 0x0B22)));
     }
 
     /// Serves land one period apart on a fine timer, and a coarse timer restarts the schedule

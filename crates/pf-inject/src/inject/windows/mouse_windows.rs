@@ -29,7 +29,7 @@ const OFF_DRIVER_HEARTBEAT: usize = core::mem::offset_of!(MouseShm, driver_heart
 const OFF_PAD_INDEX: usize = core::mem::offset_of!(MouseShm, pad_index);
 
 /// The reserved display connector a seat host owns; unset on the console.
-/// `docs-site/content/docs/multi-seat-contract.md` is the contract of record.
+/// `docs-site/content/docs/developers/multi-seat-contract.md` is the contract of record.
 const SEAT_SLOT_ENV: &str = "PUNKTFUNK_SEAT_DISPLAY_SLOT";
 const FIRST_SEAT_SLOT: u8 = 12;
 const LAST_SEAT_SLOT: u8 = 15;

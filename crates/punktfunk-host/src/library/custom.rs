@@ -463,9 +463,8 @@ pub fn validate_store_claim(store: &str) -> Result<(), String> {
     }
 }
 
-/// A plugin reconciles its whole set at once, so a 400 on one tile would drop every game.
-/// Vocabulary errors still 400 in [`validate_provider_payload`]. Drop the row, not just
-/// `launch`: a launcher tile with no launch is not shown.
+/// A plugin reconciles its whole set at once, so a 400 on one tile would drop every game. Drop
+/// the row, not just `launch`: a launcher tile with no launch is not shown.
 pub fn sanitize_launcher_entries(inputs: &mut Vec<ProviderEntryInput>) -> Vec<(String, String)> {
     let mut dropped = Vec::new();
     inputs.retain(|e| {
@@ -479,12 +478,13 @@ pub fn sanitize_launcher_entries(inputs: &mut Vec<ProviderEntryInput>) -> Vec<(S
     dropped
 }
 
-/// Non-empty titles and unique, non-empty `external_id`s. A duplicate would make ownership of
-/// the surviving row ambiguous.
+/// Refuse a payload whose rows would be ambiguous: an empty or duplicate `external_id`, or an
+/// empty title. Any other fault belongs to one entry, so that entry is dropped and returned with
+/// its reason — one odd title must not empty the provider's library.
 pub fn validate_provider_payload(
     provider: &str,
-    inputs: &[ProviderEntryInput],
-) -> Result<(), String> {
+    inputs: &mut Vec<ProviderEntryInput>,
+) -> Result<Vec<(String, String)>, String> {
     let mut seen = std::collections::HashSet::new();
     for (i, e) in inputs.iter().enumerate() {
         if e.external_id.trim().is_empty() {
@@ -499,86 +499,91 @@ pub fn validate_provider_payload(
                 e.external_id
             ));
         }
-        // Closed-vocabulary kinds are 400 here as well as at launch, so the plugin can act.
-        if let Some(launch) = &e.launch {
-            if launch.kind == "steam_ui" && !valid_steam_ui(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `steam_ui` must be `bigpicture` or `desktop`"
-                ));
-            }
-            // Vocabulary only. "Not installed" is not a payload bug — [`sanitize_launcher_entries`]
-            // drops just that tile instead of 400ing the whole reconcile.
-            if launch.kind == "launcher_ui" && !known_launcher_ui(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `launcher_ui` is not a launcher this \
-                     host's platform supports (`{}`)",
-                    launch.value
-                ));
-            }
-            // Interpolated into a `playnite://` URI; charset-checked here and at launch.
-            if launch.kind == "playnite" && !valid_playnite_id(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `playnite` must be a Playnite game GUID"
-                ));
-            }
-            // `<Identity>!<AppId>` from `MicrosoftGame.config`. The host fills the publisher hash
-            // at launch (the runner cannot), so the shape is checked here.
-            if launch.kind == "xbox" && !valid_aumid(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `xbox` must be `<Identity>!<AppId>`"
-                ));
-            }
-            // Store ids interpolated into a protocol URI or a launcher argv: charset-checked
-            // here, where the author sees it, and again at launch.
-            if launch.kind == "uplay" && !valid_uplay_id(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `uplay` must be a numeric game id"
-                ));
-            }
-            if launch.kind == "amazon" && !valid_amazon_id(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `amazon` must be a product id \
-                     (`amzn1.adg.product.…`)"
-                ));
-            }
-            if launch.kind == "battlenet" && !valid_battlenet_code(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `battlenet` must be a launch code \
-                     of [A-Za-z0-9_]"
-                ));
-            }
-            #[cfg(not(windows))]
-            if launch.kind == "desktop_id" && !crate::library::valid_desktop_id(&launch.value) {
-                return Err(format!(
-                    "entries[{i}]: `launch.value` for kind `desktop_id` must be a desktop entry id"
-                ));
-            }
-            // A template name in the publishing plugin's manifest, with its arguments. Resolved
-            // here so a bad entry is refused at publish time rather than at launch.
-            if launch.kind == "exec" {
-                if let Err(reason) = crate::library::exec_spec_is_publishable(provider, launch) {
-                    return Err(format!("entries[{i}]: `launch` for kind `exec` {reason}"));
-                }
-            }
+    }
+    let exec = inputs
+        .iter()
+        .any(|e| e.launch.as_ref().is_some_and(|l| l.kind == "exec"));
+    let manifest = exec
+        .then(|| crate::plugins::manifest::for_provider(provider))
+        .flatten();
+    let mut dropped = Vec::new();
+    inputs.retain(|e| match entry_fault(provider, manifest.as_ref(), e) {
+        None => true,
+        Some(reason) => {
+            dropped.push((e.external_id.clone(), reason));
+            false
         }
-        if let Some(marker) = &e.detect.env_marker {
-            if !valid_env_key(&marker.key) {
-                return Err(format!(
-                    "entries[{i}]: `detect.env_marker.key` must be 1–64 chars of [A-Za-z0-9_]"
-                ));
-            }
-            if marker
-                .value
-                .as_ref()
-                .is_some_and(|v| v.len() > MAX_ENV_VALUE)
-            {
-                return Err(format!(
-                    "entries[{i}]: `detect.env_marker.value` must be at most {MAX_ENV_VALUE} chars"
-                ));
-            }
+    });
+    Ok(dropped)
+}
+
+/// Why this host would never launch or detect `e`, if it would not. Closed vocabularies are
+/// checked here as well as at launch, so the plugin's author sees the reason.
+fn entry_fault(
+    provider: &str,
+    manifest: Option<&crate::plugins::manifest::PluginManifest>,
+    e: &ProviderEntryInput,
+) -> Option<String> {
+    if let Some(launch) = &e.launch {
+        let bad = |ok: bool, what: &str| {
+            (!ok).then(|| format!("`launch.value` for kind `{}` {what}", launch.kind))
+        };
+        let fault = match launch.kind.as_str() {
+            "steam_ui" => bad(
+                valid_steam_ui(&launch.value),
+                "must be `bigpicture` or `desktop`",
+            ),
+            // Vocabulary only: "not installed" is [`sanitize_launcher_entries`]'s business.
+            "launcher_ui" => bad(
+                known_launcher_ui(&launch.value),
+                "is not a launcher this host's platform supports",
+            ),
+            // Interpolated into a `playnite://` URI.
+            "playnite" => bad(
+                valid_playnite_id(&launch.value),
+                "must be a Playnite game GUID",
+            ),
+            // `<Identity>!<AppId>`: the host fills the publisher hash at launch.
+            "xbox" => bad(valid_aumid(&launch.value), "must be `<Identity>!<AppId>`"),
+            "uplay" => bad(valid_uplay_id(&launch.value), "must be a numeric game id"),
+            "amazon" => bad(
+                valid_amazon_id(&launch.value),
+                "must be a product id (`amzn1.adg.product.…`)",
+            ),
+            "battlenet" => bad(
+                valid_battlenet_code(&launch.value),
+                "must be a launch code of [A-Za-z0-9_]",
+            ),
+            #[cfg(not(windows))]
+            "desktop_id" => bad(
+                crate::library::valid_desktop_id(&launch.value),
+                "must be a desktop entry id",
+            ),
+            // A template in the publishing plugin's manifest, resolved now rather than at launch.
+            "exec" => match manifest {
+                None => Some(format!(
+                    "`launch` for kind `exec` needs an installed plugin whose manifest declares \
+                     the provider id '{provider}'"
+                )),
+                Some(m) => crate::library::exec_spec_is_valid(m, launch)
+                    .err()
+                    .map(|reason| format!("`launch` for kind `exec` is not resolvable: {reason}")),
+            },
+            _ => None,
+        };
+        if fault.is_some() {
+            return fault;
         }
     }
-    Ok(())
+    let marker = e.detect.env_marker.as_ref()?;
+    if !valid_env_key(&marker.key) {
+        return Some("`detect.env_marker.key` must be 1–64 chars of [A-Za-z0-9_]".into());
+    }
+    marker
+        .value
+        .as_ref()
+        .is_some_and(|v| v.len() > MAX_ENV_VALUE)
+        .then(|| format!("`detect.env_marker.value` must be at most {MAX_ENV_VALUE} chars"))
 }
 
 /// Replace `provider`'s rows with `inputs`. Surviving titles keep their host id (keyed on
@@ -1109,25 +1114,23 @@ mod tests {
             });
             i
         };
-        assert!(
-            validate_provider_payload("demo", &[with_launch("steam_ui", "bigpicture")]).is_ok()
-        );
-        assert!(validate_provider_payload("demo", &[with_launch("steam_ui", "desktop")]).is_ok());
-        assert!(validate_provider_payload("demo", &[with_launch("steam_ui", "gamepad")]).is_err());
-        assert!(validate_provider_payload("demo", &[with_launch("steam_ui", "")]).is_err());
+        // How many entries one bad field drops: never the whole payload.
+        let dropped = |i: ProviderEntryInput| {
+            validate_provider_payload("demo", &mut vec![i]).map(|d| d.len())
+        };
+        assert_eq!(dropped(with_launch("steam_ui", "bigpicture")), Ok(0));
+        assert_eq!(dropped(with_launch("steam_ui", "desktop")), Ok(0));
+        assert_eq!(dropped(with_launch("steam_ui", "gamepad")), Ok(1));
+        assert_eq!(dropped(with_launch("steam_ui", "")), Ok(1));
         // Other kinds are unconstrained here (validated per-kind at launch).
-        assert!(validate_provider_payload("demo", &[with_launch("command", "anything")]).is_ok());
+        assert_eq!(dropped(with_launch("command", "anything")), Ok(0));
 
-        // `launcher_ui`: unknown names 400 here. Not-installed is dropped later, not 400.
-        assert!(
-            validate_provider_payload("demo", &[with_launch("launcher_ui", "nonesuch")]).is_err()
-        );
+        // `launcher_ui`: an unknown name drops that entry; not-installed is dropped later.
+        assert_eq!(dropped(with_launch("launcher_ui", "nonesuch")), Ok(1));
         #[cfg(windows)]
-        assert!(
-            validate_provider_payload("demo", &[with_launch("launcher_ui", "playnite")]).is_ok()
-        );
+        assert_eq!(dropped(with_launch("launcher_ui", "playnite")), Ok(0));
         #[cfg(target_os = "linux")]
-        assert!(validate_provider_payload("demo", &[with_launch("launcher_ui", "lutris")]).is_ok());
+        assert_eq!(dropped(with_launch("launcher_ui", "lutris")), Ok(0));
 
         let with_env = |key: &str, value: Option<&str>| {
             let mut i = input("a", "A");
@@ -1137,17 +1140,29 @@ mod tests {
             });
             i
         };
-        assert!(
-            validate_provider_payload("demo", &[with_env("HEROIC_APP_NAME", Some("Quail"))])
-                .is_ok()
+        assert_eq!(dropped(with_env("HEROIC_APP_NAME", Some("Quail"))), Ok(0));
+        assert_eq!(dropped(with_env("BAD-KEY", None)), Ok(1));
+        assert_eq!(dropped(with_env("", None)), Ok(1));
+        assert_eq!(
+            dropped(with_env("K", Some(&"x".repeat(MAX_ENV_VALUE + 1)))),
+            Ok(1)
         );
-        assert!(validate_provider_payload("demo", &[with_env("BAD-KEY", None)]).is_err());
-        assert!(validate_provider_payload("demo", &[with_env("", None)]).is_err());
-        assert!(validate_provider_payload(
-            "demo",
-            &[with_env("K", Some(&"x".repeat(MAX_ENV_VALUE + 1)))]
-        )
-        .is_err());
+    }
+
+    #[test]
+    fn one_bad_entry_drops_only_itself() {
+        let mut bad = input("b", "B");
+        bad.launch = Some(LaunchSpec {
+            kind: "steam_ui".into(),
+            value: "gamepad".into(),
+            ..Default::default()
+        });
+        let mut inputs = vec![input("a", "A"), bad, input("c", "C")];
+        let dropped = validate_provider_payload("demo", &mut inputs).unwrap();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].0, "b");
+        let kept: Vec<_> = inputs.iter().map(|e| e.external_id.as_str()).collect();
+        assert_eq!(kept, ["a", "c"]);
     }
 
     #[test]
@@ -1226,11 +1241,12 @@ mod tests {
         assert!(validate_provider_name("-lead").is_err());
         assert!(validate_provider_name(&"x".repeat(65)).is_err());
 
-        assert!(validate_provider_payload("demo", &[input("a", "A")]).is_ok());
-        assert!(validate_provider_payload("demo", &[input("", "A")]).is_err());
-        assert!(validate_provider_payload("demo", &[input("a", " ")]).is_err());
+        let check = |mut v: Vec<ProviderEntryInput>| validate_provider_payload("demo", &mut v);
+        assert!(check(vec![input("a", "A")]).is_ok());
+        assert!(check(vec![input("", "A")]).is_err());
+        assert!(check(vec![input("a", " ")]).is_err());
         assert!(
-            validate_provider_payload("demo", &[input("a", "A"), input("a", "B")]).is_err(),
+            check(vec![input("a", "A"), input("a", "B")]).is_err(),
             "duplicate external_id"
         );
     }

@@ -1,0 +1,109 @@
+---
+title: PyroWave (wired-LAN codec)
+description: The wavelet codec for wired links — near-zero codec latency for a bitrate you set in bits per pixel.
+---
+
+PyroWave is an opt-in video codec for wired links. Every frame is a complete picture, compressed
+with a wavelet transform in Vulkan compute ([upstream](https://github.com/Themaister/pyrowave)).
+It encodes and decodes in a fraction of a millisecond, and pays for that with far more bandwidth
+than HEVC or AV1.
+
+Punktfunk never picks it for you. It runs when you choose it on the client and the host supports
+it; otherwise the session uses the normal codecs.
+
+## Why use it
+
+- **Codec latency almost disappears.** Encode takes ~0.15 ms and decode ~0.07 ms at 1080p on an
+  RTX 5070 Ti. Hardware HEVC takes one to several milliseconds on each side.
+- **Packet loss costs one frame.** No frame depends on another, so there is no keyframe request
+  and no stutter while the stream recovers.
+- **Every frame is the same size.** The network sees a steady load instead of keyframe bursts.
+
+## Setting it up
+
+**Host:** Linux hosts (AMD, Intel and NVIDIA) and x64 Windows hosts support it with nothing to
+install. Windows on Arm hosts don't.
+
+**Client:** set **Video codec** to **PyroWave (wired LAN)**.
+
+| Client | Needs |
+|---|---|
+| Linux (desktop app, controller UI, Steam Deck) | — |
+| Windows | x64 |
+| Mac, iPhone, iPad, Apple TV | Apple silicon, or A13 and newer |
+| Android | 64-bit, Vulkan 1.3 GPU |
+
+The Apple and Android apps and the controller UI list it only when the device can decode it.
+A session whose host or device can't run it falls back to HEVC. The
+[stats overlay](/docs/stats) names `PyroWave` as the codec while it runs.
+
+## Bits per pixel
+
+PyroWave has no quality setting of its own: its encoder fills each frame's byte budget exactly.
+Punktfunk sets that budget in **bits per pixel**, so one number means the same picture at every
+resolution and frame rate.
+
+Set it in the web console under **Host → Settings → Video → PyroWave quality**, or with
+`PUNKTFUNK_PYROWAVE_BPP` in `host.env`: 0.25 to 4, from the next session. One value covers every
+client, each at its own bitrate. The client's bitrate setting doesn't apply.
+
+The default is **1.6**, the codec author's clean point: at 200 Mbps for 1080p60 he
+[could not spot compression artifacts](https://themaister.net/blog/2025/06/16/i-designed-my-own-ridiculously-fast-game-streaming-video-codec-pyrowave/)
+without comparing side by side and zooming in.
+
+| Mode (4:2:0, 8-bit) | At 1.6 bits/pixel |
+|---|---|
+| 1280×800 @ 60 (Steam Deck) | ≈ 100 Mbps |
+| 1920×1080 @ 60 | ≈ 200 Mbps |
+| 1920×1080 @ 120 | ≈ 400 Mbps |
+| 2560×1440 @ 120 | ≈ 710 Mbps |
+| 3840×2160 @ 60 | ≈ 800 Mbps |
+| 3840×2160 @ 120 | ≈ 1.6 Gbps |
+
+Lower values work and look softer: fewer bits never break the stream. PyroWave sends every frame
+whole and keeps its coding simple for speed, which
+[costs the most at low bitrates](https://github.com/Themaister/pyrowave#trivial-entropy-coding).
+Text, thin UI lines and texture go soft first, and hard edges ring. For scale, Steam Remote Play's
+PyroWave [tops out at 500 Mbit/s](https://steamcommunity.com/groups/homestream/discussions/0/564794422009744473),
+which at 4K120 is 0.5 bits per pixel.
+
+<BitrateCalculator />
+
+### 4:4:4 and HDR
+
+Both follow the client's settings, as with HEVC and AV1, and scale your bits per pixel:
+
+- **4:4:4** (full chroma, sharp coloured text): ×1.625, so 2.6 at the default.
+- **10-bit and HDR** (BT.2020 PQ): +15 %. On Linux, HDR needs a
+  [`punktfunk-gamescope` session](/docs/hdr#linux--gamescope).
+
+Together, 4:4:4 HDR at the default is ~3.0 bits per pixel.
+
+## Fitting the link
+
+Before the first frame the client tests the link. If it can't carry the rate with room to spare,
+the session drops to 70 % of what the link delivered, so 4K120 on Gigabit still streams at fewer
+bits per pixel. The rate never rises afterwards and adaptive bitrate stays off; under sustained
+loss, switch to HEVC. The Android app runs this test only with its bitrate on **Automatic**, the
+default.
+
+To hold every session under a fixed rate, set **PyroWave bitrate cap** (under **Show advanced**,
+`PUNKTFUNK_PYROWAVE_MAX_MBPS`, 0 for no cap).
+
+## Checking a Linux host is zero-copy
+
+The host logs which capture path a session took, once:
+
+```
+capture pipeline resolved: dmabuf-passthrough → pyrowave
+```
+
+`dmabuf-passthrough` is zero-copy. `cpu` means every frame is copied, which lowers the frame-rate
+ceiling and raises CPU use; the warning after it names the cause, such as `PUNKTFUNK_ZEROCOPY` set
+to `0` or a compositor that would not hand over a dmabuf.
+
+## Limits
+
+- Wired links only. Wi-Fi can't carry these rates; use HEVC or AV1 there.
+- No decoder in the Windows ARM64 client or the 32-bit Android build.
+- The host accepts up to 8 Gbps, so 2.5, 5 and 10 GbE links get used.

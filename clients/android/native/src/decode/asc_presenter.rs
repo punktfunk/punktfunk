@@ -901,8 +901,8 @@ impl AscBackend {
     }
 }
 
-/// A `debug.punktfunk.*` system property, trimmed; `None` when unset.
-fn sysprop(name: &CStr) -> Option<String> {
+/// A system property, trimmed; `None` when unset.
+pub(super) fn sysprop(name: &CStr) -> Option<String> {
     let mut buf = [0u8; 92]; // PROP_VALUE_MAX
                              // SAFETY: __system_property_get with a valid name + PROP_VALUE_MAX buffer is always safe.
     let n = unsafe { libc::__system_property_get(name.as_ptr(), buf.as_mut_ptr().cast()) };

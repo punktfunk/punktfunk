@@ -1,0 +1,79 @@
+---
+title: Bazzite
+description: Install the Punktfunk host on Bazzite (or any Fedora Atomic spin) as a sysext — no layering, no reboot — and stream both Gaming Mode and the desktop.
+---
+
+Install the host on **Bazzite** or another Fedora Atomic spin. Bazzite already ships the GPU driver,
+gamescope and KDE Plasma, and one host streams both **Gaming Mode** and the **KDE desktop**,
+following the box when you switch.
+
+**One command instead?** The [guided installer](/docs/install#guided-install-preview) (preview)
+does steps 1 to 4, except the KDE desktop setup in step 3:
+
+<Installer />
+
+## 1. Install the host
+
+The host installs as a signed **systemd system extension**: no `rpm-ostree` layering, no reboot,
+and it survives OS updates.
+
+<Install platform="bazzite" />
+
+This installs the host, the console, the tray, the plugin runner and the HDR `punktfunk-gamescope`
+build. `sudo punktfunk-sysext update` updates it and restarts the services, or use the
+[console](/docs/updating); `sudo punktfunk-sysext status` shows the installed build.
+
+## 2. Let it use your controllers
+
+Bazzite manages the `input` group through a recipe, so use it instead of `usermod`. Then **log out
+and back in**:
+
+```sh
+ujust add-user-to-input-group add    # virtual gamepads
+sudo usermod -aG punktfunk "$USER"   # virtual Steam Deck controller
+```
+
+## 3. Start it
+
+Enable the services and linger from a terminal in the desktop session. Without linger the host
+waits for a login that a headless box never gets:
+
+```sh
+systemctl --user enable --now punktfunk-host punktfunk-web
+sudo loginctl enable-linger "$USER"
+```
+
+To stream the **KDE desktop** (Gaming Mode needs neither step): log out and back into the Desktop
+session once, then seed the input grant so the host doesn't wait on a dialog nobody answers:
+
+```sh
+bash /usr/share/punktfunk/bazzite/kde-desktop-setup.sh
+```
+
+## 4. Open the firewall
+
+Bazzite runs **firewalld**, and no client reaches the host until you open it. Open the host, and
+the console for other devices:
+
+```sh
+sudo firewall-cmd --reload   # load the service definitions the image installed
+sudo firewall-cmd --permanent --add-service=punktfunk-native --add-service=punktfunk-web
+sudo firewall-cmd --reload
+```
+
+For [Moonlight](/docs/moonlight), also add `punktfunk-gamestream` ([Ports & firewall](/docs/ports)).
+
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
+
+## More
+
+- How Gaming Mode reaches the client, and how to mirror the box's own screen instead:
+  [Steam / gamescope](/docs/gamescope#how-the-host-gets-a-gamescope). The desktop: [KDE](/docs/kde).
+- **Stream lags, then freezes, with a DualSense pad:**
+  [Troubleshooting](/docs/troubleshooting-input#stream-lags-then-freezes-with-a-dualsense-pad-bazzite-selinux).
+- Channels, rollback and major rebases:
+  [Updating](/docs/updating#bazzite-sysext-channels-rollback-and-rebases). Remove:
+  [Uninstall](/docs/uninstall#bazzite--fedora-atomic-systemd-sysext).
+- Already layered with `rpm-ostree`? Install the sysext, which takes over at once, then
+  `sudo rpm-ostree uninstall punktfunk punktfunk-web && systemctl reboot`.

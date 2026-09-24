@@ -32,7 +32,10 @@ import {
 	getGetHostSettingsQueryKey,
 	getGetStatusQueryKey,
 } from "@/api/gen/host/host";
-import { getGetLibraryQueryKey } from "@/api/gen/library/library";
+import {
+	getGetLibraryQueryKey,
+	getListLibraryScannersQueryKey,
+} from "@/api/gen/library/library";
 import {
 	getListNativeClientsQueryKey,
 	getListPendingDevicesQueryKey,
@@ -89,12 +92,14 @@ function keysFor(kind: string): readonly (readonly unknown[])[] {
 			];
 		// The base key with no params is a PREFIX of every parameterised library query, and React
 		// Query invalidates by prefix — so this catches the Dashboard's and the Library page's alike.
+		// The source list counts entries per provider, so it moves with the library.
 		case "library.changed":
-			return [getGetLibraryQueryKey()];
+			return [getGetLibraryQueryKey(), getListLibraryScannersQueryKey()];
 		case "update.available":
 		case "update.applied":
 			return [getGetUpdateStatusQueryKey()];
 		// Registration and folder-access changes move plugin views; store changes move packages.
+		// A new pending request can add a source line, so the source list moves too.
 		case "plugins.changed":
 			return [
 				PLUGINS_KEY,
@@ -102,6 +107,7 @@ function keysFor(kind: string): readonly (readonly unknown[])[] {
 				storeKeys.installed,
 				storeKeys.runtime,
 				getGetPluginAccessQueryKey(),
+				getListLibraryScannersQueryKey(),
 			];
 		case "store.changed":
 			return [

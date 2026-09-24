@@ -47,19 +47,10 @@ pub fn recipe(entry: &GameEntry) -> Option<ExecRecipe> {
         .ok()
 }
 
-/// Whether `spec` would resolve, without touching the filesystem beyond the manifest. The publish
-/// routes use this to refuse a bad entry at write time rather than at launch.
+/// Whether `spec` would resolve, without touching the filesystem beyond the manifest and its
+/// grants. The publish routes use this to drop a bad entry at write time rather than at launch.
 pub fn spec_is_valid(manifest: &PluginManifest, spec: &LaunchSpec) -> Result<(), &'static str> {
     build(manifest, &spec.value, spec.args.as_ref()).map(|_| ())
-}
-
-/// The publish-time gate: `provider` must have an installed manifest, and the entry must name one
-/// of its templates with arguments that manifest accepts.
-pub fn publishable(provider: &str, spec: &LaunchSpec) -> Result<(), String> {
-    let manifest = crate::plugins::manifest::for_provider(provider).ok_or_else(|| {
-        format!("needs an installed plugin whose manifest declares the provider id '{provider}'")
-    })?;
-    spec_is_valid(&manifest, spec).map_err(|reason| format!("is not resolvable: {reason}"))
 }
 
 fn build(
@@ -181,14 +172,19 @@ fn substitute(arg: &str, values: &BTreeMap<&str, &str>) -> Result<String, &'stat
 }
 
 impl ExecRecipe {
-    /// One `sh -c` string. Every element is single-quoted, so a value can never become syntax.
+    /// One `sh -c` string, run from `cwd` when the template names one. Every element is
+    /// single-quoted, so a value can never become syntax.
     #[cfg(not(windows))]
     pub fn shell_command(&self) -> String {
-        std::iter::once(&self.program)
+        let command = std::iter::once(&self.program)
             .chain(self.args.iter())
             .map(|s| sh_quote(s))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" ");
+        match &self.cwd {
+            Some(dir) => format!("cd {} && {command}", sh_quote(&dir.to_string_lossy())),
+            None => command,
+        }
     }
 
     /// One `CreateProcess` command line, quoted the way the CRT parses it back.
@@ -336,6 +332,16 @@ mod exec_tests {
                 cwd: None,
             };
             assert_eq!(r.shell_command(), r"'bottles-cli' '-b' 'Don'\''t Starve'");
+            // A game that loads its data by relative path starts in its own folder.
+            let game = ExecRecipe {
+                program: "/games/it's here/game".into(),
+                args: vec![],
+                cwd: Some("/games/it's here".into()),
+            };
+            assert_eq!(
+                game.shell_command(),
+                r"cd '/games/it'\''s here' && '/games/it'\''s here/game'"
+            );
         }
     }
 

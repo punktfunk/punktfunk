@@ -28,8 +28,9 @@ function useRunnerToggle() {
 
 /**
  * Browse-tab banner: the runner is installed but not running, so nothing an operator installs
- * here would start. Renders nothing in every other state (including "not installed" — the
- * Installed tab's card explains that case properly).
+ * here would start. A runner the host reports as failing says that instead of "switched off".
+ * Renders nothing in every other state (including "not installed" — the Installed tab's card
+ * explains that case properly).
  */
 export const RunnerBanner: FC = () => {
 	const runtime = useStoreRuntime();
@@ -40,7 +41,7 @@ export const RunnerBanner: FC = () => {
 	return (
 		<div className="flex flex-col gap-3 rounded-lg border border-amber-600/40 bg-amber-500/10 p-4 text-sm text-amber-600 sm:flex-row sm:items-center dark:border-amber-500/40 dark:text-amber-500">
 			<PowerOff className="size-5 shrink-0" />
-			<p className="flex-1">{m.store_runner_banner()}</p>
+			<p className="flex-1">{s.detail || m.store_runner_banner()}</p>
 			<Button size="sm" disabled={isPending} onClick={() => toggle(true)}>
 				<Play className="size-4" />
 				{m.store_runner_enable()}

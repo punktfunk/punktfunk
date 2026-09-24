@@ -248,36 +248,52 @@ unsafe fn d3dkmt_set_scheduling_priority_class(
 }
 
 /// Raise this process's D3DKMT GPU scheduling class (once, best-effort).
-///
-/// Process class is the cross-process lever; `SetGPUThreadPriority` alone does
-/// not unstarve encode under a GPU-bound game. Default REALTIME; see
-/// [`configured_gpu_priority_mode`]. No-ops under a UAC-filtered token.
 fn elevate_process_gpu_priority() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         use windows::Win32::System::Threading::GetCurrentProcess;
-        let prio = match configured_gpu_priority_mode() {
-            PrioMode::Off => {
-                tracing::info!("GPU process scheduling priority class left at default (off)");
-                return;
-            }
-            PrioMode::Static(p) => p,
-        };
-        enable_inc_base_priority();
-        // SAFETY: `d3dkmt_set_scheduling_priority_class` requires a valid process handle;
-        // `GetCurrentProcess()` returns the current-process pseudo-handle, which is always valid and
-        // needs no close.
-        match unsafe { d3dkmt_set_scheduling_priority_class(GetCurrentProcess(), prio) } {
-            Some(0) => tracing::info!(
-                priority_class = prio,
-                "GPU process scheduling priority class set (2=normal 4=high 5=realtime)"
-            ),
-            Some(st) => tracing::warn!(
-                status = format!("0x{st:08X}"),
-                "D3DKMTSetProcessSchedulingPriorityClass failed (run as admin/SYSTEM for GPU priority)"
-            ),
-            None => tracing::warn!("D3DKMTSetProcessSchedulingPriorityClass export not found"),
-        }
+        // SAFETY: the current-process pseudo-handle is always valid, carries every access
+        // right and needs no close.
+        unsafe { elevate_gpu_priority_of(GetCurrentProcess(), "self") };
     });
+}
+
+/// Raise `process`'s D3DKMT GPU scheduling class (best-effort, logged per call). `what`
+/// names the process in the log.
+///
+/// Process class is the cross-process lever; `SetGPUThreadPriority` alone does not
+/// unstarve encode under a GPU-bound game. It covers every GPU context the process owns,
+/// including ones a driver creates internally (NVENC's RGB→YUV pass). Default REALTIME;
+/// see [`configured_gpu_priority_mode`]. The kernel checks this caller's
+/// `SE_INC_BASE_PRIORITY`, so it no-ops under a UAC-filtered token.
+///
+/// # Safety
+/// `process` must be a live process handle carrying `PROCESS_SET_INFORMATION`.
+pub unsafe fn elevate_gpu_priority_of(process: windows::Win32::Foundation::HANDLE, what: &str) {
+    let prio = match configured_gpu_priority_mode() {
+        PrioMode::Off => {
+            tracing::info!(
+                process = what,
+                "GPU scheduling priority class left at default (off)"
+            );
+            return;
+        }
+        PrioMode::Static(p) => p,
+    };
+    enable_inc_base_priority();
+    // SAFETY: `process` is live and carries the access right, per this fn's contract.
+    match unsafe { d3dkmt_set_scheduling_priority_class(process, prio) } {
+        Some(0) => tracing::info!(
+            process = what,
+            priority_class = prio,
+            "GPU scheduling priority class set (2=normal 4=high 5=realtime)"
+        ),
+        Some(st) => tracing::warn!(
+            process = what,
+            status = format!("0x{st:08X}"),
+            "GPU scheduling priority class not raised (the host needs admin/SYSTEM)"
+        ),
+        None => tracing::warn!("D3DKMTSetProcessSchedulingPriorityClass export not found"),
+    }
 }

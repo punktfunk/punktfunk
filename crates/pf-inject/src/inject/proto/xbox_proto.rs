@@ -168,9 +168,111 @@ pub fn neutral_xbox_report() -> [u8; XBOX_REPORT_LEN] {
     serialize_xbox_state(&XboxState::default())
 }
 
+/// Xbox Bluetooth rumble report → `(low, high, left_trigger, right_trigger)` on 0..65535.
+///
+/// Report `0x03`: `[id, enable, left_trigger, right_trigger, strong, weak, duration, delay,
+/// loop]`. Magnitudes are 0..100, not 0..255; reading them as 0..255 costs 60 % of the range.
+/// `enable` bit 0 = weak (right handle, `high`), bit 1 = strong (left handle, `low`), bit 2 =
+/// right trigger, bit 3 = left trigger, as Linux `hid-microsoft` and xpadneo write them. A clear
+/// bit reads as a stopped motor. `None` for anything but a rumble report.
+pub fn parse_xbox_output(bytes: &[u8]) -> Option<(u16, u16, u16, u16)> {
+    // The driver republishes output reports report-id-prefixed, like the PS backends.
+    if bytes.len() < 6 || bytes[0] != 0x03 {
+        return None;
+    }
+    let enable = bytes[1];
+    let scale = |v: u8| -> u16 { (v.min(100) as u32 * 65535 / 100) as u16 };
+    let gated = |bit: u8, v: u8| if enable & bit != 0 { scale(v) } else { 0 };
+    Some((
+        gated(0x02, bytes[4]),
+        gated(0x01, bytes[5]),
+        gated(0x08, bytes[2]),
+        gated(0x04, bytes[3]),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rumble_scales_off_the_zero_to_hundred_protocol_range() {
+        let full = [0x03, 0x0F, 0, 0, 100, 100, 0, 0, 1];
+        assert_eq!(parse_xbox_output(&full), Some((65535, 65535, 0, 0)));
+        let half = [0x03, 0x03, 0, 0, 50, 100, 0, 0, 1];
+        assert_eq!(parse_xbox_output(&half), Some((32767, 65535, 0, 0)));
+    }
+
+    /// Trigger magnitudes share the handles' 0..100 range. A full-scale `100`
+    /// is `65535`, not `25700` (the 0..255 misread).
+    #[test]
+    fn trigger_magnitudes_are_not_a_zero_to_255_range() {
+        let full = [0x03, 0xFF, 100, 100, 0, 0, 0, 0, 1];
+        assert_eq!(parse_xbox_output(&full), Some((0, 0, 65535, 65535)));
+        let half = [0x03, 0xFF, 50, 25, 0, 0, 0, 0, 1];
+        assert_eq!(parse_xbox_output(&half), Some((0, 0, 32767, 16383)));
+    }
+
+    /// Values above 0..100 clamp, not wrap — all four actuators share the
+    /// scale closure.
+    #[test]
+    fn out_of_range_magnitudes_clamp() {
+        let over = [0x03, 0xFF, 255, 255, 255, 255, 0, 0, 1];
+        assert_eq!(parse_xbox_output(&over), Some((65535, 65535, 65535, 65535)));
+    }
+
+    /// One bit per actuator, as `hid-microsoft` (`ENABLE_WEAK` = bit 0, `ENABLE_STRONG` =
+    /// bit 1) and xpadneo (`XBOX_RUMBLE_RIGHT` = bit 2, `XBOX_RUMBLE_LEFT` = bit 3) define them.
+    /// Every actuator carries a distinct magnitude, so a swapped bit names the wrong motor.
+    #[test]
+    fn each_enable_bit_drives_its_own_actuator() {
+        let report = |enable: u8| [0x03, enable, 10, 20, 30, 40, 0, 0, 1];
+        let s = |v: u32| (v * 65535 / 100) as u16;
+        assert_eq!(
+            parse_xbox_output(&report(0x01)),
+            Some((0, s(40), 0, 0)),
+            "weak"
+        );
+        assert_eq!(
+            parse_xbox_output(&report(0x02)),
+            Some((s(30), 0, 0, 0)),
+            "strong"
+        );
+        assert_eq!(
+            parse_xbox_output(&report(0x04)),
+            Some((0, 0, 0, s(20))),
+            "right trigger"
+        );
+        assert_eq!(
+            parse_xbox_output(&report(0x08)),
+            Some((0, 0, s(10), 0)),
+            "left trigger"
+        );
+        assert_eq!(parse_xbox_output(&report(0x00)), Some((0, 0, 0, 0)), "none");
+    }
+
+    /// `hid-microsoft`'s `ms_ff_worker` sends `enable = 0x03` with only the handle magnitudes.
+    /// That is a handle-only rumble, never a trigger one.
+    #[test]
+    fn the_kernel_handle_report_leaves_the_triggers_silent() {
+        let kernel = [0x03, 0x03, 0, 0, 80, 20, 0xFF, 0, 0xFF];
+        assert_eq!(
+            parse_xbox_output(&kernel),
+            Some((
+                (80u32 * 65535 / 100) as u16,
+                (20u32 * 65535 / 100) as u16,
+                0,
+                0
+            ))
+        );
+    }
+
+    #[test]
+    fn non_rumble_reports_are_ignored() {
+        assert_eq!(parse_xbox_output(&[0x01, 0x0F, 0, 0, 100, 100]), None);
+        assert_eq!(parse_xbox_output(&[0x03, 0x0F, 0]), None);
+        assert_eq!(parse_xbox_output(&[]), None);
+    }
 
     fn le(b: &[u8]) -> u16 {
         u16::from_le_bytes([b[0], b[1]])

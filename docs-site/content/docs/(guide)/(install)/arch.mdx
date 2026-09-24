@@ -1,0 +1,72 @@
+---
+title: Arch Linux
+description: Install the Punktfunk host on Arch, CachyOS or EndeavourOS from the signed pacman repo, in four steps.
+---
+
+Install the host on **Arch Linux** and Arch-based distros such as CachyOS and EndeavourOS. Omarchy
+and SteamOS have their own pages: [Omarchy](/docs/omarchy), [SteamOS](/docs/steamos-host).
+
+**One command instead?** The [guided installer](/docs/install#guided-install-preview) (preview)
+does steps 2 to 4 and warns when step 1 is missing:
+
+<Installer />
+
+## 1. GPU driver
+
+- **NVIDIA:** `sudo pacman -S --needed nvidia-utils`. NVENC comes from it.
+- **AMD / Intel:** the Mesa stack a desktop usually has already: `vulkan-radeon` or `vulkan-intel`
+  for Vulkan Video, `libva-mesa-driver` or `intel-media-driver` for VAAPI.
+
+## 2. Install the host
+
+Trust the repo key, add the repo, and install the host, the console and the plugin runner. Always
+use a full `-Syu`: the packages are built against current Arch libraries, and a partial upgrade
+breaks them.
+
+<Install platform="arch" />
+
+`sudo pacman -Syu` updates every Punktfunk package from then on. Restart the console and the host
+afterwards with `systemctl --user restart punktfunk-web punktfunk-host`, or let the
+[console update it](/docs/updating).
+The repo also carries `punktfunk-gamescope` (HDR on gamescope) and `punktfunk-client`.
+
+## 3. Let it use your controllers
+
+Join the groups, then **log out and back in**:
+
+```sh
+sudo usermod -aG input "$USER"       # virtual gamepads
+sudo usermod -aG punktfunk "$USER"   # virtual Steam Deck controller
+```
+
+## 4. Start it
+
+From a terminal inside your desktop session. On Arch the plugin runner isn't started for you:
+
+```sh
+systemctl --user enable --now punktfunk-host punktfunk-web punktfunk-scripting
+```
+
+Stock Arch has no firewall. **CachyOS** enables `ufw` and **EndeavourOS** enables firewalld; open
+the host, and the console for other devices:
+
+```sh
+# ufw (CachyOS)
+sudo ufw allow punktfunk-native && sudo ufw allow punktfunk-web
+# firewalld (EndeavourOS)
+sudo firewall-cmd --reload
+sudo firewall-cmd --permanent --add-service=punktfunk-native --add-service=punktfunk-web
+sudo firewall-cmd --reload
+```
+
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
+
+## More
+
+- **pacman says `database already registered`?** The repo was added twice:
+  [the fix](/docs/troubleshooting-startup#pacman-error-could-not-register-punktfunk-database-database-already-registered).
+- Your desktop: [KDE](/docs/kde), [GNOME](/docs/gnome), [gamescope](/docs/gamescope),
+  [Hyprland](/docs/hyprland), [Sway](/docs/sway).
+- Stream with nobody logged in: [Running as a service](/docs/running-as-a-service).
+- Build the packages yourself: [Build from source](/docs/developers/build-from-source#arch-pkgbuild).

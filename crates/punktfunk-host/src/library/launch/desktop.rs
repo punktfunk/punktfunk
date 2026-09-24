@@ -25,13 +25,26 @@ pub fn desktop_command(id: &str) -> Option<(String, Option<PathBuf>)> {
     if !valid_desktop_id(id) {
         return None;
     }
-    let file = format!("{}.desktop", id.strip_suffix(".desktop").unwrap_or(id));
+    let files = id_files(id.strip_suffix(".desktop").unwrap_or(id));
     let path = applications_dirs()
         .into_iter()
-        .map(|dir| dir.join(&file))
+        .flat_map(|dir| files.iter().map(move |f| dir.join(f)))
         .find(|p| p.is_file())?;
     let text = std::fs::read_to_string(&path).ok()?;
     parse_entry(&text)
+}
+
+/// Where an id's file may sit below an `applications` dir. XDG joins a subdirectory into the id
+/// with `-` (`kde-foo` is `kde/foo.desktop`), so each `-` is also tried as that one separator.
+fn id_files(stem: &str) -> Vec<PathBuf> {
+    let mut out = vec![PathBuf::from(format!("{stem}.desktop"))];
+    for (i, _) in stem.match_indices('-') {
+        let (dir, rest) = (&stem[..i], &stem[i + 1..]);
+        if !matches!(dir, "" | "." | "..") && !rest.is_empty() {
+            out.push(PathBuf::from(dir).join(format!("{rest}.desktop")));
+        }
+    }
+    out
 }
 
 /// Parse the `[Desktop Entry]` group: its `Exec` and `Path`. `None` for an entry that is hidden,
@@ -119,6 +132,24 @@ mod desktop_tests {
         assert!(!valid_desktop_id("../../etc/passwd"));
         assert!(!valid_desktop_id("sub/dir"));
         assert!(!valid_desktop_id(""));
+        // `..-passwd` would be `../passwd.desktop` if a segment were not checked.
+        let files = id_files("..-passwd");
+        assert_eq!(files, vec![PathBuf::from("..-passwd.desktop")]);
+    }
+
+    #[test]
+    fn an_id_finds_an_entry_one_subdirectory_down() {
+        assert_eq!(
+            id_files("wine-Quail"),
+            vec![
+                PathBuf::from("wine-Quail.desktop"),
+                PathBuf::from("wine/Quail.desktop"),
+            ]
+        );
+        assert_eq!(
+            id_files("org.example.Flap"),
+            vec![PathBuf::from("org.example.Flap.desktop")]
+        );
     }
 
     #[test]

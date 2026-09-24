@@ -319,7 +319,7 @@ stage "Signing key"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 README_MD="$REPO_ROOT/packaging/nix/README.md"
-INSTALL_MD="$REPO_ROOT/docs-site/content/docs/install.md"
+INSTALL_MD="$REPO_ROOT/docs-site/content/docs/(guide)/(install)/nixos.mdx"
 
 if grep -q "$KEY_NAME:<" "$README_MD" 2>/dev/null; then
   say "The docs still carry a placeholder, so no key has been installed yet."

@@ -1,0 +1,16 @@
+{
+  "title": "Guide",
+  "description": "Install, connect and stream",
+  "root": true,
+  "pages": [
+    "index",
+    "quickstart",
+    "(install)",
+    "(clients)",
+    "(streaming)",
+    "(host)",
+    "(maintain)",
+    "(desktops)",
+    "(troubleshooting)"
+  ]
+}

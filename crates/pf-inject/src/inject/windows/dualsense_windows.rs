@@ -44,6 +44,25 @@ pub(super) const OFF_DEVTYPE: usize =
     core::mem::offset_of!(pf_driver_proto::gamepad::PadShm, device_type);
 pub(super) const OFF_DRIVER_PROTO: usize =
     core::mem::offset_of!(pf_driver_proto::gamepad::PadShm, driver_proto);
+pub(super) const OFF_DRIVER_REV: usize =
+    core::mem::offset_of!(pf_driver_proto::gamepad::PadShm, driver_rev);
+
+/// `(driver_proto, driver_rev)` from a pad section. The driver stamps the revision first and the
+/// protocol with Release, so a revision read after a nonzero protocol is the driver's.
+///
+/// # Safety
+/// `base` points at a live, mapped [`PadShm`].
+pub(super) unsafe fn driver_marks(base: *mut u8) -> (u32, u32) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    // SAFETY: the caller's contract; both offsets are 4-aligned fields inside the section.
+    unsafe {
+        let proto = (*(base.add(OFF_DRIVER_PROTO) as *const AtomicU32)).load(Ordering::Acquire);
+        (
+            proto,
+            std::ptr::read_volatile(base.add(OFF_DRIVER_REV) as *const u32),
+        )
+    }
+}
 pub(super) const OFF_PAD_INDEX: usize =
     core::mem::offset_of!(pf_driver_proto::gamepad::PadShm, pad_index);
 pub(super) const DEVTYPE_DUALSHOCK4: u8 = pf_driver_proto::gamepad::DEVTYPE_DUALSHOCK4;
@@ -532,11 +551,9 @@ impl DsWinPad {
     pub(super) fn service(&mut self, pad: u8) -> DsFeedback {
         self.channel.pump();
         let mut fb = DsFeedback::default();
-        // SAFETY: base points at SHM_SIZE bytes.
-        let proto = unsafe {
-            std::ptr::read_unaligned(self.channel.data_base().add(OFF_DRIVER_PROTO) as *const u32)
-        };
-        self.attach.observe(proto);
+        // SAFETY: the channel's section is live and SHM_SIZE bytes.
+        let (proto, rev) = unsafe { driver_marks(self.channel.data_base()) };
+        self.attach.observe_pad(proto, rev);
         let base = self.channel.data_base();
         fb.resync = self
             .drain
@@ -639,9 +656,7 @@ pub fn deck_spike_hold(index: u8, secs: u64) -> Result<()> {
     let boot_name = pf_driver_proto::gamepad::pad_boot_name(index);
     let mut channel = PadChannel::create(boot_name, SHM_SIZE)?;
     let base = channel.data_base();
-    // Neutral Deck frame: [0x01, 0x00, ID_CONTROLLER_DECK_STATE=0x09, 0x3C], all released.
-    let mut neutral = [0u8; 64];
-    (neutral[0], neutral[2], neutral[3]) = (0x01, 0x09, 0x3C);
+    let neutral = super::steam_proto::neutral_deck_report();
     // SAFETY: base points at SHM_SIZE writable bytes; the OFF_* offsets are in range. Device-type
     // FIRST, magic LAST — the same publish order the session pads use.
     unsafe {
@@ -1080,49 +1095,11 @@ mod drain_tests {
     }
 
     /// The driver picks HID identity from the hardware id at `EvtDeviceAdd`, before the sealed
-    /// channel exists. Every host hwid must match `devtype_from_hwids`, and longer tokens first:
-    /// `pf_dualsense` is a prefix of `pf_dualsenseedge`. A Deck frame parsed as DualSense `0x01`
-    /// pins the left stick and holds d-pad UP.
+    /// channel exists, through `pf_driver_proto::gamepad::devtype_from_hwids`. Every host hwid
+    /// must name the device_type the host stamps; a Deck frame parsed as DualSense `0x01` pins
+    /// the left stick and holds d-pad UP.
     #[test]
     fn hwid_devtype_table_matches_the_driver() {
-        let src = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../packaging/windows/drivers/pf-gamepad/src/lib.rs"
-        );
-        let driver = std::fs::read_to_string(src).expect("read pf-gamepad lib.rs");
-        let table = driver
-            .split_once("fn devtype_from_hwids")
-            .expect("devtype_from_hwids not found — did the driver's identity resolution move?")
-            .1;
-        let table = table.split_once("] {").expect("table literal").0;
-        let entries: Vec<(String, u8)> = table
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix('('))
-            .filter_map(|l| l.split_once(','))
-            .filter_map(|(id, dt)| {
-                let id = id.trim().trim_matches('"').to_ascii_lowercase();
-                let dt = dt
-                    .trim()
-                    .trim_end_matches([')', ','])
-                    .trim_end_matches("u8");
-                dt.parse().ok().map(|dt| (id, dt))
-            })
-            .collect();
-        assert_eq!(
-            entries.len(),
-            9,
-            "parsed {entries:?} out of the driver's table — the shape changed and this test went \
-             vacuous; fix the parse rather than deleting the assert"
-        );
-        for (i, (id, _)) in entries.iter().enumerate() {
-            for (later, _) in &entries[i + 1..] {
-                assert!(
-                    !later.starts_with(id.as_str()),
-                    "the driver tests {id:?} before {later:?}, so a {later:?} devnode would \
-                     resolve to {id:?}'s identity — put the longer id first"
-                );
-            }
-        }
         for (hwid, devtype) in [
             (WinDsIdentity::dualsense().hwid, 0),
             (
@@ -1156,10 +1133,9 @@ mod drain_tests {
                 .iter()
                 .map(|i| (i.hwid, i.devtype)),
         ) {
-            let want = hwid.to_ascii_lowercase();
-            let got = entries.iter().find(|(id, _)| *id == want);
+            let got = pf_driver_proto::gamepad::devtype_from_hwids(&hwid.to_ascii_lowercase());
             assert_eq!(
-                got.map(|(_, dt)| *dt),
+                got,
                 Some(devtype),
                 "the host stamps device_type={devtype} for hardware id {hwid:?}, but the driver's \
                  table says {got:?} — the pad would enumerate with another controller's report \

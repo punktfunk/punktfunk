@@ -40,7 +40,21 @@ pub fn main(args: &[String]) -> Result<()> {
             if !listing {
                 plat::require_elevation("installing or removing plugins")?;
             }
+            // A removed plugin's titles leave with it; its id is gone once its files are.
+            let removing: Vec<String> = match args.first().map(String::as_str) {
+                Some("remove") | Some("rm") | Some("uninstall") => args[1..]
+                    .iter()
+                    .filter(|a| !a.starts_with('-'))
+                    .filter_map(|pkg| manifest::id_of_package(pkg))
+                    .collect(),
+                _ => Vec::new(),
+            };
             forward_to_runner(args)?;
+            for provider in removing {
+                if let Err(e) = crate::library::delete_provider(&provider) {
+                    println!("Couldn't remove the library titles of {provider}: {e:#}");
+                }
+            }
             if !listing {
                 // The runner hands each plugin its token from this file; a running host picks
                 // the new set up on the plugin's first request.
@@ -125,7 +139,8 @@ fn grant(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<()
             }
         );
     }
-    println!("Re-run the plugin's scan (or restart the runner) to pick it up.");
+    converge_runner_roots();
+    println!("The plugin restarts with the new folder within a few seconds.");
     Ok(())
 }
 
@@ -190,6 +205,7 @@ fn revoke(plugin: Option<&str>, dir: Option<&str>, flags: &[String]) -> Result<(
     let roots = store
         .revoke(plugin, std::path::Path::new(dir))
         .with_context(|| format!("revoke the grant for '{plugin}'"))?;
+    converge_runner_roots();
     println!("{plugin} may now reach:");
     for root in roots {
         println!(
@@ -321,6 +337,11 @@ pub(crate) fn runtime_status() -> RuntimeStatus {
     plat::runtime_status()
 }
 
+/// Has the operator turned the per-plugin sandbox off for the runner? Linux only.
+pub(crate) fn runner_sandbox_off() -> bool {
+    plat::runner_sandbox_off()
+}
+
 /// [`enable`]/[`disable`], also `POST /store/runtime`. Windows: the SYSTEM service
 /// already clears the elevation bar the CLI checks.
 pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
@@ -335,6 +356,17 @@ pub(crate) fn set_runtime_enabled(enabled: bool) -> Result<()> {
 /// the runner is the operator's own user unit.
 pub(crate) fn grant_acl(dir: &std::path::Path, write: bool) -> std::io::Result<()> {
     plat::grant(dir, write).map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// Take the runner's ACE off a folder no plugin holds any more. POSIX has none to take.
+pub(crate) fn revoke_acl(dir: &std::path::Path) -> std::io::Result<()> {
+    plat::revoke(dir).map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// Windows: the runner grants `plugins enable` applies, which a fresh install never ran.
+/// `serve` calls this; it acts once per install. POSIX needs none.
+pub(crate) fn converge_runner_acls(status: &RuntimeStatus) {
+    plat::converge_runner_acls(status);
 }
 
 /// Keep a rewritten runner credential readable by the enabled Windows service. POSIX runners
@@ -396,12 +428,37 @@ pub(crate) fn converge_grants() {
 ///
 /// Discovery runs once at runner startup ([`sdk/src/runner.ts`]); this restart is
 /// how a newly installed plugin becomes active. An enabled runner that is not running
-/// (installed after login, crashed out) is started, not skipped.
+/// (installed after login, crashed out) is started, not skipped. The unit's roots are
+/// converged first: a new manifest may name paths the runner cannot see yet.
 pub(crate) fn restart_runtime() -> Result<bool> {
+    converge_runner_roots();
     let st = runtime_status();
     if !st.installed || !st.enabled {
         return Ok(false);
     }
     plat::restart_runtime()?;
     Ok(true)
+}
+
+/// Give the runner's unit every root a sandbox binds, restarting the runner when that set
+/// changed. bwrap binds from the runner's own view, and the unit empties the home, so a grant
+/// or manifest read missing from the unit never reaches the plugin.
+pub(crate) fn converge_runner_roots() {
+    // Tests never write the operator's systemd config; only a Linux unit hides the home.
+    if cfg!(test) || !cfg!(target_os = "linux") || !runtime_status().installed {
+        return;
+    }
+    // Two quick decisions must not race: the later one reads the grants the earlier wrote.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(home) = manifest::home_dir() else {
+        return;
+    };
+    let roots =
+        access::AccessStore::open(pf_paths::config_dir()).runner_roots(&manifest::installed());
+    match plat::converge_runner_roots(&roots, &home) {
+        Ok(true) => tracing::info!(roots = roots.len(), "plugin runner roots updated"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %format!("{e:#}"), "plugin runner roots not updated"),
+    }
 }

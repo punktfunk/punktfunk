@@ -8,6 +8,7 @@
 //     launch time), but a plugin that can't find the root finds no games at all.
 //   * EXCLUDED: HKCU `Software\Valve\Steam`. The runner is LocalService, whose HKCU is its own empty
 //     hive, not the operator's — reading it would look like "Steam isn't installed".
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isDir, listDir, readTextCapped } from "./fs.js";
@@ -16,6 +17,18 @@ import { vdfPaths } from "./vdf.js";
 
 /** Canonicalize-ish: resolve and drop a trailing separator so dedup is reliable. */
 const norm = (p: string): string => path.resolve(p);
+
+/**
+ * A root's real path, so `~/.steam/steam` and `~/.steam/root` dedupe into the
+ * `~/.local/share/Steam` they link to; a path that doesn't resolve stays as spelled.
+ */
+const realRoot = (p: string): string => {
+	try {
+		return fs.realpathSync(p);
+	} catch {
+		return norm(p);
+	}
+};
 
 /**
  * Candidate Steam roots that actually exist (have a `steamapps` dir), deduped.
@@ -53,7 +66,7 @@ export const steamRoots = (): string[] => {
 	const seen = new Set<string>();
 	const roots: string[] = [];
 	for (const c of candidates) {
-		const n = norm(c);
+		const n = realRoot(c);
 		if (!seen.has(n) && isDir(path.join(n, "steamapps"))) {
 			seen.add(n);
 			roots.push(n);

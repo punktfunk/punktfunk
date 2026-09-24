@@ -1,0 +1,9 @@
+{
+  "title": "Service & updates",
+  "pages": [
+    "running-as-a-service",
+    "updating",
+    "channels",
+    "uninstall"
+  ]
+}

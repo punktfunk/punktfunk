@@ -1,0 +1,17 @@
+{
+  "title": "Install the host",
+  "pagesIndex": "install",
+  "pages": [
+    "requirements",
+    "ubuntu",
+    "debian",
+    "fedora",
+    "arch",
+    "omarchy",
+    "bazzite",
+    "steamos-host",
+    "nixos",
+    "windows-host",
+    "switching-from-sunshine"
+  ]
+}

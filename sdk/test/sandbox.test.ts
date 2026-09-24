@@ -10,6 +10,8 @@ import {
 	grantedRoots,
 	netlinkFilter,
 	type PluginManifest,
+	readManifest,
+	refusedRoot,
 	sandboxEnv,
 	sandboxProbe,
 } from "../src/sandbox.js";
@@ -40,7 +42,104 @@ const binds = (argv: string[], flag: string): Array<[string, string]> => {
 	return out;
 };
 
+describe("refusedRoot", () => {
+	test("keeps the host's processes, sockets, keys and credentials out of every sandbox", () => {
+		for (const p of [
+			"/",
+			"/home",
+			"/home/u",
+			"/proc",
+			"/proc/1/root",
+			"/sys/kernel",
+			"/dev/shm",
+			"/run",
+			"/run/media",
+			"/run/user/1000",
+			"/home/u/.ssh",
+			"/home/u/.gnupg/private-keys-v1.d",
+			"/home/u/.config/punktfunk",
+			"/home/u/.config/punktfunk/plugin-run",
+			"/home/u/.config/punktfunk-extra",
+			"/home/u/Games/../.ssh",
+		]) {
+			expect([p, refusedRoot(p, "/home/u")]).toEqual([p, true]);
+		}
+	});
+
+	test("lets launcher, media and temp paths through", () => {
+		for (const p of [
+			"/home/u/.local/share/Steam",
+			"/home/u/Emu",
+			"/run/media/u/SD",
+			"/mnt/games1",
+			"/tmp/vhclient_response",
+			"/usr/share/applications",
+		]) {
+			expect([p, refusedRoot(p, "/home/u")]).toEqual([p, false]);
+		}
+	});
+
+	test("sees the home behind a link, as on Fedora Atomic", () => {
+		const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pf-linkhome-")));
+		const real = path.join(root, "var/home/u");
+		fs.mkdirSync(path.join(real, ".ssh"), { recursive: true });
+		fs.mkdirSync(path.join(real, "Games"), { recursive: true });
+		fs.symlinkSync(path.join(root, "var/home"), path.join(root, "home"));
+		const home = path.join(root, "home/u");
+		try {
+			expect(refusedRoot(real, home)).toBe(true);
+			expect(refusedRoot(path.join(real, ".ssh"), home)).toBe(true);
+			expect(refusedRoot(path.join(real, "Games"), home)).toBe(false);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("a manifest or grant naming a refused root is never bound", () => {
+		const argv = bwrapArgv(
+			manifest({ reads: ["/proc", "~/.config/punktfunk/plugin-run", "~/Games"] }),
+			paths,
+			[{ path: "/run/user/1000", write: false }],
+		);
+		const bound = binds(argv, "--ro-bind-try").map(([src]) => src);
+		expect(bound).toContain("/home/u/Games");
+		expect(bound).not.toContain("/proc");
+		expect(bound).not.toContain("/home/u/.config/punktfunk/plugin-run");
+		expect(bound).not.toContain("/run/user/1000");
+	});
+});
+
+describe("readManifest", () => {
+	test("refuses an id that is not one lowercase path component", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-manifest-"));
+		const write = (id: string) =>
+			fs.writeFileSync(
+				path.join(dir, "package.json"),
+				JSON.stringify({ punktfunk: { schema: 1, id } }),
+			);
+		try {
+			write("rom-manager");
+			expect(readManifest(dir)?.id).toBe("rom-manager");
+			for (const bad of ["..", "../plugins", "Steam", "a/b", ""]) {
+				write(bad);
+				expect([bad, readManifest(dir)]).toEqual([bad, undefined]);
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("bwrapArgv", () => {
+	test("a Nix-built bun gets the store it links against", () => {
+		const nix = { ...paths, bun: "/nix/store/abc-bun-1.3/bin/bun" };
+		expect(binds(bwrapArgv(manifest(), nix), "--ro-bind")).toContainEqual([
+			"/nix/store",
+			"/nix/store",
+		]);
+		expect(bwrapArgv(manifest(), paths).join(" ")).not.toContain("/nix/store");
+	});
+
 	test("takes away the namespaces the boundary depends on", () => {
 		const argv = bwrapArgv(manifest(), paths);
 		// `--unshare-all` plus a fresh /proc is what stops the same uid reaching the host process
@@ -67,9 +166,10 @@ describe("bwrapArgv", () => {
 
 	test("binds the plugin's own things, and the home only through what it declared", () => {
 		const argv = bwrapArgv(manifest(), paths);
+		// The kit's `pluginStateDir("demo")` inside the sandbox, not one level above it.
 		expect(binds(argv, "--bind")).toContainEqual([
 			paths.stateDir,
-			"/run/punktfunk/plugin-state",
+			"/run/punktfunk/plugin-state/demo",
 		]);
 		expect(binds(argv, "--ro-bind")).toContainEqual([
 			paths.tokenFile,
@@ -89,6 +189,16 @@ describe("bwrapArgv", () => {
 	test("no network unless the manifest asked for one", () => {
 		expect(bwrapArgv(manifest(), paths)).not.toContain("--share-net");
 		expect(bwrapArgv(manifest({ network: true }), paths)).toContain("--share-net");
+	});
+
+	test("without network the UI gets the runner's socket dir and port", () => {
+		const ui = { dir: "/run/user/1000/punktfunk/ui-demo-ab12", port: 41234 };
+		const argv = bwrapArgv(manifest(), { ...paths, ui }).join(" ");
+		expect(argv).toContain(`--bind ${ui.dir} /run/punktfunk/ui`);
+		expect(argv).toContain("--setenv PUNKTFUNK_UI_PORT 41234");
+		// A plugin on the host's network serves its UI on the host's loopback itself.
+		const shared = bwrapArgv(manifest({ network: true }), { ...paths, ui }).join(" ");
+		expect(shared).not.toContain("PUNKTFUNK_UI_PORT");
 	});
 
 	test("grants bind read-only by default and writable only when they say so", () => {

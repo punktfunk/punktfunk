@@ -23,9 +23,9 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_LOCATE_DEVNODE_NORMAL, CR_SUCCESS,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
-    HidD_FreePreparsedData, HidD_GetFeature, HidD_GetIndexedString, HidD_GetPreparsedData,
-    HidD_GetProductString, HidD_GetSerialNumberString, HidD_SetFeature, HidP_GetCaps,
-    GUID_DEVINTERFACE_HID, HIDP_CAPS, PHIDP_PREPARSED_DATA,
+    HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetFeature, HidD_GetIndexedString,
+    HidD_GetPreparsedData, HidD_GetProductString, HidD_GetSerialNumberString, HidD_SetFeature,
+    HidP_GetCaps, GUID_DEVINTERFACE_HID, HIDD_ATTRIBUTES, HIDP_CAPS, PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{
@@ -250,6 +250,28 @@ fn ask_hid_path(path: &str, expect_pad_index: u32) -> Result<u32> {
     proof
         .check(expect_pad_index)
         .map_err(|why| anyhow!("{why}"))
+}
+
+/// VID/PID the driver reports on `instance_id`'s HID collection (`HidD_GetAttributes`): what SDL,
+/// Steam and Windows read. `None` until hidclass has published the collection.
+pub(super) fn hid_vid_pid(instance_id: &str) -> Option<(u16, u16)> {
+    for child in child_device_ids(instance_id).ok()? {
+        for path in interface_paths(&GUID_DEVINTERFACE_HID, &child).unwrap_or_default() {
+            let Ok(handle) = open_device(&path) else {
+                continue;
+            };
+            let mut attrs = HIDD_ATTRIBUTES {
+                Size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: `handle` is the live collection handle just opened; `attrs` is a valid,
+            // size-stamped out-param.
+            if unsafe { HidD_GetAttributes(HANDLE(handle.as_raw_handle()), &mut attrs) } {
+                return Some((attrs.VendorID, attrs.ProductID));
+            }
+        }
+    }
+    None
 }
 
 /// Same call the delivery path makes, for the `channel-proof-probe` subcommand — reports the

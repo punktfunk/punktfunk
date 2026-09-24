@@ -1,0 +1,66 @@
+---
+title: NixOS
+description: Install the Punktfunk host on NixOS from the repo's flake — add the binary cache, import the module, enable the host.
+---
+
+Install the host on **NixOS 24.11 or newer**, `x86_64-linux`, from the repo's flake and NixOS
+module. The guided installer doesn't cover NixOS.
+
+## 1. Add the binary cache
+
+Without it, the first build compiles everything from source, which takes about an hour:
+
+```nix
+nix.settings = {
+  substituters = [ "https://nix.unom.io" ];
+  trusted-public-keys = [ "punktfunk-cache-1:yhOJmHxzg6tzXpxSFzlYn6Pc6r0jHprsWqt8MZC654o=" ];
+};
+```
+
+Don't set `inputs.punktfunk.inputs.nixpkgs.follows`: it changes every store path and misses the
+cache ([packaging/nix](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/nix/README.md#binary-cache)).
+
+## 2. Import the module and enable the host
+
+<Install platform="nixos" />
+
+A typical host block:
+
+```nix
+services.punktfunk.host = {
+  enable = true;
+  users = [ "alice" ];     # joins the input and punktfunk groups
+  openFirewall = true;
+  desktopSession = true;   # on a machine somebody logs into
+  settings = { RUST_LOG = "info"; };   # written to host.env
+};
+```
+
+The module sets up the user services, udev rules, kernel modules, firewall and groups, and adds the
+web console and the plugin runner.
+
+Set **`desktopSession = true`** on a machine somebody logs into with Plasma or GNOME: the host then
+restarts with the desktop, and without it capture fails after the desktop restarts. Leave it off on
+a headless or gamescope box.
+
+## 3. Start it
+
+From your desktop session:
+
+```sh
+systemctl --user enable --now punktfunk-host punktfunk-web
+```
+
+On a box nobody logs into, set `autoStart = true` and enable lingering for the host user instead.
+
+**Next:** [Quick Start, step 3](/docs/quickstart#3-open-the-web-console): open the console and pair
+a device.
+
+## More
+
+- Every option, GPU driver notes and the headless setup:
+  [packaging/nix](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/nix/README.md).
+- Run the host without NixOS (wrapped in [nixGL](https://github.com/nix-community/nixGL) for the
+  GPU drivers): `nix run git+https://git.unom.io/unom/punktfunk#punktfunk-host -- serve`.
+- Update: `nix flake update punktfunk`, then `sudo nixos-rebuild switch`. Remove:
+  [Uninstall](/docs/uninstall#nixos).

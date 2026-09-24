@@ -1,0 +1,84 @@
+---
+title: Install the Host
+description: Pick the system you stream from. Each guide is one page with the install command, the groups to join, and how to start the host.
+---
+
+import { Cards, Card } from 'fumadocs-ui/components/card'
+
+Install the host on the PC you stream *from*. Pick your system:
+
+<Cards>
+  <Card title="Ubuntu 26.04+" href="/docs/ubuntu" description="apt: add the repo, install host, console and plugin runner." />
+  <Card title="Debian 13+ (and LMDE)" href="/docs/debian" description="The same apt repo as Ubuntu." />
+  <Card title="Fedora 43+" href="/docs/fedora" description="dnf: add the RPM repo, install host, console and plugin runner." />
+  <Card title="Arch / CachyOS" href="/docs/arch" description="pacman: a signed binary repo, then one full -Syu." />
+  <Card title="Omarchy" href="/docs/omarchy" description="The Arch repo, plus one setup command for ufw, autostart and the app menu." />
+  <Card title="Bazzite / Fedora Atomic" href="/docs/bazzite" description="A systemd sysext: no layering, no reboot." />
+  <Card title="SteamOS (Steam Deck as host)" href="/docs/steamos-host" description="One script, built on the device." />
+  <Card title="NixOS" href="/docs/nixos" description="A flake input and a NixOS module, with a binary cache." />
+  <Card title="Windows 11" href="/docs/windows-host" description="winget or a signed installer." />
+</Cards>
+
+Streaming *to* a device instead? That's a client: [Install a Client](/docs/install-client).
+
+## Guided install (preview)
+
+On Linux, one command does what the pages above walk you through. It detects your distro, adds the
+repo, installs the host, joins the groups, opens the firewall if you run one, starts the host and
+the console, and tells you how to pair:
+
+<Installer />
+
+To read what runs first:
+
+<Installer inspect />
+
+The script downloads the `punktfunk-setup` installer for your architecture (x86_64 or aarch64),
+checks its sha256 and runs it. In a terminal it shows one screen with every choice filled in:
+press Enter to install, or edit a row. It then asks for a console password and where the console
+should listen. Without a terminal it takes the defaults.
+
+It covers Ubuntu, Debian, Fedora, Arch and its derivatives, Bazzite / Fedora Atomic and SteamOS.
+On SteamOS it hands over to the on-device build. For NixOS and Windows it points you to their
+pages. It doesn't install GPU drivers: it warns when an NVIDIA GPU has no working driver. When
+Sunshine, Apollo or Vibeshine is running, it moves the management API off their port. Re-running
+it is safe.
+
+Pass flags after `sh -s --` at the end of the one-liner, for example `… | sh -s -- --yes`.
+Each option also has an environment twin (`1` or `0` for on/off options). `--help` lists them all.
+
+| Flag | Environment | What it does |
+|---|---|---|
+| `-y`, `--yes` | `PUNKTFUNK_INSTALL_YES=1` | No questions: take every default |
+| `--host`, `--client` | | What to install (default: host). `--client` alone installs only the client, as a Flatpak where your distro has no Punktfunk repo |
+| `--channel stable\|canary` | `PUNKTFUNK_INSTALL_CHANNEL` | Package channel. On an installed box this switches channel; without it the box keeps its current one ([Release Channels](/docs/channels)) |
+| `--gamestream` / `--no-gamestream` | `PUNKTFUNK_INSTALL_GAMESTREAM` | [Moonlight](/docs/moonlight) compatibility (default off) |
+| `--clipboard` / `--no-clipboard` | `PUNKTFUNK_INSTALL_CLIPBOARD` | [Shared clipboard](/docs/clipboard) (default on) |
+| `--punktfunk-group` / `--no-punktfunk-group` | `PUNKTFUNK_INSTALL_PUNKTFUNK_GROUP` | Join the `punktfunk` group for the virtual Steam Deck controller (default on) |
+| `--linger` / `--no-linger` | `PUNKTFUNK_INSTALL_LINGER` | Start at boot with nobody logged in (default on for Bazzite, Nobara, Game Mode boxes and runs without a graphical session) |
+| `--console-cert` / `--no-console-cert` | `PUNKTFUNK_INSTALL_CONSOLE_CERT` | Trust the console's certificate in this box's browser (default on when a desktop is installed) |
+| `--web-bind lan\|localhost\|ADDR` | `PUNKTFUNK_INSTALL_WEB_BIND` | Where the console listens (default `lan`). Written to `host.env` as [`PUNKTFUNK_UI_BIND`](/docs/configuration) |
+| `--mgmt-port N` | `PUNKTFUNK_INSTALL_MGMT_PORT` | Where the management API moves when Sunshine or Apollo holds 47990 (default 47991) |
+| `--omarchy-setup` / `--no-omarchy-setup` | `PUNKTFUNK_INSTALL_OMARCHY_SETUP` | Run `punktfunk-omarchy setup` on [Omarchy](/docs/omarchy) (default on). `--no-omarchy-setup` also turns off the three rows below |
+| `--omarchy-toasts`, `--omarchy-idle`, `--omarchy-theme` (and `--no-…`) | `PUNKTFUNK_INSTALL_OMARCHY_TOASTS`, `PUNKTFUNK_INSTALL_OMARCHY_IDLE`, `PUNKTFUNK_INSTALL_OMARCHY_THEME` | Omarchy pairing and stream toasts, keep the screen awake while streaming, console follows the Omarchy theme |
+| `--no-start` | | Install and configure, but don't start the services |
+| `--dry-run` | `PUNKTFUNK_INSTALL_DRY_RUN=1` | Print every command, change nothing |
+| `--demo PRESET` | | Walk the whole flow against a canned machine, change nothing |
+| `--uninstall` | | Stop the services and remove the packages and repo. Your config stays |
+| `-v`, `--verbose` | | Echo every command instead of one progress line |
+
+## Good to know
+
+- **Read [Security & Safe Use](/docs/security) once.** A streaming host is remote control of the
+  machine.
+- **Sunshine, Apollo or Vibeshine installed?** They can run side by side with one port moved:
+  [Switching from Sunshine](/docs/switching-from-sunshine). `punktfunk-host detect-conflicts`
+  lists what it finds.
+- **Three packages.** `punktfunk-host` is the host, `punktfunk-web` the browser console,
+  `punktfunk-scripting` the plugin runner that fills your [game library](/docs/game-library).
+  Every install line names all three, so a package manager that skips recommended packages still
+  installs the console you pair with.
+- **Stable by default.** Every guide uses the stable channel. The latest `main` build is
+  [canary](/docs/channels).
+- **Updating and removing:** [Updating the Host](/docs/updating), [Uninstall](/docs/uninstall).
+- **No package for your system?** [Build from source](/docs/developers/build-from-source).

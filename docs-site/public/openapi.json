@@ -2548,6 +2548,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "A plugin reported another plugin's titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -2632,6 +2642,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A plugin toggled another plugin's source",
             "content": {
               "application/json": {
                 "schema": {
@@ -11349,6 +11369,7 @@
         "enum": [
           "bool",
           "int",
+          "decimal",
           "enum",
           "text",
           "list"
@@ -11408,11 +11429,11 @@
           },
           "max": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64",
-            "description": "`int` only."
+            "format": "double",
+            "description": "`int` and `decimal` only."
           },
           "max_len": {
             "type": [
@@ -11425,11 +11446,11 @@
           },
           "min": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64",
-            "description": "`int` only."
+            "format": "double",
+            "description": "`int` and `decimal` only."
           },
           "options": {
             "type": [
@@ -11467,7 +11488,7 @@
               "string",
               "null"
             ],
-            "description": "`int` only, e.g. `fps`."
+            "description": "`int` and `decimal` only, e.g. `fps`."
           },
           "value": {
             "description": "The value in force."

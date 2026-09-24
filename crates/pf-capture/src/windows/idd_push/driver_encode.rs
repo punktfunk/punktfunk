@@ -223,6 +223,7 @@ impl AuSection {
 }
 
 /// Open the driver's encoder for `endpoint` and hand back the stream loop's [`Encoder`].
+/// Every open re-raises the WUDFHost's GPU scheduling class, which a driver reload resets.
 /// Structured failure: [`DriverEncodeOpenError`] when the driver walked the list and none
 /// opened, else the delivery error. There is no fallback.
 pub fn open_driver_encoder(
@@ -234,6 +235,7 @@ pub fn open_driver_encoder(
     let heap = au::heap_bytes_for(params.bitrate_kbps, params.fps);
     let section = AuSection::create(heap, params.wire_seq_base)?;
     let broker = ChannelBroker::open(endpoint.wudf_pid)?;
+    broker.raise_gpu_priority();
     // SAFETY: both handles are live members of `section`, borrowed for the duplication.
     let (section_v, event_v) = unsafe {
         let s = broker.dup_into(

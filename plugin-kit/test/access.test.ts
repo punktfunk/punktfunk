@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import type { Punktfunk } from "@punktfunk/host";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { requestAccess, unreachable } from "../src/access.js";
@@ -47,6 +48,38 @@ describe("folder access", () => {
 			),
 		);
 		expect(result).toEqual([]);
+	});
+
+	test("a host that refuses the request is never a plugin failure", async () => {
+		for (const status of [403, 500]) {
+			const result = await Effect.runPromise(
+				requestAccess(["/one"]).pipe(
+					Effect.provide(
+						hostLayer((method, path) =>
+							Effect.fail(
+								new HostRequestError({ method, path, cause: { status } }),
+							),
+						),
+					),
+				),
+			);
+			expect([status, result]).toEqual([status, []]);
+		}
+	});
+
+	test("~ expands before the host sees it", async () => {
+		let seen: unknown;
+		await Effect.runPromise(
+			requestAccess(["~/Games"]).pipe(
+				Effect.provide(
+					hostLayer((_method, _path, body) => {
+						seen = body;
+						return Effect.succeed([]);
+					}),
+				),
+			),
+		);
+		expect(seen).toEqual({ paths: [{ path: `${os.homedir()}/Games` }] });
 	});
 
 	test("missing counts only inside the sandbox", () => {
@@ -106,6 +139,57 @@ describe("folder access", () => {
 			});
 			await new Promise((resolve) => setTimeout(resolve, 80));
 			expect(posts).toHaveLength(1);
+		} finally {
+			if (running) {
+				process.emit("SIGTERM", "SIGTERM");
+				await running;
+			}
+			if (previousConfig === undefined) delete process.env.PUNKTFUNK_CONFIG_DIR;
+			else process.env.PUNKTFUNK_CONFIG_DIR = previousConfig;
+			if (previousSocket === undefined) delete process.env.PUNKTFUNK_MGMT_UNIX;
+			else process.env.PUNKTFUNK_MGMT_UNIX = previousSocket;
+			fs.rmSync(config, { recursive: true, force: true });
+		}
+	});
+
+	test("a refused request still lets the scan reach the library", async () => {
+		const previousConfig = process.env.PUNKTFUNK_CONFIG_DIR;
+		const previousSocket = process.env.PUNKTFUNK_MGMT_UNIX;
+		const config = `${import.meta.dir}/.access-refused-${process.pid}`;
+		process.env.PUNKTFUNK_CONFIG_DIR = config;
+		process.env.PUNKTFUNK_MGMT_UNIX = "/run/punktfunk/host.sock";
+		const reconciles: string[] = [];
+		const plugin = defineLibraryPlugin({
+			name: "refused-test",
+			title: "Refused test",
+			configSchema: Schema.Struct({}),
+			detect: () => Effect.succeed(true),
+			scan: () => Effect.succeed([]),
+			wants: () => ["/missing-one"],
+			pollInterval: Duration.millis(20),
+		});
+		const pf = {
+			request: async (method: string, path: string) => {
+				// What a Windows host answers a plugin that has no token of its own.
+				if (method === "POST" && path === "/plugin-access/requests")
+					throw Object.assign(new Error("forbidden"), { status: 403 });
+				if (
+					method === "PUT" &&
+					path.startsWith("/library/provider/refused-test")
+				)
+					reconciles.push(path);
+				if (method === "GET" && path === "/plugins")
+					return [{ id: "refused-test", category: "library" }];
+				return [];
+			},
+		} as unknown as Punktfunk;
+		let running: Promise<void> | undefined;
+		try {
+			running = (plugin.def.main as (pf: Punktfunk) => Promise<void>)(pf);
+			const deadline = Date.now() + 5000;
+			while (reconciles.length === 0 && Date.now() < deadline)
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(reconciles.length).toBeGreaterThan(0);
 		} finally {
 			if (running) {
 				process.emit("SIGTERM", "SIGTERM");
