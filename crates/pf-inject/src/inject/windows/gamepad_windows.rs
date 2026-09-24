@@ -41,12 +41,26 @@ const OFF_RUMBLE: usize = core::mem::offset_of!(XusbShm, rumble_large); // large
 const OFF_DRIVER_PROTO: usize = core::mem::offset_of!(XusbShm, driver_proto);
 const OFF_PAD_INDEX: usize = core::mem::offset_of!(XusbShm, pad_index);
 
-/// Spawn `pf_xusb_<index>` (hwid `pf_xusb`, enumerator `punktfunk`). XInput finds the
+/// INF hardware ids. `pf_xusb` installs the `xinputhid` UpperFilters string WGI admits on;
+/// PnP fails a devnode whose filter service is missing, so without it the pad takes the
+/// filter-free line and XInput alone sees it.
+const XUSB_HWID: &str = "pf_xusb";
+const XUSB_UNFILTERED_HWID: &str = "pf_xusb_nofilter";
+
+fn xusb_hwid() -> &'static str {
+    if super::xbox_windows::xinputhid_registered() {
+        XUSB_HWID
+    } else {
+        XUSB_UNFILTERED_HWID
+    }
+}
+
+/// Spawn `pf_xusb_<index>` (hardware id `hwid`, enumerator `punktfunk`). XInput finds the
 /// device by `GUID_DEVINTERFACE_XUSB`, not VID/PID, so no USB compatible-ids — but
 /// `pContainerId` must be a deterministic non-null GUID: the null sentinel trips an
 /// `xinput1_4` slot-skip. `SwDeviceClose` on drop.
-fn create_swdevice(index: u8) -> Result<(HSWDEVICE, Option<String>)> {
-    let hwids: Vec<u16> = "pf_xusb".encode_utf16().chain([0u16, 0u16]).collect();
+fn create_swdevice(index: u8, hwid: &str) -> Result<(HSWDEVICE, Option<String>)> {
+    let hwids: Vec<u16> = hwid.encode_utf16().chain([0u16, 0u16]).collect();
     let instid: Vec<u16> = format!("pf_xusb_{index}")
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -154,7 +168,8 @@ impl XusbWinPad {
             std::ptr::write_unaligned(base as *mut u32, SHM_MAGIC);
         }
         // `?` so PadSlots retries; a swallowed failure latched a phantom pad for the session.
-        let (hsw, instance_id) = create_swdevice(index)?;
+        let hwid = xusb_hwid();
+        let (hsw, instance_id) = create_swdevice(index, hwid)?;
         channel.bind_devnode(
             index as u32,
             instance_id.clone(),
@@ -167,7 +182,7 @@ impl XusbWinPad {
             _sw,
             channel,
             attach: super::gamepad_raii::DriverAttach::new(
-                "pf_xusb",
+                hwid,
                 "pf_xusb.inf",
                 "C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Local\\Temp\\pfxusb-driver.log",
                 boot_name,
@@ -351,5 +366,53 @@ impl GamepadManager {
                 send(i as u16, 0, 0, 0, 0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Both XUSB ids have a model line, and only `pf_xusb`'s install writes the `xinputhid`
+    /// UpperFilters string: on a machine without that service it fails the devnode.
+    #[test]
+    fn xusb_hwids_match_inf() {
+        let inx = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/windows/drivers/pf-xusb/pf_xusb.inx"
+        );
+        let inf = std::fs::read_to_string(inx).expect("read pf_xusb.inx");
+        let lines: Vec<&str> = inf
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with(';'))
+            .collect();
+        let section_for = |hwid: &str| {
+            lines.iter().find_map(|l| {
+                let (section, ids) = l.split_once('=')?.1.split_once(',')?;
+                ids.split(',')
+                    .any(|i| i.trim().eq_ignore_ascii_case(hwid))
+                    .then(|| section.trim().to_string())
+            })
+        };
+        let hw_block = |section: &str| -> Vec<&str> {
+            let head = format!("[{section}.NT.HW]").to_ascii_lowercase();
+            lines
+                .iter()
+                .skip_while(|l| l.to_ascii_lowercase() != head)
+                .skip(1)
+                .take_while(|l| !l.starts_with('['))
+                .copied()
+                .collect()
+        };
+        let filtered = section_for(super::XUSB_HWID).expect("pf_xusb model line");
+        let plain = section_for(super::XUSB_UNFILTERED_HWID).expect("pf_xusb_nofilter model line");
+        assert!(
+            hw_block(&filtered).iter().any(|l| l.starts_with("AddReg=")),
+            "{filtered} lost the xinputhid AddReg WGI admits the pad on"
+        );
+        let plain_hw = hw_block(&plain);
+        assert!(
+            !plain_hw.is_empty() && !plain_hw.iter().any(|l| l.starts_with("AddReg=")),
+            "{plain} must install without the xinputhid UpperFilters string"
+        );
     }
 }

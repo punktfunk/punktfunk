@@ -51,8 +51,8 @@ pub(super) fn resolve_pad_kind(kind: GamepadPref) -> GamepadPref {
 /// Steam Controller 2 is Linux UHID and Windows DEVTYPE_TRITON; the SC2 Puck has a native
 /// Linux identity and folds onto the wired one on Windows.
 ///
-/// Compile-time OS flags only. `PUNKTFUNK_XBOX_BACKEND=xusb` un-varies Windows identity at
-/// runtime; that fold is [`degrade_xbox_identity`], not this function.
+/// Compile-time OS flags only. The Windows XUSB backend un-varies Xbox identity at runtime;
+/// that fold is [`degrade_xbox_identity`], not this function.
 fn pick_gamepad(pref: GamepadPref, env: Option<&str>, linux: bool, windows: bool) -> GamepadPref {
     let want = match pref {
         GamepadPref::Auto => env
@@ -259,7 +259,7 @@ fn degrade_steam_on_conflict(chosen: GamepadPref) -> GamepadPref {
     chosen
 }
 
-/// Fold Xbox One / Elite to 360 when `PUNKTFUNK_XBOX_BACKEND=xusb`.
+/// Fold Xbox One / Elite to 360 when [`windows_xbox_hid`] picks XUSB.
 /// The XUSB companion has one fixed 360 identity; folding here keeps the `Welcome` echo honest.
 /// No-op off Windows (`XboxElite` never survives [`pick_gamepad`] there; `XboxOne` is uinput).
 #[cfg(target_os = "windows")]
@@ -267,8 +267,7 @@ fn degrade_xbox_identity(chosen: GamepadPref) -> GamepadPref {
     if matches!(chosen, GamepadPref::XboxOne | GamepadPref::XboxElite) && !windows_xbox_hid() {
         tracing::warn!(
             wanted = chosen.as_str(),
-            "PUNKTFUNK_XBOX_BACKEND=xusb selects the XUSB companion, which has one fixed X-Box 360 \
-             identity — falling back to the 360 pad"
+            "the XUSB backend has one fixed X-Box 360 identity — falling back to the 360 pad"
         );
         return GamepadPref::Xbox360;
     }
@@ -281,22 +280,40 @@ fn degrade_xbox_identity(chosen: GamepadPref) -> GamepadPref {
 }
 
 /// Build Xbox-family pads as HID ([`crate::inject::xbox_windows`]) instead of XUSB
-/// ([`crate::inject::gamepad`]). Windows only. HID is the default; `PUNKTFUNK_XBOX_BACKEND=xusb`
-/// restores the companion.
+/// ([`crate::inject::gamepad`]). Windows only; decided once per process by [`xbox_backend_hid`]
+/// and logged.
 ///
 /// XUSB registers only `GUID_DEVINTERFACE_XUSB` — no HID collection — so Steam, DirectInput,
-/// `joy.cpl`, and WGI/GameInput never see it. HID plus inbox `xinputhid` is a superset.
-/// `xusb` stays because a servicing update or a third-party filter can break that promotion;
-/// one env var restores XUSB without a reinstall.
+/// `joy.cpl`, and WGI/GameInput never see it. HID plus inbox `xinputhid` is a superset, but
+/// without that filter (Windows Server) XInput cannot see the HID pad at all.
 ///
 /// The two backends are mutually exclusive per pad: both would be two controllers for one pair
 /// of hands. Read by both input planes (`Pads::handle` and `gamestream::control::SessionPads`).
 #[cfg(target_os = "windows")]
 pub(crate) fn windows_xbox_hid() -> bool {
-    match std::env::var("PUNKTFUNK_XBOX_BACKEND") {
-        Ok(v) if v.trim().eq_ignore_ascii_case("xusb") => false,
-        // Unset, empty, "hid", or a typo → HID. A misspelled opt-out on the XUSB path is invisible.
-        _ => true,
+    static HID: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HID.get_or_init(|| {
+        let env = std::env::var("PUNKTFUNK_XBOX_BACKEND").ok();
+        let xinputhid = crate::inject::xbox_windows::xinputhid_registered();
+        let hid = xbox_backend_hid(env.as_deref(), xinputhid);
+        tracing::info!(
+            backend = if hid { "hid" } else { "xusb" },
+            env = env.as_deref().unwrap_or(""),
+            xinputhid,
+            "virtual Xbox pad backend"
+        );
+        hid
+    })
+}
+
+/// `PUNKTFUNK_XBOX_BACKEND` (`hid` / `xusb`) wins; unset or unrecognised follows `xinputhid`.
+/// Without that filter the HID pad sits on the unfiltered line, where XInput cannot see it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn xbox_backend_hid(env: Option<&str>, xinputhid: bool) -> bool {
+    match env.map(str::trim) {
+        Some(v) if v.eq_ignore_ascii_case("xusb") => false,
+        Some(v) if v.eq_ignore_ascii_case("hid") => true,
+        _ => xinputhid,
     }
 }
 
@@ -341,8 +358,22 @@ pub(super) fn resolve_gamepad(pref: GamepadPref) -> GamepadPref {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_gamepad, route_decision};
+    use super::{pick_gamepad, route_decision, xbox_backend_hid};
     use punktfunk_core::config::GamepadPref;
+
+    /// The env override wins either way; otherwise HID only where `xinputhid` can promote it.
+    #[test]
+    fn xbox_backend_follows_xinputhid_unless_overridden() {
+        assert!(xbox_backend_hid(None, true));
+        assert!(!xbox_backend_hid(None, false), "no xinputhid → XUSB");
+        assert!(!xbox_backend_hid(Some(" XUSB "), true));
+        assert!(xbox_backend_hid(Some("hid"), false), "operator forces HID");
+        assert!(
+            !xbox_backend_hid(Some("hdi"), false),
+            "a typo follows the machine"
+        );
+        assert!(xbox_backend_hid(Some(""), true));
+    }
 
     #[test]
     fn per_pad_route_decision() {

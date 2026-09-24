@@ -27,6 +27,9 @@ pf_xusb.dll = 1,,
 
 [Standard.NT$ARCH$.10.0...22000]
 %DeviceDesc%=pfXusb, root\pf_xusb, pf_xusb
+; The same pad where `xinputhid` is not a service (Windows Server). PnP fails a devnode whose
+; UpperFilters name a missing service, so this line installs without the WGI tripwire below.
+%DeviceDesc%=pfXusbNoFilter, pf_xusb_nofilter
 
 [pfXusb.NT]
 CopyFiles=Drivers_Dir
@@ -56,6 +59,29 @@ Include=WUDFRD.inf
 Needs=WUDFRD.NT.Services
 
 [pfXusb.NT.Wdf]
+UmdfService=pf_xusb, pfXusb_Install
+UmdfServiceOrder=pf_xusb
+UmdfKernelModeClientPolicy=AllowKernelModeClients
+UmdfFileObjectPolicy=AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction=Copy
+UmdfFsContextUsePolicy=CanUseFsContext2
+UmdfHostProcessSharing=ProcessSharingDisabled
+
+; `pfXusb` without the HW AddReg; keep the two in step.
+[pfXusbNoFilter.NT]
+CopyFiles=Drivers_Dir
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+
+[pfXusbNoFilter.NT.HW]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.HW
+
+[pfXusbNoFilter.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+
+[pfXusbNoFilter.NT.Wdf]
 UmdfService=pf_xusb, pfXusb_Install
 UmdfServiceOrder=pf_xusb
 UmdfKernelModeClientPolicy=AllowKernelModeClients

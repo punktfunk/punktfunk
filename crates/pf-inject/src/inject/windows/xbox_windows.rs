@@ -113,8 +113,8 @@ pub(super) const XBOX_UNFILTERED_HWID: &str = "pf_xbox_nofilter";
 ///
 /// `pfGamepadXbox` appends it to the devnode's `UpperFilters`, and PnP treats a
 /// filter service it cannot resolve as fatal. Windows Server — the SKU every
-/// seat runs on — ships no `xinputhid` at all.
-fn xinputhid_registered() -> bool {
+/// seat runs on — ships no `xinputhid` at all, so the host picks XUSB there.
+pub fn xinputhid_registered() -> bool {
     use windows::core::w;
     use windows::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,

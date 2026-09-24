@@ -211,9 +211,9 @@ fn permitted(mask: u32, class: GrantClass, drops: &mut GrantDrops) -> bool {
 ///
 /// Windows has two, and they are not interchangeable: XUSB registers only
 /// `GUID_DEVINTERFACE_XUSB` and has no HID collection, so hidapi/SDL/RawInput/DirectInput/
-/// `joy.cpl`/WGI cannot see it — only `XInputGetState`. HID is the default; both planes
-/// read `native::gamepad::windows_xbox_hid` (`cfg(windows)`, so not an intra-doc link)
-/// and `PUNKTFUNK_XBOX_BACKEND=xusb` reverts both.
+/// `joy.cpl`/WGI cannot see it — only `XInputGetState`. Both planes read
+/// `native::gamepad::windows_xbox_hid` (`cfg(windows)`, so not an intra-doc link): HID where
+/// `xinputhid` exists, XUSB where it does not, `PUNKTFUNK_XBOX_BACKEND` overriding both.
 ///
 /// Elsewhere there is no choice: Linux is one uinput X-Box pad; other platforms drop events.
 enum SessionPads {

@@ -60,9 +60,9 @@ impl PadBackends {
                 .steamdeck_win
                 .get_or_insert_with(crate::inject::steam_deck_windows::SteamDeckWindowsManager::new)
                 .handle(ev),
-            // HID Xbox (default; `PUNKTFUNK_XBOX_BACKEND=xusb` reverts). Guard on each arm:
-            // with the hatch set, `degrade_xbox_identity` has already folded One/Elite to
-            // Xbox360, so only Xbox360 reaches here and must fall through to XUSB.
+            // HID Xbox unless `windows_xbox_hid` picks XUSB. Guard on each arm: under XUSB,
+            // `degrade_xbox_identity` has already folded One/Elite to Xbox360, so only Xbox360
+            // reaches here and must fall through to XUSB.
             GamepadPref::Xbox360 if super::super::gamepad::windows_xbox_hid() => self
                 .xbox_hid
                 .get_or_insert_with(crate::inject::xbox_windows::XboxWindowsManager::new)
