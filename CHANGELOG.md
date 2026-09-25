@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.40.0
 
-391 commits since v0.39.0. Wire stays 2. C ABI stays 37. Driver protocol floor stays 9.
+396 commits since v0.39.0. Wire stays 2. C ABI stays 37. Driver protocol floor stays 9.
 Deep dive: `git log v0.39.0..v0.40.0`
 
 ### Versions
@@ -84,7 +84,8 @@ Deep dive: `git log v0.39.0..v0.40.0`
   `d3d11va` build without `desktop`.
 - Packaging: pacman, apt and dnf try-restart every signed-in user's console, runner and host
   after an update (`packaging/linux/restart-user-units.sh`), and NixOS does it through a
-  reload-triggered unit. The in-console updater restarts them itself.
+  reload-triggered unit. The in-console updater restarts them itself. A Nix build ends its
+  version in `+g<shortRev>`, which the update check reads as a stable build.
 - Packaging: bun 1.4.2, hash-pinned on every channel (Nix flake overlay; baseline builds for
   deb, rpm, Arch and Windows x64). The Flatpak metainfo carries a `<release>` per stable tag.
 
