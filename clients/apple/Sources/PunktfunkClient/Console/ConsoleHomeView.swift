@@ -101,6 +101,7 @@ struct ConsoleHomeView: View {
                     launchTitle: launchTitle, connectShelf: connectShelf, wakeOnly: wakeOnly,
                     cancelConnect: { self.model.disconnect() },
                     showStream: { self.model.revealStream() },
+                    holding: { self.model.consoleHold = $0 },
                     paired: onPaired, quit: onQuit))
         else {
             onFailed()

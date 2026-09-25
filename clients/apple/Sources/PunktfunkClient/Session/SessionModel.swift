@@ -126,6 +126,9 @@ final class SessionModel: ObservableObject {
     /// the only moment the cover has somewhere to fly FROM, and holding from there means one
     /// unbroken screen from the tap to the game rather than a stream of the launcher in between.
     @Published private(set) var launchHold: LaunchHoldTarget?
+    /// The console's own launch hold is up, as the console reports it: the console stays over
+    /// the stream it dialled, and the stream takes no input, until the console lets go.
+    @Published var consoleHold = false
     /// The launched game is up and the host is waiting for its window.
     @Published private(set) var launchWindowWait = false
     private var launchWatch: Task<Void, Never>?

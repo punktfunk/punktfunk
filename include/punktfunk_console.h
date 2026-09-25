@@ -133,6 +133,13 @@ bool punktfunk_console_menu(const PunktfunkConsole *c, uint8_t event, uint8_t so
 // `c` is live.
 bool punktfunk_console_at_root(const PunktfunkConsole *c);
 
+// Whether the console's launch hold is up. The app keeps the console over the stream it
+// dialled while this is true, and gives the stream the screen once it is false.
+//
+// # Safety
+// `c` is live.
+bool punktfunk_console_holds_launch(const PunktfunkConsole *c);
+
 // Touch or mouse in texture pixels: kind 0 move, 1 primary down (a mouse, acts at once),
 // 2 primary up, 3 secondary down (= Back), 4 wheel (`dy` steps, + = up), 5 cancel,
 // 6 primary down from a finger — deferred, so a swipe scrolls instead. `true` = consumed.

@@ -423,6 +423,22 @@ pub unsafe extern "C" fn punktfunk_console_at_root(c: *const PunktfunkConsole) -
     })
 }
 
+/// Whether the console's launch hold is up. The app keeps the console over the stream it
+/// dialled while this is true, and gives the stream the screen once it is false.
+///
+/// # Safety
+/// `c` is live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_console_holds_launch(c: *const PunktfunkConsole) -> bool {
+    guard(false, || {
+        // SAFETY: live per the contract.
+        let Some(c) = (unsafe { c.as_ref() }) else {
+            return false;
+        };
+        c.shell().is_some_and(|shell| shell.console.holds_launch())
+    })
+}
+
 /// Touch or mouse in texture pixels: kind 0 move, 1 primary down (a mouse, acts at once),
 /// 2 primary up, 3 secondary down (= Back), 4 wheel (`dy` steps, + = up), 5 cancel,
 /// 6 primary down from a finger — deferred, so a swipe scrolls instead. `true` = consumed.

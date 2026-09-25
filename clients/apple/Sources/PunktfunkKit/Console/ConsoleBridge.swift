@@ -104,6 +104,9 @@ public final class ConsoleBridge {
     /// Menu button only while this is false, so at the root the press reaches the system.
     public var atRoot: Bool { punktfunk_console_at_root(handle) }
 
+    /// The console's launch hold is up: it covers the session it dialled until `ShowStream`.
+    public var holdsLaunch: Bool { punktfunk_console_holds_launch(handle) }
+
     /// `false` = the shell let the press go: it belongs to the system (tvOS Menu at the root).
     @discardableResult
     public func menu(_ event: Menu, from source: Source) -> Bool {
