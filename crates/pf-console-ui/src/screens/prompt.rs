@@ -3,7 +3,8 @@
 //! reference. One row per answer; Back answers none of them.
 //!
 //! The answer leaves as [`ConsoleCmd::PromptAnswer`] carrying the prompt's `id`, so the app
-//! can drop a reply to a question it no longer holds.
+//! can drop a reply to a question it no longer holds. The shell's own exit question
+//! ([`PromptScreen::exit`]) answers nobody: its yes quits.
 
 use crate::glyphs::{Hint, HintKey};
 use crate::model::ConsoleCmd;
@@ -26,6 +27,8 @@ pub struct Prompt {
 pub(crate) struct PromptScreen {
     prompt: Prompt,
     pub(super) list: MenuList,
+    /// The shell's own exit question: its first row quits, and the app hears no answer.
+    exit: bool,
 }
 
 impl PromptScreen {
@@ -33,6 +36,19 @@ impl PromptScreen {
         PromptScreen {
             prompt,
             list: MenuList::new(),
+            exit: false,
+        }
+    }
+
+    pub(crate) fn exit() -> PromptScreen {
+        PromptScreen {
+            exit: true,
+            ..PromptScreen::new(Prompt {
+                id: String::new(),
+                title: "Exit".into(),
+                message: "Exit punktfunk?".into(),
+                choices: vec!["Exit".into(), "Cancel".into()],
+            })
         }
     }
 
@@ -80,10 +96,14 @@ impl PromptScreen {
     }
 
     fn answer(&self, choice: Option<usize>, fx: &mut Outbox) {
-        fx.cmds.push(ConsoleCmd::PromptAnswer {
-            id: self.prompt.id.clone(),
-            choice,
-        });
+        if self.exit {
+            fx.quit = choice == Some(0);
+        } else {
+            fx.cmds.push(ConsoleCmd::PromptAnswer {
+                id: self.prompt.id.clone(),
+                choice,
+            });
+        }
         fx.pop();
     }
 

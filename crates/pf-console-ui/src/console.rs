@@ -215,8 +215,8 @@ impl Console {
         self.shell.text_input(text);
     }
 
-    /// Nothing to back out of. A Back here leaves the console: the desktop quits, and a TV
-    /// hands the press to the system, which is why a host asks BEFORE it binds that button.
+    /// Nothing to back out of: focus is on a tab. A Back here asks to exit, and a TV hands
+    /// the press to the system, which is why a host asks BEFORE it binds that button.
     pub fn at_root(&self) -> bool {
         self.shell.at_root()
     }

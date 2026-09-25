@@ -161,10 +161,6 @@ pub(crate) enum ToastKind {
     Error,
 }
 
-/// How long an armed exit stays armed. Long enough to be a deliberate second press, short
-/// enough that a Back pressed minutes later is a fresh accident rather than a confirmation.
-const EXIT_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
-
 /// Mark ahead of toast text. Geometric on purpose: glyph art is Skia paths
 /// that must read from 0.75× to 3× `k`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -428,9 +424,6 @@ pub(crate) struct Shell {
     /// Fingerprint of a first pairing whose shelf has not opened yet. See
     /// [`Self::open_first_paired_library`].
     first_pair: Option<String>,
-    /// When Back at the root was last pressed, where that press has to be repeated to exit.
-    /// See [`EXIT_CONFIRM_WINDOW`].
-    exit_armed: Option<std::time::Instant>,
     mesh: RuntimeEffect,
     /// Palette id baked into `mesh`. [`Self::sync`] recompiles when
     /// `settings.ui_palette` moves.
@@ -556,7 +549,6 @@ impl Shell {
             speed_view: overlays::SpeedView::default(),
             toast: None,
             first_pair: None,
-            exit_armed: None,
             mesh,
             mesh_lift,
             mesh_scrim,
@@ -653,10 +645,12 @@ impl Shell {
         self.t0.elapsed().as_secs_f64()
     }
 
-    /// Nothing to back out of: one screen, no modal, no takeover. A host whose Back belongs
-    /// to the system when the console does not want it (tvOS's Menu) asks before it binds.
+    /// Nothing to back out of: one screen, focus on its tab, no modal, no takeover. A host
+    /// whose Back belongs to the system when the console does not want it (tvOS's Menu)
+    /// asks before it binds.
     pub(crate) fn at_root(&self) -> bool {
         self.stack.len() == 1
+            && self.strip_focus
             && self.connecting.is_none()
             && self.launching.is_none()
             && self.wake.is_none()
@@ -1234,8 +1228,7 @@ impl Shell {
                 Some(Some(MenuPulse::Move))
             }
             MenuEvent::Move(MenuDir::Up) => Some(Some(MenuPulse::Boundary)),
-            // The root's Back: out of the console.
-            MenuEvent::Back => None,
+            MenuEvent::Back => Some(self.ask_exit()),
             _ => Some(None),
         }
     }
@@ -1438,7 +1431,7 @@ impl Shell {
         if self.connecting.is_some() || self.launching.is_some() {
             return;
         }
-        if self.strip_focus {
+        if self.strip_focus && self.stack.len() == 1 {
             self.strip.press();
         } else if let Some(s) = self.stack.last_mut() {
             s.press();
@@ -1596,9 +1589,8 @@ impl Shell {
             y: p.y - f64::from(self.last_insets.1),
             kind: p.kind,
         };
-        // Right button is B, including on modal cards. Exception: B at the
-        // root quits, and a right-click is too easy to fire by accident —
-        // quit stays the legend's clickable "Quit".
+        // Right button is B, including on modal cards, but not on a root: a
+        // right-click there is too easy to fire by accident.
         if let Some(l) = &self.launching {
             let connected = l.connected;
             if connected && (p.press() || p.kind == PointerKind::Back) {
@@ -1887,6 +1879,9 @@ impl Shell {
         if let Some(nav) = fx.nav {
             self.apply_nav(nav);
         }
+        if fx.quit {
+            self.actions.push_back(OverlayAction::Quit);
+        }
         if fx.browse {
             let hosts = &self.hosts;
             let below = match self.stack.first_mut() {
@@ -1939,32 +1934,26 @@ impl Shell {
                 if self.stack.len() > 1 {
                     let leaving = self.stack.pop().expect("len > 1");
                     self.begin_nav(NavKind::Pop, Some(Box::new(leaving)));
-                } else if self.exit_needs_confirming() {
-                    // B at home is the app's exit, and on a TV remote it is the same button
-                    // the user has been backing out of screens with — so it lands by accident.
-                    // Armed once, fired on the repeat, in the shell's own press-again idiom
-                    // rather than a modal it has no other use for.
-                    self.exit_armed = Some(std::time::Instant::now());
-                    self.show_toast("Press Back again to exit".to_string());
+                } else if !self.strip_focus {
+                    // A root screen's Back lifts focus to its tab; the tab's Back asks.
+                    self.strip_focus = true;
                 } else {
-                    self.exit_armed = None;
-                    self.actions.push_back(OverlayAction::Quit);
+                    self.ask_exit();
                 }
             }
         }
     }
 
-    /// Whether Back at the root should arm rather than quit.
-    ///
-    /// webOS only for now: there the shell IS the app, and Back is the same key used to leave
-    /// every screen, so one press too many closes it. A Deck's B at the root is a deliberate
-    /// exit to Gaming Mode and stays immediate — widening this is a line here.
-    fn exit_needs_confirming(&self) -> bool {
-        if self.platform != Platform::WebOS {
-            return false;
+    /// Back on the tab strip. The same button backs out of every screen, so exit is a
+    /// question, not a press. An Apple app and a browser page cannot close themselves:
+    /// there the press does nothing, and a TV remote's Menu is the system's (`at_root`).
+    fn ask_exit(&mut self) -> Option<MenuPulse> {
+        if matches!(self.platform, Platform::Apple | Platform::Web) {
+            return Some(MenuPulse::Boundary);
         }
-        self.exit_armed
-            .is_none_or(|t| t.elapsed() >= EXIT_CONFIRM_WINDOW)
+        let exit = crate::screens::prompt::PromptScreen::exit();
+        self.apply_nav(Nav::Push(Box::new(Screen::Prompt(exit))));
+        Some(MenuPulse::Confirm)
     }
 
     /// In-flight spring position. `1.0` when there is no transition, so
@@ -1990,7 +1979,7 @@ impl Shell {
         };
         match *kind {
             // Retarget the same spring. Velocity carries; `finish_nav` pops
-            // the entering screen at 0. Refused at the root: B there is quit.
+            // the entering screen at 0. Refused at the root: B there goes to the tab.
             NavKind::Push if *target == 1.0 && self.stack.len() > 1 => {
                 *target = 0.0;
                 true

@@ -62,12 +62,12 @@ final class ConsoleABITests: XCTestCase {
         XCTAssertGreaterThan(Set(pixels).count, 100, "Home paints a backdrop and text, not a flat fill")
     }
 
-    /// What a TV binds its Menu button on: at the root the press is the system's, and one
-    /// screen deeper it is the console's. Screens arrive and leave on a spring, so this runs
-    /// the frames that carry it, the way the display link does.
+    /// What a TV binds its Menu button on: on a tab the press is the system's, and on a card
+    /// or a screen deeper it is the console's. Screens arrive and leave on a spring, so this
+    /// runs the frames that carry it, the way the display link does.
     func testRootIsWhereBackLeaves() throws {
         let texture = try offscreen(width: 320, height: 180)
-        XCTAssertTrue(punktfunk_console_at_root(console))
+        XCTAssertFalse(punktfunk_console_at_root(console), "a focused card is under its tab")
         // With no hosts, focus starts on Add Host; OK opens it, so Back has somewhere to go.
         XCTAssertTrue(punktfunk_console_menu(console, 4, 1))
         draw(texture, frames: 20)

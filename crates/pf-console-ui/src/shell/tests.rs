@@ -277,7 +277,51 @@ fn navigation_lap() {
     }
     assert!(matches!(s.stack.as_slice(), [Screen::Home(_)]));
     s.handle_menu(MenuEvent::Back);
+    assert!(s.strip_focus, "back from a root lands on its tab");
+    s.handle_menu(MenuEvent::Back);
+    assert!(s.take_action().is_none(), "the tab's back asks first");
+    finish_motion(&mut s);
+    s.handle_menu(MenuEvent::Confirm);
     assert!(matches!(s.take_action(), Some(OverlayAction::Quit)));
+}
+
+/// Back climbs one layer a press: Settings' rows, its sections, the tab, then the exit
+/// question, whose Back stays. An Apple host cannot exit, so its tab's Back does nothing.
+#[test]
+fn back_climbs_from_settings_rows_to_the_exit_question() {
+    let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.sync();
+    assert!(s.switch_tab(Tab::Settings));
+    finish_motion(&mut s);
+    let sections = |s: &Shell| matches!(s.stack.as_slice(), [Screen::Settings(st)] if st.strip_focus_for_test());
+    assert!(!s.strip_focus && !sections(&s), "focus starts on the rows");
+    s.handle_menu(MenuEvent::Back);
+    assert!(!s.strip_focus && sections(&s), "rows → sections");
+    s.handle_menu(MenuEvent::Back);
+    assert!(s.strip_focus && s.at_root(), "sections → tab");
+    s.handle_menu(MenuEvent::Back);
+    assert!(
+        matches!(s.stack.as_slice(), [_, Screen::Prompt(_)]),
+        "tab → question"
+    );
+    finish_motion(&mut s);
+    s.handle_menu(MenuEvent::Back);
+    finish_motion(&mut s);
+    assert!(
+        s.take_action().is_none() && s.at_root(),
+        "the question's back stays"
+    );
+
+    let mut opts = test_options();
+    opts.platform = Platform::Apple;
+    let (console, library) = (ConsoleShared::default(), LibraryShared::default());
+    let home = vec![Screen::Home(HomeScreen::new())];
+    let mut s = Shell::new(console, library, ConsoleBus::default(), opts, home).unwrap();
+    s.sync();
+    for _ in 0..3 {
+        s.handle_menu(MenuEvent::Back);
+    }
+    assert!(s.at_root() && s.stack.len() == 1 && s.take_action().is_none());
 }
 
 /// A tab root that places nothing to focus parks focus on its tab, where Down stays;
@@ -1182,7 +1226,7 @@ fn back_mid_push_turns_the_screen_around() {
     assert!(matches!(s.motion, Motion::None));
 }
 
-/// Back at the root is not a reversal: there is no parent, and B there means quit.
+/// Back at the root is not a reversal: there is no parent, and B there goes to the tab.
 /// Decline it so the normal path can answer.
 #[test]
 fn back_mid_push_at_the_root_is_left_to_the_normal_path() {
@@ -1222,7 +1266,8 @@ fn mid_pop_refuses_confirm_but_honours_another_back() {
 
     s.handle_menu(MenuEvent::Back);
     finish_motion(&mut s);
-    assert!(matches!(s.take_action(), Some(OverlayAction::Quit)));
+    assert!(s.strip_focus, "the root's pop lands on its tab");
+    assert!(s.take_action().is_none(), "and quits nothing");
 }
 
 /// A completed pop frees the carried screen. Hint rects publish only at
