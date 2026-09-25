@@ -323,6 +323,14 @@
 // `PunktfunkStatus` code).
 #define PUNKTFUNK_CLIP_ERROR 6
 
+// This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
+// keeps sending, so a session joined to the same sink still hears the game.
+#define PUNKTFUNK_AUDIO_MUTE_LOCAL (1 << 0)
+
+// The operator muted this session from the console (`quic::AudioState`). The host
+// stopped encoding this session's audio, so a local unmute brings nothing back.
+#define PUNKTFUNK_AUDIO_MUTE_HOST (1 << 1)
+
 // Opus-plane frame length in milliseconds, and the default. One datagram carries exactly one
 // ([`crate::quic::encode_audio_datagram`]), so it is also the smallest shed unit.
 //
@@ -343,18 +351,6 @@
 #define PUNKTFUNK_AUDIO_BITS_16 16
 
 #define PUNKTFUNK_AUDIO_BITS_24 24
-
-#if defined(PUNKTFUNK_FEATURE_QUIC)
-// This client silenced its own speakers ([`NativeClient::set_audio_muted`]). The host keeps
-// sending, so a session joined to the same sink still hears the game.
-#define PUNKTFUNK_AUDIO_MUTE_LOCAL (1 << 0)
-#endif
-
-#if defined(PUNKTFUNK_FEATURE_QUIC)
-// The operator muted this session from the console ([`crate::quic::AudioState`]). The host
-// stopped encoding this session's audio, so a local unmute brings nothing back.
-#define PUNKTFUNK_AUDIO_MUTE_HOST (1 << 1)
-#endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Two missed 500 ms legacy refreshes. A quieter host is treated as gone.
