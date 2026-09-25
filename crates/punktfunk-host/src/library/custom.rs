@@ -50,6 +50,9 @@ pub struct CustomEntry {
     /// Which sessions hear this title. Absent = every session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioPolicy>,
+    /// Catalog ids a metadata source matches on. Set only by provider reconcile.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ids: BTreeMap<String, String>,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -125,6 +128,10 @@ pub struct ProviderEntryInput {
     pub on_window: OnWindow,
     #[serde(default)]
     pub audio: Option<AudioPolicy>,
+    /// Catalog ids a metadata source matches on: `steam` → appid, `libretro` →
+    /// `<system>/<No-Intro name>`. Keys `[a-z0-9_]{1,16}`, at most eight; a bad pair is dropped.
+    #[serde(default)]
+    pub ids: BTreeMap<String, String>,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -153,6 +160,8 @@ impl From<CustomEntry> for GameEntry {
             detect,
             on_window: c.on_window,
             stats: None,
+            ids: c.ids,
+            filled: BTreeMap::new(),
             meta: c.meta,
         }
     }
@@ -235,33 +244,51 @@ pub(crate) fn source_id_for(e: &CustomEntry) -> Option<&str> {
     e.store.as_deref().or(e.provider.as_deref())
 }
 
-/// Gated on [`super::collect_games`]: a source the operator switched off must not serve art
+/// Gated like [`super::collect_games`]: a source the operator switched off must not serve art
 /// (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not applied here —
 /// the console draws a dimmed cover, and this resolver cannot see the caller's lane.
 pub fn entry_for_library_id(library_id: &str) -> Option<CustomEntry> {
-    let entry = load_custom()
+    let off = disabled_scanners();
+    load_custom()
         .into_iter()
-        .find(|e| library_id_for(e) == library_id)?;
-    super::collect_games()
-        .iter()
-        .any(|g| g.id == library_id)
-        .then_some(entry)
+        .find(|e| library_id_for(e) == library_id)
+        .filter(|e| !source_id_for(e).is_some_and(|src| off.contains(src)))
+}
+
+/// The entry's art as `GET /library` lists it: its own, merged with picks and metadata sources.
+pub(crate) fn merged_art(library_id: &str) -> Option<Artwork> {
+    let mut g = GameEntry::from(entry_for_library_id(library_id)?);
+    Fills::load().apply(&mut g);
+    Some(g.art)
 }
 
 /// Art bytes for one [`ArtKind`], or `None` — no row, no such field, or art the proxy may not
 /// serve. A remote URL comes from the host's store, which fetches it on the first miss.
 /// Blocking IO — call off the async runtime.
 pub fn library_art_bytes(library_id: &str, kind: ArtKind) -> Option<(Vec<u8>, String)> {
-    let field = art_field(&entry_for_library_id(library_id)?.art, kind)?;
+    let field = art_field(&merged_art(library_id)?, kind)?;
     resolve_art_bytes(&field)
 }
 
 pub(crate) fn art_field(art: &Artwork, kind: ArtKind) -> Option<String> {
+    art_slot_ref(art, kind).clone()
+}
+
+fn art_slot_ref(art: &Artwork, kind: ArtKind) -> &Option<String> {
     match kind {
-        ArtKind::Portrait => art.portrait.clone(),
-        ArtKind::Hero => art.hero.clone(),
-        ArtKind::Logo => art.logo.clone(),
-        ArtKind::Header => art.header.clone(),
+        ArtKind::Portrait => &art.portrait,
+        ArtKind::Hero => &art.hero,
+        ArtKind::Logo => &art.logo,
+        ArtKind::Header => &art.header,
+    }
+}
+
+pub(crate) fn art_slot(art: &mut Artwork, kind: ArtKind) -> &mut Option<String> {
+    match kind {
+        ArtKind::Portrait => &mut art.portrait,
+        ArtKind::Hero => &mut art.hero,
+        ArtKind::Logo => &mut art.logo,
+        ArtKind::Header => &mut art.header,
     }
 }
 
@@ -326,6 +353,7 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
         detect: input.detect.unwrap_or_default(),
         on_window: input.on_window.unwrap_or_default(),
         audio: audio_policy(input.audio),
+        ids: BTreeMap::new(),
         meta: input.meta,
     };
     catalog.entries.push(entry.clone());
@@ -508,6 +536,9 @@ pub fn validate_provider_payload(
     let manifest = exec
         .then(|| crate::plugins::manifest::for_provider(provider))
         .flatten();
+    for e in inputs.iter_mut() {
+        sanitize_ids(&mut e.ids);
+    }
     let mut dropped = Vec::new();
     inputs.retain(|e| match entry_fault(provider, manifest.as_ref(), e) {
         None => true,
@@ -627,6 +658,7 @@ fn reconcile_entries(
             detect: input.detect,
             on_window: input.on_window,
             audio: audio_policy(input.audio),
+            ids: input.ids,
             meta: input.meta,
         });
     }
@@ -777,6 +809,7 @@ mod tests {
             detect: DetectHint::default(),
             on_window: OnWindow::default(),
             audio: None,
+            ids: BTreeMap::new(),
             meta: GameMeta::default(),
         }
     }
@@ -793,6 +826,7 @@ mod tests {
             detect: DetectHint::default(),
             on_window: OnWindow::default(),
             audio: None,
+            ids: BTreeMap::new(),
             meta: GameMeta::default(),
         }
     }

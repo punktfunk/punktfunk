@@ -133,11 +133,17 @@ pub(crate) async fn get_library(
     // `cert_may_access` allows GET /library, so paired clients see this body. For a custom
     // entry `launch.value` is the operator's shell command; clear it. `kind` stays so the
     // client can still render launchability. Unconditional: the operator arm returned above.
+    // `ids` and `filled` serve metadata sources and the console; a player needs neither.
+    let paired = matches!(lane, AuthLane::Cert);
     for g in &mut games {
         if let Some(l) = g.launch.as_mut() {
             if l.kind == "command" {
                 l.value.clear();
             }
+        }
+        if paired {
+            g.ids.clear();
+            g.filled.clear();
         }
     }
     Json(games).into_response()
@@ -710,6 +716,204 @@ pub(crate) async fn report_provider_running(
         ttl_s: crate::runstate::REPORT_TTL.as_secs(),
     })
     .into_response()
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct MetadataAccepted {
+    /// Entries the host kept.
+    entries: usize,
+    /// Values dropped because the host does not store them (non-`http(s)` art, overlong text).
+    dropped: usize,
+}
+
+#[derive(Serialize, ToSchema)]
+pub(crate) struct MetadataRemoved {
+    removed: bool,
+}
+
+/// Replace an Art & Metadata source's result
+///
+/// Everything the source has, keyed by library id: art for the four slots and `GameMeta`
+/// fields. The host merges it into `GET /library` at read time; a source fills only what the
+/// entry lacks unless the operator set it to replace art. A value the host does not store is
+/// dropped, not refused. A new source takes its place in the order by `matching`, exact first.
+/// Emits `library.changed` with the source as `source` when anything changed.
+#[utoipa::path(
+    put,
+    path = "/library/metadata/{source}",
+    tag = "library",
+    operation_id = "putLibraryMetadata",
+    params(("source" = String, Path, description = "The source's plugin id ([a-z0-9._-], `manual` reserved)")),
+    request_body = crate::library::MetadataInput,
+    responses(
+        (status = OK, description = "Stored; what the host kept", body = MetadataAccepted),
+        (status = BAD_REQUEST, description = "Invalid source id or payload", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin wrote another plugin's source", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the result", body = ApiError),
+    )
+)]
+pub(crate) async fn put_library_metadata(
+    who: Option<Extension<crate::mgmt::auth::PluginIdentity>>,
+    Path(source): Path<String>,
+    ApiJson(input): ApiJson<crate::library::MetadataInput>,
+) -> Response {
+    if !crate::mgmt::auth::plugin_owns(who.as_ref().map(|e| &e.0), &source) {
+        return api_error(StatusCode::FORBIDDEN, "a plugin may only write its own id");
+    }
+    if let Err(e) = crate::library::validate_provider_name(&source) {
+        return api_error(StatusCode::BAD_REQUEST, &e);
+    }
+    match crate::library::put_metadata(&source, input) {
+        Ok((entries, dropped)) => {
+            if dropped > 0 {
+                tracing::warn!(
+                    source,
+                    dropped,
+                    "library metadata: dropped values the host does not store — art must be an \
+                     http(s) URL, short fields at most 256 characters"
+                );
+            }
+            tracing::debug!(source, entries, "library metadata stored");
+            Json(MetadataAccepted { entries, dropped }).into_response()
+        }
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Forget an Art & Metadata source
+///
+/// Its result and its place in the order, for plugin uninstall. Emits `library.changed`
+/// when there was anything to forget.
+#[utoipa::path(
+    delete,
+    path = "/library/metadata/{source}",
+    tag = "library",
+    operation_id = "deleteLibraryMetadata",
+    params(("source" = String, Path, description = "The source's plugin id")),
+    responses(
+        (status = OK, description = "Whether anything was removed", body = MetadataRemoved),
+        (status = BAD_REQUEST, description = "Invalid source id", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "A plugin removed another plugin's source", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
+    )
+)]
+pub(crate) async fn delete_library_metadata(
+    who: Option<Extension<crate::mgmt::auth::PluginIdentity>>,
+    Path(source): Path<String>,
+) -> Response {
+    if !crate::mgmt::auth::plugin_owns(who.as_ref().map(|e| &e.0), &source) {
+        return api_error(StatusCode::FORBIDDEN, "a plugin may only write its own id");
+    }
+    if let Err(e) = crate::library::validate_provider_name(&source) {
+        return api_error(StatusCode::BAD_REQUEST, &e);
+    }
+    match crate::library::delete_metadata(&source) {
+        Ok(removed) => Json(MetadataRemoved { removed }).into_response(),
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// List Art & Metadata sources
+///
+/// Every source that has pushed a result, in the operator's order, with its switches and how
+/// many entries it has something for.
+#[utoipa::path(
+    get,
+    path = "/library/metadata",
+    tag = "library",
+    operation_id = "listLibraryMetadata",
+    responses(
+        (status = OK, description = "Sources in the operator's order", body = [crate::library::MetadataSourceInfo]),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+    )
+)]
+pub(crate) async fn list_library_metadata() -> Json<Vec<crate::library::MetadataSourceInfo>> {
+    Json(crate::library::list_metadata_sources())
+}
+
+/// Order and switch Art & Metadata sources
+///
+/// The array is the new order; each row sets `enabled` and `replace` ("Use for every game",
+/// art only). A source the array leaves out keeps its switches and goes after the named ones.
+/// Emits `library.changed`.
+#[utoipa::path(
+    put,
+    path = "/library/metadata",
+    tag = "library",
+    operation_id = "setLibraryMetadata",
+    request_body = Vec<crate::library::MetadataSourceUpdate>,
+    responses(
+        (status = OK, description = "Stored; the sources in their new order", body = [crate::library::MetadataSourceInfo]),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the settings", body = ApiError),
+    )
+)]
+pub(crate) async fn set_library_metadata(
+    ApiJson(updates): ApiJson<Vec<crate::library::MetadataSourceUpdate>>,
+) -> Response {
+    match crate::library::set_metadata_sources(&updates) {
+        Ok(sources) => {
+            tracing::info!(
+                sources = sources.len(),
+                "management API: metadata sources set"
+            );
+            Json(sources).into_response()
+        }
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Pick the art for one slot of a library entry
+///
+/// The operator's choice beats the entry's own art and every metadata source, and survives
+/// the provider's next reconcile. `url: null` clears the pick. The id is not required to
+/// exist now, as with hiding. Emits `library.changed`.
+#[utoipa::path(
+    put,
+    path = "/library/picks/{id}",
+    tag = "library",
+    operation_id = "setLibraryArtPick",
+    params(("id" = String, Path, description = "The library entry id (e.g. `steam:70`)")),
+    request_body = crate::library::ArtPickInput,
+    responses(
+        (status = OK, description = "Stored; the entry's picks after the call", body = crate::library::Artwork),
+        (status = BAD_REQUEST, description = "Empty id, unknown kind, or a URL that is not http(s)", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "Couldn't save the picks", body = ApiError),
+    )
+)]
+pub(crate) async fn set_library_art_pick(
+    Path(id): Path<String>,
+    ApiJson(input): ApiJson<crate::library::ArtPickInput>,
+) -> Response {
+    if id.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "entry id must not be empty");
+    }
+    let Some(kind) = crate::library::ArtKind::parse(&input.kind) else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "kind must be portrait, hero, logo or header",
+        );
+    };
+    if input
+        .url
+        .as_deref()
+        .is_some_and(|u| !crate::library::valid_remote_url(u))
+    {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "url must be an http(s) URL of at most 2048 characters",
+        );
+    }
+    match crate::library::set_art_pick(&id, kind, input.url) {
+        Ok(picks) => {
+            tracing::info!(entry = %id, kind = kind.name(), "management API: library art picked");
+            Json(picks).into_response()
+        }
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 /// Stream one cover-art image for a library entry.
