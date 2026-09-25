@@ -87,8 +87,11 @@ pub fn dualsense_windows_test(args: &[String]) -> Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let triton = args.iter().any(|a| a == "--triton");
+    // `--xboxhid` presses Share (the Series pad's Consumer `Record` bit) on the same beats.
     let extra_buttons: u32 = if edge || deck || triton {
         punktfunk_core::input::gamepad::BTN_PADDLE1 | punktfunk_core::input::gamepad::BTN_PADDLE2
+    } else if xboxhid {
+        punktfunk_core::input::gamepad::BTN_MISC1
     } else {
         0
     };

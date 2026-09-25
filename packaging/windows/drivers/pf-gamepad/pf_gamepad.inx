@@ -57,10 +57,8 @@ pf_gamepad.dll=1
 ; Microsoft's Xbox translator. The two sections are otherwise identical — keep them in step.
 ; (`only_the_xbox_identity_installs_the_xinputhid_section`, in pf-inject, asserts both directions.)
 ;
-; The three Xbox identities differ ONLY in hardware id, Device Manager description and the VID/PID
-; + product string the driver serves off the resulting device_type — they share one report
-; descriptor and one install section, because in HID terms they are the same pad. See the
-; `XBOX_RDESC` header in src/lib.rs for why that sharing is deliberate.
+; The three Xbox identities share one install section. The driver serves VID/PID, product string
+; and descriptor (Series with Share, One S / Elite without) off the resulting device_type.
 %DeviceDescXbox%=pfGamepadXbox, root\pf_xboxwireless, pf_xboxwireless
 %DeviceDescXboxOneS%=pfGamepadXbox, root\pf_xboxones, pf_xboxones
 %DeviceDescXboxElite%=pfGamepadXbox, root\pf_xboxelite, pf_xboxelite
