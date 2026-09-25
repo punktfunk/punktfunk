@@ -194,7 +194,7 @@ jobs:
 
       # Baked into the image; this fetches the pins while the running :latest predates them.
       - name: Prebuilt Skia (no-op once the image bakes it)
-        run: sh ci/skia-binaries.sh x86_64-unknown-linux-gnu
+        run: sh ci/skia-binaries.sh x86_64-unknown-linux-gnu wasm32-unknown-emscripten
 
       - name: Cache keys
         run: echo "rustc=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_ENV"
@@ -278,6 +278,15 @@ jobs:
       # Clippy with warnings denied: `cargo check` would stay green on a warning.
       - name: Clippy discovery without desktop
         run: cargo clippy -p pf-client-core --locked --no-default-features --features discovery -- -D warnings
+
+      # The browser client (punktfunk/client-web) builds these three for wasm; nothing else here
+      # compiles that target, so this is where a native-only import into them fails.
+      - name: Clippy the browser client's crates on wasm
+        run: |
+          rustup target add wasm32-unknown-emscripten
+          cargo clippy -p punktfunk-core -p pf-console-ui -p pf-client-core --locked \
+            --target wasm32-unknown-emscripten --no-default-features \
+            --features punktfunk-core/pake -- -D warnings
 
       # The installer's behavioural gates — detection per family, the derived defaults, channel
       # switching both ways — driven against the binary. They ran in the docs-drift lane while
