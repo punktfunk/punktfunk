@@ -151,6 +151,7 @@ tell when the game quits.
 | Data from a desktop app | `pluginIngestDir("<id>")`, an inbox any local user may write. Treat its contents as untrusted |
 | A console page | `definePluginKit` with `serveUi({ title, icon, staticDir, api })` |
 | A tab on each game's page | `serveUi({ title, game })`; see [below](#a-tab-on-each-games-page) |
+| Art or details for every game | `defineMetadataPlugin`; see [below](#a-source-of-art-and-details) |
 | Reacting to events only | `definePlugin({ name, main: async (pf) => … })` from `@punktfunk/host` |
 
 Keep Effect values inside the plugin: the runner bundles its own copy of Effect, so the default
@@ -186,6 +187,48 @@ yield* serveUi({
 - `save` receives the value decoded against `schema`; a body that doesn't decode never reaches it.
 - `status` returns up to eight short lines shown above the form.
 - A plugin with a `game` section and no `staticDir` gets no nav entry.
+
+## A source of art and details
+
+An Art & Metadata source fills covers and details for games other plugins list, the way
+[`punktfunk-plugin-steamgriddb`](https://git.unom.io/unom/punktfunk-plugin-steamgriddb) covers every
+game. Write how to find a game and what to fetch for it; `defineMetadataPlugin` does the rest:
+
+```ts
+import { Effect, Schema } from "effect";
+import { defineMetadataPlugin } from "@punktfunk/plugin-kit/metadata";
+
+export const plugin = defineMetadataPlugin({
+  name: "covers",
+  configSchema: Schema.Struct({}),
+  matching: "search",
+  offers: { art: ["portrait", "hero"], meta: ["developer"] },
+  match: (entry, cfg, pin) =>
+    Effect.succeed({ key: pin ?? entry.title, label: entry.title }),
+  fetch: (match) =>
+    Effect.succeed({ art: { portrait: `https://covers.example/${match.key}.png` } }),
+});
+
+export default plugin.def;
+```
+
+- **Which games:** the kit looks up a game only when it lacks something in `offers`, and never a
+  launcher tile. A game that already has the art keeps it unless the operator ticks **Use for
+  every game**.
+- **Matching:** `entry.ids` carries the ids its plugin knows (`steam`, `gog`, `epic`, `libretro`,
+  `sgdb`). `matching: "exact"` says you match only by those; exact sources rank before
+  `"search"` ones by default.
+- **Pins:** the operator's **Wrong game?** stores a `key` from your `search`; it reaches `match`
+  as `pin`.
+- **Art** is an `http(s)` URL. The host fetches and keeps it; anything else is dropped.
+- **Failures:** fail with `SourceRateLimited` to stop the round and retry later, or
+  `SourceUnauthorized` to stop it and show the reason in the console. Any other failure skips
+  that game until the next round.
+- **Choose…** on a game's Media tab lists `images(match, kind)` from every source, or the one
+  image `fetch` found. `lookup <id>` on the plugin's CLI prints what it finds for one game.
+
+Add `"network": true` to the manifest. Register in the store's `metadata` category so the console
+offers it under **Library** → **Art & Metadata**.
 
 ## Folders you can't know in advance
 

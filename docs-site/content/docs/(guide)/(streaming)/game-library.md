@@ -79,7 +79,26 @@ right away; a path previews after you save.
   in [Configuration](/docs/configuration) sets those folders. Network (UNC) paths are refused.
 
 `punktfunk-host library art --clear` empties the host's cover store. Plugin titles bring their own
-art.
+art; a source below fills what they lack.
+
+### Filling missing art and details
+
+Install an Art & Metadata source to give every game covers and details, whatever listed it:
+**SteamGridDB** (covers, heroes, logos; needs a free API key) and **Libretro** (box art and details
+for ROMs). They appear under **Library** → **Art & Metadata**.
+
+- A source fills only what a game is missing. The first source in the list wins; reorder with the
+  arrows.
+- **Use for every game** lets that source's art replace a game's own covers too. Details still
+  only fill gaps.
+- On a game's page, **Media** says where each image came from. **Choose…** shows every source's
+  images for that slot, a **Wrong game?** search when a source matched the wrong title, and a
+  field for your own URL. **Reset** goes back to the automatic image.
+- **Information** marks a field a source filled. On your own entries it shows as a hint until you
+  type your own.
+
+Your picks survive the plugin's next sync. Turning a source off or removing it takes its art and
+details away again.
 
 ## Launching a game
 

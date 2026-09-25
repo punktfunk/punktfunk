@@ -5,7 +5,8 @@ description: Plugins bring your game launchers into the library, sync a ROM coll
 
 Install plugins to fill the host's [game library](/docs/game-library) from your launchers and to add
 features such as USB passthrough. The host scans no launcher on its own: install one plugin per
-launcher you use, and its titles appear on every client.
+launcher you use, and its titles appear on every client. SteamGridDB and Libretro fill missing
+covers and details for all of them ([Art & Metadata](/docs/game-library#filling-missing-art-and-details)).
 
 | Plugin | Host | What it does |
 |---|---|---|
@@ -22,7 +23,9 @@ launcher you use, and its titles appear on every client.
 | **Battle.net** | Windows | Installed Blizzard titles, launched through Battle.net, which must be running. |
 | **RTSS Frame Cap** | Windows | Caps the game at the client's refresh rate through a [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) you install. |
 | **itch.io** | Linux, Windows | Games installed by the itch app, with covers. |
-| **ROM Manager** | Linux, Windows | Your ROM folders, matched to installed emulators, with box art ([below](#rom-manager)). |
+| **ROM Manager** | Linux, Windows | Your ROM folders, matched to installed emulators ([below](#rom-manager)). |
+| **SteamGridDB** | Linux, Windows | Covers, heroes and logos for every game in the library. Needs a free API key. |
+| **Libretro** | Linux, Windows | Box art, developer, publisher, year and genres for ROM Manager's games. |
 | **VirtualHere** | Linux, Windows | Hands a USB device on the couch to the host while you play ([below](#virtualhere-usb-passthrough)). |
 
 ## Install from the console
@@ -149,8 +152,8 @@ Program Files or ProgramData: every plugin runs as the same account there.
 ## ROM Manager
 
 Point it at your ROM folders. It matches each platform to an installed emulator (about 25
-built in), fetches box art from SteamGridDB with a key or libretro thumbnails without one, and adds
-the games to your library.
+built in) and adds the games to your library. Install **Libretro** for box art and details, and
+**SteamGridDB** with an API key for the games Libretro has no art for.
 
 ```sh
 punktfunk-host plugins add rom-manager
@@ -164,8 +167,7 @@ the config directory (`~/.config/punktfunk` or `%ProgramData%\punktfunk`):
   "roots": [
     { "dir": "/mnt/roms/snes", "platform": "snes" },
     { "dir": "/mnt/roms/ps1", "platform": "ps1", "excludes": ["*.sav"] }
-  ],
-  "art": { "provider": "auto", "steamGridDbKey": "" }
+  ]
 }
 ```
 
