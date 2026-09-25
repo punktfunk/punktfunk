@@ -8,4 +8,4 @@
  *
  * `version.test.ts` fails if this and `package.json` disagree, so the duplication cannot rot.
  */
-export const SDK_VERSION = "0.2.0";
+export const SDK_VERSION = "0.2.1";
