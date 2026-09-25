@@ -534,6 +534,14 @@ fn store_infs() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether any driver-store package declares the lowercase hardware id `hwid`: PnP can bind a
+/// devnode that carries it.
+pub(crate) fn store_declares_hwid(hwid: &str) -> bool {
+    store_infs()
+        .iter()
+        .any(|(_, text)| text.to_ascii_lowercase().contains(hwid))
+}
+
 /// `(file name, catalog, DriverVer)` of each store package ([`inf_identity`]).
 fn store_packages() -> Vec<(String, String, String)> {
     store_infs()

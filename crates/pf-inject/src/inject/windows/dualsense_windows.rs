@@ -1005,6 +1005,7 @@ mod drain_tests {
             super::super::dualshock4_windows::DS4_HWID,
             super::super::steam_deck_windows::DECK_HWID,
             super::super::triton_windows::TRITON_HWID,
+            super::super::switch_pro_windows::SWITCH_HWID,
         ]
         .into_iter()
         // Every Xbox identity, not just the first — a new one without its INF model line never starts.
@@ -1117,6 +1118,10 @@ mod drain_tests {
             (
                 super::super::triton_windows::TRITON_HWID,
                 pf_driver_proto::gamepad::DEVTYPE_TRITON,
+            ),
+            (
+                super::super::switch_pro_windows::SWITCH_HWID,
+                pf_driver_proto::gamepad::DEVTYPE_SWITCH_PRO,
             ),
             // Server's unfiltered Xbox line: any Xbox type, so the pad never enumerates as a
             // DualSense while hidclass asks; the section sets the real one on attach.

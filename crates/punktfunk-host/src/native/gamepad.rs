@@ -39,15 +39,17 @@ pub(super) fn resolve_pad_kind(kind: GamepadPref) -> GamepadPref {
         cfg!(target_os = "linux"),
         cfg!(target_os = "windows"),
     );
-    degrade_xbox_identity(degrade_steam_on_conflict(degrade_if_no_uhid(chosen)))
+    degrade_switch_pro_driver(degrade_xbox_identity(degrade_steam_on_conflict(
+        degrade_if_no_uhid(chosen),
+    )))
 }
 
 /// Session backend from client `pref`, then `PUNKTFUNK_GAMEPAD` under Auto, then Xbox 360.
 ///
 /// `linux`/`windows` are the host OS. DualSense, DualShock 4, DualSense Edge, Xbox One, and
-/// Steam Deck have both a Linux and a Windows backend; other wishes fold to Xbox 360 (never
-/// an error — a session without rich pads still streams). Xbox Elite has no Linux identity
-/// (`PadIdentity` stops at One S). Steam Controller and Switch Pro are Linux-only.
+/// Steam Deck and Switch Pro have both a Linux and a Windows backend; other wishes fold to Xbox
+/// 360 (never an error — a session without rich pads still streams). Xbox Elite has no Linux
+/// identity (`PadIdentity` stops at One S). Steam Controller is Linux-only.
 /// Steam Controller 2 is Linux UHID and Windows DEVTYPE_TRITON; the SC2 Puck has a native
 /// Linux identity and folds onto the wired one on Windows.
 ///
@@ -70,8 +72,8 @@ fn pick_gamepad(pref: GamepadPref, env: Option<&str>, linux: bool, windows: bool
         GamepadPref::SteamController if linux => GamepadPref::SteamController,
         GamepadPref::SteamDeck if windows => GamepadPref::SteamDeck,
         GamepadPref::DualSenseEdge if linux || windows => GamepadPref::DualSenseEdge,
-        // Linux UHID hid-nintendo (≥ 5.16). No Windows backend.
-        GamepadPref::SwitchPro if linux => GamepadPref::SwitchPro,
+        // Linux UHID hid-nintendo (≥ 5.16); Windows UMDF device type 8.
+        GamepadPref::SwitchPro if linux || windows => GamepadPref::SwitchPro,
         // Linux: UHID passthrough under 28DE:1302; no kernel driver, Steam Input consumes hidraw.
         GamepadPref::SteamController2 if linux => GamepadPref::SteamController2,
         GamepadPref::SteamController2 if windows => GamepadPref::SteamController2,
@@ -279,6 +281,29 @@ fn degrade_xbox_identity(chosen: GamepadPref) -> GamepadPref {
     chosen
 }
 
+/// Fold Switch Pro to the 360 pad when no driver-store package declares `pf_switchpro`. An
+/// older package cannot bind that devnode, so the pad would sit dead in Device Manager.
+#[cfg(target_os = "windows")]
+fn degrade_switch_pro_driver(chosen: GamepadPref) -> GamepadPref {
+    static STAGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if chosen == GamepadPref::SwitchPro
+        && !*STAGED.get_or_init(|| crate::windows::install::store_declares_hwid("pf_switchpro"))
+    {
+        tracing::warn!(
+            fix = "reinstall the host with its controller drivers",
+            "the installed controller driver predates the Switch Pro pad — falling back to the \
+             X-Box 360 pad"
+        );
+        return GamepadPref::Xbox360;
+    }
+    chosen
+}
+
+#[cfg(not(target_os = "windows"))]
+fn degrade_switch_pro_driver(chosen: GamepadPref) -> GamepadPref {
+    chosen
+}
+
 /// Build Xbox-family pads as HID ([`crate::inject::xbox_windows`]) instead of XUSB
 /// ([`crate::inject::gamepad`]). Windows only; decided once per process by [`xbox_backend_hid`]
 /// and logged.
@@ -329,6 +354,7 @@ pub(super) fn resolve_gamepad(pref: GamepadPref) -> GamepadPref {
     let chosen = degrade_if_no_uhid(chosen);
     let chosen = degrade_steam_on_conflict(chosen);
     let chosen = degrade_xbox_identity(chosen);
+    let chosen = degrade_switch_pro_driver(chosen);
     warn_if_ds_inhibit_storm(chosen);
     match pref {
         GamepadPref::Auto => {
@@ -468,7 +494,7 @@ mod tests {
             SwitchPro
         );
         assert_eq!(pick_gamepad(Auto, Some("switch"), true, false), SwitchPro);
-        assert_eq!(pick_gamepad(SwitchPro, None, false, true), Xbox360);
+        assert_eq!(pick_gamepad(SwitchPro, None, false, true), SwitchPro);
         assert_eq!(pick_gamepad(SwitchPro, None, false, false), Xbox360);
         assert_eq!(
             pick_gamepad(SteamController2, None, true, false),
