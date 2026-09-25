@@ -103,6 +103,10 @@ thread_local! {
     /// Surface frames begun ([`begin_frame`]); a handoff keeps for its frame and the next.
     static FRAME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NEXT_PLATE: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    /// Every plate drawn, device px, in draw order. Tests drain it.
+    #[cfg(test)]
+    pub(crate) static DRAWN: std::cell::RefCell<Vec<Rect>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Where a plate stood when it gave up focus: device px, so any tree can read it.
@@ -454,6 +458,11 @@ impl Plate {
         let Some((r, corner)) = self.rect().filter(|_| self.visible()) else {
             return;
         };
+        #[cfg(test)]
+        DRAWN.with(|d| {
+            let m = canvas.local_to_device_as_3x3();
+            d.borrow_mut().push(m.map_rect(r).0);
+        });
         let alpha = self.shown as f32;
         let out = OUTSET * k;
         let rr = RRect::new_rect_xy(r.with_outset((out, out)), corner + out, corner + out);

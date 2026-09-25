@@ -3550,3 +3550,45 @@ fn dump_plate_flight() {
         run(&mut s, 16, Some(&format!("{name}-right")));
     }
 }
+
+/// Pinned chrome speaks device px like every layer. Under a TV's safe-area inset the section
+/// strip's plate lands below the tab strip's, so a plate handed between them glides straight
+/// down instead of starting an inset away and sliding along a bar.
+#[test]
+fn a_pinned_plate_lands_in_device_space_under_an_inset() {
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((640, 400)).unwrap();
+    let viewport = crate::console::Viewport {
+        width: 640,
+        height: 400,
+        insets: crate::console::Insets {
+            left: 60.0,
+            top: 100.0,
+            right: 60.0,
+            bottom: 40.0,
+        },
+        scale: None,
+    };
+    let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.fake_clock = Some((100.0, 1.0 / 60.0));
+    let mut run = |s: &mut Shell, frames: usize| {
+        for _ in 0..frames {
+            crate::el::DRAWN.with(|d| d.borrow_mut().clear());
+            s.render_in(surface.canvas(), &viewport, &fonts, None, None, &[]);
+        }
+        let drawn = crate::el::DRAWN.with(|d| d.borrow().clone());
+        assert_eq!(drawn.len(), 1, "one plate at rest: {drawn:?}");
+        drawn[0]
+    };
+    assert!(s.switch_tab(Tab::Settings));
+    finish_motion(&mut s);
+    s.handle_menu(MenuEvent::Move(MenuDir::Up)); // rows → sections
+    let sections = run(&mut s, 24);
+    s.handle_menu(MenuEvent::Move(MenuDir::Up)); // sections → tabs
+    let tabs = run(&mut s, 24);
+    assert!(s.strip_focus);
+    assert!(
+        sections.top >= tabs.bottom,
+        "the sections' plate sits above the tabs': {sections:?} vs {tabs:?}"
+    );
+}

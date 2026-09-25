@@ -18,6 +18,8 @@ mod focus;
 mod layout;
 
 pub(crate) use focus::forget_handoff;
+#[cfg(test)]
+pub(crate) use focus::DRAWN;
 pub use focus::{begin_frame, Group, Plate};
 pub use layout::{Frame, Tree};
 
