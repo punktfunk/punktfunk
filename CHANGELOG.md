@@ -16,7 +16,7 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ## v0.40.0
 
-378 commits since v0.39.0. Wire stays 2. C ABI stays 37. Driver protocol floor stays 9.
+391 commits since v0.39.0. Wire stays 2. C ABI stays 37. Driver protocol floor stays 9.
 Deep dive: `git log v0.39.0..v0.40.0`
 
 ### Versions
@@ -32,7 +32,7 @@ Deep dive: `git log v0.39.0..v0.40.0`
 | Windows virtual-gamepad channel | 3 | **3** | unchanged; the gamepad driver stamps a behaviour revision beside it, and the host warns on a stale or mismatched driver |
 | Plugin index schema | 1 | **1** | unchanged |
 | Host event schema | 1 | **1** | unchanged |
-| `api/openapi.json` | 0.39.0 | **0.40.0** | setting `kind` gains `decimal` (`min`/`max` become numbers); `PUT /library/provider/{p}/running` and `PUT /library/scanners/{id}` answer 403 to another plugin's token |
+| `api/openapi.json` | 0.39.0 | **0.40.0** | setting `kind` gains `decimal` (`min`/`max` become numbers); `PUT /library/provider/{p}/running` and `PUT /library/scanners/{id}` answer 403 to another plugin's token; `display.next` joins `/api/v1/actions` (200 `{ monitor }`, schema `ActionOutcome`) |
 | gamescope patch level (`+pfhdrN`) | 21 | **23** | Patches 0026–0028: LINEAR two-plane (NV12/P010) buffers export both planes at the driver's offset and stride, the composited cursor repaints on a shape change, a destroyed surface drops its cached pointer bound |
 | `@punktfunk/host` (SDK) | 0.2.0 | **0.2.0** | unchanged on npm; the runner the host packages ship (`punktfunk-scripting`) carries the sandbox fixes |
 | `@punktfunk/plugin-kit` | 0.5.2 | **0.5.3** | A failed folder request no longer stops a scan; peer range admits `@punktfunk/host` 0.2. The 0.4 line is 0.4.9 |
@@ -79,6 +79,12 @@ Deep dive: `git log v0.39.0..v0.40.0`
 - Diagnostics: the capture provenance line carries `cpu_fallbacks=` and `held_drops`, the
   PipeWire library version is logged, and a `pad_driver` diagnostics row reports the gamepad
   driver's verdict.
+- Client: `PUNKTFUNK_CONFIG_DIR` also moves the client store (identity and settings; the probe
+  reads it), and a new private key is owner-only. `pf-client-core` features `discovery` and
+  `d3d11va` build without `desktop`.
+- Packaging: pacman, apt and dnf try-restart every signed-in user's console, runner and host
+  after an update (`packaging/linux/restart-user-units.sh`), and NixOS does it through a
+  reload-triggered unit. The in-console updater restarts them itself.
 - Packaging: bun 1.4.2, hash-pinned on every channel (Nix flake overlay; baseline builds for
   deb, rpm, Arch and Windows x64). The Flatpak metainfo carries a `<release>` per stable tag.
 
