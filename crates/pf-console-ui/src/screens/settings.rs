@@ -2745,19 +2745,24 @@ pub(crate) mod tests {
     /// straight off it, and a test must not see the developer's own. Settings go through
     /// `store::file_store`, which in tests is per-thread and in memory.
     ///
-    /// Redirects `HOME` on unix, `APPDATA` on Windows (`trust::config_dir`).
-    /// One `OnceLock` for the binary — a second copy races `set_var`.
+    /// Points `trust::config_dir` at a throwaway directory.
+    /// One `OnceLock` for the binary — a second copy races the env write.
+    /// A developer override is replaced, so these tests cannot see a real store.
     pub(crate) fn fake_home() {
         use std::sync::OnceLock;
         static HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
         HOME.get_or_init(|| {
             let dir = std::env::temp_dir().join(format!("pf-settings-test-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let var = if cfg!(windows) { "APPDATA" } else { "HOME" };
+            let cfg = if cfg!(windows) {
+                dir.join("punktfunk")
+            } else {
+                dir.join(".config/punktfunk")
+            };
+            std::fs::create_dir_all(&cfg).unwrap();
             // SAFETY: runs at most once, inside `get_or_init` — concurrent `fake_home`
             // callers block until it returns, and nothing else in this binary mutates
-            // the env var.
-            unsafe { std::env::set_var(var, &dir) };
+            // this variable.
+            unsafe { std::env::set_var("PUNKTFUNK_CONFIG_DIR", &cfg) };
             dir
         });
     }

@@ -5,7 +5,7 @@
 //! simply record what today's controller does. Every tuned number carries the
 //! reading it came from.
 
-use super::client::{ClientCfg, DecodeCfg};
+use super::client::{ClientCfg, DecodeCfg, Repair};
 use super::host::{ContentPhase, HostCfg};
 use super::link::LinkCfg;
 use super::{run, Scenario, SessionCfg};
@@ -523,6 +523,17 @@ pub(super) fn wan_lone_loss() -> Scenario {
         achievable_kbps: 9_375,
         blip_at_ms: None,
     }
+}
+
+/// A path again, its client repairing short frames another way: NACK first, or
+/// references only to acknowledged frames. Served by the ramp, as the row it
+/// copies is in the table.
+fn repairing(mut sc: Scenario, name: &'static str, repair: Repair) -> Scenario {
+    sc.name = name;
+    for s in &mut sc.sessions {
+        s.client.repair = repair;
+    }
+    with_ramp(sc)
 }
 
 /// The rig's Wi-Fi profile: a 237 Mbps link nothing touches, and a source that
@@ -1376,7 +1387,8 @@ pub(super) fn fat_pipe_10min() -> Scenario {
 ///
 /// Every row but `old_host` runs against a host that serves the ramp; the
 /// seven calibrations run a second time against one that does not, because
-/// what they replay are field sessions from before it existed.
+/// what they replay are field sessions from before it existed. The two WAN
+/// paths run again at the tail with each loss repair (`_nack`, `_ack`).
 pub(super) fn all() -> Vec<Scenario> {
     let mut table: Vec<Scenario> = vec![
         lan_10g(),
@@ -1462,6 +1474,15 @@ pub(super) fn all() -> Vec<Scenario> {
     table.push(pyrowave_pin_fit());
     table.push(pyrowave_pin_holds());
     table.push(with_ramp(calm_desktop_lossy()));
+    let wan = || wan_wg_12(0x7A_5500, 180_000);
+    for (sc, name, repair) in [
+        (wan_lone_loss(), "wan_lone_loss_nack", Repair::Nack),
+        (wan_lone_loss(), "wan_lone_loss_ack", Repair::Ack),
+        (wan(), "wan_wg_12_nack", Repair::Nack),
+        (wan(), "wan_wg_12_ack", Repair::Ack),
+    ] {
+        table.push(repairing(sc, name, repair));
+    }
     table
 }
 
@@ -2414,6 +2435,47 @@ mod tests {
             );
         }
         println!("metrics {:?}", r.metrics);
+    }
+
+    /// `cargo test … repair_readout -- --ignored --nocapture`: waves, lost frames
+    /// and kB past the budget per ten minutes, today and with each repair, over 16
+    /// seeds. One seed is one trajectory, and a repaired frame moves every draw
+    /// after it, so a single row reads noise as effect.
+    #[test]
+    #[ignore = "a reading aid, not a check"]
+    fn repair_readout() {
+        const SEEDS: u64 = 16;
+        println!("scenario\twaves_10min\tlost_10min\tabove_budget_kb_10min");
+        for name in [
+            "wan_lone_loss",
+            "wan_lone_loss_nack",
+            "wan_lone_loss_ack",
+            "wan_wg_12",
+            "wan_wg_12_nack",
+            "wan_wg_12_ack",
+        ] {
+            let (mut waves, mut lost, mut bytes, mut ms) = (0, 0, 0, 0);
+            for i in 0..SEEDS {
+                let mut sc = all().into_iter().find(|sc| sc.name == name).unwrap();
+                sc.seed ^= i.wrapping_mul(0x9E37_79B9);
+                let r = run(&sc).repair;
+                waves += u64::from(r.waves);
+                lost += r.lost;
+                bytes += r.above_budget_bytes;
+                ms += sc.duration_ms;
+            }
+            // Tenths, per ten minutes.
+            let per = |n: u64| {
+                let t = n * 6_000_000 / ms;
+                format!("{}.{}", t / 10, t % 10)
+            };
+            println!(
+                "{name}\t{}\t{}\t{}",
+                per(waves),
+                per(lost),
+                per(bytes / 1_000)
+            );
+        }
     }
 
     /// Every scenario in the plan's table runs from its fixed seed, and a run

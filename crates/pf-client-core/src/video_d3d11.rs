@@ -15,11 +15,12 @@
 //! A frame keeps its slot's NT handle open ([`SlotHandle`]): a ring rebuilt
 //! under queued frames never hands the presenter a closed handle.
 //!
-//! PQ streams pass through as RGB10A2 when the presenter has an HDR10 swapchain
-//! ([`crate::video::VulkanDecodeDevice::d3d11_hdr10`]); otherwise the processor
-//! tone-maps to sRGB. [`HandoffRing`] is `pub(crate)` for [`crate::video_d3d11_native`].
+//! PQ streams pass through as RGB10A2 when the hand-off was built for an HDR10
+//! swapchain; otherwise the processor tone-maps to sRGB. [`HandoffRing`] is
+//! `pub(crate)` for [`crate::video_d3d11_native`].
 
-use crate::video::ColorDesc;
+use crate::video_color::ColorDesc;
+use crate::video_types::umd_version_parts;
 use anyhow::{anyhow, Context as _, Result};
 use std::ffi::c_void;
 use std::ptr;
@@ -119,10 +120,10 @@ pub struct D3d11Frame {
     pub color: ColorDesc,
     /// What the slot holds; the presenter's Vulkan import must match it.
     pub format: SlotFormat,
-    /// Intra (IDR/I) — the pump's post-loss re-anchor. See [`crate::video::DecodedImage::is_keyframe`].
+    /// Intra (IDR/I) — the pump's post-loss re-anchor.
     pub keyframe: bool,
     /// Whole prediction chain was fully available. Corroborates a host
-    /// `USER_FLAG_RECOVERY_ANCHOR`: see [`crate::video::DecodedImage::anchor_evidence`].
+    /// `USER_FLAG_RECOVERY_ANCHOR`.
     pub references_clean: bool,
     /// Slot NT handle (`CreateSharedHandle`), shared with the ring so it outlives a rebuild
     /// while this frame is queued or imported.
@@ -209,18 +210,16 @@ pub(crate) fn create_device(luid: Option<[u8; 8]>) -> Result<(ID3D11Device, ID3D
     Ok((device, context))
 }
 
-/// Whether this adapter's video processor can convert a PQ decode surface to sRGB —
-/// the tonemap [`HandoffRing::present`] uses when the presenter has no HDR10 swapchain
-/// ([`crate::video::VulkanDecodeDevice::d3d11_hdr10`] false).
+/// Whether this adapter's video processor can convert a PQ decode surface to sRGB
+/// when the hand-off is not HDR10.
 ///
 /// Setting the colorspaces is not a negotiation: `VideoProcessorSetStream/OutputColorSpace1`
 /// accept anything and `VideoProcessorBlt` succeeds either way. A driver that cannot
 /// convert renders garbage. Probe the SDR-ring pair: P010 `YCBCR_STUDIO_G2084_LEFT_P2020`
 /// in, BGRA8 `RGB_FULL_G22_NONE_P709` out. Only a definitive "no" answers `false`; an
 /// API failure answers `true` — a box whose D3D11 fails the probe fails D3D11VA
-/// construction too. Paid once per connect; [`crate::video::hdr_presentable`] skips it
-/// elsewhere.
-pub(crate) fn pq_tonemap_supported(luid: Option<[u8; 8]>) -> bool {
+/// construction too. Paid once per connect.
+pub fn pq_tonemap_supported(luid: Option<[u8; 8]>) -> bool {
     fn probe(luid: Option<[u8; 8]>) -> Result<bool> {
         let (device, _context) = create_device(luid)?;
         let video_device: ID3D11VideoDevice = device
@@ -858,8 +857,8 @@ pub(crate) struct HandoffRing {
     /// `1` for the DXGI colour-space setters (Win10 1703+). Init fails to software without it.
     video_context1: ID3D11VideoContext1,
     ring: Option<SharedRing>,
-    /// Presenter can import RGB10A2 and has an HDR10 swapchain
-    /// ([`crate::video::VulkanDecodeDevice::d3d11_hdr10`]). PQ then uses the pass-through ring.
+    /// Presenter can import RGB10A2 and has an HDR10 swapchain.
+    /// PQ then uses the pass-through ring.
     hdr10_out: bool,
     /// Planar copies for NV12 / P010 pools the presenter imports ([`Self::set_planar`]);
     /// cleared for a format whose planar hand-off failed.
@@ -908,8 +907,8 @@ impl HandoffRing {
         })
     }
 
-    /// Copy NV12 / P010 pools into planar slots from the next frame on: only for formats
-    /// the presenter imports ([`crate::video::VulkanDecodeDevice::d3d11_nv12`]).
+    /// Copy NV12 / P010 pools into planar slots from the next frame on, for the
+    /// formats named by the two arguments.
     pub(crate) fn set_planar(&mut self, nv12: bool, p010: bool) {
         self.planar_nv12 = nv12;
         self.planar_p010 = p010;
@@ -1194,7 +1193,7 @@ impl HandoffRing {
 }
 
 /// User-mode driver version of the adapter behind `luid`, as Device Manager shows it
-/// ([`crate::video::umd_version_parts`]). `None` when no adapter matches or DXGI refuses.
+/// ([`crate::video_types::umd_version_parts`]). `None` when no adapter matches or DXGI refuses.
 pub fn adapter_driver_version(luid: [u8; 8]) -> Option<[u16; 4]> {
     use windows::Win32::dxgi::IDXGIDevice;
     // SAFETY: plain DXGI factory creation; the returned interface is owned by this scope.
@@ -1218,7 +1217,7 @@ pub fn adapter_driver_version(luid: [u8; 8]) -> Option<[u16; 4]> {
         }
         // SAFETY: a query on the live adapter; the IID is a static the callee only reads.
         let raw = unsafe { adapter.CheckInterfaceSupport(&IDXGIDevice::IID) }.ok()?;
-        return Some(crate::video::umd_version_parts(raw));
+        return Some(umd_version_parts(raw));
     }
     None
 }

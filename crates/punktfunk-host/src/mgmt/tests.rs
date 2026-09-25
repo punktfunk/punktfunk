@@ -249,7 +249,7 @@ async fn host_actions_follow_the_power_grant() {
     let (status, body) = send(&app, discover(guest_fp)).await;
     assert_eq!(status, StatusCode::OK);
     let rows = body["actions"].as_array().unwrap();
-    assert_eq!(rows.len(), 4, "{body}");
+    assert_eq!(rows.len(), 5, "{body}");
     assert!(
         rows.iter().all(|a| a["permitted"] == false),
         "a controller-only guest must not be offered power: {body}"
@@ -261,6 +261,7 @@ async fn host_actions_follow_the_power_grant() {
                 .as_array()
                 .unwrap()
                 .iter()
+                .filter(|a| a["group"] != "display")
                 .all(|a| a["permitted"] == true),
             "full control (current or legacy-stored) carries Power: {body}"
         );
@@ -283,6 +284,84 @@ async fn host_actions_follow_the_power_grant() {
     // Unknown id 404s before grant or platform checks.
     let (status, _) = send(&app, post("/api/v1/actions/no.such")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `display.next` follows the caller's own live session, never the Host power grant, and a
+/// refusal ends nothing. Never invoked with a pass: `policy::prefs()` is the developer's own
+/// `display-settings.json`, so a pinned two-head box would really switch.
+#[tokio::test]
+async fn display_next_follows_the_live_session_not_the_power_grant() {
+    use punktfunk_core::quic::GRANT_GAMEPAD;
+    let _serial = crate::session_status::tests::REGISTRY.lock().await;
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(
+                std::env::temp_dir()
+                    .join(format!("pf-mgmt-display-next-{}.json", std::process::id())),
+            ),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let streaming_fp = "aaaa00000011"; // controller-only, streaming
+    let idle_fp = "bbbb00000012"; // full control, nothing live
+    np.add_with_access(
+        "streaming",
+        streaming_fp,
+        Some(crate::native_pairing::Access {
+            grants: GRANT_GAMEPAD,
+            expires_unix: None,
+            until_disconnect: false,
+        }),
+    )
+    .unwrap();
+    np.add("idle", idle_fp).unwrap();
+    let app = test_app_native(test_state(), np);
+    let (_live, stop, quit, _) = fake_session_with_flags(streaming_fp);
+
+    let display_next = |body: &serde_json::Value| {
+        body["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "display.next")
+            .cloned()
+            .unwrap_or_else(|| panic!("display.next is always listed: {body}"))
+    };
+    let discover = |fp: Option<&str>| {
+        let mut req = get_req("/api/v1/actions");
+        if let Some(fp) = fp {
+            req.extensions_mut()
+                .insert(PeerCertFingerprint(Some(fp.to_string())));
+        }
+        req
+    };
+    let row = display_next(&send(&app, discover(Some(streaming_fp))).await.1);
+    assert_eq!(
+        row["permitted"], true,
+        "its own session, no grant bit: {row}"
+    );
+    assert_eq!(row["group"], "display");
+    assert_eq!(row["danger"], false);
+    let row = display_next(&send(&app, discover(Some(idle_fp))).await.1);
+    assert_eq!(
+        row["permitted"], false,
+        "Host power is not a session: {row}"
+    );
+    let row = display_next(&send(&app, discover(None)).await.1);
+    assert_eq!(row["permitted"], true, "the console may always: {row}");
+
+    // Down the power path this device has the grant and would meet the other live device's
+    // 409 instead.
+    let post = axum::http::Request::post("/api/v1/actions/display.next")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(send_cert(&app, post, idle_fp).await, StatusCode::FORBIDDEN);
+    assert!(
+        !stop.load(Ordering::SeqCst) && !quit.load(Ordering::SeqCst),
+        "a display action ends no session"
+    );
 }
 
 /// A paired streaming cert reaches only the read-only allowlist; PIN and mutating routes need the operator bearer.

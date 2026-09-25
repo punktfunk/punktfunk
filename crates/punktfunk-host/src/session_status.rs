@@ -1213,6 +1213,18 @@ pub fn other_client_live(fp_hex: &str) -> bool {
         .any(|s| !(s.client.len() == 12 && fp_hex.starts_with(s.client.as_str())))
 }
 
+/// Whether `fp_hex` owns a live session: its own display, not a join onto another's.
+///
+/// Who may switch the streamed monitor (`display.next`). Label match as in
+/// [`stop_by_fingerprint`], so an anonymous IP-labelled session owns nothing.
+pub fn owns_live_session(fp_hex: &str) -> bool {
+    registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|s| !s.join && s.client.len() == 12 && fp_hex.starts_with(s.client.as_str()))
+}
+
 /// Tear down every live native session deliberately (mgmt `DELETE /session`).
 ///
 /// Sets `quit` before `stop` so teardown matches a client's own Stop: the
@@ -1806,6 +1818,25 @@ pub(crate) mod tests {
             owner.muted.load(Ordering::SeqCst),
             "the operator's mute outlives the policy"
         );
+    }
+
+    /// The owner of a live display may switch its monitor; a joiner watching it, a device with
+    /// nothing live, and an anonymous IP-labelled session may not.
+    #[test]
+    fn only_the_owner_of_a_live_display_owns_a_session() {
+        let _registry = registry_lock();
+        let owner = "cccccccccccc0011223344556677";
+        let joiner = "dddddddddddd0011223344556677";
+        assert!(!owns_live_session(owner), "nothing live yet");
+        let (_o, _) = fake_joiner(&owner[..12], false);
+        let (_j, _) = fake_joiner(&joiner[..12], true);
+        let (_a, ..) = fake_session("192.168.1.50");
+        assert!(owns_live_session(owner));
+        assert!(
+            !owns_live_session(joiner),
+            "a joiner follows the owner's picture"
+        );
+        assert!(!owns_live_session("eeeeeeeeeeee0011223344556677"));
     }
 
     /// A second lease replaces the first; the first to end lifts both, so nothing the

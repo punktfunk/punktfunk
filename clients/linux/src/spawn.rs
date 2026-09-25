@@ -127,10 +127,10 @@ mod tests {
     /// This is the 0.22.x regression, and it was invisible because the defaults are all
     /// plausible: the spec's `bitrate_kbps: 0` means "host default", which the host reads as
     /// its 20 Mbps fallback. A stream that ignores every setting looks exactly like a stream
-    /// that is merely capped. One test, one `HOME` — the stores are read from it, so this
-    /// deliberately does not split into several that would race over the same env var.
+    /// that is merely capped. One test, one directory — the stores are read from it, so this
+    /// deliberately does not split into several that would race over the same variable.
     #[test]
-    // The crate's one test env mutation (the `HOME` scoping below) — see main.rs's deny note.
+    // The crate's one test env mutation (the config-dir write below) — see main.rs's deny note.
     #[allow(unsafe_code)]
     fn the_plan_carries_resolved_settings_not_defaults() {
         use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
@@ -140,9 +140,10 @@ mod tests {
         let cfg = home.join(".config/punktfunk");
         std::fs::create_dir_all(&cfg).unwrap();
         // SAFETY: the only env-mutating test in this binary (see the doc above — one test, one
-        // `HOME`, deliberately not split). Parallel tests may `getenv` concurrently; glibc keeps
-        // replaced environ storage alive, and every reader tolerates either value.
-        unsafe { std::env::set_var("HOME", &home) };
+        // directory, deliberately not split). Parallel tests may `getenv` concurrently; glibc
+        // keeps replaced environ storage alive, and every reader tolerates either value.
+        // Point the store at `cfg` directly. A `HOME` redirect loses to a developer override.
+        unsafe { std::env::set_var("PUNKTFUNK_CONFIG_DIR", &cfg) };
 
         // A device whose owner has set a bitrate, and a host bound to a preset that raises it
         // further — the two layers the spec has to carry.

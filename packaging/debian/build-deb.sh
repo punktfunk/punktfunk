@@ -70,6 +70,8 @@ install -Dm0644 packaging/linux/punktfunk-update.service \
                                                    "$STAGE/usr/lib/systemd/system/punktfunk-update.service"
 install -Dm0644 packaging/linux/49-punktfunk-update.rules \
                                                    "$STAGE/usr/share/polkit-1/rules.d/49-punktfunk-update.rules"
+# postinst runs this on configure and on the file trigger below (web, runner, bun).
+install -Dm0755 packaging/linux/restart-user-units.sh "$STAGE/usr/libexec/punktfunk/restart-user-units"
 install -Dm0644 scripts/60-punktfunk.rules         "$STAGE/usr/lib/udev/rules.d/60-punktfunk.rules"
 install -Dm0644 scripts/60-punktfunk-dualsense.conf "$STAGE/usr/share/wireplumber/wireplumber.conf.d/60-punktfunk-dualsense.conf"
 # ALSA UCM for the DualSense's own sound card — the `SpeakerHaptic` device alsa-ucm-conf has
@@ -380,9 +382,16 @@ if [ "$1" = "configure" ]; then
         fi
     fi
 fi
+# Restart the running services. configure restarts all three: dpkg may fold a pending trigger into it.
+case "$1" in configure|triggered) /usr/libexec/punktfunk/restart-user-units ;; esac
 exit 0
 EOF
 chmod 0755 "$STAGE/DEBIAN/postinst"
+cat > "$STAGE/DEBIAN/triggers" <<'EOF'
+interest-noawait /usr/share/punktfunk-web
+interest-noawait /usr/share/punktfunk-scripting
+interest-noawait /usr/lib/punktfunk-bun
+EOF
 
 mkdir -p dist
 OUT="dist/${PKG}_${VERSION}_${ARCH}.deb"

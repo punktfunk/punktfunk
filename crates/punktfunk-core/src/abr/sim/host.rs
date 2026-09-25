@@ -288,6 +288,10 @@ pub(super) struct Host {
     /// flight.
     idr_owed: bool,
     idr_due_ms: Option<u64>,
+    /// Recovery frames sent in answer to an ask, and the bytes each spent past an
+    /// ordinary frame's allowance.
+    pub(super) waves: u32,
+    pub(super) wave_excess_bytes: u64,
     probe: Option<ProbeBurst>,
     last_probe_ms: Option<u64>,
     swing_us: u32,
@@ -330,6 +334,8 @@ impl Host {
             next_frame_us: 0,
             idr_owed: true,
             idr_due_ms: None,
+            waves: 0,
+            wave_excess_bytes: 0,
             probe: None,
             last_probe_ms: None,
             swing_us: 0,
@@ -590,7 +596,7 @@ impl Host {
     /// Produce this millisecond's frame, if the frame clock fired. A loaded
     /// encoder caps the rate at one frame per `encode_us`, which is what turns
     /// GPU contention into a short window. Nothing leaves before the pipeline
-    /// exists.
+    /// exists. A recovery frame that answers an ask counts as a wave.
     pub(super) fn tick(&mut self, now_ms: u64) -> Option<Frame> {
         if now_ms < self.cfg.bringup_ms {
             self.next_frame_us = self.cfg.bringup_ms * 1_000;
@@ -622,11 +628,12 @@ impl Host {
         // Per-frame allowance is the session fps, not the rate the source
         // manages: a frame-driven source spends a slice of the budget.
         let frame_bytes = enc_kbps as u64 * 1_000 / 8 / self.cfg.fps.max(1) as u64;
-        let idr =
-            std::mem::take(&mut self.idr_owed) || matches!(self.idr_due_ms, Some(t) if now_ms >= t);
+        let asked = matches!(self.idr_due_ms, Some(t) if now_ms >= t);
+        let idr = std::mem::take(&mut self.idr_owed) || asked;
         if idr {
             self.idr_due_ms = None;
         }
+        self.waves += u32::from(asked);
         let cut = phase.cut_every_ms > 0 && now_ms >= self.next_cut_ms;
         if cut {
             self.next_cut_ms = now_ms + phase.cut_every_ms;
@@ -645,7 +652,11 @@ impl Host {
                 b = b * phase.cut_pct as u64 / 100;
             }
             if idr {
+                let plain = b;
                 b = b * self.cfg.idr_pct as u64 / 100;
+                if asked {
+                    self.wave_excess_bytes += b.saturating_sub(plain);
+                }
             }
             b.max(1)
         };

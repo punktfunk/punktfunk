@@ -97,7 +97,7 @@ use self::planes::{
 };
 use self::probe::ProbeState;
 use self::pump::run_pump;
-use self::recovery::{RecentRfis, RecoveryAsk, RfiRecovery};
+use self::recovery::{RecentRfis, RecoveryAsk, RfiRecovery, ShortFrames};
 use self::worker::WorkerArgs;
 
 /// What this client calls itself in the host's `handshake complete` line: build plus the shell
@@ -359,6 +359,8 @@ pub struct NativeClient {
     abr_ramp: Arc<Mutex<Option<crate::abr::RampRecord>>>,
     /// RFIs the control task sent, aged at each overlay read.
     recent_rfis: Arc<Mutex<RecentRfis>>,
+    /// Frames the pump skipped while short; [`request_rfi`](Self::request_rfi) logs theirs.
+    short_frames: Arc<Mutex<ShortFrames>>,
     /// ABR armed (Automatic, not rate-pinned PyroWave). Skip per-frame decode measurement when
     /// false ([`wants_decode_latency`](Self::wants_decode_latency)).
     wants_decode: bool,
@@ -737,6 +739,7 @@ impl NativeClient {
         let live_bitrate = Arc::new(AtomicU32::new(0));
         let rate_cut = Arc::new(AtomicU8::new(0));
         let recent_rfis = Arc::new(Mutex::new(RecentRfis::default()));
+        let short_frames = Arc::new(Mutex::new(ShortFrames::default()));
         // Same seeding: Welcome before ready_tx, then every AccessUpdate. GRANT_ALL /
         // permanent here is the pre-handshake placeholder.
         let access_grants = Arc::new(AtomicU32::new(crate::quic::GRANT_ALL));
@@ -765,6 +768,7 @@ impl NativeClient {
         let live_bitrate_w = live_bitrate.clone();
         let rate_cut_w = rate_cut.clone();
         let recent_rfis_w = recent_rfis.clone();
+        let short_frames_w = short_frames.clone();
         let pad_audio_caps_w = pad_audio_caps.clone();
         let pad_mouse_w = pad_mouse.clone();
         let scroll_invert_w = scroll_invert.clone();
@@ -856,6 +860,7 @@ impl NativeClient {
                     live_bitrate: live_bitrate_w,
                     rate_cut: rate_cut_w,
                     recent_rfis: recent_rfis_w,
+                    short_frames: short_frames_w,
                     audio_mute: audio_mute_w,
                     pad_slots: pad_slots_w,
                     launch_outcome: launch_outcome_w,
@@ -948,6 +953,7 @@ impl NativeClient {
             live_bitrate_kbps: live_bitrate,
             rate_cut,
             recent_rfis,
+            short_frames,
             // Match the pump: Automatic, not rate-pinned PyroWave, AND host echoed a rate.
             // Dropping the last term over-advertises against an old host that reports no rate.
             wants_decode: bitrate_kbps == 0
@@ -1056,13 +1062,26 @@ impl NativeClient {
     /// P-frame tagged [`crate::packet::USER_FLAG_RECOVERY_ANCHOR`]; others force an IDR
     /// ([`request_keyframe`](Self::request_keyframe)). Prefer on loss; keyframe is the backstop
     /// when the recovery frame itself is lost. Fire-and-forget; throttle like keyframe.
+    ///
+    /// Every RFI a client sends passes here and is logged at info, the most Android keeps.
+    /// `missing_shards` is what `first_frame` lacked past its parity when a later frame
+    /// overtook it; absent when none of it arrived.
     pub fn request_rfi(&self, first_frame: u32, last_frame: u32) -> Result<()> {
         self.ctrl_tx
             .try_send(CtrlRequest::Rfi(RfiRequest {
                 first_frame,
                 last_frame,
             }))
-            .map_err(|_| PunktfunkError::Closed)
+            .map_err(|_| PunktfunkError::Closed)?;
+        let short = self.short_frames.lock().unwrap().get(first_frame);
+        tracing::info!(
+            first = first_frame,
+            last = last_frame,
+            missing_shards = short.map(|s| s.0),
+            recovery_shards = short.map(|s| s.1),
+            "reference-frame invalidation requested"
+        );
+        Ok(())
     }
 
     /// Feed each received AU's `frame_index` (receive order). A forward gap fires a throttled

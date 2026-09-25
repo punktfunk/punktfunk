@@ -88,6 +88,7 @@ on:
       - 'packaging/linux/*.desktop'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
+      - 'packaging/linux/*.sh'
       - 'packaging/linux/*.ufw'
       - 'packaging/linux/*.xml'
       - 'packaging/linux/icons/**'
@@ -754,11 +755,18 @@ jobs:
           PUNKTFUNK_BUILD_VERSION: ${{ env.VERSION }}   # stamped into the binaries (build.rs)
         run: |
           git config --global --add safe.directory "$PWD"
+          # The restored target holds the binaries the cache was saved with, and the packer
+          # ships any binary it finds. Build first, as build-publish does.
+          cargo build --release --locked --target aarch64-unknown-linux-gnu \
+            -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli -p pf-update
           ARCH=arm64 TARGET=aarch64-unknown-linux-gnu \
             bash packaging/debian/build-client-deb.sh
           # Fail here rather than shipping an amd64 binary under an arm64 package name.
           readelf -h target/aarch64-unknown-linux-gnu/release/punktfunk-session \
             | grep -q AArch64 || { echo "ERROR: session binary is not AArch64"; exit 1; }
+          # The update check compares the version the shell carries; it must be this run's.
+          grep -qaF "$VERSION" target/aarch64-unknown-linux-gnu/release/punktfunk-client \
+            || { echo "ERROR: punktfunk-client does not carry version $VERSION"; exit 1; }
 
       - name: sccache stats (visibility only)
         if: always()

@@ -877,6 +877,30 @@ impl Reassembler {
     pub(crate) fn in_flight(&self) -> usize {
         self.in_flight_bytes
     }
+
+    /// `(missing, recovery)` for an in-flight video frame: shards it still needs past
+    /// what its parity can rebuild, and the parity shards it carries. A block with no
+    /// shard in yet counts all its data as missing. `None` when no shard of the frame
+    /// is in flight, or a streamed frame has not pinned its size.
+    pub fn missing_beyond_parity(&self, frame_index: u32) -> Option<(u32, u32)> {
+        let f = self.video.frames.get(&frame_index)?;
+        if f.frame_bytes == 0 {
+            return None;
+        }
+        let total_data = f.frame_bytes.div_ceil(f.shard_bytes).max(1);
+        let (mut seen, mut missing, mut recovery) = (0, 0, 0);
+        for b in f.blocks.values() {
+            seen += b.data_shards;
+            recovery += b.recovery_shards;
+            if !b.done {
+                missing += b
+                    .data_shards
+                    .saturating_sub(b.data_received + b.recovery_received);
+            }
+        }
+        missing += total_data.saturating_sub(seen);
+        Some((missing as u32, recovery as u32))
+    }
 }
 
 /// Data shards of a terminating frame that exist only because parity restored them

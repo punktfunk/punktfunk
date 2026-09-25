@@ -41,6 +41,7 @@ on:
       # Every build job below runs these, and they sit beside the driver tree rather than in it.
       - 'packaging/windows/drivers-cargo.ps1'
       - 'scripts/ci/ensure-windows-toolchain.ps1'
+      - 'scripts/ci/src-mtimes.rs'
   pull_request:
     paths:
       - '.gitea/workflows/windows-drivers.yml'
@@ -59,6 +60,7 @@ on:
       # Every build job below runs these, and they sit beside the driver tree rather than in it.
       - 'packaging/windows/drivers-cargo.ps1'
       - 'scripts/ci/ensure-windows-toolchain.ps1'
+      - 'scripts/ci/src-mtimes.rs'
 
 # Driver builds need the WDK on the runner - the driver-build job below self-provisions it via
 # scripts/ci/ensure-windows-toolchain.ps1, a fast no-op once already present.
@@ -190,13 +192,9 @@ jobs:
     defaults:
       run:
         shell: pwsh
-        # In-tree target dir on purpose: wdk-build's find_top_level_cargo_manifest() walks UP from OUT_DIR
-        # to the first ancestor with a Cargo.lock, so a relocated CARGO_TARGET_DIR (C:\t\…) hides the
-        # workspace lock and it panics. pf-vdisplay's encoder deps build PyroWave and oneVPL from
-        # source, and MAX_PATH did bite: the runner's checkout root is ~78 chars, and MSBuild's .tlog
-        # paths under the CMake tree overflow 260. The compiling steps therefore go through
-        # drivers-cargo.ps1, which substs a drive onto the repo root. fmt needs no compile, so it does
-        # not.
+        # wdk-build finds the workspace by walking up from OUT_DIR to a Cargo.lock, so the target
+        # path stays in-tree (a junction, below). Compiling steps go through drivers-cargo.ps1,
+        # whose subst keeps MSBuild's CMake .tlog paths under MAX_PATH.
         working-directory: packaging/windows/drivers
     env:
       # wdk-build otherwise picks 10.0.28000.0 (no km/crt) and bindgen fails — pin the WDK SDK version.
@@ -212,6 +210,20 @@ jobs:
         # dispatched provisioning workflow landing on a different one. Path is relative to the job
         # working-directory (packaging/windows/drivers). Near-noop once the toolchain is present.
         run: ../../../scripts/ci/ensure-windows-toolchain.ps1
+      - name: Keep the driver target between runs
+        # C:\t outlives the job, and the runner's disk reclaim purges it whole. Only this job
+        # builds into C:\t\drivers; the runner runs one job at a time.
+        run: |
+          New-Item -ItemType Directory -Force -Path 'C:\t\drivers' | Out-Null
+          New-Item -ItemType Junction -Path target -Target 'C:\t\drivers' | Out-Null
+      - name: Carry source mtimes (unchanged crates stay fresh)
+        continue-on-error: true
+        # Cargo judges path crates by mtime, and this checkout is new: scripts/ci/src-mtimes.rs.
+        # After the junction, so the directory listing it records includes `target`.
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          rustc -O scripts/ci/src-mtimes.rs -o "$env:RUNNER_TEMP\src-mtimes.exe"; if ($LASTEXITCODE) { throw "src-mtimes build" }
+          & "$env:RUNNER_TEMP\src-mtimes.exe" 'C:\t\drivers'; if ($LASTEXITCODE) { throw "src-mtimes" }
       - name: cargo build the driver workspace (wdk-iddcx + pf-vdisplay + gamepad drivers)
         # Whole workspace: wdk-iddcx (DDI wrappers + the iddcx bindgen surface asserts) + pf-vdisplay
         # (the real IddCx driver) + pf-umdf-util (the safe UMDF primitive layer) + the two gamepad
@@ -254,9 +266,12 @@ jobs:
         # The ARM64 host leg (#298). Same x64 runner: the MSVC ARM64 cross compiler and the WDK's
         # um\arm64 libs are provisioned above. Build + lint only, the DLLs cannot run here. Debug
         # profile like the x64 steps; the encoder features drop out via the driver's target table.
+        # A failed build must stop here: the warm target still holds the last run's DLL.
         run: |
           ../drivers-cargo.ps1 'build --locked --target aarch64-pc-windows-msvc -p pf-vdisplay -p pf-gamepad -p pf-mouse -p pf-xusb -v'
+          if ($LASTEXITCODE) { throw "ARM64 driver build" }
           ../drivers-cargo.ps1 'clippy --locked --target aarch64-pc-windows-msvc -p pf-umdf-util -p pf-xusb -p pf-gamepad -p pf-mouse -p wdk-iddcx -p pf-vdisplay --all-targets -- -D warnings'
+          if ($LASTEXITCODE) { throw "ARM64 driver clippy" }
           $dll = "target\aarch64-pc-windows-msvc\debug\pf_vdisplay.dll"
           if (-not (Test-Path $dll)) { throw "ARM64 pf_vdisplay.dll not produced at $dll" }
           $b = [IO.File]::ReadAllBytes($dll)

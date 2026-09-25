@@ -112,6 +112,8 @@ pub(crate) struct WorkerArgs {
     pub(crate) abr_ramp: Arc<Mutex<Option<crate::abr::RampRecord>>>,
     /// RFIs sent in the last minute, for the overlay. The control task notes each one.
     pub(crate) recent_rfis: Arc<Mutex<RecentRfis>>,
+    /// What each frame the pump skipped past still lacked, for the RFI line.
+    pub(crate) short_frames: Arc<Mutex<ShortFrames>>,
     /// Mute mask the control task ORs [`crate::client::AUDIO_MUTE_HOST`] into on every
     /// `AudioState`. The embedder's own bit rides the same cell.
     pub(crate) audio_mute: Arc<AtomicU8>,

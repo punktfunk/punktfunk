@@ -155,6 +155,6 @@ punktfunk-host service stop                 # Windows, elevated
 ```
 
 `punktfunk-host service uninstall` removes the Windows service and its firewall rules; the rest of
-the install goes through **Settings → Apps**. After a Linux package update, restart the service to
-run the new binary — [Updating](/docs/updating#restart-after-a-linux-package-update). Your config
+the install goes through **Settings → Apps**. A Linux package update restarts the running service
+for you — [Updating](/docs/updating#restart-after-a-linux-package-update). Your config
 and pairings survive all of this; [Uninstall](/docs/uninstall) clears them.

@@ -1,9 +1,11 @@
 //! Client identity, known-hosts (pinned fingerprints), and app settings.
 //!
 //! Identity PEMs live in `~/.config/punktfunk/` (Linux) or `%APPDATA%\punktfunk`
-//! (Windows) and are shared with `punktfunk-probe` so a box pairs once. On Windows
-//! the WinUI shell re-exports this module (`clients/windows/src/trust.rs`) and is
-//! the settings file's only writer; the session binary reads the same stores.
+//! (Windows). A non-empty `PUNKTFUNK_CONFIG_DIR` overrides that directory; an
+//! empty value does not. `punktfunk-probe` reads this same directory, so a box
+//! pairs once. On Windows the WinUI shell re-exports this module
+//! (`clients/windows/src/trust.rs`) and is the settings file's only writer; the
+//! session binary reads the same stores.
 //!
 //! Pin a host via [`persist_host`]. Settings resolve through [`effective_settings`].
 //! Evidence: the migration and known-hosts tests below;
@@ -65,7 +67,22 @@ pub(crate) fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T
     }
 }
 
+/// Directory for the client identity, known hosts, and settings.
+///
+/// A non-empty `PUNKTFUNK_CONFIG_DIR` wins over `~/.config/punktfunk` (`HOME`)
+/// or `%APPDATA%\punktfunk`. An empty value is ignored. The OS default is read
+/// only when no override is set.
 pub fn config_dir() -> Result<PathBuf> {
+    let env = std::env::var_os("PUNKTFUNK_CONFIG_DIR");
+    if let Some(dir) = resolve_config_dir(env.as_deref()) {
+        return Ok(dir);
+    }
+    os_config_base()
+}
+
+/// OS default for [`config_dir`]. Missing `HOME` or `APPDATA` keeps its context
+/// string. Not called when an override already won.
+fn os_config_base() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         let appdata = std::env::var("APPDATA").context("APPDATA unset")?;
@@ -78,22 +95,35 @@ pub fn config_dir() -> Result<PathBuf> {
     }
 }
 
+/// A non-empty `PUNKTFUNK_CONFIG_DIR`, or `None` when the OS default applies.
+///
+/// An empty value is `None`. The caller then reads `HOME` or `APPDATA`, so an
+/// override never builds that error and never requires the variable to be set.
+pub(crate) fn resolve_config_dir(env: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    env.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 /// Persistent mTLS identity, generated once and presented on every connect.
+///
+/// The private key is owner-only wherever the directory is. Unix uses mode 0600.
+/// Windows drops inherited ACEs and grants the owner, including when
+/// `PUNKTFUNK_CONFIG_DIR` points outside `%APPDATA%`.
 #[cfg(not(target_family = "wasm"))]
 pub fn load_or_create_identity() -> Result<(String, String)> {
     let dir = config_dir()?;
     let (cp, kp) = (dir.join("client-cert.pem"), dir.join("client-key.pem"));
     if let (Ok(c), Ok(k)) = (std::fs::read_to_string(&cp), std::fs::read_to_string(&kp)) {
-        // Older builds wrote the key via `fs::write` (umask → 0644). Re-lock on load so
-        // upgrades get 0600, not just fresh installs. Best-effort: a read-only store stays.
+        // Older Unix builds left the key world-readable. Re-lock on load. Best-effort:
+        // a read-only store still returns the key it already has. Windows keys only
+        // ever lived in the per-user `%APPDATA%`, so nothing there needs a re-lock.
         #[cfg(unix)]
         lock_identity_perms(&dir, &kp);
         return Ok((c, k));
     }
     let (c, k) = endpoint::generate_identity().map_err(|e| anyhow!("generate identity: {e}"))?;
     std::fs::create_dir_all(&dir)?;
-    // Dir 0700, key 0600 from create (`fs::write` honors umask → 0644). The cert is public.
-    // Non-Unix: %APPDATA% ACLs already scope the dir; std perms suffice.
+    // Unix: the directory is 0700 before the key is written. Windows locks the key
+    // file alone in `write_private_key`; the directory keeps the ACL it came with.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -105,8 +135,11 @@ pub fn load_or_create_identity() -> Result<(String, String)> {
     Ok((c, k))
 }
 
-/// Write the mTLS private key. Unix: create 0600 — `fs::write` then chmod would briefly
-/// expose it at the umask default. Elsewhere: std perms + %APPDATA% ACL.
+/// Write the mTLS private key owner-only.
+///
+/// Unix creates it mode 0600. Writing first and then chmod would expose the
+/// bytes at the umask default. Windows creates an empty file, locks it to the
+/// owner, then writes the bytes. A failed lock removes the file.
 #[cfg(not(target_family = "wasm"))]
 fn write_private_key(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
@@ -121,9 +154,58 @@ fn write_private_key(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
             .open(path)?;
         f.write_all(bytes)?;
     }
-    #[cfg(not(unix))]
-    std::fs::write(path, bytes)?;
+    #[cfg(windows)]
+    {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        std::fs::write(path, [])?;
+        if let Err(e) = restrict_to_owner(path) {
+            let _ = std::fs::remove_file(path);
+            return Err(e);
+        }
+        std::fs::write(path, bytes)?;
+    }
     Ok(())
+}
+
+/// `icacls.exe` from `SystemRoot`, or `icacls` on `PATH`.
+#[cfg(windows)]
+fn icacls_exe() -> String {
+    std::env::var("SystemRoot")
+        .map(|root| format!("{root}\\System32\\icacls.exe"))
+        .unwrap_or_else(|_| "icacls".to_string())
+}
+
+/// One `icacls` call with no console window: the WinUI shell has no console, so a
+/// plain spawn would open one. Failure is `restrict client key`.
+#[cfg(windows)]
+fn run_icacls(path: &std::path::Path, args: &[&str]) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new(icacls_exe())
+        .arg(path)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("restrict client key")?;
+    if status.success() {
+        return Ok(());
+    }
+    anyhow::bail!("restrict client key: {status}");
+}
+
+/// Owner-only ACL on one file. `/reset` runs first because `/inheritance:r`
+/// leaves an explicit grant in place.
+#[cfg(windows)]
+fn restrict_to_owner(path: &std::path::Path) -> Result<()> {
+    run_icacls(path, &["/reset"])?;
+    run_icacls(path, &["/inheritance:r", "/grant:r", "*S-1-3-4:(F)"])
 }
 
 /// Best-effort dir 0700 / key 0600 on an existing store. Errors ignored: this never
@@ -1683,6 +1765,66 @@ pub fn resolve_preset(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+
+    /// A non-empty override wins. Empty and absent leave the OS default to the caller.
+    /// The helper takes the override as an argument.
+    #[test]
+    fn config_dir_resolution_prefers_a_non_empty_override() {
+        assert_eq!(
+            resolve_config_dir(Some(OsStr::new("/from-env"))).as_deref(),
+            Some(Path::new("/from-env")),
+        );
+        assert_eq!(resolve_config_dir(Some(OsStr::new(""))), None);
+        assert_eq!(resolve_config_dir(None), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let raw = OsStr::from_bytes(b"/from-env/\xff");
+            assert_eq!(resolve_config_dir(Some(raw)).unwrap().as_os_str(), raw);
+        }
+    }
+
+    /// The key file is owner-only on create. Unix is mode 0600. Windows is an
+    /// owner ACE with inherited access removed.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn the_private_key_is_owner_only() {
+        let dir = std::env::temp_dir().join(format!("pf-client-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("client-key.pem");
+        write_private_key(&key, b"secret").unwrap();
+        assert_eq!(std::fs::read(&key).unwrap(), b"secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&key).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        // `icacls` prints localized account names; `/save` writes SDDL (UTF-16),
+        // which does not follow the display language.
+        #[cfg(windows)]
+        {
+            let saved = dir.join("key-acl.txt");
+            let out = std::process::Command::new(icacls_exe())
+                .arg(&key)
+                .arg("/save")
+                .arg(&saved)
+                .output()
+                .expect("save key acl");
+            assert!(out.status.success(), "{out:?}");
+            let raw = std::fs::read(&saved).unwrap();
+            let units: Vec<u16> = raw
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect();
+            let text = String::from_utf16_lossy(&units);
+            let dacl = text.lines().find(|l| l.starts_with("D:")).unwrap_or("");
+            assert_eq!(dacl.trim(), "D:PAI(A;;FA;;;OW)", "{text}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 64-hex fingerprint of one repeated digit — readable and distinct per letter.
     fn fp(c: char) -> String {

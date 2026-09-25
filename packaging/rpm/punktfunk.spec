@@ -365,6 +365,7 @@ install -Dm0644 scripts/99-punktfunk-net.conf %{buildroot}%{_prefix}/lib/sysctl.
 install -Dm0755 target/release/pf-update %{buildroot}%{_libexecdir}/punktfunk/pf-update
 install -Dm0644 packaging/linux/punktfunk-update.service %{buildroot}%{_unitdir}/punktfunk-update.service
 install -Dm0644 packaging/linux/49-punktfunk-update.rules %{buildroot}%{_datadir}/polkit-1/rules.d/49-punktfunk-update.rules
+install -Dm0755 packaging/linux/restart-user-units.sh %{buildroot}%{_libexecdir}/punktfunk/restart-user-units
 
 # systemd *user* unit (the host runs in the graphical session, not as root).
 install -Dm0644 scripts/punktfunk-host.service %{buildroot}%{_userunitdir}/punktfunk-host.service
@@ -612,6 +613,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %dir %{_libexecdir}/punktfunk
 %{_libexecdir}/punktfunk/pf-dm-helper
 %{_libexecdir}/punktfunk/pf-update
+%{_libexecdir}/punktfunk/restart-user-units
 %{_unitdir}/punktfunk-update.service
 %{_datadir}/polkit-1/rules.d/49-punktfunk-update.rules
 %{_datadir}/polkit-1/rules.d/49-punktfunk-power.rules
@@ -764,6 +766,10 @@ if command -v punktfunk-host >/dev/null 2>&1; then
         echo "$conflict"
     fi
 fi
+
+# Any punktfunk server package update restarts the running services, once per transaction.
+%transfiletriggerin -- %{_bindir}/punktfunk-host %{_datadir}/punktfunk-web %{_datadir}/punktfunk-scripting %{_libexecdir}/punktfunk-bun
+%{_libexecdir}/punktfunk/restart-user-units
 %endif
 
 %if %{with web}

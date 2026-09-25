@@ -68,6 +68,7 @@ on:
       - 'packaging/linux/*.desktop'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
+      - 'packaging/linux/*.sh'
       - 'packaging/linux/*.xml'
       - 'packaging/linux/icons/**'
       - 'LICENSE-MIT'

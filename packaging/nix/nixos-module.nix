@@ -613,6 +613,23 @@ in
         # the resolved binary keeps a build-less box SDR. `gamescopeHdr` only controls whether
         # the patched binary is on PATH; `settings`/`environmentFile` can still set =0 to force SDR.
       };
+
+      # A switch reloads user managers but never restarts a user service. A changed package
+      # reloads this unit instead, which restarts the running host, console and runner.
+      systemd.services.punktfunk-restart-user-units = {
+        description = "Restart the punktfunk user services after a package change";
+        wantedBy = [ "multi-user.target" ];
+        reloadTriggers =
+          [ cfg.host.package ]
+          ++ optional cfg.web.enable cfg.web.package
+          ++ optional cfg.scripting.enable cfg.scripting.package;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${pkgs.coreutils}/bin/true";
+          ExecReload = "${pkgs.runtimeShell} ${../linux/restart-user-units.sh}";
+        };
+      };
     })
 
     # --- client --------------------------------------------------------------------------------

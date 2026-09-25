@@ -4,7 +4,7 @@
 //! console game library) runs in the spawned `punktfunk-session` Vulkan binary — the
 //! shell never touches video (punktfunk-planning `linux-client-rearchitecture.md`).
 // `deny`, not `forbid`, since edition 2024: clearing Steam's SDL device filter and the spawn
-// test's `HOME` scoping mutate the process env, which is now an unsafe call. Both carry a named
+// test's config-dir write mutate the process env, which is now an unsafe call. Both carry a named
 // `#[allow(unsafe_code)]` with the proof at the site; everything else stays compiler-refused.
 #![deny(unsafe_code)]
 

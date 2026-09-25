@@ -1054,6 +1054,20 @@ public final class SessionAudio {
         return (ring, source, format)
     }
 
+    /// Connect the main mixer to the output at the output's own width. The connection the engine
+    /// makes on first use of `mainMixerNode` is stereo whatever the route carries, so a 5.1 or 7.1
+    /// source folds to 2 channels inside the engine and HDMI gets PCM 2.0 in 8 slots. A stereo
+    /// route keeps the default connection.
+    private func connectMixerAtOutputWidth(_ engine: AVAudioEngine) {
+        let hw = engine.outputNode.outputFormat(forBus: 0)
+        guard hw.channelCount > 2, hw.sampleRate > 0,
+              let layout = hw.channelLayout ?? wireChannelLayout(channels: Int(hw.channelCount)),
+              layout.channelCount == hw.channelCount
+        else { return }
+        let format = AVAudioFormat(standardFormatWithSampleRate: hw.sampleRate, channelLayout: layout)
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
+    }
+
     /// Say — out loud, in the log — what rate and channel count this engine is REALLY rendering
     /// at, versus what the session negotiated. Call it after `prepare()`, when the output node
     /// has settled on the device's format; on iOS/tvOS that follows the AVAudioSession, on macOS
@@ -1083,6 +1097,13 @@ public final class SessionAudio {
         guard deviceRate > 0 else { return }
         let outChannels = Int(outFormat.channelCount)
         let wireChannels = Int(connection.resolvedAudioChannels)
+        let mixerChannels = Int(engine.mainMixerNode.outputFormat(forBus: 0).channelCount)
+        if mixerChannels < wireChannels, outChannels >= wireChannels {
+            log.warning("""
+                the engine mixes to \(mixerChannels)ch before a \(outChannels)ch output — the \
+                \(wireChannels)ch session folds inside the engine
+                """)
+        }
         if deviceRate == wireRateHz, outChannels == wireChannels {
             log.info("""
                 audio output opened at \(wireRateHz) Hz \(outChannels)ch — the negotiated format
@@ -1127,6 +1148,7 @@ public final class SessionAudio {
         #endif
         engine.attach(source)
         engine.connect(source, to: engine.mainMixerNode, format: format)
+        connectMixerAtOutputWidth(engine)
         engine.prepare()
         do {
             try engine.start()
@@ -1236,6 +1258,7 @@ public final class SessionAudio {
         }
         engine.attach(source)
         engine.connect(source, to: engine.mainMixerNode, format: format)
+        connectMixerAtOutputWidth(engine)
 
         // The capture side must be PULLED, and only the render graph pulls anything. An input
         // node carrying nothing but a tap is not part of that graph, so on the combined engine

@@ -165,46 +165,10 @@ fn hex(fp: &[u8; 32]) -> String {
     fp.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// This client's persistent identity (`~/.config/punktfunk/client-{cert,key}.pem`),
-/// generated on first use — presented on every connect so hosts can recognize it once
-/// paired.
+/// This probe's identity. The same files as the desktop client, including
+/// `PUNKTFUNK_CONFIG_DIR`.
 fn load_or_create_identity() -> Result<(String, String)> {
-    let home = std::env::var("HOME").context("HOME unset")?;
-    let dir = std::path::PathBuf::from(home).join(".config/punktfunk");
-    let (cp, kp) = (dir.join("client-cert.pem"), dir.join("client-key.pem"));
-    if let (Ok(c), Ok(k)) = (std::fs::read_to_string(&cp), std::fs::read_to_string(&kp)) {
-        // Re-lock a store an older build left world-readable (this key is shared with the other
-        // clients' `~/.config/punktfunk/client-key.pem`); best-effort.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-            let _ = std::fs::set_permissions(&kp, std::fs::Permissions::from_mode(0o600));
-        }
-        return Ok((c, k));
-    }
-    let (c, k) = endpoint::generate_identity().map_err(|e| anyhow!("generate identity: {e}"))?;
-    std::fs::create_dir_all(&dir)?;
-    // The certificate is public; the key is the mTLS credential a paired host authorizes for full
-    // remote control, so it must not be world-readable — create it 0600 (a plain `fs::write`
-    // honors the umask → typically 0644).
-    std::fs::write(&cp, &c)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&kp)?;
-        f.write_all(k.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    std::fs::write(&kp, &k)?;
-    tracing::info!(cert = %cp.display(), "generated client identity");
-    Ok((c, k))
+    pf_client_core::trust::load_or_create_identity()
 }
 
 fn parse_args() -> Args {

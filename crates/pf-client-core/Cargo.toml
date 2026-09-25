@@ -282,11 +282,20 @@ default = ["desktop", "pyrowave"]
 desktop = [
     "punktfunk-core/ureq-tls",
     "dep:pf-vkdecode", "dep:pf-bitstream", "dep:async-channel", "dep:openh264", "dep:rav1d",
-    "dep:libc", "dep:opus", "dep:mdns-sd", "dep:ureq", "dep:pf-update-check", "dep:rustls",
+    "dep:libc", "dep:opus", "discovery", "dep:ureq", "dep:pf-update-check", "dep:rustls",
     "dep:tracing-subscriber", "dep:tracing-log",
     "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:pf-vaapi", "dep:pf-libva", "dep:libloading", "dep:x11rb",
-    "dep:wasapi", "dep:pf-dxvadec", "dep:winreg", "dep:windows",
+    "dep:wasapi", "dep:winreg", "d3d11va",
 ]
+# DXVA device and native rung. `desktop` includes it. The `windows` header list
+# stays the full set, because clipboard.rs needs `winuser` and `winbase`.
+# `pf-dxvadec` also links `pf-vkdecode` for `SlotMap` — bindings, loaded at runtime.
+d3d11va = ["dep:pf-dxvadec", "dep:windows"]
+# `discovery` is the mDNS browse (`mdns-sd`, `async-channel`) without the rest of `desktop`.
+# `desktop` includes it, so every desktop consumer is unchanged, and still names
+# `async-channel` for the session and gamepad paths. A shell that only looks for hosts says
+# `features = ["discovery"]`. Android and wasm say nothing — the module stays Linux and Windows.
+discovery = ["dep:mdns-sd", "dep:async-channel"]
 # PyroWave client decode ships in every default build (flatpak included; pyrowave-sys is a
 # vendored in-repo tree, offline-safe, and an empty stub off Linux/Windows). The codec is
 # still strictly per-session opt-in (Settings codec pick / PUNKTFUNK_PREFER_PYROWAVE=1).

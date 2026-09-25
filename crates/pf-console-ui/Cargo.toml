@@ -62,6 +62,10 @@ pf-client-core = { path = "../pf-client-core", default-features = false }
 # fail when no matching asset exists — it silently falls back to a gn/ninja build of Skia from
 # source, which turns a 2-minute CI leg into a multi-hour one. Verified at 0.99.0, both targets:
 #   skia-binaries-a25a0fdb7d90429aa2d1-<target>-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+# The same 0.99.0 release also publishes, for x86_64-pc-windows-msvc, a `gl` archive and a
+# `d3d` archive (hash a25a0fdb7d90429aa2d1): `…-gl-jpegd-jpege-pdf-textlayout` and
+# `…-d3d-jpegd-jpege-pdf-textlayout`. This crate still takes `vulkan` on desktop.
+# This dependency does not select either key.
 # ⚠ The asset name CHANGED across this bump — at 0.87 it was `<target>-pdf-textlayout-vulkan`,
 # because `jpeg` was not yet in skia-safe's DEFAULT feature set (0.87: binary-cache, embed-icudtl,
 # pdf; 0.99: + jpeg). We take defaults, so the JPEG codecs came along with the bump. That is a

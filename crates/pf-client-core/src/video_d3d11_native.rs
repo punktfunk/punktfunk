@@ -5,7 +5,7 @@
 //! RGBA for the presenter, so this path is not zero-copy; see [`crate::video_d3d11`].
 //!
 //! [`NativeD3d11Decoder::new`] rejects unsupported codecs, shapes, profiles, or configs
-//! so [`crate::video`]'s ladder can fall through before an AU is consumed. In-band shape
+//! so a caller can fall through before an AU is consumed. In-band shape
 //! changes rebuild the whole [`Session`]. The pool is one decoder-only `ID3D11Texture2D`
 //! array; [`pf_dxvadec::align_surface`] and [`pf_dxvadec::pool_size`] size it. Slots a
 //! submission names stay live until [`NativeD3d11Decoder::release_deferred`] after the
@@ -35,8 +35,9 @@ use windows::Win32::dxgi::{
     DXGI_SHARED_RESOURCE_WRITE,
 };
 
-use crate::video::{ColorDesc, DecodeHealth, StreamFormat};
+use crate::video_color::ColorDesc;
 use crate::video_d3d11::{create_device, D3d11Frame, HandoffRing, HandoffSource};
+use crate::video_types::{DecodeHealth, StreamFormat};
 
 /// Decode-pool bind flag. The pool takes this flag alone.
 const BIND_DECODER: u32 = 0x200;
@@ -51,7 +52,7 @@ const BEGIN_FRAME_SLEEP: Duration = Duration::from_millis(1);
 const E_PENDING: i32 = 0x8000_000A_u32 as i32;
 
 /// Pin string for this rung.
-pub(crate) const DECODER_PIN: &str = "native-d3d11va";
+pub const DECODER_PIN: &str = "native-d3d11va";
 
 /// Per-codec planner, chosen once at construction. Session, pool, and submission stay
 /// codec-agnostic; forking them per codec would fork the machinery that is hard to get right.
@@ -170,7 +171,7 @@ struct Session {
     profile: DxvaProfile,
 }
 
-pub(crate) struct NativeD3d11Decoder {
+pub struct NativeD3d11Decoder {
     device: ID3D11Device,
     /// Live context for teardown/rebuild; the hand-off holds its own clone for the blit.
     #[allow(dead_code)]
@@ -206,8 +207,8 @@ impl NativeD3d11Decoder {
     ///
     /// The decoder object is not created here: `D3D11_VIDEO_DECODER_DESC` needs the coded
     /// size from the in-band SPS. The negotiated format only proves the adapter can host
-    /// a profile; the session's profile comes from [`StreamShape`].
-    pub(crate) fn new(
+    /// a profile; the session's profile comes from `StreamShape`.
+    pub fn new(
         codec: Codec,
         stream: StreamFormat,
         luid: Option<[u8; 8]>,
@@ -261,29 +262,29 @@ impl NativeD3d11Decoder {
         })
     }
 
-    pub(crate) fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         DECODER_PIN
     }
 
     /// Hand NV12 / P010 pictures over as planar copies when the presenter imports them
-    /// ([`HandoffRing::set_planar`]); RGB through the video processor otherwise.
-    pub(crate) fn with_planar(mut self, nv12: bool, p010: bool) -> Self {
+    /// (`HandoffRing::set_planar`); RGB through the video processor otherwise.
+    pub fn with_planar(mut self, nv12: bool, p010: bool) -> Self {
         self.handoff.set_planar(nv12, p010);
         self
     }
 
-    pub(crate) fn health(&self) -> DecodeHealth {
+    pub fn health(&self) -> DecodeHealth {
         self.health
     }
 
     /// Drain the keyframe request raised by concealment.
-    pub(crate) fn take_recovery_request(&mut self) -> bool {
+    pub fn take_recovery_request(&mut self) -> bool {
         std::mem::take(&mut self.want_recovery)
     }
 
     /// The gate lifted on intra refresh marks: the planner's damaged-chain marks are stale
     /// (`CleanLedger::clear`).
-    pub(crate) fn forgive_unclean(&mut self) {
+    pub fn forgive_unclean(&mut self) {
         match &mut self.planner {
             Planner::H264(p) => p.forgive_unclean(),
             Planner::H265(p) => p.forgive_unclean(),
@@ -297,7 +298,7 @@ impl NativeD3d11Decoder {
     /// (drop, request recovery) or an HEVC RASL skip after an open-GOP join. Either as
     /// `Err` would demote on the lossy links this rung exists to handle. `Err` is a
     /// decoder that could not run — streak-eligible, counted as `refused`.
-    pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<D3d11Frame>> {
+    pub fn decode(&mut self, au: &[u8]) -> Result<Option<D3d11Frame>> {
         if matches!(self.planner, Planner::Av1(_)) {
             return self.decode_av1(au);
         }
@@ -984,7 +985,7 @@ fn colour_of(colour: pf_dxvadec::ColourDescription) -> ColorDesc {
 
 /// Does this adapter expose any HEVC decode profile? Asked before the codec caps go
 /// on the wire; no decoder is built here.
-pub(crate) fn adapter_decodes_hevc(luid: Option<[u8; 8]>) -> bool {
+pub fn adapter_decodes_hevc(luid: Option<[u8; 8]>) -> bool {
     let Ok((device, _)) = create_device(luid) else {
         return false;
     };

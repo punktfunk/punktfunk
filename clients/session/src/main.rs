@@ -126,9 +126,10 @@ fn resolve_hdr_enabled(
 #[cfg(any(target_os = "linux", windows))]
 mod session_main {
     use pf_client_core::gamepad::GamepadService;
-    use pf_client_core::session::SessionParams;
+    use pf_client_core::orchestrate::ResolvedSpec;
+    use pf_client_core::session::{Dial, Probes, SessionParams};
     use pf_client_core::trust;
-    use punktfunk_core::config::{CompositorPref, GamepadPref, Mode};
+    use punktfunk_core::config::{GamepadPref, Mode};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::Duration;
@@ -268,27 +269,21 @@ mod session_main {
             .map(|flag| arg_value(flag).unwrap_or_default())
     }
 
-    /// The connect budget: 15 s normally; `--connect-timeout SECS` overrides — the
-    /// shell's request-access flow passes ~185 s because the host PARKS the connection
-    /// until the operator clicks Approve.
+    /// Handshake budget. `--connect-timeout SECS` overrides the default.
+    /// Request-access passes a longer budget: the host parks until Approve.
     pub(crate) fn connect_timeout() -> Duration {
         Duration::from_secs(
             arg_value("--connect-timeout")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(15),
+                .unwrap_or(pf_client_core::orchestrate::DEFAULT_CONNECT_TIMEOUT_SECS),
         )
     }
 
-    /// Builds one session's pump parameters from effective settings.
+    /// Clipboard decision, then [`params_from_spec`].
     ///
-    /// Both direct and browse launches pass the result of [`trust::effective_settings`],
-    /// including the resolved host preset. Zero-valued mode fields inherit the display
-    /// under the session window, and `display_hdr` is that display's HDR volume (Windows).
-    /// `preset` names that resolution in the stats overlay.
-    ///
-    /// Capability preferences remain requests. Device and selected-output probes narrow
-    /// them before they enter [`SessionParams`], so the handshake only advertises formats
-    /// this session can present.
+    /// `clipboard_override` is the spawner's per-host decision. `None` reads the
+    /// record this pin resolves to. `display_hdr` is the selected output's HDR
+    /// volume on Windows.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn session_params(
         settings: &trust::Settings,
@@ -305,101 +300,82 @@ mod session_main {
         force_software: Arc<AtomicBool>,
         vulkan: Option<pf_client_core::video::VulkanDecodeDevice>,
     ) -> SessionParams {
-        // Per-host clipboard opt-in (design/clipboard-and-file-transfer.md §5.3). In spec
-        // mode the spawner already resolved it; otherwise this looks it up itself, which is
-        // the last store read the compat path still owes. `addr` is moved into the struct
-        // below, so read it first.
         let clipboard = clipboard_override.unwrap_or_else(|| {
-            // The record this pin RESOLVES to, not "any record at its address": a retired
-            // duplicate, or the other OS of a dual-boot box, must never be the one that
-            // hands a host the clipboard.
             trust::KnownHosts::load()
                 .resolve(Some(&trust::hex(&pin)), &addr, port)
                 .is_some_and(|h| h.clipboard_sync)
         });
-        // The shell-persisted forwarded-controller pin (stable `vid:pid:name`), applied to
-        // OUR service — the shells' own can't reach this process. Empty = automatic. Set
-        // unconditionally for `set_forwarding`'s reason below: browse mode reuses one
-        // service, so a cleared pin has to clear it there too.
+        let spec = ResolvedSpec {
+            settings: settings.clone(),
+            clipboard,
+            preset,
+        };
+        params_from_spec(
+            spec,
+            addr,
+            port,
+            pin,
+            identity,
+            launch,
+            gamepad,
+            native,
+            display_hdr,
+            force_software,
+            vulkan,
+        )
+    }
+
+    /// Gamepad-service writes and display probes, then the shared params fill.
+    ///
+    /// HDR, 4:4:4, and the pad service stay here: the library has no window
+    /// and no device. Mode fallback and video caps live in
+    /// [`ResolvedSpec::session_params`].
+    #[allow(clippy::too_many_arguments)]
+    fn params_from_spec(
+        spec: ResolvedSpec,
+        addr: String,
+        port: u16,
+        pin: [u8; 32],
+        identity: (String, String),
+        launch: Option<String>,
+        gamepad: &GamepadService,
+        native: Mode,
+        display_hdr: Option<punktfunk_core::quic::HdrMeta>,
+        force_software: Arc<AtomicBool>,
+        vulkan: Option<pf_client_core::video::VulkanDecodeDevice>,
+    ) -> SessionParams {
+        let settings = &spec.settings;
+        // Unconditional on every launch. Browse mode reuses one service, so a
+        // cleared pin or a stream with forwarding off must undo the previous
+        // choice before attach.
         gamepad
             .set_pinned((!settings.forward_pad.is_empty()).then(|| settings.forward_pad.clone()));
-        // Whether to forward controllers AT ALL (off = the pad reaches the host by some other
-        // route — VirtualHere and friends). Set unconditionally, not only when off: browse mode
-        // reuses one service across launches, so a stream that follows one with it off must put
-        // it back. It goes on before the attach below, so a non-forwarding session never opens
-        // — never grabs — the device.
         gamepad.set_forwarding(settings.gamepad_forwarding);
-        // System-button routing: whether raw guide/QAM presses ride the wire, and whether
-        // hold-Select arms as the alternate guide route. Auto keys off Gaming Mode — the
-        // local Steam UI reacts to the same physical buttons there no matter what, so
-        // forwarding raw opens BOTH overlays, the local one on top of the stream. Set
-        // unconditionally for the same browse-mode-reuse reason as the line above.
         let game_mode = gaming_mode();
         gamepad.set_system_buttons(
             settings.system_buttons_forward(game_mode),
             settings.guide_gesture_enabled(game_mode),
         );
-        // The control socket (guide/QAM injection — the Decky panel's host buttons).
-        // Spawned at first params-build so it exists for --connect AND console launches.
+        // First build binds it, for --connect and for console launches.
         #[cfg(unix)]
         crate::ctl_socket::spawn(gamepad.clone());
-        // Pad-audio prefs to OUR gamepad service (same reasoning as the pin above): tier-A
-        // slots declare their render caps at open time, which happens on attach — after this.
         gamepad.set_pad_audio_prefs(
             settings.pad_haptics,
             pf_client_core::pad_audio::speaker_active(&settings.pad_speaker),
         );
-        let mode = Mode {
-            width: if settings.width == 0 {
-                native.width
-            } else {
-                settings.width
-            },
-            height: if settings.height == 0 {
-                native.height
-            } else {
-                settings.height
-            },
-            refresh_hz: if settings.refresh_hz == 0 {
-                native.refresh_hz.max(30)
-            } else {
-                settings.refresh_hz
-            },
-        };
-        // Render scale: multiply the resolved mode (even + codec-clamped) so the host renders
-        // larger/smaller and the presenter resamples to the window. 1.0 = Native. Applied after the
-        // Native/explicit resolution so it composes uniformly with both.
-        let (sw, sh) = punktfunk_core::render_scale::apply(
-            mode.width,
-            mode.height,
-            settings.render_scale,
-            punktfunk_core::render_scale::max_dimension(&settings.codec),
-        );
-        let mode = Mode {
-            width: sw,
-            height: sh,
-            ..mode
-        };
-        // Before the struct literal — `vulkan` moves into it below.
-        let phase_lock = vulkan.as_ref().is_some_and(|v| v.present_timing);
-        // …and the 4:4:4 promise, for the same reason: asked while the device bundle is
-        // still borrowable. `&&` short-circuits, so a box that never enabled Full chroma
-        // pays no capability queries for a feature it does not want.
-        let want_444 = settings.enable_444
+        // Short-circuit: Full chroma off must not build an HEVC decoder.
+        // The probe constructs one to ask about 4:4:4 profiles.
+        let hevc_444_hardware = settings.enable_444
             && pf_client_core::video::hevc_444_hardware_decodable(vulkan.as_ref());
-        if settings.enable_444 && !want_444 {
-            // Loud, because the user turned a switch on and HEVC will not carry it. Asking
-            // anyway loses the whole codec: the decode ladder has no 4:4:4 HEVC rung.
+        if settings.enable_444 && !hevc_444_hardware {
             tracing::warn!(
                 "Full chroma (4:4:4) requested but this device has no 4:4:4 HEVC decode — \
                  HEVC sessions ask for 4:2:0 instead. PyroWave still asks for 4:4:4: it \
                  decodes full chroma on any GPU."
             );
         }
-        // Windows offers HDR only when the selected output is actively presenting HDR.
-        // Driver-declared SDR tone-mapping is not enough: unsupported outputs can accept
-        // the conversion and cover the stream with a black or corrupt layer. The peak-nits
-        // environment override remains the explicit headless-test bypass.
+        // Windows: HDR only when the selected output is presenting HDR.
+        // `PUNKTFUNK_CLIENT_PEAK_NITS` is the headless bypass.
         #[cfg(windows)]
         let display_hdr = punktfunk_core::client::display_hdr_env_override().or(display_hdr);
         #[cfg(windows)]
@@ -415,93 +391,35 @@ mod session_main {
                 "HDR request declined"
             );
         }
-        SessionParams {
-            host: addr,
-            port,
-            mode,
-            compositor: CompositorPref::from_name(&settings.compositor)
-                .unwrap_or(CompositorPref::Auto),
-            gamepad: {
-                // The setting AS CHOSEN goes to the pad service too, not just the Hello: the host
-                // builds each virtual pad from that pad's arrival and only falls back to this
-                // session default for a pad that never declares one, so an explicit choice that
-                // stopped here would be undone the moment a controller connected.
-                let chosen = GamepadPref::from_name(&settings.gamepad).unwrap_or(GamepadPref::Auto);
-                gamepad.set_kind_override(chosen);
-                match chosen {
-                    GamepadPref::Auto => gamepad.auto_pref(),
-                    explicit => explicit,
-                }
+        // The service hears the chosen kind; the Hello hears Auto resolved.
+        // The host builds each pad from its arrival, not only this default.
+        let chosen = GamepadPref::from_name(&settings.gamepad).unwrap_or(GamepadPref::Auto);
+        gamepad.set_kind_override(chosen);
+        let gamepad_pref = match chosen {
+            GamepadPref::Auto => gamepad.auto_pref(),
+            explicit => explicit,
+        };
+        spec.session_params(
+            Dial {
+                host: addr,
+                port,
+                pin,
+                launch,
+                connect_timeout: connect_timeout(),
             },
-            bitrate_kbps: settings.bitrate_kbps,
-            audio_channels: settings.audio_channels,
-            // The lossless-audio opt-in, AS STORED — the pump is what filters it, because only it
-            // knows whether this box's output device will open the rate and what the host
-            // answered. `PUNKTFUNK_AUDIO_HIRES` still overrides it there (a headless box or a
-            // Gaming-Mode kiosk has no settings UI), which is why nothing is resolved here.
-            audio_format: settings.audio_format.clone(),
-            preferred_codec: settings.preferred_codec(),
-            // Nothing excluded on a fresh dial. Only the run loop's codec-fallback retry
-            // sets this, and it does so on a CLONE of these params — a Settings-level
-            // "never use HEVC" would be `preferred_codec`, not this.
-            exclude_codecs: 0,
-            // Desktop decode truth: every stack here (Vulkan Video, D3D11VA, VAAPI,
-            // openh264/rav1d) takes multi-slice AUs, so MULTI_SLICE is unconditional —
-            // mobile/TV embedders advertise per-decoder instead (Amlogic wedges on it).
-            // HDR and 4:4:4 are requests only; the host answers the resolved chroma in the
-            // Welcome, before we build a decoder. Rules and tests: `video::video_caps_for`.
-            video_caps: pf_client_core::video::video_caps_for(
+            Probes {
+                mode: native,
+                identity,
+                vulkan,
+                force_software,
+                gamepad: gamepad_pref,
                 hdr_enabled,
-                settings.ten_bit_sdr,
-                want_444,
-            ),
-            want_444: settings.enable_444,
-            // The panel's HDR volume reaches the host's virtual-display EDID so host apps
-            // tone-map to the real glass: the window's monitor on Windows (or
-            // `PUNKTFUNK_CLIENT_PEAK_NITS`), gated on the HDR setting because an unadvertised
-            // 10-bit/HDR makes the volume noise. Linux has no portable query and sends none.
-            display_hdr: hdr_enabled.then_some(display_hdr).flatten(),
-            // The presenter renders the host cursor locally in desktop mouse mode (M2 cursor
-            // channel); capture-mode sessions keep the composited cursor, so only advertise
-            // when the session STARTS in desktop mode. The host gates further (Linux portal
-            // compositors only).
-            cursor_forward: settings.mouse_mode() == trust::MouseMode::Desktop,
-            mic_enabled: settings.mic_enabled,
-            echo_cancel: settings.echo_cancel,
-            // Pad audio (0xD1): the DualSense haptics/speaker render settings. The gamepad
-            // service learns the same prefs below so tier-A slots declare their render caps
-            // at open; the session pump gates CLIENT_CAP_PAD_AUDIO + the renderer on these.
-            pad_haptics: settings.pad_haptics,
-            pad_speaker: settings.pad_speaker.clone(),
-            clipboard,
-            keep_host_audio: settings.keep_host_audio,
-            video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings.video_fit),
-            // The Settings preference (auto → VAAPI where it exists; the presenter
-            // demotes to software on boxes whose Vulkan can't import the dmabufs).
-            // PUNKTFUNK_DECODER still overrides inside the decoder for bisects.
-            decoder: settings.decoder.clone(),
-            launch,
-            vulkan,
-            pin: Some(pin),
-            identity,
-            connect_timeout: connect_timeout(),
-            force_software,
-            preset,
-            // Presentation-tier, carried per launch rather than read once by the run loop:
-            // the console streams many sessions through ONE loop, so this is the only way a
-            // tier the user picked between streams (or one a host's preset carries) reaches
-            // the overlay before the app is restarted. Single mode passes the same value its
-            // presenter options already hold, so it changes nothing there.
-            stats_verbosity: stats_tier(settings),
-            advanced_stats: settings.advanced_stats,
-            // Phase-locked capture (design/phase-locked-capture.md, Apple/Android parity):
-            // advertised only when the presenter has real on-glass latch stamps
-            // (VK_KHR_present_wait) — without them there is no latch grid to report. The
-            // grid itself is written by the presenter (run_session clones the Arc out of
-            // these params) and folded into ~1 Hz PhaseReports by the session pump.
-            phase_lock,
-            latch_grid: std::sync::Arc::new(pf_client_core::session::LatchGrid::default()),
-        }
+                display_hdr,
+                hevc_444_hardware,
+                stats_verbosity: stats_tier(settings),
+                latch_grid: std::sync::Arc::new(pf_client_core::session::LatchGrid::default()),
+            },
+        )
     }
 
     /// The window's starting size under Match-window: the persisted last size, so the
@@ -1037,11 +955,11 @@ mod session_main {
         let spec = arg_value("--resolved-spec").map(std::path::PathBuf::from);
         // `--fp` names its own record; only a bare address falls back to what it answers with.
         let fp_arg = arg_value("--fp").map(|f| f.to_ascii_lowercase());
-        let (settings, preset_name, clipboard_override) = match &spec {
-            Some(path) => match pf_client_core::orchestrate::ResolvedSpec::read(path) {
+        let resolved = match &spec {
+            Some(path) => match ResolvedSpec::read(path) {
                 Ok(s) => {
                     tracing::info!(path = %path.display(), "running from a resolved spec");
-                    (s.settings, s.preset, Some(s.clipboard))
+                    Some(s)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, path = %path.display(), "reading the resolved spec");
@@ -1049,6 +967,10 @@ mod session_main {
                     return EXIT_CONNECT_FAILED;
                 }
             },
+            None => None,
+        };
+        let (settings, preset_name) = match &resolved {
+            Some(s) => (s.settings.clone(), s.preset.clone()),
             None => {
                 let (settings, preset) = trust::effective_settings(
                     fp_arg.as_deref(),
@@ -1057,7 +979,7 @@ mod session_main {
                     preset_arg().as_deref(),
                     arg_value("--launch").as_deref(),
                 );
-                (settings, preset.map(|p| p.name), None)
+                (settings, preset.map(|p| p.name))
             }
         };
         if let Some(name) = &preset_name {
@@ -1134,21 +1056,36 @@ mod session_main {
 
         let outcome =
             pf_presenter::run_session(opts, move |gamepad, native, hdr, force_software, vulkan| {
-                session_params(
-                    &settings,
-                    preset_name,
-                    clipboard_override,
-                    addr,
-                    port,
-                    pin,
-                    identity,
-                    launch,
-                    gamepad,
-                    native,
-                    hdr,
-                    force_software,
-                    vulkan,
-                )
+                match resolved {
+                    Some(spec) => params_from_spec(
+                        spec,
+                        addr,
+                        port,
+                        pin,
+                        identity,
+                        launch,
+                        gamepad,
+                        native,
+                        hdr,
+                        force_software,
+                        vulkan,
+                    ),
+                    None => session_params(
+                        &settings,
+                        preset_name,
+                        None,
+                        addr,
+                        port,
+                        pin,
+                        identity,
+                        launch,
+                        gamepad,
+                        native,
+                        hdr,
+                        force_software,
+                        vulkan,
+                    ),
+                }
             });
 
         match outcome {

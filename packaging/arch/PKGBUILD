@@ -234,6 +234,10 @@ package_punktfunk-host() {
     "$pkgdir/usr/lib/systemd/system/punktfunk-update.service"
   install -Dm0644 "$R/packaging/linux/49-punktfunk-update.rules" \
     "$pkgdir/usr/share/polkit-1/rules.d/49-punktfunk-update.rules"
+  # An upgrade of any punktfunk server package restarts the running services, once per transaction.
+  install -Dm0755 "$R/packaging/linux/restart-user-units.sh" "$pkgdir/usr/lib/punktfunk/restart-user-units"
+  install -Dm0644 "$R/packaging/arch/punktfunk-restart.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/punktfunk-restart.hook"
   # vhci-hcd autoload — usbip transport for the virtual Steam Deck pad (Steam only adopts USB pads)
   install -Dm0644 "$R/scripts/punktfunk-modules.conf" "$pkgdir/usr/lib/modules-load.d/punktfunk.conf"
   # 32 MB UDP socket buffers (send-side headroom at high bitrate)

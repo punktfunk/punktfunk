@@ -3931,6 +3931,7 @@ dependencies = [
  "anyhow",
  "mdns-sd",
  "opus",
+ "pf-client-core",
  "punktfunk-core",
  "quinn",
  "tokio",

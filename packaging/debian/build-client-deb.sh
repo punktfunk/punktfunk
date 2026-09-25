@@ -45,16 +45,10 @@ BIN="$OUTDIR/$PKG"
 SESSION_BIN="$OUTDIR/punktfunk-session"
 # The headless CLI (design/client-architecture-split.md §4) ships with every client.
 CLI_BIN="$OUTDIR/punktfunk"
-# Test every binary this script goes on to install, not a subset. It used to check only $BIN and
-# $SESSION_BIN while installing three, so a caller that pre-built exactly those two (deb.yml did)
-# satisfied the guard, skipped this build, and then died on `install: No such file or directory`
-# for $CLI_BIN — a confusing way to say "the CLI was never built". The arm64 leg never hit it
-# because it pre-builds nothing, so the guard always fired there and built all three.
-# pf-update joins the list: the client ships its own copy of the root helper for one-tap
-# updates (`punktfunk-client --apply-update`). Same guard rule as above — every binary this
-# script installs is tested here, so a pre-built subset can't skip the build and then die on
-# `install: No such file or directory`.
+# pf-update: the client's own copy of the root helper (`punktfunk-client --apply-update`).
 UPDATE_BIN="$OUTDIR/pf-update"
+# Builds only when a binary is missing, so it tests every binary installed below. A caller with
+# a restored target must build first: an existing binary is packaged as-is, however old.
 if [ ! -x "$BIN" ] || [ ! -x "$SESSION_BIN" ] || [ ! -x "$CLI_BIN" ] || [ ! -x "$UPDATE_BIN" ]; then
   echo "==> building $CRATE + punktfunk-client-session + punktfunk-cli + pf-update (release${TARGET:+ for $TARGET})"
   cargo build --release --locked "${CARGO_TARGET_ARGS[@]}" -p "$CRATE" -p punktfunk-client-session \

@@ -19,7 +19,7 @@
           "actions"
         ],
         "summary": "List host actions",
-        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: the device's live Host-power grant. Unknown\nids still render with the server-supplied title.",
+        "description": "Per-caller view: platform availability plus whether this caller may invoke each one.\nAdmin: everything permitted. Paired cert: power per the device's live Host-power grant,\n`display.next` while the device owns a live session. Unknown ids still render with the\nserver-supplied title.",
         "operationId": "listActions",
         "responses": {
           "200": {
@@ -51,13 +51,13 @@
           "actions"
         ],
         "summary": "Invoke a host action",
-        "description": "Id-only, empty body: nothing in the request reaches the privileged path. On `202` the\nhost ends every session (typed HostPower close), waits ~1 s so this response flushes,\nthen acts. Paired-cert callers need Host power and are `409` while another device's\nsession is live; the admin console is never blocked. One action at a time host-wide.",
+        "description": "Id-only, empty body: nothing in the request reaches the privileged path. Power actions\nanswer `202`, end every session (typed HostPower close), wait ~1 s so this response\nflushes, then act; paired-cert callers need Host power and are `409` while another\ndevice's session is live, the admin console never is. One power action at a time.\n`display.next` answers `200` with the monitor now streamed and ends nothing; a paired\ncert needs a live session of its own.",
         "operationId": "invokeAction",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "Action id (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`)",
+            "description": "Action id (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `display.next`)",
             "required": true,
             "schema": {
               "type": "string"
@@ -65,6 +65,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Done (`display.next`): the monitor streamed from now on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionOutcome"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Accepted — sessions are being ended and the action follows in about a second"
           },
@@ -79,7 +89,7 @@
             }
           },
           "403": {
-            "description": "This caller's access does not include this action (no Host power grant)",
+            "description": "This caller's access does not include this action (no Host power grant, or no live session of its own for `display.next`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -99,7 +109,17 @@
             }
           },
           "409": {
-            "description": "Refused: an action is already in flight, another device's session is live (cert lane), or the platform said no (a foreign sleep inhibitor, a second local user, …)",
+            "description": "Refused: an action is already in flight, another device's session is live (cert lane), or the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`display.next` could not store the new monitor",
             "content": {
               "application/json": {
                 "schema": {
@@ -109,7 +129,7 @@
             }
           },
           "501": {
-            "description": "This host platform has no executor for it (macOS host)",
+            "description": "This host platform has no executor for it (macOS host; `display.next` off Linux)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5664,7 +5684,7 @@
           },
           "permitted": {
             "type": "boolean",
-            "description": "Whether THIS caller may invoke it (admin: always; cert: live `GRANT_POWER` bit)."
+            "description": "Whether THIS caller may invoke it. Admin: always. Cert: the live `GRANT_POWER` bit for\npower, its own live session for `display.next`."
           },
           "title": {
             "type": "string",
@@ -5689,6 +5709,20 @@
             "items": {
               "$ref": "#/components/schemas/ActionInfo"
             }
+          }
+        }
+      },
+      "ActionOutcome": {
+        "type": "object",
+        "description": "What `display.next` did (`200`). Power actions answer `202` with no body.",
+        "required": [
+          "monitor"
+        ],
+        "properties": {
+          "monitor": {
+            "type": "string",
+            "description": "Connector streamed from now on.",
+            "example": "HDMI-A-1"
           }
         }
       },
@@ -8105,7 +8139,7 @@
               },
               "id": {
                 "type": "string",
-                "description": "`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`."
+                "description": "`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `display.next`."
               },
               "kind": {
                 "type": "string",

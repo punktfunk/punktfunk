@@ -97,6 +97,17 @@ struct Run {
     /// Every `SetBitrate` each session sent, when it sent it: the asks a
     /// window close never saw (the ramp's opening rate, the pin's verdict).
     pub asks: Vec<Vec<(u64, u32)>>,
+    pub repair: RepairTally,
+}
+
+/// Session 0's loss repair over a run: recovery frames the host sent in
+/// answer to an ask, frames the client lost, and the bytes repair spent past
+/// the budget (NACK resends, and each wave's excess over an ordinary frame).
+#[derive(Clone, Copy, Debug)]
+struct RepairTally {
+    pub waves: u32,
+    pub lost: u64,
+    pub above_budget_bytes: u64,
 }
 
 impl Run {
@@ -314,7 +325,7 @@ fn run(sc: &Scenario) -> Run {
                 if refused > 0 {
                     if let Some(shards) = client.refuse(frame, refused) {
                         let draw = link.draw_loss(shards);
-                        client.complete(frame, draw, now);
+                        client.complete(frame, draw, now, link.rtt_ms());
                     }
                 }
             };
@@ -344,7 +355,8 @@ fn run(sc: &Scenario) -> Run {
             } else if let Some(shards) = s.client.deliver(frame, bytes, now + link.base_delay_ms())
             {
                 let draw = link.draw_loss(shards);
-                s.client.complete(frame, draw, now + link.base_delay_ms());
+                s.client
+                    .complete(frame, draw, now + link.base_delay_ms(), link.rtt_ms());
             }
         }
         reported.clear();
@@ -387,6 +399,11 @@ fn run(sc: &Scenario) -> Run {
         }
     }
     let metrics = measure(sc, &sessions, &mut link, offered_10s, capacity_10s);
+    let repair = RepairTally {
+        waves: sessions[0].host.waves,
+        lost: sessions[0].client.frames_dropped(),
+        above_budget_bytes: sessions[0].host.wave_excess_bytes + sessions[0].client.resent_bytes,
+    };
     let mut windows = Vec::new();
     let mut ramps = Vec::new();
     let mut asks = Vec::new();
@@ -404,6 +421,7 @@ fn run(sc: &Scenario) -> Run {
         windows,
         ramps,
         asks,
+        repair,
     }
 }
 

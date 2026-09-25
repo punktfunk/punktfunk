@@ -881,6 +881,11 @@ impl Session {
         self.reassembler.take_shard_delays()
     }
 
+    /// See [`Reassembler::missing_beyond_parity`].
+    pub fn missing_beyond_parity(&self, frame_index: u32) -> Option<(u32, u32)> {
+        self.reassembler.missing_beyond_parity(frame_index)
+    }
+
     /// Negotiated wire shard payload (bytes of AU per datagram) — the window size for
     /// chunk-aligned AUs (`USER_FLAG_CHUNK_ALIGNED`).
     pub fn shard_payload(&self) -> usize {

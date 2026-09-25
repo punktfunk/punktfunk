@@ -55,3 +55,7 @@ idle_then_motion_legacy	0	11	0	6	4	0	0	1000	74053aa3
 pyrowave_pin_fit	0	1	0	0	5	0	0	1000	811c9dc5
 pyrowave_pin_holds	0	1	0	0	1	0	0	1000	811c9dc5
 calm_desktop_lossy	0	3	0	15	5	0	0	1000	ea6b71af
+wan_lone_loss_nack	0	3	5	17	40	0	0	1000	23629498
+wan_lone_loss_ack	0	3	4	11	38	0	0	1000	b1aeb373
+wan_wg_12_nack	0	3	0	0	31	0	0	1000	6edcf0ca
+wan_wg_12_ack	0	3	0	0	31	0	0	1000	6edcf0ca

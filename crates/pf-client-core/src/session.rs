@@ -124,6 +124,123 @@ pub struct LatchGrid {
     pub period_ns: std::sync::atomic::AtomicU64,
 }
 
+/// Host, pin, launch, and budget for one dial.
+///
+/// The pin is the parsed form of the plan's `host.fp_hex`. Device handles stay
+/// on [`Probes`]: a plan is serialised across the shell.
+pub struct Dial {
+    pub host: String,
+    pub port: u16,
+    pub pin: [u8; 32],
+    pub launch: Option<String>,
+    pub connect_timeout: Duration,
+}
+
+/// Device facts the plan does not own. The gamepad value is the Hello pref
+/// the caller already resolved; opening the pad service stays in the session binary.
+pub struct Probes {
+    pub mode: Mode,
+    pub vulkan: Option<crate::video::VulkanDecodeDevice>,
+    pub display_hdr: Option<punktfunk_core::quic::HdrMeta>,
+    /// This display can present HDR. Caps and the panel volume also require the
+    /// HDR setting. A panel volume may still be absent.
+    pub hdr_enabled: bool,
+    pub identity: (String, String),
+    pub gamepad: GamepadPref,
+    pub force_software: Arc<AtomicBool>,
+    pub latch_grid: Arc<LatchGrid>,
+    pub stats_verbosity: crate::trust::StatsVerbosity,
+    /// This device decodes HEVC 4:4:4. Caps AND this with the Full chroma switch.
+    pub hevc_444_hardware: bool,
+}
+
+impl SessionParams {
+    /// One fill for a resolved spec and a [`Dial`]. Probes stay off the plan.
+    ///
+    /// A zero width, height, or refresh inherits `mode`. Refresh 0 becomes
+    /// `mode.refresh_hz.max(30)`. `exclude_codecs` stays 0. `want_444` is the
+    /// switch; caps carry 4:4:4 only when `hevc_444_hardware` is set too.
+    /// HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume
+    /// follows the probe alone. The caller builds [`Probes::latch_grid`].
+    pub fn from_plan(
+        settings: &crate::trust::Settings,
+        clipboard: bool,
+        preset: Option<String>,
+        dial: Dial,
+        probes: Probes,
+    ) -> Self {
+        let mode = Mode {
+            width: if settings.width == 0 {
+                probes.mode.width
+            } else {
+                settings.width
+            },
+            height: if settings.height == 0 {
+                probes.mode.height
+            } else {
+                settings.height
+            },
+            refresh_hz: if settings.refresh_hz == 0 {
+                probes.mode.refresh_hz.max(30)
+            } else {
+                settings.refresh_hz
+            },
+        };
+        let (width, height) = punktfunk_core::render_scale::apply(
+            mode.width,
+            mode.height,
+            settings.render_scale,
+            punktfunk_core::render_scale::max_dimension(&settings.codec),
+        );
+        let mode = Mode {
+            width,
+            height,
+            ..mode
+        };
+        let phase_lock = probes.vulkan.as_ref().is_some_and(|v| v.present_timing);
+        let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
+        let advertise_hdr = settings.hdr_enabled && probes.hdr_enabled;
+        // The host writes the volume into its display's EDID, so it rides only with HDR on.
+        let display_hdr = advertise_hdr.then_some(probes.display_hdr).flatten();
+        Self {
+            host: dial.host,
+            port: dial.port,
+            mode,
+            compositor: CompositorPref::from_name(&settings.compositor)
+                .unwrap_or(CompositorPref::Auto),
+            gamepad: probes.gamepad,
+            bitrate_kbps: settings.bitrate_kbps,
+            audio_channels: settings.audio_channels,
+            audio_format: settings.audio_format.clone(),
+            preferred_codec: settings.preferred_codec(),
+            exclude_codecs: 0,
+            video_caps: crate::video::video_caps_for(advertise_hdr, settings.ten_bit_sdr, caps_444),
+            want_444: settings.enable_444,
+            display_hdr,
+            mic_enabled: settings.mic_enabled,
+            echo_cancel: settings.echo_cancel,
+            pad_haptics: settings.pad_haptics,
+            pad_speaker: settings.pad_speaker.clone(),
+            clipboard,
+            keep_host_audio: settings.keep_host_audio,
+            video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings.video_fit),
+            cursor_forward: settings.mouse_mode() == crate::trust::MouseMode::Desktop,
+            decoder: settings.decoder.clone(),
+            launch: dial.launch,
+            vulkan: probes.vulkan,
+            pin: Some(dial.pin),
+            identity: probes.identity,
+            connect_timeout: dial.connect_timeout,
+            force_software: probes.force_software,
+            preset,
+            stats_verbosity: probes.stats_verbosity,
+            advanced_stats: settings.advanced_stats,
+            phase_lock,
+            latch_grid: probes.latch_grid,
+        }
+    }
+}
+
 /// Decode-side facts the overlay window cannot read off the connector, about once a
 /// second. Levels, not a window: the presenter diffs `health` over its own window.
 #[derive(Clone, Copy, Debug, Default)]

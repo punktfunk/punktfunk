@@ -80,6 +80,8 @@ pub(super) struct DataPump {
     /// The bring-up ramp's steps and outcome, published once it stops
     /// ([`crate::client::NativeClient::abr_ramp`]).
     pub(super) abr_ramp: Arc<Mutex<Option<crate::abr::RampRecord>>>,
+    /// What a frame this pump skipped past still lacked, for the RFI line.
+    pub(super) short_frames: Arc<Mutex<ShortFrames>>,
 }
 
 /// Closed windows held for an embedder that has not read them. Forty-eight
@@ -122,6 +124,7 @@ impl DataPump {
             rate_cut,
             abr_windows,
             abr_ramp,
+            short_frames,
         } = self;
         pin_thread_user_interactive(); // frame channel → user-interactive video pump
         register_hot_tid(&pump_hot_tids); // UDP receive + FEC reassembly
@@ -198,6 +201,8 @@ impl DataPump {
         let mut standing_lat = StandingLatency::new();
         // A hole's two causes told apart: silence at the socket vs. this thread away from it.
         let mut rx_gap = super::rx_gap::RxGap::new(Instant::now());
+        // Newest video index handed on; a jump past it names a short frame.
+        let mut last_index: Option<u32> = None;
         let mut ingress_since = (Instant::now(), session.stats());
         while !pump_shutdown.load(Ordering::SeqCst) {
             // Reloaded every iteration so a mid-stream re-sync hits the
@@ -533,6 +538,14 @@ impl DataPump {
                     if frame.flags & FLAG_PROBE as u32 != 0 {
                         continue; // speed-test filler, not video — measured via the counters above
                     }
+                    // The decoder's RFI for this gap reads what the skipped frame lacks now.
+                    if let Some(first) =
+                        super::super::recovery::first_skipped(&mut last_index, frame.frame_index)
+                    {
+                        if let Some((missing, recovery)) = session.missing_beyond_parity(first) {
+                            short_frames.lock().unwrap().note(first, missing, recovery);
+                        }
+                    }
                     // Prefix parts are not AU arrivals. Inter-arrival,
                     // OWD, and the clock detector are per-AU; parts
                     // would bias OWD low and reset the staleness run.
@@ -841,6 +854,7 @@ mod tests {
             recovery_kf: Arc::new(AtomicU32::new(0)),
             abr_windows: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             abr_ramp: Arc::new(Mutex::new(None)),
+            short_frames: Default::default(),
             pipeline_gap: pipeline_gap.clone(),
             bitrate_kbps: 20_000,
             resolved_bitrate_kbps: 20_000,

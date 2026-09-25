@@ -40,6 +40,12 @@ $rel = $drivers.Substring($repoRoot.Length).TrimStart('\')
 $prevTarget = $env:CARGO_TARGET_DIR
 Remove-Item Env:\CARGO_TARGET_DIR -ErrorAction SilentlyContinue
 
+# A cancelled job leaves its drive mapped to a deleted checkout. Freeing it keeps every run on X:,
+# so the absolute paths a kept target and its CMake caches recorded stay valid.
+foreach ($m in @(& subst)) {
+    if ($m -match '^([A-Z]:)\\: => (.+)$' -and -not (Test-Path -LiteralPath $Matches[2])) { & subst $Matches[1] /D 2>&1 | Out-Null }
+}
+
 # Try each letter for real rather than asking Get-PSDrive which is free: subst mappings are
 # per-logon-session, so another job's letter looks free here and then fails to map. Giving up
 # on the first refusal is what silently drops the whole MAX_PATH defence.

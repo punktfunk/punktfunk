@@ -1,4 +1,5 @@
-//! Client-side loss-range detector (`RfiRecovery::observe`) and the recent-RFI count.
+//! Client-side loss-range detector (`RfiRecovery::observe`), the recent-RFI count, and
+//! what the short frames an RFI names still lacked.
 
 use std::time::{Duration, Instant};
 
@@ -105,9 +106,55 @@ impl RecentRfis {
     }
 }
 
+/// Gaps remembered for the RFI line. More than the frame queue holds before
+/// jump-to-live, so a gap is still here when the decoder reaches it.
+const SHORT_FRAMES: usize = 16;
+
+/// Frames the pump skipped past while they were still short, each with
+/// `(missing, recovery)` from [`crate::session::Session::missing_beyond_parity`].
+/// The pump writes on a forward gap; [`NativeClient::request_rfi`] reads the first
+/// frame of its range. Both are rare, so a lock is fine.
+///
+/// [`NativeClient::request_rfi`]: super::NativeClient::request_rfi
+#[derive(Default)]
+pub(crate) struct ShortFrames(std::collections::VecDeque<(u32, u32, u32)>);
+
+impl ShortFrames {
+    pub(crate) fn note(&mut self, frame_index: u32, missing: u32, recovery: u32) {
+        if self.0.len() == SHORT_FRAMES {
+            self.0.pop_front();
+        }
+        self.0.push_back((frame_index, missing, recovery));
+    }
+
+    /// `(missing, recovery)` for `frame_index`, if the pump saw it short.
+    pub(crate) fn get(&self, frame_index: u32) -> Option<(u32, u32)> {
+        self.0
+            .iter()
+            .rev()
+            .find(|e| e.0 == frame_index)
+            .map(|&(_, missing, recovery)| (missing, recovery))
+    }
+}
+
+/// Moves `last` to `idx` when `idx` is newer and returns the first index the jump
+/// skipped. A repeat (a later part of the same AU) and a straggler leave `last`.
+pub(crate) fn first_skipped(last: &mut Option<u32>, idx: u32) -> Option<u32> {
+    let prev = last.replace(idx)?;
+    let ahead = idx.wrapping_sub(prev);
+    if ahead == 0 || ahead >= u32::MAX / 2 {
+        *last = Some(prev);
+        return None;
+    }
+    (ahead > 1).then(|| prev.wrapping_add(1))
+}
+
 #[cfg(test)]
 mod rfi_recovery_tests {
-    use super::{RecentRfis, RecoveryAsk, RfiRecovery, RFI_THROTTLE};
+    use super::{
+        first_skipped, RecentRfis, RecoveryAsk, RfiRecovery, ShortFrames, RFI_THROTTLE,
+        SHORT_FRAMES,
+    };
     use std::time::{Duration, Instant};
 
     // Offsets from this Instant model the throttle window; do not sleep.
@@ -246,6 +293,30 @@ mod rfi_recovery_tests {
             r.observe(jump + 10, t + Duration::from_millis(1)),
             (8, RecoveryAsk::None)
         );
+    }
+
+    #[test]
+    fn a_jump_names_its_first_skipped_frame_and_parts_or_stragglers_do_not() {
+        let mut last = None;
+        assert_eq!(first_skipped(&mut last, 100), None);
+        assert_eq!(first_skipped(&mut last, 101), None);
+        assert_eq!(first_skipped(&mut last, 101), None, "a later part");
+        assert_eq!(first_skipped(&mut last, 104), Some(102));
+        assert_eq!(first_skipped(&mut last, 102), None, "a straggler");
+        assert_eq!(last, Some(104));
+        let mut last = Some(u32::MAX);
+        assert_eq!(first_skipped(&mut last, 1), Some(0));
+    }
+
+    #[test]
+    fn short_frames_keep_the_newest_and_forget_the_oldest() {
+        let mut s = ShortFrames::default();
+        for i in 0..=SHORT_FRAMES as u32 {
+            s.note(i, i + 1, 2);
+        }
+        assert_eq!(s.get(0), None, "evicted");
+        assert_eq!(s.get(1), Some((2, 2)));
+        assert_eq!(s.get(SHORT_FRAMES as u32 + 1), None, "never short");
     }
 
     #[test]

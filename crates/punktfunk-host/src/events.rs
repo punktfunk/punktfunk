@@ -407,7 +407,7 @@ pub enum EventKind {
     /// action ends this process, so "accepted with no later failure" is success.
     #[serde(rename = "action.invoked")]
     ActionInvoked {
-        /// `power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`.
+        /// `power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`, `display.next`.
         id: String,
         /// Cert-lane invoker; absent for the operator console (admin lane).
         #[serde(skip_serializing_if = "Option::is_none")]

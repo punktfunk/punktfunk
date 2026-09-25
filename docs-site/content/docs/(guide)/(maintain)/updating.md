@@ -55,8 +55,13 @@ the sysext, the sysext wins: update that instead.
 
 ### Restart after a Linux package update
 
-Packages don't restart user services. Restart the console first, then the host and the plugin
-runner:
+Every update restarts the running console, host and plugin runner for each signed-in user: pacman,
+apt, dnf, a NixOS switch, **Update now**, the Windows installer, `punktfunk-sysext update` and the
+Steam Deck script. A service you stopped stays stopped. A live stream drops when the host restarts.
+A layered rpm-ostree install moves at the reboot instead.
+
+The apt and dnf commands above update only the host; name `punktfunk-web` and `punktfunk-scripting`
+too to move all three. A source build restarts by hand, console first:
 
 ```bash
 systemctl --user restart punktfunk-web
@@ -64,9 +69,8 @@ systemctl --user restart punktfunk-host
 systemctl --user try-restart punktfunk-scripting
 ```
 
-The apt and dnf commands above update only the host; name `punktfunk-web` and `punktfunk-scripting`
-too to move all three. **Update now**, the Windows installer and `punktfunk-sysext update` restart
-for you.
+A host left running on a replaced binary fails every new KDE desktop session with
+`KWin does not expose zkde_screencast_unstable_v1 to this client` until it restarts.
 
 ### Bazzite sysext: channels, rollback and rebases
 

@@ -52,8 +52,9 @@ fn per_verb_help_answers_both_spellings() {
 }
 
 /// `default-host` is the only door to the start-screen pointer on a headless box, and the
-/// verbs that read it must refuse rather than guess. Runs against a scratch config dir —
-/// the store this writes is the developer's otherwise.
+/// verbs that read it must refuse rather than guess. Runs against a scratch directory.
+/// `PUNKTFUNK_CONFIG_DIR` is set there too, so a developer export cannot point the
+/// verb at the real identity.
 #[test]
 fn default_host_is_set_read_and_cleared() {
     let home = std::env::temp_dir().join(format!("pf-cli-default-host-{}", std::process::id()));
@@ -74,6 +75,7 @@ fn default_host_is_set_read_and_cleared() {
         Command::new(env!("CARGO_BIN_EXE_punktfunk"))
             .args(args)
             .env(if cfg!(windows) { "APPDATA" } else { "HOME" }, &home)
+            .env("PUNKTFUNK_CONFIG_DIR", &store)
             .output()
             .expect("run punktfunk")
     };

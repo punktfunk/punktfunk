@@ -472,6 +472,29 @@ fn e2e_unrecoverable_loss_ages_out() {
     assert_eq!(stats.snapshot().frames_dropped, 1);
 }
 
+/// The count the RFI line carries: what a short frame lacks past its parity.
+#[test]
+fn missing_beyond_parity_counts_what_parity_cannot_rebuild() {
+    let cfg = e2e_config(FecScheme::Gf16, 50);
+    let coder = coder_for(FecScheme::Gf16);
+    let mut pk = Packetizer::new(&cfg);
+    let stats = StatsCounters::default();
+    let mut r = Reassembler::new(ReassemblerLimits::from_config(&cfg));
+    // Frame 0: 64 B = 4 data + 2 parity. Three data lost, both parity in: one short.
+    let one = pk.packetize(&[1u8; 64], 1_000, 0, coder.as_ref()).unwrap();
+    for i in [0, 4, 5] {
+        r.push(&one[i], coder.as_ref(), &stats).unwrap();
+    }
+    assert_eq!(r.missing_beyond_parity(0), Some((1, 2)));
+    // Frame 1: 100 B = blocks (4+2) and (3+2). Block 1 never arrives: its 3 data count.
+    let two = pk.packetize(&[2u8; 100], 2_000, 0, coder.as_ref()).unwrap();
+    for i in [0, 1, 2, 3, 7, 8] {
+        r.push(&two[i], coder.as_ref(), &stats).unwrap();
+    }
+    assert_eq!(r.missing_beyond_parity(1), Some((3, 2)));
+    assert_eq!(r.missing_beyond_parity(2), None, "no shard of it arrived");
+}
+
 /// In-flight budget is [`IN_FLIGHT_BUF_FACTOR`] × max_frame_bytes, not one max-size buffer per first shard.
 #[test]
 fn in_flight_buffer_budget_bounds_allocation() {

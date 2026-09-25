@@ -98,6 +98,8 @@ pub(super) struct Link {
     wander_off: i64,
     wander_until_ms: u64,
     ge_bad: bool,
+    /// The last [`Self::nominal_kbps`], so a read of the round trip draws nothing.
+    nominal_now_kbps: u32,
 }
 
 impl Link {
@@ -112,6 +114,7 @@ impl Link {
             wander_off: 0,
             wander_until_ms: 0,
             ge_bad: false,
+            nominal_now_kbps: 1,
         }
     }
 
@@ -153,10 +156,16 @@ impl Link {
                 self.wander_off = self.rng.below(span) as i64 - self.cfg.wander_pct as i64;
                 self.wander_until_ms = now_ms + self.cfg.wander_ms;
             }
-            let scaled = base as i64 * (100 + self.wander_off) / 100;
-            return scaled.max(1) as u32;
+            base = (base as i64 * (100 + self.wander_off) / 100).max(1) as u32;
         }
+        self.nominal_now_kbps = base;
         base
+    }
+
+    /// A NACK's round trip right now: the base delay each way plus the queue a
+    /// resend waits behind. Reads state only, so a row that never asks is unmoved.
+    pub(super) fn rtt_ms(&self) -> u64 {
+        2 * self.cfg.base_delay_ms + self.depth_bytes * 8 / u64::from(self.nominal_now_kbps.max(1))
     }
 
     /// Offer bytes to the queue; the return is what the depth refused.

@@ -230,7 +230,7 @@ standard size. Native protocol only.
 | `PUNKTFUNK_MGMT_BIND` | `IP:PORT` (default `0.0.0.0:47990`) | Where the management API listens; `--mgmt-bind` overrides it. `127.0.0.1:47990` keeps it off the LAN (paired clients then can't browse your library); another port lets it share the machine with Sunshine or Apollo. The console, plugin runner and tray follow the port through the `mgmt-endpoint` file. See [another streaming host is installed](/docs/troubleshooting-connect#another-streaming-host-sunshine-apollo--is-installed). |
 | `PUNKTFUNK_UI_BIND` | address (default `0.0.0.0`) | Where the web console listens: `0.0.0.0` for your network, `127.0.0.1` for this machine, or one address such as a VPN interface. It never answers the internet. The installers ask; on NixOS use `services.punktfunk.web.bind`. |
 | `PUNKTFUNK_UI_PLUGIN_PORT` | port (default console port + 1) | The separate origin plugin pages load from. If the console log says it couldn't open, point it at a free port. |
-| `PUNKTFUNK_CONFIG_DIR` | path | The config directory (default `~/.config/punktfunk`, `%ProgramData%\punktfunk` on Windows): pairing state, certificates, `apps.json`. |
+| `PUNKTFUNK_CONFIG_DIR` | path | The config directory (default `~/.config/punktfunk`, `%ProgramData%\punktfunk` on Windows): pairing state, certificates, `apps.json`. The desktop clients read the same name for their own files — see [Client-side](#client-side-native-clients). |
 | `PUNKTFUNK_PLUGIN_SANDBOX` | `off` | Runs [plugins](/docs/plugins) without their sandboxes, with your account's access — only for a kernel that refuses unprivileged user namespaces. The runner doesn't read `host.env`: set it with `systemctl --user edit punktfunk-scripting` as `Environment=PUNKTFUNK_PLUGIN_SANDBOX=off`. |
 | `PUNKTFUNK_LIBRARY_ART_ROOTS` | directories, separated like `PATH` | Where the host may read local game art. Replaces the defaults (your home plus the system icon and Flatpak directories on Linux; `C:\Users` and your Steam and Playnite installs on Windows), so list every root. The host logs `dropped local art the proxy may not serve` when one is missing. |
 | `PUNKTFUNK_LIBRARY_ART_CACHE` | path | Where downloaded covers are kept (default under `~/.cache` or `%LOCALAPPDATA%`). `punktfunk-host library art --clear` empties it. |
@@ -264,7 +264,7 @@ The host also reads debugging variables not listed here; they change between rel
 
 ## Client-side (native clients)
 
-Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI — not the host.
+Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI — not the host. `PUNKTFUNK_AUDIO_HIRES` and `PUNKTFUNK_CONFIG_DIR` are also read by the host, each for its own files.
 
 | Variable | Values | What it does |
 |---|---|---|
@@ -275,6 +275,7 @@ Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI 
 | `PUNKTFUNK_PAD_SPEAKER_PATH` · `PUNKTFUNK_PAD_SPEAKER_VOLUME` | byte (default `0x20` / `0x7F`) | Which DualSense output [controller audio](/docs/controller-audio) plays to, and how loud. Change them only if the pad's speaker stays silent. |
 | `PUNKTFUNK_PAD_AUDIO_PROFILE` | `0` | Linux: don't switch a wired DualSense's sound card to **Pro Audio** while streaming controller audio. Without it the voice coils fold into the speaker pair. |
 | `PUNKTFUNK_OSD_SCALE` | multiplier (default `1`) | Size of the in-stream overlay on top of display scaling, from 0.5 to 4. |
+| `PUNKTFUNK_CONFIG_DIR` | path | Where this client keeps its identity, saved hosts and settings (default `~/.config/punktfunk`, `%APPDATA%\punktfunk` on Windows). Empty is ignored. Moving it moves that identity, so paired hosts need pairing again. The Flatpak only sees `~/.config/punktfunk`. The private key is readable only by the account that created it. |
 | `PUNKTFUNK_AUDIO_HIRES` | `1` · `48000` · `96000` · `<rate>/<bits>` · `0` | Asks for lossless audio, over the client's audio-format setting: `1` is 96 kHz/24-bit, a bare rate is 24-bit, `48000/16` is the cheapest. `0` or empty forces Opus; anything else is ignored. The host's **Lossless audio** reads the same name as on/off. |
 | `PUNKTFUNK_NO_AEC` | `1` | Turn microphone echo cancellation off for this run. |
 | `PUNKTFUNK_PRESENT_MODE` | `mailbox` · `fifo` · `immediate` · `fifo_relaxed` | Vulkan present mode. With V-sync on the default is `mailbox`, else `fifo` (AMD's Windows driver has no mailbox); with V-sync off `immediate` comes first. |

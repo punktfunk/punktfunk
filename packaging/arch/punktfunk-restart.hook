@@ -1,0 +1,13 @@
+# Restart the running host, web console and plugin runner once the transaction is done.
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = punktfunk-host
+Target = punktfunk-web
+Target = punktfunk-scripting
+Target = punktfunk-bun
+
+[Action]
+Description = Restarting the punktfunk services...
+When = PostTransaction
+Exec = /usr/lib/punktfunk/restart-user-units

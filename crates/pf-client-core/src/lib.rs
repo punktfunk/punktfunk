@@ -25,7 +25,7 @@ pub mod audio_vitals;
 // Priority for threads that feed the device callbacks (decode, pad-audio, WASAPI). rtkit / Realtime portal on Linux, MMCSS on Windows.
 #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
 pub mod audio_rt;
-#[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
+#[cfg(all(feature = "discovery", any(target_os = "linux", windows)))]
 pub mod discovery;
 #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
 pub mod gamepad;
@@ -190,6 +190,14 @@ pub mod trust;
 pub mod update;
 #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
 pub mod video;
+// Decode counters, picture shape, and the DXGI driver-version split.
+// Built for `desktop`, or Windows `d3d11va` alone. `video` re-exports them
+// when the ladder is built; this module is the path when it is not.
+#[cfg(any(
+    all(feature = "desktop", any(target_os = "linux", windows)),
+    all(feature = "d3d11va", windows),
+))]
+pub mod video_types;
 // Colour vocabulary + the CSC coefficient rows. Portable (no ash, no decode ladder): the
 // PyroWave lane needs them on Android too, where `video` itself is not built.
 #[cfg(any(target_os = "linux", windows, target_os = "android"))]
@@ -215,11 +223,11 @@ mod video_vk_native;
 #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
 pub mod clipboard;
 // D3D11 decode-device: shareable-texture hand-off ring, device creation, `display_hdr_volume`. `video_d3d11_native` and `clients/session` build on it.
-#[cfg(all(feature = "desktop", windows))]
+#[cfg(all(feature = "d3d11va", windows))]
 pub mod video_d3d11;
 // Native D3D11VA: `ID3D11VideoDecoder` from pf-bitstream plans into `video_d3d11`'s hand-off ring.
 // Only DXVA rung; in `auto` for H.264/H.265/AV1. Pin `PUNKTFUNK_DECODER=native-d3d11va`. Evidence: `video`.
-#[cfg(all(feature = "desktop", windows))]
+#[cfg(all(feature = "d3d11va", windows))]
 pub mod video_d3d11_native;
 // PyroWave: Vulkan compute on the device the frame is presented from (no fds, no dmabuf,
 // no D3D11 interop). Linux + Windows + Android; Apple Metal is a separate port.

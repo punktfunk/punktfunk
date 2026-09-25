@@ -10,6 +10,9 @@ repository.workspace = true
 
 [dependencies]
 punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
+# Same identity files as the desktop client. Default features would pull the desktop
+# ladder into this binary; the probe only needs the store.
+pf-client-core = { path = "../../crates/pf-client-core", default-features = false }
 # Backend features mirror punktfunk-core's quinn exactly (see its Cargo.toml).
 quinn = { version = "0.11", default-features = false, features = [
     "log",

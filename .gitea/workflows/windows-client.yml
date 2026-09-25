@@ -315,6 +315,17 @@ jobs:
           cargo test --release --locked -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-presenter -p pf-console-ui -p pf-dxvadec --target ${{ matrix.target }}
           if ($LASTEXITCODE) { throw "tests" }
 
+      # d3d11va without desktop. The release build above enables desktop, so it never
+      # compiles this feature alone. Same release target dir, and desktop is off, so this
+      # does not rebuild openh264 or open a second debug tree (the C1069 failure).
+      # Clippy with warnings denied, same as the job above. `cargo check` would stay green.
+      - name: Clippy d3d11va without desktop
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          cargo clippy --release --locked -p pf-client-core --no-default-features --features d3d11va --target ${{ matrix.target }} -- -D warnings
+          if ($LASTEXITCODE) { throw "d3d11va clippy" }
+
       - name: sccache stats (visibility only)
         if: always()
         shell: pwsh

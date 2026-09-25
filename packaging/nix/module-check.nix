@@ -361,13 +361,25 @@ let
       ok = !(has noScripting "punktfunk-host" "/pf-stub/punktfunk-scripting/bin");
     }
 
+    # --- a switch that changes a package restarts the running user services --------------------
+    {
+      name = "a host package change reloads the unit that restarts the user services";
+      ok =
+        let
+          u = desktop.systemd.services.punktfunk-restart-user-units;
+        in
+        lib.elem desktop.services.punktfunk.host.package u.reloadTriggers
+        && lib.hasInfix "restart-user-units" u.serviceConfig.ExecReload;
+    }
+
     # --- the client half must not drag the host's system wiring in -----------------------------
     {
       name = "a client-only machine defines no host/web/scripting units";
       ok =
         !(clientOnly.systemd.user.services ? punktfunk-host)
         && !(clientOnly.systemd.user.services ? punktfunk-web)
-        && !(clientOnly.systemd.user.services ? punktfunk-scripting);
+        && !(clientOnly.systemd.user.services ? punktfunk-scripting)
+        && !(clientOnly.systemd.services ? punktfunk-restart-user-units);
     }
   ];
 

@@ -9,6 +9,7 @@
 
 use crate::deeplink::{DeepLink, HostResolution, Route};
 use crate::presets::{PresetsFile, Resolution, StreamPreset};
+use crate::session::{Dial, Probes, SessionParams};
 use crate::trust::{KnownHost, KnownHosts, Settings};
 use serde::{Deserialize, Serialize};
 use std::process::{Child, Command, Stdio};
@@ -16,6 +17,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::Duration;
 
 /// Dial target as values. A plan-holder has no [`KnownHost`] in hand.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -71,6 +73,9 @@ pub struct ConnectPlan {
     /// does not look it up again.
     pub clipboard: bool,
 }
+
+/// Handshake budget when the plan and `--connect-timeout` both omit one.
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 15;
 
 impl ConnectPlan {
     /// Card-click plan. `one_off_preset`: `Some("")` forces the global defaults on a
@@ -195,6 +200,27 @@ impl ConnectPlan {
         // No `--window-pos`: Wayland compositors own placement, so the flag is a silent
         // no-op from GTK/CLI. Windows appends its own. An X11-only special case is drift.
         args
+    }
+
+    /// Pump parameters for this plan. Device probes stay off it: the plan is
+    /// what a shell serialises, and it must not carry a device handle.
+    ///
+    /// The pin is the parsed form of [`HostTarget::fp_hex`]. An unset
+    /// [`Self::connect_timeout_secs`] is [`DEFAULT_CONNECT_TIMEOUT_SECS`].
+    pub fn session_params(&self, pin: [u8; 32], probes: Probes) -> SessionParams {
+        self.spec(self.clipboard).session_params(
+            Dial {
+                host: self.host.addr.clone(),
+                port: self.host.port,
+                pin,
+                launch: self.launch.clone(),
+                connect_timeout: Duration::from_secs(
+                    self.connect_timeout_secs
+                        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS),
+                ),
+            },
+            probes,
+        )
     }
 }
 
@@ -503,6 +529,19 @@ impl ResolvedSpec {
         serde_json::from_str(&text)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
+
+    /// Pump parameters for a direct connect. Same fill as
+    /// [`ConnectPlan::session_params`]. Host, pin, launch, and timeout come from
+    /// the command line; this spec already holds settings, clipboard, and preset.
+    pub fn session_params(&self, dial: Dial, probes: Probes) -> SessionParams {
+        SessionParams::from_plan(
+            &self.settings,
+            self.clipboard,
+            self.preset.clone(),
+            dial,
+            probes,
+        )
+    }
 }
 
 /// One event from the session child's stdout contract (`{"ready":true}`,
@@ -724,6 +763,9 @@ pub fn exec_session(plan: &ConnectPlan) -> std::io::Error {
 mod tests {
     use super::*;
     use crate::deeplink;
+    use crate::trust::StatsVerbosity;
+    use punktfunk_core::config::{GamepadPref, Mode};
+    use punktfunk_core::quic::HdrMeta;
 
     fn host(name: &str, addr: &str, id: &str, fp: &str) -> KnownHost {
         KnownHost {
@@ -1035,5 +1077,113 @@ mod tests {
         assert_eq!(parse_session_line(r#"stats-json: {"received":60}"#), None);
         assert_eq!(parse_session_line(""), None);
         assert_eq!(parse_session_line(r#"{"other":1}"#), None);
+    }
+
+    /// No GPU and no store. Host, launch, clipboard, timeout, bitrate, and codec
+    /// come from the plan. Caps are the wire bits, not whatever the helper returns.
+    #[test]
+    fn session_params_carry_the_plan_without_a_gpu() {
+        let h = host(
+            "Desk",
+            "192.168.1.50",
+            "11111111-2222-4333-8444-555555555555",
+            &"ab".repeat(32),
+        );
+        let plan = ConnectPlan {
+            host: HostTarget::from(&h),
+            launch: Some("steam:570".into()),
+            preset: None,
+            preset_override: None,
+            settings: Settings {
+                bitrate_kbps: 42_000,
+                codec: "av1".into(),
+                enable_444: true,
+                ..Default::default()
+            },
+            wake: false,
+            connect_timeout_secs: Some(45),
+            tofu: false,
+            clipboard: true,
+        };
+        let force_software = Arc::new(AtomicBool::new(false));
+        let latch_grid = Arc::new(crate::session::LatchGrid::default());
+        let probes = |hdr_enabled: bool, hevc_444_hardware: bool| Probes {
+            mode: Mode {
+                width: 2560,
+                height: 1440,
+                refresh_hz: 10,
+            },
+            identity: ("client".into(), "desk".into()),
+            vulkan: None,
+            force_software: Arc::clone(&force_software),
+            gamepad: GamepadPref::Xbox360,
+            hdr_enabled,
+            display_hdr: Some(HdrMeta::default()),
+            hevc_444_hardware,
+            stats_verbosity: StatsVerbosity::Detailed,
+            latch_grid: Arc::clone(&latch_grid),
+        };
+        let params = plan.session_params([9; 32], probes(false, false));
+        assert_eq!(params.host, plan.host.addr);
+        assert_eq!(params.port, plan.host.port);
+        assert_eq!(params.launch, plan.launch);
+        assert_eq!(params.clipboard, plan.clipboard);
+        assert_eq!(
+            params.connect_timeout,
+            Duration::from_secs(plan.connect_timeout_secs.unwrap())
+        );
+        assert_eq!(params.bitrate_kbps, plan.settings.bitrate_kbps);
+        assert_ne!(plan.settings.bitrate_kbps, Settings::default().bitrate_kbps);
+        assert_eq!(params.preferred_codec, punktfunk_core::quic::CODEC_AV1);
+        assert_ne!(plan.settings.codec, Settings::default().codec);
+        assert_eq!(params.exclude_codecs, 0);
+        assert_eq!(params.want_444, plan.settings.enable_444);
+        assert!(params.vulkan.is_none());
+        assert!(params.display_hdr.is_none());
+        assert!(!params.phase_lock);
+        assert_eq!(
+            params.video_caps,
+            punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE
+        );
+        assert_eq!(
+            params.mode,
+            Mode {
+                width: 2560,
+                height: 1440,
+                refresh_hz: 30,
+            }
+        );
+        assert_eq!(params.pin, Some([9; 32]));
+        assert_eq!(params.identity, ("client".into(), "desk".into()));
+        assert_eq!(params.gamepad, GamepadPref::Xbox360);
+        assert_eq!(params.stats_verbosity, StatsVerbosity::Detailed);
+        assert!(Arc::ptr_eq(&params.force_software, &force_software));
+        assert!(Arc::ptr_eq(&params.latch_grid, &latch_grid));
+
+        let hdr = plan.session_params([9; 32], probes(true, false));
+        assert_eq!(
+            hdr.video_caps,
+            punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE
+                | punktfunk_core::quic::VIDEO_CAP_10BIT
+                | punktfunk_core::quic::VIDEO_CAP_HDR
+        );
+        assert!(hdr.display_hdr.is_some());
+
+        let chroma = plan.session_params([9; 32], probes(false, true));
+        assert_eq!(
+            chroma.video_caps,
+            punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE | punktfunk_core::quic::VIDEO_CAP_444
+        );
+        assert!(chroma.want_444);
+        assert!(chroma.display_hdr.is_none());
+
+        let mut declined = plan.clone();
+        declined.settings.hdr_enabled = false;
+        let off = declined.session_params([9; 32], probes(true, false));
+        assert_eq!(off.video_caps, punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE);
+        assert!(
+            off.display_hdr.is_none(),
+            "the volume stays off with HDR off"
+        );
     }
 }

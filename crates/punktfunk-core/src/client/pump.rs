@@ -88,6 +88,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         abr_windows,
         abr_ramp,
         recent_rfis,
+        short_frames,
         audio_mute,
         pad_slots,
         launch_outcome,
@@ -342,6 +343,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         rate_cut,
         abr_windows,
         abr_ramp,
+        short_frames,
     };
     let _ = tokio::task::spawn_blocking(move || pump.run()).await;
 
