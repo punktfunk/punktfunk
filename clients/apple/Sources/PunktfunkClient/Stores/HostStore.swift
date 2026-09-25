@@ -208,6 +208,23 @@ final class HostStore: ObservableObject {
         probedOnline = online
     }
 
+    /// Presence while a home is on screen, touch or console: a sweep every 10 s, and each
+    /// reachable paired host's actions and running title kept warm on the same beat, so a
+    /// card's menu is built from a settled answer. Both are TTL-gated inside. Run it from the
+    /// home's `.task`; it returns when that task is cancelled.
+    func keepPresence(
+        discovery: HostDiscovery, power: HostPowerStore, nowPlaying: NowPlayingStore
+    ) async {
+        while !Task.isCancelled {
+            await refreshReachability(discovery: discovery)
+            for host in hosts where host.pinnedSHA256 != nil && probedOnline.contains(host.id) {
+                power.refresh(host)
+                nowPlaying.refresh(host)
+            }
+            try? await Task.sleep(for: .seconds(10))
+        }
+    }
+
     #if DEBUG
     /// A seeded reachable set is in force — the sweep must not replace it with live probes.
     private var probePinned = false

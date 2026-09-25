@@ -48,6 +48,12 @@ struct ConsoleHomeView: View {
                 console?.detach()
                 console = nil
             }
+            // The console's host rows read the same sweep as the touch home, and nothing else
+            // runs it while the console is up.
+            .task {
+                await store.keepPresence(
+                    discovery: discovery, power: .shared, nowPlaying: .shared)
+            }
             .onChange(of: model.phase) { was, now in report(from: was, to: now) }
             .onChange(of: model.errorMessage) { _, message in
                 // The app's "Connection failed" alert stays down while the console is up, so the
