@@ -14,6 +14,74 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.40.0
+
+378 commits since v0.39.0. Wire stays 2. C ABI stays 37. Driver protocol floor stays 9.
+Deep dive: `git log v0.39.0..v0.40.0`
+
+### Versions
+
+| | v0.39.0 | v0.40.0 | Notes |
+|---|---|---|---|
+| Wire protocol | 2 | **2** | unchanged; control message 12 `LINK_REPORT` carries the bring-up ramp's proven rate for a pinned stream, ignored by an older host |
+| C ABI | 37 | **37** | unchanged. A second header, `include/punktfunk_console.h`, is the shared console's C surface for the Apple shell; it has no version constant and ships only inside the xcframework. `punktfunk_core.h` gains `PUNKTFUNK_MSG_LINK_REPORT` |
+| Rust edition | 2024 | **2024** | unchanged |
+| MSRV (`rust-version`) | 1.85 | **1.85** | unchanged |
+| Workspace crate dirs | 32 | **32** | unchanged; `clients/apple/native` joins the workspace members and is now the xcframework's library |
+| Virtual-display driver protocol | 9 | **9** | unchanged; a 0.39.0 display driver serves a 0.40.0 host. IddCx cursor positions are monitor-relative, so the host stamps the cursor section's `origin_x`/`origin_y` 0, which an older driver subtracts harmlessly |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged; the gamepad driver stamps a behaviour revision beside it, and the host warns on a stale or mismatched driver |
+| Plugin index schema | 1 | **1** | unchanged |
+| Host event schema | 1 | **1** | unchanged |
+| `api/openapi.json` | 0.39.0 | **0.40.0** | setting `kind` gains `decimal` (`min`/`max` become numbers); `PUT /library/provider/{p}/running` and `PUT /library/scanners/{id}` answer 403 to another plugin's token |
+| gamescope patch level (`+pfhdrN`) | 21 | **23** | Patches 0026–0028: LINEAR two-plane (NV12/P010) buffers export both planes at the driver's offset and stride, the composited cursor repaints on a shape change, a destroyed surface drops its cached pointer bound |
+| `@punktfunk/host` (SDK) | 0.2.0 | **0.2.0** | unchanged on npm; the runner the host packages ship (`punktfunk-scripting`) carries the sandbox fixes |
+| `@punktfunk/plugin-kit` | 0.5.2 | **0.5.3** | A failed folder request no longer stops a scan; peer range admits `@punktfunk/host` 0.2. The 0.4 line is 0.4.9 |
+
+### Breaking
+
+- **100.64/10 is local only over Tailscale.** A peer there passes the console's non-local
+  refusal and pairs as LAN only when the host routes its replies out of a `tailscale*` or
+  `utun*` interface. NetBird (`wt0`) or a renamed tun on Linux and Windows now reads as remote.
+- **Plugin tokens and grants live in `~/.config/punktfunk/plugin-run/`**, bound read-only as a
+  directory and migrated once without rotating a token; the old files stay. The runner unit's
+  `ExecStartPre` creates `plugin-run` and `plugin-state`, in `scripts/punktfunk-scripting.service`
+  and the NixOS module alike.
+- **`PUNKTFUNK_PLUGIN_SANDBOX` is read from the runner's own unit**, never host.env:
+  `systemctl --user edit punktfunk-scripting`.
+- **The runner refuses binds that reach the host**: `/proc`, `/run/user/<uid>`, `plugin-run`
+  and `~/.ssh` in either spelling of a linked home. Manifests come only from the plugins dir's own
+  dependencies, an id is one lowercase path component, and an id two packages claim is refused.
+- **Only the official source installs `@punktfunk/*` packages.** A third-party source keeps
+  its own scopes.
+- **The xcframework is arm64 only**: no x86_64 macOS library or simulator slices. It now
+  links `punktfunk-core` whole plus the console C ABI; Swift's calls into core are unchanged.
+
+### Knobs
+
+- `PUNKTFUNK_PYROWAVE_BPP` (0.25–4, default 1.6) / registry row `pyrowave_bpp`, the first
+  `decimal` row.
+- `PUNKTFUNK_XBOX_BACKEND=hid|xusb` still forces; the default is XUSB where `xinputhid` is not
+  registered, HID where it is. Xbox pads enumerate under `VID_045E&PID_…`.
+- Android: `debug.punktfunk.low_latency_key` (`standard` | `off` | `mtk-tv`) overrides the
+  decoder's low-latency keys. JNI, additive: `nativeConsoleSetLicenses`,
+  `nativeConsoleSetPadTest`, `nativeLogDisplay`.
+- Apple: `PUNKTFUNK_LATE_LATCH=off|<ms>` overrides the late-latch budget,
+  `PUNKTFUNK_PRESENTER=decoded` keeps tvOS on the decoded video plane, and
+  `PUNKTFUNK_DEMO_FLASH=<label>` turns the demo host into a latency flash.
+- CLI: `punktfunk-host settings set <key> <json>` writes one Host → Settings row to
+  `host-settings.json` without a running host. Installers use it for GameStream instead of
+  `--gamestream` or host.env, and an update moves an older unit's flag into the store.
+- PyroWave: `PYROWAVE_QUEUE_PRIORITY` unset on NVIDIA now means HIGH; `realtime` keeps the old
+  ladder. `PUNKTFUNK_PERF` splits each encode into GPU-timed stages. The probe's
+  `--link-kbps` sends a link report without a ramp.
+- Console C ABI: pushes 16–18 (`PROMPT`, `LICENSES`, `PAD_TEST`) and
+  `punktfunk_console_palettes()`.
+- Diagnostics: the capture provenance line carries `cpu_fallbacks=` and `held_drops`, the
+  PipeWire library version is logged, and a `pad_driver` diagnostics row reports the gamepad
+  driver's verdict.
+- Packaging: bun 1.4.2, hash-pinned on every channel (Nix flake overlay; baseline builds for
+  deb, rpm, Arch and Windows x64). The Flatpak metainfo carries a `<release>` per stable tag.
+
 ## v0.39.0
 
 505 commits since v0.38.0. Wire stays 2. **C ABI 37**, additive. Driver protocol floor stays 9.

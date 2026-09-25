@@ -84,6 +84,12 @@
   </branding>
 
   <releases>
+    <release version="0.40.0" date="2026-09-25">
+      <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.40.0</url>
+      <description>
+        <p>The console is rebuilt for the TV remote, with Hosts, Games, Controllers and Settings tabs and a Games tab laid out like the Mac library.</p>
+      </description>
+    </release>
     <release version="0.39.0" date="2026-09-20">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.39.0</url>
       <description>

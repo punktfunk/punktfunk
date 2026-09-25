@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "cursor-probe"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "pf-capture",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "display-disturb"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-win-display",
  "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "fence-ring-spike"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2458,7 +2458,7 @@ dependencies = [
 
 [[package]]
 name = "latency-probe"
-version = "0.39.0"
+version = "0.40.0"
 
 [[package]]
 name = "lazy_static"
@@ -2561,7 +2561,7 @@ dependencies = [
 
 [[package]]
 name = "libvpl-sys"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "bindgen",
  "cmake",
@@ -2596,7 +2596,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "loss-harness"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "punktfunk-core",
 ]
@@ -3107,7 +3107,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pf-bitstream"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "cros-codecs",
  "tracing",
@@ -3115,7 +3115,7 @@ dependencies = [
 
 [[package]]
 name = "pf-capture"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -3140,7 +3140,7 @@ dependencies = [
 
 [[package]]
 name = "pf-client-core"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ash",
@@ -3180,7 +3180,7 @@ dependencies = [
 
 [[package]]
 name = "pf-clipboard"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -3199,7 +3199,7 @@ dependencies = [
 
 [[package]]
 name = "pf-console-ui"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ash",
@@ -3223,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "pf-dxvadec"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "cros-codecs",
  "pf-bitstream",
@@ -3233,7 +3233,7 @@ dependencies = [
 
 [[package]]
 name = "pf-encode"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ash",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "pf-encode-win"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "libvpl-sys",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "pf-frame"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -3289,7 +3289,7 @@ dependencies = [
 
 [[package]]
 name = "pf-gpu"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "pf-host-config",
@@ -3303,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "pf-host-config"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-paths",
  "serde_json",
@@ -3311,7 +3311,7 @@ dependencies = [
 
 [[package]]
 name = "pf-inject"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -3340,7 +3340,7 @@ dependencies = [
 
 [[package]]
 name = "pf-libva"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "cros-codecs",
@@ -3352,14 +3352,14 @@ dependencies = [
 
 [[package]]
 name = "pf-paths"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "pf-paths-win"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "tracing",
  "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3367,7 +3367,7 @@ dependencies = [
 
 [[package]]
 name = "pf-presenter"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ash",
@@ -3386,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "pf-update"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3394,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "pf-update-check"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -3406,7 +3406,7 @@ dependencies = [
 
 [[package]]
 name = "pf-vaapi"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "cros-codecs",
  "pf-bitstream",
@@ -3415,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "pf-vdisplay"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -3448,7 +3448,7 @@ dependencies = [
 
 [[package]]
 name = "pf-vkdecode"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "ash",
  "cros-codecs",
@@ -3459,7 +3459,7 @@ dependencies = [
 
 [[package]]
 name = "pf-win-display"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-paths",
  "punktfunk-core",
@@ -3470,7 +3470,7 @@ dependencies = [
 
 [[package]]
 name = "pf-zerocopy"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ash",
@@ -3712,7 +3712,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-cli"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-client-core",
  "punktfunk-core",
@@ -3722,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-client-android"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -3747,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-client-apple"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "cbindgen",
  "pf-client-core",
@@ -3761,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-client-linux"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3778,7 +3778,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-client-session"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-client-core",
  "pf-console-ui",
@@ -3792,7 +3792,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-client-windows"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-client-core",
  "punktfunk-core",
@@ -3808,7 +3808,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-core"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "aes-gcm",
  "aws-lc-rs",
@@ -3844,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-encode-worker"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-encode",
  "tracing",
@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-host"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3926,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-probe"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "mdns-sd",
@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-setup"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "console",
  "getrandom 0.3.4",
@@ -3953,7 +3953,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-setup-win"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "pf-paths",
  "pf-paths-win",
@@ -3973,7 +3973,7 @@ dependencies = [
 
 [[package]]
 name = "punktfunk-tray"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "ksni",
@@ -3997,7 +3997,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "pyrowave-sys"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "bindgen",
  "cmake",
@@ -4593,7 +4593,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scroll-probe"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "pf-inject",
