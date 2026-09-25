@@ -55,6 +55,10 @@
 // Only `PUNKTFUNK_GAMEPAD_STEAMCONTROLLER2` emits these; others drop.
 #define PUNKTFUNK_HIDOUT_HID_RAW 6
 
+// `PunktfunkHidOutput::kind`: DualSense microphone-mute LED. `which` = mode (0 off, 1 on,
+// 2 pulse).
+#define PUNKTFUNK_HIDOUT_MIC_LED 7
+
 // Capacity of `PunktfunkHidOutput::effect` (DualSense trigger parameter block).
 #define PUNKTFUNK_HID_EFFECT_MAX 11
 

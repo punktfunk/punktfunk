@@ -680,7 +680,8 @@ object NativeBridge {
      * Block up to ~100 ms for the next HID-output event, written into [buf] (a direct ByteBuffer,
      * capacity >= 128) as `[pad][kind][fields…]` (leading pad = the wire pad index to route to):
      * Led=pad 01 r g b, PlayerLeds=pad 02 bits, Trigger=pad 03 which effect…, raw as-is
-     * passthrough report=pad 05 kind report-bytes (kind 0 = output report, 1 = feature report).
+     * passthrough report=pad 05 kind report-bytes (kind 0 = output report, 1 = feature report),
+     * MicLed=pad 07 mode.
      * Returns the byte count, or -1 on timeout / session closed.
      */
     external fun nativeNextHidout(handle: Long, buf: java.nio.ByteBuffer): Int

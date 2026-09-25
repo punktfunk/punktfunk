@@ -953,6 +953,9 @@ pub const PUNKTFUNK_HIDOUT_AUDIO_CTL: u8 = 5;
 /// Raw hidraw report to replay (`HidRaw`). `hid_kind` + `raw`/`raw_len` valid.
 /// Only `PUNKTFUNK_GAMEPAD_STEAMCONTROLLER2` emits these; others drop.
 pub const PUNKTFUNK_HIDOUT_HID_RAW: u8 = 6;
+/// `PunktfunkHidOutput::kind`: DualSense microphone-mute LED. `which` = mode (0 off, 1 on,
+/// 2 pulse).
+pub const PUNKTFUNK_HIDOUT_MIC_LED: u8 = 7;
 /// Capacity of `PunktfunkHidOutput::effect` (DualSense trigger parameter block).
 pub const PUNKTFUNK_HID_EFFECT_MAX: u8 = 11;
 
@@ -1060,6 +1063,11 @@ impl PunktfunkHidOutput {
                 out.which = *flags;
                 out.effect[0..6].copy_from_slice(raw);
                 out.effect_len = 6;
+            }
+            HidOutput::MicLed { pad, mode } => {
+                out.kind = PUNKTFUNK_HIDOUT_MIC_LED;
+                out.pad = *pad;
+                out.which = *mode;
             }
         }
         out
@@ -6445,6 +6453,16 @@ mod tests {
         assert_eq!(out.effect[..6], [0x50, 0x60, 0x70, 0x05, 0, 0]);
         assert_eq!(out.effect[6..], [0; 5]);
         assert_eq!(out.raw_len, 0);
+    }
+
+    /// MicLed maps to kind 7 with the mode in `which`.
+    #[test]
+    fn hidout_abi_maps_mic_led() {
+        let out = PunktfunkHidOutput::from_hid(&crate::quic::HidOutput::MicLed { pad: 2, mode: 2 });
+        assert_eq!(out.kind, PUNKTFUNK_HIDOUT_MIC_LED);
+        assert_eq!(out.pad, 2);
+        assert_eq!(out.which, 2);
+        assert_eq!(out.effect_len, 0);
     }
 
     /// HidRaw maps to kind 6 + `hid_kind`/`raw`/`raw_len`, not a skip.
