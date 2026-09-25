@@ -149,7 +149,7 @@ export interface ServeUiGame<S extends Schema.Top> {
 }
 
 /** Library ids are `<store>:<external id>`; the external part is the provider's own. */
-const validEntryId = (id: string): boolean =>
+export const validEntryId = (id: string): boolean =>
 	id.length > 0 &&
 	id.length <= 256 &&
 	id.includes(":") &&
@@ -266,6 +266,11 @@ export interface ServeUiOptions {
 	 */
 	readonly game?: ServeUiGame<Schema.Top>;
 	/**
+	 * Serve `/__metadata/*`: an Art & Metadata source's status and the console's Choose dialog.
+	 * Built by `defineMetadataPlugin`; same auth as `config`.
+	 */
+	readonly metadata?: (req: Request) => Promise<Response>;
+	/**
 	 * The plugin API: `HttpApiBuilder.layer(api)` + group handler layers + raw routes
 	 * (e.g. `sseRoute`), with plugin services already provided. `httpApiEnv` is provided
 	 * here — only `HttpRouter` may remain open.
@@ -317,6 +322,11 @@ export const serveUi = (
 			}
 			if (url.pathname === "/__game") {
 				return serveGame?.(req) ?? new Response("not found", { status: 404 });
+			}
+			if (url.pathname.startsWith("/__metadata/")) {
+				return (
+					opts.metadata?.(req) ?? new Response("not found", { status: 404 })
+				);
 			}
 			if (!url.pathname.startsWith(prefix)) return undefined; // → static SPA
 			return handler(req);

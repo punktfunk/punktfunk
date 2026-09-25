@@ -38,6 +38,10 @@
 			"types": "./dist/library/index.d.ts",
 			"default": "./dist/library/index.js"
 		},
+		"./metadata": {
+			"types": "./dist/metadata/index.d.ts",
+			"default": "./dist/metadata/index.js"
+		},
 		"./theme.css": "./dist/theme.css"
 	},
 	"files": [

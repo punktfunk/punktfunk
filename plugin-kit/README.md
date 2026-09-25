@@ -38,6 +38,23 @@ export const plugin = defineLibraryPlugin({
 export default plugin.def; // what the runner loads; `plugin.cli()` is the CLI entry
 ```
 
+An Art & Metadata source fills art and details for games other plugins list. It is its matching
+and fetching; `defineMetadataPlugin` reads the library, caches what it found, pushes the result and
+serves the console's Choose dialog:
+
+```ts
+import { defineMetadataPlugin } from "@punktfunk/plugin-kit/metadata";
+
+export const plugin = defineMetadataPlugin({
+  name: "covers",
+  configSchema: Schema.Struct({}),
+  matching: "search", // "exact" if you only match by entry ids
+  offers: { art: ["portrait"] },
+  match: (entry) => Effect.succeed({ key: entry.title, label: entry.title }),
+  fetch: (match) => Effect.succeed({ art: { portrait: `https://example.com/${match.key}.png` } }),
+});
+```
+
 Any other plugin uses `definePluginKit({ name, layer, main })`, and `serveUi(...)` for a page in the
 web console, a settings form (`config`) or a tab on each library entry's page (`game`, with
 `handedPath()` for folders the operator types in).
@@ -46,6 +63,7 @@ web console, a settings form (`config`) or a tab on each library entry's page (`
 |---|---|
 | `@punktfunk/plugin-kit` | `definePluginKit`, config and cache stores, the sync engine, `serveUi`, `requestAccess`, the CLI scaffold |
 | `@punktfunk/plugin-kit/library` | `defineLibraryPlugin`, parsers for VDF, SQLite and the Windows registry, the parity check |
+| `@punktfunk/plugin-kit/metadata` | `defineMetadataPlugin`, the rules for which entries a source looks up |
 | `@punktfunk/plugin-kit/wire` | The library wire schemas: `ProviderEntry`, `LaunchSpec` and its launch kinds |
 | `@punktfunk/plugin-kit/react` | Browser helpers for a plugin's console page |
 | `@punktfunk/plugin-kit/theme.css` | The console's colours for a plugin's page |

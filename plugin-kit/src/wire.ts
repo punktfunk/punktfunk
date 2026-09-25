@@ -163,6 +163,15 @@ export const GameMeta = Schema.Struct({
 });
 export type GameMeta = typeof GameMeta.Type;
 
+/**
+ * Catalog ids an Art & Metadata source matches on, set by the plugin that lists the entry:
+ * `steam` → appid, `gog` → product id, `epic` → catalog item id, `libretro` →
+ * `<libretro system>/<No-Intro name>`, `sgdb` → SteamGridDB game id. Keys `[a-z0-9_]{1,16}`,
+ * values at most 256 characters, at most eight; the host drops a bad pair.
+ */
+export const EntryIds = Schema.Record(Schema.String, Schema.String);
+export type EntryIds = typeof EntryIds.Type;
+
 export const ProviderEntry = Schema.Struct({
 	external_id: Schema.String,
 	title: Schema.String,
@@ -193,6 +202,32 @@ export const ProviderEntry = Schema.Struct({
 	 * has real cover art, which beats a brand mark every time.
 	 */
 	icon: Schema.optionalKey(Schema.String),
+	ids: Schema.optionalKey(EntryIds),
 	...GameMeta.fields,
 });
 export type ProviderEntry = typeof ProviderEntry.Type;
+
+/** One of an entry's four art slots. */
+export const ArtKind = Schema.Literals(["portrait", "hero", "logo", "header"]);
+export type ArtKind = typeof ArtKind.Type;
+export const ART_KINDS: ReadonlyArray<ArtKind> = [
+	"portrait",
+	"hero",
+	"logo",
+	"header",
+];
+
+/** A `GameMeta` field a metadata source may fill. */
+export type MetaField = keyof GameMeta;
+
+/**
+ * One row of an Art & Metadata source's push (`PUT /library/metadata/{source}`). Art is
+ * `http(s)` URLs only; the host fetches and keeps them like a provider's CDN art.
+ */
+export const MetadataEntry = Schema.Struct({
+	/** Library id, as `GET /library` lists it. */
+	id: Schema.String,
+	art: Schema.optionalKey(Artwork),
+	meta: Schema.optionalKey(GameMeta),
+});
+export type MetadataEntry = typeof MetadataEntry.Type;
