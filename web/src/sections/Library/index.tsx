@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { LibraryGridSection } from "./LibraryGrid";
+import { MetadataSourcesSection } from "./MetadataSources";
 import { SourcesSection } from "./Sources";
 
 // Library = the sources and the OVERVIEW grid. Adding or editing an entry happens on its own page
@@ -32,6 +33,8 @@ export const SectionLibrary: FC = () => {
 					activeFilter={providerFilter}
 					onFilter={setProviderFilter}
 				/>
+
+				<MetadataSourcesSection />
 
 				<LibraryGridSection providerFilter={providerFilter} />
 			</div>

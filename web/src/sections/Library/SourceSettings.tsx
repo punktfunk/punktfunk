@@ -57,7 +57,8 @@ const refusalText = (body: RefusalBody | null): string =>
  * `__config` at all. That 404 points at the plugin's page instead of reporting a failure.
  */
 export const SourceSettingsDialog: FC<{
-	source: ScannerInfo;
+	/** A game source, or an Art & Metadata source by its plugin id. */
+	source: Pick<ScannerInfo, "id" | "label" | "provider">;
 	onClose: () => void;
 }> = ({ source, onClose }) => {
 	const pluginId = source.provider ?? source.id;

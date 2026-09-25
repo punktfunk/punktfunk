@@ -99,7 +99,8 @@ export async function fetchUiCredential(
 }
 
 /**
- * One request to a plugin's loopback surface (`/__config`, `/__game?entry=…`) with its secret.
+ * One request to a plugin's loopback surface (`/__config`, `/__game?entry=…`, `/__metadata/…`)
+ * with its secret.
  * A 401 means the secret rotated inside the cache window, so it retries once with a fresh one.
  * `null` means unreachable. Callers read `body` before calling: a retry must not resend an
  * emptied stream.
@@ -107,7 +108,7 @@ export async function fetchUiCredential(
 export async function callPlugin(
 	id: string,
 	path: string,
-	method: "GET" | "PUT",
+	method: "GET" | "PUT" | "POST",
 	body?: Uint8Array,
 ): Promise<Response | null> {
 	const attempt = async (bustCache: boolean): Promise<Response | null> => {
@@ -118,7 +119,7 @@ export async function callPlugin(
 				method,
 				headers: {
 					authorization: `Bearer ${cred.secret}`,
-					...(method === "PUT" ? { "content-type": "application/json" } : {}),
+					...(method !== "GET" ? { "content-type": "application/json" } : {}),
 				},
 				body: body as BodyInit | undefined,
 			});

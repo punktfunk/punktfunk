@@ -1,6 +1,13 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "@unom/ui/toast";
 import { ImageOff } from "lucide-react";
 import { type FC, useState } from "react";
+import {
+	getGetLibraryQueryKey,
+	useSetLibraryArtPick,
+} from "@/api/gen/library/library";
 import { LAUNCHER_ICONS, LauncherIcon } from "@/components/launcher-icon";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
 	Select,
@@ -9,12 +16,13 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
+import { useSourceNames } from "../../Sources";
+import { type ArtKind, ChooseArtDialog } from "../ChooseArt";
 import { Group, ReadRow, TextField } from "../fields";
 import type { FormState } from "../model";
 import type { TabProps } from "./types";
-
-type ArtKind = "portrait" | "hero" | "header" | "logo";
 
 const SLOTS: {
 	kind: ArtKind;
@@ -101,81 +109,157 @@ const Preview: FC<{
 	);
 };
 
-/** The four artwork slots with previews, and the brand mark. */
+/**
+ * The four artwork slots with previews, and the brand mark. Choose… lists every Art & Metadata
+ * source's images for a slot: on an entry a plugin owns the pick is stored by the host, on the
+ * operator's own entry it goes into the draft like a typed URL.
+ */
 export const MediaTab: FC<TabProps> = ({
 	draft,
 	set,
 	readOnly,
 	entry,
 	baseline,
-}) => (
-	<>
-		<Group title={m.library_entry_tab_media()}>
-			<div className="grid gap-6 @2xl:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
-				{SLOTS.map(({ kind, label, help, frame, cell }) => (
-					<div key={kind} className={`space-y-3 ${cell ?? ""}`}>
-						<Preview
-							src={previewSrc(
-								kind,
-								draft,
-								baseline,
-								entry?.art[kind],
-								readOnly,
-							)}
-							frame={frame}
-							contain={kind === "logo"}
-						/>
-						{readOnly ? (
-							<p className="text-xs font-medium text-muted-foreground">
-								{label()}
-							</p>
-						) : (
-							<TextField
-								id={kind}
-								label={label()}
-								value={draft[kind]}
-								onChange={(v) => set(kind, v)}
-								help={help()}
-								type="url"
-							/>
-						)}
-					</div>
-				))}
-			</div>
-		</Group>
-		<Group title={m.library_entry_icon()} help={m.library_entry_icon_help()}>
-			<div className="flex items-center gap-4">
-				<div className="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground [&>svg]:size-8">
-					<LauncherIcon icon={draft.icon || null} />
+}) => {
+	const qc = useQueryClient();
+	const pick = useSetLibraryArtPick();
+	const nameOf = useSourceNames();
+	const [choosing, setChoosing] = useState<ArtKind | null>(null);
+	const filled = entry?.filled ?? {};
+
+	const store = async (kind: ArtKind, url: string | null) => {
+		if (!entry) return;
+		if (!readOnly) {
+			set(kind, url ?? "");
+			return;
+		}
+		try {
+			await pick.mutateAsync({ id: entry.id, data: { kind, url } });
+			await qc.invalidateQueries({ queryKey: getGetLibraryQueryKey() });
+		} catch (e) {
+			toast.error(apiErrorMessage(e) ?? m.library_media_pick_failed());
+		}
+	};
+
+	return (
+		<>
+			<Group title={m.library_entry_tab_media()}>
+				<div className="grid gap-6 @2xl:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+					{SLOTS.map(({ kind, label, help, frame, cell }) => {
+						const own = previewSrc(
+							kind,
+							draft,
+							baseline,
+							entry?.art[kind],
+							readOnly,
+						);
+						// A source fills an empty slot of the operator's own entry too; show what it put there.
+						const source = filled[kind];
+						const borrowed =
+							own === null && source !== undefined && source !== "pick";
+						const src = borrowed ? entry?.art[kind] : own;
+						const showsSource = source !== undefined && (readOnly || borrowed);
+						return (
+							<div key={kind} className={`space-y-3 ${cell ?? ""}`}>
+								<Preview src={src} frame={frame} contain={kind === "logo"} />
+								{readOnly ? (
+									<p className="text-xs font-medium text-muted-foreground">
+										{label()}
+									</p>
+								) : (
+									<TextField
+										id={kind}
+										label={label()}
+										value={draft[kind]}
+										onChange={(v) => set(kind, v)}
+										help={help()}
+										type="url"
+									/>
+								)}
+								{entry && (
+									<div className="flex flex-wrap items-center gap-2">
+										{showsSource && (
+											<span className="text-xs text-muted-foreground">
+												{source === "pick"
+													? m.library_media_picked()
+													: m.library_media_from({
+															source: nameOf(source) ?? source,
+														})}
+											</span>
+										)}
+										<Button
+											size="sm"
+											variant="outline"
+											onClick={() => setChoosing(kind)}
+										>
+											{m.library_media_choose()}
+										</Button>
+										{readOnly && source === "pick" && (
+											<Button
+												size="sm"
+												variant="ghost"
+												disabled={pick.isPending}
+												onClick={() => store(kind, null)}
+											>
+												{m.library_media_reset()}
+											</Button>
+										)}
+									</div>
+								)}
+							</div>
+						);
+					})}
 				</div>
-				{readOnly ? (
-					<ReadRow label={m.library_entry_icon()} value={draft.icon} />
-				) : (
-					<div className="w-full max-w-60 space-y-2">
-						<Label htmlFor="entry-icon" className="sr-only">
-							{m.library_entry_icon()}
-						</Label>
-						<Select
-							value={draft.icon || NO_ICON}
-							onValueChange={(v) => set("icon", v === NO_ICON ? "" : v)}
-						>
-							<SelectTrigger id="entry-icon" size="sm">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value={NO_ICON}>
-									{m.library_entry_icon_none()}
-								</SelectItem>
-								{Object.keys(LAUNCHER_ICONS).map((token) => (
-									<SelectItem key={token} value={token}>
-										{token.charAt(0).toUpperCase() + token.slice(1)}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+			</Group>
+			{entry && choosing && (
+				<ChooseArtDialog
+					entryId={entry.id}
+					entryTitle={entry.title}
+					kind={choosing}
+					slotLabel={
+						SLOTS.find((s) => s.kind === choosing)?.label() ?? choosing
+					}
+					onPick={(url) => {
+						setChoosing(null);
+						store(choosing, url);
+					}}
+					onClose={() => setChoosing(null)}
+				/>
+			)}
+			<Group title={m.library_entry_icon()} help={m.library_entry_icon_help()}>
+				<div className="flex items-center gap-4">
+					<div className="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground [&>svg]:size-8">
+						<LauncherIcon icon={draft.icon || null} />
 					</div>
-				)}
-			</div>
-		</Group>
-	</>
-);
+					{readOnly ? (
+						<ReadRow label={m.library_entry_icon()} value={draft.icon} />
+					) : (
+						<div className="w-full max-w-60 space-y-2">
+							<Label htmlFor="entry-icon" className="sr-only">
+								{m.library_entry_icon()}
+							</Label>
+							<Select
+								value={draft.icon || NO_ICON}
+								onValueChange={(v) => set("icon", v === NO_ICON ? "" : v)}
+							>
+								<SelectTrigger id="entry-icon" size="sm">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={NO_ICON}>
+										{m.library_entry_icon_none()}
+									</SelectItem>
+									{Object.keys(LAUNCHER_ICONS).map((token) => (
+										<SelectItem key={token} value={token}>
+											{token.charAt(0).toUpperCase() + token.slice(1)}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					)}
+				</div>
+			</Group>
+		</>
+	);
+};
