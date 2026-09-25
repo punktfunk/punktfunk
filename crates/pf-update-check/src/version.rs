@@ -132,6 +132,9 @@ mod tests {
         // published run never compares against a checkout.
         assert_eq!(triple("0.35.0+gad2aee123"), Some((0, 35, 0)));
         assert_eq!(canary_run("0.35.0+gad2aee123"), None);
+        // Nix stamps the same shape behind its `-nix` marker (packaging/nix/packages.nix).
+        assert_eq!(triple("0.39.0-nix+g8b1c2d3e"), Some((0, 39, 0)));
+        assert_eq!(canary_run("0.39.0-nix+g8b1c2d3e"), None);
         assert!(!is_newer(
             "0.35.0~ci412.gdeadbeef",
             Some(412),

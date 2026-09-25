@@ -918,9 +918,6 @@ fn gamescope_session() -> bool {
 
 type ChangedFn = Rc<RefCell<Vec<Rc<dyn Fn(u32)>>>>;
 
-/// The weak half of a [`ChangedFn`], held by [`RowRestore`].
-type ChangedWeak = std::rc::Weak<RefCell<Vec<Rc<dyn Fn(u32)>>>>;
-
 /// A titled single-choice preference row. On a desktop this is a stock popover
 /// [`adw::ComboRow`]; under gamescope (see [`gamescope_session`]) it becomes an activatable
 /// row that pushes an in-window selection subpage onto the preferences dialog instead.
@@ -966,8 +963,7 @@ impl ChoiceRow {
             let (sel, chg) = (selected.clone(), changed.clone());
             row.connect_selected_notify(move |r| {
                 if sel.replace(r.selected()) != r.selected() {
-                    // Cloned out first: a handler may park the list (`restore_selected`),
-                    // which needs the cell free while the loop runs.
+                    // Cloned out first, so a handler may touch the list while the loop runs.
                     let fns: Vec<Rc<dyn Fn(u32)>> = chg.borrow().clone();
                     for f in &fns {
                         f(r.selected());
@@ -1118,13 +1114,12 @@ impl ChoiceRow {
         self.changed.borrow_mut().push(Rc::new(f));
     }
 
-    /// A handle for putting this row's selection back from inside its own handler. The Rc
-    /// halves are weak, so a row never owns the closure that owns the row.
+    /// A handle for putting this row's selection back from inside its own handler. The cell
+    /// is held weakly, so a row never owns the closure that owns the row.
     fn restorer(&self) -> RowRestore {
         RowRestore {
             row: self.row.clone(),
             selected: Rc::downgrade(&self.selected),
-            changed: Rc::downgrade(&self.changed),
         }
     }
 }
@@ -1133,22 +1128,19 @@ impl ChoiceRow {
 struct RowRestore {
     row: adw::PreferencesRow,
     selected: std::rc::Weak<Cell<u32>>,
-    changed: ChangedWeak,
 }
 
 /// Move a row's selection without running its handlers — for a handler that has just decided
-/// the change should not stand. `set_selected` dispatches them in both modes, so they are
-/// parked for the duration rather than reasoned about.
+/// the change should not stand. The cell moves first: GObject replays a nested `notify` after
+/// the running one returns, and the combo's handler then sees no change and dispatches nothing.
 fn restore_selected(r: &RowRestore, i: u32) {
-    let (Some(changed), Some(selected)) = (r.changed.upgrade(), r.selected.upgrade()) else {
+    let Some(selected) = r.selected.upgrade() else {
         return;
     };
-    let parked = std::mem::take(&mut *changed.borrow_mut());
-    match r.row.downcast_ref::<adw::ComboRow>() {
-        Some(combo) => combo.set_selected(i),
-        None => selected.set(i),
+    selected.set(i);
+    if let Some(combo) = r.row.downcast_ref::<adw::ComboRow>() {
+        combo.set_selected(i);
     }
-    *changed.borrow_mut() = parked;
 }
 
 /// Update a row's caption after construction — the dynamic-caption hook (touch mode,
@@ -2885,9 +2877,8 @@ mod tests {
         );
     }
 
-    /// A handler that puts the row back (`restore_selected`, behind "New preset…") runs
-    /// inside the dispatch loop, so the loop must not keep the handler list borrowed while
-    /// it runs — that was a "RefCell already borrowed" abort (#1070). Both modes.
+    /// A handler may put its own row back (`restore_selected`, behind "New preset…"). That
+    /// neither aborts on a borrowed handler list nor runs the handlers again. Both modes.
     #[test]
     #[ignore = "needs a Wayland/X display"]
     fn choice_row_handler_may_restore_selection() {

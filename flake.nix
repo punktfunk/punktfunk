@@ -82,6 +82,8 @@
           craneLib = craneLibFor pkgs;
           src = self;
           inherit version;
+          # A dirty tree has no `shortRev`; Nix before 2.20 has no `dirtyShortRev` either.
+          rev = self.shortRev or self.dirtyShortRev or null;
           # `.hook` + `.fetchBunDeps` (bun2nix v2 API) — see packages.nix.
           bun2nix = bun2nix.packages.${system}.default;
         }

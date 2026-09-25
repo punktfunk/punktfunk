@@ -28,6 +28,8 @@
   craneLib,
   src,
   version,
+  # Short commit of `src`; null when the tree is dirty on a Nix without `dirtyShortRev`.
+  rev ? null,
   # native tooling
   pkg-config,
   cmake,
@@ -68,8 +70,10 @@ let
   gbm = if libgbm != null then libgbm else mesa;
 
   # Build provenance stamped into the binary (build.rs reads PUNKTFUNK_BUILD_VERSION for
-  # `--version` / mgmt /health), mirroring the deb/rpm `~ci`-style stamp.
-  buildVersion = "${version}-nix";
+  # `--version` / mgmt /health). A main checkout keeps Cargo.toml's last stable version, so
+  # only the commit tells two Nix builds apart. `+g<rev>` is the Deck's source-build shape:
+  # no `ci` in it, so the update check never reads it as a CI run.
+  buildVersion = "${version}-nix" + lib.optionalString (rev != null) "+g${rev}";
 
   # `cargo build --release --locked` scoped to the crates each package ships. crane appends this to
   # both the vendor step and the compile.

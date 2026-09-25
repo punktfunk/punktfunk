@@ -6,8 +6,8 @@
 //!
 //! The global is restricted: KWin advertises it only to a client whose `.desktop` lists it
 //! under `X-KDE-Wayland-Interfaces` (matched by `/proc/<pid>/exe` → `Exec=`). Packages ship
-//! `io.unom.Punktfunk.Host.desktop` for that. The host binary must carry no file capability —
-//! the kernel then refuses KWin the `/proc/<pid>/exe` read ([`capability_denial_hint`]).
+//! `io.unom.Punktfunk.Host.desktop` for that. The host binary must carry no file capability and
+//! must still be the file at its path ([`screencast_withheld`] names which one broke).
 //! Headless tests use `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1`. `createVirtualOutput` needs the
 //! DRM backend, or VirtualBackend since KWin 6.5.6.
 
@@ -56,6 +56,10 @@ const POINTER_EMBEDDED: u32 = 2;
 /// matches, so wrapping a repaired refusal would kill the retry that consumes the repair.
 /// Keep it a phrase, not a code.
 const REPAIRED_HINT: &str = "enabled it over output management";
+
+/// Lead of the missing-grant refusal ([`screencast_withheld`]); the opener keys on it.
+/// The docs quote this text, so it stays verbatim.
+const WITHHELD: &str = "KWin does not expose zkde_screencast_unstable_v1 to this client";
 
 /// KWin exposes the created output to output-management as `Virtual-<name>`.
 const VOUT_NAME: &str = "punktfunk";
@@ -302,6 +306,8 @@ impl VirtualDisplay for KwinDisplay {
                 // phrase; this is the one refusal whose retry is the point — the repair
                 // only fixes the NEXT request.
                 Ok(Err(e)) if e.contains(REPAIRED_HINT) => bail!("{e}"),
+                // Still permanent, but KWin never saw a request: the text below would mislead.
+                Ok(Err(e)) if e.contains(WITHHELD) => bail!("KWin virtual output failed: {e}"),
                 // KWin's reason is translated; log the compositor-side cause once here.
                 Ok(Err(e)) => bail!(
                     "KWin virtual output failed: {e} — KWin declined to create the output. It \
@@ -1453,24 +1459,64 @@ impl Drop for StopOnDrop {
     }
 }
 
-/// Extra sentence on "KWin never advertised the screencast global" when this process
-/// carries capabilities — invisible from the Wayland side.
+/// The refusal for a registry without `zkde_screencast`, naming the path KWin read and
+/// why it missed.
 ///
-/// KWin authorizes a restricted interface by resolving `/proc/<pid>/exe` against an
-/// installed `.desktop`. The kernel refuses that readlink unless the reader's effective
-/// set is a superset of the target's permitted set (`cap_ptrace_access_check`); KWin
-/// has none. A host with any file capability is unidentifiable. `PR_SET_DUMPABLE` and
-/// systemd `AmbientCapabilities=` leave the permitted-set check failing.
-fn capability_denial_hint() -> String {
+/// KWin (through 6.6) re-checks every new connection: it reads `/proc/<pid>/exe` and
+/// matches that path against an installed `.desktop`'s `Exec=`. Two host-side states
+/// defeat it: a file capability (the kernel refuses KWin the readlink, see
+/// [`capability_denial_hint_for`]) and a binary replaced since start (the link then
+/// reads `… (deleted)` or a stale mount's path). A restart is the only repair for the
+/// second.
+fn screencast_withheld() -> anyhow::Error {
+    let exe = std::fs::read_link("/proc/self/exe").unwrap_or_default();
+    let replaced = !exe.as_os_str().is_empty()
+        && std::fs::metadata("/proc/self/exe").is_ok_and(|run| replaced_on_disk(&exe, &run));
     let permitted = std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|status| permitted_caps_from_status(&status));
-    capability_denial_hint_for(permitted)
+    anyhow!(
+        "{WITHHELD} ({}) — KWin grants it only to a binary whose path is the Exec= of an \
+         installed .desktop listing it in X-KDE-Wayland-Interfaces \
+         (io.unom.Punktfunk.Host.desktop){}",
+        exe.display(),
+        identity_hint(replaced, permitted)
+    )
 }
 
-/// Message half of [`capability_denial_hint`], split from `/proc/self/status` so it
+/// Tail of [`screencast_withheld`]: every cause the host can see, else the install advice.
+fn identity_hint(replaced: bool, permitted: Option<u64>) -> String {
+    let mut hint = capability_denial_hint_for(permitted);
+    if replaced {
+        hint.insert_str(
+            0,
+            " — this binary was replaced on disk after the host started (a package update?), \
+             so KWin no longer matches it: restart the host",
+        );
+    }
+    if hint.is_empty() {
+        hint = " — install that .desktop and log in again, or run KWin with \
+                KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 for a headless test"
+            .into();
+    }
+    hint
+}
+
+/// Whether the file at `path` is no longer the `running` binary: a package update
+/// swaps the inode, a sysext refresh swaps the mount, a deleted path is gone.
+fn replaced_on_disk(path: &std::path::Path, running: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    !std::fs::metadata(path)
+        .is_ok_and(|now| (now.dev(), now.ino()) == (running.dev(), running.ino()))
+}
+
+/// Capability sentence of [`identity_hint`], split from `/proc/self/status` so it
 /// is testable against a given mask. Calling the real reader in CI sees the runner's
 /// root permitted set (`CapPrm=0x000001ffffffffff`) and the hint fires on a clean host.
+///
+/// KWin has no capabilities, and the kernel refuses a `/proc/<pid>/exe` readlink unless
+/// the reader's effective set covers the target's permitted set. `PR_SET_DUMPABLE` and
+/// systemd `AmbientCapabilities=` leave that check failing.
 fn capability_denial_hint_for(permitted: Option<u64>) -> String {
     match permitted {
         Some(caps) if caps != 0 => format!(
@@ -1533,6 +1579,41 @@ mod capability_hint_tests {
         );
         assert!(hint.contains("setcap -r"), "names the repair: {hint}");
     }
+
+    /// A package manager renames a new file over the path; the kernel suffixes a
+    /// deleted exe's link with ` (deleted)`. Both must read as replaced.
+    #[test]
+    fn spots_a_binary_swapped_under_the_process() {
+        let dir = std::env::temp_dir().join(format!("pf-kwin-exe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("punktfunk-host");
+        std::fs::write(&path, b"old").unwrap();
+        let running = std::fs::metadata(&path).unwrap();
+        assert!(!replaced_on_disk(&path, &running));
+
+        let staged = dir.join("punktfunk-host.new");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::rename(&staged, &path).unwrap();
+        assert!(replaced_on_disk(&path, &running));
+        assert!(replaced_on_disk(
+            &dir.join("punktfunk-host (deleted)"),
+            &running
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A replaced binary names the restart; the install advice appears only when
+    /// the host sees no cause of its own.
+    #[test]
+    fn picks_the_repair_the_host_can_see() {
+        let replaced = identity_hint(true, Some(0));
+        assert!(replaced.contains("restart the host"), "{replaced}");
+        assert!(!replaced.contains("install that .desktop"), "{replaced}");
+        let clean = identity_hint(false, Some(0));
+        assert!(clean.contains("install that .desktop"), "{clean}");
+        let capped = identity_hint(false, permitted_caps_from_status(CAPPED));
+        assert!(!capped.contains("install that .desktop"), "{capped}");
+    }
 }
 
 /// Readiness probe: connect, roundtrip the registry, confirm `zkde_screencast` is
@@ -1555,14 +1636,7 @@ pub fn probe() -> Result<()> {
         "registry roundtrip",
     )?;
     if state.screencast.is_none() {
-        bail!(
-            "KWin is up but does not expose zkde_screencast_unstable_v1 to this client — KWin gates \
-             it on the host's .desktop X-KDE-Wayland-Interfaces (install \
-             io.unom.Punktfunk.Host.desktop with Exec=/usr/bin/punktfunk-host, then re-login so KWin \
-             re-reads it — the grant is cached per-exe on first connect), or set \
-             KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 for the headless test; needs KWin ≥ 6.5.6{}",
-            capability_denial_hint()
-        );
+        return Err(screencast_withheld());
     }
     Ok(())
 }
@@ -1609,15 +1683,7 @@ fn run_existing(
         "wl_output property roundtrip",
     )?;
 
-    let screencast = state.screencast.clone().ok_or_else(|| {
-        anyhow!(
-            "KWin does not expose zkde_screencast_unstable_v1 to this client — install the host's \
-             .desktop (io.unom.Punktfunk.Host.desktop, X-KDE-Wayland-Interfaces) and re-login so \
-             KWin authorizes it, or run KWin with KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 (headless \
-             test){}",
-            capability_denial_hint()
-        )
-    })?;
+    let screencast = state.screencast.clone().ok_or_else(screencast_withheld)?;
 
     // A miss is a hard error naming what is there: mirroring some other monitor
     // because the requested one is unplugged is worse than a refused session.
@@ -1698,15 +1764,7 @@ fn run(
     let mut state = State::default();
     roundtrip_within(&conn, &mut queue, &mut state, stop, 1, "registry roundtrip")?;
 
-    let screencast = state.screencast.clone().ok_or_else(|| {
-        anyhow!(
-            "KWin does not expose zkde_screencast_unstable_v1 to this client — install the host's \
-             .desktop (io.unom.Punktfunk.Host.desktop, X-KDE-Wayland-Interfaces) and re-login so \
-             KWin authorizes it, or run KWin with KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 (headless \
-             test){}",
-            capability_denial_hint()
-        )
-    })?;
+    let screencast = state.screencast.clone().ok_or_else(screencast_withheld)?;
 
     // Pointer rides as stream metadata (cursor-channel) or KWin embeds it.
     let stream = screencast.stream_virtual_output(
