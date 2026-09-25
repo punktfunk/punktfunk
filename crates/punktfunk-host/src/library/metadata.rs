@@ -189,11 +189,12 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 type Stamp = (Option<SystemTime>, u64);
+type OverlayCache = Mutex<HashMap<String, (Stamp, Arc<Overlay>)>>;
 
 /// Parsed overlays keyed by source, re-read when the file's mtime or length moves. Every art
 /// request merges its entry, so parsing megabytes per cover would dominate a grid load.
 fn load_overlay(source: &str) -> Arc<Overlay> {
-    static CACHE: OnceLock<Mutex<HashMap<String, (Stamp, Arc<Overlay>)>>> = OnceLock::new();
+    static CACHE: OnceLock<OverlayCache> = OnceLock::new();
     let path = overlay_path(source);
     let Ok(md) = std::fs::metadata(&path) else {
         return Arc::default();
