@@ -1,4 +1,5 @@
-//! Post-loss display freeze: withhold concealed decoder output until a proven re-anchor.
+//! Post-loss recovery: [`ReanchorGate`] holds concealed output until a proven re-anchor, and
+//! [`AuAdmission`] keeps AUs that name a lost picture off the decoder.
 //!
 //! Hardware decoders return Ok on a missing reference and conceal; presenting that is the
 //! gray-plate artifact. Every client holds the last good picture instead, and lifts only on
@@ -406,6 +407,149 @@ impl ReanchorGate {
     /// healed it by overwrite, which the chain cannot show.
     pub fn lifted_by_marks(&self) -> bool {
         !self.awaiting && self.mark_lift
+    }
+}
+
+/// How a decoder treats an AU that references a picture it does not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecoderClass {
+    /// Refuses every later inter frame, a clean anchor included, until a keyframe.
+    Strict,
+    /// Conceals and carries on; the gate hides the result.
+    Lenient,
+}
+
+/// A codec concealer's verdict on one AU, on a lane that has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Concealment {
+    /// Every reference names a picture the decoder holds, as received or rewritten.
+    Decodable,
+    /// Nothing can stand in: withhold it and ask for a keyframe.
+    Unrecoverable,
+}
+
+/// What ended an [`AuAdmission`] episode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resume {
+    Idr,
+    Anchor,
+    /// An intra-refresh wave's start, on a lenient decoder.
+    WaveStart,
+    /// The concealer's `Decodable`.
+    Concealed,
+}
+
+/// One finished stretch of withheld AUs, for the caller's log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Episode {
+    /// Index of the first withheld AU.
+    pub first: u32,
+    pub withheld: u32,
+    pub by: Resume,
+}
+
+/// [`AuAdmission::note`]'s verdict on one AU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Admission {
+    /// Keep this AU off the decoder, every part of it.
+    pub withhold: bool,
+    /// Ask for a keyframe. The caller throttles.
+    pub ask_keyframe: bool,
+    /// This AU ended a stretch that withheld at least one AU.
+    pub ended: Option<Episode>,
+}
+
+/// The receiver half of reactive recovery: an AU reaches the decoder only when every picture
+/// it references was decoded. After an index gap, each AU until the host's IDR or anchor names
+/// the lost picture. A wave start also ends the stretch on a lenient decoder; a strict one keeps
+/// withholding and asks for a keyframe. One per elementary stream, fed every AU in receive
+/// order. A withheld AU is never fed and never folded into [`ReanchorGate`]; the gate's
+/// [`REANCHOR_FREEZE_MAX`] re-ask ends a stretch whose anchor was lost.
+#[derive(Debug, Clone, Default)]
+pub struct AuAdmission {
+    withholding: bool,
+    /// A wave start arrived while a strict decoder was withheld from: the wave builds on a
+    /// chain that decoder lacks, so only a keyframe ends this.
+    mark_seen: bool,
+    first: u32,
+    withheld: u32,
+}
+
+impl AuAdmission {
+    pub fn is_withholding(&self) -> bool {
+        self.withholding
+    }
+
+    /// Fold one AU: its `index`, the index `gap` ahead of it (0 for none), its wire `flags`,
+    /// the decoder's `class`, and the concealer's `verdict` on a lane that has one.
+    pub fn note(
+        &mut self,
+        index: u32,
+        gap: u32,
+        flags: u32,
+        class: DecoderClass,
+        verdict: Option<Concealment>,
+    ) -> Admission {
+        match verdict {
+            Some(Concealment::Decodable) => {
+                return Admission {
+                    ended: self.resume(Resume::Concealed),
+                    ..Admission::default()
+                }
+            }
+            Some(Concealment::Unrecoverable) => {
+                return Admission {
+                    withhold: true,
+                    ask_keyframe: true,
+                    ended: None,
+                }
+            }
+            None => {}
+        }
+        if gap > 0 {
+            if !self.withholding {
+                self.first = index;
+                self.withheld = 0;
+            }
+            self.withholding = true;
+            self.mark_seen = false;
+        }
+        if !self.withholding {
+            return Admission::default();
+        }
+        let wave_start = flags & USER_FLAG_RECOVERY_POINT != 0;
+        let by = if flags & FLAG_SOF as u32 != 0 {
+            Some(Resume::Idr)
+        } else if flags & USER_FLAG_RECOVERY_ANCHOR != 0 {
+            Some(Resume::Anchor)
+        } else if wave_start && class == DecoderClass::Lenient {
+            Some(Resume::WaveStart)
+        } else {
+            None
+        };
+        if let Some(by) = by {
+            return Admission {
+                ended: self.resume(by),
+                ..Admission::default()
+            };
+        }
+        self.mark_seen |= wave_start;
+        self.withheld += 1;
+        Admission {
+            withhold: true,
+            ask_keyframe: self.mark_seen,
+            ended: None,
+        }
+    }
+
+    fn resume(&mut self, by: Resume) -> Option<Episode> {
+        let was = std::mem::take(&mut self.withholding);
+        self.mark_seen = false;
+        (was && self.withheld > 0).then_some(Episode {
+            first: self.first,
+            withheld: self.withheld,
+            by,
+        })
     }
 }
 
@@ -1127,5 +1271,277 @@ mod tests {
             GateVerdict::Hold,
             "a clean frame is not a re-anchor; only IDR, anchor or marks lift"
         );
+    }
+
+    use DecoderClass::{Lenient, Strict};
+    const WAVE: u32 = USER_FLAG_RECOVERY_POINT;
+
+    /// `(index, gap, flags)` through one rule with no concealer; the `(withhold, ask)` pairs.
+    fn admit(
+        a: &mut AuAdmission,
+        class: DecoderClass,
+        aus: &[(u32, u32, u32)],
+    ) -> Vec<(bool, bool)> {
+        aus.iter()
+            .map(|&(i, gap, flags)| {
+                let s = a.note(i, gap, flags, class, None);
+                (s.withhold, s.ask_keyframe)
+            })
+            .collect()
+    }
+
+    const FEED: (bool, bool) = (false, false);
+    const HOLD: (bool, bool) = (true, false);
+    const HOLD_ASK: (bool, bool) = (true, true);
+
+    #[test]
+    fn a_clean_stream_feeds_every_au_whatever_its_marks() {
+        for class in [Strict, Lenient] {
+            let mut a = AuAdmission::default();
+            let aus = [
+                (0, 0, SOF),
+                (1, 0, 0),
+                (2, 0, WAVE),
+                (3, 0, ANCHOR),
+                (4, 0, 0),
+            ];
+            assert_eq!(admit(&mut a, class, &aus), [FEED; 5]);
+        }
+    }
+
+    #[test]
+    fn a_loss_withholds_deltas_until_the_anchor() {
+        let mut a = AuAdmission::default();
+        assert_eq!(admit(&mut a, Strict, &[(1, 0, SOF), (2, 0, 0)]), [FEED; 2]);
+        // Frame 3 was lost: 4 and 5 name it. The RFI is in flight, so no keyframe ask.
+        assert_eq!(admit(&mut a, Strict, &[(4, 1, 0), (5, 0, 0)]), [HOLD; 2]);
+        let anchor = a.note(6, 0, ANCHOR, Strict, None);
+        assert!(!anchor.withhold, "the anchor names a pre-loss picture");
+        assert_eq!(
+            anchor.ended,
+            Some(Episode {
+                first: 4,
+                withheld: 2,
+                by: Resume::Anchor
+            })
+        );
+        assert_eq!(admit(&mut a, Strict, &[(7, 0, 0)]), [FEED]);
+    }
+
+    #[test]
+    fn an_idr_ends_withholding_too() {
+        let mut a = AuAdmission::default();
+        assert_eq!(
+            admit(
+                &mut a,
+                Strict,
+                &[(1, 0, SOF), (3, 1, 0), (4, 0, SOF), (5, 0, 0)]
+            ),
+            [FEED, HOLD, FEED, FEED]
+        );
+    }
+
+    #[test]
+    fn an_anchor_right_after_the_gap_is_no_episode() {
+        let mut a = AuAdmission::default();
+        let s = a.note(3, 1, ANCHOR, Strict, None);
+        assert!(!s.withhold);
+        assert_eq!(
+            s.ended, None,
+            "nothing was withheld, so there is nothing to log"
+        );
+    }
+
+    #[test]
+    fn a_concealed_stream_withholds_nothing_after_a_loss() {
+        let mut a = AuAdmission::default();
+        for (i, gap, flags) in [(3, 1, 0), (4, 0, WAVE)] {
+            let s = a.note(i, gap, flags, Strict, Some(Concealment::Decodable));
+            assert_eq!((s.withhold, s.ask_keyframe), FEED);
+        }
+        assert!(!a.is_withholding());
+    }
+
+    #[test]
+    fn a_decodable_verdict_ends_a_stretch() {
+        let mut a = AuAdmission::default();
+        assert_eq!(admit(&mut a, Strict, &[(3, 1, 0)]), [HOLD]);
+        let s = a.note(4, 0, 0, Strict, Some(Concealment::Decodable));
+        assert!(!s.withhold);
+        assert_eq!(s.ended.map(|e| e.by), Some(Resume::Concealed));
+    }
+
+    #[test]
+    fn an_unrecoverable_concealment_withholds_and_asks() {
+        let mut a = AuAdmission::default();
+        let s = a.note(3, 1, 0, Strict, Some(Concealment::Unrecoverable));
+        assert_eq!((s.withhold, s.ask_keyframe), HOLD_ASK);
+        // The concealer resumes at the IDR and says so per AU; the rule follows it.
+        let s = a.note(4, 0, SOF, Strict, Some(Concealment::Decodable));
+        assert!(!s.withhold);
+    }
+
+    /// The host declined the RFI and started a wave. It builds on a chain a strict decoder no
+    /// longer holds, so only an IDR ends this: ask on the mark and on every AU after it.
+    #[test]
+    fn a_wave_start_while_withholding_asks_on_a_strict_decoder() {
+        let mut a = AuAdmission::default();
+        assert_eq!(
+            admit(
+                &mut a,
+                Strict,
+                &[
+                    (3, 1, 0),
+                    (4, 0, WAVE),
+                    (5, 0, 0),
+                    (6, 0, WAVE | USER_FLAG_RECOVERY_CLOSE)
+                ]
+            ),
+            [HOLD, HOLD_ASK, HOLD_ASK, HOLD_ASK]
+        );
+        let idr = a.note(7, 0, SOF, Strict, None);
+        assert!(!idr.withhold);
+        assert_eq!(
+            idr.ended.map(|e| (e.withheld, e.by)),
+            Some((4, Resume::Idr))
+        );
+    }
+
+    /// A lenient decoder takes the wave from its start and heals exactly as without the rule.
+    #[test]
+    fn a_wave_start_resumes_a_lenient_decoder() {
+        let mut a = AuAdmission::default();
+        assert_eq!(admit(&mut a, Lenient, &[(3, 1, 0), (4, 0, 0)]), [HOLD; 2]);
+        let start = a.note(5, 0, WAVE, Lenient, None);
+        assert_eq!((start.withhold, start.ask_keyframe), FEED);
+        assert_eq!(start.ended.map(|e| e.by), Some(Resume::WaveStart));
+        assert_eq!(
+            admit(
+                &mut a,
+                Lenient,
+                &[(6, 0, 0), (7, 0, WAVE | USER_FLAG_RECOVERY_CLOSE)]
+            ),
+            [FEED; 2]
+        );
+    }
+
+    /// A second loss mid-stretch is the same episode. It clears the mark: the host answers the
+    /// new ask, which may be an anchor.
+    #[test]
+    fn a_second_gap_while_withholding_restarts_the_mark() {
+        let mut a = AuAdmission::default();
+        assert_eq!(
+            admit(
+                &mut a,
+                Strict,
+                &[(3, 1, 0), (4, 0, WAVE), (6, 1, 0), (7, 0, 0)]
+            ),
+            [HOLD, HOLD_ASK, HOLD, HOLD]
+        );
+        let anchor = a.note(8, 0, ANCHOR, Strict, None);
+        assert!(!anchor.withhold);
+        assert_eq!(
+            anchor.ended,
+            Some(Episode {
+                first: 3,
+                withheld: 4,
+                by: Resume::Anchor
+            })
+        );
+    }
+
+    /// The anchor itself is lost. The rule keeps withholding; the gate's backstop (or the
+    /// feeder's RFI on the new gap) re-asks, and the next anchor ends the stretch.
+    #[test]
+    fn a_lost_anchor_withholds_until_the_re_asked_anchor() {
+        let mut a = AuAdmission::default();
+        // Frame 3 lost, anchor 6 lost too.
+        let aus = [
+            (4, 1, 0),
+            (5, 0, 0),
+            (7, 1, 0),
+            (8, 0, 0),
+            (9, 0, 0),
+            (10, 0, 0),
+            (11, 0, 0),
+        ];
+        assert_eq!(admit(&mut a, Strict, &aus), [HOLD; 7]);
+        let anchor = a.note(12, 0, ANCHOR, Strict, None);
+        assert!(!anchor.withhold);
+        assert_eq!(anchor.ended.map(|e| (e.first, e.withheld)), Some((4, 7)));
+        assert_eq!(admit(&mut a, Strict, &[(13, 0, 0)]), [FEED]);
+    }
+
+    /// A re-ask after the anchor landed is `Covered` on the host: the next frame carries the
+    /// anchor flag again and references the received anchor. Fed, no episode.
+    #[test]
+    fn a_covered_re_ask_anchor_feeds() {
+        let mut a = AuAdmission::default();
+        assert_eq!(
+            admit(&mut a, Strict, &[(4, 1, 0), (5, 0, ANCHOR), (6, 0, 0)]),
+            [HOLD, FEED, FEED]
+        );
+        let covered = a.note(7, 0, ANCHOR, Strict, None);
+        assert_eq!((covered.withhold, covered.ask_keyframe), FEED);
+        assert_eq!(covered.ended, None);
+        assert_eq!(admit(&mut a, Strict, &[(8, 0, 0)]), [FEED]);
+    }
+
+    /// `PF_AV1_DUMP=<soak capture>` with its `.idx`, `PF_AV1_LOST=1,23,…` and `PF_AV1_LAG=<n>`:
+    /// the client's view (lost AUs absent, the host's anchor `lag` frames after each loss)
+    /// through a strict rule. It must withhold exactly `lost+1 .. anchor-1`. `PF_AV1_OUT=<path>`
+    /// writes the fed AUs with an `.idx` for dav1d and aomdec.
+    #[test]
+    #[ignore = "replay: set PF_AV1_DUMP, PF_AV1_LOST and PF_AV1_LAG"]
+    fn a_soak_capture_loses_exactly_the_pre_ask_frames() {
+        let path = std::env::var("PF_AV1_DUMP").expect("PF_AV1_DUMP=<capture>");
+        let list = |k: &str| -> Vec<u32> {
+            let v = std::env::var(k).unwrap_or_else(|_| panic!("{k} unset"));
+            v.split(',')
+                .map(|s| s.trim().parse().expect("an index"))
+                .collect()
+        };
+        let lost = list("PF_AV1_LOST");
+        let lag = list("PF_AV1_LAG")[0];
+        let bytes = std::fs::read(&path).expect("read the capture");
+        let idx = std::fs::read_to_string(format!("{path}.idx")).expect("read the .idx");
+        let units: Vec<(usize, usize)> = idx
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.split_whitespace().map(|s| s.parse().ok());
+                Some((f.next()??, f.next()??))
+            })
+            .collect();
+
+        let mut a = AuAdmission::default();
+        let (mut withheld, mut episodes, mut gap) = (Vec::new(), 0, 0);
+        let (mut out, mut out_idx) = (Vec::new(), String::new());
+        for (i, &(off, len)) in units.iter().enumerate() {
+            let i = i as u32;
+            if lost.contains(&i) {
+                gap += 1;
+                continue;
+            }
+            let anchor = i.checked_sub(lag).is_some_and(|l| lost.contains(&l));
+            let flags = if anchor { ANCHOR } else { 0 };
+            let s = a.note(i, std::mem::take(&mut gap), flags, Strict, None);
+            episodes += u32::from(s.ended.is_some());
+            if s.withhold {
+                withheld.push(i);
+                continue;
+            }
+            out_idx += &format!("{} {len} 0x0 1\n", out.len());
+            out.extend_from_slice(&bytes[off..off + len]);
+        }
+        let expected: Vec<u32> = lost.iter().flat_map(|&l| l + 1..l + lag).collect();
+        println!(
+            "withheld {withheld:?} in {episodes} episodes; fed {}",
+            units.len() - lost.len() - withheld.len()
+        );
+        assert_eq!(withheld, expected);
+        if let Ok(o) = std::env::var("PF_AV1_OUT") {
+            std::fs::write(&o, &out).expect("write the view");
+            std::fs::write(format!("{o}.idx"), out_idx).expect("write its .idx");
+        }
     }
 }
