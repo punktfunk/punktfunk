@@ -44,39 +44,9 @@ pub use self::frame_channel::{ADAPT_REPORT_INTERVAL, FLUSH_COOLDOWN, NO_VIDEO_RE
 pub use self::planes::AudioPacket;
 pub use self::probe::ProbeOutcome;
 
-/// This client silenced its own speakers ([`NativeClient::set_audio_muted`]). The host keeps
-/// sending, so a session joined to the same sink still hears the game.
-pub const AUDIO_MUTE_LOCAL: u8 = 1 << 0;
-/// The operator muted this session from the console ([`crate::quic::AudioState`]). The host
-/// stopped encoding this session's audio, so a local unmute brings nothing back.
-pub const AUDIO_MUTE_HOST: u8 = 1 << 1;
-
-/// The sentence the overlay shows for a mute mask; `None` when the stream is audible. One
-/// place, so no client invents its own wording for whose mute it is.
-pub fn audio_mute_label(mask: u8) -> Option<&'static str> {
-    match (mask & AUDIO_MUTE_HOST != 0, mask & AUDIO_MUTE_LOCAL != 0) {
-        (true, true) => Some("Muted by the host and on this device"),
-        (true, false) => Some("Muted by the host"),
-        (false, true) => Some("Muted on this device"),
-        (false, false) => None,
-    }
-}
-
-/// How long a mute the player made themselves names itself on screen.
-pub const LOCAL_MUTE_NOTICE: Duration = Duration::from_secs(5);
-
-/// [`audio_mute_label`] with the badge's lifetime applied, `since` the mask last changed.
-///
-/// A host mute stands for the whole session: an operator silencing a client must not be
-/// able to hide behind a local unmute. A local mute is the player's own press from the dial
-/// that still shows its state, so it says so long enough to read and then leaves the picture
-/// alone — a standing badge over the game is the operator's language, not the player's.
-pub fn audio_mute_notice(mask: u8, since: Duration) -> Option<&'static str> {
-    if mask & AUDIO_MUTE_HOST == 0 && since >= LOCAL_MUTE_NOTICE {
-        return None;
-    }
-    audio_mute_label(mask)
-}
+pub use crate::audio::{
+    audio_mute_label, audio_mute_notice, AUDIO_MUTE_HOST, AUDIO_MUTE_LOCAL, LOCAL_MUTE_NOTICE,
+};
 
 /// Set or clear one bit of a mute mask. Read-modify-write on the atomic: the embedder and
 /// the control task own different bits and never wait on each other.

@@ -83,7 +83,8 @@ RUN curl -fsSL -o /tmp/sccache.tar.gz \
 
 # Prebuilt Skia for the jobs' SKIA_BINARIES_URL=file:///opt/skia-binaries/…, checked by SHA-256.
 COPY skia-binaries.sh /tmp/
-RUN sh /tmp/skia-binaries.sh x86_64-unknown-linux-gnu && rm /tmp/skia-binaries.sh
+RUN sh /tmp/skia-binaries.sh x86_64-unknown-linux-gnu wasm32-unknown-emscripten \
+    && rm /tmp/skia-binaries.sh
 
 # Link x86_64 with mold (see the file's own header for the rustflags-precedence traps).
 #

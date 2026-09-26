@@ -496,13 +496,13 @@ impl Ring {
                 toggle: true,
                 // The state describes the mute: `Off` while audible, else the shared
                 // sentence naming whose mute it is.
-                state: punktfunk_core::client::audio_mute_label(f.audio_mute)
+                state: punktfunk_core::audio::audio_mute_label(f.audio_mute)
                     .unwrap_or("Off")
                     .into(),
                 ..plain(
                     "stream_mute",
                     "Mute this stream",
-                    if f.audio_mute & punktfunk_core::client::AUDIO_MUTE_LOCAL != 0 {
+                    if f.audio_mute & punktfunk_core::audio::AUDIO_MUTE_LOCAL != 0 {
                         "Mute ✕"
                     } else {
                         "Mute"
@@ -1683,7 +1683,7 @@ mod tests {
     /// always asks for the local flip, and the slot never says "On" while the host is muting.
     #[test]
     fn the_mute_slot_names_whose_mute_it_is() {
-        use punktfunk_core::client::{AUDIO_MUTE_HOST, AUDIO_MUTE_LOCAL};
+        use punktfunk_core::audio::{AUDIO_MUTE_HOST, AUDIO_MUTE_LOCAL};
 
         let mut r = Ring::new();
         r.set_facts(&RingFacts { ..facts() });
