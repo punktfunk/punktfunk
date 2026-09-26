@@ -1,6 +1,8 @@
-//! Best-effort priority for the client's audio feeder threads (decode, pad-audio, WASAPI
-//! render/mic). Device callbacks already run on the OS realtime path; these threads do not.
-//! A decode thread descheduled past ring depth becomes an underrun.
+//! Best-effort priority for the client's hot threads: the audio feeders (decode, pad-audio,
+//! WASAPI render/mic) and the video path (UDP pump, decode, presenter, present-wait).
+//! Device callbacks already run on the OS realtime path; these threads do not. A thread
+//! descheduled past ring depth is an underrun; a late wake on the presenter is a missed
+//! refresh, and on the present-wait waiter a wrong on-glass stamp.
 //!
 //! Linux, first success wins: `setpriority(-10)` (needs `RLIMIT_NICE`; a no-op when the limit
 //! is 0); then the Realtime portal when `/.flatpak-info` exists (rtkit looks up `/proc/<pid>`
@@ -140,15 +142,27 @@ impl Boost {
     }
 }
 
+/// Boost the calling thread and log the outcome once, under its name. Info: a field
+/// bundle has to show whether the hot threads ran boosted. `PUNKTFUNK_THREAD_BOOST=0`
+/// leaves every thread as it was (an A/B, and the way out if a driver spins).
 pub fn boost_and_log(what: &'static str) {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *OFF.get_or_init(|| std::env::var_os("PUNKTFUNK_THREAD_BOOST").is_some_and(|v| v == "0")) {
+        tracing::info!(
+            thread = what,
+            "thread priority left alone (PUNKTFUNK_THREAD_BOOST=0)"
+        );
+        return;
+    }
     match boost_current_thread() {
         Boost::Refused(why) => {
-            tracing::debug!(thread = what, why = %why, "audio thread priority refused");
+            tracing::info!(thread = what, why = %why, "thread priority refused");
         }
-        got => tracing::debug!(
-            thread = what,
-            via = got.as_str(),
-            "audio thread priority raised"
-        ),
+        got => tracing::info!(thread = what, via = got.as_str(), "thread priority raised"),
     }
+}
+
+/// The core pump's boost (`punktfunk_core::client::set_thread_boost`).
+pub fn boost_core_thread() {
+    boost_and_log("core-pump");
 }

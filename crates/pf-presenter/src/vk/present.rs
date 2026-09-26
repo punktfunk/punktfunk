@@ -15,7 +15,7 @@
 //! Evidence: `csc_depth_packing` table tests; `design/pyrowave-444-hdr.md`.
 
 use super::gpu::*;
-use super::{FrameInput, Presenter, Retired};
+use super::{FrameInput, Presented, Presenter, Retired};
 use crate::csc::csc_rows;
 #[cfg(target_os = "linux")]
 use crate::dmabuf::{self, HwFrame};
@@ -26,6 +26,25 @@ use ash::vk::Handle as _;
 #[cfg(windows)]
 use pf_client_core::video::SlotFormat;
 use pf_client_core::video::{NativeVkFrame, NativeVkLayout, RawVkFormat};
+
+/// `PUNKTFUNK_TONEMAP_PEAK`, read once: the environment lock and a string per frame is not
+/// a price the CSC record pays. Default 4.9 ≈ 1000 nits / 203-nit reference.
+fn tonemap_peak() -> f32 {
+    static PEAK: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *PEAK.get_or_init(|| {
+        std::env::var("PUNKTFUNK_TONEMAP_PEAK")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(4.9)
+    })
+}
+
+/// `PUNKTFUNK_D3D11_NO_MUTEX=1`, read once (debugging only: torn frames).
+#[cfg(windows)]
+fn keyed_mutex_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PUNKTFUNK_D3D11_NO_MUTEX").is_none())
+}
 
 impl Presenter {
     /// How a frame of another aspect fills the swapchain. Takes effect on the next present.
@@ -74,16 +93,53 @@ impl Presenter {
         }
     }
 
-    /// Present one frame. `false` means the swapchain is out of date — the
-    /// caller recreates it (current window state) and may retry.
-    pub fn present(
+    /// Present one frame. `Stale` means the swapchain is out of date — the caller
+    /// recreates it (current window state) and may retry. `Busy` hands the frame back:
+    /// the swapchain has no image yet (FIFO with no glass stamps to gate on), so the
+    /// caller keeps the frame and tries again shortly instead of blocking on the queue.
+    pub fn present<'a>(
         &mut self,
         window: &sdl3::video::Window,
-        input: FrameInput,
+        input: FrameInput<'a>,
         overlay: Option<&OverlayFrame>,
-    ) -> Result<bool> {
+    ) -> Result<Presented<'a>> {
         if self.extent.width == 0 || self.extent.height == 0 {
-            return Ok(true); // minimized: true, not false (false recreates)
+            return Ok(Presented::Shown); // minimized: not Stale (Stale recreates)
+        }
+        // FIFO without present-wait: the queue is policed here rather than by blocking.
+        // Probe the previous submit's fence and take the image ahead of time; either
+        // one not ready means a refresh has not passed yet. Probed before `input` is
+        // consumed so the frame can go back to the store whole.
+        let nonblocking = self.needs_glass_gate()
+            && self.present_timer.is_none()
+            && !matches!(input, FrameInput::Redraw);
+        if nonblocking {
+            // SAFETY: `fence` is owned here; a status query is always legal.
+            if self.submitted && !unsafe { self.device.get_fence_status(self.fence) }? {
+                return Ok(Presented::Busy(input));
+            }
+            if self.acquired.is_none() {
+                // SAFETY: `swapchain`/`acquire_sem` are owned; the last submit that waited
+                // `acquire_sem` is fence-complete (checked above), so it is not pending.
+                match unsafe {
+                    self.swap_d.acquire_next_image(
+                        self.swapchain,
+                        0,
+                        self.acquire_sem,
+                        vk::Fence::null(),
+                    )
+                } {
+                    Ok((index, _)) => self.acquired = Some(index),
+                    Err(vk::Result::NOT_READY) | Err(vk::Result::TIMEOUT) => {
+                        return Ok(Presented::Busy(input));
+                    }
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                        self.recreate_swapchain(window)?;
+                        return Ok(Presented::Stale);
+                    }
+                    Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
+                }
+            }
         }
         // HDR follows this frame's PQ flag before any work. No HDR10 surface →
         // PQ stays on the SDR swapchain; CSC shader mode 1 tonemaps.
@@ -139,12 +195,14 @@ impl Presenter {
                     .hw
                     .as_mut()
                     .context("hardware frame without dmabuf support")?;
-                hw_frame = Some(dmabuf::import(
+                hw_frame = Some(dmabuf::get_or_import(
                     &self.instance,
                     self.pdev,
                     &self.device,
                     &hw.ext_mem_fd,
                     &mut hw.modifier_cache,
+                    &mut hw.imports,
+                    hw.sync.as_mut(),
                     d,
                 )?);
                 hw_lane = true;
@@ -202,6 +260,16 @@ impl Presenter {
         #[cfg(windows)]
         if let (Some((d, _)), Some(hw)) = (&win_frame, self.hw_win.as_mut()) {
             hw.imports.retire_stale(&self.device, d.generation);
+        }
+        // Same for a rebuilt VAAPI pool; another lane's frame means that decoder is
+        // gone, and its cached imports pin the pool's memory until they go too.
+        #[cfg(target_os = "linux")]
+        if let Some(hw) = self.hw.as_mut() {
+            match &hw_frame {
+                Some(f) => hw.imports.retire_stale(&self.device, f.generation()),
+                None if hw_lane && !hw.imports.is_empty() => hw.imports.destroy_all(&self.device),
+                None => {}
+            }
         }
         // First fence wait is the first moment the software plane images are
         // unreferenced. Hardware lane will not sample them again.
@@ -370,16 +438,21 @@ impl Presenter {
         }
 
         let acquire_started = std::time::Instant::now();
-        // SAFETY: `swapchain` and `acquire_sem` are owned here. Fence wait above
-        // completed the last submit that waited `acquire_sem`, so it is not pending.
-        let (index, _suboptimal) = match unsafe {
-            self.swap_d.acquire_next_image(
-                self.swapchain,
-                u64::MAX,
-                self.acquire_sem,
-                vk::Fence::null(),
-            )
-        } {
+        // An image taken by the non-blocking probe above is used as is.
+        let acquired = match self.acquired.take() {
+            Some(index) => Ok((index, false)),
+            // SAFETY: `swapchain` and `acquire_sem` are owned here. Fence wait above
+            // completed the last submit that waited `acquire_sem`, so it is not pending.
+            None => unsafe {
+                self.swap_d.acquire_next_image(
+                    self.swapchain,
+                    u64::MAX,
+                    self.acquire_sem,
+                    vk::Fence::null(),
+                )
+            },
+        };
+        let (index, _suboptimal) = match acquired {
             Ok(r) => r,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 // Acquire failed: GPU never saw the import; destroy it here.
@@ -388,7 +461,7 @@ impl Presenter {
                     f.destroy(&self.device);
                 }
                 self.recreate_swapchain(window)?;
-                return Ok(false);
+                return Ok(Presented::Stale);
             }
             Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
         };
@@ -628,25 +701,37 @@ impl Presenter {
                     vk::ImageLayout::UNDEFINED,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 );
-                self.device.cmd_clear_color_image(
-                    self.cmd_buf,
-                    swap_image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                    &[subresource_range()],
+                // A picture that covers the swapchain needs no clear under it: skipping the
+                // full-screen fill and its barrier is a whole pass saved on an iGPU.
+                let covered = matches!(
+                    (source, &placement),
+                    (Some(_), Some(p))
+                        if p.dst_x == 0
+                            && p.dst_y == 0
+                            && p.dst_w == self.extent.width
+                            && p.dst_h == self.extent.height
                 );
-                // Clear and blit both write the swapchain image; transfer commands carry no
-                // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
-                // the clear lands second the tile shows black (the AMD "equaliser" report).
-                barrier(
-                    &self.device,
-                    self.cmd_buf,
-                    swap_image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                );
+                if !covered {
+                    self.device.cmd_clear_color_image(
+                        self.cmd_buf,
+                        swap_image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                        &[subresource_range()],
+                    );
+                    // Clear and blit both write the swapchain image; transfer commands carry no
+                    // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
+                    // the clear lands second the tile shows black (the AMD "equaliser" report).
+                    barrier(
+                        &self.device,
+                        self.cmd_buf,
+                        swap_image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    );
+                }
                 if let (Some((image, _, _)), Some(p)) = (source, placement) {
                     let corner = |x: f64, y: f64, z: i32| vk::Offset3D {
                         x: x.round() as i32,
@@ -790,6 +875,15 @@ impl Presenter {
                 signal_sems.push(*sem);
                 signal_values.push(*value + 1);
             }
+            // The VAAPI decode's fence, sampled at FRAGMENT_SHADER like the native lane.
+            #[cfg(target_os = "linux")]
+            if let Some(f) = &hw_frame {
+                for sem in &f.sync_sems {
+                    wait_sems.push(*sem);
+                    wait_stages.push(vk::PipelineStageFlags::FRAGMENT_SHADER);
+                    wait_values.push(0);
+                }
+            }
             let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
                 .wait_semaphore_values(&wait_values)
                 .signal_semaphore_values(&signal_values);
@@ -818,9 +912,7 @@ impl Presenter {
                 .map(|(_, f)| f.memory)
                 .or(slot.map(|(f, _, _)| f.memory))
             {
-                // `PUNKTFUNK_D3D11_NO_MUTEX=1` skips acquire/release (torn frames;
-                // debugging only).
-                if std::env::var_os("PUNKTFUNK_D3D11_NO_MUTEX").is_none() {
+                if keyed_mutex_on() {
                     keyed_mem = [memory];
                     keyed_info = vk::Win32KeyedMutexAcquireReleaseInfoKHR::default()
                         .acquire_syncs(&keyed_mem)
@@ -889,11 +981,11 @@ impl Presenter {
                     if self.present_timer.is_some() {
                         self.last_presented = Some((self.swapchain, self.next_present_id));
                     }
-                    Ok(true)
+                    Ok(Presented::Shown)
                 }
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                     self.recreate_swapchain(window)?;
-                    Ok(false)
+                    Ok(Presented::Stale)
                 }
                 Err(e) => Err(e).context("vkQueuePresentKHR"),
             }
@@ -975,14 +1067,10 @@ impl Presenter {
             } else {
                 0.0
             };
-            let peak = std::env::var("PUNKTFUNK_TONEMAP_PEAK")
-                .ok()
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(4.9); // ≈1000 nits / 203-nit reference
             let mut pc = [0f32; 16];
             pc[..12].copy_from_slice(rows.as_flattened());
             pc[12] = mode;
-            pc[13] = peak;
+            pc[13] = tonemap_peak();
             pc[14] = uv_scale[0];
             pc[15] = uv_scale[1];
             let words = pc.map(f32::to_ne_bytes);
@@ -1069,14 +1157,10 @@ impl Presenter {
             } else {
                 0.0
             };
-            let peak = std::env::var("PUNKTFUNK_TONEMAP_PEAK")
-                .ok()
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(4.9); // ≈1000 nits / 203-nit reference
             let mut pc = [0f32; 16];
             pc[..12].copy_from_slice(rows.as_flattened());
             pc[12] = mode;
-            pc[13] = peak;
+            pc[13] = tonemap_peak();
             let words = pc.map(f32::to_ne_bytes);
             let bytes = words.as_flattened();
             self.device.cmd_push_constants(

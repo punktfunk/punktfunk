@@ -23,7 +23,7 @@ use crate::present_pace::{
     MARGIN_STEP_NS,
 };
 use crate::touch::{Abs, Act};
-use crate::vk::{FrameInput, Presenter};
+use crate::vk::{FrameInput, Presented, Presenter};
 use anyhow::{Context as _, Result};
 use pf_client_core::gamepad::{GamepadService, SelectChord};
 use pf_client_core::session::{self, DecodeFacts, SessionEvent, SessionHandle, SessionParams};
@@ -273,6 +273,15 @@ struct StreamState {
     /// the applied lead). Adaptive margin's error signal.
     win_misses: u32,
     win_out_max: usize,
+    /// Consecutive on-glass spacings this window, in whole panel periods: `[0, 1, 2, 3, 4, 5+]`.
+    /// The mode is the expected step; everything else is judder.
+    win_steps: [u32; 6],
+    last_displayed_ns: u64,
+    /// Smoothing: the latch slot the last vended frame was aimed at. One present per
+    /// slot; a second frame due before the same slot waits for the next.
+    last_slot_ns: u64,
+    /// The presenter handed the frame back (no swapchain image yet): wake in 1 ms.
+    busy_retry: bool,
     /// One-shot log latch: smoothness was requested but PyroWave collapsed the store
     /// to latency (plane-ring retirement assumes newest-wins).
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
@@ -367,6 +376,7 @@ impl StreamState {
         let _ = std::thread::Builder::new()
             .name("pf-frame-wake".into())
             .spawn(move || {
+                pf_client_core::audio_rt::boost_and_log("frame-wake");
                 while let Ok(f) = pump_rx.recv_blocking() {
                     let _ = wake_tx.force_send(f); // newest wins, like the pump's queue
                     let _ = wake.push_custom_event(FrameWake);
@@ -419,6 +429,10 @@ impl StreamState {
             margin_ns: 0,
             win_misses: 0,
             win_out_max: 0,
+            win_steps: [0; 6],
+            last_displayed_ns: 0,
+            last_slot_ns: 0,
+            busy_retry: false,
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             pyro_latency_forced: false,
             dmabuf_demoted: false,
@@ -449,6 +463,28 @@ impl StreamState {
 
     /// User exit: release capture, close with QUIT_CLOSE_CODE so the host tears down
     /// instead of lingering, stop the pump. The pump then emits `Ended(None)`.
+    /// The presenter had no swapchain image for `image`: keep it for the next pass and
+    /// wake soon. Newest-wins drops it if a fresher frame has landed meanwhile.
+    fn hold_busy(
+        &mut self,
+        image: Option<DecodedImage>,
+        pts_ns: u64,
+        decoded_ns: u64,
+        due_ns: i64,
+    ) {
+        if let Some(image) = image {
+            self.store.put_back(Paced {
+                frame: DecodedFrame {
+                    pts_ns,
+                    decoded_ns,
+                    image,
+                },
+                due_ns,
+            });
+        }
+        self.busy_retry = true;
+    }
+
     fn request_quit(&mut self) {
         if let Some(cap) = &mut self.capture {
             cap.release(true);
@@ -464,6 +500,10 @@ impl StreamState {
     /// mirror — a rule changed on one side oversleeps a smooth stream past its due time.
     fn wake_timeout(&self) -> Duration {
         const TICK: Duration = Duration::from_millis(15);
+        if self.busy_retry {
+            // A frame is waiting on a swapchain image; a refresh frees one.
+            return Duration::from_millis(1);
+        }
         if !self.store.is_smoothing() {
             return TICK;
         }
@@ -549,6 +589,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
     // shell⇄session windows group as one taskbar app (MSIX identity wins).
     #[cfg(windows)]
     crate::win32::set_app_user_model_id();
+    // This thread presents and forwards input; a late wake is a missed refresh.
+    pf_client_core::audio_rt::boost_and_log("presenter");
     sdl3::hint::set("SDL_JOYSTICK_THREAD", "1");
     // Hold Valve HIDAPI off before SDL_Init: the Deck driver clears digital mappings
     // at enumeration. A hint set after `sdl.gamepad()` only detaches a driver that
@@ -2040,9 +2082,16 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         {
                             st.win_misses += 1;
                         }
+                        if st.last_displayed_ns != 0 && period > 0 {
+                            let steps = (s.displayed_ns.saturating_sub(st.last_displayed_ns)
+                                + period / 2)
+                                / period;
+                            st.win_steps[(steps as usize).min(5)] += 1;
+                        }
+                        st.last_displayed_ns = s.displayed_ns;
                         stamps.push(s.displayed_ns);
                     }
-                    st.clock.note_batch(&stamps);
+                    st.clock.note_batch(&stamps, st.store.is_smoothing());
                     // VRR probe: healthy-window stamps only. Use the display mode's period
                     // (not the learned one — a slow stream makes the learner adopt our
                     // cadence as "the grid"). FIFO-family only: MAILBOX/IMMEDIATE never
@@ -2104,7 +2153,18 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                     let slot = st
                         .clock
                         .next_slot_after(now_ns.saturating_add(st.margin_ns));
-                    st.store.take(|p| p.due_ns < slot as i64)
+                    // One present per slot. Two frames due before the same slot were
+                    // presented back to back, and MAILBOX showed one of them for nothing
+                    // while the next slot went empty: the 0/2-step pairs in the ledger.
+                    if slot == st.last_slot_ns {
+                        None
+                    } else {
+                        let taken = st.store.take(|p| p.due_ns < slot as i64);
+                        if taken.is_some() {
+                            st.last_slot_ns = slot;
+                        }
+                        taken
+                    }
                 }
             } else {
                 st.store.take(|_| true)
@@ -2123,7 +2183,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                     }
                 }
             }
-            if let Some(Paced { frame: f, .. }) = to_present {
+            st.busy_retry = false;
+            if let Some(Paced { frame: f, due_ns }) = to_present {
                 // Resize end: a frame at the steered target size means the new-mode
                 // picture is here.
                 let (fw, fh) = f.image.dimensions();
@@ -2148,9 +2209,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::PyroWave(f),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.pyro_present_warned = false;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2174,14 +2240,27 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         st.hdr_untonemapped = false;
                         // Last rung: a present failure has nothing left to demote to.
                         // Drop the frame and keep the session; only a lost device ends it.
-                        match presenter.present(
-                            &window,
-                            FrameInput::Cpu(&c),
-                            overlay_frame.as_ref(),
-                        ) {
-                            Ok(p) => {
+                        // The borrow of `c` ends inside `map`, so a busy frame can go back whole.
+                        let outcome = presenter
+                            .present(&window, FrameInput::Cpu(&c), overlay_frame.as_ref())
+                            .map(|p| match p {
+                                Presented::Shown => Some(true),
+                                Presented::Stale => Some(false),
+                                Presented::Busy(_) => None,
+                            });
+                        match outcome {
+                            Ok(Some(shown)) => {
                                 st.cpu_present_warned = false;
-                                p
+                                shown
+                            }
+                            Ok(None) => {
+                                st.hold_busy(
+                                    Some(DecodedImage::Cpu(c)),
+                                    pts_ns,
+                                    decoded_ns,
+                                    due_ns,
+                                );
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2211,9 +2290,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::Dmabuf(d),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.hw_fails = 0;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             // Import/CSC failure is survivable — a streak means this box
                             // cannot do the hw path: demote the decoder to software. A lost
@@ -2259,9 +2343,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::D3d11(d),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.hw_fails = 0;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2305,9 +2394,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::NativeVk(v),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.hw_fails = 0;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2368,7 +2462,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         // No glass stamps: the submit instant anchors an approximate grid
                         // on the mode's refresh period, so smoothness still drains one
                         // frame per (approximate) slot.
-                        st.clock.note_batch(&[displayed_ns]);
+                        st.clock
+                            .note_batch(&[displayed_ns], st.store.is_smoothing());
                     }
                 }
             }
@@ -2413,10 +2508,19 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         "smoothness slot margin widened (measured latch misses)"
                     );
                 }
-                // The 1 Hz presenter line: emitted when anything moved, or always under
-                // PUNKTFUNK_PRESENT_DEBUG=1.
-                if pacing_active && (present_debug || q_drop + q_dry + gated + forced > 0) {
+                // The 1 Hz presenter line, always: the field bundle's only record of where a
+                // frame went after decode and how evenly the glass stepped.
+                if pacing_active {
+                    let _ = present_debug;
                     let cadence_health = st.pacer.health();
+                    let shown: u32 = st.win_steps.iter().sum();
+                    let mode_count = st.win_steps.iter().copied().max().unwrap_or(0);
+                    // Spacings off the most common step, per mille of the window's presents.
+                    let judder = if shown > 0 {
+                        u64::from(shown - mode_count) * 1000 / u64::from(shown)
+                    } else {
+                        0
+                    };
                     tracing::info!(
                         smoothing = present.smoothing,
                         mode = present.mode,
@@ -2428,6 +2532,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         forced,
                         misses = st.win_misses,
                         out_max = st.win_out_max,
+                        steps = ?st.win_steps,
+                        judder,
                         pace_ms,
                         latch_ms,
                         import_us = import.p50_us,
@@ -2451,6 +2557,7 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                 }
                 st.win_misses = 0;
                 st.win_out_max = 0;
+                st.win_steps = [0; 6];
             }
         }
 
@@ -3357,24 +3464,12 @@ fn close_window(
     snap.on_glass = presenter.present_timing_active();
     let prev = std::mem::replace(&mut st.health_seen, st.facts.health);
     snap.extras = desktop_extras(present, st.facts.health, prev, session::codec_fallbacks());
-    tracing::debug!(
-        e2e_p50_us = snap.e2e.p50_us,
-        e2e_p95_us = snap.e2e.p95_us,
-        host_p50_us = snap.host.p50_us,
-        host_p95_us = snap.host.p95_us,
-        net_p50_us = snap.net.p50_us,
-        net_p95_us = snap.net.p95_us,
-        decode_p50_us = snap.decode.p50_us,
-        decode_p95_us = snap.decode.p95_us,
-        display_p50_us = snap.display.p50_us,
-        display_p95_us = snap.display.p95_us,
-        rtt_us = snap.rtt_us.unwrap_or(0),
-        lost = snap.lost,
-        received = snap.received,
-        "stream window"
-    );
+    // The field bundle's per-second record, whatever the HUD tier: a report with no
+    // stats line cannot say where its frames went.
+    let text = hud::join(&hud::format(&snap, StatsVerbosity::Detailed, true), " | ");
+    tracing::info!(target: "stats", "{text}");
     if tier != StatsVerbosity::Off {
-        print_stats(&snap);
+        print_stats(&snap, &text);
     }
     let split = (
         snap.pace.p50_us as f32 / 1000.0,
@@ -3393,11 +3488,10 @@ fn render_osd(st: &mut StreamState, tier: StatsVerbosity) {
     };
 }
 
-/// The stdout machine interface: the Advanced Detailed text for a person reading a log, and
-/// the snapshot for a program. Both are additive; readers skip what they do not know.
-fn print_stats(snap: &StatsSnapshot) {
+/// The stdout machine interface: the Advanced Detailed `text` for a person reading a log,
+/// and the snapshot for a program. Both are additive; readers skip what they do not know.
+fn print_stats(snap: &StatsSnapshot, text: &str) {
     use std::io::Write as _;
-    let text = hud::join(&hud::format(snap, StatsVerbosity::Detailed, true), " | ");
     let json = serde_json::to_string(snap).unwrap_or_default();
     // Not `println!`: it panics on EPIPE, and the reader (the shell) can exit mid-stream.
     let mut out = std::io::stdout().lock();

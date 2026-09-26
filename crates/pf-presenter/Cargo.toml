@@ -45,6 +45,9 @@ tracing = "0.1"
 # of the workspace's Windows SDL consumers).
 [target.'cfg(target_os = "linux")'.dependencies]
 sdl3 = { version = "0.18", features = ["hidapi", "ash"] }
+# `dmabuf_fence::wait_sync_file`: the CPU fallback when the device cannot import a
+# sync_file as a semaphore.
+pf-zerocopy = { path = "../pf-zerocopy" }
 # `wayland_scroll` wraps SDL's foreign wl_display: `system` is the backend that
 # can, `dlopen` keeps the libwayland-client link lazy. Versions match the
 # workspace's locked wayland-* set (pf-inject uses the same 0.31/0.3 line).

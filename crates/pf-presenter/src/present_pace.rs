@@ -177,7 +177,13 @@ impl LatchClock {
 
     /// Fold on-glass stamps (ascending). Spacing is against the previous stamp,
     /// whatever the batch size, so a one-sample-per-pass drain still feeds the learner.
-    pub(crate) fn note_batch(&mut self, stamps: &[u64]) {
+    ///
+    /// `own_cadence`: the presents were scheduled on this clock's grid (the smoothing
+    /// drain). Then a spacing of whole refreshes is the drain skipping slots, not a slower
+    /// panel, and snaps to the mode — learning it fed back into a drain every second
+    /// slot for good. Arrival-driven presents keep teaching a panel slower than its
+    /// mode claim.
+    pub(crate) fn note_batch(&mut self, stamps: &[u64], own_cadence: bool) {
         for &s in stamps {
             if self.last_ns != 0 && s > self.last_ns {
                 let d = s - self.last_ns;
@@ -188,7 +194,12 @@ impl LatchClock {
                         self.pending.sort_unstable();
                         let median = self.pending[self.pending.len() / 2];
                         let mode = self.fallback_period_ns;
-                        let spacing = if median.abs_diff(mode) <= grid_snap_ns(mode) {
+                        let steps = if own_cadence {
+                            ((median + mode / 2) / mode).max(1)
+                        } else {
+                            1
+                        };
+                        let spacing = if median.abs_diff(steps * mode) <= grid_snap_ns(mode) {
                             mode
                         } else {
                             median
@@ -622,22 +633,32 @@ mod tests {
             t += (P as i64 + jitter) as u64;
             if i % GRID_OBSERVE_EVERY == 3 {
                 // Two presents retiring together, 2.2 ms apart.
-                c.note_batch(&[t, t + 2_200_000]);
+                c.note_batch(&[t, t + 2_200_000], false);
                 t += 2_200_000;
             } else {
-                c.note_batch(&[t]);
+                c.note_batch(&[t], false);
             }
         }
         assert_eq!(c.period_ns(), P, "jitter is not a faster panel");
 
-        // A stream below panel rate stays as measured — any multiple is a real latch.
+        // Arrival-driven presents every second refresh: a real 2×P latch, kept.
         let mut half = LatchClock::new(60);
         let mut t = 1_000_000_000u64;
         for _ in 0..(GRID_OBSERVE_EVERY * 9) {
             t += 2 * P;
-            half.note_batch(&[t]);
+            half.note_batch(&[t], false);
         }
         assert_eq!(half.period_ns(), 2 * P);
+
+        // The smoothing drain presenting every second slot must not teach a 30 Hz panel:
+        // that grid fed the drain back into every second slot for good.
+        let mut drain = LatchClock::new(60);
+        let mut t = 1_000_000_000u64;
+        for _ in 0..(GRID_OBSERVE_EVERY * 9) {
+            t += 2 * P;
+            drain.note_batch(&[t], true);
+        }
+        assert_eq!(drain.period_ns(), P);
     }
 
     /// Learns the batch median, anchors on the newest stamp, extrapolates.
@@ -649,7 +670,10 @@ mod tests {
         assert_eq!(c.period_ns(), P, "fallback = the mode refresh");
         assert_eq!(c.next_slot_after(1_000), 1_000 + P);
 
-        c.note_batch(&[1_000_000_000, 1_000_000_000 + P, 1_000_000_000 + 2 * P]);
+        c.note_batch(
+            &[1_000_000_000, 1_000_000_000 + P, 1_000_000_000 + 2 * P],
+            false,
+        );
         assert_eq!(c.period_ns(), P);
         assert_eq!(c.anchor_ns(), 1_000_000_000 + 2 * P);
         let next = c.next_slot_after(c.anchor_ns());
@@ -658,21 +682,21 @@ mod tests {
         assert_eq!(c.next_slot_after(next), next + P);
 
         // A queued pair (< 1 ms apart) must not become the period.
-        c.note_batch(&[2_000_000_000, 2_000_000_500]);
+        c.note_batch(&[2_000_000_000, 2_000_000_500], false);
         assert_eq!(c.period_ns(), P);
         assert_eq!(c.anchor_ns(), 2_000_000_500, "the anchor still advances");
 
         // 2×P is a slow stream, not a slower panel. PanelGrid needs a widen streak
         // before it grows; one window must not move the estimate.
-        c.note_batch(&[3_000_000_000, 3_000_000_000 + 2 * P]);
+        c.note_batch(&[3_000_000_000, 3_000_000_000 + 2 * P], false);
         assert_eq!(c.period_ns(), P, "one wide window is not a slower panel");
 
-        c.note_batch(&[5_000_000_000]);
+        c.note_batch(&[5_000_000_000], false);
         assert_eq!(c.anchor_ns(), 5_000_000_000);
         assert_eq!(c.period_ns(), P);
 
         let mut fast = LatchClock::new(120);
-        fast.note_batch(&[1_000_000_000, 1_008_333_333]);
+        fast.note_batch(&[1_000_000_000, 1_008_333_333], false);
         assert_eq!(fast.period_ns(), 8_333_333);
     }
 
@@ -685,7 +709,7 @@ mod tests {
         let mut t = 1_000_000_000u64;
         for _ in 0..(GRID_OBSERVE_EVERY * 8 + 8) {
             t += REAL;
-            c.note_batch(&[t]);
+            c.note_batch(&[t], false);
         }
         assert_eq!(
             c.period_ns(),
@@ -708,7 +732,7 @@ mod tests {
         let mut t = 1_000_000_000u64;
         for _ in 0..(GRID_OBSERVE_EVERY * 8 + GRID_OBSERVE_EVERY) {
             t += REAL;
-            c.note_batch(&[t]);
+            c.note_batch(&[t], false);
         }
         assert_eq!(
             c.period_ns(),

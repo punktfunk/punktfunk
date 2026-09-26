@@ -283,7 +283,9 @@ Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI 
 | `PUNKTFUNK_PRESENT_MODE` | `mailbox` · `fifo` · `immediate` · `fifo_relaxed` | Vulkan present mode. With V-sync on the default is `mailbox`, else `fifo` (AMD's Windows driver has no mailbox); with V-sync off `immediate` comes first. |
 | `PUNKTFUNK_PRESENTER` | `arrival` | Show frames the moment they decode, bypassing frame pacing. A diagnostic. |
 | `PUNKTFUNK_VRR_FIFO` | `1` | Follow a variable-refresh screen on a driver too old for the modern mode; costs latency on a fixed-refresh screen. The Detailed [stats overlay](/docs/stats) shows `vrr yes` when it works. |
-| `PUNKTFUNK_PRESENT_DEBUG` | `1` | Log the presenter's summary every second. |
+| `PUNKTFUNK_PRESENT_DEBUG` | `1` | Windows: log the D3D11VA hand-off window every second. The presenter's own summary line is always logged. |
+| `PUNKTFUNK_THREAD_BOOST` | `0` | Leave the video threads (receive, decode, present) at normal priority instead of raising them. An A/B, and the way out if a driver misbehaves under a boosted thread. |
+| `PUNKTFUNK_VAAPI_EXPLICIT_SYNC` | `0` | Linux: wait each VAAPI decode on the CPU before handing it to the presenter, instead of passing the GPU's own fence along. Costs one decode time of pipelining per frame; the way out if a driver shows a frame before it is done. |
 | `PUNKTFUNK_ABR_PROBE_KBPS` | kbps | Upper limit for the startup link measurement. |
 | `PUNKTFUNK_ABR_PROBE` | `0` | Skip the startup link measurement; Automatic then opens at the starting rate and climbs. |
 | `PUNKTFUNK_ABR_MAX_MBPS` | Mbps | Cap on Automatic's ceiling, for a client whose decoder can't keep up with what the link carries. |

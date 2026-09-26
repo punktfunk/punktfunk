@@ -18,6 +18,7 @@
 //! `PUNKTFUNK_DECODER=native-vaapi`. Evidence: `video::native_evidence` and the
 //! ignored tests in this file.
 
+use std::os::fd::AsRawFd as _;
 use std::os::fd::FromRawFd as _;
 use std::os::fd::OwnedFd;
 use std::os::raw::c_int;
@@ -1248,7 +1249,7 @@ fn ship(
     let surface = s.surfaces[surface_index];
 
     // Fds are owned from the successful export; later refusals close them by drop.
-    let (exported, fds) = export(d, surface)?;
+    let (exported, fds, sync_fds) = export(d, surface)?;
     if exported.fourcc != s.fourcc {
         // Driver silently substituted a different layout than the pool was created with.
         bail!(
@@ -1287,6 +1288,8 @@ fn ship(
         color: picture.facts.color,
         keyframe: picture.facts.keyframe,
         references_clean: picture.facts.references_clean,
+        sync_fds,
+        pool_key: (s.generation << 32) | surface_index as u64,
         guard: DrmFrameGuard(VaFrameGuard {
             _fds: fds,
             tx: tx.clone(),
@@ -1322,15 +1325,73 @@ fn finish(
     Ok(frames)
 }
 
-/// Sync then export. VAAPI has no fence for the importer; without the wait the
-/// presenter would sample a surface still being written. Fds are owned from success
-/// so later refusals close them. One fd per object, even when planes share it.
-fn export(d: &Display, surface: VaSurfaceId) -> Result<(pf_vaapi::ExportedSurface, Vec<OwnedFd>)> {
-    // SAFETY: a live display and a surface from its own pool.
-    d.va.check("vaSyncSurface", unsafe {
-        (d.va.sync_surface)(d.display, surface)
-    })?;
+/// How the importer learns the decode is done. The kernel fence on the surface's
+/// dma-buf is the default; `PUNKTFUNK_VAAPI_EXPLICIT_SYNC=0`, or a kernel without
+/// `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`, falls back to `vaSyncSurface` on the pump.
+/// Process-wide: a kernel fact, not a per-decoder one.
+static SYNC_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(SYNC_UNDECIDED);
+const SYNC_UNDECIDED: u8 = 0;
+const SYNC_EXPLICIT: u8 = 1;
+const SYNC_CPU: u8 = 2;
 
+fn sync_mode() -> u8 {
+    use std::sync::atomic::Ordering;
+    match SYNC_MODE.load(Ordering::Relaxed) {
+        SYNC_UNDECIDED => {
+            let off = std::env::var_os("PUNKTFUNK_VAAPI_EXPLICIT_SYNC").is_some_and(|v| v == "0");
+            let mode = if off { SYNC_CPU } else { SYNC_EXPLICIT };
+            SYNC_MODE.store(mode, Ordering::Relaxed);
+            mode
+        }
+        mode => mode,
+    }
+}
+
+/// Export, then hand out the decode's write fence as sync_files (one per object).
+/// The pump never waits: the presenter waits them on the GPU. Without the ioctl the
+/// old CPU wait runs here and `sync_fds` is empty. Fds are owned from success so
+/// later refusals close them. One fd per object, even when planes share it.
+fn export(
+    d: &Display,
+    surface: VaSurfaceId,
+) -> Result<(pf_vaapi::ExportedSurface, Vec<OwnedFd>, Vec<OwnedFd>)> {
+    if sync_mode() == SYNC_CPU {
+        // SAFETY: a live display and a surface from its own pool.
+        d.va.check("vaSyncSurface", unsafe {
+            (d.va.sync_surface)(d.display, surface)
+        })?;
+    }
+    let (exported, fds) = export_handle(d, surface)?;
+    if sync_mode() == SYNC_CPU {
+        return Ok((exported, fds, Vec::new()));
+    }
+    let mut sync_fds = Vec::with_capacity(fds.len());
+    for fd in &fds {
+        match pf_zerocopy::dmabuf_fence::export_sync_file(fd.as_raw_fd()) {
+            Ok(Some(sync)) => sync_fds.push(sync),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "native VAAPI: the kernel exports no dma-buf sync_file — the pump \
+                     waits each decode on the CPU instead"
+                );
+                SYNC_MODE.store(SYNC_CPU, std::sync::atomic::Ordering::Relaxed);
+                // SAFETY: a live display and a surface from its own pool.
+                d.va.check("vaSyncSurface", unsafe {
+                    (d.va.sync_surface)(d.display, surface)
+                })?;
+                return Ok((exported, fds, Vec::new()));
+            }
+        }
+    }
+    Ok((exported, fds, sync_fds))
+}
+
+fn export_handle(
+    d: &Display,
+    surface: VaSurfaceId,
+) -> Result<(pf_vaapi::ExportedSurface, Vec<OwnedFd>)> {
     let mut desc = pf_vaapi::VaDrmPrimeSurfaceDescriptor::zeroed();
     // SAFETY: a live display and surface; `desc` is a local of exactly the layout
     // `VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2` writes (measured by
@@ -1775,6 +1836,8 @@ mod tests {
             color: PLAIN.color,
             keyframe: PLAIN.keyframe,
             references_clean: PLAIN.references_clean,
+            sync_fds: Vec::new(),
+            pool_key: (1 << 32) | surface as u64,
             guard: DrmFrameGuard(VaFrameGuard {
                 _fds: Vec::new(),
                 tx: tx.clone(),
@@ -2165,6 +2228,8 @@ mod tests {
         let mut decoder = NativeVaapiDecoder::new(pf_vaapi::Codec::H265, StreamFormat::SDR_420_8)
             .expect("this box is supposed to have a VAAPI HEVC decode entry point");
         let mut us = Vec::with_capacity(units.len());
+        let mut fence_us = Vec::with_capacity(units.len());
+        let mut fence_outcomes = [0u32; 4]; // cpu-synced, signaled, already-done, timed-out
         let mut held = std::collections::VecDeque::new();
         let start = std::time::Instant::now();
         for (index, unit) in units.iter().enumerate() {
@@ -2173,6 +2238,24 @@ mod tests {
                 .decode(unit)
                 .unwrap_or_else(|e| panic!("unit {index}: {e:#}"));
             us.push(t.elapsed().as_micros() as u64);
+            // The fence the presenter would wait: how long after the call it signals, and
+            // whether the kernel handed one out at all.
+            if let Some(f) = &frame {
+                use pf_zerocopy::dmabuf_fence::{wait_sync_file, WaitOutcome};
+                match f.sync_fds.first() {
+                    None => fence_outcomes[0] += 1,
+                    Some(fd) => {
+                        let w = std::time::Instant::now();
+                        let slot = match wait_sync_file(fd.as_raw_fd(), 100) {
+                            Ok(WaitOutcome::Signaled) => 1,
+                            Ok(WaitOutcome::NoFence) => 2,
+                            _ => 3,
+                        };
+                        fence_outcomes[slot] += 1;
+                        fence_us.push(w.elapsed().as_micros() as u64);
+                    }
+                }
+            }
             held.extend(frame);
             if held.len() > 3 {
                 held.pop_front();
@@ -2180,14 +2263,22 @@ mod tests {
         }
         let total = start.elapsed();
         us.sort_unstable();
-        let at = |p: usize| us[(us.len() - 1) * p / 100];
+        fence_us.sort_unstable();
+        let at = |v: &[u64], p: usize| v.get((v.len().max(1) - 1) * p / 100).copied().unwrap_or(0);
         eprintln!(
-            "{path}: {} AUs in {total:?} ({:.0} fps); decode call p50 {} us, p95 {} us, max {} us",
+            "{path}: {} AUs in {total:?} ({:.0} fps); decode call p50 {} us, p95 {} us, max {} us; \
+             fence: cpu-synced {} signaled {} already-done {} timed-out {}; wait p50 {} us p95 {} us",
             us.len(),
             us.len() as f64 / total.as_secs_f64(),
-            at(50),
-            at(95),
-            us[us.len() - 1]
+            at(&us, 50),
+            at(&us, 95),
+            us[us.len() - 1],
+            fence_outcomes[0],
+            fence_outcomes[1],
+            fence_outcomes[2],
+            fence_outcomes[3],
+            at(&fence_us, 50),
+            at(&fence_us, 95),
         );
     }
 

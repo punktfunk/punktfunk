@@ -361,6 +361,7 @@ pub struct SessionHandle {
 }
 
 pub fn start(params: SessionParams) -> SessionHandle {
+    punktfunk_core::client::set_thread_boost(crate::audio_rt::boost_core_thread);
     let (ev_tx, ev_rx) = async_channel::unbounded();
     // Tiny frame queue, newest wins: force_send displaces the oldest when the UI lags.
     let (frame_tx, frame_rx) = async_channel::bounded(2);
@@ -839,6 +840,17 @@ fn spawn_plane_threads(
     }
 }
 
+/// How the pump learns a hardware decode finished, for the once-per-window decode sample.
+enum HwDone {
+    /// Vulkan Video: the picture's timeline semaphore reaches `value`.
+    Timeline(u64, u64),
+    /// VAAPI: the surface's write fence, exported as a sync_file.
+    #[cfg(target_os = "linux")]
+    SyncFile(std::os::fd::OwnedFd),
+    /// The decoder returned with the pixels done.
+    Cpu,
+}
+
 fn pump(
     params: SessionParams,
     ev_tx: async_channel::Sender<SessionEvent>,
@@ -846,6 +858,7 @@ fn pump(
     stop: Arc<AtomicBool>,
     mic: MicControl,
 ) {
+    crate::audio_rt::boost_and_log("decode");
     let ConnectPlan {
         preferred,
         pad_speaker_on,
@@ -1327,8 +1340,18 @@ fn pump(
                             // Native rung: decode signals `semaphore_value` when pixels
                             // are ready (presenter write-back is `+ 1`). Wait measures
                             // received→decode-complete.
-                            DecodedImage::NativeVk(f) => Some((f.semaphore, f.semaphore_value)),
-                            _ => None,
+                            DecodedImage::NativeVk(f) => {
+                                HwDone::Timeline(f.semaphore, f.semaphore_value)
+                            }
+                            // VAAPI ships the decode's write fence as a sync_file; a dup
+                            // outlives the frame's move to the presenter.
+                            #[cfg(target_os = "linux")]
+                            DecodedImage::NativeDmabuf(d) => d
+                                .sync_fds
+                                .first()
+                                .and_then(|fd| fd.try_clone().ok())
+                                .map_or(HwDone::Cpu, HwDone::SyncFile),
+                            _ => HwDone::Cpu,
                         };
                         if present {
                             // A displaced frame decoded and was never shown: newest wins.
@@ -1347,7 +1370,7 @@ fn pump(
                         match hw_fence {
                             // `decoded_ns` is a submission stamp here, so GPU decode sits
                             // inside `display` and this sample re-counts it.
-                            Some((sem, value)) => {
+                            HwDone::Timeline(sem, value) => {
                                 if !fence_sampled && decoder.wait_hw_decoded(sem, value, 50_000_000)
                                 {
                                     fence_sampled = true;
@@ -1355,7 +1378,21 @@ fn pump(
                                     connector.hud().note_decode_us(us, true);
                                 }
                             }
-                            None => {
+                            #[cfg(target_os = "linux")]
+                            HwDone::SyncFile(fd) => {
+                                use std::os::fd::AsRawFd as _;
+                                if !fence_sampled
+                                    && pf_zerocopy::dmabuf_fence::wait_sync_file(fd.as_raw_fd(), 50)
+                                        .is_ok_and(|o| {
+                                            o != pf_zerocopy::dmabuf_fence::WaitOutcome::TimedOut
+                                        })
+                                {
+                                    fence_sampled = true;
+                                    let us = now_ns().saturating_sub(received_ns) / 1000;
+                                    connector.hud().note_decode_us(us, true);
+                                }
+                            }
+                            HwDone::Cpu => {
                                 let us = decoded_ns.saturating_sub(received_ns) / 1000;
                                 connector.hud().note_decode_us(us, false);
                             }

@@ -26,6 +26,8 @@ fn kmsdrm_swapchain_hint() -> String {
 impl Presenter {
     pub fn recreate_swapchain(&mut self, window: &sdl3::video::Window) -> Result<()> {
         self.quiesce_own()?;
+        // An image acquired ahead of a present belongs to the swapchain that goes now.
+        self.acquired = None;
         // Presentation-engine semaphore waits finish here. A fence wait proves
         // only OUR submit (VUID-vkDestroySemaphore-05149 /
         // VUID-vkDestroySwapchainKHR-01282). Decode submits share `queue_lock`.

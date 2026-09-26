@@ -451,8 +451,24 @@ fn pin_thread_user_interactive() {
         let _ = libc::setpriority(libc::PRIO_PROCESS, tid as libc::id_t, -8);
     }
 }
+/// Desktop has no QoS class of its own; the embedder installs one with
+/// [`set_thread_boost`] (nice via rtkit, MMCSS on Windows).
 #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
-fn pin_thread_user_interactive() {}
+fn pin_thread_user_interactive() {
+    if let Some(boost) = THREAD_BOOST.get() {
+        boost();
+    }
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "android")))]
+static THREAD_BOOST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Install the call every hot client thread (UDP pump, runtime workers) makes at start
+/// to raise its own priority. First caller wins; later calls are ignored.
+#[cfg(not(any(target_vendor = "apple", target_os = "android")))]
+pub fn set_thread_boost(boost: fn()) {
+    let _ = THREAD_BOOST.set(boost);
+}
 
 /// Wall-clock now (ns, CLOCK_REALTIME) for latency math against host `pts_ns` after skew.
 ///

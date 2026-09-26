@@ -282,6 +282,11 @@ impl Transport for UdpTransport {
     fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> std::io::Result<usize> {
         apple::recv_batch(self, out, lens)
     }
+
+    #[cfg(target_os = "windows")]
+    fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> std::io::Result<usize> {
+        windows::recv_batch(self, out, lens)
+    }
 }
 
 #[cfg(test)]
