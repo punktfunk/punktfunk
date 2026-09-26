@@ -99,16 +99,18 @@ final class ConsoleABITests: XCTestCase {
         }
     }
 
-    /// A pad's Back at Home is not the console's: tvOS hands Menu to the system, and the shell
-    /// says why with a Quit action.
-    func testBackAtTheRootGoesToTheSystem() {
-        XCTAssertFalse(punktfunk_console_menu(console, 5, 1))
+    /// A pad's Back on a card climbs to its tab, where the press is the system's: an Apple app
+    /// cannot close itself, so the console raises no Quit and `at_root` hands Menu to tvOS.
+    func testBackClimbsToTheTabAndRaisesNoQuit() {
+        XCTAssertTrue(punktfunk_console_menu(console, 5, 1), "Back on a card is the console's")
+        XCTAssertTrue(punktfunk_console_at_root(console), "and lands on the tab")
+        XCTAssertTrue(punktfunk_console_menu(console, 5, 1))
         var events: [String] = []
         while let raw = punktfunk_console_next_event(console) {
             events.append(String(cString: raw))
             punktfunk_console_string_free(raw)
         }
-        XCTAssertTrue(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
+        XCTAssertFalse(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
     }
 }
 #endif
