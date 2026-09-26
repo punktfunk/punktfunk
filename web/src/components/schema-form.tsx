@@ -62,6 +62,16 @@ const handed = (n: JsonSchemaNode): "read" | "write" | null =>
 			? "read"
 			: null;
 
+/** Explorer's "Copy as path" wraps a path in double quotes; the path itself has none. */
+export const unquote = (s: string): string => s.replace(/^\s*"(.*)"\s*$/, "$1");
+
+/** One entry per line: edge space and blank lines dropped, handed paths unquoted. */
+export const toLines = (text: string, paths: boolean): string[] =>
+	text
+		.split("\n")
+		.map((s) => (paths ? unquote(s) : s).trim())
+		.filter((s) => s !== "");
+
 /**
  * The form. `onChange` gets `null` while the JSON editor holds text that is not an object, so
  * the caller can hold its Save. `grantee` names who receives a handed folder.
@@ -210,29 +220,17 @@ const Field: FC<{
 	}
 
 	if (node.type === "array") {
-		// One entry per line — the shape every "extra folders" setting wants.
-		const list = (value ?? node.default ?? []) as string[];
+		const access = handed(flatten(node.items ?? {}));
 		return (
 			<div className="space-y-1">
 				<Label htmlFor={id}>{label}</Label>
-				<Textarea
+				<LinesField
 					id={id}
-					className="h-24 font-mono text-xs"
-					value={list.join("\n")}
-					onChange={(e) =>
-						onChange(
-							e.target.value
-								.split("\n")
-								.map((s) => s.trim())
-								.filter((s) => s !== ""),
-						)
-					}
+					list={(value ?? node.default ?? []) as string[]}
+					paths={access !== null}
+					onChange={onChange}
 				/>
-				<Help
-					node={node}
-					grantee={grantee}
-					access={handed(flatten(node.items ?? {}))}
-				/>
+				<Help node={node} grantee={grantee} access={access} />
 			</div>
 		);
 	}
@@ -252,10 +250,34 @@ const Field: FC<{
 					const v = e.target.value;
 					// Emptied means unset, not zero or "": the file keeps a value never chosen out.
 					if (v === "") return onChange(undefined);
-					onChange(numeric ? Number(v) : v);
+					onChange(numeric ? Number(v) : access ? unquote(v) : v);
 				}}
 			/>
 			<Help node={node} grantee={grantee} access={access} />
 		</div>
+	);
+};
+
+/** The shape every "extra folders" setting wants. The text stays as typed, so a space or a new
+ * line survives the keystroke; blur shows what will be saved. */
+const LinesField: FC<{
+	id: string;
+	list: string[];
+	paths: boolean;
+	onChange: (v: string[]) => void;
+}> = ({ id, list, paths, onChange }) => {
+	const [text, setText] = useState(() => list.join("\n"));
+	return (
+		<Textarea
+			id={id}
+			className="h-24 font-mono text-xs"
+			value={text}
+			spellCheck={!paths}
+			onChange={(e) => {
+				setText(e.target.value);
+				onChange(toLines(e.target.value, paths));
+			}}
+			onBlur={() => setText(list.join("\n"))}
+		/>
 	);
 };
