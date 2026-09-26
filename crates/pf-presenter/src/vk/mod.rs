@@ -19,7 +19,7 @@ use crate::overlay::SharedDevice;
 use ash::vk;
 #[cfg(target_os = "linux")]
 use pf_client_core::video::DmabufFrame;
-use pf_client_core::video::{CpuPlanarFrame, NativeVkFrame};
+use pf_client_core::video::{CpuPlanarFrame, DecodedImage, NativeVkFrame};
 
 mod gpu;
 mod overlay_pipe;
@@ -51,6 +51,32 @@ fn overlay_api_version_of(declared: u32, loader: Option<u32>) -> u32 {
 /// Video-format probe behind [`AdapterDecode::formats`]. Re-exported so a printer
 /// cannot pick up a different `pf-vkdecode` version's flag names.
 pub use pf_vkdecode::probe;
+
+impl FrameInput<'_> {
+    /// The decoded image back out of a frame the presenter did not consume. The CPU lane
+    /// borrows its frame, so the caller still holds that one; `Redraw` carries nothing.
+    pub(crate) fn into_image(self) -> Option<DecodedImage> {
+        match self {
+            FrameInput::Redraw | FrameInput::Cpu(_) => None,
+            #[cfg(target_os = "linux")]
+            FrameInput::Dmabuf(d) => Some(DecodedImage::NativeDmabuf(d)),
+            #[cfg(windows)]
+            FrameInput::D3d11(d) => Some(DecodedImage::D3d11(d)),
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            FrameInput::PyroWave(f) => Some(DecodedImage::PyroWave(f)),
+            FrameInput::NativeVk(f) => Some(DecodedImage::NativeVk(f)),
+        }
+    }
+}
+
+/// What [`Presenter::present`] did with a frame.
+pub enum Presented<'a> {
+    Shown,
+    /// Swapchain out of date; recreated, frame dropped.
+    Stale,
+    /// No swapchain image yet: the frame comes back for a retry, unconsumed.
+    Busy(FrameInput<'a>),
+}
 
 pub enum FrameInput<'a> {
     /// Re-blit the retained video image (expose / resize); no new decode.
@@ -228,6 +254,8 @@ pub struct Presenter {
     /// Submit fence has work pending. Wait before recording; also what makes the single
     /// staging buffer safe to overwrite.
     submitted: bool,
+    /// Swapchain image taken by the non-blocking probe, waiting for its present.
+    acquired: Option<u32>,
     /// `VK_KHR_present_wait` on-glass timing. `None` without present-id/present-wait;
     /// the run loop then keeps its submit-time display stamp.
     present_timer: Option<present_timing::PresentTimer>,

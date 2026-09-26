@@ -677,6 +677,7 @@ impl Presenter {
             staging: None,
             video: None,
             submitted: false,
+            acquired: None,
             present_timer,
             next_present_id: 0,
             last_presented: None,

@@ -23,7 +23,7 @@ use crate::present_pace::{
     MARGIN_STEP_NS,
 };
 use crate::touch::{Abs, Act};
-use crate::vk::{FrameInput, Presenter};
+use crate::vk::{FrameInput, Presented, Presenter};
 use anyhow::{Context as _, Result};
 use pf_client_core::gamepad::{GamepadService, SelectChord};
 use pf_client_core::session::{self, DecodeFacts, SessionEvent, SessionHandle, SessionParams};
@@ -280,6 +280,8 @@ struct StreamState {
     /// Smoothing: the latch slot the last vended frame was aimed at. One present per
     /// slot; a second frame due before the same slot waits for the next.
     last_slot_ns: u64,
+    /// The presenter handed the frame back (no swapchain image yet): wake in 1 ms.
+    busy_retry: bool,
     /// One-shot log latch: smoothness was requested but PyroWave collapsed the store
     /// to latency (plane-ring retirement assumes newest-wins).
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
@@ -430,6 +432,7 @@ impl StreamState {
             win_steps: [0; 6],
             last_displayed_ns: 0,
             last_slot_ns: 0,
+            busy_retry: false,
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             pyro_latency_forced: false,
             dmabuf_demoted: false,
@@ -460,6 +463,22 @@ impl StreamState {
 
     /// User exit: release capture, close with QUIT_CLOSE_CODE so the host tears down
     /// instead of lingering, stop the pump. The pump then emits `Ended(None)`.
+    /// The presenter had no swapchain image for `image`: keep it for the next pass and
+    /// wake soon. Newest-wins drops it if a fresher frame has landed meanwhile.
+    fn hold_busy(&mut self, image: Option<DecodedImage>, pts_ns: u64, decoded_ns: u64, due_ns: i64) {
+        if let Some(image) = image {
+            self.store.put_back(Paced {
+                frame: DecodedFrame {
+                    pts_ns,
+                    decoded_ns,
+                    image,
+                },
+                due_ns,
+            });
+        }
+        self.busy_retry = true;
+    }
+
     fn request_quit(&mut self) {
         if let Some(cap) = &mut self.capture {
             cap.release(true);
@@ -475,6 +494,10 @@ impl StreamState {
     /// mirror — a rule changed on one side oversleeps a smooth stream past its due time.
     fn wake_timeout(&self) -> Duration {
         const TICK: Duration = Duration::from_millis(15);
+        if self.busy_retry {
+            // A frame is waiting on a swapchain image; a refresh frees one.
+            return Duration::from_millis(1);
+        }
         if !self.store.is_smoothing() {
             return TICK;
         }
@@ -2153,7 +2176,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                     }
                 }
             }
-            if let Some(Paced { frame: f, .. }) = to_present {
+            st.busy_retry = false;
+            if let Some(Paced { frame: f, due_ns }) = to_present {
                 // Resize end: a frame at the steered target size means the new-mode
                 // picture is here.
                 let (fw, fh) = f.image.dimensions();
@@ -2178,9 +2202,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::PyroWave(f),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.pyro_present_warned = false;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2204,14 +2233,22 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         st.hdr_untonemapped = false;
                         // Last rung: a present failure has nothing left to demote to.
                         // Drop the frame and keep the session; only a lost device ends it.
-                        match presenter.present(
-                            &window,
-                            FrameInput::Cpu(&c),
-                            overlay_frame.as_ref(),
-                        ) {
-                            Ok(p) => {
+                        // The borrow of `c` ends inside `map`, so a busy frame can go back whole.
+                        let outcome = presenter
+                            .present(&window, FrameInput::Cpu(&c), overlay_frame.as_ref())
+                            .map(|p| match p {
+                                Presented::Shown => Some(true),
+                                Presented::Stale => Some(false),
+                                Presented::Busy(_) => None,
+                            });
+                        match outcome {
+                            Ok(Some(shown)) => {
                                 st.cpu_present_warned = false;
-                                p
+                                shown
+                            }
+                            Ok(None) => {
+                                st.hold_busy(Some(DecodedImage::Cpu(c)), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2241,9 +2278,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::Dmabuf(d),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.hw_fails = 0;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             // Import/CSC failure is survivable — a streak means this box
                             // cannot do the hw path: demote the decoder to software. A lost
@@ -2289,9 +2331,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::D3d11(d),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.hw_fails = 0;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {
@@ -2335,9 +2382,14 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             FrameInput::NativeVk(v),
                             overlay_frame.as_ref(),
                         ) {
-                            Ok(p) => {
+                            Ok(Presented::Shown) => {
                                 st.hw_fails = 0;
-                                p
+                                true
+                            }
+                            Ok(Presented::Stale) => false,
+                            Ok(Presented::Busy(input)) => {
+                                st.hold_busy(input.into_image(), pts_ns, decoded_ns, due_ns);
+                                false
                             }
                             Err(e) => {
                                 if device_lost(&e) {

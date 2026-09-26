@@ -15,7 +15,7 @@
 //! Evidence: `csc_depth_packing` table tests; `design/pyrowave-444-hdr.md`.
 
 use super::gpu::*;
-use super::{FrameInput, Presenter, Retired};
+use super::{FrameInput, Presented, Presenter, Retired};
 use crate::csc::csc_rows;
 #[cfg(target_os = "linux")]
 use crate::dmabuf::{self, HwFrame};
@@ -74,16 +74,53 @@ impl Presenter {
         }
     }
 
-    /// Present one frame. `false` means the swapchain is out of date — the
-    /// caller recreates it (current window state) and may retry.
-    pub fn present(
+    /// Present one frame. `Stale` means the swapchain is out of date — the caller
+    /// recreates it (current window state) and may retry. `Busy` hands the frame back:
+    /// the swapchain has no image yet (FIFO with no glass stamps to gate on), so the
+    /// caller keeps the frame and tries again shortly instead of blocking on the queue.
+    pub fn present<'a>(
         &mut self,
         window: &sdl3::video::Window,
-        input: FrameInput,
+        input: FrameInput<'a>,
         overlay: Option<&OverlayFrame>,
-    ) -> Result<bool> {
+    ) -> Result<Presented<'a>> {
         if self.extent.width == 0 || self.extent.height == 0 {
-            return Ok(true); // minimized: true, not false (false recreates)
+            return Ok(Presented::Shown); // minimized: not Stale (Stale recreates)
+        }
+        // FIFO without present-wait: the queue is policed here rather than by blocking.
+        // Probe the previous submit's fence and take the image ahead of time; either
+        // one not ready means a refresh has not passed yet. Probed before `input` is
+        // consumed so the frame can go back to the store whole.
+        let nonblocking = self.needs_glass_gate()
+            && self.present_timer.is_none()
+            && !matches!(input, FrameInput::Redraw);
+        if nonblocking {
+            // SAFETY: `fence` is owned here; a status query is always legal.
+            if self.submitted && !unsafe { self.device.get_fence_status(self.fence) }? {
+                return Ok(Presented::Busy(input));
+            }
+            if self.acquired.is_none() {
+                // SAFETY: `swapchain`/`acquire_sem` are owned; the last submit that waited
+                // `acquire_sem` is fence-complete (checked above), so it is not pending.
+                match unsafe {
+                    self.swap_d.acquire_next_image(
+                        self.swapchain,
+                        0,
+                        self.acquire_sem,
+                        vk::Fence::null(),
+                    )
+                } {
+                    Ok((index, _)) => self.acquired = Some(index),
+                    Err(vk::Result::NOT_READY) | Err(vk::Result::TIMEOUT) => {
+                        return Ok(Presented::Busy(input));
+                    }
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                        self.recreate_swapchain(window)?;
+                        return Ok(Presented::Stale);
+                    }
+                    Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
+                }
+            }
         }
         // HDR follows this frame's PQ flag before any work. No HDR10 surface →
         // PQ stays on the SDR swapchain; CSC shader mode 1 tonemaps.
@@ -384,14 +421,19 @@ impl Presenter {
         let acquire_started = std::time::Instant::now();
         // SAFETY: `swapchain` and `acquire_sem` are owned here. Fence wait above
         // completed the last submit that waited `acquire_sem`, so it is not pending.
-        let (index, _suboptimal) = match unsafe {
-            self.swap_d.acquire_next_image(
-                self.swapchain,
-                u64::MAX,
-                self.acquire_sem,
-                vk::Fence::null(),
-            )
-        } {
+        // An image taken by the non-blocking probe above is used as is.
+        let acquired = match self.acquired.take() {
+            Some(index) => Ok((index, false)),
+            None => unsafe {
+                self.swap_d.acquire_next_image(
+                    self.swapchain,
+                    u64::MAX,
+                    self.acquire_sem,
+                    vk::Fence::null(),
+                )
+            },
+        };
+        let (index, _suboptimal) = match acquired {
             Ok(r) => r,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 // Acquire failed: GPU never saw the import; destroy it here.
@@ -400,7 +442,7 @@ impl Presenter {
                     f.destroy(&self.device);
                 }
                 self.recreate_swapchain(window)?;
-                return Ok(false);
+                return Ok(Presented::Stale);
             }
             Err(e) => return Err(e).context("vkAcquireNextImageKHR"),
         };
@@ -910,11 +952,11 @@ impl Presenter {
                     if self.present_timer.is_some() {
                         self.last_presented = Some((self.swapchain, self.next_present_id));
                     }
-                    Ok(true)
+                    Ok(Presented::Shown)
                 }
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                     self.recreate_swapchain(window)?;
-                    Ok(false)
+                    Ok(Presented::Stale)
                 }
                 Err(e) => Err(e).context("vkQueuePresentKHR"),
             }
