@@ -27,10 +27,15 @@ const GYRO_LSB_PER_RAD_S: f32 =
 const ACCEL_LSB_PER_G: f32 = wire::MOTION_ACCEL_LSB_PER_G as f32;
 const G: f32 = 9.80665;
 
-/// L1+R1+Start+Select: leave fullscreen and release capture. Raises the UI escape;
-/// the presenter masks forwarding until capture returns. A hold of
-/// [`DISCONNECT_HOLD`] disconnects. Not Guide/QAM — those pass through to the host.
-const ESCAPE_CHORD: [u32; 4] = [wire::BTN_LB, wire::BTN_RB, wire::BTN_START, wire::BTN_BACK];
+/// L1+R1+Start+Select: raises the UI escape (on a desktop the presenter releases capture,
+/// which masks forwarding until capture returns). A hold of [`DISCONNECT_HOLD`]
+/// disconnects, mask or not. Not Guide/QAM — those pass through to the host.
+const ESCAPE_CHORD: [sdl3::gamepad::Button; 4] = [
+    sdl3::gamepad::Button::LeftShoulder,
+    sdl3::gamepad::Button::RightShoulder,
+    sdl3::gamepad::Button::Start,
+    sdl3::gamepad::Button::Back,
+];
 
 /// 1500 ms is long enough to be deliberate over a leave-fullscreen press.
 const DISCONNECT_HOLD: Duration = Duration::from_millis(1500);
@@ -1418,10 +1423,12 @@ impl Worker {
         self.rearm_escape();
     }
 
+    /// Read from the pads, not `held_buttons`: the mask drops button events, and a hold
+    /// that began before it must still complete or let go.
     fn chord_held(&self) -> bool {
         self.slots
             .iter()
-            .any(|s| ESCAPE_CHORD.iter().all(|b| s.held_buttons.contains(b)))
+            .any(|s| ESCAPE_CHORD.iter().all(|&b| s.pad.button(b)))
     }
 
     fn maybe_fire_escape(&mut self) {
@@ -1465,8 +1472,9 @@ impl Worker {
         }
     }
 
-    /// Polled so the hold completes without new events.
+    /// Polled so the hold completes, or lets go, without new events — a mask drops them.
     fn maybe_fire_disconnect(&mut self) {
+        self.rearm_escape();
         if self.disconnect_fired {
             return;
         }
@@ -1701,12 +1709,12 @@ impl Worker {
                     self.push_sc2_gate();
                     if on {
                         // Neutral now, slots stay open — the host must not see an unplug.
+                        // An escape hold carries on: the escape itself raises this mask.
                         if let Some(c) = self.attached.clone() {
                             for slot in &mut self.slots {
                                 Self::flush_slot(&c, slot);
                             }
                         }
-                        self.reset_chord();
                     } else {
                         self.readopt_held();
                         self.menu_nav.reset();

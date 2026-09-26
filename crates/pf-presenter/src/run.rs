@@ -1501,9 +1501,13 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
             }
         }
 
-        // Controller escape chord: release capture (+ leave fullscreen on desktop —
-        // under a `--fullscreen` gamescope launch there is nothing to release into).
+        // Controller escape chord: release capture and leave fullscreen. Gamescope has
+        // nothing to release into and no pointer to click back with, while a release masks
+        // the pads — there the chord only starts the disconnect hold.
         while escape_rx.try_recv().is_ok() {
+            if in_gamescope() {
+                continue;
+            }
             if let Some(cap) = stream.as_mut().and_then(|s| s.capture.as_mut()) {
                 if cap.release(true) {
                     apply_capture(&mut window, &mouse, false, false, inhibit_shortcuts, 0);
