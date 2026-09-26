@@ -7,6 +7,39 @@
 use super::{is_transient_io, UdpTransport};
 use crate::transport::Transport;
 
+/// Drain the socket into the caller's buffers, one `recv` per datagram. Winsock has no
+/// `recvmmsg`, but this still spares the trait default's 9 KB allocation and copy per
+/// datagram — 20k of them a second at 200 Mbps. Stops at the first empty read.
+#[cfg(target_os = "windows")]
+pub(super) fn recv_batch(
+    t: &UdpTransport,
+    out: &mut [Vec<u8>],
+    lens: &mut [usize],
+) -> std::io::Result<usize> {
+    // WSAEMSGSIZE: the datagram outgrew the buffer and was truncated — larger than any
+    // valid packet, so drop it like the scalar path does.
+    const WSAEMSGSIZE: i32 = 10040;
+    let n_bufs = out.len().min(lens.len());
+    let mut got = 0usize;
+    while got < n_bufs {
+        match t.socket.recv(&mut out[got]) {
+            Ok(n) if n >= out[got].len() => continue,
+            Ok(n) => {
+                lens[got] = n;
+                got += 1;
+            }
+            Err(e) if e.raw_os_error() == Some(WSAEMSGSIZE) => continue,
+            Err(e) if is_transient_io(&e) => break, // drained or stale ICMP
+            Err(e) if got > 0 => {
+                let _ = e; // keep what we have; the next empty poll surfaces it
+                break;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(got)
+}
+
 /// Process-wide UDP Send Offload. On by default; `PUNKTFUNK_GSO=0` kills it.
 /// Support latches from the first send error, not a `setsockopt` probe — the
 /// probe would set a socket-wide segment size and fragment larger plain `send`s.
