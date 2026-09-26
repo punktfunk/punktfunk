@@ -148,7 +148,10 @@ impl Boost {
 pub fn boost_and_log(what: &'static str) {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *OFF.get_or_init(|| std::env::var_os("PUNKTFUNK_THREAD_BOOST").is_some_and(|v| v == "0")) {
-        tracing::info!(thread = what, "thread priority left alone (PUNKTFUNK_THREAD_BOOST=0)");
+        tracing::info!(
+            thread = what,
+            "thread priority left alone (PUNKTFUNK_THREAD_BOOST=0)"
+        );
         return;
     }
     match boost_current_thread() {

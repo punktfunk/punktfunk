@@ -465,7 +465,13 @@ impl StreamState {
     /// instead of lingering, stop the pump. The pump then emits `Ended(None)`.
     /// The presenter had no swapchain image for `image`: keep it for the next pass and
     /// wake soon. Newest-wins drops it if a fresher frame has landed meanwhile.
-    fn hold_busy(&mut self, image: Option<DecodedImage>, pts_ns: u64, decoded_ns: u64, due_ns: i64) {
+    fn hold_busy(
+        &mut self,
+        image: Option<DecodedImage>,
+        pts_ns: u64,
+        decoded_ns: u64,
+        due_ns: i64,
+    ) {
         if let Some(image) = image {
             self.store.put_back(Paced {
                 frame: DecodedFrame {
@@ -2077,7 +2083,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                             st.win_misses += 1;
                         }
                         if st.last_displayed_ns != 0 && period > 0 {
-                            let steps = (s.displayed_ns.saturating_sub(st.last_displayed_ns) + period / 2)
+                            let steps = (s.displayed_ns.saturating_sub(st.last_displayed_ns)
+                                + period / 2)
                                 / period;
                             st.win_steps[(steps as usize).min(5)] += 1;
                         }
@@ -2247,7 +2254,12 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                                 shown
                             }
                             Ok(None) => {
-                                st.hold_busy(Some(DecodedImage::Cpu(c)), pts_ns, decoded_ns, due_ns);
+                                st.hold_busy(
+                                    Some(DecodedImage::Cpu(c)),
+                                    pts_ns,
+                                    decoded_ns,
+                                    due_ns,
+                                );
                                 false
                             }
                             Err(e) => {
@@ -2450,7 +2462,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         // No glass stamps: the submit instant anchors an approximate grid
                         // on the mode's refresh period, so smoothness still drains one
                         // frame per (approximate) slot.
-                        st.clock.note_batch(&[displayed_ns], st.store.is_smoothing());
+                        st.clock
+                            .note_batch(&[displayed_ns], st.store.is_smoothing());
                     }
                 }
             }

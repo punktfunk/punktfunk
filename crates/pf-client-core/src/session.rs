@@ -1331,7 +1331,9 @@ fn pump(
                             // Native rung: decode signals `semaphore_value` when pixels
                             // are ready (presenter write-back is `+ 1`). Wait measures
                             // received→decode-complete.
-                            DecodedImage::NativeVk(f) => HwDone::Timeline(f.semaphore, f.semaphore_value),
+                            DecodedImage::NativeVk(f) => {
+                                HwDone::Timeline(f.semaphore, f.semaphore_value)
+                            }
                             // VAAPI ships the decode's write fence as a sync_file; a dup
                             // outlives the frame's move to the presenter.
                             #[cfg(target_os = "linux")]
@@ -1372,7 +1374,9 @@ fn pump(
                                 use std::os::fd::AsRawFd as _;
                                 if !fence_sampled
                                     && pf_zerocopy::dmabuf_fence::wait_sync_file(fd.as_raw_fd(), 50)
-                                        .is_ok_and(|o| o != pf_zerocopy::dmabuf_fence::WaitOutcome::TimedOut)
+                                        .is_ok_and(|o| {
+                                            o != pf_zerocopy::dmabuf_fence::WaitOutcome::TimedOut
+                                        })
                                 {
                                     fence_sampled = true;
                                     let us = now_ns().saturating_sub(received_ns) / 1000;

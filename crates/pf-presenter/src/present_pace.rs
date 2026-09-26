@@ -670,7 +670,10 @@ mod tests {
         assert_eq!(c.period_ns(), P, "fallback = the mode refresh");
         assert_eq!(c.next_slot_after(1_000), 1_000 + P);
 
-        c.note_batch(&[1_000_000_000, 1_000_000_000 + P, 1_000_000_000 + 2 * P], false);
+        c.note_batch(
+            &[1_000_000_000, 1_000_000_000 + P, 1_000_000_000 + 2 * P],
+            false,
+        );
         assert_eq!(c.period_ns(), P);
         assert_eq!(c.anchor_ns(), 1_000_000_000 + 2 * P);
         let next = c.next_slot_after(c.anchor_ns());

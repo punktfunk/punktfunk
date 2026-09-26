@@ -283,12 +283,18 @@ impl SyncImport {
     const RING: usize = 8;
 
     /// `None` when the device cannot import a `SYNC_FD` semaphore.
-    pub(crate) fn new(instance: &ash::Instance, pdev: vk::PhysicalDevice, device: &ash::Device) -> Option<Self> {
+    pub(crate) fn new(
+        instance: &ash::Instance,
+        pdev: vk::PhysicalDevice,
+        device: &ash::Device,
+    ) -> Option<Self> {
         let info = vk::PhysicalDeviceExternalSemaphoreInfo::default()
             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
         let mut props = vk::ExternalSemaphoreProperties::default();
         // SAFETY: read-only query on a live instance/pdev; locals outlive the call.
-        unsafe { instance.get_physical_device_external_semaphore_properties(pdev, &info, &mut props) };
+        unsafe {
+            instance.get_physical_device_external_semaphore_properties(pdev, &info, &mut props)
+        };
         if !props
             .external_semaphore_features
             .contains(vk::ExternalSemaphoreFeatureFlags::IMPORTABLE)
@@ -359,7 +365,10 @@ pub(crate) fn get_or_import(
 ) -> Result<HwFrame> {
     let generation = frame.pool_key >> 32;
     let layout = [
-        frame.planes.first().map_or((0, 0), |p| (p.offset, p.stride)),
+        frame
+            .planes
+            .first()
+            .map_or((0, 0), |p| (p.offset, p.stride)),
         frame.planes.get(1).map_or((0, 0), |p| (p.offset, p.stride)),
     ];
     let hit = cache.planes.get(&frame.pool_key).is_some_and(|p| {
