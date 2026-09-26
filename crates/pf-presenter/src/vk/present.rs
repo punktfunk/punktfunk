@@ -27,6 +27,25 @@ use ash::vk::Handle as _;
 use pf_client_core::video::SlotFormat;
 use pf_client_core::video::{NativeVkFrame, NativeVkLayout, RawVkFormat};
 
+/// `PUNKTFUNK_TONEMAP_PEAK`, read once: the environment lock and a string per frame is not
+/// a price the CSC record pays. Default 4.9 ≈ 1000 nits / 203-nit reference.
+fn tonemap_peak() -> f32 {
+    static PEAK: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *PEAK.get_or_init(|| {
+        std::env::var("PUNKTFUNK_TONEMAP_PEAK")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(4.9)
+    })
+}
+
+/// `PUNKTFUNK_D3D11_NO_MUTEX=1`, read once (debugging only: torn frames).
+#[cfg(windows)]
+fn keyed_mutex_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PUNKTFUNK_D3D11_NO_MUTEX").is_none())
+}
+
 impl Presenter {
     /// How a frame of another aspect fills the swapchain. Takes effect on the next present.
     pub fn set_video_fit(&mut self, fit: punktfunk_core::video_fit::VideoFit) {
@@ -682,25 +701,37 @@ impl Presenter {
                     vk::ImageLayout::UNDEFINED,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 );
-                self.device.cmd_clear_color_image(
-                    self.cmd_buf,
-                    swap_image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                    &[subresource_range()],
+                // A picture that covers the swapchain needs no clear under it: skipping the
+                // full-screen fill and its barrier is a whole pass saved on an iGPU.
+                let covered = matches!(
+                    (source, &placement),
+                    (Some(_), Some(p))
+                        if p.dst_x == 0
+                            && p.dst_y == 0
+                            && p.dst_w == self.extent.width
+                            && p.dst_h == self.extent.height
                 );
-                // Clear and blit both write the swapchain image; transfer commands carry no
-                // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
-                // the clear lands second the tile shows black (the AMD "equaliser" report).
-                barrier(
-                    &self.device,
-                    self.cmd_buf,
-                    swap_image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                );
+                if !covered {
+                    self.device.cmd_clear_color_image(
+                        self.cmd_buf,
+                        swap_image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                        &[subresource_range()],
+                    );
+                    // Clear and blit both write the swapchain image; transfer commands carry no
+                    // implicit order. RDNA fast-clears DCC metadata beside the blit, and where
+                    // the clear lands second the tile shows black (the AMD "equaliser" report).
+                    barrier(
+                        &self.device,
+                        self.cmd_buf,
+                        swap_image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    );
+                }
                 if let (Some((image, _, _)), Some(p)) = (source, placement) {
                     let corner = |x: f64, y: f64, z: i32| vk::Offset3D {
                         x: x.round() as i32,
@@ -881,9 +912,7 @@ impl Presenter {
                 .map(|(_, f)| f.memory)
                 .or(slot.map(|(f, _, _)| f.memory))
             {
-                // `PUNKTFUNK_D3D11_NO_MUTEX=1` skips acquire/release (torn frames;
-                // debugging only).
-                if std::env::var_os("PUNKTFUNK_D3D11_NO_MUTEX").is_none() {
+                if keyed_mutex_on() {
                     keyed_mem = [memory];
                     keyed_info = vk::Win32KeyedMutexAcquireReleaseInfoKHR::default()
                         .acquire_syncs(&keyed_mem)
@@ -1038,14 +1067,10 @@ impl Presenter {
             } else {
                 0.0
             };
-            let peak = std::env::var("PUNKTFUNK_TONEMAP_PEAK")
-                .ok()
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(4.9); // ≈1000 nits / 203-nit reference
             let mut pc = [0f32; 16];
             pc[..12].copy_from_slice(rows.as_flattened());
             pc[12] = mode;
-            pc[13] = peak;
+            pc[13] = tonemap_peak();
             pc[14] = uv_scale[0];
             pc[15] = uv_scale[1];
             let words = pc.map(f32::to_ne_bytes);
@@ -1132,14 +1157,10 @@ impl Presenter {
             } else {
                 0.0
             };
-            let peak = std::env::var("PUNKTFUNK_TONEMAP_PEAK")
-                .ok()
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(4.9); // ≈1000 nits / 203-nit reference
             let mut pc = [0f32; 16];
             pc[..12].copy_from_slice(rows.as_flattened());
             pc[12] = mode;
-            pc[13] = peak;
+            pc[13] = tonemap_peak();
             let words = pc.map(f32::to_ne_bytes);
             let bytes = words.as_flattened();
             self.device.cmd_push_constants(
