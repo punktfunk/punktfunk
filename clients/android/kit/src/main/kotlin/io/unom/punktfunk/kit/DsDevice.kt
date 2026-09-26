@@ -384,13 +384,15 @@ object DsDevice {
 
     // DS5 output report 0x02, report-relative offsets (`dualsense_proto::parse_ds_output`):
     // [1] valid_flag0 (bit0 compat vibration, bit1 haptics select, bit2 R2 block, bit3 L2 block),
-    // [2] valid_flag1 (bit2 lightbar, bit4 player LEDs), [3]/[4] motors, [11..22) R2 effect,
+    // [2] valid_flag1 (bit0 mic LED, bit2 lightbar, bit4 player LEDs), [3]/[4] motors, [9] mic LED
+    // mode, [11..22) R2 effect,
     // [22..33) L2 effect, [39] valid_flag2 (bit1 lightbar-setup enable, bit2 vibration2),
     // [42] lightbar_setup, [44] player LEDs, [45..48) RGB.
     private const val DS5_FLAG0_COMPAT_VIBRATION = 0x01
     private const val DS5_FLAG0_HAPTICS_SELECT = 0x02
     private const val DS5_FLAG0_R2_EFFECT = 0x04
     private const val DS5_FLAG0_L2_EFFECT = 0x08
+    private const val DS5_FLAG1_MIC_LED = 0x01
     private const val DS5_FLAG1_LIGHTBAR = 0x04
     private const val DS5_FLAG1_PLAYER_LEDS = 0x10
     private const val DS5_FLAG2_LIGHTBAR_SETUP = 0x02
@@ -464,6 +466,12 @@ object DsDevice {
     fun ds5PlayerLedsReport(model: Model, bits: Int): ByteArray = newDs5(model).also {
         it[2] = DS5_FLAG1_PLAYER_LEDS.toByte()
         it[44] = (bits and 0x1F).toByte()
+    }
+
+    /** DS5/Edge mic-mute LED: [mode] 0 off, 1 on, 2 pulse. */
+    fun ds5MicLedReport(model: Model, mode: Int): ByteArray = newDs5(model).also {
+        it[2] = DS5_FLAG1_MIC_LED.toByte()
+        it[9] = mode.toByte()
     }
 
     // DS4 output report 0x05 (32 B), report-relative (`dualshock4_proto::parse_ds4_output`):

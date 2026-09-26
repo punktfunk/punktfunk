@@ -44,6 +44,7 @@ public final class GamepadFeedback {
         var controller: GCController?
         var lastLight: (r: UInt8, g: UInt8, b: UInt8)?
         var lastPlayerBits: UInt8?
+        var lastMicMode: UInt8?
         var lastTrigger: [DualSenseTriggerEffect?] = [nil, nil]
         init(controller: GCController?) { self.controller = controller }
     }
@@ -149,7 +150,7 @@ public final class GamepadFeedback {
                 reset(slot.controller)
                 slot.controller = controller
                 withRouting { rumbleByPad[pad]?.retarget(controller) }
-                replay(slot)
+                replay(pad, slot)
             } else {
                 slots[pad] = Slot(controller: controller)
                 let renderer = RumbleRenderer()
@@ -270,7 +271,7 @@ public final class GamepadFeedback {
             return on ? Array(rumbleByPad.values) : []
         }
         for renderer in playing { renderer.apply(low: 0, high: 0, leftTrigger: 0, rightTrigger: 0) }
-        if !on { for slot in slots.values { replay(slot) } }
+        if !on { for (pad, slot) in slots { replay(pad, slot) } }
     }
 
     private func withRouting<R>(_ body: () -> R) -> R {
@@ -315,6 +316,12 @@ public final class GamepadFeedback {
             slot.lastPlayerBits = bits
             guard !withRouting({ silenced }) else { return }
             slot.controller?.playerIndex = Self.playerIndex(forBits: bits)
+        case let .micLED(pad, mode):
+            // No GameController API: only the macOS raw-HID path lights it.
+            guard let slot = slots[pad] else { return }
+            slot.lastMicMode = mode
+            guard !withRouting({ silenced }) else { return }
+            withRouting { rumbleByPad[pad] }?.setMicLED(mode)
         case let .triggerEffect(pad, which, effect):
             guard which < 2, let slot = slots[pad] else { return }
             let parsed = DualSenseTriggerEffect.parse(effect)
@@ -331,13 +338,16 @@ public final class GamepadFeedback {
 
     /// Replay a pad's cached feedback onto its (swapped-in) controller so a re-plug looks the same.
     @MainActor
-    private func replay(_ slot: Slot) {
+    private func replay(_ pad: UInt8, _ slot: Slot) {
         if let (r, g, b) = slot.lastLight {
             slot.controller?.light?.color = GCColor(
                 red: Float(r) / 255, green: Float(g) / 255, blue: Float(b) / 255)
         }
         if let bits = slot.lastPlayerBits {
             slot.controller?.playerIndex = Self.playerIndex(forBits: bits)
+        }
+        if let mode = slot.lastMicMode {
+            withRouting { rumbleByPad[pad] }?.setMicLED(mode)
         }
         for which in 0..<2 {
             if let effect = slot.lastTrigger[which],

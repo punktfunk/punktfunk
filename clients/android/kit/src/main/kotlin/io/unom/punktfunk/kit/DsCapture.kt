@@ -475,6 +475,12 @@ class DsCapture(
         usb.writeRaw(0, DsDevice.ds5PlayerLedsReport(m, bits))
     }
 
+    override fun micLed(pad: Int, mode: Int) {
+        val m = model ?: return
+        if (m == DsDevice.Model.DUALSHOCK4) return // no mic LED on a DS4
+        usb.writeRaw(0, DsDevice.ds5MicLedReport(m, mode))
+    }
+
     override fun trigger(pad: Int, which: Int, effect: ByteArray) {
         val m = model ?: return
         if (m == DsDevice.Model.DUALSHOCK4) return // no adaptive triggers on a DS4
@@ -497,7 +503,8 @@ class DsCapture(
     )
 
     /**
-     * Hand the pad back neutral: adaptive triggers released, lightbar dark, player LEDs clear.
+     * Hand the pad back neutral: adaptive triggers released, lightbar dark, player and mic LEDs
+     * clear.
      *
      * Rumble stops the moment nothing renews it, but these are LATCHED in the controller's
      * firmware — they outlive the stream, the app, and being unplugged. Ending a session while a
@@ -523,6 +530,7 @@ class DsCapture(
         }
         usb.writeControl(DsDevice.ds5LightbarReport(m, 0, 0, 0))
         usb.writeControl(DsDevice.ds5PlayerLedsReport(m, 0))
+        usb.writeControl(DsDevice.ds5MicLedReport(m, 0))
     }
 
     /** The report that stops the motors. The DS4's is a full-state write, so it zeroes the

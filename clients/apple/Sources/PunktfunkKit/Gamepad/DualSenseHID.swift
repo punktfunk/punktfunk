@@ -1,4 +1,4 @@
-// Raw-HID DualSense rumble for macOS.
+// Raw-HID DualSense rumble and mic-mute LED for macOS.
 //
 // Apple's GameController/CHHapticEngine path does NOT drive the DualSense's rumble motors on
 // macOS — a documented platform gap: adaptive triggers, lightbar and player LEDs all work
@@ -21,7 +21,8 @@ import os
 
 private let log = ClientLog(category: "gamepad")
 
-/// Opens one connected Sony DualSense and forwards motor rumble to it over raw HID.
+/// Opens one connected Sony DualSense and forwards motor rumble and the mic-mute LED to it over
+/// raw HID.
 ///
 /// A caller that owns a particular pad passes the location id it wants (see
 /// `open(preferringLocationID:)`); the renderer takes that from the `GCController` it is bound to,
@@ -32,6 +33,8 @@ final class DualSenseHID {
     private var device: IOHIDDevice?
     private var bluetooth = false
     private var closed = false
+    /// This instance lit the mic LED, so `close` puts it out: the pad latches it.
+    private var micLEDLit = false
 
     private static let vendorSony = 0x054C
     // DualSense (0x0CE6) and DualSense Edge (0x0DF2). The DualShock 4 uses a different report
@@ -139,16 +142,27 @@ final class DualSenseHID {
     /// stop left the motors running with nothing scheduled to try again.
     @discardableResult
     func rumble(low: UInt8, high: UInt8) -> Bool {
-        guard let dev = device else { return false }
-        let report = bluetooth
+        send(bluetooth
             ? Self.bluetoothReport(low: low, high: high)
-            : Self.usbReport(low: low, high: high)
+            : Self.usbReport(low: low, high: high))
+    }
+
+    /// Set the mic-mute LED: `mode` 0 off, 1 on, 2 pulse. GameController has no API for it.
+    @discardableResult
+    func micLED(mode: UInt8) -> Bool {
+        let sent = send(bluetooth ? Self.bluetoothMicReport(mode: mode) : Self.usbMicReport(mode: mode))
+        if sent { micLEDLit = mode != 0 }
+        return sent
+    }
+
+    private func send(_ report: [UInt8]) -> Bool {
+        guard let dev = device else { return false }
         let rc = report.withUnsafeBufferPointer { buf in
             IOHIDDeviceSetReport(
                 dev, kIOHIDReportTypeOutput, CFIndex(report[0]), buf.baseAddress!, buf.count)
         }
         if rc != kIOReturnSuccess {
-            log.error("rumble: IOHIDDeviceSetReport failed (0x\(String(format: "%08x", rc), privacy: .public))")
+            log.error("DualSense: IOHIDDeviceSetReport failed (0x\(String(format: "%08x", rc), privacy: .public))")
             return false
         }
         return true
@@ -157,7 +171,10 @@ final class DualSenseHID {
     func close() {
         guard !closed else { return }
         closed = true
-        if device != nil { rumble(low: 0, high: 0) } // silence the motors before releasing
+        if device != nil {
+            rumble(low: 0, high: 0) // silence the motors before releasing
+            if micLEDLit { micLED(mode: 0) }
+        }
         device = nil
         IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
     }
@@ -182,18 +199,42 @@ final class DualSenseHID {
     // `usbReport` / `bluetoothReport` / `crc32` are internal (not private) so the unit tests can
     // pin the exact wire layout against the SDL / hid-playstation spec without a physical pad.
     static func usbReport(low: UInt8, high: UInt8) -> [UInt8] {
-        var d = [UInt8](repeating: 0, count: 48)
-        d[0] = 0x02 // report id
-        fillEffects(&d, at: 1, low: low, high: high)
-        return d
+        usbFrame { fillEffects(&$0, at: $1, low: low, high: high) }
     }
 
     static func bluetoothReport(low: UInt8, high: UInt8) -> [UInt8] {
+        bluetoothFrame { fillEffects(&$0, at: $1, low: low, high: high) }
+    }
+
+    /// flag1 bit 0 (mic-mute LED enable) and `mute_button_led` at payload offset 8.
+    private static func fillMicLED(_ data: inout [UInt8], at base: Int, mode: UInt8) {
+        data[base + 1] = 0x01
+        data[base + 8] = mode
+    }
+
+    static func usbMicReport(mode: UInt8) -> [UInt8] {
+        usbFrame { fillMicLED(&$0, at: $1, mode: mode) }
+    }
+
+    static func bluetoothMicReport(mode: UInt8) -> [UInt8] {
+        bluetoothFrame { fillMicLED(&$0, at: $1, mode: mode) }
+    }
+
+    /// USB report 0x02: the payload starts at byte 1.
+    private static func usbFrame(_ fill: (inout [UInt8], Int) -> Void) -> [UInt8] {
+        var d = [UInt8](repeating: 0, count: 48)
+        d[0] = 0x02 // report id
+        fill(&d, 1)
+        return d
+    }
+
+    /// Bluetooth report 0x31: the payload starts at byte 3, CRC32 in the last four.
+    private static func bluetoothFrame(_ fill: (inout [UInt8], Int) -> Void) -> [UInt8] {
         var d = [UInt8](repeating: 0, count: 78)
         d[0] = 0x31 // report id
         d[1] = 0x00 // seq/tag (static, as SDL)
         d[2] = 0x10 // magic
-        fillEffects(&d, at: 3, low: low, high: high)
+        fill(&d, 3)
         // Trailing CRC32 over a 0xA2 seed byte + the report minus its 4 CRC bytes, little-endian.
         let crc = Self.crc32(seed: 0xA2, d[0..<(d.count - 4)])
         d[74] = UInt8(crc & 0xFF)

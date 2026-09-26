@@ -580,12 +580,14 @@ pub struct DsFeedback {
 pub mod out_report {
     /// `valid_flag0`: BIT0 compat vibration, BIT1 haptics select, BIT2 R2, BIT3 L2.
     pub const VALID_FLAG0: usize = 1;
-    /// `valid_flag1`: BIT2 lightbar, BIT4 player indicators.
+    /// `valid_flag1`: BIT0 mic-mute LED, BIT2 lightbar, BIT4 player indicators.
     pub const VALID_FLAG1: usize = 2;
     /// High-frequency (small / right) motor.
     pub const MOTOR_RIGHT: usize = 3;
     /// Low-frequency (big / left) motor.
     pub const MOTOR_LEFT: usize = 4;
+    /// Mic-mute LED mode: 0 off, 1 on, 2 pulse (`mute_button_led`).
+    pub const MIC_LED: usize = 9;
     /// First byte of the RIGHT trigger's parameter block — it precedes the left one in the report.
     pub const RIGHT_TRIGGER: usize = 11;
     /// First byte of the LEFT trigger's parameter block.
@@ -601,7 +603,8 @@ pub mod out_report {
 }
 
 /// Parse output report `0x02` into [`DsFeedback`], indexed off [`out_report`]. Rumble,
-/// lightbar, and player LEDs are typed; trigger blocks and audio-control are forwarded raw.
+/// lightbar, player LEDs and the mic-mute LED are typed; trigger blocks and audio-control are
+/// forwarded raw.
 ///
 /// Bluetooth `0x31` is accepted too: libScePad writes it to any pad whose output report
 /// exceeds 48 bytes, as the Edge's does. Its sequence and tag bytes are skipped; the CRC is
@@ -645,6 +648,12 @@ pub fn parse_ds_output(pad: u8, data: &[u8], fb: &mut DsFeedback) {
         fb.hidout.push(HidOutput::PlayerLeds {
             pad,
             bits: data[o::PLAYER_LEDS] & 0x1F,
+        });
+    }
+    if flag1 & 0x01 != 0 {
+        fb.hidout.push(HidOutput::MicLed {
+            pad,
+            mode: data[o::MIC_LED],
         });
     }
     // Right trigger block first (SDL `DS5EffectsState_t` / inputtino). Wire `which`: 0 = L2, 1 = R2.
@@ -989,6 +998,31 @@ mod tests {
         let mut fb = DsFeedback::default();
         parse_ds_output(0, &data, &mut fb);
         assert_eq!(fb.rumble, Some((0, 0)));
+    }
+
+    /// `hid-playstation` lights the mic LED with `valid_flag1` BIT0 and `mute_button_led` at
+    /// byte 9. Without the flag, the same byte is stale audio state, not an LED write.
+    #[test]
+    fn mic_led_rides_valid_flag1_bit0() {
+        let mut data = vec![0u8; 48];
+        data[0] = 0x02;
+        data[2] = 0x01; // valid_flag1: mic-mute LED
+        data[9] = 0x02; // pulse
+        let mut fb = DsFeedback::default();
+        parse_ds_output(3, &data, &mut fb);
+        assert!(
+            fb.rumble.is_none(),
+            "an LED write says nothing about rumble"
+        );
+        assert!(fb.hidout.contains(&HidOutput::MicLed { pad: 3, mode: 2 }));
+
+        data[2] = 0;
+        let mut fb = DsFeedback::default();
+        parse_ds_output(3, &data, &mut fb);
+        assert!(!fb
+            .hidout
+            .iter()
+            .any(|h| matches!(h, HidOutput::MicLed { .. })));
     }
 
     /// SDL's `RumbleJoystick(0, 0)` sends report `0x02` with every byte zero: no vibration

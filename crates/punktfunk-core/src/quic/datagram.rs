@@ -443,6 +443,7 @@ const HIDOUT_TRIGGER: u8 = 0x03;
 const HIDOUT_TRACKPAD_HAPTIC: u8 = 0x04;
 const HIDOUT_HID_RAW: u8 = 0x05;
 const HIDOUT_AUDIO_CTL: u8 = 0x06;
+const HIDOUT_MIC_LED: u8 = 0x07;
 
 /// [`HidOutput::HidRaw`] `kind`: interrupt-OUT / GATT write (`write` / `SDL_hid_write`).
 pub const HID_RAW_OUTPUT: u8 = 0;
@@ -499,6 +500,13 @@ pub enum HidOutput {
         flags: u8,
         raw: [u8; 6],
     },
+    /// Microphone-mute LED: `mode` 0 off, 1 on, 2 pulse (report `0x02` byte 9, enabled by
+    /// `valid_flag1` bit 0). Wire: `[0xCD][0x07][pad][mode]`. A client that predates the tag
+    /// drops this one datagram.
+    MicLed {
+        pad: u8,
+        mode: u8,
+    },
 }
 
 impl HidOutput {
@@ -509,7 +517,8 @@ impl HidOutput {
             | HidOutput::PlayerLeds { pad, .. }
             | HidOutput::Trigger { pad, .. }
             | HidOutput::TrackpadHaptic { pad, .. }
-            | HidOutput::HidRaw { pad, .. } => u16::from(*pad),
+            | HidOutput::HidRaw { pad, .. }
+            | HidOutput::MicLed { pad, .. } => u16::from(*pad),
             HidOutput::AudioCtl { pad, .. } => *pad,
         }
     }
@@ -555,6 +564,7 @@ impl HidOutput {
                 data,
             },
             HidOutput::AudioCtl { flags, raw, .. } => HidOutput::AudioCtl { pad, flags, raw },
+            HidOutput::MicLed { mode, .. } => HidOutput::MicLed { pad: narrow, mode },
         }
     }
 
@@ -592,6 +602,9 @@ impl HidOutput {
                 out.extend_from_slice(&pad.to_le_bytes());
                 out.push(*flags);
                 out.extend_from_slice(raw);
+            }
+            HidOutput::MicLed { pad, mode } => {
+                out.extend_from_slice(&[HIDOUT_MIC_LED, *pad, *mode])
             }
         }
         out
@@ -645,6 +658,10 @@ impl HidOutput {
                     raw: b[5..11].try_into().unwrap(),
                 })
             }
+            HIDOUT_MIC_LED if b.len() >= 4 => Some(HidOutput::MicLed {
+                pad: b[2],
+                mode: b[3],
+            }),
             _ => None,
         }
     }
@@ -1506,6 +1523,7 @@ mod tests {
                 flags: 0b0_0101,
                 raw: [0x50, 0x60, 0x70, 0x05, 0x00, 0x00],
             },
+            HidOutput::MicLed { pad: 2, mode: 2 },
         ];
         for ev in &cases {
             let d = ev.encode();
@@ -1522,6 +1540,17 @@ mod tests {
             .encode()
         )
         .is_none());
+    }
+
+    /// `[0xCD][0x07][pad][mode]`; anything shorter is dropped, like every other tag.
+    #[test]
+    fn mic_led_wire_layout_and_truncation() {
+        let m = HidOutput::MicLed { pad: 3, mode: 1 };
+        let d = m.encode();
+        assert_eq!(d, [0xCD, 0x07, 3, 1]);
+        assert_eq!(HidOutput::decode(&d), Some(m.clone()));
+        assert_eq!(HidOutput::decode(&d[..3]), None);
+        assert_eq!(m.with_pad(5), HidOutput::MicLed { pad: 5, mode: 1 });
     }
 
     #[test]

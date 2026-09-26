@@ -70,6 +70,9 @@ class GamepadFeedback(
         /** Player-indicator LED bitmask (low 5 bits, hid-playstation layout). */
         fun playerLeds(pad: Int, bits: Int)
 
+        /** Mic-mute LED: [mode] 0 off, 1 on, 2 pulse. A pad without one ignores it. */
+        fun micLed(pad: Int, mode: Int) {}
+
         /** One adaptive-trigger effect: [which] 0 = L2, 1 = R2; [effect] = the raw DS5 trigger
          *  block (mode byte + parameters) exactly as the game wrote it host-side. */
         fun trigger(pad: Int, which: Int, effect: ByteArray)
@@ -88,6 +91,7 @@ class GamepadFeedback(
         const val TAG_PLAYER_LEDS: Byte = 0x02
         const val TAG_TRIGGER: Byte = 0x03
         const val TAG_HID_RAW: Byte = 0x05
+        const val TAG_MIC_LED: Byte = 0x07
 
         /** Sparse-log cadence for swallowed render failures — see [noteRenderFailure]. */
         const val LOG_EVERY = 128L
@@ -385,6 +389,11 @@ class GamepadFeedback(
                 val s = sink?.takeIf { it.ownsPad(pad) }
                 if (s != null) s.playerLeds(pad, bits)
                 else if (Build.VERSION.SDK_INT >= 33) setPlayerId(pad, player)
+            }
+            TAG_MIC_LED -> {
+                // No platform API lights it: only a captured DualSense can.
+                val mode = buf.get().toInt() and 0xFF
+                sink?.takeIf { it.ownsPad(pad) }?.micLed(pad, mode)
             }
             TAG_TRIGGER -> {
                 val which = buf.get().toInt() and 0xFF // 0 = L2, 1 = R2

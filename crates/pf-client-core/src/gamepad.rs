@@ -579,6 +579,8 @@ impl Ds5Feedback {
     const RIGHT_TRIGGER: usize = 11 - Self::REPORT_ID_LEN;
     const LEFT_TRIGGER: usize = 22 - Self::REPORT_ID_LEN;
     const PAD_LIGHTS: usize = 44 - Self::REPORT_ID_LEN;
+    /// `ucMicLightMode`: USB report byte 9.
+    const MIC_LED: usize = 9 - Self::REPORT_ID_LEN;
     const LED_RGB: usize = 45 - Self::REPORT_ID_LEN;
     /// Mode byte plus 10 parameters — same width as `PUNKTFUNK_HID_EFFECT_MAX`.
     const TRIGGER_LEN: usize = punktfunk_core::abi::PUNKTFUNK_HID_EFFECT_MAX as usize;
@@ -609,6 +611,13 @@ impl Ds5Feedback {
         let mut p = [0u8; 47];
         p[1] = 0x10; // valid_flag1 player LEDs
         p[Self::PAD_LIGHTS] = bits & 0x1F;
+        p
+    }
+
+    fn mic_led_packet(mode: u8) -> [u8; 47] {
+        let mut p = [0u8; 47];
+        p[1] = 0x01; // valid_flag1 mic-mute LED
+        p[Self::MIC_LED] = mode;
         p
     }
 
@@ -2107,6 +2116,9 @@ impl Worker {
                 HidOutput::PlayerLeds { bits, .. } => {
                     let _ = set_player_leds(&slot.pad, bits);
                 }
+                HidOutput::MicLed { mode, .. } if is_ds => {
+                    let _ = slot.pad.send_effect(&Ds5Feedback::mic_led_packet(mode));
+                }
                 HidOutput::Trigger {
                     which, ref effect, ..
                 } if is_ds => {
@@ -2136,7 +2148,8 @@ impl Worker {
                 }
                 HidOutput::Trigger { .. }
                 | HidOutput::TrackpadHaptic { .. }
-                | HidOutput::AudioCtl { .. } => {}
+                | HidOutput::AudioCtl { .. }
+                | HidOutput::MicLed { .. } => {}
             }
         }
     }
@@ -2164,7 +2177,8 @@ fn hidout_pad(h: &HidOutput) -> u8 {
         | HidOutput::PlayerLeds { pad, .. }
         | HidOutput::Trigger { pad, .. }
         | HidOutput::TrackpadHaptic { pad, .. }
-        | HidOutput::HidRaw { pad, .. } => *pad,
+        | HidOutput::HidRaw { pad, .. }
+        | HidOutput::MicLed { pad, .. } => *pad,
         // AudioCtl's pad is the plane's only u16; decode already rejects ≥ MAX_PADS.
         HidOutput::AudioCtl { pad, .. } => *pad as u8,
     }
@@ -2618,6 +2632,7 @@ mod ds5_feedback_tests {
             (22, Ds5Feedback::LEFT_TRIGGER),
             (44, Ds5Feedback::PAD_LIGHTS),
             (45, Ds5Feedback::LED_RGB),
+            (9, Ds5Feedback::MIC_LED),
         ] {
             assert_eq!(payload, usb - 1, "payload offset for USB byte {usb}");
         }
@@ -2661,6 +2676,16 @@ mod ds5_feedback_tests {
         );
         let p = Ds5Feedback::player_packet(0b0000_0101);
         assert_eq!(p[Ds5Feedback::PAD_LIGHTS], 0b0000_0101);
+    }
+
+    /// SDL's `ucEnableBits2` 0x01 enables `ucMicLightMode`; nothing else is claimed.
+    #[test]
+    fn mic_led_sets_only_its_enable_bit_and_mode() {
+        let p = Ds5Feedback::mic_led_packet(2);
+        assert_eq!(p[1], 0x01, "valid_flag1 mic-mute LED bit");
+        assert_eq!(p[0], 0, "must not claim any valid_flag0 field");
+        assert_eq!(p[Ds5Feedback::MIC_LED], 2);
+        assert_eq!(p.iter().filter(|&&b| b != 0).count(), 2);
     }
 
     /// which 1 = R2, which 0 = L2; the RIGHT block sits first in the report.
