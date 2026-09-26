@@ -367,9 +367,9 @@ else
 fi
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Publish — land the flake on main and verify"
+stage "Publish — dispatch the nix workflow on main and verify"
 
-say "The publish tier runs on a push to main touching the flake, Cargo.*, or packaging/nix."
+say "The publish runs on v* tags, nightly, and on a dispatch of the nix workflow on main."
 printf '\n'
 note "  It builds the whole Rust workspace AND gamescope inside the nix sandbox — sccache"
 note "  cannot reach in there, so budget roughly an hour for the first run."
@@ -377,7 +377,7 @@ note "  If it reddens on 'Build the bun packages', that is the known intermitten
 note "  (exit 137) rather than a real break — re-run the job."
 printf '\n'
 open_url "$GITEA_REPO/actions?workflow=nix.yml"
-step "Merge any outstanding cache PR, or push a flake-touching commit to main."
+step "Merge any outstanding cache PR, then 'Run workflow' on main."
 step "Watch the nix workflow's 'Sign + publish to nix.unom.io' step."
 pause "Published? Press Enter to verify the live cache"
 

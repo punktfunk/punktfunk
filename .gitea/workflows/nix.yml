@@ -33,14 +33,14 @@
 #             covers what the ci.yml drift gate cannot, e.g. a tarball the registry no longer
 #             serves, or the codegen going quietly message-less (see packages.nix's inlang note).
 #
-#   * cache — PUSH TO MAIN ONLY. Builds the Rust packages + gamescope for real and publishes every
-#             punktfunk store path to the binary cache at https://nix.unom.io, so a NixOS user gets
-#             prebuilt binaries instead of an hour of rustc and a gamescope compile. This is the
-#             expensive tier and it is why the job timeout is 180 rather than 90.
-#
-#             It needs NO extra trigger for releases: a release bumps the workspace version in
-#             Cargo.toml, which is already in the path filter below, so the tag's content is
-#             published by the version-bump commit on main.
+#   * cache — builds the Rust packages + gamescope, publishes every punktfunk store path to
+#             https://nix.unom.io, then moves a channel branch to the published commit:
+#               `v*` tag                     → nix-stable
+#               nightly, or dispatch on main → nix-canary (the nightly skips a commit it has)
+#             Users follow `?ref=nix-stable` or `?ref=nix-canary`, so `nix flake update` only
+#             lands on a commit the cache holds. The version carries `+g<rev>`, so every commit
+#             is its own store path, and a plain main push is not published: users never get it.
+#             This is the expensive tier and why the job timeout is 180 rather than 90.
 #
 #             Only OUR paths are published — see the step for why that is both correct and the
 #             difference between ~300 MB and several GB per publish.
@@ -52,8 +52,8 @@
 # ⚠ punktfunk-gamescope matters more than it looks: `host.gamescopeHdr` DEFAULTS TRUE, so it is on
 # the critical path of every `services.punktfunk.host.enable = true` build. It patches whatever
 # gamescope the pinned nixpkgs carries, so a nixpkgs bump — not a change of ours — is what breaks
-# it, and the first person to find out would be an operator whose system rebuild fails. The `cache`
-# tier now compiles it on every main push, so a flake.lock bump that breaks it goes red HERE; the
+# it, and the first person to find out would be an operator whose system rebuild fails. The nightly
+# `cache` run compiles it, so a flake.lock bump that breaks it goes red here within a day; the
 # dispatch input below is for checking it on a branch before merging.
 #
 # ⚠ pull_request is deliberately present. flatpak.yml shipped with push-only triggers and manifest
@@ -62,13 +62,18 @@
 # workflow parser is not a place to bet on anchor support. Keep them in step by hand.
 name: nix
 
+# Per event, so a main push cannot cancel the nightly publish mid-build.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 on:
+  # Canary publish. Tag runs ignore the path filter below.
+  schedule:
+    - cron: "0 2 * * *"
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "flake.nix"
       - "flake.lock"
@@ -252,7 +257,7 @@ jobs:
             || { echo "installed console is not a bun bundle" >&2; exit 1; }
           echo "bun packages OK: $web  $scripting"
 
-      # ── binary cache (push to main only) ───────────────────────────────────────────────────────
+      # ── binary cache (v* tags, nightly, dispatch on main) ─────────────────────────────────────
       #
       # Decided against a bucket on storage.unom.io even though sccache already uses it and the
       # credentials already exist: it is local RustFS on the home uplink with no CDN in front, so
@@ -266,24 +271,36 @@ jobs:
       # /<hash>.narinfo, /nar/<hash>.nar.xz) that /api/packages/{owner}/generic/… cannot express.
       - name: Cache publish preflight
         id: cachecfg
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name != 'pull_request' }}
         env:
+          EVENT: ${{ github.event_name }}
           NIX_CACHE_SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           # unom-1's SSH host key, `ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST"`. Gated here with
           # the rest: no pinned host key, no publish — never a first-contact-trusts-anything deploy.
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          # Moves the nix-* channel branch after the publish.
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         # Guard BEFORE the build, not before the upload: an unconfigured cache must not cost an
         # hour of rustc first. No-ops cleanly until the secret exists, exactly as flatpak.yml's
         # repo deploy does, so this workflow stays green through setup.
         run: |
           set -eu
-          if [ -n "${NIX_CACHE_SIGNING_KEY:-}" ] && [ -n "${DEPLOY_HOST:-}" ] && [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::NIX_CACHE_SIGNING_KEY/DEPLOY_HOST/DEPLOY_KNOWN_HOSTS not set — skipping the binary cache publish (see packaging/nix/README.md)."
+          skip() { echo "go=false" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
+          case "$EVENT:$GITHUB_REF" in
+            push:refs/tags/v*) CHANNEL=stable ;;
+            schedule:refs/heads/main | workflow_dispatch:refs/heads/main) CHANNEL=canary ;;
+            *) skip "$EVENT on $GITHUB_REF does not publish (v* tags, the nightly, or a dispatch on main do)" ;;
+          esac
+          if [ -z "${NIX_CACHE_SIGNING_KEY:-}" ] || [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_KNOWN_HOSTS:-}" ] || [ -z "${REGISTRY_TOKEN:-}" ]; then
+            skip "::warning::NIX_CACHE_SIGNING_KEY/DEPLOY_HOST/DEPLOY_KNOWN_HOSTS/REGISTRY_TOKEN not set — skipping the binary cache publish (see packaging/nix/README.md)."
           fi
+          if [ "$EVENT" = schedule ] && [ "$(git ls-remote origin refs/heads/nix-canary | cut -f1)" = "$GITHUB_SHA" ]; then
+            skip "nix-canary is already at $GITHUB_SHA"
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "publishing $GITHUB_SHA to nix-$CHANNEL"
 
       - name: Build the publishable packages
         if: ${{ steps.cachecfg.outputs.go == 'true' }}
@@ -308,6 +325,8 @@ jobs:
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          CHANNEL: ${{ steps.cachecfg.outputs.channel }}
         run: |
           # `set -eu`, NOT `set -euo pipefail`: act_runner may execute a step's `run:` under dash in
           # these containers (see scripts/ci/ensure-sccache.sh), and dash dies on `-o pipefail` with
@@ -369,16 +388,20 @@ jobs:
           # mid-download is never pulled out from under.
           bash scripts/ci/retry.sh 5 rsync -az --info=stats1 -e "$SSH" nix-cache/nar/ "$DEST:$DEPLOY_DIR/site/nar/"
           bash scripts/ci/retry.sh 5 rsync -az -e "$SSH" nix-cache/nix-cache-info nix-cache/punktfunk-cache.pub nix-cache/*.narinfo "$DEST:$DEPLOY_DIR/site/"
+          # prune.sh never ages out the latest stable release's narinfos.
+          if [ "$CHANNEL" = stable ]; then
+            (cd nix-cache && printf '%s\n' *.narinfo) > stable.narinfos
+            bash scripts/ci/retry.sh 5 rsync -az -e "$SSH" stable.narinfos "$DEST:$DEPLOY_DIR/"
+          fi
           bash scripts/ci/retry.sh 5 rsync -az -e "$SSH" \
             packaging/nix/server/compose.production.yml packaging/nix/server/Caddyfile packaging/nix/server/prune.sh \
             "$DEST:$DEPLOY_DIR/"
           bash scripts/ci/retry.sh 5 $SSH "$DEST" "cd ~/$DEPLOY_DIR && docker compose -f compose.production.yml up -d"
 
-          # 4) Bound it. The flatpak repo next door reached 3.84 GB publishing this same way with
-          #    no sweep, on a box that has run out of disk before; this one gets the sweep from the
-          #    first publish. Never allowed to fail the job — the cache is already live by now, and
-          #    a growing disk is a slower problem than a red main.
-          bash scripts/ci/retry.sh 3 $SSH "$DEST" "sh ~/$DEPLOY_DIR/prune.sh ~/$DEPLOY_DIR/site 180" \
+          # 4) Bound it: 30 days, because canary publishes nightly; stable.narinfos is exempt. Never
+          #    allowed to fail the job — the cache is already live by now, and a growing disk is a
+          #    slower problem than a red main.
+          bash scripts/ci/retry.sh 3 $SSH "$DEST" "sh ~/$DEPLOY_DIR/prune.sh ~/$DEPLOY_DIR/site 30 ~/$DEPLOY_DIR/stable.narinfos" \
             || echo "::warning::cache prune failed — published cache may be growing unbounded"
 
           # 5) Prove the published cache actually answers, rather than assuming the rsync landed.
@@ -388,6 +411,23 @@ jobs:
           miss="$(curl -sS -o /dev/null -w '%{http_code}' "$CACHE_URL/0000000000000000000000000000000000.narinfo")"
           [ "$miss" = 404 ] || { echo "::error::cache returns $miss for an absent path; nix needs 404 or every user build fails"; exit 1; }
           echo "published → $CACHE_URL"
+
+          # 6) Point the channel at the commit just published, and only now, so the branch never
+          #    names a commit the cache lacks. No force: Gitea answers a non-fast-forward with 422,
+          #    so a run that finishes after a newer one leaves the channel where it is.
+          BRANCH="nix-$CHANNEL"
+          API="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/branches"
+          AUTH="Authorization: token $REGISTRY_TOKEN"
+          code="$(curl -sS --retry 3 -o branch.out -w '%{http_code}' -X PUT "$API/$BRANCH" \
+            -H "$AUTH" -H 'Content-Type: application/json' -d "{\"new_commit_id\":\"$GITHUB_SHA\"}")"
+          case "$code" in
+            204) ;;
+            404) curl -fsS --retry 3 -X POST "$API" -H "$AUTH" -H 'Content-Type: application/json' \
+                   -d "{\"new_branch_name\":\"$BRANCH\",\"old_ref_name\":\"$GITHUB_SHA\"}" > /dev/null ;;
+            422) echo "::warning::$BRANCH is already past $GITHUB_SHA; left in place"; exit 0 ;;
+            *) echo "::error::moving $BRANCH returned $code: $(cat branch.out)"; exit 1 ;;
+          esac
+          echo "$BRANCH → $GITHUB_SHA"
 
       # Opt-in only: the full Rust workspace through crane, which is the hour-long leg.
       # Accept BOTH shapes. A checkbox dispatched from the Gitea UI arrives as the STRING

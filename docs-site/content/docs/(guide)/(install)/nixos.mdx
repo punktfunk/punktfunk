@@ -24,6 +24,9 @@ cache ([packaging/nix](https://git.unom.io/unom/punktfunk/src/branch/main/packag
 
 <Install platform="nixos" />
 
+`?ref=nix-stable` follows releases. For canary, built nightly from `main`, use `?ref=nix-canary`
+([Release Channels](/docs/channels)). Both move only to a commit the binary cache holds.
+
 A typical host block:
 
 ```nix
@@ -61,6 +64,6 @@ a device.
 - Every option, GPU driver notes and the headless setup:
   [packaging/nix](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/nix/README.md).
 - Run the host without NixOS (wrapped in [nixGL](https://github.com/nix-community/nixGL) for the
-  GPU drivers): `nix run git+https://git.unom.io/unom/punktfunk#punktfunk-host -- serve`.
+  GPU drivers): `nix run 'git+https://git.unom.io/unom/punktfunk?ref=nix-stable#punktfunk-host' -- serve`.
 - Update: `nix flake update punktfunk`, then `sudo nixos-rebuild switch`. Remove:
   [Uninstall](/docs/uninstall#nixos).

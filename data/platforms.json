@@ -162,7 +162,7 @@
       "docs": "/docs/nixos",
       "floor": "NixOS with flakes",
       "install": [
-        "# flake input: inputs.punktfunk.url = \"git+https://git.unom.io/unom/punktfunk\";",
+        "# flake input: inputs.punktfunk.url = \"git+https://git.unom.io/unom/punktfunk?ref=nix-stable\";",
         "# then: imports = [ punktfunk.nixosModules.default ]; services.punktfunk.host.enable = true;"
       ]
     },

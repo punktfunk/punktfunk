@@ -7,7 +7,7 @@
 # (`services.punktfunk.scripting`, likewise on by default — the game-library scanners are plugins).
 #
 # Usage (flake):
-#   { inputs.punktfunk.url = "git+https://git.unom.io/unom/punktfunk";
+#   { inputs.punktfunk.url = "git+https://git.unom.io/unom/punktfunk?ref=nix-stable";
 #     outputs = { punktfunk, nixpkgs, ... }: {
 #       nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
 #         modules = [ punktfunk.nixosModules.default

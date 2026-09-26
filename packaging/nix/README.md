@@ -27,10 +27,22 @@ host runs on NVIDIA, AMD/Intel or software.
 
 ## Binary cache
 
-CI publishes every punktfunk package to `https://nix.unom.io` on each push to `main` that moves the
-flake. Without it, `nix build` here compiles the whole Rust workspace *and* gamescope from source —
-about an hour. Only punktfunk's own store paths are published; everything else is stock nixpkgs from
-`cache.nixos.org`, so adding the substituter costs nothing on unrelated builds.
+CI publishes every punktfunk package to `https://nix.unom.io`. Without it, `nix build` here compiles
+the whole Rust workspace *and* gamescope from source — about an hour. Only punktfunk's own store
+paths are published; everything else is stock nixpkgs from `cache.nixos.org`, so adding the
+substituter costs nothing on unrelated builds.
+
+The version carries `+g<rev>`, so every commit is its own store path and the cache holds only the
+commits CI published. Each channel is a branch that CI moves only after a publish succeeds, so
+`nix flake update` never lands on an uncached commit:
+
+| Flake input | Moves on |
+| --- | --- |
+| `git+https://git.unom.io/unom/punktfunk?ref=nix-stable` | each `v*` release tag |
+| `git+https://git.unom.io/unom/punktfunk?ref=nix-canary` | nightly when `main` moved, or a dispatch of `nix.yml` on `main` |
+| `…?ref=v<x.y.z>` | never; the tag is published too |
+
+A bare URL follows `main`, which is almost never the published commit.
 
 The cache serves its own public key at `https://nix.unom.io/punktfunk-cache.pub`, which is the
 source of truth to check any pinned copy against.
@@ -117,9 +129,10 @@ GPU driver. `nix fmt` formats the `.nix` files.
 - **Commit `flake.lock`.** It pins nixpkgs, crane, rust-overlay and bun2nix.
 
 CI runs three tiers (`nix.yml`): `nix flake check --no-build` evaluates every output including the
-module check; the two bun packages are built for real on every PR; and a push to `main` builds the
-Rust packages and `punktfunk-gamescope` and publishes them to the cache. A `flake.lock` bump that
-breaks the gamescope patches therefore goes red on main rather than in an operator's rebuild.
+module check; the two bun packages are built for real on every PR; and a `v*` tag, the nightly or a
+dispatch on `main` builds the Rust packages and `punktfunk-gamescope` and publishes them to the
+cache. A `flake.lock` bump that breaks the gamescope patches therefore goes red within a day rather
+than in an operator's rebuild.
 
 ## Cache infrastructure (maintainers)
 
@@ -185,8 +198,10 @@ publishing on. Until those exist the publish no-ops with a warning and `main` st
    Pin **ed25519 only**. Pinning every type `ssh-keyscan` prints lets a host offering just RSA
    satisfy the check on an RSA line, so the weakest pinned key decides.
 
-5. Push to `main` touching the flake. The publish also writes the public key to
-   `https://nix.unom.io/punktfunk-cache.pub`.
+5. Dispatch `nix.yml` on `main`. The publish also writes the public key to
+   `https://nix.unom.io/punktfunk-cache.pub` and creates `nix-canary`. The next `v*` tag creates
+   `nix-stable`; before that, create it by hand at a tag the cache holds. `REGISTRY_TOKEN` moves the
+   channel branches, so no branch protection rule may cover `nix-*`.
 
 `scripts/setup-nix-cache.sh` walks this interactively and each stage detects work already done.
 
@@ -197,8 +212,9 @@ publishing on. Until those exist the publish no-ops with a warning and `main` st
 - `rsync` runs **without** `--delete` so a client mid-download is never pulled out from under, and
   NARs upload *before* narinfos — a narinfo whose NAR has not landed is a hard failure for whoever
   fetches it in that window, while an unreferenced NAR is merely invisible.
-- Growth is bounded by [`server/prune.sh`](server/prune.sh) (evicts narinfos untouched for 180 days,
-  then sweeps unreferenced NARs). The flatpak repo next door reached 3.84 GB publishing the same way
-  with no sweep, on a box that has run out of disk before. Self-check with `--self-test`.
+- Growth is bounded by [`server/prune.sh`](server/prune.sh): it evicts narinfos untouched for 30
+  days except the latest stable release's (`stable.narinfos`, written by the tag publish), then
+  sweeps unreferenced NARs older than a day. Publishes can overlap, so a younger orphan may belong
+  to one in flight. Self-check with `--self-test`.
 - A user on a pinned rev older than the eviction window falls back to building from source, which is
   the pre-cache status quo.
