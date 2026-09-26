@@ -64,7 +64,27 @@ pub(crate) struct DecideRequest {
     /// A file grants its folder. The same refusals apply as to a request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write: Option<bool>,
+    /// With `allow` and `write`: the plugin form handing the path over (`config`,
+    /// `game:<entry id>`). Its grant goes once every form that handed it lets go.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<String>,
 }
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct ReleaseRequest {
+    /// The plugin form letting go, as named when it handed the paths over.
+    pub form: String,
+    /// Every path the form still hands over, as saved.
+    pub keep: Vec<String>,
+}
+
+/// A form name is a key the console makes up, never a path; the grants file stores it.
+fn valid_form(form: &str) -> bool {
+    !form.is_empty() && form.len() <= 300 && !form.chars().any(char::is_control)
+}
+
+const FORM_INVALID: &str =
+    "the form name must be 1 to 300 characters, none of them control characters";
 
 fn store_err(e: std::io::Error, what: &str) -> Response {
     match e.kind() {
@@ -194,8 +214,8 @@ pub(crate) async fn get_plugin_access(State(st): State<Arc<MgmtState>>) -> Respo
 /// Grant, deny, or forget an access request
 ///
 /// `allow` turns a pending request into a grant (the platform ACL lands first, so a failed
-/// grant stores nothing), or with `write` set grants a path the operator handed over;
-/// `deny` remembers the no; `forget` removes a grant or denial.
+/// grant stores nothing), or with `write` set grants a path the operator handed over, on
+/// behalf of `form` when named; `deny` remembers the no; `forget` removes a grant or denial.
 #[utoipa::path(
     post,
     path = "/plugin-access/{plugin}/decide",
@@ -222,6 +242,9 @@ pub(crate) async fn decide_plugin_access(
         DecisionInput::Deny => Decision::Deny,
         DecisionInput::Forget => Decision::Forget,
     };
+    if req.form.as_deref().is_some_and(|f| !valid_form(f)) {
+        return api_error(StatusCode::BAD_REQUEST, FORM_INVALID);
+    }
     let outcome = match (decision, req.write) {
         (Decision::Allow, Some(write)) => {
             let path = std::path::Path::new(&req.path);
@@ -229,13 +252,15 @@ pub(crate) async fn decide_plugin_access(
                 Some(parent) if path.is_file() => parent,
                 _ => path,
             };
-            st.access
-                .grant(&plugin, dir, write, "console")
-                .and_then(|_| st.access.snapshot_for(&plugin))
-                .map(|value| crate::plugins::access::Mutation {
-                    value,
-                    changed: true,
-                })
+            match &req.form {
+                Some(form) => st.access.hand(&plugin, dir, write, form),
+                None => st.access.grant(&plugin, dir, write, "console"),
+            }
+            .and_then(|_| st.access.snapshot_for(&plugin))
+            .map(|value| crate::plugins::access::Mutation {
+                value,
+                changed: true,
+            })
         }
         (decision, _) => st.access.decide(&plugin, &req.path, decision, "console"),
     };
@@ -247,5 +272,48 @@ pub(crate) async fn decide_plugin_access(
             Json(m.value).into_response()
         }
         Err(e) => store_err(e, "record the decision"),
+    }
+}
+
+/// Let a plugin form go of the paths it no longer hands over
+///
+/// `keep` is every path the form still holds. Each grant the form holds outside it loses the
+/// form, and a grant only forms made goes with its last one. The operator's own grants stay.
+#[utoipa::path(
+    post,
+    path = "/plugin-access/{plugin}/release",
+    tag = "plugin-access",
+    operation_id = "releasePluginAccess",
+    params(("plugin" = String, Path, description = "The plugin id")),
+    request_body = ReleaseRequest,
+    responses(
+        (status = OK, description = "The plugin's access state after the release", body = crate::plugins::access::PluginAccessSnapshot),
+        (status = BAD_REQUEST, description = "Invalid form name", body = ApiError),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = FORBIDDEN, description = "Not reachable on the plugin or device lane", body = ApiError),
+        (status = INTERNAL_SERVER_ERROR, description = "The release could not be recorded", body = ApiError),
+    )
+)]
+pub(crate) async fn release_plugin_access(
+    State(st): State<Arc<MgmtState>>,
+    Path(plugin): Path<String>,
+    ApiJson(req): ApiJson<ReleaseRequest>,
+) -> Response {
+    if !valid_form(&req.form) {
+        return api_error(StatusCode::BAD_REQUEST, FORM_INVALID);
+    }
+    match st
+        .access
+        .release(&plugin, &req.form, &req.keep)
+        .and_then(|m| Ok((m.changed, st.access.snapshot_for(&plugin)?)))
+    {
+        Ok((changed, snap)) => {
+            if changed {
+                tokio::task::spawn_blocking(crate::plugins::converge_runner_roots);
+                emit(EventKind::PluginsChanged { id: plugin });
+            }
+            Json(snap).into_response()
+        }
+        Err(e) => store_err(e, "record the release"),
     }
 }

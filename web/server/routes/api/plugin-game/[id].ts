@@ -1,6 +1,7 @@
 // GET/PUT /api/plugin-game/<id>?entry=<library id> — a plugin's section on one library entry's
 // page (`/__game`), read server-side over loopback like `plugin-config`, so no plugin markup or
-// secret reaches the console origin. A save grants the folders the operator typed into it.
+// secret reaches the console origin. A save grants the folders the operator typed into it and lets
+// go of the ones taken out.
 import {
 	defineEventHandler,
 	getQuery,
@@ -41,7 +42,7 @@ export default defineEventHandler(async (event) => {
 			: undefined;
 	const { res, access } =
 		method === "PUT"
-			? await putAndGrant(id, path, body)
+			? await putAndGrant(id, path, body, `game:${entry}`)
 			: { res: await callPlugin(id, path, "GET"), access: undefined };
 	if (!res) {
 		setResponseStatus(event, 502);

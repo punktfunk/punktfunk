@@ -54,7 +54,7 @@ export default defineEventHandler(async (event) => {
 			: undefined;
 	const { res, access } =
 		method === "PUT"
-			? await putAndGrant(id, "/__config", body)
+			? await putAndGrant(id, "/__config", body, "config")
 			: { res: await callPlugin(id, "/__config", "GET"), access: undefined };
 	if (!res) {
 		setResponseStatus(event, 502);

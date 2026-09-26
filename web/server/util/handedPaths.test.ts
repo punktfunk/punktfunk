@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { handedPaths, newlyHanded } from "./handedPaths";
+import { handedPaths, keepAfterDrop, newlyHanded } from "./handedPaths";
 
 const schema = {
 	schema: {
@@ -44,6 +44,15 @@ describe("handed paths", () => {
 		expect(newlyHanded(schema, before, after)).toEqual([
 			{ path: "/home/a/typed", write: true },
 		]);
+	});
+
+	test("a dropped path lets go of all but what is still handed", () => {
+		const before = { paths: ["/home/a/one", "/home/a/two"] };
+		expect(keepAfterDrop(schema, before, { paths: ["/home/a/two"] })).toEqual([
+			"/home/a/two",
+		]);
+		const added = { paths: ["/home/a/one", "/home/a/two", "/home/a/three"] };
+		expect(keepAfterDrop(schema, before, added)).toBeNull();
 	});
 
 	test("no schema, no paths", () => {

@@ -1,6 +1,7 @@
 // The folders an operator types into a plugin's form (`format: "pf:path"`, or `"pf:path:write"`),
 // and the grant that follows a save. Only paths new in that save are granted: the form's old value
-// came from the plugin, and a path the plugin filled in itself is not the operator's word.
+// came from the plugin, and a path the plugin filled in itself is not the operator's word. A save
+// that drops a path lets the form go of it; the host keeps what another form or the operator holds.
 import { loopbackTls, mgmtToken, mgmtUrl } from "./auth";
 import { callPlugin } from "./pluginProxy";
 
@@ -57,28 +58,48 @@ export function newlyHanded(
 	return handedPaths(schema, after).filter((p) => !had.has(p.path));
 }
 
-/** Grant each path to the plugin on the operator's lane. The host refuses what it would refuse
- * a request (`~`, `~/.ssh`, the config dir, …); those come back in `refused`. */
+/** What `after` still hands over when it dropped a path `before` handed, else `null`. */
+export function keepAfterDrop(
+	schema: unknown,
+	before: unknown,
+	after: unknown,
+): string[] | null {
+	const kept = handedPaths(schema, after).map((p) => p.path);
+	const dropped = handedPaths(schema, before).some(
+		(p) => !kept.includes(p.path),
+	);
+	return dropped ? kept : null;
+}
+
+const accessPost = (id: string, route: string, body: unknown) => {
+	const base = mgmtUrl();
+	return fetch(`${base}/api/v1/plugin-access/${id}/${route}`, {
+		...(loopbackTls(base) as RequestInit | undefined),
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${mgmtToken()}`,
+			"content-type": "application/json",
+		},
+		body: JSON.stringify(body),
+	});
+};
+
+/** Grant each path to the plugin on the operator's lane, on behalf of `form`. The host refuses
+ * what it would refuse a request (`~`, `~/.ssh`, the config dir, …); those come back in
+ * `refused`. */
 export async function grantHandedPaths(
 	id: string,
 	paths: HandedPath[],
+	form: string,
 ): Promise<GrantOutcome> {
 	const out: GrantOutcome = { granted: [], refused: [] };
-	const base = mgmtUrl();
 	for (const p of paths) {
 		try {
-			const res = await fetch(`${base}/api/v1/plugin-access/${id}/decide`, {
-				...(loopbackTls(base) as RequestInit | undefined),
-				method: "POST",
-				headers: {
-					authorization: `Bearer ${mgmtToken()}`,
-					"content-type": "application/json",
-				},
-				body: JSON.stringify({
-					path: p.path,
-					decision: "allow",
-					write: p.write,
-				}),
+			const res = await accessPost(id, "decide", {
+				path: p.path,
+				decision: "allow",
+				write: p.write,
+				form,
 			});
 			if (res.ok) {
 				out.granted.push(p.path);
@@ -98,12 +119,14 @@ export async function grantHandedPaths(
 	return out;
 }
 
-/** PUT a form's value to the plugin's `path`, then grant the paths this save handed over. The
- * value before the save is read first; if that read fails, nothing is granted. */
+/** PUT a form's value to the plugin's `path`, then grant the paths this save handed over and let
+ * `form` go of the ones it dropped. The value before the save is read first; if that read fails,
+ * nothing is granted or let go. A failed release leaves the grant in place. */
 export async function putAndGrant(
 	id: string,
 	path: string,
 	body: Uint8Array | undefined,
+	form: string,
 ): Promise<{ res: Response | null; access?: GrantOutcome }> {
 	const before = await callPlugin(id, path, "GET");
 	const prior = before?.ok
@@ -121,8 +144,10 @@ export async function putAndGrant(
 		return { res };
 	}
 	const handed = newlyHanded(prior.schema, prior.value, value);
-	return {
-		res,
-		...(handed.length ? { access: await grantHandedPaths(id, handed) } : {}),
-	};
+	const access = handed.length
+		? await grantHandedPaths(id, handed, form)
+		: undefined;
+	const keep = keepAfterDrop(prior.schema, prior.value, value);
+	if (keep) await accessPost(id, "release", { form, keep }).catch(() => null);
+	return { res, ...(access ? { access } : {}) };
 }

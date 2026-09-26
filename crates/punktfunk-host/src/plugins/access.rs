@@ -24,14 +24,21 @@ pub const MAX_PENDING: usize = 16;
 pub const MAX_GRANTS: usize = 64;
 
 /// One root the operator granted, as recorded on disk. `at`/`by` are audit fields:
-/// RFC3339 and `console`/`cli`/`legacy` (a v1 entry has neither).
+/// RFC3339 and `console`/`cli`/`legacy`/`form` (a v1 entry has neither).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Grant {
     pub path: String,
     pub write: bool,
     pub at: String,
     pub by: String,
+    /// The plugin forms that handed this path over (`config`, `game:<entry id>`). A grant
+    /// with `by: "form"` goes when the last of them lets go.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forms: Vec<String>,
 }
+
+/// `by` on a grant only plugin forms made.
+const BY_FORM: &str = "form";
 
 /// A path a plugin asked for that the operator has not answered yet.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -115,6 +122,7 @@ impl AccessEntry {
                         write: false,
                         at: String::new(),
                         by: "legacy".into(),
+                        forms: Vec::new(),
                     })
                     .collect(),
                 denied: Vec::new(),
@@ -729,6 +737,7 @@ impl AccessStore {
                         write: row.write,
                         at: now_rfc3339(),
                         by: by.to_string(),
+                        forms: Vec::new(),
                     });
                 }
                 grants_changed = true;
@@ -873,10 +882,73 @@ impl AccessStore {
         roots
     }
 
-    /// The operator's direct grant (CLI, console form): an existing directory the host would
-    /// grant on request, ACL applied before it is recorded. Re-granting updates it, and a
-    /// pending request for the same path is answered by it.
+    /// The operator's direct grant (CLI, access page): an existing directory the host would
+    /// grant on request, ACL applied before it is recorded. Re-granting updates it and makes it
+    /// the operator's own, so no form's release takes it away. A pending request for the same
+    /// path is answered by it.
     pub fn grant(&self, id: &str, dir: &Path, write: bool, by: &str) -> io::Result<Vec<Grant>> {
+        self.record(id, dir, write, by, None)
+    }
+
+    /// A grant a plugin form hands over: `form` joins the grant's holders and never narrows
+    /// what is there. A new grant is `by: "form"` and goes with its last holder.
+    pub fn hand(&self, id: &str, dir: &Path, write: bool, form: &str) -> io::Result<Vec<Grant>> {
+        self.record(id, dir, write, BY_FORM, Some(form))
+    }
+
+    /// `form` now hands over only `keep`; it lets go of every other grant it holds. A grant
+    /// only forms made goes with its last holder, and the operator's own grant stays. A kept
+    /// file keeps its folder's grant.
+    pub fn release(
+        &self,
+        id: &str,
+        form: &str,
+        keep: &[String],
+    ) -> io::Result<Mutation<Vec<Grant>>> {
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let kept: Vec<String> = keep.iter().flat_map(|p| grant_keys(Path::new(p))).collect();
+        let mut access = self.load_access();
+        let Some(entry) = access.get_mut(id) else {
+            return Ok(Mutation {
+                value: Vec::new(),
+                changed: false,
+            });
+        };
+        let mut changed = false;
+        let mut gone = Vec::new();
+        entry.grants.retain_mut(|g| {
+            if !g.forms.iter().any(|f| f == form) || kept.iter().any(|k| same_path(k, &g.path)) {
+                return true;
+            }
+            g.forms.retain(|f| f != form);
+            changed = true;
+            let last = g.forms.is_empty() && g.by == BY_FORM;
+            if last {
+                gone.push(g.path.clone());
+            }
+            !last
+        });
+        let grants = entry.grants.clone();
+        if changed {
+            self.write_access(&access)?;
+            for path in &gone {
+                settle_acl(&access, path);
+            }
+        }
+        Ok(Mutation {
+            value: grants,
+            changed,
+        })
+    }
+
+    fn record(
+        &self,
+        id: &str,
+        dir: &Path,
+        write: bool,
+        by: &str,
+        form: Option<&str>,
+    ) -> io::Result<Vec<Grant>> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         if !dir.is_dir() {
             return Err(io::Error::new(
@@ -895,27 +967,40 @@ impl AccessStore {
         let mut access = self.load_access();
         let entry = access.entry(id.to_string()).or_default();
         let path = canonical.to_string_lossy().into_owned();
+        let existing = entry.grants.iter().position(|g| same_path(&g.path, &path));
         // Cap before ACL: a refused grant must not leave an ACE on the directory.
-        if !entry.grants.iter().any(|g| same_path(&g.path, &path))
-            && entry.grants.len() >= MAX_GRANTS
-        {
+        if existing.is_none() && entry.grants.len() >= MAX_GRANTS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "the grant limit is reached",
             ));
         }
+        let write = match (existing, form) {
+            (Some(i), Some(_)) => write || entry.grants[i].write,
+            _ => write,
+        };
         apply_acl(&canonical, write)?;
-        if let Some(g) = entry.grants.iter_mut().find(|g| same_path(&g.path, &path)) {
-            g.write = write;
-            g.at = now_rfc3339();
-            g.by = by.to_string();
-        } else {
-            entry.grants.push(Grant {
+        match (existing, form) {
+            (Some(i), Some(form)) => {
+                let g = &mut entry.grants[i];
+                g.write = write;
+                if !g.forms.iter().any(|f| f == form) {
+                    g.forms.push(form.to_string());
+                }
+            }
+            (Some(i), None) => {
+                let g = &mut entry.grants[i];
+                g.write = write;
+                g.at = now_rfc3339();
+                g.by = by.to_string();
+            }
+            (None, _) => entry.grants.push(Grant {
                 path: path.clone(),
                 write,
                 at: now_rfc3339(),
                 by: by.to_string(),
-            });
+                forms: form.map(|f| vec![f.to_string()]).unwrap_or_default(),
+            }),
         }
         let grants = entry.grants.clone();
         self.write_access(&access)?;
@@ -993,6 +1078,21 @@ fn resolve_stored(path: &str) -> Option<String> {
     }
     (p.is_absolute() && !p.components().any(|c| matches!(c, Component::ParentDir)))
         .then(|| path.to_string())
+}
+
+/// The grants a handed path may stand on: its own, and its folder's for a file. A path that no
+/// longer resolves keeps both, so a deleted file never costs the folder it comes back to.
+fn grant_keys(p: &Path) -> Vec<String> {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let own = real(p);
+    let folder = (own.is_file() || !own.exists())
+        .then(|| own.parent().map(real))
+        .flatten();
+    [Some(own), folder]
+        .into_iter()
+        .flatten()
+        .map(|k| k.to_string_lossy().into_owned())
+        .collect()
 }
 
 fn snapshot_of(
@@ -1323,6 +1423,7 @@ mod tests {
                     write: false,
                     at: String::new(),
                     by: "legacy".into(),
+                    forms: Vec::new(),
                 }],
                 denied: Vec::new(),
             },
@@ -1408,13 +1509,15 @@ mod tests {
                     path: "/mnt/old".into(),
                     write: false,
                     at: String::new(),
-                    by: "legacy".into()
+                    by: "legacy".into(),
+                    forms: Vec::new(),
                 },
                 Grant {
                     path: "/mnt/older".into(),
                     write: false,
                     at: String::new(),
-                    by: "legacy".into()
+                    by: "legacy".into(),
+                    forms: Vec::new(),
                 },
             ]
         );
@@ -1472,6 +1575,48 @@ mod tests {
     }
 
     #[test]
+    fn a_handed_grant_goes_with_its_last_form() {
+        let f = fixture();
+        let saves = f.dir("home/Saves");
+        let ini = saves.join("game.ini");
+        std::fs::write(&ini, "x").unwrap();
+        let s = f.store();
+        s.hand("demo", &saves, true, "game:a").unwrap();
+        let grants = s.hand("demo", &saves, false, "game:b").unwrap();
+        assert!(
+            grants[0].write,
+            "a read-only form never narrows a write grant"
+        );
+        assert_eq!(grants[0].by, "form");
+        // Game a still holds a file in the folder: the folder's grant stays.
+        let kept = [ini.to_string_lossy().into_owned()];
+        assert!(!s.release("demo", "game:a", &kept).unwrap().changed);
+        let m = s.release("demo", "game:a", &[]).unwrap();
+        assert!(m.changed);
+        assert_eq!(m.value[0].forms, vec!["game:b"]);
+        let removes = acl_removes();
+        assert!(s.release("demo", "game:b", &[]).unwrap().value.is_empty());
+        assert_eq!(acl_removes(), removes + 1, "the last form takes the ACE");
+    }
+
+    #[test]
+    fn the_operators_own_grant_outlives_every_form() {
+        let f = fixture();
+        let s = f.store();
+        let games = f.dir("home/Games");
+        s.grant("demo", &games, false, "console").unwrap();
+        s.hand("demo", &games, true, "config").unwrap();
+        let m = s.release("demo", "config", &[]).unwrap();
+        assert!(m.changed);
+        assert_eq!((m.value.len(), m.value[0].by.as_str()), (1, "console"));
+        // Granted by hand after a form handed it: the operator's now.
+        let other = f.dir("home/Other");
+        s.hand("demo", &other, false, "config").unwrap();
+        s.grant("demo", &other, false, "cli").unwrap();
+        assert_eq!(s.release("demo", "config", &[]).unwrap().value.len(), 2);
+    }
+
+    #[test]
     fn forget_removes_grants_and_denials_even_unplugged() {
         let f = fixture();
         let gone = "/mnt/unplugged-pf-test";
@@ -1484,6 +1629,7 @@ mod tests {
                     write: false,
                     at: "x".into(),
                     by: "cli".into(),
+                    forms: Vec::new(),
                 }],
                 denied: vec![gone.into()],
             },
@@ -1580,6 +1726,7 @@ mod tests {
             write: false,
             at: String::new(),
             by: "cli".into(),
+            forms: Vec::new(),
         }
     }
 

@@ -465,6 +465,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         ))
         .routes(routes!(plugin_access::get_plugin_access))
         .routes(routes!(plugin_access::decide_plugin_access))
+        .routes(routes!(plugin_access::release_plugin_access))
         .routes(routes!(store::get_catalog))
         .routes(routes!(store::refresh_catalog))
         .routes(routes!(store::list_installed))
