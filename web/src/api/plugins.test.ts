@@ -14,6 +14,8 @@ describe("plugin surfaces", () => {
 			p("old", { port: 1 }),
 			p("tab-only", { port: 2, page: false, game: true }),
 			p("scanner", { port: 3 }, "library"),
+			// An older SDK sends no `page` flag; the category still keeps a source out of the nav.
+			p("covers", { port: 4 }, "metadata"),
 			p("headless"),
 		];
 		expect(uiPlugins(list).map((x) => x.id)).toEqual(["old"]);

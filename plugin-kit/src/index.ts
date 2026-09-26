@@ -27,11 +27,16 @@ export {
 	statePath,
 } from "./paths.js";
 export {
+	ART_KINDS,
+	ArtKind,
 	Artwork,
 	DEFAULT_RUNNING_TTL_S,
 	DetectHint,
+	EntryIds,
 	GameMeta,
 	LaunchSpec,
+	MetadataEntry,
+	type MetaField,
 	PrepStep,
 	ProviderClient,
 	type ProviderClientService,

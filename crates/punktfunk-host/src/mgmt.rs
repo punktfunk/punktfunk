@@ -420,8 +420,17 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
                     library::reconcile_provider_entries,
                     library::delete_provider_entries
                 ))
+                .routes(routes!(
+                    library::put_library_metadata,
+                    library::delete_library_metadata
+                ))
                 .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
+        .routes(routes!(
+            library::list_library_metadata,
+            library::set_library_metadata
+        ))
+        .routes(routes!(library::set_library_art_pick))
         .routes(routes!(library::report_provider_running))
         .routes(routes!(library::get_library_art))
         .routes(routes!(stats::stats_capture_start))

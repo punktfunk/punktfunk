@@ -33,7 +33,8 @@ export type SyncReason =
 	| "fs-change"
 	| "config-change"
 	| "manual"
-	| "coalesced";
+	| "coalesced"
+	| "library-change";
 
 export interface LastSync {
 	readonly fingerprint: string;

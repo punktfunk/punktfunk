@@ -2154,6 +2154,13 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/library/custom/{id}", true, false),
         ("PUT", "/api/v1/library/provider/{provider}", true, false),
         ("DELETE", "/api/v1/library/provider/{provider}", true, false),
+        // A source writes its own result and reads its mode; order, switches and picks are
+        // curation, operator-only.
+        ("GET", "/api/v1/library/metadata", true, false),
+        ("PUT", "/api/v1/library/metadata", false, false),
+        ("PUT", "/api/v1/library/metadata/{source}", true, false),
+        ("DELETE", "/api/v1/library/metadata/{source}", true, false),
+        ("PUT", "/api/v1/library/picks/{id}", false, false),
         // Provider liveness is plugin-lane like reconcile; the host maps through the catalog.
         // Never the cert lane — a streaming client has no titles of its own.
         (
@@ -4001,6 +4008,130 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
     assert_eq!(s.last_run_ms, s.play_time_ms, "one run: {s:?}");
     assert_eq!(s.launch_count, 0, "the lease never counts launches: {s:?}");
     assert_eq!(s.last_played_unix_ms, 0);
+}
+
+/// A metadata source fills a gap, a pick beats it, the replace switch beats own art, and
+/// DELETE forgets the source. The env override must cover the whole body.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn metadata_sources_fill_pick_replace_and_forget() {
+    let _tmp = ConfigDirOverride::new();
+    let app = test_app(test_state(), None);
+    let json_req = |method: &str, uri: &str, body: serde_json::Value| {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let added = crate::library::add_custom(crate::library::CustomInput {
+        title: "Hades".into(),
+        art: crate::library::Artwork {
+            portrait: Some("https://own/p.png".into()),
+            ..Default::default()
+        },
+        launch: None,
+        prep: None,
+        role: Default::default(),
+        icon: None,
+        detect: None,
+        on_window: None,
+        audio: None,
+        meta: Default::default(),
+    })
+    .expect("seed one custom title");
+    let id = crate::library::library_id_for(&added);
+
+    let (s, json) = send(
+        &app,
+        json_req(
+            "PUT",
+            "/api/v1/library/metadata/sgdb",
+            serde_json::json!({
+                "matching": "search",
+                "entries": [
+                    {"id": id, "art": {"portrait": "https://sgdb/p.png", "logo": "https://sgdb/l.png",
+                     "hero": "file:///etc/passwd"}, "meta": {"developer": "Supergiant"}},
+                    {"id": "not-an-id", "art": {"logo": "https://sgdb/x.png"}}
+                ]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{json}");
+    assert_eq!(
+        (json["entries"].as_u64(), json["dropped"].as_u64()),
+        (Some(1), Some(2))
+    );
+
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    let g = &json[0];
+    assert_eq!(g["filled"]["logo"], "sgdb", "{json}");
+    assert_eq!(g["developer"], "Supergiant");
+    assert!(
+        g["filled"].get("portrait").is_none(),
+        "own art stays: {json}"
+    );
+    assert!(g["art"]["logo"]
+        .as_str()
+        .unwrap()
+        .starts_with("/api/v1/library/art/"));
+
+    let pick = format!("/api/v1/library/picks/{id}");
+    let (s, _) = send(
+        &app,
+        json_req(
+            "PUT",
+            &pick,
+            serde_json::json!({"kind": "logo", "url": "file:///x"}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a pick is http(s) only");
+    let (s, _) = send(
+        &app,
+        json_req(
+            "PUT",
+            &pick,
+            serde_json::json!({"kind": "logo", "url": "https://pick/l.png"}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(json[0]["filled"]["logo"], "pick");
+
+    let (s, json) = send(
+        &app,
+        json_req(
+            "PUT",
+            "/api/v1/library/metadata",
+            serde_json::json!([{"id": "sgdb", "enabled": true, "replace": true}]),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(json[0]["replace"], true, "{json}");
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(
+        json[0]["filled"]["portrait"], "sgdb",
+        "replace beats own art: {json}"
+    );
+
+    let del = axum::http::Request::delete("/api/v1/library/metadata/sgdb")
+        .body(Body::empty())
+        .unwrap();
+    let (s, json) = send(&app, del).await;
+    assert_eq!((s, json["removed"].as_bool()), (StatusCode::OK, Some(true)));
+    let (_, json) = send(&app, get_req("/api/v1/library/metadata")).await;
+    assert_eq!(json.as_array().map(Vec::len), Some(0), "{json}");
+    let (_, json) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(
+        json[0]["filled"]["logo"], "pick",
+        "the pick outlives the source: {json}"
+    );
+    assert!(json[0].get("developer").is_none());
 }
 
 // ------------------------------------------------------------------ library providers

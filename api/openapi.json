@@ -2350,6 +2350,324 @@
         }
       }
     },
+    "/api/v1/library/metadata": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List Art & Metadata sources",
+        "description": "Every source that has pushed a result, in the operator's order, with its switches and how\nmany entries it has something for.",
+        "operationId": "listLibraryMetadata",
+        "responses": {
+          "200": {
+            "description": "Sources in the operator's order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetadataSourceInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Order and switch Art & Metadata sources",
+        "description": "The array is the new order; each row sets `enabled` and `replace` (\"Use for every game\",\nart only). A source the array leaves out keeps its switches and goes after the named ones.\nEmits `library.changed`.",
+        "operationId": "setLibraryMetadata",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MetadataSourceUpdate"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the sources in their new order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetadataSourceInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/metadata/{source}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Replace an Art & Metadata source's result",
+        "description": "Everything the source has, keyed by library id: art for the four slots and `GameMeta`\nfields. The host merges it into `GET /library` at read time; a source fills only what the\nentry lacks unless the operator set it to replace art. A value the host does not store is\ndropped, not refused. A new source takes its place in the order by `matching`, exact first.\nEmits `library.changed` with the source as `source` when anything changed.",
+        "operationId": "putLibraryMetadata",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The source's plugin id ([a-z0-9._-], `manual` reserved)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; what the host kept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid source id or payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A plugin wrote another plugin's source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Forget an Art & Metadata source",
+        "description": "Its result and its place in the order, for plugin uninstall. Emits `library.changed`\nwhen there was anything to forget.",
+        "operationId": "deleteLibraryMetadata",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The source's plugin id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether anything was removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataRemoved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid source id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A plugin removed another plugin's source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/picks/{id}": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Pick the art for one slot of a library entry",
+        "description": "The operator's choice beats the entry's own art and every metadata source, and survives\nthe provider's next reconcile. `url: null` clears the pick. The id is not required to\nexist now, as with hiding. Emits `library.changed`.",
+        "operationId": "setLibraryArtPick",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id (e.g. `steam:70`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtPickInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; the entry's picks after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artwork"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty id, unknown kind, or a URL that is not http(s)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Couldn't save the picks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/library/provider/{provider}": {
       "put": {
         "tags": [
@@ -6146,6 +6464,27 @@
           }
         }
       },
+      "ArtPickInput": {
+        "type": "object",
+        "description": "`PUT /library/picks/{id}`.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`portrait`, `hero`, `logo` or `header`.",
+            "example": "portrait"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An `http(s)` URL; `null` clears the pick."
+          }
+        }
+      },
       "Artwork": {
         "type": "object",
         "description": "Cover art. The client prefers `portrait` for a grid and falls back to `header`\nwhen a title has no 600×900 capsule (common for older Steam apps).",
@@ -7024,6 +7363,16 @@
               "id": {
                 "type": "string",
                 "description": "Host-assigned row id; the `{id}` in the CRUD path. Not the surfaced library id."
+              },
+              "ids": {
+                "type": "object",
+                "description": "Catalog ids a metadata source matches on. Set only by provider reconcile.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
               },
               "launch": {
                 "oneOf": [
@@ -8253,6 +8602,16 @@
               "art": {
                 "$ref": "#/components/schemas/Artwork"
               },
+              "filled": {
+                "type": "object",
+                "description": "Where each borrowed value came from: art slot or meta field → source id, or `pick`\n([`PICK`]). Values the entry carried itself are absent. Not sent to paired clients.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
               "icon": {
                 "type": [
                   "string",
@@ -8265,6 +8624,16 @@
                 "type": "string",
                 "description": "Stable, store-qualified id: `steam:<appid>` or `custom:<id>`.",
                 "example": "steam:570"
+              },
+              "ids": {
+                "type": "object",
+                "description": "Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),\nset by the plugin that lists the entry. Not sent to paired clients.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
               },
               "launch": {
                 "oneOf": [
@@ -9688,6 +10057,132 @@
           }
         }
       },
+      "Matching": {
+        "type": "string",
+        "description": "How a source finds its games. A new source lands after the last one of its kind, exact first.",
+        "enum": [
+          "exact",
+          "search"
+        ]
+      },
+      "MetadataAccepted": {
+        "type": "object",
+        "required": [
+          "entries",
+          "dropped"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "description": "Values dropped because the host does not store them (non-`http(s)` art, overlong text).",
+            "minimum": 0
+          },
+          "entries": {
+            "type": "integer",
+            "description": "Entries the host kept.",
+            "minimum": 0
+          }
+        }
+      },
+      "MetadataEntryInput": {
+        "type": "object",
+        "description": "One entry in a source's push.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "art": {
+            "$ref": "#/components/schemas/Artwork",
+            "description": "`http(s)` URLs only; the host fetches and keeps them like a provider's CDN art."
+          },
+          "id": {
+            "type": "string",
+            "description": "Library id, as `GET /library` lists it (`steam:570`, `custom:3f9a0c1b2d4e`)."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/GameMeta"
+          }
+        }
+      },
+      "MetadataInput": {
+        "type": "object",
+        "description": "`PUT /library/metadata/{source}`: the source's whole result.",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataEntryInput"
+            }
+          },
+          "matching": {
+            "$ref": "#/components/schemas/Matching"
+          }
+        }
+      },
+      "MetadataRemoved": {
+        "type": "object",
+        "required": [
+          "removed"
+        ],
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MetadataSourceInfo": {
+        "type": "object",
+        "description": "One Art & Metadata source as the console lists it, in the operator's order.",
+        "required": [
+          "id",
+          "matching",
+          "enabled",
+          "replace",
+          "entries"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "integer",
+            "description": "Entries the source has something for.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The source's plugin id.",
+            "example": "steamgriddb"
+          },
+          "matching": {
+            "$ref": "#/components/schemas/Matching"
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "\"Use for every game\": this source's art beats the entry's own. Art only."
+          }
+        }
+      },
+      "MetadataSourceUpdate": {
+        "type": "object",
+        "description": "One row of `PUT /library/metadata`. The array's order is the new order.",
+        "required": [
+          "id",
+          "enabled",
+          "replace"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "replace": {
+            "type": "boolean"
+          }
+        }
+      },
       "ModeConflict": {
         "type": "string",
         "description": "Admission when a new client asks for a different mode than the live\ndisplay. [`super::admission`] runs this before Welcome so `reject` is a\nhandshake error, not a half-built session.",
@@ -10609,6 +11104,16 @@
                   "null"
                 ],
                 "description": "Brand token a plugin sets on its `launchers(cfg)` tiles. See [`GameEntry::icon`]."
+              },
+              "ids": {
+                "type": "object",
+                "description": "Catalog ids a metadata source matches on: `steam` → appid, `libretro` →\n`<system>/<No-Intro name>`. Keys `[a-z0-9_]{1,16}`, at most eight; a bad pair is dropped.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
               },
               "launch": {
                 "oneOf": [

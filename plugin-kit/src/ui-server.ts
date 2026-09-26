@@ -150,7 +150,7 @@ export interface ServeUiGame<S extends Schema.Top> {
 }
 
 /** Library ids are `<store>:<external id>`; the external part is the provider's own. */
-const validEntryId = (id: string): boolean =>
+export const validEntryId = (id: string): boolean =>
 	id.length > 0 &&
 	id.length <= 256 &&
 	id.includes(":") &&
@@ -311,6 +311,11 @@ export interface ServeUiOptions {
 	 */
 	readonly game?: ServeUiGame<Schema.Top>;
 	/**
+	 * Serve `/__metadata/*`: an Art & Metadata source's status and the console's Choose dialog.
+	 * Built by `defineMetadataPlugin`; same auth as `config`.
+	 */
+	readonly metadata?: (req: Request) => Promise<Response>;
+	/**
 	 * Stages this plugin holds. The host POSTs the event to `/__hold` and waits for the handler,
 	 * up to `holdTimeoutMs` (default 30 000, at most 120 000), then goes on regardless.
 	 */
@@ -369,6 +374,11 @@ export const serveUi = (
 			}
 			if (url.pathname === "/__game") {
 				return serveGame?.(req) ?? new Response("not found", { status: 404 });
+			}
+			if (url.pathname.startsWith("/__metadata/")) {
+				return (
+					opts.metadata?.(req) ?? new Response("not found", { status: 404 })
+				);
 			}
 			if (url.pathname === "/__hold") {
 				return serveHold?.(req) ?? new Response("not found", { status: 404 });

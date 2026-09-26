@@ -326,6 +326,11 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         (&Method::DELETE, "/api/v1/library/provider/{}"),
         // Provider liveness for its own titles — mapped through the catalog, no one else's session.
         (&Method::PUT, "/api/v1/library/provider/{}/running"),
+        // An Art & Metadata source pushes its own result and reads its mode. Ordering, the
+        // switches and picks are the operator's.
+        (&Method::GET, "/api/v1/library/metadata"),
+        (&Method::PUT, "/api/v1/library/metadata/{}"),
+        (&Method::DELETE, "/api/v1/library/metadata/{}"),
         (&Method::POST, "/api/v1/stats/capture/start"),
         (&Method::POST, "/api/v1/stats/capture/stop"),
         (&Method::GET, "/api/v1/stats/capture/status"),

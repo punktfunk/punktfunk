@@ -8,6 +8,7 @@
 //! A plugin publishes a validated [`LaunchSpec`]; the host builds the command
 //! (`launch.rs`, design D1). Source toggles live in `scanners.rs`. Artwork rides on
 //! the entries; [`art`] proxies local files so a client never sees an unreachable path.
+//! Art & Metadata sources fill what an entry lacks at read time (`metadata.rs`).
 //!
 //! This module is read-mostly metadata. Launching a chosen title is `launch.rs`.
 
@@ -24,6 +25,7 @@ mod custom;
 mod detect;
 mod hidden;
 mod launch;
+mod metadata;
 mod scanners;
 mod stats;
 
@@ -32,6 +34,7 @@ pub use custom::*;
 pub use detect::*;
 pub use hidden::*;
 pub use launch::*;
+pub use metadata::*;
 pub use scanners::*;
 pub use stats::*;
 
@@ -268,6 +271,14 @@ pub struct GameEntry {
     /// time from `library-stats.json`, never stored on the entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stats: Option<GameStats>,
+    /// Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),
+    /// set by the plugin that lists the entry. Not sent to paired clients.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub ids: BTreeMap<String, String>,
+    /// Where each borrowed value came from: art slot or meta field → source id, or `pick`
+    /// ([`PICK`]). Values the entry carried itself are absent. Not sent to paired clients.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub filled: BTreeMap<String, String>,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -301,6 +312,18 @@ pub enum ArtKind {
 }
 
 impl ArtKind {
+    pub const ALL: [Self; 4] = [Self::Portrait, Self::Hero, Self::Logo, Self::Header];
+
+    /// The field name, as `parse` reads it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Portrait => "portrait",
+            Self::Hero => "hero",
+            Self::Logo => "logo",
+            Self::Header => "header",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "portrait" => Some(Self::Portrait),
@@ -344,11 +367,12 @@ pub fn all_games_for_operator() -> Vec<OperatorGameEntry> {
 }
 
 /// Merge every enabled source and the custom entries, sorted by title, each
-/// carrying its play stats. Split out so the two public views differ only in
-/// how they apply the hidden set.
+/// carrying its play stats and what Art & Metadata sources fill. Split out so the
+/// two public views differ only in how they apply the hidden set.
 fn collect_games() -> Vec<GameEntry> {
     let off = disabled_scanners();
     let stats = game_stats();
+    let fills = Fills::load();
     // Manual entries always contribute; a provider's follow the operator's source toggle.
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
@@ -357,6 +381,7 @@ fn collect_games() -> Vec<GameEntry> {
         .collect();
     for g in &mut games {
         g.stats = stats.get(&g.id).copied();
+        fills.apply(g);
     }
     games.sort_by_key(|g| g.title.to_lowercase());
     games
@@ -390,6 +415,8 @@ mod tests {
             detect: DetectSpec::default(),
             on_window: OnWindow::default(),
             stats: None,
+            ids: BTreeMap::new(),
+            filled: BTreeMap::new(),
             meta: GameMeta::default(),
         }
     }

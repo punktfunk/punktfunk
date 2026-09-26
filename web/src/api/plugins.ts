@@ -36,16 +36,18 @@ export interface PluginSummary {
 	/** Present iff the plugin serves a UI (and thus gets a nav entry). */
 	ui?: PluginUiSummary;
 	/**
-	 * What kind of plugin this is. The console knows one value — `"library"` — and keeps those OUT
-	 * of the nav: a scanner's entry point is the Library section's Game sources surface, and six
-	 * installed scanners would otherwise flood the sidebar (design D5). Absent on an older host, and
-	 * absent by choice for a plugin that wants its own page anyway (rom-manager).
+	 * What kind of plugin this is. The console keeps `"library"` and `"metadata"` OUT of the nav:
+	 * their entry point is the Library section (Game sources, Art & Metadata), and a sidebar entry
+	 * per scanner would flood it (design D5). Absent on an older host, and absent by choice for a
+	 * plugin that wants its own page anyway (rom-manager).
 	 */
 	category?: string;
 }
 
-/** The one category the console treats specially. */
+/** A game source: listed under Library → Game sources. */
 export const LIBRARY_CATEGORY = "library";
+/** An Art & Metadata source: listed under Library → Art & Metadata. */
+export const METADATA_CATEGORY = "metadata";
 
 // A curated lucide set for plugin nav icons. Importing lucide's full dynamic icon map would defeat
 // tree-shaking (U-S4), so a plugin picks a name from here; anything unknown falls back to Puzzle.
@@ -114,7 +116,7 @@ export function usePlugins() {
 }
 
 /**
- * The plugins that get a **nav entry**: those serving a page, minus the library-category ones.
+ * The plugins that get a **nav entry**: those serving a page, minus the library and metadata ones.
  *
  * A plugin with only a settings form or an entry tab still serves a UI port, and its
  * `/plugins/$pluginId/$` route still resolves, so a deep link keeps working — it simply isn't
@@ -122,7 +124,11 @@ export function usePlugins() {
  */
 export const uiPlugins = (list: PluginSummary[] | undefined): PluginSummary[] =>
 	(list ?? []).filter(
-		(p) => p.ui && p.ui.page !== false && p.category !== LIBRARY_CATEGORY,
+		(p) =>
+			p.ui &&
+			p.ui.page !== false &&
+			p.category !== LIBRARY_CATEGORY &&
+			p.category !== METADATA_CATEGORY,
 	);
 
 /** The plugins that add a tab to every library entry's page. */
