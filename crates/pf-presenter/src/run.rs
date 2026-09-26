@@ -277,6 +277,9 @@ struct StreamState {
     /// The mode is the expected step; everything else is judder.
     win_steps: [u32; 6],
     last_displayed_ns: u64,
+    /// Smoothing: the latch slot the last vended frame was aimed at. One present per
+    /// slot; a second frame due before the same slot waits for the next.
+    last_slot_ns: u64,
     /// One-shot log latch: smoothness was requested but PyroWave collapsed the store
     /// to latency (plane-ring retirement assumes newest-wins).
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
@@ -426,6 +429,7 @@ impl StreamState {
             win_out_max: 0,
             win_steps: [0; 6],
             last_displayed_ns: 0,
+            last_slot_ns: 0,
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             pyro_latency_forced: false,
             dmabuf_demoted: false,
@@ -2119,7 +2123,18 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                     let slot = st
                         .clock
                         .next_slot_after(now_ns.saturating_add(st.margin_ns));
-                    st.store.take(|p| p.due_ns < slot as i64)
+                    // One present per slot. Two frames due before the same slot were
+                    // presented back to back, and MAILBOX showed one of them for nothing
+                    // while the next slot went empty: the 0/2-step pairs in the ledger.
+                    if slot == st.last_slot_ns {
+                        None
+                    } else {
+                        let taken = st.store.take(|p| p.due_ns < slot as i64);
+                        if taken.is_some() {
+                            st.last_slot_ns = slot;
+                        }
+                        taken
+                    }
                 }
             } else {
                 st.store.take(|_| true)
