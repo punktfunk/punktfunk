@@ -1,6 +1,6 @@
 {
 	"name": "@punktfunk/plugin-kit",
-	"version": "0.6.0",
+	"version": "0.7.0",
 	"description": "Effect-based framework for punktfunk plugins: lifecycle runtime, config/state, sync engine, UI serving, CLI scaffold, and browser helpers.",
 	"type": "module",
 	"license": "MIT OR Apache-2.0",
