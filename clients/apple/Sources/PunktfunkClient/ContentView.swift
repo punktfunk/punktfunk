@@ -187,11 +187,20 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     /// While the console fronts the app and no stream is up, the console draws every screen:
-    /// connect, wake, pairing, the approval wait, a failed dial. The app's own alerts and sheets
-    /// would be a second interface over it — and on a TV, a focus trap the pad cannot reach. Once
-    /// a stream exists the app owns the screen again, which is where the trust card belongs.
+    /// connect, wake, pairing, the approval wait, a failed dial, its launch hold. The app's own
+    /// alerts and sheets would be a second interface over it — and on a TV, a focus trap the pad
+    /// cannot reach. Once the stream shows, the app owns the screen again, trust card included.
     private var consoleOwnsScreen: Bool {
-        gamepadUIActive && (model.phase == .idle || model.phase == .connecting)
+        gamepadUIActive
+            && (model.phase == .idle || model.phase == .connecting || consoleHoldsStream)
+    }
+
+    /// The console's launch hold covers the stream it dialled. A trust card is the stream
+    /// view's, so the hold gives way to it.
+    private var consoleHoldsStream: Bool {
+        guard model.consoleHold else { return false }
+        if case .awaitingTrust = model.phase { return false }
+        return true
     }
 
     /// A console that could not be built hands the screen back to this app's own UI.
@@ -284,7 +293,7 @@ struct ContentView: View {
     }
 
     private var driven: some View {
-        Group {
+        ZStack {
             // The stream view's structural identity MUST be stable across the
             // awaiting-trust → streaming transition: recreating it restarts the pump,
             // which has then already missed the opening IDR (infinite GOP — no other
@@ -292,7 +301,9 @@ struct ContentView: View {
             // trust prompt as an overlay.
             if model.connection != nil {
                 sessionView
-            } else {
+            }
+            // The console stays mounted over the stream while its launch hold is up.
+            if model.connection == nil || consoleHoldsStream {
                 home
             }
         }
@@ -952,7 +963,7 @@ struct ContentView: View {
             return nil
         }()
         return ZStack {
-            stream(captureEnabled: pendingFingerprint == nil)
+            stream(captureEnabled: pendingFingerprint == nil && !consoleHoldsStream)
                 // Blur the live stream during the trust prompt (heavy) and during a resize (lighter
                 // — the deliberate "hold on" while the host rebuilds its pipeline and the decoder
                 // re-inits on the new-mode IDR). Only the resize blur animates; the trust blur snaps

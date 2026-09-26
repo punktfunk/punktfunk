@@ -277,7 +277,51 @@ fn navigation_lap() {
     }
     assert!(matches!(s.stack.as_slice(), [Screen::Home(_)]));
     s.handle_menu(MenuEvent::Back);
+    assert!(s.strip_focus, "back from a root lands on its tab");
+    s.handle_menu(MenuEvent::Back);
+    assert!(s.take_action().is_none(), "the tab's back asks first");
+    finish_motion(&mut s);
+    s.handle_menu(MenuEvent::Confirm);
     assert!(matches!(s.take_action(), Some(OverlayAction::Quit)));
+}
+
+/// Back climbs one layer a press: Settings' rows, its sections, the tab, then the exit
+/// question, whose Back stays. An Apple host cannot exit, so its tab's Back does nothing.
+#[test]
+fn back_climbs_from_settings_rows_to_the_exit_question() {
+    let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.sync();
+    assert!(s.switch_tab(Tab::Settings));
+    finish_motion(&mut s);
+    let sections = |s: &Shell| matches!(s.stack.as_slice(), [Screen::Settings(st)] if st.strip_focus_for_test());
+    assert!(!s.strip_focus && !sections(&s), "focus starts on the rows");
+    s.handle_menu(MenuEvent::Back);
+    assert!(!s.strip_focus && sections(&s), "rows → sections");
+    s.handle_menu(MenuEvent::Back);
+    assert!(s.strip_focus && s.at_root(), "sections → tab");
+    s.handle_menu(MenuEvent::Back);
+    assert!(
+        matches!(s.stack.as_slice(), [_, Screen::Prompt(_)]),
+        "tab → question"
+    );
+    finish_motion(&mut s);
+    s.handle_menu(MenuEvent::Back);
+    finish_motion(&mut s);
+    assert!(
+        s.take_action().is_none() && s.at_root(),
+        "the question's back stays"
+    );
+
+    let mut opts = test_options();
+    opts.platform = Platform::Apple;
+    let (console, library) = (ConsoleShared::default(), LibraryShared::default());
+    let home = vec![Screen::Home(HomeScreen::new())];
+    let mut s = Shell::new(console, library, ConsoleBus::default(), opts, home).unwrap();
+    s.sync();
+    for _ in 0..3 {
+        s.handle_menu(MenuEvent::Back);
+    }
+    assert!(s.at_root() && s.stack.len() == 1 && s.take_action().is_none());
 }
 
 /// A tab root that places nothing to focus parks focus on its tab, where Down stays;
@@ -1182,7 +1226,7 @@ fn back_mid_push_turns_the_screen_around() {
     assert!(matches!(s.motion, Motion::None));
 }
 
-/// Back at the root is not a reversal: there is no parent, and B there means quit.
+/// Back at the root is not a reversal: there is no parent, and B there goes to the tab.
 /// Decline it so the normal path can answer.
 #[test]
 fn back_mid_push_at_the_root_is_left_to_the_normal_path() {
@@ -1222,7 +1266,8 @@ fn mid_pop_refuses_confirm_but_honours_another_back() {
 
     s.handle_menu(MenuEvent::Back);
     finish_motion(&mut s);
-    assert!(matches!(s.take_action(), Some(OverlayAction::Quit)));
+    assert!(s.strip_focus, "the root's pop lands on its tab");
+    assert!(s.take_action().is_none(), "and quits nothing");
 }
 
 /// A completed pop frees the carried screen. Hint rects publish only at
@@ -3504,4 +3549,46 @@ fn dump_plate_flight() {
         s.handle_menu(MenuEvent::Move(MenuDir::Right));
         run(&mut s, 16, Some(&format!("{name}-right")));
     }
+}
+
+/// Pinned chrome speaks device px like every layer. Under a TV's safe-area inset the section
+/// strip's plate lands below the tab strip's, so a plate handed between them glides straight
+/// down instead of starting an inset away and sliding along a bar.
+#[test]
+fn a_pinned_plate_lands_in_device_space_under_an_inset() {
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((640, 400)).unwrap();
+    let viewport = crate::console::Viewport {
+        width: 640,
+        height: 400,
+        insets: crate::console::Insets {
+            left: 60.0,
+            top: 100.0,
+            right: 60.0,
+            bottom: 40.0,
+        },
+        scale: None,
+    };
+    let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.fake_clock = Some((100.0, 1.0 / 60.0));
+    let mut run = |s: &mut Shell, frames: usize| {
+        for _ in 0..frames {
+            crate::el::DRAWN.with(|d| d.borrow_mut().clear());
+            s.render_in(surface.canvas(), &viewport, &fonts, None, None, &[]);
+        }
+        let drawn = crate::el::DRAWN.with(|d| d.borrow().clone());
+        assert_eq!(drawn.len(), 1, "one plate at rest: {drawn:?}");
+        drawn[0]
+    };
+    assert!(s.switch_tab(Tab::Settings));
+    finish_motion(&mut s);
+    s.handle_menu(MenuEvent::Move(MenuDir::Up)); // rows → sections
+    let sections = run(&mut s, 24);
+    s.handle_menu(MenuEvent::Move(MenuDir::Up)); // sections → tabs
+    let tabs = run(&mut s, 24);
+    assert!(s.strip_focus);
+    assert!(
+        sections.top >= tabs.bottom,
+        "the sections' plate sits above the tabs': {sections:?} vs {tabs:?}"
+    );
 }

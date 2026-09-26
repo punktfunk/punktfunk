@@ -103,6 +103,10 @@ thread_local! {
     /// Surface frames begun ([`begin_frame`]); a handoff keeps for its frame and the next.
     static FRAME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NEXT_PLATE: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    /// Every plate drawn, device px, in draw order. Tests drain it.
+    #[cfg(test)]
+    pub(crate) static DRAWN: std::cell::RefCell<Vec<Rect>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Where a plate stood when it gave up focus: device px, so any tree can read it.
@@ -454,6 +458,11 @@ impl Plate {
         let Some((r, corner)) = self.rect().filter(|_| self.visible()) else {
             return;
         };
+        #[cfg(test)]
+        DRAWN.with(|d| {
+            let m = canvas.local_to_device_as_3x3();
+            d.borrow_mut().push(m.map_rect(r).0);
+        });
         let alpha = self.shown as f32;
         let out = OUTSET * k;
         let rr = RRect::new_rect_xy(r.with_outset((out, out)), corner + out, corner + out);
@@ -483,10 +492,11 @@ impl Plate {
 }
 
 /// The spring for one edge: `hi` is the right or bottom edge, `along` the hop's unit
-/// direction on its axis. An axis the hop barely moves along keeps both edges together.
+/// direction on its axis. An axis the hop barely moves along keeps both edges together on
+/// the leading edge's spring, so the front runs straight at the target, not along the row.
 fn edge_spec(along: f64, hi: bool) -> SpringSpec {
     match leader(along) {
-        None => TRAVEL,
+        None => LEAD,
         Some(lead) if lead == hi => LEAD,
         Some(_) => TRAIL,
     }
@@ -595,6 +605,27 @@ mod tests {
             );
             assert_eq!(p.rect().unwrap().0, to);
             assert!(!p.busy(), "{dist}: settled");
+        }
+    }
+
+    /// A hop mostly along one axis runs straight: the plate's front covers the short axis at
+    /// the long axis's pace, not after it. Main tabs down to Settings' sections is this hop.
+    #[test]
+    fn a_mostly_sideways_hop_runs_straight() {
+        let (a, b) = (super::super::Id::new("t", 0), super::super::Id::new("t", 1));
+        let mut p = Plate::default();
+        let from = Rect::from_xywh(460.0, 40.0, 140.0, 50.0);
+        let to = Rect::from_xywh(40.0, 120.0, 100.0, 40.0);
+        p.step(a, from, 8.0, 1.0 / 60.0, None, (0.0, 0.0));
+        for _ in 0..8 {
+            p.step(b, to, 8.0, 1.0 / 60.0, None, (0.0, 0.0));
+            let (r, _) = p.rect().unwrap();
+            let x = (from.left - r.left) / (from.left - to.left);
+            let y = (r.center_y() - from.center_y()) / (to.center_y() - from.center_y());
+            assert!(
+                (x - y).abs() < 0.1,
+                "front off the line: x {x:.2}, y {y:.2}"
+            );
         }
     }
 

@@ -150,26 +150,11 @@ struct HomeView: View {
             // session. The home appears/disappears as the stream swaps in and out.
             .onAppear { discovery.start() }
             .onDisappear { discovery.stop() }
-            // Reachability sweep while the grid is up: a saved host reached only over a routed
-            // network (Tailscale/VPN) never advertises on mDNS, so `advertises` can't see it. Probe
-            // every non-advertising saved host ~every 10 s and publish the reachable set for the
-            // pips (`isOnline` above OR's it in). The `.task` is cancelled on disappear, matching
-            // `discovery.stop()`.
+            // Presence while the grid is up (`HostStore.keepPresence`); the `.task` is cancelled
+            // on disappear, matching `discovery.stop()`.
             .task {
-                while !Task.isCancelled {
-                    await store.refreshReachability(discovery: discovery)
-                    // Keep each reachable paired host's advertised actions warm on the same
-                    // beat, so a card's menu is BUILT from a settled answer rather than one
-                    // arriving while the menu is open. TTL-gated inside, so this costs nothing
-                    // on an ordinary lap.
-                    for host in store.hosts where host.pinnedSHA256 != nil && isOnline(host) {
-                        hostPower.refresh(host)
-                        // What it is PLAYING changes while somebody is looking at the card, so
-                        // this one has a 20 s TTL against the actions' 300 s.
-                        nowPlaying.refresh(host)
-                    }
-                    try? await Task.sleep(for: .seconds(10))
-                }
+                await store.keepPresence(
+                    discovery: discovery, power: hostPower, nowPlaying: nowPlaying)
             }
             // The host page, from a card's ⓘ or its menu (design §2.4), and the speed test pushed
             // from it. The Mac opens both in the host's own window (`MacHostWindow`).
