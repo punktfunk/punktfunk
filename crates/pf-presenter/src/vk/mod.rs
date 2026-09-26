@@ -78,6 +78,10 @@ struct HwCtx {
     /// (format, modifier) importability answers — immutable per device, so the
     /// driver queries run once, not per frame.
     modifier_cache: crate::dmabuf::ModifierCache,
+    /// Plane images per decoder surface, imported once per pool generation.
+    imports: crate::dmabuf::ImportCache,
+    /// Decode sync_file → semaphore. `None`: the frame's fences are polled instead.
+    sync: Option<crate::dmabuf::SyncImport>,
 }
 
 /// Win32 external-memory + keyed-mutex table; present only when both extensions exist.
@@ -413,6 +417,13 @@ impl Drop for Presenter {
             #[cfg(windows)]
             if let Some(hw) = self.hw_win.as_mut() {
                 hw.imports.destroy_all(&self.device); // GPU idle above
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(hw) = self.hw.as_mut() {
+                hw.imports.destroy_all(&self.device); // GPU idle above
+                if let Some(s) = hw.sync.take() {
+                    s.destroy(&self.device);
+                }
             }
             if let Some(s) = self.staging.take() {
                 self.device.unmap_memory(s.memory);

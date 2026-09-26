@@ -187,10 +187,16 @@ impl Presenter {
         };
         #[cfg(target_os = "linux")]
         let hw_capable = dmabuf::DEVICE_EXTENSIONS.iter().all(|n| has(n));
+        // Optional on top: the decode fence as a semaphore instead of a CPU poll.
+        #[cfg(target_os = "linux")]
+        let sync_fd_ext = hw_capable && has(ash::khr::external_semaphore_fd::NAME);
         let mut dev_exts = vec![ash::khr::swapchain::NAME.as_ptr()];
         #[cfg(target_os = "linux")]
         if hw_capable {
             dev_exts.extend(dmabuf::DEVICE_EXTENSIONS.iter().map(|n| n.as_ptr()));
+            if sync_fd_ext {
+                dev_exts.push(ash::khr::external_semaphore_fd::NAME.as_ptr());
+            }
         } else {
             tracing::info!(
                 "device lacks the dmabuf import extensions — VAAPI hardware frames \
@@ -444,9 +450,19 @@ impl Presenter {
         let queue = unsafe { device.get_device_queue(qfi, 0) };
         #[cfg(target_os = "linux")]
         let hw = if hw_capable {
+            let sync = sync_fd_ext
+                .then(|| crate::dmabuf::SyncImport::new(&instance, pdev, &device))
+                .flatten();
+            tracing::info!(
+                semaphore = sync.is_some(),
+                "dmabuf decode sync (a decode fence the sampling submit waits; \
+                 `false` polls the fence on the presenter thread)"
+            );
             Some(HwCtx {
                 ext_mem_fd: ash::khr::external_memory_fd::Device::new(&instance, &device),
                 modifier_cache: Default::default(),
+                imports: Default::default(),
+                sync,
             })
         } else {
             None

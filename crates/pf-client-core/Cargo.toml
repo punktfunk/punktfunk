@@ -183,6 +183,9 @@ zbus = { version = "5", default-features = false, features = ["tokio", "blocking
 # ordinary macOS and container gates, exactly as pf-dxvadec does for Windows.
 pf-vaapi = { path = "../pf-vaapi", optional = true }
 pf-libva = { path = "../pf-libva", optional = true }
+# `dmabuf_fence`: the decode's write fence as a sync_file, so the presenter waits it
+# on the GPU instead of the pump blocking in `vaSyncSurface`.
+pf-zerocopy = { path = "../pf-zerocopy", optional = true }
 # libva itself is dlopen'd, never linked (see `video_vaapi_native`'s module docs): the
 # container can then compile and clippy the whole rung without `libva-dev`, and a machine
 # without a VAAPI runtime gets a clean refusal instead of a packaging dependency.
@@ -285,6 +288,7 @@ desktop = [
     "dep:libc", "dep:opus", "discovery", "dep:ureq", "dep:pf-update-check", "dep:rustls",
     "dep:tracing-subscriber", "dep:tracing-log",
     "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:pf-vaapi", "dep:pf-libva", "dep:libloading", "dep:x11rb",
+    "dep:pf-zerocopy",
     "dep:wasapi", "dep:winreg", "d3d11va",
 ]
 # DXVA device and native rung. `desktop` includes it. The `windows` header list

@@ -398,6 +398,14 @@ pub struct DmabufFrame {
     /// Whole prediction chain was fully available. Corroborates a host
     /// `USER_FLAG_RECOVERY_ANCHOR`: see [`DecodedImage::anchor_evidence`].
     pub references_clean: bool,
+    /// The decode's write fences as sync_files, one per exported object. Empty means
+    /// the decoder already waited on the CPU; otherwise the importer waits them on
+    /// the GPU (or polls) before it samples.
+    pub sync_fds: Vec<std::os::fd::OwnedFd>,
+    /// Identity of the surface behind the fds across the pool's lifetime: the
+    /// importer keeps one `VkImage` per key instead of re-importing every frame.
+    /// The high 32 bits change when the pool is rebuilt.
+    pub pool_key: u64,
     pub guard: DrmFrameGuard,
 }
 

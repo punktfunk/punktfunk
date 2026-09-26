@@ -142,8 +142,9 @@ fn crop_scale(width: u32, height: u32, coded_width: u32, coded_height: u32) -> [
     ]
 }
 
-/// Imported frame. GPU reads outlive submit: park until the fence signals,
-/// then [`HwFrame::destroy`] (drops the decoder surface guard).
+/// Frame bound to its cached plane images. GPU reads outlive submit: park until
+/// the fence signals, then [`HwFrame::destroy`] (drops the decoder surface guard;
+/// the images stay in [`ImportCache`]).
 pub struct HwFrame {
     pub luma_view: vk::ImageView,
     pub chroma_view: vk::ImageView,
@@ -152,14 +153,17 @@ pub struct HwFrame {
     /// [`Self::coded_height`], so sampling must crop ([`Self::uv_scale`]).
     pub width: u32,
     pub height: u32,
+    /// Decode-complete semaphores the sampling submit must wait (binary, temporary
+    /// payloads from the frame's sync_files). Empty when the decode was CPU-waited.
+    pub sync_sems: Vec<vk::Semaphore>,
     /// Exported surface extent the plane images were created at.
     coded_width: u32,
     coded_height: u32,
     /// Fourcc. CSC picks its P010 vs 8-bit rows off this.
     fourcc: u32,
     images: [vk::Image; 2],
-    memories: [vk::DeviceMemory; 2],
-    views: [vk::ImageView; 2],
+    /// Pool generation (high half of the frame's `pool_key`).
+    generation: u64,
     _guard: DrmFrameGuard,
 }
 
@@ -182,9 +186,37 @@ impl HwFrame {
         self.images[1]
     }
 
-    pub fn destroy(self, device: &ash::Device) {
-        // SAFETY: views, images, and memories are owned by `self`. Called only
-        // after the frame's fence has signaled, so the GPU is idle on them.
+    /// The decoder pool this frame's surface belongs to.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Release the decoder surface. The plane images belong to the cache, so
+    /// nothing Vulkan is destroyed here. Only after the frame's fence signaled.
+    pub fn destroy(self, _device: &ash::Device) {
+        // `_guard` drops after the GPU reads: the VAAPI surface stays mapped until here.
+    }
+}
+
+/// One decoder surface's plane images, imported once and reused every time the
+/// surface comes round. An import costs two image creates, two memory imports and
+/// a mapping each; a pool of ~17 surfaces at 4K did that per frame before.
+struct Planes {
+    generation: u64,
+    coded_width: u32,
+    coded_height: u32,
+    fourcc: u32,
+    modifier: u64,
+    layout: [(u32, u32); 2],
+    images: [vk::Image; 2],
+    memories: [vk::DeviceMemory; 2],
+    views: [vk::ImageView; 2],
+}
+
+impl Planes {
+    fn destroy(self, device: &ash::Device) {
+        // SAFETY: handles owned by `self`; the caller waited the last fence that
+        // sampled them.
         unsafe {
             for v in self.views {
                 device.destroy_image_view(v, None);
@@ -196,21 +228,194 @@ impl HwFrame {
                 device.free_memory(m, None);
             }
         }
-        // `_guard` drops after the GPU reads: the VAAPI surface stays mapped until here.
     }
 }
 
+/// Imported plane images keyed by the decoder's `pool_key`.
+#[derive(Default)]
+pub(crate) struct ImportCache {
+    planes: std::collections::HashMap<u64, Planes>,
+}
+
+impl ImportCache {
+    /// Drop every pool but `generation`. Only after the fence wait, with no frame of
+    /// an older pool parked.
+    pub(crate) fn retire_stale(&mut self, device: &ash::Device, generation: u64) {
+        if self.planes.values().all(|p| p.generation == generation) {
+            return;
+        }
+        let stale: Vec<u64> = self
+            .planes
+            .iter()
+            .filter(|(_, p)| p.generation != generation)
+            .map(|(k, _)| *k)
+            .collect();
+        for k in stale {
+            if let Some(p) = self.planes.remove(&k) {
+                p.destroy(device);
+            }
+        }
+    }
+
+    /// Drop every entry. GPU idle on them: after the fence wait or a device wait.
+    pub(crate) fn destroy_all(&mut self, device: &ash::Device) {
+        for (_, p) in self.planes.drain() {
+            p.destroy(device);
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.planes.is_empty()
+    }
+}
+
+/// Sync_file → binary semaphore imports (`VK_KHR_external_semaphore_fd`). A
+/// temporary payload is consumed by one wait, so a small ring outlives the frames
+/// in flight.
+pub(crate) struct SyncImport {
+    ext: ash::khr::external_semaphore_fd::Device,
+    ring: Vec<vk::Semaphore>,
+    next: usize,
+}
+
+impl SyncImport {
+    /// Enough for four frames in flight with two objects each.
+    const RING: usize = 8;
+
+    /// `None` when the device cannot import a `SYNC_FD` semaphore.
+    pub(crate) fn new(instance: &ash::Instance, pdev: vk::PhysicalDevice, device: &ash::Device) -> Option<Self> {
+        let info = vk::PhysicalDeviceExternalSemaphoreInfo::default()
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
+        let mut props = vk::ExternalSemaphoreProperties::default();
+        // SAFETY: read-only query on a live instance/pdev; locals outlive the call.
+        unsafe { instance.get_physical_device_external_semaphore_properties(pdev, &info, &mut props) };
+        if !props
+            .external_semaphore_features
+            .contains(vk::ExternalSemaphoreFeatureFlags::IMPORTABLE)
+        {
+            return None;
+        }
+        let mut ring = Vec::with_capacity(Self::RING);
+        for _ in 0..Self::RING {
+            // SAFETY: create on a live device; the info local outlives the call.
+            match unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) } {
+                Ok(s) => ring.push(s),
+                Err(_) => {
+                    for s in ring {
+                        // SAFETY: created just above, never submitted.
+                        unsafe { device.destroy_semaphore(s, None) };
+                    }
+                    return None;
+                }
+            }
+        }
+        Some(Self {
+            ext: ash::khr::external_semaphore_fd::Device::new(instance, device),
+            ring,
+            next: 0,
+        })
+    }
+
+    /// Import `sync` as the next ring semaphore's temporary payload. Vulkan owns the
+    /// fd it is given, so this dups.
+    fn import(&mut self, sync: &std::os::fd::OwnedFd) -> Result<vk::Semaphore> {
+        let sem = self.ring[self.next];
+        self.next = (self.next + 1) % self.ring.len();
+        let owned = sync.try_clone().context("dup sync_file")?;
+        let info = vk::ImportSemaphoreFdInfoKHR::default()
+            .semaphore(sem)
+            .flags(vk::SemaphoreImportFlags::TEMPORARY)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
+            .fd(owned.as_raw_fd());
+        // SAFETY: `sem` is a ring semaphore whose last wait completed (the ring is
+        // deeper than the frames in flight); `info` outlives the call.
+        unsafe { self.ext.import_semaphore_fd(&info) }.context("vkImportSemaphoreFdKHR")?;
+        // The driver took the dup on success; `?` above still closes it.
+        let _ = owned.into_raw_fd();
+        Ok(sem)
+    }
+
+    pub(crate) fn destroy(self, device: &ash::Device) {
+        for s in self.ring {
+            // SAFETY: owned semaphores; the caller idled the device.
+            unsafe { device.destroy_semaphore(s, None) };
+        }
+    }
+}
+
+/// Bind `frame` to its cached plane images, importing on first sight, and turn its
+/// sync_files into semaphores (or wait them here when the device cannot import).
+/// An unimportable modifier, or a driver rejection, is a clean error; the caller
+/// demotes.
+pub(crate) fn get_or_import(
+    instance: &ash::Instance,
+    pdev: vk::PhysicalDevice,
+    device: &ash::Device,
+    ext_mem_fd: &ash::khr::external_memory_fd::Device,
+    modifiers: &mut ModifierCache,
+    cache: &mut ImportCache,
+    sync: Option<&mut SyncImport>,
+    frame: DmabufFrame,
+) -> Result<HwFrame> {
+    let generation = frame.pool_key >> 32;
+    let layout = [
+        frame.planes.first().map_or((0, 0), |p| (p.offset, p.stride)),
+        frame.planes.get(1).map_or((0, 0), |p| (p.offset, p.stride)),
+    ];
+    let hit = cache.planes.get(&frame.pool_key).is_some_and(|p| {
+        p.coded_width == frame.coded_width
+            && p.coded_height == frame.coded_height
+            && p.fourcc == frame.fourcc
+            && p.modifier == frame.modifier
+            && p.layout == layout
+    });
+    if !hit {
+        let planes = import(instance, pdev, device, ext_mem_fd, modifiers, &frame)?;
+        if let Some(old) = cache.planes.insert(frame.pool_key, planes) {
+            old.destroy(device);
+        }
+    }
+    let p = &cache.planes[&frame.pool_key];
+    let mut sync_sems = Vec::new();
+    match sync {
+        Some(s) => {
+            for fd in &frame.sync_fds {
+                sync_sems.push(s.import(fd)?);
+            }
+        }
+        None => {
+            for fd in &frame.sync_fds {
+                // 100 ms fail-open: a decode this late is a stalled GPU, not a race worth a hang.
+                let _ = pf_zerocopy::dmabuf_fence::wait_sync_file(fd.as_raw_fd(), 100);
+            }
+        }
+    }
+    Ok(HwFrame {
+        luma_view: p.views[0],
+        chroma_view: p.views[1],
+        color: frame.color,
+        width: frame.width,
+        height: frame.height,
+        sync_sems,
+        coded_width: frame.coded_width,
+        coded_height: frame.coded_height,
+        fourcc: frame.fourcc,
+        images: p.images,
+        generation,
+        _guard: frame.guard,
+    })
+}
+
 /// Import both planes at the exported (coded) extent; [`HwFrame::uv_scale`]
-/// crops sampling to the visible picture. An unimportable modifier, or a
-/// driver rejection, is a clean error; the caller demotes.
-pub(crate) fn import(
+/// crops sampling to the visible picture.
+fn import(
     instance: &ash::Instance,
     pdev: vk::PhysicalDevice,
     device: &ash::Device,
     ext_mem_fd: &ash::khr::external_memory_fd::Device,
     cache: &mut ModifierCache,
-    frame: DmabufFrame,
-) -> Result<HwFrame> {
+    frame: &DmabufFrame,
+) -> Result<Planes> {
     // Test hook: fault every import so demotion is exercisable without a broken
     // driver. Per-frame lookup is fine — demotion silences it within three frames.
     if std::env::var_os("PUNKTFUNK_HW_FAULT").is_some_and(|v| v == "import") {
@@ -337,19 +542,16 @@ pub(crate) fn import(
         }
     };
 
-    Ok(HwFrame {
-        luma_view,
-        chroma_view,
-        color: frame.color,
-        width: frame.width,
-        height: frame.height,
+    Ok(Planes {
+        generation: frame.pool_key >> 32,
         coded_width: frame.coded_width,
         coded_height: frame.coded_height,
         fourcc: frame.fourcc,
+        modifier: frame.modifier,
+        layout: [(y.offset, y.stride), (c.offset, c.stride)],
         images: [luma_img, chroma_img],
         memories: [luma_mem, chroma_mem],
         views: [luma_view, chroma_view],
-        _guard: frame.guard,
     })
 }
 

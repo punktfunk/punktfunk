@@ -139,12 +139,14 @@ impl Presenter {
                     .hw
                     .as_mut()
                     .context("hardware frame without dmabuf support")?;
-                hw_frame = Some(dmabuf::import(
+                hw_frame = Some(dmabuf::get_or_import(
                     &self.instance,
                     self.pdev,
                     &self.device,
                     &hw.ext_mem_fd,
                     &mut hw.modifier_cache,
+                    &mut hw.imports,
+                    hw.sync.as_mut(),
                     d,
                 )?);
                 hw_lane = true;
@@ -202,6 +204,16 @@ impl Presenter {
         #[cfg(windows)]
         if let (Some((d, _)), Some(hw)) = (&win_frame, self.hw_win.as_mut()) {
             hw.imports.retire_stale(&self.device, d.generation);
+        }
+        // Same for a rebuilt VAAPI pool; another lane's frame means that decoder is
+        // gone, and its cached imports pin the pool's memory until they go too.
+        #[cfg(target_os = "linux")]
+        if let Some(hw) = self.hw.as_mut() {
+            match &hw_frame {
+                Some(f) => hw.imports.retire_stale(&self.device, f.generation()),
+                None if hw_lane && !hw.imports.is_empty() => hw.imports.destroy_all(&self.device),
+                None => {}
+            }
         }
         // First fence wait is the first moment the software plane images are
         // unreferenced. Hardware lane will not sample them again.
@@ -789,6 +801,15 @@ impl Presenter {
                 wait_values.push(*value);
                 signal_sems.push(*sem);
                 signal_values.push(*value + 1);
+            }
+            // The VAAPI decode's fence, sampled at FRAGMENT_SHADER like the native lane.
+            #[cfg(target_os = "linux")]
+            if let Some(f) = &hw_frame {
+                for sem in &f.sync_sems {
+                    wait_sems.push(*sem);
+                    wait_stages.push(vk::PipelineStageFlags::FRAGMENT_SHADER);
+                    wait_values.push(0);
+                }
             }
             let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
                 .wait_semaphore_values(&wait_values)
