@@ -119,6 +119,9 @@ fn declared_kind(setting: GamepadPref, physical: GamepadPref) -> GamepadPref {
     }
 }
 
+/// What SDL's HIDAPI driver calls the Deck's built-in controller.
+const DECK_NAME: &str = "Steam Deck";
+
 /// Steam Deck probe. `SteamDeck=1` short-circuits; else DMI (Valve + Jupiter/Galileo,
 /// readable in the flatpak). Cached — the answer cannot change while we run.
 pub fn is_steam_deck() -> bool {
@@ -392,16 +395,13 @@ impl GamepadService {
         let _ = self.ctl.send(Ctl::Detach);
     }
 
-    /// Physical pad's virtual kind, or the host default if none. Read *before* attach,
-    /// when Valve HIDAPI is still off ([`set_valve_hidapi`]) so the Deck's 28DE:1205 is
-    /// not enumerable; Steam Input shows only a virtual X360. On a Deck, a virtual pad
-    /// (or none) is the built-in controller — resolve to Steam Deck so paddles/gyro land.
-    /// A real external controller still wins.
+    /// The active pad's kind, or the host default if none. Read *before* attach, when a
+    /// Deck's built-in controls are still Steam Input's pad, which already reads as a Deck.
+    /// A Deck with no pad at all is still a Deck, so paddles and gyro land.
     pub fn auto_pref(&self) -> GamepadPref {
         match self.active() {
-            Some(p) if !p.steam_virtual => p.pref,
-            _ if is_steam_deck() => GamepadPref::SteamDeck,
             Some(p) => p.pref,
+            None if is_steam_deck() => GamepadPref::SteamDeck,
             None => GamepadPref::Auto,
         }
     }
@@ -443,6 +443,17 @@ impl Drop for GamepadPump {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// A Deck's pad list: Steam Input's pads are shadows of the built-in controls and of each
+/// external pad SDL already lists (the session clears Steam's device filter). The built-in
+/// controller is listed once: the raw 28DE:1205 when a session has it, else one Steam pad.
+/// A pad only Steam can see (a Steam Controller while Valve HIDAPI is off) gets no card.
+fn fold_deck_shadows(list: &mut Vec<PadInfo>) {
+    let mut stand_in = !list
+        .iter()
+        .any(|p| !p.steam_virtual && p.pref == GamepadPref::SteamDeck);
+    list.retain(|p| !p.steam_virtual || std::mem::take(&mut stand_in));
 }
 
 /// Lowest free wire index, or `None` when every slot is taken. Lowest-free keeps indices
@@ -945,10 +956,20 @@ impl Worker {
             .subsystem
             .name_for_id(jid)
             .unwrap_or_else(|_| "Controller".into());
+        let key = format!("{vid:04x}:{pid:04x}:{name}");
+        let steam_virtual =
+            (vid == 0x28DE && pid == 0x11FF) || name.starts_with("Steam Virtual Gamepad");
+        // On a Deck, Steam Input's pad is the built-in controls until a session enables Valve
+        // HIDAPI and the raw 28DE:1205 appears. The key keeps SDL's name so a pin still matches.
+        let name = if steam_virtual && is_steam_deck() {
+            pref = GamepadPref::SteamDeck;
+            DECK_NAME.to_string()
+        } else {
+            name
+        };
         Some(PadInfo {
-            key: format!("{vid:04x}:{pid:04x}:{name}"),
-            steam_virtual: (vid == 0x28DE && pid == 0x11FF)
-                || name.starts_with("Steam Virtual Gamepad"),
+            key,
+            steam_virtual,
             name,
             pref,
             // SDL reports power only for an OPEN device; `publish` fills the one we hold.
@@ -1066,13 +1087,7 @@ impl Worker {
             );
             return;
         };
-        let pref = match self.pad_info(id) {
-            // Virtual pad in front of the Deck's built-in controls: declare Deck, not X360.
-            // The host honors per-pad arrival over the session default ([`Self::auto_pref`]).
-            Some(p) if p.steam_virtual && is_steam_deck() => GamepadPref::SteamDeck,
-            Some(p) => p.pref,
-            None => GamepadPref::Xbox360,
-        };
+        let pref = self.pad_info(id).map_or(GamepadPref::Xbox360, |p| p.pref);
         let declared = declared_kind(self.kind_override, pref);
         match self.subsystem.open(sdl3::sys::joystick::SDL_JoystickID(id)) {
             Ok(pad) => {
@@ -1602,6 +1617,9 @@ impl Worker {
             .copied()
             .filter_map(with_battery)
             .collect();
+        if is_steam_deck() {
+            fold_deck_shadows(&mut list);
+        }
         list.reverse();
         *self.pads_out.lock().unwrap() = list;
         *self.active_out.lock().unwrap() = self.active_id().and_then(with_battery);
@@ -2490,6 +2508,35 @@ mod slot_tests {
         let mut but_seven = all.clone();
         but_seven.retain(|&i| i != 7);
         assert_eq!(lowest_free_index(&but_seven), Some(7));
+    }
+
+    #[test]
+    fn a_deck_lists_its_built_in_controller_once() {
+        let pad = |name: &str, pref, steam_virtual| PadInfo {
+            name: name.into(),
+            key: name.into(),
+            pref,
+            steam_virtual,
+            battery: None,
+            detail: String::new(),
+            forwarded: true,
+            rumble: false,
+        };
+        let names = |mut list: Vec<PadInfo>| {
+            fold_deck_shadows(&mut list);
+            list.into_iter().map(|p| p.name).collect::<Vec<_>>()
+        };
+        let shadow = || pad(DECK_NAME, GamepadPref::SteamDeck, true);
+        let ds = || pad("DualSense", GamepadPref::DualSense, false);
+        // Idle: Steam's pads only; one stands in for the built-in controls.
+        assert_eq!(names(vec![shadow()]), [DECK_NAME]);
+        assert_eq!(
+            names(vec![shadow(), ds(), shadow()]),
+            [DECK_NAME, "DualSense"]
+        );
+        // In session the raw 28DE:1205 is there, so every Steam pad is a shadow.
+        let raw = pad(DECK_NAME, GamepadPref::SteamDeck, false);
+        assert_eq!(names(vec![shadow(), raw, ds()]), [DECK_NAME, "DualSense"]);
     }
 
     #[test]

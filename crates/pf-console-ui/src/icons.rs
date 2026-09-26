@@ -24,9 +24,10 @@ pub const CHEVRON_UP: Icon = Icon(pf_client_core::lucide::CHEVRON_UP);
 pub const CORNER_DOWN_LEFT: Icon = Icon(pf_client_core::lucide::CORNER_DOWN_LEFT);
 pub const PLUS: Icon = Icon(pf_client_core::lucide::PLUS);
 
-/// Kenney `controller_xbox360.svg` outline; sticks and guide ring drawn here.
+/// Kenney `controller_xbox360.svg` left half, mirrored about x = 12; sticks and the
+/// guide ring between them drawn here.
 pub const PAD_XBOX_360: Icon = Icon(
-    "M12.08 15.59Q8.51 15.45 7.48 16.6Q5.67 18.66 4.32 19.18Q2.33 20.06 1.74 18.77Q1 17.08 1.36 14.26Q1.7 11.28 2.53 8.71L2.9 7.62Q3.28 6.49 3.87 5.5L3.87 5.19Q5.4 3.94 7.3 4.26L8.49 4.94Q9.39 5.41 10.48 5.48L12.08 5.59L13.68 5.48Q14.76 5.41 15.67 4.94L16.89 4.26Q18.76 3.94 20.29 5.19L20.29 5.5Q20.9 6.49 21.26 7.62L21.65 8.71L22.32 11.23L22.8 14.26L22.89 15.27Q23 17.39 22.41 18.77Q21.87 19.99 20.02 19.24L19.84 19.18Q19.1 18.88 18.22 18.14L16.68 16.6Q15.64 15.45 12.08 15.59ZM4.7 9a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0ZM13.1 13a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0ZM10.2 8.4a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0 -3.8 0Z",
+    "M12 15.6Q8.5 15.6 7.45 16.6Q5.65 18.66 4.3 19.18Q2.3 20.06 1.7 18.77Q1 17.08 1.35 14.26Q1.7 11.28 2.5 8.71L2.87 7.62Q3.3 6.4 3.95 5.35Q5.4 3.94 7.3 4.26L8.49 4.94Q9.39 5.41 10.48 5.5L12 5.5L13.52 5.5Q14.61 5.41 15.51 4.94L16.7 4.26Q18.6 3.94 20.05 5.35Q20.7 6.4 21.13 7.62L21.5 8.71Q22.3 11.28 22.65 14.26Q23 17.08 22.3 18.77Q21.7 20.06 19.7 19.18Q18.35 18.66 16.55 16.6Q15.5 15.6 12 15.6ZM4.9 9.4a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0ZM13.9 12.8a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0ZM10.8 8a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0 -2.4 0Z",
 );
 /// Kenney `controller_xboxone.svg` outline; sticks drawn here.
 pub const PAD_XBOX_ONE: Icon = Icon(
