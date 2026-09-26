@@ -273,6 +273,10 @@ struct StreamState {
     /// the applied lead). Adaptive margin's error signal.
     win_misses: u32,
     win_out_max: usize,
+    /// Consecutive on-glass spacings this window, in whole panel periods: `[0, 1, 2, 3, 4, 5+]`.
+    /// The mode is the expected step; everything else is judder.
+    win_steps: [u32; 6],
+    last_displayed_ns: u64,
     /// One-shot log latch: smoothness was requested but PyroWave collapsed the store
     /// to latency (plane-ring retirement assumes newest-wins).
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
@@ -420,6 +424,8 @@ impl StreamState {
             margin_ns: 0,
             win_misses: 0,
             win_out_max: 0,
+            win_steps: [0; 6],
+            last_displayed_ns: 0,
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             pyro_latency_forced: false,
             dmabuf_demoted: false,
@@ -2043,6 +2049,12 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         {
                             st.win_misses += 1;
                         }
+                        if st.last_displayed_ns != 0 && period > 0 {
+                            let steps = (s.displayed_ns.saturating_sub(st.last_displayed_ns) + period / 2)
+                                / period;
+                            st.win_steps[(steps as usize).min(5)] += 1;
+                        }
+                        st.last_displayed_ns = s.displayed_ns;
                         stamps.push(s.displayed_ns);
                     }
                     st.clock.note_batch(&stamps);
@@ -2416,10 +2428,19 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         "smoothness slot margin widened (measured latch misses)"
                     );
                 }
-                // The 1 Hz presenter line: emitted when anything moved, or always under
-                // PUNKTFUNK_PRESENT_DEBUG=1.
-                if pacing_active && (present_debug || q_drop + q_dry + gated + forced > 0) {
+                // The 1 Hz presenter line, always: the field bundle's only record of where a
+                // frame went after decode and how evenly the glass stepped.
+                if pacing_active {
+                    let _ = present_debug;
                     let cadence_health = st.pacer.health();
+                    let shown: u32 = st.win_steps.iter().sum();
+                    let mode_count = st.win_steps.iter().copied().max().unwrap_or(0);
+                    // Spacings off the most common step, per mille of the window's presents.
+                    let judder = if shown > 0 {
+                        u64::from(shown - mode_count) * 1000 / u64::from(shown)
+                    } else {
+                        0
+                    };
                     tracing::info!(
                         smoothing = present.smoothing,
                         mode = present.mode,
@@ -2431,6 +2452,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         forced,
                         misses = st.win_misses,
                         out_max = st.win_out_max,
+                        steps = ?st.win_steps,
+                        judder,
                         pace_ms,
                         latch_ms,
                         import_us = import.p50_us,
@@ -2454,6 +2477,7 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                 }
                 st.win_misses = 0;
                 st.win_out_max = 0;
+                st.win_steps = [0; 6];
             }
         }
 
@@ -3360,24 +3384,12 @@ fn close_window(
     snap.on_glass = presenter.present_timing_active();
     let prev = std::mem::replace(&mut st.health_seen, st.facts.health);
     snap.extras = desktop_extras(present, st.facts.health, prev, session::codec_fallbacks());
-    tracing::debug!(
-        e2e_p50_us = snap.e2e.p50_us,
-        e2e_p95_us = snap.e2e.p95_us,
-        host_p50_us = snap.host.p50_us,
-        host_p95_us = snap.host.p95_us,
-        net_p50_us = snap.net.p50_us,
-        net_p95_us = snap.net.p95_us,
-        decode_p50_us = snap.decode.p50_us,
-        decode_p95_us = snap.decode.p95_us,
-        display_p50_us = snap.display.p50_us,
-        display_p95_us = snap.display.p95_us,
-        rtt_us = snap.rtt_us.unwrap_or(0),
-        lost = snap.lost,
-        received = snap.received,
-        "stream window"
-    );
+    // The field bundle's per-second record, whatever the HUD tier: a report with no
+    // stats line cannot say where its frames went.
+    let text = hud::join(&hud::format(&snap, StatsVerbosity::Detailed, true), " | ");
+    tracing::info!(target: "stats", "{text}");
     if tier != StatsVerbosity::Off {
-        print_stats(&snap);
+        print_stats(&snap, &text);
     }
     let split = (
         snap.pace.p50_us as f32 / 1000.0,
@@ -3396,11 +3408,10 @@ fn render_osd(st: &mut StreamState, tier: StatsVerbosity) {
     };
 }
 
-/// The stdout machine interface: the Advanced Detailed text for a person reading a log, and
-/// the snapshot for a program. Both are additive; readers skip what they do not know.
-fn print_stats(snap: &StatsSnapshot) {
+/// The stdout machine interface: the Advanced Detailed `text` for a person reading a log,
+/// and the snapshot for a program. Both are additive; readers skip what they do not know.
+fn print_stats(snap: &StatsSnapshot, text: &str) {
     use std::io::Write as _;
-    let text = hud::join(&hud::format(snap, StatsVerbosity::Detailed, true), " | ");
     let json = serde_json::to_string(snap).unwrap_or_default();
     // Not `println!`: it panics on EPIPE, and the reader (the shell) can exit mid-stream.
     let mut out = std::io::stdout().lock();
