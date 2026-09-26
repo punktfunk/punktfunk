@@ -438,11 +438,11 @@ impl Presenter {
         }
 
         let acquire_started = std::time::Instant::now();
-        // SAFETY: `swapchain` and `acquire_sem` are owned here. Fence wait above
-        // completed the last submit that waited `acquire_sem`, so it is not pending.
         // An image taken by the non-blocking probe above is used as is.
         let acquired = match self.acquired.take() {
             Some(index) => Ok((index, false)),
+            // SAFETY: `swapchain` and `acquire_sem` are owned here. Fence wait above
+            // completed the last submit that waited `acquire_sem`, so it is not pending.
             None => unsafe {
                 self.swap_d.acquire_next_image(
                     self.swapchain,

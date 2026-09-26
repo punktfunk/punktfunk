@@ -2240,7 +2240,7 @@ mod tests {
             us.push(t.elapsed().as_micros() as u64);
             // The fence the presenter would wait: how long after the call it signals, and
             // whether the kernel handed one out at all.
-            for f in &frame {
+            if let Some(f) = &frame {
                 use pf_zerocopy::dmabuf_fence::{wait_sync_file, WaitOutcome};
                 match f.sync_fds.first() {
                     None => fence_outcomes[0] += 1,

@@ -353,6 +353,7 @@ impl SyncImport {
 /// sync_files into semaphores (or wait them here when the device cannot import).
 /// An unimportable modifier, or a driver rejection, is a clean error; the caller
 /// demotes.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn get_or_import(
     instance: &ash::Instance,
     pdev: vk::PhysicalDevice,
