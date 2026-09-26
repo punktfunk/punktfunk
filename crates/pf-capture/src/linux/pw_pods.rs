@@ -11,6 +11,8 @@ use pipewire as pw;
 use pw::spa;
 use spa::param::video::VideoFormat;
 
+use super::sync_timeline::{MetaSyncTimeline, META_SYNC_TIMELINE, PARAM_BUFFERS_META_TYPE};
+
 pub(super) fn serialize_pod(obj: pw::spa::pod::Object) -> Result<Vec<u8>> {
     Ok(pw::spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
@@ -389,9 +391,9 @@ pub(super) fn build_dmabuf_buffers(pool_min: i32, explicit_sync: bool) -> Result
     ];
     if explicit_sync {
         properties.push(pw::spa::pod::Property {
-            key: pw::spa::sys::SPA_PARAM_BUFFERS_metaType,
+            key: PARAM_BUFFERS_META_TYPE,
             flags: pw::spa::pod::PropertyFlags::MANDATORY,
-            value: pw::spa::pod::Value::Int(1i32 << spa::sys::SPA_META_SyncTimeline),
+            value: pw::spa::pod::Value::Int(1i32 << META_SYNC_TIMELINE),
         });
     }
     serialize_pod(pw::spa::pod::Object {
@@ -411,14 +413,12 @@ pub(super) fn build_sync_timeline_meta_param() -> Result<Vec<u8>> {
             pw::spa::pod::Property {
                 key: pw::spa::sys::SPA_PARAM_META_type,
                 flags: pw::spa::pod::PropertyFlags::empty(),
-                value: pw::spa::pod::Value::Id(pw::spa::utils::Id(spa::sys::SPA_META_SyncTimeline)),
+                value: pw::spa::pod::Value::Id(pw::spa::utils::Id(META_SYNC_TIMELINE)),
             },
             pw::spa::pod::Property {
                 key: pw::spa::sys::SPA_PARAM_META_size,
                 flags: pw::spa::pod::PropertyFlags::empty(),
-                value: pw::spa::pod::Value::Int(
-                    std::mem::size_of::<spa::sys::spa_meta_sync_timeline>() as i32,
-                ),
+                value: pw::spa::pod::Value::Int(std::mem::size_of::<MetaSyncTimeline>() as i32),
             },
         ],
     })
