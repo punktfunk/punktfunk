@@ -1,6 +1,6 @@
 {
 	"name": "@punktfunk/host",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "TypeScript SDK for the punktfunk streaming host: typed management-API client + lifecycle event stream, built on Effect.",
 	"type": "module",
 	"license": "MIT OR Apache-2.0",
@@ -48,7 +48,7 @@
 	},
 	"scripts": {
 		"prepare": "if command -v bun2nix >/dev/null 2>&1; then bun2nix -o bun.nix; fi",
-		"gen": "openapigen --spec ../api/openapi.json --name Punktfunk --format httpclient > src/gen/punktfunk.ts",
+		"gen": "bun scripts/gen-spec.ts ../api/openapi.json node_modules/.cache/openapi.gen.json && openapigen --spec node_modules/.cache/openapi.gen.json --name Punktfunk --format httpclient > src/gen/punktfunk.ts",
 		"typecheck": "tsc --noEmit",
 		"build": "tsc -p tsconfig.build.json",
 		"test": "bun test",
