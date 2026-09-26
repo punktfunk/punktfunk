@@ -2057,7 +2057,7 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         st.last_displayed_ns = s.displayed_ns;
                         stamps.push(s.displayed_ns);
                     }
-                    st.clock.note_batch(&stamps);
+                    st.clock.note_batch(&stamps, st.store.is_smoothing());
                     // VRR probe: healthy-window stamps only. Use the display mode's period
                     // (not the learned one — a slow stream makes the learner adopt our
                     // cadence as "the grid"). FIFO-family only: MAILBOX/IMMEDIATE never
@@ -2383,7 +2383,7 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
                         // No glass stamps: the submit instant anchors an approximate grid
                         // on the mode's refresh period, so smoothness still drains one
                         // frame per (approximate) slot.
-                        st.clock.note_batch(&[displayed_ns]);
+                        st.clock.note_batch(&[displayed_ns], st.store.is_smoothing());
                     }
                 }
             }
