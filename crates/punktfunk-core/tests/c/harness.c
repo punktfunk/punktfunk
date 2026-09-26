@@ -72,6 +72,24 @@ int main(void) {
         punktfunk_h265_concealer_free(concealer);
     }
 
+    {
+        /* After a gap the rule withholds until the anchor, and refuses an unknown verdict. */
+        AuAdmission *admit = punktfunk_au_admission_new();
+        bool gap_held = false, anchor_held = true, ask = true;
+        PunktfunkStatus s1 = punktfunk_au_admission_note(
+            admit, 4, 1, 0, true, PUNKTFUNK_CONCEALED_NONE, &gap_held, &ask);
+        PunktfunkStatus s2 = punktfunk_au_admission_note(
+            admit, 5, 0, PUNKTFUNK_USER_FLAG_RECOVERY_ANCHOR, true, PUNKTFUNK_CONCEALED_NONE,
+            &anchor_held, NULL);
+        PunktfunkStatus s3 = punktfunk_au_admission_note(admit, 6, 0, 0, true, 7, NULL, NULL);
+        if (s1 != PUNKTFUNK_STATUS_OK || s2 != PUNKTFUNK_STATUS_OK || !gap_held || ask
+            || anchor_held || s3 != PUNKTFUNK_STATUS_INVALID_ARG) {
+            fprintf(stderr, "FAIL: admission rule (st=%d/%d/%d)\n", (int)s1, (int)s2, (int)s3);
+            return 1;
+        }
+        punktfunk_au_admission_free(admit);
+    }
+
     const uint32_t DROP_PERIOD = 8;   /* drop 1 of every 8 packets */
     PunktfunkConfig host_cfg = make_config(0, DROP_PERIOD);
     PunktfunkConfig client_cfg = make_config(1, DROP_PERIOD);
