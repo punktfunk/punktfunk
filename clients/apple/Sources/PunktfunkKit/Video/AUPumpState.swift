@@ -2,16 +2,14 @@
 // and decoded-size tracking, the keyframe WANT that only an IDR's parameter sets can end, and
 // which post-loss AUs never reach the decoder.
 //
-// Pure by design — the caller reads the connection and applies what `note` returns — so the rules
-// are testable without a host. It exists as one type because the two pumps carried the same
-// ~60 lines and had already drifted apart: both of the loss-recovery defects found in the Apple
-// client had to be fixed twice, and the second copy is easy to miss.
-//
-// The freeze itself (what stays on glass) is the shared `ReanchorGate`'s. This type only keeps
-// reference-damaged deltas away from VideoToolbox so the gate ever sees the anchor decode.
+// No I/O: the caller reads the connection and applies what `note` returns, so the rules are
+// testable without a host. Which post-loss AUs reach VideoToolbox is the core's receiver rule
+// (`punktfunk_au_admission_*`), strict: one reference-damaged delta can make VideoToolbox
+// refuse every later non-IDR AU, the anchor too. What stays on glass is `ReanchorGate`'s.
 
 import CoreMedia
 import Foundation
+import PunktfunkCore
 
 struct AUPumpState {
     /// The live format description. Only an IDR's parameter sets can set it.
@@ -23,14 +21,8 @@ struct AUPumpState {
     /// Persistent WANT for the two states only parameter sets can end: no decodable format yet,
     /// or a decoder reset. The caller re-asks (throttled) while it is true.
     private(set) var awaitingIDR = false
-    /// From a frame-index gap until the AU that re-anchors decode (an IDR or a flagged RFI
-    /// anchor). Every delta in between references the lost picture, and one such AU puts the
-    /// VideoToolbox HEVC session into an error state that refuses every later non-IDR AU — the
-    /// anchor included. Withheld, the anchor decodes and lifts the gate.
-    private(set) var withholding = false
-    /// A recovery mark arrived while withholding: the wave builds on a chain VideoToolbox no
-    /// longer has, so only an IDR ends this — keep asking.
-    private var markWhileWithholding = false
+    /// The core's receiver rule. A copy of this state shares it; each pump owns one.
+    private let admission = Admission()
 
     /// What the caller should do about this access unit.
     struct Step: Equatable {
@@ -43,7 +35,7 @@ struct AUPumpState {
         var resumed = false
         /// The wait for a decodable format began with this AU (log once, not per AU).
         var startedFormatWait = false
-        /// Do not hand this AU to the decoder: it references a lost picture (see `withholding`).
+        /// Do not hand this AU to the decoder: it references a lost picture.
         var withhold = false
         /// Ask the host for a keyframe (the caller throttles).
         var askKeyframe = false
@@ -62,6 +54,14 @@ struct AUPumpState {
         case decodable
         /// Nothing can stand in: off the decoder, and ask for an IDR.
         case unrecoverable
+
+        var core: UInt32 {
+            switch self {
+            case .none: UInt32(PUNKTFUNK_CONCEALED_NONE)
+            case .decodable: UInt32(PUNKTFUNK_CONCEALED_DECODABLE)
+            case .unrecoverable: UInt32(PUNKTFUNK_CONCEALED_UNRECOVERABLE)
+            }
+        }
     }
 
     /// Whether `note` skips this index as a straggler. Work the decoder never sees must not
@@ -73,7 +73,8 @@ struct AUPumpState {
 
     /// Fold one access unit in. `idrFormat` is what the codec made of its parameter sets, or nil
     /// for a delta frame; `lossAhead` says a frame-index gap precedes this AU; `flags` are its
-    /// wire flags (`AccessUnit.flags`); `concealed` is the concealer's verdict on it.
+    /// wire flags (`AccessUnit.flags`); `concealed` is the concealer's verdict on it. Parsed
+    /// parameter sets re-anchor like the wire IDR bit.
     mutating func note(
         frameIndex: UInt32, idrFormat: CMVideoFormatDescription?, lossAhead: Bool = false,
         flags: UInt32 = 0, concealed: Concealment = .none
@@ -85,37 +86,10 @@ struct AUPumpState {
         }
         newestIndex = frameIndex
 
-        switch concealed {
-        case .none:
-            if lossAhead {
-                withholding = true
-                markWhileWithholding = false
-            }
-            if withholding {
-                let reanchors =
-                    idrFormat != nil
-                    || flags
-                        & (PunktfunkConnection.flagSOF | PunktfunkConnection.userFlagRecoveryAnchor)
-                        != 0
-                if reanchors {
-                    withholding = false
-                } else {
-                    step.withhold = true
-                    if flags & PunktfunkConnection.userFlagRecoveryPoint != 0 {
-                        markWhileWithholding = true
-                    }
-                    step.askKeyframe = markWhileWithholding
-                }
-            }
-        case .decodable:
-            // The concealer keeps the decoder's DPB consistent, so a wave or an anchor heals
-            // without an IDR: nothing is withheld.
-            withholding = false
-            markWhileWithholding = false
-        case .unrecoverable:
-            step.withhold = true
-            step.askKeyframe = true
-        }
+        let idr = idrFormat != nil ? PunktfunkConnection.flagSOF : 0
+        _ = punktfunk_au_admission_note(
+            admission.ptr, frameIndex, lossAhead ? 1 : 0, flags | idr, true, concealed.core,
+            &step.withhold, &step.askKeyframe)
 
         if let f = idrFormat {
             format = f // refreshed on every IDR, mode changes included
@@ -143,4 +117,10 @@ struct AUPumpState {
         format = nil
         awaitingIDR = true
     }
+}
+
+/// The core rule's C handle, freed once with the last state that holds it.
+private final class Admission {
+    let ptr: OpaquePointer = punktfunk_au_admission_new()
+    deinit { punktfunk_au_admission_free(ptr) }
 }
