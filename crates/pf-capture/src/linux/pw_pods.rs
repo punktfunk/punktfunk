@@ -23,12 +23,12 @@ pub(super) fn serialize_pod(obj: pw::spa::pod::Object) -> Result<Vec<u8>> {
 
 /// What the offer's `maxFramerate` tells the producer.
 ///
-/// `Unpaced` is `0/1`: no ceiling, so KWin delivers on its own damage signal instead
-/// of a timer. KWin derives its screencast timer from the negotiated `maxFramerate`
-/// and rounds the wait up to a whole millisecond, so an 8.333 ms frame is scheduled
-/// at 9 and the cadence jitters; zero makes its `frameInterval()` zero. KWin 6.7+
-/// offers `Range(refresh, 0/1, refresh)`, so this fixates; older KWin floors at 1/1
-/// and rejects the pod, so the caller lists a plain twin behind it.
+/// `Unpaced` is `0/1`: no ceiling, so KWin delivers on its own damage signal. Up to 6.7
+/// the only ceiling KWin takes is its refresh (`Range(refresh, 0/1, refresh)`), and it
+/// throttles that with a whole-millisecond timer stamped after each render: at the
+/// stream rate every record slips a millisecond until one coalesces, ~9.3 ms apart.
+/// KWin 6.8 offers millihertz and paces the cast at the ceiling that fixates, so there
+/// the stream rate goes on as `Cap`.
 ///
 /// `Cap(hz)` is the wire rate, for a producer that paints on every commit (gamescope
 /// with adaptive sync): it pushes at most `hz` frames a second. A producer that never
@@ -424,6 +424,52 @@ pub(super) fn build_sync_timeline_meta_param() -> Result<Vec<u8>> {
     })
 }
 
+/// `SPA_META_Header` on each buffer: the producer's own stamp per frame (KWin's last
+/// vblank up to 6.7, its paced tick from 6.8), which the wire pts takes over delivery time.
+pub(super) fn build_header_meta_param() -> Result<Vec<u8>> {
+    serialize_pod(pw::spa::pod::Object {
+        type_: pw::spa::utils::SpaTypes::ObjectParamMeta.as_raw(),
+        id: pw::spa::param::ParamType::Meta.as_raw(),
+        properties: vec![
+            pw::spa::pod::Property {
+                key: pw::spa::sys::SPA_PARAM_META_type,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: pw::spa::pod::Value::Id(pw::spa::utils::Id(spa::sys::SPA_META_Header)),
+            },
+            pw::spa::pod::Property {
+                key: pw::spa::sys::SPA_PARAM_META_size,
+                flags: pw::spa::pod::PropertyFlags::empty(),
+                value: pw::spa::pod::Value::Int(
+                    std::mem::size_of::<spa::sys::spa_meta_header>() as i32
+                ),
+            },
+        ],
+    })
+}
+
+/// The producer's `maxFramerate` denominator, off one of its `EnumFormat` pods. KWin 6.8
+/// offers millihertz (`refresh/1000`); 6.7 and older offer whole hertz. `None` without
+/// the property.
+pub(super) fn offer_framerate_denom(pod: &[u8]) -> Option<u32> {
+    use pw::spa::pod::{deserialize::PodDeserializer, ChoiceValue, Value};
+    use pw::spa::utils::{Choice, ChoiceEnum};
+    let (_, Value::Object(obj)) = PodDeserializer::deserialize_any_from(pod).ok()? else {
+        return None;
+    };
+    let prop = obj
+        .properties
+        .iter()
+        .find(|p| p.key == pw::spa::sys::SPA_FORMAT_VIDEO_maxFramerate)?;
+    match &prop.value {
+        Value::Fraction(f) => Some(f.denom),
+        Value::Choice(ChoiceValue::Fraction(Choice(_, ChoiceEnum::Range { default, .. })))
+        | Value::Choice(ChoiceValue::Fraction(Choice(_, ChoiceEnum::Enum { default, .. }))) => {
+            Some(default.denom)
+        }
+        _ => None,
+    }
+}
+
 /// `SPA_META_Cursor` on each buffer, paired with the portal's
 /// `CursorMode::Metadata`. Unsupported producers omit it (harmless).
 pub(super) fn build_cursor_meta_param() -> Result<Vec<u8>> {
@@ -583,6 +629,40 @@ mod tests {
                 "{name} did not parse back as a pod"
             );
         }
+    }
+
+    /// KWin 6.8 is told apart from 6.7 by the denominator of the ceiling it offers.
+    #[test]
+    fn the_offer_denominator_tells_kwin_generations_apart() {
+        use spa::pod::{ChoiceValue, Value};
+        use spa::utils::{Choice, ChoiceEnum, ChoiceFlags, Fraction};
+        let offer = |props: Vec<spa::pod::Property>| {
+            serialize_pod(spa::pod::Object {
+                type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+                id: spa::param::ParamType::EnumFormat.as_raw(),
+                properties: props,
+            })
+            .unwrap()
+        };
+        let range = |num: u32, denom: u32| spa::pod::Property {
+            key: spa::sys::SPA_FORMAT_VIDEO_maxFramerate,
+            flags: spa::pod::PropertyFlags::empty(),
+            value: Value::Choice(ChoiceValue::Fraction(Choice(
+                ChoiceFlags::empty(),
+                ChoiceEnum::Range {
+                    default: Fraction { num, denom },
+                    min: Fraction { num: 0, denom: 1 },
+                    max: Fraction { num, denom },
+                },
+            ))),
+        };
+        assert_eq!(offer_framerate_denom(&offer(vec![range(120, 1)])), Some(1));
+        assert_eq!(
+            offer_framerate_denom(&offer(vec![range(120_000, 1_000)])),
+            Some(1_000)
+        );
+        assert_eq!(offer_framerate_denom(&offer(vec![])), None);
+        assert_eq!(offer_framerate_denom(b"not a pod"), None);
     }
 
     #[test]

@@ -3,8 +3,9 @@
 use super::pw_cursor::{composite_cursor, update_cursor_meta, CursorState};
 use super::pw_pods::{
     build_cursor_meta_param, build_default_format_obj, build_dmabuf_buffers, build_dmabuf_format,
-    build_hdr_dmabuf_format, build_mappable_buffers, build_shm_only_buffers,
-    build_sync_timeline_meta_param, serialize_pod, Pacing, HDR_FORMAT_ORDER,
+    build_hdr_dmabuf_format, build_header_meta_param, build_mappable_buffers,
+    build_shm_only_buffers, build_sync_timeline_meta_param, offer_framerate_denom, serialize_pod,
+    Pacing, HDR_FORMAT_ORDER,
 };
 use super::sync_timeline::{hand_back, plane_count, SyncDevice, SyncPoints};
 use super::{CapturedFrame, DmabufFrame, FramePayload, PixelFormat, ZeroCopyPolicy};
@@ -1791,7 +1792,8 @@ pub fn pipewire_thread(
     // in a graph cycle this stream starts, so the encode loop owns the tick and no second
     // clock beats against it. Only a producer that emits RequestProcess (Mutter ≥ 49 virtual
     // monitors) may be driven this way; any other stays the driver as before.
-    let lazy = lazy && producer_supports_request(&core, &mainloop, node_id);
+    let probe = probe_producer(&core, &mainloop, node_id);
+    let lazy = lazy && probe.supports_request;
     if quit_seen.get() {
         return Ok(());
     }
@@ -2440,7 +2442,12 @@ pub fn pipewire_thread(
     // makes the compositor pick shm). Modifiers go out as MANDATORY `ChoiceEnum::Enum`;
     // this is not the two-step DONT_FIXATE handshake (`ChoiceFlags` cannot express it).
     let build_pods = |unpaced: bool| -> Result<Vec<Vec<u8>>> {
-        let pacing = offer_pacing(unpaced, producer_is_gamescope, preferred);
+        let pacing = offer_pacing(
+            unpaced,
+            probe.framerate_mhz,
+            producer_is_gamescope,
+            preferred,
+        );
         if want_hdr {
             // Offering SDR alongside lets the producer pick it, and a timeout latches SDR
             // downgrade. Order is the fix — see the NVIDIA note on `HDR_FORMAT_ORDER`. First
@@ -2535,6 +2542,13 @@ pub fn pipewire_thread(
         Some(_) => Some(build_sync_timeline_meta_param()?),
         None => None,
     };
+    // Any meta listed here narrows the producer's set to the intersection, so the header
+    // rides along with the first one; a producer left unlisted keeps its whole set.
+    let header_meta = if cursor_meta.is_some() || sync_meta.is_some() {
+        Some(build_header_meta_param()?)
+    } else {
+        None
+    };
     let mut byte_slices: Vec<&[u8]> = Vec::new();
     for pod in &format_pods {
         byte_slices.push(pod);
@@ -2549,6 +2563,9 @@ pub fn pipewire_thread(
         byte_slices.push(m);
     }
     if let Some(m) = &sync_meta {
+        byte_slices.push(m);
+    }
+    if let Some(m) = &header_meta {
         byte_slices.push(m);
     }
     let mut params: Vec<&Pod> = byte_slices
@@ -2871,27 +2888,37 @@ impl Drop for RequestListener {
     }
 }
 
-/// Whether the producer node emits RequestProcess (`node.supports-request` > 0). The
-/// registry announce carries only a subset of a node's props, so the node is bound and
-/// the value read off its `info`. False on any doubt — a wrong true makes a non-lazy
-/// producer a follower of a driver that never triggers.
-fn producer_supports_request(
+/// What the producer node says about itself before the stream connects. The registry
+/// announce carries only a subset of a node's props, so the node is bound and read.
+#[derive(Debug, Clone, Copy, Default)]
+struct ProducerProbe {
+    /// It emits RequestProcess (`node.supports-request` > 0). False on any doubt — a wrong
+    /// true makes a non-lazy producer a follower of a driver that never triggers.
+    supports_request: bool,
+    /// Its `EnumFormat` states `maxFramerate` in millihertz: KWin 6.8+, which paces the
+    /// cast at the ceiling that fixates. Older KWin offers whole hertz and throttles.
+    framerate_mhz: bool,
+}
+
+fn probe_producer(
     core: &pw::core::CoreRc,
     mainloop: &pw::main_loop::MainLoopRc,
     node_id: u32,
-) -> bool {
+) -> ProducerProbe {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     let Ok(registry) = core.get_registry_rc() else {
-        return false;
+        return ProducerProbe::default();
     };
     let found: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
+    let mhz: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
     // The bound proxy and its listener must outlive the round trips that deliver `info`.
     let bound: Rc<RefCell<Option<(pw::node::Node, pw::node::NodeListener)>>> = Rc::default();
     let _reg = registry
         .add_listener_local()
         .global({
-            let (registry, found, bound) = (registry.clone(), found.clone(), bound.clone());
+            let (registry, found, mhz, bound) =
+                (registry.clone(), found.clone(), mhz.clone(), bound.clone());
             move |g| {
                 if g.id != node_id || g.type_ != pw::types::ObjectType::Node {
                     return;
@@ -2913,13 +2940,27 @@ fn producer_supports_request(
                             found.set(Some(v > 0));
                         }
                     })
+                    .param({
+                        let mhz = mhz.clone();
+                        move |_, id, _, _, pod| {
+                            if id != pw::spa::param::ParamType::EnumFormat {
+                                return;
+                            }
+                            if let Some(denom) =
+                                pod.and_then(|p| offer_framerate_denom(p.as_bytes()))
+                            {
+                                mhz.set(Some(denom == 1000));
+                            }
+                        }
+                    })
                     .register();
+                node.enum_params(0, Some(pw::spa::param::ParamType::EnumFormat), 0, u32::MAX);
                 *bound.borrow_mut() = Some((node, listener));
             }
         })
         .register();
-    // Round 1 replays the globals and binds; round 2 lands the bind's `info`. The timer
-    // bounds a daemon that never answers.
+    // Round 1 replays the globals and binds; round 2 lands the bind's `info` and formats.
+    // The timer bounds a daemon that never answers.
     let awaited: Rc<Cell<Option<pw::spa::utils::result::AsyncSeq>>> = Rc::new(Cell::new(None));
     let _core_l = core
         .add_listener_local()
@@ -2937,38 +2978,47 @@ fn producer_supports_request(
         move |_| ml.quit()
     });
     let _ = guard.update_timer(Some(std::time::Duration::from_secs(2)), None);
-    for _ in 0..2 {
+    for _ in 0..3 {
         let Ok(seq) = core.sync(0) else {
-            return false;
+            return ProducerProbe::default();
         };
         awaited.set(Some(seq));
         mainloop.run();
-        if found.get().is_some() {
+        if found.get().is_some() && mhz.get().is_some() {
             break;
         }
     }
-    let supports = found.get();
+    let (supports, framerate_mhz) = (found.get(), mhz.get());
     tracing::info!(
         node_id,
         supports_request = ?supports,
-        "capture producer probed for PipeWire request scheduling"
+        framerate_mhz = ?framerate_mhz,
+        "capture producer probed"
     );
-    supports.unwrap_or(false)
+    ProducerProbe {
+        supports_request: supports.unwrap_or(false),
+        framerate_mhz: framerate_mhz.unwrap_or(false),
+    }
 }
 
-/// KWin's unpaced ceiling, in multiples of the stream rate. Above one refresh its ms timer
-/// never gates a real frame; bounded, a game far above the stream rate cannot flood the pool.
-const KWIN_UNPACED_HEADROOM: u32 = 2;
-
-/// The offer's `maxFramerate`. KWin asks for its own signal under a ceiling of
-/// [`KWIN_UNPACED_HEADROOM`] times the stream rate; gamescope paints on every commit, so the
-/// wire rate caps its pushes (`Cap`); anyone else keeps its rate.
-fn offer_pacing(unpaced: bool, gamescope: bool, preferred: Option<(u32, u32, u32)>) -> Pacing {
+/// The offer's `maxFramerate`. KWin up to 6.7 asks for its own damage signal: it takes no
+/// ceiling above its refresh, and that one it throttles with a whole-millisecond timer that
+/// slips a frame every few. KWin 6.8 (millihertz offer) paces the cast at the ceiling, so
+/// it gets the stream rate. gamescope paints on every commit, so the wire rate caps its
+/// pushes; anyone else keeps its rate.
+fn offer_pacing(
+    unpaced: bool,
+    producer_mhz: bool,
+    gamescope: bool,
+    preferred: Option<(u32, u32, u32)>,
+) -> Pacing {
     let hz = preferred.map(|(_, _, hz)| hz).filter(|hz| *hz > 0);
     if unpaced {
-        hz.map_or(Pacing::Unpaced, |hz| {
-            Pacing::Cap(hz * KWIN_UNPACED_HEADROOM)
-        })
+        if producer_mhz {
+            hz.map_or(Pacing::Unpaced, Pacing::Cap)
+        } else {
+            Pacing::Unpaced
+        }
     } else if gamescope {
         hz.map_or(Pacing::Producer, Pacing::Cap)
     } else {
@@ -3177,20 +3227,33 @@ mod tests {
         assert!(!book.contains(0x10));
     }
 
-    /// gamescope is capped at the wire rate, KWin at its headroom above it; a missing rate
-    /// caps nothing.
+    /// gamescope and KWin 6.8 are capped at the wire rate, older KWin never; a missing
+    /// rate caps nothing.
     #[test]
     fn pacing_caps_follow_the_wire_rate() {
         assert_eq!(
-            offer_pacing(true, false, Some((1, 1, 90))),
-            Pacing::Cap(180)
+            offer_pacing(true, false, false, Some((1, 1, 90))),
+            Pacing::Unpaced
         );
-        assert_eq!(offer_pacing(true, false, Some((1, 1, 0))), Pacing::Unpaced);
-        assert_eq!(offer_pacing(true, false, None), Pacing::Unpaced);
-        assert_eq!(offer_pacing(false, true, Some((1, 1, 90))), Pacing::Cap(90));
-        assert_eq!(offer_pacing(false, true, Some((1, 1, 0))), Pacing::Producer);
         assert_eq!(
-            offer_pacing(false, false, Some((1, 1, 90))),
+            offer_pacing(true, true, false, Some((1, 1, 90))),
+            Pacing::Cap(90)
+        );
+        assert_eq!(
+            offer_pacing(true, true, false, Some((1, 1, 0))),
+            Pacing::Unpaced
+        );
+        assert_eq!(offer_pacing(true, true, false, None), Pacing::Unpaced);
+        assert_eq!(
+            offer_pacing(false, false, true, Some((1, 1, 90))),
+            Pacing::Cap(90)
+        );
+        assert_eq!(
+            offer_pacing(false, false, true, Some((1, 1, 0))),
+            Pacing::Producer
+        );
+        assert_eq!(
+            offer_pacing(false, false, false, Some((1, 1, 90))),
             Pacing::Producer
         );
     }
