@@ -60,6 +60,7 @@ export function Ports() {
     ['Native control', `UDP ${ports.native.port}`, ports.native.what, firewall.native],
     ['Discovery', `UDP ${ports.mdns.port}`, ports.mdns.what, firewall.native],
     ['Management API', `TCP ${ports.mgmt.port}`, ports.mgmt.what, firewall.native],
+    ['Browser streaming', `UDP ${ports.browser.port}`, ports.browser.what, firewall.native],
     ['Video data', 'UDP (ephemeral)', ports.data.what, '—'],
     ['Web console', `TCP ${[ports.web.port, ...ports.web.also].join(', ')}`, ports.web.what, firewall.web],
     [

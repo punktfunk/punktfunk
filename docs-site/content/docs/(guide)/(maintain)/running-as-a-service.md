@@ -15,7 +15,7 @@ API. Two more planes stay off until you turn them on under **Host → Settings**
 | Plane | Setting | `host.env` | Firewall |
 |---|---|---|---|
 | Stock [Moonlight](/docs/moonlight) (GameStream) | **GameStream** | `PUNKTFUNK_GAMESTREAM=1` | open the `punktfunk-gamestream` service |
-| Browser client (preview) | **Browser streaming** | `PUNKTFUNK_WEBTRANSPORT=1` | open UDP 9778 (`PUNKTFUNK_WEBTRANSPORT_PORT` moves it) |
+| Browser client (preview) | **Browser streaming** | `PUNKTFUNK_WEBTRANSPORT=1` | UDP 9778, in `punktfunk-native` (`PUNKTFUNK_WEBTRANSPORT_PORT` moves it) |
 
 Both take effect after a host restart. GameStream pairs over plain HTTP with weaker encryption, so
 turn it on only on a LAN you trust ([Security](/docs/security)).

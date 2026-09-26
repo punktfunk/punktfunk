@@ -157,18 +157,9 @@ post_upgrade() {
   _warn_stale_firewall_ports
 }
 
-# An already-open firewall does NOT pick up a port we added to a profile.
-#
-# ufw expands an app profile into concrete rules when you run `ufw allow`, and stores THOSE. Editing
-# /etc/ufw/applications.d later — which is all a package upgrade does — changes nothing about the
-# rules already installed. firewalld is friendlier (its permanent config names the service, so a
-# reload re-reads the XML) but still needs that reload. Either way the operator has an old rule and
-# no reason to suspect it.
-#
-# That is not hypothetical: 47993 (plugin UIs, a separate origin from the console) arrived exactly
-# this way, and on an upgraded ufw box every plugin interface silently became an empty panel in the
-# console. So on upgrade, look at what is actually open and say so — still without touching the
-# running firewall, which stays the operator's call.
+# An open firewall keeps the ports a profile had when it was allowed: ufw stores the expanded rules,
+# and a running firewalld serves the service it last loaded. Name each profile that lacks a port this
+# package added, with the command that refreshes it. The running firewall stays the operator's call.
 _warn_stale_firewall_ports() {
   # `ufw status verbose` prints each rule with its EXPANDED ports — "47992/tcp (punktfunk-web)"
   # before the refresh, "47992,47993/tcp (punktfunk-web)" after — so one listing answers both "is
@@ -184,6 +175,16 @@ are served from. Until it is refreshed, plugin interfaces will not load in the w
      sudo ufw app update punktfunk-web && sudo ufw reload
 MSG
   fi
+  if command -v ufw >/dev/null 2>&1 &&
+     ufw status verbose 2>/dev/null | grep -q 'punktfunk-native' &&
+     ! ufw status verbose 2>/dev/null | grep -q '9778'; then
+    cat <<'MSG'
+
+punktfunk: your ufw rule for 'punktfunk-native' predates UDP 9778, browser streaming. Until it is
+refreshed, a browser cannot connect to this host:
+     sudo ufw app update punktfunk-native && sudo ufw reload
+MSG
+  fi
   # `--info-service` asks the DAEMON, which answers from the definition it loaded at its last
   # (re)start — precisely the stale copy we are warning about. The file on disk already says 47993.
   if command -v firewall-cmd >/dev/null 2>&1 &&
@@ -195,6 +196,17 @@ MSG
 punktfunk: the punktfunk-web firewalld service now also covers TCP 47993, the separate origin
 plugin UIs are served from. Reload so the running firewall picks it up, or plugin interfaces will
 not load in the web console:
+     sudo firewall-cmd --reload
+MSG
+  fi
+  if command -v firewall-cmd >/dev/null 2>&1 &&
+     firewall-cmd --state >/dev/null 2>&1 &&
+     firewall-cmd --query-service=punktfunk-native >/dev/null 2>&1 &&
+     ! firewall-cmd --info-service=punktfunk-native 2>/dev/null | grep -q '9778'; then
+    cat <<'MSG'
+
+punktfunk: the punktfunk-native firewalld service now also covers UDP 9778, browser streaming.
+Reload so the running firewall picks it up, or a browser cannot connect to this host:
      sudo firewall-cmd --reload
 MSG
   fi

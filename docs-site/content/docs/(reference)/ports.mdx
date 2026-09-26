@@ -15,8 +15,10 @@ Linux packages install firewalld services and ufw profiles but never enable them
 - **`punktfunk-gamestream`** only with [Moonlight](/docs/moonlight) compat on.
 - **Video needs no open port.** The client hole-punches an ephemeral UDP port and the host answers
   through it. To open one fixed port instead, set `PUNKTFUNK_DATA_PORT`.
-- **The browser client** (preview, off by default) uses UDP 9778, which no profile opens — see
-  [The browser client](/docs/running-as-a-service#the-browser-client-preview).
+- **The browser client** (preview, off by default) uses UDP 9778, in `punktfunk-native` — see
+  [The browser client](/docs/running-as-a-service#the-browser-client-preview). A rule from before
+  0.41 lacks it: `sudo ufw app update punktfunk-native && sudo ufw reload`, or `sudo firewall-cmd
+  --reload`.
 
 ## Enable the profiles
 

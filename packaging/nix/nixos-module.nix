@@ -82,8 +82,9 @@ let
   nativeTCP = [ 47990 ]; # mgmt/library REST API (HTTPS + mTLS)
   nativeUDP = [
     9777
+    9778
     5353
-  ]; # QUIC control plane + mDNS
+  ]; # QUIC control plane + browser streaming (closed until switched on) + mDNS
   # GameStream/Moonlight-compat fixed ports (opt-in with `host.gamestream`).
   gamestreamTCP = [
     47984
@@ -227,8 +228,8 @@ in
         type = types.bool;
         default = false;
         description = ''
-          Open the host's inbound ports. Native punktfunk/1 always: UDP 9777 (QUIC) + 5353 (mDNS),
-          TCP 47990 (mgmt API). With `gamestream = true` also TCP 47984/47989/48010 and UDP
+          Open the host's inbound ports. Native punktfunk/1 always: UDP 9777 (QUIC), 9778 (browser
+          streaming) + 5353 (mDNS), TCP 47990 (mgmt API). With `gamestream = true` also TCP 47984/47989/48010 and UDP
           47998/47999/48000. The ephemeral media UDP port is hole-punched, so a default-deny
           firewall still streams (it just adds ~2.5 s at session start).
         '';

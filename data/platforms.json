@@ -21,6 +21,12 @@
       "what": "punktfunk/1 QUIC control port",
       "env": "PUNKTFUNK_NATIVE_PORT"
     },
+    "browser": {
+      "port": 9778,
+      "proto": "udp",
+      "what": "browser streaming (preview, off until switched on)",
+      "env": "PUNKTFUNK_WEBTRANSPORT_PORT"
+    },
     "data": {
       "port": null,
       "proto": "udp",

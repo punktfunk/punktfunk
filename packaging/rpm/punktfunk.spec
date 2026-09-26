@@ -747,10 +747,8 @@ if command -v firewall-cmd >/dev/null 2>&1; then
     echo "    sudo firewall-cmd --permanent --add-service=punktfunk-gamestream && sudo firewall-cmd --reload"
     echo "    (use punktfunk-native for the native-only host)"
 fi
-# A RUNNING firewalld keeps serving the service definition it loaded at its last (re)start, so a
-# port added to the XML by this upgrade — 47993, the separate origin plugin UIs are served from —
-# is not open until a reload, and the console shows every plugin interface as an empty panel with
-# nothing to explain it. `--info-service` asks the daemon, i.e. reads that stale copy.
+# A running firewalld serves the service it last loaded, so a port this upgrade added to the XML is
+# closed until a reload. `--info-service` asks the daemon, i.e. reads that stale copy.
 if command -v firewall-cmd >/dev/null 2>&1 &&
    firewall-cmd --state >/dev/null 2>&1 &&
    firewall-cmd --query-service=punktfunk-web >/dev/null 2>&1 &&
@@ -758,6 +756,14 @@ if command -v firewall-cmd >/dev/null 2>&1 &&
     echo ""
     echo "punktfunk: the punktfunk-web firewalld service now also covers TCP 47993 (plugin UIs)."
     echo "  Plugin interfaces will not load in the console until:  sudo firewall-cmd --reload"
+fi
+if command -v firewall-cmd >/dev/null 2>&1 &&
+   firewall-cmd --state >/dev/null 2>&1 &&
+   firewall-cmd --query-service=punktfunk-native >/dev/null 2>&1 &&
+   ! firewall-cmd --info-service=punktfunk-native 2>/dev/null | grep -q '9778'; then
+    echo ""
+    echo "punktfunk: the punktfunk-native firewalld service now also covers UDP 9778 (browser"
+    echo "  streaming). A browser cannot connect to this host until:  sudo firewall-cmd --reload"
 fi
 # Conflicting Moonlight-compatible host (Sunshine/Apollo/...): reuse the host's own detector so the
 # warning stays in one place. Exit 1 = something found; never fail the install on it.

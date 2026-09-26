@@ -17,12 +17,15 @@
 # ephemeral UDP port chosen per session and is NOT listed here: the host
 # hole-punches, so a deny-inbound firewall still works (it just adds ~2.5 s at
 # session start). To open a fixed one instead, run the host with
-# `serve --data-port 9778` and `sudo ufw allow 9778/udp`.
+# `serve --data-port 9779` and `sudo ufw allow 9779/udp`.
+#
+# 9778/udp is browser streaming (console: Browser streaming). Nothing listens
+# there until it is switched on, and the console switch cannot open a firewall.
 
 [punktfunk-native]
 title=punktfunk host (native punktfunk/1)
-description=punktfunk/1 native streaming: QUIC control plane + mDNS auto-discovery + mgmt/library API (HTTPS + mTLS)
-ports=9777/udp|5353/udp|47990/tcp
+description=punktfunk/1 native streaming: QUIC control plane + browser streaming + mDNS auto-discovery + mgmt/library API (HTTPS + mTLS)
+ports=9777/udp|9778/udp|5353/udp|47990/tcp
 
 [punktfunk-gamestream]
 title=punktfunk host (GameStream/Moonlight)
