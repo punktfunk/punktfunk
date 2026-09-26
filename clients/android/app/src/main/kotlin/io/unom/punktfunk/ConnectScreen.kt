@@ -365,7 +365,7 @@ fun ConnectScreen(
         launch: String?,
     ): Long = connectToHost(
         context, settings.effectiveFor(preset), id, targetHost, targetPort, pinHex,
-        launch = launch, dialer = "touch/host-grid", timeoutMs = timeoutMs,
+        launch = launch, dialer = "touch/host-grid", timeoutMs = timeoutMs, preset = preset,
     )
 
     // What the stream screen is handed: the settings this connect actually used, plus the HOST's

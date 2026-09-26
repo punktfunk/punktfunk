@@ -403,6 +403,8 @@ impl StreamState {
             client_name,
             launch,
             launch_target,
+            launch_claim,
+            fresh_stamp,
             launch_outcome,
             client_hdr,
             join_live,
@@ -435,17 +437,7 @@ impl StreamState {
             ramp_open,
             fit_pin,
         );
-        // Stamp before the display exists: a reading after launch would reject the process it is meant to find.
-        let fresh_stamp = crate::gamelease::launch_clock();
-        // Re-dial re-sends `Hello::launch` verbatim. Adopt against the original stamp or procscan refuses it.
-        let launch_claim = launch_target.as_ref().map(|t| {
-            crate::launchreg::claim(
-                conn.peer_fingerprint().map(hex::encode).as_deref(),
-                t.game.id.as_deref(),
-                t.launcher,
-                fresh_stamp,
-            )
-        });
+        // Adopt against the original stamp, or procscan refuses the running game.
         let launch_stamp = launch_claim.as_ref().map_or(fresh_stamp, |c| c.stamp());
         // `PUNKTFUNK_STREAMED_AU=0` reverts to whole-AU sends. Encoder chunking is per-AU.
         // `bitrate_kbps` is the total wire budget; only encoder opens convert via EncDerive.
@@ -829,6 +821,7 @@ impl StreamState {
                     game: target.game.clone(),
                     client: client_label.clone(),
                     fingerprint: controls.fingerprint.clone(),
+                    preset: controls.preset.clone(),
                     plane: crate::events::Plane::Native,
                     spec: target.detect.clone(),
                     nested,

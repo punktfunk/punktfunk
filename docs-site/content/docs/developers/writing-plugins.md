@@ -152,6 +152,7 @@ tell when the game quits.
 | A console page | `definePluginKit` with `serveUi({ title, icon, staticDir, api })` |
 | A tab on each game's page | `serveUi({ title, game })`; see [below](#a-tab-on-each-games-page) |
 | Art or details for every game | `defineMetadataPlugin`; see [below](#a-source-of-art-and-details) |
+| Work before a game starts | `serveUi({ title, holds })`; see [below](#hold-a-launch) |
 | Reacting to events only | `definePlugin({ name, main: async (pf) => … })` from `@punktfunk/host` |
 
 Keep Effect values inside the plugin: the runner bundles its own copy of Effect, so the default
@@ -229,6 +230,28 @@ export default plugin.def;
 
 Add `"network": true` to the manifest. Register in the store's `metadata` category so the console
 offers it under **Library** → **Art & Metadata**.
+
+## Hold a launch
+
+A plugin that must act before a game starts, like swapping its config files, holds the
+`game.launching` stage. The host calls the handler before it spawns the game and waits for it:
+
+```ts
+yield* serveUi({
+  title: "Game slots",
+  holds: {
+    "game.launching": (game) => swapIn(game.app, game.fingerprint, game.preset),
+  },
+  holdTimeoutMs: 60_000,
+});
+```
+
+- `game` is the event's `GameRef`: app id, title, client, fingerprint, plane and the preset the
+  device dialled with.
+- The stage fires only when the host starts the game, not when it picks up one still running.
+- `holdTimeoutMs` is 1–120 000, default 30 000. Past it the host starts the game anyway and logs
+  the plugin; the handler's Effect is interrupted.
+- A failure logs and never blocks the launch. A plugin mid-restart misses the stage.
 
 ## Folders you can't know in advance
 

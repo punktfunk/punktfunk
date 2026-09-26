@@ -288,6 +288,7 @@ mod session_main {
     pub(crate) fn session_params(
         settings: &trust::Settings,
         preset: Option<String>,
+        preset_id: Option<String>,
         clipboard_override: Option<bool>,
         addr: String,
         port: u16,
@@ -309,6 +310,7 @@ mod session_main {
             settings: settings.clone(),
             clipboard,
             preset,
+            preset_id,
         };
         params_from_spec(
             spec,
@@ -969,8 +971,8 @@ mod session_main {
             },
             None => None,
         };
-        let (settings, preset_name) = match &resolved {
-            Some(s) => (s.settings.clone(), s.preset.clone()),
+        let (settings, preset_name, preset_id) = match &resolved {
+            Some(s) => (s.settings.clone(), s.preset.clone(), s.preset_id.clone()),
             None => {
                 let (settings, preset) = trust::effective_settings(
                     fp_arg.as_deref(),
@@ -979,7 +981,8 @@ mod session_main {
                     preset_arg().as_deref(),
                     arg_value("--launch").as_deref(),
                 );
-                (settings, preset.map(|p| p.name))
+                let id = preset.as_ref().map(|p| p.id.clone());
+                (settings, preset.map(|p| p.name), id)
             }
         };
         if let Some(name) = &preset_name {
@@ -1073,6 +1076,7 @@ mod session_main {
                     None => session_params(
                         &settings,
                         preset_name,
+                        preset_id,
                         None,
                         addr,
                         port,

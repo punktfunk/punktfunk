@@ -38,7 +38,7 @@ mod host;
 mod library;
 mod native;
 mod plugin_access;
-mod plugins;
+pub(crate) mod plugins;
 mod session;
 mod settings;
 mod shared;

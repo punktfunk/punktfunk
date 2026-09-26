@@ -13,7 +13,8 @@ an **event** for each of these, and you react with:
 - **The event stream**: `GET /api/v1/events`, for scripts and plugins.
 
 Hooks only observe. They can't veto or delay a connection, a stream or a pairing, and they never
-run in the streaming path.
+run in the streaming path. The one exception is a launch: a hook with `hold` set on
+`game.launching` runs before the game starts, and the game waits for it.
 
 ## The events
 
@@ -22,6 +23,7 @@ run in the streaming path.
 | `client.connected` / `client.disconnected` | a device connects / goes away | name, fingerprint, plane (`native` / `gamestream`); disconnect adds `reason`: `quit`, `timeout` or `error` |
 | `session.started` / `session.ended` | a session starts / ends | session id, client, fingerprint, plane, mode (`3840x2160@120`), HDR. `session.ended` adds a `summary` (duration, codec, bitrate span, frames, bring-up time, and `ended`: `local`, `game_exited`, `host_ended`, `host_error`, `lost` or `stopped_by_operator`), the same shape as `GET /api/v1/session/last` |
 | `stream.started` / `stream.stopped` | video starts / stops | mode, HDR, client, fingerprint, launched app, plane |
+| `game.launching` | the host is about to start a launched game; not when it picks up one still running | app id, title, store, client, fingerprint, plane, preset |
 | `game.running` | a launched game's own process runs (not just its launcher) | app id, title, store, client, fingerprint, plane |
 | `game.window` | the game's window reaches the screen, often 5–40 s after `game.running` | the same, plus the window's `title` and `app_id` |
 | `game.exited` | a launched game is gone | the same, plus `reason`: `exited` (the player quit) or `terminated` (the host closed it, per [these settings](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does)) |
@@ -47,8 +49,12 @@ Fields are only ever added, never renamed.
   "kind": "stream.started",
   "stream": { "mode": "2560x1440@120", "hdr": true,
               "client": "Living Room TV", "fingerprint": "9f86d081…",
-              "app": "steam:570", "plane": "native" } }
+              "app": "steam:570", "plane": "native",
+              "preset": { "id": "3f9a0c11e2b4", "name": "Docked" } } }
 ```
+
+`preset` names the settings preset the device streamed with; it is absent when the device used
+its plain settings, and on Moonlight.
 
 ## Hooks
 
@@ -79,9 +85,10 @@ The console writes `~/.config/punktfunk/hooks.json` (Windows:
 | `on` | An event kind (`stream.started`) or a domain (`pairing.*`). Required, with `run`, `webhook` or both. |
 | `run` | A shell command. |
 | `webhook` | A URL the event JSON is POSTed to. |
-| `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native` / `gamestream`), `app`. |
+| `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native` / `gamestream`), `app`, `preset` (its name or id). |
 | `timeout_s` | Seconds before a command is killed with everything it started. 1–600, default 30. |
 | `debounce_ms` | Minimum gap between firings of this hook. Default 0. |
+| `hold` | Only with `on: game.launching`: the game waits for this hook, up to `timeout_s`. |
 | `hmac_secret_file` | Signs webhooks with `X-Punktfunk-Signature: sha256=<hex HMAC-SHA256 of the body>`. |
 
 Filter on `fingerprint`, not `client`: names aren't unique and change on rename. The console's
@@ -125,6 +132,21 @@ expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
 ok = hmac.compare_digest(request.headers["X-Punktfunk-Signature"], expected)
 ```
 
+### Hold the launch
+
+A hook on `game.launching` with `hold` set runs before the game starts, and the launch waits
+for it: the command until it exits, the webhook until it answers. Each gets `timeout_s`; past
+it, or on a failure, the game starts anyway and the log says why. The device shows its launch
+screen meanwhile. `debounce_ms` doesn't apply, and a held hook never runs a second time on its
+own.
+
+```json
+{ "on": "game.launching", "filter": { "preset": "Docked" }, "hold": true, "timeout_s": 20,
+  "run": "/home/me/.config/punktfunk/scripts/tv-profile.sh" }
+```
+
+Plugins hold the same stage: see [Writing plugins](/docs/developers/writing-plugins#hold-a-launch).
+
 ### A hook that doesn't fire
 
 One invalid entry disables every hook: the log says `hooks.json invalid — hooks disabled until
@@ -143,7 +165,7 @@ Library form keeps prep steps but can't edit them.
 
 Every step gets the session's mode: `PF_STREAM_WIDTH`, `PF_STREAM_HEIGHT`, `PF_STREAM_REFRESH`,
 `PF_STREAM_HDR` (`1` / `0`), plus `PF_APP_ID` (a Punktfunk client's launch) or `PF_APP_TITLE`
-(Moonlight). `undo` sees the same values as its `do`, so one entry serves every device. A
+(Moonlight), and `PF_PRESET_ID` / `PF_PRESET_NAME` when the device streamed with a preset. `undo` sees the same values as its `do`, so one entry serves every device. A
 Windows host service can't pass these variables to its steps.
 
 An `apps.json` entry; the `prep` array is the same in `library.json`:

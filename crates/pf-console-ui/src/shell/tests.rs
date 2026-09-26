@@ -826,7 +826,7 @@ fn a_search_and_its_empty_result_raster() {
     let fonts = crate::theme::build_fonts().unwrap();
     let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
     let host = hosts().remove(0);
-    let search = crate::screens::search::SearchScreen::new(&host, 0, &Default::default());
+    let search = crate::screens::search::SearchScreen::new(&host, &Default::default());
     let (mut s, _console, library) = shell(vec![
         Screen::Home(HomeScreen::new()),
         Screen::Search(search),
@@ -1299,94 +1299,19 @@ fn mixed_library(library: &LibraryShared) {
     ]);
 }
 
-/// Asserted on the shell stack after `sync`. A screen cannot replace itself;
-/// only the shell owns the stack, so that is where the handover has to be witnessed.
+/// OK on a Collections tile opens that platform's shelf; Back returns to the tab.
 #[test]
-fn the_setting_hands_a_multi_platform_library_over_to_collections() {
-    let games: Vec<crate::library::LibraryGame> = platform_games();
-    for (want_collections, enabled) in [(true, true), (false, false)] {
-        let (mut s, _console, library) = shell(vec![
-            Screen::Home(HomeScreen::new()),
-            Screen::Library(LibraryScreen::new(&hosts()[0], 0)),
-        ]);
-        s.settings.library_collections = enabled;
-
-        // Ready before `begin_fetch` is the previous host's library. The epoch
-        // `begin_fetch` raises is what the shelf compares against its push epoch.
-        s.sync();
-        assert!(
-            matches!(s.stack.last(), Some(Screen::Library(_))),
-            "nothing to hand over to while the fetch is still out"
-        );
-
-        library.begin_fetch();
-        library.set_games(games.clone());
-        s.sync();
-
-        if want_collections {
-            assert!(
-                matches!(s.stack.last(), Some(Screen::Collections(_))),
-                "the setting is on and the library has four platforms — it must open on them"
-            );
-            assert_eq!(
-                s.stack.len(),
-                2,
-                "it REPLACES the shelf, never stacks on it"
-            );
-        } else {
-            assert!(
-                matches!(s.stack.last(), Some(Screen::Library(_))),
-                "with the setting off the library opens on its shelf"
-            );
-        }
-    }
-}
-
-/// A collections screen listing a single tile is a press that buys nothing.
-#[test]
-fn one_collection_is_not_worth_a_screen() {
-    let (mut s, _console, library) = shell(vec![
-        Screen::Home(HomeScreen::new()),
-        Screen::Library(LibraryScreen::new(&hosts()[0], 0)),
-    ]);
-    s.settings.library_collections = true;
-    s.sync();
-    library.begin_fetch();
-    library.set_games(
-        platform_games()
-            .into_iter()
-            .map(|mut g| {
-                g.platform = Some("PlayStation 3".into());
-                g
-            })
-            .collect(),
-    );
-    s.sync();
-    assert!(
-        matches!(s.stack.last(), Some(Screen::Library(_))),
-        "one platform is not a set of collections"
-    );
-}
-
-#[test]
-fn collections_drill_in_reaches_one_platform_and_backs_out() {
+fn a_collection_tile_opens_one_platform_and_backs_out() {
     let (mut s, _console, library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    // The row above the field, so the tab seats on its first tile.
+    s.settings.library_sections = "collections,games".into();
     s.sync();
     mixed_library(&library);
     s.handle_menu(MenuEvent::JumpForward); // R1 → Games, this host's shelf
     finish_motion(&mut s);
     assert!(matches!(s.stack.last(), Some(Screen::Library(_))));
 
-    s.handle_menu(MenuEvent::Tertiary);
-    finish_motion(&mut s);
-    assert!(
-        matches!(s.stack.last(), Some(Screen::Collections(_))),
-        "X on a multi-group library opens the collections"
-    );
-
-    // Groups sort A–Z with launchers first: Launchers, PS3, SNES, Steam.
-    s.handle_menu(MenuEvent::Move(MenuDir::Right));
-
+    // Tiles sort A–Z with the launchers left out: PS3, SNES, Steam.
     s.handle_menu(MenuEvent::Confirm);
     finish_motion(&mut s);
     frame(&mut s); // the new shelf adopts the shared model on its first sync
@@ -1402,68 +1327,15 @@ fn collections_drill_in_reaches_one_platform_and_backs_out() {
 
     s.handle_menu(MenuEvent::Back);
     finish_motion(&mut s);
-    assert!(matches!(s.stack.last(), Some(Screen::Collections(_))));
-    s.handle_menu(MenuEvent::Back);
-    finish_motion(&mut s);
     frame(&mut s);
     let Some(Screen::Library(shelf)) = s.stack.last() else {
-        panic!("back to the library");
+        panic!("back to the Games tab");
     };
     assert_eq!(
         shelf.len_for_test(),
         5,
         "the whole library again; the desktop and the launcher sit in their bands"
     );
-}
-
-/// A library with nothing to collect must not offer the button, and must not answer it.
-#[test]
-fn collections_is_offered_only_when_there_is_something_to_browse() {
-    let (mut s, _console, library) = shell(vec![Screen::Home(HomeScreen::new())]);
-    s.sync();
-    // One store, no platforms: a single group.
-    library.set_games(vec![
-        crate::library::LibraryGame {
-            id: "a".into(),
-            title: "Dota 2".into(),
-            store: "steam".into(),
-            launcher: false,
-            icon: String::new(),
-            platform: None,
-            developer: None,
-            year: None,
-            genres: Vec::new(),
-            stats: None,
-            running: false,
-        },
-        crate::library::LibraryGame {
-            id: "b".into(),
-            title: "Half-Life".into(),
-            store: "steam".into(),
-            launcher: false,
-            icon: String::new(),
-            platform: None,
-            developer: None,
-            year: None,
-            genres: Vec::new(),
-            stats: None,
-            running: false,
-        },
-    ]);
-    s.handle_menu(MenuEvent::JumpForward);
-    finish_motion(&mut s);
-    assert!(matches!(s.stack.last(), Some(Screen::Library(_))));
-    let depth = s.stack.len();
-    assert!(matches!(
-        s.handle_menu(MenuEvent::Tertiary),
-        Some(MenuPulse::Boundary)
-    ));
-    assert_eq!(s.stack.len(), depth, "and pushed nothing");
-
-    mixed_library(&library);
-    s.handle_menu(MenuEvent::Tertiary);
-    finish_motion(&mut s);
-    assert!(matches!(s.stack.last(), Some(Screen::Collections(_))));
 }
 
 /// Rescan sits past Add Host and must never start a session: accidental A on the
@@ -1836,7 +1708,7 @@ fn dump_console_screens() {
             test_options(),
             vec![
                 Screen::Home(HomeScreen::new()),
-                Screen::Library(LibraryScreen::new(&hosts()[0], 0)),
+                Screen::Library(LibraryScreen::new(&hosts()[0])),
             ],
         )
         .unwrap();
@@ -1932,7 +1804,7 @@ fn dump_console_screens() {
             test_options(),
             vec![
                 Screen::Home(HomeScreen::new()),
-                Screen::Library(LibraryScreen::new(&hosts()[0], 0)),
+                Screen::Library(LibraryScreen::new(&hosts()[0])),
             ],
         )
         .unwrap();
@@ -2092,7 +1964,7 @@ fn collections_shell_inner(
         test_options(),
         vec![
             Screen::Home(HomeScreen::new()),
-            Screen::Library(LibraryScreen::new(&hosts()[0], 0)),
+            Screen::Library(LibraryScreen::new(&hosts()[0])),
         ],
     )
     .unwrap();
@@ -2177,7 +2049,7 @@ fn store_shots() {
         let mut s = store_shell(
             vec![
                 Screen::Home(HomeScreen::new()),
-                Screen::Library(LibraryScreen::new(&host, 0)),
+                Screen::Library(LibraryScreen::new(&host)),
             ],
             library,
         );
@@ -2888,7 +2760,7 @@ mod launch_hold {
             test_options(),
             vec![
                 Screen::Home(HomeScreen::new()),
-                Screen::Library(LibraryScreen::new(&hosts()[0], 0)),
+                Screen::Library(LibraryScreen::new(&hosts()[0])),
             ],
         )
         .unwrap();

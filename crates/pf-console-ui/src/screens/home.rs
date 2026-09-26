@@ -1424,7 +1424,7 @@ mod tests {
             s.wants_shelf(&hosts, None).map(|h| h.key.as_str()),
             Some("desk")
         );
-        s.set_shelf(LibraryScreen::embedded(&desk, 0));
+        s.set_shelf(LibraryScreen::embedded(&desk));
         assert!(s.wants_shelf(&hosts, Some("d1")).is_none(), "asked once");
         assert!(
             s.wants_shelf(&hosts, Some("other")).is_some(),

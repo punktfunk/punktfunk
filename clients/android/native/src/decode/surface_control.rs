@@ -57,6 +57,8 @@ struct ARect {
 const TRANSFORM_IDENTITY: i32 = 0;
 /// `ASURFACE_TRANSACTION_VISIBILITY_SHOW`.
 const VISIBILITY_SHOW: i8 = 1;
+/// `ASURFACE_TRANSACTION_VISIBILITY_HIDE`.
+const VISIBILITY_HIDE: i8 = 0;
 
 /// [`HdrMeta`](punktfunk_core::quic::HdrMeta) (ST.2086 G, B, R in 1/50000; mastering luminance in
 /// 0.0001 nits) as the NDK's float structs.
@@ -522,6 +524,22 @@ impl Layer {
             (self.api.txn_delete)(txn);
         }
         true
+    }
+
+    /// Take the layer off the screen. Dropping it does not: a released child stays on display
+    /// as long as its parent does, over whatever layer replaced it.
+    pub(super) fn hide(&self) {
+        // SAFETY: as in `present`: a fresh transaction or null, this layer's live `sc`, applied
+        // and deleted once.
+        unsafe {
+            let txn = (self.api.txn_create)();
+            if txn.is_null() {
+                return;
+            }
+            (self.api.txn_set_visibility)(txn, self.sc.sc, VISIBILITY_HIDE);
+            (self.api.txn_apply)(txn);
+            (self.api.txn_delete)(txn);
+        }
     }
 }
 

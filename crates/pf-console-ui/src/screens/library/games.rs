@@ -5,8 +5,9 @@
 //! shelf) where Games sits among them. An empty section hides. Desktops and Launchers
 //! leave the field while their rows show. A list that failed, is empty or still loading
 //! keeps the chips and the Desktops row, with the state's action where the field was.
-//! A shelf drilled from Collections has only the pills and its field.
+//! A collection's shelf has only the pills and its field.
 
+use super::super::collections::{paint_tile, TILE_CORNER, TILE_H, TILE_W};
 use super::bar::{pill_id, Pill};
 use super::card::{self, Card, DESK_H, DESK_W};
 use super::{desk_intent, store_sort, store_view, LibraryScreen};
@@ -78,6 +79,8 @@ pub(super) enum Item {
     Desktop(Box<HostRow>),
     /// An index into the shelf's `games`.
     Game(usize),
+    /// An index into the shelf's `collections`.
+    Collection(usize),
 }
 
 pub(super) struct Band {
@@ -133,7 +136,7 @@ fn chip_hosts(hosts: &[HostRow]) -> impl Iterator<Item = &HostRow> {
 }
 
 impl LibraryScreen {
-    /// The shelf lays out as the Games tab: not drilled from Collections, not under the
+    /// The shelf lays out as the Games tab: not a collection or a search, not under the
     /// Hosts row.
     pub(super) fn sectioned(&self) -> bool {
         !self.drilled && !self.embedded
@@ -144,7 +147,7 @@ impl LibraryScreen {
         Some(h.key.as_str()) == self.host.key.split('\0').next()
     }
 
-    fn shows(&self, s: Section) -> bool {
+    pub(super) fn shows(&self, s: Section) -> bool {
         self.sections.iter().any(|&(x, on)| x == s && on)
     }
 
@@ -215,6 +218,7 @@ impl LibraryScreen {
                     .filter(|&i| self.games[i].launcher)
                     .map(Item::Game)
                     .collect(),
+                Section::Collections => (0..self.collections.len()).map(Item::Collection).collect(),
                 Section::Games => unreachable!("handled above"),
             };
             if !items.is_empty() {
@@ -319,7 +323,6 @@ impl LibraryScreen {
         let (bands, lines) = self.place_zone(ctx);
         let lines = self.focus_lines(lines);
         let chips = chip_hosts(ctx.hosts).count() + 1;
-        let ready = matches!(self.phase, LibraryPhase::Ready);
         let Some(at) = lines.iter().position(|&l| l == line_of(self.zone)) else {
             // Nothing to stand on: Up still reaches the tabs, Back still leaves.
             return Some(match ev {
@@ -374,11 +377,16 @@ impl LibraryScreen {
             }
             MenuEvent::Confirm => Some(match self.zone {
                 Zone::Band { band, item } => {
-                    fx.connect = Some(match &bands[band].items[item] {
+                    let intent = match &bands[band].items[item] {
                         Item::Desktop(h) if self.own(h) => self.desktop_intent(),
                         Item::Desktop(h) => desk_intent(h),
                         Item::Game(i) => self.launch_intent(&self.games[*i]),
-                    });
+                        Item::Collection(c) => {
+                            self.open_collection(*c, fx);
+                            return Some(Some(MenuPulse::Confirm));
+                        }
+                    };
+                    fx.connect = Some(intent);
                     Some(MenuPulse::Confirm)
                 }
                 Zone::Bar(i) => self.apply_pill(i, ctx, fx),
@@ -394,6 +402,7 @@ impl LibraryScreen {
                             let cover = self.art.get(&g.id).cloned();
                             fx.options(CardMenu::for_game(&self.host, g, cover));
                         }
+                        Item::Collection(_) => return Some(Some(MenuPulse::Boundary)),
                     },
                     Zone::Chip(_) => match self.chip_host(ctx) {
                         Some(h) => fx.options(CardMenu::for_host(h)),
@@ -407,11 +416,21 @@ impl LibraryScreen {
                 fx.pop();
                 Some(None)
             }
-            // Collections, from anywhere on a ready tab.
-            MenuEvent::Tertiary if ready => None,
-            MenuEvent::Tertiary => Some(Some(MenuPulse::Boundary)),
-            MenuEvent::JumpBack | MenuEvent::JumpForward | MenuEvent::Sector(_) => Some(None),
+            MenuEvent::Tertiary
+            | MenuEvent::JumpBack
+            | MenuEvent::JumpForward
+            | MenuEvent::Sector(_) => Some(None),
         }
+    }
+
+    /// Collection `c`'s shelf: this list filtered, so nothing is fetched, with the covers
+    /// already decoded here.
+    fn open_collection(&self, c: usize, fx: &mut Outbox) {
+        let c = &self.collections[c];
+        let mut shelf = LibraryScreen::new(&self.host);
+        shelf.set_filter(c.key.clone(), c.label.clone());
+        shelf.adopt_art(self.art.clone());
+        fx.push(Screen::Library(shelf));
     }
 
     /// Pill `i`'s sort or arrangement, written to the setting; the screen adopts it next.
@@ -419,8 +438,7 @@ impl LibraryScreen {
     fn apply_pill(&mut self, i: usize, ctx: &mut Ctx, fx: &mut Outbox) -> Option<MenuPulse> {
         match Pill::all(true)[i] {
             Pill::Search => {
-                let epoch = ctx.library.fetch_epoch();
-                let search = super::super::search::SearchScreen::new(&self.host, epoch, &self.art);
+                let search = super::super::search::SearchScreen::new(&self.host, &self.art);
                 fx.push(crate::screens::Screen::Search(search));
                 Some(MenuPulse::Confirm)
             }
@@ -460,8 +478,7 @@ impl LibraryScreen {
         if self.own(h) {
             return Some(MenuPulse::Boundary);
         }
-        // The epoch is read before the fetch is queued, as for the shell's own shelf.
-        let mut shelf = LibraryScreen::new(h, ctx.library.fetch_epoch());
+        let mut shelf = LibraryScreen::new(h);
         shelf.zone = self.zone;
         shelf.seated = true;
         fx.cmds.push(ConsoleCmd::FetchLibrary {
@@ -568,6 +585,7 @@ impl LibraryScreen {
                     }
                     Item::Desktop(h) => format!("{} \u{b7} Resume {}", h.name, h.running),
                     Item::Game(i) => self.games[*i].title.clone(),
+                    Item::Collection(c) => self.collections[*c].label.clone(),
                 })
             }
         }
@@ -580,7 +598,7 @@ impl LibraryScreen {
         };
         match self.bands(ctx).0.get(band)?.items.get(item)? {
             Item::Game(i) => self.games.get(*i),
-            Item::Desktop(_) => None,
+            Item::Desktop(_) | Item::Collection(_) => None,
         }
     }
 
@@ -599,17 +617,18 @@ impl LibraryScreen {
                 Item::Game(i) if self.games[*i].running => "Resume",
                 Item::Game(i) if self.games[*i].launcher => "Open",
                 Item::Game(_) => "Play",
+                Item::Collection(_) => "Open",
             },
         };
         let mut hints = vec![Hint::new(HintKey::Confirm, ok)];
-        if matches!(self.zone, Zone::Band { .. }) || self.chip_host(ctx).is_some() {
+        let options = match self.zone {
+            Zone::Band { band, item } => {
+                !matches!(bands[band].items.get(item), Some(Item::Collection(_)))
+            }
+            _ => self.chip_host(ctx).is_some(),
+        };
+        if options {
             hints.push(Hint::new(HintKey::Secondary, "Options"));
-        }
-        if matches!(self.phase, LibraryPhase::Ready)
-            && !self.drilled
-            && crate::collate::worth_browsing(&self.games)
-        {
-            hints.push(Hint::new(HintKey::Tertiary, "Collections"));
         }
         hints.push(Hint::new(HintKey::Back, "Back"));
         Some(hints)
@@ -713,10 +732,10 @@ impl LibraryScreen {
         ));
         let (iw, pitch) = item_pitch(band, cw, k);
         let off = self.band_x.get(b).map_or(0.0, |s| s.pos);
-        let corner = if band.section == Section::Desktops {
-            14.0
-        } else {
-            card::COVER_CORNER
+        let corner = match band.section {
+            Section::Desktops => 14.0,
+            Section::Collections => TILE_CORNER,
+            _ => card::COVER_CORNER,
         };
         let mut el = El::column()
             .size(width as f32, Self::band_h(band, ch, k) as f32)
@@ -741,6 +760,10 @@ impl LibraryScreen {
                         Item::Desktop(h) => card::desk_tile(canvas, fonts, h, slot, k),
                         Item::Game(g) => {
                             self.band_card(canvas, fonts, band.section, *g, slot, ch, k, z)
+                        }
+                        Item::Collection(c) => {
+                            let c = &self.collections[*c];
+                            paint_tile(canvas, fonts, c, &self.games, &self.art, slot, k)
                         }
                     }
                 })
@@ -789,16 +812,17 @@ impl LibraryScreen {
 fn row_h(band: &Band, ch: f64, k: f64) -> f64 {
     match band.section {
         Section::Desktops => DESK_H * k,
+        Section::Collections => TILE_H * k,
         s => ch + card::text_h(s == Section::Recent) * k,
     }
 }
 
 /// An item's width and the distance to the next, at grid cell width `cw`.
 fn item_pitch(band: &Band, cw: f64, k: f64) -> (f64, f64) {
-    let w = if band.section == Section::Desktops {
-        DESK_W * k
-    } else {
-        cw
+    let w = match band.section {
+        Section::Desktops => DESK_W * k,
+        Section::Collections => TILE_W * k,
+        _ => cw,
     };
     (w, w + GRID_GAP * k)
 }
@@ -986,7 +1010,7 @@ mod tests {
         assert!(matches!(pulse, Some(MenuPulse::Boundary)), "already hidden");
         assert_eq!(
             ctx.settings.library_sections,
-            "recent,-desktops,favorites,launchers,games"
+            "recent,-desktops,favorites,launchers,collections,games"
         );
     }
 }

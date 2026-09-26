@@ -56,10 +56,9 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.hdrEnabled) var hdrEnabled = true
     @AppStorage(DefaultsKey.enable444) var enable444 = false
     @AppStorage(DefaultsKey.tenBitSdr) var tenBitSdr = false
-    /// The gamepad library's arrangement and its collections-first switch — device preferences,
-    /// stored as the cross-client `library_view` / `library_collections` values.
+    /// The gamepad library's arrangement — a device preference, stored as the cross-client
+    /// `library_view` value.
     @AppStorage(DefaultsKey.libraryView) var libraryViewRaw = LibraryArrangement.shelf.stored
-    @AppStorage(DefaultsKey.libraryCollections) var libraryCollections = false
     @AppStorage(DefaultsKey.startIn) var startInRaw = StartIn.hosts.stored
     @AppStorage(DefaultsKey.defaultHost) var defaultHostID = ""
     @AppStorage(DefaultsKey.fullscreenWhileStreaming) var fullscreenWhileStreaming = true

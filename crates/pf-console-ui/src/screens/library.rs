@@ -4,10 +4,10 @@
 //! The shell owns aurora, chrome and the connecting overlay. Every line lives in one
 //! scroll and one focus tree ([`games`]): the sort/view pills ([`bar`]), the host chips,
 //! the section rows, and the field, which is the grid or the shelf by `library_view`.
-//! A shelf drilled from Collections has only the pills and its field.
+//! A collection's shelf has only the pills and its field.
 //!
 //! `host.pin` is load-bearing: a pinned card launches with that preset. Posters decode
-//! here ([`decode_poster`]) so collections and this screen share one cache size.
+//! here ([`decode_poster`]), so every screen keeps one cache size.
 //! Entrance waits for neighbourhood art or 400 ms. Pin with the tests in this module.
 
 use crate::anim::{entrances, Entrance, EntranceAt, Spring};
@@ -22,7 +22,7 @@ use crate::library::{
 };
 use crate::model::{ConsoleCmd, HostRow};
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{ConnectIntent, Ctx, Outbox, Screen};
+use crate::screens::{ConnectIntent, Ctx, Outbox};
 use crate::theme::{art_sampling, edge, fg, fill, stroke, Fonts, W};
 use crate::widgets::{button, button_w, BUTTON_H};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
@@ -107,7 +107,7 @@ pub fn decode_poster_off_thread(bytes: &[u8], k: f64) -> Option<crate::library::
 
 thread_local! {
     /// Covers every screen on the drawing thread shares, by host fingerprint and title. One
-    /// decode and one upload serve the Hosts shelf, the Games tab and Collections alike.
+    /// decode and one upload serve the Hosts shelf, the Games tab and a collection alike.
     static SHARED_ART: RefCell<SharedArt> = RefCell::new(SharedArt::default());
 }
 
@@ -225,7 +225,7 @@ impl ArtDecoder {
 /// Decode here (not at first draw) and bake mips at [`art_cache_size`].
 ///
 /// `Image::from_encoded` defers decode until use; a GPU purge then re-decodes JPEG on
-/// the render thread. Shared with collections so both screens agree on cache size.
+/// the render thread.
 pub(super) fn decode_poster(bytes: &[u8], k: f64) -> Option<Image> {
     let started = std::time::Instant::now();
     let data = Data::new_copy(bytes);
@@ -446,7 +446,7 @@ fn store_view(view: LibraryView, ctx: &mut Ctx) {
 }
 
 pub(crate) struct LibraryScreen {
-    /// Whole row: collections builds a second shelf from it. `pin` is the one-off preset.
+    /// Whole row: a collection's shelf is built from it. `pin` is the one-off preset.
     host: HostRow,
     shared: Option<LibraryShared>,
     // Snapshot of the shared model; re-pulled when `generation` bumps.
@@ -464,14 +464,10 @@ pub(crate) struct LibraryScreen {
     filter_label: Option<String>,
     /// A title search, lowercased: only titles containing it stay.
     query: Option<String>,
-    /// Reached from collections (group or "All titles"). Y must refuse both, or it loops.
+    /// A collection's or a search's shelf: the pills and the field, no rows.
     drilled: bool,
-    /// Collections hand-over, once. A later rescan must not replace a shelf already in use.
-    pending_collections: bool,
-    /// [`LibraryShared::fetch_epoch`] at push, before `FetchLibrary` is queued.
-    /// Until that fetch lands, the model still holds the previous host's Ready list.
-    /// Do not infer "mine" from a phase: a warm cache can skip `Loading` in one frame.
-    entry_epoch: u64,
+    /// The Collections row's tiles, collated with the view.
+    collections: Vec<super::collections::Collection>,
     // Integer cursor is the authority; the eased position chases it.
     cursor: i32,
     /// Last drawn card rects (axis-aligned; tilt is inside finger slop). Empty if culled.
@@ -534,8 +530,7 @@ pub(crate) struct LibraryScreen {
 }
 
 impl LibraryScreen {
-    /// [`LibraryShared::fetch_epoch`] at push, before `FetchLibrary` is queued.
-    pub(crate) fn new(host: &HostRow, entry_epoch: u64) -> LibraryScreen {
+    pub(crate) fn new(host: &HostRow) -> LibraryScreen {
         LibraryScreen {
             host: host.clone(),
             shared: None, // first render adopts from Ctx; the shell owns the handle
@@ -549,8 +544,7 @@ impl LibraryScreen {
             filter_label: None,
             query: None,
             drilled: false,
-            pending_collections: true,
-            entry_epoch,
+            collections: Vec::new(),
             cursor: 0,
             geom: Vec::new(),
             anim: Spring::rest(0.0),
@@ -586,14 +580,12 @@ impl LibraryScreen {
         }
     }
 
-    /// The focused host's shelf under the Hosts row. It never hands over to Collections:
-    /// the home is not its to replace.
-    pub(crate) fn embedded(host: &HostRow, entry_epoch: u64) -> LibraryScreen {
+    /// The focused host's shelf under the Hosts row.
+    pub(crate) fn embedded(host: &HostRow) -> LibraryScreen {
         LibraryScreen {
             embedded: true,
             quiet: true,
-            pending_collections: false,
-            ..LibraryScreen::new(host, entry_epoch)
+            ..LibraryScreen::new(host)
         }
     }
 
@@ -722,6 +714,11 @@ impl LibraryScreen {
             .collect();
         self.cursor = self.cursor.clamp(0, (self.view.len() as i32 - 1).max(0));
         self.seat_grid_col();
+        let row = self.sectioned() && self.shows(crate::library::Section::Collections);
+        self.collections = match row {
+            true => super::collections::collections(&self.games, self.sort),
+            false => Vec::new(),
+        };
     }
 
     /// `None` if `i` is past the end or the order is stale.
@@ -809,52 +806,11 @@ impl LibraryScreen {
         self.recollate();
     }
 
-    /// Whole library from collections' "All titles": drilled without a filter, so no band
-    /// holds a title out of the field.
+    /// The whole library with no rows: drilled without a filter.
+    #[cfg(test)]
     pub(crate) fn all_titles(&mut self) {
         self.drilled = true;
         self.recollate();
-    }
-
-    /// Hand over to collections once the list lands and is worth browsing.
-    ///
-    /// The list arrives after the push; `render` cannot navigate. `Some` replaces this
-    /// shelf. Swap only on a settled transition. Loading / Empty / Retry stay here.
-    pub(crate) fn collections_upgrade(
-        &mut self,
-        library: &LibraryShared,
-        settings: &pf_client_core::trust::Settings,
-    ) -> Option<super::collections::CollectionsScreen> {
-        // Per-frame for the life of the screen; fall-through collates the whole library at 60 Hz.
-        if !self.pending_collections {
-            return None;
-        }
-        if !settings.library_collections || self.drilled {
-            self.pending_collections = false;
-            return None;
-        }
-        self.sync(library);
-        // Pending is spent only on Ready. Failed fetch keeps Retry; a later retry still upgrades.
-        if !matches!(self.phase, LibraryPhase::Ready) {
-            return None;
-        }
-        // Same epoch as push = previous host's list, still in the model.
-        if library.fetch_epoch() == self.entry_epoch {
-            return None;
-        }
-        self.pending_collections = false;
-        // Same predicate Y and the legend use. One collection is not worth a screen.
-        if !crate::collate::worth_browsing(&self.games) {
-            return None;
-        }
-        // Setting, not `self.sort`: this can fire before `adopt_settings`.
-        let mut screen = super::collections::CollectionsScreen::new(
-            &self.host,
-            crate::collate::SortKey::parse(&settings.library_sort),
-        );
-        screen.adopt_art(std::mem::take(&mut self.art));
-        screen.own_library();
-        Some(screen)
     }
 
     /// Take decoded posters from the screen that pushed this one. The model's queue is already drained.
@@ -981,28 +937,23 @@ impl LibraryScreen {
         }
     }
 
-    /// Titles to decode next: on screen last frame first, then the view from its first drawn
-    /// title on, so a scroll decodes ahead. Capped well under [`ART_BUDGET`], or eviction and
-    /// decode would chase each other round a long library.
+    /// Titles to decode next: on screen last frame first, rows included, then the view from
+    /// its first drawn title on, so a scroll decodes ahead. Capped well under
+    /// [`ART_BUDGET`], or eviction and decode would chase each other round a long library.
     fn art_wanted(&self) -> Vec<String> {
         const AHEAD: usize = 48;
         let recent = self.frame.saturating_sub(2);
+        let seen = |id: &String| self.art_seen.get(id).is_some_and(|&f| f >= recent);
         let lacking = |id: &String| {
             !self.art.contains_key(id)
                 && !self.art_failed.contains(id)
                 && !self.arriving.iter().any(|(a, _)| a == id)
         };
-        let mut out: Vec<String> = Vec::new();
-        let mut first_seen = None;
-        for (i, &g) in self.view.iter().enumerate() {
-            let id = &self.games[g].id;
-            if self.art_seen.get(id).is_some_and(|&f| f >= recent) {
-                first_seen.get_or_insert(i);
-                if lacking(id) {
-                    out.push(id.clone());
-                }
-            }
-        }
+        let mut out: Vec<String> = (self.games.iter().map(|g| &g.id))
+            .filter(|id| seen(id) && lacking(id))
+            .cloned()
+            .collect();
+        let first_seen = (self.view.iter()).position(|&g| seen(&self.games[g].id));
         for &g in self.view.iter().skip(first_seen.unwrap_or(0)) {
             if out.len() >= AHEAD {
                 break;
@@ -1188,17 +1139,8 @@ impl LibraryScreen {
                 fx.pop();
                 None
             }
-            // Boundary, not silence, when there is nothing to collect or this shelf is drilled.
-            MenuEvent::Tertiary => {
-                if self.drilled || !crate::collate::worth_browsing(&self.games) {
-                    return Some(MenuPulse::Boundary);
-                }
-                let mut screen = super::collections::CollectionsScreen::new(&self.host, self.sort);
-                screen.adopt_art(self.art.clone());
-                fx.push(Screen::Collections(screen));
-                Some(MenuPulse::Confirm)
-            }
-            MenuEvent::Move(_)
+            MenuEvent::Tertiary
+            | MenuEvent::Move(_)
             | MenuEvent::Sector(_)
             | MenuEvent::JumpBack
             | MenuEvent::JumpForward => None,
@@ -1354,15 +1296,11 @@ impl LibraryScreen {
             (_, false, true) => "Open",
             (_, false, false) => "Play",
         };
-        let mut hints = vec![
+        vec![
             Hint::new(HintKey::Confirm, ok),
             Hint::new(HintKey::Secondary, "Options"),
-        ];
-        if !self.drilled && crate::collate::worth_browsing(&self.games) {
-            hints.push(Hint::new(HintKey::Tertiary, "Collections"));
-        }
-        hints.push(Hint::new(HintKey::Back, "Back"));
-        hints
+            Hint::new(HintKey::Back, "Back"),
+        ]
     }
 
     pub(crate) fn render(
@@ -1772,8 +1710,13 @@ impl LibraryScreen {
             let Zone::Band { band, item } = *z else {
                 continue;
             };
-            if let Some(games::Item::Game(g)) = bands[band].items.get(item) {
-                self.art_seen.insert(self.games[*g].id.clone(), self.frame);
+            let drawn: &[usize] = match bands[band].items.get(item) {
+                Some(games::Item::Game(g)) => std::slice::from_ref(g),
+                Some(games::Item::Collection(c)) => &self.collections[*c].fan,
+                _ => &[],
+            };
+            for &g in drawn {
+                self.art_seen.insert(self.games[g].id.clone(), self.frame);
             }
         }
     }
@@ -2148,6 +2091,7 @@ struct ShelfCard {
 mod tests {
     use super::*;
     use crate::library::POSTER_W;
+    use crate::screens::Screen;
 
     #[test]
     fn a_cover_already_at_cache_size_decodes_here_with_mips() {
@@ -2222,7 +2166,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         s.view_mode = LibraryView::Shelf;
         s.sync(&library);
         s.entrance_armed = true;
@@ -2273,7 +2217,7 @@ mod tests {
             .collect()
     }
 
-    /// The coverflow drilled from Collections: its pills, then its field.
+    /// A drilled shelf's coverflow: its pills, then its field.
     fn plain_shelf() -> (LibraryScreen, LibraryShared) {
         let (mut s, library) = live_shelf();
         s.all_titles();
@@ -2544,7 +2488,7 @@ mod tests {
             can_retry: true,
         });
         let mut settings = pf_client_core::trust::Settings::default();
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         let (pulse, _) = press(&mut s, &library, &mut settings, right());
         assert!(matches!(pulse, Some(MenuPulse::Boundary)));
         assert_eq!(s.zone, Zone::State, "focus lands on Retry");
@@ -2571,7 +2515,7 @@ mod tests {
             "Retry fetches again"
         );
 
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         s.all_titles();
         library.set_phase(LibraryPhase::Error {
             title: "Couldn't load the library".into(),
@@ -2591,7 +2535,7 @@ mod tests {
         crate::screens::settings::tests::fake_home();
         let library = LibraryShared::default();
         let mut settings = pf_client_core::trust::Settings::default();
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         let (pulse, _) = press(&mut s, &library, &mut settings, down());
         assert!(matches!(pulse, Some(MenuPulse::Boundary)));
         assert_eq!(s.zone, Zone::Band { band: 0, item: 0 });
@@ -2623,7 +2567,7 @@ mod tests {
         list[1].stats = played(5);
         list[2].stats = played(9);
         library.set_games(list);
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         s.sync(&library);
         let mut settings = pf_client_core::trust::Settings::default();
         let titles = |s: &LibraryScreen, band: &games::Band| -> Vec<String> {
@@ -2631,6 +2575,7 @@ mod tests {
                 .map(|it| match it {
                     games::Item::Game(i) => s.games[*i].title.clone(),
                     games::Item::Desktop(h) => h.name.clone(),
+                    games::Item::Collection(c) => s.collections[*c].label.clone(),
                 })
                 .collect()
         };
@@ -2697,7 +2642,7 @@ mod tests {
 
     /// List landed, no art yet.
     fn waiting_shelf() -> LibraryScreen {
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         s.phase = LibraryPhase::Ready;
         s.games = (0..6)
             .map(|i| LibraryGame {
@@ -2916,8 +2861,8 @@ mod tests {
         let titles: Vec<String> = (0..200).map(|i| format!("Title {i:03}")).collect();
         let spec: Vec<(&str, Option<&str>)> = titles.iter().map(|t| (t.as_str(), None)).collect();
         library.set_games(games(&spec));
-        let mut s = LibraryScreen::new(&host(), 0);
-        // The plain grid, as Collections' "All titles" opens it: no sections above.
+        let mut s = LibraryScreen::new(&host());
+        // A drilled shelf's plain grid: no sections above.
         s.all_titles();
         s.sync(&library);
         s.entrance_armed = true;
@@ -3053,164 +2998,6 @@ mod tests {
             .collect()
     }
 
-    fn setting_on() -> pf_client_core::trust::Settings {
-        pf_client_core::trust::Settings {
-            library_collections: true,
-            ..Default::default()
-        }
-    }
-
-    /// Push + queued fetch. Model is `Loading`; this is the only state the entry decision runs in.
-    fn pushed_shelf(
-        library: &LibraryShared,
-        settings: &pf_client_core::trust::Settings,
-    ) -> LibraryScreen {
-        let mut s = LibraryScreen::new(&host(), library.fetch_epoch());
-        library.begin_fetch();
-        s.collections_upgrade(library, settings);
-        s
-    }
-
-    /// Setting on AND more than one collection. One-shot either way — a miss still costs a collate.
-    #[test]
-    fn the_shelf_hands_over_only_when_the_setting_and_the_library_agree() {
-        let mixed = games(&[("Ico", Some("PS2")), ("Journey", None)]);
-        let one = games(&[("Ico", None), ("Journey", None)]);
-
-        let off = pf_client_core::trust::Settings::default();
-        let library = LibraryShared::default();
-        library.set_games(mixed.clone());
-        let mut s = LibraryScreen::new(&host(), library.fetch_epoch());
-        assert!(
-            s.collections_upgrade(&library, &off).is_none(),
-            "setting off"
-        );
-        assert!(!s.pending_collections, "and it is not asked again");
-
-        let library = LibraryShared::default();
-        let mut s = pushed_shelf(&library, &setting_on());
-        library.set_games(one);
-        assert!(
-            s.collections_upgrade(&library, &setting_on()).is_none(),
-            "one collection is not worth a screen"
-        );
-        assert!(!s.pending_collections);
-        assert!(!s.drilled, "…and the shelf it stayed still offers Y");
-
-        let library = LibraryShared::default();
-        let mut s = pushed_shelf(&library, &setting_on());
-        library.set_games(mixed);
-        assert!(s.collections_upgrade(&library, &setting_on()).is_some());
-        assert!(
-            s.collections_upgrade(&library, &setting_on()).is_none(),
-            "handed over twice"
-        );
-    }
-
-    /// Until this shelf's fetch lands, the model still holds the previous host's Ready list.
-    #[test]
-    fn a_shelf_never_hands_over_on_the_library_it_inherited() {
-        let mixed = games(&[("Ico", Some("PS2")), ("Journey", None)]);
-        let library = LibraryShared::default();
-        library.set_games(mixed.clone());
-        let mut s = LibraryScreen::new(&host(), library.fetch_epoch());
-        assert!(s.collections_upgrade(&library, &setting_on()).is_none());
-        assert!(
-            s.pending_collections,
-            "the decision was deferred, not spent"
-        );
-
-        library.begin_fetch();
-        assert!(s.collections_upgrade(&library, &setting_on()).is_none());
-        library.set_games(mixed);
-        assert!(s.collections_upgrade(&library, &setting_on()).is_some());
-    }
-
-    /// Warm cache can skip `Loading` inside one frame. Do not insert an upgrade call in between.
-    #[test]
-    fn a_warm_cache_still_hands_over_though_no_frame_ever_saw_loading() {
-        let mixed = games(&[("Ico", Some("PS2")), ("Journey", None)]);
-        let library = LibraryShared::default();
-        library.set_games(mixed.clone());
-        let mut s = LibraryScreen::new(&host(), library.fetch_epoch());
-
-        library.begin_fetch();
-        library.set_games_cached(mixed);
-        assert!(
-            s.collections_upgrade(&library, &setting_on()).is_some(),
-            "a cached catalog is this shelf's own list and must upgrade"
-        );
-    }
-
-    /// Same epoch as the push is the previous host, however ready the model looks.
-    #[test]
-    fn a_cached_list_from_before_the_push_is_still_refused() {
-        let mixed = games(&[("Ico", Some("PS2")), ("Journey", None)]);
-        let library = LibraryShared::default();
-        library.begin_fetch();
-        library.set_games_cached(mixed);
-        let mut s = LibraryScreen::new(&host(), library.fetch_epoch());
-        assert!(
-            s.collections_upgrade(&library, &setting_on()).is_none(),
-            "same epoch as the push — this list belongs to the host we came from"
-        );
-        assert!(s.pending_collections, "and the decision is still pending");
-    }
-
-    /// Failed fetch keeps Retry here; pending stays so a later retry can still hand over.
-    #[test]
-    fn a_failed_fetch_keeps_the_shelf_and_still_hands_over_on_retry() {
-        let library = LibraryShared::default();
-        let mut s = LibraryScreen::new(&host(), library.fetch_epoch());
-
-        library.begin_fetch();
-        library.set_phase(LibraryPhase::Error {
-            title: "Couldn't load the library".into(),
-            body: "refused".into(),
-            can_retry: true,
-        });
-        assert!(s.collections_upgrade(&library, &setting_on()).is_none());
-        assert!(
-            s.pending_collections,
-            "the decision was deferred, not spent"
-        );
-        assert!(
-            matches!(s.phase, LibraryPhase::Error { .. }),
-            "the retry is still here"
-        );
-
-        library.begin_fetch();
-        library.set_games(games(&[("Ico", Some("PS2")), ("Journey", None)]));
-        assert!(s.collections_upgrade(&library, &setting_on()).is_some());
-    }
-
-    /// Drilled (group or "All titles") must not loop back to collections.
-    #[test]
-    fn a_drilled_shelf_neither_hands_over_nor_offers_x() {
-        let library = LibraryShared::default();
-        library.set_games(games(&[("Ico", Some("PS2")), ("Journey", None)]));
-        let mut settings = setting_on();
-        for drill in [0, 1] {
-            let mut s = LibraryScreen::new(&host(), 0);
-            if drill == 0 {
-                s.set_filter(
-                    crate::collate::GroupKey::Platform("PS2".into()),
-                    "PS2".into(),
-                );
-            } else {
-                s.all_titles();
-            }
-            assert!(s.collections_upgrade(&library, &settings).is_none());
-            let (pulse, fx) = press(&mut s, &library, &mut settings, MenuEvent::Tertiary);
-            assert!(matches!(pulse, Some(MenuPulse::Boundary)), "X was answered");
-            assert!(fx.nav.is_none(), "…and pushed a screen");
-            assert!(
-                !hint_keys(&s, &library, &mut settings).contains(&HintKey::Tertiary),
-                "the legend offered a press that only thuds"
-            );
-        }
-    }
-
     /// First list is always "fresh" on an empty screen; adopted art must survive that, not a later one.
     #[test]
     fn handed_over_posters_survive_the_first_list_and_only_that_one() {
@@ -3221,7 +3008,7 @@ mod tests {
         };
         let library = LibraryShared::default();
         library.set_games(games(&[("Ico", Some("PS2")), ("Journey", None)]));
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         s.adopt_art(HashMap::from([("g0".to_string(), poster())]));
         s.sync(&library);
         assert_eq!(s.art.len(), 1, "the hand-over was wiped by the first list");
@@ -3263,7 +3050,7 @@ mod tests {
         crate::screens::settings::tests::fake_home();
         let library = LibraryShared::default();
         library.set_games(Vec::new());
-        let mut s = LibraryScreen::new(&host(), 0);
+        let mut s = LibraryScreen::new(&host());
         s.sync(&library);
         s.entrance_armed = true;
         assert!(matches!(s.phase, LibraryPhase::Empty));
@@ -3288,11 +3075,11 @@ mod tests {
             running: "Elden Ring".into(),
             ..host()
         };
-        let s = LibraryScreen::new(&busy, 0);
+        let s = LibraryScreen::new(&busy);
         assert_eq!(s.desktop_caption(), "Resume Elden Ring");
         assert_eq!(s.desktop_intent().title, "Elden Ring");
 
-        let idle = LibraryScreen::new(&host(), 0);
+        let idle = LibraryScreen::new(&host());
         assert_eq!(idle.desktop_caption(), "Desktop");
         assert_eq!(idle.desktop_intent().title, "Desk");
     }
@@ -3306,8 +3093,8 @@ mod tests {
         let bytes = poster_png(1);
         library.push_art("g0".into(), bytes.clone());
         library.push_decoded("g0".into(), decode_poster_off_thread(&bytes, 1.0).unwrap());
-        let mut first = LibraryScreen::new(&host(), 0);
-        let mut second = LibraryScreen::new(&host(), 0);
+        let mut first = LibraryScreen::new(&host());
+        let mut second = LibraryScreen::new(&host());
         first.sync(&library);
         assert!(
             first.art.contains_key("g0"),
@@ -3329,8 +3116,8 @@ mod tests {
         library.set_games(games(&[("Alpha", None)]));
         let poster = decode_poster_off_thread(&poster_png(2), 1.0).unwrap();
         library.push_decoded("g0".into(), poster);
-        let mut first = LibraryScreen::new(&host(), 0);
-        let mut second = LibraryScreen::new(&host(), 0);
+        let mut first = LibraryScreen::new(&host());
+        let mut second = LibraryScreen::new(&host());
         first.sync(&library);
         second.sync(&library);
         assert!(second.art.contains_key("g0"), "shared, not decoded");
@@ -3379,7 +3166,7 @@ mod tests {
 
     /// Ignored eyeball dump of the Games tab, `PF_CONSOLE_DUMP=<dir> cargo test -p
     /// pf-console-ui --release --lib -- --ignored dump_library`: the rows, the pills, the
-    /// shelf, the three list states, Collections, and a phone.
+    /// shelf, the three list states, the Collections row, and a phone.
     #[test]
     #[ignore]
     fn dump_library() {
@@ -3495,7 +3282,7 @@ mod tests {
                 ..Default::default()
             };
             crate::library::toggle_favorite(&mut settings, "aa11", "steam:4");
-            let root = Screen::Library(LibraryScreen::new(&hosts()[0], 0));
+            let root = Screen::Library(LibraryScreen::new(&hosts()[0]));
             shell(settings, library, vec![root])
         };
         let games_tab =
@@ -3562,14 +3349,14 @@ mod tests {
             dump(&mut s, 60, name);
         }
 
-        // Drilled from Collections: the pills and a coverflow of the whole library.
+        // Drilled: the pills and a coverflow of the whole library.
         let settings = pf_client_core::trust::Settings {
             library_view: LibraryView::Shelf.id().to_string(),
             ..Default::default()
         };
-        let mut drilled = LibraryScreen::new(&hosts()[0], 0);
+        let mut drilled = LibraryScreen::new(&hosts()[0]);
         drilled.all_titles();
-        let root = Screen::Library(LibraryScreen::new(&hosts()[0], 0));
+        let root = Screen::Library(LibraryScreen::new(&hosts()[0]));
         let mut s = shell(settings, &full(), vec![root, Screen::Library(drilled)]);
         dump(&mut s, 60, "_settle");
         menu(&mut s, &[right(), right(), right()]);
@@ -3581,20 +3368,11 @@ mod tests {
             g.platform = Some(["PC", "PS2", "SNES"][i % 3].into());
         }
         mixed.set_games(games);
-        let mut coll = crate::screens::collections::CollectionsScreen::new(
-            &hosts()[0],
-            crate::collate::SortKey::HostOrder,
-        );
-        coll.own_library();
         for i in 1..titles.len() {
             mixed.push_art(format!("steam:{i}"), poster_png(i));
         }
-        let root = Screen::Library(LibraryScreen::new(&hosts()[0], 0));
-        let settings = pf_client_core::trust::Settings::default();
-        let mut s = shell(settings, &mixed, vec![root, Screen::Collections(coll)]);
-        dump(&mut s, 60, "LA-collections");
-        menu(&mut s, &[up(), right()]);
-        dump(&mut s, 40, "LB-collections-pills");
+        let mut s = games_tab(LibraryView::Grid, &mixed);
+        dump(&mut s, 60, "LA-collections-row");
 
         // A phone in landscape, as the shell's own phone dump sizes it.
         let (w, h) = (2868_i32, 1320_i32);

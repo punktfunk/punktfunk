@@ -97,6 +97,9 @@ pub struct SessionParams {
     /// only — values are already baked in; it rides so the overlay can name the preset
     /// without re-reading a store.
     pub preset: Option<String>,
+    /// That preset's stable id: the dial names it to the host, which shows it and hands it to
+    /// hooks and plugins. `None` with `preset` from an older spec just names nothing.
+    pub preset_id: Option<String>,
     /// Overlay tier this launch resolved to. Presentation-only: the controller never
     /// reads it. It rides so a browse-mode presenter (one window, many sessions) can
     /// adopt a per-launch choice; the in-stream cycle chord still wins for that stream.
@@ -166,6 +169,7 @@ impl SessionParams {
         settings: &crate::trust::Settings,
         clipboard: bool,
         preset: Option<String>,
+        preset_id: Option<String>,
         dial: Dial,
         probes: Probes,
     ) -> Self {
@@ -233,6 +237,7 @@ impl SessionParams {
             connect_timeout: dial.connect_timeout,
             force_software: probes.force_software,
             preset,
+            preset_id,
             stats_verbosity: probes.stats_verbosity,
             advanced_stats: settings.advanced_stats,
             phase_lock,
@@ -874,6 +879,10 @@ fn pump(
     // This pair is the request: core derives the cap from it being specified, so
     // `None` must reach the wire as unspecified, not as an explicit 48 000/16.
     let (audio_rate_hz, audio_bits) = hires.unwrap_or(AUDIO_FORMAT_UNSPECIFIED);
+    // Per dial: a session without a preset must not name the last one's.
+    punktfunk_core::client::set_session_preset(params.preset_id.as_deref().and_then(|id| {
+        punktfunk_core::quic::SessionPreset::new(id, params.preset.as_deref().unwrap_or(""))
+    }));
     let connector = match NativeClient::connect_with_audio_format(
         &params.host,
         params.port,

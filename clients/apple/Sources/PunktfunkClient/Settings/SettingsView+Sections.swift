@@ -624,10 +624,6 @@ extension SettingsView {
                         options: LibraryArrangement.all.map { (label: $0.label, tag: $0.stored) },
                         selection: $libraryViewRaw)
                 }
-                described("Opens a library on its platform groups first; a library with one "
-                    + "platform still opens on the shelf.") {
-                    Toggle("Start in collections", isOn: $libraryCollections)
-                }
                 described(startInFooter) {
                     settingPicker(
                         "Start in",

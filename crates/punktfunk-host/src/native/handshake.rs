@@ -327,6 +327,8 @@ pub(super) async fn negotiate(
     // What the client calls itself (`EXT_TAG_CLIENT` on `Start`); `None` from one that sent no
     // block. Log only: two dialers from one device are told apart by that line.
     Option<String>,
+    // `EXT_TAG_PRESET` on `Start`: the settings preset the client dialled with.
+    Option<crate::events::PresetRef>,
     // `EXT_TAG_ABR` on `Start` (`0` = absent): the ABR wire features this client reads.
     u8,
     Option<crate::vdisplay::Compositor>,
@@ -822,6 +824,7 @@ pub(super) async fn negotiate(
     // Which ABR wire features this client understands. Bits it does not set are bits it
     // cannot read, and bits this host does not know are ignored.
     let abr_features = punktfunk_core::quic::ext_abr_features(&start_ext);
+    let preset = punktfunk_core::quic::SessionPreset::from_ext(&start_ext).map(Into::into);
     bringup.mark("start");
     // `wire_mtu::spawn_watch` is started by `serve_session` once the control-task channels
     // exist; it also drives mid-session shard renegotiation (needs the control writer).
@@ -832,6 +835,7 @@ pub(super) async fn negotiate(
         data_sock,
         start,
         client_label,
+        preset,
         abr_features,
         compositor,
         gamescope_route,

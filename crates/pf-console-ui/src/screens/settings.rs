@@ -90,8 +90,6 @@ pub enum RowId {
     ReduceUiResolution,
     /// Same `library_view` key the library bar writes.
     LibraryView,
-    /// `trust::Settings::library_collections`. Couch path besides the shelf's Y.
-    LibraryCollections,
     /// `trust::Settings::start_in`. The value line names where a launch will land.
     StartIn,
     // Android-only. Values live in `trust::Settings::extra` under `android.*`
@@ -354,7 +352,6 @@ const TABS: [(&str, &[RowId]); 8] = [
             RowId::Palette,
             RowId::LibrarySections,
             RowId::LibraryView,
-            RowId::LibraryCollections,
             RowId::StartIn,
             RowId::HostSort,
             RowId::HostGrouping,
@@ -1413,7 +1410,7 @@ fn row_icon(id: RowId) -> &'static str {
         RowId::FollowOsTheme => "moon",
         RowId::Palette => "palette",
         RowId::LibrarySections => "grip-vertical",
-        RowId::LibraryView | RowId::LibraryCollections => "menu",
+        RowId::LibraryView => "menu",
         RowId::StartIn => "play",
         RowId::GamepadUi | RowId::GamepadUiMode => "tv",
         RowId::Stats | RowId::AdvancedStats => "chart-column",
@@ -1808,11 +1805,6 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
                 .label()
                 .into(),
         ),
-        RowId::LibraryCollections => (
-            None,
-            "Start in collections",
-            on_off(s.library_collections).into(),
-        ),
         RowId::StartIn => (None, "Start in", start_in_value(ctx)),
         RowId::Stats => (
             None,
@@ -2111,11 +2103,6 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             "Shelf shows one cover at a time, big. Grid shows about eighteen at once — \
              for when you already know what you are looking for. The library's own bar \
              switches it while you browse, along with the sort."
-        }
-        RowId::LibraryCollections => {
-            "Opening a host's library goes straight to its collections — platforms and \
-             stores as tiles — instead of the whole shelf. A library with only one \
-             collection opens on the shelf as usual."
         }
         RowId::StartIn => {
             "Where this app opens. Library lands on your host's shelf, Stream goes \
@@ -2487,7 +2474,6 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
             let at = all.iter().position(|v| *v == cur);
             step_option(at, all.len(), delta, wrap).map(|i| s.library_view = all[i].id().into())
         }
-        RowId::LibraryCollections => toggle(&mut s.library_collections, delta, wrap),
         RowId::StartIn => {
             let all = &start::StartIn::ALL;
             let at = all
@@ -4037,7 +4023,7 @@ pub(crate) mod tests {
                 seen.push(*id);
             }
         }
-        assert_eq!(seen.len(), 62, "{seen:?}");
+        assert_eq!(seen.len(), 61, "{seen:?}");
         assert!(seen.contains(&RowId::StartIn));
         assert!(seen.contains(&RowId::AdvancedStats));
         assert!(seen.contains(&RowId::FollowOsTheme));
@@ -4087,64 +4073,6 @@ pub(crate) mod tests {
             crate::os_theme::set_os_theme(None);
             assert!(!row_applies(RowId::FollowOsTheme, ctx));
         });
-    }
-
-    /// Off by default: this key decides where a deep link lands, so an install
-    /// that never opens this screen must keep the shelf it has.
-    #[test]
-    fn the_collections_entry_sits_with_the_library_view_and_ships_off() {
-        let (mut settings, pads) = ctx_parts();
-        assert!(!settings.library_collections, "off by default");
-        let interface = TABS
-            .iter()
-            .find(|(name, _)| *name == "Interface")
-            .expect("the Interface tab")
-            .1;
-        let view = interface
-            .iter()
-            .position(|id| *id == RowId::LibraryView)
-            .expect("the library view row");
-        assert_eq!(interface.get(view + 1), Some(&RowId::LibraryCollections));
-
-        let library = crate::library::LibraryShared::default();
-        let mut ctx = Ctx {
-            hosts: &[],
-            library: &library,
-            settings: &mut settings,
-            store: crate::store::file_store(),
-            platform: crate::platform::Platform::Desktop,
-            screen: None,
-            pads: &pads,
-            deck: false,
-            tv: false,
-            fallback_ui: false,
-            pyrowave_ok: true,
-            av1_ok: true,
-            device_name: "t",
-            t: 0.0,
-        };
-        assert!(
-            !adjust(RowId::LibraryCollections, -1, false, &mut ctx),
-            "already off = thud"
-        );
-        assert!(adjust(RowId::LibraryCollections, 1, false, &mut ctx));
-        assert!(ctx.settings.library_collections);
-        assert_eq!(
-            row_spec(RowId::LibraryCollections, &ctx, &[], &Default::default())
-                .value
-                .as_deref(),
-            Some("On"),
-            "the row says what the key holds"
-        );
-        assert!(
-            !adjust(RowId::LibraryCollections, 1, false, &mut ctx),
-            "on = thud"
-        );
-        assert!(
-            adjust(RowId::LibraryCollections, 1, true, &mut ctx),
-            "A flips it back"
-        );
-        assert!(!ctx.settings.library_collections);
     }
 
     #[test]

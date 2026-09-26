@@ -162,22 +162,90 @@ pub const EXT_TAG_ABR: u16 = 3;
 /// Core sets it for every embedder that links the controller reading it, not the embedder.
 pub const EXT_ABR_ACK_REASON: u8 = 0x01;
 
-/// The extension entries a client appends to its `Start`, label before features.
+/// Extension tag `4` on `Start`: the settings preset this session was dialled with, as
+/// [`SessionPreset::encode`] writes it. The id is the client's own and stable across a rename;
+/// the name is for people. The host shows it and hands it to hooks and plugins; it changes
+/// nothing about the stream. Absent when the client streams with its plain settings.
+pub const EXT_TAG_PRESET: u16 = 4;
+
+/// Longest [`SessionPreset::id`], printable ASCII.
+pub const PRESET_ID_MAX: usize = 32;
+/// Longest [`SessionPreset::name`] in UTF-8 bytes.
+pub const PRESET_NAME_MAX: usize = 64;
+
+/// The preset a session was dialled with ([`EXT_TAG_PRESET`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionPreset {
+    pub id: String,
+    pub name: String,
+}
+
+impl SessionPreset {
+    /// Bounded and stripped: id to printable ASCII, name to [`client_label`]'s rules, each
+    /// truncated. `None` when the id is empty after that, since the id is what a host keys on.
+    pub fn new(id: &str, name: &str) -> Option<SessionPreset> {
+        let id: String = id
+            .trim()
+            .chars()
+            .filter(|c| c.is_ascii_graphic())
+            .take(PRESET_ID_MAX)
+            .collect();
+        let mut name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+        while name.len() > PRESET_NAME_MAX {
+            name.pop();
+        }
+        (!id.is_empty()).then_some(SessionPreset { id, name })
+    }
+
+    /// `id_len u8, id, name_len u8, name`.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + self.id.len() + self.name.len());
+        out.push(self.id.len() as u8);
+        out.extend_from_slice(self.id.as_bytes());
+        out.push(self.name.len() as u8);
+        out.extend_from_slice(self.name.as_bytes());
+        out
+    }
+
+    /// The preset in a decoded block, re-bounded as [`new`](Self::new) does. A malformed
+    /// value is no preset, never a failed handshake: the tag informs, it does not gate.
+    pub fn from_ext(entries: &[(u16, &[u8])]) -> Option<SessionPreset> {
+        let (_, v) = entries.iter().find(|(tag, _)| *tag == EXT_TAG_PRESET)?;
+        let (&id_len, rest) = v.split_first()?;
+        let id = rest.get(..id_len as usize)?;
+        let (&name_len, rest) = rest.get(id_len as usize..)?.split_first()?;
+        let name = rest.get(..name_len as usize)?;
+        SessionPreset::new(
+            std::str::from_utf8(id).ok()?,
+            &String::from_utf8_lossy(name),
+        )
+    }
+}
+
+/// The extension entries a client appends to its `Start`: label, features, then the preset.
 ///
 /// Empty toward a host without [`HOST_CAP2_EXT`](super::HOST_CAP2_EXT): that host reads
 /// `Start`'s six frozen bytes and nothing else, so it never learns the ABR features and
 /// never lengthens an ack — today's behaviour, reached by never being told. An empty label
-/// says nothing rather than saying nothing at length.
+/// or preset says nothing rather than saying nothing at length.
 #[cfg(any(feature = "quic", test))]
-pub(crate) fn start_ext<'a>(host_caps2: u8, label: &'a str, abr: &'a [u8]) -> Vec<(u16, &'a [u8])> {
+pub(crate) fn start_ext<'a>(
+    host_caps2: u8,
+    label: &'a str,
+    abr: &'a [u8],
+    preset: &'a [u8],
+) -> Vec<(u16, &'a [u8])> {
     if host_caps2 & super::HOST_CAP2_EXT == 0 {
         return Vec::new();
     }
-    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(2);
+    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(3);
     if !label.is_empty() {
         out.push((EXT_TAG_CLIENT, label.as_bytes()));
     }
     out.push((EXT_TAG_ABR, abr));
+    if !preset.is_empty() {
+        out.push((EXT_TAG_PRESET, preset));
+    }
     out
 }
 
@@ -2566,16 +2634,42 @@ mod tests {
     #[test]
     fn an_old_host_is_told_nothing_and_answers_as_it_always_did() {
         let abr = [EXT_ABR_ACK_REASON];
-        assert!(start_ext(0, "android 0.38.0", &abr).is_empty());
-        assert!(start_ext(HOST_CAP2_REPEAT_MARK | HOST_CAP2_TOUCH, "x", &abr).is_empty());
+        assert!(start_ext(0, "android 0.38.0", &abr, &[]).is_empty());
+        assert!(start_ext(HOST_CAP2_REPEAT_MARK | HOST_CAP2_TOUCH, "x", &abr, &[]).is_empty());
         // A host that does parse it hears both, the log label first.
-        let ext = start_ext(HOST_CAP2_EXT, "android 0.38.0", &abr);
+        let ext = start_ext(HOST_CAP2_EXT, "android 0.38.0", &abr, &[]);
         assert_eq!(ext.len(), 2);
         assert_eq!(ext[0].0, EXT_TAG_CLIENT);
         assert_eq!(ext_abr_features(&ext), EXT_ABR_ACK_REASON);
         // No label is still a tag: the feature byte does not ride on a log line.
-        let ext = start_ext(HOST_CAP2_EXT, "", &abr);
+        let ext = start_ext(HOST_CAP2_EXT, "", &abr, &[]);
         assert_eq!(ext, vec![(EXT_TAG_ABR, &abr[..])]);
+    }
+
+    #[test]
+    fn a_preset_rides_start_and_reads_back_bounded() {
+        let preset = SessionPreset::new("3f9a0c11e2b4", "Docked").unwrap();
+        let bytes = preset.encode();
+        let abr = [EXT_ABR_ACK_REASON];
+        let block = encode_ext_block(&start_ext(HOST_CAP2_EXT, "deck", &abr, &bytes)).unwrap();
+        let got = decode_ext_block(&block).unwrap();
+        assert_eq!(SessionPreset::from_ext(&got), Some(preset));
+        // Nothing set, nothing sent; an old host hears none of it.
+        assert_eq!(
+            SessionPreset::from_ext(&start_ext(HOST_CAP2_EXT, "", &abr, &[])),
+            None
+        );
+        assert!(start_ext(0, "", &abr, &bytes).is_empty());
+        // A hostile value is bounded, never a failed handshake.
+        let long = SessionPreset::new(&"a".repeat(99), &"\u{7}n".repeat(99)).unwrap();
+        assert_eq!(long.id.len(), PRESET_ID_MAX);
+        assert!(long.name.len() <= PRESET_NAME_MAX && !long.name.contains('\u{7}'));
+        assert_eq!(
+            SessionPreset::from_ext(&[(EXT_TAG_PRESET, &[9, b'x'][..])]),
+            None
+        );
+        assert_eq!(SessionPreset::from_ext(&[(EXT_TAG_PRESET, &[][..])]), None);
+        assert_eq!(SessionPreset::new(" ", "Docked"), None);
     }
 
     /// New client → new host: the tag is one byte of features, and a bit this

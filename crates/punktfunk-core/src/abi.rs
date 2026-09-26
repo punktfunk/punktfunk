@@ -2373,6 +2373,28 @@ const _: () = {
     assert!(core::mem::size_of::<PunktfunkConnectOpts>() == 76);
 };
 
+/// Name the settings preset the next connect sends: its stable id and display name. The host
+/// shows it and hands it to hooks; the stream is unchanged. A null `id` names none. The value
+/// outlives the call, so set it before every connect. ABI v38.
+///
+/// # Safety
+/// `id` and `name` are null or NUL-terminated C strings, read during this call only.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_set_session_preset(
+    id: *const std::os::raw::c_char,
+    name: *const std::os::raw::c_char,
+) {
+    // SAFETY: null or NUL-terminated per the contract above.
+    let preset = match unsafe { (opt_cstr(id), opt_cstr(name)) } {
+        (Ok(Some(id)), name) => {
+            crate::quic::SessionPreset::new(id, name.ok().flatten().unwrap_or(""))
+        }
+        _ => None,
+    };
+    crate::client::set_session_preset(preset);
+}
+
 /// Minimum `struct_size` [`punktfunk_connect_opts`] accepts. Frozen: when the
 /// struct grows this stays put so older callers keep connecting; only the size
 /// asserts above move.
@@ -6145,8 +6167,8 @@ mod abi_version_tests {
     #[test]
     fn abi_version_is_pinned() {
         // Current ABI. A bump must update this pin.
-        assert_eq!(crate::ABI_VERSION, 37);
-        assert_eq!(super::punktfunk_abi_version(), 37);
+        assert_eq!(crate::ABI_VERSION, 38);
+        assert_eq!(super::punktfunk_abi_version(), 38);
     }
 
     #[test]

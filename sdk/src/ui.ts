@@ -63,6 +63,13 @@ export interface PluginUiOptions {
 	 */
 	surfaces?: { page?: boolean; config?: boolean; game?: boolean };
 	/**
+	 * Stages this plugin holds, like `"game.launching"`. The host POSTs the event to `/__hold` and
+	 * waits for a 2xx, up to `holdTimeoutMs` (default 30 000, at most 120 000). Needs `fetch` to
+	 * answer `/__hold`; `@punktfunk/plugin-kit`'s `serveUi({ holds })` does.
+	 */
+	holds?: readonly string[];
+	holdTimeoutMs?: number;
+	/**
 	 * Directory of the built SPA. Requests are served from here first (with an `index.html` SPA
 	 * fallback for navigations); a static miss falls through to [`fetch`]. Accepts a filesystem
 	 * path or a `file:` URL (`new URL("../dist/ui", import.meta.url)`).
@@ -204,6 +211,10 @@ export const servePluginUi = async (
 		// Sent through the UNTYPED `pf.request` below, so an older host simply ignores the unknown
 		// field rather than rejecting the registration — no runner flag, no version gate.
 		...(opts.category !== undefined ? { category: opts.category } : {}),
+		...(opts.holds?.length ? { holds: opts.holds } : {}),
+		...(opts.holdTimeoutMs !== undefined
+			? { hold_timeout_ms: opts.holdTimeoutMs }
+			: {}),
 	};
 
 	const register = () => pf.request("PUT", `/plugins/${opts.id}`, body);

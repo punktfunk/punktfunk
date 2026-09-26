@@ -32,6 +32,35 @@ describe("wire", () => {
 		expect(stopping._tag).toBe("Success");
 	});
 
+	test("keeps the device and its preset on a game event", () => {
+		const r = decodeHostEvent(
+			JSON.parse(
+				'{"seq":5,"ts_ms":1700000000000,"schema":1,"kind":"game.exited","game":{"app":"steam:504230","title":"Celeste","client":"Deck","fingerprint":"ab12cd","plane":"native","preset":{"id":"3f9a0c11e2b4","name":"Docked"}},"reason":"exited"}',
+			),
+		);
+		expect(r._tag).toBe("Success");
+		if (r._tag === "Success" && r.success.kind === "game.exited") {
+			expect(r.success.game.fingerprint).toBe("ab12cd");
+			expect(r.success.game.preset).toEqual({ id: "3f9a0c11e2b4", name: "Docked" });
+		}
+	});
+
+	test("decodes the launch stage a plugin holds", () => {
+		const r = decodeHostEvent(
+			JSON.parse(
+				'{"seq":5,"ts_ms":1700000000000,"schema":1,"kind":"game.launching","game":{"app":"steam:570","title":"Dota 2","store":"steam","client":"a1b2c3d4e5f6","fingerprint":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","plane":"native","preset":{"id":"3f9a0c11e2b4","name":"Docked"}}}',
+			),
+		);
+		expect(r._tag).toBe("Success");
+		if (r._tag === "Success" && r.success.kind === "game.launching") {
+			expect(r.success.game.preset?.name).toBe("Docked");
+		}
+		for (const kind of ["store.changed", "plugins.changed"]) {
+			const ev = decodeHostEvent({ seq: 1, ts_ms: 1, schema: 1, kind, id: "x" });
+			expect(ev._tag).toBe("Success");
+		}
+	});
+
 	test("tolerates unknown keys (additive-only wire)", () => {
 		const r = decodeHostEvent({
 			seq: 9,

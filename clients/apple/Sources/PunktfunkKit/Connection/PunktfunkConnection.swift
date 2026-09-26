@@ -981,6 +981,12 @@ public final class PunktfunkConnection: @unchecked Sendable {
         // Core reads any explicit pair, 48 000/16 included, as a lossless ask and sets
         // `CLIENT_CAP_AUDIO_HIRES`; `AudioFormatChoice.opus.wire` is `(48_000, 16)`.
         let wantsHiRes = audioRateHz != 48_000 || audioBits != 16
+        // The core keeps the preset across dials; nil here clears the last session's.
+        withOptionalCString(settings.presetID) { id in
+            withOptionalCString(settings.presetName) { name in
+                punktfunk_set_session_preset(id, name)
+            }
+        }
         handle = host.withCString { cs in
             withOptionalCString(identity?.certPEM) { cert in
                 withOptionalCString(identity?.keyPEM) { key in

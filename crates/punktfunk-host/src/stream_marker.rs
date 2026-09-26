@@ -28,6 +28,8 @@ pub struct StreamInfo {
     pub fingerprint: Option<String>,
     /// On lifecycle events and hook filters; never in the marker file.
     pub plane: crate::events::Plane,
+    /// The dialled preset, for lifecycle events; never in the marker file.
+    pub preset: Option<crate::events::PresetRef>,
 }
 
 fn stream_ref(info: &StreamInfo) -> crate::events::StreamRef {
@@ -38,6 +40,7 @@ fn stream_ref(info: &StreamInfo) -> crate::events::StreamRef {
         fingerprint: info.fingerprint.clone(),
         app: info.launch.clone(),
         plane: info.plane,
+        preset: info.preset.clone(),
     }
 }
 
@@ -230,6 +233,7 @@ mod imp {
                 hdr: true,
                 client: "Couch'TV".to_string(),
                 fingerprint: None,
+                preset: None,
                 launch: None,
                 plane: crate::events::Plane::Native,
             });
@@ -249,6 +253,7 @@ mod imp {
                 hdr: false,
                 client: "Phone".to_string(),
                 fingerprint: None,
+                preset: None,
                 launch: None,
                 plane: crate::events::Plane::Gamestream,
             });
@@ -287,6 +292,7 @@ mod tests {
             hdr: false,
             client: String::new(),
             fingerprint: None,
+            preset: None,
             launch: Some("Hades".to_string()),
             plane: Plane::Gamestream,
         };

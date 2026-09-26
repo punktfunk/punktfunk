@@ -59,6 +59,13 @@ pub(crate) struct PluginRegistration {
     /// Game sources); omit the field to keep a nav page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Stages this plugin holds (`game.launching`). The host POSTs the event to `/__hold` on
+    /// `ui.port` and waits for a 2xx. Needs `ui`.
+    #[serde(default)]
+    pub holds: Vec<String>,
+    /// How long a hold may take, 1–120 000 ms. Absent means 30 000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_timeout_ms: Option<u32>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -127,6 +134,8 @@ struct Stored {
     version: Option<String>,
     ui: Option<StoredUi>,
     category: Option<String>,
+    holds: Vec<String>,
+    hold_timeout: Duration,
     expires_at: Instant,
 }
 
@@ -149,6 +158,8 @@ struct Valid {
     version: Option<String>,
     ui: Option<StoredUi>,
     category: Option<String>,
+    holds: Vec<String>,
+    hold_timeout: Duration,
 }
 
 impl PluginRegistry {
@@ -175,6 +186,8 @@ impl PluginRegistry {
                 version: v.version,
                 ui: v.ui,
                 category: v.category,
+                holds: v.holds,
+                hold_timeout: v.hold_timeout,
                 expires_at,
             },
         );
@@ -229,6 +242,23 @@ impl PluginRegistry {
         })
     }
 
+    /// Live plugins holding `stage`, with the credentials to call them. Read-only.
+    fn holders(&self, stage: &str) -> Vec<Holder> {
+        let map = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        map.iter()
+            .filter(|(_, s)| s.is_live() && s.holds.iter().any(|h| h == stage))
+            .filter_map(|(id, s)| {
+                let ui = s.ui.as_ref()?;
+                Some(Holder {
+                    id: id.clone(),
+                    port: ui.port,
+                    secret: ui.secret.clone(),
+                    timeout: s.hold_timeout,
+                })
+            })
+            .collect()
+    }
+
     /// Read-only; does not prune or emit.
     fn live_ids(&self) -> Vec<String> {
         let map = self.inner.read().unwrap_or_else(|e| e.into_inner());
@@ -263,6 +293,19 @@ pub(crate) fn live_plugin_ids() -> Vec<String> {
     registry().live_ids()
 }
 
+/// A plugin that holds a stage, as [`crate::holds`] calls it. Carries the secret: never serialize.
+pub(crate) struct Holder {
+    pub id: String,
+    pub port: u16,
+    pub secret: String,
+    pub timeout: Duration,
+}
+
+/// Live plugins registered to hold `stage`.
+pub(crate) fn holders(stage: &str) -> Vec<Holder> {
+    registry().holders(stage)
+}
+
 /// In-process `{port, secret}` for [`crate::library::ask_plugin_launch`]. Same lookup as
 /// `GET /plugins/{id}/ui-credential`, without a management-API round trip to a port this process
 /// already holds.
@@ -287,6 +330,8 @@ pub(crate) fn register_ui_for_test(id: &str, port: u16, secret: &str) {
                 game: false,
             }),
             category: None,
+            holds: Vec::new(),
+            hold_timeout: Duration::from_secs(30),
         },
     );
 }
@@ -364,11 +409,36 @@ fn validate(reg: PluginRegistration) -> Result<Valid, String> {
         }
         None => None,
     };
+    if let Some(bad) = reg
+        .holds
+        .iter()
+        .find(|h| !crate::holds::STAGES.contains(&h.as_str()))
+    {
+        return Err(format!(
+            "holds: unknown stage `{}` — known: {}",
+            sanitize(bad),
+            crate::holds::STAGES.join(", ")
+        ));
+    }
+    if !reg.holds.is_empty() && ui.is_none() {
+        return Err("holds needs ui.port and ui.secret — the host calls /__hold there".into());
+    }
+    let Some(hold_timeout) = crate::holds::deadline(reg.hold_timeout_ms) else {
+        return Err(format!(
+            "hold_timeout_ms must be 1–{}",
+            crate::holds::HOLD_MAX_MS
+        ));
+    };
+    let mut holds = reg.holds;
+    holds.sort();
+    holds.dedup();
     Ok(Valid {
         title,
         version,
         ui,
         category,
+        holds,
+        hold_timeout,
     })
 }
 
@@ -591,6 +661,8 @@ mod tests {
                 game: false,
             }),
             category: None,
+            holds: Vec::new(),
+            hold_timeout_ms: None,
         }
     }
 
@@ -617,6 +689,8 @@ mod tests {
             version: None,
             ui: None,
             category: None,
+            holds: Vec::new(),
+            hold_timeout_ms: None,
         })
         .unwrap();
         assert_eq!(v.title, "Rom");
@@ -625,6 +699,8 @@ mod tests {
             version: None,
             ui: None,
             category: Some(c.into()),
+            holds: Vec::new(),
+            hold_timeout_ms: None,
         };
         assert_eq!(
             validate(lib("library")).unwrap().category.as_deref(),
@@ -662,6 +738,35 @@ mod tests {
         );
         let ui = r.snapshot().0.remove(0).ui.unwrap();
         assert!(ui.page && ui.game && !ui.config);
+    }
+
+    #[test]
+    fn a_hold_needs_a_known_stage_a_ui_and_a_sane_deadline() {
+        let held = |holds: &[&str], ms: Option<u32>| PluginRegistration {
+            holds: holds.iter().map(|h| h.to_string()).collect(),
+            hold_timeout_ms: ms,
+            ..reg("Slots", 49321, SECRET)
+        };
+        let v = validate(held(&["game.launching", "game.launching"], Some(5_000))).unwrap();
+        assert_eq!(v.holds, vec!["game.launching".to_string()]);
+        assert_eq!(v.hold_timeout, Duration::from_secs(5));
+        assert!(validate(held(&["game.exited"], None)).is_err());
+        assert!(validate(held(&["game.launching"], Some(0))).is_err());
+        assert!(validate(held(&["game.launching"], Some(120_001))).is_err());
+        let headless = PluginRegistration {
+            ui: None,
+            ..held(&["game.launching"], None)
+        };
+        assert!(validate(headless).is_err());
+
+        let r = PluginRegistry::new();
+        r.upsert("slots", validate(held(&["game.launching"], None)).unwrap());
+        r.upsert("other", validate(reg("Other", 49322, SECRET)).unwrap());
+        let h = r.holders("game.launching");
+        assert_eq!(h.len(), 1);
+        assert_eq!((h[0].id.as_str(), h[0].port), ("slots", 49321));
+        assert_eq!(h[0].timeout, Duration::from_secs(30));
+        assert!(r.holders("game.exited").is_empty());
     }
 
     #[test]
@@ -704,6 +809,8 @@ mod tests {
                 version: None,
                 ui: None,
                 category: None,
+                holds: Vec::new(),
+                hold_timeout_ms: None,
             })
             .unwrap(),
         );

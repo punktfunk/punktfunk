@@ -882,6 +882,13 @@ impl AscBackend {
         self.presented.clear();
         self.awaiting.clear();
     }
+
+    /// Tear down everything but the layer, which keeps showing its last frame. A rebuilt
+    /// decoder hides it once its own layer presents (see [`Layer::hide`]).
+    pub(super) fn into_layer(mut self) -> Layer {
+        self.release_all();
+        self.layer
+    }
 }
 
 impl AscBackend {

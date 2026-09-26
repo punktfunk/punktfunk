@@ -65,6 +65,7 @@ suspend fun connectToHost(
     launch: String?,
     dialer: String,
     timeoutMs: Int = CONNECT_TIMEOUT_MS,
+    preset: StreamPreset? = null,
 ): Long {
     // One launch, one session: every shell's connect lands here, so the refusal lives here too.
     if (!SessionGate.take()) {
@@ -72,7 +73,7 @@ suspend fun connectToHost(
         return 0L
     }
     try {
-        return dial(context, settings, identity, host, port, pinHex, launch, dialer, timeoutMs)
+        return dial(context, settings, identity, host, port, pinHex, launch, dialer, timeoutMs, preset)
     } finally {
         SessionGate.release()
     }
@@ -89,6 +90,7 @@ private suspend fun dial(
     launch: String?,
     dialer: String,
     timeoutMs: Int,
+    preset: StreamPreset?,
 ): Long {
     // Advertise HDR only when the user enabled it AND this device's display can present it (else the
     // host sends a proper SDR stream rather than PQ the panel would mis-tone-map).
@@ -174,6 +176,8 @@ private suspend fun dial(
             // Which build, and which shell and path, opened this session — the host's
             // `handshake complete` `client=` field.
             dialer = "android ${appVersion(context)} $dialer",
+            presetId = preset?.id,
+            presetName = preset?.name,
         )
         NativeBridge.nativeConnect(request.toJson())
     }

@@ -56,6 +56,24 @@ pub enum DisconnectReason {
     Error,
 }
 
+/// The settings preset a client dialled with ([`punktfunk_core::quic::EXT_TAG_PRESET`]). The
+/// id is the client's own and stable across a rename, so it is what a hook or plugin keys on
+/// together with the device fingerprint; the name is for people.
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug, PartialEq, Eq)]
+pub struct PresetRef {
+    pub id: String,
+    pub name: String,
+}
+
+impl From<punktfunk_core::quic::SessionPreset> for PresetRef {
+    fn from(p: punktfunk_core::quic::SessionPreset) -> Self {
+        PresetRef {
+            id: p.id,
+            name: p.name,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
 pub struct ClientRef {
     /// Display name: the trust-store name (a console rename wins), else the name the client
@@ -65,6 +83,9 @@ pub struct ClientRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
     pub plane: Plane,
+    /// The preset the client dialled with. Absent for plain settings and on GameStream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<PresetRef>,
 }
 
 /// Plane-neutral A/V session (distinct from a video [`StreamRef`]).
@@ -81,6 +102,9 @@ pub struct SessionRef {
     pub hdr: bool,
     /// Which plane serves it, as `stream.*` and `game.*` also report.
     pub plane: Plane,
+    /// See [`ClientRef::preset`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<PresetRef>,
 }
 
 /// Why a session ended, in the client's own words
@@ -253,6 +277,9 @@ pub struct StreamRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     pub plane: Plane,
+    /// See [`ClientRef::preset`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<PresetRef>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
@@ -269,6 +296,9 @@ pub struct GameRefPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
     pub plane: Plane,
+    /// The preset of the session that launched it. See [`ClientRef::preset`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<PresetRef>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,6 +343,10 @@ pub enum EventKind {
     StreamStarted { stream: StreamRef },
     #[serde(rename = "stream.stopped")]
     StreamStopped { stream: StreamRef },
+    /// Fires before the host spawns a launched game, never on adopt. Plugins and hooks that
+    /// hold this stage run first ([`crate::holds`]).
+    #[serde(rename = "game.launching")]
+    GameLaunching { game: GameRefPayload },
     /// Fires once the host has seen the game process, not merely spawned its launcher.
     #[serde(rename = "game.running")]
     GameRunning { game: GameRefPayload },
@@ -430,6 +464,7 @@ impl EventKind {
             EventKind::SessionEnded { .. } => "session.ended",
             EventKind::StreamStarted { .. } => "stream.started",
             EventKind::StreamStopped { .. } => "stream.stopped",
+            EventKind::GameLaunching { .. } => "game.launching",
             EventKind::GameRunning { .. } => "game.running",
             EventKind::GameWindow { .. } => "game.window",
             EventKind::GameExited { .. } => "game.exited",
@@ -467,7 +502,8 @@ impl EventKind {
             EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
                 Some(&stream.client)
             }
-            EventKind::GameRunning { game }
+            EventKind::GameLaunching { game }
+            | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => Some(&game.client),
             EventKind::PairingPending { device }
@@ -500,9 +536,29 @@ impl EventKind {
             EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
                 stream.fingerprint.as_deref()
             }
-            EventKind::GameRunning { game }
+            EventKind::GameLaunching { game }
+            | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => game.fingerprint.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The dialled preset, on the events that carry a client, session, stream or game.
+    pub fn preset(&self) -> Option<&PresetRef> {
+        match self {
+            EventKind::ClientConnected { client }
+            | EventKind::ClientDisconnected { client, .. } => client.preset.as_ref(),
+            EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
+                session.preset.as_ref()
+            }
+            EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
+                stream.preset.as_ref()
+            }
+            EventKind::GameLaunching { game }
+            | EventKind::GameRunning { game }
+            | EventKind::GameWindow { game, .. }
+            | EventKind::GameExited { game, .. } => game.preset.as_ref(),
             _ => None,
         }
     }
@@ -517,7 +573,8 @@ impl EventKind {
             EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
                 Some(stream.plane)
             }
-            EventKind::GameRunning { game }
+            EventKind::GameLaunching { game }
+            | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => Some(game.plane),
             EventKind::PairingPending { device }
@@ -536,7 +593,8 @@ impl EventKind {
                 stream.app.as_deref()
             }
             // No library id: operator-typed command; title is the only hook-filter handle.
-            EventKind::GameRunning { game }
+            EventKind::GameLaunching { game }
+            | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => game.app.as_deref().or(Some(&game.title)),
             _ => None,
@@ -593,7 +651,8 @@ impl EventBus {
     }
 
     /// Fire-and-forget. No receivers is fine — the ring still records for later catch-up.
-    pub fn emit(&self, kind: EventKind) {
+    /// Returns the event as sent, for a caller that hands it on.
+    pub fn emit(&self, kind: EventKind) -> HostEvent {
         let ts_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -613,7 +672,8 @@ impl EventBus {
         // Hold the ring lock across `send` so it serializes with `subscribe`: an event
         // lands in catch-up or on the live tail — never both, never neither. `send` is
         // non-blocking, so the hold is trivial.
-        let _ = self.tx.send(ev);
+        let _ = self.tx.send(ev.clone());
+        ev
     }
 
     /// Live tail only (no catch-up, no cursor) — for consumers that care from now on.
@@ -780,6 +840,7 @@ mod tests {
                     fingerprint: Some(FP_SNAPSHOT.into()),
                     app: Some("steam:570".into()),
                     plane: Plane::Native,
+                    preset: None,
                 },
             },
         };
@@ -797,6 +858,7 @@ mod tests {
                     name: "Deck".into(),
                     fingerprint: Some("b1c2".into()),
                     plane: Plane::Gamestream,
+                    preset: None,
                 },
                 reason: DisconnectReason::Timeout,
             },
@@ -842,12 +904,38 @@ mod tests {
                     client: "Living Room TV".into(),
                     fingerprint: Some(FP_SNAPSHOT.into()),
                     plane: Plane::Native,
+                    preset: None,
                 },
             },
         };
         assert_eq!(
             serde_json::to_string(&ev).unwrap(),
             r#"{"seq":5,"ts_ms":1700000000000,"schema":1,"kind":"game.running","game":{"app":"steam:570","title":"Dota 2","store":"steam","client":"Living Room TV","fingerprint":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","plane":"native"}}"#
+        );
+
+        // The launch stage, with the dialled preset: what a plugin's `/__hold` receives.
+        let ev = HostEvent {
+            seq: 5,
+            ts_ms: 1_700_000_000_000,
+            schema: 1,
+            kind: EventKind::GameLaunching {
+                game: GameRefPayload {
+                    app: Some("steam:570".into()),
+                    title: "Dota 2".into(),
+                    store: Some("steam".into()),
+                    client: "a1b2c3d4e5f6".into(),
+                    fingerprint: Some(FP_SNAPSHOT.into()),
+                    plane: Plane::Native,
+                    preset: Some(PresetRef {
+                        id: "3f9a0c11e2b4".into(),
+                        name: "Docked".into(),
+                    }),
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_string(&ev).unwrap(),
+            r#"{"seq":5,"ts_ms":1700000000000,"schema":1,"kind":"game.launching","game":{"app":"steam:570","title":"Dota 2","store":"steam","client":"a1b2c3d4e5f6","fingerprint":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","plane":"native","preset":{"id":"3f9a0c11e2b4","name":"Docked"}}}"#
         );
 
         // Optional ids omitted, not nulled — host-ended game with no library entry.
@@ -863,6 +951,7 @@ mod tests {
                     client: String::new(),
                     fingerprint: None,
                     plane: Plane::Gamestream,
+                    preset: None,
                 },
                 reason: GameEndReason::Terminated,
             },
@@ -886,6 +975,7 @@ mod tests {
                     mode: mode_str(1920, 1080, 30),
                     hdr: false,
                     plane: Plane::Native,
+                    preset: None,
                 },
                 summary: Box::new(SessionSummary {
                     id: 3,
@@ -950,6 +1040,7 @@ mod tests {
                     mode: mode_str(0, 0, 0),
                     hdr: false,
                     plane: Plane::Native,
+                    preset: None,
                 },
                 summary: Box::new(SessionSummary {
                     id: 4,
@@ -1095,6 +1186,7 @@ mod tests {
                 client: "Deck".into(),
                 fingerprint: Some("ab12".into()),
                 plane: Plane::Native,
+                preset: None,
             },
         };
         assert_eq!(running.name(), "game.running");
@@ -1116,6 +1208,7 @@ mod tests {
                 client: String::new(),
                 fingerprint: None,
                 plane: Plane::Gamestream,
+                preset: None,
             },
             reason: GameEndReason::Exited,
         };

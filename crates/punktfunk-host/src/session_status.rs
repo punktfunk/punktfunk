@@ -122,6 +122,8 @@ pub struct SessionControls {
     /// Full cert fingerprint, when this session has one. The stable device key —
     /// `client` is only its 12-hex prefix, and an address is not an identity.
     pub fingerprint: Option<String>,
+    /// The settings preset the client dialled with, when it named one.
+    pub preset: Option<crate::events::PresetRef>,
     /// This device's key in [`crate::inject::pad_pool`]. A reservation and a
     /// reconnect are keyed by it, so both follow the pairing, never the address.
     pub pad_owner: u64,
@@ -158,6 +160,7 @@ impl SessionControls {
             audio_tx: None,
             pad_slots: Arc::new(AtomicU16::new(0)),
             fingerprint: None,
+            preset: None,
             pad_owner: crate::inject::pad_pool::owner_key(None),
             preferred_pad_slot: Arc::new(AtomicU8::new(NO_PAD_SLOT)),
             pads: Arc::new(crate::pad_feed::PadFeed::new()),
@@ -446,6 +449,8 @@ pub struct SessionSnapshot {
     pub codec: Codec,
     /// Display name (trust-store, else sanitized Hello). `None` if nameless.
     pub client_name: Option<String>,
+    /// Name of the preset the client dialled with, if any.
+    pub preset_name: Option<String>,
     /// Which plane serves it.
     pub plane: crate::events::Plane,
     /// The capturer's live health, if it classifies.
@@ -486,6 +491,7 @@ fn session_ref(s: &LiveSession) -> crate::events::SessionRef {
         plane: s.plane,
         mode: crate::events::mode_str(width, height, fps),
         hdr: s.hdr,
+        preset: s.controls.preset.clone(),
     }
 }
 
@@ -1023,6 +1029,7 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
                 bitrate_kbps: s.bitrate_kbps.load(Ordering::Relaxed),
                 codec: s.codec,
                 client_name: s.client_name.clone(),
+                preset_name: s.controls.preset.as_ref().map(|p| p.name.clone()),
                 plane: s.plane,
                 capture_health: s
                     .capture_health
@@ -1910,6 +1917,7 @@ pub(crate) mod tests {
                 },
                 client: "192.0.2.7".into(),
                 fingerprint: None,
+                preset: None,
                 plane: crate::events::Plane::Gamestream,
                 // No signals: inert lease, so no watcher thread races the assertions.
                 spec: crate::library::DetectSpec::default(),

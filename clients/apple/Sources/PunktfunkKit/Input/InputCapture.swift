@@ -119,8 +119,6 @@ public final class InputCapture {
     /// window, clicking the HUD) and nothing is forwarded. Main-queue only.
     public private(set) var forwarding = false
 
-    public var forwardsRawWheel: Bool { forwarding && gcMouseForwarding && !mice.isEmpty }
-
     /// iPad pointer routing (the StreamViewController mirrors the scene's live pointer-lock
     /// state into this). GCMouse only delivers relative deltas + buttons while the scene is
     /// LOCKED, so this is true then and the GCMouse handlers forward. When the scene can't
@@ -788,17 +786,18 @@ public final class InputCapture {
                 }
             }
         }
-        // Scroll WHEEL: GCMouse's dpad reports raw device deltas (+y up / +x right, one unit
-        // per notch → ×120 v120). The `gcMouseForwarding` gate keeps it silent until the
-        // scene pointer-locks — tvOS latches it for the session; on iOS it only fires while
-        // locked, where the discrete recognizer's duplicate is suppressed at the stream view.
-        // macOS takes wheel from NSEvent instead (StreamLayerView.scrollWheel).
-        input.scroll.valueChangedHandler = { [weak self] _, dx, dy in
+        // Scroll WHEEL, tvOS only: raw detents, one per notch (×120 → v120), the vertical wheel on
+        // x (+x = down) and the horizontal on y (+y = right), as SDL reads it. iOS takes every scroll
+        // from the stream view's pan recognizers, locked or not: right axes, Natural Scrolling
+        // applied. Both would send every notch twice.
+        #if os(tvOS)
+        input.scroll.valueChangedHandler = { [weak self] _, x, y in
             guard let self, self.forwarding, self.gcMouseForwarding else { return }
             self.sendScroll( // a real wheel: counted detents, not distance
-                dx: dx * 120, dy: dy * 120,
+                dx: y * 120, dy: -x * 120,
                 source: PUNKTFUNK_SCROLL_SOURCE_WHEEL, phase: PUNKTFUNK_SCROLL_PHASE_NONE)
         }
+        #endif
         #endif
     }
 

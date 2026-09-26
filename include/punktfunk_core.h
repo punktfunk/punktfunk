@@ -25,7 +25,7 @@
 // Not [`WIRE_VERSION`]. The C surface can grow without a wire byte changing.
 // Pin the integer in `abi.rs` (`abi_version_is_pinned`). Per-bump notes live
 // in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 37
+#define PUNKTFUNK_ABI_VERSION 38
 
 // punktfunk/1 wire version. `Hello`/`Welcome` carry it; hosts equality-check it.
 //
@@ -1112,6 +1112,18 @@
 // toward this bit, because every client without it rejects an ack of any other length.
 // Core sets it for every embedder that links the controller reading it, not the embedder.
 #define PUNKTFUNK_EXT_ABR_ACK_REASON 1
+
+// Extension tag `4` on `Start`: the settings preset this session was dialled with, as
+// [`SessionPreset::encode`] writes it. The id is the client's own and stable across a rename;
+// the name is for people. The host shows it and hands it to hooks and plugins; it changes
+// nothing about the stream. Absent when the client streams with its plain settings.
+#define EXT_TAG_PRESET 4
+
+// Longest [`SessionPreset::id`], printable ASCII.
+#define PRESET_ID_MAX 32
+
+// Longest [`SessionPreset::name`] in UTF-8 bytes.
+#define PRESET_NAME_MAX 64
 
 // Largest extension block on the wire, its `ext_len` header included. The block is read
 // before the peer is trusted, so this bounds what one message makes the other side hold.
@@ -2430,6 +2442,16 @@ PunktfunkConnection *punktfunk_connect_ex12(const char *host,
                                             const char *device_name,
                                             uint32_t timeout_ms,
                                             int32_t *status_out);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Name the settings preset the next connect sends: its stable id and display name. The host
+// shows it and hands it to hooks; the stream is unchanged. A null `id` names none. The value
+// outlives the call, so set it before every connect. ABI v38.
+//
+// # Safety
+// `id` and `name` are null or NUL-terminated C strings, read during this call only.
+void punktfunk_set_session_preset(const char *id, const char *name);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

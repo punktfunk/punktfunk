@@ -140,6 +140,8 @@ pub struct LeaseShared {
     pub client: String,
     /// Stable id of the device that launched it, for the game events' hook filter.
     pub fingerprint: Option<String>,
+    /// The launching session's preset, on the game events.
+    pub preset: Option<crate::events::PresetRef>,
     pub plane: crate::events::Plane,
     kind: LeaseKind,
     state: AtomicU8,
@@ -298,6 +300,8 @@ pub struct LeaseRequest {
     pub client: String,
     /// Stable id of the device that launched it. `None` for an anonymous client.
     pub fingerprint: Option<String>,
+    /// The launching session's preset; `None` for plain settings and on GameStream.
+    pub preset: Option<crate::events::PresetRef>,
     pub plane: crate::events::Plane,
     pub spec: DetectSpec,
     /// `true` when a bare-spawn gamescope owns the game.
@@ -411,6 +415,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         game,
         client,
         fingerprint,
+        preset,
         plane,
         spec,
         nested,
@@ -458,6 +463,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         game,
         client,
         fingerprint,
+        preset,
         plane,
         kind: kind.clone(),
         state: AtomicU8::new(GameState::Launching as u8),
@@ -1191,6 +1197,7 @@ pub fn game_event_ref(shared: &LeaseShared) -> crate::events::GameRefPayload {
         client: shared.client.clone(),
         fingerprint: shared.fingerprint.clone(),
         plane: shared.plane,
+        preset: shared.preset.clone(),
     }
 }
 
@@ -1839,6 +1846,7 @@ mod tests {
             },
             client: "Deck".into(),
             fingerprint: None,
+            preset: None,
             plane: crate::events::Plane::Native,
             spec,
             nested,
@@ -2256,6 +2264,7 @@ mod tests {
                 },
                 client: "test".into(),
                 fingerprint: None,
+                preset: None,
                 plane: crate::events::Plane::Native,
                 // Real signal nothing will match: the game never shows up.
                 spec: DetectSpec::steam(999_001),
@@ -2503,6 +2512,7 @@ mod tests {
                 },
                 client: "test".into(),
                 fingerprint: None,
+                preset: None,
                 plane: crate::events::Plane::Native,
                 spec: DetectSpec::dir(td.path()),
                 nested: false,

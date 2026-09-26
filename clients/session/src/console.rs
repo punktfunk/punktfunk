@@ -1,11 +1,9 @@
 //! `--browse [host[:port]]` — the console shell. Bare `--browse` opens the host list
 //! (discovery, pairing, settings, wake — the whole couch flow); with a target it opens
 //! straight into that host's library (the Decky per-host launch), B backing out to the
-//! list — one press either way, because with "Start in collections" on it is the shelf
-//! that hands over to the collections screen rather than a second screen being stacked on
-//! it. A launches in the SAME window (no gamescope window handoff — the whole point
-//! of one process), the session's end returns to the console, B at the root quits to
-//! Gaming Mode.
+//! list in one press. A launches in the SAME window (no gamescope window handoff — the
+//! whole point of one process), the session's end returns to the console, B at the root
+//! quits to Gaming Mode.
 //!
 //! This file is the console's SERVICE side: the shell (pf-console-ui) renders and
 //! raises [`ConsoleCmd`]s; worker threads here run everything that blocks — mDNS
@@ -250,9 +248,11 @@ pub fn run(target: Option<&str>) -> u8 {
                         preset.as_deref(),
                         launch.as_deref(),
                     );
+                    let preset_id = preset.as_ref().map(|p| p.id.clone());
                     let mut params = session_params(
                         &settings,
                         preset.map(|p| p.name),
+                        preset_id,
                         // In-process launch: no spawner resolved a clipboard decision for us.
                         None,
                         addr.clone(),

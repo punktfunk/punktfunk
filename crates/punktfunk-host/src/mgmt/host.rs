@@ -380,6 +380,9 @@ pub(crate) struct SessionRow {
     /// Display name (trust store, else the name the client sent). `null` if nameless.
     #[serde(skip_serializing_if = "Option::is_none")]
     client_name: Option<String>,
+    /// Name of the settings preset the client dialled with. Absent for plain settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preset_name: Option<String>,
     /// `WxH@Hz`.
     #[schema(example = "3840x2160@120")]
     mode: String,
@@ -631,6 +634,7 @@ pub(crate) async fn get_status(State(st): State<Arc<MgmtState>>) -> Json<Runtime
                 plane: s.plane,
                 client: s.client.clone(),
                 client_name: s.client_name.clone(),
+                preset_name: s.preset_name.clone(),
                 mode: crate::events::mode_str(s.width, s.height, s.fps),
                 hdr: s.hdr,
                 join: s.join,

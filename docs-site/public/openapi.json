@@ -7302,6 +7302,17 @@
           },
           "plane": {
             "$ref": "#/components/schemas/Plane"
+          },
+          "preset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PresetRef",
+                "description": "The preset the client dialled with. Absent for plain settings and on GameStream."
+              }
+            ]
           }
         }
       },
@@ -8093,6 +8104,25 @@
           },
           {
             "type": "object",
+            "description": "Fires before the host spawns a launched game, never on adopt. Plugins and hooks that\nhold this stage run first ([`crate::holds`]).",
+            "required": [
+              "game",
+              "kind"
+            ],
+            "properties": {
+              "game": {
+                "$ref": "#/components/schemas/GameRefPayload"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "game.launching"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Fires once the host has seen the game process, not merely spawned its launcher.",
             "required": [
               "game",
@@ -8766,6 +8796,17 @@
           "plane": {
             "$ref": "#/components/schemas/Plane"
           },
+          "preset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PresetRef",
+                "description": "The preset of the session that launched it. See [`ClientRef::preset`]."
+              }
+            ]
+          },
           "store": {
             "type": [
               "string",
@@ -9006,7 +9047,7 @@
           "debounce_ms": {
             "type": "integer",
             "format": "int64",
-            "description": "Minimum interval between firings, in milliseconds. 0 = fire every time.",
+            "description": "Minimum interval between firings, in milliseconds. 0 = fire every time. A `hold` ignores it.",
             "minimum": 0
           },
           "filter": {
@@ -9026,6 +9067,10 @@
               "null"
             ],
             "description": "HMAC secret file (`X-Punktfunk-Signature: sha256=<hex>`). Warns if world-readable."
+          },
+          "hold": {
+            "type": "boolean",
+            "description": "The launch waits for this hook, up to `timeout_s`. Only with `on: game.launching`."
           },
           "on": {
             "type": "string",
@@ -9086,6 +9131,13 @@
                 "$ref": "#/components/schemas/Plane"
               }
             ]
+          },
+          "preset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The dialled settings preset, by id or name (`client.*`, `session.*`, `stream.*`, `game.*`)."
           }
         }
       },
@@ -10725,6 +10777,22 @@
             ],
             "description": "Plugin kind, not a UI field. Console hides `library` from the nav (those plugins already have\nGame sources); omit the field to keep a nav page."
           },
+          "hold_timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long a hold may take, 1–120 000 ms. Absent means 30 000.",
+            "minimum": 0
+          },
+          "holds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Stages this plugin holds (`game.launching`). The host POSTs the event to `/__hold` on\n`ui.port` and waits for a 2xx. Needs `ui`."
+          },
           "title": {
             "type": "string"
           },
@@ -10978,6 +11046,22 @@
             "description": "`default` | `gaming-rig` | `shared-desktop` | `hotdesk` | `workstation`."
           },
           "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "PresetRef": {
+        "type": "object",
+        "description": "The settings preset a client dialled with ([`punktfunk_core::quic::EXT_TAG_PRESET`]). The\nid is the client's own and stable across a rename, so it is what a hook or plugin keys on\ntogether with the device fingerprint; the name is for people.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -11600,6 +11684,17 @@
           "plane": {
             "$ref": "#/components/schemas/Plane",
             "description": "Which plane serves it, as `stream.*` and `game.*` also report."
+          },
+          "preset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PresetRef",
+                "description": "See [`ClientRef::preset`]."
+              }
+            ]
           }
         }
       },
@@ -11685,6 +11780,13 @@
             "format": "int32",
             "description": "Player slot the operator picked for this session, 0-based (`PUT\n/session/{id}/player`). `null` = the slot is whichever comes free.",
             "minimum": 0
+          },
+          "preset_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the settings preset the client dialled with. Absent for plain settings."
           },
           "shared_path_with": {
             "type": "array",
@@ -12437,6 +12539,17 @@
           },
           "plane": {
             "$ref": "#/components/schemas/Plane"
+          },
+          "preset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PresetRef",
+                "description": "See [`ClientRef::preset`]."
+              }
+            ]
           }
         }
       },

@@ -1,35 +1,19 @@
-// iOS/iPadOS presenter: the same AVSampleBufferDisplayLayer + StreamPump as macOS,
-// hosted in a UIViewController so the scene can pointer-lock (the iPadOS equivalent of
-// the Mac's cursor capture — with a hardware mouse/trackpad the system cursor is hidden
-// and GCMouse's raw deltas drive the host cursor alone; the system only honors the lock
-// fullscreen-and-frontmost, so in Stage Manager it degrades to Mac-style "both cursors
-// visible" forwarding).
+// iOS/iPadOS presenter: the macOS AVSampleBufferDisplayLayer + StreamPump in a UIViewController,
+// so the scene can pointer-lock. UITouch.type routes fingers and pointers apart.
 //
-// FINGER touch and INDIRECT POINTER (mouse/trackpad) are routed apart by UITouch.type.
-// Direct fingers (and Pencil) always forward as wire touches — every finger maps to a touch
-// id, coordinates mapped through the aspect-fit letterbox into host-mode pixels (surface ==
-// host mode, so the host's rescale is the identity).
+// Direct fingers and Pencil always forward as wire touches, mapped through the aspect-fit letterbox
+// into host-mode pixels. A mouse or trackpad is a pointer and never forwards as a touch.
 //
-// A hardware mouse/trackpad is a pointer, not a finger. When the scene is pointer-LOCKED
-// (full-screen + frontmost iPad, and the user hasn't disabled pointer capture in Settings —
-// see PointerLockChain, which steers the lock request through SwiftUI's hosting controllers)
-// GCMouse delivers raw relative deltas and the system hides the cursor — the gaming-grade path.
-// InputCapture handles EVERY connected mouse (GCMouse.mice), not just the current one, so a
-// trackpad + a second pointer (e.g. a Universal Control mouse) both drive. When the scene CAN'T
-// lock (Stage Manager, not frontmost, iPhone, capture disabled) the system shows its own cursor
-// and routes the mouse through UIKit's pointer path: hover + indirect-pointer touches, which we
-// forward as ABSOLUTE cursor position (+ buttons) so the host cursor tracks the visible local one.
-// We never forward an indirect pointer as a touch — doing so hid the cursor and made the host see
-// taps instead of a moving mouse. The two paths are mutually exclusive on `gcMouseForwarding`
-// (== locked): GCMouse forwards only WHILE locked, the UIKit indirect path (motion, buttons AND
-// scroll) only while NOT locked — so a pointer that emits both channels under lock can't double-send.
-// Hardware keyboard forwarding shares InputCapture with macOS — auto-engaged when streaming
-// starts, ⌘⎋ toggles and ⌃⌥⇧Q releases (both detected from the HID stream; there is no NSEvent
-// monitor here). ⌃⌥⇧Q is the cross-client Ctrl+Alt+Shift+Q — it un-captures so the Magic Keyboard
-// trackpad drives the local iPad UI again.
+// Locked (full-screen, frontmost, pointer capture allowed; see PointerLockChain): GCMouse drives
+// motion and buttons for every connected mouse and the system hides the cursor. Unlocked (Stage
+// Manager, not frontmost, iPhone): UIKit hover and indirect touches forward an absolute cursor
+// plus buttons. `gcMouseForwarding` (== locked) keeps the two apart, so a pointer reporting on both
+// never double-sends. Scroll always comes from UIKit's pan recognizers, locked or not.
 //
-// The public type is named StreamView like its macOS twin (each is platform-gated), so
-// the SwiftUI app layer is identical on both platforms.
+// Hardware keyboards share InputCapture with macOS: engaged at stream start, ⌘⎋ toggles and
+// ⌃⌥⇧Q releases, both read from the HID stream.
+//
+// The public type is named StreamView like its macOS twin, so the SwiftUI layer is shared.
 
 #if os(iOS) || os(tvOS)
 import AVFoundation
@@ -479,13 +463,9 @@ public final class StreamViewController: StreamViewControllerBase {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: release)
             }
         }
-        // Indirect pointer (mouse/trackpad) WITHOUT a lock → absolute cursor + buttons + scroll.
-        // While the scene is pointer-LOCKED the GCMouse path owns motion AND buttons AND scroll, so
-        // the whole UIKit indirect path is gated off here (`gcMouseForwarding`). The trackpad and a
-        // mouse BOTH report through GCMouse under lock and ALSO emit UIKit indirect-pointer events
-        // (pinned at the locked position) — without this gate a click double-sends (GCMouse + UIKit)
-        // and a second pointer (e.g. a Universal Control mouse) competes with the trackpad. The gate
-        // is the exact mirror of the GCMouse handlers, which fire only while locked.
+        // Indirect pointer WITHOUT a lock → absolute cursor + buttons. Under lock a mouse or trackpad
+        // also emits UIKit indirect events pinned at the lock point while GCMouse owns motion and
+        // buttons, so this path is gated off (`gcMouseForwarding`). Otherwise a click sends twice.
         streamView.onPointerMoveAbs = { [weak self] p in
             guard let self, self.inputCapture?.gcMouseForwarding == false else { return }
             self.inputCapture?.sendMouseAbs(
@@ -508,12 +488,10 @@ public final class StreamViewController: StreamViewControllerBase {
             // on one transport — a grant mid-click would strand the release on the GCMouse path.
             if !down { self.requestPointerLock() }
         }
-        // Trackpad gestures always use UIKit, including under pointer lock.
-        // Only discrete pans yield to an attached, forwarding GCMouse wheel.
+        // Every scroll, wheel and trackpad, locked or not: UIKit applies Natural Scrolling, which
+        // GCMouse's raw wheel does not, so the direction never changes with the lock.
         streamView.onScroll = { [weak self] dx, dy, source, phase in
-            guard let self, let capture = self.inputCapture else { return }
-            if source == PUNKTFUNK_SCROLL_SOURCE_CONTINUOUS, capture.forwardsRawWheel { return }
-            capture.sendScroll(dx: dx, dy: dy, source: source, phase: phase)
+            self?.inputCapture?.sendScroll(dx: dx, dy: dy, source: source, phase: phase)
         }
 
         let capture = InputCapture(connection: connection)

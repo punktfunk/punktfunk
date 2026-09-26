@@ -50,6 +50,9 @@ mod decode;
 // (and its unit test runs there) exactly like `session`/`stats`. Kotlin only ever calls it on device.
 mod discovery;
 mod feedback;
+// `decode`'s hung-codec check, `test`-gated like `audio_format` so its proof runs off-device.
+#[cfg(any(target_os = "android", test))]
+mod input_stall;
 #[cfg(target_os = "android")]
 mod mic;
 /// Tier-A DualSense pad audio: the 0xD1 plane rendered on the pad's own USB endpoint.

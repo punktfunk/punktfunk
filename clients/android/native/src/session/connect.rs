@@ -393,6 +393,12 @@ struct ConnectRequest {
     /// Build plus the shell that dialled; rides `Start`'s extension block as the host's log label.
     #[serde(default)]
     dialer: String,
+    /// The settings preset this session streams with; `None` for the plain settings.
+    #[serde(default)]
+    preset_id: Option<String>,
+    /// That preset's name.
+    #[serde(default)]
+    preset_name: Option<String>,
 }
 
 /// `NativeBridge.nativeConnect(requestJson): Long` — see [`ConnectRequest`]. Returns an opaque
@@ -453,10 +459,16 @@ fn connect(req: ConnectRequest) -> jlong {
         keep_host_audio,
         video_fit,
         dialer,
+        preset_id,
+        preset_name,
     } = req;
     // Which shell asked, for the host's `handshake complete` line. Set before the dial: core reads
     // it once the host says it parses the block.
     punktfunk_core::client::set_client_label(&dialer);
+    // Per dial, like the label: a session without a preset must not name the last one's.
+    punktfunk_core::client::set_session_preset(preset_id.as_deref().and_then(|id| {
+        punktfunk_core::quic::SessionPreset::new(id, preset_name.as_deref().unwrap_or(""))
+    }));
     let launch = launch.filter(|s| !s.is_empty());
     let device_name = device_name
         .map(|s| s.trim().to_string())

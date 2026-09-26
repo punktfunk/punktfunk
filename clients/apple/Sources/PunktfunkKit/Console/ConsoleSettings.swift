@@ -144,7 +144,6 @@ public enum ConsoleSettings {
         .string("library_sections", DefaultsKey.librarySections, ""),
         // Unset stays unset: the console's own default is the Games tab's grid.
         .string("library_view", DefaultsKey.libraryView, ""),
-        .bool("library_collections", DefaultsKey.libraryCollections, false),
         .string("start_in", DefaultsKey.startIn, StartIn.hosts.stored),
         .bool("auto_wake", DefaultsKey.autoWake, true),
         // The console's own off switch lands on the touch, TV or Mac UI.

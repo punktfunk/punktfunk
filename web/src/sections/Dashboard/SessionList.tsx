@@ -115,6 +115,11 @@ const Row: FC<{
 					<span className="truncate font-medium">
 						{row.client_name || row.client}
 					</span>
+					{row.preset_name && (
+						<span className="truncate text-sm text-muted-foreground">
+							· {row.preset_name}
+						</span>
+					)}
 					{row.muted && <Badge variant="secondary">{m.sessions_muted()}</Badge>}
 					{/* Which controllers the session holds right now — the badge follows the
 					    pads, not the pick, so a slot that has not moved yet reads honestly. */}

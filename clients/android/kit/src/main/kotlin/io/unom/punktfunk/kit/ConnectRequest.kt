@@ -80,6 +80,11 @@ data class ConnectRequest(
      *  `Start` extension block, and is the host's `handshake complete` `client=` field: it is how
      *  two sessions from one device are told apart without a capture. */
     val dialer: String = "",
+    /** The settings preset this session streams with, `null` for the plain settings. Rides the
+     *  `Start` extension block; the host shows it and hands it to hooks and plugins. */
+    val presetId: String? = null,
+    /** That preset's name, for people. */
+    val presetName: String? = null,
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -109,5 +114,7 @@ data class ConnectRequest(
         .put("keep_host_audio", keepHostAudio)
         .put("video_fit", videoFit)
         .put("dialer", dialer)
+        .put("preset_id", presetId ?: JSONObject.NULL)
+        .put("preset_name", presetName ?: JSONObject.NULL)
         .toString()
 }

@@ -97,6 +97,8 @@ struct Args {
     /// `--launch ID` — ask the host to launch a library title in this session (a store-qualified
     /// id from the host's `GET /api/v1/library`, e.g. `steam:570`). Host resolves it; `None` = none.
     launch: Option<String>,
+    /// `--preset ID:NAME` — the settings preset this session names on `Start`, as a client does.
+    preset: Option<punktfunk_core::quic::SessionPreset>,
     /// `--speed-test KBPS:MS` — after the stream starts, ask the host for a `MS`-millisecond
     /// bandwidth probe burst at `KBPS`, then report measured throughput + loss.
     speed_test: Option<(u32, u32)>,
@@ -293,6 +295,10 @@ fn parse_args() -> Args {
             _ => 0, // auto — no preference
         },
         launch: get("--launch").map(str::to_string),
+        preset: get("--preset").and_then(|s| {
+            let (id, name) = s.split_once(':').unwrap_or((s, ""));
+            punktfunk_core::quic::SessionPreset::new(id, name)
+        }),
         speed_test: get("--speed-test").and_then(|s| {
             let (kbps, ms) = s.split_once(':')?;
             Some((kbps.parse().ok()?, ms.parse().ok()?))
@@ -655,14 +661,17 @@ async fn session(args: Args) -> Result<()> {
     let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
     let udp_port = probe.local_addr()?.port();
     drop(probe);
-    io::write_msg(
-        &mut send,
-        &Start {
-            client_udp_port: udp_port,
-        }
-        .encode(),
-    )
-    .await?;
+    let start = Start {
+        client_udp_port: udp_port,
+    };
+    let preset = args.preset.as_ref().map(|p| p.encode()).unwrap_or_default();
+    let start_msg =
+        if preset.is_empty() || welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_EXT == 0 {
+            start.encode()
+        } else {
+            start.encode_ext(&[(punktfunk_core::quic::EXT_TAG_PRESET, &preset)])?
+        };
+    io::write_msg(&mut send, &start_msg).await?;
 
     // Wall-clock skew handshake on the still-private control stream (before --remode/--speed-test
     // take it): align our clock to the host's so the per-frame capture→received latency is valid

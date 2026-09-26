@@ -13,7 +13,7 @@
         "typescript": "^5.9.3",
       },
       "peerDependencies": {
-        "@punktfunk/host": "^0.1.3",
+        "@punktfunk/host": "^0.3.0",
         "effect": "^4.0.0-beta.98",
         "react": "^19.2.0",
       },

@@ -47,6 +47,7 @@ export type {
 	HostEvent,
 	HostEventKind,
 	Plane,
+	PresetRef,
 	SessionRef,
 	StreamRef,
 } from "./wire.js";

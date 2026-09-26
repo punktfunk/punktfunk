@@ -1,48 +1,19 @@
-//! One tile per library group, and the sort that orders them.
+//! The Games tab's Collections row: one tile per platform or store group.
 //!
-//! Owns no model. [`crate::collate`] groups the library snapshot; opening a tile
-//! pushes a `LibraryScreen` with a filter rather than a filtered copy, so the art
-//! pump, fetch, and shared model never learn this screen exists. Tile metrics match
-//! the home carousel pixel-for-pixel.
-//!
-//! Two entry paths, one flag ([`CollectionsScreen::root`]). From a shelf's Y the
-//! shelf stays underneath. As the host's library ("Start in collections",
-//! `LibraryScreen::collections_upgrade`) nothing is underneath, so this screen
-//! pumps the model's poster queue and Y opens the unfiltered list.
-//!
-//! The library's SORT pills sit over the tiles as a line: Up reaches them, Left and Right
-//! move, OK applies, Down returns. The focus plate stands behind the focused pill or tile.
-//!
-//! Pin: `as_the_librarys_root_it_takes_only_the_covers_it_fans`,
-//! `a_drill_in_from_a_shelf_leaves_the_queue_alone`,
-//! `the_way_to_all_titles_exists_only_where_there_is_no_shelf`.
+//! [`crate::collate`] groups the shelf's list. OK on a tile pushes a `LibraryScreen` with
+//! the group as its filter rather than a filtered copy, so the art pump, fetch, and shared
+//! model never learn a collection exists. Tile metrics match the home's host tile.
 
-use super::library::bar::{pill_id, Bar, BAR_H};
-use crate::anim::{entrances, Entrance, EntranceAt, Spring};
-use crate::collate::{collate, GroupBy, GroupKey, SortKey};
-use crate::el::{El, Id, Tree};
-use crate::glyphs::{Hint, HintKey};
-use crate::library::{
-    initials, step_cursor, LibraryGame, LibraryShared, StepResult, BUMP_C, BUMP_K, BUMP_V,
-    ENTER_RISE, ENTER_SCALE, SPRING_C, SPRING_K,
-};
-use crate::model::HostRow;
-use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{Ctx, Outbox, Screen};
-use crate::theme::{accent, art_sampling, edge, fg, fill, stroke, Fonts, PanelStroke, W};
-use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
+use crate::collate::{collate, worth_browsing, GroupBy, GroupKey, SortKey};
+use crate::library::{initials, LibraryGame};
+use crate::theme::{accent, art_sampling, fg, fill, stroke, Fonts, PanelStroke, W};
 use skia_safe::{Canvas, Color4f, Image, Matrix, Point, RRect, Rect, TileMode};
 use std::collections::HashMap;
 
-fn tile_id(i: usize) -> Id {
-    Id::new("collection-tile", i)
-}
-
 // Same numbers as home.rs — a collection tile is a host tile.
-const TILE_W: f64 = 340.0;
-const TILE_H: f64 = 224.0;
-const TILE_GAP: f64 = 30.0;
-const TILE_CORNER: f64 = 26.0;
+pub(crate) const TILE_W: f64 = 340.0;
+pub(crate) const TILE_H: f64 = 224.0;
+pub(crate) const TILE_CORNER: f64 = 26.0;
 /// Deck depth. Three reads as a shelf; more and the back cards vanish at tile size.
 const FAN: usize = 3;
 
@@ -64,680 +35,169 @@ const PLATE_DX: f64 = 1.5;
 const PLATE_DY: f64 = 2.0;
 const PLATE_ALPHA: f32 = 0.38;
 
-pub(crate) struct CollectionsScreen {
-    /// Host and pinned preset from the shelf that opened this. A drill-in off a
-    /// pinned card must still launch the way that card does.
-    host: HostRow,
-    cursor: i32,
-    anim: Spring,
-    bump: Spring,
-    sort: SortKey,
-    /// The SORT pills' capsule, and the pill focus stands on while the row has it.
-    bar: Bar,
-    pill: Option<usize>,
-    /// Pills and tiles as focus targets, so the plate travels between them. Boxed: the
-    /// screen is a variant of one enum.
-    tree: Box<Tree>,
-    groups: Vec<GroupTile>,
-    generation: u64,
-    /// Posters borrowed by id from the library screen. This screen never fetches art;
-    /// a group with none yet (or ever — art-less ROMs) fans a monogram.
-    art: HashMap<String, Image>,
-    /// Posters Skia could not decode; asked once, not every frame.
-    art_failed: std::collections::HashSet<String>,
-    /// Covers this screen has only the bytes of, decoding off the render thread.
-    decoder: super::library::ArtDecoder,
-    /// Decode scale: last frame's `k`, published by `render` before `sync`.
-    art_k: f64,
-    /// Opened as the host's library, not from a shelf's Y. Pumps the poster queue
-    /// itself and offers Y as the way to the whole library — there is no shelf beneath.
-    root: bool,
-    geom: Vec<Rect>,
-    entrance: Option<Entrance>,
-    entrance_armed: bool,
+/// One tile: the filter its drill-in applies and the titles its deck fans.
+pub(crate) struct Collection {
+    pub key: GroupKey,
+    pub label: String,
+    pub count: usize,
+    /// Indices into the shelf's games, front card first.
+    pub fan: Vec<usize>,
 }
 
-struct GroupTile {
-    key: GroupKey,
-    label: String,
-    count: usize,
-    fan: Vec<FanCard>,
+/// The row's tiles; none unless [`worth_browsing`]. Launchers keep their own row.
+pub(crate) fn collections(games: &[LibraryGame], sort: SortKey) -> Vec<Collection> {
+    if !worth_browsing(games) {
+        return Vec::new();
+    }
+    collate(games, sort, Some(GroupBy::Platform))
+        .into_iter()
+        .filter(|g| g.key != GroupKey::Launchers)
+        .map(|g| Collection {
+            count: g.games.len(),
+            fan: g.games.iter().copied().take(FAN).collect(),
+            key: g.key,
+            label: g.label,
+        })
+        .collect()
 }
 
-/// Id plus launcher icon — enough to draw the cover without holding the title.
-///
-/// A launcher has no poster; its cover is a brand mark from `icon`. Ids alone
-/// fan empty ghosts for every launcher group.
-struct FanCard {
-    id: String,
-    /// Launcher icon key (`steam`, …); empty for a game. A path built to the card
-    /// rect, which is not known at collate time.
-    icon: String,
-}
+/// Collection `c` in `rect`, its deck drawn from the posters `art` holds for `games`.
+/// The focus plate is the tile's focus mark, so the tile draws no halo of its own.
+pub(crate) fn paint_tile(
+    canvas: &Canvas,
+    fonts: &Fonts,
+    c: &Collection,
+    games: &[LibraryGame],
+    art: &HashMap<String, Image>,
+    rect: Rect,
+    k: f64,
+) {
+    crate::theme::panel(
+        canvas,
+        rect,
+        TILE_CORNER as f32,
+        Some(accent(0.16)),
+        PanelStroke::Gradient,
+        k as f32,
+    );
+    crate::theme::panel_highlight(canvas, rect, TILE_CORNER as f32, k as f32);
 
-impl CollectionsScreen {
-    pub(crate) fn new(host: &HostRow, sort: SortKey) -> CollectionsScreen {
-        CollectionsScreen {
-            host: host.clone(),
-            cursor: 0,
-            anim: Spring::rest(0.0),
-            bump: Spring::rest(0.0),
-            sort,
-            bar: Bar::default(),
-            pill: None,
-            tree: Box::default(),
-            groups: Vec::new(),
-            generation: u64::MAX,
-            art: HashMap::new(),
-            art_failed: std::collections::HashSet::new(),
-            decoder: super::library::ArtDecoder::default(),
-            // Design scale until the first frame publishes the real `k` before `sync`.
-            art_k: 1.0,
-            root: false,
-            geom: Vec::new(),
-            entrance: None,
-            entrance_armed: false,
-        }
-    }
+    let pad = 20.0 * k;
+    let (l, t) = (f64::from(rect.left) + pad, f64::from(rect.top) + pad);
 
-    pub(crate) fn title(&self) -> String {
-        self.host.name.clone()
-    }
-
-    /// Rebuild tiles on a library generation bump or a sort change. Collation is
-    /// one pass; tiles hold labels and ids, not games.
-    fn sync(&mut self, library: &LibraryShared) {
-        if library.generation() != self.generation {
-            let snap = library.snapshot();
-            let (games, generation) = (snap.games, snap.generation);
-            self.generation = generation;
-            self.groups = collate(&games, self.sort, Some(GroupBy::Platform))
-                .into_iter()
-                .map(|g| GroupTile {
-                    count: g.games.len(),
-                    fan: g
-                        .games
-                        .iter()
-                        .filter_map(|&i| games.get(i))
-                        .map(|game: &LibraryGame| FanCard {
-                            id: game.id.clone(),
-                            icon: game.icon.clone(),
-                        })
-                        .take(FAN)
-                        .collect(),
-                    key: g.key,
-                    label: g.label,
-                })
-                .collect();
-            self.cursor = self.cursor.clamp(0, (self.groups.len() as i32 - 1).max(0));
-        }
-        // Art arrives after the list settles; the generation guard would miss it.
-        if self.root {
-            self.pump_art(library);
-        }
-    }
-
-    /// Decode only the covers this screen fans, and only as the library's root. The model
-    /// keeps every poster's bytes for the fetch, so this takes nothing from the shelves.
-    fn pump_art(&mut self, library: &LibraryShared) {
-        let want: Vec<String> = self
-            .groups
-            .iter()
-            .flat_map(|g| g.fan.iter())
-            .filter(|c| {
-                c.icon.is_empty()
-                    && !self.art.contains_key(&c.id)
-                    && !self.art_failed.contains(&c.id)
-            })
-            .map(|c| c.id.clone())
-            .collect();
-        if want.is_empty() {
-            return;
-        }
-        use super::library::{share_cover, shared_cover};
-        let (fp, k) = (self.host.fp_hex.clone(), self.art_k);
-        // Already decoded by the host: a move, not work this frame.
-        for (id, poster) in library.drain_decoded() {
-            let img = poster.into_image();
-            share_cover(&fp, &id, k, &img);
-            self.art.entry(id).or_insert(img);
-        }
-        for (id, img) in self.decoder.finished() {
-            match img {
-                Some(img) => {
-                    share_cover(&fp, &id, k, &img);
-                    self.art.entry(id).or_insert(img);
-                }
-                None => {
-                    tracing::info!(%id, "undecodable poster");
-                    self.art_failed.insert(id);
-                }
-            }
-        }
-        // Another screen's cover is a clone; the rest decode off the render thread.
-        let mut want = want;
-        want.retain(|id| match shared_cover(&fp, id, k) {
+    // Fixed-size deck, top-left; title runs the full inner width. Scale by the
+    // tile, not `k` alone, or a squeezed tile lets the deck hit the title.
+    let fk = (f64::from(rect.height()) / TILE_H).min(k);
+    let front = Rect::from_xywh(
+        l as f32,
+        (t + (FAN_H - COVER_H) * fk) as f32,
+        (COVER_W * fk) as f32,
+        (COVER_H * fk) as f32,
+    );
+    let rr = RRect::new_rect_xy(
+        front,
+        (COVER_CORNER * fk) as f32,
+        (COVER_CORNER * fk) as f32,
+    );
+    // Compact: a hole in the middle of the deck reads as a draw fault.
+    let have: Vec<&Image> = (c.fan.iter())
+        .filter_map(|&i| art.get(&games.get(i)?.id))
+        .collect();
+    // Never deeper than the group has titles. `have` is compact, so covers fill
+    // from the front and ghosts trail.
+    let slots = FAN.min(c.count.max(1));
+    // Device-pixel floor, same as `panel_highlight`: a sub-pixel hairline smears.
+    let hair = fk.max(1.0) as f32;
+    // Back to front so `fan[0]` (sort-first, the group's face) lands on top.
+    for n in (0..slots).rev() {
+        canvas.save();
+        canvas.concat(&fan_matrix(front, n, fk));
+        match have.get(n) {
             Some(img) => {
-                self.art.insert(id.clone(), img);
-                false
-            }
-            None => true,
-        });
-        let ask = want.iter().filter(|id| !self.decoder.pending(id));
-        for (id, bytes) in library.art_for(ask.map(String::as_str), 4) {
-            self.decoder.want(id, bytes, self.art_k);
-        }
-    }
-
-    pub(crate) fn own_library(&mut self) {
-        self.root = true;
-    }
-
-    /// Take posters the library screen already decoded. The model's queue is drained
-    /// by the shelf this drill-in sits on; as root, [`Self::pump_art`] takes over.
-    pub(crate) fn adopt_art(&mut self, art: HashMap<String, Image>) {
-        self.art = art;
-    }
-
-    fn step(&mut self, delta: i32) -> Option<MenuPulse> {
-        match step_cursor(self.cursor, self.groups.len(), delta, false) {
-            StepResult::Moved(c) => {
-                self.cursor = c;
-                Some(MenuPulse::Move)
-            }
-            StepResult::Boundary => {
-                self.bump = Spring {
-                    pos: self.bump.pos,
-                    vel: -BUMP_V * f64::from(delta.signum()),
-                };
-                Some(MenuPulse::Boundary)
-            }
-        }
-    }
-
-    /// Apply sort `s` and persist it. The shelf reads `library_sort` every frame, so the
-    /// tiles here and the shelf behind re-order together.
-    fn apply_sort(&mut self, s: SortKey, ctx: &mut Ctx) -> Option<MenuPulse> {
-        if s == self.sort {
-            return Some(MenuPulse::Boundary);
-        }
-        self.sort = s;
-        super::library::store_sort(s, ctx);
-        // Sort changed, not the library — force a re-collate.
-        self.generation = u64::MAX;
-        Some(MenuPulse::Confirm)
-    }
-
-    /// The pad on the SORT pills: Left and Right move, OK applies, Down returns to the
-    /// tiles, Up is the edge.
-    fn pill_menu(
-        &mut self,
-        i: usize,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        let len = SortKey::ALL.len();
-        let to = match ev {
-            MenuEvent::Move(MenuDir::Left) => i.checked_sub(1),
-            MenuEvent::Move(MenuDir::Right) => Some(i + 1).filter(|&j| j < len),
-            MenuEvent::Move(MenuDir::Down) => {
-                self.pill = None;
-                return Some(MenuPulse::Move);
-            }
-            MenuEvent::Move(MenuDir::Up) => return Some(MenuPulse::Boundary),
-            MenuEvent::Confirm => return self.apply_sort(SortKey::ALL[i], ctx),
-            MenuEvent::Back => {
-                fx.pop();
-                return None;
-            }
-            _ => return None,
-        };
-        match to {
-            Some(j) => {
-                self.pill = Some(j);
-                Some(MenuPulse::Move)
-            }
-            None => Some(MenuPulse::Boundary),
-        }
-    }
-
-    /// OK went down: the plate under the focused pill or tile dips.
-    pub(crate) fn press(&mut self) {
-        self.tree.press();
-    }
-
-    /// What a screen reader says for the focused pill or tile.
-    pub(crate) fn announcement(&self) -> Option<String> {
-        if let Some(i) = self.pill {
-            let applied = if SortKey::ALL[i] == self.sort {
-                ", applied"
-            } else {
-                ""
-            };
-            return Some(format!("Sort by {}{applied}", SortKey::ALL[i].label()));
-        }
-        let g = self.groups.get(self.cursor.max(0) as usize)?;
-        Some(format!("{}, {} titles", g.label, g.count))
-    }
-
-    /// The applied sort's pill.
-    fn sort_pill(&self) -> usize {
-        SortKey::ALL
-            .iter()
-            .position(|s| *s == self.sort)
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn menu(
-        &mut self,
-        ev: MenuEvent,
-        ctx: &mut Ctx,
-        fx: &mut Outbox,
-    ) -> Option<MenuPulse> {
-        self.sync(ctx.library);
-        if let Some(i) = self.pill {
-            return self.pill_menu(i, ev, ctx, fx);
-        }
-        match ev {
-            MenuEvent::Move(MenuDir::Left) => self.step(-1),
-            MenuEvent::Move(MenuDir::Right) => self.step(1),
-            MenuEvent::Move(MenuDir::Up) => {
-                self.pill = Some(self.sort_pill());
-                Some(MenuPulse::Move)
-            }
-            MenuEvent::Move(MenuDir::Down) => Some(MenuPulse::Boundary),
-            MenuEvent::Confirm => {
-                let g = self.groups.get(self.cursor.max(0) as usize)?;
-                // This epoch: a drill-in fetches nothing, it filters the list already
-                // in the model. `set_filter` also refuses a second collections hand-over.
-                let mut shelf =
-                    super::library::LibraryScreen::new(&self.host, ctx.library.fetch_epoch());
-                shelf.set_filter(g.key.clone(), g.label.clone());
-                // Covers this tile just fanned. Without them the drill-in waits out
-                // the art deadline and shows monograms: the shared queue was drained above.
-                shelf.adopt_art(self.art.clone());
-                fx.push(Screen::Library(shelf));
-                Some(MenuPulse::Confirm)
-            }
-            // Whole-library only as root: nothing is underneath. From a shelf's Y
-            // that shelf is one Back away; this would push a second copy of it.
-            MenuEvent::Secondary if self.root => {
-                let mut shelf =
-                    super::library::LibraryScreen::new(&self.host, ctx.library.fetch_epoch());
-                shelf.all_titles();
-                shelf.adopt_art(self.art.clone());
-                fx.push(Screen::Library(shelf));
-                Some(MenuPulse::Confirm)
-            }
-            MenuEvent::Back => {
-                fx.pop();
-                None
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn pointer(&mut self, p: Pointer, ctx: &mut Ctx, fx: &mut Outbox) -> bool {
-        self.sync(ctx.library);
-        match p.kind {
-            PointerKind::Scroll { up } => {
-                self.step(if up { -1 } else { 1 });
-                true
-            }
-            // Hover focuses, so the press that follows is the one that OPENS the card rather
-            // than the one that reaches it. The move-then-press fallback below stays for a
-            // pointer that cannot hover: a touchscreen sends Press with no Move before it.
-            PointerKind::Move => match p.pick(&self.geom).filter(|i| *i < self.groups.len()) {
-                Some(i) if i != self.cursor as usize || self.pill.is_some() => {
-                    self.cursor = i as i32;
-                    self.pill = None;
-                    true
+                plate(canvas, rr, fk);
+                draw_cover(canvas, img, front, rr);
+                // Recede toward the ground (`shade` tracks the palette). A colour
+                // filter would cost a `save_layer` per cover — the deck must not.
+                if n > 0 {
+                    canvas.draw_rrect(rr, &fill(crate::theme::shade(0.14 * n as f32)));
                 }
-                _ => false,
-            },
-            PointerKind::Press => {
-                // A pill applies on the first press.
-                let hit = self.tree.hit(p.x as f32, p.y as f32);
-                if let Some(i) = (0..SortKey::ALL.len()).find(|&i| hit == Some(pill_id(i))) {
-                    self.pill = Some(i);
-                    self.apply_sort(SortKey::ALL[i], ctx);
-                    return true;
-                }
-                match p.pick(&self.geom).filter(|i| *i < self.groups.len()) {
-                    // Press centres a tile; press the centred tile to open it.
-                    Some(i) if i == self.cursor as usize && self.pill.is_none() => {
-                        self.menu(MenuEvent::Confirm, ctx, fx);
-                        true
-                    }
-                    Some(i) => {
-                        self.cursor = i as i32;
-                        self.pill = None;
-                        true
-                    }
-                    None => false,
-                }
+                // Plate under, ink hairline on top: an edge on both palettes.
+                // Stronger rim on back cards; they need the separation more.
+                canvas.draw_rrect(
+                    rr.with_inset((hair / 2.0, hair / 2.0)),
+                    &stroke(fg(if n == 0 { 0.18 } else { 0.28 }), hair),
+                );
             }
-            _ => false,
-        }
-    }
-
-    pub(crate) fn hints(&self, _ctx: &Ctx) -> Vec<Hint> {
-        if self.pill.is_some() {
-            return vec![
-                Hint::new(HintKey::Confirm, "Select"),
-                Hint::new(HintKey::Back, "Back"),
-            ];
-        }
-        let mut hints = vec![Hint::new(HintKey::Confirm, "Open")];
-        // Same condition the press answers, so the legend never advertises a no-op.
-        if self.root {
-            hints.push(Hint::new(HintKey::Secondary, "All titles"));
-        }
-        hints.push(Hint::new(HintKey::Back, "Back"));
-        hints
-    }
-
-    pub(crate) fn render(
-        &mut self,
-        canvas: &Canvas,
-        rect: Rect,
-        k: f64,
-        dt: f64,
-        fonts: &Fonts,
-        ctx: &mut Ctx,
-    ) {
-        // Cached against the scale it will be drawn at; a decode cannot be redone.
-        self.art_k = k;
-        self.sync(ctx.library);
-        let avail = f64::from(rect.width()) - 2.0 * edge(k);
-        let applied = [self.sort_pill(), usize::MAX];
-        self.bar.step(fonts, k, avail, false, applied, dt, false);
-        let field = Rect::from_ltrb(
-            rect.left,
-            rect.top + (BAR_H * k) as f32,
-            rect.right,
-            rect.bottom,
-        );
-        self.anim
-            .step(f64::from(self.cursor), SPRING_K, SPRING_C, dt);
-        self.anim.settle(f64::from(self.cursor), 0.001, 0.01);
-        self.bump.step(0.0, BUMP_K, BUMP_C, dt);
-        self.bump.settle(0.0, 0.3, 4.0);
-        if crate::theme::reduce_motion() {
-            self.bump = Spring::rest(0.0);
-        }
-        if !self.entrance_armed {
-            self.entrance_armed = true;
-            self.entrance = Some(Entrance::new(
-                entrances::CARDS,
-                self.cursor.max(0) as usize,
-                ctx.t,
-            ));
-        }
-        if self.entrance.is_some_and(|e| e.done(ctx.t)) {
-            self.entrance = None;
-        }
-
-        let w = f64::from(field.width());
-        let tile_w = (TILE_W * k).min(w * 0.8);
-        let tile_h = (TILE_H * k).min(f64::from(field.height()) - 40.0 * k);
-        let pitch = tile_w + TILE_GAP * k;
-        let cx0 = f64::from(field.left) + w / 2.0 + self.bump.pos * k;
-        let cy = f64::from(field.top) + f64::from(field.height()) / 2.0;
-
-        self.geom.clear();
-        self.geom.resize(self.groups.len(), Rect::new_empty());
-        let mut tiles = Vec::new();
-        for i in 0..self.groups.len() {
-            let d = i as f64 - self.anim.pos;
-            if d.abs() > 2.6 {
-                continue;
+            // Front slot with no art: finished monogram, not a gap. Art-less ROMs stay this.
+            None if n == 0 => {
+                plate(canvas, rr, fk);
+                draw_monogram(canvas, fonts, &c.label, front, rr, hair);
             }
-            let f = 1.0 - d.abs().min(1.0);
-            let ent = self
-                .entrance
-                .map_or(EntranceAt::SETTLED, |e| e.at(i, ctx.t));
-            let arrive = ENTER_SCALE + (1.0 - ENTER_SCALE) * ent.travel;
-            let scale = (0.88 + 0.12 * f) * arrive;
-            let alpha = (0.78 + 0.22 * f) * ent.fade;
-            let cxx = cx0 + d * pitch;
-            let cyy = cy + (1.0 - ent.travel) * ENTER_RISE * k;
-            let tile = Rect::from_xywh(
-                (cxx - tile_w / 2.0) as f32,
-                (cyy - tile_h / 2.0) as f32,
-                tile_w as f32,
-                tile_h as f32,
-            );
-            self.geom[i] = Rect::from_xywh(
-                (cxx - tile_w * scale / 2.0) as f32,
-                (cyy - tile_h * scale / 2.0) as f32,
-                (tile_w * scale) as f32,
-                (tile_h * scale) as f32,
-            );
-            tiles.push((i, tile, scale, alpha, 1.0 - f));
-        }
-
-        // Out of `self` while its painters borrow the screen.
-        let mut tree = std::mem::take(&mut self.tree);
-        let this = &*self;
-        let seen = |_: usize, _: Rect| {};
-        let pills = this
-            .bar
-            .el(fonts, k, avail, false, applied, this.pill, &seen)
-            .place(Rect::from_xywh(
-                edge(k) as f32,
-                0.0,
-                avail as f32,
-                (BAR_H * k) as f32,
-            ));
-        let mut root = El::column().child(pills);
-        // The plate is the focus mark and the lift, so a tile draws no halo of its own.
-        for &(i, tile, scale, alpha, recede) in &tiles {
-            let drawn = this.geom[i];
-            root = root.child(
-                El::paint(move |canvas, _| {
-                    let (cx, cy) = (tile.center_x(), tile.center_y());
-                    canvas.save();
-                    canvas.translate((cx, cy));
-                    canvas.scale((scale as f32, scale as f32));
-                    canvas.translate((-cx, -cy));
-                    // Layer only when alpha or recede does work, and bound it to the tile.
-                    // Unbounded, `save_layer` allocates a screen-sized offscreen per tile.
-                    let layered = alpha < 0.999 || recede > 0.001;
-                    if layered {
-                        let mut lp = crate::theme::layer();
-                        lp.set_alpha_f(alpha as f32);
-                        if recede > 0.001 {
-                            lp.set_color_filter(skia_safe::color_filters::matrix_row_major(
-                                &crate::theme::recede_matrix(recede),
-                                None,
-                            ));
-                        }
-                        let bounds = tile.with_outset(((4.0 * k) as f32, (4.0 * k) as f32));
-                        canvas.save_layer(
-                            &skia_safe::canvas::SaveLayerRec::default()
-                                .bounds(&bounds)
-                                .paint(&lp)
-                                .flags(crate::theme::layer_flags(canvas)),
-                        );
-                    }
-                    this.draw_tile(canvas, fonts, i, tile, k);
-                    if layered {
-                        canvas.restore();
-                    }
-                    canvas.restore();
-                })
-                .id(tile_id(i))
-                .focusable((TILE_CORNER * k * scale) as f32)
-                .place(drawn.with_offset((-rect.left, -rect.top))),
-            );
-        }
-        let frame = tree.layout(root, rect);
-        let focus = match self.pill {
-            Some(i) => pill_id(i),
-            None => tile_id(self.cursor.max(0) as usize),
-        };
-        tree.set_focus(Some(focus));
-        let cheap = super::settings::reduce_ui_res(ctx.settings, ctx.platform, ctx.fallback_ui);
-        tree.paint_focus(canvas, frame, k as f32, dt, cheap);
-        self.tree = tree;
-
-        if self.groups.is_empty() {
-            fonts.centered(
-                canvas,
-                "Nothing to collect yet — this library is still loading.",
-                W::Regular,
-                14.0 * k,
-                fg(0.55),
-                f64::from(field.left) + w / 2.0,
-                cy,
-                w * 0.7,
-            );
-        }
-    }
-
-    fn draw_tile(&self, canvas: &Canvas, fonts: &Fonts, i: usize, rect: Rect, k: f64) {
-        let Some(g) = self.groups.get(i) else { return };
-        crate::theme::panel(
-            canvas,
-            rect,
-            TILE_CORNER as f32,
-            Some(accent(0.16)),
-            PanelStroke::Gradient,
-            k as f32,
-        );
-        crate::theme::panel_highlight(canvas, rect, TILE_CORNER as f32, k as f32);
-
-        let pad = 20.0 * k;
-        let (l, t) = (f64::from(rect.left) + pad, f64::from(rect.top) + pad);
-
-        // Fixed-size deck, top-left; title runs the full inner width. Scale by the
-        // tile, not `k` alone, or a squeezed tile lets the deck hit the title.
-        let fk = (f64::from(rect.height()) / TILE_H).min(k);
-        let front = Rect::from_xywh(
-            l as f32,
-            (t + (FAN_H - COVER_H) * fk) as f32,
-            (COVER_W * fk) as f32,
-            (COVER_H * fk) as f32,
-        );
-        let rr = RRect::new_rect_xy(
-            front,
-            (COVER_CORNER * fk) as f32,
-            (COVER_CORNER * fk) as f32,
-        );
-        // A launcher's cover is its brand mark, not a missing poster. Compact gaps:
-        // a hole in the middle reads as a draw fault.
-        let have: Vec<Face<'_>> = g
-            .fan
-            .iter()
-            .filter_map(|c| match self.art.get(&c.id) {
-                Some(img) => Some(Face::Poster(img)),
-                None if !c.icon.is_empty() => Some(Face::Launcher(&c.icon)),
-                None => None,
-            })
-            .collect();
-        // Never deeper than the group has titles. `have` is compact, so covers fill
-        // from the front and ghosts trail.
-        let slots = FAN.min(g.count.max(1));
-        // Device-pixel floor, same as `panel_highlight`: a sub-pixel hairline smears.
-        let hair = fk.max(1.0) as f32;
-        // Back to front so `fan[0]` (sort-first, the group's face) lands on top.
-        // Ascending order buried it and put the sort's last pick in front.
-        for n in (0..slots).rev() {
-            canvas.save();
-            canvas.concat(&fan_matrix(front, n, fk));
-            match have.get(n) {
-                Some(face) => {
-                    plate(canvas, rr, fk);
-                    match face {
-                        Face::Poster(img) => draw_cover(canvas, img, front, rr),
-                        Face::Launcher(icon) => draw_launcher_face(canvas, icon, front, rr),
-                    }
-                    // Recede toward the ground (`shade` tracks the palette). A colour
-                    // filter would cost a `save_layer` per cover — the deck must not.
-                    if n > 0 {
-                        canvas.draw_rrect(rr, &fill(crate::theme::shade(0.14 * n as f32)));
-                    }
-                    // Plate under, ink hairline on top: an edge on both palettes.
-                    // Stronger rim on back cards; they need the separation more.
-                    canvas.draw_rrect(
-                        rr.with_inset((hair / 2.0, hair / 2.0)),
-                        &stroke(fg(if n == 0 { 0.18 } else { 0.28 }), hair),
-                    );
-                }
-                // Front slot with no art: finished monogram, not a gap. Art-less ROMs stay this.
-                None if n == 0 => {
-                    plate(canvas, rr, fk);
-                    draw_monogram(canvas, fonts, &g.label, front, rr, hair);
-                }
-                // Empty silhouette, no plate (nothing to cast a shadow). Keeps deck depth
-                // so the tile does not change shape as posters arrive.
-                None => {
-                    canvas.draw_rrect(rr, &fill(crate::theme::shade(0.10)));
-                    canvas.draw_rrect(
-                        rr.with_inset((hair / 2.0, hair / 2.0)),
-                        &stroke(fg(0.12), hair),
-                    );
-                }
+            // Empty silhouette, no plate (nothing to cast a shadow). Keeps deck depth
+            // so the tile does not change shape as posters arrive.
+            None => {
+                canvas.draw_rrect(rr, &fill(crate::theme::shade(0.10)));
+                canvas.draw_rrect(
+                    rr.with_inset((hair / 2.0, hair / 2.0)),
+                    &stroke(fg(0.12), hair),
+                );
             }
-            canvas.restore();
         }
-
-        // Bottom rail, full inner width — same place the host tile puts name and address.
-        let max_w = f64::from(rect.width()) - 2.0 * pad;
-        let sub_base = f64::from(rect.bottom) - pad;
-        let count = if g.count == 1 {
-            "1 title".to_string()
-        } else {
-            format!("{} titles", g.count)
-        };
-        fonts.draw_clipped(
-            canvas,
-            &count,
-            l,
-            sub_base,
-            W::Regular,
-            13.0 * k,
-            fg(0.55),
-            max_w,
-        );
-        fonts.draw_clipped(
-            canvas,
-            &g.label,
-            l,
-            sub_base - 22.0 * k,
-            W::Bold,
-            23.0 * k,
-            fg(1.0),
-            max_w,
-        );
-        // Platform vs store, so two "Steam" buckets stay distinct. Top-right, the
-        // corner the deck leaves clear.
-        let kind = match &g.key {
-            GroupKey::Launchers => "LAUNCHERS",
-            GroupKey::Platform(_) => "PLATFORM",
-            GroupKey::Store(_) => "STORE",
-        };
-        // `draw_tracked` tracks after every character including the last, so the ink
-        // ends one gap short of the pen — `n - 1` when hanging off the right edge.
-        let track = 1.4 * k;
-        let kind_w = f64::from(fonts.measure(kind, W::SemiBold, 11.0 * k))
-            + track * (kind.chars().count().saturating_sub(1)) as f64;
-        // Never left of the deck's reserved corner: a narrow tile would otherwise
-        // walk the caption back into the covers.
-        let kind_x = (f64::from(rect.right) - pad - kind_w).max(l + (FAN_W + 10.0) * fk);
-        fonts.draw_tracked(
-            canvas,
-            kind,
-            kind_x,
-            t + 12.0 * k,
-            W::SemiBold,
-            11.0 * k,
-            track,
-            fg(0.45),
-        );
+        canvas.restore();
     }
+
+    // Bottom rail, full inner width — same place the host tile puts name and address.
+    let max_w = f64::from(rect.width()) - 2.0 * pad;
+    let sub_base = f64::from(rect.bottom) - pad;
+    let count = if c.count == 1 {
+        "1 title".to_string()
+    } else {
+        format!("{} titles", c.count)
+    };
+    fonts.draw_clipped(
+        canvas,
+        &count,
+        l,
+        sub_base,
+        W::Regular,
+        13.0 * k,
+        fg(0.55),
+        max_w,
+    );
+    fonts.draw_clipped(
+        canvas,
+        &c.label,
+        l,
+        sub_base - 22.0 * k,
+        W::Bold,
+        23.0 * k,
+        fg(1.0),
+        max_w,
+    );
+    // Platform vs store, so two "Steam" buckets stay distinct. Top-right, the
+    // corner the deck leaves clear.
+    let kind = match &c.key {
+        GroupKey::Store(_) => "STORE",
+        GroupKey::Platform(_) | GroupKey::Launchers => "PLATFORM",
+    };
+    // `draw_tracked` tracks after every character including the last, so the ink
+    // ends one gap short of the pen — `n - 1` when hanging off the right edge.
+    let track = 1.4 * k;
+    let kind_w = f64::from(fonts.measure(kind, W::SemiBold, 11.0 * k))
+        + track * (kind.chars().count().saturating_sub(1)) as f64;
+    // Never left of the deck's reserved corner: a narrow tile would otherwise
+    // walk the caption back into the covers.
+    let kind_x = (f64::from(rect.right) - pad - kind_w).max(l + (FAN_W + 10.0) * fk);
+    fonts.draw_tracked(
+        canvas,
+        kind,
+        kind_x,
+        t + 12.0 * k,
+        W::SemiBold,
+        11.0 * k,
+        track,
+        fg(0.45),
+    );
 }
 
 /// Transform that places card `n` relative to the front card's rect.
@@ -763,31 +223,6 @@ fn plate(canvas: &Canvas, rr: RRect, k: f64) {
             .with_offset(((PLATE_DX * k) as f32, (PLATE_DY * k) as f32)),
         &fill(Color4f::new(0.0, 0.0, 0.0, alpha)),
     );
-}
-
-/// What one slot of the deck draws.
-enum Face<'a> {
-    /// Decoded poster, adopted from the shelf that opened this screen.
-    Poster(&'a Image),
-    /// Brand mark from the icon key. Not a missing poster — a launcher has no cover art.
-    Launcher(&'a str),
-}
-
-/// Launcher card: the library placeholder's brand face, mark centred. Same recipe
-/// as `screens::library::draw_poster_placeholder` so one launcher is not two colours.
-fn draw_launcher_face(canvas: &Canvas, icon: &str, front: Rect, rr: RRect) {
-    canvas.draw_rrect(rr, &fill(crate::theme::card_face(0.38)));
-    // ~44 % of the card; `launcher_mark` letterboxes, so a non-square master is not stretched to 2:3.
-    let side = front.width().min(front.height()) * 0.44;
-    let box_ = Rect::from_xywh(
-        front.left + (front.width() - side) / 2.0,
-        front.top + (front.height() - side) / 2.0,
-        side,
-        side,
-    );
-    if let Some(path) = crate::launcher_icons::launcher_mark(icon, box_) {
-        canvas.draw_path(&path, &fill(fg(0.85)));
-    }
 }
 
 /// Centre-crop to the card's 2:3 and fill the round-rect with one shader.
@@ -851,166 +286,48 @@ fn draw_monogram(canvas: &Canvas, fonts: &Fonts, label: &str, front: Rect, rr: R
 mod tests {
     use super::*;
 
-    fn host() -> HostRow {
-        HostRow {
-            key: "aa".into(),
-            id: None,
-            name: "Desk".into(),
-            addr: "10.0.0.5".into(),
-            port: 9777,
-            fp_hex: "aa".into(),
-            paired: true,
-            saved: true,
-            online: true,
-            mgmt_port: 9778,
-            can_wake: false,
-            clipboard_sync: false,
-            last_used: None,
-            os: String::new(),
-            actions: Vec::new(),
-            pin: None,
-            bound_preset: None,
-            running: String::new(),
-            game_presets: Default::default(),
+    fn game(id: &str, launcher: bool, platform: Option<&str>) -> LibraryGame {
+        LibraryGame {
+            id: id.into(),
+            title: id.into(),
+            store: "steam".into(),
+            launcher,
+            icon: String::new(),
+            platform: platform.map(str::to_string),
+            developer: None,
+            year: None,
+            genres: Vec::new(),
+            stats: None,
+            running: false,
         }
     }
 
-    /// Two platforms of four titles — more per group than [`FAN`], so the queue
-    /// keeps covers no tile draws.
-    fn two_platforms() -> LibraryShared {
-        let library = LibraryShared::default();
-        library.set_games(
-            (0..8)
-                .map(|i| LibraryGame {
-                    id: format!("g{i}"),
-                    title: format!("Game {i}"),
-                    store: "steam".into(),
-                    launcher: false,
-                    icon: String::new(),
-                    platform: Some(if i < 4 { "PS2".into() } else { "PS3".into() }),
-                    developer: None,
-                    year: None,
-                    genres: Vec::new(),
-                    stats: None,
-                    running: false,
-                })
-                .collect(),
-        );
-        let bytes = {
-            let mut surface =
-                skia_safe::surfaces::raster_n32_premul((6, 9)).expect("a raster surface");
-            surface.canvas().clear(Color4f::new(0.2, 0.4, 0.6, 1.0));
-            surface
-                .image_snapshot()
-                .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
-                .expect("a PNG encoder")
-                .as_bytes()
-                .to_vec()
-        };
-        for i in 0..8 {
-            library.push_art(format!("g{i}"), bytes.clone());
-        }
-        library
-    }
-
-    /// As the library's root this screen feeds itself — and decodes only the covers it fans.
-    /// The model keeps every poster for the fetch, so the next shelf still has them all.
+    /// Launchers have their own row, and a single group is the whole library again.
     #[test]
-    fn as_the_librarys_root_it_takes_only_the_covers_it_fans() {
-        let library = two_platforms();
-        let mut s = CollectionsScreen::new(&host(), SortKey::HostOrder);
-        s.own_library();
-        // Bounded per frame, like the shelf's pump: several frames to take six covers.
-        for _ in 0..8 {
-            s.sync(&library);
-        }
-        // Poster-backed slots only: a launcher's card is drawn from its icon, never fetched.
-        let mut fanned: Vec<String> = s
-            .groups
-            .iter()
-            .flat_map(|g| g.fan.iter())
-            .filter(|c| c.icon.is_empty())
-            .map(|c| c.id.clone())
-            .collect();
-        fanned.sort();
-        assert_eq!(
-            fanned.len(),
-            2 * FAN,
-            "the fixture stopped exercising the deck"
-        );
-        let mut decoded: Vec<String> = s.art.keys().cloned().collect();
-        decoded.sort();
-        assert_eq!(decoded, fanned, "it decoded something it never draws");
-        let all: Vec<String> = (0..8).map(|i| format!("g{i}")).collect();
-        assert_eq!(
-            library.art_for(all.iter().map(String::as_str), 99).len(),
-            8,
-            "every poster survives for the shelf"
-        );
-    }
-
-    /// From a shelf's Y that shelf is still underneath, feeding itself; a drill-in decodes
-    /// nothing of its own.
-    #[test]
-    fn a_drill_in_from_a_shelf_decodes_nothing() {
-        let library = two_platforms();
-        let mut s = CollectionsScreen::new(&host(), SortKey::HostOrder);
-        for _ in 0..8 {
-            s.sync(&library);
-        }
-        assert!(s.art.is_empty(), "it decoded art the shelf below draws");
-    }
-
-    /// Y opens the whole library only as root, where that list is otherwise unreachable.
-    /// From a shelf's Y it would be a second copy of the screen one Back away.
-    #[test]
-    fn the_way_to_all_titles_exists_only_where_there_is_no_shelf() {
-        let library = two_platforms();
-        let mut settings = pf_client_core::trust::Settings::default();
-        let mut ctx = Ctx {
-            hosts: &[],
-            library: &library,
-            settings: &mut settings,
-            store: crate::store::file_store(),
-            platform: crate::platform::Platform::Desktop,
-            screen: None,
-            pads: &[],
-            deck: false,
-            tv: false,
-            fallback_ui: false,
-            pyrowave_ok: true,
-            av1_ok: true,
-            device_name: "test",
-            t: 0.0,
-        };
-        let mut drilled = CollectionsScreen::new(&host(), SortKey::HostOrder);
-        let mut fx = Outbox::default();
-        assert!(drilled
-            .menu(MenuEvent::Secondary, &mut ctx, &mut fx)
-            .is_none());
-        assert!(fx.nav.is_none(), "Y pushed a shelf that was already below");
-        assert!(!drilled
-            .hints(&ctx)
-            .iter()
-            .any(|h| h.key == HintKey::Secondary));
-
-        let mut root = CollectionsScreen::new(&host(), SortKey::HostOrder);
-        root.own_library();
-        let mut fx = Outbox::default();
-        assert!(root.menu(MenuEvent::Secondary, &mut ctx, &mut fx).is_some());
+    fn the_row_leaves_launchers_out_and_needs_two_groups() {
+        let one = [
+            game("l", true, None),
+            game("a", false, None),
+            game("b", false, None),
+        ];
         assert!(
-            matches!(&fx.nav, Some(crate::screens::Nav::Push(s)) if matches!(**s, Screen::Library(_))),
-            "Y did not open the whole library"
+            collections(&one, SortKey::HostOrder).is_empty(),
+            "a launcher and one store made a row"
         );
-        assert!(root.hints(&ctx).iter().any(|h| h.key == HintKey::Secondary));
+        let mut two = one.to_vec();
+        two.push(game("p", false, Some("PS2")));
+        let row = collections(&two, SortKey::HostOrder);
+        let labels: Vec<&str> = row.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["PS2", "Steam"]);
+        assert_eq!(row[1].fan, [1, 2], "the deck fans the group's own titles");
     }
 
-    /// Tile at `k`, matching [`CollectionsScreen::render`].
+    /// Tile at `k`, as the Collections row lays it out.
     fn tile(k: f64) -> Rect {
         Rect::from_xywh(100.0, 60.0, (TILE_W * k) as f32, (TILE_H * k) as f32)
     }
 
-    /// Front card of the deck — [`CollectionsScreen::draw_tile`]'s arithmetic.
+    /// Front card of the deck — [`paint_tile`]'s arithmetic.
     fn front_card(rect: Rect, k: f64) -> Rect {
         let pad = 20.0 * k;
         Rect::from_xywh(
@@ -1057,68 +374,6 @@ mod tests {
                 deck.bottom
             );
         }
-    }
-
-    /// A launcher's slot is a face, not a poster still on its way.
-    ///
-    /// A launcher has no poster; its cover is a brand mark from the icon key.
-    /// Asserted on what the tile carries: a rendered frame cannot tell a mark
-    /// that was never asked for from one that failed to draw.
-    #[test]
-    fn a_launcher_fans_its_mark_and_is_never_fetched() {
-        let library = LibraryShared::default();
-        library.set_games(vec![
-            LibraryGame {
-                id: "steam".into(),
-                title: "Steam".into(),
-                store: "steam".into(),
-                launcher: true,
-                icon: "steam".into(),
-                platform: Some("Launchers".into()),
-                developer: None,
-                year: None,
-                genres: Vec::new(),
-                stats: None,
-                running: false,
-            },
-            LibraryGame {
-                id: "g0".into(),
-                title: "Game 0".into(),
-                store: "steam".into(),
-                launcher: false,
-                icon: String::new(),
-                platform: Some("PS3".into()),
-                developer: None,
-                year: None,
-                genres: Vec::new(),
-                stats: None,
-                running: false,
-            },
-        ]);
-        let mut s = CollectionsScreen::new(&host(), SortKey::HostOrder);
-        s.own_library();
-        s.sync(&library);
-
-        let launchers = s
-            .groups
-            .iter()
-            .find(|g| g.label == "Launchers")
-            .expect("the launcher group");
-        let card = launchers.fan.first().expect("one card");
-        assert_eq!(
-            card.icon, "steam",
-            "the fan must carry the icon, or the deck has no way to draw the mark"
-        );
-        assert!(
-            crate::launcher_icons::launcher_mark(&card.icon, Rect::from_xywh(0.0, 0.0, 40.0, 40.0))
-                .is_some(),
-            "and the icon it carries must actually resolve to a mark"
-        );
-        // Never fetched: a launcher has no poster, so the request can only fail.
-        assert!(
-            !s.art.contains_key("steam"),
-            "a launcher's cover is drawn, not fetched"
-        );
     }
 
     /// Every back card is smaller, higher, and further right. One cue alone is a

@@ -124,7 +124,7 @@ shortcuts. It's on every app and in the console (which edits your defaults only)
 | **Background** | Violet | The console's backdrop colour: 20 dark fields, then 16 pale ones. **Eclipse** is true black for OLED screens. | Console; Apple TV **Settings** |
 | **Reduce motion** | Off | Stops the console's moving backdrop. Apple follows the system setting instead, and so do Windows and Linux desktops that report one (GNOME, KDE); the row then hides. | Console on Linux, Windows, Android |
 | **Reduce interface resolution** | On for Android TV, off on phones | Draws the console at 1080p and lets the screen scale it up, for slow 4K TV boxes. The stream isn't affected. | Android console |
-| **Library view**, **Start in collections** | Shelf, off | How a host's library opens. | Console, Apple |
+| **Library view** | Shelf | How a host's library opens. | Console, Apple |
 | **Follow the Omarchy theme** | On | The app and console follow `omarchy-theme-set`. **Hosts in the Omarchy menu** adds your hosts to the Omarchy menu. See [Omarchy](/docs/omarchy#this-box-as-a-client). | Linux on Omarchy. Console: **Follow system theme**. |
 
 ## Overlay

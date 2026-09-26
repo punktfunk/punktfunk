@@ -1559,15 +1559,18 @@ pub enum Section {
     Recent,
     Favorites,
     Launchers,
+    /// One tile per platform or store group.
+    Collections,
     Games,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
+    pub const ALL: [Section; 6] = [
         Section::Desktops,
         Section::Recent,
         Section::Favorites,
         Section::Launchers,
+        Section::Collections,
         Section::Games,
     ];
 
@@ -1577,6 +1580,7 @@ impl Section {
             Section::Recent => "recent",
             Section::Favorites => "favorites",
             Section::Launchers => "launchers",
+            Section::Collections => "collections",
             Section::Games => "games",
         }
     }
@@ -1587,6 +1591,7 @@ impl Section {
             Section::Recent => "Recently played",
             Section::Favorites => "Favorites",
             Section::Launchers => "Launchers",
+            Section::Collections => "Collections",
             Section::Games => "Games",
         }
     }
@@ -1727,12 +1732,13 @@ mod tests {
                 (Desktops, true),
                 (Favorites, true),
                 (Launchers, true),
+                (Collections, true),
             ]
         );
-        let s = sections("desktops,recent,-favorites,launchers,games");
+        let s = sections("desktops,recent,-favorites,launchers,-collections,games");
         assert_eq!(
             stored_sections(&s),
-            "desktops,recent,-favorites,launchers,games"
+            "desktops,recent,-favorites,launchers,-collections,games"
         );
     }
 

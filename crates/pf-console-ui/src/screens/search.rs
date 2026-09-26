@@ -17,8 +17,6 @@ const ROWS: usize = 2;
 
 pub(crate) struct SearchScreen {
     host: HostRow,
-    /// The shelf's fetch epoch: the results filter the list already in the model.
-    epoch: u64,
     /// Covers the shelf already decoded, handed on so the results show them at once.
     art: HashMap<String, Image>,
     pub(super) list: MenuList,
@@ -29,10 +27,9 @@ pub(crate) struct SearchScreen {
 
 impl SearchScreen {
     /// Opens typing: the field is the only reason to be here.
-    pub(crate) fn new(host: &HostRow, epoch: u64, art: &HashMap<String, Image>) -> SearchScreen {
+    pub(crate) fn new(host: &HostRow, art: &HashMap<String, Image>) -> SearchScreen {
         SearchScreen {
             host: host.clone(),
-            epoch,
             art: art.clone(),
             list: MenuList::new(),
             keyboard: Keyboard::new(),
@@ -187,7 +184,7 @@ impl SearchScreen {
             self.editing = true;
             return Some(MenuPulse::Boundary);
         }
-        let mut shelf = super::library::LibraryScreen::new(&self.host, self.epoch);
+        let mut shelf = super::library::LibraryScreen::new(&self.host);
         shelf.set_query(query);
         shelf.adopt_art(self.art.clone());
         fx.replace(Screen::Library(shelf));
@@ -312,7 +309,7 @@ mod tests {
     /// Typed text becomes the query, and searching swaps in the filtered shelf.
     #[test]
     fn typing_then_searching_opens_the_matching_shelf() {
-        let mut s = SearchScreen::new(&host(), 0, &HashMap::new());
+        let mut s = SearchScreen::new(&host(), &HashMap::new());
         assert!(s.editing(), "it opens typing");
         s.text_input("star");
         let mut fx = Outbox::default();
@@ -338,7 +335,7 @@ mod tests {
     /// Nothing typed: searching goes back to the keyboard instead of an empty shelf.
     #[test]
     fn an_empty_query_keeps_typing() {
-        let mut s = SearchScreen::new(&host(), 0, &HashMap::new());
+        let mut s = SearchScreen::new(&host(), &HashMap::new());
         s.text_input("   ");
         let mut fx = Outbox::default();
         with_ctx(true, |ctx| s.menu(MenuEvent::Confirm, ctx, &mut fx));

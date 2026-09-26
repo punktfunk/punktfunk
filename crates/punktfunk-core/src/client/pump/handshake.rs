@@ -160,7 +160,8 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         // reason is this crate's, so no client app can leave it clear and make one host
         // answer two ways.
         let abr = [crate::quic::EXT_ABR_ACK_REASON];
-        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr);
+        let preset = super::super::session_preset_bytes();
+        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr, &preset);
         let start_msg = if ext.is_empty() {
             start.encode()
         } else {

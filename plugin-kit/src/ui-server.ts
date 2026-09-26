@@ -3,6 +3,7 @@
 // register/renew/deregister through Scope. Validated end-to-end by the phase-0 spike:
 // core-only env layers, no platform package, SPA fallthrough preserved.
 import { type PluginUiHandle, servePluginUi } from "@punktfunk/host";
+import { decodeHostEvent, type GameRef } from "@punktfunk/host/core";
 import { Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect";
 import { Etag, HttpPlatform, HttpRouter } from "effect/unstable/http";
 import type { ConfigService } from "./config.js";
@@ -233,6 +234,50 @@ export const makeGameHandler = <S extends Schema.Top>(
 	};
 };
 
+/** Stages a plugin holds. The host waits for the handler before it goes on. */
+export interface ServeUiHolds {
+	/** Before the host starts a launched game; not when it picks up one still running. */
+	readonly "game.launching"?: (game: GameRef) => Effect.Effect<void, unknown>;
+}
+
+/**
+ * The `/__hold` handler: decodes the event, runs its stage's handler, answers 204. The request's
+ * signal interrupts the handler when the host stops waiting.
+ */
+export const makeHoldHandler =
+	(holds: ServeUiHolds) =>
+	async (req: Request): Promise<Response> => {
+		if (req.method !== "POST") {
+			return new Response("method not allowed", { status: 405 });
+		}
+		let body: unknown;
+		try {
+			body = await req.json();
+		} catch (cause) {
+			return Response.json(
+				{ error: "body must be JSON", issue: String(cause) },
+				{ status: 400 },
+			);
+		}
+		const ev = decodeHostEvent(body);
+		if (ev._tag === "Failure" || ev.success.kind !== "game.launching") {
+			return Response.json({ error: "not a held stage" }, { status: 400 });
+		}
+		const run = holds["game.launching"];
+		if (!run) {
+			return Response.json({ error: "stage not held" }, { status: 404 });
+		}
+		try {
+			await Effect.runPromise(run(ev.success.game), { signal: req.signal });
+		} catch (cause) {
+			return Response.json(
+				{ error: "hold failed", issue: String(cause) },
+				{ status: 500 },
+			);
+		}
+		return new Response(null, { status: 204 });
+	};
+
 export interface ServeUiOptions {
 	/** Console nav title. */
 	readonly title: string;
@@ -270,6 +315,12 @@ export interface ServeUiOptions {
 	 * Built by `defineMetadataPlugin`; same auth as `config`.
 	 */
 	readonly metadata?: (req: Request) => Promise<Response>;
+	/**
+	 * Stages this plugin holds. The host POSTs the event to `/__hold` and waits for the handler,
+	 * up to `holdTimeoutMs` (default 30 000, at most 120 000), then goes on regardless.
+	 */
+	readonly holds?: ServeUiHolds;
+	readonly holdTimeoutMs?: number;
 	/**
 	 * The plugin API: `HttpApiBuilder.layer(api)` + group handler layers + raw routes
 	 * (e.g. `sseRoute`), with plugin services already provided. `httpApiEnv` is provided
@@ -311,6 +362,7 @@ export const serveUi = (
 			? makeConfigHandler(opts.config)
 			: undefined;
 		const serveGame = opts.game ? makeGameHandler(opts.game) : undefined;
+		const serveHold = opts.holds ? makeHoldHandler(opts.holds) : undefined;
 
 		const fetch = async (req: Request): Promise<Response | undefined> => {
 			const url = new URL(req.url);
@@ -327,6 +379,9 @@ export const serveUi = (
 				return (
 					opts.metadata?.(req) ?? new Response("not found", { status: 404 })
 				);
+			}
+			if (url.pathname === "/__hold") {
+				return serveHold?.(req) ?? new Response("not found", { status: 404 });
 			}
 			if (!url.pathname.startsWith(prefix)) return undefined; // → static SPA
 			return handler(req);
@@ -351,6 +406,16 @@ export const serveUi = (
 							config: opts.config !== undefined,
 							game: opts.game !== undefined,
 						},
+						...(opts.holds
+							? {
+									holds: Object.keys(opts.holds).filter(
+										(k) => opts.holds?.[k as keyof ServeUiHolds],
+									),
+								}
+							: {}),
+						...(opts.holdTimeoutMs !== undefined
+							? { holdTimeoutMs: opts.holdTimeoutMs }
+							: {}),
 						fetch,
 					}),
 				catch: (cause) => new UiServeError({ cause }),

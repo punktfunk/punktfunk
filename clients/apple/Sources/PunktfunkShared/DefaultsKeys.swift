@@ -247,11 +247,6 @@ public enum DefaultsKey {
     /// unknown reads as shelf. Presentation only. One key, two surfaces: the library's bar and the
     /// Interface settings row both write it.
     public static let libraryView = "punktfunk.libraryView"
-    /// Open a browsable library straight onto its Collections (group-by-platform tiles) instead of
-    /// the shelf — the cross-client `library_collections` key. Off by default; a library that is
-    /// not worth browsing (one platform, one store) opens on the shelf regardless. Presentation
-    /// only.
-    public static let libraryCollections = "punktfunk.libraryCollections"
     /// Where a bare launch opens — a `StartIn` stored value (`"hosts"` the default, `"library"`,
     /// `"stream"`). The cross-client `start_in` key; unknown reads as hosts, and with no default
     /// host every value degrades to the host list. Resolve through `StartScreen.resolve`, never by

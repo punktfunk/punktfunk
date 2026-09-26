@@ -773,6 +773,7 @@ object SkiaConsole {
                     app, effective, id, addr, port, fp, launchId,
                     dialer = if (launchId != null) "console/library" else "console/desktop",
                     timeoutMs = timeout,
+                    preset = preset,
                 )
             }
             main.post {

@@ -103,6 +103,9 @@ export const HookForm: FC<{
 	const legacyClient = draft.filter?.fingerprint ? null : draft.filter?.client;
 
 	const action = kind === "run" ? (draft.run ?? "") : (draft.webhook ?? "");
+	// Only the launch stage waits for anyone; the host refuses `hold` on any other kind.
+	const holdable = draft.on.trim() === "game.launching";
+	const holds = holdable && draft.hold === true;
 	const ready = draft.on.trim().length > 0 && action.trim().length > 0;
 
 	const commit = () => {
@@ -116,6 +119,7 @@ export const HookForm: FC<{
 			...(filtered && draft.filter ? { filter: draft.filter } : {}),
 			...(draft.debounce_ms ? { debounce_ms: draft.debounce_ms } : {}),
 			...(draft.timeout_s ? { timeout_s: draft.timeout_s } : {}),
+			...(holds ? { hold: true } : {}),
 			...(kind === "webhook" && draft.hmac_secret_file
 				? { hmac_secret_file: draft.hmac_secret_file }
 				: {}),
@@ -301,6 +305,42 @@ export const HookForm: FC<{
 								{m.automation_filter_app_help()}
 							</p>
 						</div>
+						<div className="space-y-2">
+							<Label htmlFor="hook-preset">
+								{m.automation_filter_preset()}
+							</Label>
+							<Input
+								id="hook-preset"
+								value={draft.filter?.preset ?? ""}
+								onChange={(e) =>
+									set({
+										filter: {
+											...draft.filter,
+											preset: e.target.value.trim() || undefined,
+										},
+									})
+								}
+							/>
+							<p className="text-xs text-muted-foreground">
+								{m.automation_filter_preset_help()}
+							</p>
+						</div>
+					</div>
+				)}
+
+				{holdable && (
+					<div className="space-y-1">
+						<Label className="flex items-start gap-3 text-sm font-normal">
+							<Checkbox
+								checked={holds}
+								onCheckedChange={(n) => set({ hold: n === true })}
+								className="mt-0.5"
+							/>
+							<span>{m.automation_field_hold()}</span>
+						</Label>
+						<p className="pl-7 text-xs text-muted-foreground">
+							{m.automation_field_hold_help()}
+						</p>
 					</div>
 				)}
 
@@ -316,7 +356,7 @@ export const HookForm: FC<{
 							onChange={(debounce_ms) => set({ debounce_ms })}
 						/>
 					</div>
-					{kind === "run" && (
+					{(kind === "run" || holds) && (
 						<div className="space-y-2">
 							<Label htmlFor="hook-timeout">
 								{m.automation_field_timeout()}

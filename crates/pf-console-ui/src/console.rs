@@ -152,7 +152,7 @@ impl Console {
     ) -> Result<Console> {
         let stream = stream_intent(&entry);
         let fetch = entry_fetch(&entry);
-        let stack = entry_stack(entry, &handles.library, &opts.device_name);
+        let stack = entry_stack(entry, &opts.device_name);
         if let Some(cmd) = fetch {
             handles.bus.send(cmd);
         }
@@ -269,7 +269,7 @@ impl Console {
         }
         let stream = stream_intent(&entry);
         let fetch = entry_fetch(&entry);
-        let stack = entry_stack(entry, self.shell.library(), self.shell.device_name());
+        let stack = entry_stack(entry, self.shell.device_name());
         if let Some(cmd) = fetch {
             self.shell.send_cmd(cmd);
         }
@@ -317,8 +317,7 @@ fn stream_intent(entry: &ConsoleEntry) -> Option<crate::screens::ConnectIntent> 
     })
 }
 
-/// The fetch a shelf entry needs. Nothing else loads a pushed shelf, so send it after
-/// [`entry_stack`] snapshots the epoch.
+/// The fetch a shelf entry needs. Nothing else loads a pushed shelf.
 fn entry_fetch(entry: &ConsoleEntry) -> Option<ConsoleCmd> {
     let (ConsoleEntry::Library(host) | ConsoleEntry::Stream(host)) = entry else {
         return None;
@@ -330,21 +329,16 @@ fn entry_fetch(entry: &ConsoleEntry) -> Option<ConsoleCmd> {
     })
 }
 
-fn entry_stack(
-    entry: ConsoleEntry,
-    library: &crate::library::LibraryShared,
-    device_name: &str,
-) -> Vec<Screen> {
+fn entry_stack(entry: ConsoleEntry, device_name: &str) -> Vec<Screen> {
     match entry {
         ConsoleEntry::Home => vec![Screen::Home(crate::screens::home::HomeScreen::new())],
         ConsoleEntry::Pair(host) => vec![
             Screen::Home(crate::screens::home::HomeScreen::new()),
             Screen::Pair(crate::screens::pair::PairScreen::new(&host, device_name)),
         ],
-        // The Games tab's root. Snapshot the model's fetch epoch so the host's following
-        // `FetchLibrary` is the first raise; that is how the shelf knows the result is its own.
+        // The Games tab's root.
         ConsoleEntry::Library(host) | ConsoleEntry::Stream(host) => vec![Screen::Library(
-            crate::screens::library::LibraryScreen::new(&host, library.fetch_epoch()),
+            crate::screens::library::LibraryScreen::new(&host),
         )],
     }
 }
@@ -438,12 +432,11 @@ mod tests {
     /// on the shelf rather than on the host list.
     #[test]
     fn a_stream_entry_opens_the_same_stack_as_library() {
-        let library = crate::library::LibraryShared::default();
         for entry in [
             ConsoleEntry::Library(Box::new(row())),
             ConsoleEntry::Stream(Box::new(row())),
         ] {
-            let stack = entry_stack(entry, &library, "d");
+            let stack = entry_stack(entry, "d");
             assert!(matches!(stack.as_slice(), [Screen::Library(_)]));
         }
     }
@@ -452,11 +445,10 @@ mod tests {
     /// fetches nothing and connects nothing.
     #[test]
     fn a_pair_entry_opens_pair_over_home() {
-        let library = crate::library::LibraryShared::default();
         let entry = ConsoleEntry::Pair(Box::new(row()));
         assert!(entry_fetch(&entry).is_none());
         assert!(stream_intent(&entry).is_none());
-        let stack = entry_stack(entry, &library, "d");
+        let stack = entry_stack(entry, "d");
         assert!(matches!(
             stack.as_slice(),
             [Screen::Home(_), Screen::Pair(_)]
@@ -467,8 +459,7 @@ mod tests {
     /// host's shelf, a Stream entry, or a Home top re-roots as before.
     #[test]
     fn a_library_entry_for_the_shelf_on_top_is_a_no_op() {
-        let library = crate::library::LibraryShared::default();
-        let stack = entry_stack(ConsoleEntry::Library(Box::new(row())), &library, "d");
+        let stack = entry_stack(ConsoleEntry::Library(Box::new(row())), "d");
         let top = stack.last();
         assert!(already_showing(
             top,

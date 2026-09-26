@@ -101,7 +101,7 @@ impl Tab {
     /// The tab a root screen belongs to.
     fn of(root: &Screen) -> Tab {
         match root {
-            Screen::Library(_) | Screen::Collections(_) => Tab::Games,
+            Screen::Library(_) => Tab::Games,
             Screen::Players(_) => Tab::Players,
             Screen::Settings(_) => Tab::Settings,
             _ => Tab::Hosts,
@@ -579,11 +579,6 @@ impl Shell {
             fake_clock: None,
             field: RefCell::new(None),
         })
-    }
-
-    /// Live library model, for a host re-rooting via [`Self::replace_stack`].
-    pub(crate) fn library(&self) -> &LibraryShared {
-        &self.library
     }
 
     /// The screen on top of the stack.
@@ -1111,7 +1106,6 @@ impl Shell {
             }
         }
 
-        self.collections_handover();
         self.home_shelf();
         self.tick_launch();
         self.settle_focus();
@@ -1132,8 +1126,8 @@ impl Shell {
         }
     }
 
-    /// Fetch the games under the Hosts row once it rests on a host. Lives here, like
-    /// [`Self::collections_handover`]: a screen cannot send while it draws.
+    /// Fetch the games under the Hosts row once it rests on a host. Lives here: a screen
+    /// cannot send while it draws.
     fn home_shelf(&mut self) {
         let Some(Screen::Home(home)) = self.stack.last_mut() else {
             return;
@@ -1142,41 +1136,13 @@ impl Shell {
             return;
         };
         let host = host.clone();
-        let epoch = self.library.fetch_epoch();
         self.library_fp = Some(host.fp_hex.clone());
         self.bus.send(ConsoleCmd::FetchLibrary {
             addr: host.addr.clone(),
             mgmt: host.mgmt_port,
             fp_hex: host.fp_hex.clone(),
         });
-        home.set_shelf(crate::screens::library::LibraryScreen::embedded(
-            &host, epoch,
-        ));
-    }
-
-    /// Swap a library shelf for the collections screen once it holds more
-    /// than one. Lives here: a screen cannot replace itself.
-    ///
-    /// Settled transitions only. Mid-flight the stack top is not what is
-    /// on glass; swapping under a reversed push would land on a host the
-    /// user already backed out of.
-    fn collections_handover(&mut self) {
-        if !matches!(self.motion, Motion::None) {
-            return;
-        }
-        // Borrow, don't clone: this is every frame of the shelf's life and
-        // `Settings` owns Strings. `stack` mut vs `library`/`settings` shared
-        // are disjoint, so the shelf can read both while being held.
-        let upgraded = match self.stack.last_mut() {
-            Some(Screen::Library(shelf)) => {
-                shelf.collections_upgrade(&self.library, &self.settings)
-            }
-            _ => None,
-        };
-        if let Some(screen) = upgraded {
-            let n = self.stack.len();
-            self.stack[n - 1] = Screen::Collections(screen);
-        }
+        home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
     }
 
     /// This pairing is what turned its host into the default one. False for a second or
@@ -1433,9 +1399,8 @@ impl Shell {
             .cloned()
     }
 
-    /// A fresh shelf for `host`, its fetch sent after the epoch it compares against.
+    /// A fresh shelf for `host`, its fetch sent.
     fn shelf_root(&mut self, host: &HostRow) -> Screen {
-        let epoch = self.library.fetch_epoch();
         self.bus.send(ConsoleCmd::FetchLibrary {
             addr: host.addr.clone(),
             mgmt: host.mgmt_port,
@@ -1443,7 +1408,7 @@ impl Shell {
         });
         self.games_key = Some(host.key.clone());
         self.library_fp = Some(host.fp_hex.clone());
-        Screen::Library(crate::screens::library::LibraryScreen::new(host, epoch))
+        Screen::Library(crate::screens::library::LibraryScreen::new(host))
     }
 
     /// OK from a remote, both edges. A press acts on release; held [`HOLD_S`] it opens the

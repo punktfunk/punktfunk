@@ -167,6 +167,7 @@ impl ConnectPlan {
             settings: self.settings.clone(),
             clipboard,
             preset: self.preset.as_ref().map(|p| p.name.clone()),
+            preset_id: self.preset.as_ref().map(|p| p.id.clone()),
         }
     }
 
@@ -488,6 +489,9 @@ pub struct ResolvedSpec {
     /// Preset name for the stats overlay. `None` = the global defaults.
     #[serde(default, alias = "profile", skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// The preset's stable id, which the dial names to the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
 }
 
 impl ResolvedSpec {
@@ -538,6 +542,7 @@ impl ResolvedSpec {
             &self.settings,
             self.clipboard,
             self.preset.clone(),
+            self.preset_id.clone(),
             dial,
             probes,
         )
@@ -997,6 +1002,7 @@ mod tests {
             },
             clipboard: true,
             preset: Some("Work".into()),
+            preset_id: Some("3f9a0c11e2b4".into()),
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert_eq!(serde_json::from_str::<ResolvedSpec>(&json).unwrap(), spec);
@@ -1004,6 +1010,7 @@ mod tests {
         // No preset: the key is absent, not null.
         let plain = ResolvedSpec {
             preset: None,
+            preset_id: None,
             ..spec.clone()
         };
         let json = serde_json::to_string(&plain).unwrap();

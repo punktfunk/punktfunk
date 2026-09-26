@@ -52,9 +52,12 @@ pub struct HookEntry {
     /// Exec timeout in seconds (1–600, default 30); the process group is killed on expiry.
     #[serde(default = "default_timeout_s")]
     pub timeout_s: u32,
-    /// Minimum interval between firings, in milliseconds. 0 = fire every time.
+    /// Minimum interval between firings, in milliseconds. 0 = fire every time. A `hold` ignores it.
     #[serde(default)]
     pub debounce_ms: u64,
+    /// The launch waits for this hook, up to `timeout_s`. Only with `on: game.launching`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold: bool,
     /// HMAC secret file (`X-Punktfunk-Signature: sha256=<hex>`). Warns if world-readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
@@ -76,6 +79,9 @@ pub struct HookFilter {
     /// Launched app id/title (`stream.*` events).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+    /// The dialled settings preset, by id or name (`client.*`, `session.*`, `stream.*`, `game.*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 impl HookFilter {
@@ -99,6 +105,12 @@ impl HookFilter {
         if let Some(want) = &self.app {
             if kind.app() != Some(want.as_str()) {
                 return false;
+            }
+        }
+        if let Some(want) = &self.preset {
+            match kind.preset() {
+                Some(p) if p.id == *want || p.name.eq_ignore_ascii_case(want) => {}
+                _ => return false,
             }
         }
         true
@@ -143,6 +155,12 @@ impl HooksConfig {
             }
             if h.timeout_s == 0 || h.timeout_s > MAX_TIMEOUT_S {
                 return Err(at(&format!("`timeout_s` must be 1–{MAX_TIMEOUT_S}")));
+            }
+            if h.hold && !crate::holds::STAGES.contains(&h.on.as_str()) {
+                return Err(at(&format!(
+                    "`hold` needs `on` set to one of: {}",
+                    crate::holds::STAGES.join(", ")
+                )));
             }
         }
         Ok(())
@@ -333,7 +351,8 @@ fn dispatch(
     let kind = ev.kind.name();
     let cfg = store().get();
     for h in &cfg.hooks {
-        if !crate::events::kind_matches(&h.on, kind) {
+        // The launch stage runs a hold itself ([`hold`]); firing it here too would run it twice.
+        if h.hold || !crate::events::kind_matches(&h.on, kind) {
             continue;
         }
         if !h
@@ -372,6 +391,38 @@ fn dispatch(
     };
     if let Some(cmd) = mirror {
         fire_exec(cmd, ev, DEFAULT_TIMEOUT_S, sem);
+    }
+}
+
+/// The hooks that hold `ev`'s stage: `hold` set, kind and filter matching.
+pub(crate) fn holding(ev: &crate::events::HostEvent) -> Vec<HookEntry> {
+    let kind = ev.kind.name();
+    store()
+        .get()
+        .hooks
+        .into_iter()
+        .filter(|h| h.hold && crate::events::kind_matches(&h.on, kind))
+        .filter(|h| h.filter.as_ref().is_none_or(|f| f.matches(&ev.kind)))
+        .collect()
+}
+
+/// Run one holding hook to completion, blocking: `run`, then `webhook`, each bounded by
+/// `timeout_s`. Failures log; the caller proceeds either way.
+pub(crate) fn hold(h: &HookEntry, ev: &crate::events::HostEvent) {
+    let json = serde_json::to_string(ev).unwrap_or_else(|_| "{}".to_string());
+    let timeout = Duration::from_secs(u64::from(h.timeout_s));
+    if let Some(cmd) = h.run.as_deref().filter(|c| !c.trim().is_empty()) {
+        let label = cmd_label(cmd);
+        match exec_path_check(cmd) {
+            Err(e) => tracing::error!(cmd = %label, "REFUSING hook command — {e}"),
+            Ok(()) => {
+                tracing::info!(cmd = %label, kind = ev.kind.name(), "hook: holding the launch");
+                run_hook_process(cmd, &json, &flatten_env(ev), timeout);
+            }
+        }
+    }
+    if let Some(url) = h.webhook.as_deref().filter(|u| !u.trim().is_empty()) {
+        post_webhook(url, &json, h.hmac_secret_file.as_deref(), timeout);
     }
 }
 
@@ -810,7 +861,7 @@ fn fire_webhook(
     let kind = ev.kind.name();
     tracing::info!(url = %origin, kind, "hook: posting webhook");
     std::thread::spawn(move || {
-        post_webhook(&url, &json, secret_file.as_deref());
+        post_webhook(&url, &json, secret_file.as_deref(), WEBHOOK_TIMEOUT);
         drop(permit);
     });
 }
@@ -868,12 +919,12 @@ pub(crate) fn webhook_origin(url: &str) -> String {
         .collect()
 }
 
-fn post_webhook(url: &str, json: &str, secret_file: Option<&std::path::Path>) {
+fn post_webhook(url: &str, json: &str, secret_file: Option<&std::path::Path>, timeout: Duration) {
     let origin = webhook_origin(url);
     // Verified TLS (ureq rustls roots). max_redirects(0): a compromised receiver cannot bounce the POST.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
-        .timeout_global(Some(WEBHOOK_TIMEOUT))
+        .timeout_global(Some(timeout))
         .build()
         .into();
     let mut req = agent.post(url).header("Content-Type", "application/json");
@@ -1019,6 +1070,7 @@ mod tests {
                     fingerprint: Some("9f86d081".into()),
                     app: Some("steam:570".into()),
                     plane: Plane::Native,
+                    preset: None,
                 },
             },
         }
@@ -1034,6 +1086,7 @@ mod tests {
                 webhook: None,
                 timeout_s: 30,
                 debounce_ms: 0,
+                hold: false,
                 hmac_secret_file: None,
             }],
         };
@@ -1056,6 +1109,40 @@ mod tests {
         assert!(bad.validate().is_err(), "zero timeout");
         bad.hooks[0].timeout_s = 601;
         assert!(bad.validate().is_err(), "over-ceiling timeout");
+
+        let mut bad = ok.clone();
+        bad.hooks[0].hold = true;
+        assert!(bad.validate().is_err(), "hold on a kind nothing waits for");
+        bad.hooks[0].on = "game.launching".into();
+        assert!(bad.validate().is_ok(), "hold on the launch stage");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_holding_hook_blocks_until_its_command_exits() {
+        let h = HookEntry {
+            on: "game.launching".into(),
+            filter: None,
+            run: Some("sleep 1".into()),
+            webhook: None,
+            timeout_s: 5,
+            debounce_ms: 0,
+            hold: true,
+            hmac_secret_file: None,
+        };
+        let ev = crate::events::HostEvent {
+            seq: 1,
+            ts_ms: 0,
+            schema: crate::events::SCHEMA_VERSION,
+            kind: crate::events::EventKind::HostStopping,
+        };
+        let t = Instant::now();
+        hold(&h, &ev);
+        assert!(
+            t.elapsed() >= Duration::from_millis(950),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     #[test]
@@ -1081,6 +1168,7 @@ mod tests {
                 webhook: Some("https://ha.local/api/webhook/punktfunk".into()),
                 timeout_s: 30,
                 debounce_ms: 500,
+                hold: false,
                 hmac_secret_file: None,
             }],
         };
@@ -1179,6 +1267,7 @@ mod tests {
                 name: "Deck".into(),
                 fingerprint: Some("AB12CD".into()),
                 plane: Plane::Native,
+                preset: None,
             },
         };
         let f = HookFilter {
@@ -1186,6 +1275,33 @@ mod tests {
             ..Default::default()
         };
         assert!(f.matches(&connected));
+    }
+
+    #[test]
+    fn a_preset_filter_matches_by_id_or_name() {
+        let docked = EventKind::ClientConnected {
+            client: ClientRef {
+                name: "Deck".into(),
+                fingerprint: Some("ab12cd".into()),
+                plane: Plane::Native,
+                preset: Some(crate::events::PresetRef {
+                    id: "3f9a0c11e2b4".into(),
+                    name: "Docked".into(),
+                }),
+            },
+        };
+        let by = |want: &str| HookFilter {
+            preset: Some(want.into()),
+            ..Default::default()
+        };
+        assert!(by("3f9a0c11e2b4").matches(&docked));
+        assert!(by("docked").matches(&docked), "a name matches in any case");
+        assert!(!by("Handheld").matches(&docked));
+        // No preset on the event: a preset filter never matches it.
+        assert!(!by("Docked").matches(&sample_event().kind));
+        // It rides the event JSON, so a hook's env names it.
+        let json = serde_json::to_value(&docked).unwrap();
+        assert_eq!(json["client"]["preset"]["name"], "Docked");
     }
 
     #[test]

@@ -185,7 +185,6 @@ pub(crate) fn host_link(store: &dyn crate::store::SettingsStore, row: &HostRow) 
 pub(crate) enum Screen {
     Home(home::HomeScreen),
     Library(library::LibraryScreen),
-    Collections(collections::CollectionsScreen),
     Settings(settings::SettingsScreen),
     AddHost(add_host::AddHostScreen),
     Pair(pair::PairScreen),
@@ -239,7 +238,6 @@ impl Screen {
         match self {
             Screen::Home(s) => s.menu(ev, ctx, fx),
             Screen::Library(s) => s.menu(ev, ctx, fx),
-            Screen::Collections(s) => s.menu(ev, ctx, fx),
             Screen::Settings(s) => s.menu(ev, ctx, fx),
             Screen::AddHost(s) => s.menu(ev, ctx, fx),
             Screen::RingEditor(s) => s.menu(ev, ctx, fx),
@@ -275,7 +273,6 @@ impl Screen {
         match self {
             Screen::Home(s) => s.press(),
             Screen::Library(s) => s.press(),
-            Screen::Collections(s) => s.press(),
             Screen::Settings(s) => s.press(),
             Screen::AddHost(s) => s.list.dip(),
             Screen::Pair(s) => s.list.dip(),
@@ -320,7 +317,7 @@ impl Screen {
             Screen::RingEditor(s) => s.pan_list().pan(p),
             Screen::Library(s) => s.pan(p),
             Screen::Home(s) => s.pan(p),
-            Screen::Collections(_) | Screen::Players(_) | Screen::InputTest(_) => false,
+            Screen::Players(_) | Screen::InputTest(_) => false,
         }
     }
 
@@ -331,7 +328,6 @@ impl Screen {
         match self {
             Screen::Home(s) => s.pointer(p, ctx, fx),
             Screen::Library(s) => s.pointer(p, ctx, fx),
-            Screen::Collections(s) => s.pointer(p, ctx, fx),
             Screen::Settings(s) => s.pointer(p, ctx, fx),
             Screen::AddHost(s) => s.pointer(p, ctx, fx),
             Screen::RingEditor(s) => s.pointer(p, ctx, fx),
@@ -441,9 +437,7 @@ impl Screen {
 
     pub(crate) fn background(&self) -> Bg {
         match self {
-            Screen::Home(_) | Screen::Library(_) | Screen::Collections(_) | Screen::Players(_) => {
-                Bg::Aurora
-            }
+            Screen::Home(_) | Screen::Library(_) | Screen::Players(_) => Bg::Aurora,
             _ => Bg::Form,
         }
     }
@@ -452,7 +446,6 @@ impl Screen {
         match self {
             Screen::Home(_) => "Select a Host".into(),
             Screen::Library(s) => s.title(),
-            Screen::Collections(s) => s.title(),
             Screen::Settings(_) => "Settings".into(),
             Screen::AddHost(s) => s.title(),
             Screen::RingEditor(s) => s.title(),
@@ -481,7 +474,6 @@ impl Screen {
         match self {
             Screen::Home(s) => s.announcement(ctx),
             Screen::Library(s) => s.announcement(ctx),
-            Screen::Collections(s) => s.announcement(),
             Screen::Customize(s) => s.announcement(ctx),
             Screen::Palette(s) => s.announcement(ctx),
             Screen::Grants(s) => s.announcement(),
@@ -496,7 +488,6 @@ impl Screen {
         match self {
             Screen::Home(s) => s.hints(ctx),
             Screen::Library(s) => s.hints(ctx),
-            Screen::Collections(s) => s.hints(ctx),
             Screen::Settings(s) => s.hints(ctx),
             Screen::AddHost(s) => s.hints(ctx),
             Screen::RingEditor(s) => s.hints(ctx),
@@ -536,7 +527,6 @@ impl Screen {
                 s.render(canvas, rect, k, dt, fonts, ctx);
                 crate::el::claim(usize::from(s.has_titles()));
             }
-            Screen::Collections(s) => s.render(canvas, rect, k, dt, fonts, ctx),
             Screen::Settings(s) => s.render(canvas, rect, k, dt, fonts, ctx),
             Screen::AddHost(s) => s.render(canvas, rect, k, dt, fonts, ctx),
             Screen::RingEditor(s) => s.render(canvas, rect, k, dt, fonts, ctx),
