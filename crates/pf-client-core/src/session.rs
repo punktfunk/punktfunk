@@ -356,6 +356,7 @@ pub struct SessionHandle {
 }
 
 pub fn start(params: SessionParams) -> SessionHandle {
+    punktfunk_core::client::set_thread_boost(crate::audio_rt::boost_core_thread);
     let (ev_tx, ev_rx) = async_channel::unbounded();
     // Tiny frame queue, newest wins: force_send displaces the oldest when the UI lags.
     let (frame_tx, frame_rx) = async_channel::bounded(2);
@@ -852,6 +853,7 @@ fn pump(
     stop: Arc<AtomicBool>,
     mic: MicControl,
 ) {
+    crate::audio_rt::boost_and_log("decode");
     let ConnectPlan {
         preferred,
         pad_speaker_on,

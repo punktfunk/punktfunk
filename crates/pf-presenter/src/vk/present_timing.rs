@@ -60,6 +60,8 @@ impl PresentTimer {
         let join = std::thread::Builder::new()
             .name("pf-present-wait".into())
             .spawn(move || {
+                // The on-glass stamp is taken at wake; scheduler delay reads as latch.
+                pf_client_core::audio_rt::boost_and_log("present-wait");
                 while let Ok(job) = rx.recv() {
                     // 250 ms: ids complete in order; longer means the pipeline is wedged.
                     // SAFETY: `job.swapchain` stays live for this call — enqueue runs

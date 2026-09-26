@@ -367,6 +367,7 @@ impl StreamState {
         let _ = std::thread::Builder::new()
             .name("pf-frame-wake".into())
             .spawn(move || {
+                pf_client_core::audio_rt::boost_and_log("frame-wake");
                 while let Ok(f) = pump_rx.recv_blocking() {
                     let _ = wake_tx.force_send(f); // newest wins, like the pump's queue
                     let _ = wake.push_custom_event(FrameWake);
@@ -549,6 +550,8 @@ fn run_inner(mut opts: SessionOpts, mut mode: ModeCtl) -> Result<Option<Outcome>
     // shell⇄session windows group as one taskbar app (MSIX identity wins).
     #[cfg(windows)]
     crate::win32::set_app_user_model_id();
+    // This thread presents and forwards input; a late wake is a missed refresh.
+    pf_client_core::audio_rt::boost_and_log("presenter");
     sdl3::hint::set("SDL_JOYSTICK_THREAD", "1");
     // Hold Valve HIDAPI off before SDL_Init: the Deck driver clears digital mappings
     // at enumeration. A hint set after `sdl.gamepad()` only detaches a driver that
