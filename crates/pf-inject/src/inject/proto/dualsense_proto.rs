@@ -1,5 +1,5 @@
 //! Transport-independent DualSense HID contract: report descriptor, feature blobs, the
-//! [`DsState`] model and GameStream mapper, input report `0x01`, output report `0x02`.
+//! [`DsState`] model and GameStream mapper, input report `0x01`, output reports `0x02`/`0x31`.
 //! Shared by [`super::dualsense`] (Linux UHID) and [`super::dualsense_windows`] (UMDF).
 //!
 //! Layout is the inputtino DualSense descriptor (`games-on-whales/inputtino`
@@ -600,8 +600,12 @@ pub mod out_report {
     pub const LED_RGB: usize = 45;
 }
 
-/// Parse USB output report `0x02` into [`DsFeedback`], indexed off [`out_report`]. Rumble,
+/// Parse output report `0x02` into [`DsFeedback`], indexed off [`out_report`]. Rumble,
 /// lightbar, and player LEDs are typed; trigger blocks and audio-control are forwarded raw.
+///
+/// Bluetooth `0x31` is accepted too: libScePad writes it to any pad whose output report
+/// exceeds 48 bytes, as the Edge's does. Its sequence and tag bytes are skipped; the CRC is
+/// not checked.
 ///
 /// Gated on valid-flags: writers set only the bits they mean to change and zero the rest, so
 /// an ungated parse would turn a rumble write into lightbar-off + triggers-off.
@@ -611,7 +615,12 @@ pub mod out_report {
 /// LED-only report says nothing about rumble, as `hid-playstation` writes it.
 pub fn parse_ds_output(pad: u8, data: &[u8], fb: &mut DsFeedback) {
     use out_report as o;
-    if data.first() != Some(&0x02) || data.len() < 48 {
+    let data = match data.first() {
+        Some(0x02) => data,
+        Some(0x31) => data.get(2..).unwrap_or_default(),
+        _ => return,
+    };
+    if data.len() < 48 {
         return;
     }
     let flag0 = data[o::VALID_FLAG0];
@@ -1179,6 +1188,46 @@ mod tests {
                 raw: [0, 0, 0, 0, 0x01, 0],
             }]
         );
+    }
+
+    /// A Bluetooth `0x31` frame, built at literal offsets, parses like the matching `0x02`.
+    /// 64 bytes is what libScePad writes to the Edge; 49 is one short of the lightbar.
+    #[test]
+    fn bluetooth_output_report_matches_usb() {
+        let mut usb = vec![0u8; 48];
+        usb[0] = 0x02;
+        let mut bt = vec![0u8; 64];
+        bt[0] = 0x31;
+        bt[1] = 0x30; // sequence 3, tag nibble 0
+        bt[2] = 0x10; // tag
+        for (u, b, v) in [
+            (1, 3, 0xFF),  // valid_flag0: everything
+            (2, 4, 0x14),  // valid_flag1: lightbar + player indicators
+            (3, 5, 0x80),  // right motor
+            (4, 6, 0x40),  // left motor
+            (9, 11, 0x02), // audio region
+            (11, 13, 0x21),
+            (22, 24, 0x26),
+            (44, 46, 0x05),
+            (45, 47, 10),
+            (46, 48, 20),
+            (47, 49, 30),
+        ] {
+            usb[u] = v;
+            bt[b] = v;
+        }
+        let (mut from_usb, mut from_bt) = (DsFeedback::default(), DsFeedback::default());
+        parse_ds_output(0, &usb, &mut from_usb);
+        parse_ds_output(0, &bt, &mut from_bt);
+        assert_eq!(from_bt.rumble, Some((0x4000, 0x8000)));
+        assert_eq!(from_bt.rumble, from_usb.rumble);
+        assert_eq!(from_bt.hidout.len(), 5);
+        assert_eq!(from_bt.hidout, from_usb.hidout);
+
+        let mut fb = DsFeedback::default();
+        parse_ds_output(0, &bt[..49], &mut fb);
+        assert!(fb.rumble.is_none());
+        assert!(fb.hidout.is_empty());
     }
 
     #[test]
