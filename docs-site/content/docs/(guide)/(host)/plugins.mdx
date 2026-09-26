@@ -21,6 +21,7 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
 | **Ubisoft Connect** | Windows | Installed Ubisoft titles, launched through Ubisoft Connect. |
 | **Amazon Games** | Windows | Installed Amazon Games titles, launched through the Amazon Games app. |
 | **Battle.net** | Windows | Installed Blizzard titles, launched through Battle.net, which must be running. |
+| **Game slots** | Linux, Windows | Keeps a copy of a game's config or saves for each device and swaps it in at launch ([below](#game-slots)). |
 | **RTSS Frame Cap** | Windows | Caps the game at the client's refresh rate through a [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) you install. |
 | **itch.io** | Linux, Windows | Games installed by the itch app, with covers. |
 | **ROM Manager** | Linux, Windows | Your ROM folders, matched to installed emulators ([below](#rom-manager)). |
@@ -211,6 +212,28 @@ rule that matches it by name. By default the device moves to the host when video
 when it stops; you can widen that to the session or to the whole time a client is connected. If
 nothing happens, the **Diagnostics** tab names the part to fix. Details:
 [the plugin's repository](https://git.unom.io/unom/punktfunk-plugin-virtualhere).
+
+## Game slots
+
+Keeps a copy of a game's config or save files for each device that streams it and puts that copy
+in place before the game starts. Play at the PC with the monitor's settings, on the Steam Deck with
+the Deck's, on the TV with the TV's.
+
+1. Install **Game slots** from **Plugins**.
+2. Open the game in the **Library** and pick its **Game slots** tab.
+3. Turn on **Keep a slot per device** and add the game's config or save folders. On Windows, write
+   the full `C:\Users\<you>\…` path.
+4. **Save**. The console gives the plugin write access to each folder you added.
+
+**A slot per settings preset** gives one device a slot for each of its presets, like *Docked* and
+*Handheld*. The launch waits while the plugin swaps the files, up to two minutes; the device shows
+its launch screen meanwhile. When the game exits, the plugin saves the device's files into its slot
+and puts the PC's own back. A device's first launch starts from the PC's files.
+
+It only swaps games a client launches from its library, never one already running, and only for
+paired devices. A folder that Steam Cloud syncs raises Steam's conflict dialog after a swap: track
+the game's config instead, or turn Steam Cloud off for that game. Details:
+[the plugin's repository](https://git.unom.io/unom/punktfunk-plugin-game-slots).
 
 ## Troubleshooting
 

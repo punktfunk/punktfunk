@@ -87,8 +87,13 @@ pub fn dualsense_windows_test(args: &[String]) -> Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let triton = args.iter().any(|a| a == "--triton");
+    // `--switch`: Pro Controller; the driver answers the handshake, the host streams `0x30`.
+    let switch = args.iter().any(|a| a == "--switch");
+    // `--xboxhid` presses Share (the Series pad's Consumer `Record` bit) on the same beats.
     let extra_buttons: u32 = if edge || deck || triton {
         punktfunk_core::input::gamepad::BTN_PADDLE1 | punktfunk_core::input::gamepad::BTN_PADDLE2
+    } else if xboxhid {
+        punktfunk_core::input::gamepad::BTN_MISC1
     } else {
         0
     };
@@ -260,6 +265,11 @@ pub fn dualsense_windows_test(args: &[String]) -> Result<()> {
         drive!(
             crate::inject::triton_windows::TritonWindowsManager::new(),
             "Steam Controller 2"
+        );
+    } else if switch {
+        drive!(
+            crate::inject::switch_pro_windows::SwitchProWindowsManager::new(),
+            "Switch Pro Controller"
         );
     } else {
         drive!(

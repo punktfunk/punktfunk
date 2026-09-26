@@ -5,8 +5,7 @@
 //! card to verb. The row keeps the focused card on the shared margin until its end reaches
 //! the screen's. OK connects, wakes, or pairs; Down reaches the verbs (Games, Connect
 //! with…, Wake, Details…, More…), then the games; Y (OK held on a remote) opens the
-//! card's menu; X jumps to Settings; Up from the row is the tab strip's; B at the root
-//! leaves.
+//! card's menu; X jumps to Settings; Up from the row, or B, is the tab strip's.
 //!
 //! The games are the Games tab's grid for that host ([`LibraryScreen::embedded`]). The
 //! shell fetches them once the row settles on a paired, online host. With focus in them
@@ -494,7 +493,7 @@ impl HomeScreen {
                 Some(MenuPulse::Confirm)
             }
             MenuEvent::Back => {
-                fx.pop(); // root pop is quit (shell rule)
+                fx.pop(); // a root's pop focuses its tab (shell rule)
                 None
             }
             // Up is the tab strip's.

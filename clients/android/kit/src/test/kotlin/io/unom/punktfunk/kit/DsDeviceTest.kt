@@ -378,6 +378,15 @@ class DsDeviceTest {
     }
 
     @Test
+    fun ds5MicLedSetsOnlyItsFlagAndMode() {
+        val mic = DsDevice.ds5MicLedReport(DsDevice.Model.DUALSENSE_EDGE, 2)
+        assertEquals(0x02, mic[0].toInt())
+        assertEquals(0x01, mic[2].toInt()) // mic-LED valid flag
+        assertEquals(2, mic[9].toInt()) // pulse
+        assertEquals(3, mic.count { it.toInt() != 0 })
+    }
+
+    @Test
     fun ds4ReportIsAFullStateWrite() {
         val r = DsDevice.ds4Report(low = 0xAB00, high = 0x0100, r = 9, g = 8, b = 7)
         assertEquals(32, r.size)

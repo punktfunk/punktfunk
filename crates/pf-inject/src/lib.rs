@@ -829,9 +829,14 @@ pub mod steam_usbip;
 #[cfg(target_os = "linux")]
 #[path = "inject/linux/switch_pro.rs"]
 pub mod switch_pro;
-/// Switch Pro codec + canned `hid-nintendo` handshake replies, used by [`switch_pro`].
-/// Not cfg-gated (same reason as `triton_proto`): pure byte-packing, so layout tests and
-/// the IMU unit contract in `tests/motion_contract.rs` run on any host, Windows included.
+/// Virtual Switch Pro Controller (`057E:2009`) via UMDF + shm (device-type 8). The driver
+/// answers the handshake; the host publishes `0x30` state and reads rumble and player lights.
+#[cfg(target_os = "windows")]
+#[path = "inject/windows/switch_pro_windows.rs"]
+pub mod switch_pro_windows;
+/// Switch Pro state mapping and feedback parsing, used by [`switch_pro`] and
+/// `switch_pro_windows`. Not cfg-gated (same reason as `triton_proto`): pure byte-packing, so
+/// layout tests and the IMU unit contract in `tests/motion_contract.rs` run on any host.
 #[path = "inject/proto/switch_proto.rs"]
 pub mod switch_proto;
 /// Sysfs/procfs poll helpers shared by the Linux backends' `#[ignore]`d device tests.

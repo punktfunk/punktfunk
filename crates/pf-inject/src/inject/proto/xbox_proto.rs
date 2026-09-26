@@ -4,10 +4,10 @@
 //! `pf-xusb` registers only `GUID_DEVINTERFACE_XUSB` and has no HID collection, so Steam hidapi,
 //! DirectInput, `joy.cpl`, and WGI/GameInput never see it — only classic `XInputGetState` does.
 //!
-//! The report is `XBOX_RDESC` in order: two 16-bit stick pairs (`X`/`Y`, `Rx`/`Ry`, 0..65535),
-//! two 16-bit Simulation-page triggers (`Brake`/`Accelerator`, 0..1023), a 4-bit null-state hat
-//! plus 4 pad bits, then 15 buttons plus 1 pad bit. [`serialize_xbox_state`] writes that layout;
-//! [`tests`] pin every field.
+//! The report is `pf_driver_proto::xbox::SERIES_RDESC` in order: two 16-bit stick pairs
+//! (`X`/`Y`, `Z`/`Rz`, 0..65535), two 16-bit Simulation-page triggers (`Brake`/`Accelerator`,
+//! 0..1023), a 4-bit null-state hat plus 4 pad bits, 15 buttons plus 1 pad bit, then Share plus 7
+//! pad bits. [`serialize_xbox_state`] writes that layout; [`tests`] pin every field.
 //!
 //! Button numbers are the real Xbox-Bluetooth layout, gaps included. We enumerate as Microsoft
 //! `045E:0B13`; SDL / Steam / Windows stock mappings key off that VID/PID. Renumbering silently
@@ -16,10 +16,9 @@
 
 use punktfunk_core::input::gamepad as gs;
 
-/// Report id included. Must equal the driver's `XBOX_INPUT_REPORT_LEN`: hidclass sizes
-/// READ_REPORT from the descriptor, and `copy_to_output` refuses a longer source rather than
-/// truncating.
-pub const XBOX_REPORT_LEN: usize = 16;
+/// The Series report, id included. One S and Elite publish only its first
+/// [`pf_driver_proto::xbox::input_len`] bytes, which stop before Share.
+pub const XBOX_REPORT_LEN: usize = pf_driver_proto::xbox::SERIES_INPUT_LEN;
 
 const REPORT_ID: u8 = 0x01;
 
@@ -160,6 +159,7 @@ pub fn serialize_xbox_state(s: &XboxState) -> [u8; XBOX_REPORT_LEN] {
     let (lo, hi) = button_bits(s.buttons);
     r[14] = lo;
     r[15] = hi;
+    r[16] = u8::from(s.buttons & gs::BTN_MISC1 != 0); // Share: Consumer `Record`
     r
 }
 
@@ -283,7 +283,7 @@ mod tests {
     fn the_report_matches_the_descriptor_layout() {
         let s = XboxState::from_gamepad(0, 0, 0, 0, 0, 0, 0);
         let r = serialize_xbox_state(&s);
-        assert_eq!(r.len(), XBOX_REPORT_LEN, "16 bytes: id + 8 + 4 + 1 + 2");
+        assert_eq!(r.len(), XBOX_REPORT_LEN, "17 bytes: id + 8 + 4 + 1 + 2 + 1");
         assert_eq!(r[0], 0x01, "report id");
     }
 
@@ -418,14 +418,25 @@ mod tests {
         }
     }
 
-    /// Touchpad / capture / paddles have no Xbox HID slot — drop them, do not collide with a real button.
+    /// Touchpad and paddles have no Xbox HID slot — drop them, do not collide with a real button.
     #[test]
     fn unmappable_wire_buttons_are_dropped() {
-        let extra = gs::BTN_TOUCHPAD | gs::BTN_MISC1 | gs::BTN_PADDLE1;
+        let extra = gs::BTN_TOUCHPAD | gs::BTN_PADDLE1;
         let r = serialize_xbox_state(&XboxState::from_gamepad(extra, 0, 0, 0, 0, 0, 0));
-        assert_eq!(r[14], 0);
-        assert_eq!(r[15], 0);
-        assert_eq!(r[13] & 0x0F, 0);
+        assert_eq!(r[13..], [0, 0, 0, 0]);
+    }
+
+    /// Share is bit 0 of byte 16, where the Series pad and SDL's Bluetooth parser put it. It
+    /// sits past the 16 bytes One S and Elite serve, so they never report it.
+    #[test]
+    fn share_is_bit_zero_of_the_byte_one_s_and_elite_do_not_serve() {
+        let r = serialize_xbox_state(&XboxState::from_gamepad(gs::BTN_MISC1, 0, 0, 0, 0, 0, 0));
+        assert_eq!(r[16], 0x01);
+        assert_eq!(r[13..16], [0, 0, 0], "Share set a button or the hat");
+        use pf_driver_proto::gamepad::{DEVTYPE_XBOX_ELITE, DEVTYPE_XBOX_ONE_S};
+        for dt in [DEVTYPE_XBOX_ONE_S, DEVTYPE_XBOX_ELITE] {
+            assert_eq!(pf_driver_proto::xbox::input_len(dt), 16);
+        }
     }
 
     #[test]
@@ -436,8 +447,7 @@ mod tests {
         );
         let r = neutral_xbox_report();
         assert_eq!(r[13], 0, "hat NULL");
-        assert_eq!(r[14], 0);
-        assert_eq!(r[15], 0);
+        assert_eq!(r[14..], [0, 0, 0], "no buttons, no Share");
         // Must match the driver's `XBOX_NEUTRAL_REPORT`; a drift is a different at-rest pose before the first frame.
         assert_eq!(r[0], 0x01);
         assert_eq!([r[1], r[2]], [0x00, 0x80], "LX = 0x8000");

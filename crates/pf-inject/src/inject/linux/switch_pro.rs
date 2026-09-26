@@ -1,7 +1,7 @@
 //! Virtual Nintendo Switch Pro Controller on `/dev/uhid`, bound by `hid-nintendo`
-//! (≥ 5.16). Codec and canned replies live in [`super::switch_proto`]; this file
-//! is the UHID plumbing that answers the driver's probe from [`UhidManager`]'s
-//! `service` pass.
+//! (≥ 5.16). State mapping lives in [`super::switch_proto`], the replies in
+//! `pf_driver_proto::switch`; this file is the UHID plumbing that answers the driver's
+//! probe from [`UhidManager`]'s `service` pass.
 //!
 //! `hid-nintendo` is not DualSense's three GET_REPORTs: it runs a blocking probe
 //! (`0x80` USB commands, then subcommands for device info, SPI calibration, IMU,
@@ -13,9 +13,8 @@
 //! re-runs the whole init; nothing probe-specific is latched here.
 
 use super::switch_proto::{
-    build_subcmd_reply, build_usb_ack, device_info_payload, parse_output, player_leds_bits,
-    serialize_report_0x30, spi_flash_read, switch_mac, SwitchOutput, SwitchState, PROCON_RDESC,
-    SWITCH_PRODUCT, SWITCH_REPORT_LEN, SWITCH_VENDOR,
+    parse_output, player_leds_bits, serialize_report_0x30, SwitchOutput, SwitchState,
+    SWITCH_PRODUCT, SWITCH_VENDOR,
 };
 use crate::uhid_abi::{
     put_cstr, BUS_USB, HID_MAX_DESCRIPTOR_SIZE, UHID_CREATE2, UHID_DESTROY, UHID_EVENT_SIZE,
@@ -23,6 +22,7 @@ use crate::uhid_abi::{
 };
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::{Context, Result};
+use pf_driver_proto::switch as wire;
 use punktfunk_core::quic::{HidOutput, RichInput};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -72,18 +72,18 @@ impl SwitchProPad {
         );
         put_cstr(&mut ev, 132, 64, &format!("punktfunk/switchpro/{index}"));
         put_cstr(&mut ev, 196, 64, &format!("punktfunk-swpro-{index}"));
-        ev[260..262].copy_from_slice(&(PROCON_RDESC.len() as u16).to_ne_bytes());
+        ev[260..262].copy_from_slice(&(wire::RDESC.len() as u16).to_ne_bytes());
         ev[262..264].copy_from_slice(&BUS_USB.to_ne_bytes());
         ev[264..268].copy_from_slice(&SWITCH_VENDOR.to_ne_bytes());
         ev[268..272].copy_from_slice(&SWITCH_PRODUCT.to_ne_bytes());
         ev[272..276].copy_from_slice(&0x0200u32.to_ne_bytes()); // bcdDevice 2.00
         ev[276..280].copy_from_slice(&0u32.to_ne_bytes());
-        ev[280..280 + PROCON_RDESC.len()].copy_from_slice(PROCON_RDESC);
+        ev[280..280 + wire::RDESC.len()].copy_from_slice(&wire::RDESC);
         self.fd.write_all(&ev).context("write UHID_CREATE2")?;
         Ok(())
     }
 
-    fn write_report(&mut self, r: &[u8; SWITCH_REPORT_LEN]) -> Result<()> {
+    fn write_report(&mut self, r: &[u8; wire::REPORT_LEN]) -> Result<()> {
         let mut ev = [0u8; UHID_EVENT_SIZE];
         ev[0..4].copy_from_slice(&UHID_INPUT2.to_ne_bytes());
         // uhid_input2_req: size u16 at 4, data at 6.
@@ -100,33 +100,14 @@ impl SwitchProPad {
         self.write_report(&r)
     }
 
-    fn answer_subcmd(&mut self, id: u8, args: &[u8]) {
+    /// Answer a handshake command or subcommand, as the Windows driver does. Every `0x80` is
+    /// acked, including no-timeout (0x04): that skips the driver's 2 × 100 ms wait.
+    fn answer(&mut self, output: &[u8]) {
         self.timer = self.timer.wrapping_add(1);
-        let st = self.state;
-        let reply = match id {
-            // Device info: probe aborts without it. Hardware acks with 0x82.
-            0x02 => build_subcmd_reply(
-                &st,
-                self.timer,
-                0x82,
-                id,
-                &device_info_payload(&switch_mac(self.index)),
-            ),
-            // SPI flash: unknown addresses read as zero. Kernel and SDL ask for
-            // the same calibration in different shapes — see `spi_flash_read`.
-            0x10 => {
-                let addr = args
-                    .get(..4)
-                    .map(|a| u32::from_le_bytes([a[0], a[1], a[2], a[3]]))
-                    .unwrap_or(0);
-                let len = args.get(4).copied().unwrap_or(0);
-                let payload = spi_flash_read(addr, len);
-                build_subcmd_reply(&st, self.timer, 0x90, id, &payload)
-            }
-            // Input mode 0x03, IMU 0x40, vibration 0x48, lights 0x30/0x38, …: ack + echoed id.
-            _ => build_subcmd_reply(&st, self.timer, 0x80, id, &[]),
-        };
-        let _ = self.write_report(&reply);
+        let state = serialize_report_0x30(&self.state, self.timer);
+        if let Some(reply) = wire::reply(&state, output, self.index) {
+            let _ = self.write_report(&reply);
+        }
     }
 
     /// Drain UHID events. Each probe step blocks `hid-nintendo` until answered; call often.
@@ -142,28 +123,23 @@ impl SwitchProPad {
                     // uhid_output_req: data[4096] at [4..4100], size u16 at [4100..4102].
                     let size = u16::from_ne_bytes([ev[4100], ev[4101]]) as usize;
                     let end = 4 + size.min(HID_MAX_DESCRIPTOR_SIZE);
-                    match parse_output(&ev[4..end]) {
-                        Some(SwitchOutput::UsbCmd(cmd)) => {
-                            // Ack every 0x80, including no-timeout (0x04): skips the driver's 2 × 100 ms wait.
-                            let _ = self.write_report(&build_usb_ack(cmd));
-                        }
+                    let data = ev[4..end].to_vec();
+                    match parse_output(&data) {
                         Some(SwitchOutput::Subcmd { id, args, rumble }) => {
                             // No trigger motors on this protocol — see `PadFeedback::rumble`.
                             fb.rumble = Some((rumble.0, rumble.1, 0, 0));
-                            if id == 0x30 {
-                                // Player lights are the subcommand payload; still ack via `answer_subcmd`.
-                                if let Some(&arg) = args.first() {
-                                    fb.hidout.push(HidOutput::PlayerLeds {
-                                        pad,
-                                        bits: player_leds_bits(arg),
-                                    });
-                                }
+                            // Player lights are the subcommand payload; `answer` still acks it.
+                            if let (0x30, Some(&arg)) = (id, args.first()) {
+                                fb.hidout.push(HidOutput::PlayerLeds {
+                                    pad,
+                                    bits: player_leds_bits(arg),
+                                });
                             }
-                            self.answer_subcmd(id, &args);
                         }
                         Some(SwitchOutput::Rumble(r)) => fb.rumble = Some((r.0, r.1, 0, 0)),
-                        None => {}
+                        Some(SwitchOutput::UsbCmd(_)) | None => {}
                     }
+                    self.answer(&data);
                 }
                 UHID_GET_REPORT => {
                     // hid-nintendo never GET_REPORTs; EIO so a stray request cannot block.

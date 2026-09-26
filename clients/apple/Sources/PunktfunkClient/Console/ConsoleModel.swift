@@ -28,6 +28,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         var wakeOnly: (StoredHost) -> Void
         var cancelConnect: () -> Void
         var showStream: () -> Void
+        /// The console's launch hold went up (`true`) or let go.
+        var holding: (Bool) -> Void
         var paired: (StoredHost, Data) -> Void
         /// A Back the shell did not take: on a TV that press belongs to the system.
         var quit: () -> Void
@@ -63,6 +65,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     private var openedField: SystemEntry?
     /// Sends the pad's reading while the console's input test is up; the menu poller rests.
     private var padTestTimer: Timer?
+    /// The launch hold as last reported through `actions.holding`.
+    private var holding = false
 
     struct SystemEntry: Identifiable, Equatable {
         let id = UUID()
@@ -145,6 +149,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     }
 
     func detach() {
+        // A console off screen holds nothing.
+        report(holding: false)
         watching.removeAll()
         padTest(false)
         pads.stop()
@@ -188,6 +194,13 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     func consoleDidDrawFrame() {
         while let raw = bridge.nextEvent() { handle(event: raw) }
         drainCommands()
+        report(holding: bridge.holdsLaunch)
+    }
+
+    private func report(holding now: Bool) {
+        guard now != holding else { return }
+        holding = now
+        actions.holding(now)
     }
 
     func consoleDidRequestQuit() { actions.quit() }

@@ -5,8 +5,8 @@
 //!
 //! Transport matches the PS/Deck pads (`SwDeviceCreate` + sealed channel). Stamp
 //! `device_type` before the magic so the driver resolves identity before hidclass
-//! asks for descriptors. Codec: [`super::xbox_proto`]. One descriptor (`XBOX_RDESC`)
-//! for all three identities — see `WinXboxIdentity`.
+//! asks for descriptors. Codec: [`super::xbox_proto`]. Descriptors: `pf_driver_proto::xbox`,
+//! the Series one with Share and the One S / Elite one cut from it.
 //!
 //! Identities are Bluetooth Xbox pads on purpose. Wired ids (`045E:028E`, `045E:02EA`)
 //! are vendor-class XUSB/GIP with no HID interface; a HID child claiming one has never
@@ -31,8 +31,7 @@ use std::time::Duration;
 
 /// Xbox identity this backend can present. Same transport as `WinDsIdentity`
 /// (`super::dualsense_windows`); only PnP identity and `device_type` differ.
-/// All three share the driver's `XBOX_RDESC` — identity is VID/PID. Provenance:
-/// `packaging/windows/drivers/pf-gamepad/src/lib.rs`.
+/// Descriptor and report length follow `devtype` (`pf_driver_proto::xbox`).
 pub(super) struct WinXboxIdentity {
     /// Stamped into the section; the driver picks VID/PID and product string
     /// from it before hidclass asks.
@@ -176,6 +175,8 @@ pub struct XboxWinPad {
     drain: OutputDrain,
     /// Rumble `enable` bytes already logged for this pad — see [`XboxWinPad::service`].
     seen_enable: Vec<u8>,
+    /// Input bytes the identity's descriptor declares; Share rides past One S / Elite's 16.
+    report_len: usize,
 }
 
 impl XboxWinPad {
@@ -239,15 +240,23 @@ impl XboxWinPad {
             input_gen: 0,
             drain: OutputDrain::new(),
             seen_enable: Vec::new(),
+            report_len: pf_driver_proto::xbox::input_len(id.devtype),
         })
     }
 
-    /// Publish `st` under the v2.3 seqlock so a driver read cannot land mid-copy.
+    /// Publish the identity's slice of `st` under the v2.3 seqlock so a driver read cannot land
+    /// mid-copy.
     fn write_state(&mut self, st: &XboxState) {
         let r = serialize_xbox_state(st);
-        // SAFETY: `data_base()` is a live SHM_SIZE-byte section; `r` is the
-        // codec's fixed-size report.
-        unsafe { publish_input(self.channel.data_base(), &mut self.input_gen, &r) };
+        // SAFETY: `data_base()` is a live SHM_SIZE-byte section; `report_len` ≤ the codec's
+        // fixed-size report.
+        unsafe {
+            publish_input(
+                self.channel.data_base(),
+                &mut self.input_gen,
+                &r[..self.report_len],
+            )
+        };
     }
 
     fn service(&mut self) -> (Option<(u16, u16, u16, u16)>, bool) {

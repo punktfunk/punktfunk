@@ -111,7 +111,7 @@ pub(crate) struct ConnectIntent {
 
 pub(crate) enum Nav {
     Push(Box<Screen>),
-    /// Pop this screen; popping the root quits the console.
+    /// Pop this screen; popping the root focuses its tab, and the tab's Back asks to exit.
     Pop,
     /// Swap in place, animated as a push. Pop+push would leave the old menu on the
     /// stack, so Back from the editor would describe the host as it was before the edit.
@@ -131,6 +131,8 @@ pub(crate) struct Outbox {
     pub tab: Option<crate::shell::Tab>,
     /// Browse games: focus the games under the Hosts row.
     pub browse: bool,
+    /// Leave the console: the exit question's yes.
+    pub quit: bool,
 }
 
 impl Outbox {

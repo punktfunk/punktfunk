@@ -47,6 +47,7 @@ const TAG_LED: u8 = 0x01;
 const TAG_PLAYER_LEDS: u8 = 0x02;
 const TAG_TRIGGER: u8 = 0x03;
 const TAG_HID_RAW: u8 = 0x05;
+const TAG_MIC_LED: u8 = 0x07;
 
 /// `NativeBridge.nativeNextRumble(handle): Long` — block up to ~100 ms for the next EFFECTIVE
 /// rumble command from the core's shared policy engine (`design/rumble-root-fix.md` §D). The
@@ -94,6 +95,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNextRumble(
 ///   Led        → `[pad][0x01][r][g][b]`         (len 5)
 ///   PlayerLeds → `[pad][0x02][bits]`            (len 3)
 ///   Trigger    → `[pad][0x03][which][effect…]`  (len 3 + effect.len())
+///   MicLed     → `[pad][0x07][mode]`            (len 3)
 /// Returns the byte count written, or `-1` on timeout / session closed / an event with no
 /// Android replay (dropped). A buffer too small for the event is logged.
 #[unsafe(no_mangle)]
@@ -123,6 +125,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNextHidout(
             let (pad, tag, head, tail): (u8, u8, &[u8], &[u8]) = match &ev {
                 HidOutput::Led { pad, r, g, b } => (*pad, TAG_LED, &[*r, *g, *b], &[]),
                 HidOutput::PlayerLeds { pad, bits } => (*pad, TAG_PLAYER_LEDS, &[*bits], &[]),
+                HidOutput::MicLed { pad, mode } => (*pad, TAG_MIC_LED, &[*mode], &[]),
                 HidOutput::Trigger { pad, which, effect } => {
                     (*pad, TAG_TRIGGER, &[*which], effect.as_slice())
                 }

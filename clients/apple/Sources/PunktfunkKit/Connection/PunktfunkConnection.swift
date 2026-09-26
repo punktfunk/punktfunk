@@ -1604,6 +1604,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         /// SET_REPORT — lizard mode, IMU enable); `data` the full report, id byte first, ≤ 64
         /// bytes (feature frames arrive whole/zero-padded by design).
         case hidRaw(pad: UInt8, kind: UInt8, data: [UInt8])
+        /// DualSense mic-mute LED: `mode` 0 off, 1 on, 2 pulse.
+        case micLED(pad: UInt8, mode: UInt8)
     }
 
     /// Pull the next HID-output feedback event (lightbar / player LEDs / adaptive triggers —
@@ -1636,6 +1638,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 let len = Int(min(out.raw_len, UInt8(PUNKTFUNK_HID_REPORT_MAX)))
                 let data = withUnsafeBytes(of: out.raw) { Array($0.prefix(len)) }
                 return .hidRaw(pad: out.pad, kind: out.hid_kind, data: data)
+            case PUNKTFUNK_HIDOUT_MIC_LED:
+                return .micLED(pad: out.pad, mode: out.which)
             default:
                 return nil // unknown kind from a newer host — skip (forward-compatible)
             }

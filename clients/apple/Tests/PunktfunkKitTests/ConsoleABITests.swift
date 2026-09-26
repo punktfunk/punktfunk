@@ -62,12 +62,12 @@ final class ConsoleABITests: XCTestCase {
         XCTAssertGreaterThan(Set(pixels).count, 100, "Home paints a backdrop and text, not a flat fill")
     }
 
-    /// What a TV binds its Menu button on: at the root the press is the system's, and one
-    /// screen deeper it is the console's. Screens arrive and leave on a spring, so this runs
-    /// the frames that carry it, the way the display link does.
+    /// What a TV binds its Menu button on: on a tab the press is the system's, and on a card
+    /// or a screen deeper it is the console's. Screens arrive and leave on a spring, so this
+    /// runs the frames that carry it, the way the display link does.
     func testRootIsWhereBackLeaves() throws {
         let texture = try offscreen(width: 320, height: 180)
-        XCTAssertTrue(punktfunk_console_at_root(console))
+        XCTAssertFalse(punktfunk_console_at_root(console), "a focused card is under its tab")
         // With no hosts, focus starts on Add Host; OK opens it, so Back has somewhere to go.
         XCTAssertTrue(punktfunk_console_menu(console, 4, 1))
         draw(texture, frames: 20)
@@ -99,16 +99,18 @@ final class ConsoleABITests: XCTestCase {
         }
     }
 
-    /// A pad's Back at Home is not the console's: tvOS hands Menu to the system, and the shell
-    /// says why with a Quit action.
-    func testBackAtTheRootGoesToTheSystem() {
-        XCTAssertFalse(punktfunk_console_menu(console, 5, 1))
+    /// A pad's Back on a card climbs to its tab, where the press is the system's: an Apple app
+    /// cannot close itself, so the console raises no Quit and `at_root` hands Menu to tvOS.
+    func testBackClimbsToTheTabAndRaisesNoQuit() {
+        XCTAssertTrue(punktfunk_console_menu(console, 5, 1), "Back on a card is the console's")
+        XCTAssertTrue(punktfunk_console_at_root(console), "and lands on the tab")
+        XCTAssertTrue(punktfunk_console_menu(console, 5, 1))
         var events: [String] = []
         while let raw = punktfunk_console_next_event(console) {
             events.append(String(cString: raw))
             punktfunk_console_string_free(raw)
         }
-        XCTAssertTrue(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
+        XCTAssertFalse(events.contains(#"{"action":"Quit"}"#), "events: \(events)")
     }
 }
 #endif

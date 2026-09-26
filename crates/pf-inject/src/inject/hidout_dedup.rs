@@ -24,6 +24,7 @@ const RENEW_EVERY: Duration = Duration::from_millis(1000);
 pub struct HidoutDedup {
     led: Option<(u8, u8, u8)>,
     player_leds: Option<u8>,
+    mic_led: Option<u8>,
     /// Last-forwarded adaptive-trigger effect per side: `[0]` = L2, `[1]` = R2.
     trigger: [Option<Vec<u8>>; 2],
     audio_ctl: Option<(u8, [u8; 6])>,
@@ -65,6 +66,9 @@ impl HidoutDedup {
         if let Some(bits) = self.player_leds {
             out.push(HidOutput::PlayerLeds { pad, bits });
         }
+        if let Some(mode) = self.mic_led {
+            out.push(HidOutput::MicLed { pad, mode });
+        }
         for (which, effect) in self.trigger.iter().enumerate() {
             if let Some(effect) = effect {
                 out.push(HidOutput::Trigger {
@@ -103,6 +107,15 @@ impl HidoutDedup {
                     false
                 } else {
                     self.player_leds = v;
+                    true
+                }
+            }
+            HidOutput::MicLed { mode, .. } => {
+                let v = Some(*mode);
+                if self.mic_led == v {
+                    false
+                } else {
+                    self.mic_led = v;
                     true
                 }
             }
@@ -162,6 +175,16 @@ mod tests {
         assert!(d.should_forward(&pl(0b101), t));
         assert!(!d.should_forward(&pl(0b101), t));
         assert!(!d.should_forward(&led(20), t));
+
+        let mic = |mode| HidOutput::MicLed { pad: 0, mode };
+        assert!(d.should_forward(&mic(1), t));
+        assert!(!d.should_forward(&mic(1), t));
+        assert!(d.should_forward(&mic(0), t));
+        let later = t + RENEW_EVERY;
+        assert!(
+            d.renewals(0, later).contains(&mic(0)),
+            "the LED state renews"
+        );
 
         let trig = |which, byte| HidOutput::Trigger {
             pad: 0,

@@ -1875,21 +1875,23 @@ pub mod gamepad {
     /// wired `045E:028E`/`045E:02EA` are not). `pf-xusb` registers only `GUID_DEVINTERFACE_XUSB`
     /// and has no HID collection, so Steam/WGI/GameInput never see it.
     ///
-    /// Unlike its siblings the Xbox input report is not 64 bytes — it is `XBOX_INPUT_REPORT_LEN`
-    /// (16). hidclass sizes its buffer from the descriptor and refuses an over-long source.
+    /// Its input report is [`crate::xbox::SERIES_INPUT_LEN`] bytes, not 64: hidclass sizes its
+    /// buffer from the descriptor and refuses an over-long source.
     pub const DEVTYPE_XBOX: u8 = 4;
-    /// Xbox One S over Bluetooth (`VID_045E&PID_02FD`).
-    /// Shares [`DEVTYPE_XBOX`]'s report descriptor byte-for-byte. All three Xbox identities are
-    /// the same pad in HID terms and differ only in VID/PID, product string, and INF model line.
-    /// Do not hand-write a per-identity descriptor — the shape is shared; identity is VID/PID.
+    /// Xbox One S over Bluetooth (`VID_045E&PID_02FD`). No Share button: it serves
+    /// [`crate::xbox::NO_SHARE_RDESC`], cut from the Series descriptor, never hand-written.
     pub const DEVTYPE_XBOX_ONE_S: u8 = 5;
-    /// Xbox Elite Wireless Controller Series 2 (`VID_045E&PID_0B22`).
-    /// The four paddles are not in this identity's report yet. The descriptor is shared (see
-    /// [`DEVTYPE_XBOX_ONE_S`]); `xinputhid` may claim the HID collection exclusively anyway.
+    /// Xbox Elite Wireless Controller Series 2 (`VID_045E&PID_0B22`), on the One S descriptor.
+    /// The four paddles are not in its report; `xinputhid` may claim the collection exclusively.
     pub const DEVTYPE_XBOX_ELITE: u8 = 6;
     /// Steam Controller 2 (Triton): wired identity `28DE:1302`. Raw-passthrough — host feeds
     /// captured reports; the driver answers Steam's feature query-dance (see [`crate::triton`]).
     pub const DEVTYPE_TRITON: u8 = 7;
+    /// Nintendo Switch Pro Controller, wired (`VID_057E&PID_2009`). The driver answers the
+    /// `0x80` / `0x01` handshake itself from [`crate::switch`]; the host publishes `0x30` state.
+    /// A driver package without the `pf_switchpro` model line never binds the devnode, so the
+    /// type needs no protocol bump.
+    pub const DEVTYPE_SWITCH_PRO: u8 = 8;
 
     /// Written into the section's `driver_proto` on attach. The section starts zeroed, so `0`
     /// means no driver has attached. Bump on a gamepad-layout change.
@@ -1903,7 +1905,8 @@ pub mod gamepad {
     /// only moves when the layout breaks, so a driver with old behaviour still attaches; the host
     /// compares this instead and flags an older driver. Bump it with any driver change a game or
     /// the host depends on. `1`: devnode-index serials, Deck packet numbers, refused unknown ids.
-    pub const GAMEPAD_DRIVER_REV: u32 = 1;
+    /// `2`: Share on the Series Xbox pad. `3`: the Switch Pro identity.
+    pub const GAMEPAD_DRIVER_REV: u32 = 3;
 
     // Channel proof: who to hand the DATA section to. Do not take the duplication target from
     // the mailbox's `driver_pid` — LocalService can spawn a world-executable WUDFHost and publish
@@ -2289,28 +2292,40 @@ pub mod gamepad {
     };
 
     /// How often a real pad on USB sends an input report: `DualSense`, DualShock 4 and the Deck
-    /// (its 4 ms connection interval) alike. Every identity but the Triton is served at this rate.
+    /// (its 4 ms connection interval) alike.
     ///
     /// A game polls the stream, not the state: Sony's libScePad hands a frame no sample when no
     /// report arrived since its last read, so a pad slower than the game's frame rate reads as a
     /// held input released and pressed again.
     pub const REPORT_PERIOD_US: u64 = 4_000;
 
+    /// The input-report period the driver serves `device_type` at (the Triton serves changes).
+    ///
+    /// The Pro Controller pushes `0x30` every 8 ms over Bluetooth and 15 ms over USB, three IMU
+    /// samples each. 8 ms sits inside `hid-nintendo`'s 8–17 ms window and SDL measures the sample
+    /// spacing from the stream, so the faster real cadence costs no consumer anything.
+    pub const fn report_period_us(device_type: u8) -> u64 {
+        match device_type {
+            DEVTYPE_SWITCH_PRO => 8_000,
+            _ => REPORT_PERIOD_US,
+        }
+    }
+
     /// Whether a report is due at `now_us`, given the slot `due_us` it was scheduled for.
     ///
-    /// `Some(next)` means serve now and schedule the next slot one period on. A tick more than a
-    /// period late restarts the schedule from now rather than catching up, since a burst of
-    /// back-dated reports is exactly the cadence a game must not see.
-    pub fn serve_due(now_us: u64, due_us: u64) -> Option<u64> {
+    /// `Some(next)` means serve now and schedule the next slot one `period_us` on. A tick more
+    /// than a period late restarts the schedule from now rather than catching up, since a burst
+    /// of back-dated reports is exactly the cadence a game must not see.
+    pub fn serve_due(now_us: u64, due_us: u64, period_us: u64) -> Option<u64> {
         if now_us < due_us {
             return None;
         }
-        let from = if now_us - due_us >= REPORT_PERIOD_US {
+        let from = if now_us - due_us >= period_us {
             now_us
         } else {
             due_us
         };
-        Some(from + REPORT_PERIOD_US)
+        Some(from + period_us)
     }
 
     /// Write the pad's own clocks into a report about to be served.
@@ -2321,9 +2336,9 @@ pub mod gamepad {
     /// real time between the reports a game receives. A Deck frame carries `unPacketNum` (4–7),
     /// and Valve's `controller_structs.h` tells readers to skip a repeated one. The host publishes
     /// at its client's rate and the driver serves at the hardware's, so the driver owns every
-    /// clock. `serial` is this report's index, `elapsed_us` the time since the first report; every
-    /// field wraps as hardware does. Returns `false`, and leaves the report alone, for an identity
-    /// that has no such fields.
+    /// clock. A Switch Pro `0x30` or `0x21` carries an 8-bit timer (byte 1). `serial` is this
+    /// report's index, `elapsed_us` the time since the first report; every field wraps as hardware
+    /// does. Returns `false`, and leaves the report alone, for an identity that has no such fields.
     pub fn stamp_report_clock(
         device_type: u8,
         report: &mut [u8; 64],
@@ -2354,6 +2369,11 @@ pub mod gamepad {
                 report[4..8].copy_from_slice(&serial.to_le_bytes());
                 true
             }
+            // A `0x81` handshake ack has no timer; its byte 1 is the echoed command.
+            DEVTYPE_SWITCH_PRO if report[0] != 0x81 => {
+                report[1] = serial as u8;
+                true
+            }
             _ => false,
         }
     }
@@ -2372,7 +2392,8 @@ pub mod gamepad {
 
     /// USB serial string of pad `index` presented as `device_type`. SDL and Steam dedup pads by
     /// it, so no two (identity, index) pairs may share one. A PlayStation serial is the pairing
-    /// MAC, most significant octet first; each Xbox model has its own base octet.
+    /// MAC, most significant octet first; each Xbox model has its own base octet. A Switch Pro
+    /// serial is its device-info MAC ([`crate::switch::mac`]).
     pub fn pad_serial(device_type: u8, index: u8) -> String {
         let low = ps_mac_low(device_type, index);
         let xbox = |base: u8| alloc::format!("F4B0FC2A6C{:02X}", base.wrapping_add(index));
@@ -2387,6 +2408,10 @@ pub mod gamepad {
                 crate::triton::serial(index, &mut s);
                 String::from_utf8_lossy(&s).into_owned()
             }
+            DEVTYPE_SWITCH_PRO => crate::switch::mac(index)
+                .iter()
+                .map(|b| alloc::format!("{b:02X}"))
+                .collect(),
             _ => alloc::format!("35533AD6E7{low:02X}"),
         }
     }
@@ -2395,7 +2420,8 @@ pub mod gamepad {
     /// each names. A token that prefixes another comes after it (`pf_dualsense` after
     /// `pf_dualsenseedge`), so the first match is the right one. Windows Server has no
     /// `xinputhid`, so every Xbox kind binds `pf_xbox_nofilter`; the section fixes the PID.
-    pub const HWID_DEVTYPES: [(&str, u8); 9] = [
+    pub const HWID_DEVTYPES: [(&str, u8); 10] = [
+        ("pf_switchpro", DEVTYPE_SWITCH_PRO),
         ("pf_xbox_nofilter", DEVTYPE_XBOX),
         ("pf_xboxwireless", DEVTYPE_XBOX),
         ("pf_xboxones", DEVTYPE_XBOX_ONE_S),
@@ -2428,6 +2454,7 @@ pub mod gamepad {
             DEVTYPE_XBOX_ONE_S => (0x045E, 0x02FD),
             DEVTYPE_XBOX_ELITE => (0x045E, 0x0B22),
             DEVTYPE_TRITON => (0x28DE, 0x1302),
+            DEVTYPE_SWITCH_PRO => (0x057E, 0x2009),
             _ => return None,
         })
     }
@@ -2633,6 +2660,431 @@ pub mod triton {
             }
         }
         r
+    }
+}
+
+/// Xbox Bluetooth HID report descriptors, served by `pf-gamepad` for device types 4–6 and packed
+/// by `pf-inject`'s `xbox_proto`.
+///
+/// [`SERIES_RDESC`] is the Series X|S pad (`045E:0B13`). Its input report matches the Linux
+/// capture of a real one (xpadneo `docs/descriptors/xbxs.md`) byte for byte; the triggers are
+/// declared as 16-bit fields where the pad declares 10 bits plus 6 of padding. One S and Elite
+/// have no Share button, so [`NO_SHARE_RDESC`] is the same bytes with [`SHARE_ITEMS`] cut out.
+/// Identity beyond that is VID/PID, not descriptor shape.
+///
+/// Two blocks the capture lacks. Output `0x03` is the Bluetooth rumble report
+/// (`[id][enable][lt][rt][left][right][duration][delay][loop]`, magnitudes 0..100). Feature
+/// `0x85` is the sealed channel's proof transport: without it hidclass refuses the host's
+/// `HidD_GetFeature` and the pad serves neutral forever. Both come after the last Input item and
+/// restate every global they use, so they cannot shift the input layout.
+pub mod xbox {
+    /// Offset of [`SHARE_ITEMS`] in [`SERIES_RDESC`]: right after the button padding bit.
+    pub const SHARE_AT: usize = 131;
+    /// Consumer `Record` (0x0C/0xB2), one bit plus seven of padding: Share is bit 0 of byte 16.
+    #[rustfmt::skip]
+    pub const SHARE_ITEMS: [u8; 25] = [
+        0x05, 0x0C, 0x0A, 0xB2, 0x00, 0x15, 0x00, 0x25, 0x01, 0x95, 0x01, 0x75, 0x01, 0x81, 0x02,
+        0x15, 0x00, 0x25, 0x00, 0x75, 0x07, 0x95, 0x01, 0x81, 0x03,
+    ];
+    /// Input report 0x01 on the wire, id included: sticks 8, triggers 4, hat 1, buttons 2, Share 1.
+    pub const SERIES_INPUT_LEN: usize = 17;
+    /// [`SERIES_INPUT_LEN`] without the Share byte.
+    pub const NO_SHARE_INPUT_LEN: usize = 16;
+
+    /// Whether `device_type` is the Series pad, the one identity with a Share button.
+    pub const fn has_share(device_type: u8) -> bool {
+        device_type == crate::gamepad::DEVTYPE_XBOX
+    }
+
+    /// Wire length of the input report the identity's descriptor declares.
+    pub const fn input_len(device_type: u8) -> usize {
+        if has_share(device_type) {
+            SERIES_INPUT_LEN
+        } else {
+            NO_SHARE_INPUT_LEN
+        }
+    }
+
+    /// Right stick is `Z`/`Rz`: `xinputhid` maps those to the right stick and ignores `Rx`/`Ry`.
+    #[rustfmt::skip]
+    pub static SERIES_RDESC: [u8; 248] = [
+        0x05, 0x01,                    // Usage Page (Generic Desktop)
+        0x09, 0x05,                    // Usage (Game Pad)
+        0xA1, 0x01,                    // Collection (Application)
+        0x85, 0x01,                    //   Report ID (1)
+        0x09, 0x01,                    //   Usage (Pointer)
+        0xA1, 0x00,                    //   Collection (Physical)
+        0x09, 0x30,                    //     Usage (X)          — left stick X
+        0x09, 0x31,                    //     Usage (Y)          — left stick Y
+        0x15, 0x00,                    //     Logical Minimum (0)
+        0x27, 0xFF, 0xFF, 0x00, 0x00,  //     Logical Maximum (65535)
+        0x95, 0x02,                    //     Report Count (2)
+        0x75, 0x10,                    //     Report Size (16)
+        0x81, 0x02,                    //     Input (Data,Var,Abs)
+        0xC0,                          //   End Collection
+        0x09, 0x01,                    //   Usage (Pointer)
+        0xA1, 0x00,                    //   Collection (Physical)
+        0x09, 0x32,                    //     Usage (Z)          — right stick X
+        0x09, 0x35,                    //     Usage (Rz)         — right stick Y
+        0x15, 0x00,                    //     Logical Minimum (0)
+        0x27, 0xFF, 0xFF, 0x00, 0x00,  //     Logical Maximum (65535)
+        0x95, 0x02,                    //     Report Count (2)
+        0x75, 0x10,                    //     Report Size (16)
+        0x81, 0x02,                    //     Input (Data,Var,Abs)
+        0xC0,                          //   End Collection
+        0x05, 0x02,                    //   Usage Page (Simulation Controls)
+        0x09, 0xC5,                    //   Usage (Brake)        — left trigger
+        0x15, 0x00,                    //   Logical Minimum (0)
+        0x26, 0xFF, 0x03,              //   Logical Maximum (1023)
+        0x95, 0x01,                    //   Report Count (1)
+        0x75, 0x10,                    //   Report Size (16)
+        0x81, 0x02,                    //   Input (Data,Var,Abs)
+        0x09, 0xC4,                    //   Usage (Accelerator)  — right trigger
+        0x15, 0x00,                    //   Logical Minimum (0)
+        0x26, 0xFF, 0x03,              //   Logical Maximum (1023)
+        0x95, 0x01,                    //   Report Count (1)
+        0x75, 0x10,                    //   Report Size (16)
+        0x81, 0x02,                    //   Input (Data,Var,Abs)
+        0x05, 0x01,                    //   Usage Page (Generic Desktop)
+        0x09, 0x39,                    //   Usage (Hat switch)
+        0x15, 0x01,                    //   Logical Minimum (1)
+        0x25, 0x08,                    //   Logical Maximum (8)
+        0x35, 0x00,                    //   Physical Minimum (0)
+        0x46, 0x3B, 0x01,              //   Physical Maximum (315)
+        0x65, 0x14,                    //   Unit (Eng Rot: Degrees)
+        0x75, 0x04,                    //   Report Size (4)
+        0x95, 0x01,                    //   Report Count (1)
+        0x81, 0x42,                    //   Input (Data,Var,Abs,Null State)
+        0x65, 0x00,                    //   Unit (None)
+        0x75, 0x04,                    //   Report Size (4)
+        0x95, 0x01,                    //   Report Count (1)
+        0x81, 0x03,                    //   Input (Cnst,Var,Abs) — pad the hat byte
+        0x05, 0x09,                    //   Usage Page (Button)
+        0x19, 0x01,                    //   Usage Minimum (Button 1)
+        0x29, 0x0F,                    //   Usage Maximum (Button 15)
+        0x15, 0x00,                    //   Logical Minimum (0)
+        0x25, 0x01,                    //   Logical Maximum (1)
+        0x75, 0x01,                    //   Report Size (1)
+        0x95, 0x0F,                    //   Report Count (15)
+        0x81, 0x02,                    //   Input (Data,Var,Abs)
+        0x75, 0x01,                    //   Report Size (1)
+        0x95, 0x01,                    //   Report Count (1)
+        0x81, 0x03,                    //   Input (Cnst,Var,Abs) — pad to a byte boundary
+        0x05, 0x0C,                    //   Usage Page (Consumer)          ┐ SHARE_ITEMS
+        0x0A, 0xB2, 0x00,              //   Usage (Record)       — Share   │
+        0x15, 0x00,                    //   Logical Minimum (0)            │
+        0x25, 0x01,                    //   Logical Maximum (1)            │
+        0x95, 0x01,                    //   Report Count (1)               │
+        0x75, 0x01,                    //   Report Size (1)                │
+        0x81, 0x02,                    //   Input (Data,Var,Abs)           │
+        0x15, 0x00,                    //   Logical Minimum (0)            │
+        0x25, 0x00,                    //   Logical Maximum (0)            │
+        0x75, 0x07,                    //   Report Size (7)                │
+        0x95, 0x01,                    //   Report Count (1)               │
+        0x81, 0x03,                    //   Input (Cnst,Var,Abs) — pad     ┘
+        0x05, 0x0F,                    //   Usage Page (Physical Interface Device)
+        0x09, 0x21,                    //   Usage (Set Effect Report)
+        0x85, 0x03,                    //   Report ID (3)
+        0xA1, 0x02,                    //   Collection (Logical)
+        0x09, 0x97,                    //     Usage (DC Enable Actuators)
+        0x15, 0x00,                    //     Logical Minimum (0)
+        0x25, 0x01,                    //     Logical Maximum (1)
+        0x75, 0x04,                    //     Report Size (4)
+        0x95, 0x01,                    //     Report Count (1)
+        0x91, 0x02,                    //     Output (Data,Var,Abs) — the enable mask, low nibble
+        0x15, 0x00,                    //     Logical Minimum (0)
+        0x25, 0x00,                    //     Logical Maximum (0)
+        0x75, 0x04,                    //     Report Size (4)
+        0x95, 0x01,                    //     Report Count (1)
+        0x91, 0x03,                    //     Output (Cnst,Var,Abs) — pad the enable byte
+        0x09, 0x70,                    //     Usage (Magnitude)
+        0x15, 0x00,                    //     Logical Minimum (0)
+        0x25, 0x64,                    //     Logical Maximum (100) — percent, NOT 255
+        0x75, 0x08,                    //     Report Size (8)
+        0x95, 0x04,                    //     Report Count (4) — LT, RT, left handle, right handle
+        0x91, 0x02,                    //     Output (Data,Var,Abs)
+        0x09, 0x50,                    //     Usage (Duration)
+        0x66, 0x01, 0x10,              //     Unit (SI Linear: seconds)
+        0x55, 0x0E,                    //     Unit Exponent (-2) — centiseconds
+        0x15, 0x00,                    //     Logical Minimum (0)
+        0x26, 0xFF, 0x00,              //     Logical Maximum (255)
+        0x75, 0x08,                    //     Report Size (8)
+        0x95, 0x01,                    //     Report Count (1)
+        0x91, 0x02,                    //     Output (Data,Var,Abs)
+        0x09, 0xA7,                    //     Usage (Start Delay) — same unit and range as Duration
+        0x91, 0x02,                    //     Output (Data,Var,Abs)
+        0x65, 0x00,                    //     Unit (None)
+        0x55, 0x00,                    //     Unit Exponent (0)
+        0x09, 0x7C,                    //     Usage (Loop Count)
+        0x91, 0x02,                    //     Output (Data,Var,Abs)
+        0xC0,                          //   End Collection
+        0x06, 0x00, 0xFF,              //   Usage Page (Vendor Defined 0xFF00)
+        0x85, 0x85,                    //   Report ID (0x85)
+        0x09, 0x2D,                    //   Usage (0x2D) — the id the PS descriptors use for it
+        0x15, 0x00,                    //   Logical Minimum (0)
+        0x26, 0xFF, 0x00,              //   Logical Maximum (255)
+        0x75, 0x08,                    //   Report Size (8)
+        0x95, 0x3F,                    //   Report Count (63) — 1 id + 63 = 64 = FeatureReportByteLength
+        0xB1, 0x02,                    //   Feature (Data,Var,Abs)
+        0xC0,                          // End Collection
+    ];
+
+    /// One S and Elite: [`SERIES_RDESC`] without [`SHARE_ITEMS`].
+    pub static NO_SHARE_RDESC: [u8; 223] = {
+        let mut out = [0u8; 223];
+        let mut i = 0;
+        while i < out.len() {
+            let from = if i < SHARE_AT {
+                i
+            } else {
+                i + SHARE_ITEMS.len()
+            };
+            out[i] = SERIES_RDESC[from];
+            i += 1;
+        }
+        out
+    };
+
+    const _: () = {
+        let mut i = 0;
+        while i < SHARE_ITEMS.len() {
+            assert!(SERIES_RDESC[SHARE_AT + i] == SHARE_ITEMS[i]);
+            i += 1;
+        }
+    };
+
+    /// The descriptor `device_type` serves.
+    pub fn rdesc(device_type: u8) -> &'static [u8] {
+        if has_share(device_type) {
+            &SERIES_RDESC
+        } else {
+            &NO_SHARE_RDESC
+        }
+    }
+}
+
+/// Nintendo Switch Pro Controller (wired, `057E:2009`) report tables and handshake replies,
+/// pinned to `hid-nintendo.c` and SDL's `SDL_hidapi_switch.c`. The UMDF driver answers the
+/// handshake from [`reply`] with no host round trip; Linux UHID calls the same function, so both
+/// serve identical bytes.
+///
+/// USB: output `0x80 <cmd>` → input `0x81 <cmd>`. Subcommand `0x01` → `0x21`, whose 13-byte
+/// header is the latest `0x30` state report's. SPI `0x10` reads are served by address range.
+pub mod switch {
+    use alloc::vec::Vec;
+
+    /// Wired Pro Controller USB HID report descriptor. Report ids: in 0x30/0x21/0x81, out
+    /// 0x01/0x10/0x80/0x82. Not the Bluetooth descriptor, which declares another report set.
+    #[rustfmt::skip]
+    pub static RDESC: [u8; 203] = [
+        0x05, 0x01, 0x15, 0x00, 0x09, 0x04, 0xA1, 0x01, 0x85, 0x30, 0x05, 0x01, 0x05, 0x09, 0x19, 0x01,
+        0x29, 0x0A, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x0A, 0x55, 0x00, 0x65, 0x00, 0x81, 0x02,
+        0x05, 0x09, 0x19, 0x0B, 0x29, 0x0E, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x04, 0x81, 0x02,
+        0x75, 0x01, 0x95, 0x02, 0x81, 0x03, 0x0B, 0x01, 0x00, 0x01, 0x00, 0xA1, 0x00, 0x0B, 0x30, 0x00,
+        0x01, 0x00, 0x0B, 0x31, 0x00, 0x01, 0x00, 0x0B, 0x32, 0x00, 0x01, 0x00, 0x0B, 0x35, 0x00, 0x01,
+        0x00, 0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00, 0x75, 0x10, 0x95, 0x04, 0x81, 0x02, 0xC0, 0x0B,
+        0x39, 0x00, 0x01, 0x00, 0x15, 0x00, 0x25, 0x07, 0x35, 0x00, 0x46, 0x3B, 0x01, 0x65, 0x14, 0x75,
+        0x04, 0x95, 0x01, 0x81, 0x02, 0x05, 0x09, 0x19, 0x0F, 0x29, 0x12, 0x15, 0x00, 0x25, 0x01, 0x75,
+        0x01, 0x95, 0x04, 0x81, 0x02, 0x75, 0x08, 0x95, 0x34, 0x81, 0x03, 0x06, 0x00, 0xFF, 0x85, 0x21,
+        0x09, 0x01, 0x75, 0x08, 0x95, 0x3F, 0x81, 0x03, 0x85, 0x81, 0x09, 0x02, 0x75, 0x08, 0x95, 0x3F,
+        0x81, 0x03, 0x85, 0x01, 0x09, 0x03, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83, 0x85, 0x10, 0x09, 0x04,
+        0x75, 0x08, 0x95, 0x3F, 0x91, 0x83, 0x85, 0x80, 0x09, 0x05, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83,
+        0x85, 0x82, 0x09, 0x06, 0x75, 0x08, 0x95, 0x3F, 0x91, 0x83, 0xC0,
+    ];
+
+    /// Vendor Feature report `0x85`, 63 bytes: the sealed channel's proof transport. Every
+    /// global it uses is restated, so it cannot shift a report above it.
+    #[rustfmt::skip]
+    const PROOF_ITEMS: [u8; 18] = [
+        0x06, 0x00, 0xFF, 0x85, 0x85, 0x09, 0x2D, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95,
+        0x3F, 0xB1, 0x02,
+    ];
+
+    /// What the Windows driver serves: [`RDESC`] with [`PROOF_ITEMS`] before its closing
+    /// `End Collection`. Without the feature report hidclass refuses the host's channel proof and
+    /// the pad serves neutral forever. The Linux UHID pad has no channel and serves [`RDESC`].
+    pub static RDESC_WITH_PROOF: [u8; 221] = {
+        let mut out = [0u8; 221];
+        let mut i = 0;
+        while i < out.len() {
+            out[i] = if i < 202 {
+                RDESC[i]
+            } else if i < 220 {
+                PROOF_ITEMS[i - 202]
+            } else {
+                RDESC[202]
+            };
+            i += 1;
+        }
+        out
+    };
+
+    /// Every USB input report, id included. `hid-nintendo` rejects a `0x21` under 49 bytes.
+    pub const REPORT_LEN: usize = 64;
+    /// 12-bit factory stick calibration: `center ± range` is full deflection.
+    pub const STICK_CENTER: u16 = 2048;
+    pub const STICK_RANGE: u16 = 1400;
+    /// Header byte 2: full, charging, wired. Suppresses low-battery warnings.
+    pub const BAT_CON_FULL_WIRED: u8 = 0x91;
+    /// Header byte 12. Zero stops `hid-nintendo`'s rumble queue.
+    pub const VIBRATOR_READY: u8 = 0x70;
+
+    /// Two 12-bit values in `hid_field_extract` little-endian bitfield order.
+    pub fn pack12(a: u16, b: u16) -> [u8; 3] {
+        [
+            (a & 0xFF) as u8,
+            ((a >> 8) & 0x0F) as u8 | ((b & 0x0F) << 4) as u8,
+            ((b >> 4) & 0xFF) as u8,
+        ]
+    }
+
+    /// Input report `0x30`: the 13-byte header (timer, battery, 24 button bits, packed
+    /// `[lx, ly, rx, ry]`, vibrator), then three IMU frames of accel and gyro repeating one
+    /// sample, i16 LE.
+    pub fn state_report(
+        timer: u8,
+        buttons: u32,
+        sticks: [u16; 4],
+        accel: [i16; 3],
+        gyro: [i16; 3],
+    ) -> [u8; REPORT_LEN] {
+        let mut r = [0u8; REPORT_LEN];
+        r[0] = 0x30;
+        r[1] = timer;
+        r[2] = BAT_CON_FULL_WIRED;
+        r[3..6].copy_from_slice(&buttons.to_le_bytes()[..3]);
+        r[6..9].copy_from_slice(&pack12(sticks[0], sticks[1]));
+        r[9..12].copy_from_slice(&pack12(sticks[2], sticks[3]));
+        r[12] = VIBRATOR_READY;
+        for frame in r[13..49].chunks_exact_mut(12) {
+            for (i, v) in accel.iter().chain(gyro.iter()).enumerate() {
+                frame[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        r
+    }
+
+    /// At rest: sticks centred, nothing held, 1 g on +Z. Zero accel reads as free fall.
+    pub fn neutral_report() -> [u8; REPORT_LEN] {
+        state_report(0, 0, [STICK_CENTER; 4], [0, 0, 4096], [0; 3])
+    }
+
+    /// Nintendo OUI plus the pad index: the MAC `hid-nintendo` keys `uniq` off and SDL reads.
+    pub const fn mac(index: u8) -> [u8; 6] {
+        [0x7C, 0xBB, 0x8A, 0xDF, 0x00, index]
+    }
+
+    /// `0x81 <cmd>` handshake ack; `hid-nintendo` matches those two bytes. SDL reads the status
+    /// ack (`cmd` 0x01) for the controller type (3, Pro) and the MAC, least significant first.
+    pub fn usb_ack(cmd: u8, index: u8) -> [u8; REPORT_LEN] {
+        let mut r = [0u8; REPORT_LEN];
+        r[0] = 0x81;
+        r[1] = cmd;
+        if cmd == 0x01 {
+            r[3] = 0x03;
+            for (slot, b) in r[4..10].iter_mut().zip(mac(index).iter().rev()) {
+                *slot = *b;
+            }
+        }
+        r
+    }
+
+    /// `0x21` reply on `state`'s header. `hid-nintendo` matches only the echoed id (byte 14);
+    /// `ack` has its MSB set, as on hardware.
+    pub fn subcmd_reply(
+        state: &[u8; REPORT_LEN],
+        ack: u8,
+        subcmd: u8,
+        payload: &[u8],
+    ) -> [u8; REPORT_LEN] {
+        let mut r = [0u8; REPORT_LEN];
+        r[..13].copy_from_slice(&state[..13]);
+        r[0] = 0x21;
+        r[13] = ack;
+        r[14] = subcmd;
+        let n = payload.len().min(REPORT_LEN - 15);
+        r[15..15 + n].copy_from_slice(&payload[..n]);
+        r
+    }
+
+    /// Subcommand `0x02` payload: firmware 4.33, type `0x03` (Pro), then the MAC.
+    pub fn device_info_payload(mac: &[u8; 6]) -> [u8; 12] {
+        let mut p = [0x04, 0x21, 0x03, 0x02, 0, 0, 0, 0, 0, 0, 0x01, 0x01];
+        p[4..10].copy_from_slice(mac);
+        p
+    }
+
+    /// Modelled SPI flash as `(start, bytes)`. Anything else reads as zero.
+    ///
+    /// `0x6020` IMU: offsets 0, accel scale 16384, gyro scale 13371 (the driver's identity).
+    /// Stick cal: [`STICK_CENTER`] ± [`STICK_RANGE`]. Left = max ++ center ++ min; right =
+    /// center ++ min ++ max (`joycon_read_stick_calibration`). User magics at
+    /// `0x8010`/`0x801B`/`0x8026` are not `0xB2 0xA1`, so consumers take factory.
+    fn flash_blocks() -> [(u32, Vec<u8>); 6] {
+        let cal_pair = pack12(STICK_RANGE, STICK_RANGE);
+        let center_pair = pack12(STICK_CENTER, STICK_CENTER);
+        let mut imu = Vec::with_capacity(24);
+        imu.extend_from_slice(&[0u8; 6]);
+        for _ in 0..3 {
+            imu.extend_from_slice(&16384u16.to_le_bytes());
+        }
+        imu.extend_from_slice(&[0u8; 6]);
+        for _ in 0..3 {
+            imu.extend_from_slice(&13371u16.to_le_bytes());
+        }
+        [
+            (0x6020, imu),
+            (0x603D, [cal_pair, center_pair, cal_pair].concat()),
+            (0x6046, [center_pair, cal_pair, cal_pair].concat()),
+            (0x8010, alloc::vec![0xFF, 0xFF]),
+            (0x801B, alloc::vec![0xFF, 0xFF]),
+            (0x8026, alloc::vec![0xFF, 0xFF]),
+        ]
+    }
+
+    /// SPI `0x10` reply payload: echoed LE addr + len + `len` bytes at `addr`.
+    ///
+    /// Served by range, never by exact `(addr, len)`: `hid-nintendo` reads two 9-byte stick
+    /// blocks, SDL 18 bytes at `0x603D` and 22 at `0x8010`. Exact matching zero-fills SDL's
+    /// reads and pins both sticks to a corner.
+    pub fn spi_flash_read(addr: u32, len: u8) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(5 + len as usize);
+        payload.extend_from_slice(&addr.to_le_bytes());
+        payload.push(len);
+        payload.resize(5 + len as usize, 0);
+        for (start, bytes) in flash_blocks() {
+            for (i, slot) in payload[5..].iter_mut().enumerate() {
+                let a = addr.saturating_add(i as u32);
+                if let Some(b) = a.checked_sub(start).and_then(|o| bytes.get(o as usize)) {
+                    *slot = *b;
+                }
+            }
+        }
+        payload
+    }
+
+    /// The input report a Pro Controller answers `output` with, given its latest `0x30` `state`
+    /// and pad `index`: `0x81` for a `0x80` command, `0x21` for a `0x01` subcommand. Device info
+    /// and SPI reads carry data; every other subcommand is acked. `None` for rumble-only `0x10`.
+    pub fn reply(state: &[u8; REPORT_LEN], output: &[u8], index: u8) -> Option<[u8; REPORT_LEN]> {
+        match *output.first()? {
+            0x80 => Some(usb_ack(*output.get(1)?, index)),
+            0x01 if output.len() >= 11 => {
+                let (id, args) = (output[10], &output[11..]);
+                Some(match id {
+                    0x02 => subcmd_reply(state, 0x82, id, &device_info_payload(&mac(index))),
+                    0x10 => {
+                        let addr = args
+                            .get(..4)
+                            .map_or(0, |a| u32::from_le_bytes([a[0], a[1], a[2], a[3]]));
+                        let len = args.get(4).copied().unwrap_or(0);
+                        subcmd_reply(state, 0x90, id, &spi_flash_read(addr, len))
+                    }
+                    _ => subcmd_reply(state, 0x80, id, &[]),
+                })
+            }
+            _ => None,
+        }
     }
 }
 
@@ -2969,7 +3421,7 @@ mod tests {
     fn no_two_pads_share_a_serial() {
         use gamepad::*;
         let mut seen = std::collections::HashMap::new();
-        for devtype in DEVTYPE_DUALSENSE..=DEVTYPE_TRITON {
+        for devtype in DEVTYPE_DUALSENSE..=DEVTYPE_SWITCH_PRO {
             for index in 0..16u8 {
                 let serial = pad_serial(devtype, index);
                 if let Some(prev) = seen.insert(serial.clone(), (devtype, index)) {
@@ -3018,7 +3470,7 @@ mod tests {
         );
         assert_eq!(devtype_from_hwids("usb\\vid_054c&pid_0ce6"), None);
         assert_eq!(devtype_from_hwids(""), None, "a failed property query");
-        assert_eq!(identity_vid_pid(DEVTYPE_TRITON + 1), None);
+        assert_eq!(identity_vid_pid(DEVTYPE_SWITCH_PRO + 1), None);
         assert_eq!(
             identity_vid_pid(DEVTYPE_DUALSENSE_EDGE),
             Some((0x054C, 0x0DF2))
@@ -3032,22 +3484,30 @@ mod tests {
     fn serves_at_the_hardware_period() {
         use gamepad::*;
         let p = REPORT_PERIOD_US;
-        assert_eq!(serve_due(0, 0), Some(p));
+        assert_eq!(serve_due(0, 0, p), Some(p));
         assert_eq!(
-            serve_due(2_000, p),
+            serve_due(2_000, p, p),
             None,
             "a 2 ms tick between slots serves nothing"
         );
         assert_eq!(
-            serve_due(p + 100, p),
+            serve_due(p + 100, p, p),
             Some(2 * p),
             "a slightly late tick keeps the grid"
         );
         assert_eq!(
-            serve_due(p + 15_600, p),
+            serve_due(p + 15_600, p, p),
             Some(p + 15_600 + p),
             "a coarse tick restarts it"
         );
+        let sw = report_period_us(DEVTYPE_SWITCH_PRO);
+        assert_eq!(sw, 8_000);
+        assert_eq!(
+            serve_due(sw - 2_000, sw, sw),
+            None,
+            "a Switch slot waits 8 ms"
+        );
+        assert_eq!(report_period_us(DEVTYPE_DUALSENSE), p);
     }
 
     #[test]
@@ -3979,6 +4439,164 @@ mod tests {
         assert_eq!(&s, b"FVPF130203D03");
     }
 
+    /// The `0x30` header, packed sticks and three identical IMU frames (`struct
+    /// joycon_input_report` + `joycon_imu_data`).
+    #[test]
+    fn switch_state_report_layout() {
+        use switch::*;
+        let buttons = (1 << 2) | (1 << 8) | (1 << 23); // B, Minus, ZL
+        let c = STICK_CENTER;
+        let r = state_report(7, buttons, [c; 4], [-1, 0x3344, 5], [0x1122, -2, 3]);
+        assert_eq!(r[..3], [0x30, 7, BAT_CON_FULL_WIRED]);
+        assert_eq!(r[3..6], [0x04, 0x01, 0x80]);
+        assert_eq!(r[6..9], pack12(c, c));
+        assert_eq!(r[9..12], pack12(c, c));
+        assert_eq!(r[12], VIBRATOR_READY);
+        assert_eq!(r[13..15], (-1i16).to_le_bytes());
+        assert_eq!(r[15..17], 0x3344u16.to_le_bytes());
+        assert_eq!(r[19..21], 0x1122u16.to_le_bytes());
+        assert_eq!(r[13..25], r[25..37]);
+        assert_eq!(r[13..25], r[37..49]);
+        let n = neutral_report();
+        assert_eq!(
+            n[13 + 4..13 + 6],
+            4096i16.to_le_bytes(),
+            "1 g on +Z at rest"
+        );
+    }
+
+    /// The Windows descriptor is the capture plus the proof feature, closed by the capture's own
+    /// `End Collection`, and it declares Feature report `0x85` exactly once.
+    #[test]
+    fn switch_windows_rdesc_adds_only_the_proof_feature() {
+        use switch::*;
+        assert_eq!(RDESC[202], 0xC0);
+        assert_eq!(RDESC_WITH_PROOF[..202], RDESC[..202]);
+        assert_eq!(RDESC_WITH_PROOF[220], 0xC0);
+        let ids = RDESC_WITH_PROOF
+            .windows(2)
+            .filter(|w| w == &[0x85, 0x85])
+            .count();
+        assert_eq!(ids, 1, "one Report ID (0x85)");
+        assert!(RDESC_WITH_PROOF[202..]
+            .windows(2)
+            .any(|w| w == [0xB1, 0x02]));
+    }
+
+    /// A at bit 0, B at bit 12 (`hid_field_extract` LE bitfield).
+    #[test]
+    fn switch_pack12_layout() {
+        use switch::pack12;
+        assert_eq!(pack12(0x578, 0x578), [0x78, 0x85, 0x57]); // 1400/1400, the cal pair
+        assert_eq!(pack12(0x800, 0x800), [0x00, 0x08, 0x80]); // 2048/2048, the center pair
+        let p = pack12(0xABC, 0x123);
+        let a = p[0] as u16 | ((p[1] as u16 & 0xF) << 8);
+        let b = ((p[1] as u16) >> 4) | ((p[2] as u16) << 4);
+        assert_eq!((a, b), (0xABC, 0x123));
+    }
+
+    /// The handshake as `hid-nintendo` and SDL drive it: `0x80` commands get `0x81` acks (the
+    /// status ack names a Pro pad and its MAC), subcommands get `0x21` on the latched header.
+    #[test]
+    fn switch_reply_answers_the_handshake() {
+        use switch::*;
+        let state = state_report(9, 1 << 3, [STICK_CENTER; 4], [0, 0, 4096], [0; 3]);
+        let ack = reply(&state, &[0x80, 0x02], 3).expect("handshake ack");
+        assert_eq!(ack[..2], [0x81, 0x02]);
+        assert_eq!(ack[2..], [0u8; 62]);
+        let status = reply(&state, &[0x80, 0x01], 3).expect("status ack");
+        assert_eq!(status[3], 0x03, "controller type Pro");
+        let mut mac_back = [0u8; 6];
+        mac_back.copy_from_slice(&status[4..10]);
+        mac_back.reverse();
+        assert_eq!(mac_back, mac(3), "SDL reverses the status MAC");
+
+        let subcmd = |id: u8, args: &[u8]| {
+            let mut out = alloc::vec![0x01, 0x05, 0, 1, 0x40, 0x40, 0, 1, 0x40, 0x40, id];
+            out.extend_from_slice(args);
+            reply(&state, &out, 3).expect("subcommand reply")
+        };
+        let info = subcmd(0x02, &[]);
+        assert_eq!(info[..13], [&[0x21][..], &state[1..13]].concat()[..]);
+        assert_eq!(info[13..15], [0x82, 0x02]);
+        assert_eq!(info[15..27], device_info_payload(&mac(3)));
+        let spi = subcmd(0x10, &[0x3D, 0x60, 0, 0, 9]);
+        assert_eq!(spi[13..15], [0x90, 0x10]);
+        assert_eq!(spi[15..29], spi_flash_read(0x603D, 9)[..]);
+        let mode = subcmd(0x03, &[0x30]);
+        assert_eq!(mode[13..16], [0x80, 0x03, 0]);
+
+        assert!(reply(&state, &[0x10, 0x06, 0, 1, 0x40, 0x40, 0, 1, 0x40, 0x40], 3).is_none());
+        assert!(
+            reply(&state, &[0x01, 0x05], 3).is_none(),
+            "short subcommand"
+        );
+        assert!(reply(&state, &[], 3).is_none());
+    }
+
+    /// User magics absent; stick min < center < max in per-side byte order; replies echo addr+len.
+    #[test]
+    fn switch_spi_blobs_are_valid() {
+        use switch::*;
+        for addr in [0x8010u32, 0x801B, 0x8026] {
+            let p = spi_flash_read(addr, 2);
+            assert_eq!(p[..4], addr.to_le_bytes());
+            assert_eq!(p[4], 2);
+            assert!(!(p[5] == 0xB2 && p[6] == 0xA1));
+        }
+        let unpack = |b: &[u8]| b[0] as u16 | ((b[1] as u16 & 0xF) << 8);
+        // Left: max-above ++ center ++ min-below.
+        let l = spi_flash_read(0x603D, 9);
+        assert_eq!(l[..5], [0x3D, 0x60, 0, 0, 9]);
+        let (max_above, center, min_below) =
+            (unpack(&l[5..8]), unpack(&l[8..11]), unpack(&l[11..14]));
+        assert_eq!(center, STICK_CENTER);
+        assert!(center - min_below < center && center < center + max_above);
+        // Right: center ++ min-below ++ max-above.
+        assert_eq!(unpack(&spi_flash_read(0x6046, 9)[5..8]), STICK_CENTER);
+        let imu = spi_flash_read(0x6020, 24);
+        assert_eq!(imu[5..11], [0; 6]);
+        assert_eq!(imu[11..13], 16384u16.to_le_bytes());
+        assert_eq!(imu[17..23], [0; 6]);
+        assert_eq!(imu[23..25], 13371u16.to_le_bytes());
+        let gap = spi_flash_read(0x6050, 12);
+        assert_eq!(gap[..5], [0x50, 0x60, 0, 0, 12]);
+        assert_eq!(gap[5..], [0u8; 12]);
+    }
+
+    /// SDL reads 18 factory bytes at `0x603D` and 22 user bytes at `0x8010`, shapes
+    /// `hid-nintendo` never asks. Exact `(addr, len)` matching would zero-fill them.
+    #[test]
+    fn switch_spi_serves_sdl_read_shapes() {
+        use switch::*;
+        let f = spi_flash_read(0x603D, 18);
+        assert_eq!(f[..5], [0x3D, 0x60, 0, 0, 18]);
+        assert_eq!(f[5..14], spi_flash_read(0x603D, 9)[5..]);
+        assert_eq!(f[14..], spi_flash_read(0x6046, 9)[5..]);
+        let cal = &f[5..];
+        let cx = (((cal[4] as u16) << 8) & 0xF00) | cal[3] as u16;
+        let cy = ((cal[5] as u16) << 4) | ((cal[4] as u16) >> 4);
+        assert_eq!((cx, cy), (STICK_CENTER, STICK_CENTER));
+        let u = spi_flash_read(0x8010, 22);
+        assert_eq!(u[..5], [0x10, 0x80, 0, 0, 22]);
+        assert_eq!(u[5..7], [0xFF, 0xFF]); // left magic  @ 0x8010
+        assert_eq!(u[16..18], [0xFF, 0xFF]); // right magic @ 0x801B
+    }
+
+    /// The timer byte advances per served report; a `0x81` ack keeps its echoed command.
+    #[test]
+    fn switch_timer_advances_per_report() {
+        use gamepad::*;
+        let mut r = switch::neutral_report();
+        assert!(stamp_report_clock(DEVTYPE_SWITCH_PRO, &mut r, 0x1FF, 0));
+        assert_eq!(r[1], 0xFF);
+        let mut ack = switch::usb_ack(0x02, 0);
+        assert!(!stamp_report_clock(DEVTYPE_SWITCH_PRO, &mut ack, 5, 0));
+        assert_eq!(ack[1], 0x02);
+        assert_eq!(pad_serial(DEVTYPE_SWITCH_PRO, 2), "7CBB8ADF0002");
+        assert_eq!(identity_vid_pid(DEVTYPE_SWITCH_PRO), Some((0x057E, 0x2009)));
+    }
+
     #[test]
     fn triton_rdesc_is_the_372_byte_capture() {
         assert_eq!(triton::RDESC.len(), 372);
@@ -3987,6 +4605,63 @@ mod tests {
             &triton::RDESC[..8],
             &[0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x40]
         );
+    }
+
+    /// Cutting the Consumer `Record` block out of the Series descriptor leaves exactly the one
+    /// One S and Elite serve.
+    #[test]
+    fn xbox_no_share_rdesc_is_the_series_one_without_share() {
+        let series = xbox::SERIES_RDESC.to_vec();
+        let at = series
+            .windows(xbox::SHARE_ITEMS.len())
+            .position(|w| w == xbox::SHARE_ITEMS)
+            .expect("Share block in the Series descriptor");
+        assert_eq!(at, xbox::SHARE_AT);
+        let mut cut = series.clone();
+        cut.drain(at..at + xbox::SHARE_ITEMS.len());
+        assert_eq!(cut, xbox::NO_SHARE_RDESC.to_vec());
+        assert_eq!(xbox::rdesc(gamepad::DEVTYPE_XBOX), &xbox::SERIES_RDESC[..]);
+        for dt in [gamepad::DEVTYPE_XBOX_ONE_S, gamepad::DEVTYPE_XBOX_ELITE] {
+            assert_eq!(xbox::rdesc(dt), &xbox::NO_SHARE_RDESC[..]);
+        }
+    }
+
+    /// Bytes of input report `id` a descriptor declares, id byte included.
+    fn declared_input_len(rdesc: &[u8], id: u8) -> usize {
+        let (mut i, mut bits) = (0, 0usize);
+        let (mut size, mut count, mut cur_id) = (0usize, 0usize, 0u8);
+        while i < rdesc.len() {
+            let prefix = rdesc[i];
+            let n = [0, 1, 2, 4][(prefix & 3) as usize];
+            let data = rdesc[i + 1..i + 1 + n]
+                .iter()
+                .rev()
+                .fold(0usize, |v, b| v << 8 | *b as usize);
+            match prefix & 0xFC {
+                0x74 => size = data,
+                0x94 => count = data,
+                0x84 => cur_id = data as u8,
+                0x80 if cur_id == id => bits += size * count,
+                _ => {}
+            }
+            i += 1 + n;
+        }
+        assert_eq!(bits % 8, 0, "input report {id:#x} is not byte-aligned");
+        1 + bits / 8
+    }
+
+    #[test]
+    fn xbox_input_lengths_match_their_descriptors() {
+        assert_eq!(
+            declared_input_len(&xbox::SERIES_RDESC, 1),
+            xbox::SERIES_INPUT_LEN
+        );
+        assert_eq!(
+            declared_input_len(&xbox::NO_SHARE_RDESC, 1),
+            xbox::NO_SHARE_INPUT_LEN
+        );
+        assert_eq!(xbox::input_len(gamepad::DEVTYPE_XBOX), 17);
+        assert_eq!(xbox::input_len(gamepad::DEVTYPE_XBOX_ELITE), 16);
     }
 
     #[test]

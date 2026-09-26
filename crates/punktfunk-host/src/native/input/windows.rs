@@ -23,6 +23,7 @@ pub(super) struct PadBackends {
     dualsense_edge_win: Option<crate::inject::dualsense_edge_windows::DualSenseEdgeWindowsManager>,
     dualshock4_win: Option<crate::inject::dualshock4_windows::DualShock4WindowsManager>,
     steamdeck_win: Option<crate::inject::steam_deck_windows::SteamDeckWindowsManager>,
+    switchpro_win: Option<crate::inject::switch_pro_windows::SwitchProWindowsManager>,
 }
 
 impl PadBackends {
@@ -59,6 +60,10 @@ impl PadBackends {
             GamepadPref::SteamDeck => self
                 .steamdeck_win
                 .get_or_insert_with(crate::inject::steam_deck_windows::SteamDeckWindowsManager::new)
+                .handle(ev),
+            GamepadPref::SwitchPro => self
+                .switchpro_win
+                .get_or_insert_with(crate::inject::switch_pro_windows::SwitchProWindowsManager::new)
                 .handle(ev),
             // HID Xbox unless `windows_xbox_hid` picks XUSB. Guard on each arm: under XUSB,
             // `degrade_xbox_identity` has already folded One/Elite to Xbox360, so only Xbox360
@@ -116,6 +121,11 @@ impl PadBackends {
                     m.apply_rich(rich)
                 }
             }
+            GamepadPref::SwitchPro => {
+                if let Some(m) = &mut self.switchpro_win {
+                    m.apply_rich(rich)
+                }
+            }
             _ => {}
         }
     }
@@ -157,6 +167,9 @@ impl PadBackends {
         if let Some(m) = &mut self.steamdeck_win {
             m.pump(&mut *rumble, &mut *hidout);
         }
+        if let Some(m) = &mut self.switchpro_win {
+            m.pump(&mut *rumble, &mut *hidout);
+        }
     }
 
     /// Re-emit HID reports so a held-steady UMDF pad is not dropped.
@@ -175,6 +188,9 @@ impl PadBackends {
             m.heartbeat(gap);
         }
         if let Some(m) = &mut self.steamdeck_win {
+            m.heartbeat(gap);
+        }
+        if let Some(m) = &mut self.switchpro_win {
             m.heartbeat(gap);
         }
     }

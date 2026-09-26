@@ -1,10 +1,10 @@
 //! Console settings: the couch-facing subset of the shared Settings store.
 //!
 //! One row per setting, in the sections of [`TABS`], named in a strip of tabs over the
-//! list. Up from the first row reaches the sections; Left/Right there switch them, Down
-//! returns. Left/right steps the focused
-//! value (clamped); A cycles wrapping; L1/R1 change section; B closes. Every change
-//! writes the store immediately so desktop shells round-trip the same file.
+//! list. Up from the first row, or B from any, reaches the sections; Left/Right there
+//! switch them, Down returns. Left/right steps the focused value (clamped); A cycles
+//! wrapping; L1/R1 change section; B on the sections closes. Every change writes the
+//! store immediately so desktop shells round-trip the same file.
 //! Each section remembers its cursor. Presets lists the catalog and ends on New preset;
 //! a preset's own screens ([`super::preset`]) edit it through the host.
 //!
@@ -854,13 +854,13 @@ impl SettingsScreen {
             return self.sections_menu(ev, ctx, fx);
         }
         match ev {
-            MenuEvent::Back => {
-                fx.pop();
-                return None;
-            }
             MenuEvent::JumpBack => return self.switch_tab(-1, ctx),
             MenuEvent::JumpForward => return self.switch_tab(1, ctx),
-            // Up from row 0 focuses the sections, not a boundary.
+            // Back and Up from row 0 focus the sections, not a boundary.
+            MenuEvent::Back => {
+                self.strip_focus = true;
+                return Some(MenuPulse::Move);
+            }
             MenuEvent::Move(MenuDir::Up) if self.list.cursor == 0 => {
                 self.strip_focus = true;
                 return Some(MenuPulse::Move);

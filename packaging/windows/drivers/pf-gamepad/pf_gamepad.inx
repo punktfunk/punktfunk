@@ -36,10 +36,10 @@ pf_gamepad.dll=1
 ; Hardware ids: `root\pf_dualsense` for a root-enumerated devnode (devgen/devcon tests); `pf_dualsense`
 ; for the host's SwDeviceCreate'd DualSense (the `root\` prefix is reserved for root enumeration, so
 ; SwDeviceCreate rejects it with E_INVALIDARG); `pf_dualshock4` / `pf_dualsenseedge` /
-; `pf_steamdeck` / `pf_triton` / `pf_xboxwireless` / `pf_xboxones` / `pf_xboxelite` for the host's
+; `pf_steamdeck` / `pf_triton` / `pf_switchpro` / `pf_xboxwireless` / `pf_xboxones` / `pf_xboxelite` for the host's
 ; other virtual pads — ONE driver binds all of them and serves the matching HID identity per the
 ; device_type byte the host stamps into shared memory. TWO install sections, though: the
-; PlayStation/Deck/Triton ids share `pfGamepad`, and the three Xbox ids install `pfGamepadXbox`,
+; PlayStation/Deck/Triton/Switch ids share `pfGamepad`, and the three Xbox ids install `pfGamepadXbox`,
 ; which additionally attaches the `xinputhid` bus filter (see the ⚠️ below the Triton line).
 ;
 ; Each id carries its OWN description: Device Manager reads this string, and a single shared
@@ -51,16 +51,15 @@ pf_gamepad.dll=1
 %DeviceDescEdge%=pfGamepad, pf_dualsenseedge
 %DeviceDescDeck%=pfGamepad, pf_steamdeck
 %DeviceDescTriton%=pfGamepad, pf_triton
+%DeviceDescSwitchPro%=pfGamepad, pf_switchpro
 ; ⚠️ The Xbox lines install their OWN section, `pfGamepadXbox`, and must keep doing so. Every other
 ; identity shares `pfGamepad`; the Xbox ones additionally attach the `xinputhid` bus filter, and
 ; putting that on a DualSense / DualShock 4 / Edge / Steam Deck would hand a PlayStation pad to
 ; Microsoft's Xbox translator. The two sections are otherwise identical — keep them in step.
 ; (`only_the_xbox_identity_installs_the_xinputhid_section`, in pf-inject, asserts both directions.)
 ;
-; The three Xbox identities differ ONLY in hardware id, Device Manager description and the VID/PID
-; + product string the driver serves off the resulting device_type — they share one report
-; descriptor and one install section, because in HID terms they are the same pad. See the
-; `XBOX_RDESC` header in src/lib.rs for why that sharing is deliberate.
+; The three Xbox identities share one install section. The driver serves VID/PID, product string
+; and descriptor (Series with Share, One S / Elite without) off the resulting device_type.
 %DeviceDescXbox%=pfGamepadXbox, root\pf_xboxwireless, pf_xboxwireless
 %DeviceDescXboxOneS%=pfGamepadXbox, root\pf_xboxones, pf_xboxones
 %DeviceDescXboxElite%=pfGamepadXbox, root\pf_xboxelite, pf_xboxelite
@@ -196,6 +195,7 @@ DeviceDescDS4      ="Punktfunk Virtual DualShock 4"
 DeviceDescEdge     ="Punktfunk Virtual DualSense Edge"
 DeviceDescDeck     ="Punktfunk Virtual Steam Deck Controller"
 DeviceDescTriton   ="Punktfunk Virtual Steam Controller"
+DeviceDescSwitchPro="Punktfunk Virtual Pro Controller"
 DeviceDescXbox     ="Punktfunk Virtual Xbox Wireless Controller"
 ; ⚠️ This one deliberately does NOT match the product string the driver serves for device_type 5.
 ; A real Xbox One S pad reports "Xbox Wireless Controller" over Bluetooth, exactly like the Series

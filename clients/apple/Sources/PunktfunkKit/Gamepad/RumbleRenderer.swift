@@ -648,6 +648,13 @@ final class RumbleRenderer: @unchecked Sendable {
     // we drive them over raw HID (see `DualSenseHID`); every other pad keeps the CoreHaptics path.
     // Runs on the serial `queue`, like the rest of the renderer state.
 
+    /// Set a DualSense's mic-mute LED over raw HID (macOS); a no-op for any other pad.
+    func setMicLED(_ mode: UInt8) {
+        #if os(macOS)
+        queue.async { self.dualSenseHID?.micLED(mode: mode) }
+        #endif
+    }
+
     private func openHIDIfDualSense(_ c: GCController?) -> Bool {
         #if os(macOS)
         guard let c, c.extendedGamepad is GCDualSenseGamepad else { return false }

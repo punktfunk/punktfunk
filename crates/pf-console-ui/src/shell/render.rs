@@ -500,6 +500,10 @@ impl LayerEnv<'_> {
         let edges = canvas
             .local_clip_bounds()
             .unwrap_or_else(|| Rect::from_wh(self.w as f32, self.h as f32));
+        // It records in device space, as this canvas stands before the slide: a focus plate
+        // handing off to or from it, and a blur, then read the rects every layer reads.
+        let base = canvas.local_to_device();
+        let device_edges = canvas.local_to_device_as_3x3().map_rect(edges).0;
         canvas.translate((dx as f32, dy as f32));
         let (cx, cy) = ((self.w / 2.0) as f32, (self.h / 2.0) as f32);
         canvas.translate((cx, cy));
@@ -532,7 +536,8 @@ impl LayerEnv<'_> {
             // a slide or a zoom never carries it. Its targets still count here.
             if screen.pinned(self.k) != (0.0, 0.0) {
                 let mut rec = PictureRecorder::new();
-                let rc = rec.begin_recording(edges, false);
+                let rc = rec.begin_recording(device_edges, false);
+                rc.set_matrix(&base);
                 screen.render_pinned(rc, self.content, self.k, self.dt, self.fonts, &ctx);
                 pinned_pic = rec.finish_recording_as_picture(None);
             }
@@ -581,6 +586,8 @@ impl LayerEnv<'_> {
                 continue;
             };
             if open_at(canvas, c.alpha) {
+                // Recorded in device space (`paint`).
+                canvas.reset_matrix();
                 canvas.draw_picture(pic, None, None);
                 canvas.restore();
             }
