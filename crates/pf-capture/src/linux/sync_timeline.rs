@@ -81,6 +81,22 @@ const WAIT_FOR_SUBMIT: u32 = 1 << 1;
 /// `spa_meta_sync_timeline.flags`: the producer sets it; clearing it promises the release signal.
 const UNSCHEDULED_RELEASE: u32 = 1 << 0;
 
+/// libspa's explicit-sync ABI (PipeWire 1.2), written out because older headers lack it and
+/// bindgen then fails the host build: Ubuntu 24.04 ships 1.0. `sync_abi_matches_libspa` pins
+/// each value where the headers carry it.
+pub(super) const META_SYNC_TIMELINE: u32 = 9;
+pub(super) const DATA_SYNC_OBJ: u32 = 5;
+pub(super) const PARAM_BUFFERS_META_TYPE: u32 = 7;
+
+/// `struct spa_meta_sync_timeline`.
+#[repr(C)]
+pub(super) struct MetaSyncTimeline {
+    flags: u32,
+    _padding: u32,
+    acquire_point: u64,
+    release_point: u64,
+}
+
 /// A DRM node whose driver serves the syncobj ioctls. One per stream.
 pub(super) struct SyncDevice {
     node: OwnedFd,
@@ -216,7 +232,7 @@ pub(super) struct SyncPoints {
     pub(super) release_fd: RawFd,
     pub(super) acquire_point: u64,
     pub(super) release_point: u64,
-    meta: *mut spa::sys::spa_meta_sync_timeline,
+    meta: *mut MetaSyncTimeline,
 }
 
 impl SyncPoints {
@@ -233,10 +249,10 @@ impl SyncPoints {
         let meta = unsafe {
             spa::sys::spa_buffer_find_meta_data(
                 spa_buf,
-                spa::sys::SPA_META_SyncTimeline,
-                std::mem::size_of::<spa::sys::spa_meta_sync_timeline>(),
+                META_SYNC_TIMELINE,
+                std::mem::size_of::<MetaSyncTimeline>(),
             )
-        } as *mut spa::sys::spa_meta_sync_timeline;
+        } as *mut MetaSyncTimeline;
         if meta.is_null() {
             return None;
         }
@@ -245,9 +261,7 @@ impl SyncPoints {
         let [_, .., acquire, release] = datas else {
             return None;
         };
-        if acquire.type_ != spa::sys::SPA_DATA_SyncObj
-            || release.type_ != spa::sys::SPA_DATA_SyncObj
-        {
+        if acquire.type_ != DATA_SYNC_OBJ || release.type_ != DATA_SYNC_OBJ {
             return None;
         }
         // SAFETY: `meta` is non-null and sized above.
@@ -323,7 +337,7 @@ unsafe fn datas<'a>(spa_buf: *mut spa::sys::spa_buffer) -> &'a [spa::sys::spa_da
 pub(super) fn planes_before_sync(types: impl IntoIterator<Item = u32>) -> u32 {
     types
         .into_iter()
-        .take_while(|&t| t != spa::sys::SPA_DATA_SyncObj)
+        .take_while(|&t| t != DATA_SYNC_OBJ)
         .count() as u32
 }
 
@@ -348,6 +362,29 @@ mod tests {
         assert_eq!(SYNCOBJ_FD_TO_HANDLE, 0xC018_64C2);
         assert_eq!(SYNCOBJ_TIMELINE_WAIT, 0xC030_64CA);
         assert_eq!(SYNCOBJ_TIMELINE_SIGNAL, 0xC018_64CD);
+    }
+
+    /// Hand-written ABI vs the real libspa binding, wherever the headers carry it.
+    #[test]
+    fn sync_abi_matches_libspa() {
+        use spa::sys::spa_meta_sync_timeline as Spa;
+        use std::mem::{offset_of, size_of};
+        assert_eq!(META_SYNC_TIMELINE, spa::sys::SPA_META_SyncTimeline);
+        assert_eq!(DATA_SYNC_OBJ, spa::sys::SPA_DATA_SyncObj);
+        assert_eq!(
+            PARAM_BUFFERS_META_TYPE,
+            spa::sys::SPA_PARAM_BUFFERS_metaType
+        );
+        assert_eq!(size_of::<MetaSyncTimeline>(), size_of::<Spa>());
+        assert_eq!(offset_of!(MetaSyncTimeline, flags), offset_of!(Spa, flags));
+        assert_eq!(
+            offset_of!(MetaSyncTimeline, acquire_point),
+            offset_of!(Spa, acquire_point)
+        );
+        assert_eq!(
+            offset_of!(MetaSyncTimeline, release_point),
+            offset_of!(Spa, release_point)
+        );
     }
 
     #[test]
