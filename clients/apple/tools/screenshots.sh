@@ -15,11 +15,10 @@
 #   ipad-13    2064×2752   (portrait)
 #   appletv    1920×1080
 #
-# A `.landscape` scene rotates on iPhone but NOT on iPad: an iPad app that supports multitasking
-# is resizable, and iPadOS ignores `requestGeometryUpdate` orientation requests for it — the app
-# follows the device, and simctl cannot rotate a simulated device. The iPad set is therefore
-# portrait throughout (a valid App Store size, and uniform, which the gallery prefers). To get a
-# landscape iPad hero, rotate the Simulator by hand (⌘←) and re-run just that scene.
+# The iPad set is landscape throughout, and simctl cannot rotate a device. The iPad simulator runs
+# in Full Screen Apps mode and the capture build is marked full-screen-only (UIRequiresFullScreen,
+# in the built bundle only), so the app may turn itself landscape. The portrait framebuffer then
+# shows it scaled to fit, and the screenshot is cropped to it: 2064×1548.
 #
 # Requirements:
 #   • macOS target: full Xcode. No Screen Recording grant: the app only reads its own windows.
@@ -46,7 +45,7 @@ BUNDLE_ID="io.unom.punktfunk"
 # The App Store set, in listing order — the first three are what most people ever see, so they are
 # the stream itself, the machines it found, and their games. Everything else in
 # ShotScenes.all is a dev scene; capture those with `SCENES="15-library-touch 16-host-page" ...`.
-SCENES=(${SCENES:-01-stream 02-hosts 15-library-touch 12-controllers 09e-waking-modal 05-settings 03-pair})
+SCENES=(${SCENES:-01-stream 02-hosts 15-library-touch 15f-library-filter 06-console 12-controllers 09e-waking-modal 05-settings 03-pair})
 SETTLE="${SETTLE:-4}" # seconds to let a scene lay out before capturing
 
 mkdir -p "$OUT"
@@ -81,8 +80,10 @@ shoot_macos() {
   for scene in "${SCENES[@]}"; do
     local logf; logf="$(mktemp)"
     # The app captures its own windows once the scene has settled, then exits (MacSelfCapture).
+    # English on every target: the app otherwise follows the machine's locale ("vor 2 Std.").
     PUNKTFUNK_SHOT_SCENE="$scene" PUNKTFUNK_SHOT_SELFCAPTURE="$OUT" \
-      PUNKTFUNK_SHOT_DELAY="${PUNKTFUNK_SHOT_DELAY:-$((SETTLE * 1000))}" "$bin" >"$logf" 2>&1 &
+      PUNKTFUNK_SHOT_DELAY="${PUNKTFUNK_SHOT_DELAY:-$((SETTLE * 1000))}" \
+      "$bin" -AppleLanguages '(en)' -AppleLocale en_US >"$logf" 2>&1 &
     local pid=$! dest="$OUT/mac-$scene.png"
     for _ in $(seq 1 150); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     kill -9 "$pid" 2>/dev/null || true
@@ -96,6 +97,22 @@ shoot_macos() {
 }
 
 # ------------------------------------------------------------------ iOS / iPadOS / tvOS
+
+# $1 png  $2 $3 the app's window in pixels. A window whose orientation differs from the
+# framebuffer's is drawn scaled to fit and centred; crop the png to that rect.
+crop_to_window() {
+  local png="$1" ww="$2" wh="$3" sw sh
+  sw="$(sips -g pixelWidth "$png" | awk '/pixelWidth/ {print $2}')"
+  sh="$(sips -g pixelHeight "$png" | awk '/pixelHeight/ {print $2}')"
+  [ $(( (ww > wh) != (sw > sh) )) -eq 1 ] || return 0
+  local cw ch
+  if [ $(( ww * sh )) -gt $(( wh * sw )) ]; then
+    cw=$sw; ch=$(( wh * sw / ww ))
+  else
+    ch=$sh; cw=$(( ww * sh / wh ))
+  fi
+  sips --cropOffset $(( (sh - ch) / 2 )) $(( (sw - cw) / 2 )) -c "$ch" "$cw" "$png" >/dev/null
+}
 
 # $1 device-type regex (matches both existing device names and the device-type catalog)
 # $2 scheme  $3 sdk  $4 file prefix  $5 runtime platform (iOS|tvOS — for the create fallback)
@@ -129,6 +146,14 @@ shoot_sim() {
   [ -n "$udid" ] || die "$prefix: no Simulator matching /$match/, and none could be created
        (needs a $platform runtime + a matching device type — check 'xcrun simctl list')."
   log "$prefix — Simulator $udid"
+  if [ "$prefix" = ipad-13 ]; then
+    # Full Screen Apps, not Windowed Apps: a window cannot turn itself landscape. SpringBoard reads
+    # this at boot, so set it on a shut-down device.
+    xcrun simctl shutdown "$udid" 2>/dev/null || true
+    local sbprefs="$HOME/Library/Developer/CoreSimulator/Devices/$udid/data/Library/Preferences/com.apple.springboard.plist"
+    [ -f "$sbprefs" ] || plutil -create xml1 "$sbprefs"
+    plutil -replace SBEnhancedWindowingModeEnabled -bool NO "$sbprefs"
+  fi
   xcrun simctl boot "$udid" 2>/dev/null || true
   xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
   # Every scene is a dark-mode scene. The in-app `.environment(\.colorScheme, .dark)` override
@@ -158,6 +183,10 @@ shoot_sim() {
     || die "$prefix: xcodebuild failed"
   local app; app="$(find "$dd/Build/Products" -maxdepth 2 -name '*.app' -type d | head -1)"
   [ -n "$app" ] || die "$prefix: no .app built"
+  if [ "$prefix" = ipad-13 ]; then
+    /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool true" "$app/Info.plist" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c "Set :UIRequiresFullScreen true" "$app/Info.plist"
+  fi
   xcrun simctl install "$udid" "$app"
 
   for scene in "${SCENES[@]}"; do
@@ -165,14 +194,28 @@ shoot_sim() {
     # `env` with an array: bash decides what is an assignment BEFORE expanding, so a
     # ${VAR:+NAME=...} word would be run as the command name instead.
     local envs=("SIMCTL_CHILD_PUNKTFUNK_SHOT_SCENE=$scene")
+    [ "$prefix" = ipad-13 ] && envs+=("SIMCTL_CHILD_PUNKTFUNK_SHOT_ORIENTATION=landscape")
     [ -n "${PUNKTFUNK_SHOT_HERO:-}" ] \
       && envs+=("SIMCTL_CHILD_PUNKTFUNK_SHOT_HERO=$PUNKTFUNK_SHOT_HERO")
     [ -n "${PUNKTFUNK_SHOT_FPS:-}" ] \
       && envs+=("SIMCTL_CHILD_PUNKTFUNK_SHOT_FPS=$PUNKTFUNK_SHOT_FPS")
-    env "${envs[@]}" xcrun simctl launch "$udid" "$BUNDLE_ID" >/dev/null
+    # In OUT, not mktemp: the simulator writes nothing to a file under /var/folders.
+    local applog="$OUT/.$prefix-$scene.log"
+    rm -f "$applog"
+    env "${envs[@]}" xcrun simctl launch --stdout="$applog" "$udid" "$BUNDLE_ID" \
+      -AppleLanguages '(en)' -AppleLocale en_US >/dev/null
     sleep "$SETTLE"
     local dest="$OUT/$prefix-$scene.png"
     xcrun simctl io "$udid" screenshot "$dest" >/dev/null
+    if [ "$prefix" = ipad-13 ]; then
+      local win; win="$(sed -n 's/^PF_SHOT_WINDOW_PX //p' "$applog" | tail -1)"
+      if [ -n "$win" ]; then
+        crop_to_window "$dest" $win
+      else
+        warn "$prefix/$scene: the app reported no window size — left uncropped"
+      fi
+    fi
+    rm -f "$applog"
     log "$prefix/$scene → $dest ($(pixels "$dest"))"
   done
   xcrun simctl terminate "$udid" "$BUNDLE_ID" 2>/dev/null || true

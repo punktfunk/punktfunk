@@ -19,6 +19,10 @@ struct MacShellView<Hosts: View>: View {
     let onLaunch: (LibraryTarget, String) -> Void
     let onConnectShelf: (LibraryTarget) -> Void
     let onConnectHost: (StoredHost) -> Void
+    #if DEBUG
+    /// Shot harness: a canned catalog for the Library row.
+    var libraryShotPhase: ShotLibraryPhase?
+    #endif
 
     var body: some View {
         NavigationSplitView {
@@ -34,9 +38,16 @@ struct MacShellView<Hosts: View>: View {
             case .hosts:
                 hosts
             case .library:
+                #if DEBUG
+                LibraryTabView(
+                    store: store, onLaunch: onLaunch, onConnectShelf: onConnectShelf,
+                    onConnectHost: onConnectHost, showHosts: { selection = .hosts },
+                    shotPhase: libraryShotPhase)
+                #else
                 LibraryTabView(
                     store: store, onLaunch: onLaunch, onConnectShelf: onConnectShelf,
                     onConnectHost: onConnectHost, showHosts: { selection = .hosts })
+                #endif
             }
         }
         .focusedSceneValue(

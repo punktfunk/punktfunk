@@ -76,8 +76,9 @@ enum ShotScenes {
         ]
         #if os(iOS) || os(macOS)
         scenes += [
-            // The Library tab with its host filter (iOS) and the Mac's Library row.
-            ShotScene(name: "15f-library-filter", orientation: .natural, colorScheme: .dark) {
+            // The Library tab with its host filter (iOS) and the Mac's Library row. Landscape like
+            // the store set's other shelves.
+            ShotScene(name: "15f-library-filter", orientation: .landscape, colorScheme: .dark) {
                 AnyView(ShotLibraryFilter())
             },
             // The host page as sections beside a sidebar: the iPad's sheet, the Mac's window.
@@ -101,6 +102,10 @@ enum ShotScenes {
             // for horizontal use, so the two pads sit as side-by-side columns (see the scene).
             ShotScene(name: "12-controllers", orientation: .landscape, colorScheme: .dark) {
                 AnyView(ShotControllers())
+            },
+            // The gamepad UI: the console the app swaps in when a controller is connected.
+            ShotScene(name: "06-console", orientation: .landscape, colorScheme: .dark) {
+                AnyView(ShotConsole())
             },
         ]
         #endif
@@ -391,14 +396,26 @@ private struct ShotHome: View {
 
     var body: some View {
         #if os(macOS)
-        HomeView(
-            store: store, model: model, discovery: discovery,
-            showAddHost: .constant(false), pairingTarget: .constant(nil),
-            speedTestTarget: .constant(nil), libraryTarget: .constant(nil),
-            connect: { _, _ in }, connectDiscovered: { _ in },
-            onPaired: { _, _ in }, onLaunchTitle: { _, _ in }, onConnectShelf: { _ in },
-            wake: { _ in })
+        // The window as ContentView builds it: the sidebar shell around the host grid.
+        MacShellView(
+            store: store, selection: .constant(.hosts),
+            hosts: HomeView(
+                store: store, model: model, discovery: discovery,
+                showAddHost: .constant(false), pairingTarget: .constant(nil),
+                speedTestTarget: .constant(nil), libraryTarget: .constant(nil),
+                connect: { _, _ in }, connectDiscovered: { _ in },
+                onPaired: { _, _ in }, onLaunchTitle: { _, _ in }, onConnectShelf: { _ in },
+                wake: { _ in }),
+            onLaunch: { _, _ in }, onConnectShelf: { _ in }, onConnectHost: { _ in })
+        #elseif os(iOS)
+        ShotTouchTabs(selection: .hosts) { home } library: { Color.clear }
         #else
+        home
+        #endif
+    }
+
+    #if !os(macOS)
+    private var home: some View {
         HomeView(
             store: store, model: model, discovery: discovery,
             showAddHost: .constant(false), pairingTarget: .constant(nil),
@@ -407,9 +424,37 @@ private struct ShotHome: View {
             connect: { _, _ in }, connectDiscovered: { _ in },
             onPaired: { _, _ in }, onLaunchTitle: { _, _ in }, onConnectShelf: { _ in },
             wake: { _ in })
-        #endif
+    }
+    #endif
+}
+
+#if os(iOS)
+/// Hosts and Library as ContentView's tabs: a tab bar on iPhone, a sidebar-able bar on iPad.
+struct ShotTouchTabs<Hosts: View, Library: View>: View {
+    let selection: TouchTab
+    @ViewBuilder let hosts: Hosts
+    @ViewBuilder let library: Library
+
+    var body: some View {
+        if #available(iOS 18, *) {
+            TabView(selection: .constant(selection)) {
+                Tab("Hosts", systemImage: "desktopcomputer", value: TouchTab.hosts) { hosts }
+                Tab("Library", systemImage: "square.grid.2x2", value: TouchTab.library) { library }
+            }
+            .tabViewStyle(.sidebarAdaptable)
+        } else {
+            TabView(selection: .constant(selection)) {
+                hosts
+                    .tabItem { Label("Hosts", systemImage: "desktopcomputer") }
+                    .tag(TouchTab.hosts)
+                library
+                    .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+                    .tag(TouchTab.library)
+            }
+        }
     }
 }
+#endif
 
 #if os(tvOS)
 /// The TV's tab bar as the app draws it, over the mock hosts and catalog.
@@ -611,6 +656,37 @@ private struct ShotConnect: View {
 
 }
 
+// MARK: - Console
+
+/// The console over the mock hosts, as ContentView mounts it for a connected controller.
+private struct ShotConsole: View {
+    @StateObject private var store = ShotMock.hostStore()
+    @StateObject private var model = SessionModel()
+    @StateObject private var discovery = ShotMock.discovery()
+    @StateObject private var waker = HostWaker()
+    /// Mounted once the scene has turned: a console built before the rotation kept its
+    /// portrait width.
+    @State private var mounted = false
+
+    var body: some View {
+        ZStack {
+            if mounted {
+                ConsoleHomeView(
+                    store: store, model: model, discovery: discovery, waker: waker,
+                    entry: .constant(nil), notice: .constant(nil), pairing: .constant(nil),
+                    linkConfirm: .constant(nil), runLink: { _ in }, onFailed: {},
+                    onPaired: { _, _ in }, connect: { _, _ in }, connectDiscovered: { _ in },
+                    requestAccess: { _ in }, requestAccessDiscovered: { _ in },
+                    launchTitle: { _, _ in }, connectShelf: { _ in }, wakeOnly: { _ in })
+            }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            mounted = true
+        }
+    }
+}
+
 // MARK: - Controllers (the pads the store listing names)
 
 /// The FEEL THE GAME frame: the controller test panel rendering the two pads the listing talks
@@ -783,7 +859,12 @@ private struct ShotTrust: View {
 /// The frame fills the display; the HUD stays inside the safe area. The status bar and home
 /// indicator hide, as they do for a live session.
 private struct ShotStreamHero: View {
+    #if os(macOS)
+    /// The App Store canvas's scale: a 1× monitor still shoots the 2× Mac.
+    private let scale = ShotDevice.mac.scale
+    #else
     @Environment(\.displayScale) private var scale
+    #endif
 
     var body: some View {
         GeometryReader { geo in

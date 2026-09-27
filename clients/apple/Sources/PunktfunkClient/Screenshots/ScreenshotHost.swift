@@ -67,7 +67,7 @@ struct ScreenshotHostView: View {
             #if os(macOS)
             .background(MacShotWindowConfigurator(scene: scene))
             #elseif os(iOS)
-            .background(IOSOrientationConfigurator(orientation: scene.orientation))
+            .background(IOSOrientationConfigurator(orientation: orientation))
             #endif
             .task {
                 // Let layout + materials settle, then signal the driver. PUNKTFUNK_SHOT_DELAY
@@ -80,8 +80,26 @@ struct ScreenshotHostView: View {
             }
     }
 
+    #if os(iOS)
+    /// PUNKTFUNK_SHOT_ORIENTATION=landscape turns every scene: the iPad set is landscape.
+    private var orientation: ShotOrientation {
+        ProcessInfo.processInfo.environment["PUNKTFUNK_SHOT_ORIENTATION"] == "landscape"
+            ? .landscape : scene.orientation
+    }
+    #endif
+
     private func announceReady() {
         print("PF_SHOT_READY scene=\(scene.name)")
+        #if os(iOS)
+        // The window in pixels. A landscape iPad app in a portrait simulator is drawn scaled to
+        // fit, and the driver crops the screenshot to it.
+        if let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first {
+            let scale = window.screen.scale
+            print("PF_SHOT_WINDOW_PX \(Int(window.bounds.width * scale)) "
+                + "\(Int(window.bounds.height * scale))")
+        }
+        #endif
         fflush(stdout)
         #if os(macOS)
         MacSelfCapture.captureIfRequested(scene: scene)
@@ -163,6 +181,11 @@ enum MacSelfCapture {
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
         let url = outDir.appendingPathComponent("\(ShotDevice.mac.id)-\(scene.name).png")
         Task { @MainActor in
+            // The front sheet takes key, as a click would: an unkeyed sheet draws grey buttons.
+            if let sheet = NSApp.orderedWindows.first(where: { $0.isVisible && $0.sheetParent != nil }) {
+                sheet.makeKey()
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
             let (shot, windows) = await captureOwnWindows()
             if let shot, let flat = flatten(shot),
                let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
@@ -208,6 +231,9 @@ enum MacSelfCapture {
             }
             var drawn = 0
             for window in visible.reversed() {
+                // macOS 27 draws an attached sheet into its parent's capture, and a capture of the
+                // sheet itself returns the parent shrunk to the sheet's size.
+                if #available(macOS 27, *), window.sheetParent != nil { continue }
                 let frame = topLeft(window.frame)
                 guard frame.intersects(bounds),
                       let scWindow = content.windows.first(where: {

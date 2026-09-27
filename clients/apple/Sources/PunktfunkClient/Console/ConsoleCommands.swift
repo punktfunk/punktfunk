@@ -199,8 +199,14 @@ extension ConsoleModel {
     /// runs, then what the host answers. `refreshOnly` asks about running titles alone.
     func fetchLibrary(addr: String, mgmt: UInt16, fp: String, refreshOnly: Bool) {
         guard let host = host(fp: fp, addr: addr, port: 0) else { return }
-        // The demo host serves no management API; its shelf is built in.
-        if DemoMode.isDemo(host) {
+        // The demo host serves no management API; its shelf is built in. The shot harness has
+        // no host to ask, so every host shows that shelf there.
+        #if DEBUG
+        let builtIn = DemoMode.isDemo(host) || ScreenshotMode.isActive
+        #else
+        let builtIn = DemoMode.isDemo(host)
+        #endif
+        if builtIn {
             bridge.push(.libraryRunning, ConsoleJSON.runningGames([]))
             if refreshOnly { return }
             bridge.push(.libraryBegin, "{}")
