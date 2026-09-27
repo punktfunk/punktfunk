@@ -423,8 +423,16 @@ impl Codec {
 /// A single NVENC engine tops out ~1 Gpix/s on HEVC, and AUTO does not
 /// engage below ~2112 px height, so sessions that need the second engine
 /// must be forced. 4K120 is 3840×2160×120 = 995,328,000; 950 M keeps
-/// margin for fractional refresh while leaving 1440p240 (884.7 M) on AUTO.
+/// margin for fractional refresh.
 pub const SPLIT_FORCE_PIXEL_RATE: u64 = 950_000_000;
+
+/// Pixel rate from which HEVC takes the split on a card with a second
+/// engine, below the force bar. 1440p120 is 442.4 M. On a 5070 Ti the
+/// second engine takes the encode from 3.1 to 2.1 ms at 1440p120 and from
+/// 8.6 to 4.3 ms at 4K60; the sub-frame readback it costs was worth under
+/// 0.3 ms of send overlap on a LAN. Below this bar sub-frame keeps the
+/// smaller win.
+pub const SPLIT_HEVC_PIXEL_RATE: u64 = 440_000_000;
 
 /// `NV_ENC_SPLIT_ENCODE_MODE` values as plain constants.
 ///
@@ -455,10 +463,13 @@ pub const SPLIT_DISABLE: u32 = 15;
 /// 2. Pixel rate ≥ [`SPLIT_FORCE_PIXEL_RATE`] → widest split the GPU can
 ///    deliver ([`max_forced_split_mode`]). AUTO never engages below ~2112 px
 ///    height, so 4K120 must be forced.
-/// 3. HEVC Main10 below that bar → DISABLE (split is slower there).
-///    Codec-scoped and *below* the pixel-rate arm so it cannot veto AV1
+/// 3. HEVC at ≥ [`SPLIT_HEVC_PIXEL_RATE`] on a card with a second engine →
+///    widest split; sub-frame readback goes with it. AV1 is not in this
+///    arm: its split is tile rows, which one Windows driver mis-decodes.
+/// 4. HEVC Main10 below that → DISABLE: one engine with sub-frame on.
+///    Codec-scoped and *below* the pixel-rate arms so it cannot veto AV1
 ///    10-bit or 10-bit 4K120.
-/// 4. Else AUTO. AUTO splits only with sub-frame off; with sub-frame on
+/// 5. Else AUTO. AUTO splits only with sub-frame off; with sub-frame on
 ///    the driver resolves it to no-split (HEVC cannot do both).
 ///    [`resolve_split_subframe`] logs that.
 ///
@@ -483,8 +494,16 @@ pub fn resolve_split_mode(
         // Widest split the card can deliver, not a hard-coded two. Ahead of
         // the 10-bit rule so 10-bit 4K120 (~995 Mpix/s) is not vetoed.
         _ if pixel_rate >= SPLIT_FORCE_PIXEL_RATE => hw_max,
-        // HEVC Main10 below the bar stays single-engine (split can be slower
-        // there). Codec-scoped: this is HEVC Main10, not AV1 10-bit.
+        // A second engine halves an HEVC encode from 1440p120 up, which beats
+        // the send overlap sub-frame readback gives (`SPLIT_HEVC_PIXEL_RATE`).
+        _ if codec == Codec::H265
+            && pixel_rate >= SPLIT_HEVC_PIXEL_RATE
+            && hw_max != SPLIT_DISABLE =>
+        {
+            hw_max
+        }
+        // HEVC Main10 below that bar stays single-engine with sub-frame on.
+        // Codec-scoped: this is HEVC Main10, not AV1 10-bit.
         _ if codec == Codec::H265 && bit_depth >= 10 => SPLIT_DISABLE,
         _ => SPLIT_AUTO,
     };

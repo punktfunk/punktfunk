@@ -244,7 +244,7 @@ standard size. Native protocol only.
 |---|---|---|
 | `PUNKTFUNK_FRAME_DRIVEN` | `1` · `0` | Encode when a frame arrives instead of on a fixed tick, on by default. `0` restores the tick, which adds about half a frame of latency. |
 | `PUNKTFUNK_GSO` | `1` · `0` | UDP segmentation offload: less send CPU, but bursty on constrained links. On by default on Windows (needed past about 1 Gbps), off on Linux. |
-| `PUNKTFUNK_SPLIT_ENCODE` | `0` · `1` · `2` · `3` | NVENC split encode for very high pixel rates. Unset splits on its own from about 4K120; `1` forces a split, `2` and `3` force two or three ways, `0` never splits. |
+| `PUNKTFUNK_SPLIT_ENCODE` | `0` · `1` · `2` · `3` | NVENC split encode. Unset splits HEVC from about 1440p120 on a card with two encoders, and everything from about 4K120; `1` forces a split, `2` and `3` force two or three ways, `0` never splits. |
 | `PUNKTFUNK_NVENC_SUBFRAME` | `0` · `1` | NVENC sub-frame readback for lower latency, on where the GPU supports it. `0` never, `1` always. |
 | `PUNKTFUNK_NVENC_SPLIT_ARBITRATE` | `1` | Lets NVENC change its split decision mid-session as the pixel rate moves. |
 | `PUNKTFUNK_PHASE_LOCK` | `0` | Stops timing frame submission to the client's display. Try it if frame pacing keeps cycling. |

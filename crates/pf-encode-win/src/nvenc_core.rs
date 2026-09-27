@@ -134,7 +134,7 @@ pub fn resolve_split_subframe(
             tracing::info!(
                 split_mode,
                 "HEVC forced split-encode supersedes default-on sub-frame readback (mutually \
-                 unsupported per nvEncodeAPI.h; split is the 4K120 throughput lever) — set \
+                 unsupported per nvEncodeAPI.h; the second engine halves the encode) — set \
                  PUNKTFUNK_SPLIT_ENCODE=0 to choose sub-frame instead"
             );
         }
@@ -608,16 +608,51 @@ mod tests {
         );
         assert_eq!(
             resolve_split_mode(Codec::H265, 8, four_k_60, 2, 32),
-            M::NV_ENC_SPLIT_AUTO_MODE as u32
+            M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32,
+            "the same rate splits for a client that takes more than one slice"
         );
     }
 
+    /// HEVC takes the second engine from 1440p120 up, at either bit depth. 1440p60
+    /// keeps sub-frame readback, a one-engine card never splits, and AV1 keeps the
+    /// ordinary path: its split is tile rows.
     #[test]
-    fn split_leaves_1440p240_auto() {
-        // 884.7 Mpix/s is single-engine; the threshold move must not drag it in.
-        let qhd_240 = 2560u64 * 1440 * 240;
+    fn hevc_splits_from_1440p120_on_a_two_engine_card() {
+        let qhd_60 = 2560u64 * 1440 * 60;
+        let qhd_120 = 2560u64 * 1440 * 120;
+        let four_k_60 = 3840u64 * 2160 * 60;
         assert_eq!(
-            resolve_split_mode(Codec::H265, 8, qhd_240, 2, 32),
+            resolve_split_mode(Codec::H265, 8, qhd_60, 2, 32),
+            M::NV_ENC_SPLIT_AUTO_MODE as u32
+        );
+        assert_eq!(
+            resolve_split_mode(Codec::H265, 10, qhd_60, 2, 32),
+            M::NV_ENC_SPLIT_DISABLE_MODE as u32
+        );
+        for rate in [qhd_120, four_k_60] {
+            for depth in [8u8, 10] {
+                assert_eq!(
+                    resolve_split_mode(Codec::H265, depth, rate, 2, 32),
+                    M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32,
+                    "{depth}-bit at {rate} px/s"
+                );
+                assert_eq!(
+                    resolve_split_mode(Codec::H265, depth, rate, 3, 32),
+                    M::NV_ENC_SPLIT_THREE_FORCED_MODE as u32
+                );
+                let one_engine = if depth >= 10 {
+                    M::NV_ENC_SPLIT_DISABLE_MODE
+                } else {
+                    M::NV_ENC_SPLIT_AUTO_MODE
+                };
+                assert_eq!(
+                    resolve_split_mode(Codec::H265, depth, rate, 1, 32),
+                    one_engine as u32
+                );
+            }
+        }
+        assert_eq!(
+            resolve_split_mode(Codec::Av1, 10, four_k_60, 2, 32),
             M::NV_ENC_SPLIT_AUTO_MODE as u32
         );
     }
@@ -638,7 +673,7 @@ mod tests {
             resolve_split_mode(Codec::H265, 10, four_k_120, 2, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32
         );
-        // Under the bar, HEVC Main10 stays single-engine — a second engine buys nothing.
+        // Below the HEVC bar, Main10 stays single-engine with sub-frame readback.
         assert_eq!(
             resolve_split_mode(Codec::H265, 10, hd_60, 2, 32),
             M::NV_ENC_SPLIT_DISABLE_MODE as u32
