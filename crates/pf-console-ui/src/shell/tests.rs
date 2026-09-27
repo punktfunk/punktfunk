@@ -2074,34 +2074,37 @@ fn store_shots() {
         s
     };
 
-    let mut s = store_shell(
-        vec![Screen::Home(HomeScreen::new())],
-        LibraryShared::default(),
-    );
-    frames(&mut s, 30);
-    s.handle_menu(MenuEvent::Move(MenuDir::Right));
-    s.handle_menu(MenuEvent::Move(MenuDir::Right));
-    save(frames(&mut s, 90), "tv-console-home");
-
     // Art before the list, so the shelf decodes it before the entrance arms.
-    let shelf = || {
+    let store_library = || {
         let library = LibraryShared::default();
         for (i, (title, ..)) in STORE_TITLES.iter().enumerate() {
             library.push_art(format!("steam:{i}"), store_poster(i, title, &fonts));
         }
         library.set_games(store_games());
+        library
+    };
+
+    // The home draws the focused host's games under its row, so it needs the catalog too.
+    let mut s = store_shell(vec![Screen::Home(HomeScreen::new())], store_library());
+    frames(&mut s, 30);
+    s.handle_menu(MenuEvent::Move(MenuDir::Right));
+    s.handle_menu(MenuEvent::Move(MenuDir::Right));
+    save(frames(&mut s, 90), "tv-console-home");
+
+    let shelf = || {
         let host = store_hosts()[2].clone();
         let mut s = store_shell(
             vec![
                 Screen::Home(HomeScreen::new()),
                 Screen::Library(LibraryScreen::new(&host)),
             ],
-            library,
+            store_library(),
         );
         frames(&mut s, 60);
-        // Past the Desktop and Steam tiles onto the first title.
-        s.handle_menu(MenuEvent::Move(MenuDir::Right));
-        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        // Down past the Desktops, Launchers and Collections bands onto the first title.
+        for _ in 0..3 {
+            s.handle_menu(MenuEvent::Move(MenuDir::Down));
+        }
         s
     };
     let mut s = shelf();
