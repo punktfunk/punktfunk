@@ -1208,8 +1208,13 @@ impl NvencD3d11Encoder {
             // Split-frame encode: one session tops out ~0.8–1 Gpix/s. See [`resolve_split_mode`].
             // Init-failure fallback below disables it if rejected.
             let pixel_rate = self.width as u64 * self.height as u64 * self.fps.max(1) as u64;
-            let split_mode: u32 =
-                resolve_split_mode(self.codec, self.bit_depth, pixel_rate, self.encoder_engines);
+            let split_mode: u32 = resolve_split_mode(
+                self.codec,
+                self.bit_depth,
+                pixel_rate,
+                self.encoder_engines,
+                self.max_slices,
+            );
             // Multi-slice default 4, clamped by the client ceiling. `PUNKTFUNK_NVENC_SLICES` overrides.
             self.slices = resolve_slices(self.codec, 4.min(self.max_slices));
             // Sub-frame defaults ON where the GPU advertises SUBFRAME_READBACK.

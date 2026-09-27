@@ -446,6 +446,8 @@ pub const SPLIT_DISABLE: u32 = 15;
 
 /// NVENC split-frame mode for a session. Shared by the Windows and Linux
 /// direct-SDK backends. Precedence:
+/// 0. `max_slices` ≤ 1 → DISABLE. Split-frame encode emits one slice per
+///    engine, which a client that never asked for multi-slice cannot take.
 /// 1. `PUNKTFUNK_SPLIT_ENCODE` = `0`/`disable` | `1`/`auto` (AUTO_FORCED) |
 ///    `2` | `3` — operator override, always wins. `2`/`3` clamp to the GPU's
 ///    engine count ([`clamp_to_engines`]); the driver honours an over-ask
@@ -464,9 +466,16 @@ pub const SPLIT_DISABLE: u32 = 15;
 /// `NV_ENC_CAPS_NUM_ENCODER_ENGINES`; `0` = unknown (assume a second engine).
 // Split-policy cfg — see the constants above.
 #[cfg(any(target_os = "linux", all(target_os = "windows", feature = "nvenc")))]
-pub fn resolve_split_mode(codec: Codec, bit_depth: u8, pixel_rate: u64, engines: u32) -> u32 {
+pub fn resolve_split_mode(
+    codec: Codec,
+    bit_depth: u8,
+    pixel_rate: u64,
+    engines: u32,
+    max_slices: u32,
+) -> u32 {
     let hw_max = max_forced_split_mode(engines);
     let mode = match crate::knobs::get().split_encode {
+        _ if max_slices <= 1 => SPLIT_DISABLE,
         1 => SPLIT_DISABLE,
         2 => SPLIT_AUTO_FORCED,
         4 => clamp_to_engines(SPLIT_THREE_FORCED, hw_max, engines),

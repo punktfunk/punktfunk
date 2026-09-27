@@ -1419,8 +1419,13 @@ impl NvencCudaEncoder {
             let requested_bps = self.bitrate_bps;
             // [`resolve_split_mode`]: env / 10-bit / pixel-rate precedence.
             let pixel_rate = self.width as u64 * self.height as u64 * self.fps.max(1) as u64;
-            let mut split_mode: u32 =
-                resolve_split_mode(self.codec, self.bit_depth, pixel_rate, self.encoder_engines);
+            let mut split_mode: u32 = resolve_split_mode(
+                self.codec,
+                self.bit_depth,
+                pixel_rate,
+                self.encoder_engines,
+                self.max_slices,
+            );
             // Cached verdict wins over the static rule. Operator pin still beats both
             // (`resolve_split_mode`); only consult the cache when the knob is unset.
             if std::env::var_os("PUNKTFUNK_SPLIT_ENCODE").is_none() {

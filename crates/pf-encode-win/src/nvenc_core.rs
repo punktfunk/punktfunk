@@ -586,8 +586,29 @@ mod tests {
         // gate and stayed AUTO — AUTO never engages at 2160 px height.
         let four_k_120 = 3840u64 * 2160 * 120;
         assert_eq!(
-            resolve_split_mode(Codec::H265, 8, four_k_120, 2),
+            resolve_split_mode(Codec::H265, 8, four_k_120, 2, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32
+        );
+    }
+
+    /// Split-frame encode emits one slice per engine. A client whose ceiling is one slice
+    /// (never advertised multi-slice) gets no split at any pixel rate, forced bar included.
+    #[test]
+    fn a_single_slice_ceiling_disables_split_at_any_pixel_rate() {
+        let four_k_60 = 3840u64 * 2400 * 60;
+        let four_k_120 = 3840u64 * 2160 * 120;
+        assert_eq!(
+            resolve_split_mode(Codec::H265, 8, four_k_60, 2, 1),
+            M::NV_ENC_SPLIT_DISABLE_MODE as u32
+        );
+        assert_eq!(
+            resolve_split_mode(Codec::H265, 8, four_k_120, 2, 1),
+            M::NV_ENC_SPLIT_DISABLE_MODE as u32,
+            "the force bar does not override a single-slice client"
+        );
+        assert_eq!(
+            resolve_split_mode(Codec::H265, 8, four_k_60, 2, 32),
+            M::NV_ENC_SPLIT_AUTO_MODE as u32
         );
     }
 
@@ -596,7 +617,7 @@ mod tests {
         // 884.7 Mpix/s is single-engine; the threshold move must not drag it in.
         let qhd_240 = 2560u64 * 1440 * 240;
         assert_eq!(
-            resolve_split_mode(Codec::H265, 8, qhd_240, 2),
+            resolve_split_mode(Codec::H265, 8, qhd_240, 2, 32),
             M::NV_ENC_SPLIT_AUTO_MODE as u32
         );
     }
@@ -610,16 +631,16 @@ mod tests {
         // 10-bit over the pixel-rate bar now splits. The old Main10 veto was one
         // sample at low bits/frame; `PUNKTFUNK_SPLIT_ENCODE=0` is the escape.
         assert_eq!(
-            resolve_split_mode(Codec::H265, 10, five_k_240, 2),
+            resolve_split_mode(Codec::H265, 10, five_k_240, 2, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32
         );
         assert_eq!(
-            resolve_split_mode(Codec::H265, 10, four_k_120, 2),
+            resolve_split_mode(Codec::H265, 10, four_k_120, 2, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32
         );
         // Under the bar, HEVC Main10 stays single-engine — a second engine buys nothing.
         assert_eq!(
-            resolve_split_mode(Codec::H265, 10, hd_60, 2),
+            resolve_split_mode(Codec::H265, 10, hd_60, 2, 32),
             M::NV_ENC_SPLIT_DISABLE_MODE as u32
         );
     }
@@ -631,12 +652,12 @@ mod tests {
         let hd_60 = 1920u64 * 1080 * 60;
         let four_k_120 = 3840u64 * 2160 * 120;
         assert_eq!(
-            resolve_split_mode(Codec::Av1, 10, hd_60, 2),
+            resolve_split_mode(Codec::Av1, 10, hd_60, 2, 32),
             M::NV_ENC_SPLIT_AUTO_MODE as u32,
             "AV1 10-bit must follow the ordinary path, not inherit an HEVC veto"
         );
         assert_eq!(
-            resolve_split_mode(Codec::Av1, 10, four_k_120, 2),
+            resolve_split_mode(Codec::Av1, 10, four_k_120, 2, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32
         );
     }
@@ -647,17 +668,17 @@ mod tests {
     fn split_uses_every_engine_the_gpu_has() {
         let four_k_120 = 3840u64 * 2160 * 120;
         assert_eq!(
-            resolve_split_mode(Codec::H265, 8, four_k_120, 3),
+            resolve_split_mode(Codec::H265, 8, four_k_120, 3, 32),
             M::NV_ENC_SPLIT_THREE_FORCED_MODE as u32,
             "a 3-engine GPU must split three ways"
         );
         assert_eq!(
-            resolve_split_mode(Codec::H265, 8, four_k_120, 1),
+            resolve_split_mode(Codec::H265, 8, four_k_120, 1, 32),
             M::NV_ENC_SPLIT_DISABLE_MODE as u32,
             "a 1-engine GPU must not pretend to split — today this costs a wasted session open"
         );
         assert_eq!(
-            resolve_split_mode(Codec::H265, 8, four_k_120, 0),
+            resolve_split_mode(Codec::H265, 8, four_k_120, 0, 32),
             M::NV_ENC_SPLIT_TWO_FORCED_MODE as u32,
             "unprobed engine count keeps the historical assumption; the rejection fallback corrects"
         );
