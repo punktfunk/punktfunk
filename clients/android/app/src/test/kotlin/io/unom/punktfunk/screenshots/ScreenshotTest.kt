@@ -43,12 +43,13 @@ class ScreenshotTest {
     private fun shootRoot(
         name: String,
         statusBar: Boolean = true,
+        device: String = "phone",
         content: @androidx.compose.runtime.Composable () -> Unit,
     ) {
         compose.mainClock.autoAdvance = false
         compose.setContent { ShotTheme { if (statusBar) ShotStatusFrame(content) else content() } }
         compose.mainClock.advanceTimeBy(800)
-        compose.onRoot().captureRoboImage("$out/phone-$name.png")
+        compose.onRoot().captureRoboImage("$out/$device-$name.png")
     }
 
     /** Dialog scenes: the AlertDialog is a separate window, so capture the whole screen (all windows). */
@@ -185,4 +186,42 @@ class ScreenshotTest {
     @Test
     @Config(sdk = [36], qualifiers = "w411dp-h915dp-420dpi")
     fun addHost() = shootScreen("add-host") { AddHostScene() }
+
+    // Play's 7" and 10" tablet slots at their exact sizes: xhdpi is 2 px per dp, so 600×960 dp
+    // is 1200×1920 px and 800×1280 dp is 1600×2560 px. Grids portrait, stream and pads landscape.
+    @Test
+    @Config(sdk = [36], qualifiers = "w600dp-h960dp-xhdpi")
+    fun tablet7Hosts() = shootRoot("hosts", device = "tablet7") { HostsScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w600dp-h960dp-xhdpi")
+    fun tablet7Library() = shootRoot("library", device = "tablet7") { TouchLibraryScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w960dp-h600dp-xhdpi")
+    fun tablet7Controllers() = shootRoot("controllers", device = "tablet7") { ControllersScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w960dp-h600dp-xhdpi")
+    fun tablet7Stream() = shootRoot("stream", statusBar = false, device = "tablet7") {
+        StreamScene(io.unom.punktfunk.StatsVerbosity.DETAILED)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w800dp-h1280dp-xhdpi")
+    fun tablet10Hosts() = shootRoot("hosts", device = "tablet10") { HostsScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w800dp-h1280dp-xhdpi")
+    fun tablet10Library() = shootRoot("library", device = "tablet10") { TouchLibraryScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tablet10Controllers() = shootRoot("controllers", device = "tablet10") { ControllersScene() }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tablet10Stream() = shootRoot("stream", statusBar = false, device = "tablet10") {
+        StreamScene(io.unom.punktfunk.StatsVerbosity.DETAILED)
+    }
 }
