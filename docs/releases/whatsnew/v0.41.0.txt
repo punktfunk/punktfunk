@@ -1,0 +1,6 @@
+• End a game you launched from the library or the quick-action ring.
+• Chromebooks show the stream instead of a white window.
+• Pixel phones recover from AV1 loss instead of freezing.
+• Keys no longer stick when a packet is lost.
+• Off touch mode, and a ring button on the virtual controller.
+• Large libraries load; rarely changed settings sit under Show advanced.

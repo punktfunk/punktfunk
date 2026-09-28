@@ -14,6 +14,66 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.41.0
+
+732 commits since v0.40.0. Wire stays 2. **C ABI 41**, additive. Driver protocol floor stays 9.
+Deep dive: `git log v0.40.0..v0.41.0`
+
+### Versions
+
+| | v0.40.0 | v0.41.0 | Notes |
+|---|---|---|---|
+| Wire protocol | 2 | **2** | unchanged; additions are gated. `MSG_INPUT_EDGE` (92) carries key edges on the control stream behind host cap `HOST_CAP2_INPUT_EDGES` (64). Start ext tag 4 carries the preset. HID output kind 7 (`MIC_LED`) is ungated; an older client drops it |
+| C ABI | 37 | **41** | additive. 38 `punktfunk_set_session_preset`; 39 `punktfunk_au_admission_{new,free,note}` + `PUNKTFUNK_CONCEALED_*`; 40 `punktfunk_av1_sequence_info`; 41 `PunktfunkConnectOpts` covers every connect option (`video_fit`, `preset_id`/`preset_name` behind `struct_size`; a zeroed `reserved0` still fits). The library is `punktfunk-ffi` |
+| C headers | — | — | `punktfunk_core.h` gains gamepad kinds 12–18 (8BitDo, HORIPAD, Joy-Con pair, Switch 2 Pro and GameCube). `punktfunk_console.h` has no version constant and gains `punktfunk_console_holds_launch()` |
+| Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
+| Workspace crate dirs | 32 | **37** | `pf-audio`, `pf-dmabuf`, `pf-encode-core`, `pf-portal`, `punktfunk-ffi` (the C ABI and demo host) |
+| Virtual-display driver protocol | 9 | **9** | unchanged |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged; driver behaviour revision 1 → 5. Device types 8 (Switch Pro), 9–12 (8BitDo, HORIPAD) and 13–14 (Joy-Con halves) need this release's driver; without it the host falls back to an Xbox 360 pad |
+| Plugin index schema | 1 | **1** | unchanged; the store reads the index's categories |
+| Host event schema | 1 | **1** | unchanged; kinds `game.launching` and `emulators.changed` join, `plane` gains `web`, client/session/stream/game refs carry `preset` |
+| `api/openapi.json` | 0.40.0 | **0.41.0** | `GET /library/page`, `/library/metadata[/{source}]`, `PUT /library/picks/{id}`, `/emulators` + install/remove, `POST /plugin-access/{plugin}/release`; `ActiveGame.endable`, `HookEntry.hold`, `HookFilter.preset`. `POST /game/end` answers 403 for a game this device did not launch |
+| gamescope patch level (`+pfhdrN`) | 23 | **24** | Patch 0029: WM_STATE returns to Normal when focus comes back, so a game the Steam overlay minimized is restored |
+| `@punktfunk/host` (SDK) | 0.2.0 | **0.3.3** | console `surfaces`, launch hold, `game.launching`, preset and fingerprint on refs, Art & Metadata routes, end-game and emulator fields, `web` plane |
+| `@punktfunk/plugin-kit` | 0.5.3 | **0.8.0** | `serveUi({ holds, game })`, `defineMetadataPlugin`, library sources that hold a launch. The tree's emulator requests, EA/Rockstar kinds and full provider entry ship with the next kit cut |
+
+### Breaking
+
+- **C embedders link `punktfunk-ffi`.** Build `cargo build -p punktfunk-ffi --features quic` and link
+  `libpunktfunk_ffi.{a,so,dylib}` (`punktfunk_ffi.dll`). The header keeps its name.
+- **`USER_FLAG_RECOVERY_CLOSE` is `PUNKTFUNK_USER_FLAG_RECOVERY_CLOSE`.** Same value, 512.
+- **Event `plane` gains `web`.** SDKs up to 0.3.2 decode a browser's client, session, stream and
+  game events as unknown, and a hook filtered on `plane: native` no longer fires for them.
+- **SDK events narrow with `EventOf<kind>`**; the per-event schemas are gone and optional refs are
+  nullable. plugin-kit 0.6+ needs `@punktfunk/host` ^0.3.0.
+- **Host switches read one grammar.** `false`/`off`/`no` are off everywhere and `auto` is not on,
+  in host.env and the console alike.
+- **Host log targets gained a group segment:** `punktfunk_host::gamelease` is
+  `punktfunk_host::game::gamelease`; the groups are `game`, `telemetry`, `hostsys`, `plugin_host`.
+  Update a `RUST_LOG` filter that names a host module.
+- **SteamOS: the checkout's branch is the channel.** New installs clone `stable`; an existing Deck
+  stays on `main` until `git switch stable`.
+
+### Knobs
+
+- Host, Linux: `PUNKTFUNK_EXPLICIT_SYNC=0` keeps implicit sync on PipeWire dma-buf capture.
+- Host, Windows NVIDIA: `PUNKTFUNK_INSTANT_REPLAY_PAUSE=auto|on|off` (default `auto`), registry
+  row `instant_replay_pause`.
+- Windows display driver (machine environment): AMF reads the desktop in place by default;
+  `PFVD_POOL_BYPASS=0` copies every frame, any other value reads in place on NVENC too;
+  `PFVD_AMF_NV12` opens AMF on NV12. The `pool-bypass` cargo feature is gone.
+- Desktop client: `PUNKTFUNK_DIRECT_PRESENT=0`, `PUNKTFUNK_VAAPI_EXPLICIT_SYNC=0` and
+  `PUNKTFUNK_THREAD_BOOST=0` turn the new defaults off. `PUNKTFUNK_NATIVE_SCANOUT=1` opts into the
+  Wayland native scanout lane (off by default); `PUNKTFUNK_VKDECODE_ARRANGEMENT=distinct` forces
+  separate reference and output images.
+- Apple: `PUNKTFUNK_TXN_PRESENT` and `PUNKTFUNK_WINDOWED_PRESENT` are gone with Safe windowed
+  presentation.
+- Host, Linux: `PUNKTFUNK_GAMEPAD=xboxelite` builds an Elite with its paddles. The Switch 2
+  pads need `vhci_hcd`; without it they fold to a Switch Pro.
+- Hooks: `hold` (with `on: game.launching`) and `filter.preset`; prep steps get `PF_PRESET_ID` and
+  `PF_PRESET_NAME`.
+- CLI: `punktfunk end-game [<host-ref>] --game ID`. `punktfunk1-host` refuses a bad flag value.
+
 ## v0.40.0
 
 396 commits since v0.39.0. Wire stays 2. C ABI stays 37. Driver protocol floor stays 9.

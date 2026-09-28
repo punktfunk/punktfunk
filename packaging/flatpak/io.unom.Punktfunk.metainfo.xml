@@ -84,6 +84,12 @@
   </branding>
 
   <releases>
+    <release version="0.41.0" date="2026-09-28">
+      <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.41.0</url>
+      <description>
+        <p>A game you launched can be ended from any client, keys no longer stick when a packet is lost, and large libraries load a page at a time.</p>
+      </description>
+    </release>
     <release version="0.40.0" date="2026-09-25">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.40.0</url>
       <description>

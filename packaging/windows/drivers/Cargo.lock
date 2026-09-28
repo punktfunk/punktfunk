@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "libvpl-sys"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "bindgen",
  "cmake",
@@ -695,7 +695,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pf-dmabuf"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "libc",
  "rustix",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "pf-encode-core"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "anyhow",
  "nvidia-video-codec-sdk",
@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "pf-encode-win"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "anyhow",
  "libvpl-sys",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "pf-frame"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "pf-zerocopy"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "anyhow",
  "ash",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "pyrowave-sys"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "bindgen",
  "cmake",
