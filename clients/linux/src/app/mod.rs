@@ -1,7 +1,7 @@
 //! The application shell as a relm4 component tree: [`AppModel`] owns the window, the
-//! [`Store`], navigation, and the spawned session child's lifecycle. The hosts page is a
-//! child component ([`crate::hosts`]); dialogs (trust, settings, library) are plain GTK
-//! invoked from `update`. The connect flow is in `connect.rs`, host requests beside a
+//! [`Store`], navigation, and the spawned session child's lifecycle. Hosts and Library are
+//! child components, the two destinations of one view stack (design §2.1); dialogs are plain
+//! GTK invoked from `update`. The connect flow is in `connect.rs`, host requests beside a
 //! stream in `host_ops.rs`. Every stream runs in the `punktfunk-session` Vulkan binary —
 //! the shell never touches video.
 
@@ -11,6 +11,7 @@ mod host_ops;
 pub mod spawn;
 
 use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage};
+use crate::library::{LibraryInit, LibraryMsg, LibraryOutput, LibraryPage};
 use crate::store::{Changed, Store};
 use crate::trust;
 use adw::prelude::*;
@@ -41,6 +42,9 @@ pub struct AppModel {
     /// Empty until the probe lands — empty lists simply hide their pickers.
     pub probes: Rc<RefCell<crate::settings::DeviceProbes>>,
     hosts: Controller<HostsPage>,
+    library: Controller<LibraryPage>,
+    /// Hosts · Library.
+    views: adw::ViewStack,
     /// One session child at a time — connects while one runs are ignored.
     busy: bool,
     /// Armed by [`AppMsg::WakeConnect`] (a dial to a host that isn't advertising but has a
@@ -80,8 +84,13 @@ pub enum AppMsg {
     /// The SPAKE2 PIN ceremony dialog.
     Pair(ConnectRequest),
     SpeedTest(ConnectRequest),
-    /// The desktop library page (mgmt port from the live advert when known).
-    OpenLibrary(ConnectRequest, Option<u16>),
+    /// The Library on this host's shelf.
+    OpenLibrary(ConnectRequest),
+    /// Show a destination by its view name.
+    ShowView(&'static str),
+    Find,
+    /// Rescan the network, or reload the shelf.
+    Reload,
     /// Spawn the session child now (trust already decided; `tofu` = persist the
     /// fingerprint once the child proves it).
     StartSession {
@@ -120,8 +129,7 @@ pub enum AppMsg {
     /// Request-access Cancel: the child was killed; release busy quietly.
     CancelPending,
     /// Upload the client log ring to this paired host (`logring::send_to_host`); the
-    /// outcome lands as a Toast either way. The mgmt port rides along, resolved like
-    /// OpenLibrary's.
+    /// outcome lands as a Toast either way. The mgmt port rides along when an advert has one.
     SendLogs(ConnectRequest, Option<u16>),
     /// Run one of the host's own actions — sleep / restart / shut down it
     /// (`design/host-actions.md` §7). `danger` asks first; the outcome is a toast.
@@ -194,10 +202,13 @@ impl SimpleComponent for AppModel {
     type Widgets = AppWidgets;
 
     fn init_root() -> Self::Root {
+        // The minimum size is what the narrow breakpoint is checked against.
         adw::ApplicationWindow::builder()
             .title("Punktfunk")
             .default_width(1200)
             .default_height(780)
+            .width_request(360)
+            .height_request(294)
             .build()
     }
 
@@ -225,6 +236,9 @@ impl SimpleComponent for AppModel {
         }
 
         let store = Store::open();
+        if crate::shots::shot_scene().is_none() {
+            remember_size(&window, &store);
+        }
         // Recolour the shell from the desktop theme (Omarchy only; one stat everywhere else).
         // Every colour in `data/style.css` resolves through libadwaita's named palette, so
         // redefining those names is all it takes. After the settings load, because the
@@ -276,17 +290,24 @@ impl SimpleComponent for AppModel {
         }
 
         let nav = adw::NavigationView::new();
+        let views = adw::ViewStack::new();
+        let narrow = adw::Breakpoint::new(
+            adw::BreakpointCondition::parse("max-width: 550sp").expect("a breakpoint condition"),
+        );
+        window.add_breakpoint(narrow.clone());
         let hosts = HostsPage::builder()
             .launch(hosts::HostsInit {
                 store: store.clone(),
                 nav: nav.clone(),
+                views: views.clone(),
+                narrow: narrow.clone(),
             })
             .forward(sender.input_sender(), |out| match out {
                 HostsOutput::Connect(req) => AppMsg::Connect(req),
                 HostsOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
                 HostsOutput::Pair(req) => AppMsg::Pair(req),
                 HostsOutput::SpeedTest(req) => AppMsg::SpeedTest(req),
-                HostsOutput::Library(req, mgmt) => AppMsg::OpenLibrary(req, mgmt),
+                HostsOutput::Library(req) => AppMsg::OpenLibrary(req),
                 HostsOutput::SendLogs(req, mgmt) => AppMsg::SendLogs(req, mgmt),
                 HostsOutput::HostAction {
                     req,
@@ -304,7 +325,37 @@ impl SimpleComponent for AppModel {
                 HostsOutput::Toast(msg) => AppMsg::Toast(msg),
             });
 
-        nav.add(hosts.widget());
+        let library = LibraryPage::builder()
+            .launch(LibraryInit {
+                store: store.clone(),
+                identity: identity.clone(),
+                views: views.clone(),
+                narrow,
+            })
+            .forward(sender.input_sender(), |out| match out {
+                LibraryOutput::Connect(req) => AppMsg::Connect(req),
+                LibraryOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
+                LibraryOutput::Toast(msg) => AppMsg::Toast(msg),
+                LibraryOutput::ShowHosts => AppMsg::ShowView("hosts"),
+            });
+        views.add_titled_with_icon(hosts.widget(), Some("hosts"), "Hosts", "computer-symbolic");
+        views.add_titled_with_icon(
+            library.widget(),
+            Some("library"),
+            "Library",
+            "applications-games-symbolic",
+        );
+        let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        main.append(&store_health_banner(&store));
+        main.append(&views);
+        views.set_vexpand(true);
+        nav.add(
+            &adw::NavigationPage::builder()
+                .title("Punktfunk")
+                .tag("main")
+                .child(&main)
+                .build(),
+        );
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&nav));
         window.set_content(Some(&toasts));
@@ -318,6 +369,8 @@ impl SimpleComponent for AppModel {
             gamepad: init.gamepad,
             probes,
             hosts,
+            library,
+            views,
             busy: false,
             wake_fallback: None,
             waiting: Rc::new(RefCell::new(None)),
@@ -347,8 +400,9 @@ impl SimpleComponent for AppModel {
         if let Some(scene) = crate::shots::shot_scene() {
             let ctx = crate::shots::ShotCtx {
                 window: model.window.clone(),
-                nav: model.nav.clone(),
                 hosts: model.hosts.sender().clone(),
+                library: model.library.sender().clone(),
+                views: model.views.clone(),
                 store: model.store.clone(),
                 gamepad: model.gamepad.clone(),
                 identity: model.identity.clone(),
@@ -392,7 +446,7 @@ impl SimpleComponent for AppModel {
             drop(settings);
             if let Some(i) = screen.host_index() {
                 let req = hosts::saved_request(&known.hosts[i]);
-                sender.input(AppMsg::OpenLibrary(req.clone(), known.hosts[i].mgmt_port));
+                sender.input(AppMsg::OpenLibrary(req.clone()));
                 // Stream is the library PLUS a connect, never a screen of its own: the session
                 // window is the overlay, so ending it leaves the shelf on screen underneath.
                 if matches!(screen, start::Start::Stream(_)) {
@@ -443,9 +497,19 @@ impl SimpleComponent for AppModel {
                 danger,
             } => self.host_action(req, mgmt, action_id, label, danger, &sender),
             AppMsg::SpeedTestDone => self.busy = false,
-            AppMsg::OpenLibrary(req, mgmt_port) => {
-                crate::library::open(self, &sender, req, mgmt_port);
+            AppMsg::OpenLibrary(req) => {
+                self.show_view("library");
+                self.library.emit(LibraryMsg::Open(req));
             }
+            AppMsg::ShowView(name) => self.show_view(name),
+            AppMsg::Find => {
+                self.show_view("library");
+                self.library.emit(LibraryMsg::FocusSearch);
+            }
+            AppMsg::Reload => match self.views.visible_child_name().as_deref() {
+                Some("library") => self.library.emit(LibraryMsg::Reload),
+                _ => self.hosts.emit(HostsMsg::Rescan),
+            },
             AppMsg::StartSession {
                 req,
                 fp_hex,
@@ -513,6 +577,12 @@ impl SimpleComponent for AppModel {
 impl AppModel {
     pub fn toast(&self, msg: &str) {
         self.toasts.add_toast(adw::Toast::new(msg));
+    }
+
+    /// A destination, over any host page pushed on top of it.
+    fn show_view(&self, name: &str) {
+        self.nav.pop_to_tag("main");
+        self.views.set_visible_child_name(name);
     }
 
     fn show_preferences(&self, scope: crate::settings::Scope, sender: &ComponentSender<Self>) {
@@ -703,14 +773,87 @@ fn install_actions(window: &adw::ApplicationWindow, sender: &ComponentSender<App
     window.add_action(&add("add-host", || AppMsg::ShowAddHost));
     window.add_action(&add("console", || AppMsg::OpenConsole));
     window.add_action(&add("fullscreen", || AppMsg::ToggleFullscreen));
-    relm4::main_application().set_accels_for_action("win.fullscreen", &["F11"]);
+    window.add_action(&add("show-hosts", || AppMsg::ShowView("hosts")));
+    window.add_action(&add("show-library", || AppMsg::ShowView("library")));
+    window.add_action(&add("find", || AppMsg::Find));
+    window.add_action(&add("reload", || AppMsg::Reload));
+    let app = relm4::main_application();
+    for (_, action, accels) in ACCELS {
+        app.set_accels_for_action(action, accels);
+    }
+}
+
+/// The window's keys, as the shortcuts dialog lists them.
+const ACCELS: &[(&str, &str, &[&str])] = &[
+    ("Show Hosts", "win.show-hosts", &["<Control>1"]),
+    ("Show Library", "win.show-library", &["<Control>2"]),
+    ("Search the Library", "win.find", &["<Control>f"]),
+    ("Add a host", "win.add-host", &["<Control>n"]),
+    ("Rescan or reload", "win.reload", &["<Control>r", "F5"]),
+    ("Preferences", "win.preferences", &["<Control>comma"]),
+    (
+        "Keyboard shortcuts",
+        "win.shortcuts",
+        &["<Control>question"],
+    ),
+    ("Toggle fullscreen", "win.fullscreen", &["F11"]),
+    (
+        "Close the window",
+        "window.close",
+        &["<Control>w", "<Control>q"],
+    ),
+];
+
+/// The `Settings::extra` key the window's size is kept under: width, height, maximized.
+const WINDOW_KEY: &str = "shell_window";
+
+/// Open at the size the window last closed at, and keep it on close.
+fn remember_size(window: &adw::ApplicationWindow, store: &Rc<Store>) {
+    let kept: Vec<i64> = store
+        .settings()
+        .extra
+        .get(WINDOW_KEY)
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|n| n.as_i64()).collect())
+        .unwrap_or_default();
+    if let [w, h, maximized] = kept[..] {
+        window.set_default_size(w.clamp(360, 8192) as i32, h.clamp(294, 8192) as i32);
+        window.set_maximized(maximized != 0);
+    }
+    let store = store.clone();
+    window.connect_close_request(move |w| {
+        let (width, height) = w.default_size();
+        let size = vec![
+            i64::from(width),
+            i64::from(height),
+            i64::from(w.is_maximized()),
+        ];
+        store.update_settings(|s| s.extra.insert(WINDOW_KEY.into(), size.into()));
+        glib::Propagation::Proceed
+    });
+}
+
+/// "Your changes aren't being saved", while the last write to the config dir failed.
+fn store_health_banner(store: &Store) -> adw::Banner {
+    let banner = adw::Banner::new(
+        "Your changes aren\u{2019}t being saved \u{2014} Punktfunk can\u{2019}t write to its settings folder.",
+    );
+    let check = {
+        let banner = banner.clone();
+        move || banner.set_revealed(pf_client_core::trust::store_health::last_error().is_some())
+    };
+    check();
+    store.subscribe(move |_| check());
+    banner
 }
 
 /// The Keyboard Shortcuts dialog: this window's keys, then the session window's, kept here
 /// as discoverable documentation.
 pub fn shortcuts_dialog() -> adw::ShortcutsDialog {
     let shell = adw::ShortcutsSection::new(Some("This window"));
-    shell.add(adw::ShortcutsItem::new("Toggle fullscreen", "F11"));
+    for (title, action, _) in ACCELS {
+        shell.add(adw::ShortcutsItem::from_action(title, action));
+    }
     let stream = adw::ShortcutsSection::new(Some("Stream (session window)"));
     for (title, accel) in [
         ("Toggle fullscreen", "F11 <Alt>Return"),

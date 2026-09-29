@@ -11,8 +11,9 @@ use std::rc::Rc;
 /// component parts, so the scene can be dispatched from the window's `map` callback.
 pub struct ShotCtx {
     pub window: adw::ApplicationWindow,
-    pub nav: adw::NavigationView,
     pub hosts: relm4::Sender<HostsMsg>,
+    pub library: relm4::Sender<crate::library::LibraryMsg>,
+    pub views: adw::ViewStack,
     pub store: Rc<crate::store::Store>,
     pub gamepad: crate::gamepad::GamepadService,
     pub identity: (String, String),
@@ -149,19 +150,14 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
         "shortcuts" | "07-shortcuts" => {
             adw::prelude::AdwDialogExt::present(&crate::app::shortcuts_dialog(), Some(&ctx.window));
         }
-        // The library page with injected entries: mixed stores exercising the badge set,
-        // no-art placeholders, and one solid-color texture standing in for a poster.
+        // The Library on the first shelf with injected titles: mixed stores for the badge
+        // set, a launcher, placeholders, and one solid-colour texture standing in for a poster.
         "library" | "08-library" => {
             let (games, art) = mock_library();
-            crate::library::open_mock(
-                &ctx.nav,
-                ctx.store.clone(),
-                ctx.identity.clone(),
-                sender,
-                mock_req(),
-                games,
-                art,
-            );
+            ctx.views.set_visible_child_name("library");
+            let _ = ctx
+                .library
+                .send(crate::library::LibraryMsg::Mock(games, art));
         }
         other => tracing::warn!("unknown PUNKTFUNK_SHOT_SCENE={other:?}; showing hosts only"),
     }
@@ -212,26 +208,39 @@ fn mock_library() -> (
     Vec<pf_client_core::library::GameEntry>,
     Vec<(String, gtk::gdk::Texture)>,
 ) {
-    let game = |id: &str, store: &str, title: &str| pf_client_core::library::GameEntry {
-        id: id.to_string(),
-        store: store.to_string(),
-        title: title.to_string(),
-        art: pf_client_core::library::Artwork::default(),
-        platform: None,
-        developer: None,
-        release_year: None,
-        genres: Vec::new(),
-        role: None,
-        icon: None,
-        stats: None,
-    };
+    let game =
+        |id: &str, store: &str, title: &str, played: u64| pf_client_core::library::GameEntry {
+            id: id.to_string(),
+            store: store.to_string(),
+            title: title.to_string(),
+            art: pf_client_core::library::Artwork::default(),
+            platform: None,
+            developer: None,
+            release_year: None,
+            genres: Vec::new(),
+            role: None,
+            icon: None,
+            stats: (played > 0).then_some(pf_client_core::library::GameStats {
+                last_played_unix_ms: 1_700_000_000_000 + played * 3_600_000,
+                play_time_ms: played * 3_600_000,
+                last_run_ms: 0,
+                launch_count: 1,
+            }),
+        };
     let games = vec![
-        game("steam:570", "steam", "Dota 2"),
-        game("steam:1091500", "steam", "Cyberpunk 2077"),
-        game("custom:emu-1", "custom", "RetroArch"),
-        game("heroic:fortnite", "heroic", "Fortnite"),
-        game("gog:witcher3", "gog", "The Witcher 3"),
-        game("lutris:osu", "lutris", "osu!"),
+        pf_client_core::library::GameEntry {
+            role: Some("launcher".into()),
+            icon: Some("steam".into()),
+            ..game("steam:bigpicture", "steam", "Steam", 0)
+        },
+        game("steam:570", "steam", "Dota 2", 30),
+        game("steam:1091500", "steam", "Cyberpunk 2077", 12),
+        game("custom:emu-1", "custom", "RetroArch", 0),
+        game("heroic:fortnite", "heroic", "Fortnite", 0),
+        game("gog:witcher3", "gog", "The Witcher 3", 5),
+        game("lutris:osu", "lutris", "osu!", 0),
+        game("steam:1145360", "steam", "Hades", 0),
+        game("steam:504230", "steam", "Celeste", 0),
     ];
     let art = vec![(
         "steam:570".to_string(),

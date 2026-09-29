@@ -750,7 +750,7 @@ fn remove_host(ctx: &Ctx, nav: &adw::NavigationView, anchor: &adw::ButtonRow) {
             }
             ctx.store.reload(Changed::Hosts);
             ctx.store.reload(Changed::Settings);
-            nav.pop_to_tag("hosts");
+            nav.pop_to_tag("main");
         },
     );
 }

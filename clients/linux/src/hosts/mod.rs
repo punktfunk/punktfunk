@@ -14,6 +14,7 @@ use crate::discovery::{self, DiscoveredHost, DiscoveryEvent};
 use crate::store::{Changed, Store};
 use crate::trust::{self, HostEdit, KnownHost, KnownHosts, Settings};
 use adw::prelude::*;
+pub(crate) use card::os_icon_name;
 use gtk::{gio, glib};
 use model::{Band, CardModel, Live, Preset, Status};
 use pf_client_core::host_order;
@@ -142,6 +143,8 @@ pub struct HostsInit {
     pub store: Rc<Store>,
     /// The window's navigation, which host pages push onto.
     pub nav: adw::NavigationView,
+    pub views: adw::ViewStack,
+    pub narrow: adw::Breakpoint,
 }
 
 pub struct HostsPage {
@@ -180,7 +183,7 @@ pub enum HostsMsg {
     AdvertRemoved {
         fullname: String,
     },
-    /// Re-render from the store (it changed, or the page was shown again).
+    /// Re-render: the store changed, or the console handed the window back.
     Refresh,
     /// Re-query mDNS *and* re-render — the header's Refresh button. After a while `mdns-sd`
     /// re-queries about once an hour, so a host that appeared since needs an actual query.
@@ -205,11 +208,10 @@ pub enum HostsOutput {
     WakeConnect(ConnectRequest),
     Pair(ConnectRequest),
     SpeedTest(ConnectRequest),
+    Library(ConnectRequest),
     /// With the advertised mgmt port when a live advert carries one.
-    Library(ConnectRequest, Option<u16>),
-    /// With the mgmt port resolved the same way as [`HostsOutput::Library`]'s.
     SendLogs(ConnectRequest, Option<u16>),
-    /// Run one of the host's own actions — same mgmt-port resolution as the two above.
+    /// Run one of the host's own actions — same mgmt-port resolution as [`HostsOutput::SendLogs`].
     HostAction {
         req: ConnectRequest,
         mgmt: Option<u16>,
@@ -223,14 +225,11 @@ impl SimpleComponent for HostsPage {
     type Init = HostsInit;
     type Input = HostsMsg;
     type Output = HostsOutput;
-    type Root = adw::NavigationPage;
+    type Root = adw::ToolbarView;
     type Widgets = ();
 
     fn init_root() -> Self::Root {
-        adw::NavigationPage::builder()
-            .title("Punktfunk")
-            .tag("hosts")
-            .build()
+        adw::ToolbarView::new()
     }
 
     fn init(
@@ -238,7 +237,12 @@ impl SimpleComponent for HostsPage {
         page: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let HostsInit { store, nav } = init;
+        let HostsInit {
+            store,
+            nav,
+            views,
+            narrow,
+        } = init;
         let heading = |text: &str| {
             let l = gtk::Label::new(Some(text));
             l.add_css_class("heading");
@@ -313,7 +317,7 @@ impl SimpleComponent for HostsPage {
             }),
         );
 
-        let header = adw::HeaderBar::new();
+        let (header, bar) = crate::widgets::chrome::destination_header(&views, &narrow);
         let add_host_btn = crate::widgets::lucide::button("plus");
         add_host_btn.set_tooltip_text(Some("Add host"));
         add_host_btn.set_action_name(Some("win.add-host"));
@@ -326,21 +330,8 @@ impl SimpleComponent for HostsPage {
         }
         header.pack_start(&rescan_btn);
         header.pack_start(&arrange);
-        let menu = gio::Menu::new();
-        if cfg!(feature = "console") {
-            menu.append(Some("Console UI"), Some("win.console"));
-        }
-        menu.append(Some("Preferences"), Some("win.preferences"));
-        menu.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
-        menu.append(Some("About Punktfunk"), Some("win.about"));
-        let menu_btn = gtk::MenuButton::builder()
-            .child(&crate::widgets::lucide::row_icon("menu"))
-            .menu_model(&menu)
-            .primary(true)
-            .tooltip_text("Main menu")
-            .build();
-        // Packed after the menu so the hamburger stays rightmost (pack_end fills inward).
-        header.pack_end(&menu_btn);
+        // Packed first so the menu stays rightmost (pack_end fills inward).
+        header.pack_end(&crate::widgets::chrome::primary_menu());
         if cfg!(feature = "console") {
             // The couch UI's front door, beside the page's other actions.
             let console_btn = crate::widgets::lucide::button("gamepad-2");
@@ -350,16 +341,10 @@ impl SimpleComponent for HostsPage {
             header.pack_end(&console_btn);
         }
 
-        let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
-        toolbar.add_top_bar(&banner);
-        toolbar.set_content(Some(&stack));
-        page.set_child(Some(&toolbar));
-
-        {
-            let sender = sender.clone();
-            page.connect_shown(move |_| sender.input(HostsMsg::Refresh));
-        }
+        page.add_top_bar(&header);
+        page.add_top_bar(&banner);
+        page.add_bottom_bar(&bar);
+        page.set_content(Some(&stack));
         {
             let sender = sender.clone();
             nav.connect_popped(move |_, popped| {
@@ -681,7 +666,7 @@ impl HostsPage {
             hosts: hosts.to_vec(),
         };
         let Some(k) = page.host().index(&known).map(|i| &known.hosts[i]) else {
-            self.nav.pop_to_tag("hosts");
+            self.nav.pop_to_tag("main");
             self.detail = None;
             return;
         };
@@ -720,10 +705,7 @@ impl HostsPage {
             Act::WakeConnect(req) => out(HostsOutput::WakeConnect(req)),
             Act::Pair(req) => out(HostsOutput::Pair(req)),
             Act::SpeedTest(req) => out(HostsOutput::SpeedTest(req)),
-            Act::Library(req) => {
-                let mgmt = self.mgmt_port_for(&req);
-                out(HostsOutput::Library(req, mgmt));
-            }
+            Act::Library(req) => out(HostsOutput::Library(req)),
             Act::SendLogs(req) => {
                 let mgmt = self.mgmt_port_for(&req);
                 out(HostsOutput::SendLogs(req, mgmt));

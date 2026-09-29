@@ -204,6 +204,19 @@ impl AppModel {
             Ok(l) => l,
             Err(e) => return self.toast(&e.message()),
         };
+        // A shelf dials nothing, so a guessable name needs no confirmation here.
+        if link.route == deeplink::Route::Browse {
+            let known = self.store.hosts();
+            return match deeplink::resolve_host(&link, &known) {
+                deeplink::HostResolution::Known(i) | deeplink::HostResolution::Confirm(i) => {
+                    sender.input(AppMsg::OpenLibrary(hosts::saved_request(&known.hosts[i])))
+                }
+                _ => {
+                    drop(known);
+                    self.toast("That host isn't saved on this device.")
+                }
+            };
+        }
         let outcome = plan_from_link(
             &link,
             &self.store.hosts(),
