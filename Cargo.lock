@@ -3876,6 +3876,7 @@ dependencies = [
  "pf-client-core",
  "punktfunk-core",
  "relm4",
+ "serde",
  "serde_json",
  "tracing",
 ]

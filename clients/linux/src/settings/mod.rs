@@ -15,6 +15,7 @@
 
 pub mod quick_actions;
 
+use crate::store::Changed;
 use crate::trust::Settings;
 use adw::prelude::*;
 use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
@@ -1343,7 +1344,7 @@ fn group(title: &str, description: &str) -> adw::PreferencesGroup {
 /// the next one is loaded, and there is exactly one place that builds the rows.
 pub fn show_scoped(
     parent: &impl IsA<gtk::Widget>,
-    settings: Rc<RefCell<Settings>>,
+    store: Rc<crate::store::Store>,
     gamepads: &crate::gamepad::GamepadService,
     probes: &DeviceProbes,
     scope: Scope,
@@ -1361,13 +1362,13 @@ pub fn show_scoped(
     // overrides on top. A row the preset doesn't override therefore reads as the live
     // global, which is what "inherit by default" has to look like.
     let seed: Settings = match &active {
-        Some(p) => p.overrides.apply(&settings.borrow()),
-        None => settings.borrow().clone(),
+        Some(p) => p.overrides.apply(&store.settings()),
+        None => store.settings().clone(),
     };
     let touched = Touched::default();
     // The globals as they are right now — what a reset row goes back to showing. Read before
     // the close handler takes ownership of the cell.
-    let globals: Settings = settings.borrow().clone();
+    let globals: Settings = store.settings().clone();
     // Where a scope switch wants to go once this dialog has committed and closed.
     let next_scope: Rc<RefCell<Option<Scope>>> = Rc::default();
     // The preset "Duplicate" asked for, copied once this dialog's edits are committed.
@@ -1430,15 +1431,9 @@ pub fn show_scoped(
                 rows.apply(&mut values);
                 commit_preset(active, &touched, &values);
             }
-            None => {
-                // Rebase on the file, not the start-of-app snapshot: other whole-file writers
-                // exist (the spawner persists `last_window_w/h`), and saving the stale snapshot
-                // would revert them. The rows carry every value this dialog owns.
-                let mut s = settings.borrow_mut();
-                *s = Settings::load();
-                rows.apply(&mut s);
-                s.save();
-            }
+            // The store re-reads the file first: other writers exist (the spawner persists
+            // `last_window_w/h`). The rows carry every value this dialog owns.
+            None => store.update_settings(|s| rows.apply(s)),
         }
         // Deferred Duplicate: the source has just been committed above, so the copy is
         // taken from what the user was actually looking at.
@@ -1449,6 +1444,10 @@ pub fn show_scoped(
                     *next_scope.borrow_mut() = Some(Scope::Preset(new_id));
                 }
             }
+        }
+        // The catalog and the host bindings were written straight to disk above.
+        for what in [Changed::Presets, Changed::Hosts, Changed::Settings] {
+            store.reload(what);
         }
         // A scope switch closed this dialog to commit first; now re-open in the new scope.
         if let Some(next) = next_scope.borrow_mut().take() {

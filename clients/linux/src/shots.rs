@@ -5,7 +5,6 @@ use crate::hosts::{ConnectRequest, HostsMsg};
 use gtk::glib;
 use gtk::prelude::*;
 use relm4::prelude::*;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 /// The handles `run_shot` needs — cloned out of `AppModel` before it moves into the
@@ -14,7 +13,7 @@ pub struct ShotCtx {
     pub window: adw::ApplicationWindow,
     pub nav: adw::NavigationView,
     pub hosts: relm4::Sender<HostsMsg>,
-    pub settings: Rc<RefCell<crate::trust::Settings>>,
+    pub store: Rc<crate::store::Store>,
     pub gamepad: crate::gamepad::GamepadService,
     pub identity: (String, String),
     pub sender: ComponentSender<AppModel>,
@@ -105,7 +104,8 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
                 .ok()
                 .filter(|v| !v.is_empty())
                 .and_then(|reference| {
-                    pf_client_core::presets::PresetsFile::load()
+                    ctx.store
+                        .presets()
                         .resolve(&reference)
                         .0
                         .map(|p| crate::settings::Scope::Preset(p.id.clone()))
@@ -113,7 +113,7 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
                 .unwrap_or(crate::settings::Scope::Defaults);
             let dialog = crate::settings::show_scoped(
                 &ctx.window,
-                ctx.settings.clone(),
+                ctx.store.clone(),
                 &ctx.gamepad,
                 &probes,
                 scope,
@@ -145,6 +145,7 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             let (games, art) = mock_library();
             crate::library::open_mock(
                 &ctx.nav,
+                ctx.store.clone(),
                 ctx.identity.clone(),
                 sender,
                 mock_req(),

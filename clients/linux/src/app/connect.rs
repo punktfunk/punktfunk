@@ -10,7 +10,7 @@ impl AppModel {
         if self.busy {
             return;
         }
-        let known = trust::KnownHosts::load();
+        let known = self.store.hosts();
         let fp = req.fp_hex.as_deref();
         match trust_route(&known, fp, &req.addr, req.port, req.pair_optional) {
             TrustRoute::Pinned(fp_hex) => sender.input(AppMsg::StartSession {
@@ -74,7 +74,9 @@ impl AppModel {
         if persist_paired {
             // Request-access: the operator approved this device — a trusted
             // PAIRED host from now on, like after a PIN ceremony.
-            match trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, true, &[]) {
+            let saved = trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, true, &[]);
+            self.store.reload(Changed::Hosts);
+            match saved {
                 Ok(()) => self.toast("Approved — connected"),
                 // The stream is up (the pin was carried in memory), but nothing was
                 // written — say so, or the host is simply gone at the next launch.
@@ -82,7 +84,9 @@ impl AppModel {
             }
         } else if tofu {
             // The advertised fingerprint proved itself on a real connect.
-            match trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, false, &[]) {
+            let saved = trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, false, &[]);
+            self.store.reload(Changed::Hosts);
+            match saved {
                 Ok(()) => self.toast(&format!(
                     "Trusted on first use — fingerprint {}…",
                     &fp_hex[..16.min(fp_hex.len())]
@@ -161,7 +165,7 @@ impl AppModel {
         ];
         // Same knobs a stream uses — the session also fullscreens itself on the Deck
         // and under gamescope regardless.
-        let settings = self.settings.borrow();
+        let settings = self.store.settings();
         if settings.fullscreen_on_stream || settings.fullscreen_always() {
             argv.push("--fullscreen".into());
         }
@@ -194,15 +198,18 @@ impl AppModel {
     pub(super) fn open_deep_link(&mut self, url: &str, sender: &ComponentSender<AppModel>) {
         use pf_client_core::deeplink;
         use pf_client_core::orchestrate::{plan_from_link, PlanOutcome};
-        use pf_client_core::presets::PresetsFile;
 
         tracing::debug!(%url, "deep link");
         let link = match deeplink::parse(url) {
             Ok(l) => l,
             Err(e) => return self.toast(&e.message()),
         };
-        let known = trust::KnownHosts::load();
-        let outcome = plan_from_link(&link, &known, &PresetsFile::load(), &self.settings.borrow());
+        let outcome = plan_from_link(
+            &link,
+            &self.store.hosts(),
+            &self.store.presets(),
+            &self.store.settings(),
+        );
         match outcome {
             Ok(PlanOutcome::Connect(plan)) => {
                 // Rule 2 of §3: never preempt a live session. Only this layer knows one is

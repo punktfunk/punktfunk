@@ -26,6 +26,7 @@ type ArtRx = async_channel::Receiver<(String, Vec<u8>)>;
 /// art consumer (its weak upgrade fails).
 struct State {
     sender: ComponentSender<AppModel>,
+    store: Rc<crate::store::Store>,
     identity: (String, String),
     /// The advertised mgmt port when the host was live at open time (else the default).
     mgmt_port: u16,
@@ -82,13 +83,14 @@ impl Drop for State {
 /// says nothing extra: its binding is the host's own default, not a second thing to read.
 /// A one-off whose preset has since been deleted resolves as no preset everywhere else,
 /// and reads as a plain host here.
-fn page_host_label(req: &ConnectRequest) -> String {
+fn page_host_label(store: &crate::store::Store, req: &ConnectRequest) -> String {
     let Some(id) = req.preset.as_deref().filter(|id| !id.is_empty()) else {
         return req.name.clone();
     };
-    pf_client_core::presets::PresetsFile::load()
+    store
+        .presets()
         .presets
-        .into_iter()
+        .iter()
         .find(|p| p.id == id)
         .map_or_else(
             || req.name.clone(),
@@ -104,9 +106,9 @@ fn page_host_label(req: &ConnectRequest) -> String {
 /// A shelf opened from a PINNED card carries that card's one-off preset into the link:
 /// what you copy off that shelf is what pressing the card and picking the title does.
 /// `None` only when the host has left the store while the page was open.
-fn game_link(req: &ConnectRequest, game_id: &str) -> Option<String> {
+fn game_link(store: &crate::store::Store, req: &ConnectRequest, game_id: &str) -> Option<String> {
     pf_client_core::deeplink::saved_host_link(
-        &pf_client_core::trust::KnownHosts::load(),
+        &store.hosts(),
         req.fp_hex.as_deref(),
         &req.addr,
         req.port,
@@ -123,7 +125,14 @@ pub fn open(
     req: ConnectRequest,
     mgmt_port: Option<u16>,
 ) {
-    let state = build(&app.nav, app.identity.clone(), sender, req, mgmt_port);
+    let state = build(
+        &app.nav,
+        app.store.clone(),
+        app.identity.clone(),
+        sender,
+        req,
+        mgmt_port,
+    );
     load(&state);
 }
 
@@ -131,13 +140,14 @@ pub fn open(
 /// entry id) with no host and no network — the CI `library` scene.
 pub fn open_mock(
     nav: &adw::NavigationView,
+    store: Rc<crate::store::Store>,
     identity: (String, String),
     sender: &ComponentSender<AppModel>,
     req: ConnectRequest,
     games: Vec<GameEntry>,
     art: Vec<(String, gdk::Texture)>,
 ) {
-    let state = build(nav, identity, sender, req, None);
+    let state = build(nav, store, identity, sender, req, None);
     state.mock.set(true);
     state.art.borrow_mut().extend(art);
     if games.is_empty() {
@@ -152,6 +162,7 @@ pub fn open_mock(
 /// Build the page (loading / error / empty / grid states in a stack) and push it.
 fn build(
     nav: &adw::NavigationView,
+    store: Rc<crate::store::Store>,
     identity: (String, String),
     sender: &ComponentSender<AppModel>,
     req: ConnectRequest,
@@ -262,7 +273,7 @@ fn build(
     header.pack_end(&reload);
     // Shared `library_sort`: the same four orders the console's bar offers, so one library
     // reads the same on both fronts. Default is the host's own order, which is a no-op.
-    let stored_sort = SortKey::parse(&trust::Settings::load().library_sort);
+    let stored_sort = SortKey::parse(&store.settings().library_sort);
     let labels: Vec<&str> = SortKey::ALL.iter().map(|k| k.label()).collect();
     let sort_menu = gtk::DropDown::from_strings(&labels);
     sort_menu.set_tooltip_text(Some("Sort"));
@@ -280,12 +291,13 @@ fn build(
     toolbar.set_content(Some(&stack));
 
     let page = adw::NavigationPage::builder()
-        .title(format!("{} — Library", page_host_label(&req)))
+        .title(format!("{} — Library", page_host_label(&store, &req)))
         .child(&toolbar)
         .build();
 
     let state = Rc::new(State {
         sender: sender.clone(),
+        store,
         identity,
         mgmt_port: mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
         req,
@@ -308,7 +320,7 @@ fn build(
     {
         let state = state.clone();
         // Presentation only, like the console's bar: write the key, re-render what is already
-        // fetched. Load-modify-save because the settings file has one writer per shell.
+        // fetched.
         sort_menu.connect_selected_notify(move |menu| {
             let key = SortKey::ALL
                 .get(menu.selected() as usize)
@@ -317,9 +329,9 @@ fn build(
             if state.sort.replace(key) == key {
                 return;
             }
-            let mut settings = trust::Settings::load();
-            settings.library_sort = key.id().to_string();
-            settings.save();
+            state
+                .store
+                .update_settings(|s| s.library_sort = key.id().to_string());
             render(&state);
         });
     }
@@ -585,8 +597,9 @@ fn game_card(state: &Rc<State>, game: &GameEntry) -> gtk::FlowBoxChild {
     let actions = gio::SimpleActionGroup::new();
     {
         let (sender, req, id) = (state.sender.clone(), state.req.clone(), game.id.clone());
+        let store = state.store.clone();
         let a = gio::SimpleAction::new("copy-link", None);
-        a.connect_activate(move |_, _| match game_link(&req, &id) {
+        a.connect_activate(move |_, _| match game_link(&store, &req, &id) {
             Some(url) => {
                 if let Some(display) = gdk::Display::default() {
                     display.clipboard().set_text(&url);

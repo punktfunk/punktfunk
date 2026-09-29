@@ -30,6 +30,9 @@ mod settings;
 // The CI screenshot scenes.
 #[cfg(target_os = "linux")]
 mod shots;
+// Hosts, settings and presets in memory, kept in step with the disk.
+#[cfg(target_os = "linux")]
+mod store;
 // Shared widgets: the FlowBox activation bridge and the Lucide icons.
 #[cfg(target_os = "linux")]
 mod widgets;

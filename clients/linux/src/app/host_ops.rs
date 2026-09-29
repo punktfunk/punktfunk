@@ -109,7 +109,7 @@ impl AppModel {
         // always the global, so measuring the slow retro box downstairs re-tuned the desktop
         // too. The target depends only on the host, so it is known before the result lands and
         // the button can say where it will write.
-        let target = SpeedTestTarget::resolve(&req);
+        let target = SpeedTestTarget::resolve(&req, &self.store);
         match &target {
             SpeedTestTarget::Global => {
                 dialog.add_responses(&[("close", "Close"), ("apply", "Apply")]);
@@ -149,7 +149,7 @@ impl AppModel {
             let _ = tx.send_blocking(result);
         });
 
-        let settings = self.settings.clone();
+        let store = self.store.clone();
         let toasts = self.toasts.clone();
         let sender = sender.clone();
         glib::spawn_future_local(async move {
@@ -172,22 +172,15 @@ impl AppModel {
                     }
                     let mbit = f64::from(recommended_kbps) / 1000.0;
                     {
-                        let (settings, toasts) = (settings.clone(), toasts.clone());
+                        let (store, toasts) = (store.clone(), toasts.clone());
                         dialog.connect_response(Some("apply"), move |_, _| {
                             let where_to = match &target {
                                 SpeedTestTarget::Global => {
-                                    // Rebase on the file before the whole-file save (same
-                                    // discipline as the settings dialog): another writer — the
-                                    // spawner's window-size persist, a second window's dialog —
-                                    // may have moved it under this shell's snapshot.
-                                    let mut s = settings.borrow_mut();
-                                    *s = Settings::load();
-                                    s.bitrate_kbps = recommended_kbps;
-                                    s.save();
+                                    store.update_settings(|s| s.bitrate_kbps = recommended_kbps);
                                     "the default bitrate".to_string()
                                 }
                                 SpeedTestTarget::Preset(p) | SpeedTestTarget::Ask(p) => {
-                                    write_preset_bitrate(&p.id, recommended_kbps);
+                                    write_preset_bitrate(&store, &p.id, recommended_kbps);
                                     format!("“{}”", p.name)
                                 }
                             };
@@ -197,11 +190,7 @@ impl AppModel {
                         });
                     }
                     dialog.connect_response(Some("apply-global"), move |_, _| {
-                        // Rebase on the file first — see the Global arm above.
-                        let mut s = settings.borrow_mut();
-                        *s = Settings::load();
-                        s.bitrate_kbps = recommended_kbps;
-                        s.save();
+                        store.update_settings(|s| s.bitrate_kbps = recommended_kbps);
                         toasts.add_toast(adw::Toast::new(&format!(
                             "{mbit:.0} Mbit/s set in the default bitrate"
                         )));
@@ -226,10 +215,11 @@ enum SpeedTestTarget {
 }
 
 impl SpeedTestTarget {
-    fn resolve(req: &crate::hosts::ConnectRequest) -> SpeedTestTarget {
+    fn resolve(req: &crate::hosts::ConnectRequest, store: &Store) -> SpeedTestTarget {
         // Resolved exactly the way a connect resolves it: the one-off pick this test was
         // started with (a pinned card carries one), else the host's binding.
-        let bound = trust::KnownHosts::load()
+        let bound = store
+            .hosts()
             .resolve(req.fp_hex.as_deref(), &req.addr, req.port)
             .and_then(|h| h.preset_id.clone());
         let reference = match req.preset.as_deref() {
@@ -240,7 +230,7 @@ impl SpeedTestTarget {
         let Some(reference) = reference else {
             return SpeedTestTarget::Global;
         };
-        let catalog = pf_client_core::presets::PresetsFile::load();
+        let catalog = store.presets();
         match catalog.resolve(&reference).0 {
             Some(p) if p.overrides.bitrate_kbps.is_some() => SpeedTestTarget::Preset(p.clone()),
             Some(p) => SpeedTestTarget::Ask(p.clone()),
@@ -250,14 +240,15 @@ impl SpeedTestTarget {
     }
 }
 
-/// Write a measured bitrate into one preset's overlay, leaving everything else alone.
-fn write_preset_bitrate(id: &str, kbps: u32) {
-    let mut catalog = pf_client_core::presets::PresetsFile::load();
-    let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id) else {
-        return; // deleted while the test ran — the toast still tells the truth about the test
-    };
-    p.overrides.bitrate_kbps = Some(kbps);
-    if let Err(e) = catalog.save() {
-        tracing::warn!(error = %format!("{e:#}"), "saving the measured bitrate");
+/// Write a measured bitrate into one preset's overlay, leaving everything else alone. A
+/// preset deleted while the test ran is left deleted; the toast still reports the test.
+fn write_preset_bitrate(store: &Store, id: &str, kbps: u32) {
+    let saved = store.update_presets(|catalog| {
+        if let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id) {
+            p.overrides.bitrate_kbps = Some(kbps);
+        }
+    });
+    if let Err(e) = saved {
+        tracing::warn!(error = %format!("{e:#}"), "measured bitrate not saved");
     }
 }

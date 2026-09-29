@@ -2,16 +2,17 @@
 //! and mDNS-discovered hosts — avatar + name + `addr:port` + status pills, online pips,
 //! dashed discovered cards, an overflow menu, an add-host dialog, and a connect-failure
 //! banner. Cards are a [`FactoryVecDeque`]; both grids re-populate from one state
-//! snapshot (known hosts on disk + the live advert map) on every change, so dedup and
-//! the online pips stay consistent. Actions leave as typed [`HostsOutput`]s — the
-//! callback bag and `Rc<RefCell<HostsUi>>` pokes of the pre-relm4 shell are gone.
+//! snapshot (the [`Store`] + the live advert map) on every change, so dedup and the online
+//! pips stay consistent. What an advert or a probe teaches is written when it arrives,
+//! never while drawing. Actions leave as typed [`HostsOutput`]s.
 
 mod card;
 mod dialogs;
 mod form;
 
 use crate::discovery::{self, DiscoveredHost, DiscoveryEvent};
-use crate::trust::{self, HostEdit, KnownHost, KnownHosts, Settings};
+use crate::store::{Changed, Store};
+use crate::trust::{self, HostEdit, KnownHost, KnownHosts};
 use adw::prelude::*;
 use card::{CardKind, CardOutput, HostCard, Preset};
 use gtk::{gio, glib};
@@ -93,6 +94,7 @@ pub struct HostsPage {
     /// Forces the mDNS browse to re-query (the header's Refresh button). `None` only if the
     /// browse never started — the button then just re-renders, which is what it did before.
     rescan: Option<discovery::Rescan>,
+    store: Rc<Store>,
 }
 
 struct PageWidgets {
@@ -151,7 +153,7 @@ pub enum HostsOutput {
 }
 
 impl SimpleComponent for HostsPage {
-    type Init = ();
+    type Init = Rc<Store>;
     type Input = HostsMsg;
     type Output = HostsOutput;
     type Root = adw::NavigationPage;
@@ -165,7 +167,7 @@ impl SimpleComponent for HostsPage {
     }
 
     fn init(
-        _init: Self::Init,
+        store: Self::Init,
         page: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -332,13 +334,15 @@ impl SimpleComponent for HostsPage {
         // thread (bounded QUIC handshake, then the addresses a silent host left) and feeds results
         // back as `Probed`; the first sweep runs immediately, then every `PROBE_INTERVAL`.
         {
-            let sender = sender.clone();
+            let (sender, store) = (sender.clone(), store.clone());
             glib::spawn_future_local(async move {
                 loop {
-                    let hosts: Vec<KnownHost> = KnownHosts::load()
+                    let hosts: Vec<KnownHost> = store
+                        .hosts()
                         .hosts
-                        .into_iter()
+                        .iter()
                         .filter(|h| !h.addr.is_empty())
+                        .cloned()
                         .collect();
                     if !hosts.is_empty() {
                         let (tx, rx) = async_channel::bounded(1);
@@ -374,7 +378,12 @@ impl SimpleComponent for HostsPage {
                 searching,
             },
             rescan: Some(rescan),
+            store: store.clone(),
         };
+        {
+            let sender = sender.clone();
+            store.subscribe(move |_| sender.input(HostsMsg::Refresh));
+        }
         model.rebuild();
 
         ComponentParts { model, widgets: () }
@@ -383,6 +392,7 @@ impl SimpleComponent for HostsPage {
     fn update(&mut self, msg: HostsMsg, sender: ComponentSender<Self>) {
         match msg {
             HostsMsg::Advert(h) => {
+                self.learn(&h);
                 self.adverts.insert(h.key.clone(), h);
                 self.rebuild();
             }
@@ -401,6 +411,12 @@ impl SimpleComponent for HostsPage {
             }
             HostsMsg::Probed(map) => {
                 self.probed = map;
+                // A host saved after its advert arrived learns from it here, within a sweep.
+                let adverts: Vec<DiscoveredHost> = self.adverts.values().cloned().collect();
+                for a in &adverts {
+                    self.learn(a);
+                }
+                self.refresh_host_actions();
                 self.rebuild();
             }
             HostsMsg::SetConnecting(key) => {
@@ -473,17 +489,19 @@ impl SimpleComponent for HostsPage {
                         )));
                         return;
                     };
-                    let mut settings = trust::Settings::load();
-                    let on = settings.default_host.as_deref() != Some(id.as_str());
-                    settings.default_host = on.then_some(id);
-                    settings.save();
-                    let opens = start::StartIn::parse(&settings.start_in) != start::StartIn::Hosts;
+                    let (on, opens) = self.store.update_settings(|s| {
+                        let on = s.default_host.as_deref() != Some(id.as_str());
+                        s.default_host = on.then_some(id);
+                        (
+                            on,
+                            start::StartIn::parse(&s.start_in) != start::StartIn::Hosts,
+                        )
+                    });
                     let _ = sender.output(HostsOutput::Toast(match (on, opens) {
                         (true, true) => format!("{name} opens on launch"),
                         (true, false) => format!("{name} is the default host"),
                         (false, _) => format!("{name} is no longer the default host"),
                     }));
-                    sender.input(HostsMsg::Refresh);
                 }
                 CardOutput::Wake { mac, addr } => crate::wol::wake(&mac, addr.parse().ok()),
                 CardOutput::CopyLink(url) => {
@@ -502,20 +520,20 @@ impl SimpleComponent for HostsPage {
                     preset_id,
                     pin,
                 } => {
-                    let mut known = KnownHosts::load();
-                    if let Some(h) = known.hosts.iter_mut().find(|h| {
-                        (!fp_hex.is_empty() && h.fp_hex == fp_hex)
-                            || (h.addr == addr && h.port == port)
-                    }) {
-                        h.pinned_presets.retain(|p| p != &preset_id);
-                        if pin {
-                            h.pinned_presets.push(preset_id);
+                    let saved = self.store.update_hosts(|known| {
+                        if let Some(h) = known.hosts.iter_mut().find(|h| {
+                            (!fp_hex.is_empty() && h.fp_hex == fp_hex)
+                                || (h.addr == addr && h.port == port)
+                        }) {
+                            h.pinned_presets.retain(|p| p != &preset_id);
+                            if pin {
+                                h.pinned_presets.push(preset_id);
+                            }
                         }
-                        if let Err(e) = known.save() {
-                            tracing::warn!(error = %format!("{e:#}"), "saving the pinned cards");
-                        }
+                    });
+                    if let Err(e) = saved {
+                        tracing::warn!(error = %format!("{e:#}"), "pinned cards not saved");
                     }
-                    self.rebuild();
                 }
             },
         }
@@ -523,11 +541,54 @@ impl SimpleComponent for HostsPage {
 }
 
 impl HostsPage {
-    /// Re-populate both factories from disk + the advert map. Cheap (a handful of
+    /// What a live advert teaches the saved host it matches: its wake MACs, its OS chain (so
+    /// the icon survives it going offline), its management port, and an address the probe
+    /// sweep asks. `learn_from_advert` writes only when something moved.
+    fn learn(&self, a: &DiscoveredHost) {
+        let target = self
+            .store
+            .hosts()
+            .hosts
+            .iter()
+            .find(|k| discovery::same_host(k, a))
+            .map(|k| (k.fp_hex.clone(), k.addr.clone(), k.port));
+        let Some((fp, addr, port)) = target else {
+            return;
+        };
+        trust::learn_from_advert(&fp, &addr, port, &a.addr, &a.mac, &a.os, a.mgmt_port);
+        self.store.reload(Changed::Hosts);
+    }
+
+    /// Keep each paired, reachable host's advertised actions warm, so its menu is built from
+    /// a settled answer rather than one that arrives while the menu is open. Gated on the TTL
+    /// inside. The port: live advert, then the stored one, then the default.
+    fn refresh_host_actions(&self) {
+        let online = |k: &KnownHost| self.probed.get(&k.card_key()).copied().unwrap_or(false);
+        for k in self
+            .store
+            .hosts()
+            .hosts
+            .iter()
+            .filter(|k| k.paired && online(k))
+        {
+            let mgmt = self
+                .adverts
+                .values()
+                .find(|a| discovery::same_host(k, a))
+                .and_then(|a| a.mgmt_port)
+                .unwrap_or_else(|| k.effective_mgmt_port());
+            pf_client_core::host_actions::refresh(&k.addr, mgmt, &k.fp_hex);
+        }
+    }
+
+    /// Re-populate both factories from the store and the advert map. Cheap (a handful of
     /// widgets) and keeps every derived view — online pips, dedup, most-recent accent,
-    /// spinner — in one straight-line pass.
+    /// spinner — in one straight-line pass. Reads only memory.
     fn rebuild(&mut self) {
-        let known = KnownHosts::load();
+        let known = KnownHosts {
+            hosts: self.store.hosts().hosts.clone(),
+        };
+        let default_host = self.store.settings().default_host.clone();
         // A saved host is ONLINE iff a live advert matches it — `same_host` holds the rule
         // (two known fingerprints decide it alone) for every client that browses mDNS.
         let matches = |k: &KnownHost, a: &DiscoveredHost| discovery::same_host(k, a);
@@ -539,13 +600,14 @@ impl HostsPage {
             .map(|(fp, _)| fp);
         // One catalog read per refresh, shared by every card's menus and chip.
         let presets: Rc<Vec<Preset>> = Rc::new(
-            pf_client_core::presets::PresetsFile::load()
+            self.store
+                .presets()
                 .presets
-                .into_iter()
+                .iter()
                 .map(|p| Preset {
-                    id: p.id,
-                    name: p.name,
-                    accent: p.accent,
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    accent: p.accent.clone(),
                 })
                 .collect(),
         );
@@ -560,32 +622,7 @@ impl HostsPage {
                 // the wake gate reads `!online`, which is how Wake-on-LAN stayed silent for
                 // exactly the host it was meant to wake.
                 let online = self.probed.get(&k.card_key()).copied().unwrap_or(false);
-                // Learn what this host's live advert teaches: its wake MAC(s), its OS chain (so
-                // the icon survives it going offline), its management port, and an address the
-                // probe sweep asks — the card moves there only once its pin answers.
-                let advert = self.adverts.values().find(|a| matches(k, a));
-                if let Some(a) = advert {
-                    crate::trust::learn_from_advert(
-                        &k.fp_hex,
-                        &k.addr,
-                        k.port,
-                        &a.addr,
-                        &a.mac,
-                        &a.os,
-                        a.mgmt_port,
-                    );
-                }
-                // Keep this host's advertised actions warm, so the card's menu is built from a
-                // settled answer rather than one that arrives while the menu is open. Gated on
-                // the TTL inside, so an ordinary refresh costs nothing. Same three rungs for
-                // the port as everything else here: live advert, then the stored one, then the
-                // default.
-                if k.paired && online {
-                    let mgmt = advert
-                        .and_then(|a| a.mgmt_port)
-                        .unwrap_or_else(|| k.effective_mgmt_port());
-                    pf_client_core::host_actions::refresh(&k.addr, mgmt, &k.fp_hex);
-                }
+                let is_default = k.id.is_some() && default_host.as_deref() == k.id.as_deref();
                 saved.push_back(HostCard {
                     // The key `ConnectRequest::card_key` mints. A bare `fp_hex` is empty for
                     // every unpaired record.
@@ -595,6 +632,7 @@ impl HostsPage {
                         online,
                         presets: presets.clone(),
                         recent: most_recent.as_deref() == Some(k.fp_hex.as_str()),
+                        is_default,
                         pinned: None,
                     },
                 });
@@ -615,6 +653,7 @@ impl HostsPage {
                             online,
                             presets: presets.clone(),
                             recent: false,
+                            is_default,
                             pinned: Some((id, name)),
                         },
                     });
@@ -683,7 +722,8 @@ impl HostsPage {
         {
             return Some(p);
         }
-        crate::trust::KnownHosts::load()
+        self.store
+            .hosts()
             .hosts
             .iter()
             .find(|h| matches_req(&h.fp_hex, &h.addr, h.port))

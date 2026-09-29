@@ -26,6 +26,8 @@ pub(super) enum CardKind {
         host: KnownHost,
         online: bool,
         recent: bool,
+        /// This record is the one `Settings::default_host` names.
+        is_default: bool,
         /// The preset catalog as `(id, name)`, for this card's menus and chip. Shared per
         /// refresh rather than re-read per card.
         presets: Rc<Vec<Preset>>,
@@ -277,6 +279,7 @@ impl relm4::factory::FactoryComponent for HostCard {
                 host: k,
                 online,
                 recent,
+                is_default,
                 presets,
                 pinned,
             } => {
@@ -585,12 +588,8 @@ impl relm4::factory::FactoryComponent for HostCard {
                     // never resolves. Unchecked is not "not the default": a lone paired host
                     // is the default with nothing written.
                     if k.paired {
-                        // One settings read per card build. Cards rebuild on store changes,
-                        // not per frame, so this is a file read per host per change.
-                        let named = k.id.is_some()
-                            && Settings::load().default_host.as_deref() == k.id.as_deref();
                         manage.append(
-                            Some(if named {
+                            Some(if *is_default {
                                 "Default host \u{2713}"
                             } else {
                                 "Make default host"

@@ -55,11 +55,13 @@ impl HostsPage {
         port: u16,
         current: &str,
     ) {
-        let known = KnownHosts::load();
-        let stored = known
-            .index_of_card(id, addr, port)
-            .and_then(|i| known.hosts.get(i))
-            .cloned();
+        let stored = {
+            let known = self.store.hosts();
+            known
+                .index_of_card(id, addr, port)
+                .and_then(|i| known.hosts.get(i))
+                .cloned()
+        };
         let name_row = adw::EntryRow::builder().title("Name").build();
         name_row.set_text(current);
         let connection = ConnectionRows::new(
@@ -77,7 +79,7 @@ impl HostsPage {
         clipboard_row.set_active(stored.as_ref().is_some_and(|h| h.clipboard_sync));
 
         // Preset picker: "Default settings" plus the catalog, seeded to the current binding.
-        let catalog = pf_client_core::presets::PresetsFile::load();
+        let catalog = self.store.presets();
         let mut labels = vec!["Default settings".to_string()];
         let mut ids: Vec<String> = vec![String::new()];
         for p in &catalog.presets {
@@ -140,7 +142,7 @@ impl HostsPage {
         dialog.set_close_response("cancel");
         connection.enable_when_valid(&dialog, "save");
         {
-            let sender = sender.clone();
+            let (sender, store) = (sender.clone(), self.store.clone());
             let (id, addr, port) = (id.map(str::to_string), addr.to_string(), port);
             dialog.connect_response(Some("save"), move |_, _| {
                 // The response is only enabled while the rows parse.
@@ -151,27 +153,27 @@ impl HostsPage {
                     name: Some(name_row.text().to_string()),
                     ..edit
                 };
-                let mut known = KnownHosts::load();
-                let target = known.index_of_card(id.as_deref(), &addr, port);
-                if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                    h.apply_edit(&edit);
-                    h.clipboard_sync = clipboard_row.is_active();
-                    h.preset_id = ids
-                        .get(preset_row.selected() as usize)
-                        .filter(|id| !id.is_empty())
-                        .cloned();
-                    // Rebuilt from the switches rather than toggled, so the card order follows
-                    // the catalog and a preset deleted meanwhile simply drops out.
-                    h.pinned_presets = pin_rows
-                        .iter()
-                        .filter(|(_, row)| row.is_active())
-                        .map(|(id, _)| id.clone())
-                        .collect();
-                    if let Err(e) = known.save() {
-                        let _ = sender.output(HostsOutput::Toast(format!("Couldn't save — {e:#}")));
+                let saved = store.update_hosts(|known| {
+                    let target = known.index_of_card(id.as_deref(), &addr, port);
+                    if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
+                        h.apply_edit(&edit);
+                        h.clipboard_sync = clipboard_row.is_active();
+                        h.preset_id = ids
+                            .get(preset_row.selected() as usize)
+                            .filter(|id| !id.is_empty())
+                            .cloned();
+                        // Rebuilt from the switches rather than toggled, so the card order
+                        // follows the catalog and a preset deleted meanwhile drops out.
+                        h.pinned_presets = pin_rows
+                            .iter()
+                            .filter(|(_, row)| row.is_active())
+                            .map(|(id, _)| id.clone())
+                            .collect();
                     }
+                });
+                if let Err(e) = saved {
+                    let _ = sender.output(HostsOutput::Toast(format!("Couldn't save — {e:#}")));
                 }
-                sender.input(HostsMsg::Refresh);
             });
         }
         dialog.present(Some(&self.widgets.stack));
@@ -197,16 +199,18 @@ impl HostsPage {
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
         {
-            let sender = sender.clone();
+            let (sender, store) = (sender.clone(), self.store.clone());
             let (id, addr, port) = (id.map(str::to_string), addr.to_string(), port);
             dialog.connect_response(Some("remove"), move |_, _| {
-                let mut known = KnownHosts::load();
+                // `forget_host` saves the hosts file and clears a default pointing at the host.
+                let mut known = KnownHosts::read();
                 if let Some(i) = known.index_of_card(id.as_deref(), &addr, port) {
                     if let Err(e) = pf_client_core::orchestrate::forget_host(&mut known, i) {
                         let _ = sender.output(HostsOutput::Toast(format!("Couldn't save — {e:#}")));
                     }
                 }
-                sender.input(HostsMsg::Refresh);
+                store.reload(Changed::Hosts);
+                store.reload(Changed::Settings);
             });
         }
         dialog.present(Some(&self.widgets.stack));
@@ -233,7 +237,7 @@ impl HostsPage {
         dialog.set_close_response("cancel");
         connection.enable_when_valid(&dialog, "add");
         {
-            let sender = sender.clone();
+            let (sender, store) = (sender.clone(), self.store.clone());
             dialog.connect_response(Some("add"), move |_, _| {
                 let Some(edit) = connection.edit() else {
                     return;
@@ -255,7 +259,7 @@ impl HostsPage {
                     Err(e) => format!("Couldn't save the host \u{2014} {e:#}"),
                 };
                 let _ = sender.output(HostsOutput::Toast(msg));
-                sender.input(HostsMsg::Refresh);
+                store.reload(Changed::Hosts);
             });
         }
         dialog.present(Some(&self.widgets.stack));

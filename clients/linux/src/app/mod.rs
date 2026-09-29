@@ -1,9 +1,9 @@
-//! The application shell as a relm4 component tree (phase 5 of punktfunk-planning
-//! `linux-client-rearchitecture.md`): [`AppModel`] owns the window, navigation, trust
-//! gate, and the spawned session child's lifecycle; the hosts page is a child component
-//! ([`crate::hosts`]); dialogs (trust, settings, library) are plain GTK invoked from
-//! `update`. Every stream runs in the `punktfunk-session` Vulkan binary — the shell
-//! never touches video.
+//! The application shell as a relm4 component tree: [`AppModel`] owns the window, the
+//! [`Store`], navigation, and the spawned session child's lifecycle. The hosts page is a
+//! child component ([`crate::hosts`]); dialogs (trust, settings, library) are plain GTK
+//! invoked from `update`. The connect flow is in `connect.rs`, host requests beside a
+//! stream in `host_ops.rs`. Every stream runs in the `punktfunk-session` Vulkan binary —
+//! the shell never touches video.
 
 mod connect;
 pub mod gate;
@@ -11,7 +11,8 @@ mod host_ops;
 pub mod spawn;
 
 use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage};
-use crate::trust::{self, Settings};
+use crate::store::{Changed, Store};
+use crate::trust;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
@@ -110,7 +111,7 @@ pub struct AppModel {
     pub window: adw::ApplicationWindow,
     pub nav: adw::NavigationView,
     toasts: adw::ToastOverlay,
-    pub settings: Rc<RefCell<Settings>>,
+    pub store: Rc<Store>,
     pub identity: (String, String),
     /// App-lifetime SDL gamepad service (Settings' controller list + pinning). Streams
     /// run in the session binary, which has its own.
@@ -304,12 +305,12 @@ impl SimpleComponent for AppModel {
             }
         }
 
-        let settings = Rc::new(RefCell::new(Settings::load()));
+        let store = Store::open();
         // Recolour the shell from the desktop theme (Omarchy only; one stat everywhere else).
         // Every colour in `CSS` above resolves through libadwaita's named palette, so
         // redefining those names is all it takes. After the settings load, because the
         // "Follow the Omarchy theme" switch decides whether it draws.
-        crate::desktop::omarchy::install(settings.borrow().follow_os_theme);
+        crate::desktop::omarchy::install(store.settings().follow_os_theme);
         // Device lists for the settings pickers: probe in the background, ready long
         // before the dialog opens. A missing session binary or absent PipeWire just
         // leaves the corresponding list empty (and its picker hidden).
@@ -349,7 +350,7 @@ impl SimpleComponent for AppModel {
         // Re-apply the persisted forwarded-controller pin (stable key; the service
         // matches it whenever such a pad connects).
         {
-            let forward = settings.borrow().forward_pad.clone();
+            let forward = store.settings().forward_pad.clone();
             if !forward.is_empty() {
                 init.gamepad.set_pinned(Some(forward));
             }
@@ -357,7 +358,7 @@ impl SimpleComponent for AppModel {
 
         let hosts =
             HostsPage::builder()
-                .launch(())
+                .launch(store.clone())
                 .forward(sender.input_sender(), |out| match out {
                     HostsOutput::Connect(req) => AppMsg::Connect(req),
                     HostsOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
@@ -391,7 +392,7 @@ impl SimpleComponent for AppModel {
             window: window.clone(),
             nav,
             toasts,
-            settings,
+            store,
             identity,
             gamepad: init.gamepad,
             probes,
@@ -427,7 +428,7 @@ impl SimpleComponent for AppModel {
                 window: model.window.clone(),
                 nav: model.nav.clone(),
                 hosts: model.hosts.sender().clone(),
-                settings: model.settings.clone(),
+                store: model.store.clone(),
                 gamepad: model.gamepad.clone(),
                 identity: model.identity.clone(),
                 sender: sender.clone(),
@@ -452,13 +453,13 @@ impl SimpleComponent for AppModel {
         // application object exists, and a parked link is explicit intent that wins outright.
         let console_home = cfg!(feature = "console")
             && crate::shots::shot_scene().is_none()
-            && model.settings.borrow().gamepad_ui() == GamepadUi::Always;
+            && model.store.settings().gamepad_ui() == GamepadUi::Always;
         if parked.is_empty() && console_home {
             // The console follows Start in itself.
             sender.input(AppMsg::OpenConsole);
         } else if parked.is_empty() {
-            let settings = model.settings.borrow();
-            let known = trust::KnownHosts::load();
+            let settings = model.store.settings();
+            let known = model.store.hosts();
             let (default, source) = start::default_host_with_source(&settings, &known);
             tracing::info!(
                 start_in = start::StartIn::parse(&settings.start_in).as_str(),
@@ -499,7 +500,7 @@ impl SimpleComponent for AppModel {
                     // boots while the dial times out, and the fallback is armed for THIS request.
                     // Auto-wake off means no packet and no wake-and-wait, just the normal dial
                     // error; the host-card menu's explicit "Wake host" stays ungated.
-                    if self.settings.borrow().auto_wake {
+                    if self.store.settings().auto_wake {
                         crate::wol::wake(&req.mac, req.addr.parse().ok());
                         self.wake_fallback = Some(req.clone());
                     }
@@ -547,7 +548,7 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenConsole => self.open_console(&sender, false),
             AppMsg::Pads(n) => {
                 let prev = std::mem::replace(&mut self.pads, n);
-                if !self.busy && console_opens(self.settings.borrow().gamepad_ui(), prev, n) {
+                if !self.busy && console_opens(self.store.settings().gamepad_ui(), prev, n) {
                     self.open_console(&sender, true);
                 }
             }
@@ -598,7 +599,7 @@ impl AppModel {
         let (reopen, closed) = (sender.clone(), sender.clone());
         crate::settings::show_scoped(
             &self.window,
-            self.settings.clone(),
+            self.store.clone(),
             &self.gamepad,
             &self.probes.borrow(),
             scope,
@@ -617,7 +618,7 @@ impl AppModel {
 
     /// Fullscreen Always: on enters fullscreen, off leaves only a fullscreen it entered.
     fn apply_fullscreen(&mut self) {
-        let always = self.settings.borrow().fullscreen_always();
+        let always = self.store.settings().fullscreen_always();
         if always && !self.window.is_fullscreen() {
             self.window.fullscreen();
             self.fullscreen_by_setting = true;
