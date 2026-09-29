@@ -28,8 +28,8 @@ pub use crate::settings::{
     StatsVerbosity, TouchMode,
 };
 pub use hosts::{
-    forget_placeholder, learn_from_advert, learn_mgmt_port_by_fp, persist_host, rekey_addr,
-    touch_last_used, KnownHost, KnownHosts, PREV_ADDRS_MAX,
+    add_host, forget_placeholder, learn_from_advert, learn_mgmt_port_by_fp, persist_host,
+    rekey_addr, touch_last_used, HostEdit, KnownHost, KnownHosts, PREV_ADDRS_MAX,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use identity::{device_name, load_or_create_identity, pair_with_host};

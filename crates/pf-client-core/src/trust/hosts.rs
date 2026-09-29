@@ -199,6 +199,46 @@ impl KnownHost {
             None => drop(self.game_presets.remove(game_id)),
         }
     }
+
+    /// Apply a person's edit. An address or port change goes through
+    /// [`move_to`](Self::move_to), so the address it leaves stays a probe candidate. A blank
+    /// name or address is no edit. `true` if anything changed.
+    pub fn apply_edit(&mut self, edit: &HostEdit) -> bool {
+        let mut changed = false;
+        if let Some(name) = edit
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            changed |= self.name != name;
+            self.name = name.to_string();
+        }
+        let addr = edit
+            .addr
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .unwrap_or(&self.addr)
+            .to_string();
+        changed |= self.move_to(&addr, edit.port.unwrap_or(self.port));
+        if let Some(macs) = &edit.macs {
+            changed |= self.mac != *macs;
+            self.mac = macs.clone();
+        }
+        changed
+    }
+}
+
+/// A person's edit of a saved host: the Add and Edit forms' fields, already validated
+/// ([`crate::wol::parse_mac_list`] for the MACs). `None` leaves a field as stored. An empty
+/// `macs` clears them — a person may, where an advert may only teach one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HostEdit {
+    pub name: Option<String>,
+    pub addr: Option<String>,
+    pub port: Option<u16>,
+    pub macs: Option<Vec<String>>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -427,6 +467,30 @@ impl KnownHosts {
         }
     }
 
+    /// Save a host a person typed in, without dialing it. A record already at `addr:port`
+    /// takes the edit; otherwise an unpinned placeholder, which the first trust decision
+    /// pins ([`upsert_trusted`](Self::upsert_trusted) retires it then, keeping its MACs).
+    /// Returns its index.
+    pub fn add(&mut self, edit: &HostEdit) -> Result<usize> {
+        let addr = edit.addr.as_deref().map(str::trim).unwrap_or_default();
+        anyhow::ensure!(!addr.is_empty(), "empty host address");
+        let port = edit.port.unwrap_or(9777);
+        let i = match self.index_by_addr(addr, port) {
+            Some(i) => i,
+            None => {
+                self.hosts.push(KnownHost {
+                    name: addr.to_string(),
+                    addr: addr.to_string(),
+                    port,
+                    ..Default::default()
+                });
+                self.hosts.len() - 1
+            }
+        };
+        self.hosts[i].apply_edit(edit);
+        Ok(i)
+    }
+
     /// [`upsert`](Self::upsert) for an authorised trust decision (PIN, TOFU accept,
     /// delegated, headless pair). Also retires the fp-less placeholders claiming the
     /// same `addr:port`, whose pin this decision is.
@@ -528,6 +592,13 @@ pub fn forget_placeholder(addr: &str, port: u16) {
     if known.hosts.len() != before {
         let _ = known.save();
     }
+}
+
+/// Load, [`KnownHosts::add`], save.
+pub fn add_host(edit: &HostEdit) -> Result<()> {
+    let mut known = KnownHosts::load();
+    known.add(edit)?;
+    known.save()
 }
 
 /// Record an advert should land on: the one its caller matched, by pin, or the placeholder
@@ -1325,5 +1396,86 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["Game", "Work"]);
         assert!(KnownHost::default().resolved_pins(&catalog).is_empty());
+    }
+
+    /// A typed edit moves the address the way a re-key does and replaces the MACs; blank
+    /// fields are no edit; a typed MAC outranks any advert.
+    #[test]
+    fn a_typed_edit_moves_the_address_and_owns_the_macs() {
+        let typed = vec!["01:02:03:04:05:06".to_string()];
+        let learned = vec!["aa:bb:cc:dd:ee:ff".to_string()];
+        let mut h = KnownHost {
+            name: "Desk".into(),
+            addr: "192.168.1.9".into(),
+            fp_hex: fp('a'),
+            mac: learned.clone(),
+            ..Default::default()
+        };
+        assert!(h.apply_edit(&HostEdit {
+            name: Some(" Den ".into()),
+            addr: Some("192.168.1.20".into()),
+            port: Some(9800),
+            macs: Some(typed.clone()),
+        }));
+        assert_eq!(h.name, "Den");
+        assert_eq!((h.addr.as_str(), h.port), ("192.168.1.20", 9800));
+        assert_eq!(h.prev_addrs, ["192.168.1.9"]);
+        assert_eq!(h.mac, typed);
+
+        let blank = HostEdit {
+            name: Some("  ".into()),
+            addr: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(!h.apply_edit(&blank));
+        assert_eq!(h.name, "Den");
+        assert!(!apply_advert(&mut h, "", &learned, "", None));
+        assert_eq!(h.mac, typed);
+
+        // Cleared, the next advert may teach one again.
+        assert!(h.apply_edit(&HostEdit {
+            macs: Some(Vec::new()),
+            ..Default::default()
+        }));
+        assert!(apply_advert(&mut h, "", &learned, "", None));
+        assert_eq!(h.mac, learned);
+    }
+
+    /// Add saves an unpinned placeholder with its MACs; the same address again edits it; the
+    /// first pairing pins it and keeps what was typed.
+    #[test]
+    fn an_added_host_waits_as_a_placeholder_for_its_first_pairing() {
+        let macs = vec!["aa:bb:cc:dd:ee:ff".to_string()];
+        let mut k = KnownHosts::default();
+        let edit = HostEdit {
+            addr: Some("192.168.1.9".into()),
+            port: Some(9777),
+            macs: Some(macs.clone()),
+            ..Default::default()
+        };
+        let i = k.add(&edit).unwrap();
+        assert_eq!(k.hosts[i].name, "192.168.1.9");
+        assert!(k.hosts[i].fp_hex.is_empty());
+        assert_eq!(k.hosts[i].mac, macs);
+
+        let named = HostEdit {
+            name: Some("Desk".into()),
+            ..edit.clone()
+        };
+        assert_eq!(k.add(&named).unwrap(), i);
+        assert_eq!(k.hosts.len(), 1);
+        assert_eq!(k.hosts[0].name, "Desk");
+
+        k.upsert_trusted(KnownHost {
+            name: "Desk".into(),
+            addr: "192.168.1.9".into(),
+            port: 9777,
+            fp_hex: fp('a'),
+            paired: true,
+            ..Default::default()
+        });
+        assert_eq!(k.hosts.len(), 1);
+        assert_eq!(k.hosts[0].mac, macs);
+        assert!(k.add(&HostEdit::default()).is_err());
     }
 }
