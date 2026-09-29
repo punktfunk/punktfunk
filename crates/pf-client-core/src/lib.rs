@@ -117,6 +117,9 @@ pub mod settings;
 pub mod speed;
 #[cfg(portable)]
 pub mod trust;
+// The `host_sort` / `host_grouping` order every shell on a device shares.
+#[cfg(portable)]
+pub mod host_order;
 // Client half of the signed-manifest update check (`design/host-update-from-web-console.md`).
 // Linux only: Windows ships inside the host installer, macOS through `clients/apple`.
 #[cfg(all(desktop, target_os = "linux"))]

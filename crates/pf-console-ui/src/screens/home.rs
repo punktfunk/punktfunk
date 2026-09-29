@@ -49,62 +49,30 @@ const GAMES_AIR: f64 = 12.0;
 const GROUP_AIR: f64 = 24.0;
 const GROUP_CAPTION: f64 = 12.0;
 
-/// The `Settings::extra` keys and values the Apple app's own home stores its order under.
-pub(crate) const HOST_SORT_KEY: &str = "host_sort";
-pub(crate) const HOST_GROUPING_KEY: &str = "host_grouping";
-pub(crate) const HOST_SORTS: [(&str, &str); 3] = [
-    ("added", "Date added"),
-    ("name", "Name"),
-    ("lastConnected", "Last connected"),
-];
-pub(crate) const HOST_GROUPINGS: [(&str, &str); 3] =
-    [("none", "None"), ("preset", "Preset"), ("status", "Status")];
+// The device's host order, shared with the desktop shell through one settings file.
+pub(crate) use pf_client_core::host_order::arrange;
+use pf_client_core::host_order::{group_of, grouping};
+pub(crate) use pf_client_core::host_order::{
+    HOST_GROUPINGS, HOST_GROUPING_KEY, HOST_SORTS, HOST_SORT_KEY,
+};
 
-fn extra<'s>(s: &'s pf_client_core::trust::Settings, key: &str, default: &'s str) -> &'s str {
-    s.extra.get(key).and_then(|v| v.as_str()).unwrap_or(default)
-}
-
-/// The grouping in force; Apple's store may still say `profile`, the old name for presets.
-fn grouping(s: &pf_client_core::trust::Settings) -> &str {
-    match extra(s, HOST_GROUPING_KEY, "none") {
-        "profile" => "preset",
-        g => g,
+/// A pinned card goes with the preset it connects with, the host's own card with its binding.
+impl pf_client_core::host_order::Arrangeable for HostRow {
+    fn name(&self) -> &str {
+        &self.name
     }
-}
-
-/// The band a card sits in under `grouping`, or `None` ungrouped. A pinned card goes with
-/// the preset it connects with, the host's own card with its binding.
-fn group_of(h: &HostRow, grouping: &str) -> Option<String> {
-    match grouping {
-        "status" => Some(if h.online { "Online" } else { "Offline" }.into()),
-        "preset" => Some(match (&h.pin, &h.bound_preset) {
-            (Some(p), _) | (None, Some(p)) => p.name.clone(),
-            (None, None) => "No preset".into(),
-        }),
-        _ => None,
+    fn online(&self) -> bool {
+        self.online
     }
-}
-
-/// Order the row as Settings asks: bands first (Online before Offline, presets by name with
-/// "No preset" last), then the sort inside each. Stable, so equal cards keep the order the
-/// host sent, which is the order they were added.
-pub(crate) fn arrange(hosts: &mut [HostRow], s: &pf_client_core::trust::Settings) {
-    let grouping = grouping(s);
-    let sort = extra(s, HOST_SORT_KEY, "added");
-    let band = |h: &HostRow| match (grouping, group_of(h, grouping)) {
-        ("status", _) => (u8::from(!h.online), String::new()),
-        (_, Some(name)) if name == "No preset" => (1, String::new()),
-        (_, Some(name)) => (0, name.to_lowercase()),
-        (_, None) => (0, String::new()),
-    };
-    hosts.sort_by(|a, b| {
-        band(a).cmp(&band(b)).then_with(|| match sort {
-            "name" => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            // Most recent first; a host never connected to goes last.
-            "lastConnected" => b.last_used.cmp(&a.last_used),
-            _ => std::cmp::Ordering::Equal,
-        })
-    });
+    fn last_used(&self) -> Option<u64> {
+        self.last_used
+    }
+    fn preset_name(&self) -> Option<&str> {
+        self.pin
+            .as_ref()
+            .or(self.bound_preset.as_ref())
+            .map(|p| p.name.as_str())
+    }
 }
 
 /// Sentinel. Host keys are fingerprints or `addr:port`; neither starts with `\0`.
