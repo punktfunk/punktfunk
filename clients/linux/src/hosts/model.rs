@@ -16,10 +16,19 @@ pub struct Preset {
     pub accent: Option<String>,
 }
 
+/// This device's session with a host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Connecting,
+    Streaming,
+}
+
 /// What a saved card says under its name: one sentence, one register (design §2.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     Connecting,
+    /// This device streams from it.
+    Streaming,
     Playing(String),
     Online,
     /// Answers, but nothing is pinned yet: a click runs the pairing.
@@ -33,12 +42,15 @@ impl Status {
     pub fn of(
         host: &KnownHost,
         online: bool,
-        connecting: bool,
+        phase: Option<Phase>,
         playing: &str,
         auto_wake: bool,
     ) -> Status {
-        if connecting {
-            Status::Connecting
+        if let Some(phase) = phase {
+            match phase {
+                Phase::Connecting => Status::Connecting,
+                Phase::Streaming => Status::Streaming,
+            }
         } else if !online {
             if auto_wake && !host.mac.is_empty() {
                 Status::OfflineWakes
@@ -57,6 +69,7 @@ impl Status {
     pub fn sentence(&self) -> String {
         match self {
             Status::Connecting => "Connecting\u{2026}".into(),
+            Status::Streaming => "Streaming".into(),
             Status::Playing(title) => format!("Playing {title}"),
             Status::Online => "Online".into(),
             Status::NotPaired => "Not paired \u{b7} click to pair".into(),
@@ -69,7 +82,7 @@ impl Status {
     pub fn live(&self) -> bool {
         matches!(
             self,
-            Status::Online | Status::Playing(_) | Status::NotPaired
+            Status::Online | Status::Streaming | Status::Playing(_) | Status::NotPaired
         )
     }
 }
@@ -144,8 +157,8 @@ pub struct Band {
 pub struct Live<'a> {
     /// The last probe sweep, by [`KnownHost::card_key`].
     pub probed: &'a HashMap<String, bool>,
-    /// The card key a connect is in flight for.
-    pub connecting: Option<&'a str>,
+    /// The card key this device's session is with, and how far it got.
+    pub session: Option<(&'a str, Phase)>,
     /// What a host has up, by fingerprint; empty when nothing is.
     pub playing: &'a dyn Fn(&str) -> String,
 }
@@ -173,7 +186,7 @@ pub fn saved_bands(
             (live.playing)(&k.fp_hex)
         };
         let is_default = k.id.is_some() && settings.default_host.as_deref() == k.id.as_deref();
-        let card = |pinned: Option<&Preset>, connecting: bool| {
+        let card = |pinned: Option<&Preset>, phase: Option<Phase>| {
             let bound = k
                 .preset_id
                 .as_deref()
@@ -188,7 +201,7 @@ pub fn saved_bands(
                 name: k.name.clone(),
                 address: format!("{}:{}", k.addr, k.port),
                 os: k.os.clone(),
-                status: Status::of(k, online, connecting, &playing, settings.auto_wake),
+                status: Status::of(k, online, phase, &playing, settings.auto_wake),
                 chip: pinned.or(bound).cloned(),
                 kind: CardKind::Saved {
                     id: k.id.clone(),
@@ -200,11 +213,15 @@ pub fn saved_bands(
                 last_used: k.last_used,
             }
         };
-        // The spinner belongs to the card that was clicked, and a pinned card never is.
-        cards.push(card(None, live.connecting == Some(k.card_key().as_str())));
+        // The session shows on the host's own card, never on a pinned one.
+        let key = k.card_key();
+        let phase = live
+            .session
+            .and_then(|(at, phase)| (at == key).then_some(phase));
+        cards.push(card(None, phase));
         for id in &k.pinned_presets {
             if let Some(p) = presets.iter().find(|p| &p.id == id) {
-                cards.push(card(Some(p), false));
+                cards.push(card(Some(p), None));
             }
         }
     }
@@ -288,22 +305,29 @@ mod tests {
     #[test]
     fn a_status_is_one_sentence() {
         let mut k = host("Desk", "10.0.0.2", "ab");
-        assert_eq!(Status::of(&k, true, false, "", true), Status::Online);
+        assert_eq!(Status::of(&k, true, None, "", true), Status::Online);
         assert_eq!(
-            Status::of(&k, true, false, "Hades", true).sentence(),
+            Status::of(&k, true, None, "Hades", true).sentence(),
             "Playing Hades"
         );
         assert_eq!(
-            Status::of(&k, true, true, "Hades", true),
+            Status::of(&k, true, Some(Phase::Connecting), "Hades", true),
             Status::Connecting
         );
-        assert_eq!(Status::of(&k, false, false, "", true), Status::Offline);
+        let streaming = Status::of(&k, false, Some(Phase::Streaming), "Hades", true);
+        assert_eq!(
+            streaming,
+            Status::Streaming,
+            "this device's stream beats the probe"
+        );
+        assert!(streaming.live());
+        assert_eq!(Status::of(&k, false, None, "", true), Status::Offline);
         k.mac = vec!["aa:bb:cc:dd:ee:ff".into()];
-        assert_eq!(Status::of(&k, false, false, "", true), Status::OfflineWakes);
-        assert_eq!(Status::of(&k, false, false, "", false), Status::Offline);
+        assert_eq!(Status::of(&k, false, None, "", true), Status::OfflineWakes);
+        assert_eq!(Status::of(&k, false, None, "", false), Status::Offline);
         let placeholder = host("Den", "10.0.0.3", "");
         assert_eq!(
-            Status::of(&placeholder, true, false, "", true),
+            Status::of(&placeholder, true, None, "", true),
             Status::NotPaired
         );
         assert!(Status::NotPaired.live());
@@ -314,7 +338,7 @@ mod tests {
         let probed: HashMap<String, bool> = [("ab".to_string(), true)].into_iter().collect();
         let live = Live {
             probed: &probed,
-            connecting: None,
+            session: None,
             playing: &|fp| {
                 if fp == "ab" {
                     "Hades".into()

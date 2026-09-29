@@ -91,6 +91,19 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
                 )));
             }
         }
+        // A stream from the first saved host: its card and the window's banner.
+        "streaming" => {
+            let _ = hosts.send(HostsMsg::Probed(mock_online(ctx)));
+            if let Some(k) = ctx.store.hosts().hosts.first() {
+                sender.input(crate::app::AppMsg::SessionReady {
+                    req: crate::hosts::saved_request(k),
+                    fp_hex: k.fp_hex.clone(),
+                    tofu: false,
+                    persist_paired: false,
+                    cancel: None,
+                });
+            }
+        }
         "about" | "08-about" => {
             crate::settings::show_about(&ctx.window);
         }

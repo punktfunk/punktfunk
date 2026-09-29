@@ -10,7 +10,7 @@ pub mod gate;
 mod host_ops;
 pub mod spawn;
 
-use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage};
+use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage, Phase};
 use crate::library::{LibraryInit, LibraryMsg, LibraryOutput, LibraryPage};
 use crate::store::{Changed, Store};
 use crate::trust;
@@ -25,6 +25,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 pub const APP_ID: &str = "io.unom.Punktfunk";
+
+/// How long a session asked to quit gets to close the host before it is killed.
+const DISCONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Everything the shell shares below the component tree.
 pub struct AppModel {
@@ -68,6 +71,10 @@ pub struct AppModel {
     pads: usize,
     /// Fullscreen Always put the window there, so turning it off may take it back out.
     fullscreen_by_setting: bool,
+    /// The running session's child, from spawn to exit.
+    session: Option<CancelHandle>,
+    /// "Streaming from …" on both pages, with Disconnect.
+    streaming: Banners,
 }
 
 #[derive(Debug)]
@@ -149,6 +156,8 @@ pub enum AppMsg {
     ShowShortcuts,
     ShowAbout,
     ShowAddHost,
+    /// End the running stream the way its window does.
+    Disconnect,
     Toast(String),
 }
 
@@ -345,15 +354,17 @@ impl SimpleComponent for AppModel {
             "Library",
             "applications-games-symbolic",
         );
-        let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        main.append(&store_health_banner(&store));
-        main.append(&views);
-        views.set_vexpand(true);
+        let pages = [hosts.widget().clone(), library.widget().clone()];
+        store_health_banner(&pages, &store);
+        let streaming = Banners::new(&pages, {
+            let sender = sender.clone();
+            move || sender.input(AppMsg::Disconnect)
+        });
         nav.add(
             &adw::NavigationPage::builder()
                 .title("Punktfunk")
                 .tag("main")
-                .child(&main)
+                .child(&views)
                 .build(),
         );
         let toasts = adw::ToastOverlay::new();
@@ -376,6 +387,8 @@ impl SimpleComponent for AppModel {
             waiting: Rc::new(RefCell::new(None)),
             session_cancelled: false,
             pads: 0,
+            session: None,
+            streaming,
             fullscreen_by_setting: false,
         };
         install_actions(&model.window, &sender);
@@ -559,7 +572,7 @@ impl SimpleComponent for AppModel {
                 self.session_cancelled = true;
                 self.close_waiting();
                 self.busy = false;
-                self.hosts.emit(HostsMsg::SetConnecting(None));
+                self.hosts.emit(HostsMsg::SetSession(None));
                 self.toast("Cancelled — the request may still be pending on the host.");
             }
             AppMsg::ShowPreferences => sender.input(AppMsg::ShowPreferencesScoped(
@@ -569,6 +582,14 @@ impl SimpleComponent for AppModel {
             AppMsg::ShowShortcuts => shortcuts_dialog().present(Some(&self.window)),
             AppMsg::ShowAbout => crate::settings::show_about(&self.window),
             AppMsg::ShowAddHost => self.hosts.emit(HostsMsg::ShowAddHost),
+            AppMsg::Disconnect => {
+                if let Some(child) = &self.session {
+                    // Our own end: an escalated kill must not read as a crash.
+                    self.session_cancelled = true;
+                    child.terminate(DISCONNECT_GRACE);
+                    self.streaming.show("Disconnecting\u{2026}", None);
+                }
+            }
             AppMsg::Toast(msg) => self.toast(&msg),
         }
     }
@@ -826,18 +847,54 @@ fn remember_size(window: &adw::ApplicationWindow, store: &Rc<Store>) {
     });
 }
 
+/// One banner under each destination's header, kept in step.
+#[derive(Clone)]
+struct Banners(Vec<adw::Banner>);
+
+impl Banners {
+    fn new(pages: &[adw::ToolbarView], on_button: impl Fn() + Clone + 'static) -> Banners {
+        Banners(
+            pages
+                .iter()
+                .map(|page| {
+                    let banner = adw::Banner::new("");
+                    let on_button = on_button.clone();
+                    banner.connect_button_clicked(move |_| on_button());
+                    page.add_top_bar(&banner);
+                    banner
+                })
+                .collect(),
+        )
+    }
+
+    fn show(&self, title: &str, button: Option<&str>) {
+        for b in &self.0 {
+            b.set_title(title);
+            b.set_button_label(button);
+            b.set_revealed(true);
+        }
+    }
+
+    fn hide(&self) {
+        for b in &self.0 {
+            b.set_revealed(false);
+        }
+    }
+}
+
 /// "Your changes aren't being saved", while the last write to the config dir failed.
-fn store_health_banner(store: &Store) -> adw::Banner {
-    let banner = adw::Banner::new(
-        "Your changes aren\u{2019}t being saved \u{2014} Punktfunk can\u{2019}t write to its settings folder.",
-    );
-    let check = {
-        let banner = banner.clone();
-        move || banner.set_revealed(pf_client_core::trust::store_health::last_error().is_some())
+fn store_health_banner(pages: &[adw::ToolbarView], store: &Store) {
+    let banners = Banners::new(pages, || {});
+    let check = move || match pf_client_core::trust::store_health::last_error() {
+        Some(_) => banners.show(
+            "Your changes aren\u{2019}t being saved \u{2014} Punktfunk can\u{2019}t write to its \
+             settings folder.",
+            None,
+        ),
+        None => banners.hide(),
     };
     check();
     store.subscribe(move |_| check());
-    banner
 }
 
 /// The Keyboard Shortcuts dialog: this window's keys, then the session window's, kept here

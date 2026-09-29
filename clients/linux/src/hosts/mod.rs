@@ -16,6 +16,7 @@ use crate::trust::{self, HostEdit, KnownHost, KnownHosts, Settings};
 use adw::prelude::*;
 pub(crate) use card::os_icon_name;
 use gtk::{gio, glib};
+pub use model::Phase;
 use model::{Band, CardModel, Live, Preset, Status};
 use pf_client_core::host_order;
 use relm4::prelude::*;
@@ -155,7 +156,8 @@ pub struct HostsPage {
     /// Saved hosts proven reachable by the periodic QUIC probe (mDNS-independent), keyed by
     /// [`KnownHost::card_key`].
     probed: HashMap<String, bool>,
-    connecting: Option<String>,
+    /// This device's session, by card key.
+    session: Option<(String, Phase)>,
     /// What is on screen; a build equal to it redraws nothing.
     drawn: Option<(Vec<Band>, Vec<CardModel>, Vec<Preset>)>,
     detail: Option<detail::DetailPage>,
@@ -190,8 +192,9 @@ pub enum HostsMsg {
     Rescan,
     /// A completed reachability sweep: saved-host key → reachable.
     Probed(HashMap<String, bool>),
-    /// Mark the card matching `ConnectRequest::card_key` as connecting; `None` restores.
-    SetConnecting(Option<String>),
+    /// This device's session with the card of `ConnectRequest::card_key`; `None` when none
+    /// runs.
+    SetSession(Option<(String, Phase)>),
     ShowError(String),
     ClearError,
     ShowAddHost,
@@ -415,7 +418,7 @@ impl SimpleComponent for HostsPage {
             sender: sender.input_sender().clone(),
             adverts: HashMap::new(),
             probed: HashMap::new(),
-            connecting: None,
+            session: None,
             drawn: None,
             detail: None,
             widgets: PageWidgets {
@@ -462,8 +465,8 @@ impl SimpleComponent for HostsPage {
                 self.refresh_reachable();
                 self.rebuild();
             }
-            HostsMsg::SetConnecting(key) => {
-                self.connecting = key;
+            HostsMsg::SetSession(session) => {
+                self.session = session;
                 self.rebuild();
             }
             HostsMsg::ShowError(msg) => {
@@ -603,12 +606,18 @@ impl HostsPage {
         let playing = |fp: &str| pf_client_core::library::now_playing(fp);
         let live = Live {
             probed: &self.probed,
-            connecting: self.connecting.as_deref(),
+            session: self
+                .session
+                .as_ref()
+                .map(|(key, phase)| (key.as_str(), *phase)),
             playing: &playing,
         };
         let bands = model::saved_bands(&hosts, &presets, &settings, &live);
-        let discovered =
-            model::discovered_cards(self.adverts.values(), &hosts, self.connecting.as_deref());
+        let dialing = match &self.session {
+            Some((key, Phase::Connecting)) => Some(key.as_str()),
+            _ => None,
+        };
+        let discovered = model::discovered_cards(self.adverts.values(), &hosts, dialing);
         let next = (bands, discovered, presets);
         if self.drawn.as_ref() != Some(&next) {
             self.draw(&next);
@@ -681,9 +690,12 @@ impl HostsPage {
         } else {
             pf_client_core::library::now_playing(&k.fp_hex)
         };
-        let connecting = self.connecting.as_deref() == Some(k.card_key().as_str());
+        let phase = match &self.session {
+            Some((key, phase)) if *key == k.card_key() => Some(*phase),
+            _ => None,
+        };
         detail::Live {
-            status: Status::of(k, online, connecting, &playing, settings.auto_wake),
+            status: Status::of(k, online, phase, &playing, settings.auto_wake),
             online,
             presets: self.presets(),
             actions: if k.fp_hex.is_empty() {

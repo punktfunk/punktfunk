@@ -391,8 +391,11 @@ impl DetailPage {
             } else {
                 "Connect"
             });
-        self.connect
-            .set_sensitive(live.status != Status::Connecting);
+        // One session at a time: the window's banner ends the running one.
+        self.connect.set_sensitive(!matches!(
+            live.status,
+            Status::Connecting | Status::Streaming
+        ));
         self.library.set_visible(k.paired);
 
         self.refresh_presets(k, &live.presets);

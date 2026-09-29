@@ -42,15 +42,19 @@ impl AppModel {
             return;
         }
         self.hosts.emit(HostsMsg::ClearError);
-        self.hosts
-            .emit(HostsMsg::SetConnecting(Some(req.card_key())));
+        self.hosts.emit(HostsMsg::SetSession(Some((
+            req.card_key(),
+            Phase::Connecting,
+        ))));
         // No settings ride along: the spawner resolves this host's effective ones
         // (globals + its preset) for both the argv and the child's spec.
-        if let Err(e) = spawn::spawn_session(sender.input_sender().clone(), req, fp_hex, tofu, opts)
-        {
-            self.busy = false;
-            self.hosts.emit(HostsMsg::SetConnecting(None));
-            self.hosts.emit(HostsMsg::ShowError(e));
+        match spawn::spawn_session(sender.input_sender().clone(), req, fp_hex, tofu, opts) {
+            Ok(child) => self.session = Some(child),
+            Err(e) => {
+                self.busy = false;
+                self.hosts.emit(HostsMsg::SetSession(None));
+                self.hosts.emit(HostsMsg::ShowError(e));
+            }
         }
     }
 
@@ -66,7 +70,12 @@ impl AppModel {
             return;
         }
         self.close_waiting();
-        self.hosts.emit(HostsMsg::SetConnecting(None));
+        self.hosts.emit(HostsMsg::SetSession(Some((
+            req.card_key(),
+            Phase::Streaming,
+        ))));
+        self.streaming
+            .show(&format!("Streaming from {}", req.name), Some("Disconnect"));
         // A child that reported ready proves the host answered — the exact condition
         // the dial-first wake fallback exists to rule out. Left armed, it turns a
         // later ordinary failure into a spurious "waking…".
@@ -108,7 +117,9 @@ impl AppModel {
     ) {
         self.close_waiting();
         self.busy = false;
-        self.hosts.emit(HostsMsg::SetConnecting(None));
+        self.session = None;
+        self.streaming.hide();
+        self.hosts.emit(HostsMsg::SetSession(None));
         // The dial-first wake fallback (armed by `WakeConnect`, consumed on every exit):
         // a failed dial to the non-advertising host it was armed for falls into the
         // visible wake-and-wait instead of an error alert. Matched by fingerprint (else

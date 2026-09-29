@@ -74,15 +74,15 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
 /// `tofu` persists an advertised fingerprint only after ready proves the host owns it.
 /// The plan supplies all effective settings, including preset fullscreen policy.
 ///
-/// The caller takes `busy`; [`AppMsg::SessionExited`] releases it. `Err` reports a
-/// spawn failure before supervision starts.
+/// The caller takes `busy`; [`AppMsg::SessionExited`] releases it. `Ok` is the child's
+/// handle; `Err` reports a spawn failure before supervision starts.
 pub fn spawn_session(
     sender: relm4::Sender<AppMsg>,
     req: ConnectRequest,
     fp_hex: String,
     tofu: bool,
     opts: SpawnOpts,
-) -> Result<(), String> {
+) -> Result<CancelHandle, String> {
     let plan = plan_for(&req, &fp_hex, tofu, &opts);
     let persist_paired = opts.persist_paired;
     let cancel = opts.cancel.clone();
@@ -113,8 +113,7 @@ pub fn spawn_session(
                 tofu,
             });
         }
-    })?;
-    Ok(())
+    })
 }
 
 #[cfg(test)]
