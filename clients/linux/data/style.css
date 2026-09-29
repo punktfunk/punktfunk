@@ -2,7 +2,10 @@
    ring's editor, preset swatches, library posters. Colours come from libadwaita's named
    palette, so dark mode and the Omarchy recolour reach them; the ring's scrim and the
    swatches are literals on purpose. */
-.pf-host-card { padding: 16px; }
+.pf-host-card { padding: 12px 8px 12px 14px; }
+/* The default host's star, a disc on the tile's corner so it reads over any OS mark. */
+.pf-star { color: @accent_color; background: @card_bg_color; border-radius: 999px;
+           padding: 2px; margin: -2px; }
 /* The FlowBoxChild draws the hover/selection highlight AROUND the card (it wraps it
    with its own padding), so its corners must run concentric with the card's 12px —
    radius = card radius + the child's padding ring. */
@@ -51,10 +54,6 @@
 .pf-swatch-pink   { background: #d16d9e; }
 .pf-swatch-slate  { background: #77767b; }
 .pf-swatch-on { outline: 2px solid @accent_color; outline-offset: 2px; }
-/* Most-recent host: a full accent ring drawn as an inset outline so it follows the card's
-   rounded corners (an `inset` box-shadow bar gets eaten by the 12px corner clip) and leaves
-   the card's own elevation shadow intact. */
-.pf-recent { outline: 2px solid @accent_color; outline-offset: -2px; }
 .pf-discovered { border: 1px dashed alpha(currentColor, 0.35); }
 .pf-poster { border-radius: 10px; background: alpha(currentColor, 0.08); }
 .pf-poster-monogram { font-size: 2.4em; font-weight: bold; color: alpha(currentColor, 0.45); }

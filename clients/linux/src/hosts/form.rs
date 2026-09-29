@@ -17,44 +17,46 @@ struct FieldError {
     message: String,
 }
 
+/// The address row: trimmed, a pasted `host:port` split. `Err` is the sentence to show.
+pub(super) fn parse_address(text: &str) -> Result<(String, Option<u16>), String> {
+    let addr = text.trim();
+    if addr.is_empty() {
+        return Err("Enter the host's address.".into());
+    }
+    pf_client_core::deeplink::split_host_port(addr).ok_or_else(|| {
+        format!("\u{201c}{addr}\u{201d} isn't an address. Use a name or an IP, like 192.168.1.20.")
+    })
+}
+
+/// The port row; blank is the default 9777.
+pub(super) fn parse_port(text: &str) -> Result<u16, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(9777);
+    }
+    text.parse::<u16>().ok().filter(|&p| p != 0).ok_or_else(|| {
+        format!("\u{201c}{text}\u{201d} isn't a port. Use a number from 1 to 65535.")
+    })
+}
+
+/// The Wake-on-LAN row: a list, or empty to clear it.
+pub(super) fn parse_macs(text: &str) -> Result<Vec<String>, String> {
+    pf_client_core::wol::parse_mac_list(text).map_err(|bad| {
+        format!("\u{201c}{bad}\u{201d} isn't a MAC address. Use six pairs, like aa:bb:cc:dd:ee:ff.")
+    })
+}
+
 /// The connection rows' text as a store edit. A pasted `host:port` address wins over the port
 /// row, and a blank port is the default 9777.
 fn parse_connection(addr: &str, port: &str, macs: &str) -> Result<HostEdit, FieldError> {
-    let err = |field, message: String| Err(FieldError { field, message });
-    let addr = addr.trim();
-    if addr.is_empty() {
-        return err(Field::Addr, "Enter the host's address.".into());
-    }
-    let port_text = port.trim();
-    let typed_port = if port_text.is_empty() {
-        Some(9777)
-    } else {
-        port_text.parse::<u16>().ok().filter(|&p| p != 0)
-    };
-    let Some(typed_port) = typed_port else {
-        return err(
-            Field::Port,
-            format!("\u{201c}{port_text}\u{201d} isn't a port. Use a number from 1 to 65535."),
-        );
-    };
-    let Some((addr, spelled)) = pf_client_core::deeplink::split_host_port(addr) else {
-        return err(
-            Field::Addr,
-            format!(
-                "\u{201c}{addr}\u{201d} isn't an address. Use a name or an IP, like 192.168.1.20."
-            ),
-        );
-    };
-    let macs = pf_client_core::wol::parse_mac_list(macs).map_err(|bad| FieldError {
-        field: Field::Macs,
-        message: format!(
-            "\u{201c}{bad}\u{201d} isn't a MAC address. Use six pairs, like aa:bb:cc:dd:ee:ff."
-        ),
-    })?;
+    let at = |field| move |message| FieldError { field, message };
+    let (addr, spelled) = parse_address(addr).map_err(at(Field::Addr))?;
+    let port = parse_port(port).map_err(at(Field::Port))?;
+    let macs = parse_macs(macs).map_err(at(Field::Macs))?;
     Ok(HostEdit {
         name: None,
         addr: Some(addr),
-        port: Some(spelled.unwrap_or(typed_port)),
+        port: Some(spelled.unwrap_or(port)),
         macs: Some(macs),
     })
 }

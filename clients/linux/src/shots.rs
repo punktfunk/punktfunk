@@ -79,6 +79,16 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
                 "192.168.1.77",
                 "00aabbccddeeff112233445566778899a0b1c2d3e4f5061728394a5b6c7d8e9f",
             )));
+            let _ = hosts.send(HostsMsg::Probed(mock_online(ctx)));
+        }
+        // The first saved host's page, its host answering.
+        "host" | "09-host" => {
+            let _ = hosts.send(HostsMsg::Probed(mock_online(ctx)));
+            if let Some(k) = ctx.store.hosts().hosts.first() {
+                let _ = hosts.send(HostsMsg::Act(crate::hosts::Act::Details(
+                    crate::hosts::HostRef::of(k),
+                )));
+            }
         }
         "about" | "08-about" => {
             crate::settings::show_about(&ctx.window);
@@ -187,6 +197,17 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
 
 /// The mock game set for the `library` scene: mixed stores exercising the badge set,
 /// plus one solid-colour poster texture.
+/// A probe sweep that found the first saved host, the rest asleep.
+fn mock_online(ctx: &ShotCtx) -> std::collections::HashMap<String, bool> {
+    ctx.store
+        .hosts()
+        .hosts
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k.card_key(), i == 0))
+        .collect()
+}
+
 fn mock_library() -> (
     Vec<pf_client_core::library::GameEntry>,
     Vec<(String, gtk::gdk::Texture)>,

@@ -275,33 +275,35 @@ impl SimpleComponent for AppModel {
             }
         }
 
-        let hosts =
-            HostsPage::builder()
-                .launch(store.clone())
-                .forward(sender.input_sender(), |out| match out {
-                    HostsOutput::Connect(req) => AppMsg::Connect(req),
-                    HostsOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
-                    HostsOutput::Pair(req) => AppMsg::Pair(req),
-                    HostsOutput::SpeedTest(req) => AppMsg::SpeedTest(req),
-                    HostsOutput::Library(req, mgmt) => AppMsg::OpenLibrary(req, mgmt),
-                    HostsOutput::SendLogs(req, mgmt) => AppMsg::SendLogs(req, mgmt),
-                    HostsOutput::HostAction {
-                        req,
-                        mgmt,
-                        action_id,
-                        label,
-                        danger,
-                    } => AppMsg::HostAction {
-                        req,
-                        mgmt,
-                        action_id,
-                        label,
-                        danger,
-                    },
-                    HostsOutput::Toast(msg) => AppMsg::Toast(msg),
-                });
-
         let nav = adw::NavigationView::new();
+        let hosts = HostsPage::builder()
+            .launch(hosts::HostsInit {
+                store: store.clone(),
+                nav: nav.clone(),
+            })
+            .forward(sender.input_sender(), |out| match out {
+                HostsOutput::Connect(req) => AppMsg::Connect(req),
+                HostsOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
+                HostsOutput::Pair(req) => AppMsg::Pair(req),
+                HostsOutput::SpeedTest(req) => AppMsg::SpeedTest(req),
+                HostsOutput::Library(req, mgmt) => AppMsg::OpenLibrary(req, mgmt),
+                HostsOutput::SendLogs(req, mgmt) => AppMsg::SendLogs(req, mgmt),
+                HostsOutput::HostAction {
+                    req,
+                    mgmt,
+                    action_id,
+                    label,
+                    danger,
+                } => AppMsg::HostAction {
+                    req,
+                    mgmt,
+                    action_id,
+                    label,
+                    danger,
+                },
+                HostsOutput::Toast(msg) => AppMsg::Toast(msg),
+            });
+
         nav.add(hosts.widget());
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&nav));
