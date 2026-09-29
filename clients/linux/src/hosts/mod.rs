@@ -9,6 +9,7 @@ mod detail;
 mod dialogs;
 mod form;
 mod model;
+pub mod speed;
 
 use crate::discovery::{self, DiscoveredHost, DiscoveryEvent};
 use crate::store::{Changed, Store};

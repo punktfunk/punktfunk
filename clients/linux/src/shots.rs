@@ -91,6 +91,14 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
                 )));
             }
         }
+        // The first saved host's speed test, on the canned burst.
+        "speed" => {
+            if let Some(k) = ctx.store.hosts().hosts.first() {
+                sender.input(crate::app::AppMsg::SpeedTest(crate::hosts::saved_request(
+                    k,
+                )));
+            }
+        }
         // A stream from the first saved host: its card and the window's banner.
         "streaming" => {
             let _ = hosts.send(HostsMsg::Probed(mock_online(ctx)));
