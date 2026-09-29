@@ -7,7 +7,7 @@ use super::lucide;
 use super::speed::SpeedState;
 use super::style::*;
 use super::{Screen, Svc, Target};
-use crate::trust::{KnownHosts, Settings};
+use crate::trust::{HostEdit, KnownHosts, Settings};
 use pf_client_core::discovery::DiscoveredHost;
 use std::collections::HashMap;
 use windows_reactor::*;
@@ -359,35 +359,20 @@ fn edit_editor(
             let mut known = KnownHosts::load();
             let target = who.index(&known);
             if let Some(h) = target.and_then(|i| known.hosts.get_mut(i)) {
-                // Each field falls back to what was stored: a cleared box means "leave it",
-                // never "erase it" — except the MAC, which is legitimately clearable.
-                let name = name_draft.borrow().trim().to_string();
-                if !name.is_empty() {
-                    h.name = name;
-                }
-                let addr = addr_draft.borrow().trim().to_string();
-                let addr = if addr.is_empty() {
-                    h.addr.clone()
-                } else {
-                    addr
-                };
+                // A cleared box leaves its field as stored, and so does MAC text that doesn't
+                // parse; a cleared MAC box clears the MACs.
                 let port = port_draft
                     .borrow()
                     .trim()
                     .parse::<u16>()
                     .ok()
-                    .filter(|&p| p != 0)
-                    .unwrap_or(h.port);
-                h.move_to(&addr, port);
-                let mac = mac_draft.borrow().trim().to_string();
-                h.mac = if mac.is_empty() {
-                    Vec::new()
-                } else {
-                    mac.split(&[',', ' '][..])
-                        .filter(|m| !m.trim().is_empty())
-                        .map(|m| m.trim().to_string())
-                        .collect()
-                };
+                    .filter(|&p| p != 0);
+                h.apply_edit(&HostEdit {
+                    name: Some(name_draft.borrow().clone()),
+                    addr: Some(addr_draft.borrow().clone()),
+                    port,
+                    macs: pf_client_core::wol::parse_mac_list(&mac_draft.borrow()).ok(),
+                });
                 h.clipboard_sync = *clip_draft.borrow();
             }
             let _ = known.save();

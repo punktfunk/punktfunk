@@ -10,5 +10,5 @@
 
 pub use pf_client_core::trust::{
     device_name, hex, learn_from_advert, load_or_create_identity, pair_error_message,
-    pair_with_host, parse_hex32, persist_host, probe_known, KnownHosts, Settings,
+    pair_with_host, parse_hex32, persist_host, probe_known, HostEdit, KnownHosts, Settings,
 };
