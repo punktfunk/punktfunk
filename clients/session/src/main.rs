@@ -859,13 +859,14 @@ mod session_main {
         let Some(target) = arg_value("--connect") else {
             eprintln!(
                 "usage: punktfunk-session --connect host[:port] [--fp HEX] [--launch id] [--preset REF] [--fullscreen]\n\
-                 \x20      punktfunk-session --browse [host[:port]] [--mgmt PORT] [--fullscreen] [--json-status]\n\
+                 \x20      punktfunk-session --browse [host[:port]] [--mgmt PORT] [--fullscreen] [--json-status] [--until-no-controller]\n\
                  \x20      punktfunk-session --pair - --connect host[:port] [--name LABEL]\n\
                  \n\
                  Streams from a paired punktfunk host in a Vulkan window. --browse opens the\n\
                  gamepad console instead: bare --browse is the host list (discovery, PIN\n\
                  pairing, settings, wake-on-LAN); with a target it opens that host's game\n\
-                 library. --preset picks a preset by id or name for this session\n\
+                 library; --until-no-controller returns once the last controller is gone\n\
+                 and no stream is up. --preset picks a preset by id or name for this session\n\
                  only (\"\" = the global defaults); without it the host's own preset applies.\n\
                  --connect never dials a host it has no pinned fingerprint for —\n\
                  enrol with --pair (no display needed), in the console, or from the desktop\n\
@@ -996,6 +997,7 @@ mod session_main {
             render_scale: settings.render_scale,
             render_scale_max_dim: punktfunk_core::render_scale::max_dimension(&settings.codec),
             video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings.video_fit),
+            until_no_pads: false,
         };
 
         let outcome =

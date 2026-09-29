@@ -713,6 +713,13 @@ impl Shell {
                 }
             }
         }
+        if self.opts.until_no_pads {
+            let pads = stream.is_none().then(|| self.gamepad.pads().len());
+            if self.pad_absence.tick(pads, Instant::now()) {
+                tracing::info!("no controller left — returning to the desktop");
+                return ControlFlow::Break(Outcome::Ended(None));
+            }
+        }
         ControlFlow::Continue(())
     }
 }

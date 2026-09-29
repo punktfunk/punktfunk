@@ -218,6 +218,8 @@ pub fn run(target: Option<&str>) -> u8 {
         render_scale: settings_at_start.render_scale,
         render_scale_max_dim: punktfunk_core::render_scale::max_dimension(&settings_at_start.codec),
         video_fit: punktfunk_core::video_fit::VideoFit::from_name(&settings_at_start.video_fit),
+        // The desktop shell opened this console because a controller connected.
+        until_no_pads: arg_flag("--until-no-controller"),
     };
 
     let result = pf_presenter::run_browse(

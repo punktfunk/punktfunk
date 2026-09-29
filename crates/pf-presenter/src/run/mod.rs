@@ -110,6 +110,71 @@ pub struct SessionOpts {
     /// How a frame of another aspect fills the window. The blit and every absolute input
     /// map through the same [`video_fit::place`].
     pub video_fit: VideoFit,
+    /// Browse mode: return, as Quit does, once no controller has been attached for
+    /// [`NO_PAD_GRACE`] while no stream is up. Set by a desktop shell that opened the
+    /// console because a controller connected.
+    pub until_no_pads: bool,
+}
+
+/// How long [`SessionOpts::until_no_pads`] waits: a Bluetooth reconnect or Steam Input
+/// re-enumerating a pad is not a player putting the controller down.
+pub const NO_PAD_GRACE: Duration = Duration::from_secs(3);
+
+/// [`SessionOpts::until_no_pads`]' clock: armed once a controller was seen, running while
+/// none is attached.
+#[derive(Default)]
+struct PadAbsence {
+    seen: bool,
+    since: Option<Instant>,
+}
+
+impl PadAbsence {
+    /// `pads` is `None` while a stream is up, which holds the clock. `true` once no
+    /// controller has been attached for [`NO_PAD_GRACE`].
+    fn tick(&mut self, pads: Option<usize>, now: Instant) -> bool {
+        match pads {
+            Some(0) if self.seen => {
+                now.duration_since(*self.since.get_or_insert(now)) >= NO_PAD_GRACE
+            }
+            Some(0) => false,
+            Some(_) => {
+                self.seen = true;
+                self.since = None;
+                false
+            }
+            None => {
+                self.since = None;
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pad_absence_tests {
+    use super::{PadAbsence, NO_PAD_GRACE};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn leaves_after_the_grace_never_mid_stream() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut clock = PadAbsence::default();
+        // No controller yet: the console was opened some other way, or SDL is still counting.
+        assert!(!clock.tick(Some(0), at(0)));
+        assert!(!clock.tick(Some(0), at(10_000)));
+        assert!(!clock.tick(Some(1), at(10_000)));
+        assert!(!clock.tick(Some(0), at(11_000)));
+        // A pad back inside the grace resets it.
+        assert!(!clock.tick(Some(1), at(12_000)));
+        assert!(!clock.tick(Some(0), at(13_000)));
+        // A stream holds the clock; the grace starts again once it ends.
+        assert!(!clock.tick(None, at(20_000)));
+        assert!(!clock.tick(Some(0), at(21_000)));
+        let limit = 21_000 + NO_PAD_GRACE.as_millis() as u64;
+        assert!(!clock.tick(Some(0), at(limit - 1)));
+        assert!(clock.tick(Some(0), at(limit)));
+    }
 }
 
 pub enum Outcome {
@@ -258,6 +323,7 @@ struct Shell {
     opts: SessionOpts,
     /// Browse mode: the console idles between streams.
     browse: bool,
+    pad_absence: PadAbsence,
 }
 
 /// Decoded frame plus when the source cadence says it is due on glass. Due time is

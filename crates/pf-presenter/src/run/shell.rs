@@ -206,6 +206,7 @@ impl Shell {
             _sdl: sdl,
             opts,
             browse,
+            pad_absence: PadAbsence::default(),
         })
     }
 
