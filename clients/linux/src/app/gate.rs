@@ -2,10 +2,10 @@
 //! delegated (request-access) approval. The trust GATE itself is `orchestrate::trust_route`;
 //! `AppModel::connect` opens these surfaces for it, each resolving into typed [`AppMsg`]s.
 
+use crate::app::spawn::{CancelHandle, SpawnOpts};
 use crate::app::{AppModel, AppMsg};
-use crate::spawn::{CancelHandle, SpawnOpts};
+use crate::hosts::ConnectRequest;
 use crate::trust;
-use crate::ui_hosts::ConnectRequest;
 use adw::prelude::*;
 use gtk::glib;
 use pf_client_core::orchestrate::{WakeOutcome, WakeWait};

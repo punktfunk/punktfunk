@@ -1,19 +1,24 @@
 //! The application shell as a relm4 component tree (phase 5 of punktfunk-planning
 //! `linux-client-rearchitecture.md`): [`AppModel`] owns the window, navigation, trust
 //! gate, and the spawned session child's lifecycle; the hosts page is a child component
-//! ([`crate::ui_hosts`]); dialogs (trust, settings, library) are plain GTK invoked from
+//! ([`crate::hosts`]); dialogs (trust, settings, library) are plain GTK invoked from
 //! `update`. Every stream runs in the `punktfunk-session` Vulkan binary — the shell
 //! never touches video.
 
-use crate::spawn::{self, CancelHandle, SpawnOpts};
+mod connect;
+pub mod gate;
+mod host_ops;
+pub mod spawn;
+
+use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage};
 use crate::trust::{self, Settings};
-use crate::ui_hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use relm4::prelude::*;
+use spawn::{CancelHandle, SpawnOpts};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -114,7 +119,7 @@ pub struct AppModel {
     /// --list-adapters` — the shell deliberately links no Vulkan itself — and audio
     /// endpoints via the PipeWire registry), probed once at startup on a worker thread.
     /// Empty until the probe lands — empty lists simply hide their pickers.
-    pub probes: Rc<RefCell<crate::ui_settings::DeviceProbes>>,
+    pub probes: Rc<RefCell<crate::settings::DeviceProbes>>,
     hosts: Controller<HostsPage>,
     /// One session child at a time — connects while one runs are ignored.
     busy: bool,
@@ -130,7 +135,7 @@ pub struct AppModel {
     /// The handler id rides along because `close()` EMITS the close response: closing this
     /// dialog in code is indistinguishable from the user pressing Cancel unless the handler
     /// is disconnected first ([`AppModel::close_waiting`]).
-    waiting: crate::ui_trust::WaitingSlot,
+    waiting: crate::app::gate::WaitingSlot,
     /// Set when this shell kills the session child itself (the request-access Cancel). Read
     /// once on the child's exit: without it, EVERY signal death read as "we meant that" and
     /// an OOM-killed or crashed stream vanished with no message at all.
@@ -212,7 +217,7 @@ pub enum AppMsg {
     ShowPreferences,
     /// Re-open Preferences editing a specific layer — the settings scope switcher's
     /// destination (design/client-settings-profiles.md §5.1).
-    ShowPreferencesScoped(crate::ui_settings::Scope),
+    ShowPreferencesScoped(crate::settings::Scope),
     ShowShortcuts,
     ShowAbout,
     ShowAddHost,
@@ -293,7 +298,7 @@ impl SimpleComponent for AppModel {
         // Screenshot scenes must capture settled frames: kill every GTK/libadwaita
         // animation (a headless session may starve the frame clock and leave a
         // transition frozen mid-flight in the capture).
-        if crate::cli::shot_scene().is_some() {
+        if crate::shots::shot_scene().is_some() {
             if let Some(s) = gtk::Settings::default() {
                 s.set_gtk_enable_animations(false);
             }
@@ -304,16 +309,16 @@ impl SimpleComponent for AppModel {
         // Every colour in `CSS` above resolves through libadwaita's named palette, so
         // redefining those names is all it takes. After the settings load, because the
         // "Follow the Omarchy theme" switch decides whether it draws.
-        crate::omarchy::install(settings.borrow().follow_os_theme);
+        crate::desktop::omarchy::install(settings.borrow().follow_os_theme);
         // Device lists for the settings pickers: probe in the background, ready long
         // before the dialog opens. A missing session binary or absent PipeWire just
         // leaves the corresponding list empty (and its picker hidden).
-        let probes: Rc<RefCell<crate::ui_settings::DeviceProbes>> = Rc::default();
+        let probes: Rc<RefCell<crate::settings::DeviceProbes>> = Rc::default();
         {
-            let (tx, rx) = async_channel::bounded::<crate::ui_settings::DeviceProbes>(1);
+            let (tx, rx) = async_channel::bounded::<crate::settings::DeviceProbes>(1);
             std::thread::spawn(move || {
                 let adapters: Vec<String> =
-                    std::process::Command::new(crate::spawn::session_binary())
+                    std::process::Command::new(crate::app::spawn::session_binary())
                         .arg("--list-adapters")
                         .output()
                         .ok()
@@ -328,7 +333,7 @@ impl SimpleComponent for AppModel {
                         })
                         .unwrap_or_default();
                 let (speakers, mics) = pf_client_core::audio::devices().unwrap_or_default();
-                let _ = tx.send_blocking(crate::ui_settings::DeviceProbes {
+                let _ = tx.send_blocking(crate::settings::DeviceProbes {
                     adapters,
                     speakers,
                     mics,
@@ -401,7 +406,7 @@ impl SimpleComponent for AppModel {
         install_actions(&model.window, &sender);
         // Controller-optimized UI reads the count on every change; the service has no event
         // for a pad arriving, and a 1 s poll is one lock and a short Vec.
-        if cfg!(feature = "console") && crate::cli::shot_scene().is_none() {
+        if cfg!(feature = "console") && crate::shots::shot_scene().is_none() {
             let (gamepad, sender) = (model.gamepad.clone(), sender.clone());
             let mut last = 0;
             glib::timeout_add_seconds_local(1, move || {
@@ -417,8 +422,8 @@ impl SimpleComponent for AppModel {
         // CI screenshot mode: dispatch the scripted scene once the window is actually
         // mapped (AdwDialogs need a live window; relm4 maps it after `init` returns, so
         // this can't run inline like the pre-relm4 `activate` path did).
-        if let Some(scene) = crate::cli::shot_scene() {
-            let ctx = crate::cli::ShotCtx {
+        if let Some(scene) = crate::shots::shot_scene() {
+            let ctx = crate::shots::ShotCtx {
                 window: model.window.clone(),
                 nav: model.nav.clone(),
                 hosts: model.hosts.sender().clone(),
@@ -432,7 +437,7 @@ impl SimpleComponent for AppModel {
                 if fired.replace(true) {
                     return; // map can fire more than once; the scene runs on the first
                 }
-                crate::cli::run_shot(&ctx, &scene);
+                crate::shots::run_shot(&ctx, &scene);
             });
         }
         window.present();
@@ -446,7 +451,7 @@ impl SimpleComponent for AppModel {
         // `--browse` and every headless verb have already exec'd or returned before the
         // application object exists, and a parked link is explicit intent that wins outright.
         let console_home = cfg!(feature = "console")
-            && crate::cli::shot_scene().is_none()
+            && crate::shots::shot_scene().is_none()
             && model.settings.borrow().gamepad_ui() == GamepadUi::Always;
         if parked.is_empty() && console_home {
             // The console follows Start in itself.
@@ -464,7 +469,7 @@ impl SimpleComponent for AppModel {
             let screen = start::start_screen(&settings, &known);
             drop(settings);
             if let Some(i) = screen.host_index() {
-                let req = ui_hosts::saved_request(&known.hosts[i]);
+                let req = hosts::saved_request(&known.hosts[i]);
                 sender.input(AppMsg::OpenLibrary(req.clone(), known.hosts[i].mgmt_port));
                 // Stream is the library PLUS a connect, never a screen of its own: the session
                 // window is the overlay, so ending it leaves the shelf on screen underneath.
@@ -503,7 +508,7 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::Pair(req) => {
                 if !self.busy {
-                    crate::ui_trust::pin_dialog(&self.window, &sender, self.identity.clone(), req);
+                    crate::app::gate::pin_dialog(&self.window, &sender, self.identity.clone(), req);
                 }
             }
             AppMsg::SpeedTest(req) => self.speed_test(req, &sender),
@@ -517,7 +522,7 @@ impl SimpleComponent for AppModel {
             } => self.host_action(req, mgmt, action_id, label, danger, &sender),
             AppMsg::SpeedTestDone => self.busy = false,
             AppMsg::OpenLibrary(req, mgmt_port) => {
-                crate::ui_library::open(self, &sender, req, mgmt_port);
+                crate::library::open(self, &sender, req, mgmt_port);
             }
             AppMsg::StartSession {
                 req,
@@ -572,11 +577,11 @@ impl SimpleComponent for AppModel {
                 self.toast("Cancelled — the request may still be pending on the host.");
             }
             AppMsg::ShowPreferences => sender.input(AppMsg::ShowPreferencesScoped(
-                crate::ui_settings::Scope::Defaults,
+                crate::settings::Scope::Defaults,
             )),
             AppMsg::ShowPreferencesScoped(scope) => self.show_preferences(scope, &sender),
             AppMsg::ShowShortcuts => shortcuts_dialog().present(Some(&self.window)),
-            AppMsg::ShowAbout => crate::ui_settings::show_about(&self.window),
+            AppMsg::ShowAbout => crate::settings::show_about(&self.window),
             AppMsg::ShowAddHost => self.hosts.emit(HostsMsg::ShowAddHost),
             AppMsg::Toast(msg) => self.toast(&msg),
         }
@@ -588,284 +593,10 @@ impl AppModel {
         self.toasts.add_toast(adw::Toast::new(msg));
     }
 
-    /// Opens the surface [`trust_route`] picks: the stored pin dials, a changed fingerprint
-    /// gets the PIN dialog, a new `pair=optional` host gets the TOFU offer, and anything
-    /// else gets delegated approval or PIN.
-    fn connect(&mut self, req: ConnectRequest, sender: &ComponentSender<Self>) {
-        if self.busy {
-            return;
-        }
-        let known = trust::KnownHosts::load();
-        let fp = req.fp_hex.as_deref();
-        match trust_route(&known, fp, &req.addr, req.port, req.pair_optional) {
-            TrustRoute::Pinned(fp_hex) => sender.input(AppMsg::StartSession {
-                req,
-                fp_hex,
-                tofu: false,
-                opts: SpawnOpts::default(),
-            }),
-            TrustRoute::FingerprintChanged => {
-                self.toast("Host fingerprint changed — re-pair with a PIN to continue");
-                crate::ui_trust::pin_dialog(&self.window, sender, self.identity.clone(), req);
-            }
-            TrustRoute::OfferTofu(_) => crate::ui_trust::tofu_dialog(&self.window, sender, req),
-            TrustRoute::NeedsPairing => {
-                crate::ui_trust::approval_dialog(&self.window, sender, self.waiting.clone(), req);
-            }
-        }
-    }
-
-    fn send_logs(
-        &self,
-        req: ConnectRequest,
-        mgmt_port: Option<u16>,
-        sender: &ComponentSender<Self>,
-    ) {
-        // Blocking network (the library agent's 5 s connect / 10 s global budgets) —
-        // a worker thread, with the outcome routed back as a Toast.
-        let identity = self.identity.clone();
-        let mgmt = mgmt_port.unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-        self.toast(&format!("Sending logs to {}…", req.name));
-        let out = sender.input_sender().clone();
-        std::thread::Builder::new()
-            .name("punktfunk-sendlogs".into())
-            .spawn(move || {
-                let msg = pf_client_core::logring::send_bundle(
-                    "punktfunk-client",
-                    &req.name,
-                    &req.addr,
-                    mgmt,
-                    &identity,
-                    req.fp_hex.as_deref().unwrap_or_default(),
-                );
-                let _ = out.send(AppMsg::Toast(msg));
-            })
-            .ok();
-    }
-
-    fn host_action(
-        &self,
-        req: ConnectRequest,
-        mgmt: Option<u16>,
-        action_id: String,
-        label: String,
-        danger: bool,
-        sender: &ComponentSender<Self>,
-    ) {
-        let mgmt = mgmt.unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
-        // Restart and shut down lose whatever is running on that machine, so they ask
-        // first — the same treatment Forget gets. Sleep is reversible from the same
-        // menu ("Wake host"), so it goes straight through.
-        if danger {
-            let dialog = adw::AlertDialog::new(
-                Some(&format!("{label}?")),
-                Some(&format!(
-                    "This ends every stream from {} and anything running on it. \
-                     You'll need to wake or start it again.",
-                    req.name
-                )),
-            );
-            dialog.add_responses(&[("cancel", "Cancel"), ("go", &label)]);
-            dialog.set_response_appearance("go", adw::ResponseAppearance::Destructive);
-            dialog.set_default_response(Some("cancel"));
-            dialog.set_close_response("cancel");
-            let out = sender.input_sender().clone();
-            let (req, action_id, label) = (req.clone(), action_id.clone(), label.clone());
-            dialog.connect_response(Some("go"), move |_, _| {
-                out.send(AppMsg::HostAction {
-                    req: req.clone(),
-                    mgmt: Some(mgmt),
-                    action_id: action_id.clone(),
-                    label: label.clone(),
-                    // Asked and answered.
-                    danger: false,
-                })
-                .ok();
-            });
-            dialog.present(Some(&self.window));
-            return;
-        }
-        // Blocking network on a worker, outcome as a toast — the SendLogs recipe.
-        let identity = self.identity.clone();
-        self.toast(&format!("{label} — asking {}…", req.name));
-        let out = sender.input_sender().clone();
-        std::thread::Builder::new()
-            .name("punktfunk-hostaction".into())
-            .spawn(move || {
-                let msg = pf_client_core::host_actions::run(
-                    &req.name,
-                    &req.addr,
-                    mgmt,
-                    &identity,
-                    req.fp_hex.as_deref().unwrap_or_default(),
-                    &action_id,
-                    &label,
-                );
-                let _ = out.send(AppMsg::Toast(msg));
-            })
-            .ok();
-    }
-
-    fn start_session(
-        &mut self,
-        req: ConnectRequest,
-        fp_hex: String,
-        tofu: bool,
-        opts: SpawnOpts,
-        sender: &ComponentSender<Self>,
-    ) {
-        if std::mem::replace(&mut self.busy, true) {
-            return;
-        }
-        self.hosts.emit(HostsMsg::ClearError);
-        self.hosts
-            .emit(HostsMsg::SetConnecting(Some(req.card_key())));
-        // No settings ride along: the spawner resolves this host's effective ones
-        // (globals + its preset) for both the argv and the child's spec.
-        if let Err(e) = spawn::spawn_session(sender.input_sender().clone(), req, fp_hex, tofu, opts)
-        {
-            self.busy = false;
-            self.hosts.emit(HostsMsg::SetConnecting(None));
-            self.hosts.emit(HostsMsg::ShowError(e));
-        }
-    }
-
-    fn session_ready(
-        &mut self,
-        req: ConnectRequest,
-        fp_hex: String,
-        tofu: bool,
-        persist_paired: bool,
-        cancel: Option<CancelHandle>,
-    ) {
-        if ready_was_cancelled(cancel.as_ref()) {
-            return;
-        }
-        self.close_waiting();
-        self.hosts.emit(HostsMsg::SetConnecting(None));
-        // A child that reported ready proves the host answered — the exact condition
-        // the dial-first wake fallback exists to rule out. Left armed, it turns a
-        // later ordinary failure into a spurious "waking…".
-        self.wake_fallback = None;
-        if persist_paired {
-            // Request-access: the operator approved this device — a trusted
-            // PAIRED host from now on, like after a PIN ceremony.
-            match trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, true, &[]) {
-                Ok(()) => self.toast("Approved — connected"),
-                // The stream is up (the pin was carried in memory), but nothing was
-                // written — say so, or the host is simply gone at the next launch.
-                Err(e) => self.toast(&format!("Connected, but couldn't save — {e:#}")),
-            }
-        } else if tofu {
-            // The advertised fingerprint proved itself on a real connect.
-            match trust::persist_host(&req.name, &req.addr, req.port, &fp_hex, false, &[]) {
-                Ok(()) => self.toast(&format!(
-                    "Trusted on first use — fingerprint {}…",
-                    &fp_hex[..16.min(fp_hex.len())]
-                )),
-                Err(e) => self.toast(&format!("Connected, but couldn't save — {e:#}")),
-            }
-        }
-        self.hosts.emit(HostsMsg::Refresh);
-    }
-
-    fn session_exited(
-        &mut self,
-        req: ConnectRequest,
-        code: i32,
-        error: Option<(String, bool)>,
-        ended: Option<String>,
-        tofu: bool,
-        sender: &ComponentSender<Self>,
-    ) {
-        self.close_waiting();
-        self.busy = false;
-        self.hosts.emit(HostsMsg::SetConnecting(None));
-        // The dial-first wake fallback (armed by `WakeConnect`, consumed on every exit):
-        // a failed dial to the non-advertising host it was armed for falls into the
-        // visible wake-and-wait instead of an error alert. Matched by fingerprint (else
-        // address) so a stale armed request can never redirect another host's failure.
-        let cancelled = std::mem::take(&mut self.session_cancelled);
-        let wake_fb = self
-            .wake_fallback
-            .take()
-            .filter(|fb| match (&fb.fp_hex, &req.fp_hex) {
-                (Some(a), Some(b)) => a == b,
-                _ => fb.addr == req.addr && fb.port == req.port,
-            });
-        match ConnectOutcome::from_exit(code, error, ended, cancelled) {
-            // A clean end, or our own kill (request-access cancel) — the toast
-            // already said so.
-            ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {}
-            ConnectOutcome::Ended(Some(reason)) => self.hosts.emit(HostsMsg::ShowError(reason)),
-            o if wake_fb.is_some() && o.warrants_wake() => {
-                crate::ui_trust::wake_and_connect(&self.window, sender, req)
-            }
-            ConnectOutcome::TrustRejected(_) if !tofu => {
-                // The stored pin no longer matches (rotated cert or impostor).
-                self.toast("Host fingerprint changed — re-pair with a PIN to continue");
-                crate::ui_trust::pin_dialog(&self.window, sender, self.identity.clone(), req);
-            }
-            ConnectOutcome::TrustRejected(msg) | ConnectOutcome::ConnectFailed(msg) => self
-                .hosts
-                .emit(HostsMsg::ShowError(format!("Couldn't connect — {msg}"))),
-            ConnectOutcome::RendererFailed { code: -1 } => self.hosts.emit(HostsMsg::ShowError(
-                "Stream session was killed — out of memory, or stopped by the system".into(),
-            )),
-            ConnectOutcome::RendererFailed { code } => {
-                let how = ConnectOutcome::exit_phrase(code);
-                self.hosts.emit(HostsMsg::ShowError(format!(
-                    "The session didn't start ({how}). Check the client log."
-                )))
-            }
-        }
-    }
-
-    /// `until_no_pads`: a controller connecting opened it, so it hands the desk back once the
-    /// last one is gone (never mid-stream; the session decides that).
-    fn open_console(&mut self, sender: &ComponentSender<Self>, until_no_pads: bool) {
-        if std::mem::replace(&mut self.busy, true) {
-            return;
-        }
-        // The console owns the screen and the pads while it runs, so it takes `busy`
-        // like a stream does. `wait_check_async` lands the exit on this main loop —
-        // no thread, no channel — and turns a non-zero exit into the error the
-        // banner shows, which is also how a session built without `ui` surfaces.
-        let mut argv = vec![
-            std::ffi::OsString::from(crate::spawn::session_binary()),
-            "--browse".into(),
-        ];
-        // Same knobs a stream uses — the session also fullscreens itself on the Deck
-        // and under gamescope regardless.
-        let settings = self.settings.borrow();
-        if settings.fullscreen_on_stream || settings.fullscreen_always() {
-            argv.push("--fullscreen".into());
-        }
-        drop(settings);
-        if until_no_pads {
-            argv.push("--until-no-controller".into());
-        }
-        let argv: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsString::as_os_str).collect();
-        match gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
-            Ok(child) => {
-                let sender = sender.clone();
-                child.wait_check_async(gio::Cancellable::NONE, move |res| {
-                    sender.input(AppMsg::ConsoleExited(res.err().map(|e| e.to_string())));
-                });
-            }
-            Err(e) => {
-                self.busy = false;
-                self.hosts.emit(HostsMsg::ShowError(format!(
-                    "Couldn't start the console UI — {e}"
-                )));
-            }
-        }
-    }
-
-    fn show_preferences(&self, scope: crate::ui_settings::Scope, sender: &ComponentSender<Self>) {
+    fn show_preferences(&self, scope: crate::settings::Scope, sender: &ComponentSender<Self>) {
         let hosts = self.hosts.sender().clone();
         let (reopen, closed) = (sender.clone(), sender.clone());
-        crate::ui_settings::show_scoped(
+        crate::settings::show_scoped(
             &self.window,
             self.settings.clone(),
             &self.gamepad,
@@ -884,127 +615,6 @@ impl AppModel {
         );
     }
 
-    /// Route a `punktfunk://` URL (design/client-deep-links.md §4.1). Parsing, host/preset
-    /// resolution and every refusal rule — including "only a stable record id may dial
-    /// unattended" — live in the shared brain (`plan_from_link`); this is only the GTK end of
-    /// it: turn the outcome into the same messages a card click raises, so a link gets the
-    /// identical wake, trust and error surfaces and NOT a second connect path of its own.
-    fn open_deep_link(&mut self, url: &str, sender: &ComponentSender<AppModel>) {
-        use pf_client_core::deeplink;
-        use pf_client_core::orchestrate::{plan_from_link, PlanOutcome};
-        use pf_client_core::presets::PresetsFile;
-
-        tracing::debug!(%url, "deep link");
-        let link = match deeplink::parse(url) {
-            Ok(l) => l,
-            Err(e) => return self.toast(&e.message()),
-        };
-        let known = trust::KnownHosts::load();
-        let outcome = plan_from_link(&link, &known, &PresetsFile::load(), &self.settings.borrow());
-        match outcome {
-            Ok(PlanOutcome::Connect(plan)) => {
-                // Rule 2 of §3: never preempt a live session. Only this layer knows one is
-                // running, which is why the brain leaves the check here.
-                if self.busy {
-                    return self.toast("A session is already running — end it first.");
-                }
-                let req = ConnectRequest {
-                    name: plan.host.name.clone(),
-                    addr: plan.host.addr.clone(),
-                    port: plan.host.port,
-                    fp_hex: plan.host.fp_hex.clone(),
-                    pair_optional: false,
-                    launch: plan.launch.clone(),
-                    mac: plan.host.mac.clone(),
-                    // `preset=` in a URL is a one-off, exactly like "Connect with ▸": it
-                    // shapes this session and leaves the host's binding alone.
-                    preset: plan.preset_override.clone(),
-                };
-                // A link is a launch like any other: with a MAC it takes the dial-first wake
-                // path, so a sleeping host wakes instead of erroring.
-                sender.input(if plan.wake {
-                    AppMsg::WakeConnect(req)
-                } else {
-                    AppMsg::Connect(req)
-                });
-            }
-            Ok(PlanOutcome::ConfirmConnect(plan)) => {
-                // The link named this (saved, pinned) host by its LABEL or its ADDRESS rather
-                // than by its record id. `x-scheme-handler/punktfunk` is registered by our
-                // .desktop, so any web page can hand us such a URL and both of those are
-                // guessable — the dial waits for a person. Deliberately not the PIN ceremony
-                // below: this host is already pinned, and re-pairing it would throw that away.
-                if self.busy {
-                    return self.toast("A session is already running — end it first.");
-                }
-                let req = ConnectRequest {
-                    name: plan.host.name.clone(),
-                    addr: plan.host.addr.clone(),
-                    port: plan.host.port,
-                    fp_hex: plan.host.fp_hex.clone(),
-                    pair_optional: false,
-                    launch: plan.launch.clone(),
-                    mac: plan.host.mac.clone(),
-                    preset: plan.preset_override.clone(),
-                };
-                let mut body = format!("A link asks to connect to {} ({}).", req.name, req.addr);
-                if let Some(id) = &req.launch {
-                    body.push_str(&format!("\n\nIt also asks the host to launch “{id}”."));
-                }
-                body.push_str(
-                    "\n\nIt names the host by its label or address, which anything that can \
-                     open a link could guess. A link that names the host's id connects without \
-                     asking.",
-                );
-                let dialog = adw::AlertDialog::new(Some("Open this link?"), Some(&body));
-                dialog.add_responses(&[("cancel", "Cancel"), ("connect", "Connect")]);
-                dialog.set_response_appearance("connect", adw::ResponseAppearance::Suggested);
-                dialog.set_default_response(Some("connect"));
-                dialog.set_close_response("cancel");
-                let sender = sender.clone();
-                let wake = plan.wake;
-                dialog.connect_response(Some("connect"), move |_, _| {
-                    // The same two messages the `Connect` arm raises, so the confirmed link
-                    // gets the identical wake / trust / error surfaces a card click gets.
-                    sender.input(if wake {
-                        AppMsg::WakeConnect(req.clone())
-                    } else {
-                        AppMsg::Connect(req.clone())
-                    });
-                });
-                dialog.present(Some(&self.window));
-            }
-            Ok(PlanOutcome::ConfirmUnknown(unknown)) => {
-                // Known-but-unpinned, or not known at all: the link may not pair and may not
-                // trust on its own, so it opens the ordinary ceremony under the user's eyes —
-                // the PIN dialog, seeded with what the link claimed.
-                if self.busy {
-                    return self.toast("A session is already running — end it first.");
-                }
-                let req = ConnectRequest {
-                    name: unknown.name.clone().unwrap_or_else(|| unknown.addr.clone()),
-                    addr: unknown.addr.clone(),
-                    port: unknown.port,
-                    fp_hex: unknown.fp.clone(),
-                    pair_optional: false,
-                    launch: unknown.launch.clone(),
-                    mac: Vec::new(),
-                    preset: None,
-                };
-                self.toast(&format!(
-                    "{} isn't paired with this device yet — pair it to continue.",
-                    req.name
-                ));
-                crate::ui_trust::pin_dialog(&self.window, sender, self.identity.clone(), req);
-            }
-            Ok(PlanOutcome::Unsupported(route)) => self.toast(&format!(
-                "Punktfunk can't open “{}” links yet.",
-                route.as_str()
-            )),
-            Err(e) => self.toast(&e.message()),
-        }
-    }
-
     /// Fullscreen Always: on enters fullscreen, off leaves only a fullscreen it entered.
     fn apply_fullscreen(&mut self) {
         let always = self.settings.borrow().fullscreen_always();
@@ -1014,182 +624,6 @@ impl AppModel {
         } else if !always && std::mem::take(&mut self.fullscreen_by_setting) {
             self.window.unfullscreen();
         }
-    }
-
-    /// Dismiss the waiting dialog without its Cancel handler running. `close()` emits the
-    /// close response, so the handler has to go first or the approval that just landed reads
-    /// as the user cancelling — and kills the child that reported ready.
-    fn close_waiting(&mut self) {
-        if let Some((w, handler)) = self.waiting.borrow_mut().take() {
-            w.disconnect(handler);
-            w.close();
-        }
-    }
-
-    /// Measure the path to a host over the real data plane: connect, burst probe filler
-    /// for 2 s, report goodput · loss · a recommended bitrate, and apply it in one tap.
-    fn speed_test(&mut self, req: ConnectRequest, sender: &ComponentSender<AppModel>) {
-        if std::mem::replace(&mut self.busy, true) {
-            return;
-        }
-        let status = gtk::Label::new(Some("Connecting…"));
-        let dialog = adw::AlertDialog::new(Some("Network Speed Test"), Some(&req.name));
-        dialog.set_extra_child(Some(&status));
-        // Where a measured bitrate belongs is "the layer this host actually resolves bitrate
-        // from" (design/client-settings-profiles.md §5.3) — the long-standing wrong answer was
-        // always the global, so measuring the slow retro box downstairs re-tuned the desktop
-        // too. The target depends only on the host, so it is known before the result lands and
-        // the button can say where it will write.
-        let target = SpeedTestTarget::resolve(&req);
-        match &target {
-            SpeedTestTarget::Global => {
-                dialog.add_responses(&[("close", "Close"), ("apply", "Apply")]);
-            }
-            SpeedTestTarget::Preset(p) => {
-                dialog.add_responses(&[
-                    ("close", "Close"),
-                    ("apply", &format!("Apply to “{}”", p.name)),
-                ]);
-            }
-            // A bound host whose preset doesn't override bitrate could legitimately mean
-            // either: the user gets both, rather than us guessing which layer they meant.
-            SpeedTestTarget::Ask(p) => {
-                dialog.add_responses(&[
-                    ("close", "Close"),
-                    ("apply-global", "Set as default"),
-                    ("apply", &format!("Set in “{}”", p.name)),
-                ]);
-                dialog.set_response_enabled("apply-global", false);
-            }
-        }
-        dialog.set_response_enabled("apply", false);
-        dialog.set_default_response(Some("close"));
-        dialog.set_close_response("close");
-        dialog.present(Some(&self.window));
-
-        let (tx, rx) =
-            async_channel::bounded::<Result<punktfunk_core::client::ProbeOutcome, String>>(1);
-        let identity = self.identity.clone();
-        std::thread::spawn(move || {
-            let result = pf_client_core::speed::run_speed_probe(
-                &req.addr,
-                req.port,
-                req.fp_hex.as_deref(),
-                identity,
-            );
-            let _ = tx.send_blocking(result);
-        });
-
-        let settings = self.settings.clone();
-        let toasts = self.toasts.clone();
-        let sender = sender.clone();
-        glib::spawn_future_local(async move {
-            let outcome = rx.recv().await;
-            sender.input(AppMsg::SpeedTestDone);
-            match outcome {
-                Ok(Ok(r)) => {
-                    let mbps = f64::from(r.throughput_kbps) / 1000.0;
-                    let recommended_kbps =
-                        pf_client_core::speed::recommended_kbps(r.throughput_kbps);
-                    status.set_text(&format!(
-                        "{mbps:.0} Mbit/s measured · {:.1} % loss\nRecommended bitrate: {:.0} Mbit/s",
-                        r.loss_pct,
-                        f64::from(recommended_kbps) / 1000.0,
-                    ));
-                    dialog.set_response_enabled("apply", true);
-                    dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
-                    if matches!(target, SpeedTestTarget::Ask(_)) {
-                        dialog.set_response_enabled("apply-global", true);
-                    }
-                    let mbit = f64::from(recommended_kbps) / 1000.0;
-                    {
-                        let (settings, toasts) = (settings.clone(), toasts.clone());
-                        dialog.connect_response(Some("apply"), move |_, _| {
-                            let where_to = match &target {
-                                SpeedTestTarget::Global => {
-                                    // Rebase on the file before the whole-file save (same
-                                    // discipline as the settings dialog): another writer — the
-                                    // spawner's window-size persist, a second window's dialog —
-                                    // may have moved it under this shell's snapshot.
-                                    let mut s = settings.borrow_mut();
-                                    *s = Settings::load();
-                                    s.bitrate_kbps = recommended_kbps;
-                                    s.save();
-                                    "the default bitrate".to_string()
-                                }
-                                SpeedTestTarget::Preset(p) | SpeedTestTarget::Ask(p) => {
-                                    write_preset_bitrate(&p.id, recommended_kbps);
-                                    format!("“{}”", p.name)
-                                }
-                            };
-                            toasts.add_toast(adw::Toast::new(&format!(
-                                "{mbit:.0} Mbit/s set in {where_to}"
-                            )));
-                        });
-                    }
-                    dialog.connect_response(Some("apply-global"), move |_, _| {
-                        // Rebase on the file first — see the Global arm above.
-                        let mut s = settings.borrow_mut();
-                        *s = Settings::load();
-                        s.bitrate_kbps = recommended_kbps;
-                        s.save();
-                        toasts.add_toast(adw::Toast::new(&format!(
-                            "{mbit:.0} Mbit/s set in the default bitrate"
-                        )));
-                    });
-                }
-                Ok(Err(msg)) => status.set_text(&msg),
-                Err(_) => {}
-            }
-        });
-    }
-}
-
-/// Which layer a measured bitrate should land in for the host that was tested
-/// (design/client-settings-profiles.md §5.3).
-enum SpeedTestTarget {
-    /// No preset bound — the global default, i.e. what has always happened.
-    Global,
-    /// The bound preset already overrides bitrate, so that override is what this host reads.
-    Preset(pf_client_core::presets::StreamPreset),
-    /// Bound, but the preset inherits bitrate: writing either layer is defensible, so ask.
-    Ask(pf_client_core::presets::StreamPreset),
-}
-
-impl SpeedTestTarget {
-    fn resolve(req: &crate::ui_hosts::ConnectRequest) -> SpeedTestTarget {
-        // Resolved exactly the way a connect resolves it: the one-off pick this test was
-        // started with (a pinned card carries one), else the host's binding.
-        let bound = trust::KnownHosts::load()
-            .resolve(req.fp_hex.as_deref(), &req.addr, req.port)
-            .and_then(|h| h.preset_id.clone());
-        let reference = match req.preset.as_deref() {
-            Some("") => return SpeedTestTarget::Global,
-            Some(id) => Some(id.to_string()),
-            None => bound,
-        };
-        let Some(reference) = reference else {
-            return SpeedTestTarget::Global;
-        };
-        let catalog = pf_client_core::presets::PresetsFile::load();
-        match catalog.resolve(&reference).0 {
-            Some(p) if p.overrides.bitrate_kbps.is_some() => SpeedTestTarget::Preset(p.clone()),
-            Some(p) => SpeedTestTarget::Ask(p.clone()),
-            // A dangling binding resolves as no preset everywhere else; here too.
-            None => SpeedTestTarget::Global,
-        }
-    }
-}
-
-/// Write a measured bitrate into one preset's overlay, leaving everything else alone.
-fn write_preset_bitrate(id: &str, kbps: u32) {
-    let mut catalog = pf_client_core::presets::PresetsFile::load();
-    let Some(p) = catalog.presets.iter_mut().find(|p| p.id == id) else {
-        return; // deleted while the test ran — the toast still tells the truth about the test
-    };
-    p.overrides.bitrate_kbps = Some(kbps);
-    if let Err(e) = catalog.save() {
-        tracing::warn!(error = %format!("{e:#}"), "saving the measured bitrate");
     }
 }
 
@@ -1274,7 +708,7 @@ pub fn run() -> glib::ExitCode {
         .flags(gio::ApplicationFlags::HANDLES_OPEN);
     // Screenshot mode launches the app once per scene back-to-back; NON_UNIQUE keeps
     // each launch its own primary instance.
-    if crate::cli::shot_scene().is_some() {
+    if crate::shots::shot_scene().is_some() {
         builder =
             builder.flags(gio::ApplicationFlags::NON_UNIQUE | gio::ApplicationFlags::HANDLES_OPEN);
     }

@@ -12,7 +12,7 @@
 //! "what does ready mean" have exactly one answer.
 
 use crate::app::AppMsg;
-use crate::ui_hosts::ConnectRequest;
+use crate::hosts::ConnectRequest;
 use pf_client_core::orchestrate::{self, ConnectPlan, HostTarget, SessionEvent};
 
 /// Spawn tunables beyond a plain connect.

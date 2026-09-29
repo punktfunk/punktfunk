@@ -6,12 +6,12 @@
 //! Hello via `ConnectRequest::launch`).
 
 use crate::app::{AppModel, AppMsg};
-use crate::library::{self, GameEntry};
+use crate::hosts::ConnectRequest;
 use crate::trust;
-use crate::ui_hosts::ConnectRequest;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::collate::{self, SortKey};
+use pf_client_core::library::{self, GameEntry};
 use pf_client_core::library::{initials, store_label, DESKTOP_ICON, DESKTOP_ID};
 use relm4::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -170,7 +170,7 @@ fn build(
     // Click/keyboard activation fires `child-activated` on the FlowBox, not the child's own
     // `activate` — bridge it so each poster's connect handler (below) runs on click. The
     // bridge must be the guarded one: bare, it recurses until the stack overflows.
-    crate::ui_flow::bridge_child_activation(&flow);
+    crate::widgets::flow::bridge_child_activation(&flow);
     // The launcher shelf: same tile geometry as the games grid, its own FlowBox so the two
     // groups never interleave and each wraps on its own.
     let launcher_flow = gtk::FlowBox::builder()
@@ -183,7 +183,7 @@ fn build(
         .row_spacing(18)
         .valign(gtk::Align::Start)
         .build();
-    crate::ui_flow::bridge_child_activation(&launcher_flow);
+    crate::widgets::flow::bridge_child_activation(&launcher_flow);
     let launchers_heading = gtk::Label::new(Some("Launchers"));
     launchers_heading.add_css_class("pf-group-heading");
     launchers_heading.set_halign(gtk::Align::Start);
@@ -257,7 +257,7 @@ fn build(
     stack.add_named(&scrolled, Some("grid"));
 
     let header = adw::HeaderBar::new();
-    let reload = crate::lucide::button("refresh-cw");
+    let reload = crate::widgets::lucide::button("refresh-cw");
     reload.set_tooltip_text(Some("Reload"));
     header.pack_end(&reload);
     // Shared `library_sort`: the same four orders the console's bar offers, so one library
@@ -522,7 +522,7 @@ fn poster_mark(game: &GameEntry) -> Option<gtk::Widget> {
         img.set_pixel_size(72);
         img.upcast()
     } else if pf_client_core::lucide::path(token).is_some() {
-        crate::lucide::icon(token, 56).upcast()
+        crate::widgets::lucide::icon(token, 56).upcast()
     } else {
         return None;
     };
@@ -616,7 +616,7 @@ fn game_card(state: &Rc<State>, game: &GameEntry) -> gtk::FlowBoxChild {
         menu.append(Some("End game"), Some("game.end-game"));
     }
     let menu_btn = gtk::MenuButton::builder()
-        .child(&crate::lucide::row_icon("ellipsis"))
+        .child(&crate::widgets::lucide::row_icon("ellipsis"))
         .menu_model(&menu)
         .halign(gtk::Align::End)
         .valign(gtk::Align::Start)

@@ -11,37 +11,28 @@
 // The UI-agnostic plumbing lives in `pf-client-core`, shared with the session binary.
 // Root re-exports keep every `crate::trust`-style path resolving unchanged.
 #[cfg(target_os = "linux")]
-pub use pf_client_core::{discovery, gamepad, library, os, trust, video, wol};
+pub use pf_client_core::{discovery, gamepad, os, trust, video, wol};
 
+// The window, its messages and the connect flow.
 #[cfg(target_os = "linux")]
 mod app;
 #[cfg(target_os = "linux")]
 mod cli;
-// The shell's icons: Lucide marks stroked from the console's own shared table.
+// Omarchy theming and the `.desktop` shortcut writer.
 #[cfg(target_os = "linux")]
-mod lucide;
-// Recolour the shell from the Omarchy theme, when the box has one.
+mod desktop;
 #[cfg(target_os = "linux")]
-mod omarchy;
-// "Create shortcut…" — the desktop-entry writer (design/client-deep-links.md §5).
+mod hosts;
 #[cfg(target_os = "linux")]
-mod shortcuts;
+mod library;
 #[cfg(target_os = "linux")]
-mod spawn;
-// The guarded FlowBox `child-activated → activate` bridge every card grid needs.
+mod settings;
+// The CI screenshot scenes.
 #[cfg(target_os = "linux")]
-mod ui_flow;
+mod shots;
+// Shared widgets: the FlowBox activation bridge and the Lucide icons.
 #[cfg(target_os = "linux")]
-mod ui_hosts;
-#[cfg(target_os = "linux")]
-mod ui_library;
-/// The quick-action ring's editor — the ring itself, as a preferences subpage.
-#[cfg(target_os = "linux")]
-mod ui_quick_actions;
-#[cfg(target_os = "linux")]
-mod ui_settings;
-#[cfg(target_os = "linux")]
-mod ui_trust;
+mod widgets;
 
 #[cfg(target_os = "linux")]
 fn main() -> gtk::glib::ExitCode {

@@ -206,7 +206,7 @@ impl QuickActions {
             .use_markup(false)
             .activatable(true)
             .build();
-        row.add_suffix(&crate::lucide::row_icon("chevron-right"));
+        row.add_suffix(&crate::widgets::lucide::row_icon("chevron-right"));
         let shared = Shared {
             dialog: dialog.downgrade(),
             blob: Rc::new(RefCell::new(blob.to_string())),
@@ -361,14 +361,14 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
 /// which is what the console does too.
 fn disc_face(cfg: &OverlayConfig, slot: Option<&SlotId>) -> gtk::Widget {
     let Some(slot) = slot else {
-        return crate::lucide::icon("plus", 22).upcast();
+        return crate::widgets::lucide::icon("plus", 22).upcast();
     };
     if let SlotId::Shortcut(id) = slot {
         let keys = cfg.shortcut(id).map(|s| s.keys.clone()).unwrap_or_default();
         return keycap(&keys).upcast();
     }
     if let Some(name) = slot_icon(&slot.id(), "") {
-        return crate::lucide::icon(name, ICON_PX).upcast();
+        return crate::widgets::lucide::icon(name, ICON_PX).upcast();
     }
     gtk::Label::builder()
         .label(short_label(cfg, slot))
@@ -442,7 +442,7 @@ fn build_ring(
     // The mark has to EXPAND to be centred. A `gtk::Box` is horizontal by default and packs a
     // single child at the start, so a child narrower than the box's requested width sits on its
     // left edge however it aligns itself; expanding gives it the whole box to centre within.
-    let centre_mark = crate::lucide::icon("ellipsis", ICON_PX);
+    let centre_mark = crate::widgets::lucide::icon("ellipsis", ICON_PX);
     centre_mark.set_hexpand(true);
     centre_mark.set_vexpand(true);
     centre.append(&centre_mark);
@@ -580,7 +580,7 @@ fn picker(button: &gtk::Button, k: usize, shared: &Shared, rebuild: Option<Rc<dy
                 row.set_subtitle(&entry.note);
             }
             if entry.id == current {
-                row.add_suffix(&crate::lucide::row_icon("check"));
+                row.add_suffix(&crate::widgets::lucide::row_icon("check"));
             }
             let (shared, rebuild, popover, id) =
                 (shared.clone(), rebuild.clone(), popover.clone(), entry.id);
@@ -670,7 +670,7 @@ fn build_shortcuts(
         face.add_css_class("pf-keycap-small");
         face.set_size_request(36, 36);
         row.add_prefix(&face);
-        row.add_suffix(&crate::lucide::row_icon("chevron-right"));
+        row.add_suffix(&crate::widgets::lucide::row_icon("chevron-right"));
         let (shared, rebuild, sc) = (shared.clone(), rebuild.clone(), sc.clone());
         row.connect_activated(move |_| {
             if let Some(dialog) = shared.dialog() {
