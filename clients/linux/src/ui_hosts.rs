@@ -29,8 +29,8 @@ pub struct ConnectRequest {
     pub port: u16,
     pub fp_hex: Option<String>,
     pub pair_optional: bool,
-    /// A library title to launch on connect (`(library id, display name)`).
-    pub launch: Option<(String, String)>,
+    /// A library title id to launch on connect.
+    pub launch: Option<String>,
     /// Wake-on-LAN MAC(s) for this host. Empty when none is known.
     pub mac: Vec<String>,
     /// A ONE-OFF settings preset for this connect ("Connect with ▸ X"): `Some(id)` overrides
@@ -396,7 +396,7 @@ impl relm4::factory::FactoryComponent for HostCard {
                     let (id, addr, port, name) =
                         (k.id.clone(), k.addr.clone(), k.port, k.name.clone());
                     add(
-                        "rename",
+                        "edit",
                         Box::new(move || CardOutput::Edit {
                             id: id.clone(),
                             addr: addr.clone(),
@@ -665,7 +665,7 @@ impl relm4::factory::FactoryComponent for HostCard {
                             Some("card.make-default"),
                         );
                     }
-                    manage.append(Some("Edit\u{2026}"), Some("card.rename"));
+                    manage.append(Some("Edit\u{2026}"), Some("card.edit"));
                     manage.append(Some("Pair with PIN\u{2026}"), Some("card.pair"));
                     manage.append(Some("Forget"), Some("card.forget"));
                     menu.append_section(None, &manage);
@@ -718,12 +718,6 @@ impl relm4::factory::FactoryComponent for HostCard {
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
 const PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(12);
 
-/// The key a saved host is tracked under in the probe-results map: its fingerprint (stable
-/// across IP changes) when it has one, else `addr:port` (a not-yet-paired manual entry).
-/// A preset chip in that preset's colour. `accent` is the field the catalog schema reserved
-/// for this — without it every preset is the same grey, and telling them apart across a grid
-/// at a glance is the whole reason the chip exists. No colour set keeps the neutral pill, so
-/// the palette stays opt-in.
 /// The OS-icon tokens this shell ships symbolic art for (`data/icons/.../pf-os-<t>-symbolic.svg`,
 /// embedded via gresource): the families a chain can land on, plus the distro leaves that earn
 /// their own mark because "a Bazzite box" and "a Fedora box" are different machines to the person
@@ -743,6 +737,10 @@ fn os_icon_name(chain: &str) -> Option<String> {
     Some(format!("pf-os-{token}-symbolic"))
 }
 
+/// A preset chip in that preset's colour. `accent` is the field the catalog schema reserved
+/// for this — without it every preset is the same grey, and telling them apart across a grid
+/// at a glance is the whole reason the chip exists. No colour set keeps the neutral pill, so
+/// the palette stays opt-in.
 fn preset_pill(p: &Preset) -> gtk::Widget {
     let label = gtk::Label::new(Some(&p.name));
     label.add_css_class("pf-pill");
@@ -862,7 +860,7 @@ pub enum HostsOutput {
 }
 
 impl SimpleComponent for HostsPage {
-    type Init = Rc<RefCell<Settings>>;
+    type Init = ();
     type Input = HostsMsg;
     type Output = HostsOutput;
     type Root = adw::NavigationPage;
@@ -876,10 +874,7 @@ impl SimpleComponent for HostsPage {
     }
 
     fn init(
-        // The shared settings store, which this page no longer reads: its card menus follow
-        // pairing alone now that the library is offered on every paired host. It stays in
-        // `Init` because the shell hands the same store to every page it launches.
-        _settings: Self::Init,
+        _init: Self::Init,
         page: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -1404,7 +1399,6 @@ impl HostsPage {
             .and_then(|h| h.mgmt_port)
     }
 
-    /// Rename a saved host — an entry in an alert, then upsert + refresh.
     /// Write the shortcut, or — inside the flatpak sandbox, which cannot reach
     /// `~/.local/share/applications` — hand the user the URL to place themselves. The
     /// DynamicLauncher portal is the intended upgrade for that case (design §5); until then

@@ -924,9 +924,6 @@ pub fn show_about(parent: &impl IsA<gtk::Widget>) {
     about.present(Some(parent));
 }
 
-/// True inside a gamescope session (Steam game mode on the Deck / Bazzite): GTK popovers
-/// are xdg_popups, which gamescope never maps for nested apps — a ComboRow's dropdown
-/// flashes the row but no list ever appears. Selection UI must stay inside the toplevel.
 /// Names the host the Start in row resolves to, and says when it resolves to nothing — which
 /// is what every value does until one host is paired. Read at build time: the row is rebuilt
 /// each time the dialog opens, and the pointer is written from a host card, not from here.
@@ -941,6 +938,9 @@ fn start_in_subtitle() -> String {
     }
 }
 
+/// True inside a gamescope session (Steam game mode on the Deck / Bazzite): GTK popovers
+/// are xdg_popups, which gamescope never maps for nested apps — a ComboRow's dropdown
+/// flashes the row but no list ever appears. Selection UI must stay inside the toplevel.
 fn gamescope_session() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.eq_ignore_ascii_case("gamescope"))
         || pf_client_core::gamescope::under_gamescope()

@@ -325,7 +325,7 @@ impl SimpleComponent for AppModel {
 
         let hosts =
             HostsPage::builder()
-                .launch(settings.clone())
+                .launch(())
                 .forward(sender.input_sender(), |out| match out {
                     HostsOutput::Connect(req) => AppMsg::Connect(req),
                     HostsOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
@@ -842,7 +842,7 @@ impl AppModel {
                     port: plan.host.port,
                     fp_hex: plan.host.fp_hex.clone(),
                     pair_optional: false,
-                    launch: plan.launch.clone().map(|id| (id.clone(), id)),
+                    launch: plan.launch.clone(),
                     mac: plan.host.mac.clone(),
                     // `preset=` in a URL is a one-off, exactly like "Connect with ▸": it
                     // shapes this session and leaves the host's binding alone.
@@ -871,12 +871,12 @@ impl AppModel {
                     port: plan.host.port,
                     fp_hex: plan.host.fp_hex.clone(),
                     pair_optional: false,
-                    launch: plan.launch.clone().map(|id| (id.clone(), id)),
+                    launch: plan.launch.clone(),
                     mac: plan.host.mac.clone(),
                     preset: plan.preset_override.clone(),
                 };
                 let mut body = format!("A link asks to connect to {} ({}).", req.name, req.addr);
-                if let Some((id, _)) = &req.launch {
+                if let Some(id) = &req.launch {
                     body.push_str(&format!("\n\nIt also asks the host to launch “{id}”."));
                 }
                 body.push_str(
@@ -915,7 +915,7 @@ impl AppModel {
                     port: unknown.port,
                     fp_hex: unknown.fp.clone(),
                     pair_optional: false,
-                    launch: unknown.launch.clone().map(|id| (id.clone(), id)),
+                    launch: unknown.launch.clone(),
                     mac: Vec::new(),
                     preset: None,
                 };

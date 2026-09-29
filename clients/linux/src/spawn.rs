@@ -52,7 +52,7 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
             id: None,
             mgmt_port: None, // this shell resolves the library port itself (`mgmt_port_for`)
         },
-        req.launch.as_ref().map(|(id, _)| id.clone()),
+        req.launch.clone(),
         // A plain card click carries no one-off: the resolver honors the host's own binding
         // (design/client-settings-profiles.md §4.6). Only a "Connect with ▸" pick (or a URL's
         // `preset=`) sets one, and it applies to this session alone.

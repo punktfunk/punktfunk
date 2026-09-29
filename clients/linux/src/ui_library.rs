@@ -674,7 +674,7 @@ fn game_card(state: &Rc<State>, game: &GameEntry) -> gtk::FlowBoxChild {
     // The desktop tile is the host, not one of its titles: it streams with no launch id.
     // Asking a host to launch what it is already showing is how a second copy starts.
     if !is_desktop(game) {
-        req.launch = Some((game.id.clone(), game.title.clone()));
+        req.launch = Some(game.id.clone());
     }
     child.connect_activate(move |_| sender.input(AppMsg::Connect(req.clone())));
     child
