@@ -585,8 +585,8 @@ impl AppModel {
         self.views.set_visible_child_name(name);
     }
 
+    /// The rows write through the store as they change, so the pages follow on their own.
     fn show_preferences(&self, scope: crate::settings::Scope, sender: &ComponentSender<Self>) {
-        let hosts = self.hosts.sender().clone();
         let (reopen, closed) = (sender.clone(), sender.clone());
         crate::settings::show_scoped(
             &self.window,
@@ -594,16 +594,9 @@ impl AppModel {
             &self.gamepad,
             &self.probes.borrow(),
             scope,
-            // The switcher closes the dialog to commit the layer it was editing, then
-            // asks for it back in the new scope — so the app owns the re-open and the
-            // dialog stays a pure view.
+            // A scope change closes the dialog and asks for it back in the new scope.
             move |next| reopen.input(AppMsg::ShowPreferencesScoped(next)),
-            move || {
-                // The library toggle changes the saved cards' menu, and a preset edit
-                // changes the chips — re-render either way.
-                let _ = hosts.send(HostsMsg::Refresh);
-                closed.input(AppMsg::SettingsClosed);
-            },
+            move || closed.input(AppMsg::SettingsClosed),
         );
     }
 
