@@ -353,6 +353,59 @@ impl SettingsOverlay {
         true
     }
 
+    /// Pin one field at `from`'s value, by the names [`Self::clear`] takes. `resolution` pins
+    /// its three fields together. False for a name the overlay does not carry.
+    pub fn pin(&mut self, field: &str, from: &Settings) -> bool {
+        let s = from;
+        match field {
+            "resolution" => {
+                self.width = Some(s.width);
+                self.height = Some(s.height);
+                self.match_window = Some(s.match_window);
+            }
+            "width" => self.width = Some(s.width),
+            "height" => self.height = Some(s.height),
+            "refresh_hz" => self.refresh_hz = Some(s.refresh_hz),
+            "match_window" => self.match_window = Some(s.match_window),
+            "bitrate_kbps" => self.bitrate_kbps = Some(s.bitrate_kbps),
+            "render_scale" => self.render_scale = Some(s.render_scale),
+            "video_fit" => self.video_fit = Some(s.video_fit.clone()),
+            "codec" => self.codec = Some(s.codec.clone()),
+            "hdr_enabled" => self.hdr_enabled = Some(s.hdr_enabled),
+            "enable_444" => self.enable_444 = Some(s.enable_444),
+            "ten_bit_sdr" => self.ten_bit_sdr = Some(s.ten_bit_sdr),
+            "compositor" => self.compositor = Some(s.compositor.clone()),
+            "audio_channels" => self.audio_channels = Some(s.audio_channels),
+            "audio_format" => self.audio_format = Some(s.audio_format.clone()),
+            "keep_host_audio" => self.keep_host_audio = Some(s.keep_host_audio),
+            "mic_enabled" => self.mic_enabled = Some(s.mic_enabled),
+            "echo_cancel" => self.echo_cancel = Some(s.echo_cancel),
+            "touch_mode" => self.touch_mode = Some(s.touch_mode.clone()),
+            "mouse_mode" => self.mouse_mode = Some(s.mouse_mode.clone()),
+            "invert_scroll" => self.invert_scroll = Some(s.invert_scroll),
+            "overlay_actions" => self.overlay_actions = Some(s.overlay_actions.clone()),
+            "inhibit_shortcuts" => self.inhibit_shortcuts = Some(s.inhibit_shortcuts),
+            "gamepad" => self.gamepad = Some(s.gamepad.clone()),
+            "gamepad_forwarding" => self.gamepad_forwarding = Some(s.gamepad_forwarding),
+            "system_buttons" => self.system_buttons = Some(s.system_buttons.clone()),
+            "guide_gesture" => self.guide_gesture = Some(s.guide_gesture.clone()),
+            "stats_verbosity" => self.stats_verbosity = Some(s.stats_verbosity()),
+            "fullscreen_on_stream" => self.fullscreen_on_stream = Some(s.fullscreen_on_stream),
+            "present_priority" => self.present_priority = Some(s.present_priority.clone()),
+            "smooth_buffer" => self.smooth_buffer = Some(s.smooth_buffer),
+            "vsync" => self.vsync = Some(s.vsync),
+            "allow_vrr" => self.allow_vrr = Some(s.allow_vrr),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Whether this overlay holds a value for `field`, by the names [`Self::clear`] takes.
+    pub fn overrides(&self, field: &str) -> bool {
+        let mut cleared = self.clone();
+        cleared.clear(field) && cleared != *self
+    }
+
     /// True when nothing is overridden. Unknown-key carry-through counts:
     /// a preset that only holds a newer client's field is not empty.
     pub fn is_empty(&self) -> bool {
@@ -550,6 +603,61 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every name `clear` takes, `pin` takes too, and the two undo each other.
+    #[test]
+    fn pin_and_clear_take_the_same_names() {
+        let names = [
+            "resolution",
+            "width",
+            "height",
+            "refresh_hz",
+            "match_window",
+            "bitrate_kbps",
+            "render_scale",
+            "video_fit",
+            "codec",
+            "hdr_enabled",
+            "enable_444",
+            "ten_bit_sdr",
+            "compositor",
+            "audio_channels",
+            "audio_format",
+            "keep_host_audio",
+            "mic_enabled",
+            "echo_cancel",
+            "touch_mode",
+            "mouse_mode",
+            "invert_scroll",
+            "overlay_actions",
+            "inhibit_shortcuts",
+            "gamepad",
+            "gamepad_forwarding",
+            "system_buttons",
+            "guide_gesture",
+            "stats_verbosity",
+            "fullscreen_on_stream",
+            "present_priority",
+            "smooth_buffer",
+            "vsync",
+            "allow_vrr",
+        ];
+        let from = Settings::default();
+        for name in names {
+            let mut o = SettingsOverlay::default();
+            assert!(!o.overrides(name), "{name}");
+            assert!(o.pin(name, &from), "{name}");
+            assert!(o.overrides(name) && !o.is_empty(), "{name}");
+            assert!(o.clear(name), "{name}");
+            assert!(o.is_empty(), "{name}");
+        }
+        let mut o = SettingsOverlay::default();
+        assert!(!o.pin("start_in", &from), "a device key is never pinned");
+        // A pin at the global's own value is still a pin.
+        o.pin("codec", &from);
+        assert_eq!(o.apply(&from).codec, from.codec);
+        assert!(o.overrides("codec"));
+    }
 
     #[test]
     fn a_duplicate_takes_the_first_free_name_and_the_overrides() {
