@@ -295,8 +295,9 @@ impl SimpleComponent for LibraryPage {
         }
         let chips = gtk::Box::new(gtk::Orientation::Vertical, 0);
         chips.set_margin_top(12);
-        chips.set_margin_start(16);
-        chips.set_margin_end(16);
+        chips.set_margin_bottom(12);
+        chips.set_margin_start(8);
+        chips.set_margin_end(8);
         chips.set_visible(false);
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(
