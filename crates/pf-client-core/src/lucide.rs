@@ -18,6 +18,8 @@ pub const ACTIVITY: &str = "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0
 pub const ARROW_LEFT: &str = "M12 19l-7-7 7-7M19 12H5";
 /// Lucide `arrow-right`.
 pub const ARROW_RIGHT: &str = "M5 12h14M12 5l7 7-7 7";
+/// Lucide `arrow-up-down`.
+pub const ARROW_UP_DOWN: &str = "M21 16l-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16";
 /// Lucide `bug`.
 pub const BUG: &str = "M8 2l1.88 1.88M14.12 3.88 16 2M9 7.13v-1a3.003 3.003 0 1 1 6 0v1M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6M12 20v-9M6.53 9C4.6 8.8 3 7.1 3 5M6 13H2M3 21c0-2.1 1.7-3.9 3.8-4M20.97 5c0 2.1-1.6 3.8-3.5 4M22 13h-4M17.2 17c2.1.1 3.8 1.9 3.8 4";
 /// Lucide `chart-column`.
@@ -115,6 +117,8 @@ pub const SETTINGS: &str = "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.4
 /// Lucide `square`.
 pub const SQUARE: &str =
     "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z";
+/// Lucide `star`.
+pub const STAR: &str = "M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z";
 /// Lucide `sun`.
 pub const SUN: &str = "M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41";
 /// Lucide `trash-2`.
@@ -136,6 +140,7 @@ pub const ALL: &[(&str, &str, char)] = &[
     ("activity", ACTIVITY, '\u{e038}'),
     ("arrow-left", ARROW_LEFT, '\u{e04c}'),
     ("arrow-right", ARROW_RIGHT, '\u{e04d}'),
+    ("arrow-up-down", ARROW_UP_DOWN, '\u{e381}'),
     ("bug", BUG, '\u{e20c}'),
     ("chart-column", CHART_COLUMN, '\u{e2a3}'),
     ("check", CHECK, '\u{e070}'),
@@ -182,6 +187,7 @@ pub const ALL: &[(&str, &str, char)] = &[
     ("send", SEND, '\u{e156}'),
     ("settings", SETTINGS, '\u{e158}'),
     ("square", SQUARE, '\u{e16b}'),
+    ("star", STAR, '\u{e17a}'),
     ("sun", SUN, '\u{e17c}'),
     ("trash-2", TRASH_2, '\u{e18e}'),
     ("tv", TV, '\u{e195}'),
