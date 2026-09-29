@@ -249,40 +249,47 @@ fn headless_omarchy_menu(verb: &str) -> glib::ExitCode {
     }
 }
 
-/// `--set-host <fp|host[:port]> [--host-label NAME] [--addr ADDR] [--port PORT]` — edit a saved
-/// host: rename and/or re-point its address, remembering the address it leaves. Identified by
-/// fingerprint (survives IP changes) or current address. Prints `updated <name>`; fails if
-/// nothing matched.
+/// `--set-host <fp|host[:port]> [--host-label NAME] [--addr ADDR] [--port PORT] [--mac LIST]` —
+/// edit a saved host: rename it, re-point its address (remembering the one it leaves), or set
+/// its Wake-on-LAN MACs (`--mac ""` clears them). Identified by fingerprint (survives IP
+/// changes) or current address. Prints `updated <name>`; fails if nothing matched or a value
+/// doesn't parse.
 pub fn headless_set_host(selector: &str) -> glib::ExitCode {
+    let fail = |msg: String| {
+        eprintln!("set-host: {msg}");
+        glib::ExitCode::FAILURE
+    };
+    let port = match arg_value("--port") {
+        None => None,
+        Some(p) => match p.trim().parse::<u16>().ok().filter(|&p| p != 0) {
+            Some(p) => Some(p),
+            None => return fail(format!("invalid port {p:?}")),
+        },
+    };
+    let macs = match arg_value("--mac").map(|m| pf_client_core::wol::parse_mac_list(&m)) {
+        None => None,
+        Some(Ok(macs)) => Some(macs),
+        Some(Err(bad)) => return fail(format!("invalid MAC address {bad:?}")),
+    };
+    let edit = crate::trust::HostEdit {
+        name: arg_value("--host-label"),
+        addr: arg_value("--addr"),
+        port,
+        macs,
+    };
     let sel = parse_selector(selector);
     let mut known = KnownHosts::load();
     let Some(h) = known.hosts.iter_mut().find(|h| sel.matches(h)) else {
-        eprintln!("set-host: no saved host matches {selector:?}");
-        return glib::ExitCode::FAILURE;
+        return fail(format!("no saved host matches {selector:?}"));
     };
-    if let Some(name) = arg_value("--host-label").map(|n| n.trim().to_string()) {
-        if !name.is_empty() {
-            h.name = name;
-        }
-    }
-    let addr = arg_value("--addr")
-        .map(|a| a.trim().to_string())
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| h.addr.clone());
-    let port = arg_value("--port")
-        .and_then(|p| p.trim().parse::<u16>().ok())
-        .unwrap_or(h.port);
-    h.move_to(&addr, port);
+    h.apply_edit(&edit);
     let label = h.name.clone();
     match known.save() {
         Ok(()) => {
             println!("updated {label}");
             glib::ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("set-host: {e:#}");
-            glib::ExitCode::FAILURE
-        }
+        Err(e) => fail(format!("{e:#}")),
     }
 }
 
