@@ -512,7 +512,7 @@ impl SimpleComponent for AppModel {
                 crate::ui_settings::Scope::Defaults,
             )),
             AppMsg::ShowPreferencesScoped(scope) => self.show_preferences(scope, &sender),
-            AppMsg::ShowShortcuts => shortcuts_window(&self.window).present(),
+            AppMsg::ShowShortcuts => shortcuts_dialog().present(Some(&self.window)),
             AppMsg::ShowAbout => crate::ui_settings::show_about(&self.window),
             AppMsg::ShowAddHost => self.hosts.emit(HostsMsg::ShowAddHost),
             AppMsg::Toast(msg) => self.toast(&msg),
@@ -1299,65 +1299,33 @@ fn install_actions(window: &adw::ApplicationWindow, sender: &ComponentSender<App
     window.add_action(&add("console", || AppMsg::OpenConsole));
 }
 
-/// The Keyboard Shortcuts window — the SESSION window's keys (the shell itself has
-/// none); kept here as discoverable documentation.
-pub fn shortcuts_window(parent: &adw::ApplicationWindow) -> gtk::ShortcutsWindow {
-    const UI: &str = r#"
-<interface>
-  <object class="GtkShortcutsWindow" id="shortcuts">
-    <property name="modal">1</property>
-    <child>
-      <object class="GtkShortcutsSection">
-        <child>
-          <object class="GtkShortcutsGroup">
-            <property name="title">Stream (session window)</property>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Toggle fullscreen</property>
-                <property name="accelerator">F11 &lt;Alt&gt;Return</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Release captured input (click the stream to capture)</property>
-                <property name="accelerator">&lt;Control&gt;&lt;Alt&gt;&lt;Shift&gt;q</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Disconnect</property>
-                <property name="accelerator">&lt;Control&gt;&lt;Alt&gt;&lt;Shift&gt;d</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Cycle the statistics overlay (off · compact · normal · detailed)</property>
-                <property name="accelerator">&lt;Control&gt;&lt;Alt&gt;&lt;Shift&gt;s</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Mute or unmute your microphone (only while the stream sends one)</property>
-                <property name="accelerator">&lt;Control&gt;&lt;Alt&gt;&lt;Shift&gt;v</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="title">Open the quick actions dial (a pad opens it with Select + A, and aims it with the left stick)</property>
-                <property name="accelerator">&lt;Control&gt;&lt;Alt&gt;&lt;Shift&gt;o</property>
-              </object>
-            </child>
-          </object>
-        </child>
-      </object>
-    </child>
-  </object>
-</interface>
-"#;
-    let builder = gtk::Builder::from_string(UI);
-    let window: gtk::ShortcutsWindow = builder
-        .object("shortcuts")
-        .expect("shortcuts window in builder XML");
-    window.set_transient_for(Some(parent));
-    window
+/// The Keyboard Shortcuts dialog — the SESSION window's keys (the shell itself has none);
+/// kept here as discoverable documentation.
+pub fn shortcuts_dialog() -> adw::ShortcutsDialog {
+    let stream = adw::ShortcutsSection::new(Some("Stream (session window)"));
+    for (title, accel) in [
+        ("Toggle fullscreen", "F11 <Alt>Return"),
+        (
+            "Release captured input (click the stream to capture)",
+            "<Control><Alt><Shift>q",
+        ),
+        ("Disconnect", "<Control><Alt><Shift>d"),
+        (
+            "Cycle the statistics overlay (off · compact · normal · detailed)",
+            "<Control><Alt><Shift>s",
+        ),
+        (
+            "Mute or unmute your microphone (only while the stream sends one)",
+            "<Control><Alt><Shift>v",
+        ),
+        (
+            "Open the quick actions dial (a pad opens it with Select + A, and aims it with the left stick)",
+            "<Control><Alt><Shift>o",
+        ),
+    ] {
+        stream.add(adw::ShortcutsItem::new(title, accel));
+    }
+    let dialog = adw::ShortcutsDialog::new();
+    dialog.add(stream);
+    dialog
 }

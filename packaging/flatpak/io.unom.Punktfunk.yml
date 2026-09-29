@@ -15,8 +15,8 @@
 # is sandbox-friendly: it only needs the GPU render node, the host PipeWire socket, the
 # network, Wayland, hidraw for DualSense, and its config dir — all expressible as finish-args.
 #
-# Runtime: GNOME 50 ships GTK 4.20 and libadwaita 1.8 — both far exceed the crate floors
-# (gtk4 0.11 "v4_16", libadwaita 0.9 "v1_5"). GNOME 50 is built on freedesktop-sdk 25.08, so
+# Runtime: GNOME 50 ships GTK 4.22 and libadwaita 1.9 — both above the crate floors
+# (gtk4 0.11 "v4_20", libadwaita 0.9 "v1_8"). GNOME 50 is built on freedesktop-sdk 25.08, so
 # `org.freedesktop.Sdk.Extension.rust-stable` resolves to //25.08 (rustc 1.96 — the GTK4 dep
 # chain, e.g. pango-sys 0.22, needs >= 1.92, which the older GNOME-48/24.08 rust-stable at 1.89
 # could NOT satisfy). GNOME 50 is also a *supported* runtime (GNOME 48 went EOL in March 2026).

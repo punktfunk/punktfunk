@@ -507,9 +507,8 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             os: "linux/arch/steamos".to_string(),
         };
 
-    // What the self-capture renders: the main window, except for scenes that open their
-    // own toplevel (the shortcuts window).
-    let mut target: gtk::Widget = ctx.window.clone().upcast();
+    // What the self-capture renders: the main window, its dialogs included.
+    let target: gtk::Widget = ctx.window.clone().upcast();
     let hosts = &ctx.hosts;
     match scene {
         // Saved hosts come from the seeded known-hosts store; on top, inject synthetic
@@ -584,9 +583,7 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             let _ = hosts.send(HostsMsg::ShowAddHost);
         }
         "shortcuts" | "07-shortcuts" => {
-            let w = crate::app::shortcuts_window(&ctx.window);
-            w.present();
-            target = w.upcast();
+            adw::prelude::AdwDialogExt::present(&crate::app::shortcuts_dialog(), Some(&ctx.window));
         }
         // The library page with injected entries: mixed stores exercising the badge set,
         // no-art placeholders, and one solid-color texture standing in for a poster.

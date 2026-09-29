@@ -219,9 +219,8 @@ fn build(
 
     let loading = gtk::Box::new(gtk::Orientation::Vertical, 12);
     loading.set_valign(gtk::Align::Center);
-    let spinner = gtk::Spinner::new();
+    let spinner = adw::Spinner::new();
     spinner.set_size_request(32, 32);
-    spinner.start();
     spinner.set_halign(gtk::Align::Center);
     loading.append(&spinner);
     let loading_label = gtk::Label::new(Some("Loading library…"));

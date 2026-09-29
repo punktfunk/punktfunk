@@ -30,9 +30,10 @@ pf-client-core = { path = "../../crates/pf-client-core", default-features = fals
 ] }
 punktfunk-core = { path = "../../crates/punktfunk-core", features = ["quic"] }
 
-# UI shell. AlertDialog/PreferencesDialog need libadwaita ≥ 1.5.
-gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+# UI shell. GTK 4.20 is already the package floor (Ubuntu 26.04, Fedora 43, GNOME 50), and
+# every such target ships libadwaita ≥ 1.8: Spinner, WrapBox, ToggleGroup, ShortcutsDialog.
+gtk = { package = "gtk4", version = "0.11", features = ["v4_20"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_8"] }
 async-channel = "2"
 
 serde_json = "1"

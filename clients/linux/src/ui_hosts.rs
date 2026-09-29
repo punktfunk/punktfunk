@@ -237,9 +237,8 @@ impl relm4::factory::FactoryComponent for HostCard {
         // The shared scaffold: avatar (spinner while connecting) / name / addr / status.
         let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
         if self.connecting {
-            let spinner = gtk::Spinner::new();
+            let spinner = adw::Spinner::new();
             spinner.set_size_request(48, 48);
-            spinner.start();
             spinner.set_halign(gtk::Align::Center);
             content.append(&spinner);
         } else {
@@ -925,9 +924,7 @@ impl SimpleComponent for HostsPage {
 
         // Shown under the discovered heading while no (unsaved) advert is live yet.
         let searching = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let spinner = gtk::Spinner::new();
-        spinner.start();
-        searching.append(&spinner);
+        searching.append(&adw::Spinner::new());
         let searching_label = gtk::Label::new(Some("Searching the LAN…"));
         searching_label.add_css_class("dim-label");
         searching.append(&searching_label);
