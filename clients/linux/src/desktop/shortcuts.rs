@@ -10,18 +10,54 @@
 //! URL to copy instead. The `org.freedesktop.portal.DynamicLauncher` route (which exists for
 //! exactly this, with its own confirmation) is the intended upgrade there.
 
+use adw::prelude::*;
 use std::path::PathBuf;
+
+/// Create the shortcut, or — sandboxed — show the URL to place by hand. `Some` is the toast to
+/// show; `None` when the dialog took over.
+pub fn create(parent: &impl IsA<gtk::Widget>, label: &str, url: &str) -> Option<String> {
+    if sandboxed() {
+        let dialog = adw::AlertDialog::new(
+            Some("Create Shortcut"),
+            Some(
+                "Punktfunk is sandboxed here, so it can't add the shortcut itself. Copy this \
+                 link and make a launcher for it \u{2014} it opens the same stream.",
+            ),
+        );
+        let entry = gtk::Entry::builder().text(url).editable(false).build();
+        dialog.set_extra_child(Some(&entry));
+        dialog.add_responses(&[("close", "Close"), ("copy", "Copy link")]);
+        dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("copy"));
+        dialog.set_close_response("close");
+        let url = url.to_string();
+        dialog.connect_response(Some("copy"), move |_, _| {
+            if let Some(display) = gtk::gdk::Display::default() {
+                display.clipboard().set_text(&url);
+            }
+        });
+        dialog.present(Some(parent));
+        return None;
+    }
+    Some(match write_desktop_entry(label, url) {
+        Ok(_) => format!("Shortcut for \u{201c}{label}\u{201d} added to your applications"),
+        Err(e) => {
+            tracing::warn!(error = %e, "shortcut not written");
+            format!("Couldn't create the shortcut \u{2014} {e}")
+        }
+    })
+}
 
 /// Are we inside the flatpak sandbox? `/.flatpak-info` is present in every flatpak run and
 /// nowhere else — the standard check, and the one the portal docs use.
-pub fn sandboxed() -> bool {
+fn sandboxed() -> bool {
     std::path::Path::new("/.flatpak-info").exists()
 }
 
 /// Write `~/.local/share/applications/punktfunk-<slug>.desktop` for this URL and return the
 /// path. Best-effort `update-desktop-database` afterwards: an entry nothing indexes still
 /// works from a file manager, it just won't show up in search straight away.
-pub fn write_desktop_entry(label: &str, url: &str) -> Result<PathBuf, String> {
+fn write_desktop_entry(label: &str, url: &str) -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME isn't set".to_string())?;
     let dir = PathBuf::from(home).join(".local/share/applications");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
