@@ -12,7 +12,6 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
 use pf_client_core::start;
-use punktfunk_core::client::{ConnectParams, NativeClient};
 use relm4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -950,7 +949,6 @@ impl AppModel {
         if std::mem::replace(&mut self.busy, true) {
             return;
         }
-        let pin = req.fp_hex.as_deref().and_then(trust::parse_hex32);
         let status = gtk::Label::new(Some("Connecting…"));
         let dialog = adw::AlertDialog::new(Some("Network Speed Test"), Some(&req.name));
         dialog.set_extra_child(Some(&status));
@@ -989,47 +987,13 @@ impl AppModel {
         let (tx, rx) =
             async_channel::bounded::<Result<punktfunk_core::client::ProbeOutcome, String>>(1);
         let identity = self.identity.clone();
-        let (host, port) = (req.addr.clone(), req.port);
         std::thread::spawn(move || {
-            let result = (|| {
-                let mode = punktfunk_core::config::Mode {
-                    width: 1280,
-                    height: 720,
-                    refresh_hz: 60,
-                };
-                // A probe connect: nothing presents, so every other Hello field stays default.
-                let c = NativeClient::connect(ConnectParams {
-                    // Unused by the probe, but honest.
-                    video_codecs: crate::video::decodable_codecs(),
-                    // Knock under this device's name, not a fingerprint placeholder, when the
-                    // probed host doesn't know us yet.
-                    name: Some(pf_client_core::trust::device_name()),
-                    pin,
-                    identity: Some(identity),
-                    ..ConnectParams::new(&host, port, mode, std::time::Duration::from_secs(15))
-                })
-                .map_err(|e| {
-                    tracing::warn!(error = ?e, "speed test connect");
-                    "Couldn't start the speed test".to_string()
-                })?;
-                c.request_probe(3_000_000, 2_000).map_err(|e| {
-                    tracing::warn!(error = ?e, "speed test probe request");
-                    "The host didn't start the speed test".to_string()
-                })?;
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    let r = c.probe_result();
-                    if r.done {
-                        // Let the last UDP shards land before tearing down.
-                        std::thread::sleep(std::time::Duration::from_millis(400));
-                        return Ok(c.probe_result());
-                    }
-                    if std::time::Instant::now() > deadline {
-                        return Err("The speed test didn't finish in time".to_string());
-                    }
-                }
-            })();
+            let result = pf_client_core::speed::run_speed_probe(
+                &req.addr,
+                req.port,
+                req.fp_hex.as_deref(),
+                identity,
+            );
             let _ = tx.send_blocking(result);
         });
 
@@ -1042,7 +1006,8 @@ impl AppModel {
             match outcome {
                 Ok(Ok(r)) => {
                     let mbps = f64::from(r.throughput_kbps) / 1000.0;
-                    let recommended_kbps = r.throughput_kbps / 10 * 7;
+                    let recommended_kbps =
+                        pf_client_core::speed::recommended_kbps(r.throughput_kbps);
                     status.set_text(&format!(
                         "{mbps:.0} Mbit/s measured · {:.1} % loss\nRecommended bitrate: {:.0} Mbit/s",
                         r.loss_pct,
