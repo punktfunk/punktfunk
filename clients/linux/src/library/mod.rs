@@ -14,7 +14,7 @@ use crate::store::Store;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::collate::{GroupBy, SortKey};
-use pf_client_core::library::{self, GameEntry, RunningGame};
+use pf_client_core::library::{self, GameEntry, LibraryError, RunningGame};
 use pf_client_core::library_layout as layout;
 use relm4::prelude::*;
 use rows::Row;
@@ -91,6 +91,8 @@ pub enum LibraryMsg {
     EndGame(String),
     Ended(u64, library::GameEnd, String, Vec<RunningGame>),
     FocusSearch,
+    /// The shelf's host no longer takes this device's pin: pair again.
+    Pair,
     /// Screenshot scenes: these titles and posters on the selected shelf, no network.
     Mock(Vec<GameEntry>, Vec<(String, gdk::Texture)>),
 }
@@ -110,6 +112,7 @@ pub enum LibraryOutput {
     WakeConnect(ConnectRequest),
     Toast(String),
     ShowHosts,
+    Pair(ConnectRequest),
 }
 
 pub struct LibraryPage {
@@ -118,22 +121,32 @@ pub struct LibraryPage {
     view: Rc<View>,
     /// Bumped by every load. A result whose generation is stale when it lands is dropped.
     generation: u64,
-    /// The shelf the catalog on screen belongs to.
-    loaded: Option<String>,
+    /// The shelf the catalog on screen belongs to, as it was loaded. A re-pair or a new address
+    /// changes it, and the shelf loads again.
+    loaded: Option<Shelf>,
     sort: SortKey,
     /// This window's, not a setting.
     group: Option<GroupBy>,
     search: String,
     columns: usize,
     rows: gio::ListStore,
+    /// The shelves and the selection the chip bar shows; a refresh that changes neither keeps it.
+    chips_drawn: Option<Chips>,
     widgets: Widgets,
 }
 
+/// Each shelf's key and label, and the selected key.
+type Chips = (Vec<(String, String)>, Option<String>);
+
 struct Widgets {
     root: adw::ToolbarView,
+    /// The shelf picker, above every state of the page so a failing shelf never traps it.
+    chips: gtk::Box,
     stack: gtk::Stack,
     banner: adw::Banner,
     error: adw::StatusPage,
+    retry: gtk::Button,
+    pair: gtk::Button,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
     sort: gio::SimpleAction,
@@ -177,15 +190,29 @@ impl SimpleComponent for LibraryPage {
         let stack = gtk::Stack::new();
         stack.add_named(&scrolled, Some("rows"));
         stack.add_named(&loading_page(), Some("loading"));
-        let error = status_page(
-            "dialog-error-symbolic",
-            "Couldn't load the library",
-            None,
-            ("Retry", {
-                let sender = sender.clone();
-                move || sender.input(LibraryMsg::Reload)
-            }),
+        let error = adw::StatusPage::builder()
+            .icon_name("dialog-error-symbolic")
+            .title("Couldn't load the library")
+            .build();
+        let pill = |label: &str, msg: fn() -> LibraryMsg| {
+            let b = gtk::Button::builder()
+                .label(label)
+                .css_classes(["pill", "suggested-action"])
+                .halign(gtk::Align::Center)
+                .build();
+            let sender = sender.clone();
+            b.connect_clicked(move |_| sender.input(msg()));
+            b
+        };
+        let (retry, pair) = (
+            pill("Retry", || LibraryMsg::Reload),
+            pill("Pair Again", || LibraryMsg::Pair),
         );
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        actions.set_halign(gtk::Align::Center);
+        actions.append(&retry);
+        actions.append(&pair);
+        error.set_child(Some(&actions));
         stack.add_named(&error, Some("error"));
         stack.add_named(
             &status_page(
@@ -262,11 +289,29 @@ impl SimpleComponent for LibraryPage {
 
         // A remembered shelf says so until the host answers.
         let banner = adw::Banner::new("");
+        {
+            let sender = sender.clone();
+            banner.connect_button_clicked(move |_| sender.input(LibraryMsg::Pair));
+        }
+        let chips = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        chips.set_margin_top(12);
+        chips.set_margin_start(16);
+        chips.set_margin_end(16);
+        chips.set_visible(false);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(
+            &adw::Clamp::builder()
+                .maximum_size(1400)
+                .child(&chips)
+                .build(),
+        );
+        content.append(&stack);
+        stack.set_vexpand(true);
         root.add_top_bar(&header);
         root.add_top_bar(&search_bar);
         root.add_top_bar(&banner);
         root.add_bottom_bar(&bar);
-        root.set_content(Some(&stack));
+        root.set_content(Some(&content));
         {
             let sender = sender.clone();
             store.subscribe(move |_| sender.input(LibraryMsg::Refresh));
@@ -288,11 +333,15 @@ impl SimpleComponent for LibraryPage {
             search: String::new(),
             columns: 4,
             rows,
+            chips_drawn: None,
             widgets: Widgets {
                 root,
+                chips,
                 stack,
                 banner,
                 error,
+                retry,
+                pair,
                 search_bar,
                 search_entry,
                 sort,
@@ -407,13 +456,18 @@ impl SimpleComponent for LibraryPage {
                     self.relayout();
                 }
             }
+            LibraryMsg::Pair => {
+                if let Some(shelf) = self.shelf() {
+                    out(LibraryOutput::Pair(shelf.req));
+                }
+            }
             LibraryMsg::FocusSearch => {
                 self.widgets.search_bar.set_search_mode(true);
                 self.widgets.search_entry.grab_focus();
             }
             LibraryMsg::Mock(games, art) => {
                 self.generation += 1;
-                self.loaded = self.view.selected.borrow().clone();
+                self.loaded = self.shelf();
                 for (id, tex) in art {
                     self.view.art.insert(id, tex);
                 }
@@ -505,7 +559,6 @@ fn row_list(
 
 fn row_widget(view: &Rc<View>, row: &Row) -> gtk::Widget {
     let w: gtk::Widget = match row {
-        Row::Chips => tile::chips(view),
         Row::Heading(text) => gtk::Label::builder()
             .label(text)
             .xalign(0.0)
@@ -537,6 +590,24 @@ fn loading_page() -> gtk::Box {
             .build(),
     );
     page
+}
+
+/// Why a shelf did not load, and the next move, in the player's words.
+fn failure(e: &LibraryError, host: &str) -> String {
+    match e {
+        LibraryError::PinMismatch => {
+            format!("{host}'s certificate changed since you paired. Pair again to see its games.")
+        }
+        LibraryError::NotPaired => {
+            format!("{host} doesn't recognize this device any more. Pair again to see its games.")
+        }
+        LibraryError::Http(code) => {
+            format!("{host} turned the request down (HTTP {code}). Try again later.")
+        }
+        LibraryError::Unreachable(_) => {
+            format!("{host} didn't answer. Check that it's on, then try again.")
+        }
+    }
 }
 
 fn status_page(
@@ -670,6 +741,7 @@ impl LibraryPage {
             .unwrap_or_default();
         self.sort = SortKey::parse(&settings.library_sort);
         self.widgets.sort.set_state(&self.sort.id().to_variant());
+        self.draw_chips();
         match pick {
             None => {
                 self.loaded = None;
@@ -677,7 +749,7 @@ impl LibraryPage {
                 self.widgets.stack.set_visible_child_name("nohost");
             }
             // Only a shelf on screen loads: a load can wake the host.
-            Some(key) if self.loaded.as_deref() != Some(key.as_str()) => {
+            Some(_) if self.loaded != self.shelf() => {
                 if self.widgets.root.is_mapped() {
                     self.load(false);
                 }
@@ -726,7 +798,7 @@ impl LibraryPage {
     }
 
     fn select(&mut self, key: &str) {
-        if self.loaded.as_deref() == Some(key) {
+        if self.loaded.as_ref().is_some_and(|s| s.key == key) {
             return;
         }
         *self.view.selected.borrow_mut() = Some(key.to_string());
@@ -746,8 +818,8 @@ impl LibraryPage {
         };
         self.generation += 1;
         let generation = self.generation;
-        let new_shelf = self.loaded.as_deref() != Some(shelf.key.as_str());
-        self.loaded = Some(shelf.key.clone());
+        let new_shelf = self.loaded.as_ref() != Some(&shelf);
+        self.loaded = Some(shelf.clone());
         let pin = shelf
             .req
             .fp_hex
@@ -808,6 +880,7 @@ impl LibraryPage {
         let w = &self.widgets;
         match loaded {
             Loaded::Cached(games) => {
+                w.banner.set_button_label(None);
                 w.banner
                     .set_title("Last known library \u{2014} asking the host\u{2026}");
                 w.banner.set_revealed(true);
@@ -819,19 +892,53 @@ impl LibraryPage {
                 *self.view.games.borrow_mut() = games;
                 w.stack.set_visible_child_name("rows");
             }
-            Loaded::Fetched(Err(e)) if !self.view.games.borrow().is_empty() => {
-                tracing::info!(error = %e, "library fetch failed; keeping the remembered shelf");
-                w.banner
-                    .set_title("Last known library \u{2014} the host didn\u{2019}t answer");
-                w.banner.set_revealed(true);
-            }
             Loaded::Fetched(Err(e)) => {
-                w.error.set_description(Some(&e.to_string()));
-                w.stack.set_visible_child_name("error");
+                tracing::info!(error = %e, "library not fetched");
+                let name = self.shelf().map(|s| s.req.name).unwrap_or_default();
+                let pair = matches!(e, LibraryError::PinMismatch | LibraryError::NotPaired);
+                if self.view.games.borrow().is_empty() {
+                    w.error.set_description(Some(&failure(&e, &name)));
+                    w.retry.set_visible(!pair);
+                    w.pair.set_visible(pair);
+                    w.stack.set_visible_child_name("error");
+                } else {
+                    w.banner.set_title(&if pair {
+                        "Last known library \u{2014} pair again to refresh it".to_string()
+                    } else {
+                        format!("Last known library \u{2014} {name} didn\u{2019}t answer")
+                    });
+                    w.banner.set_button_label(pair.then_some("Pair Again"));
+                    w.banner.set_revealed(true);
+                }
             }
             Loaded::Running(games) => self.set_running(games),
         }
         self.relayout();
+    }
+
+    /// The chip bar: one chip per shelf, shown with more than one. Rebuilt only when the shelves
+    /// or the selection moved, so a store write mid-click keeps the chip under the pointer.
+    fn draw_chips(&mut self) {
+        let shelves: Vec<(String, String)> = self
+            .view
+            .shelves
+            .borrow()
+            .iter()
+            .map(|s| (s.key.clone(), s.label.clone()))
+            .collect();
+        let next = (shelves, self.view.selected.borrow().clone());
+        if self.chips_drawn.as_ref() == Some(&next) {
+            return;
+        }
+        let holder = &self.widgets.chips;
+        while let Some(c) = holder.first_child() {
+            holder.remove(&c);
+        }
+        holder.set_visible(next.0.len() > 1);
+        if next.0.len() > 1 {
+            holder.append(&tile::chips(&self.view));
+        }
+        self.chips_drawn = Some(next);
     }
 
     /// Keep what is up, one row per title; the endable row wins, since it carries End Game.
@@ -858,7 +965,6 @@ impl LibraryPage {
                 group: self.group,
                 search: &self.search,
                 columns: self.columns,
-                shelves: self.view.shelves.borrow().len(),
                 paired_hosts: self.view.desktops.borrow().len(),
             })
         };

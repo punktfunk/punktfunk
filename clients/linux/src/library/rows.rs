@@ -1,5 +1,5 @@
-//! The Library's rows as plain values: the shelf picker, then each section the device keeps on,
-//! in its order (design §2.5). The Games grid is cut into rows of `columns` posters, so one
+//! The Library's rows as plain values: each section the device keeps on, in its order
+//! (design §2.5). The Games grid is cut into rows of `columns` posters, so one
 //! virtualized list scrolls a library of thousands without building a widget per title.
 
 use pf_client_core::collate::{self, GroupBy, GroupKey, SortKey};
@@ -28,8 +28,6 @@ pub enum Caption {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
-    /// The shelf picker; only with more than one shelf.
-    Chips,
     Heading(String),
     /// One wide tile per paired host.
     Desktops,
@@ -53,7 +51,6 @@ pub struct Layout<'a> {
     pub group: Option<GroupBy>,
     pub search: &'a str,
     pub columns: usize,
-    pub shelves: usize,
     pub paired_hosts: usize,
 }
 
@@ -79,9 +76,6 @@ impl Layout<'_> {
 /// The rows for one shelf. An empty section hides; Desktops ignores the search.
 pub fn rows(l: &Layout) -> Vec<Row> {
     let mut out = Vec::new();
-    if l.shelves > 1 {
-        out.push(Row::Chips);
-    }
     let groups = collate::collate(l.games, l.sort, None);
     let in_order: Vec<usize> = groups.iter().flat_map(|g| g.games.clone()).collect();
     let desktops_on = l
@@ -235,7 +229,6 @@ mod tests {
             group: None,
             search,
             columns: 2,
-            shelves: 1,
             paired_hosts: 1,
         }
     }

@@ -346,6 +346,7 @@ impl SimpleComponent for AppModel {
                 LibraryOutput::WakeConnect(req) => AppMsg::WakeConnect(req),
                 LibraryOutput::Toast(msg) => AppMsg::Toast(msg),
                 LibraryOutput::ShowHosts => AppMsg::ShowView("hosts"),
+                LibraryOutput::Pair(req) => AppMsg::Pair(req),
             });
         views.add_titled_with_icon(hosts.widget(), Some("hosts"), "Hosts", "computer-symbolic");
         views.add_titled_with_icon(
