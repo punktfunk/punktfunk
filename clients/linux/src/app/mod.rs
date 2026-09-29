@@ -245,8 +245,10 @@ impl SimpleComponent for AppModel {
         }
 
         let store = Store::open();
-        if crate::shots::shot_scene().is_none() {
-            remember_size(&window, &store);
+        match crate::shots::shot_size() {
+            Some((w, h)) => window.set_default_size(w, h),
+            None if crate::shots::shot_scene().is_none() => remember_size(&window, &store),
+            None => {}
         }
         // Recolour the shell from the desktop theme (Omarchy only; one stat everywhere else).
         // Every colour in `data/style.css` resolves through libadwaita's named palette, so

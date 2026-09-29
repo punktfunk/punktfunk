@@ -27,6 +27,14 @@ pub fn shot_scene() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// `PUNKTFUNK_SHOT_SIZE=WxH`: the window size a scene opens at, for the narrow layouts.
+pub fn shot_size() -> Option<(i32, i32)> {
+    shot_scene()?;
+    let size = std::env::var("PUNKTFUNK_SHOT_SIZE").ok()?;
+    let (w, h) = size.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
+}
+
 /// Render one mock-populated, host-free scene over the already-presented window, then
 /// print `PF_SHOT_READY` once it has settled. When `PUNKTFUNK_SHOT_OUT=/path.png` is set
 /// the app CAPTURES ITSELF (widget snapshot → gsk render → PNG) — no Xvfb/ImageMagick

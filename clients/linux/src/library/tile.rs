@@ -341,9 +341,13 @@ fn scroller(child: &gtk::Box) -> gtk::Widget {
         .upcast()
 }
 
-/// One row of the grid.
+/// One row of the grid. A wrap box, so the row asks for one poster's width: a plain box would
+/// hold the window at the whole row's width, and the columns could never shrink to fit.
 pub fn posters(view: &Rc<View>, tiles: &[Tile], caption: Caption) -> gtk::Widget {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    let row = adw::WrapBox::builder()
+        .child_spacing(16)
+        .line_spacing(16)
+        .build();
     for t in tiles {
         row.append(&poster(view, *t, caption));
     }
