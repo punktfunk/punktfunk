@@ -38,19 +38,20 @@ value.
 
 Rows that describe this device rather than the stream don't show in a preset: the list is on
 [Client settings](/docs/client-settings#settings-that-are-facts-about-your-device). **Share
-clipboard** is a per-host switch in the host's edit sheet, not a setting: see
+clipboard** is a per-host switch on the host's page or in its edit sheet, not a setting: see
 [Shared clipboard](/docs/clipboard).
 
 ## Using a preset
 
-- **Bind it to a host.** Set **Preset** in the host's edit sheet, **Connect with** on the Apple host
-  page, or **Default preset…** in the console's host options. A plain click on the host uses it.
+- **Bind it to a host.** Set **Preset** in the host's edit sheet, **Connect with** on the host page
+  (Linux, Apple), or **Default preset…** in the console's host options. A plain click on the host
+  uses it.
 - **Bind it to a game.** In the console, open a game's options (**X**) → **Settings preset…**.
   Launching that game uses it instead of the host's preset.
 - **Use it once.** The host card's menu → **Connect with** (on Android, **Connect with: …**).
   **Default settings** there streams without the host's preset.
 - **Pin it as a card.** A pinned preset gets its own card beside the host. Pin it in the host's edit
-  sheet (Linux, Android), on the host page (Apple), with **Pin as card: …** (Android) or **Pin
+  sheet (Android), on the host page (Linux, Apple), with **Pin as card: …** (Android) or **Pin
   tiles** (Windows) in the card menu, or from the console's **Presets** tab. Unpinning changes
   neither the preset nor the host.
 
@@ -82,8 +83,9 @@ Scheme and route are case-insensitive, unknown parameters are ignored, and a rep
 first value wins. Limits: 2048 characters for the URL, 128 for `<host-ref>` and `launch`, 64 for
 `preset` and `name`. `launch` must be printable ASCII without spaces, quotes, `\`, `$` or backticks.
 
-`browse` takes the same form and opens the host's game library instead; only the Apple apps handle
-it (their library widget and **Open Game Library** shortcut use it). Other apps show a notice.
+`browse` takes the same form and opens the host's game library instead. The Apple apps and the
+Linux app handle it; Apple's library widget and **Open Game Library** shortcut use it. Other apps
+show a notice.
 
 ```text
 punktfunk://connect/Living%20Room%20PC
@@ -121,8 +123,8 @@ record id, `host=` and, once pinned, `fp=`, so it survives an address change or 
 
 **Create shortcut…** (Linux, Windows) writes a launcher:
 
-- **Linux**: a desktop entry in `~/.local/share/applications/`. Under Flatpak the app shows the URL
-  for you to place yourself.
+- **Linux**: a desktop entry in `~/.local/share/applications/`, from the host page or a game's
+  details. Under Flatpak the app shows the URL for you to place yourself.
 - **Windows**: a `.lnk` on your Desktop that runs `punktfunk-client.exe` with the URL.
 
 From a script, use the [`punktfunk` command](/docs/clients#scripting-the-punktfunk-cli):

@@ -18,7 +18,7 @@ Copy on your device and paste on the host, or the other way round, once three sw
 |---|---|---|
 | Mac, iPhone, iPad | Host card menu → **Host Details…** → **Connection** | **Share clipboard with this host** |
 | Windows | Host tile menu → **Edit…** | **Share clipboard with this host** |
-| Linux | Host card menu → **Edit…** | **Share clipboard** |
+| Linux | Host card ⓘ → **Connection** | **Share clipboard** |
 | Android | Host card menu → **Edit…** | **Shared clipboard** |
 | Controller home (Android TV, Steam Deck) | The host's options | **Shared clipboard** |
 

@@ -40,8 +40,18 @@ One app for macOS, iOS, iPadOS and tvOS. It adds:
 ## Linux desktop client (GTK4)
 
 `punktfunk-client` is a GTK4 app with hardware decode (Vulkan Video or VAAPI), PipeWire audio and
-SDL3 controllers. For the couch, open **Punktfunk Console**, the gamepad button in the header bar,
-or run `punktfunk-client --browse --fullscreen`.
+SDL3 controllers. It adds:
+
+- **Hosts** and **Library** tabs, at the bottom of a narrow window. The Library has a chip for each
+  paired host and pinned preset, and sections you arrange with **Customize**.
+- A host page behind each card's ⓘ: name, address, port, Wake-on-LAN MAC, presets, pairing, power
+  and a network speed test.
+- A banner while you stream, with **Disconnect**.
+- Keys for the window: **Keyboard Shortcuts** in the menu lists them.
+
+For the couch, open **Punktfunk Console**, the gamepad button in the header bar, or run
+`punktfunk-client --browse --fullscreen`. **Controller-optimized UI** opens it when a controller
+connects.
 
 ## Windows desktop client
 

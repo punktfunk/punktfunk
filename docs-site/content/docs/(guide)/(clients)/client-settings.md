@@ -58,7 +58,7 @@ Android. Most settings can differ per [preset](/docs/presets-and-links); the exc
 | **Low-latency mode** | On | Asks the decoder and system for their low-latency paths. Turn it off if a device misbehaves. | Android |
 
 **Test network speed…** in a host card's menu suggests a bitrate (Android: **Network speed test**;
-Apple: on the host page). With PyroWave the bitrate row is greyed: the host sets the rate from its
+Linux and Apple: on the host page). With PyroWave the bitrate row is greyed: the host sets the rate from its
 [bits per pixel](/docs/pyrowave#bits-per-pixel).
 
 ## Audio
@@ -124,20 +124,20 @@ shortcuts. It's on every app and in the console (which edits your defaults only)
 |---|---|---|---|
 | **Start in** | Host list | **Library** opens the default host's games; **Stream** connects to its desktop. With several paired hosts, set one with **Make default host** in its menu (Apple: **Default host** on the host page) or `punktfunk default-host`. | All |
 | **Auto-wake on connect** | On | Wakes a sleeping saved host with [Wake-on-LAN](/docs/wake-on-lan) and waits. Turn it off for hosts over a VPN. | All |
-| **Start streams fullscreen** | On | F11 or Alt+Enter leaves fullscreen. On a Mac, **Always** also opens the app fullscreen. | Linux, Windows, Mac (**Fullscreen**: **Off**, **While streaming**, **Always**) |
+| **Start streams fullscreen** | On | F11 or Alt+Enter leaves fullscreen. On Linux and a Mac, **Always** also keeps the app fullscreen. | Linux, Windows, Mac (Linux and Mac: **Fullscreen**: **Off**, **While streaming**, **Always**) |
 | **Keep streaming in background** | Off | Audio and the connection stay live while you switch apps, for 10 minutes unless you pick another limit. | iPhone, iPad, Apple TV, Android phones (**Keep streaming in the background**) |
 
 ## Interface
 
 | Setting | Default | What it does | Where |
 |---|---|---|---|
-| **Controller-optimized UI** | On | Switches to the console when a controller is in use. | Android (not Android TV, which always uses it), Apple |
-| **Show it** | With a controller | **Always** keeps the console without a pad, for a docked phone or tablet. | Android, Apple |
+| **Controller-optimized UI** | On | Switches to the console when a controller is in use. | Linux, Android (not Android TV, which always uses it), Apple |
+| **Show it** | With a controller | **Always** keeps the console without a pad, for a docked phone or tablet. | Linux, Android, Apple |
 | **Background** | Violet | The console's backdrop colour: 20 dark fields, then 16 pale ones. **Eclipse** is true black for OLED screens. | Console; Apple TV **Settings** |
 | **Reduce motion** | Off | Stops the console's moving backdrop. Apple follows the system setting instead, and so do Windows and Linux desktops that report one (GNOME, KDE); the row then hides. | Console on Linux, Windows, Android |
 | **Reduce interface resolution** | On for Android TV, off on phones | Draws the console at 1080p and lets the screen scale it up, for slow 4K TV boxes. The stream isn't affected. | Android console |
 | **Library view** | Shelf | How a host's library opens. | Console, Apple |
-| **Follow the Omarchy theme** | On | The app and console follow `omarchy-theme-set`. **Hosts in the Omarchy menu** adds your hosts to the Omarchy menu. See [Omarchy](/docs/omarchy#this-box-as-a-client). | Linux on Omarchy. Console: **Follow system theme**. |
+| **Follow system theme** | On | The app and console follow `omarchy-theme-set`. **Hosts in the Omarchy menu** adds your hosts to the Omarchy menu. See [Omarchy](/docs/omarchy#this-box-as-a-client). | Linux on Omarchy, console |
 
 ## Overlay
 
@@ -156,7 +156,7 @@ one: **Video decoder**, **GPU**, the **Speaker** and **Microphone** devices, **U
 controller**, **Auto-wake on connect**, **Start in**, **Show advanced**, the [Overlay](#overlay)
 rows but **Statistics overlay**, and the [Interface](#interface) rows.
 
-**Share clipboard** isn't in Settings: it's per host, in the host's edit sheet. See
+**Share clipboard** isn't in Settings: it's per host, on the host's page or in its edit sheet. See
 [Shared clipboard](/docs/clipboard).
 
 ## When the client and the host disagree

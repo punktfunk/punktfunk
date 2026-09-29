@@ -111,7 +111,8 @@ game runs on the host, the tile reads **Resume** and the game's name.
 
 | From | How |
 |---|---|
-| Linux, Windows, Android (touch) | A host card's menu → **Browse library…** |
+| Linux | The **Library** tab, or a host card's menu → **Browse Library** |
+| Windows, Android (touch) | A host card's menu → **Browse library…** |
 | Mac | **Library** in the window's sidebar |
 | iPhone, iPad, Apple TV | The **Library** tab |
 | Controller home (TV, Steam Deck, a client with a controller) | **Y** on a saved host, or the host's options → **Library** |

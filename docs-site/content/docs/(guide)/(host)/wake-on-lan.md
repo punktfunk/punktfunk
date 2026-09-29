@@ -39,7 +39,7 @@ A saved host's menu also has an explicit wake while it is offline and its MAC is
 
 | Client | Explicit wake | Type a MAC by hand |
 |---|---|---|
-| Linux | **Wake host** sends the packet | not offered |
+| Linux | **Wake Host** sends the packet | **Wake-on-LAN MAC addresses** on the host page (ⓘ) |
 | Windows | **Wake host** sends the packet | **MAC (Wake-on-LAN)** under **Edit…** |
 | macOS · iOS · iPadOS · tvOS | **Wake Host** waits on the **Waking…** screen | **MAC address** in **Edit Host** |
 | Android · Android TV | **Wake host** waits on the **Waking…** screen | **Wake-on-LAN MAC** in **Edit host** |
