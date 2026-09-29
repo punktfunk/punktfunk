@@ -122,7 +122,7 @@ pub fn install(enabled: bool) {
     gtk::style_context_add_provider_for_display(
         &display,
         &provider,
-        // Above `app::CSS`, which sits at APPLICATION and *uses* `@accent_color`, and above
+        // Above the app stylesheet (`data/style.css`), which sits at APPLICATION and *uses* `@accent_color`, and above
         // libadwaita's own sheet, which defines these same names at THEME priority.
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
     );
@@ -196,7 +196,7 @@ mod tests {
 
     /// The load-bearing assumption, stated as a test: a `@define-color` in OUR provider
     /// reaches a widget styled by a DIFFERENT provider that only ever *names*
-    /// `@accent_color` — which is exactly what `app::CSS` does. Every test above would still
+    /// `@accent_color` — which is exactly what the app stylesheet (`data/style.css`) does. Every test above would still
     /// pass if this were false and the shell quietly ignored the theme.
     ///
     /// 🛑 GTK initialises ONCE per process, from ONE thread, and libtest gives every test its
@@ -212,7 +212,7 @@ mod tests {
         gtk::init().expect("gtk init");
         let display = gdk::Display::default().expect("a display");
 
-        // `app::CSS` as the shell installs it: it names the colour and never defines it.
+        // the app stylesheet (`data/style.css`) as the shell installs it: it names the colour and never defines it.
         let app = gtk::CssProvider::new();
         app.load_from_string(".pf-probe { color: @accent_color; }");
         gtk::style_context_add_provider_for_display(

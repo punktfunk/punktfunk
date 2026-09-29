@@ -25,87 +25,6 @@ use std::rc::Rc;
 
 pub const APP_ID: &str = "io.unom.Punktfunk";
 
-/// Custom styles on top of libadwaita for the host cards: status pills, presence pips,
-/// the most-recent accent bar, dashed discovered cards. Colours come from the adwaita
-/// named palette so dark mode just works.
-const CSS: &str = "
-.pf-host-card { padding: 16px; }
-/* The FlowBoxChild draws the hover/selection highlight AROUND the card (it wraps it
-   with its own padding), so its corners must run concentric with the card's 12px —
-   radius = card radius + the child's padding ring. */
-.pf-host-grid > flowboxchild { border-radius: 15px; }
-.pf-pill { font-size: 0.72em; font-weight: bold; padding: 2px 10px; border-radius: 999px;
-           color: alpha(currentColor, 0.8); background: alpha(currentColor, 0.1); }
-.pf-pill.pf-green { color: @success_color; background: alpha(@success_color, 0.15); }
-.pf-pill.pf-accent { color: @accent_color; background: alpha(@accent_color, 0.15); }
-.pf-pill.pf-neutral { color: alpha(currentColor, 0.75); background: alpha(currentColor, 0.12); }
-.pf-pip { min-width: 8px; min-height: 8px; border-radius: 999px;
-          background: alpha(currentColor, 0.35); }
-.pf-pip.pf-online { background: @success_color; }
-/* An overridden row in preset scope: an accent dot in the prefix, so which settings this
-   preset changes is legible at a glance without reading every value. (Plain string literal
-   -- a quote in here would end it.) */
-.pf-override-dot { min-width: 8px; min-height: 8px; border-radius: 999px;
-                   background: @accent_color; }
-/* The quick-action ring's editor (ui_quick_actions.rs): the stage is a flat card face like
-   every other card on this shell -- a gradient read as decoration, which is why the console's
-   editor dropped its own. A disc stays the in-stream ring's own surface -- dark, translucent,
-   a white hairline -- so the editor shows the real thing, and its white ink is what the
-   Lucide marks inherit. (No quotes in here.) */
-.pf-ring-stage { border-radius: 22px; background: @card_bg_color;
-                 border: 1px solid alpha(currentColor, 0.12); }
-.pf-ring-disc { background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.18);
-                border-radius: 999px; color: white; padding: 0; }
-.pf-ring-disc:hover { background: rgba(0, 0, 0, 0.7); }
-.pf-ring-disc.pf-dim { color: rgba(255, 255, 255, 0.4); }
-.pf-ring-centre { border-radius: 999px; background: rgba(0, 0, 0, 0.35);
-                  color: rgba(255, 255, 255, 0.4); }
-.pf-ring-word { font-size: 0.85em; font-weight: 600; }
-.pf-keycap-mods { font-size: 0.6em; font-weight: 500; }
-.pf-keycap-key { font-size: 1.0em; font-weight: 700; }
-.pf-keycap-small .pf-keycap-mods { font-size: 0.5em; }
-.pf-keycap-small .pf-keycap-key { font-size: 0.75em; }
-.pf-key { min-width: 36px; padding: 4px 8px; }
-/* Preset colour swatches (the accent a preset's chips carry). One class per palette entry
-   because a per-widget CSS provider for eight buttons is a lot of machinery for a dot. */
-.pf-swatch { min-width: 26px; min-height: 26px; border-radius: 999px; padding: 0; }
-.pf-swatch-none   { background: alpha(currentColor, 0.15); }
-.pf-swatch-red    { background: #e01b24; }
-.pf-swatch-orange { background: #ff7800; }
-.pf-swatch-yellow { background: #f6d32d; }
-.pf-swatch-green  { background: #33d17a; }
-.pf-swatch-blue   { background: #3584e4; }
-.pf-swatch-purple { background: #9141ac; }
-.pf-swatch-pink   { background: #d16d9e; }
-.pf-swatch-slate  { background: #77767b; }
-.pf-swatch-on { outline: 2px solid @accent_color; outline-offset: 2px; }
-/* Most-recent host: a full accent ring drawn as an inset outline so it follows the card's
-   rounded corners (an `inset` box-shadow bar gets eaten by the 12px corner clip) and leaves
-   the card's own elevation shadow intact. */
-.pf-recent { outline: 2px solid @accent_color; outline-offset: -2px; }
-.pf-discovered { border: 1px dashed alpha(currentColor, 0.35); }
-.pf-poster { border-radius: 10px; background: alpha(currentColor, 0.08); }
-.pf-poster-monogram { font-size: 2.4em; font-weight: bold; color: alpha(currentColor, 0.45); }
-.pf-store-badge { color: white; background: rgba(0, 0, 0, 0.55); }
-/* The poster's own overflow menu button. It sits ON artwork, so it needs the badge's dark
-   scrim to read at all — a flat button inherits the page's foreground and vanishes into a
-   pale cover. Small and round so it balances the store badge opposite it rather than
-   competing with the art. (No quotes in here — see the top of this string.) */
-.pf-poster-menu { color: white; background: rgba(0, 0, 0, 0.55); border-radius: 999px;
-                  min-width: 24px; min-height: 24px; padding: 0; margin: 6px; }
-.pf-poster-menu:hover { background: rgba(0, 0, 0, 0.75); }
-/* Launcher entries (design D4) open the launcher itself. They rarely have poster art, so an
-   art-less one must not read as a game whose cover failed to load: accent face, the launcher
-   named instead of a title monogram, and an accent badge. */
-.pf-poster.pf-launcher { background: alpha(@accent_color, 0.18); }
-.pf-poster-launcher-name { font-size: 1.15em; font-weight: bold; color: alpha(currentColor, 0.85); }
-/* The brand mark when we ship one for this launcher — same ink as the name it replaces, so the
-   two fallback rungs read as one design rather than two. */
-.pf-poster-launcher-mark { color: alpha(currentColor, 0.85); }
-.pf-store-badge.pf-launcher { color: white; background: @accent_color; }
-.pf-group-heading { font-size: 0.8em; font-weight: bold; color: alpha(currentColor, 0.55); }
-";
-
 /// Everything the shell shares below the component tree.
 pub struct AppModel {
     pub window: adw::ApplicationWindow,
@@ -294,8 +213,8 @@ impl SimpleComponent for AppModel {
                 std::process::exit(1);
             }
         };
+        install_resources();
         load_css();
-        install_os_icons();
         // Screenshot scenes must capture settled frames: kill every GTK/libadwaita
         // animation (a headless session may starve the frame clock and leave a
         // transition frozen mid-flight in the capture).
@@ -307,7 +226,7 @@ impl SimpleComponent for AppModel {
 
         let store = Store::open();
         // Recolour the shell from the desktop theme (Omarchy only; one stat everywhere else).
-        // Every colour in `CSS` above resolves through libadwaita's named palette, so
+        // Every colour in `data/style.css` resolves through libadwaita's named palette, so
         // redefining those names is all it takes. After the settings load, because the
         // "Follow the Omarchy theme" switch decides whether it draws.
         crate::desktop::omarchy::install(store.settings().follow_os_theme);
@@ -741,12 +660,12 @@ pub fn run() -> glib::ExitCode {
     glib::ExitCode::SUCCESS
 }
 
-/// Register the embedded gresource (built by build.rs from `data/`) and point the icon
-/// theme at it, so the host cards' `pf-os-*-symbolic` OS marks resolve — and recolor —
-/// like any themed icon.
-fn install_os_icons() {
+/// Register the embedded gresource (built by build.rs from `data/`: the stylesheet and the
+/// OS and launcher marks) and point the icon theme at it, so the `pf-os-*-symbolic` marks
+/// resolve — and recolour — like any themed icon.
+fn install_resources() {
     if let Err(e) = gio::resources_register_include!("punktfunk-client.gresource") {
-        tracing::warn!("register gresource: {e} — host cards lose their OS marks");
+        tracing::warn!(error = %e, "gresource did not register — no stylesheet, no OS marks");
         return;
     }
     if let Some(display) = gdk::Display::default() {
@@ -756,7 +675,8 @@ fn install_os_icons() {
 
 fn load_css() {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(CSS);
+    // Registered with the icons just before.
+    provider.load_from_resource("/io/unom/Punktfunk/style.css");
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,

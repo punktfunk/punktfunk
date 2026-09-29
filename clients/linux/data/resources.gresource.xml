@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- The shell's embedded icon assets: the host-card OS marks (derived from the
+<!-- The shell's stylesheet and embedded icon assets: the host-card OS marks (derived from the
      assets/os-icons masters) and the library's launcher-tile brand marks (from the
      assets/launcher-icons masters). See each directory's README for provenance/licensing.
      Registered under the hicolor-style layout IconTheme::add_resource_path expects. -->
 <gresources>
   <gresource prefix="/io/unom/Punktfunk">
+    <file>style.css</file>
     <file>icons/scalable/actions/pf-launcher-steam-symbolic.svg</file>
     <file>icons/scalable/actions/pf-launcher-lutris-symbolic.svg</file>
     <file>icons/scalable/actions/pf-launcher-heroic-symbolic.svg</file>

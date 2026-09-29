@@ -181,7 +181,7 @@ impl SimpleComponent for HostsPage {
                 .column_spacing(12)
                 .row_spacing(12)
                 .build();
-            // Scopes the concentric hover-highlight radius (see app.rs CSS).
+            // Scopes the concentric hover-highlight radius (see data/style.css).
             f.add_css_class("pf-host-grid");
             f
         };
