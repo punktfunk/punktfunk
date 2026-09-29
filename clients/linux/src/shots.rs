@@ -188,6 +188,22 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
                 .library
                 .send(crate::library::LibraryMsg::Mock(games, art));
         }
+        // A 10 000-title shelf scrolled top to bottom a page a frame; prints `PF_BENCH`.
+        "library-bench" => {
+            ctx.views.set_visible_child_name("library");
+            let n = std::env::var("PUNKTFUNK_BENCH_TITLES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10_000);
+            let games = bench_library(n);
+            let _ = ctx
+                .library
+                .send(crate::library::LibraryMsg::Mock(games, Vec::new()));
+            let (window, views) = (ctx.window.clone(), ctx.views.clone());
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+                bench_scroll(&window, &views)
+            });
+        }
         other => tracing::warn!("unknown PUNKTFUNK_SHOT_SCENE={other:?}; showing hosts only"),
     }
 
@@ -276,6 +292,133 @@ fn mock_library() -> (
         solid_texture(300, 450, 0x35, 0x84, 0xe4),
     )];
     (games, art)
+}
+
+/// `n` titles across the stores, a few played, five of them launchers.
+fn bench_library(n: usize) -> Vec<pf_client_core::library::GameEntry> {
+    const WORDS: &[&str] = &[
+        "Crimson", "Hollow", "Star", "Iron", "Silent", "Neon", "Ancient", "Frozen", "Wild", "Last",
+        "Broken", "Golden", "Shadow", "Echo", "Solar", "Rogue", "Arcane", "Quiet",
+    ];
+    const STORES: &[&str] = &["steam", "gog", "epic", "heroic", "lutris", "custom"];
+    (0..n)
+        .map(|i| pf_client_core::library::GameEntry {
+            id: format!("bench:{i}"),
+            store: STORES[i % STORES.len()].to_string(),
+            title: format!(
+                "{} {} {i}",
+                WORDS[i % WORDS.len()],
+                WORDS[(i / 7) % WORDS.len()]
+            ),
+            art: pf_client_core::library::Artwork::default(),
+            platform: Some(["PC", "SNES", "PS2", "Switch"][i % 4].to_string()),
+            developer: None,
+            release_year: None,
+            genres: Vec::new(),
+            role: (i < 5).then(|| "launcher".to_string()),
+            icon: None,
+            stats: (i % 50 == 0).then(|| pf_client_core::library::GameStats {
+                last_played_unix_ms: 1_700_000_000_000 + i as u64,
+                play_time_ms: i as u64 * 1000,
+                last_run_ms: 0,
+                launch_count: 1,
+            }),
+        })
+        .collect()
+}
+
+/// Scroll the Library's list a page a frame to the bottom, timing each frame's layout (where
+/// rows bind) and the whole frame, then print them with the process's resident memory.
+fn bench_scroll(window: &adw::ApplicationWindow, views: &adw::ViewStack) {
+    use std::cell::{Cell, RefCell};
+    use std::time::Instant;
+    // The first scrolled window in the page is the rows'; the bands sit inside it.
+    fn find_list(w: &gtk::Widget) -> Option<gtk::ScrolledWindow> {
+        if let Some(l) = w.downcast_ref::<gtk::ScrolledWindow>() {
+            return Some(l.clone());
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            if let Some(hit) = find_list(&c) {
+                return Some(hit);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+    let (Some(page), Some(clock)) = (views.child_by_name("library"), window.frame_clock()) else {
+        return;
+    };
+    let Some(list) = find_list(&page) else { return };
+    let adj = list.vadjustment();
+    let start: Rc<Cell<Option<Instant>>> = Rc::default();
+    let layout: Rc<RefCell<Vec<f64>>> = Rc::default();
+    let frame: Rc<RefCell<Vec<f64>>> = Rc::default();
+    {
+        let start = start.clone();
+        clock.connect_update(move |_| start.set(Some(Instant::now())));
+    }
+    {
+        let (start, layout) = (start.clone(), layout.clone());
+        clock.connect_layout(move |_| {
+            if let Some(t) = start.get() {
+                layout.borrow_mut().push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+        });
+    }
+    {
+        let (start, frame) = (start.clone(), frame.clone());
+        clock.connect_after_paint(move |_| {
+            if let Some(t) = start.take() {
+                frame.borrow_mut().push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+        });
+    }
+    let wall = Instant::now();
+    let rows = adj.upper() as i64;
+    list.add_tick_callback(move |_, _| {
+        let step = std::env::var("PUNKTFUNK_BENCH_STEP")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(adj.page_size());
+        let next = adj.value() + step;
+        if next < adj.upper() - adj.page_size() {
+            adj.set_value(next);
+            return glib::ControlFlow::Continue;
+        }
+        let stats = |v: &[f64]| {
+            let mut s = v.to_vec();
+            s.sort_by(f64::total_cmp);
+            let at = |q: f64| {
+                s.get(((s.len() as f64 - 1.0) * q) as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            let mean = s.iter().sum::<f64>() / s.len().max(1) as f64;
+            format!(
+                "mean={mean:.1} p50={:.1} p95={:.1} max={:.1}",
+                at(0.5),
+                at(0.95),
+                at(1.0)
+            )
+        };
+        let rss = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("VmRSS"))
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        println!(
+            "PF_BENCH height_px={rows} frames={} wall_s={:.1} layout_ms[{}] frame_ms[{}] {rss}",
+            frame.borrow().len(),
+            wall.elapsed().as_secs_f64(),
+            stats(&layout.borrow()),
+            stats(&frame.borrow()),
+        );
+        glib::ControlFlow::Break
+    });
 }
 
 /// A WxH single-colour RGBA texture — the `library` scene's stand-in for a fetched poster.
