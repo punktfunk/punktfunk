@@ -305,6 +305,9 @@ impl relm4::factory::FactoryComponent for HostCard {
                 status.append(&presence);
                 status.append(&if k.paired {
                     pill("Paired", "pf-green")
+                } else if k.fp_hex.is_empty() {
+                    // Added by address and never dialed: nothing is pinned yet.
+                    pill("Not paired", "pf-neutral")
                 } else {
                     pill("Trusted", "pf-accent")
                 });
@@ -1797,60 +1800,50 @@ impl HostsPage {
         dialog.present(Some(&self.widgets.stack));
     }
 
-    /// "+": name (optional) / address / port. Submit runs the normal trust gate.
+    /// "+": name (optional), address, port and Wake-on-LAN MACs. Add saves the host without
+    /// dialing it, so a sleeping machine can be added with the MAC that wakes it; the first
+    /// click on its card runs the trust gate.
     fn add_host_dialog(&self, sender: &ComponentSender<Self>) {
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
         list.set_selection_mode(gtk::SelectionMode::None);
         let name_row = adw::EntryRow::builder().title("Name (optional)").build();
-        let addr_row = adw::EntryRow::builder().title("Address").build();
-        let port_row = adw::EntryRow::builder().title("Port").text("9777").build();
         list.append(&name_row);
-        list.append(&addr_row);
-        list.append(&port_row);
+        let connection = ConnectionRows::new("", 9777, &[]);
+        connection.append_to(&list);
         list.set_size_request(320, -1);
 
         let dialog = adw::AlertDialog::new(Some("Add Host"), None);
-        dialog.set_extra_child(Some(&list));
-        dialog.add_responses(&[("cancel", "Cancel"), ("connect", "Connect")]);
-        dialog.set_response_appearance("connect", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("connect"));
+        dialog.set_extra_child(Some(&connection.framed(&list)));
+        dialog.add_responses(&[("cancel", "Cancel"), ("add", "Add")]);
+        dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("add"));
         dialog.set_close_response("cancel");
-        dialog.set_response_enabled("connect", false);
-        {
-            let dialog = dialog.clone();
-            addr_row.connect_changed(move |row| {
-                dialog.set_response_enabled("connect", !row.text().trim().is_empty());
-            });
-        }
+        connection.enable_when_valid(&dialog, "add");
         {
             let sender = sender.clone();
-            let (name_row, addr_row, port_row) =
-                (name_row.clone(), addr_row.clone(), port_row.clone());
-            dialog.connect_response(Some("connect"), move |_, _| {
-                let text = addr_row.text().trim().to_string();
-                if text.is_empty() {
+            dialog.connect_response(Some("add"), move |_, _| {
+                let Some(edit) = connection.edit() else {
                     return;
-                }
-                // A pasted `host:port` wins over the port field; else the field. The shared
-                // parser, so a pasted `::1` stays one address instead of host `:` port `1`.
-                let field = port_row.text().trim().parse::<u16>().unwrap_or(9777);
-                let (addr, port) = match pf_client_core::deeplink::split_host_port(&text) {
-                    Some((a, spelled)) => (a, spelled.unwrap_or(field)),
-                    None => (text.clone(), field),
                 };
-                let name = name_row.text().trim().to_string();
-                let _ = sender.output(HostsOutput::Connect(ConnectRequest {
-                    name: if name.is_empty() { addr.clone() } else { name },
-                    addr,
-                    port,
-                    fp_hex: None,
-                    // Manual entry carries no advertised policy — never TOFU-eligible.
-                    pair_optional: false,
-                    launch: None,
-                    mac: Vec::new(),
-                    preset: None,
-                }));
+                let edit = HostEdit {
+                    name: Some(name_row.text().to_string()),
+                    ..edit
+                };
+                let msg = match trust::add_host(&edit) {
+                    Ok(_) => {
+                        let name = edit.name.as_deref().map(str::trim).unwrap_or_default();
+                        let shown = if name.is_empty() {
+                            edit.addr.as_deref().unwrap_or_default()
+                        } else {
+                            name
+                        };
+                        format!("Added {shown}. Click it to connect.")
+                    }
+                    Err(e) => format!("Couldn't save the host \u{2014} {e:#}"),
+                };
+                let _ = sender.output(HostsOutput::Toast(msg));
+                sender.input(HostsMsg::Refresh);
             });
         }
         dialog.present(Some(&self.widgets.stack));
