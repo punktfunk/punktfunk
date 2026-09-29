@@ -21,6 +21,7 @@ use pf_client_core::presets::{PresetsFile, SettingsOverlay, StreamPreset};
 // clients so one preset round-trips. A second copy of the spellings in this file is exactly the
 // drift the shared table exists to prevent.
 use pf_client_core::session::AUDIO_FORMATS;
+use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use pf_client_core::trust::{HudCorner, StatsVerbosity};
 use punktfunk_core::hud::{stats_scale, STATS_SCALE_PCTS};
@@ -1387,7 +1388,7 @@ pub fn show_scoped(
 
     let rows = Rows {
         display: display_rows(&dialog, inline, &seed, probes),
-        general: general_rows(&dialog, inline),
+        general: general_rows(&dialog, inline, active.is_some()),
         input: input_rows(&dialog, inline),
         audio: audio_rows(&dialog, inline, &globals, probes),
         pads: pad_rows(&dialog, inline, gamepads, &globals, &seed),
@@ -1494,7 +1495,12 @@ struct DisplayRows {
 }
 
 struct GeneralRows {
+    /// Which of the two fullscreen rows is on the page, and so which one `apply` reads.
+    preset_scope: bool,
     fullscreen_row: adw::SwitchRow,
+    fullscreen_mode_row: ChoiceRow,
+    gamepad_ui_row: adw::SwitchRow,
+    gamepad_ui_mode_row: ChoiceRow,
     theme_row: adw::SwitchRow,
     menu_row: adw::SwitchRow,
     wake_row: adw::SwitchRow,
@@ -1569,6 +1575,9 @@ impl Rows {
             general:
                 GeneralRows {
                     fullscreen_row,
+                    fullscreen_mode_row,
+                    gamepad_ui_row,
+                    gamepad_ui_mode_row,
                     theme_row,
                     menu_row,
                     wake_row,
@@ -1610,6 +1619,15 @@ impl Rows {
                 },
             ..
         } = self;
+        fullscreen_mode_row.set_selected(if s.fullscreen_always() {
+            2
+        } else {
+            u32::from(s.fullscreen_on_stream)
+        });
+        let gamepad_ui_on = s.gamepad_ui() != GamepadUi::Off;
+        gamepad_ui_row.set_active(gamepad_ui_on);
+        gamepad_ui_mode_row.set_selected(u32::from(s.gamepad_ui_always()));
+        gamepad_ui_mode_row.widget().set_visible(gamepad_ui_on);
         stats_position_row.set_selected(index::stats_position(s));
         stats_size_row.set_selected(index::stats_size(s));
         exit_hint_row.set_active(s.exit_hint);
@@ -2150,7 +2168,11 @@ impl Rows {
                 },
             general:
                 GeneralRows {
+                    preset_scope,
                     fullscreen_row,
+                    fullscreen_mode_row,
+                    gamepad_ui_row,
+                    gamepad_ui_mode_row,
                     theme_row,
                     menu_row,
                     wake_row,
@@ -2269,7 +2291,24 @@ impl Rows {
             [(start_in_row.selected() as usize).min(start::StartIn::ALL.len() - 1)]
         .as_str()
         .to_string();
-        s.fullscreen_on_stream = fullscreen_row.is_active();
+        if *preset_scope {
+            s.fullscreen_on_stream = fullscreen_row.is_active();
+        } else {
+            // The device keys are written only when moved, like the rows above.
+            let mode = fullscreen_mode_row.selected();
+            s.fullscreen_on_stream = mode >= 1;
+            if (mode == 2) != s.fullscreen_always() {
+                s.set_fullscreen_always(mode == 2);
+            }
+            let on = gamepad_ui_row.is_active();
+            if on != (s.gamepad_ui() != GamepadUi::Off) {
+                s.set_gamepad_ui_enabled(on);
+            }
+            let always = gamepad_ui_mode_row.selected() == 1;
+            if always != s.gamepad_ui_always() {
+                s.set_gamepad_ui_always(always);
+            }
+        }
         s.advanced_stats = adv_stats_row.is_active();
         // Written only when moved, like the rows above: "" and a newer client's name stay.
         let corner_i = (stats_position_row.selected() as usize).min(HudCorner::ALL.len() - 1);
@@ -2614,12 +2653,37 @@ fn display_rows(
     }
 }
 
-fn general_rows(dialog: &adw::PreferencesDialog, inline: bool) -> GeneralRows {
+fn general_rows(dialog: &adw::PreferencesDialog, inline: bool, preset_scope: bool) -> GeneralRows {
     // ---- General ----
+    // A preset carries only `fullscreen_on_stream`, so its scope keeps this switch; the
+    // defaults scope shows the three-way picker below, which also sets `fullscreen_always`.
     let fullscreen_row = adw::SwitchRow::builder()
         .title("Start streams fullscreen")
         .subtitle("F11, the mouse at the top edge, or L1+R1+Start+Select lead back out")
         .build();
+    let fullscreen_mode_row = ChoiceRow::new(
+        dialog,
+        inline,
+        "Fullscreen",
+        "Always keeps this window fullscreen too. F11 leads back out",
+        &["Off", "While streaming", "Always"],
+    );
+    let gamepad_ui_row = adw::SwitchRow::builder()
+        .title("Controller-optimized UI")
+        .subtitle("Opens the console, the interface built for a controller")
+        .build();
+    let gamepad_ui_mode_row = ChoiceRow::new(
+        dialog,
+        inline,
+        "Show it",
+        "Always opens it at launch. Otherwise it opens when a controller connects, and \
+         this window returns when the last one disconnects",
+        &["With a controller", "Always"],
+    );
+    {
+        let mode = gamepad_ui_mode_row.widget().clone();
+        gamepad_ui_row.connect_active_notify(move |r| mode.set_visible(r.is_active()));
+    }
     let theme_row = adw::SwitchRow::builder()
         .title("Follow the Omarchy theme")
         .subtitle("Colours track omarchy-theme-set live — off keeps Punktfunk's own look")
@@ -2718,7 +2782,11 @@ fn general_rows(dialog: &adw::PreferencesDialog, inline: bool) -> GeneralRows {
         });
     }
     GeneralRows {
+        preset_scope,
         fullscreen_row,
+        fullscreen_mode_row,
+        gamepad_ui_row,
+        gamepad_ui_mode_row,
         theme_row,
         menu_row,
         wake_row,
@@ -3150,7 +3218,11 @@ fn add_pages(
             },
         general:
             GeneralRows {
+                preset_scope: _,
                 fullscreen_row,
+                fullscreen_mode_row,
+                gamepad_ui_row,
+                gamepad_ui_mode_row,
                 theme_row,
                 menu_row,
                 wake_row,
@@ -3205,7 +3277,11 @@ fn add_pages(
     // you are editing, not about the stream.
     general.add(&switcher);
     let session_group = group("Session", "");
-    session_group.add(fullscreen_row);
+    if preset_mode {
+        session_group.add(fullscreen_row);
+    } else {
+        session_group.add(fullscreen_mode_row.widget());
+    }
     // Auto-wake is a property of the host and this network, not of "Game vs Work" — it stays
     // global in v1 (design §3, tier H/G).
     if !preset_mode {
@@ -3215,6 +3291,13 @@ fn add_pages(
         session_group.add(start_in_row.widget());
     }
     general.add(&session_group);
+    // Which interface this device opens is the device's, never a preset's.
+    if !preset_mode && cfg!(feature = "console") {
+        let console_group = group("Console", "");
+        console_group.add(gamepad_ui_row);
+        console_group.add(gamepad_ui_mode_row.widget());
+        general.add(&console_group);
+    }
     // Appearance is device-level like the console's palette, never part of a preset, and
     // the row exists only where the theme does — Omarchy — rather than sitting disabled.
     if !preset_mode && pf_client_core::omarchy::present() {

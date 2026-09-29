@@ -11,6 +11,7 @@ use crate::ui_hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
+use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use relm4::prelude::*;
 use std::cell::RefCell;
@@ -134,6 +135,10 @@ pub struct AppModel {
     /// once on the child's exit: without it, EVERY signal death read as "we meant that" and
     /// an OOM-killed or crashed stream vanished with no message at all.
     session_cancelled: bool,
+    /// Controllers attached at the last poll — the edge Controller-optimized UI opens on.
+    pads: usize,
+    /// Fullscreen Always put the window there, so turning it off may take it back out.
+    fullscreen_by_setting: bool,
 }
 
 #[derive(Debug)]
@@ -180,6 +185,11 @@ pub enum AppMsg {
     /// Hand over to the gamepad console (`punktfunk-session --browse`) — the couch UI's
     /// door from the desktop shell.
     OpenConsole,
+    /// The attached controller count changed (a 1 s poll).
+    Pads(usize),
+    /// Preferences closed: re-read what the window itself follows.
+    SettingsClosed,
+    ToggleFullscreen,
     /// The console child exited; `Some` carries why it ended badly.
     ConsoleExited(Option<String>),
     /// Request-access Cancel: the child was killed; release busy quietly.
@@ -213,9 +223,26 @@ fn ready_was_cancelled(cancel: Option<&CancelHandle>) -> bool {
     cancel.is_some_and(CancelHandle::is_cancelled)
 }
 
+/// Whether Controller-optimized UI opens the console on this poll: on the first controller
+/// and never on a later one, so a console the player quit stays closed until every
+/// controller has gone and one comes back. Always opens it once, at launch.
+fn console_opens(ui: GamepadUi, prev: usize, now: usize) -> bool {
+    ui == GamepadUi::WithController && prev == 0 && now > 0
+}
+
 #[cfg(test)]
 mod cancel_tests {
     use super::*;
+
+    #[test]
+    fn the_console_opens_on_the_first_controller_only() {
+        assert!(console_opens(GamepadUi::WithController, 0, 1));
+        assert!(!console_opens(GamepadUi::WithController, 1, 2));
+        assert!(!console_opens(GamepadUi::WithController, 2, 1));
+        assert!(!console_opens(GamepadUi::WithController, 1, 0));
+        assert!(!console_opens(GamepadUi::Off, 0, 1));
+        assert!(!console_opens(GamepadUi::Always, 0, 1));
+    }
 
     #[test]
     fn cancelled_request_rejects_late_ready() {
@@ -355,7 +382,7 @@ impl SimpleComponent for AppModel {
         toasts.set_child(Some(&nav));
         window.set_content(Some(&toasts));
 
-        let model = AppModel {
+        let mut model = AppModel {
             window: window.clone(),
             nav,
             toasts,
@@ -368,8 +395,24 @@ impl SimpleComponent for AppModel {
             wake_fallback: None,
             waiting: Rc::new(RefCell::new(None)),
             session_cancelled: false,
+            pads: 0,
+            fullscreen_by_setting: false,
         };
         install_actions(&model.window, &sender);
+        // Controller-optimized UI reads the count on every change; the service has no event
+        // for a pad arriving, and a 1 s poll is one lock and a short Vec.
+        if cfg!(feature = "console") && crate::cli::shot_scene().is_none() {
+            let (gamepad, sender) = (model.gamepad.clone(), sender.clone());
+            let mut last = 0;
+            glib::timeout_add_seconds_local(1, move || {
+                let n = gamepad.pads().len();
+                if n != last {
+                    last = n;
+                    sender.input(AppMsg::Pads(n));
+                }
+                glib::ControlFlow::Continue
+            });
+        }
 
         // CI screenshot mode: dispatch the scripted scene once the window is actually
         // mapped (AdwDialogs need a live window; relm4 maps it after `init` returns, so
@@ -393,6 +436,7 @@ impl SimpleComponent for AppModel {
             });
         }
         window.present();
+        model.apply_fullscreen();
 
         // The deep-link seam is live from here: anything GApplication delivered during a cold
         // start has been parked, and everything from now on arrives as a message.
@@ -401,7 +445,13 @@ impl SimpleComponent for AppModel {
         // Where a bare launch opens (design/default-host.md). Only a bare one: `--connect`,
         // `--browse` and every headless verb have already exec'd or returned before the
         // application object exists, and a parked link is explicit intent that wins outright.
-        if parked.is_empty() {
+        let console_home = cfg!(feature = "console")
+            && crate::cli::shot_scene().is_none()
+            && model.settings.borrow().gamepad_ui() == GamepadUi::Always;
+        if parked.is_empty() && console_home {
+            // The console follows Start in itself.
+            sender.input(AppMsg::OpenConsole);
+        } else if parked.is_empty() {
             let settings = model.settings.borrow();
             let known = trust::KnownHosts::load();
             let (default, source) = start::default_host_with_source(&settings, &known);
@@ -489,7 +539,21 @@ impl SimpleComponent for AppModel {
                 ended,
                 tofu,
             } => self.session_exited(req, code, error, ended, tofu, &sender),
-            AppMsg::OpenConsole => self.open_console(&sender),
+            AppMsg::OpenConsole => self.open_console(&sender, false),
+            AppMsg::Pads(n) => {
+                let prev = std::mem::replace(&mut self.pads, n);
+                if !self.busy && console_opens(self.settings.borrow().gamepad_ui(), prev, n) {
+                    self.open_console(&sender, true);
+                }
+            }
+            AppMsg::SettingsClosed => self.apply_fullscreen(),
+            AppMsg::ToggleFullscreen => {
+                if self.window.is_fullscreen() {
+                    self.window.unfullscreen();
+                } else {
+                    self.window.fullscreen();
+                }
+            }
             AppMsg::ConsoleExited(err) => {
                 self.busy = false;
                 // Quitting the console (B at its root) exits 0 and returns here silently.
@@ -757,7 +821,9 @@ impl AppModel {
         }
     }
 
-    fn open_console(&mut self, sender: &ComponentSender<Self>) {
+    /// `until_no_pads`: a controller connecting opened it, so it hands the desk back once the
+    /// last one is gone (never mid-stream; the session decides that).
+    fn open_console(&mut self, sender: &ComponentSender<Self>, until_no_pads: bool) {
         if std::mem::replace(&mut self.busy, true) {
             return;
         }
@@ -769,10 +835,15 @@ impl AppModel {
             std::ffi::OsString::from(crate::spawn::session_binary()),
             "--browse".into(),
         ];
-        // Same knob a stream uses — the session also fullscreens itself on the Deck
+        // Same knobs a stream uses — the session also fullscreens itself on the Deck
         // and under gamescope regardless.
-        if self.settings.borrow().fullscreen_on_stream {
+        let settings = self.settings.borrow();
+        if settings.fullscreen_on_stream || settings.fullscreen_always() {
             argv.push("--fullscreen".into());
+        }
+        drop(settings);
+        if until_no_pads {
+            argv.push("--until-no-controller".into());
         }
         let argv: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsString::as_os_str).collect();
         match gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE) {
@@ -793,7 +864,7 @@ impl AppModel {
 
     fn show_preferences(&self, scope: crate::ui_settings::Scope, sender: &ComponentSender<Self>) {
         let hosts = self.hosts.sender().clone();
-        let reopen = sender.clone();
+        let (reopen, closed) = (sender.clone(), sender.clone());
         crate::ui_settings::show_scoped(
             &self.window,
             self.settings.clone(),
@@ -808,6 +879,7 @@ impl AppModel {
                 // The library toggle changes the saved cards' menu, and a preset edit
                 // changes the chips — re-render either way.
                 let _ = hosts.send(HostsMsg::Refresh);
+                closed.input(AppMsg::SettingsClosed);
             },
         );
     }
@@ -930,6 +1002,17 @@ impl AppModel {
                 route.as_str()
             )),
             Err(e) => self.toast(&e.message()),
+        }
+    }
+
+    /// Fullscreen Always: on enters fullscreen, off leaves only a fullscreen it entered.
+    fn apply_fullscreen(&mut self) {
+        let always = self.settings.borrow().fullscreen_always();
+        if always && !self.window.is_fullscreen() {
+            self.window.fullscreen();
+            self.fullscreen_by_setting = true;
+        } else if !always && std::mem::take(&mut self.fullscreen_by_setting) {
+            self.window.unfullscreen();
         }
     }
 
@@ -1262,11 +1345,15 @@ fn install_actions(window: &adw::ApplicationWindow, sender: &ComponentSender<App
     window.add_action(&add("about", || AppMsg::ShowAbout));
     window.add_action(&add("add-host", || AppMsg::ShowAddHost));
     window.add_action(&add("console", || AppMsg::OpenConsole));
+    window.add_action(&add("fullscreen", || AppMsg::ToggleFullscreen));
+    relm4::main_application().set_accels_for_action("win.fullscreen", &["F11"]);
 }
 
-/// The Keyboard Shortcuts dialog — the SESSION window's keys (the shell itself has none);
-/// kept here as discoverable documentation.
+/// The Keyboard Shortcuts dialog: this window's keys, then the session window's, kept here
+/// as discoverable documentation.
 pub fn shortcuts_dialog() -> adw::ShortcutsDialog {
+    let shell = adw::ShortcutsSection::new(Some("This window"));
+    shell.add(adw::ShortcutsItem::new("Toggle fullscreen", "F11"));
     let stream = adw::ShortcutsSection::new(Some("Stream (session window)"));
     for (title, accel) in [
         ("Toggle fullscreen", "F11 <Alt>Return"),
@@ -1291,6 +1378,7 @@ pub fn shortcuts_dialog() -> adw::ShortcutsDialog {
         stream.add(adw::ShortcutsItem::new(title, accel));
     }
     let dialog = adw::ShortcutsDialog::new();
+    dialog.add(shell);
     dialog.add(stream);
     dialog
 }
