@@ -835,6 +835,34 @@ impl CancelHandle {
         }
     }
 
+    /// End the session the way its own window does: SIGTERM, which the session's SDL turns
+    /// into a quit event and so a quit-close of the host. A child still up after `grace` is
+    /// killed. Windows has no SIGTERM, so it kills at once.
+    pub fn terminate(&self, grace: std::time::Duration) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        #[cfg(unix)]
+        {
+            let slot = self.child.lock().unwrap();
+            let Some(child) = slot.as_ref() else { return };
+            // SAFETY: the lock is held, and the reaper takes the child out under it before
+            // `wait`, so this pid is still our unreaped child and names no other process.
+            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+            drop(slot);
+            let me = self.clone();
+            let _ = std::thread::Builder::new()
+                .name("pf-session-term".into())
+                .spawn(move || {
+                    std::thread::sleep(grace);
+                    me.kill();
+                });
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = grace;
+            self.kill();
+        }
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
