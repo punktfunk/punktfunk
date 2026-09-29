@@ -70,7 +70,7 @@ pub struct LibraryInit {
 
 #[derive(Debug)]
 pub enum LibraryMsg {
-    /// The store changed: hosts, favorites, the sections.
+    /// The store changed (hosts, favorites, the sections), or the tab came on screen.
     Refresh,
     Select(String),
     /// Show this host's shelf: a card's Browse Library, a `browse` link, Start in.
@@ -270,6 +270,10 @@ impl SimpleComponent for LibraryPage {
         {
             let sender = sender.clone();
             store.subscribe(move |_| sender.input(LibraryMsg::Refresh));
+        }
+        {
+            let sender = sender.clone();
+            root.connect_map(move |_| sender.input(LibraryMsg::Refresh));
         }
 
         let sort_key = SortKey::parse(&store.settings().library_sort);
@@ -636,7 +640,7 @@ impl LibraryPage {
             .cloned()
     }
 
-    /// Re-read the shelves, the desktops and the favorites; load when the shelf changed.
+    /// Re-read the shelves, the desktops and the favorites. A changed shelf loads once on screen.
     fn refresh(&mut self) {
         let (shelves, desktops) = self.shelves();
         let settings = self.store.settings().clone();
@@ -672,7 +676,12 @@ impl LibraryPage {
                 self.widgets.banner.set_revealed(false);
                 self.widgets.stack.set_visible_child_name("nohost");
             }
-            Some(key) if self.loaded.as_deref() != Some(key.as_str()) => self.load(false),
+            // Only a shelf on screen loads: a load can wake the host.
+            Some(key) if self.loaded.as_deref() != Some(key.as_str()) => {
+                if self.widgets.root.is_mapped() {
+                    self.load(false);
+                }
+            }
             Some(_) => self.relayout(),
         }
     }
