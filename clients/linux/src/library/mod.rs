@@ -4,8 +4,10 @@
 //! virtualized list, so a library of thousands scrolls like one of ten.
 
 pub mod art;
+mod canvas;
 mod customize;
 mod details;
+mod poster;
 mod rows;
 mod tile;
 
@@ -21,6 +23,9 @@ use rows::Row;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+
+/// The widest the page's content grows; a wider window centres it.
+const MAX_WIDTH: i32 = 2400;
 
 /// The `Settings::extra` key the chosen shelf is kept under, on this device only.
 const SHELF_KEY: &str = "library_shelf";
@@ -57,6 +62,8 @@ pub struct View {
     pub shelves: RefCell<Vec<Shelf>>,
     pub selected: RefCell<Option<String>>,
     pub desktops: RefCell<Vec<Desktop>>,
+    /// The grid's columns: every grid row has this many slots.
+    pub columns: Cell<usize>,
     pub art: Rc<art::Art>,
     pub sender: relm4::Sender<LibraryMsg>,
 }
@@ -129,7 +136,10 @@ pub struct LibraryPage {
     group: Option<GroupBy>,
     search: String,
     columns: usize,
-    rows: gio::ListStore,
+    canvas: canvas::Canvas,
+    /// What the canvas shows. A relayout that builds the same rows leaves it alone; a new
+    /// catalog or running set clears this, since equal rows then show new data.
+    drawn: Vec<Row>,
     /// The shelves and the selection the chip bar shows; a refresh that changes neither keeps it.
     chips_drawn: Option<Chips>,
     widgets: Widgets,
@@ -181,12 +191,13 @@ impl SimpleComponent for LibraryPage {
             shelves: RefCell::default(),
             selected: RefCell::default(),
             desktops: RefCell::default(),
+            columns: Cell::new(4),
             art: Rc::default(),
             sender: sender.input_sender().clone(),
         });
 
-        let rows = gio::ListStore::new::<glib::BoxedAnyObject>();
-        let scrolled = row_list(&view, &rows, &sender);
+        let canvas = canvas::Canvas::new(&view, MAX_WIDTH);
+        let scrolled = row_scroller(&canvas, &sender);
         let stack = gtk::Stack::new();
         stack.add_named(&scrolled, Some("rows"));
         stack.add_named(&loading_page(), Some("loading"));
@@ -238,6 +249,7 @@ impl SimpleComponent for LibraryPage {
         }
         header.pack_start(&reload);
         let (arrange, sort, group) = arrange_menu(&store, &sender);
+        root.insert_action_group("title", Some(&title_actions(&sender)));
         root.insert_action_group(
             "library",
             Some(&{
@@ -302,7 +314,8 @@ impl SimpleComponent for LibraryPage {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(
             &adw::Clamp::builder()
-                .maximum_size(1400)
+                .maximum_size(MAX_WIDTH)
+                .tightening_threshold(MAX_WIDTH)
                 .child(&chips)
                 .build(),
         );
@@ -333,8 +346,9 @@ impl SimpleComponent for LibraryPage {
             group: None,
             search: String::new(),
             columns: 4,
-            rows,
+            canvas,
             chips_drawn: None,
+            drawn: Vec::new(),
             widgets: Widgets {
                 root,
                 chips,
@@ -473,6 +487,7 @@ impl SimpleComponent for LibraryPage {
                     self.view.art.insert(id, tex);
                 }
                 *self.view.games.borrow_mut() = games;
+                self.drawn.clear();
                 self.widgets.stack.set_visible_child_name("rows");
                 self.relayout();
             }
@@ -498,56 +513,25 @@ fn connect(req: ConnectRequest) -> LibraryOutput {
     }
 }
 
-/// How many posters fit a row `width` wide. n tiles take n·150 + (n−1)·16, and the row's
-/// margins take the 16 the last gap leaves over.
+/// How many columns a list `width` wide holds at the smallest poster: n posters take
+/// n·150 + (n−1)·16, and the row's margins take the 16 the last gap leaves over. The posters
+/// stretch into whatever is left.
 fn columns_for(width: f64) -> usize {
-    (width / f64::from(tile::POSTER_W + 16)).floor().max(1.0) as usize
+    (width / f64::from(poster::NATURAL_W + tile::GAP))
+        .floor()
+        .max(1.0) as usize
 }
 
-/// The rows as a list view: each item a row widget built when it is bound.
-fn row_list(
-    view: &Rc<View>,
-    rows: &gio::ListStore,
+/// The rows in a scrolled window. The canvas reports its content width as the horizontal page
+/// size, and the grid's columns follow it.
+fn row_scroller(
+    canvas: &canvas::Canvas,
     sender: &ComponentSender<LibraryPage>,
 ) -> gtk::ScrolledWindow {
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        let item = item.downcast_ref::<gtk::ListItem>().expect("a list item");
-        item.set_activatable(false);
-        item.set_selectable(false);
-        item.set_focusable(false);
-        item.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
-    });
-    {
-        let view = view.clone();
-        factory.connect_bind(move |_, item| {
-            let item = item.downcast_ref::<gtk::ListItem>().expect("a list item");
-            let (Some(holder), Some(obj)) = (
-                item.child().and_downcast::<gtk::Box>(),
-                item.item().and_downcast::<glib::BoxedAnyObject>(),
-            ) else {
-                return;
-            };
-            while let Some(c) = holder.first_child() {
-                holder.remove(&c);
-            }
-            holder.append(&row_widget(&view, &obj.borrow::<Row>()));
-        });
-    }
-    let list = gtk::ListView::builder()
-        .model(&gtk::NoSelection::new(Some(rows.clone())))
-        .factory(&factory)
-        .css_classes(["pf-library"])
-        .build();
-    let clamp = adw::ClampScrollable::builder()
-        .maximum_size(1400)
-        .child(&list)
-        .build();
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .child(&clamp)
+        .child(canvas)
         .build();
-    // The list sets the page size to its own width on every allocation.
     let (sender, last) = (sender.clone(), Cell::new(0usize));
     scrolled.hadjustment().connect_page_size_notify(move |adj| {
         let n = columns_for(adj.page_size());
@@ -556,26 +540,6 @@ fn row_list(
         }
     });
     scrolled
-}
-
-fn row_widget(view: &Rc<View>, row: &Row) -> gtk::Widget {
-    let w: gtk::Widget = match row {
-        Row::Heading(text) => gtk::Label::builder()
-            .label(text)
-            .xalign(0.0)
-            .css_classes(["heading"])
-            .margin_top(18)
-            .build()
-            .upcast(),
-        Row::Desktops => tile::desktops(view),
-        Row::Band { tiles, caption } => tile::band(view, tiles, *caption),
-        Row::Posters { tiles, caption } => tile::posters(view, tiles, *caption),
-    };
-    w.set_margin_start(8);
-    w.set_margin_end(8);
-    w.set_margin_top(w.margin_top().max(6));
-    w.set_margin_bottom(6);
-    w
 }
 
 fn loading_page() -> gtk::Box {
@@ -630,6 +594,30 @@ fn status_page(
     button.connect_clicked(move |_| pressed());
     page.set_child(Some(&button));
     page
+}
+
+/// A title's menu rows, each taking the title's id: one set for the page, not one per poster.
+fn title_actions(sender: &ComponentSender<LibraryPage>) -> gio::SimpleActionGroup {
+    let group = gio::SimpleActionGroup::new();
+    type Act = (&'static str, fn(String) -> LibraryMsg);
+    let acts: [Act; 5] = [
+        ("play", LibraryMsg::Play),
+        ("favorite", LibraryMsg::ToggleFavorite),
+        ("details", LibraryMsg::Details),
+        ("copy-link", LibraryMsg::CopyLink),
+        ("end-game", LibraryMsg::EndGame),
+    ];
+    for (name, msg) in acts {
+        let action = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
+        let sender = sender.clone();
+        action.connect_activate(move |_, v| {
+            if let Some(id) = v.and_then(|v| v.str()) {
+                sender.input(msg(id.to_string()));
+            }
+        });
+        group.add_action(&action);
+    }
+    group
 }
 
 /// Sort and Group. The sort is the shared `library_sort`.
@@ -886,11 +874,13 @@ impl LibraryPage {
                     .set_title("Last known library \u{2014} asking the host\u{2026}");
                 w.banner.set_revealed(true);
                 *self.view.games.borrow_mut() = games;
+                self.drawn.clear();
                 w.stack.set_visible_child_name("rows");
             }
             Loaded::Fetched(Ok(games)) => {
                 w.banner.set_revealed(false);
                 *self.view.games.borrow_mut() = games;
+                self.drawn.clear();
                 w.stack.set_visible_child_name("rows");
             }
             Loaded::Fetched(Err(e)) => {
@@ -943,7 +933,8 @@ impl LibraryPage {
     }
 
     /// Keep what is up, one row per title; the endable row wins, since it carries End Game.
-    fn set_running(&self, games: Vec<RunningGame>) {
+    fn set_running(&mut self, games: Vec<RunningGame>) {
+        self.drawn.clear();
         let mut by_id: HashMap<String, RunningGame> = HashMap::new();
         for g in games.into_iter().filter(RunningGame::is_up) {
             let Some(id) = g.app_id.clone() else { continue };
@@ -955,6 +946,7 @@ impl LibraryPage {
     }
 
     fn relayout(&mut self) {
+        let started = std::time::Instant::now();
         let sections = layout::sections(&self.store.settings().library_sections);
         let rows = {
             let (games, favorites) = (self.view.games.borrow(), self.view.favorites.borrow());
@@ -969,9 +961,15 @@ impl LibraryPage {
                 paired_hosts: self.view.desktops.borrow().len(),
             })
         };
-        let objects: Vec<glib::BoxedAnyObject> =
-            rows.into_iter().map(glib::BoxedAnyObject::new).collect();
-        self.rows.splice(0, self.rows.n_items(), &objects);
+        let built = started.elapsed().as_secs_f64() * 1000.0;
+        self.view.columns.set(self.columns);
+        let changed = rows != self.drawn;
+        if changed {
+            self.canvas.set_rows(rows.clone());
+        }
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        tracing::debug!(rows = rows.len(), changed, built, ms, "library laid out");
+        self.drawn = rows;
     }
 
     fn title(&self, id: &str) -> String {

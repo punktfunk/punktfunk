@@ -60,7 +60,6 @@
 .pf-store-badge { color: white; background: rgba(0, 0, 0, 0.55); }
 /* The Library's rows are plain rows, and a poster tile is its art: no padding, so a row of n
    tiles is n·150 plus the gaps. */
-.pf-library, .pf-library > row { background: none; padding: 0; }
 .pf-tile { padding: 0; }
 .pf-desktop-tile { padding: 12px; }
 /* Launcher entries (design D4) open the launcher itself. They rarely have poster art, so an

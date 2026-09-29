@@ -19,7 +19,7 @@ pub enum Tile {
 }
 
 /// What a poster says under its title (design P6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Caption {
     None,
     LastPlayed,
