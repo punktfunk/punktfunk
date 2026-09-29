@@ -702,14 +702,28 @@ pub fn spawn_art_fetch(
 
 #[cfg(desktop)]
 pub(crate) fn classify(e: ureq::Error) -> LibraryError {
+    // `PinVerify`'s fingerprint-mismatch error, and only that: a broader cert arm would also
+    // catch unrelated TLS failures. The pinned connector hands it back inside an io error.
+    let pin_failure = |r: &rustls::Error| {
+        matches!(
+            r,
+            rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure
+            )
+        )
+    };
     match e {
         ureq::Error::StatusCode(401 | 403) => LibraryError::NotPaired,
         ureq::Error::StatusCode(code) => LibraryError::Http(code),
-        // `PinVerify`'s fingerprint-mismatch error. Match this variant only —
-        // a broader cert-error arm would also fire on unrelated TLS failures.
-        ureq::Error::Rustls(rustls::Error::InvalidCertificate(
-            rustls::CertificateError::ApplicationVerificationFailure,
-        )) => LibraryError::PinMismatch,
+        ureq::Error::Rustls(ref r) if pin_failure(r) => LibraryError::PinMismatch,
+        ureq::Error::Io(ref io)
+            if io
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                .is_some_and(pin_failure) =>
+        {
+            LibraryError::PinMismatch
+        }
         other => LibraryError::Unreachable(other.to_string()),
     }
 }
@@ -717,6 +731,38 @@ pub(crate) fn classify(e: ureq::Error) -> LibraryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A changed host certificate is a pin mismatch however ureq wraps it, never a host that
+    /// could not be reached.
+    #[cfg(desktop)]
+    #[test]
+    fn a_failed_pin_is_a_pin_mismatch() {
+        let pin = || {
+            rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            )
+        };
+        let wrapped = std::io::Error::new(std::io::ErrorKind::InvalidData, pin());
+        assert!(matches!(
+            classify(ureq::Error::Io(wrapped)),
+            LibraryError::PinMismatch
+        ));
+        assert!(matches!(
+            classify(ureq::Error::Rustls(pin())),
+            LibraryError::PinMismatch
+        ));
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(matches!(
+            classify(ureq::Error::Io(refused)),
+            LibraryError::Unreachable(_)
+        ));
+        let expired = rustls::Error::InvalidCertificate(rustls::CertificateError::Expired);
+        let wrapped = std::io::Error::new(std::io::ErrorKind::InvalidData, expired);
+        assert!(matches!(
+            classify(ureq::Error::Io(wrapped)),
+            LibraryError::Unreachable(_)
+        ));
+    }
 
     fn row(json: &str) -> RunningGame {
         serde_json::from_str(json).unwrap()
