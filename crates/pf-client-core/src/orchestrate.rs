@@ -238,7 +238,7 @@ impl ConnectPlan {
             args.push("--connect-timeout".into());
             args.push(secs.to_string());
         }
-        if self.settings.fullscreen_on_stream {
+        if self.settings.fullscreen_on_stream || self.settings.fullscreen_always() {
             args.push("--fullscreen".into());
         }
         // No `--window-pos`: Wayland compositors own placement, so the flag is a silent
@@ -1115,6 +1115,10 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--preset", "aaaaaaaaaaaa"]));
         assert!(args.windows(2).any(|w| w == ["--connect-timeout", "185"]));
         assert!(args.contains(&"--fullscreen".to_string()));
+        // Fullscreen Always outranks a preset that turned streams fullscreen off.
+        plan.settings.fullscreen_on_stream = false;
+        plan.settings.set_fullscreen_always(true);
+        assert!(plan.session_args().contains(&"--fullscreen".to_string()));
 
         // "Connect with ▸ Default settings" on a bound host is an empty override, not
         // the same as no override — it has to survive as a flag.

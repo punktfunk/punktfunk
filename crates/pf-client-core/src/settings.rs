@@ -374,6 +374,22 @@ fn default_codec() -> String {
     "auto".into()
 }
 
+/// [`Settings::extra`] keys every client stores under these names. The console, Apple and
+/// Android read them there too, so they stay out of the typed struct.
+pub const FULLSCREEN_ALWAYS_KEY: &str = "fullscreen_always";
+pub const GAMEPAD_UI_KEY: &str = "gamepad_ui_enabled";
+pub const GAMEPAD_UI_MODE_KEY: &str = "gamepad_ui_mode";
+
+/// When the controller-optimized UI (the console) takes over the desktop layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GamepadUi {
+    Off,
+    /// While a controller is attached — the default.
+    WithController,
+    /// Pad or no pad.
+    Always,
+}
+
 /// Opus plane — the one an older client's store must load as. Named from `session`
 /// so the default and the menu's first row cannot be two different strings.
 fn default_audio_format() -> String {
@@ -424,6 +440,52 @@ impl Settings {
         } else {
             StatsVerbosity::Off
         })
+    }
+
+    /// The window opens fullscreen and every stream goes fullscreen, whatever a preset
+    /// says. Device-only: no preset carries it.
+    pub fn fullscreen_always(&self) -> bool {
+        self.extra_bool(FULLSCREEN_ALWAYS_KEY, false)
+    }
+
+    pub fn set_fullscreen_always(&mut self, on: bool) {
+        self.extra
+            .insert(FULLSCREEN_ALWAYS_KEY.into(), serde_json::Value::Bool(on));
+    }
+
+    /// `gamepad_ui_enabled` (default on) with `gamepad_ui_mode` (`"always"`, else with a
+    /// controller). Device-only, like [`fullscreen_always`](Self::fullscreen_always).
+    pub fn gamepad_ui(&self) -> GamepadUi {
+        if !self.extra_bool(GAMEPAD_UI_KEY, true) {
+            GamepadUi::Off
+        } else if self.gamepad_ui_always() {
+            GamepadUi::Always
+        } else {
+            GamepadUi::WithController
+        }
+    }
+
+    /// The stored mode, kept while the switch is off so turning it back on restores it.
+    pub fn gamepad_ui_always(&self) -> bool {
+        self.extra.get(GAMEPAD_UI_MODE_KEY).and_then(|v| v.as_str()) == Some("always")
+    }
+
+    pub fn set_gamepad_ui_enabled(&mut self, on: bool) {
+        self.extra
+            .insert(GAMEPAD_UI_KEY.into(), serde_json::Value::Bool(on));
+    }
+
+    pub fn set_gamepad_ui_always(&mut self, always: bool) {
+        let mode = if always { "always" } else { "connected" };
+        self.extra
+            .insert(GAMEPAD_UI_MODE_KEY.into(), serde_json::Value::from(mode));
+    }
+
+    fn extra_bool(&self, key: &str, default: bool) -> bool {
+        self.extra
+            .get(key)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
     }
 
     /// Set the tier, keeping the legacy `show_stats` bool coherent for pre-tier readers.
@@ -741,6 +803,36 @@ mod tests {
         assert!(s.fullscreen_on_stream);
         // Echo cancellation post-dates every stored file: it must load on.
         assert!(s.echo_cancel);
+    }
+
+    /// The shared device keys read from `extra` with the other clients' defaults, and
+    /// write back under the same names.
+    #[test]
+    fn shared_device_keys_live_in_extra() {
+        let mut s = Settings::default();
+        assert!(!s.fullscreen_always());
+        assert_eq!(s.gamepad_ui(), GamepadUi::WithController);
+
+        let stored: Settings = serde_json::from_str(
+            r#"{"fullscreen_always":true,"gamepad_ui_enabled":true,"gamepad_ui_mode":"always"}"#,
+        )
+        .unwrap();
+        assert!(stored.fullscreen_always());
+        assert_eq!(stored.gamepad_ui(), GamepadUi::Always);
+
+        s.set_gamepad_ui_always(true);
+        s.set_gamepad_ui_enabled(false);
+        assert_eq!(s.gamepad_ui(), GamepadUi::Off);
+        assert!(s.gamepad_ui_always(), "off keeps the mode");
+        s.set_fullscreen_always(true);
+        let text = serde_json::to_string(&s).unwrap();
+        for key in [FULLSCREEN_ALWAYS_KEY, GAMEPAD_UI_KEY, GAMEPAD_UI_MODE_KEY] {
+            assert!(text.contains(&format!("\"{key}\"")), "{key} is written");
+        }
+        // A mode this build does not know reads as with a controller.
+        s.set_gamepad_ui_enabled(true);
+        s.extra.insert(GAMEPAD_UI_MODE_KEY.into(), "later".into());
+        assert_eq!(s.gamepad_ui(), GamepadUi::WithController);
     }
 
     /// Unknown keys survive load→save. An empty flatten map adds nothing, so files
