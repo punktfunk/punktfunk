@@ -901,7 +901,8 @@ pub fn show_about(parent: &impl IsA<gtk::Widget>) {
         // generic fallback rather than nothing.
         .application_icon(crate::app::APP_ID)
         .developer_name("unom")
-        .version(env!("CARGO_PKG_VERSION"))
+        // The package version `--version` prints, canary suffix included (build.rs).
+        .version(env!("PUNKTFUNK_VERSION"))
         .website("https://git.unom.io/unom/punktfunk")
         .license_type(gtk::License::Custom)
         .license(license.as_str())
