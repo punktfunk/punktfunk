@@ -70,6 +70,6 @@
 		"undici": "^7.0.0"
 	},
 	"overrides": {
-		"undici": "^8.9.0"
+		"undici": "^8.10.2"
 	}
 }
