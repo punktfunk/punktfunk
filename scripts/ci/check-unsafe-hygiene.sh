@@ -167,8 +167,8 @@ fi
 # A startup scrub of our OWN credentials is the one shape that belongs here rather than at a
 # spawn site: Command::env_remove leaves them in /proc/self/environ for every same-uid reader.
 cat > "$tmp/gate_c_baseline" <<'BASELINE'
-clients/linux/src/app.rs:1
-clients/linux/src/spawn.rs:1
+clients/linux/src/app/mod.rs:1
+clients/linux/src/app/spawn.rs:1
 clients/session/src/main.rs:4
 crates/pf-console-ui/src/screens/settings/tests.rs:1
 crates/pf-encode-win/src/windows/nvenc.rs:4
