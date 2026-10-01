@@ -198,6 +198,7 @@ impl Encoder for OpenH264Encoder {
             // 10-bit is GPU-path only; this 8-bit encoder is never negotiated HDR/10-bit.
             PixelFormat::Rgb10a2
             | PixelFormat::Rgb10a2Sdr
+            | PixelFormat::RgbaF16
             | PixelFormat::X2Rgb10
             | PixelFormat::X2Bgr10 => {
                 anyhow::bail!(

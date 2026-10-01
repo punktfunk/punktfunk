@@ -279,6 +279,7 @@ fn outcome_tag(kind: InputKind, chroma444: bool) -> [u8; 32] {
         InputKind::P010 => "P010",
         InputKind::P010Sdr => "P010Sdr",
         InputKind::Rgb10 => "Rgb10",
+        InputKind::Fp16 => "Fp16",
         InputKind::Planar { .. } => "Planar",
     };
     let tag = format!("{k}+{}", if chroma444 { "444" } else { "420" });
@@ -296,7 +297,7 @@ fn spec(req: &EncodeProbeRequest, w: u32, h: u32) -> Result<OpenSpec, Fail> {
     let chroma444 = (req.flags & control::PROBE_FLAG_444) != 0;
     let kind = match (req.backend, req.input) {
         // No 10-bit-SDR probe flag: `ten_bit` follows `hdr`, so the probe's input matches the
-        // shipping SDR (Nv12/Bgra) and HDR (P010) decisions, never the AMF P010Sdr path.
+        // shipping SDR (Nv12/Bgra) and HDR (P010/Fp16) decisions, never the AMF P010Sdr path.
         (4, _) => InputKind::choose(4, hdr, hdr, chroma444),
         // The colour A/B: BGRA→NV12 on the video engine instead of the backend's own CSC.
         (_, 1) => InputKind::Nv12,

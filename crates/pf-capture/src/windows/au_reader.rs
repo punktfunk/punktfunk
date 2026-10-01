@@ -147,6 +147,9 @@ pub(crate) struct Taken {
     pub qpc_submit: u64,
     pub qpc_published: u64,
     pub flags: u32,
+    /// This access unit carries the source frame of the one before it: a re-encode, not a
+    /// new picture. The same for every chunk of the unit.
+    pub repeat: bool,
 }
 
 /// A slot whose heap range lies outside the section: the driver's index is not trusted and
@@ -181,6 +184,9 @@ pub(crate) struct AuReader {
     next_wire_seq: u32,
     /// The access unit still owing its LAST chunk: `(wire_seq, end offset of the last chunk)`.
     open_au: Option<(u32, u32)>,
+    /// `source_seq` of the last access unit started, and whether it repeated its predecessor's.
+    last_source: Option<u32>,
+    au_repeat: bool,
     /// PUBLISHED slots freed without reaching the wire.
     pub(crate) freed_unread: u64,
     /// Access units the driver skipped: `next_wire_seq` jumped over them.
@@ -193,6 +199,8 @@ impl AuReader {
             view,
             next_wire_seq: wire_seq_base,
             open_au: None,
+            last_source: None,
+            au_repeat: false,
             freed_unread: 0,
             gaps: 0,
         }
@@ -356,6 +364,11 @@ impl AuReader {
                 len: s.len,
             });
         }
+        // Chunks of one access unit share a sequence, so only its FIRST can compare.
+        if s.flags & au::AU_FIRST != 0 {
+            self.au_repeat = self.last_source == Some(s.source_seq);
+            self.last_source = Some(s.source_seq);
+        }
         if s.flags & au::AU_LAST != 0 {
             self.open_au = None;
             self.next_wire_seq = s.wire_seq.wrapping_add(1);
@@ -370,6 +383,7 @@ impl AuReader {
             qpc_submit: s.qpc_submit,
             qpc_published: s.qpc_published,
             flags: s.flags,
+            repeat: self.au_repeat,
         }))
     }
 }
@@ -603,6 +617,25 @@ mod tests {
             vec![(au::AU_FIRST, filler.len()), (0, 3), (au::AU_LAST, 4)]
         );
         assert!(!rd.mid_au() && rd.next_wire_seq() == 2);
+    }
+
+    /// A re-encode carries its predecessor's source sequence and reads as a repeat; a chunk
+    /// of the same access unit never repeats its own FIRST.
+    #[test]
+    fn an_access_unit_on_the_same_source_frame_is_a_repeat() {
+        let mut buf = section();
+        let (p, len) = base(&mut buf);
+        let mut prod = Producer::init(p, len, 1, 0);
+        let mut rd = reader(&mut buf, 0);
+        prod.publish(b"new", 0, 7, 0, au::AU_FIRST);
+        prod.publish(b"tail", 0, 7, 0, au::AU_LAST);
+        prod.publish(b"again", 1, 7, 0, WHOLE);
+        prod.publish(b"next", 2, 8, 0, WHOLE);
+        let mut got = Vec::new();
+        while let Some(t) = rd.take_next().unwrap() {
+            got.push((t.wire_seq, t.repeat));
+        }
+        assert_eq!(got, vec![(0, false), (0, false), (1, true), (2, false)]);
     }
 
     #[test]

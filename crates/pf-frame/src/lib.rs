@@ -45,6 +45,9 @@ pub enum PixelFormat {
     Nv12,
     /// 10-bit BT.2020 PQ limited YUV 4:2:0 (DXGI `P010`). HDR analogue of [`Nv12`]; NVENC `YUV420_10BIT`.
     P010,
+    /// Linear scRGB half floats (DXGI `R16G16B16A16_FLOAT`), 8 bpp: what Windows composes an
+    /// HDR desktop in. 1.0 is 80 nits, BT.709 primaries. GPU-only; AMF ingests it as `RGBA_F16`.
+    RgbaF16,
     /// Planar 8-bit YUV 4:4:4 (BT.709; range via `PUNKTFUNK_444_FULLRANGE`). GPU-only
     /// ([`FramePayload::Cuda`] / `DeviceBuffer::yuv444`); never a CPU payload. NVENC Range-Extensions.
     Yuv444,
@@ -63,6 +66,7 @@ impl PixelFormat {
             PixelFormat::Rgb | PixelFormat::Bgr => 3,
             // Three full-res 1-byte planes; GPU-only (no CPU payload).
             PixelFormat::Yuv444 => 3,
+            PixelFormat::RgbaF16 => 8,
             _ => 4,
         }
     }
@@ -138,9 +142,9 @@ pub fn drm_fourcc(format: PixelFormat) -> Option<u32> {
         // NV12 at 16 bits per sample, the 10-bit code high (`DRM_FORMAT_P010`).
         P010 => drm_fourcc_code(b"P010"),
         // 24-bit packed RGB/BGR have no dmabuf import here; use the CPU path.
-        // Rgb10a2/Rgb10a2Sdr are Windows formats; Yuv444 is convert output, never a
+        // Rgb10a2/Rgb10a2Sdr/RgbaF16 are Windows formats; Yuv444 is convert output, never a
         // capture source.
-        Rgb | Bgr | Rgb10a2 | Rgb10a2Sdr | Yuv444 => return None,
+        Rgb | Bgr | Rgb10a2 | Rgb10a2Sdr | RgbaF16 | Yuv444 => return None,
     })
 }
 

@@ -26,7 +26,7 @@ pub fn ten_bit_input(format: pf_frame::PixelFormat, negotiated_depth: u8) -> boo
     use pf_frame::PixelFormat;
     let ten = matches!(
         format,
-        PixelFormat::P010 | PixelFormat::Rgb10a2 | PixelFormat::Rgb10a2Sdr
+        PixelFormat::P010 | PixelFormat::Rgb10a2 | PixelFormat::Rgb10a2Sdr | PixelFormat::RgbaF16
     );
     if negotiated_depth >= 10 && !ten {
         tracing::warn!(

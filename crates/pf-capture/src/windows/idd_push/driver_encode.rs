@@ -335,11 +335,17 @@ pub fn open_driver_encoder(
         wire_chunk_warned: false,
         last_wire_seq: 0,
         last_source_seq: 0,
+        au_repeat: false,
         last_arrival: None,
         last_split: None,
         dump: AuDump::create(endpoint.target_id),
         opened_at: Instant::now(),
         backend: backend_name(reply.backend_opened),
+        // Opt-in: without it the card sits in its idle clocks under a stream.
+        _clock_boost: (reply.backend_opened == encode::backend::NVENC)
+            .then(pf_gpu::selected_gpu)
+            .flatten()
+            .and_then(|gpu| clock_boost::ClockBoost::hold(gpu.info.luid())),
     }))
 }
 
@@ -381,6 +387,8 @@ pub struct EncoderProxy {
     /// ground-truth clock (`progress`).
     last_wire_seq: u32,
     last_source_seq: u32,
+    /// The access unit being taken re-encodes its predecessor's source frame.
+    au_repeat: bool,
     /// Age of the last taken chunk's `qpc_pts` when the host took it — present→arrival.
     last_arrival: Option<Duration>,
     /// The driver's own split of that span, when its slot carried the stamps.
@@ -392,6 +400,8 @@ pub struct EncoderProxy {
     opened_at: Instant,
     /// The backend the driver opened, for the status surface.
     backend: &'static str,
+    /// NVENC only: the GPU's clocks stay up until this proxy drops.
+    _clock_boost: Option<clock_boost::ClockBoost>,
 }
 
 impl Drop for EncoderProxy {
@@ -445,6 +455,7 @@ impl EncoderProxy {
     /// its copy here, so a chunked session writes the same bytes in the same order.
     fn chunk(&mut self, t: Taken) -> AuChunk {
         self.last_wire_seq = t.wire_seq;
+        self.au_repeat = t.repeat;
         self.last_source_seq = t.source_seq;
         self.last_arrival =
             (t.qpc_pts != 0).then(|| Duration::from_micros(IddPushCapturer::qpc_age_us(t.qpc_pts)));
@@ -608,6 +619,7 @@ impl Encoder for EncoderProxy {
             drain_heartbeat: stamp(h.drain_heartbeat_qpc),
             present_to_arrival: self.last_arrival,
             driver_split: self.last_split,
+            au_repeat: self.au_repeat,
             state: h.encoder_state,
             backend: self.backend,
         })

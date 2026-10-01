@@ -65,8 +65,9 @@ pub fn spec_for(req: &SetEncodeRequest, backend: u32) -> Result<OpenSpec, Fail> 
     // 10-bit SDR (depth 10, HDR off) picks a BT.709 P010 input on AMF; `choose` ignores it elsewhere.
     let ten_bit = req.bit_depth >= 10;
     let chosen = InputKind::choose(backend, hdr, ten_bit, chroma444);
-    // `PFVD_AMF_NV12` (machine environment, read per open) opens AMF on the video engine's
-    // NV12 at once: the A/B for a VCN whose own colour conversion looks or runs worse.
+    // `PFVD_AMF_NV12` (machine environment, read per open) opens AMF on its converted YUV
+    // (NV12, or P010 under HDR) at once: the A/B for a VCN whose own colour conversion looks
+    // or runs worse.
     let kind = match chosen.fallback(backend) {
         Some(second) if crate::log::knob("PFVD_AMF_NV12").is_some() => second,
         _ => chosen,
@@ -227,7 +228,7 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
     // `PFVD_POOL_BYPASS` (machine environment, read per open): `0` copies every frame.
     let bypass = wire::zero_copy(
         spec.backend,
-        spec.kind == InputKind::Bgra,
+        spec.kind.composed(),
         crate::log::knob("PFVD_POOL_BYPASS").as_deref(),
     );
     let reused = monitor
@@ -287,6 +288,10 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
     Drive::new(enc, &pool, &ctx.session, stop, &live, spec.fps, opened_kbps).run();
     if live.load(Ordering::Acquire) {
         section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_CLOSED);
+        // The encoder is closed, and D3D11 frees what it released only at a flush. The pooled
+        // device outlives the session and is idle after it.
+        // SAFETY: a single call on the pooled device's multithread-protected context.
+        unsafe { ctx.device.device_context.Flush() };
     }
 }
 
@@ -361,7 +366,10 @@ pub fn open_backend(
     let format = pixel_format(spec.kind);
     // P010 serves both HDR and 10-bit SDR; the kind is the only thing that tells them apart, so
     // the backend's colour signalling follows it, not the (identical) P010 pixel label.
-    let hdr = matches!(spec.kind, InputKind::P010 | InputKind::Rgb10);
+    let hdr = matches!(
+        spec.kind,
+        InputKind::P010 | InputKind::Rgb10 | InputKind::Fp16
+    );
     let luid = Some(adapter.luid62());
     // NVENC, QSV and PyroWave are x86-64 only (see Cargo.toml); an ARM64 driver refuses their
     // ids here and the host falls through to Media Foundation.

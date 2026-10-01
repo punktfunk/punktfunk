@@ -164,6 +164,23 @@ impl Seed {
     }
 }
 
+impl Drop for Seed {
+    /// Free the kept frame with its monitor: the pooled device is idle by then, and D3D11
+    /// frees a released texture only at a flush.
+    fn drop(&mut self) {
+        let Some(kept) = lock(&self.0).take() else {
+            return;
+        };
+        // SAFETY: plain accessors on the live texture's own device.
+        let ctx = unsafe { kept.tex.GetDevice().and_then(|d| d.GetImmediateContext()) };
+        drop(kept);
+        if let Ok(ctx) = ctx {
+            // SAFETY: a single call on the pooled device's multithread-protected context.
+            unsafe { ctx.Flush() };
+        }
+    }
+}
+
 /// One monitor's pool. See the module docs.
 pub struct Pool {
     device_epoch: u32,

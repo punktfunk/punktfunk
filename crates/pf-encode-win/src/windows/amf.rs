@@ -30,7 +30,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -256,6 +257,7 @@ const COLOR_PROFILE_2020: i64 = 2;
 const COLOR_PROFILE_FULL_709: i64 = 7;
 // `AMF_COLOR_TRANSFER_CHARACTERISTIC_ENUM` / `AMF_COLOR_PRIMARIES_ENUM` (CICP code points).
 const TRANSFER_BT709: i64 = 1;
+const TRANSFER_LINEAR: i64 = 8;
 const TRANSFER_SMPTE2084: i64 = 16;
 const PRIMARIES_BT709: i64 = 1;
 const PRIMARIES_BT2020: i64 = 9;
@@ -850,6 +852,7 @@ fn input_formats(input: PixelFormat) -> Option<(i32, DXGI_FORMAT)> {
         PixelFormat::Nv12 => Some((sys::AMF_SURFACE_NV12, DXGI_FORMAT_NV12)),
         PixelFormat::P010 => Some((sys::AMF_SURFACE_P010, DXGI_FORMAT_P010)),
         PixelFormat::Bgra => Some((sys::AMF_SURFACE_BGRA, DXGI_FORMAT_B8G8R8A8_UNORM)),
+        PixelFormat::RgbaF16 => Some((sys::AMF_SURFACE_RGBA_F16, DXGI_FORMAT_R16G16B16A16_FLOAT)),
         _ => None,
     }
 }
@@ -858,6 +861,40 @@ fn input_formats(input: PixelFormat) -> Option<(i32, DXGI_FORMAT)> {
 /// `RING - 1` frames may be in flight. `submit` drains before reuse. Shallow enough that
 /// back-pressure starts after a few frames, not after AMF's 16-deep input queue.
 const RING: usize = 6;
+
+/// The [`RING`] copy targets for `input` at `width`×`height` on `device`.
+fn input_ring(
+    device: &ID3D11Device,
+    input: PixelFormat,
+    width: u32,
+    height: u32,
+) -> Result<Vec<ID3D11Texture2D>> {
+    let (_, format) = input_formats(input).context("AMF input format")?;
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    (0..RING)
+        .map(|_| {
+            let mut t: Option<ID3D11Texture2D> = None;
+            // SAFETY: a complete description, no initial data; `t` is a local out-param.
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut t)) }
+                .context("CreateTexture2D (AMF input ring)")?;
+            t.context("AMF input ring texture")
+        })
+        .collect()
+}
 
 /// Process-wide count of successful `Init`s. A climbing number with no following first-AU log
 /// ([`FirstAuLog`]) is a silent VCN-session wedge.
@@ -871,8 +908,8 @@ const QUERY_TIMEOUT_MS: i64 = 50;
 /// What the retrieve thread and the encode thread share: `(pts_ns, forced-IDR, recovery-anchor)`
 /// per submitted frame. The component is deliberately not in here: AMF documents `SubmitInput` and
 /// `QueryOutput` as a thread pair, so only the queue needs a lock, and it is never held across a
-/// `QueryOutput`.
-type OutQueue = AuQueue<(u64, bool, bool)>;
+/// `QueryOutput`. The extra `bool` is "the component has answered EOF since the last Drain".
+type OutQueue = AuQueue<(u64, bool, bool), bool>;
 
 /// The retrieve thread and its queue. The thread owns every `QueryOutput` on the component, so
 /// the encode thread never waits on VCN — it takes finished AUs off the queue, and a caller that
@@ -911,7 +948,16 @@ fn retrieve_loop(
     stop: &AtomicBool,
 ) {
     pf_frame::thread_qos::boost_thread_priority(false);
+    // An empty answer this fast was a poll, whatever `blocking` says: HEVC before its first
+    // submit, or a runtime that took the timeout and ignores it. Unpaced, that spins a core.
+    const POLL: std::time::Duration = std::time::Duration::from_millis(1);
     while !stop.load(Ordering::Acquire) {
+        let asked = std::time::Instant::now();
+        let pace = || {
+            if !blocking || asked.elapsed() < POLL {
+                std::thread::sleep(std::time::Duration::from_micros(250));
+            }
+        };
         match drain_one_output(&comp, output_data_type, output_key_max) {
             Ok(DrainOutcome::Frame { data, key_prop }) => {
                 let mut g = q.lock();
@@ -940,17 +986,11 @@ fn retrieve_loop(
             // behind the Drain. EOF repeats on every call while the component sits drained and
             // the loop only exits on `stop`, so pace it like NotReady.
             Ok(DrainOutcome::Eof) => {
-                if !blocking {
-                    std::thread::sleep(std::time::Duration::from_micros(250));
-                }
+                q.lock().extra = true;
+                pace();
             }
-            Ok(DrainOutcome::NotReady) => {
-                // Without `QueryTimeout` the call is a poll; keep the old sampling interval,
-                // which now costs this thread rather than the encode thread.
-                if !blocking {
-                    std::thread::sleep(std::time::Duration::from_micros(250));
-                }
-            }
+            // Without `QueryTimeout` the call is a poll, sampled at this interval.
+            Ok(DrainOutcome::NotReady) => pace(),
             Err(e) => {
                 q.fail(&mut q.lock(), || format!("{e:#}"));
                 return;
@@ -959,7 +999,8 @@ fn retrieve_loop(
     }
 }
 
-/// Ask the component to let `QueryOutput` block. `false` means the driver declined and the
+/// Ask the component to let `QueryOutput` block. Static: it takes hold at the next `Init`, and
+/// set after one it is accepted and ignored. `false` means the driver declined and the
 /// retrieve thread samples instead — older AMF runtimes have no such property.
 fn set_query_timeout(comp: &Component, name: &HSTRING) -> bool {
     comp.set_prop(name, AmfVariant::from_i64(QUERY_TIMEOUT_MS), false)
@@ -973,11 +1014,13 @@ struct Inner {
     /// Shared with the retrieve thread, which holds the only other clone.
     comp: Arc<Component>,
     ctx: Ctx,
-    /// Capturer device — kept alive for `ctx` and the ring textures.
-    _device: ID3D11Device,
+    /// Capturer device — kept alive for `ctx`, and where the ring textures are made.
+    device: ID3D11Device,
     /// Immediate context for the ring copy. The AMF runtime uses it too, so it runs
     /// multithread-protected.
     dctx: ID3D11DeviceContext,
+    /// The copy targets, made by the first submit that copies ([`input_ring`]): a caller
+    /// encoding in place never pays for them. Empty until then.
     ring: Vec<ID3D11Texture2D>,
     next: usize,
     /// A reference to every texture AMF may still be reading, newest last, capped at [`RING`].
@@ -999,7 +1042,7 @@ pub struct AmfEncoder {
     bitrate_bps: u64,
     /// The highest target rate this encoder took after refusing one, 0 until it refuses.
     rate_ceiling: AtomicI64,
-    /// What every submitted texture holds: NV12, P010 or BGRA ([`input_formats`]).
+    /// What every submitted texture holds: NV12, P010, BGRA or FP16 ([`input_formats`]).
     input: PixelFormat,
     ten_bit: bool,
     /// BT.2020 PQ (HDR) vs BT.709 (SDR). Independent of `ten_bit`: 10-bit SDR is Main10 under
@@ -1077,7 +1120,9 @@ impl AmfEncoder {
         let ten_bit = crate::ten_bit_input(format, bit_depth);
         // Any other capture format has no native input path, and there is no readback.
         if input_formats(format).is_none() {
-            bail!("native AMF takes NV12, P010 or BGRA textures; capturer delivered {format:?}");
+            bail!(
+                "native AMF takes NV12, P010, BGRA or FP16 textures; capturer delivered {format:?}"
+            );
         }
         if ten_bit && codec == Codec::H264 {
             bail!("native AMF: 10-bit is HEVC-only (H.264 High10 is not a VCN mode)");
@@ -1321,10 +1366,17 @@ impl AmfEncoder {
             comp.set_prop(p.in_primaries, AmfVariant::from_i64(PRIMARIES_BT709), false)?;
             comp.set_prop(p.in_full_range, AmfVariant::from_bool(true), false)?;
         }
+        // FP16 in is scRGB: linear light on BT.709 primaries. VCN converts it to the PQ
+        // output above. A runtime that takes FP16 reads it this way unprompted, so a refused
+        // property is not a refused input.
+        if self.input == PixelFormat::RgbaF16 {
+            comp.set_prop(p.in_transfer, AmfVariant::from_i64(TRANSFER_LINEAR), false)?;
+            comp.set_prop(p.in_primaries, AmfVariant::from_i64(PRIMARIES_BT709), false)?;
+        }
         Ok((ir_active, ltr_active))
     }
 
-    /// Build or rebuild the AMF context + component on the capturer's device, plus the input ring.
+    /// Build or rebuild the AMF context + component on the capturer's device.
     /// Open the session now instead of at the first submit, so `caps()` reports the LTR and
     /// intra-refresh the encoder actually negotiated. The host latches those once per session
     /// and gates reference-frame invalidation on them — read early, every lost frame costs a
@@ -1357,7 +1409,8 @@ impl AmfEncoder {
         amf_ok(r, "AMF InitDX11 (capturer device)")?;
         let mut comp = lib.create_component(&ctx, self.props.component)?;
         let (ir_active, ltr_active) = self.apply_static_props(&comp)?;
-        let (fmt, ring_format) = input_formats(self.input).context("AMF input format")?;
+        let blocking = set_query_timeout(&comp, self.props.query_timeout);
+        let (fmt, _) = input_formats(self.input).context("AMF input format")?;
         amf_ok(
             comp.init(fmt, self.width as i32, self.height as i32),
             "AMF encoder Init",
@@ -1371,29 +1424,6 @@ impl AmfEncoder {
             self.pending_force = None;
         }
 
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: self.width,
-            Height: self.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: ring_format,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let mut ring = Vec::with_capacity(RING);
-        for _ in 0..RING {
-            let mut t: Option<ID3D11Texture2D> = None;
-            // SAFETY: a complete description, no initial data; `t` is a local out-param.
-            unsafe { device.CreateTexture2D(&desc, None, Some(&mut t)) }
-                .context("CreateTexture2D (AMF input ring)")?;
-            ring.push(t.context("AMF input ring texture")?);
-        }
         // Bump after successful Init so a failed bring-up never counts.
         let context_no = AMF_CONTEXTS_OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         tracing::info!(
@@ -1416,7 +1446,6 @@ impl AmfEncoder {
         );
         // The retrieve thread starts against the initialized component; `Inner` joins it
         // before its own reference drops, and `reset` stops it by hand.
-        let blocking = set_query_timeout(&comp, self.props.query_timeout);
         let comp = Arc::new(comp);
         let retrieve = Retrieve::start(Arc::clone(&comp), &self.props, blocking)?;
         tracing::debug!(
@@ -1432,9 +1461,9 @@ impl AmfEncoder {
             retrieve,
             comp,
             ctx,
-            _device: device.clone(),
+            device: device.clone(),
             dctx,
-            ring,
+            ring: Vec::new(),
             next: 0,
             held: VecDeque::new(),
             hdr_pushed: None,
@@ -1719,6 +1748,9 @@ impl AmfEncoder {
         let source = if in_place.is_some() {
             frame.texture.clone()
         } else {
+            if inner.ring.is_empty() {
+                inner.ring = input_ring(&inner.device, self.input, self.width, self.height)?;
+            }
             let src: ID3D11Resource = frame.texture.cast().context("texture -> resource")?;
             let dst: ID3D11Resource = inner.ring[slot].cast().context("ring -> resource")?;
             // SAFETY: `src`/`dst` are same-format, same-size textures on one device (the ring is
@@ -2066,11 +2098,11 @@ impl Encoder for AmfEncoder {
         inner.retrieve.q.reset(); // owed AUs forfeited; rebuilt stream restarts at IDR
         inner.next = 0; // the rebuilt component's first frame is `opening` again
         inner.hdr_pushed = None; // re-Init'd component needs HDR metadata again
-        let fmt = if self.ten_bit {
-            sys::AMF_SURFACE_P010
-        } else {
-            sys::AMF_SURFACE_NV12
-        };
+
+        // The format the frames arrive in, as at the open: re-Init'd as NV12, a BGRA session
+        // takes every surface and never returns an access unit.
+        let fmt = input_formats(self.input).map(|(fmt, _)| fmt);
+        let mut blocking = false;
         // The joined thread dropped its clone, so this is the only reference.
         let rebuilt = match Arc::get_mut(&mut inner.comp) {
             Some(comp) => {
@@ -2079,17 +2111,18 @@ impl Encoder for AmfEncoder {
                 comp.terminate();
                 // VCN may read an input surface until Terminate returns; only then can they go.
                 inner.held.clear();
-                match self.apply_static_props(comp) {
-                    Ok((ir, ltr)) => {
+                match (self.apply_static_props(comp), fmt) {
+                    (Ok((ir, ltr)), Some(fmt)) => {
                         self.ir_active = ir;
                         // Re-Init voids reference history; drop prior LTR marks.
                         self.ltr_active = ltr;
                         self.ltr_slots = [None; NUM_LTR_SLOTS];
                         self.next_ltr_slot = 0;
                         self.pending_force = None;
+                        blocking = set_query_timeout(comp, self.props.query_timeout);
                         comp.init(fmt, self.width as i32, self.height as i32) == sys::AMF_OK
                     }
-                    Err(_) => false,
+                    _ => false,
                 }
             }
             // Unreachable once joined; a failed rebuild tears the context down.
@@ -2098,7 +2131,6 @@ impl Encoder for AmfEncoder {
         if rebuilt {
             // The component is live again, so it needs its retrieve thread back. Without one no
             // AU would ever be taken off it and the rebuild would read as a second wedge.
-            let blocking = set_query_timeout(&inner.comp, self.props.query_timeout);
             match Retrieve::start(Arc::clone(&inner.comp), &self.props, blocking) {
                 Ok(r) => {
                     inner.retrieve = r;
@@ -2179,6 +2211,7 @@ impl Encoder for AmfEncoder {
             return Ok(());
         };
         // Drain = EOS; remaining AUs surface until AMF_EOF.
+        inner.retrieve.q.lock().extra = false;
         let r = inner.comp.drain();
         if r != sys::AMF_OK {
             tracing::debug!(
@@ -2188,10 +2221,15 @@ impl Encoder for AmfEncoder {
             );
         }
         // The owed AUs surface on the retrieve thread; wait for the last of them here so no
-        // frame submitted after this can be paired with one. Past the budget the component is
-        // at end-of-stream, so what is still owed never comes: those entries are stale.
+        // frame submitted after this can be paired with one, and for the EOF behind them: the
+        // component refuses input until `QueryOutput` has answered it. Past the budget what is
+        // still owed never comes: those entries are stale.
         let deadline = std::time::Instant::now() + INPUT_DRAIN_BUDGET;
-        while inner.retrieve.q.in_flight() > 0 && std::time::Instant::now() < deadline {
+        let draining = |q: &OutQueue| {
+            let g = q.lock();
+            !g.pending.is_empty() || (r == sys::AMF_OK && !g.extra)
+        };
+        while draining(&inner.retrieve.q) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_micros(250));
         }
         let stale = std::mem::take(&mut inner.retrieve.q.lock().pending).len();
@@ -2560,33 +2598,37 @@ mod tests {
                     // Three textures in rotation, two in flight: the third is always free.
                     enc.set_input_ring_depth(2);
                 }
-                let mut aus = Vec::new();
-                for i in 0..FRAMES {
-                    let frame = CapturedFrame {
-                        provenance: Default::default(),
-                        width: w,
-                        height: h,
-                        pts_ns: 1 + i as u64,
-                        format: PixelFormat::Bgra,
-                        payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
-                            texture: texs[i % texs.len()].clone(),
-                            device: device.clone(),
-                            pyro: None,
-                        }),
-                        cursor: None,
-                    };
-                    enc.submit(&frame).expect("submit");
-                    if let Some(au) = enc.poll().expect("poll") {
-                        aus.push(au);
+                let batch = |enc: &mut AmfEncoder, base: u64| -> Vec<EncodedFrame> {
+                    let mut aus = Vec::new();
+                    for i in 0..FRAMES {
+                        let frame = CapturedFrame {
+                            provenance: Default::default(),
+                            width: w,
+                            height: h,
+                            pts_ns: base + i as u64,
+                            format: PixelFormat::Bgra,
+                            payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
+                                texture: texs[i % texs.len()].clone(),
+                                device: device.clone(),
+                                pyro: None,
+                            }),
+                            cursor: None,
+                        };
+                        enc.submit(&frame).expect("submit");
+                        if let Some(au) = enc.poll().expect("poll") {
+                            aus.push(au);
+                        }
                     }
-                }
-                enc.flush().expect("flush");
-                for _ in 0..50 {
-                    match enc.poll().expect("drain poll") {
-                        Some(au) => aus.push(au),
-                        None => break,
+                    enc.flush().expect("flush");
+                    for _ in 0..50 {
+                        match enc.poll().expect("drain poll") {
+                            Some(au) => aus.push(au),
+                            None => break,
+                        }
                     }
-                }
+                    aus
+                };
+                let aus = batch(&mut enc, 1);
                 eprintln!(
                     "{codec:?} in_place={in_place}: {} AUs of {FRAMES}, {} bytes",
                     aus.len(),
@@ -2595,7 +2637,221 @@ mod tests {
                 assert_eq!(aus.len(), FRAMES, "{codec:?} in_place={in_place}");
                 assert!(aus[0].keyframe, "{codec:?}: the stream starts on an IDR");
                 assert_eq!(aus[0].pts_ns, 1, "FIFO pts pairing");
+                // A stall recovery re-Inits the component, which must still take BGRA.
+                assert!(enc.reset(), "{codec:?}: reset rebuilds in place");
+                let again = batch(&mut enc, 100);
+                assert_eq!(
+                    again.len(),
+                    FRAMES,
+                    "{codec:?} in_place={in_place}: after a reset"
+                );
+                assert!(again[0].keyframe, "{codec:?}: a reset restarts on an IDR");
             }
+        }
+    }
+
+    /// Live FP16 input per ten-bit codec: VCN takes the scRGB an HDR desktop composes and
+    /// converts it itself. An access unit per frame in both submit modes, and again after a
+    /// reset. HEVC must take it; an AV1 that declines is the driver's P010 fallback, so it
+    /// is reported and skipped. Skips without AMD.
+    #[test]
+    fn amf_fp16_hdr_encode_live() {
+        use windows::Win32::Graphics::Direct3D11::D3D11_SUBRESOURCE_DATA;
+        if let Err(e) = try_factory() {
+            eprintln!("skipping: AMF runtime unavailable ({e})");
+            return;
+        }
+        let Some(device) = amd_d3d11_device() else {
+            eprintln!("skipping: no AMD adapter on this box");
+            return;
+        };
+        let (w, h, fps) = (640u32, 480u32, 60u32);
+        // Flat scRGB white at 80, 160 and 320 nits, as IEEE halves (1.0, 2.0, 4.0).
+        let texs: Vec<ID3D11Texture2D> = [0x3C00u16, 0x4000, 0x4400]
+            .iter()
+            .map(|&level| {
+                let px = vec![level; (w * h * 4) as usize];
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: w,
+                    Height: h,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    // The binds of the driver's pool slots.
+                    BindFlags: BIND_SR | D3D11_BIND_RENDER_TARGET.0 as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                };
+                let init = D3D11_SUBRESOURCE_DATA {
+                    pSysMem: px.as_ptr().cast(),
+                    SysMemPitch: w * 8,
+                    SysMemSlicePitch: 0,
+                };
+                let mut tex = None;
+                // SAFETY: `init` points at `px`, `w * h * 8` bytes alive across the call, read
+                // at the pitch given. The out-param fills only on success.
+                unsafe { device.CreateTexture2D(&desc, Some(&init), Some(&mut tex)) }
+                    .expect("FP16 texture");
+                tex.expect("FP16 texture")
+            })
+            .collect();
+        const FRAMES: usize = 12;
+        for in_place in [false, true] {
+            for codec in [Codec::H265, Codec::Av1] {
+                if codec == Codec::Av1 && !probe_can_encode_on(&device, codec) {
+                    eprintln!("skipping Av1: this AMD GPU's native probe declined it");
+                    continue;
+                }
+                let mut enc = AmfEncoder::open(
+                    codec,
+                    PixelFormat::RgbaF16,
+                    w,
+                    h,
+                    fps,
+                    2_000_000,
+                    10,
+                    ChromaFormat::Yuv420,
+                    true,
+                    None,
+                )
+                .expect("open on FP16");
+                if let Err(e) = enc.prepare(&device) {
+                    assert_ne!(codec, Codec::H265, "HEVC Main10 declined FP16: {e:#}");
+                    eprintln!("skipping {codec:?}: FP16 input declined ({e:#})");
+                    continue;
+                }
+                if in_place {
+                    // Three textures in rotation, two in flight: the third is always free.
+                    enc.set_input_ring_depth(2);
+                }
+                let batch = |enc: &mut AmfEncoder, base: u64| -> Vec<EncodedFrame> {
+                    let mut aus = Vec::new();
+                    for i in 0..FRAMES {
+                        let frame = CapturedFrame {
+                            provenance: Default::default(),
+                            width: w,
+                            height: h,
+                            pts_ns: base + i as u64,
+                            format: PixelFormat::RgbaF16,
+                            payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
+                                texture: texs[i % texs.len()].clone(),
+                                device: device.clone(),
+                                pyro: None,
+                            }),
+                            cursor: None,
+                        };
+                        enc.submit(&frame).expect("submit");
+                        if let Some(au) = enc.poll().expect("poll") {
+                            aus.push(au);
+                        }
+                    }
+                    enc.flush().expect("flush");
+                    for _ in 0..50 {
+                        match enc.poll().expect("drain poll") {
+                            Some(au) => aus.push(au),
+                            None => break,
+                        }
+                    }
+                    aus
+                };
+                let aus = batch(&mut enc, 1);
+                eprintln!(
+                    "{codec:?} FP16 in_place={in_place}: {} AUs of {FRAMES}, {} bytes",
+                    aus.len(),
+                    aus.iter().map(|a| a.data.len()).sum::<usize>()
+                );
+                assert_eq!(aus.len(), FRAMES, "{codec:?} in_place={in_place}");
+                assert!(aus[0].keyframe, "{codec:?}: the stream starts on an IDR");
+                assert!(enc.reset(), "{codec:?}: reset rebuilds in place");
+                let again = batch(&mut enc, 100);
+                assert_eq!(
+                    again.len(),
+                    FRAMES,
+                    "{codec:?} in_place={in_place}: after a reset"
+                );
+            }
+        }
+    }
+
+    /// An open encoder with nothing to encode costs no CPU: its retrieve thread parks in
+    /// `QueryOutput` or samples it, never spins on it. Skips without AMD.
+    #[test]
+    fn amf_idle_encoder_does_not_spin_live() {
+        use windows::Win32::Foundation::FILETIME;
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        if let Err(e) = try_factory() {
+            eprintln!("skipping: AMF runtime unavailable ({e})");
+            return;
+        }
+        let Some(device) = amd_d3d11_device() else {
+            eprintln!("skipping: no AMD adapter on this box");
+            return;
+        };
+        // Kernel plus user time of this process, in 100 ns units.
+        let cpu = || {
+            let mut t = [FILETIME::default(); 4];
+            let [created, exited, kernel, user] = &mut t;
+            // SAFETY: the pseudo-handle is always valid; the four out-params are locals.
+            unsafe { GetProcessTimes(GetCurrentProcess(), created, exited, kernel, user) }
+                .expect("GetProcessTimes");
+            let ticks =
+                |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+            ticks(t[2]) + ticks(t[3])
+        };
+        let (w, h) = (640u32, 480u32);
+        let tex = nv12_texture(&device, w, h, None, BIND_SR);
+        for codec in [Codec::H265, Codec::H264] {
+            let mut enc = AmfEncoder::open(
+                codec,
+                PixelFormat::Nv12,
+                w,
+                h,
+                60,
+                2_000_000,
+                8,
+                ChromaFormat::Yuv420,
+                false,
+                None,
+            )
+            .expect("open");
+            let frame = CapturedFrame {
+                provenance: Default::default(),
+                width: w,
+                height: h,
+                pts_ns: 1,
+                format: PixelFormat::Nv12,
+                payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
+                    texture: tex.clone(),
+                    device: device.clone(),
+                    pyro: None,
+                }),
+                cursor: None,
+            };
+            enc.submit(&frame).expect("submit");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while enc.poll().expect("poll").is_none() {
+                assert!(std::time::Instant::now() < deadline, "{codec:?}: no AU");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            // The quietest of three windows, so another test's burst cannot fail this one.
+            let idle_ms = (0..3)
+                .map(|_| {
+                    let before = cpu();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    (cpu() - before) / 10_000
+                })
+                .min()
+                .unwrap_or(0);
+            eprintln!("{codec:?}: {idle_ms} ms of CPU in 200 ms idle");
+            assert!(
+                idle_ms < 60,
+                "{codec:?}: the idle encoder burned {idle_ms} ms of 200"
+            );
         }
     }
 

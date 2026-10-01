@@ -394,6 +394,7 @@ mod tests {
             drain_heartbeat: Some(last_au),
             present_to_arrival: None,
             driver_split: None,
+            au_repeat: false,
             state: 0,
             backend: "nvenc",
         })

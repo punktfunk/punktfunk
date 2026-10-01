@@ -1769,7 +1769,8 @@ fn stream_body(
         }
         // Absolute clock. Behind a slow frame: resync to now rather than bursting to catch up.
         next_frame += frame_interval;
-        if crate::send_pacing::frame_driven_enabled() && capturer.supports_arrival_wait() {
+        let frame_driven = crate::send_pacing::frame_driven_enabled();
+        if frame_driven && capturer.supports_arrival_wait() {
             // 0.9× floor leaves jitter headroom; credit pins the long-run average so a faster
             // mirrored panel cannot overdrive the wire. +0.5× deadline keeps static-desktop
             // re-encode at ~1.5×interval (client liveness).
@@ -1784,6 +1785,10 @@ fn stream_body(
             capturer.wait_arrival(tick + frame_interval.mul_f32(1.5));
             // Arrivals are the clock; re-anchor so a rebuild back to fixed cadence stays sane.
             next_frame = Instant::now() + frame_interval;
+        } else if frame_driven && enc.ready_aus(next_frame).is_some() {
+            // An encoder that publishes its own access units: one landed or the period ran
+            // out. On its own phase the grid holds a finished AU for up to a period.
+            next_frame = Instant::now();
         } else {
             match next_frame.checked_duration_since(Instant::now()) {
                 Some(d) => std::thread::sleep(d),

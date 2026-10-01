@@ -462,7 +462,7 @@ impl StreamState {
             cap_us: st.cap_us,
             submit_us: st.submit_us,
             wait_us,
-            repeat: st.repeat,
+            repeat: d.repeat.unwrap_or(st.repeat),
             was_measured: st.measure,
             driver: d.driver,
         }
@@ -757,10 +757,13 @@ impl StreamState {
         }
     }
 
-    /// Wait for the next tick: the capturer's arrival wait under the credit pacer, or the
-    /// fixed-interval sleep.
+    /// Wait for the next tick: the capturer's arrival wait under the credit pacer, the next
+    /// access unit of an encoder that publishes its own, or the fixed-interval sleep.
     pub(super) fn sleep_to_next(&mut self, t_cap: std::time::Instant) {
-        if frame_driven_enabled() && self.capturer.supports_arrival_wait() {
+        if !frame_driven_enabled() {
+            return self.sleep_to_grid();
+        }
+        if self.capturer.supports_arrival_wait() {
             // Anchor the 0.9× floor to `t_cap`, not `next`: a sync encoder folds encode into cadence.
             let earliest = std::cmp::max(
                 t_cap + self.interval.mul_f32(0.9),
@@ -771,11 +774,20 @@ impl StreamState {
             }
             self.capturer
                 .wait_arrival(self.next + self.interval.mul_f32(0.5));
+        } else if self.enc.ready_aus(self.next).is_some() {
+            // An access unit landed or the period ran out. The grid restarts here: on its own
+            // phase it holds a finished AU for up to a period, a different one every session.
+            self.next = std::time::Instant::now();
         } else {
-            match self.next.checked_duration_since(std::time::Instant::now()) {
-                Some(d) => std::thread::sleep(d),
-                None => self.next = std::time::Instant::now(),
-            }
+            self.sleep_to_grid();
+        }
+    }
+
+    /// The fixed-cadence tick, re-anchored when the loop is behind it.
+    fn sleep_to_grid(&mut self) {
+        match self.next.checked_duration_since(std::time::Instant::now()) {
+            Some(d) => std::thread::sleep(d),
+            None => self.next = std::time::Instant::now(),
         }
     }
 
@@ -824,6 +836,9 @@ struct AuStages {
     queue_us: u32,
     encode_us: u32,
     driver: Option<DriverSample>,
+    /// The driver's own word on whether this AU repeats the last source frame. `None` leaves
+    /// it to the tick, which is right for an encoder the loop feeds.
+    repeat: Option<bool>,
 }
 
 impl AuStages {
@@ -832,18 +847,21 @@ impl AuStages {
             queue_us,
             encode_us,
             driver: None,
+            repeat: None,
         }
     }
 }
 
 /// The driver's stages for the AU just taken. Unmeasured before its first AU.
 fn driver_stages(enc: &dyn crate::encode::Encoder) -> AuStages {
-    let sample = DriverSample::from_telemetry(enc.telemetry().as_ref());
+    let telemetry = enc.telemetry();
+    let sample = DriverSample::from_telemetry(telemetry.as_ref());
     let (queue_us, encode_us) = sample.queue_encode_us();
     AuStages {
         queue_us,
         encode_us,
         driver: Some(sample),
+        repeat: telemetry.map(|t| t.au_repeat),
     }
 }
 
