@@ -120,10 +120,11 @@ internal class StreamWindow(
         context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
 
     /**
-     * One `pf.display` line per panel change for the stream's lifetime. `mode=` is the panel's
-     * active mode, `render=` what this app is allowed: `mode=120 render=60` is a per-uid
-     * frame-rate override, `mode=60` a real mode switch. The native presenter cannot tell the two
-     * apart — its period reads 16.6 ms either way — and neither shows in `pf.present`.
+     * One `pf.display` line in the log ring per panel change for the stream's lifetime. `mode=` is
+     * the panel's active mode, `render=` what this app is allowed: `mode=120 render=60` is a
+     * per-uid frame-rate override, `mode=60` a real mode switch. Below Android 13 the native
+     * presenter's period is the requested mode, so this line is the bundle's only witness of a
+     * slower panel.
      *
      * A display arriving or leaving writes the whole list to the log ring instead ([logDisplays]).
      */
@@ -133,9 +134,15 @@ internal class StreamWindow(
         override fun onDisplayChanged(displayId: Int) = logPanel("changed")
     }
 
+    /** The last panel line written; `onDisplayChanged` also fires for changes that keep the rate. */
+    private var lastPanel = ""
+
     private fun logPanel(why: String) {
         val d = runCatching { activity?.display }.getOrNull() ?: return // API 30; hidden below
-        Log.i("pf.display", "panel $why mode=${d.mode.refreshRate} render=${d.refreshRate}")
+        val panel = "mode=${d.mode.refreshRate} render=${d.refreshRate}"
+        if (panel == lastPanel) return
+        lastPanel = panel
+        runCatching { NativeBridge.nativeLogDisplay("panel $why $panel") }
     }
 
     /** Every display, into the "Send logs" bundle: which dual-screen shape this device reports. */
