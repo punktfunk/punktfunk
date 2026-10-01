@@ -144,6 +144,8 @@ struct AddHostSheet: View {
             }
             // A first guess, not nil: an unsized form fits to zero and never lays out a row.
             .frame(height: formHeight ?? 400)
+            // The fitted sheet adds no top margin of its own.
+            .padding(.top, 24)
             #endif
             #if os(macOS)
             // macOS ONLY: the grouped form's default system text is oversized next to the app's
