@@ -116,14 +116,15 @@ jobs:
       # `gtk::init()`, and libtest gives every test its own thread — so a second display test in
       # the same process dies with "Attempted to initialize GTK from two different threads",
       # which `--test-threads=1` does not fix. Discovered by name so a new one is picked up.
+      # Each gets a scratch PUNKTFUNK_CONFIG_DIR: the tests that write the stores need one.
       - name: Display-only client tests
         run: |
           cargo test -p punktfunk-client-linux --locked -- --ignored --list --format terse \
             | sed -n 's/: test$//p' \
             | while read -r t; do
                 echo "--- $t"
-                xvfb-run -a cargo test -p punktfunk-client-linux --locked -- \
-                  --ignored --exact "$t"
+                PUNKTFUNK_CONFIG_DIR="$(mktemp -d)" xvfb-run -a \
+                  cargo test -p punktfunk-client-linux --locked -- --ignored --exact "$t"
               done
 
       - name: Upload screenshots
