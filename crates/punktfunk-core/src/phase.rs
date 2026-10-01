@@ -146,19 +146,26 @@ const NEED_NUDGE_NS: i64 = 1_000_000;
 /// A need this close to a whole period leaves the host's lead target no room.
 const NEED_HEADROOM_NS: i64 = 3_000_000;
 
+/// Clean windows before the need gives back one nudge. The host's lead target absorbs the
+/// first step down, so a probe rarely costs a latch; a jitter burst must not set the hold
+/// for the session (seen: 5.4 → 7.6 → 11.5 ms in two minutes, every raise for keeps).
+const NEED_DECAY_AFTER: u8 = 30;
+
 /// What a frame needs between hand-over and the latch that shows it, learned from misses.
 ///
 /// A frame that had some lead to its first latch and landed on a later one needed more
 /// than that lead. A miss at a lead the need already covers is a late arrival and counts
 /// for nothing. One frame in twenty missing, two windows running, raises the need: past
 /// the misses' p75 lead when half the window missed, by a nudge when fewer did. The need
-/// only grows, since probing downward costs a missed latch per probe. Misses that would
-/// push it to a whole period are not about lead, and the need parks at zero for the
-/// stream.
+/// gives back a nudge after [`NEED_DECAY_AFTER`] clean windows, so a burst does not hold
+/// for the session. Misses that would push it to a whole period are not about lead, and
+/// the need parks at zero for the stream.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LatchNeed {
     need_ns: i64,
     streak: u8,
+    /// Clean windows since the last change.
+    clean: u8,
     parked: bool,
 }
 
@@ -179,8 +186,15 @@ impl LatchNeed {
             .collect();
         if open.len() * 20 < frames.len().max(20) {
             self.streak = 0;
-            return false;
+            self.clean = self.clean.saturating_add(1);
+            if self.clean < NEED_DECAY_AFTER || self.need_ns == 0 {
+                return false;
+            }
+            self.clean = 0;
+            self.need_ns = (self.need_ns - NEED_NUDGE_NS).max(0);
+            return true;
         }
+        self.clean = 0;
         self.streak += 1;
         if self.streak < 2 {
             return false;
@@ -1024,6 +1038,31 @@ mod latch_need_tests {
             assert!(!window(&mut need, 2_500_000, 2));
         }
         assert_eq!(need.need_ns(), 0);
+    }
+
+    /// A burst raised the need to 3 ms; thirty clean windows give one nudge back, and the
+    /// need keeps falling to zero while the windows stay clean, then holds there.
+    #[test]
+    fn a_long_clean_stretch_lets_the_need_fall() {
+        let mut need = LatchNeed::default();
+        window(&mut need, 2_500_000, 60);
+        window(&mut need, 2_500_000, 60);
+        assert_eq!(need.need_ns(), 3_000_000);
+        for _ in 0..29 {
+            assert!(!window(&mut need, 9_000_000, 0));
+        }
+        assert!(
+            window(&mut need, 9_000_000, 0),
+            "the thirtieth clean window"
+        );
+        assert_eq!(need.need_ns(), 2_000_000);
+        for _ in 0..60 {
+            window(&mut need, 9_000_000, 0);
+        }
+        assert_eq!(need.need_ns(), 0);
+        for _ in 0..30 {
+            assert!(!window(&mut need, 9_000_000, 0), "nothing below zero");
+        }
     }
 
     /// The host holds arrival its 2.5 ms before the ready-by instant. Frames take 8 ms;
