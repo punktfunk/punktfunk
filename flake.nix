@@ -36,35 +36,32 @@
       # The workspace version is the single source of truth (crates/*/Cargo.toml inherit it).
       version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
 
-      pkgsFor =
-        system:
-        import nixpkgs {
-          inherit system;
-          overlays = [
-            (import rust-overlay)
-            # nixpkgs lags bun; the web console and plugin runner exec this one. Same release as
-            # the deb/rpm/arch/windows pins — bump them together (SHASUMS256.txt, as SRI).
-            (final: prev: {
-              bun = prev.bun.overrideAttrs (old: {
-                version = "1.4.2";
-                # src is read from passthru.sources, so it follows without being set here.
-                __intentionallyOverridingVersion = true;
-                passthru = old.passthru // {
-                  sources = {
-                    x86_64-linux = final.fetchurl {
-                      url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-baseline.zip";
-                      hash = "sha256-xngEDxT+BEDrg503y9DOTAUaMtpygGrJfeamqra/co8=";
-                    };
-                    aarch64-linux = final.fetchurl {
-                      url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-aarch64.zip";
-                      hash = "sha256-VDKLvC2cjgyfiSxUTWbFeoO4QTnjSQnl7oF1jxrI/ac=";
-                    };
-                  };
+      overlays = [
+        (import rust-overlay)
+        # nixpkgs lags bun; the web console and plugin runner exec this one. Same release as
+        # the deb/rpm/arch/windows pins — bump them together (SHASUMS256.txt, as SRI).
+        (final: prev: {
+          bun = prev.bun.overrideAttrs (old: {
+            version = "1.4.2";
+            # src is read from passthru.sources, so it follows without being set here.
+            __intentionallyOverridingVersion = true;
+            passthru = old.passthru // {
+              sources = {
+                x86_64-linux = final.fetchurl {
+                  url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-baseline.zip";
+                  hash = "sha256-xngEDxT+BEDrg503y9DOTAUaMtpygGrJfeamqra/co8=";
                 };
-              });
-            })
-          ];
-        };
+                aarch64-linux = final.fetchurl {
+                  url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-aarch64.zip";
+                  hash = "sha256-VDKLvC2cjgyfiSxUTWbFeoO4QTnjSQnl7oF1jxrI/ac=";
+                };
+              };
+            };
+          });
+        })
+      ];
+
+      pkgsFor = system: import nixpkgs { inherit system overlays; };
 
       # Pin cargo/rustc EXACTLY to rust-toolchain.toml (channel 1.96.0 + rustfmt/clippy) so a Nix
       # build, a dev shell and CI all use the identical toolchain — the repo is deliberate about
@@ -73,11 +70,9 @@
 
       craneLibFor = pkgs: (crane.mkLib pkgs).overrideToolchain toolchainFor;
 
-      packagesFor =
-        system:
-        let
-          pkgs = pkgsFor system;
-        in
+      # `pkgs` must carry `overlays`; `lib.packagesWith` below adds them to any nixpkgs.
+      packagesWith =
+        pkgs:
         pkgs.callPackage ./packaging/nix/packages.nix {
           craneLib = craneLibFor pkgs;
           src = self;
@@ -85,7 +80,7 @@
           # A dirty tree has no `shortRev`; Nix before 2.20 has no `dirtyShortRev` either.
           rev = self.shortRev or self.dirtyShortRev or null;
           # `.hook` + `.fetchBunDeps` (bun2nix v2 API) — see packages.nix.
-          bun2nix = bun2nix.packages.${system}.default;
+          bun2nix = bun2nix.packages.${pkgs.stdenv.hostPlatform.system}.default;
         }
         // {
           # gamescope + our `pipewire-hdr` patches, so the gamescope backend can stream HDR.
@@ -93,6 +88,8 @@
           # disjoint dependency set — and out of `checks` below, because it rebuilds gamescope
           # from source and would make `nix flake check` an hour long.
           punktfunk-gamescope = pkgs.callPackage ./packaging/nix/gamescope.nix {
+            # The pinned recipe on `pkgs`' libraries: its NixOS patches match our gamescope source.
+            gamescope = pkgs.callPackage "${nixpkgs}/pkgs/by-name/ga/gamescope/package.nix" { };
             patchDir = ./packaging/gamescope/patches;
             # Shared verbatim with build-punktfunk-gamescope.sh, which is the whole reason it is a
             # file: the FHS packages and the Nix store must rename the WSI layer identically, or
@@ -100,8 +97,14 @@
             manifestRewriter = ./packaging/gamescope/rewrite-wsi-layer-manifest.py;
           };
         };
+
+      packagesFor = system: packagesWith (pkgsFor system);
     in
     {
+      # The package set built from the caller's nixpkgs. The NixOS module builds the host, client
+      # and gamescope this way, because they load the system's Mesa into their own process.
+      lib.packagesWith = pkgs: packagesWith (pkgs.appendOverlays overlays);
+
       packages = forAllSystems (
         system:
         let
