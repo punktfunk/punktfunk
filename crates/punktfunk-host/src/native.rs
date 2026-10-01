@@ -1495,6 +1495,9 @@ pub(crate) async fn run_admitted(
     let host_facts = delivery_ask
         .filter(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_FACTS != 0)
         .map(|_| crate::telemetry::net_health::host_facts(data_sock.as_ref()));
+    // A diagnostic session: the stream thread serves probes and builds nothing.
+    let probe_only =
+        delivery_ask.is_some_and(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0);
     let join_live = joined.is_some();
     let reframe_to = joined.as_ref().map(|(_, view)| {
         (
@@ -1649,6 +1652,7 @@ pub(crate) async fn run_admitted(
         ack_reason: abr_features & punktfunk_core::quic::EXT_ABR_ACK_REASON != 0,
         delivery_ask,
         host_facts,
+        probe_only,
         ends: control_ends,
         shared: shared.clone(),
         clip_enabled: clip_enabled.clone(),
@@ -1993,6 +1997,11 @@ pub(crate) async fn run_admitted(
                 bit_depth,
                 chroma,
             };
+            // A display prep that started at Welcome (Windows) goes unreceived here and
+            // aborts into keep-alive: the tag arrives on Start, after the prep began.
+            if probe_only {
+                return stream::probe_only_stream(&mut common, probe_seq);
+            }
             match source {
                 Punktfunk1Source::Software => software_stream(
                     &mut common.session,
@@ -3711,6 +3720,48 @@ mod tests {
         assert!(matches!(
             client.set_delivery(1),
             Err(punktfunk_core::PunktfunkError::Unsupported(_))
+        ));
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// A `Start` that asks for probes only gets a session that serves every probe in full,
+    /// back to back, and shows no video: nothing was built to show.
+    #[test]
+    fn a_probe_only_start_serves_probes_without_a_pipeline() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_PROBE_ONLY};
+        let (client, host) = synthetic_session(19787, Punktfunk1Source::Synthetic, |p| {
+            punktfunk_core::client::ConnectParams {
+                delivery: Some(DeliveryAsk {
+                    profile: 0,
+                    flags: EXT_DELIVERY_PROBE_ONLY,
+                }),
+                ..p
+            }
+        });
+        assert!(client.probe_only());
+        assert!(
+            wait_for(|| client.delivery().is_some()),
+            "the tag is answered"
+        );
+        // Two long rounds back to back: a streaming session would clamp neither and
+        // refuse the second for ten seconds.
+        for _ in 0..2 {
+            client.request_probe(20_000, 600).unwrap();
+            assert!(wait_for(|| client.probe_result().done), "the round reports");
+            let r = client.probe_result();
+            assert!(r.wire_packets_sent > 0, "served, not declined");
+            assert!(
+                r.elapsed_ms >= 300,
+                "served in full, not as a 50 ms step: {}",
+                r.elapsed_ms
+            );
+        }
+        assert!(matches!(
+            client.next_frame(std::time::Duration::from_millis(500)),
+            Err(punktfunk_core::PunktfunkError::NoFrame)
         ));
         drop(client);
         host.join().unwrap().unwrap();

@@ -374,6 +374,39 @@ fn service_burst(
     }
 }
 
+/// A diagnostic session (`EXT_DELIVERY_PROBE_ONLY`): the punched data plane serves every
+/// probe in full and nothing else — no display, encoder, launch or seat — until the client
+/// closes, [`PROBE_ONLY_MAX`] passes, or the probes have cost [`PROBE_ONLY_BYTES`]. Past the
+/// byte cap the rest are declined; the per-request clamps still apply to each.
+pub(crate) fn probe_only_stream(common: &mut StreamCommon, probe_seq: bool) -> Result<()> {
+    const PROBE_ONLY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+    const PROBE_ONLY_BYTES: u64 = 2 << 30;
+    tracing::info!("diagnostic session: probes only, no pipeline");
+    let started = std::time::Instant::now();
+    while !common.stop.load(Ordering::SeqCst) && started.elapsed() < PROBE_ONLY_MAX {
+        if common.session.stats().bytes_sent >= PROBE_ONLY_BYTES {
+            while common.ends.probe_rx.try_recv().is_ok() {
+                let _ = common.ends.probe_result_tx.send(declined());
+            }
+        } else {
+            service_probes(
+                &mut common.session,
+                &common.stop,
+                &common.ends.probe_rx,
+                &common.ends.probe_result_tx,
+                probe_seq,
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    tracing::info!(
+        bytes = common.session.stats().bytes_sent,
+        secs = started.elapsed().as_secs(),
+        "diagnostic session over"
+    );
+    Ok(())
+}
+
 /// Serve pending speed-test requests between frames, blocking here for each burst. The
 /// synthetic and software sources hold no capture buffers and owe no deadline; the
 /// virtual-display path pumps [`ProbeBurst`] from its send loop instead.

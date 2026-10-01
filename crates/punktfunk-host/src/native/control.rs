@@ -237,6 +237,9 @@ pub(super) struct Task {
     pub(super) delivery_ask: Option<punktfunk_core::quic::DeliveryAsk>,
     /// Sent after the answer when the ask set `EXT_DELIVERY_FACTS`.
     pub(super) host_facts: Option<punktfunk_core::quic::HostFacts>,
+    /// A diagnostic session (`EXT_DELIVERY_PROBE_ONLY`): every probe is served, with no
+    /// spacing. The session holds no pipeline, and the stream thread bounds what it costs.
+    pub(super) probe_only: bool,
     /// The control halves of the session's channels to the stream thread.
     pub(super) ends: super::wiring::ControlEnds,
     /// Encoder truth read at `SetBitrate`, so the ack never exceeds what the encoder will run,
@@ -288,6 +291,7 @@ pub(super) async fn run(task: Task) {
         ack_reason,
         delivery_ask,
         host_facts,
+        probe_only,
         ends:
             super::wiring::ControlEnds {
                 reconfig_tx,
@@ -653,7 +657,9 @@ pub(super) async fn run(task: Task) {
                     .or_else(|_| ProbeShaped::decode(&msg))
                 {
                     let open = ramp_open.load(Ordering::SeqCst);
-                    if !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open) {
+                    if !probe_only
+                        && !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open)
+                    {
                         tracing::warn!(
                             target_kbps = req.target_kbps,
                             "speed-test probe rejected (rate-limited)"

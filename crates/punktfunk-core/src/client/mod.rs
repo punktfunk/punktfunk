@@ -625,6 +625,7 @@ impl NativeClient {
             std::sync::mpsc::sync_channel::<crate::quic::AccessUpdate>(ACCESS_QUEUE);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Negotiated>>();
         let shared = Arc::new(ClientShared::new(params.mode));
+        *shared.delivery_ask.lock().unwrap() = params.delivery;
 
         let cancel = params.cancel.take();
         let (timeout, bitrate_kbps, requested_gamepad) =
@@ -1234,6 +1235,17 @@ impl NativeClient {
     /// What the host said about its end of the path, when the dial asked for it.
     pub fn host_facts(&self) -> Option<crate::quic::HostFacts> {
         *self.shared.host_facts.lock().unwrap()
+    }
+
+    /// This dial's delivery ask ([`ConnectParams::delivery`]).
+    pub fn delivery_ask(&self) -> Option<crate::quic::DeliveryAsk> {
+        *self.shared.delivery_ask.lock().unwrap()
+    }
+
+    /// A diagnostic session: the dial asked for probes only, so no video ever comes.
+    pub fn probe_only(&self) -> bool {
+        self.delivery_ask()
+            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
     }
 
     /// Whether a burst is in flight — an embedder speed test or the startup capacity probe. Loss

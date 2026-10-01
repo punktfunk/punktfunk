@@ -93,7 +93,9 @@ pub fn speed_test(
             blast: Some(blast),
         });
     };
-    wait_for_video(c);
+    if !c.probe_only() {
+        wait_for_video(c);
+    }
     let rate_kbps = clean_rate_kbps(ceiling_kbps);
     let outcome = run_round(c, rate_kbps, CLEAN_ROUND_MS, &mut progress)?;
     Ok(SpeedReport {
@@ -125,6 +127,7 @@ fn wait_for_ramp(c: &NativeClient) -> Option<crate::abr::RampRecord> {
 
 /// The first completed AU, which is the ramp window closing on the host. A session that
 /// shows no video within [`VIDEO_WAIT`] goes on anyway: the round then measures what it can.
+/// A probe-only session never waits: its host serves every probe in full.
 fn wait_for_video(c: &NativeClient) {
     let deadline = Instant::now() + VIDEO_WAIT;
     while Instant::now() < deadline {
