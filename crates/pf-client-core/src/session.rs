@@ -209,8 +209,9 @@ impl SessionParams {
             height,
             ..mode
         };
-        // Off on the desktop (see the field). The report path stays for a client that asks.
-        let phase_lock = false;
+        // Off on the desktop (see the field). `PUNKTFUNK_CLIENT_PHASE_LOCK=1` asks for it: the
+        // A/B for the host hold's cost against the free-running floor's drift.
+        let phase_lock = std::env::var("PUNKTFUNK_CLIENT_PHASE_LOCK").is_ok_and(|v| v == "1");
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
