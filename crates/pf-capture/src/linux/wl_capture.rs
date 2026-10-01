@@ -363,10 +363,11 @@ fn choose_format(
     None
 }
 
-/// Does this session's encoder need the dmabuf imported to CUDA first?
+/// Does this session's encoder need the EGL/CUDA importer?
 ///
-/// libva and PyroWave's Vulkan import a dmabuf themselves; NVENC only takes CUDA. Same
-/// split the PipeWire path makes through `ZeroCopyPolicy`.
+/// libva and PyroWave's Vulkan import a dmabuf themselves. NVENC needs it for the modifier
+/// list, and takes CUDA from it when its raw lane is off. Same split the PipeWire path makes
+/// through `ZeroCopyPolicy`.
 fn needs_cuda_import(policy: &crate::ZeroCopyPolicy) -> bool {
     policy.backend_is_gpu && !policy.backend_is_vaapi && !policy.pyrowave_session
 }
@@ -525,10 +526,13 @@ fn run(
         return Ok(());
     }
 
-    // NVENC cannot take a raw dmabuf: the frame has to arrive as CUDA, the same EGL/CUDA
-    // import the PipeWire path performs. libva and PyroWave import the dmabuf themselves,
-    // so they get it untouched. Built before the pool because it also says which modifiers
-    // are allocatable — one importer, one worker process, for the session's life.
+    // NVENC's raw lane converts the held dmabuf into its slot in one pass, as libva and
+    // PyroWave import it themselves. Once this identity's raw latch or tiled refusal trips,
+    // NVENC takes CUDA from the EGL/CUDA import instead. The importer is built before the
+    // pool either way: it names the allocatable modifiers. One importer, one worker process.
+    let raw_lane = policy.nvenc_raw_dmabuf
+        && !signals.health.raw_disabled()
+        && !signals.health.passthrough_tiled_refused();
     let mut importer = if needs_cuda_import(&policy) {
         match pf_zerocopy::Importer::new_for_capture() {
             Ok(i) => Some(i),
@@ -594,6 +598,7 @@ fn run(
         fourcc = format_args!("{:#010x}", fourcc),
         modifier = pool.bos.first().map(|b| b.modifier).unwrap_or(0),
         pool = pool.bos.len(),
+        raw_lane,
         "direct wayland capture: the compositor fills our dmabufs, no portal in the path"
     );
     let _ = started.send(Ok(()));
@@ -649,7 +654,7 @@ fn run(
             } else {
                 bo.modifier
             };
-            let payload = if let Some(imp) = importer.as_mut() {
+            let payload = if let Some(imp) = importer.as_mut().filter(|_| !raw_lane) {
                 // The import reads the buffer synchronously here, so the buffer goes
                 // straight back to the pool: the CUDA payload owns whatever it needed.
                 let plane = pf_zerocopy::DmabufPlane {
