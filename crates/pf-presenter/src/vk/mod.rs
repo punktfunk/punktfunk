@@ -35,6 +35,7 @@ mod resources;
 mod setup;
 #[cfg(target_os = "linux")]
 mod sync_timeline;
+mod timing_ext;
 
 pub use setup::{list_adapters, probe_decode, AdapterDecode, PresentPref};
 
@@ -312,6 +313,13 @@ pub struct Presenter {
     /// The waiter runs on `VK_KHR_present_wait2`: presents chain `VkPresentId2KHR` and the
     /// swapchain is created with the present-id2/present-wait2 flags.
     present_id2: bool,
+    /// `VK_EXT_present_timing`: the engine stamps each present itself, and the waiter
+    /// reads the stamp in place of its own wake time.
+    timing: Option<std::sync::Arc<timing_ext::Engine>>,
+    /// The live swapchain was created for those stamps and its result queue is sized.
+    timing_armed: bool,
+    /// The last present asked for a stamp.
+    timing_asked: bool,
     /// The output's vblank as the glass clock where present-wait is missing (AMD on
     /// Windows). Estimated stamps, `glass=est`.
     #[cfg(windows)]
@@ -329,6 +337,16 @@ pub struct Presenter {
     /// Wayland lane that hands a dma-buf to the compositor as the window's own buffer.
     #[cfg(target_os = "linux")]
     native: Option<crate::wl_native::NativeLane>,
+    /// The compositor's own stamp per swapchain present, beside the driver's.
+    #[cfg(target_os = "linux")]
+    feedback: Option<crate::wl_feedback::SurfaceFeedback>,
+    /// (flipped without a copy, shown) since the last take, from the compositor's stamps.
+    #[cfg(target_os = "linux")]
+    scanout: (u32, u32),
+    /// The compositor has flagged a zero-copy flip at least once. KWin before 6.7 never
+    /// sets the bit, so until then a zero means nothing.
+    #[cfg(target_os = "linux")]
+    scanout_reported: bool,
     /// Exportable copies of Vulkan Video or PyroWave pictures for the lane; built on the
     /// first one.
     #[cfg(target_os = "linux")]
@@ -485,11 +503,24 @@ impl Presenter {
         }
     }
 
-    /// Where the display stamp comes from, for the ledger: `wait` (present-wait), `est`
-    /// (the vblank waiter), `feedback` (the native lane), `none`.
+    /// The engine's refresh as `(cycle, interval)` in ns, where it stamps presents and has
+    /// reported one. The interval is the cycle on a fixed panel, `u64::MAX` under variable
+    /// refresh, 0 where the engine cannot tell.
+    pub(crate) fn engine_refresh(&self) -> Option<(u64, u64)> {
+        use std::sync::atomic::Ordering;
+        let r = &self.timing.as_ref().filter(|_| self.timing_armed)?.refresh;
+        let cycle = r.duration_ns.load(Ordering::Relaxed);
+        (cycle > 0).then(|| (cycle, r.interval_ns.load(Ordering::Relaxed)))
+    }
+
+    /// Where the display stamp comes from, for the ledger: `timing` (the engine's own
+    /// stamps), `wait` (present-wait), `est` (the vblank waiter), `feedback` (the native
+    /// lane), `none`.
     pub(crate) fn glass_source(&self) -> &'static str {
         if self.native_last {
             "feedback"
+        } else if self.timing_armed {
+            "timing"
         } else if self.present_timer.is_some() {
             "wait"
         } else if self.vblank_active() {
@@ -1164,6 +1195,21 @@ impl Presenter {
         }
     }
 
+    /// Presents the engine reported as never shown since the last call: a newer one
+    /// replaced them before a refresh took them.
+    pub(crate) fn take_unshown(&self) -> u32 {
+        self.present_timer.as_ref().map_or(0, |t| t.take_unshown())
+    }
+
+    /// (flipped without a copy, shown) since the last call, by the compositor's own word.
+    /// `None` until the compositor has ever flagged a flip: a zero from one that never
+    /// says so is not "composited".
+    #[cfg(target_os = "linux")]
+    pub(crate) fn take_scanout(&mut self) -> Option<(u32, u32)> {
+        let out = std::mem::take(&mut self.scanout);
+        self.scanout_reported.then_some(out)
+    }
+
     /// (zero-copy, presented) the native lane counted since the last call.
     #[cfg(target_os = "linux")]
     pub(crate) fn take_native_zero_copy(&mut self) -> (u32, u32) {
@@ -1182,7 +1228,15 @@ impl Presenter {
         let done = (self.done_sem != vk::Semaphore::null()).then_some((self.done_sem, id));
         let now_ns = pf_client_core::session::now_ns();
         if let Some(t) = &self.present_timer {
-            t.enqueue(sc, id, done, pts_ns, decoded_ns, now_ns);
+            t.enqueue(present_timing::Job {
+                swapchain: sc,
+                present_id: id,
+                done,
+                stamped: std::mem::take(&mut self.timing_asked),
+                pts_ns,
+                decoded_ns,
+                submitted_ns: now_ns,
+            });
         }
         #[cfg(windows)]
         if let Some(t) = &self.vblank_timer {
@@ -1248,7 +1302,9 @@ impl Presenter {
     /// True when the swapchain itself can queue presents — the only modes the glass gate
     /// governs. MAILBOX and IMMEDIATE replace or drop stale images in the driver, and
     /// so does `FIFO_LATEST_READY` — except on Windows, where DXGI keeps up to three
-    /// composed presents queued ahead of DWM and LATEST_READY drains none of them.
+    /// composed presents queued ahead of DWM and LATEST_READY drains none of them. Under
+    /// Wayland the gate on LATEST_READY measured no gain at 60 fps and held a 120 fps
+    /// stream 20 ms: a completion there is not the flip.
     pub(crate) fn needs_glass_gate(&self) -> bool {
         let fifo = matches!(
             self.present_mode,
@@ -1280,16 +1336,50 @@ impl Presenter {
         if let Some(t) = &self.vblank_timer {
             out.extend(t.take_samples());
         }
+        // Both stamps per present, joined offline by id.
+        #[cfg(target_os = "linux")]
+        if let Some(fb) = self.feedback.as_mut() {
+            for s in fb.take() {
+                if s.displayed_ns.is_some() {
+                    self.scanout.1 += 1;
+                    if s.zero_copy {
+                        self.scanout.0 += 1;
+                        self.scanout_reported = true;
+                    }
+                }
+                tracing::trace!(
+                    target: "pf_glass",
+                    id = s.present_id,
+                    displayed_ns = s.displayed_ns.unwrap_or(0),
+                    zero_copy = s.zero_copy,
+                    refresh_ns = s.refresh_ns,
+                    "compositor stamp"
+                );
+            }
+            for s in &out {
+                tracing::trace!(
+                    target: "pf_glass",
+                    id = s.present_id,
+                    displayed_ns = s.displayed_ns,
+                    submitted_ns = s.submitted_ns,
+                    exact = s.exact,
+                    "driver stamp"
+                );
+            }
+        }
         #[cfg(target_os = "linux")]
         if let Some(lane) = self.native.as_mut() {
             out.extend(lane.take_samples().into_iter().map(|s| {
                 present_timing::PresentedSample {
+                    present_id: 0,
                     pts_ns: s.pts_ns,
                     decoded_ns: s.decoded_ns,
                     submitted_ns: s.submitted_ns,
                     // No GPU work of ours on this lane: the whole latch is the compositor's.
                     gpu_done_ns: s.submitted_ns,
                     displayed_ns: s.displayed_ns,
+                    // The compositor's own presentation time.
+                    exact: true,
                 }
             }));
         }

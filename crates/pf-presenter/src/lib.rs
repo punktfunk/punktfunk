@@ -53,6 +53,8 @@ pub mod wayland_scroll;
 #[cfg(windows)]
 mod win32;
 #[cfg(target_os = "linux")]
+pub mod wl_feedback;
+#[cfg(target_os = "linux")]
 pub mod wl_native;
 
 #[cfg(any(target_os = "linux", windows))]
