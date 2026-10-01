@@ -2855,3 +2855,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "qsv_gates.rs"]
+mod gates;
