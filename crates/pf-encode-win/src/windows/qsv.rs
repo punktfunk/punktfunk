@@ -6,11 +6,13 @@
 //! driver fails session creation and open falls through — same degrade as NVENC/AMF.
 //! Feature `qsv` (cmake + libclang).
 //!
-//! Input is same-adapter D3D11 NV12/P010: `SetHandle` then GPU-side
-//! `CopySubresourceRegion` into a runtime encode surface (`MFXMemory_GetSurfaceForEncode`).
-//! No readback: Bgra/Rgb10a2 or CPU frames fail open/submit. HRD off so
+//! Input is a same-adapter D3D11 texture: NV12/P010, or BGRA that the encoder converts to
+//! BT.709 limited 4:2:0 itself. Our frame allocator hands the runtime the caller's
+//! texture where it lies once the caller declares a ring depth, else a copy at the coded
+//! size; a runtime that refuses the allocator gets a copy into one of its own surfaces
+//! (`MFXMemory_GetSurfaceForEncode`). No readback: CPU frames fail submit. HRD off so
 //! `reconfigure_bitrate` is a no-IDR Reset. LTR-RFI is Query-gated per codec.
-//! Evidence: `design/native-qsv-encoder.md`.
+//! Evidence: `design/native-qsv-encoder.md`, `design/intel-windows-zero-copy-conversion.md`.
 
 use super::policy::{intra_refresh_requested, ltr_test_force_at};
 use super::{ChromaFormat, Codec, EncodedFrame, Encoder, EncoderCaps};
@@ -25,7 +27,8 @@ use windows::core::Interface;
 use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11DeviceContext, ID3D11Multithread, ID3D11Resource, ID3D11Texture2D, D3D11_TEXTURE2D_DESC,
+    ID3D11DeviceContext, ID3D11Multithread, ID3D11Resource, ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 
@@ -102,6 +105,23 @@ fn split_rate(bps: u64) -> (u16, u16) {
 
 const fn align16(v: u32) -> u16 {
     (v.div_ceil(16) * 16) as u16
+}
+
+/// The runtime's FourCC for an input format; `None` for one QSV does not read. BGRA is
+/// converted to BT.709 limited 4:2:0 inside the encoder. A2RGB10 is left out: the UHD 750
+/// reads it with red and blue swapped and the BT.709 matrix. FP16 does not Init.
+fn fourcc(format: PixelFormat) -> Option<u32> {
+    Some(match format {
+        PixelFormat::Nv12 => vpl::MFX_FOURCC_NV12,
+        PixelFormat::P010 => vpl::MFX_FOURCC_P010,
+        PixelFormat::Bgra => vpl::MFX_FOURCC_RGB4,
+        _ => return None,
+    } as u32)
+}
+
+/// `mfxFrameData::TimeStamp` is 90 kHz.
+fn ts_90k(pts_ns: u64) -> u64 {
+    pts_ns.wrapping_mul(9) / 100_000
 }
 
 const NUM_LTR_SLOTS: usize = 2;
@@ -266,6 +286,7 @@ struct ParamSet {
     par: vpl::mfxVideoParam,
     co: Box<vpl::mfxExtCodingOption>,
     co2: Option<Box<vpl::mfxExtCodingOption2>>,
+    co3: Option<Box<vpl::mfxExtCodingOption3>>,
     vsi: Option<Box<vpl::mfxExtVideoSignalInfo>>,
     mastering: Option<Box<vpl::mfxExtMasteringDisplayColourVolume>>,
     cll: Option<Box<vpl::mfxExtContentLightLevelInfo>>,
@@ -279,6 +300,9 @@ impl ParamSet {
         self.ptrs
             .push(&mut self.co.Header as *mut vpl::mfxExtBuffer);
         if let Some(b) = self.co2.as_mut() {
+            self.ptrs.push(&mut b.Header as *mut vpl::mfxExtBuffer);
+        }
+        if let Some(b) = self.co3.as_mut() {
             self.ptrs.push(&mut b.Header as *mut vpl::mfxExtBuffer);
         }
         if let Some(b) = self.vsi.as_mut() {
@@ -297,11 +321,15 @@ impl ParamSet {
 
 struct EncodeConfig {
     codec: Codec,
+    /// What each frame carries ([`fourcc`]).
+    input: PixelFormat,
     width: u32,
     height: u32,
     fps: u32,
     bitrate_bps: u64,
     ten_bit: bool,
+    /// BT.2020 PQ signalling; a 10-bit stream without it is BT.709.
+    hdr: bool,
     /// CO2 intra-refresh wave instead of LTR (mutually exclusive).
     intra_refresh: bool,
     hdr_meta: Option<pf_frame::HdrMeta>,
@@ -349,17 +377,22 @@ fn build_params(cfg: &EncodeConfig) -> ParamSet {
         set_max_kbps(e, kbps);
     }
     let info = &mut mfx.FrameInfo;
-    info.FourCC = if cfg.ten_bit {
-        vpl::MFX_FOURCC_P010 as u32
-    } else {
-        vpl::MFX_FOURCC_NV12 as u32
-    };
+    info.FourCC = fourcc(cfg.input).expect("open admits only inputs with a FourCC");
+    let rgb = cfg.input == PixelFormat::Bgra;
     if cfg.ten_bit {
         info.BitDepthLuma = 10;
         info.BitDepthChroma = 10;
         info.Shift = 1; // P010 is MSB-aligned
+    } else if rgb {
+        info.BitDepthLuma = 8;
+        info.BitDepthChroma = 8;
     }
-    info.ChromaFormat = vpl::MFX_CHROMAFORMAT_YUV420 as u16;
+    // BGRA is 4:4:4 as described; `co3` below asks for a 4:2:0 stream.
+    info.ChromaFormat = if rgb {
+        vpl::MFX_CHROMAFORMAT_YUV444
+    } else {
+        vpl::MFX_CHROMAFORMAT_YUV420
+    } as u16;
     info.PicStruct = vpl::MFX_PICSTRUCT_PROGRESSIVE as u16;
     info.FrameRateExtN = cfg.fps.max(1);
     info.FrameRateExtD = 1;
@@ -391,9 +424,23 @@ fn build_params(cfg: &EncodeConfig) -> ParamSet {
         b
     });
 
-    // Colour signalling is unconditional: capture already CSC'd to BT.709 limited or
-    // BT.2020 PQ. An "unspecified" stream lets decoders pick 601 at sub-HD.
-    let hdr = cfg.ten_bit && cfg.codec != Codec::H264;
+    // BGRA in, 8-bit 4:2:0 out. The runtime defaults RGB4 to 4:2:0 already; asking keeps a
+    // runtime that defaults otherwise from emitting a 4:4:4 stream.
+    let co3 = rgb.then(|| {
+        // SAFETY: all-zero is a valid `mfxExtCodingOption3`; header stamped below. Not
+        // `Default`, for the padding reason `co2` gives.
+        let mut b: Box<vpl::mfxExtCodingOption3> = Box::new(unsafe { std::mem::zeroed() });
+        b.Header.BufferId = vpl::MFX_EXTBUFF_CODING_OPTION3 as u32;
+        b.Header.BufferSz = std::mem::size_of::<vpl::mfxExtCodingOption3>() as u32;
+        b.TargetChromaFormatPlus1 = vpl::MFX_CHROMAFORMAT_YUV420 as u16 + 1;
+        b.TargetBitDepthLuma = 8;
+        b.TargetBitDepthChroma = 8;
+        b
+    });
+
+    // Colour signalling is unconditional: the input is BT.709 limited or BT.2020 PQ, or BGRA
+    // the encoder converts to BT.709 limited. "Unspecified" lets decoders pick 601 at sub-HD.
+    let hdr = cfg.hdr && cfg.codec != Codec::H264;
     let vsi = {
         let mut b = Box::new(vpl::mfxExtVideoSignalInfo::default());
         b.Header.BufferId = vpl::MFX_EXTBUFF_VIDEO_SIGNAL_INFO as u32;
@@ -458,6 +505,7 @@ fn build_params(cfg: &EncodeConfig) -> ParamSet {
         par,
         co,
         co2,
+        co3,
         vsi,
         mastering,
         cll,
@@ -513,7 +561,8 @@ impl FrameCtrl {
     }
 }
 
-/// In-flight frame. `_ctrl` keeps per-frame ext buffers alive until the sync point completes.
+/// In-flight frame. `_ctrl` keeps per-frame ext buffers alive until the sync point completes,
+/// `_input` the surface and texture the runtime reads.
 struct Pending {
     syncp: vpl::mfxSyncPoint,
     bs: Box<BsBuf>,
@@ -521,6 +570,89 @@ struct Pending {
     forced: bool,
     recovery_anchor: bool,
     _ctrl: Option<Box<FrameCtrl>>,
+    _input: Option<Box<OwnSurface>>,
+}
+
+/// Our frame allocator. The runtime reads a texture through `GetHDL`, by the `MemId` we put on
+/// the surface; nothing is allocated, locked or freed here, and a request for that is refused.
+fn frame_allocator() -> vpl::mfxFrameAllocator {
+    vpl::mfxFrameAllocator {
+        Alloc: Some(alloc_refused),
+        Lock: Some(lock_refused),
+        Unlock: Some(lock_refused),
+        GetHDL: Some(get_hdl),
+        Free: Some(free_nothing),
+        ..Default::default()
+    }
+}
+
+unsafe extern "C" fn alloc_refused(
+    _: vpl::mfxHDL,
+    request: *mut vpl::mfxFrameAllocRequest,
+    _: *mut vpl::mfxFrameAllocResponse,
+) -> vpl::mfxStatus {
+    // SAFETY: the runtime passes a live request for the duration of the call, or null.
+    let kind = unsafe { request.as_ref() }.map(|r| r.Type);
+    tracing::warn!(
+        ?kind,
+        "QSV runtime asked our frame allocator for frames — refused"
+    );
+    vpl::MFX_ERR_UNSUPPORTED
+}
+
+unsafe extern "C" fn lock_refused(
+    _: vpl::mfxHDL,
+    _: vpl::mfxMemId,
+    _: *mut vpl::mfxFrameData,
+) -> vpl::mfxStatus {
+    vpl::MFX_ERR_UNSUPPORTED
+}
+
+/// A `MemId` is one of [`Inner::mem_ids`]; D3D11 wants that `{texture, array index}` pair
+/// written where `handle` points.
+unsafe extern "C" fn get_hdl(
+    _: vpl::mfxHDL,
+    mid: vpl::mfxMemId,
+    handle: *mut vpl::mfxHDL,
+) -> vpl::mfxStatus {
+    if mid.is_null() || handle.is_null() {
+        return vpl::MFX_ERR_INVALID_HANDLE;
+    }
+    // SAFETY: every `MemId` we hand out points at a boxed pair that lives as long as the
+    // session; under D3D11 the runtime's `handle` is an `mfxHDLPair` slot.
+    unsafe { *handle.cast::<vpl::mfxHDLPair>() = *mid.cast::<vpl::mfxHDLPair>() };
+    vpl::MFX_ERR_NONE
+}
+
+unsafe extern "C" fn free_nothing(
+    _: vpl::mfxHDL,
+    _: *mut vpl::mfxFrameAllocResponse,
+) -> vpl::mfxStatus {
+    vpl::MFX_ERR_NONE
+}
+
+/// A texture of ours or the caller's as one frame's input. Boxed: the runtime holds the
+/// surface's address until the frame is synced, and `_tex` keeps what the `MemId` names alive.
+struct OwnSurface {
+    surf: vpl::mfxFrameSurface1,
+    _tex: ID3D11Texture2D,
+}
+
+/// The surface one frame is encoded from.
+enum FrameInput {
+    /// One of the runtime's own, holding a copy; released when this drops.
+    Runtime(EncodeSurface),
+    /// Read through our allocator ([`frame_allocator`]).
+    Own(Box<OwnSurface>),
+}
+
+impl FrameInput {
+    fn surface(&mut self) -> *mut vpl::mfxFrameSurface1 {
+        match self {
+            Self::Runtime(s) => s.surf,
+            Self::Own(o) => &mut o.surf,
+        }
+    }
 }
 
 // SAFETY: `Pending` carries raw VPL allocations — a sync point, the boxed bitstream the runtime
@@ -684,7 +816,20 @@ struct Inner {
     /// Session must Close before the loader unloads the runtime (declaration drop order).
     session: Session,
     _loader: Loader,
-    _device: ID3D11Device,
+    /// Installed on `session`, so declared after it. `None`: the runtime refused it and every
+    /// frame is copied into one of its own surfaces ([`Inner::load_surface`]).
+    alloc: Option<Box<vpl::mfxFrameAllocator>>,
+    /// One `{texture, 0}` pair per texture ever handed over, so a texture keeps its `MemId`
+    /// while the runtime may cache by it. Grows with distinct textures: pool slots and
+    /// swap-chain buffers. Boxed: a `MemId` is the pair's address.
+    #[allow(clippy::vec_box)]
+    mem_ids: Vec<Box<vpl::mfxHDLPair>>,
+    /// The `FrameInfo` Init took; every surface of ours carries it.
+    info: vpl::mfxFrameInfo,
+    /// Copy targets at the coded size, for a frame that is not read in place. Made on first use.
+    ring: Vec<ID3D11Texture2D>,
+    next: usize,
+    device: ID3D11Device,
     dctx: ID3D11DeviceContext,
     bs_bytes: usize,
     frames_submitted: u64,
@@ -723,11 +868,20 @@ impl Inner {
 
 pub struct QsvEncoder {
     codec: Codec,
+    /// What every frame must carry.
+    input: PixelFormat,
     width: u32,
     height: u32,
     fps: u32,
     bitrate_bps: u64,
     ten_bit: bool,
+    hdr: bool,
+    /// What the caller promised through [`Encoder::set_input_ring_depth`]
+    /// ([`QsvEncoder::in_place`]).
+    input_ring_depth: Option<usize>,
+    /// The runtime refused our allocator or a texture of ours: copy every frame into its own
+    /// surfaces for this encoder's life.
+    runtime_surfaces: bool,
     /// Lazy from the first frame's device; rebuilt on capturer-device change.
     inner: Option<Inner>,
     bound_device: isize,
@@ -766,7 +920,8 @@ unsafe impl Send for QsvEncoder {}
 
 impl QsvEncoder {
     /// Open native QSV. Fails when there is no Intel VPL impl, the codec probe declines, or
-    /// capture is not NV12/P010.
+    /// the input is not one QSV reads ([`fourcc`]). `hdr` signals BT.2020 PQ; a 10-bit stream
+    /// without it is BT.709.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         codec: Codec,
@@ -777,6 +932,7 @@ impl QsvEncoder {
         bitrate_bps: u64,
         bit_depth: u8,
         chroma: ChromaFormat,
+        hdr: bool,
         // Selected render adapter (`None` = first Intel VPL implementation); the AV1 probe
         // queries it. The session itself binds to the capture device's adapter at bring-up.
         adapter_luid: Option<LUID>,
@@ -788,32 +944,31 @@ impl QsvEncoder {
         if codec == Codec::Av1 && !probe_can_encode(Codec::Av1, adapter_luid) {
             bail!("this GPU/driver declined AV1 encode (DG2/Arc or MTL+ required) — QSV probe");
         }
+        if fourcc(format).is_none() {
+            bail!(
+                "native QSV reads NV12, P010 or BGRA frames; the capturer delivered {format:?} \
+                 (no readback path by design — zero-copy invariant)"
+            );
+        }
         // Depth follows delivered pixels, not negotiated depth ([`crate::ten_bit_input`]).
         let ten_bit = crate::ten_bit_input(format, bit_depth);
         if ten_bit && codec == Codec::H264 {
             bail!("native QSV: 10-bit is HEVC/AV1-only (H.264 High10 is not negotiated)");
-        }
-        let expected = if ten_bit {
-            PixelFormat::P010
-        } else {
-            PixelFormat::Nv12
-        };
-        if format != expected {
-            bail!(
-                "native QSV needs the video-processor {expected:?} capture path; capturer \
-                 delivered {format:?} (no readback path by design — zero-copy invariant)"
-            );
         }
         if chroma.is_444() {
             tracing::warn!("QSV 4:4:4 is not probed/wired yet — encoding 4:2:0");
         }
         Ok(QsvEncoder {
             codec,
+            input: format,
             width,
             height,
             fps,
             bitrate_bps,
             ten_bit,
+            hdr: hdr && ten_bit,
+            input_ring_depth: None,
+            runtime_surfaces: false,
             inner: None,
             bound_device: 0,
             frame_idx: 0,
@@ -838,21 +993,36 @@ impl QsvEncoder {
         !ltr_disabled() && !intra_refresh_requested()
     }
 
+    /// Whether to hand the runtime the caller's texture instead of a copy, and how many frames
+    /// may then be in flight. AMF's rule ([`super::amf`]): only at a declared depth of 2 or
+    /// more, since at 1 the copy is what decouples the encode from the caller's ring.
+    fn in_place(&self) -> Option<usize> {
+        self.input_ring_depth
+            .filter(|&d| d >= 2)
+            .map(|d| d.min(IN_FLIGHT_MAX))
+    }
+
     fn encode_config(&self) -> EncodeConfig {
         EncodeConfig {
             codec: self.codec,
+            input: self.input,
             width: self.width,
             height: self.height,
             fps: self.fps,
             bitrate_bps: self.bitrate_bps,
             ten_bit: self.ten_bit,
+            hdr: self.hdr,
             intra_refresh: intra_refresh_requested(),
             hdr_meta: self.hdr_meta,
         }
     }
 
-    /// Query-gate LTR/IR, Init, then size the bitstream pool from `BufferSizeInKB`.
-    fn init_encode(&self, session: vpl::mfxSession) -> Result<(bool, bool, usize)> {
+    /// Query-gate LTR/IR, Init, then size the bitstream pool from `BufferSizeInKB`. Also
+    /// returns the `FrameInfo` the encoder took, which surfaces of ours must carry.
+    fn init_encode(
+        &self,
+        session: vpl::mfxSession,
+    ) -> Result<(bool, bool, usize, vpl::mfxFrameInfo)> {
         let cfg = self.encode_config();
         let mut set = build_params(&cfg);
         // Query-gate mfxExtRefListCtrl: AVC/HEVC are spec'd; AV1 is runtime-only and
@@ -893,7 +1063,7 @@ impl QsvEncoder {
         // Asked-for, not installed — confirmed by GetVideoParam below.
         let ir_requested = cfg.intra_refresh && set.co2.is_some();
         // SAFETY: `session` is live; `got` and its (empty) ext chain outlive the call.
-        let bs_bytes = unsafe {
+        let (bs_bytes, info) = unsafe {
             let mut got = vpl::mfxVideoParam::default();
             vpl_ok(
                 vpl::MFXVideoENCODE_GetVideoParam(session, &mut got),
@@ -902,7 +1072,7 @@ impl QsvEncoder {
             let m = &mut got.__bindgen_anon_1.mfx;
             let mult = m.BRCParamMultiplier.max(1) as usize;
             let kb = enc_of(m).BufferSizeInKB as usize;
-            (kb * mult * 1000).max(256 * 1024)
+            ((kb * mult * 1000).max(256 * 1024), m.FrameInfo)
         };
         // Query/Init can warn INCOMPATIBLE_VIDEO_PARAM and still drop the wave
         // (`IntRefType=0`). `ir_active` feeds `EncoderCaps::intra_refresh`; a false
@@ -943,7 +1113,7 @@ impl QsvEncoder {
         } else {
             false
         };
-        Ok((ltr_active, ir_active, bs_bytes))
+        Ok((ltr_active, ir_active, bs_bytes, info))
     }
 
     /// Open the session now instead of at the first submit, so `caps()` reports the LTR and
@@ -985,7 +1155,31 @@ impl QsvEncoder {
             )?;
             dctx
         };
-        let (ltr_active, ir_active, bs_bytes) = self.init_encode(session.0)?;
+        // Installed before Init, as the runtime requires; it lives in `Inner` after the session.
+        let mut alloc = (!self.runtime_surfaces).then(|| Box::new(frame_allocator()));
+        let installed = alloc.as_mut().is_some_and(|a| {
+            // SAFETY: `session.0` is live and has no encoder yet; `a` is boxed and kept in
+            // `Inner`, declared after the session, so it outlives every call the runtime makes.
+            let sts = unsafe { vpl::MFXVideoCORE_SetFrameAllocator(session.0, &mut **a) };
+            sts >= vpl::MFX_ERR_NONE
+        });
+        if !installed && alloc.take().is_some() {
+            tracing::warn!("QSV refused our frame allocator — copying into the runtime's surfaces");
+        }
+        let (ltr_active, ir_active, bs_bytes, info) = match self.init_encode(session.0) {
+            // A runtime that cannot encode from our allocator gets a session without one.
+            Err(e) if alloc.is_some() => {
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    "QSV Init refused with our frame allocator — retrying on the runtime's surfaces"
+                );
+                drop((session, loader));
+                self.runtime_surfaces = true;
+                self.bound_device = 0;
+                return self.ensure_inner(device);
+            }
+            r => r?,
+        };
         self.ltr_active = ltr_active;
         self.ir_active = ir_active;
         self.ltr_slots = [None; NUM_LTR_SLOTS];
@@ -995,15 +1189,18 @@ impl QsvEncoder {
         self.hdr_applied = self.hdr_meta;
         tracing::info!(
             codec = ?self.codec,
+            input = ?self.input,
             width = self.width,
             height = self.height,
             fps = self.fps,
             ten_bit = self.ten_bit,
+            hdr = self.hdr,
             ltr = ltr_active,
             intra_refresh = ir_active,
+            own_surfaces = alloc.is_some(),
             api = %format_args!("{}.{}", api.0, api.1),
             device = %format_args!("{:#x}", dev_raw as usize),
-            "native QSV encode active (VPL, zero-copy D3D11)"
+            "native QSV encode active (VPL, D3D11)"
         );
         // The sync thread starts against the initialized session and is joined before anything
         // closes it (`Inner` drops it first; `reset` stops it by hand).
@@ -1012,7 +1209,12 @@ impl QsvEncoder {
             retrieve,
             session,
             _loader: loader,
-            _device: device.clone(),
+            alloc,
+            mem_ids: Vec::new(),
+            info,
+            ring: Vec::new(),
+            next: 0,
+            device: device.clone(),
             dctx,
             bs_bytes,
             frames_submitted: 0,
@@ -1042,17 +1244,12 @@ impl QsvEncoder {
                 bail!("native QSV is D3D11-only; got a CPU frame (video processor lost?)")
             }
         };
-        let expected = if self.ten_bit {
-            PixelFormat::P010
-        } else {
-            PixelFormat::Nv12
-        };
         anyhow::ensure!(
-            captured.format == expected,
+            captured.format == self.input,
             "captured format {:?} != QSV input {:?} (capturer video-processor fallback \
              mid-session — native QSV has no readback path)",
             captured.format,
-            expected
+            self.input
         );
         self.ensure_inner(&frame.device)?;
         // Mid-stream HDR regrade re-Inits so the new mastering SEI/OBU rides the fresh IDR.
@@ -1079,16 +1276,18 @@ impl QsvEncoder {
         if self.fail_submit_at == Some(cur_idx) {
             bail!("test hook: frame {cur_idx} refused after the LTR decision");
         }
+        let in_place = self.in_place();
         let inner = self.inner.as_mut().expect("ensure_inner succeeded");
         // Wait for the sync thread to free a slot before submitting: the runtime keeps writing a
-        // bitstream until its frame is synced, so the queue must not grow under overload.
+        // bitstream, and reading an input, until its frame is synced. In place, the caller's
+        // declared depth is the bound.
+        let cap = in_place.unwrap_or(IN_FLIGHT_MAX);
         inner
             .retrieve
             .q
-            .wait_until(BUSY_BUDGET, "QSV output", |o| {
-                o.pending.len() < IN_FLIGHT_MAX
-            })?;
-        let surf = inner.load_surface(&frame.texture, cur_idx, captured.pts_ns)?;
+            .wait_until(BUSY_BUDGET, "QSV output", |o| o.pending.len() < cap)?;
+        let mut input =
+            inner.frame_input(&frame.texture, in_place.is_some(), cur_idx, captured.pts_ns)?;
         let mut ctrl = frame_ctrl(
             forced,
             ltr,
@@ -1097,7 +1296,28 @@ impl QsvEncoder {
             self.codec != Codec::Av1,
         );
         let mut bs = inner.take_bs();
-        let syncp = inner.encode_async(&surf, ctrl.as_deref_mut(), &mut bs)?;
+        let first = inner.frames_submitted == 0;
+        let syncp = match inner.encode_async(input.surface(), ctrl.as_deref_mut(), &mut bs) {
+            Ok(s) => s,
+            Err(e) => {
+                // A runtime that takes our allocator at Init and then refuses our surface.
+                if first && matches!(input, FrameInput::Own(_)) {
+                    tracing::warn!(
+                        error = %format!("{e:#}"),
+                        "QSV refused a texture of ours — reopening on the runtime's surfaces"
+                    );
+                    self.runtime_surfaces = true;
+                    self.inner = None;
+                    self.bound_device = 0;
+                }
+                return Err(e);
+            }
+        };
+        let own = match input {
+            FrameInput::Own(o) => Some(o),
+            // Releases here; the runtime holds its own reference for the in-flight encode.
+            FrameInput::Runtime(_) => None,
+        };
         inner.retrieve.q.lock().pending.push_back(Pending {
             syncp,
             bs,
@@ -1105,9 +1325,9 @@ impl QsvEncoder {
             forced,
             recovery_anchor: ltr.force.is_some(),
             _ctrl: ctrl,
+            _input: own,
         });
         inner.frames_submitted += 1;
-        // `surf` releases here; the runtime holds its own reference for the in-flight encode.
         Ok(())
     }
 
@@ -1239,6 +1459,108 @@ impl Drop for EncodeSurface {
 }
 
 impl Inner {
+    /// One frame's input. Through our allocator: `texture` itself when the caller declared a
+    /// ring depth, else a copy at the coded size. A texture of exactly the display size is
+    /// read in place too; the runtime reads no row past the crop. Without the allocator, a
+    /// copy into one of the runtime's surfaces.
+    fn frame_input(
+        &mut self,
+        texture: &ID3D11Texture2D,
+        in_place: bool,
+        frame_order: i64,
+        pts_ns: u64,
+    ) -> Result<FrameInput> {
+        if self.alloc.is_none() {
+            return self
+                .load_surface(texture, frame_order, pts_ns)
+                .map(FrameInput::Runtime);
+        }
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        // SAFETY: `texture` is the caller's live texture; `desc` a valid local out-param.
+        unsafe { texture.GetDesc(&mut desc) };
+        let mut info = self.info;
+        let wh = *frame_wh(&mut info);
+        let fits = desc.ArraySize == 1
+            && desc.Width >= u32::from(wh.CropW)
+            && desc.Height >= u32::from(wh.CropH);
+        let tex = if in_place && fits {
+            texture.clone()
+        } else {
+            self.copy_to_ring(texture, &desc)?
+        };
+        let mut surf = vpl::mfxFrameSurface1 {
+            Info: self.info,
+            ..Default::default()
+        };
+        surf.Data.MemId = self.mem_id(&tex);
+        surf.Data.MemType = (vpl::MFX_MEMTYPE_VIDEO_MEMORY_PROCESSOR_TARGET
+            | vpl::MFX_MEMTYPE_EXTERNAL_FRAME
+            | vpl::MFX_MEMTYPE_FROM_ENCODE) as u16;
+        // mfxExtRefListCtrl keys on FrameOrder; `submit_indexed` keeps that = wire index.
+        surf.Data.FrameOrder = frame_order as u32;
+        surf.Data.TimeStamp = ts_90k(pts_ns);
+        Ok(FrameInput::Own(Box::new(OwnSurface { surf, _tex: tex })))
+    }
+
+    /// `src` copied into the next ring texture at the coded size. The in-flight bound
+    /// ([`IN_FLIGHT_MAX`]) is the ring's length, so the slot's last frame is synced.
+    fn copy_to_ring(
+        &mut self,
+        src: &ID3D11Texture2D,
+        desc: &D3D11_TEXTURE2D_DESC,
+    ) -> Result<ID3D11Texture2D> {
+        let mut info = self.info;
+        let wh = *frame_wh(&mut info);
+        if self.ring.is_empty() {
+            let ring_desc = D3D11_TEXTURE2D_DESC {
+                Width: u32::from(wh.Width),
+                Height: u32::from(wh.Height),
+                MipLevels: 1,
+                ArraySize: 1,
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+                ..*desc
+            };
+            for _ in 0..IN_FLIGHT_MAX {
+                let mut t = None;
+                // SAFETY: a complete description, no initial data; `t` is a valid out-param.
+                unsafe { self.device.CreateTexture2D(&ring_desc, None, Some(&mut t)) }
+                    .context("QSV copy ring texture")?;
+                self.ring.push(t.context("QSV copy ring texture")?);
+            }
+        }
+        let dst = self.ring[self.next % self.ring.len()].clone();
+        self.next += 1;
+        let src_res: ID3D11Resource = src.cast().context("texture -> resource")?;
+        let dst_res: ID3D11Resource = dst.cast().context("ring -> resource")?;
+        // SAFETY: same device and format (the ring follows the first frame's format and the
+        // encoder rejects a format change); the source fits inside the coded-size target. The
+        // immediate context is multithread-protected.
+        unsafe {
+            self.dctx
+                .CopySubresourceRegion(&dst_res, 0, 0, 0, 0, &src_res, 0, None)
+        };
+        Ok(dst)
+    }
+
+    /// The `MemId` for `tex`: the same one every time this texture comes back.
+    fn mem_id(&mut self, tex: &ID3D11Texture2D) -> vpl::mfxMemId {
+        let raw = tex.as_raw();
+        let at = match self.mem_ids.iter().position(|p| p.first == raw) {
+            Some(i) => i,
+            None => {
+                self.mem_ids.push(Box::new(vpl::mfxHDLPair {
+                    first: raw,
+                    second: ptr::null_mut(),
+                }));
+                self.mem_ids.len() - 1
+            }
+        };
+        (&mut *self.mem_ids[at] as *mut vpl::mfxHDLPair).cast()
+    }
+
     /// A runtime surface holding a copy of `texture`, stamped with the frame's order and time.
     fn load_surface(
         &mut self,
@@ -1298,7 +1620,7 @@ impl Inner {
                 .CopySubresourceRegion(&dst_res, 0, 0, 0, 0, &src, 0, None);
             // mfxExtRefListCtrl keys on FrameOrder; `submit_indexed` keeps that = wire index.
             (*surf.surf).Data.FrameOrder = frame_order as u32;
-            (*surf.surf).Data.TimeStamp = pts_ns.wrapping_mul(9) / 100_000; // 90 kHz
+            (*surf.surf).Data.TimeStamp = ts_90k(pts_ns);
             Ok(surf)
         }
     }
@@ -1307,7 +1629,7 @@ impl Inner {
     /// [`BUSY_BUDGET`]. Returns the sync point the retrieve thread waits on.
     fn encode_async(
         &self,
-        surf: &EncodeSurface,
+        surf: *mut vpl::mfxFrameSurface1,
         ctrl: Option<&mut FrameCtrl>,
         bs: &mut BsBuf,
     ) -> Result<vpl::mfxSyncPoint> {
@@ -1316,13 +1638,14 @@ impl Inner {
         let deadline = std::time::Instant::now() + BUSY_BUDGET;
         let sts = loop {
             // SAFETY: encode thread, live session. `EncodeFrameAsync` copies `ctrl`; its ext
-            // buffers and `bs` live on in the `Pending` entry until the sync point completes,
-            // and `surf` stays referenced until its guard drops.
+            // buffers and `bs` live on in the `Pending` entry until the sync point completes.
+            // `surf` is a runtime surface referenced until its guard drops, or ours, which the
+            // `Pending` entry keeps until the sync point completes.
             let sts = unsafe {
                 vpl::MFXVideoENCODE_EncodeFrameAsync(
                     self.session.0,
                     ctrl_ptr,
-                    surf.surf,
+                    surf,
                     &mut bs.mfx,
                     &mut syncp,
                 )
@@ -1495,6 +1818,21 @@ impl Encoder for QsvEncoder {
         self.inner.as_ref().map(|i| i.retrieve.q.raw())
     }
 
+    /// Take the caller's promise about its own texture ring. At 2 or more the runtime reads
+    /// the caller's texture where it lies ([`QsvEncoder::in_place`]), and the value bounds
+    /// in-flight frames, since past it the caller may overwrite a picture still being read.
+    fn set_input_ring_depth(&mut self, depth: usize) {
+        if self.input_ring_depth == Some(depth) {
+            return;
+        }
+        self.input_ring_depth = Some(depth);
+        tracing::debug!(
+            depth,
+            in_place = self.in_place().is_some(),
+            "QSV input ring depth declared"
+        );
+    }
+
     /// Stall recovery: Close+Init in place. A second reset with no AU drops the whole session.
     fn reset(&mut self) -> bool {
         self.force_kf = true;
@@ -1534,7 +1872,7 @@ impl Encoder for QsvEncoder {
             inner.session.0
         };
         match self.init_encode(rebuilt) {
-            Ok((ltr, ir, bs_bytes)) => {
+            Ok((ltr, ir, bs_bytes, info)) => {
                 self.ltr_active = ltr;
                 self.ir_active = ir;
                 self.ltr_slots = [None; NUM_LTR_SLOTS];
@@ -1544,6 +1882,7 @@ impl Encoder for QsvEncoder {
                 let restarted = match self.inner.as_mut() {
                     Some(inner) => {
                         inner.bs_bytes = bs_bytes;
+                        inner.info = info;
                         // BufferSizeInKB may have changed; a pooled buffer sized for the old rate
                         // would be short.
                         inner.retrieve.q.lock().extra.boxes.clear();
@@ -1697,6 +2036,7 @@ impl Encoder for QsvEncoder {
                     forced: false,
                     recovery_anchor: false,
                     _ctrl: None,
+                    _input: None,
                 });
             }
         }
@@ -1738,11 +2078,17 @@ fn probe_query(codec: Codec, ten_bit: bool, adapter_luid: Option<LUID>) -> bool 
     };
     let cfg = EncodeConfig {
         codec,
+        input: if ten_bit {
+            PixelFormat::P010
+        } else {
+            PixelFormat::Nv12
+        },
         width: 640,
         height: 480,
         fps: 30,
         bitrate_bps: 4_000_000,
         ten_bit,
+        hdr: ten_bit,
         intra_refresh: false,
         hdr_meta: None,
     };
@@ -1794,6 +2140,7 @@ mod tests {
             2_000_000,
             8,
             ChromaFormat::Yuv420,
+            false,
             None,
         )
         .expect("open");
@@ -2012,6 +2359,7 @@ mod tests {
             2_000_000,
             if ten_bit { 10 } else { 8 },
             ChromaFormat::Yuv420,
+            ten_bit,
             None,
         )
         .expect("open");
@@ -2126,6 +2474,7 @@ mod tests {
             soak.mbps * 1_000_000,
             8,
             ChromaFormat::Yuv420,
+            false,
             None,
         )
         .expect("QSV open");
@@ -2459,6 +2808,7 @@ mod tests {
             10_000_000,
             10,
             ChromaFormat::Yuv420,
+            true,
             None,
         )
         .expect("open");
@@ -2505,3 +2855,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "qsv_gates.rs"]
+mod gates;

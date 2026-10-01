@@ -722,17 +722,15 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
-    DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_RATIONAL,
+    DXGI_COLOR_SPACE_TYPE, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709, DXGI_RATIONAL,
 };
 
 /// D3D11 Video Processor CSC on the dedicated video engine, not the 3D
-/// engine, so RGB→YUV does not contend with a GPU-bound game. Output is
-/// always NV12, BT.709 studio-range — a native NVENC YUV input.
+/// engine, so RGB→YUV does not contend with a GPU-bound game.
 ///
-/// Does not produce P010/BT.2020: `new` pins
-/// `YCBCR_STUDIO_G22_LEFT_P709`, and NVIDIA's processor cannot RGB→P010
-/// (renders green). `scrgb_input` tone-maps FP16 down to 8-bit BT.709;
-/// `idd_push::ensure_converter` currently always passes `false`.
+/// [`Self::new`] writes BT.709 studio range into NV12 or P010 (`scrgb_input`
+/// tone-maps FP16 down to SDR; every caller passes `false`). NVIDIA's
+/// processor cannot RGB→P010 (renders green).
 pub struct VideoConverter {
     vdev: ID3D11VideoDevice,
     vctx: ID3D11VideoContext1,
@@ -750,11 +748,77 @@ impl VideoConverter {
         height: u32,
         scrgb_input: bool,
     ) -> Result<Self> {
+        // Full-range RGB in: G10 = FP16 scRGB, G22 = 8-bit BGRA.
+        let in_cs = if scrgb_input {
+            DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+        } else {
+            DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
+        };
+        let conv = Self::build(device, context, width, height)?;
+        conv.set_colour(in_cs, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+        Ok(conv)
+    }
+
+    /// FP16 scRGB (1.0 = 80 nits, BT.709 primaries) → P010 BT.2020 PQ studio range. `Err`
+    /// when the driver does not report that conversion (`CheckVideoProcessorFormatConversion`).
+    /// Test-only: the UHD 750 reports no; the QSV gate probe asks other hardware.
+    #[cfg(test)]
+    pub(crate) fn new_hdr10(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        use windows::Win32::Graphics::Direct3D11::ID3D11VideoProcessorEnumerator1;
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020, DXGI_FORMAT_P010,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+        };
+        let conv = Self::build(device, context, width, height)?;
+        // SAFETY: a QueryInterface and one query on the live enumerator; plain enum values in.
+        let ok = unsafe {
+            conv.enumr
+                .cast::<ID3D11VideoProcessorEnumerator1>()
+                .context("ID3D11VideoProcessorEnumerator1")?
+                .CheckVideoProcessorFormatConversion(
+                    DXGI_FORMAT_R16G16B16A16_FLOAT,
+                    DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+                    DXGI_FORMAT_P010,
+                    DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020,
+                )
+                .context("CheckVideoProcessorFormatConversion")?
+        };
+        anyhow::ensure!(
+            ok.as_bool(),
+            "the video processor does not convert FP16 scRGB to P010 BT.2020 PQ"
+        );
+        conv.set_colour(
+            DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+            DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020,
+        );
+        Ok(conv)
+    }
+
+    fn set_colour(&self, input: DXGI_COLOR_SPACE_TYPE, output: DXGI_COLOR_SPACE_TYPE) {
+        // SAFETY: setters on the live processor this converter owns; plain enum values in.
+        unsafe {
+            self.vctx
+                .VideoProcessorSetStreamColorSpace1(&self.vp, 0, input);
+            self.vctx
+                .VideoProcessorSetOutputColorSpace1(&self.vp, output);
+        }
+    }
+
+    fn build(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
         // SAFETY: the `cast()`s and the `?`-checked video-device factory calls run on the caller's
         // live `device`/`context` borrows; `&desc` is a fully-initialized stack
         // `D3D11_VIDEO_PROCESSOR_CONTENT_DESC` read only for the duration of the call, and the
-        // colour-space/frame-format setters take the just-created processor by borrow plus plain
-        // enum values.
+        // frame-format setters take the just-created processor by borrow plus plain values.
         unsafe {
             let vdev: ID3D11VideoDevice = device.cast().context("device -> ID3D11VideoDevice")?;
             let vctx: ID3D11VideoContext1 =
@@ -779,17 +843,6 @@ impl VideoConverter {
             let vp = vdev
                 .CreateVideoProcessor(&enumr, 0)
                 .context("CreateVideoProcessor")?;
-
-            // Full-range RGB in → studio BT.709 NV12 out. G10 = FP16 scRGB ring,
-            // G22 = 8-bit BGRA ring. Output is always BT.709 SDR (tone-maps scRGB).
-            let in_cs = if scrgb_input {
-                DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
-            } else {
-                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
-            };
-            let out_cs = DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709;
-            vctx.VideoProcessorSetStreamColorSpace1(&vp, 0, in_cs);
-            vctx.VideoProcessorSetOutputColorSpace1(&vp, out_cs);
             // Progressive: one frame in, one out — no deinterlace, no frame-rate convert.
             vctx.VideoProcessorSetStreamFrameFormat(&vp, 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
             // Default auto-processing is ENABLED: denoise / edge enhance would
@@ -805,9 +858,8 @@ impl VideoConverter {
         }
     }
 
-    /// `input` (BGRA, or scRGB FP16 if built with `scrgb_input`) → `output`
-    /// (NV12, BT.709 studio — never P010). Views are per call so the input
-    /// texture can vary frame to frame.
+    /// `input` (BGRA, or FP16 scRGB) → `output` (NV12 or P010) in the colour spaces the
+    /// constructor set. Views are per call so the input texture can vary frame to frame.
     pub fn convert(&self, input: &ID3D11Texture2D, output: &ID3D11Texture2D) -> Result<()> {
         // SAFETY: both view creations are `?`-checked calls on `self.vdev` with fully-initialized
         // stack descriptors and live out-params. `stream.pInputSurface` is a `ManuallyDrop` of the

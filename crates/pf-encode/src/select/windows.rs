@@ -85,12 +85,12 @@ pub(crate) fn ingests_rgb_444() -> bool {
 
 /// [`crate::backend_carries_sdr10`] on Windows.
 pub(crate) fn sdr10(codec: Codec) -> bool {
-    // NVENC widens 8→10 from packed RGB for HEVC + AV1. AMF takes a BT.709 P010 the driver's video
-    // processor produces (`EncodeInput::P010Sdr`) for HEVC Main10 only — AV1 10-bit SDR on AMF is
-    // unbuilt. `can_encode_10bit` still gates on the real probe.
+    // NVENC widens 8→10 from packed RGB for HEVC + AV1. AMF and QSV take a BT.709 P010 the
+    // driver's video processor produces (`EncodeInput::P010Sdr`) for HEVC Main10 only — their
+    // AV1 10-bit SDR is unbuilt. `can_encode_10bit` still gates on the real probe.
     match windows_resolved_backend() {
         WindowsBackend::Nvenc => true,
-        WindowsBackend::Amf => codec == Codec::H265,
+        WindowsBackend::Amf | WindowsBackend::Qsv => codec == Codec::H265,
         _ => false,
     }
 }
