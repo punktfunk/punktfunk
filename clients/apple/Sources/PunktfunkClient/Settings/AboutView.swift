@@ -253,10 +253,10 @@ struct AboutView: View {
 ///
 /// Every platform hides it somewhere different, and one of them can't hand it over at all: macOS
 /// has the running app's icon; iOS keeps the primary icon's file names in `CFBundleIcons`; tvOS
-/// app icons are layered assets with no single image to load, and an unbundled `swift run` build
-/// has no icon in the first place. So there is a drawn fallback, built from the same brand
-/// gradient and Geist monogram as the host cards — where the real icon is unavailable this reads
-/// as a mark, not as a missing image.
+/// and visionOS icons are layered assets with no single image to load, and an unbundled
+/// `swift run` build has no icon in the first place. So there is a drawn fallback, built from
+/// the same brand gradient and Geist monogram as the host cards — where the real icon is
+/// unavailable this reads as a mark, not as a missing image.
 struct AppIconView: View {
     let side: CGFloat
 
@@ -299,6 +299,8 @@ struct AppIconView: View {
     /// and the 24 pt a TV home screen gives its 150 pt tall icons.
     #if os(tvOS)
     private static let cornerRatio: CGFloat = 0.16
+    #elseif os(visionOS)
+    private static let cornerRatio: CGFloat = 0.5 // a circle, as the home view draws it
     #else
     private static let cornerRatio: CGFloat = 0.2237
     #endif
@@ -320,7 +322,7 @@ struct AppIconView: View {
     private static var bundleIcon: (image: Image, needsMask: Bool)? {
         #if os(macOS)
         return (Image(nsImage: NSApplication.shared.applicationIconImage), false)
-        #elseif os(iOS) || os(visionOS)
+        #elseif os(iOS)
         // The last entry is the largest — `CFBundleIconFiles` is ordered small to large.
         guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
               let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
@@ -330,9 +332,9 @@ struct AppIconView: View {
         else { return nil }
         return (Image(uiImage: image), true)
         #else
-        // A tvOS icon is a layered stack with no single image to load. `AboutAppIcon` is that
-        // stack flattened by scripts/render-tvos-icon.swift, which writes both, square as the
-        // stack is: the home screen rounds it at draw time.
+        // tvOS and visionOS icons are layered stacks with no single image to load. `AboutAppIcon`
+        // is the stack flattened, unmasked as the stack is (the home screen masks it at draw
+        // time): tvOS's by scripts/render-tvos-icon.swift, visionOS's from its three layers.
         guard let image = UIImage(named: "AboutAppIcon") else { return nil }
         return (Image(uiImage: image), true)
         #endif

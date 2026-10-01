@@ -18,13 +18,24 @@ import SwiftUI
 /// width runs its last line straight under that control — which is what the cap alone never
 /// fixed, because an iPhone cell is narrower than the cap in the first place.
 struct CaptionWidth: ViewModifier {
-    #if os(iOS) || os(visionOS)
+    #if os(iOS)
     /// Reserve the control column. A `UISwitch` is 51pt, and the rest is breathing room — the
     /// caption should stop visibly short of the control, not graze it.
     private static let trailingInset: CGFloat = 76
+    #elseif os(visionOS)
+    /// A visionOS picker is a capsule as wide as its value (~230 pt for the modifier keys) and
+    /// taller than its label line, so a caption must clear the whole capsule.
+    private static let trailingInset: CGFloat = 240
     #else
     // macOS lays the control out inline and its cells are wider than the cap; nothing to clear.
     private static let trailingInset: CGFloat = 0
+    #endif
+    #if os(visionOS)
+    /// The cap holds the inset too, so visionOS grows it by its wider column: 284pt of text, as
+    /// on iOS.
+    private static let cap: CGFloat = 524
+    #else
+    private static let cap: CGFloat = 360
     #endif
 
     func body(content: Content) -> some View {
@@ -32,7 +43,7 @@ struct CaptionWidth: ViewModifier {
             // Order matters: the padding shrinks what the text is offered, THEN the cap applies —
             // so a narrow phone cell reserves the control column and a wide pane still caps.
             .padding(.trailing, Self.trailingInset)
-            .frame(maxWidth: 360, alignment: .leading)
+            .frame(maxWidth: Self.cap, alignment: .leading)
     }
 }
 

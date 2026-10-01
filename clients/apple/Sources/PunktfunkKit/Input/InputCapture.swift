@@ -742,8 +742,11 @@ public final class InputCapture {
     }
     #endif
 
+    /// A preempted capture keeps its connect observers; the guard stops a reconnect there from
+    /// taking the global handler slots back from the live one.
     private func attach(mouse: GCMouse) {
-        guard let input = mouse.mouseInput,
+        guard Self.activeCapture === self,
+              let input = mouse.mouseInput,
               !mice.contains(where: { $0 === mouse }) // re-delivered on wake — attach once
         else { return }
         mice.append(mouse)
@@ -873,7 +876,8 @@ public final class InputCapture {
     }
 
     private func attach(keyboard: GCKeyboard) {
-        guard !keyboards.contains(where: { $0 === keyboard }) else { return }
+        guard Self.activeCapture === self, !keyboards.contains(where: { $0 === keyboard })
+        else { return }
         keyboards.append(keyboard)
         // macOS sends keys from NSEvent (StreamLayerView's keyDown/keyUp/flagsChanged →
         // sendKey/handleFlagsChanged) because GCKeyboard delivery proved unreliable there —

@@ -505,9 +505,9 @@ struct ContentView: View {
             disconnect: { model.disconnect() }))
         // ⌃⌥⇧A fired while input was CAPTURED (InputCapture's chord path posts it — the menu's
         // identical equivalent can't reach a captured stream). Same toggle either way. It names
-        // its session; iOS's one scene posts none.
+        // its session, so a second window's stream keeps its own mic state.
         .onReceive(NotificationCenter.default.publisher(for: .punktfunkToggleMicMute)) { note in
-            guard note.object == nil || note.object as AnyObject === model.connection else { return }
+            guard note.object as AnyObject === model.connection else { return }
             model.toggleMicMute()
         }
         #endif
@@ -1216,7 +1216,7 @@ struct ContentView: View {
                 let i = order.firstIndex(of: TouchInputMode.current(conn.settings)) ?? 0
                 TouchInputMode.sessionOverride = order[(i + 1) % order.count]
             },
-            keyboard: { NotificationCenter.default.post(name: .punktfunkToggleSoftKeyboard, object: nil) },
+            keyboard: { NotificationCenter.default.post(name: .punktfunkToggleSoftKeyboard, object: conn) },
             stats: { [model] in model.statsVerbosity },
             cycleStats: { [model] in model.cycleStats() },
             micAvailable: { [model] in model.micAvailable },

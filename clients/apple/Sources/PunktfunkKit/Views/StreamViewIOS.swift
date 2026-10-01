@@ -527,10 +527,10 @@ public final class StreamViewController: StreamViewControllerBase {
             self?.setCaptured(false)
         }
         // ⌃⌥⇧A mutes/unmutes the mic uplink. Session state this controller doesn't own, so it
-        // posts to the app exactly as the macOS chord does — the Stream menu's identical
-        // equivalent (which a captured scene swallows) ends at the same toggle.
-        capture.onToggleMicMute = {
-            NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: nil)
+        // posts to the app exactly as the macOS chord does, naming its session so only that
+        // window's stream toggles.
+        capture.onToggleMicMute = { [weak connection] in
+            NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: connection)
         }
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
@@ -641,9 +641,10 @@ public final class StreamViewController: StreamViewControllerBase {
             self.setCaptured(false)
         })
         // The ring's Keyboard slot shows the soft keyboard, and hides it when it is up. iPhone's
-        // keyboard has no dismiss key, and passthrough has no three-finger swipe.
+        // keyboard has no dismiss key, and passthrough has no three-finger swipe. The slot names
+        // its session: every visionOS window is foreground-active at once.
         observers.append(NotificationCenter.default.addObserver(
-            forName: .punktfunkToggleSoftKeyboard, object: nil, queue: .main
+            forName: .punktfunkToggleSoftKeyboard, object: connection, queue: .main
         ) { [weak self] _ in
             guard let self,
                   self.view.window?.windowScene?.activationState == .foregroundActive else { return }
@@ -659,12 +660,18 @@ public final class StreamViewController: StreamViewControllerBase {
         #endif
         #if os(visionOS)
         // Several windows can stream at once and none is "in front": input follows the window
-        // the player last pinched into.
+        // the player last pinched into. Another app window's scene taking it (a host list being
+        // typed into) releases this one; this scene's ornaments and the theater's space do not.
         observers.append(NotificationCenter.default.addObserver(
             forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, (note.object as? UIWindow) === self.view.window else { return }
-            self.setCaptured(true)
+            guard let self, let window = note.object as? UIWindow else { return }
+            if window === self.view.window {
+                self.setCaptured(true)
+            } else if let scene = window.windowScene, scene !== self.view.window?.windowScene,
+                      scene.session.role == .windowApplication {
+                self.setCaptured(false)
+            }
         })
         #endif
 
