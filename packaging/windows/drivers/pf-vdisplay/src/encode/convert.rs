@@ -5,8 +5,9 @@
 //!
 //! A blended pointer costs the window nothing: the pass then only copies the source into a
 //! slot-sized RGB scratch, and `frame` (the encode thread) draws the cursor quad and runs the
-//! converter from there. NVENC's BGRA slot is its own scratch, so that kind copies once either
-//! way; the converter kinds pay one extra full-frame copy while the client draws no pointer.
+//! converter from there. A composed kind's slot (BGRA, FP16) is its own scratch, so it copies
+//! once either way; the converter kinds pay one extra full-frame copy while the client draws no
+//! pointer.
 //!
 //! Every COM object the backends see is a [`bridge`]d `QueryInterface` of the driver's own
 //! 0.58 object, so the two crates never wrap each other's pointer.
@@ -208,21 +209,24 @@ pub fn pixel_format(kind: InputKind) -> PixelFormat {
             PixelFormat::P010
         }
         InputKind::Rgb10 => PixelFormat::Rgb10a2,
+        InputKind::Fp16 => PixelFormat::RgbaF16,
     }
 }
 
 /// The source the pass reads: FP16 under advanced colour, BGRA otherwise.
 pub fn source_format(kind: InputKind) -> dxgi::DXGI_FORMAT {
     match kind {
-        InputKind::P010 | InputKind::Rgb10 | InputKind::Planar { hdr: true, .. } => {
-            dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT
-        }
+        InputKind::P010
+        | InputKind::Rgb10
+        | InputKind::Fp16
+        | InputKind::Planar { hdr: true, .. } => dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT,
         _ => dxgi::DXGI_FORMAT_B8G8R8A8_UNORM,
     }
 }
 
 enum Planes {
-    Bgra(Vec<Tex>),
+    /// BGRA or FP16: the slot holds the source's own format and the backend converts.
+    Composed(Vec<Tex>),
     Nv12 {
         conv: VideoConverter,
         out: Vec<Tex>,
@@ -297,12 +301,12 @@ impl Targets {
         };
         let rt = d3d::D3D11_BIND_RENDER_TARGET.0 as u32;
         let planes = match kind {
-            InputKind::Bgra => {
+            InputKind::Bgra | InputKind::Fp16 => {
                 let bind = rt | d3d::D3D11_BIND_SHADER_RESOURCE.0 as u32;
                 let slots = (0..slots)
-                    .map(|_| make_tex62(dev, (w, h), dxgi::DXGI_FORMAT_B8G8R8A8_UNORM, bind, 0))
+                    .map(|_| make_tex62(dev, (w, h), source_format(kind), bind, 0))
                     .collect::<Result<_, _>>()?;
-                Planes::Bgra(slots)
+                Planes::Composed(slots)
             }
             InputKind::Nv12 => {
                 let conv = VideoConverter::new(dev, ctx, w, h, false).map_err(convert_err)?;
@@ -394,9 +398,9 @@ impl Targets {
     ///
     /// `Err` when a converter kind's slot has no frame in its RGB scratch: blending began after
     /// the pass that filled the slot, so there is nothing to re-blend until the next compose.
-    /// The BGRA slot is its own scratch and is always restorable.
+    /// A composed slot is its own scratch and is always restorable.
     pub fn restore_under(&mut self, i: usize) -> Result<(), Fail> {
-        let converter = !matches!(self.planes, Planes::Bgra(_));
+        let converter = !matches!(self.planes, Planes::Composed(_));
         if converter && !self.scratch_holds_frame[i] {
             return Err((-2, "scratch"));
         }
@@ -405,7 +409,7 @@ impl Targets {
             && owner == i
         {
             let dst = match &self.planes {
-                Planes::Bgra(slots) => slots[i].clone(),
+                Planes::Composed(slots) => slots[i].clone(),
                 _ => self.rgb[i].as_ref().ok_or((-2, "scratch"))?.0.clone(),
             };
             let patch = self.patch.as_ref().ok_or((-2, "patch"))?;
@@ -434,8 +438,8 @@ impl Targets {
         Ok(())
     }
 
-    /// One GPU pass from `src` (BGRA or FP16, the pool's size) into slot `i`: a copy for BGRA,
-    /// the video engine for NV12, a draw for P010 and the planar pair. With `defer` the
+    /// One GPU pass from `src` (BGRA or FP16, the pool's size) into slot `i`: a copy for the
+    /// composed kinds, the video engine for NV12, a draw for P010 and the planar pair. With `defer` the
     /// converter kinds copy into the slot's RGB scratch instead and convert in [`Self::frame`],
     /// after the cursor blend. `src` needs no bind flags beyond what the shader kinds read
     /// through an SRV created per call.
@@ -447,7 +451,7 @@ impl Targets {
         if self.under.is_some_and(|(owner, _)| owner == i) {
             self.under = None;
         }
-        if let Planes::Bgra(slots) = &self.planes {
+        if let Planes::Composed(slots) = &self.planes {
             // SAFETY: `src` and the slot are live same-size textures on the same device, whose
             // immediate context is multithread-protected (`Direct3DDevice`).
             unsafe { self.ctx.CopyResource(&slots[i], src) };
@@ -535,7 +539,7 @@ impl Targets {
             None => srv(&self.dev, src),
         };
         match &self.planes {
-            Planes::Bgra(_) => {}
+            Planes::Composed(_) => {}
             Planes::Nv12 { conv, out } => conv.convert(src, &out[i]).map_err(convert_err)?,
             Planes::P010Sdr { conv, out } => conv.convert(src, &out[i]).map_err(convert_err)?,
             Planes::P010 { conv, out } => conv
@@ -565,12 +569,12 @@ impl Targets {
         Ok(())
     }
 
-    /// Draw `cursor` over slot `i`'s RGB image — the BGRA slot itself, or the deferred scratch.
+    /// Draw `cursor` over slot `i`'s RGB image — a composed slot itself, or the deferred scratch.
     /// A failure loses the pointer, never the frame, and is logged once.
     fn blend(&mut self, i: usize, cursor: &CursorImage, scale: f32) {
         let fp16 = source_format(self.kind) == dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT;
         let dst = match &self.planes {
-            Planes::Bgra(slots) => slots[i].clone(),
+            Planes::Composed(slots) => slots[i].clone(),
             _ if self.deferred[i] => match &self.rgb[i] {
                 Some((t, _)) => t.clone(),
                 None => return,
@@ -613,8 +617,8 @@ impl Targets {
     }
 
     /// Spike S6: wrap the acquired surface itself as the frame `submit` takes — no pass, no
-    /// slot, and no pointer, because there is no driver-owned image to draw one on. Only the
-    /// BGRA kind reaches this; every other kind's converter has to run first.
+    /// slot, and no pointer, because there is no driver-owned image to draw one on. Only a
+    /// composed kind reaches this; every other kind's converter has to run first.
     pub fn direct_frame(&self, src: &Tex, pts_ns: u64) -> CapturedFrame {
         CapturedFrame {
             width: self.width,
@@ -650,7 +654,7 @@ impl Targets {
             self.convert(&t, Some(&v), i)?;
         }
         let (texture, pyro) = match &mut self.planes {
-            Planes::Bgra(slots) => (slots[i].clone(), None),
+            Planes::Composed(slots) => (slots[i].clone(), None),
             Planes::Nv12 { out, .. } => (out[i].clone(), None),
             Planes::P010Sdr { out, .. } => (out[i].clone(), None),
             Planes::P010 { out, .. } => (out[i].0.clone(), None),
@@ -731,7 +735,7 @@ mod tests {
 
     /// Slot 0's pixels, through a staging copy.
     fn read_back(t: &Targets, ctx: &d3d::ID3D11DeviceContext, w: u32, h: u32) -> Vec<u8> {
-        let Planes::Bgra(slots) = &t.planes else {
+        let Planes::Composed(slots) = &t.planes else {
             panic!("BGRA targets only")
         };
         let desc = d3d::D3D11_TEXTURE2D_DESC {

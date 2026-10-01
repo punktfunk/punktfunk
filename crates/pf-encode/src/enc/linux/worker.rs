@@ -92,12 +92,10 @@ impl From<PixelFormat> for WireFormat {
             PixelFormat::Rgb => WireFormat::Rgb,
             PixelFormat::Bgr => WireFormat::Bgr,
             PixelFormat::Rgb10a2 => WireFormat::Rgb10a2,
-            // Windows-only (IDD-push 10-bit SDR). The Linux worker never sees it;
-            // the wire has no variant.
-            PixelFormat::Rgb10a2Sdr => {
-                unreachable!(
-                    "Rgb10a2Sdr is a Windows capture format — the Linux worker never sees it"
-                )
+            // Windows-only (IDD-push 10-bit SDR, and the HDR desktop's FP16). The Linux
+            // worker never sees them; the wire has no variant.
+            PixelFormat::Rgb10a2Sdr | PixelFormat::RgbaF16 => {
+                unreachable!("{f:?} is a Windows capture format — the Linux worker never sees it")
             }
             PixelFormat::Nv12 => WireFormat::Nv12,
             PixelFormat::P010 => WireFormat::P010,

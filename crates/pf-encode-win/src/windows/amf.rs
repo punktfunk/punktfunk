@@ -30,7 +30,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010,
+    DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -256,6 +257,7 @@ const COLOR_PROFILE_2020: i64 = 2;
 const COLOR_PROFILE_FULL_709: i64 = 7;
 // `AMF_COLOR_TRANSFER_CHARACTERISTIC_ENUM` / `AMF_COLOR_PRIMARIES_ENUM` (CICP code points).
 const TRANSFER_BT709: i64 = 1;
+const TRANSFER_LINEAR: i64 = 8;
 const TRANSFER_SMPTE2084: i64 = 16;
 const PRIMARIES_BT709: i64 = 1;
 const PRIMARIES_BT2020: i64 = 9;
@@ -850,6 +852,7 @@ fn input_formats(input: PixelFormat) -> Option<(i32, DXGI_FORMAT)> {
         PixelFormat::Nv12 => Some((sys::AMF_SURFACE_NV12, DXGI_FORMAT_NV12)),
         PixelFormat::P010 => Some((sys::AMF_SURFACE_P010, DXGI_FORMAT_P010)),
         PixelFormat::Bgra => Some((sys::AMF_SURFACE_BGRA, DXGI_FORMAT_B8G8R8A8_UNORM)),
+        PixelFormat::RgbaF16 => Some((sys::AMF_SURFACE_RGBA_F16, DXGI_FORMAT_R16G16B16A16_FLOAT)),
         _ => None,
     }
 }
@@ -1003,7 +1006,7 @@ pub struct AmfEncoder {
     bitrate_bps: u64,
     /// The highest target rate this encoder took after refusing one, 0 until it refuses.
     rate_ceiling: AtomicI64,
-    /// What every submitted texture holds: NV12, P010 or BGRA ([`input_formats`]).
+    /// What every submitted texture holds: NV12, P010, BGRA or FP16 ([`input_formats`]).
     input: PixelFormat,
     ten_bit: bool,
     /// BT.2020 PQ (HDR) vs BT.709 (SDR). Independent of `ten_bit`: 10-bit SDR is Main10 under
@@ -1081,7 +1084,9 @@ impl AmfEncoder {
         let ten_bit = crate::ten_bit_input(format, bit_depth);
         // Any other capture format has no native input path, and there is no readback.
         if input_formats(format).is_none() {
-            bail!("native AMF takes NV12, P010 or BGRA textures; capturer delivered {format:?}");
+            bail!(
+                "native AMF takes NV12, P010, BGRA or FP16 textures; capturer delivered {format:?}"
+            );
         }
         if ten_bit && codec == Codec::H264 {
             bail!("native AMF: 10-bit is HEVC-only (H.264 High10 is not a VCN mode)");
@@ -1324,6 +1329,13 @@ impl AmfEncoder {
             comp.set_prop(p.in_transfer, AmfVariant::from_i64(TRANSFER_BT709), false)?;
             comp.set_prop(p.in_primaries, AmfVariant::from_i64(PRIMARIES_BT709), false)?;
             comp.set_prop(p.in_full_range, AmfVariant::from_bool(true), false)?;
+        }
+        // FP16 in is scRGB: linear light on BT.709 primaries. VCN converts it to the PQ
+        // output above. A runtime that takes FP16 reads it this way unprompted, so a refused
+        // property is not a refused input.
+        if self.input == PixelFormat::RgbaF16 {
+            comp.set_prop(p.in_transfer, AmfVariant::from_i64(TRANSFER_LINEAR), false)?;
+            comp.set_prop(p.in_primaries, AmfVariant::from_i64(PRIMARIES_BT709), false)?;
         }
         Ok((ir_active, ltr_active))
     }
@@ -2618,6 +2630,134 @@ mod tests {
                     "{codec:?} in_place={in_place}: after a reset"
                 );
                 assert!(again[0].keyframe, "{codec:?}: a reset restarts on an IDR");
+            }
+        }
+    }
+
+    /// Live FP16 input per ten-bit codec: VCN takes the scRGB an HDR desktop composes and
+    /// converts it itself. An access unit per frame in both submit modes, and again after a
+    /// reset. HEVC must take it; an AV1 that declines is the driver's P010 fallback, so it
+    /// is reported and skipped. Skips without AMD.
+    #[test]
+    fn amf_fp16_hdr_encode_live() {
+        use windows::Win32::Graphics::Direct3D11::D3D11_SUBRESOURCE_DATA;
+        if let Err(e) = try_factory() {
+            eprintln!("skipping: AMF runtime unavailable ({e})");
+            return;
+        }
+        let Some(device) = amd_d3d11_device() else {
+            eprintln!("skipping: no AMD adapter on this box");
+            return;
+        };
+        let (w, h, fps) = (640u32, 480u32, 60u32);
+        // Flat scRGB white at 80, 160 and 320 nits, as IEEE halves (1.0, 2.0, 4.0).
+        let texs: Vec<ID3D11Texture2D> = [0x3C00u16, 0x4000, 0x4400]
+            .iter()
+            .map(|&level| {
+                let px = vec![level; (w * h * 4) as usize];
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: w,
+                    Height: h,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    // The binds of the driver's pool slots.
+                    BindFlags: BIND_SR | D3D11_BIND_RENDER_TARGET.0 as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                };
+                let init = D3D11_SUBRESOURCE_DATA {
+                    pSysMem: px.as_ptr().cast(),
+                    SysMemPitch: w * 8,
+                    SysMemSlicePitch: 0,
+                };
+                let mut tex = None;
+                // SAFETY: `init` points at `px`, `w * h * 8` bytes alive across the call, read
+                // at the pitch given. The out-param fills only on success.
+                unsafe { device.CreateTexture2D(&desc, Some(&init), Some(&mut tex)) }
+                    .expect("FP16 texture");
+                tex.expect("FP16 texture")
+            })
+            .collect();
+        const FRAMES: usize = 12;
+        for in_place in [false, true] {
+            for codec in [Codec::H265, Codec::Av1] {
+                if codec == Codec::Av1 && !probe_can_encode_on(&device, codec) {
+                    eprintln!("skipping Av1: this AMD GPU's native probe declined it");
+                    continue;
+                }
+                let mut enc = AmfEncoder::open(
+                    codec,
+                    PixelFormat::RgbaF16,
+                    w,
+                    h,
+                    fps,
+                    2_000_000,
+                    10,
+                    ChromaFormat::Yuv420,
+                    true,
+                    None,
+                )
+                .expect("open on FP16");
+                if let Err(e) = enc.prepare(&device) {
+                    assert_ne!(codec, Codec::H265, "HEVC Main10 declined FP16: {e:#}");
+                    eprintln!("skipping {codec:?}: FP16 input declined ({e:#})");
+                    continue;
+                }
+                if in_place {
+                    // Three textures in rotation, two in flight: the third is always free.
+                    enc.set_input_ring_depth(2);
+                }
+                let batch = |enc: &mut AmfEncoder, base: u64| -> Vec<EncodedFrame> {
+                    let mut aus = Vec::new();
+                    for i in 0..FRAMES {
+                        let frame = CapturedFrame {
+                            provenance: Default::default(),
+                            width: w,
+                            height: h,
+                            pts_ns: base + i as u64,
+                            format: PixelFormat::RgbaF16,
+                            payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
+                                texture: texs[i % texs.len()].clone(),
+                                device: device.clone(),
+                                pyro: None,
+                            }),
+                            cursor: None,
+                        };
+                        enc.submit(&frame).expect("submit");
+                        if let Some(au) = enc.poll().expect("poll") {
+                            aus.push(au);
+                        }
+                    }
+                    enc.flush().expect("flush");
+                    for _ in 0..50 {
+                        match enc.poll().expect("drain poll") {
+                            Some(au) => aus.push(au),
+                            None => break,
+                        }
+                    }
+                    aus
+                };
+                let aus = batch(&mut enc, 1);
+                eprintln!(
+                    "{codec:?} FP16 in_place={in_place}: {} AUs of {FRAMES}, {} bytes",
+                    aus.len(),
+                    aus.iter().map(|a| a.data.len()).sum::<usize>()
+                );
+                assert_eq!(aus.len(), FRAMES, "{codec:?} in_place={in_place}");
+                assert!(aus[0].keyframe, "{codec:?}: the stream starts on an IDR");
+                assert!(enc.reset(), "{codec:?}: reset rebuilds in place");
+                let again = batch(&mut enc, 100);
+                assert_eq!(
+                    again.len(),
+                    FRAMES,
+                    "{codec:?} in_place={in_place}: after a reset"
+                );
             }
         }
     }
