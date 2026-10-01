@@ -9,6 +9,11 @@
       "filename" : "about-icon@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
+    },
+    {
+      "filename" : "about-icon-vision@2x.png",
+      "idiom" : "vision",
+      "scale" : "2x"
     }
   ],
   "info" : {
