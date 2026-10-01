@@ -35,6 +35,7 @@ mod resources;
 mod setup;
 #[cfg(target_os = "linux")]
 mod sync_timeline;
+mod timing_ext;
 
 pub use setup::{list_adapters, probe_decode, AdapterDecode, PresentPref};
 
@@ -312,6 +313,13 @@ pub struct Presenter {
     /// The waiter runs on `VK_KHR_present_wait2`: presents chain `VkPresentId2KHR` and the
     /// swapchain is created with the present-id2/present-wait2 flags.
     present_id2: bool,
+    /// `VK_EXT_present_timing`: the engine stamps each present itself, and the waiter
+    /// reads the stamp in place of its own wake time.
+    timing: Option<std::sync::Arc<timing_ext::Engine>>,
+    /// The live swapchain was created for those stamps and its result queue is sized.
+    timing_armed: bool,
+    /// The last present asked for a stamp.
+    timing_asked: bool,
     /// The output's vblank as the glass clock where present-wait is missing (AMD on
     /// Windows). Estimated stamps, `glass=est`.
     #[cfg(windows)]
@@ -485,11 +493,24 @@ impl Presenter {
         }
     }
 
-    /// Where the display stamp comes from, for the ledger: `wait` (present-wait), `est`
-    /// (the vblank waiter), `feedback` (the native lane), `none`.
+    /// The engine's refresh as `(cycle, interval)` in ns, where it stamps presents and has
+    /// reported one. The interval is the cycle on a fixed panel, `u64::MAX` under variable
+    /// refresh, 0 where the engine cannot tell.
+    pub(crate) fn engine_refresh(&self) -> Option<(u64, u64)> {
+        use std::sync::atomic::Ordering;
+        let r = &self.timing.as_ref().filter(|_| self.timing_armed)?.refresh;
+        let cycle = r.duration_ns.load(Ordering::Relaxed);
+        (cycle > 0).then(|| (cycle, r.interval_ns.load(Ordering::Relaxed)))
+    }
+
+    /// Where the display stamp comes from, for the ledger: `timing` (the engine's own
+    /// stamps), `wait` (present-wait), `est` (the vblank waiter), `feedback` (the native
+    /// lane), `none`.
     pub(crate) fn glass_source(&self) -> &'static str {
         if self.native_last {
             "feedback"
+        } else if self.timing_armed {
+            "timing"
         } else if self.present_timer.is_some() {
             "wait"
         } else if self.vblank_active() {
@@ -1164,6 +1185,12 @@ impl Presenter {
         }
     }
 
+    /// Presents the engine reported as never shown since the last call: a newer one
+    /// replaced them before a refresh took them.
+    pub(crate) fn take_unshown(&self) -> u32 {
+        self.present_timer.as_ref().map_or(0, |t| t.take_unshown())
+    }
+
     /// (zero-copy, presented) the native lane counted since the last call.
     #[cfg(target_os = "linux")]
     pub(crate) fn take_native_zero_copy(&mut self) -> (u32, u32) {
@@ -1182,7 +1209,15 @@ impl Presenter {
         let done = (self.done_sem != vk::Semaphore::null()).then_some((self.done_sem, id));
         let now_ns = pf_client_core::session::now_ns();
         if let Some(t) = &self.present_timer {
-            t.enqueue(sc, id, done, pts_ns, decoded_ns, now_ns);
+            t.enqueue(present_timing::Job {
+                swapchain: sc,
+                present_id: id,
+                done,
+                stamped: std::mem::take(&mut self.timing_asked),
+                pts_ns,
+                decoded_ns,
+                submitted_ns: now_ns,
+            });
         }
         #[cfg(windows)]
         if let Some(t) = &self.vblank_timer {
@@ -1290,6 +1325,8 @@ impl Presenter {
                     // No GPU work of ours on this lane: the whole latch is the compositor's.
                     gpu_done_ns: s.submitted_ns,
                     displayed_ns: s.displayed_ns,
+                    // The compositor's own presentation time.
+                    exact: true,
                 }
             }));
         }

@@ -291,6 +291,8 @@ pub(crate) struct CadenceProbe {
     /// The output's own vblank spacing reads off the mode period, or on it; `None` where no
     /// waiter measures it. It outranks the stamps ([`CadenceProbe::note_refresh`]).
     refresh_variable: Option<bool>,
+    /// The presentation engine says it runs variable refresh. It outranks everything.
+    engine_variable: bool,
 }
 
 /// Enough deltas to distinguish jitter from a real off-grid cadence.
@@ -314,7 +316,13 @@ impl CadenceProbe {
             agree_rounds: 0,
             verdict: Cadence::Unknown,
             refresh_variable: None,
+            engine_variable: false,
         }
+    }
+
+    /// The engine's own word on variable refresh, where it gives one.
+    pub(crate) fn note_engine_variable(&mut self, variable: bool) {
+        self.engine_variable = variable;
     }
 
     /// The output's measured vblank spacing, where a waiter reads it. A fixed panel
@@ -383,6 +391,9 @@ impl CadenceProbe {
     }
 
     pub(crate) fn verdict(&self) -> Cadence {
+        if self.engine_variable {
+            return Cadence::Variable;
+        }
         match self.refresh_variable {
             Some(true) => Cadence::Variable,
             Some(false) => Cadence::Fixed,
@@ -398,6 +409,7 @@ impl CadenceProbe {
         self.agree_rounds = 0;
         self.verdict = Cadence::Unknown;
         self.refresh_variable = None;
+        self.engine_variable = false;
     }
 }
 

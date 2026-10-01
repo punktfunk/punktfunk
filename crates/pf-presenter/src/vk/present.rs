@@ -1118,7 +1118,18 @@ impl Presenter {
             // Monotonic present id for `PresentTimer`'s `vkWaitForPresentKHR`.
             let ids = [self.next_present_id + 1];
             let mut pid_info = vk::PresentIdKHR::default().present_ids(&ids);
-            let pid2_info = super::setup::present_wait2::PresentId2::new(&ids);
+            let mut pid2_info = super::setup::present_wait2::PresentId2::new(&ids);
+            // A stamp only while the swapchain's result queue has room: asking into a
+            // full one fails the present.
+            let ask = self
+                .timing
+                .as_ref()
+                .filter(|t| self.timing_armed && t.may_ask());
+            let timing_info = ask.map_or_else(
+                || super::timing_ext::TimingInfo::stamps(0, 0),
+                |t| t.request(),
+            );
+            let timings_info = super::timing_ext::TimingsInfo::new(&timing_info);
             let mut present_info = vk::PresentInfoKHR::default()
                 .wait_semaphores(&present_sems)
                 .swapchains(&swapchains)
@@ -1129,7 +1140,10 @@ impl Presenter {
                 self.next_present_id += 1;
             }
             if self.present_id2 {
-                // Hand-rolled struct: the chain is empty here, so it is the whole chain.
+                // Hand-rolled structs: the chain is empty here, so they are the whole chain.
+                if ask.is_some() {
+                    pid2_info.p_next = (&timings_info) as *const _ as *const std::ffi::c_void;
+                }
                 present_info.p_next = (&pid2_info) as *const _ as *const std::ffi::c_void;
             } else if self.present_timer.is_some() {
                 present_info = present_info.push_next(&mut pid_info);
@@ -1144,13 +1158,27 @@ impl Presenter {
                 self.swap_d.queue_present(self.queue, &present_info)
             };
             self.last_present_us = present_started.elapsed().as_micros() as u32;
+            let asked = ask.is_some();
             match present_res {
                 Ok(_) => {
                     // A failed present's id may never signal — claim it only on Ok.
                     if self.glass_active() {
                         self.last_presented = Some((self.swapchain, self.next_present_id));
                     }
+                    self.timing_asked = asked;
+                    if let Some(t) = self.timing.as_ref().filter(|_| asked) {
+                        t.note_asked();
+                    }
                     Ok(Presented::Shown)
+                }
+                // The driver counted its result queue differently: stop asking, and take
+                // a swapchain whose queue is empty.
+                Err(super::timing_ext::QUEUE_FULL) => {
+                    tracing::warn!("present stamp queue full; presenting without stamps");
+                    self.timing = None;
+                    self.timing_armed = false;
+                    self.recreate_swapchain(window)?;
+                    Ok(Presented::Stale)
                 }
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR)
                 | Err(vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) => {

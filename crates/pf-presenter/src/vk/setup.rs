@@ -12,6 +12,7 @@
 //!
 //! Evidence: [`present_mode_chain`], [`pick_device`], [`AdapterDecode::index`].
 
+use super::timing_ext;
 #[cfg(target_os = "linux")]
 use super::HwCtx;
 #[cfg(windows)]
@@ -522,9 +523,57 @@ impl Presenter {
                     && id_caps.value == vk::TRUE
                     && wait_caps.value == vk::TRUE
             };
-        // The successors only on request: AMD's Windows driver completes the wait late
-        // enough that the glass gate drops frames. Without them the vblank waiter runs.
-        let use_wait2 = present_wait2_ok && present_wait2_opt_in();
+        // The engine's own display stamps ride on present-id2: the device feature, then the
+        // stages this surface reports. 0 = none.
+        let timing_stages = if present_wait2_ok
+            && present_timing_wanted()
+            && has(timing_ext::NAME)
+            && has(ash::khr::calibrated_timestamps::NAME)
+        {
+            let mut feat = timing_ext::Features::new(vk::FALSE);
+            let mut probe = vk::PhysicalDeviceFeatures2 {
+                p_next: (&mut feat) as *mut _ as *mut std::ffi::c_void,
+                ..Default::default()
+            };
+            // SAFETY: read-only query; `feat` is the pNext target and outlives the call.
+            unsafe { instance.get_physical_device_features2(pdev, &mut probe) };
+            let mut caps = timing_ext::SurfaceCaps::default();
+            let mut caps2 = vk::SurfaceCapabilities2KHR {
+                p_next: (&mut caps) as *mut _ as *mut std::ffi::c_void,
+                ..Default::default()
+            };
+            let surface_info = vk::PhysicalDeviceSurfaceInfo2KHR::default().surface(surface);
+            let caps2_i = ash::khr::get_surface_capabilities2::Instance::new(&entry, &instance);
+            // SAFETY: live handles; the chained locals outlive the call.
+            let queried = unsafe {
+                caps2_i.get_physical_device_surface_capabilities2(pdev, &surface_info, &mut caps2)
+            }
+            .is_ok();
+            let stages = caps.present_stage_queries
+                & (timing_ext::STAGE_PIXEL_OUT | timing_ext::STAGE_PIXEL_VISIBLE);
+            tracing::info!(
+                feature = feat.present_timing == vk::TRUE,
+                surface = caps.present_timing_supported == vk::TRUE,
+                stages = format_args!("{:#x}", caps.present_stage_queries),
+                at_absolute_time = caps.present_at_absolute_time_supported == vk::TRUE,
+                at_relative_time = caps.present_at_relative_time_supported == vk::TRUE,
+                "engine display stamps (VK_EXT_present_timing)"
+            );
+            if queried
+                && feat.present_timing == vk::TRUE
+                && caps.present_timing_supported == vk::TRUE
+            {
+                stages
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        // The successors on request, and wherever the engine stamps its presents: those
+        // stamps need present-id2. AMD's Windows driver completes the wait late enough
+        // that the glass gate drops frames; without the successors the vblank waiter runs.
+        let use_wait2 = present_wait2_ok && (present_wait2_opt_in() || timing_stages != 0);
         let present_wait_ok = present_wait_ok && !use_wait2;
         // PyroWave is Vulkan 1.3 compute on this device — no video extensions.
         // Probe here so a capable device enables the features and advertises the codec.
@@ -596,6 +645,10 @@ impl Presenter {
             dev_exts.push(present_wait2::ID_NAME.as_ptr());
             dev_exts.push(present_wait2::WAIT_NAME.as_ptr());
         }
+        if timing_stages != 0 {
+            dev_exts.push(timing_ext::NAME.as_ptr());
+            dev_exts.push(ash::khr::calibrated_timestamps::NAME.as_ptr());
+        }
         if flr_ok {
             dev_exts.push(fifo_latest_ready::NAME.as_ptr());
         }
@@ -646,6 +699,11 @@ impl Presenter {
             en_id2.p_next = (&mut en_wait2) as *mut _ as *mut std::ffi::c_void;
             en_f2.p_next = (&mut en_id2) as *mut _ as *mut std::ffi::c_void;
         }
+        let mut en_timing = timing_ext::Features::new(vk::TRUE);
+        if timing_stages != 0 {
+            en_timing.p_next = en_f2.p_next;
+            en_f2.p_next = (&mut en_timing) as *mut _ as *mut std::ffi::c_void;
+        }
         en_f2.features.shader_int16 = if pyrowave_ok { vk::TRUE } else { vk::FALSE };
 
         let priorities = [1.0f32];
@@ -673,9 +731,18 @@ impl Presenter {
         .context("vkCreateDevice")?;
         let swap_d = ash::khr::swapchain::Device::new(&instance, &device);
         use super::present_timing::{PresentTimer, Waiter};
+        // SAFETY: the device was created with the extension and calibrated timestamps.
+        let timing = (timing_stages != 0)
+            .then(|| unsafe { timing_ext::Engine::load(&instance, &device, timing_stages) })
+            .flatten()
+            .map(std::sync::Arc::new);
         let present_timer = if present_wait_ok {
             let wait_d = ash::khr::present_wait::Device::new(&instance, &device);
-            Some(PresentTimer::spawn(Waiter::V1(wait_d), device.clone()))
+            Some(PresentTimer::spawn(
+                Waiter::V1(wait_d),
+                device.clone(),
+                None,
+            ))
         } else if use_wait2 {
             // SAFETY: a name lookup on the live device; `None` if the driver has no such entry.
             let raw = unsafe {
@@ -690,16 +757,19 @@ impl Presenter {
                     device: device.handle(),
                     wait,
                 };
-                PresentTimer::spawn(waiter, device.clone())
+                PresentTimer::spawn(waiter, device.clone(), timing.clone())
             })
         } else {
             None
         };
         // The swapchain and every present opt into the successors only with a live waiter.
         let present_id2 = use_wait2 && present_timer.is_some();
+        // The engine's stamps are read by that waiter.
+        let timing = timing.filter(|_| present_id2);
         tracing::info!(
             present_wait = present_wait_ok,
             present_wait2 = present_id2,
+            engine_stamps = timing.is_some(),
             "on-glass present timing (VK_KHR_present_wait / present_wait2)"
         );
         // No present-wait in use: the output's vblank stands in for the ledger and the VRR
@@ -1014,6 +1084,9 @@ impl Presenter {
             acquired: None,
             present_timer,
             present_id2,
+            timing,
+            timing_armed: false,
+            timing_asked: false,
             #[cfg(windows)]
             vblank_timer,
             #[cfg(windows)]
@@ -1369,6 +1442,16 @@ fn vrr_fifo_opt_in() -> bool {
 /// `PUNKTFUNK_PRESENT_WAIT2=1`: time presents with `VK_KHR_present_wait2`.
 fn present_wait2_opt_in() -> bool {
     std::env::var("PUNKTFUNK_PRESENT_WAIT2").is_ok_and(|v| v != "0")
+}
+
+/// Whether to read the engine's display stamps (`VK_EXT_present_timing`) where the surface
+/// reports them. On by default on Linux; `PUNKTFUNK_PRESENT_TIMING=1` or `0` decides
+/// anywhere.
+fn present_timing_wanted() -> bool {
+    match std::env::var("PUNKTFUNK_PRESENT_TIMING") {
+        Ok(v) => v != "0",
+        Err(_) => cfg!(target_os = "linux"),
+    }
 }
 
 /// `PUNKTFUNK_FULLSCREEN_EXCLUSIVE=1`: take the monitor with `VK_EXT_full_screen_exclusive`.

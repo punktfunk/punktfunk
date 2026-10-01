@@ -166,6 +166,7 @@ fn run(
                     submitted_ns: j.submitted_ns,
                     gpu_done_ns: 0,
                     displayed_ns: vblank_ns,
+                    exact: false,
                 });
                 true
             }

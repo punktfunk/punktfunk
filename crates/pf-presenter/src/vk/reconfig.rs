@@ -119,10 +119,15 @@ impl Presenter {
             .present_mode(self.present_mode)
             .clipped(true)
             .old_swapchain(old);
-        // Present-id2/present-wait2 are asked for per swapchain.
+        // Present-id2/present-wait2 are asked for per swapchain, and so are engine stamps.
+        let mut flags = vk::SwapchainCreateFlagsKHR::empty();
         if self.present_id2 {
-            info = info.flags(super::setup::present_wait2::SWAPCHAIN_FLAGS);
+            flags |= super::setup::present_wait2::SWAPCHAIN_FLAGS;
         }
+        if self.timing.is_some() {
+            flags |= super::timing_ext::SWAPCHAIN_FLAG;
+        }
+        info = info.flags(flags);
         #[cfg(windows)]
         if let Some(f) = &self.fse {
             info = f.extend(info, &mut fse_chain);
@@ -158,6 +163,12 @@ impl Presenter {
             }
         }
         self.swapchain = swapchain;
+        // SAFETY: `swapchain` was created above; the waiter is drained, so this thread is
+        // its only user.
+        self.timing_armed = self
+            .timing
+            .as_ref()
+            .is_some_and(|t| unsafe { t.arm(swapchain) });
         // SAFETY: `swapchain` was created above and is owned here.
         self.images = unsafe { self.swap_d.get_swapchain_images(swapchain) }?;
         self.extent = extent;

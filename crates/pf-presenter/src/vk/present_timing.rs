@@ -3,7 +3,9 @@
 //! `vkQueuePresentKHR` return is CPU submit, not vblank. A waiter thread
 //! blocks in `vkWaitForPresentKHR` until the image is visible and stamps that.
 //! Given the submit's timeline value it first stamps when our own GPU work was
-//! done, which splits the compositor's share from ours.
+//! done, which splits the compositor's share from ours. Where the engine stamps
+//! presents itself (`VK_EXT_present_timing`) its stamp replaces the wake time, and
+//! a present it reports as never shown yields no sample.
 //!
 //! [`PresentTimer::drain`] before `vkDestroySwapchainKHR` and before any
 //! `vkCreateSwapchainKHR` that names the live swapchain as `oldSwapchain` —
@@ -17,11 +19,14 @@
 //! [`PresentTimer::swapchain_guard`]'s lock for one call of at most [`SLICE_NS`];
 //! the waiter waits in slices and lets a waiting presenter go first.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use ash::vk;
+
+use super::timing_ext::{Engine, Offset, Stamp};
 
 /// Longest single wait on the swapchain. 1 ms bounds how long a present waits for the
 /// waiter, and a driver with millisecond timeouts still blocks rather than spins.
@@ -45,18 +50,24 @@ pub(crate) struct PresentedSample {
     pub submitted_ns: u64,
     /// Our GPU work for this present finished (client clock). 0 when not waited.
     pub gpu_done_ns: u64,
-    /// `vkWaitForPresentKHR` completion: the image is visible (client clock).
+    /// The image is visible (client clock): the engine's stamp, or the instant the
+    /// present wait completed.
     pub displayed_ns: u64,
+    /// `displayed_ns` is the engine's own stamp, not a wake time.
+    pub exact: bool,
 }
 
-struct Job {
-    swapchain: vk::SwapchainKHR,
-    present_id: u64,
+/// One present handed to the waiter.
+pub(crate) struct Job {
+    pub(crate) swapchain: vk::SwapchainKHR,
+    pub(crate) present_id: u64,
     /// The submit's timeline signal, waited before the present.
-    done: Option<(vk::Semaphore, u64)>,
-    pts_ns: u64,
-    decoded_ns: u64,
-    submitted_ns: u64,
+    pub(crate) done: Option<(vk::Semaphore, u64)>,
+    /// The present asked the engine for a stamp.
+    pub(crate) stamped: bool,
+    pub(crate) pts_ns: u64,
+    pub(crate) decoded_ns: u64,
+    pub(crate) submitted_ns: u64,
 }
 
 /// Run-loop wake (SDL event push), shared with the waiter thread.
@@ -72,7 +83,75 @@ pub(crate) struct PresentTimer {
     /// never waits out the event-loop timeout.
     wake: WakeSlot,
     sync: Arc<SwapchainSync>,
+    /// Presents the engine reported as never shown, since the last take.
+    unshown: Arc<AtomicUsize>,
     join: Option<std::thread::JoinHandle<()>>,
+}
+
+/// An engine stamp this far before the submit or after the wake is on another clock.
+const PLAUSIBLE_NS: u64 = 50_000_000;
+/// This many stamps in a row off the session clock, and the wake time stands in for good.
+const DISTRUST_AFTER: u32 = 8;
+/// Stamps kept for jobs still queued: a replaced present's wait completes with its
+/// successor's, and one poll returns both.
+const STASH: usize = 32;
+
+/// Engine stamps read ahead of the jobs they belong to.
+struct Stamps {
+    engine: Arc<Engine>,
+    offset: Offset,
+    stash: VecDeque<Stamp>,
+    /// Consecutive stamps that failed [`PLAUSIBLE_NS`].
+    off_clock: u32,
+}
+
+impl Stamps {
+    /// The engine's word on `job`: `Some(Some(ns))` shown then, `Some(None)` never shown,
+    /// `None` no word (not asked, not reported yet, or the stamps are distrusted).
+    fn of(&mut self, sync: &SwapchainSync, job: &Job, wake_ns: u64) -> Option<Option<u64>> {
+        // Polled on every job while results are outstanding: a present without a request
+        // of its own still drains the queue the earlier ones fill.
+        let stashed = self.stash.iter().any(|s| s.present_id == job.present_id);
+        if !stashed && self.engine.outstanding() > 0 {
+            let _swapchain = sync.lock.lock().unwrap_or_else(PoisonError::into_inner);
+            // SAFETY: `job.swapchain` is live until this job leaves `pending`, and the
+            // lock above is its host sync.
+            let fresh = unsafe { self.engine.poll(job.swapchain, &mut self.offset) };
+            self.stash.extend(fresh);
+            while self.stash.len() > STASH {
+                self.stash.pop_front();
+            }
+        }
+        if !job.stamped {
+            return None;
+        }
+        let at = self
+            .stash
+            .iter()
+            .position(|s| s.present_id == job.present_id)?;
+        let stamp = self.stash.drain(..=at).next_back()?;
+        if self.off_clock >= DISTRUST_AFTER {
+            return None;
+        }
+        let Some(ns) = stamp.displayed_ns else {
+            return Some(None);
+        };
+        let plausible = ns + PLAUSIBLE_NS >= job.submitted_ns && ns <= wake_ns + PLAUSIBLE_NS;
+        if !plausible {
+            self.off_clock += 1;
+            if self.off_clock == DISTRUST_AFTER {
+                tracing::warn!(
+                    stamp_ns = ns,
+                    submitted_ns = job.submitted_ns,
+                    wake_ns,
+                    "engine display stamps are off the session clock; using wake times"
+                );
+            }
+            return None;
+        }
+        self.off_clock = 0;
+        Some(Some(ns))
+    }
 }
 
 /// The driver call that blocks until a present is visible.
@@ -132,14 +211,28 @@ fn wait_sliced(wait_d: &Waiter, sync: &SwapchainSync, job: &Job) -> ash::prelude
 }
 
 impl PresentTimer {
-    pub(crate) fn spawn(wait_d: Waiter, device: ash::Device) -> Self {
+    /// `engine`: where presents carry `VK_EXT_present_timing` requests, its stamps replace
+    /// the wake time.
+    pub(crate) fn spawn(wait_d: Waiter, device: ash::Device, engine: Option<Arc<Engine>>) -> Self {
         let (tx, rx) = mpsc::channel::<Job>();
         let pending = Arc::new(AtomicUsize::new(0));
         let results = Arc::new(Mutex::new(Vec::with_capacity(256)));
         let wake: WakeSlot = Arc::new(Mutex::new(None));
         let sync = Arc::new(SwapchainSync::default());
-        let (pending_t, results_t, wake_t, sync_t) =
-            (pending.clone(), results.clone(), wake.clone(), sync.clone());
+        let unshown = Arc::new(AtomicUsize::new(0));
+        let (pending_t, results_t, wake_t, sync_t, unshown_t) = (
+            pending.clone(),
+            results.clone(),
+            wake.clone(),
+            sync.clone(),
+            unshown.clone(),
+        );
+        let mut stamps = engine.map(|engine| Stamps {
+            engine,
+            offset: Offset::default(),
+            stash: VecDeque::with_capacity(STASH),
+            off_clock: 0,
+        });
         let join = std::thread::Builder::new()
             .name("pf-present-wait".into())
             .spawn(move || {
@@ -161,14 +254,27 @@ impl PresentTimer {
                     }
                     let r = wait_sliced(&wait_d, &sync_t, &job);
                     if r.is_ok() {
-                        let displayed_ns = pf_client_core::session::now_ns();
-                        results_t.lock().unwrap().push(PresentedSample {
-                            pts_ns: job.pts_ns,
-                            decoded_ns: job.decoded_ns,
-                            submitted_ns: job.submitted_ns,
-                            gpu_done_ns,
-                            displayed_ns,
-                        });
+                        let wake_ns = pf_client_core::session::now_ns();
+                        let engine = stamps.as_mut().and_then(|s| s.of(&sync_t, &job, wake_ns));
+                        if let Some(Some(ns)) = engine {
+                            tracing::trace!(
+                                wake_lag_us = (wake_ns as i64 - ns as i64) / 1000,
+                                "present wait completed after the engine's stamp"
+                            );
+                        }
+                        match engine {
+                            Some(None) => {
+                                unshown_t.fetch_add(1, Ordering::Relaxed);
+                            }
+                            shown => results_t.lock().unwrap().push(PresentedSample {
+                                pts_ns: job.pts_ns,
+                                decoded_ns: job.decoded_ns,
+                                submitted_ns: job.submitted_ns,
+                                gpu_done_ns,
+                                displayed_ns: shown.flatten().unwrap_or(wake_ns),
+                                exact: shown.is_some(),
+                            }),
+                        }
                     }
                     // Wait failed: no sample. The frame still showed, or the loop
                     // is about to find out — do not poison the stats window.
@@ -188,8 +294,14 @@ impl PresentTimer {
             results,
             wake,
             sync,
+            unshown,
             join: Some(join),
         }
+    }
+
+    /// Presents the engine reported as never shown, since the last call.
+    pub(crate) fn take_unshown(&self) -> u32 {
+        self.unshown.swap(0, Ordering::Relaxed) as u32
     }
 
     /// The swapchain's host sync on the presenter thread: hold it across one acquire or
@@ -215,28 +327,10 @@ impl PresentTimer {
         self.pending.load(Ordering::Acquire)
     }
 
-    pub(crate) fn enqueue(
-        &self,
-        swapchain: vk::SwapchainKHR,
-        present_id: u64,
-        done: Option<(vk::Semaphore, u64)>,
-        pts_ns: u64,
-        decoded_ns: u64,
-        submitted_ns: u64,
-    ) {
+    pub(crate) fn enqueue(&self, job: Job) {
         if let Some(tx) = &self.tx {
             self.pending.fetch_add(1, Ordering::AcqRel);
-            if tx
-                .send(Job {
-                    swapchain,
-                    present_id,
-                    done,
-                    pts_ns,
-                    decoded_ns,
-                    submitted_ns,
-                })
-                .is_err()
-            {
+            if tx.send(job).is_err() {
                 self.pending.fetch_sub(1, Ordering::AcqRel);
             }
         }

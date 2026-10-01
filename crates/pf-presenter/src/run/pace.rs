@@ -29,6 +29,9 @@ impl Shell {
                 st.cadence.note_refresh(refresh_ns, st.mode_period_ns);
             }
         }
+        if let Some((cycle_ns, interval_ns)) = self.presenter.engine_refresh() {
+            st.note_engine_refresh(cycle_ns, interval_ns);
+        }
         let now_ns = session::now_ns();
         // An estimated stamp never builds the latch grid: on a VRR panel the vblanks it
         // reads follow our own presents, and a grid built on them chases itself.
@@ -105,6 +108,9 @@ impl Shell {
         let forwarded = st.forwarder_drops.swap(0, Ordering::Relaxed);
         let cadence_err = hud::Summary::of(&mut st.win.cadence_err_us);
         st.win.cadence_err_us.clear();
+        let grid_err = hud::Summary::of(&mut st.win.grid_err_us);
+        st.win.grid_err_us.clear();
+        let unshown = self.presenter.take_unshown();
         st.last_forced = forced;
         let present = PresentCounters {
             mode: self.presenter.present_mode_name(),
@@ -181,6 +187,13 @@ impl Shell {
                 // On-glass spacing error against the source's spacing, per shown frame.
                 cadence_err_us = cadence_err.p50_us,
                 cadence_err_p95_us = cadence_err.p95_us,
+                // Stamps the engine took itself, and how far the on-glass spacing sat
+                // from a whole number of refreshes: a fixed panel's is stamp noise.
+                exact = st.win.exact,
+                grid_err_us = grid_err.p50_us,
+                grid_err_p95_us = grid_err.p95_us,
+                // Presents the engine never showed: replaced before a refresh took them.
+                unshown,
                 gated,
                 forced,
                 misses = st.win.misses,
@@ -237,7 +250,17 @@ impl StreamState {
             && !self.store.is_smoothing()
             && self.source_interval_ns.abs_diff(period as i64) < period / 10;
         let mut stamps = Vec::with_capacity(samples.len());
+        // The engine's stamps are display times in any present mode; a wake time is one
+        // only where the wait ends on a vblank.
+        let exact = !samples.is_empty() && samples.iter().all(|s| s.exact);
         for s in samples {
+            self.win.exact += u32::from(s.exact);
+            if self.last_displayed_ns != 0 && s.displayed_ns > self.last_displayed_ns {
+                let off = off_grid_ns(s.displayed_ns - self.last_displayed_ns, self.mode_period_ns);
+                self.win
+                    .grid_err_us
+                    .push((off / 1000).min(u64::from(u32::MAX)) as u32);
+            }
             if learn_need {
                 self.win.leads.extend(punktfunk_core::phase::latch_lead(
                     self.clock.anchor_ns(),
@@ -287,10 +310,11 @@ impl StreamState {
         self.clock.note_batch(&stamps, self.store.is_smoothing());
         // VRR probe: healthy-window stamps only. Use the display mode's period
         // (not the learned one — a slow stream makes the learner adopt our
-        // cadence as "the grid"). FIFO-family only: MAILBOX/IMMEDIATE never
-        // wait for vblank, so they would look like VRR. Else Unknown.
+        // cadence as "the grid"). Wake-time stamps count in the FIFO family only:
+        // a MAILBOX or IMMEDIATE wait does not end on a vblank, so it would look like
+        // VRR. The engine's own stamps are display times in every mode.
         let healthy = self.last_forced == 0;
-        if vblank_locked {
+        if exact || vblank_locked {
             self.cadence.note(&stamps, self.mode_period_ns, healthy);
         }
         // Phase-locked capture, the presenter's half: publish the grid the
@@ -590,6 +614,11 @@ pub(super) struct PresentWindow {
     ticks: u32,
     /// Per shown frame: |on-glass spacing − source spacing| to the frame before it, µs.
     cadence_err_us: Vec<u32>,
+    /// Samples whose stamp the engine took itself.
+    exact: u32,
+    /// Per shown frame: how far its on-glass spacing sat from a whole number of
+    /// refreshes, µs.
+    grid_err_us: Vec<u32>,
     /// This window's on-glass frames: the lead each had to its first latch, and whether
     /// it landed on a later one.
     leads: Vec<(i64, bool)>,
@@ -611,6 +640,8 @@ impl PresentWindow {
             repeats: 0,
             ticks: 0,
             cadence_err_us: Vec::with_capacity(256),
+            exact: 0,
+            grid_err_us: Vec::with_capacity(256),
             leads: Vec::with_capacity(256),
         }
     }
@@ -649,8 +680,18 @@ impl PresentWindow {
         self.busy = [0; 2];
         self.repeats = 0;
         self.ticks = 0;
+        self.exact = 0;
         self.leads.clear();
     }
+}
+
+/// How far `delta_ns` sits from the nearest whole number of `period_ns`.
+fn off_grid_ns(delta_ns: u64, period_ns: u64) -> u64 {
+    if period_ns == 0 {
+        return 0;
+    }
+    let rem = delta_ns % period_ns;
+    rem.min(period_ns - rem)
 }
 
 /// Display time against the frame's host capture stamp, in the host clock. `None` for a
@@ -826,6 +867,17 @@ impl StreamState {
 }
 
 impl StreamState {
+    /// The engine's own refresh: its cycle is the grid presents quantize to, where the
+    /// display mode's rate is a rounded claim, and an unbounded interval is variable
+    /// refresh by the engine's word.
+    pub(super) fn note_engine_refresh(&mut self, cycle_ns: u64, interval_ns: u64) {
+        // 1 to 100 ms: 1000 Hz down to 10 Hz.
+        if (1_000_000..=100_000_000).contains(&cycle_ns) {
+            self.mode_period_ns = cycle_ns;
+        }
+        self.cadence.note_engine_variable(interval_ns == u64::MAX);
+    }
+
     /// Re-seed the latch grid, VRR verdict and pacer anchor from the window's current
     /// display mode. Re-anchoring costs one frame; measured jitter survives, because
     /// that describes the link.
