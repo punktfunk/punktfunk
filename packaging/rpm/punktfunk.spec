@@ -63,6 +63,13 @@ ExclusiveArch:  x86_64 aarch64
 # from emitting an empty `punktfunk` package alongside the client.
 %bcond_without host
 
+# Debug packages. ON by default (COPR). CI builds `--without debuginfo`: it publishes no
+# -debuginfo/-debugsource packages, so it compiles no debug info either (see %%build).
+%bcond_without debuginfo
+%if %{without debuginfo}
+%global debug_package %{nil}
+%endif
+
 # --- Build toolchain ---------------------------------------------------------
 BuildRequires:  cargo
 BuildRequires:  rust
@@ -216,6 +223,11 @@ The bun runtime the punktfunk web console and plugin runner run on, installed on
 # Release build of the host + client binaries (the workspace also has the core lib).
 # cargo fetches crates over the network; COPR build hosts allow this.
 export RUSTFLAGS="%{?build_rustflags}"
+%if %{without debuginfo}
+# Fedora's flags pin -Cdebuginfo=2 and -Ccodegen-units=1; drop both so Cargo.toml's release
+# profile (and CI's canary codegen-units) decide.
+RUSTFLAGS="$(printf '%s' "$RUSTFLAGS" | sed -E 's/ ?-C(debuginfo|codegen-units)=[^ ]*//g')"
+%endif
 # Use the toolchain baked into the builder image as-is, ignoring rust-toolchain.toml. The toml
 # floats `channel = "stable"` and requests rustfmt/clippy (lint-only — not needed for a build); when
 # a newer stable lands upstream, that combination makes rustup try to UPDATE the baked, minimal-
