@@ -894,7 +894,7 @@ async fn negotiate_compositor(
     Ok((compositor, gamescope_route))
 }
 
-/// Bit depth, HDR verdict, and chroma, each gated by host, client, codec, and GPU probes.
+/// Bit depth, HDR verdict, and chroma, each gated by host, client, codec, source, and GPU probes.
 async fn negotiate_video_format(
     hello: &Hello,
     codec: crate::encode::Codec,
@@ -912,11 +912,12 @@ async fn negotiate_video_format(
     // that latch is per-source and this gate already used this session's source.
     let capture_supports_hdr =
         crate::capture::capturer_supports_hdr_for(compositor, gamescope_route);
-    // SDR-10 needs a backend that writes 10 bits from an SDR desktop's 8-bit capture:
-    // direct-NVENC, VAAPI/Vulkan Video, or PyroWave's own CSC (`backend_carries_sdr10`).
-    // A Linux non-PyroWave 4:4:4 session is clamped to 8-bit separately at the
-    // resolved-chroma gate below, so depth needs no chroma input here.
-    let sdr10_chain_ok = codec_carries_sdr10(codec) && crate::encode::backend_carries_sdr10(codec);
+    // No capture source delivers more than 8 bits of SDR, so SDR-10 only widens the desktop:
+    // a colour pass per frame for no source detail. The operator opts in (`sdr10_widen`), and the
+    // backend must write the 10 bits. Linux non-PyroWave 4:4:4 is clamped to 8-bit below.
+    let sdr10_widen = pf_host_config::row_bool("PUNKTFUNK_10BIT_SDR_WIDEN");
+    let sdr10_chain_ok =
+        sdr10_widen && codec_carries_sdr10(codec) && crate::encode::backend_carries_sdr10(codec);
     let depth_reachable = (client_wants_hdr && capture_supports_hdr) || sdr10_chain_ok;
     // Probe may open a tiny encoder; spawn_blocking, short-circuited behind the cheap gates.
     let gpu_can_10bit =
@@ -938,6 +939,7 @@ async fn negotiate_video_format(
         client_supports_10bit,
         client_wants_hdr,
         capture_supports_hdr,
+        sdr10_widen,
         sdr10_chain_ok,
         codec = ?codec,
         gpu_can_10bit,

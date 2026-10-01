@@ -39,6 +39,7 @@ restart*.
 | Browser origins | `PUNKTFUNK_WEBTRANSPORT_ORIGINS` | comma list | — | after a restart |
 | Encoder | `PUNKTFUNK_ENCODER` | `auto` · `nvenc` · `vaapi` · `vulkan` · `pyrowave` · `software` | `auto` | next session |
 | 10-bit and HDR | `PUNKTFUNK_10BIT` | `on` · `off` | `on` | next session |
+| Allow 10-bit SDR | `PUNKTFUNK_10BIT_SDR_WIDEN` | `on` · `off` | `off` | next session |
 | Full color 4:4:4 | `PUNKTFUNK_444` | `on` · `off` | `on` | next session |
 | Game frame limit (Linux) | `PUNKTFUNK_MAX_FPS` | 0–240 fps | `0` | next session |
 | Cursor capture (Linux) | `PUNKTFUNK_PORTAL_CURSOR_MODE` | `auto` · `embedded` · `metadata` · `hidden` | `auto` | next session |

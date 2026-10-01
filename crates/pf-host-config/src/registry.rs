@@ -423,6 +423,7 @@ pub static SETTINGS: &[Setting] = &[
     // --- Video
     row("encoder", "PUNKTFUNK_ENCODER", Kind::Enum(ENCODERS), D::Str("auto"), Video, NextSession, "Encoder", "configuration").spellings(ENCODER_SPELLINGS),
     row("ten_bit", "PUNKTFUNK_10BIT", Kind::Bool, D::Bool(true), Video, NextSession, "10-bit and HDR", "hdr"),
+    row("sdr10_widen", "PUNKTFUNK_10BIT_SDR_WIDEN", Kind::Bool, D::Bool(false), Video, NextSession, "Allow 10-bit SDR", "hdr").advanced(),
     row("chroma_444", "PUNKTFUNK_444", Kind::Bool, D::Bool(true), Video, NextSession, "Full color 4:4:4", "configuration"),
     row("max_fps", "PUNKTFUNK_MAX_FPS", Kind::Int { min: 0, max: 240, unit: "fps" }, D::Int(0), Video, NextSession, "Game frame limit", "gamescope").only(LINUX),
     row("portal_cursor_mode", "PUNKTFUNK_PORTAL_CURSOR_MODE", Kind::Enum(&["auto", "embedded", "metadata", "hidden"]), D::Str("auto"), Video, NextSession, "Cursor capture", "configuration")
@@ -649,6 +650,15 @@ mod tests {
         assert_eq!(s.default.to_value(), Value::Bool(false));
         assert_eq!(s.apply, Apply::NextSession);
         assert_eq!(s.env, "PUNKTFUNK_STEAM_SEAT_SANDBOX");
+    }
+
+    /// No desktop delivers 10-bit SDR, so widening one costs a colour pass for no detail.
+    #[test]
+    fn widening_an_8_bit_desktop_to_10_bit_is_opt_in() {
+        let s = find("sdr10_widen").expect("the row exists");
+        assert_eq!(s.default.to_value(), Value::Bool(false));
+        assert_eq!(s.apply, Apply::NextSession);
+        assert_eq!(s.env, "PUNKTFUNK_10BIT_SDR_WIDEN");
     }
 
     #[test]

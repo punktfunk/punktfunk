@@ -46,6 +46,10 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_ten_bit,
 		hint: m.setting_ten_bit_hint,
 	},
+	sdr10_widen: {
+		label: m.setting_sdr10_widen,
+		hint: m.setting_sdr10_widen_hint,
+	},
 	chroma_444: {
 		label: m.setting_chroma_444,
 		hint: m.setting_chroma_444_hint,
