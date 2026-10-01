@@ -701,6 +701,20 @@ impl Targets {
     }
 }
 
+impl Drop for Targets {
+    /// Give the slots back now. D3D11 frees a released texture at the next flush, and the
+    /// pooled device is idle once its last monitor left.
+    fn drop(&mut self) {
+        self.planes = Planes::Composed(Vec::new());
+        self.rgb.clear();
+        self.patch = None;
+        self.blend = None;
+        let _ctx = lock(&CTX);
+        // SAFETY: a single call on the pooled device's multithread-protected context.
+        unsafe { self.ctx.Flush() };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

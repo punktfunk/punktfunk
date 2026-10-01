@@ -288,6 +288,10 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
     Drive::new(enc, &pool, &ctx.session, stop, &live, spec.fps, opened_kbps).run();
     if live.load(Ordering::Acquire) {
         section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_CLOSED);
+        // The encoder is closed, and D3D11 frees what it released only at a flush. The pooled
+        // device outlives the session and is idle after it.
+        // SAFETY: a single call on the pooled device's multithread-protected context.
+        unsafe { ctx.device.device_context.Flush() };
     }
 }
 
