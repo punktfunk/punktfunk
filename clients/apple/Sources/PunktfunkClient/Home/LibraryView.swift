@@ -654,6 +654,12 @@ struct LibraryView: View {
             if launchAndRemember != nil {
                 Button { launch(game.id, frameID: key) } label: {
                     card(game, caption: caption, frameID: key)
+                        #if os(visionOS)
+                        // The plain style's gaze highlight takes the system's large radius round
+                        // the tile; this one runs concentric with the poster's corners, a little out.
+                        .contentShape(
+                            .hoverEffect, RoundedRectangle(cornerRadius: 16, style: .continuous).inset(by: -6))
+                        #endif
                 }
                     // A TV's plain style draws a platter round the label, a second card round the
                     // card; this one lifts the card itself.
