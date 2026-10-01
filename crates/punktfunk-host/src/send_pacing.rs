@@ -230,9 +230,10 @@ pub(crate) fn pace_frame<T: AsRef<[u8]>, E>(
     })
 }
 
-/// `PUNKTFUNK_FRAME_DRIVEN=0` restores the fixed-cadence tick. Backends
-/// without an arrival wait keep that tick regardless — see
-/// [`pf_capture::Capturer::supports_arrival_wait`]. Shared by both video planes.
+/// `PUNKTFUNK_FRAME_DRIVEN=0` restores the fixed-cadence tick. On, the loop wakes on
+/// the capturer's arrival ([`pf_capture::Capturer::supports_arrival_wait`]) or on the
+/// next access unit of an encoder that publishes its own; a backend with neither
+/// keeps the tick. Shared by both video planes.
 pub(crate) fn frame_driven_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_FRAME_DRIVEN").unwrap_or(true))
