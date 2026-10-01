@@ -181,6 +181,13 @@ codegen-units = 1
 [profile.release.package."*"]
 codegen-units = 1
 
+# CI test builds: release code without LTO, so each test exe links fast. Its own target subdir,
+# so a test run never replaces the release binaries a later step packs.
+[profile.ci-test]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 # The per-frame hot path must stay fast even in dev builds.
 [profile.dev.package."*"]
 opt-level = 2

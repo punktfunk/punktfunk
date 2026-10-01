@@ -8,13 +8,10 @@
 # it, spawned by the shell), plus punktfunk-cli, whose `punktfunk.exe` alias the MSIX manifest
 # references.
 #
-# ⚠ WHY THIS IS ONE FILE. This was `windows.yml` (build+lint+test, DEBUG, x64 + arm64) and
-# `windows-msix.yml` (build+package, RELEASE, x64 + arm64) — four full compiles of the same crates
-# per client push, on ONE runner, from three copies of the same `paths:` list that had already
-# started to drift. windows-host.yml learned the hard way that debug trees on this machine are pure
-# liability: a second dep tree tips it into `cabac_decoder.cpp: fatal error C1069` building
-# openh264-sys2's vendored C++, which is disk/temp exhaustion, not a source error. So there is now
-# ONE release build per arch, and clippy/fmt/test run against it. Do not reintroduce a debug leg.
+# ⚠ ONE FILE, ONE RELEASE BUILD PER ARCH. Build, clippy and fmt share it. Tests build under the
+# `ci-test` profile (release without LTO), the only second tree. Every extra tree costs disk, and
+# `cabac_decoder.cpp: fatal error C1069` in openh264-sys2's vendored C++ means the disk ran out,
+# not a source error. Do not add a debug leg.
 #
 # Renamed from windows-msix.yml deliberately, and safely: `github.run_number` is REPO-WIDE in Gitea
 # (consecutive runs of DIFFERENT workflows get consecutive numbers), so the canary MSIX version
@@ -295,9 +292,7 @@ jobs:
       # aliases and pack-msix.ps1 requires (bf981027 added the requirement without the build — the
       # same gap 90c84ef4 closed for deb). --no-default-features on ARM64 is a no-op for the shell.
       #
-      # Release, not debug, even for the lint/test legs below: a debug build here would compile the
-      # whole dep tree into a SECOND target dir and re-run openh264-sys2's vendored C++ through
-      # cc-rs's cl.exe fan-out, which is what tips this runner into C1069 (see the header).
+      # Release, not debug, for the lint legs below too; tests build under `ci-test` (see the header).
       - name: Build (release)
         shell: pwsh
         run: cargo build --release --locked -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli ${{ matrix.session_flags }} --target ${{ matrix.target }}
@@ -326,7 +321,7 @@ jobs:
         if: matrix.arch == 'x64'
         shell: pwsh
         run: |
-          cargo test --release --locked -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-presenter -p pf-console-ui -p pf-dxvadec --target ${{ matrix.target }}
+          cargo test --profile ci-test --locked -p punktfunk-client-windows -p punktfunk-client-session -p punktfunk-cli -p pf-client-core -p pf-presenter -p pf-console-ui -p pf-dxvadec --target ${{ matrix.target }}
           if ($LASTEXITCODE) { throw "tests" }
 
       # d3d11va without desktop. The release build above enables desktop, so it never
