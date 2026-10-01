@@ -119,11 +119,6 @@ static MANAGED_LAUNCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const SESSION_UNIT: &str = "punktfunk-gamescope";
 const SESSION_PLUS_BIN: &str = "/usr/share/gamescope-session-plus/gamescope-session-plus";
 
-/// `WAYLAND_DISPLAY` for a command run inside gamescope: empty names no socket, so it draws
-/// through gamescope's Xwayland. Unset means `wayland-0`, the desktop's socket on a desktop box:
-/// flatpak then withholds X11 from a `fallback-x11` app, and a Qt app that forces xcb aborts.
-const NESTED_WAYLAND_DISPLAY: &str = "";
-
 /// Game Mode's crash counters: a line per run that ends inside 60 s. [`SESSION_PLUS_BIN`]
 /// re-bootstraps Steam and switches to desktop at five; SteamOS's `steam-short-session-tracker`
 /// moves `~/.steam` aside at three. A run the host ends or restarts is never Steam failing.

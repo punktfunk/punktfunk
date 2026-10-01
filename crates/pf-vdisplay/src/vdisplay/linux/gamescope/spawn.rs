@@ -257,7 +257,9 @@ pub(super) fn spawn(
         mark_seat_steam_log(home);
     }
     let mut nested_env = wsi.env(hdr);
-    nested_env.push(("WAYLAND_DISPLAY", NESTED_WAYLAND_DISPLAY.to_string()));
+    if let Some(w) = nested_wayland_display(&app) {
+        nested_env.push(("WAYLAND_DISPLAY", w.to_string()));
+    }
     if let Some(home) = nested_seat_home {
         nested_env.extend(seat::env(home));
     }
