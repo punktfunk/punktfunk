@@ -462,7 +462,7 @@ impl StreamState {
             cap_us: st.cap_us,
             submit_us: st.submit_us,
             wait_us,
-            repeat: st.repeat,
+            repeat: d.repeat.unwrap_or(st.repeat),
             was_measured: st.measure,
             driver: d.driver,
         }
@@ -836,6 +836,9 @@ struct AuStages {
     queue_us: u32,
     encode_us: u32,
     driver: Option<DriverSample>,
+    /// The driver's own word on whether this AU repeats the last source frame. `None` leaves
+    /// it to the tick, which is right for an encoder the loop feeds.
+    repeat: Option<bool>,
 }
 
 impl AuStages {
@@ -844,18 +847,21 @@ impl AuStages {
             queue_us,
             encode_us,
             driver: None,
+            repeat: None,
         }
     }
 }
 
 /// The driver's stages for the AU just taken. Unmeasured before its first AU.
 fn driver_stages(enc: &dyn crate::encode::Encoder) -> AuStages {
-    let sample = DriverSample::from_telemetry(enc.telemetry().as_ref());
+    let telemetry = enc.telemetry();
+    let sample = DriverSample::from_telemetry(telemetry.as_ref());
     let (queue_us, encode_us) = sample.queue_encode_us();
     AuStages {
         queue_us,
         encode_us,
         driver: Some(sample),
+        repeat: telemetry.map(|t| t.au_repeat),
     }
 }
 

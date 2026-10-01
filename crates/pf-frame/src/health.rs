@@ -86,6 +86,9 @@ pub struct EncoderTelemetry {
     /// The driver's own split of that span for the newest access unit, from the stamps on its
     /// slot. `None` from a driver that does not stamp, and before the first access unit.
     pub driver_split: Option<DriverSplit>,
+    /// The newest access unit re-encodes the frame the one before it carried: a keyframe over
+    /// a still desktop. The loop's own tick cannot tell, it races the driver's next frame.
+    pub au_repeat: bool,
     /// The driver's encoder state word (`pf_driver_proto::encode::ENCODER_*`).
     pub state: u32,
     /// The backend the driver opened, for the status surface.
@@ -440,6 +443,7 @@ mod tests {
             drain_heartbeat: Some(now),
             present_to_arrival: None,
             driver_split: None,
+            au_repeat: false,
             state: 0,
             backend: "nvenc",
         };
