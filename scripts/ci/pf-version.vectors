@@ -2,10 +2,10 @@
 # self-test). Columns: tags | GITHUB_REF | --format or - | expected KEY=VALUE pairs.
 # Every row runs with GITHUB_RUN_NUMBER=9907 and GITHUB_SHA=01234567…; the pwsh twin checks
 # only the keys it emits.
-v0.9.0 v0.10.0 v0.40.0 v0.41.0-rc1 | refs/heads/main       | -       | PF_CHANNEL=canary PF_BASE=0.41.0 PF_MAJOR=0 PF_MINOR=41 PF_PATCH=0 PF_STABLE_TAG=0.40.0
+v0.9.0 v0.10.0 v0.40.0 v0.41.0-rc1 | refs/heads/main       | -       | PF_CHANNEL=canary PF_BASE=0.41.0 PF_MAJOR=0 PF_MINOR=41 PF_PATCH=0 PF_STABLE_TAG=0.40.0 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 v0.9.0 v0.10.0                     | refs/heads/main       | -       | PF_BASE=0.11.0 PF_STABLE_TAG=0.10.0
-v1.2.3                             | refs/heads/feature/x  | -       | PF_CHANNEL=canary PF_BASE=1.3.0 PF_MAJOR=1 PF_MINOR=3 PF_PATCH=0
-v0.40.0                            | refs/tags/v0.41.0-rc1 | -       | PF_CHANNEL=stable PF_BASE=0.41.0 PF_MAJOR=0 PF_MINOR=41 PF_PATCH=0 PF_STABLE_TAG=0.40.0
+v1.2.3                             | refs/heads/feature/x  | -       | PF_CHANNEL=canary PF_BASE=1.3.0 PF_MAJOR=1 PF_MINOR=3 PF_PATCH=0 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+v0.40.0                            | refs/tags/v0.41.0-rc1 | -       | PF_CHANNEL=stable PF_BASE=0.41.0 PF_MAJOR=0 PF_MINOR=41 PF_PATCH=0 PF_STABLE_TAG=0.40.0 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 v0.40.0                            | refs/tags/v0.41.2+b7  | -       | PF_CHANNEL=stable PF_BASE=0.41.2 PF_PATCH=2
 v0.40.0                            | refs/heads/main       | deb     | PF_CHANNEL=canary PF_VERSION=0.41.0~ci9907.g01234567
 v0.41.0                            | refs/tags/v0.41.0     | deb     | PF_CHANNEL=stable PF_VERSION=0.41.0

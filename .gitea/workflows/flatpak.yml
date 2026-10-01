@@ -552,10 +552,11 @@ jobs:
           # is a first contact — would hand the deploy key and the publish to anything that won the
           # race for the address. The guard above skips the deploy when the secret is unset.
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts; chmod 600 ~/.ssh/known_hosts
-          SSH="ssh -i $HOME/.ssh/deploy -p ${DEPLOY_PORT:-22} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          # Every call below rides one multiplexed connection: fresh dials to unom-1 drop (from
+          # the arm64 runner, after almost every repo rsync), and each cost ~2 min to time out.
+          SSH="ssh -i $HOME/.ssh/deploy -p ${DEPLOY_PORT:-22} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-%C -o ControlPersist=120"
           DEST="${DEPLOY_USER}@${DEPLOY_HOST}"
-          # All idempotent — retried because the runner's link to unom-1 drops TCP dials under
-          # load (the same flake that hits docker.yml's deploy-docs with "dial tcp: i/o timeout").
+          # All idempotent, so a dropped dial or a stalled session just retries.
           bash scripts/ci/retry.sh 5 $SSH "$DEST" "mkdir -p ~/$DEPLOY_DIR/site/repo"
           bash scripts/ci/retry.sh 5 rsync -az --info=stats1 -e "$SSH" repo/ "$DEST:$DEPLOY_DIR/site/repo/"
           bash scripts/ci/retry.sh 5 rsync -az -e "$SSH" site/unom.flatpakrepo "site/${APP_ID}.flatpakref" "site/${APP_ID}.Canary.flatpakref" site/index.html "$DEST:$DEPLOY_DIR/site/"

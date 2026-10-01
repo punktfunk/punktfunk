@@ -23,6 +23,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # toolchain + bindgen; nodejs runs the JS actions (checkout/cache); unzip for the rustup installer's deps
     build-essential clang libclang-dev pkg-config cmake git curl ca-certificates nodejs unzip \
+    # zstd: actions/cache compresses with it on all cores instead of single-threaded gzip.
+    zstd \
     # mold: link-phase accelerator (sccache cannot cache linking). This image links the release
     # host + encode worker on every deb.yml run. Wired via cargo-config-mold.toml below.
     mold \

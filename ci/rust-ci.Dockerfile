@@ -13,6 +13,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # toolchain + bindgen; nodejs runs the JS actions (checkout/cache); unzip extracts the pinned bun zip
     build-essential clang libclang-dev pkg-config cmake git curl ca-certificates nodejs unzip \
+    # zstd: actions/cache compresses with it on all cores. Without it, gzip takes ~8 min to
+    # save ci.yml's target cache. Inherited by rust-ci-arm64cross.
+    zstd \
     # mold: the link-phase accelerator. Linking is the one thing sccache cannot cache, and this
     # image relinks the whole workspace on every job. Wired via cargo-config-mold.toml below.
     mold \

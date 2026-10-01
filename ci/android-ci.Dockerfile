@@ -16,6 +16,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git unzip zip python3 openjdk-21-jdk-headless \
         build-essential pkg-config \
+        # zstd: actions/cache compresses with it instead of gzip. Its cargo-home key is shared
+        # with deb.yml's images, and a restore misses unless both sides agree on zstd.
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64

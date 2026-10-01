@@ -6,7 +6,7 @@
 # (ci/fedora-rpm.Dockerfile) to match Bazzite's sonames. libcuda is excluded in the spec.
 #
 # Usage: PF_VERSION=0.0.1 [PF_RELEASE=0.ci42.gdeadbee] bash packaging/rpm/build-rpm.sh
-# Output: dist/punktfunk-<version>-<release>.<arch>.rpm  (+ the -debuginfo/-debugsource subpkgs)
+# Output: dist/punktfunk-<version>-<release>.<arch>.rpm
 set -euo pipefail
 
 PF_VERSION="${PF_VERSION:-0.5.0}"   # canary base; keep one minor ahead of the latest stable release
@@ -84,7 +84,8 @@ fi
 # resolves them from RPMs. Our builder image provides the toolchain via rustup (so
 # rust-toolchain.toml's pinned channel works) and the -devel libs via dnf, neither of which
 # rpmbuild's RPM-level check sees — skip it; a genuinely missing dep fails the compile/link.
-rpmbuild -bb --nodeps "${WEB_OPT[@]}" "${SCRIPTING_OPT[@]}" "${HOST_OPT[@]}" \
+# --without debuginfo: the registry ships no -debuginfo packages, so none are built.
+rpmbuild -bb --nodeps --without debuginfo "${WEB_OPT[@]}" "${SCRIPTING_OPT[@]}" "${HOST_OPT[@]}" \
   "${PREBUILT_WEB_OPT[@]}" \
   --define "_topdir $TOP" \
   --define "pf_version ${PF_VERSION}" \
