@@ -862,6 +862,40 @@ fn input_formats(input: PixelFormat) -> Option<(i32, DXGI_FORMAT)> {
 /// back-pressure starts after a few frames, not after AMF's 16-deep input queue.
 const RING: usize = 6;
 
+/// The [`RING`] copy targets for `input` at `width`×`height` on `device`.
+fn input_ring(
+    device: &ID3D11Device,
+    input: PixelFormat,
+    width: u32,
+    height: u32,
+) -> Result<Vec<ID3D11Texture2D>> {
+    let (_, format) = input_formats(input).context("AMF input format")?;
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    (0..RING)
+        .map(|_| {
+            let mut t: Option<ID3D11Texture2D> = None;
+            // SAFETY: a complete description, no initial data; `t` is a local out-param.
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut t)) }
+                .context("CreateTexture2D (AMF input ring)")?;
+            t.context("AMF input ring texture")
+        })
+        .collect()
+}
+
 /// Process-wide count of successful `Init`s. A climbing number with no following first-AU log
 /// ([`FirstAuLog`]) is a silent VCN-session wedge.
 static AMF_CONTEXTS_OPENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -980,11 +1014,13 @@ struct Inner {
     /// Shared with the retrieve thread, which holds the only other clone.
     comp: Arc<Component>,
     ctx: Ctx,
-    /// Capturer device — kept alive for `ctx` and the ring textures.
-    _device: ID3D11Device,
+    /// Capturer device — kept alive for `ctx`, and where the ring textures are made.
+    device: ID3D11Device,
     /// Immediate context for the ring copy. The AMF runtime uses it too, so it runs
     /// multithread-protected.
     dctx: ID3D11DeviceContext,
+    /// The copy targets, made by the first submit that copies ([`input_ring`]): a caller
+    /// encoding in place never pays for them. Empty until then.
     ring: Vec<ID3D11Texture2D>,
     next: usize,
     /// A reference to every texture AMF may still be reading, newest last, capped at [`RING`].
@@ -1340,7 +1376,7 @@ impl AmfEncoder {
         Ok((ir_active, ltr_active))
     }
 
-    /// Build or rebuild the AMF context + component on the capturer's device, plus the input ring.
+    /// Build or rebuild the AMF context + component on the capturer's device.
     /// Open the session now instead of at the first submit, so `caps()` reports the LTR and
     /// intra-refresh the encoder actually negotiated. The host latches those once per session
     /// and gates reference-frame invalidation on them — read early, every lost frame costs a
@@ -1374,7 +1410,7 @@ impl AmfEncoder {
         let mut comp = lib.create_component(&ctx, self.props.component)?;
         let (ir_active, ltr_active) = self.apply_static_props(&comp)?;
         let blocking = set_query_timeout(&comp, self.props.query_timeout);
-        let (fmt, ring_format) = input_formats(self.input).context("AMF input format")?;
+        let (fmt, _) = input_formats(self.input).context("AMF input format")?;
         amf_ok(
             comp.init(fmt, self.width as i32, self.height as i32),
             "AMF encoder Init",
@@ -1388,29 +1424,6 @@ impl AmfEncoder {
             self.pending_force = None;
         }
 
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: self.width,
-            Height: self.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: ring_format,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let mut ring = Vec::with_capacity(RING);
-        for _ in 0..RING {
-            let mut t: Option<ID3D11Texture2D> = None;
-            // SAFETY: a complete description, no initial data; `t` is a local out-param.
-            unsafe { device.CreateTexture2D(&desc, None, Some(&mut t)) }
-                .context("CreateTexture2D (AMF input ring)")?;
-            ring.push(t.context("AMF input ring texture")?);
-        }
         // Bump after successful Init so a failed bring-up never counts.
         let context_no = AMF_CONTEXTS_OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         tracing::info!(
@@ -1448,9 +1461,9 @@ impl AmfEncoder {
             retrieve,
             comp,
             ctx,
-            _device: device.clone(),
+            device: device.clone(),
             dctx,
-            ring,
+            ring: Vec::new(),
             next: 0,
             held: VecDeque::new(),
             hdr_pushed: None,
@@ -1735,6 +1748,9 @@ impl AmfEncoder {
         let source = if in_place.is_some() {
             frame.texture.clone()
         } else {
+            if inner.ring.is_empty() {
+                inner.ring = input_ring(&inner.device, self.input, self.width, self.height)?;
+            }
             let src: ID3D11Resource = frame.texture.cast().context("texture -> resource")?;
             let dst: ID3D11Resource = inner.ring[slot].cast().context("ring -> resource")?;
             // SAFETY: `src`/`dst` are same-format, same-size textures on one device (the ring is
