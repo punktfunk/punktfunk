@@ -194,6 +194,9 @@ mod recovery;
 // The capturer end of that ladder: the classifier inputs and the rungs it runs here.
 #[path = "idd_push/health.rs"]
 mod health;
+// Full GPU clocks on NVIDIA for as long as the driver's NVENC session is open.
+#[path = "idd_push/clock_boost.rs"]
+mod clock_boost;
 // In-driver encode: the AU section, `SET_ENCODE`, and the `Encoder` proxy over `ENCODE_CTL`.
 #[path = "idd_push/driver_encode.rs"]
 pub(crate) mod driver_encode;

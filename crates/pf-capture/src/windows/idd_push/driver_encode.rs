@@ -341,6 +341,11 @@ pub fn open_driver_encoder(
         dump: AuDump::create(endpoint.target_id),
         opened_at: Instant::now(),
         backend: backend_name(reply.backend_opened),
+        // Opt-in: without it the card sits in its idle clocks under a stream.
+        _clock_boost: (reply.backend_opened == encode::backend::NVENC)
+            .then(pf_gpu::selected_gpu)
+            .flatten()
+            .and_then(|gpu| clock_boost::ClockBoost::hold(gpu.info.luid())),
     }))
 }
 
@@ -395,6 +400,8 @@ pub struct EncoderProxy {
     opened_at: Instant,
     /// The backend the driver opened, for the status surface.
     backend: &'static str,
+    /// NVENC only: the GPU's clocks stay up until this proxy drops.
+    _clock_boost: Option<clock_boost::ClockBoost>,
 }
 
 impl Drop for EncoderProxy {

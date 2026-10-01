@@ -245,6 +245,7 @@ standard size. Native protocol only.
 | `PUNKTFUNK_FRAME_DRIVEN` | `1` · `0` | Encode when a frame arrives instead of on a fixed tick, on by default. `0` restores the tick, which adds about half a frame of latency. |
 | `PUNKTFUNK_GSO` | `1` · `0` | UDP segmentation offload: less send CPU, but bursty on constrained links. On by default on Windows (needed past about 1 Gbps), off on Linux. |
 | `PUNKTFUNK_SPLIT_ENCODE` | `0` · `1` · `2` · `3` | NVENC split encode for very high pixel rates. Unset splits on its own from about 4K120; `1` forces a split, `2` and `3` force two or three ways, `0` never splits. |
+| `PUNKTFUNK_NVENC_CLOCK_BOOST` | `1` | Windows, NVIDIA: keeps the GPU at full clocks while a session is live. A stream alone leaves the card in its idle clocks, where each frame takes two to three times as long to encode. Off by default: it costs about 40 W on a high-end card for as long as someone is connected. |
 | `PUNKTFUNK_NVENC_SUBFRAME` | `0` · `1` | NVENC sub-frame readback for lower latency, on where the GPU supports it and the stream has more than one slice. `0` never, `1` on every multi-slice stream. |
 | `PUNKTFUNK_NVENC_SPLIT_ARBITRATE` | `1` | Lets NVENC change its split decision mid-session as the pixel rate moves. |
 | `PUNKTFUNK_PHASE_LOCK` | `0` | Stops timing frame submission to the client's display. Try it if frame pacing keeps cycling. |
