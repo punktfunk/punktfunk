@@ -31,6 +31,10 @@ struct AddHostSheet: View {
     /// The form's rows, measured: a visionOS sheet ignores detents and a Form has no height of its
     /// own, so the form is pinned to this and the sheet fits the result.
     @State private var formHeight: CGFloat?
+    /// One gap round the close button, the form and the action, past the sheet's round corners.
+    private static let margin: CGFloat = 24
+    #else
+    private static let margin: CGFloat = 16
     #endif
 
     /// A field's placeholder, which is not the same job on both platforms.
@@ -103,14 +107,19 @@ struct AddHostSheet: View {
         #else
         VStack(spacing: 0) {
             #if os(visionOS)
-            // A visionOS sheet doesn't swipe away: this is the way out without adding a host.
+            // A visionOS sheet doesn't swipe away: the close button is the way out without adding
+            // a host. Untinted, so the brand tint stays on the one primary action.
             HStack {
+                Text("Add Host")
+                    .font(.geist(22, .semibold, relativeTo: .title3))
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button("Close", systemImage: "xmark") { dismiss() }
                     .labelStyle(.iconOnly)
                     .buttonBorderShape(.circle)
+                    .tint(nil)
             }
-            .padding([.top, .horizontal], 16)
+            .padding([.top, .horizontal], Self.margin)
             #endif
             Form {
                 TextField(
@@ -146,6 +155,8 @@ struct AddHostSheet: View {
             .scrollDisabled(true)
             #endif
             #if os(visionOS)
+            // The form's own margins differ from the sheet's; `margin` below sets every gap.
+            .contentMargins(0, for: .scrollContent)
             .onScrollGeometryChange(for: CGFloat.self) {
                 $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom
             } action: { _, height in
@@ -154,7 +165,7 @@ struct AddHostSheet: View {
             }
             // A first guess, not nil: an unsized form fits to zero and never lays out a row.
             .frame(height: formHeight ?? 400)
-            .padding(.top, 8) // below the close button row
+            .padding([.top, .horizontal], Self.margin)
             #endif
             #if os(macOS)
             // macOS ONLY: the grouped form's default system text is oversized next to the app's
@@ -183,7 +194,7 @@ struct AddHostSheet: View {
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canSave)
-                .padding(16)
+                .padding(Self.margin)
             #endif
         }
         #if os(iOS)
