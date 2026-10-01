@@ -11,6 +11,7 @@
 #                    iOS    -> archive + upload to TestFlight, plus an unsigned .ipa for sideloading
 #                    tvOS   -> archive + upload to TestFlight (Rust core built from tier-3 targets,
 #                              nightly -Zbuild-std, in build-xcframework.sh)
+#                    visionOS -> archive + upload to TestFlight (the iOS scheme; tier-3 like tvOS)
 #   screenshots  — needs: swift. App Store Connect screenshots of the REAL UI, attached to the run
 #                  as a zip artifact. Best-effort, so a capture gap never reds the core signal.
 #
@@ -413,7 +414,7 @@ jobs:
           fi
           echo "disk after prune:"; df -h /System/Volumes/Data | tail -1
 
-      - name: Build PunktfunkCore.xcframework (mac + iOS + tvOS)
+      - name: Build PunktfunkCore.xcframework (mac + iOS + tvOS + visionOS)
         # The `swift` job parked this commit's bundle on the runner, so this copies it in. Built on
         # canary too, so the tvOS archive/upload below runs on the same track as iOS/macOS.
         run: sh scripts/ci/mac-xcframework.sh
@@ -803,6 +804,53 @@ jobs:
             -archivePath "$RUNNER_TEMP/Punktfunk-tvos.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/export-tvos.plist" \
             -exportPath "$RUNNER_TEMP/export-tvos" \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "${{ secrets.ASC_API_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_API_ISSUER_ID }}"
+
+      - name: visionOS — archive + upload to TestFlight
+        # visionOS is a destination of the iOS scheme: same bundle id, same xcframework (the
+        # visionOS slices ride in the bundle above). Signing as the tvOS step: Automatic to
+        # archive, manual to export. The iOS App Store profile covers visionOS, and the widget
+        # extension is iOS-only, so the app is the one bundle to map.
+        if: gitea.event_name != 'workflow_dispatch' || inputs.testflight == 'true'
+        continue-on-error: true
+        run: |
+          osascript -e 'tell application "Xcode" to quit' >/dev/null 2>&1 || true
+          pkill -x Xcode 2>/dev/null || true
+          PROFILE="Punktfunk iOS App Store Distribution"
+          DEVELOPER_DIR="$XCODE_DEV_DIR" xcodebuild archive \
+            -project "$PROJECT" -scheme Punktfunk-iOS \
+            -destination 'generic/platform=visionOS' \
+            -archivePath "$RUNNER_TEMP/Punktfunk-visionos.xcarchive" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -skipMacroValidation -skipPackagePluginValidation \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "${{ secrets.ASC_API_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_API_ISSUER_ID }}" \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUM" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$TEAM_ID"
+          cat > "$RUNNER_TEMP/export-visionos.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict><key>io.unom.punktfunk</key><string>$PROFILE</string></dict>
+          </dict>
+          </plist>
+          EOF
+          DEVELOPER_DIR="$XCODE_DEV_DIR" xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Punktfunk-visionos.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export-visionos.plist" \
+            -exportPath "$RUNNER_TEMP/export-visionos" \
             -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
             -authenticationKeyID "${{ secrets.ASC_API_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_API_ISSUER_ID }}"
