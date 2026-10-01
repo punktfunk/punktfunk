@@ -794,7 +794,7 @@ mod tests {
     /// the client's Welcome — still said 4:4:4.
     #[test]
     fn a_444_request_picks_a_full_chroma_input() {
-        use super::EncodeInput::{Bgra, Fp16, Nv12, P010Sdr, Planar, Rgb10, P010};
+        use super::EncodeInput::{Bgra, Fp16, P010Sdr, Planar, Rgb10, P010};
 
         // (backend, hdr, ten_bit, chroma444) -> input. HDR implies ten_bit; 10-bit SDR is
         // ten_bit without hdr.

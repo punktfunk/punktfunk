@@ -2095,11 +2095,10 @@ impl VulkanVideoEncoder {
     /// `(st_dev, st_ino)` because each `DmabufFrame` owns a fresh dup (new fd, same inode).
     /// `fresh` is true only on first import (UNDEFINED old-layout preserves modifier-tiled data).
     ///
-    /// The cache is as deep as the ring and no deeper: one import per frame that can be in
-    /// flight, a repeat's among them. RADV lists every resident import in every submission,
-    /// and amdgpu then orders that submission behind whatever paints any of them: an import
-    /// of a buffer the producer is rendering into makes each encode wait on that render, and
-    /// the render on the encode.
+    /// A miss keeps only the imports that frames in flight read; a repeat hits the newest. Every
+    /// other buffer is back with the producer. RADV lists every resident import in every
+    /// submission, and amdgpu orders that submission against whatever paints any of them: the
+    /// producer's next render into a released buffer waits on this encode, or this encode on it.
     unsafe fn import_cached(
         &mut self,
         d: &pf_frame::DmabufFrame,
@@ -2125,6 +2124,7 @@ impl VulkanVideoEncoder {
             self.device.destroy_image(e.img, None);
             self.device.free_memory(e.mem, None);
         }
+        let t0 = std::time::Instant::now();
         // A deterministic packed import refusal rebuilds this capture on its safe offer.
         // Transient OOM and native NV12 stay out of that sticky verdict.
         let (img, mem, view) = match self.import_dmabuf(d, cw, ch) {
@@ -2141,10 +2141,10 @@ impl VulkanVideoEncoder {
                 return Err(e);
             }
         };
-        // Least recently used first. Every frame in flight read its import after the victim
-        // was last used, so none reads the victim; destroying one that is read is a GPU-side
-        // use-after-free, so a victim found in flight idles the device first.
-        while self.import_cache.len() >= self.frames.len().max(1) {
+        // Least recently used first. The frames in flight are the last ones submitted, so their
+        // imports are the newest entries and none is evicted. Destroying an image the GPU reads
+        // is a use-after-free, so a victim found in flight still idles the device first.
+        while self.import_cache.len() > self.in_flight.len() {
             let e = self.import_cache.remove(0);
             let read = |&s: &usize| self.frames[s].src_key == Some(e.key);
             if self.in_flight.iter().any(read) {
@@ -2163,6 +2163,7 @@ impl VulkanVideoEncoder {
         });
         tracing::debug!(
             resident = self.import_cache.len(),
+            miss_us = t0.elapsed().as_micros() as u64,
             "vulkan-encode: imported a new dmabuf buffer"
         );
         Ok((img, view, true))

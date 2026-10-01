@@ -1543,10 +1543,11 @@ impl PyroWaveEncoder {
     /// always the right size, because `submit_frame` refuses a frame off the session mode.
     /// `fresh` is true only on first import.
     ///
-    /// One import per slot and no more. RADV lists every resident import in every
-    /// submission, and amdgpu then orders that submission behind whatever paints any of
-    /// them: an import of a buffer the producer is rendering into makes each encode wait on
-    /// that render, and the render on the encode.
+    /// A miss keeps only the imports that frames in flight read; a repeat hits the newest.
+    /// Every other buffer is back with the producer. RADV lists every resident import in
+    /// every submission, and amdgpu orders that submission against whatever paints any of
+    /// them: the producer's next render into a released buffer waits on this encode, or
+    /// this encode on it.
     unsafe fn import_cached(
         &mut self,
         d: &pf_frame::DmabufFrame,
@@ -1560,6 +1561,7 @@ impl PyroWaveEncoder {
             self.import_cache.push(e);
             return Ok((e.2, e.4, false));
         }
+        let t0 = std::time::Instant::now();
         // Deterministic import refusal rebuilds this capture on its safe offer.
         // Transient OOM stays out of the sticky verdict.
         let (img, mem, view) =
@@ -1575,10 +1577,10 @@ impl PyroWaveEncoder {
                     return Err(e);
                 }
             };
-        // Least recently used first. Every frame in flight read its import after the victim
-        // was last used, so none samples the victim; one found in flight idles the device
-        // before it is destroyed.
-        while self.import_cache.len() >= SLOTS {
+        // Least recently used first. The frames in flight are the last ones submitted, so
+        // their imports are the newest entries and none is evicted; a victim found in flight
+        // still idles the device before it is destroyed.
+        while self.import_cache.len() > self.inflight.len() {
             let (dev, ino, oi, om, ov) = self.import_cache.remove(0);
             if self.inflight.iter().any(|f| f.src_key == Some((dev, ino))) {
                 let _ = self.device.device_wait_idle();
@@ -1590,6 +1592,7 @@ impl PyroWaveEncoder {
         self.import_cache.push((key.0, key.1, img, mem, view));
         tracing::debug!(
             resident = self.import_cache.len(),
+            miss_us = t0.elapsed().as_micros() as u64,
             "pyrowave: imported a new dmabuf buffer"
         );
         Ok((img, view, true))
