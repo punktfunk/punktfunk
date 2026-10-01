@@ -337,6 +337,9 @@ pub struct Presenter {
     /// Wayland lane that hands a dma-buf to the compositor as the window's own buffer.
     #[cfg(target_os = "linux")]
     native: Option<crate::wl_native::NativeLane>,
+    /// The compositor's own stamp per swapchain present, beside the driver's.
+    #[cfg(target_os = "linux")]
+    feedback: Option<crate::wl_feedback::SurfaceFeedback>,
     /// Exportable copies of Vulkan Video or PyroWave pictures for the lane; built on the
     /// first one.
     #[cfg(target_os = "linux")]
@@ -1283,7 +1286,9 @@ impl Presenter {
     /// True when the swapchain itself can queue presents — the only modes the glass gate
     /// governs. MAILBOX and IMMEDIATE replace or drop stale images in the driver, and
     /// so does `FIFO_LATEST_READY` — except on Windows, where DXGI keeps up to three
-    /// composed presents queued ahead of DWM and LATEST_READY drains none of them.
+    /// composed presents queued ahead of DWM and LATEST_READY drains none of them. Under
+    /// Wayland the gate on LATEST_READY measured no gain at 60 fps and held a 120 fps
+    /// stream 20 ms: a completion there is not the flip.
     pub(crate) fn needs_glass_gate(&self) -> bool {
         let fifo = matches!(
             self.present_mode,
@@ -1315,10 +1320,35 @@ impl Presenter {
         if let Some(t) = &self.vblank_timer {
             out.extend(t.take_samples());
         }
+        // Both stamps per present, joined offline by id.
+        #[cfg(target_os = "linux")]
+        if let Some(fb) = self.feedback.as_mut() {
+            for s in fb.take() {
+                tracing::trace!(
+                    target: "pf_glass",
+                    id = s.present_id,
+                    displayed_ns = s.displayed_ns.unwrap_or(0),
+                    zero_copy = s.zero_copy,
+                    refresh_ns = s.refresh_ns,
+                    "compositor stamp"
+                );
+            }
+            for s in &out {
+                tracing::trace!(
+                    target: "pf_glass",
+                    id = s.present_id,
+                    displayed_ns = s.displayed_ns,
+                    submitted_ns = s.submitted_ns,
+                    exact = s.exact,
+                    "driver stamp"
+                );
+            }
+        }
         #[cfg(target_os = "linux")]
         if let Some(lane) = self.native.as_mut() {
             out.extend(lane.take_samples().into_iter().map(|s| {
                 present_timing::PresentedSample {
+                    present_id: 0,
                     pts_ns: s.pts_ns,
                     decoded_ns: s.decoded_ns,
                     submitted_ns: s.submitted_ns,

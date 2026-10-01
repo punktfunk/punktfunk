@@ -1096,6 +1096,15 @@ impl Presenter {
             video_fit: Default::default(),
             placement_logged: None,
             #[cfg(target_os = "linux")]
+            feedback: if crate::wl_feedback::enabled() {
+                crate::wl_feedback::SurfaceFeedback::new(window).unwrap_or_else(|e| {
+                    tracing::warn!(error = %format!("{e:#}"), "surface feedback unavailable");
+                    None
+                })
+            } else {
+                None
+            },
+            #[cfg(target_os = "linux")]
             native: if crate::wl_native::enabled() {
                 crate::wl_native::NativeLane::new(window, native_timelines).unwrap_or_else(|e| {
                     tracing::warn!(error = %format!("{e:#}"), "native scanout lane unavailable");
@@ -1335,12 +1344,19 @@ pub(super) fn pick_formats(
     // SAFETY: read-only query; `pdev` and `surface` are live on this instance.
     let formats = unsafe { surface_i.get_physical_device_surface_formats(pdev, surface) }?;
     let mut sdr = None;
-    for want in [
-        vk::Format::A2B10G10R10_UNORM_PACK32,
-        vk::Format::A2R10G10B10_UNORM_PACK32,
-        vk::Format::B8G8R8A8_UNORM,
-        vk::Format::R8G8B8A8_UNORM,
-    ] {
+    // `PUNKTFUNK_SDR_8BIT=1`: an 8-bit SDR swapchain. A compositor may scan out only those.
+    let eight_bit = std::env::var("PUNKTFUNK_SDR_8BIT").is_ok_and(|v| v != "0");
+    let ranked: &[vk::Format] = if eight_bit {
+        &[vk::Format::B8G8R8A8_UNORM, vk::Format::R8G8B8A8_UNORM]
+    } else {
+        &[
+            vk::Format::A2B10G10R10_UNORM_PACK32,
+            vk::Format::A2R10G10B10_UNORM_PACK32,
+            vk::Format::B8G8R8A8_UNORM,
+            vk::Format::R8G8B8A8_UNORM,
+        ]
+    };
+    for &want in ranked {
         if let Some(f) = formats
             .iter()
             .find(|f| f.format == want && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)

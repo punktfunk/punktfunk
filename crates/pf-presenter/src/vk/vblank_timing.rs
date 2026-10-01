@@ -161,6 +161,7 @@ fn run(
             Some(j) if j.submitted_ns < vblank_ns && gpu_done(&device, j.done) => {
                 let j = queue.pop_front().expect("front checked");
                 results.lock().unwrap().push(PresentedSample {
+                    present_id: 0,
                     pts_ns: j.pts_ns,
                     decoded_ns: j.decoded_ns,
                     submitted_ns: j.submitted_ns,

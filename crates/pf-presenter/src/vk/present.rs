@@ -1139,6 +1139,11 @@ impl Presenter {
             if self.glass_active() {
                 self.next_present_id += 1;
             }
+            // The compositor stamps the commit this present makes.
+            #[cfg(target_os = "linux")]
+            if let Some(fb) = self.feedback.as_mut().filter(|_| !redraw) {
+                fb.request(self.next_present_id);
+            }
             if self.present_id2 {
                 // Hand-rolled structs: the chain is empty here, so they are the whole chain.
                 if ask.is_some() {

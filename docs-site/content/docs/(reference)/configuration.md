@@ -289,6 +289,8 @@ Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI 
 | `PUNKTFUNK_VRR_PACE` | `0` | Shows each frame as it arrives on a variable-refresh screen, instead of holding it a moment to even out the spacing. Try it if *Lowest latency* feels uneven on such a screen. |
 | `PUNKTFUNK_PRESENT_WAIT2` | `1` | Time frames with the newer `VK_KHR_present_wait2`. An experiment: on AMD's Windows driver it drops frames below the screen's refresh rate. |
 | `PUNKTFUNK_PRESENT_TIMING` | `0` or `1` | Read each frame's on-screen time from the driver (`VK_EXT_present_timing`) instead of timing it from the client. On by default on Linux, where Mesa and NVIDIA offer it; `0` turns it off, `1` tries it elsewhere. The presenter's summary line says `glass=timing` when it is in use. |
+| `PUNKTFUNK_SURFACE_FEEDBACK` | `1` | Linux: also ask the compositor for its own on-screen time of each frame (`wp_presentation`) and log both at trace level, to check the driver's stamps against it. A diagnostic. |
+| `PUNKTFUNK_SDR_8BIT` | `1` | Use an 8-bit window buffer for SDR instead of 10-bit. An A/B for compositors that scan out only 8-bit buffers. |
 | `PUNKTFUNK_FULLSCREEN_EXCLUSIVE` | `1` | Windows: take the screen with exclusive fullscreen (`VK_EXT_full_screen_exclusive`), so a variable-refresh screen follows the stream where the desktop would otherwise hold the window. An experiment; switching windows flickers. |
 | `PUNKTFUNK_PRESENT_DEBUG` | `1` | Windows: log the D3D11VA hand-off window every second. The presenter's own summary line is always logged. |
 | `PUNKTFUNK_THREAD_BOOST` | `0` | Leave the video threads (receive, decode, present) at normal priority instead of raising them. An A/B, and the way out if a driver misbehaves under a boosted thread. |

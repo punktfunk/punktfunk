@@ -41,6 +41,8 @@ struct SwapchainSync {
 }
 
 pub(crate) struct PresentedSample {
+    /// The present's id; 0 where the source has none.
+    pub present_id: u64,
     /// Capture stamp (host clock) — the e2e latency anchor.
     pub pts_ns: u64,
     /// Decode-complete stamp (client clock) — the display-stage anchor.
@@ -267,6 +269,7 @@ impl PresentTimer {
                                 unshown_t.fetch_add(1, Ordering::Relaxed);
                             }
                             shown => results_t.lock().unwrap().push(PresentedSample {
+                                present_id: job.present_id,
                                 pts_ns: job.pts_ns,
                                 decoded_ns: job.decoded_ns,
                                 submitted_ns: job.submitted_ns,
