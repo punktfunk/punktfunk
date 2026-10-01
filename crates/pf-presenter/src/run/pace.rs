@@ -61,6 +61,13 @@ impl Shell {
         let mut presented = false;
         if let Some(paced) = to_present {
             let (pts_ns, decoded_ns) = (paced.frame.pts_ns, paced.frame.decoded_ns);
+            tracing::trace!(
+                pts_ns,
+                // Present pass against the due time (0 = none); against arrival otherwise.
+                slip_us = (now_ns as i64 - paced.due_ns) / 1000 * i64::from(paced.due_ns != 0),
+                waited_us = now_ns.saturating_sub(decoded_ns) / 1000,
+                "frame out"
+            );
             // Resize end: a frame at the steered target size means the new-mode
             // picture is here.
             let (fw, fh) = paced.frame.image.dimensions();
@@ -361,6 +368,13 @@ impl StreamState {
                     .due_ns(smoothing, f.pts_ns, f.decoded_ns, self.source_interval_ns)
                     .unwrap_or(0)
             };
+            tracing::trace!(
+                pts_ns = f.pts_ns,
+                repeat,
+                // Hold the pacer asks for; negative means the frame arrived past its due time.
+                hold_us = (due_ns - f.decoded_ns as i64) / 1000 * i64::from(due_ns != 0),
+                "frame in"
+            );
             self.store.submit(Paced { frame: f, due_ns });
         }
     }
@@ -853,16 +867,11 @@ impl StreamState {
         } else {
             self.clock.next_slot_after(p.due_ns.max(0) as u64) as i64 - lead_ns
         };
-        // Windows sleeps its short waits itself ([`wait_event`](super::wait_event)), so the
-        // floor there is what a due time may slip by; elsewhere SDL's wait takes a
-        // millisecond at least.
-        let floor = if cfg!(windows) {
-            Duration::from_micros(200)
-        } else {
-            Duration::from_millis(1)
-        };
+        // Short waits sleep in slices ([`wait_event`](super::wait_event)), so the floor is
+        // what a due time may slip by.
+        const FLOOR: Duration = Duration::from_micros(200);
         Duration::from_nanos(wake_ns.saturating_sub(session::now_ns() as i64).max(0) as u64)
-            .clamp(floor, TICK)
+            .clamp(FLOOR, TICK)
     }
 }
 
