@@ -65,11 +65,16 @@ pub fn spec_for(req: &SetEncodeRequest, backend: u32) -> Result<OpenSpec, Fail> 
     // 10-bit SDR (depth 10, HDR off) picks a BT.709 P010 input on AMF; `choose` ignores it elsewhere.
     let ten_bit = req.bit_depth >= 10;
     let chosen = InputKind::choose(backend, hdr, ten_bit, chroma444);
-    // `PFVD_AMF_NV12` (machine environment, read per open) opens AMF on its converted YUV
-    // (NV12, or P010 under HDR) at once: the A/B for a VCN whose own colour conversion looks
-    // or runs worse.
+    // `PFVD_AMF_NV12` / `PFVD_QSV_NV12` (machine environment, read per open) skip the encoder's
+    // own colour conversion and open on the YUV the driver converts: the A/B for an encoder
+    // whose conversion looks or runs worse.
+    let skip = match backend {
+        backend::AMF => crate::log::knob("PFVD_AMF_NV12"),
+        backend::QSV => crate::log::knob("PFVD_QSV_NV12"),
+        _ => None,
+    };
     let kind = match chosen.fallback(backend) {
-        Some(second) if crate::log::knob("PFVD_AMF_NV12").is_some() => second,
+        Some(second) if skip.is_some() => second,
         _ => chosen,
     };
     Ok(OpenSpec {
@@ -101,10 +106,10 @@ fn caps_wire(c: EncoderCaps) -> EncoderCapsWire {
 }
 
 /// Walk the request's backend list in order; the first that opens wins. A backend that
-/// refuses its input is tried on [`InputKind::fallback`] before the next one. `Err` is the
-/// last failure as the wire reply — no silent fallback past the list. `open_backend` returns
-/// a backend whose session already exists, so `reply.caps` describes the live encoder rather
-/// than its defaults — the host reads those caps once and never asks again.
+/// refuses its input is tried down its [`InputKind::fallback`] chain before the next one.
+/// `Err` is the last failure as the wire reply — no silent fallback past the list.
+/// `open_backend` returns a backend whose session already exists, so `reply.caps` describes
+/// the live encoder rather than its defaults — the host reads those caps once.
 fn open_listed(
     req: &SetEncodeRequest,
     adapter: &AdapterId,
@@ -119,11 +124,10 @@ fn open_listed(
                 continue;
             }
         };
-        let second = first
-            .kind
-            .fallback(backend)
-            .map(|kind| OpenSpec { kind, ..first });
-        for spec in std::iter::once(first).chain(second) {
+        let ladder = std::iter::successors(Some(first), |s| {
+            s.kind.fallback(backend).map(|kind| OpenSpec { kind, ..*s })
+        });
+        for spec in ladder {
             match open_backend(&spec, adapter, device) {
                 Ok(mut enc) => {
                     if req.wire_chunk_bytes != 0 {
@@ -399,7 +403,7 @@ pub fn open_backend(
         }),
         #[cfg(target_arch = "x86_64")]
         backend::QSV => pf_encode_win::qsv::QsvEncoder::open(
-            spec.codec, format, w, h, fps, bps, depth, chroma, luid,
+            spec.codec, format, w, h, fps, bps, depth, chroma, hdr, luid,
         )
         .and_then(|mut e| {
             e.prepare(device)?;

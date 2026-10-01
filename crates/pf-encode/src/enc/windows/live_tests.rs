@@ -153,6 +153,7 @@ fn qsv_live_hdr_converter_e2e_1080_dump() {
         10_000_000,
         10,
         ChromaFormat::Yuv420,
+        true,
         Some(luid),
     )
     .expect("open");
