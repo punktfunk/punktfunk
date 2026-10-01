@@ -122,7 +122,13 @@ pub(in crate::linux) fn pipewire_thread(
     // A driven producer paints only in cycles this stream starts; the pacer starts one per
     // request, no sooner than a wire interval after the last. Every entry point runs on this
     // thread. The stream pointer lands once the stream exists.
-    let pacer = lazy.then(|| Pacer::new(wire_interval(preferred)));
+    let pacer = lazy.then(|| {
+        Pacer::new(
+            wire_interval(preferred),
+            signals.paint_anchor_ns.clone(),
+            signals.paint_period_ns.clone(),
+        )
+    });
     // Shared with the consumer, which imports held frames at its own tick.
     let importer = offer.importer.take();
     signals

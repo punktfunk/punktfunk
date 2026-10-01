@@ -242,6 +242,16 @@ impl PhaseController {
         }
     }
 
+    /// The grid a request-driven producer should paint on so its frame reaches the submit
+    /// grid with `lead_ns` to spare: the engaged grid, `lead_ns` earlier. `None` disengaged.
+    pub(super) fn paint_grid(&self, period_ns: i64, lead_ns: i64) -> Option<pf_capture::PaintGrid> {
+        let epoch = self.epoch?;
+        (period_ns > 0).then(|| pf_capture::PaintGrid {
+            anchor_ns: pf_capture::mono_ns(epoch) + self.offset_ns - lead_ns,
+            period_ns,
+        })
+    }
+
     pub(super) fn due(&self) -> bool {
         self.last_adjust.elapsed() >= std::time::Duration::from_secs(1)
     }

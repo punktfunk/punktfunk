@@ -45,6 +45,10 @@ pub(super) struct StreamState {
     pub(super) sent: u64,
     /// Survives in-loop rebuilds so a mid-stream rebuild keeps the acquired lock.
     pub(super) phase_ctl: PhaseController,
+    /// Capture to encode submit, smoothed (ns): the lead a driven producer paints with.
+    pub(super) cap_to_submit_ns: i64,
+    /// The grid hold the last tick slept (ns), taken out of that smoothing.
+    pub(super) last_hold_ns: i64,
     /// Same: a rebuild must not reopen the overshoot.
     pub(super) pace: CaptureCredit,
     /// Predicted as `au_seq + inflight.len()`. Encoder-internal counters desync on the first ABR rebuild.
@@ -958,6 +962,8 @@ impl StreamState {
             next: now,
             sent: 0,
             phase_ctl: PhaseController::new(),
+            cap_to_submit_ns: 0,
+            last_hold_ns: 0,
             pace: CaptureCredit::new(now),
             au_seq: 0,
             wire_frame_open: false,

@@ -156,6 +156,10 @@ struct CaptureSignals {
     importer: Arc<std::sync::Mutex<Option<pf_zerocopy::Importer>>>,
     /// `importer` is `Some`. Read per frame on the loop thread without the lock.
     has_importer: Arc<AtomicBool>,
+    /// [`crate::PaintGrid`] for the loop thread's pacer: a grid point and the period in
+    /// [`crate::mono_ns`] time, period `0` = free-run. Written by [`Capturer::set_paint_grid`].
+    paint_anchor_ns: Arc<std::sync::atomic::AtomicI64>,
+    paint_period_ns: Arc<std::sync::atomic::AtomicI64>,
 }
 
 /// Producer identity plus the consumer policy whose failures must stay independent.
@@ -188,7 +192,17 @@ impl CaptureSignals {
             frame_size: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             importer: Arc::new(std::sync::Mutex::new(None)),
             has_importer: Arc::new(AtomicBool::new(false)),
+            paint_anchor_ns: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            paint_period_ns: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         }
+    }
+
+    /// Publish or clear the paint grid for the loop thread. Period first, so a reader never
+    /// pairs a new anchor with the old period.
+    fn set_paint_grid(&self, grid: Option<crate::PaintGrid>) {
+        let (anchor, period) = grid.map_or((0, 0), |g| (g.anchor_ns, g.period_ns));
+        self.paint_period_ns.store(period, Ordering::Relaxed);
+        self.paint_anchor_ns.store(anchor, Ordering::Relaxed);
     }
 }
 
@@ -600,6 +614,10 @@ impl Capturer for PortalCapturer {
 
     fn supports_arrival_wait(&self) -> bool {
         true
+    }
+
+    fn set_paint_grid(&mut self, grid: Option<crate::PaintGrid>) {
+        self.signals.set_paint_grid(grid);
     }
 
     fn wait_arrival(&mut self, deadline: std::time::Instant) {
@@ -1081,6 +1099,10 @@ impl Capturer for WlCapturer {
 
     fn supports_arrival_wait(&self) -> bool {
         true
+    }
+
+    fn set_paint_grid(&mut self, grid: Option<crate::PaintGrid>) {
+        self.signals.set_paint_grid(grid);
     }
 
     fn wait_arrival(&mut self, deadline: std::time::Instant) {

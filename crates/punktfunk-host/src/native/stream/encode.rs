@@ -207,13 +207,20 @@ impl StreamState {
                 }
                 self.phase.set_applied(self.phase_ctl.applied_readout());
             }
+            // A request-driven producer paints on the grid itself, one capture-to-submit
+            // time plus a millisecond ahead, so the hold below shrinks to that millisecond.
+            let lead_ns = (self.cap_to_submit_ns + 1_000_000).clamp(1_000_000, interval_ns / 2);
+            self.capturer
+                .set_paint_grid(self.phase_ctl.paint_grid(interval_ns, lead_ns));
             if let Some(t) = self
                 .phase_ctl
                 .next_submit_target(std::time::Instant::now(), interval_ns)
             {
                 let now = std::time::Instant::now();
                 if t > now {
-                    std::thread::sleep(t.duration_since(now));
+                    let hold = t.duration_since(now);
+                    std::thread::sleep(hold);
+                    self.last_hold_ns = hold.as_nanos() as i64;
                 }
             }
         }
@@ -276,11 +283,16 @@ impl StreamState {
     pub(super) fn encode_and_send(&mut self, tick: Tick) -> Result<Flow> {
         self.encode_chain_ns = 0;
         let Tick {
-            t_cap: _,
+            t_cap,
             cap_us,
             repeat,
             measure,
         } = tick;
+        // Capture to submit less the grid hold, smoothed: how early a producer must paint
+        // for the submit grid. Counting the hold would move the paint earlier every tick.
+        let hold = std::mem::take(&mut self.last_hold_ns);
+        let cap_to_submit = (t_cap.elapsed().as_nanos() as i64 - hold).max(0);
+        self.cap_to_submit_ns += (cap_to_submit - self.cap_to_submit_ns) / 8;
         let hdr_meta = self
             .capturer
             .hdr_meta()

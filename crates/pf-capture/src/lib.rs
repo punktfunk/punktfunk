@@ -166,6 +166,37 @@ impl std::fmt::Display for DisplayStillAlive {
 /// Produces frames without blocking the compositor. The Linux portal publishes
 /// into a one-deep overwriting slot (drop-oldest): a stalled consumer still
 /// sees the freshest frame.
+/// A grid the host asks a request-driven producer to paint on: one grid point and the
+/// period, in [`mono_ns`] time. The producer paints at `anchor + k × period`, one paint per
+/// wire interval, where its cadence would otherwise free-run off its last paint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaintGrid {
+    pub anchor_ns: i64,
+    pub period_ns: i64,
+}
+
+static MONO_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Nanoseconds since a process-wide instant: the one clock the host loop and the capture
+/// threads share for a [`PaintGrid`]. Negative before the epoch's first read, never after.
+pub fn mono_ns(t: std::time::Instant) -> i64 {
+    let epoch = *MONO_EPOCH.get_or_init(std::time::Instant::now);
+    match t.checked_duration_since(epoch) {
+        Some(d) => d.as_nanos() as i64,
+        None => -(epoch.duration_since(t).as_nanos() as i64),
+    }
+}
+
+/// The instant [`mono_ns`] maps to `ns`.
+pub fn mono_instant(ns: i64) -> std::time::Instant {
+    let epoch = *MONO_EPOCH.get_or_init(std::time::Instant::now);
+    if ns >= 0 {
+        epoch + std::time::Duration::from_nanos(ns as u64)
+    } else {
+        epoch - std::time::Duration::from_nanos(ns.unsigned_abs())
+    }
+}
+
 pub trait Capturer: Send {
     fn next_frame(&mut self) -> Result<CapturedFrame>;
 
@@ -313,6 +344,10 @@ pub trait Capturer: Send {
     /// once per loop tick before `try_latest` so the supervisor classifies the
     /// encode leg on them. Default: ignored.
     fn observe_encoder(&mut self, _t: Option<pf_frame::health::EncoderTelemetry>) {}
+
+    /// The grid a request-driven producer should paint on, or `None` to free-run. Only a
+    /// producer that paints on this capturer's requests can follow it; the rest ignore it.
+    fn set_paint_grid(&mut self, _grid: Option<PaintGrid>) {}
 
     /// A recovery rung whose actuator the stream loop owns because the
     /// encoder does (`EncoderReset`) or the display manager does

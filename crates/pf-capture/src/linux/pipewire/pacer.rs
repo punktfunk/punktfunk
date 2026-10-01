@@ -8,6 +8,21 @@ use pw::spa;
 /// gets its first (Mutter's first paint follows a request only once a cycle has run).
 pub(super) const HEARTBEAT: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// How far under the cap a grid point may fall and still be taken: timer and scheduling
+/// jitter must not push a paint to the point after.
+const GRID_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// The first `anchor + k × period` at or after `floor` (all ns on one clock, `period > 0`).
+fn grid_point_at_or_after(anchor_ns: i64, period_ns: i64, floor_ns: i64) -> i64 {
+    let k = (floor_ns - anchor_ns).div_euclid(period_ns);
+    let at = anchor_ns + k * period_ns;
+    if at >= floor_ns {
+        at
+    } else {
+        at + period_ns
+    }
+}
+
 /// The least spacing between two paints: one wire interval. The multiplier is undone —
 /// a driven monitor never ticks on its own, so a multiplied refresh only inflates the
 /// mode its clients see.
@@ -83,16 +98,26 @@ pub(super) struct Pacer {
     /// Requests that waited on the cap timer.
     deferred: std::cell::Cell<u64>,
     reported: std::cell::Cell<Option<std::time::Instant>>,
+    /// The host's paint grid ([`crate::PaintGrid`] as two atomics, period `0` = none): a
+    /// trigger lands on its next point instead of one interval after the last paint.
+    grid_anchor_ns: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    grid_period_ns: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
 /// A cycle out longer than this is lost (the producer stalled or the stream re-linked).
 const LOST_CYCLE: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl Pacer {
-    pub(super) fn new(interval: std::time::Duration) -> std::rc::Rc<Pacer> {
+    pub(super) fn new(
+        interval: std::time::Duration,
+        grid_anchor_ns: std::sync::Arc<std::sync::atomic::AtomicI64>,
+        grid_period_ns: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    ) -> std::rc::Rc<Pacer> {
         std::rc::Rc::new(Pacer {
             stream: std::cell::Cell::new(std::ptr::null_mut()),
             interval,
+            grid_anchor_ns,
+            grid_period_ns,
             live: std::cell::Cell::new(false),
             timer: std::cell::Cell::new(None),
             pending: std::cell::Cell::new(false),
@@ -145,7 +170,28 @@ impl Pacer {
             return;
         }
         let now = std::time::Instant::now();
-        if let Some(next) = self.last_paint.get().map(|t| t + self.interval) {
+        // The cap: one paint per wire interval. On a grid, the next point at or after the
+        // cap (less a little slack, so jitter never skips a point) instead of the cap itself.
+        let cap = self.last_paint.get().map(|t| t + self.interval);
+        let period = self
+            .grid_period_ns
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let next = if period > 0 {
+            let floor = cap
+                .map(|c| c.checked_sub(GRID_SLACK).unwrap_or(c))
+                .map_or(now, |c| c.max(now));
+            let anchor = self
+                .grid_anchor_ns
+                .load(std::sync::atomic::Ordering::Relaxed);
+            Some(crate::mono_instant(grid_point_at_or_after(
+                anchor,
+                period,
+                crate::mono_ns(floor),
+            )))
+        } else {
+            cap
+        };
+        if let Some(next) = next {
             if now < next {
                 if let Some(timer) = self.timer.get() {
                     timer.arm(next - now);
@@ -262,5 +308,22 @@ impl Drop for RequestListener {
     fn drop(&mut self) {
         // SAFETY: the hook was added by `attach` and not removed since.
         unsafe { spa::sys::spa_hook_remove(&mut *self.hook) }
+    }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::grid_point_at_or_after;
+
+    /// The grid point is the first on or after the floor, whichever side of the anchor
+    /// the floor lies, and a floor on a point is that point.
+    #[test]
+    fn the_next_grid_point_is_the_first_at_or_after_the_floor() {
+        let p = 16_666_667;
+        assert_eq!(grid_point_at_or_after(1_000, p, 1_000), 1_000);
+        assert_eq!(grid_point_at_or_after(1_000, p, 1_001), 1_000 + p);
+        assert_eq!(grid_point_at_or_after(1_000, p, 5 * p), 1_000 + 5 * p);
+        assert_eq!(grid_point_at_or_after(50 * p, p, 1_000), p);
+        assert_eq!(grid_point_at_or_after(50 * p, p, -p), -p);
     }
 }
