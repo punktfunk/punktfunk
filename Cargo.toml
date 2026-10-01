@@ -176,6 +176,11 @@ codegen-units = 1
 # no-op and let a stray panic abort the embedding application. Unwinding keeps the
 # documented isolation guarantee real.
 
+# Canary CI raises codegen-units for workspace crates (scripts/ci/pf-version.sh). Dependencies
+# stay at 1, so their sccache entries are the ones a release tag build reuses.
+[profile.release.package."*"]
+codegen-units = 1
+
 # The per-frame hot path must stay fast even in dev builds.
 [profile.dev.package."*"]
 opt-level = 2

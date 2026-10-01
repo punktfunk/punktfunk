@@ -23,6 +23,7 @@
 #     PF_STABLE_TAG  the latest stable release version the canary base was derived from (for logs)
 #     PF_VERSION     with --format: the package version (deb, rpm, arch, flatpak)
 #     PF_RELEASE     with --format rpm|arch: the package release
+#     CARGO_PROFILE_RELEASE_CODEGEN_UNITS   16 on canary, 1 on a tag
 #
 # The pwsh twin scripts/ci/pf-version.ps1 implements the base rule for the Windows runners;
 # both check the same scripts/ci/pf-version.vectors.
@@ -107,6 +108,12 @@ _emit PF_MAJOR      "$_pf_major"
 _emit PF_MINOR      "$_pf_minor"
 _emit PF_PATCH      "$_pf_patch"
 _emit PF_STABLE_TAG "$_stable"
+# Canary and pull-request builds compile workspace crates on 16 codegen units; a release tag
+# keeps Cargo.toml's 1. Dependencies stay at 1 either way ([profile.release.package."*"]).
+case "$_channel" in
+  canary) _emit CARGO_PROFILE_RELEASE_CODEGEN_UNITS 16 ;;
+  *)      _emit CARGO_PROFILE_RELEASE_CODEGEN_UNITS 1 ;;
+esac
 
 # The package version per format. A release keeps its full tag; a canary sorts below the release
 # it precedes and climbs by run number.

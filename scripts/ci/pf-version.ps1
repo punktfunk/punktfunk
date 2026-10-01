@@ -77,6 +77,8 @@ $out = [ordered]@{
   PF_MINOR      = $b[1]
   PF_PATCH      = $b[2]
   PF_STABLE_TAG = $stable
+  # Canary: workspace crates on 16 codegen units. A release tag keeps Cargo.toml's 1.
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS = $(if ($channel -eq 'canary') { '16' } else { '1' })
 }
 foreach ($k in $out.Keys) {
   Write-Output ("{0}={1}" -f $k, $out[$k]) | Out-Null
