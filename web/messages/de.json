@@ -960,7 +960,7 @@
 	"setting_ten_bit": "10-Bit und HDR",
 	"setting_ten_bit_hint": "Aus hält jeden Stream bei 8 Bit.",
 	"setting_sdr10_widen": "10-Bit SDR erlauben",
-	"setting_sdr10_widen_hint": "Der Desktop hat 8 Bit. An bekommt ein Client, der 10-Bit SDR anfragt, jedes Bild aufgeweitet: weichere Verläufe, ein Farbdurchgang mehr auf der GPU.",
+	"setting_sdr10_widen_hint": "Weitet den 8-Bit-Desktop für Clients auf, die 10-Bit SDR anfragen. Weichere Verläufe, mehr GPU-Last.",
 	"setting_chroma_444": "Volle Farbe 4:4:4",
 	"setting_chroma_444_hint": "Schärferer Text, wo Gerät und GPU es unterstützen.",
 	"setting_max_fps": "Bildraten-Limit",
