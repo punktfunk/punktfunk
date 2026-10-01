@@ -2066,11 +2066,10 @@ impl Encoder for AmfEncoder {
         inner.retrieve.q.reset(); // owed AUs forfeited; rebuilt stream restarts at IDR
         inner.next = 0; // the rebuilt component's first frame is `opening` again
         inner.hdr_pushed = None; // re-Init'd component needs HDR metadata again
-        let fmt = if self.ten_bit {
-            sys::AMF_SURFACE_P010
-        } else {
-            sys::AMF_SURFACE_NV12
-        };
+
+        // The format the frames arrive in, as at the open: re-Init'd as NV12, a BGRA session
+        // takes every surface and never returns an access unit.
+        let fmt = input_formats(self.input).map(|(fmt, _)| fmt);
         // The joined thread dropped its clone, so this is the only reference.
         let rebuilt = match Arc::get_mut(&mut inner.comp) {
             Some(comp) => {
@@ -2079,8 +2078,8 @@ impl Encoder for AmfEncoder {
                 comp.terminate();
                 // VCN may read an input surface until Terminate returns; only then can they go.
                 inner.held.clear();
-                match self.apply_static_props(comp) {
-                    Ok((ir, ltr)) => {
+                match (self.apply_static_props(comp), fmt) {
+                    (Ok((ir, ltr)), Some(fmt)) => {
                         self.ir_active = ir;
                         // Re-Init voids reference history; drop prior LTR marks.
                         self.ltr_active = ltr;
@@ -2089,7 +2088,7 @@ impl Encoder for AmfEncoder {
                         self.pending_force = None;
                         comp.init(fmt, self.width as i32, self.height as i32) == sys::AMF_OK
                     }
-                    Err(_) => false,
+                    _ => false,
                 }
             }
             // Unreachable once joined; a failed rebuild tears the context down.
@@ -2560,33 +2559,37 @@ mod tests {
                     // Three textures in rotation, two in flight: the third is always free.
                     enc.set_input_ring_depth(2);
                 }
-                let mut aus = Vec::new();
-                for i in 0..FRAMES {
-                    let frame = CapturedFrame {
-                        provenance: Default::default(),
-                        width: w,
-                        height: h,
-                        pts_ns: 1 + i as u64,
-                        format: PixelFormat::Bgra,
-                        payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
-                            texture: texs[i % texs.len()].clone(),
-                            device: device.clone(),
-                            pyro: None,
-                        }),
-                        cursor: None,
-                    };
-                    enc.submit(&frame).expect("submit");
-                    if let Some(au) = enc.poll().expect("poll") {
-                        aus.push(au);
+                let batch = |enc: &mut AmfEncoder, base: u64| -> Vec<EncodedFrame> {
+                    let mut aus = Vec::new();
+                    for i in 0..FRAMES {
+                        let frame = CapturedFrame {
+                            provenance: Default::default(),
+                            width: w,
+                            height: h,
+                            pts_ns: base + i as u64,
+                            format: PixelFormat::Bgra,
+                            payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
+                                texture: texs[i % texs.len()].clone(),
+                                device: device.clone(),
+                                pyro: None,
+                            }),
+                            cursor: None,
+                        };
+                        enc.submit(&frame).expect("submit");
+                        if let Some(au) = enc.poll().expect("poll") {
+                            aus.push(au);
+                        }
                     }
-                }
-                enc.flush().expect("flush");
-                for _ in 0..50 {
-                    match enc.poll().expect("drain poll") {
-                        Some(au) => aus.push(au),
-                        None => break,
+                    enc.flush().expect("flush");
+                    for _ in 0..50 {
+                        match enc.poll().expect("drain poll") {
+                            Some(au) => aus.push(au),
+                            None => break,
+                        }
                     }
-                }
+                    aus
+                };
+                let aus = batch(&mut enc, 1);
                 eprintln!(
                     "{codec:?} in_place={in_place}: {} AUs of {FRAMES}, {} bytes",
                     aus.len(),
@@ -2595,6 +2598,15 @@ mod tests {
                 assert_eq!(aus.len(), FRAMES, "{codec:?} in_place={in_place}");
                 assert!(aus[0].keyframe, "{codec:?}: the stream starts on an IDR");
                 assert_eq!(aus[0].pts_ns, 1, "FIFO pts pairing");
+                // A stall recovery re-Inits the component, which must still take BGRA.
+                assert!(enc.reset(), "{codec:?}: reset rebuilds in place");
+                let again = batch(&mut enc, 100);
+                assert_eq!(
+                    again.len(),
+                    FRAMES,
+                    "{codec:?} in_place={in_place}: after a reset"
+                );
+                assert!(again[0].keyframe, "{codec:?}: a reset restarts on an IDR");
             }
         }
     }
