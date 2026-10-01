@@ -27,6 +27,11 @@ struct AddHostSheet: View {
     }
     @State private var editingField: EditField?
     #endif
+    #if os(visionOS)
+    /// The form's rows, measured: a visionOS sheet ignores detents and a Form has no height of its
+    /// own, so the form is pinned to this and the sheet fits the result.
+    @State private var formHeight: CGFloat?
+    #endif
 
     /// A field's placeholder, which is not the same job on both platforms.
     ///
@@ -130,6 +135,16 @@ struct AddHostSheet: View {
             // The sheet is sized to its content, so there is nothing to scroll.
             .scrollDisabled(true)
             #endif
+            #if os(visionOS)
+            .onScrollGeometryChange(for: CGFloat.self) {
+                $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom
+            } action: { _, height in
+                // The first reading lands before any row is laid out.
+                if height > 0 { formHeight = height }
+            }
+            // A first guess, not nil: an unsized form fits to zero and never lays out a row.
+            .frame(height: formHeight ?? 400)
+            #endif
             #if os(macOS)
             // macOS ONLY: the grouped form's default system text is oversized next to the app's
             // Geist typography, so the panel reads out of place at full size. iOS keeps the app's
@@ -160,10 +175,12 @@ struct AddHostSheet: View {
                 .padding(16)
             #endif
         }
-        #if os(iOS) || os(visionOS)
+        #if os(iOS)
         // Sized to its content: four fields, the clipboard toggle and the action row.
         .presentationDetents([.height(392 + 44)])
         .presentationDragIndicator(.visible)
+        #elseif os(visionOS)
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         #endif
         #if os(macOS)
         .frame(width: 400)

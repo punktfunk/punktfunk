@@ -59,14 +59,15 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
 #if os(iOS) || os(visionOS)
 extension View {
-    /// Present the settings sheet large on iPad so the NavigationSplitView has room for its
-    /// sidebar + detail — a default form sheet is too narrow and the split view would collapse to
-    /// the iPhone push list. No-op on iPhone (the standard sheet is already right) and on iOS 17
-    /// (no `presentationSizing` — it falls back to the default sheet, which still degrades cleanly
-    /// to the push list).
+    /// Present the settings sheet large on iPad and Vision Pro so the NavigationSplitView has room
+    /// for its sidebar + detail — a default form sheet is too narrow and the split view would
+    /// collapse to the iPhone push list. No-op on iPhone (the standard sheet is already right) and
+    /// on iOS 17 (no `presentationSizing` — it falls back to the default sheet, which still
+    /// degrades cleanly to the push list).
     @ViewBuilder
     func settingsSheetSizing() -> some View {
-        if UIDevice.current.userInterfaceIdiom == .pad, #available(iOS 18, *) {
+        let idiom = UIDevice.current.userInterfaceIdiom
+        if idiom == .pad || idiom == .vision, #available(iOS 18, *) {
             presentationSizing(.page)
         } else {
             self

@@ -573,14 +573,21 @@ struct LibraryView: View {
             .flatMap(\.indices).map { titles[$0] }
     }
 
+    #if os(visionOS)
+    private static let customizeWidth: CGFloat = 440
+    #else
+    private static let customizeWidth: CGFloat = 320
+    #endif
+
     private var customizeButton: some View {
         Button { showCustomize = true } label: {
             Label("Customize", systemImage: "slider.horizontal.3")
         }
         #if os(iOS) || os(visionOS)
-        // A popover on the iPad, as on the Mac; an iPhone shows it as a sheet.
+        // A popover on the iPad, as on the Mac; an iPhone shows it as a sheet. visionOS rows carry
+        // larger type and insets, so its popover is wider.
         .popover(isPresented: $showCustomize) {
-            LibrarySectionsPanel().frame(minWidth: 320, minHeight: 440)
+            LibrarySectionsPanel().frame(minWidth: Self.customizeWidth, minHeight: 440)
         }
         #endif
         #if os(macOS)
