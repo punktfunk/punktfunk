@@ -10,6 +10,10 @@ use crate::quic::{
 pub(crate) enum CtrlRequest {
     Mode(Mode),
     Probe(ProbeRequest),
+    /// Toward a host that answered the delivery tag; see [`crate::quic::ProbeShaped`].
+    ProbeShaped(crate::quic::ProbeShaped),
+    /// Toward a host that answered the delivery tag; see [`crate::quic::SetDelivery`].
+    SetDelivery(u8),
     Keyframe,
     /// Client saw a `frame_index` gap; an RFI-capable host re-references a known-good picture
     /// instead of a full IDR.

@@ -104,6 +104,46 @@ pub struct LinkReport {
     pub proven_kbps: u32,
 }
 
+/// `client → host` mid-session: stream under this delivery profile (`0` burst, `1` capped,
+/// `2` smooth) from the next frame. Answered by [`DeliveryChanged`]. Sent only after the
+/// host answered the `Start` tag ([`EXT_TAG_DELIVERY`](super::EXT_TAG_DELIVERY)): an older
+/// host logs every type it does not know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetDelivery {
+    pub profile: u8,
+}
+
+/// `host → client`: the profile this session now streams under — once after a `Start` that
+/// carried the tag, and after every [`SetDelivery`]. `forced` = the host pins one for every
+/// session (`PUNKTFUNK_DELIVERY`) and the ask changed nothing. Its arrival is what tells the
+/// client the host reads delivery messages at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeliveryChanged {
+    pub profile: u8,
+    pub forced: bool,
+}
+
+/// `host → client`, once after `Start`, toward a tag that set
+/// [`EXT_DELIVERY_FACTS`](super::EXT_DELIVERY_FACTS): what the host knows about its own end
+/// of the path. `link_mbps` `0` and `iface_kind` `0` mean the OS did not say, never "none".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostFacts {
+    /// `0` unknown, `1` Ethernet, `2` Wi-Fi, `3` other.
+    pub iface_kind: u8,
+    pub link_mbps: u32,
+    /// The data socket's granted send buffer.
+    pub sndbuf_kb: u32,
+    /// `PUNKTFUNK_DELIVERY` as a profile byte, `0xFF` when unset.
+    pub forced_profile: u8,
+}
+
+pub const IFACE_KIND_UNKNOWN: u8 = 0;
+pub const IFACE_KIND_ETHERNET: u8 = 1;
+pub const IFACE_KIND_WIFI: u8 = 2;
+pub const IFACE_KIND_OTHER: u8 = 3;
+/// [`HostFacts::forced_profile`] when nothing is pinned.
+pub const FORCED_PROFILE_NONE: u8 = 0xFF;
+
 /// `client → host` after [`Start`]: retarget encoder bitrate without
 /// reconnecting. Host clamps like [`Hello::bitrate_kbps`] (`0` → default),
 /// answers [`BitrateChanged`], and retargets in place. Automatic-bitrate
@@ -221,6 +261,34 @@ pub struct ProbeResult {
     pub send_dropped: u32,
 }
 
+/// `client → host`: a [`ProbeRequest`] with a shape. `burst_hz` `0` is the smooth train a
+/// plain request sends; otherwise every `1/burst_hz` the host releases `rate/burst_hz`
+/// bytes in `group_bytes` groups on a `group_rate_kbps` clock (`0` = line rate) — what
+/// video does, or what a capped profile would. Same clamps and spacing as the plain
+/// request, answered by the same [`ProbeResult`]. Sent only toward a host that answered
+/// the delivery tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProbeShaped {
+    pub target_kbps: u32,
+    pub duration_ms: u32,
+    pub burst_hz: u16,
+    pub group_bytes: u32,
+    pub group_rate_kbps: u32,
+}
+
+impl From<ProbeRequest> for ProbeShaped {
+    /// The smooth train, unshaped.
+    fn from(r: ProbeRequest) -> ProbeShaped {
+        ProbeShaped {
+            target_kbps: r.target_kbps,
+            duration_ms: r.duration_ms,
+            burst_hz: 0,
+            group_bytes: 0,
+            group_rate_kbps: 0,
+        }
+    }
+}
+
 /// `client → host` after [`Start`]: one round of the wall-clock skew
 /// handshake. Client stamps `t1_ns`; host answers [`ClockEcho`]. A few
 /// rounds estimate host−client offset so AU `pts_ns` latency is meaningful
@@ -277,8 +345,12 @@ pub const MSG_SHARD_PAYLOAD_ACK: u8 = 0x09;
 pub const MSG_PIPELINE_GAP: u8 = 0x0A;
 pub const MSG_DELIVERY_REPORT: u8 = 0x0B;
 pub const MSG_LINK_REPORT: u8 = 0x0C;
+pub const MSG_SET_DELIVERY: u8 = 0x0D;
+pub const MSG_DELIVERY_CHANGED: u8 = 0x0E;
+pub const MSG_HOST_FACTS: u8 = 0x0F;
 pub const MSG_PROBE_REQUEST: u8 = 0x20;
 pub const MSG_PROBE_RESULT: u8 = 0x21;
+pub const MSG_PROBE_SHAPED: u8 = 0x22;
 pub const MSG_CLOCK_PROBE: u8 = 0x30;
 pub const MSG_CLOCK_ECHO: u8 = 0x31;
 pub const MSG_PHASE_REPORT: u8 = 0x32;
@@ -431,6 +503,83 @@ impl LinkReport {
         let mut r = Rd::ctl(b, MSG_LINK_REPORT, 9..=9, "bad LinkReport")?;
         Ok(LinkReport {
             proven_kbps: r.u32(),
+        })
+    }
+}
+
+impl SetDelivery {
+    pub fn encode(&self) -> Vec<u8> {
+        // magic[0..4] type[4] profile[5]
+        Wr::ctl(MSG_SET_DELIVERY, 6).u8(self.profile).done()
+    }
+
+    pub fn decode(b: &[u8]) -> Result<SetDelivery> {
+        let mut r = Rd::ctl(b, MSG_SET_DELIVERY, 6..=6, "bad SetDelivery")?;
+        Ok(SetDelivery { profile: r.u8() })
+    }
+}
+
+impl DeliveryChanged {
+    pub fn encode(&self) -> Vec<u8> {
+        // magic[0..4] type[4] profile[5] forced[6]
+        Wr::ctl(MSG_DELIVERY_CHANGED, 7)
+            .u8(self.profile)
+            .u8(self.forced as u8)
+            .done()
+    }
+
+    pub fn decode(b: &[u8]) -> Result<DeliveryChanged> {
+        let mut r = Rd::ctl(b, MSG_DELIVERY_CHANGED, 7..=7, "bad DeliveryChanged")?;
+        Ok(DeliveryChanged {
+            profile: r.u8(),
+            forced: r.u8() != 0,
+        })
+    }
+}
+
+impl HostFacts {
+    pub fn encode(&self) -> Vec<u8> {
+        // magic[0..4] type[4] iface_kind[5] link_mbps[6..10] sndbuf_kb[10..14] forced[14]
+        Wr::ctl(MSG_HOST_FACTS, 15)
+            .u8(self.iface_kind)
+            .u32(self.link_mbps)
+            .u32(self.sndbuf_kb)
+            .u8(self.forced_profile)
+            .done()
+    }
+
+    pub fn decode(b: &[u8]) -> Result<HostFacts> {
+        let mut r = Rd::ctl(b, MSG_HOST_FACTS, 15..=15, "bad HostFacts")?;
+        Ok(HostFacts {
+            iface_kind: r.u8(),
+            link_mbps: r.u32(),
+            sndbuf_kb: r.u32(),
+            forced_profile: r.u8(),
+        })
+    }
+}
+
+impl ProbeShaped {
+    pub fn encode(&self) -> Vec<u8> {
+        // magic[0..4] type[4] target[5..9] duration[9..13] burst_hz[13..15]
+        // group_bytes[15..19] group_rate[19..23]
+        Wr::ctl(MSG_PROBE_SHAPED, 23)
+            .u32(self.target_kbps)
+            .u32(self.duration_ms)
+            .u16(self.burst_hz)
+            .u32(self.group_bytes)
+            .u32(self.group_rate_kbps)
+            .done()
+    }
+
+    pub fn decode(b: &[u8]) -> Result<ProbeShaped> {
+        let mut r = Rd::ctl(b, MSG_PROBE_SHAPED, 23..=23, "bad ProbeShaped")?;
+        Ok(ProbeShaped {
+            target_kbps: r.u32(),
+            duration_ms: r.u32(),
+            burst_hz: r.u16(),
+            group_bytes: r.u32(),
+            group_rate_kbps: r.u32(),
         })
     }
 }
@@ -1733,6 +1882,62 @@ mod tests {
             &RfiRequest {
                 first_frame: 1,
                 last_frame: 2
+            }
+            .encode()
+        )
+        .is_err());
+    }
+
+    /// The delivery types and the shaped probe: exact-length, like every type here. An
+    /// older peer rejects each as an unknown type, which is why a client sends them only
+    /// after the host answered the `Start` tag.
+    #[test]
+    fn delivery_messages_keep_their_wire_bytes() {
+        pin!(SetDelivery, SetDelivery { profile: 2 }, "0d02");
+        pin!(
+            DeliveryChanged,
+            DeliveryChanged {
+                profile: 1,
+                forced: true
+            },
+            "0e0101"
+        );
+        pin!(
+            HostFacts,
+            HostFacts {
+                iface_kind: IFACE_KIND_ETHERNET,
+                link_mbps: 2500,
+                sndbuf_kb: 32768,
+                forced_profile: 0
+            },
+            "0f01c40900000080000000"
+        );
+        pin!(
+            ProbeShaped,
+            ProbeShaped {
+                target_kbps: 100_000,
+                duration_ms: 500,
+                burst_hz: 60,
+                group_bytes: 65_536,
+                group_rate_kbps: 800_000
+            },
+            "22a0860100f40100003c000000010000350c00"
+        );
+        let plain = ProbeRequest {
+            target_kbps: 100_000,
+            duration_ms: 500,
+        };
+        let shaped: ProbeShaped = plain.into();
+        assert_eq!(
+            (shaped.burst_hz, shaped.group_bytes, shaped.group_rate_kbps),
+            (0, 0, 0)
+        );
+        assert!(ProbeShaped::decode(&plain.encode()).is_err());
+        assert!(ProbeRequest::decode(&shaped.encode()).is_err());
+        assert!(SetDelivery::decode(
+            &DeliveryChanged {
+                profile: 1,
+                forced: false
             }
             .encode()
         )

@@ -47,7 +47,7 @@ pub(super) fn synthetic_stream(
     session: &mut Session,
     frames: u32,
     stop: &AtomicBool,
-    probe_rx: &std::sync::mpsc::Receiver<ProbeRequest>,
+    probe_rx: &std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: &tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     fec_target: &AtomicU8,
     timing_conn: Option<&super::link::SessionLink>,
@@ -94,7 +94,7 @@ pub(super) fn software_stream(
     mode: punktfunk_core::config::Mode,
     bitrate_kbps: u32,
     stop: &AtomicBool,
-    probe_rx: &std::sync::mpsc::Receiver<ProbeRequest>,
+    probe_rx: &std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: &tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     fec_target: &AtomicU8,
     probe_seq: bool,
@@ -142,7 +142,7 @@ pub(super) fn software_stream(
     _mode: punktfunk_core::config::Mode,
     _bitrate_kbps: u32,
     _stop: &AtomicBool,
-    _probe_rx: &std::sync::mpsc::Receiver<ProbeRequest>,
+    _probe_rx: &std::sync::mpsc::Receiver<ProbeShaped>,
     _probe_result_tx: &tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     _fec_target: &AtomicU8,
     _probe_seq: bool,
@@ -160,7 +160,8 @@ const PROBE_PUMP_BYTES: u64 = 64 * 1024;
 
 /// A speed-test burst in flight: zero-filled [`FLAG_PROBE`] AUs at `target_kbps` for
 /// `duration_ms`, both clamped to `MAX_PROBE_*`. The send loop pumps it between AUs, so video
-/// keeps flowing and the burst reads the headroom beside the live stream.
+/// keeps flowing and the burst reads the headroom beside the live stream. A shaped request
+/// ([`ProbeShaped`]) releases each period's bytes at once, in groups on a clock.
 struct ProbeBurst {
     filler: Vec<u8>,
     target_kbps: u32,
@@ -175,6 +176,13 @@ struct ProbeBurst {
     /// video shares the loop now, so a session-stats delta would fold its shards in.
     wire_offered: u32,
     send_dropped: u32,
+    /// `0` is the smooth train; otherwise `rate / burst_hz` bytes come due every period.
+    burst_hz: u16,
+    /// Bytes one pump may release of a shaped burst (`u64::MAX` = the whole backlog).
+    group_bytes: u64,
+    /// Clock the groups leave on; `0` = line rate.
+    group_rate_bps: u64,
+    group_next: std::time::Instant,
 }
 
 impl ProbeBurst {
@@ -182,7 +190,8 @@ impl ProbeBurst {
     /// without VIDEO_CAP_PROBE_SEQ. That client has one reassembly window and would drop probe
     /// frames as stale — and a burst in video's index space reads as a multi-thousand-frame
     /// loss once it ends.
-    fn begin(req: ProbeRequest, probe_seq: bool) -> Option<ProbeBurst> {
+    fn begin(req: impl Into<ProbeShaped>, probe_seq: bool) -> Option<ProbeBurst> {
+        let req: ProbeShaped = req.into();
         if !probe_seq {
             tracing::info!(
                 "declining speed-test probe: client predates VIDEO_CAP_PROBE_SEQ (its reassembler \
@@ -209,21 +218,47 @@ impl ProbeBurst {
             packets_sent: 0,
             wire_offered: 0,
             send_dropped: 0,
+            burst_hz: req.burst_hz,
+            group_bytes: match req.group_bytes {
+                0 => u64::MAX,
+                b => u64::from(b),
+            },
+            group_rate_bps: u64::from(req.group_rate_kbps) * 1_000,
+            group_next: start,
         })
     }
 
+    fn period(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(1.0 / f64::from(self.burst_hz.max(1)))
+    }
+
     /// Bytes the burst is allowed to have sent by now: elapsed × rate, held at the whole
-    /// request so a late pump delivers the budget without overshooting it.
+    /// request so a late pump delivers the budget without overshooting it. A shaped burst
+    /// is owed each period's bytes the moment the period starts.
     fn allowed_bytes(&self) -> u64 {
         let elapsed = self.start.elapsed().min(self.deadline - self.start);
-        (elapsed.as_secs_f64() * self.bytes_per_sec as f64) as u64
+        let whole = ((self.deadline - self.start).as_secs_f64() * self.bytes_per_sec as f64) as u64;
+        if self.burst_hz == 0 {
+            return (elapsed.as_secs_f64() * self.bytes_per_sec as f64) as u64;
+        }
+        let periods = (elapsed.as_secs_f64() / self.period().as_secs_f64()).floor() + 1.0;
+        ((periods * self.bytes_per_sec as f64 / f64::from(self.burst_hz)) as u64).min(whole)
     }
 
     /// Send what the budget allows now, at most [`PROBE_PUMP_BYTES`], then hand the thread
     /// back. Sending the backlog is what keeps the measured rate true when video held the
-    /// loop for an AU.
+    /// loop for an AU. A clocked group waits for its instant and leaves whole.
     fn pump(&mut self, session: &mut Session) {
-        let budget = self.allowed_bytes().min(self.bytes_sent + PROBE_PUMP_BYTES);
+        let now = std::time::Instant::now();
+        let clocked = self.burst_hz > 0 && self.group_rate_bps > 0;
+        if clocked && now < self.group_next {
+            return;
+        }
+        let mut budget = self.allowed_bytes().min(self.bytes_sent + PROBE_PUMP_BYTES);
+        if clocked {
+            budget = budget.min(self.bytes_sent.saturating_add(self.group_bytes));
+        }
+        let before = self.bytes_sent;
         while self.bytes_sent < budget {
             // WouldBlock/ENOBUFS is part of what the probe measures (`send_dropped`) — keep going.
             if let Ok((offered, dropped)) = session.submit_probe_frame(&self.filler, now_ns()) {
@@ -232,6 +267,12 @@ impl ProbeBurst {
             }
             self.bytes_sent += self.filler.len() as u64;
             self.packets_sent += 1;
+        }
+        if clocked && self.bytes_sent > before {
+            self.group_next = now
+                + std::time::Duration::from_nanos(
+                    (self.bytes_sent - before).saturating_mul(8_000_000_000) / self.group_rate_bps,
+                );
         }
     }
 
@@ -242,13 +283,26 @@ impl ProbeBurst {
     }
 
     /// How long the caller may spend elsewhere: until the next filler comes due, zero while
-    /// the budget is behind, and never past the burst's own deadline.
+    /// the budget is behind, and never past the burst's own deadline. A shaped burst with a
+    /// backlog is due at its next group's instant, otherwise at the next period.
     fn next_due(&self) -> std::time::Duration {
         let now = std::time::Instant::now();
-        let due = self.start
-            + std::time::Duration::from_secs_f64(
-                self.bytes_sent as f64 / self.bytes_per_sec as f64,
-            );
+        let due = if self.burst_hz == 0 {
+            self.start
+                + std::time::Duration::from_secs_f64(
+                    self.bytes_sent as f64 / self.bytes_per_sec as f64,
+                )
+        } else if self.bytes_sent < self.allowed_bytes() {
+            if self.group_rate_bps > 0 {
+                self.group_next
+            } else {
+                now
+            }
+        } else {
+            let elapsed = now.saturating_duration_since(self.start);
+            let periods = (elapsed.as_secs_f64() / self.period().as_secs_f64()).floor() as u32 + 1;
+            self.start + self.period() * periods
+        };
         due.saturating_duration_since(now)
             .min(self.deadline.saturating_duration_since(now))
     }
@@ -295,7 +349,7 @@ pub(super) fn declined() -> ProbeResult {
 fn service_burst(
     session: &mut Session,
     burst: &mut Option<ProbeBurst>,
-    probe_rx: &std::sync::mpsc::Receiver<ProbeRequest>,
+    probe_rx: &std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: &tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     probe_seq: bool,
 ) {
@@ -326,7 +380,7 @@ fn service_burst(
 fn service_probes(
     session: &mut Session,
     stop: &AtomicBool,
-    probe_rx: &std::sync::mpsc::Receiver<ProbeRequest>,
+    probe_rx: &std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: &tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     probe_seq: bool,
 ) {
@@ -758,14 +812,14 @@ mod tests {
     #[test]
     fn a_burst_disarms_itself_and_reports_once() {
         let (mut host, _client) = loopback_sessions();
-        let (req_tx, req_rx) = std::sync::mpsc::channel::<ProbeRequest>();
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<ProbeShaped>();
         let (res_tx, mut res_rx) = tokio::sync::mpsc::unbounded_channel::<ProbeResult>();
         let mut burst: Option<ProbeBurst> = None;
         let req = ProbeRequest {
             target_kbps: 4_000,
             duration_ms: 20,
         };
-        req_tx.send(req).unwrap();
+        req_tx.send(req.into()).unwrap();
         service_burst(&mut host, &mut burst, &req_rx, &res_tx, true);
         assert!(burst.is_some(), "the request arms a burst");
         assert!(res_rx.try_recv().is_err(), "no result until the burst ends");
@@ -775,7 +829,7 @@ mod tests {
         let r = res_rx.try_recv().expect("the finished burst reports");
         assert!(r.bytes_sent > 0 && r.duration_ms >= 20, "{r:?}");
         assert!(res_rx.try_recv().is_err(), "one result per request");
-        req_tx.send(req).unwrap();
+        req_tx.send(req.into()).unwrap();
         service_burst(&mut host, &mut burst, &req_rx, &res_tx, false);
         assert!(burst.is_none(), "an old client arms nothing");
         assert_eq!(res_rx.try_recv().expect("a decline"), declined());

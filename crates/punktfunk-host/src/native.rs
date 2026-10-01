@@ -23,8 +23,8 @@ use punktfunk_core::packet::{FLAG_PIC, FLAG_PROBE, FLAG_SOF};
 use punktfunk_core::quic::{
     classify, endpoint, io, AccessUpdate, AckReason, BitrateChanged, ClockEcho, ClockProbe,
     ColorInfo, GrantClass, Hello, LinkReport, LossReport, PairRequest, PipelineGap, ProbeRequest,
-    ProbeResult, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate, Start,
-    Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
+    ProbeResult, ProbeShaped, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate,
+    Start, Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
 };
 use punktfunk_core::transport::UdpTransport;
 use punktfunk_core::Session;
@@ -1464,6 +1464,7 @@ pub(crate) async fn run_admitted(
         client_label,
         preset: session_preset,
         abr_features,
+        delivery_ask,
         compositor,
         gamescope_route,
         prep,
@@ -1489,6 +1490,11 @@ pub(crate) async fn run_admitted(
     .await
     .map_err(|_| anyhow!("handshake timed out after {HANDSHAKE_TIMEOUT:?}"))??;
     let (ctrl_send, ctrl_recv) = (send, recv);
+    // The host's half of the path, for a client that asked; read while the data socket is
+    // still in hand.
+    let host_facts = delivery_ask
+        .filter(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_FACTS != 0)
+        .map(|_| crate::telemetry::net_health::host_facts(data_sock.as_ref()));
     let join_live = joined.is_some();
     let reframe_to = joined.as_ref().map(|(_, view)| {
         (
@@ -1641,6 +1647,8 @@ pub(crate) async fn run_admitted(
             + punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
         audio_kbps: audio_reserved_kbps(&welcome),
         ack_reason: abr_features & punktfunk_core::quic::EXT_ABR_ACK_REASON != 0,
+        delivery_ask,
+        host_facts,
         ends: control_ends,
         shared: shared.clone(),
         clip_enabled: clip_enabled.clone(),
@@ -3593,6 +3601,114 @@ mod tests {
             .expect("host declines the fetch (no backend) → Error event");
         assert!(matches!(err, ClipEventCore::Error { .. }));
 
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// Spin up a synthetic host on `port` and dial it with `params`; the host joins on drop
+    /// of the returned client.
+    fn synthetic_session(
+        port: u16,
+        params: impl FnOnce(
+            punktfunk_core::client::ConnectParams,
+        ) -> punktfunk_core::client::ConnectParams,
+    ) -> (
+        punktfunk_core::client::NativeClient,
+        std::thread::JoinHandle<anyhow::Result<()>>,
+    ) {
+        use punktfunk_core::client::{ConnectParams, NativeClient};
+        let host = std::thread::spawn(move || {
+            run_ephemeral(Punktfunk1Options {
+                port,
+                source: Punktfunk1Source::Synthetic,
+                seconds: 0,
+                frames: 600,
+                max_sessions: 1,
+                max_concurrent: 1,
+                require_pairing: false,
+                allow_pairing: false,
+                pairing_pin: None,
+                paired_store: None,
+                data_port: None,
+                idle_timeout: None,
+                mdns: false,
+            })
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let mode = punktfunk_core::Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let client = NativeClient::connect(params(ConnectParams::new(
+            "127.0.0.1",
+            port,
+            mode,
+            std::time::Duration::from_secs(10),
+        )))
+        .expect("client connects to synthetic host");
+        (client, host)
+    }
+
+    fn wait_for(pred: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if pred() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// `EXT_TAG_DELIVERY` on `Start` is answered with the profile the session streams
+    /// under and, when asked, the host's facts; a later `SetDelivery` is answered too.
+    #[test]
+    fn a_client_that_asks_for_a_profile_is_answered() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, FORCED_PROFILE_NONE};
+        let (client, host) = synthetic_session(19783, |p| punktfunk_core::client::ConnectParams {
+            delivery: Some(DeliveryAsk {
+                profile: 1,
+                flags: EXT_DELIVERY_FACTS,
+            }),
+            ..p
+        });
+        assert!(
+            wait_for(|| client.delivery().is_some()),
+            "the host answers the tag"
+        );
+        let answer = client.delivery().unwrap();
+        assert_eq!((answer.profile, answer.forced), (1, false));
+        let facts = client
+            .host_facts()
+            .expect("facts follow the answer when asked");
+        assert!(facts.sndbuf_kb > 0, "the data socket has a send buffer");
+        assert_eq!(facts.forced_profile, FORCED_PROFILE_NONE);
+        client.set_delivery(2).unwrap();
+        assert!(
+            wait_for(|| client.delivery().map(|d| d.profile) == Some(2)),
+            "SetDelivery is answered"
+        );
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// A client that asks nothing hears nothing and may send nothing: the session streams
+    /// as every shipped client's does.
+    #[test]
+    fn a_client_that_asks_nothing_streams_burst() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let (client, host) = synthetic_session(19784, |p| p);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert!(client.delivery().is_none(), "no tag, no answer");
+        assert!(client.host_facts().is_none());
+        assert!(matches!(
+            client.set_delivery(1),
+            Err(punktfunk_core::PunktfunkError::Unsupported(_))
+        ));
         drop(client);
         host.join().unwrap().unwrap();
     }

@@ -54,6 +54,11 @@ pub(crate) struct ClientShared {
     pub(crate) abr_windows: Mutex<std::collections::VecDeque<crate::abr::WindowRecord>>,
     /// What the bring-up ramp measured, once it stopped.
     pub(crate) abr_ramp: Mutex<Option<crate::abr::RampRecord>>,
+    /// The host's latest answer about the delivery profile; `None` until one arrives, which
+    /// toward an older host is for ever.
+    pub(crate) delivery: Mutex<Option<crate::quic::DeliveryChanged>>,
+    /// What the host said about its end of the path, when the dial asked.
+    pub(crate) host_facts: Mutex<Option<crate::quic::HostFacts>>,
     /// Live encoder target (kbps): the Welcome seed, then every `BitrateChanged` ack.
     pub(crate) live_bitrate_kbps: AtomicU32,
     /// [`crate::hud::RateCut`] code the pump publishes each window; `0` = no standing cut.
@@ -107,6 +112,8 @@ impl ClientShared {
             decode_lat: Mutex::default(),
             abr_windows: Mutex::default(),
             abr_ramp: Mutex::default(),
+            delivery: Mutex::default(),
+            host_facts: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),
             rate_cut: AtomicU8::new(0),
             recent_rfis: Mutex::default(),

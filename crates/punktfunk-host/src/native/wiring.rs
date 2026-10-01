@@ -30,6 +30,9 @@ pub(crate) struct SessionShared {
     /// The client's proven link rate (kbps), `0` until its `LinkReport`. The send loop paces a
     /// pinned stream against it.
     pub(crate) link_kbps: Arc<AtomicU32>,
+    /// The delivery profile the client asked for (`DeliveryProfile as u8`), written by the
+    /// control task and read per frame by the send loop. `PUNKTFUNK_DELIVERY` overrides it.
+    pub(crate) delivery: Arc<AtomicU8>,
     /// PhaseReports from the control task; the encode loop drains them at its own cadence
     /// (`design/phase-locked-capture.md`). Inert until a vsync-aware client.
     pub(crate) phase: Arc<stream::PhaseCtl>,
@@ -49,7 +52,7 @@ pub(crate) struct ControlEnds {
     /// LTR-RFI: the encode loop prefers `invalidate_ref_frames` over a full IDR when it can.
     pub(crate) rfi_tx: std::sync::mpsc::Sender<(u32, u32)>,
     pub(crate) bitrate_tx: std::sync::mpsc::Sender<u32>,
-    pub(crate) probe_tx: std::sync::mpsc::Sender<ProbeRequest>,
+    pub(crate) probe_tx: std::sync::mpsc::Sender<ProbeShaped>,
     pub(crate) probe_result_rx: tokio::sync::mpsc::UnboundedReceiver<ProbeResult>,
     pub(crate) reconfig_result_rx: tokio::sync::mpsc::UnboundedReceiver<Reconfigured>,
     pub(crate) retarget_rx: tokio::sync::mpsc::UnboundedReceiver<(u32, AckReason)>,
@@ -71,7 +74,7 @@ pub(crate) struct StreamEnds {
     pub(crate) bitrate_rx: std::sync::mpsc::Receiver<u32>,
     /// Shard re-keys, validated and ack-gated by the wire-MTU watcher. Applied between AUs.
     pub(crate) shard_rx: std::sync::mpsc::Receiver<usize>,
-    pub(crate) probe_rx: std::sync::mpsc::Receiver<ProbeRequest>,
+    pub(crate) probe_rx: std::sync::mpsc::Receiver<ProbeShaped>,
     pub(crate) probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     /// The accept ack goes out before the rebuild; a failed or differently-honoured rebuild
     /// corrects the client's mode slot with a second `Reconfigured { accepted: true, mode }`.
@@ -168,6 +171,7 @@ impl SessionWiring {
                 fec_target,
                 fec_requested,
                 link_kbps: Arc::new(AtomicU32::new(0)),
+                delivery: Arc::new(AtomicU8::new(0)),
                 phase: Arc::new(stream::PhaseCtl::new()),
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,

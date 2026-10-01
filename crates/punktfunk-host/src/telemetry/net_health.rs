@@ -107,6 +107,55 @@ impl WireProbe {
     }
 }
 
+/// What this host knows about its own end of the path, for a client that asked
+/// ([`punktfunk_core::quic::HostFacts`]): the data socket's interface kind and link speed
+/// (Linux reads `/sys/class/net`; elsewhere both stay "the OS did not say"), its granted
+/// send buffer, and the pinned profile.
+pub fn host_facts(sock: Option<&UdpSocket>) -> punktfunk_core::quic::HostFacts {
+    use punktfunk_core::quic::{FORCED_PROFILE_NONE, IFACE_KIND_UNKNOWN};
+    let iface = sock
+        .and_then(|s| s.local_addr().ok())
+        .and_then(|a| iface_for(a.ip()));
+    let (iface_kind, link_mbps) = iface.as_deref().map_or((IFACE_KIND_UNKNOWN, 0), link_facts);
+    let sndbuf_kb = sock
+        .and_then(|s| socket2::SockRef::from(s).send_buffer_size().ok())
+        .map_or(0, |b| (b / 1024) as u32);
+    punktfunk_core::quic::HostFacts {
+        iface_kind,
+        link_mbps,
+        sndbuf_kb,
+        forced_profile: crate::send_pacing::forced_delivery()
+            .map_or(FORCED_PROFILE_NONE, |p| p as u8),
+    }
+}
+
+/// `(kind, Mbit/s)` of one interface. Wi-Fi has a `wireless/` directory, a NIC a `device/`
+/// link; anything else (loopback, a tunnel) is "other". `speed` reads `-1` or nothing where
+/// the driver does not say.
+#[cfg(target_os = "linux")]
+fn link_facts(iface: &str) -> (u8, u32) {
+    use punktfunk_core::quic::{IFACE_KIND_ETHERNET, IFACE_KIND_OTHER, IFACE_KIND_WIFI};
+    let dir = format!("/sys/class/net/{iface}");
+    let kind = if std::path::Path::new(&format!("{dir}/wireless")).exists() {
+        IFACE_KIND_WIFI
+    } else if std::path::Path::new(&format!("{dir}/device")).exists() {
+        IFACE_KIND_ETHERNET
+    } else {
+        IFACE_KIND_OTHER
+    };
+    let speed = std::fs::read_to_string(format!("{dir}/speed"))
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|&s| s > 0)
+        .map_or(0, |s| s as u32);
+    (kind, speed)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn link_facts(_iface: &str) -> (u8, u32) {
+    (punktfunk_core::quic::IFACE_KIND_UNKNOWN, 0)
+}
+
 fn iface_for(ip: IpAddr) -> Option<String> {
     if_addrs::get_if_addrs()
         .ok()?

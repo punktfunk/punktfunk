@@ -156,7 +156,9 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         // answer two ways.
         let abr = [crate::quic::EXT_ABR_ACK_REASON];
         let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
-        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr, &preset);
+        // The delivery ask rides only when the dial made one; a host that reads it answers.
+        let delivery: Vec<u8> = p.delivery.map(|d| d.encode().to_vec()).unwrap_or_default();
+        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr, &preset, &delivery);
         let start_msg = if ext.is_empty() {
             start.encode()
         } else {

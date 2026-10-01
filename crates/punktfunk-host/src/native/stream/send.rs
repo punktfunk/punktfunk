@@ -312,7 +312,7 @@ pub(crate) fn reconfig_allowed(
 pub(super) fn send_loop(
     mut session: Session,
     frame_rx: std::sync::mpsc::Receiver<SendMsg>,
-    probe_rx: std::sync::mpsc::Receiver<ProbeRequest>,
+    probe_rx: std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
     stop: Arc<AtomicBool>,
     perf: bool,

@@ -545,6 +545,10 @@ pub struct ConnectParams {
     /// Settings preset this dial names ([`crate::quic::EXT_TAG_PRESET`]); the host shows it and
     /// hands it to hooks, the stream is unchanged. `None` names none.
     pub preset: Option<crate::quic::SessionPreset>,
+    /// The delivery profile to stream under and what to ask besides
+    /// ([`crate::quic::EXT_TAG_DELIVERY`]); `None` asks nothing. A host that reads it answers
+    /// in [`NativeClient::delivery`].
+    pub delivery: Option<crate::quic::DeliveryAsk>,
     /// Handshake budget. The dial re-dials inside it, so a waking host is not a failure.
     pub timeout: Duration,
     /// Abort while blocked: a request-access knock parks ~185 s. Never alias the session's
@@ -578,6 +582,7 @@ impl ConnectParams {
             pin: None,
             identity: None,
             preset: None,
+            delivery: None,
             timeout,
             cancel: None,
         }
@@ -1165,10 +1170,30 @@ impl NativeClient {
             }));
     }
 
-    /// Burst filler at `target_kbps` for `duration_ms`, pausing video. Non-blocking; poll
+    /// Burst filler at `target_kbps` for `duration_ms` beside the video. Non-blocking; poll
     /// [`NativeClient::probe_result`] until `done`. Resets any prior measurement. Host clamps
     /// ≤ 10 Gbps, ≤ 5 s.
     pub fn request_probe(&self, target_kbps: u32, duration_ms: u32) -> Result<()> {
+        self.send_probe(
+            duration_ms,
+            CtrlRequest::Probe(ProbeRequest {
+                target_kbps,
+                duration_ms,
+            }),
+        )
+    }
+
+    /// A shaped burst ([`crate::quic::ProbeShaped`]): frame-sized bursts at line rate, or
+    /// capped groups, at the same average rate. Same polling as [`Self::request_probe`].
+    /// Refused toward a host that never answered the delivery tag ([`Self::delivery`]).
+    pub fn request_probe_shaped(&self, shape: crate::quic::ProbeShaped) -> Result<()> {
+        self.delivery().ok_or(PunktfunkError::Unsupported(
+            "host does not read delivery messages",
+        ))?;
+        self.send_probe(shape.duration_ms, CtrlRequest::ProbeShaped(shape))
+    }
+
+    fn send_probe(&self, duration_ms: u32, req: CtrlRequest) -> Result<()> {
         *self.shared.probe.lock().unwrap() = ProbeState {
             active: true,
             duration_ms,
@@ -1176,10 +1201,7 @@ impl NativeClient {
         };
         let sent = self
             .ctrl_tx
-            .try_send(CtrlRequest::Probe(ProbeRequest {
-                target_kbps,
-                duration_ms,
-            }))
+            .try_send(req)
             .map_err(|_| PunktfunkError::Closed);
         if sent.is_err() {
             // Send failed: nothing will answer. Leaving `active` would suppress the pump's
@@ -1187,6 +1209,30 @@ impl NativeClient {
             self.shared.probe.lock().unwrap().active = false;
         }
         sent
+    }
+
+    /// Stream under `profile` (`0` burst, `1` capped, `2` smooth) from the next frame; the
+    /// host's answer lands in [`Self::delivery`]. Refused toward a host that never answered
+    /// the delivery tag.
+    pub fn set_delivery(&self, profile: u8) -> Result<()> {
+        self.delivery().ok_or(PunktfunkError::Unsupported(
+            "host does not read delivery messages",
+        ))?;
+        self.ctrl_tx
+            .try_send(CtrlRequest::SetDelivery(profile))
+            .map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// The profile this session streams under, as the host last said, and whether the host
+    /// pins one for every session. `None` until the host answers — for ever, from one that
+    /// does not read the tag, or when the dial asked nothing.
+    pub fn delivery(&self) -> Option<crate::quic::DeliveryChanged> {
+        *self.shared.delivery.lock().unwrap()
+    }
+
+    /// What the host said about its end of the path, when the dial asked for it.
+    pub fn host_facts(&self) -> Option<crate::quic::HostFacts> {
+        *self.shared.host_facts.lock().unwrap()
     }
 
     /// Whether a burst is in flight — an embedder speed test or the startup capacity probe. Loss
