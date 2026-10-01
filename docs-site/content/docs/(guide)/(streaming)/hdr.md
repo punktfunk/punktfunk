@@ -86,6 +86,14 @@ The toggle sits with the other [video settings](/docs/client-settings#video).
 | Android, Android TV | **HDR** | the setting is on. It is greyed out on a panel without HDR10 |
 | Moonlight | its own HDR toggle | the toggle appears when the host offers a 10-bit codec |
 
+## 10-bit SDR
+
+The client's **10-bit SDR** setting asks for a 10-bit stream without HDR. No desktop hands the
+host more than 8 bits of SDR, so the host could only widen each frame: smoother gradients after
+the encoder, one more colour pass on the GPU, no detail the desktop didn't have. The host streams
+8-bit SDR unless **Host → Settings → Video → Allow 10-bit SDR** (`PUNKTFUNK_10BIT_SDR_WIDEN`,
+advanced, off by default) is on.
+
 ## HDR and 4:4:4
 
 [Full chroma](/docs/client-settings#video) and HDR together:

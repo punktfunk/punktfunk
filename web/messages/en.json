@@ -1043,6 +1043,8 @@
 	"setting_host_name_hint": "Shown in every client. Leave it blank to use the computer's name.",
 	"setting_ten_bit": "10-bit and HDR",
 	"setting_ten_bit_hint": "Off keeps every stream 8-bit.",
+	"setting_sdr10_widen": "Allow 10-bit SDR",
+	"setting_sdr10_widen_hint": "The desktop is 8-bit. On, a client that asks for 10-bit SDR gets every frame widened: smoother gradients, one more colour pass on the GPU.",
 	"setting_chroma_444": "Full color 4:4:4",
 	"setting_chroma_444_hint": "Sharper text where the device and GPU support it.",
 	"setting_max_fps": "Game frame limit",

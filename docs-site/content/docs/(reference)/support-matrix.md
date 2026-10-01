@@ -194,7 +194,8 @@ decoders, with openh264 and rav1d as the software floor on the desktop.
    offered when the GPU passes its probe.
 3. HDR is on by default. Linux presents HDR10 where the desktop offers it and tone-maps otherwise;
    Windows asks for HDR only when the selected output is in HDR mode. The software decoder refuses
-   10-bit. 10-bit SDR is a client setting.
+   10-bit. 10-bit SDR is a client setting the host must
+   [allow](/docs/hdr#10-bit-sdr).
 4. Opt-in **Full chroma**, off by default. The client asks for 4:4:4 only when its GPU
    hardware-decodes 4:4:4 HEVC, in practice NVIDIA; PyroWave needs no probe. There is no software
    fallback. The Detailed [stats overlay](/docs/stats) shows `4:4:4→4:2:0` when the host declined.
