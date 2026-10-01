@@ -48,6 +48,10 @@ let
   cfg = config.services.punktfunk;
   system = pkgs.stdenv.hostPlatform.system;
 
+  # The host, client and gamescope dlopen Mesa from /run/opengl-driver, which loads only on the
+  # glibc it was built for or newer. Built from this system's nixpkgs, they always match it.
+  systemBuilt = self.lib.packagesWith pkgs;
+
   # host.env rendering: booleans → 1/0 (what PUNKTFUNK_* knobs expect), everything else verbatim.
   renderVal = v: if lib.isBool v then (if v then "1" else "0") else toString v;
   renderEnv =
@@ -104,9 +108,12 @@ in
 
       package = mkOption {
         type = types.package;
-        default = self.packages.${system}.punktfunk-host;
-        defaultText = literalExpression "punktfunk.packages.\${system}.punktfunk-host";
-        description = "The punktfunk-host package (bundles punktfunk-host + punktfunk-tray).";
+        default = systemBuilt.punktfunk-host;
+        defaultText = literalExpression "(punktfunk.lib.packagesWith pkgs).punktfunk-host";
+        description = ''
+          The punktfunk-host package (bundles punktfunk-host + punktfunk-tray). Built from this
+          system's nixpkgs so it can load the system's GPU driver.
+        '';
       };
 
       gamestream = mkOption {
@@ -252,11 +259,11 @@ in
 
       gamescopePackage = mkOption {
         type = types.package;
-        default = self.packages.${system}.punktfunk-gamescope;
-        defaultText = literalExpression "punktfunk.packages.\${system}.punktfunk-gamescope";
+        default = systemBuilt.punktfunk-gamescope;
+        defaultText = literalExpression "(punktfunk.lib.packagesWith pkgs).punktfunk-gamescope";
         description = ''
-          The patched gamescope used when `gamescopeHdr = true`. Override to build it from a
-          different nixpkgs (the patches apply to whatever gamescope that nixpkgs pins).
+          The patched gamescope used when `gamescopeHdr = true`. Built from this system's
+          nixpkgs, like the host.
         '';
       };
     };
@@ -266,9 +273,12 @@ in
 
       package = mkOption {
         type = types.package;
-        default = self.packages.${system}.punktfunk-client;
-        defaultText = literalExpression "punktfunk.packages.\${system}.punktfunk-client";
-        description = "The punktfunk-client package (bundles punktfunk-client + punktfunk-session).";
+        default = systemBuilt.punktfunk-client;
+        defaultText = literalExpression "(punktfunk.lib.packagesWith pkgs).punktfunk-client";
+        description = ''
+          The punktfunk-client package (bundles punktfunk-client + punktfunk-session). Built from
+          this system's nixpkgs so it can load the system's GPU driver.
+        '';
       };
 
       openFirewall = mkOption {

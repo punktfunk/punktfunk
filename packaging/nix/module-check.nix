@@ -43,14 +43,20 @@ let
     outputs = [ "out" ];
   };
 
-  stubSelf = {
-    packages.${system} = lib.genAttrs [
+  stubPackages =
+    prefix:
+    lib.genAttrs [
       "punktfunk-host"
       "punktfunk-client"
       "punktfunk-web"
       "punktfunk-scripting"
       "punktfunk-gamescope"
-    ] fakeDrv;
+    ] (name: fakeDrv "${prefix}${name}");
+
+  # `system-` marks the packages built from the system's nixpkgs.
+  stubSelf = {
+    packages.${system} = stubPackages "";
+    lib.packagesWith = _: stubPackages "system-";
   };
 
   # A machine just complete enough for eval-config, plus the scenario under test.
@@ -186,7 +192,7 @@ let
     {
       name = "host ExecStart is the store binary, never a capability wrapper";
       ok =
-        has desktop "punktfunk-host" "ExecStart=/pf-stub/punktfunk-host/bin/punktfunk-host serve"
+        has desktop "punktfunk-host" "ExecStart=/pf-stub/system-punktfunk-host/bin/punktfunk-host serve"
         && !(has desktop "punktfunk-host" "ExecStart=/run/wrappers");
     }
     # ...while the ENCODE WORKER, which nothing ever has to identify, is pointed at the wrapper.
@@ -379,6 +385,20 @@ let
         && !(clientOnly.systemd.user.services ? punktfunk-web)
         && !(clientOnly.systemd.user.services ? punktfunk-scripting)
         && !(clientOnly.systemd.services ? punktfunk-restart-user-units);
+    }
+
+    # --- GPU-loading packages come from the system's nixpkgs -----------------------------------
+    {
+      name = "host, client and gamescope default to the system build; web and scripting do not";
+      ok =
+        let
+          p = desktop.services.punktfunk;
+        in
+        p.host.package.name == "system-punktfunk-host"
+        && p.host.gamescopePackage.name == "system-punktfunk-gamescope"
+        && clientOnly.services.punktfunk.client.package.name == "system-punktfunk-client"
+        && p.web.package.name == "punktfunk-web"
+        && p.scripting.package.name == "punktfunk-scripting";
     }
   ];
 

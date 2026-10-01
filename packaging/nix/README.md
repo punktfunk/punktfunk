@@ -47,10 +47,15 @@ A bare URL follows `main`, which is almost never the published commit.
 The cache serves its own public key at `https://nix.unom.io/punktfunk-cache.pub`, which is the
 source of truth to check any pinned copy against.
 
-**`nixpkgs.follows` turns the cache off.** Every store path is keyed by the exact inputs it was
-built from, so pointing punktfunk's nixpkgs at yours makes every path miss. That is a real trade,
-not a bug: `follows` buys one shared nixpkgs in the closure instead of two. Take it if closure size
-matters more than build time.
+**The module builds the host, client and gamescope from your nixpkgs**, so the cache never holds
+them. They dlopen Mesa from `/run/opengl-driver`, which loads only on the glibc it was built for or
+newer; a pinned nixpkgs older than yours leaves AMD and Intel with no EGL, Vulkan or VA-API. The web
+console and runner load no driver and still come from the cache. `packages.…` stay pinned for
+`nix build` and `nix run`.
+
+**`nixpkgs.follows` turns the rest of the cache off.** Every store path is keyed by the exact inputs
+it was built from, so pointing punktfunk's nixpkgs at yours makes every path miss. It buys one
+shared nixpkgs in the closure instead of two.
 
 **Why not cachix.** Punktfunk self-hosts every other channel, and a Nix cache is static files behind
 a web server, so it rides the same box and deploy key as the rest. It speaks plain binary-cache
