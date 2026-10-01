@@ -102,6 +102,16 @@ struct AddHostSheet: View {
         }
         #else
         VStack(spacing: 0) {
+            #if os(visionOS)
+            // A visionOS sheet doesn't swipe away: this is the way out without adding a host.
+            HStack {
+                Spacer()
+                Button("Close", systemImage: "xmark") { dismiss() }
+                    .labelStyle(.iconOnly)
+                    .buttonBorderShape(.circle)
+            }
+            .padding([.top, .horizontal], 16)
+            #endif
             Form {
                 TextField(
                     "Name", text: $name,
@@ -144,8 +154,7 @@ struct AddHostSheet: View {
             }
             // A first guess, not nil: an unsized form fits to zero and never lays out a row.
             .frame(height: formHeight ?? 400)
-            // The fitted sheet adds no top margin of its own.
-            .padding(.top, 24)
+            .padding(.top, 8) // below the close button row
             #endif
             #if os(macOS)
             // macOS ONLY: the grouped form's default system text is oversized next to the app's
