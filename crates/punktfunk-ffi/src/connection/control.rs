@@ -486,6 +486,12 @@ pub struct PunktfunkProbeResult {
     /// Wire packets the host put on the link, and the ones its send buffer dropped.
     pub wire_packets_sent: u32,
     pub send_dropped: u32,
+    /// Probe inter-arrival gap, µs, to a tenth of a millisecond: median and 99th percentile.
+    /// Their difference is the path's jitter.
+    pub gap_p50_us: u32,
+    pub gap_p99_us: u32,
+    /// Probe packets that arrived behind a later one.
+    pub reorders: u32,
 }
 
 /// Start a bandwidth speed test: host bursts filler at `target_kbps` goodput for
@@ -538,6 +544,9 @@ pub unsafe extern "C" fn punktfunk_connection_probe_result(
                 host_drop_pct: o.host_drop_pct,
                 wire_packets_sent: o.wire_packets_sent,
                 send_dropped: o.send_dropped,
+                gap_p50_us: o.gap_p50_us,
+                gap_p99_us: o.gap_p99_us,
+                reorders: o.reorders,
             };
         }
         PunktfunkStatus::Ok

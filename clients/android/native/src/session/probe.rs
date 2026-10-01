@@ -17,11 +17,11 @@ use jni::EnvUnowned;
 
 /// The `DoubleArray` [`Java_io_unom_punktfunk_kit_NativeBridge_nativeProbeResult`] returns. Kept in
 /// one place because Kotlin indexes it positionally; see the Kotlin doc for the field order.
-const PROBE_RESULT_LEN: usize = 6;
+const PROBE_RESULT_LEN: usize = 9;
 
 /// `NativeBridge.nativeSpeedTest(handle, targetKbps, durationMs): Boolean` — ask the host to burst
-/// filler at `targetKbps` of goodput for `durationMs` (each clamped host-side to ≤ 3 Gbps / ≤ 5 s),
-/// **briefly pausing video**. Non-blocking: poll
+/// filler at `targetKbps` of goodput for `durationMs` (each clamped host-side to ≤ 10 Gbit/s /
+/// ≤ 5 s) beside the video it is already sending. Non-blocking: poll
 /// [`Java_io_unom_punktfunk_kit_NativeBridge_nativeProbeResult`] until its `done` element is 1.
 /// Starting a probe resets any prior measurement. `false` on a `0` handle or a closed session.
 #[unsafe(no_mangle)]
@@ -52,7 +52,8 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSpeedTest(
 /// `[0] == 1`. Safe to poll; before any probe it reports zeros. `null` on a `0` handle.
 ///
 /// Layout (doubles so one array carries both the counts and the percentages):
-/// `[done, throughputKbps, lossPct, hostDropPct, elapsedMs, recvBytes]`.
+/// `[done, throughputKbps, lossPct, hostDropPct, elapsedMs, recvBytes, gapP50Us, gapP99Us,
+/// reorders]`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProbeResult<'local>(
     mut env: EnvUnowned<'local>,
@@ -73,6 +74,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeProbeResult
             f64::from(r.host_drop_pct),
             f64::from(r.elapsed_ms),
             r.recv_bytes as f64,
+            f64::from(r.gap_p50_us),
+            f64::from(r.gap_p99_us),
+            f64::from(r.reorders),
         ];
         let arr = env.new_double_array(PROBE_RESULT_LEN)?;
         arr.set_region(env, 0, &values)?;

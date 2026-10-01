@@ -18,8 +18,11 @@ pub(crate) enum SpeedState {
     Running,
     Failed(String),
     Done {
+        /// What the link carries.
         mbps: f64,
-        loss_pct: f32,
+        /// The clean round under it: `(rate Mbit/s, loss %, jitter ms)`. `None` toward a
+        /// host without a ramp, which gets no loss line.
+        clean: Option<(f64, f32, f64)>,
         recommended_kbps: u32,
     },
 }
@@ -66,15 +69,19 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                         return; // superseded
                     }
                     set_speed.call(match outcome {
-                        Ok(r) => {
-                            let mbps = f64::from(r.throughput_kbps) / 1000.0;
-                            SpeedState::Done {
-                                mbps,
-                                loss_pct: r.loss_pct,
-                                // ≈70 % of measured: headroom for FEC overhead + real-world loss.
-                                recommended_kbps: r.throughput_kbps / 10 * 7,
-                            }
-                        }
+                        Ok(r) => SpeedState::Done {
+                            mbps: f64::from(r.ceiling_kbps) / 1000.0,
+                            clean: r.clean.map(|c| {
+                                (
+                                    f64::from(c.rate_kbps) / 1000.0,
+                                    c.loss_pct,
+                                    f64::from(c.jitter_us) / 1000.0,
+                                )
+                            }),
+                            recommended_kbps: pf_client_core::speed::recommended_kbps(
+                                r.ceiling_kbps,
+                            ),
+                        },
                         Err(msg) => SpeedState::Failed(msg),
                     });
                 })
@@ -121,7 +128,7 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
         }
         SpeedState::Done {
             mbps,
-            loss_pct,
+            clean,
             recommended_kbps,
         } => {
             let recommended_mbps = f64::from(*recommended_kbps) / 1000.0;
@@ -219,7 +226,12 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                         .font_size(34.0)
                         .bold()
                         .horizontal_alignment(HorizontalAlignment::Center),
-                    text_block(format!("measured \u{00B7} {loss_pct:.1} % loss"))
+                    text_block(match clean {
+                        Some((rate, loss, jitter)) => format!(
+                            "at {rate:.0} Mbit/s \u{00B7} {loss:.1} % loss \u{00B7} {jitter:.1} ms jitter"
+                        ),
+                        None => "measured".to_string(),
+                    })
                         .font_size(12.0)
                         .foreground(ThemeRef::SecondaryText)
                         .horizontal_alignment(HorizontalAlignment::Center),

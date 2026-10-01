@@ -2025,7 +2025,12 @@ mod launch_hold {
 fn apply_is_offered_only_when_the_default_is_the_layer_that_wins() {
     let done = SpeedPhase::Done {
         throughput_kbps: 100_000,
-        loss_pct: 0.3,
+        wall: true,
+        clean: Some(crate::model::CleanRound {
+            rate_kbps: 50000,
+            loss_pct: 0.3,
+            jitter_us: 300,
+        }),
         recommended_kbps: 70_000,
     };
     let chip = |bitrate_kbps| {
@@ -2080,7 +2085,12 @@ fn progress_reports_trace_the_burst() {
 
     let done = SpeedPhase::Done {
         throughput_kbps: 840_000,
-        loss_pct: 0.1,
+        wall: true,
+        clean: Some(crate::model::CleanRound {
+            rate_kbps: 420000,
+            loss_pct: 0.1,
+            jitter_us: 300,
+        }),
         recommended_kbps: 588_000,
     };
     console.advance_speed("aa11", done.clone());
@@ -2109,7 +2119,12 @@ fn a_dismissed_speed_test_drops_its_late_result() {
         "aa11",
         SpeedPhase::Done {
             throughput_kbps: 100_000,
-            loss_pct: 0.0,
+            wall: true,
+            clean: Some(crate::model::CleanRound {
+                rate_kbps: 50000,
+                loss_pct: 0.0,
+                jitter_us: 300,
+            }),
             recommended_kbps: 70_000,
         },
     );
@@ -2129,7 +2144,12 @@ fn a_superseded_speed_test_cannot_report_under_the_new_host() {
         "aa11",
         SpeedPhase::Done {
             throughput_kbps: 100_000,
-            loss_pct: 0.0,
+            wall: true,
+            clean: Some(crate::model::CleanRound {
+                rate_kbps: 50000,
+                loss_pct: 0.0,
+                jitter_us: 300,
+            }),
             recommended_kbps: 70_000,
         },
     );
@@ -2401,7 +2421,12 @@ fn dump_phone_home() {
         "aa11",
         SpeedPhase::Done {
             throughput_kbps: 842_000,
-            loss_pct: 0.3,
+            wall: true,
+            clean: Some(crate::model::CleanRound {
+                rate_kbps: 421000,
+                loss_pct: 0.3,
+                jitter_us: 300,
+            }),
             recommended_kbps: 589_400,
         },
     );

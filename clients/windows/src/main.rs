@@ -189,12 +189,20 @@ fn run_headless_cli(args: &[String], identity: (String, String)) {
             .map(|k| k.fp_hex.clone());
         match pf_client_core::speed::run_speed_probe(&host, port, fp.as_deref(), identity) {
             Ok(r) => {
-                let mbps = f64::from(r.throughput_kbps) / 1000.0;
-                let recommended = f64::from(r.throughput_kbps / 10 * 7) / 1000.0;
+                let mbps = f64::from(r.ceiling_kbps) / 1000.0;
+                let recommended =
+                    f64::from(pf_client_core::speed::recommended_kbps(r.ceiling_kbps)) / 1000.0;
+                let clean = match r.clean {
+                    Some(c) => format!(
+                        " · at {:.0} Mbit/s: {:.1} % loss, {:.1} ms jitter",
+                        f64::from(c.rate_kbps) / 1000.0,
+                        c.loss_pct,
+                        f64::from(c.jitter_us) / 1000.0
+                    ),
+                    None => String::new(),
+                };
                 println!(
-                    "{mbps:.0} Mbit/s measured · {:.1} % loss · recommended bitrate {recommended:.0} Mbit/s (--bitrate {:.0})",
-                    r.loss_pct,
-                    recommended
+                    "{mbps:.0} Mbit/s measured{clean} · recommended bitrate {recommended:.0} Mbit/s (--bitrate {recommended:.0})"
                 );
             }
             Err(e) => {

@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 mod control;
 pub(crate) mod frame_channel;
+pub mod health;
 mod pad_mouse;
 mod pad_touch;
 mod pairing;
@@ -1291,6 +1292,9 @@ impl NativeClient {
             host_drop_pct,
             wire_packets_sent: p.host_wire_packets,
             send_dropped: p.host_send_dropped,
+            gap_p50_us: crate::stats::probe_gap_percentile(&p.gap_buckets, 0.5),
+            gap_p99_us: crate::stats::probe_gap_percentile(&p.gap_buckets, 0.99),
+            reorders: p.reorders,
         }
     }
 

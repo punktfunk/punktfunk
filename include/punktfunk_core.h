@@ -2014,6 +2014,16 @@ typedef struct {
     // Wire packets the host put on the link, and the ones its send buffer dropped.
     uint32_t wire_packets_sent;
     uint32_t send_dropped;
+    /**
+     * Probe inter-arrival gap, µs, to a tenth of a millisecond: median and 99th percentile.
+     * Their difference is the path's jitter.
+     */
+    uint32_t gap_p50_us;
+    uint32_t gap_p99_us;
+    /**
+     * Probe packets that arrived behind a later one.
+     */
+    uint32_t reorders;
 } PunktfunkProbeResult;
 
 // [`punktfunk_av1_sequence_info`]'s answer: what an `av1C` record and a colour description

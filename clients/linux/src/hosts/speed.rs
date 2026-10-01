@@ -7,8 +7,7 @@ use crate::store::Store;
 use adw::prelude::*;
 use gtk::glib;
 use pf_client_core::presets::StreamPreset;
-use pf_client_core::speed::recommended_kbps;
-use punktfunk_core::client::ProbeOutcome;
+use pf_client_core::speed::{recommended_kbps, CleanRound, SpeedReport};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -88,7 +87,7 @@ pub fn push(
 
     enum Probe {
         Sample(u32),
-        Done(Result<ProbeOutcome, String>),
+        Done(Result<SpeedReport, String>),
     }
     let (tx, rx) = async_channel::unbounded::<Probe>();
     std::thread::Builder::new()
@@ -129,20 +128,40 @@ pub fn push(
                     if let Some(done) = done.take() {
                         done();
                     }
-                    let rec = recommended_kbps(r.throughput_kbps);
+                    let rec = recommended_kbps(r.ceiling_kbps);
                     {
                         let mut c = chart.borrow_mut();
-                        c.measured = Some(r.throughput_kbps);
+                        c.measured = Some(r.ceiling_kbps);
                         c.recommended = Some(rec);
                     }
                     area.queue_draw();
-                    headline.set_label(&mbit(r.throughput_kbps));
-                    caption.set_label("Measured over the real data plane");
-                    loss.set_label(&format!("{:.1} %", r.loss_pct));
-                    received.set_label(&format!(
-                        "{} of {} packets",
-                        r.recv_packets, r.wire_packets_sent
-                    ));
+                    headline.set_label(&mbit(r.ceiling_kbps));
+                    // The loss figure is the clean round's, at a rate the link holds. A host
+                    // without a ramp only ever measured the blast, which says nothing.
+                    match r.clean {
+                        Some(c) => {
+                            caption.set_label(&format!(
+                                "At {}: {:.1} % loss, {:.1} ms jitter",
+                                mbit(c.rate_kbps),
+                                c.loss_pct,
+                                f64::from(c.jitter_us) / 1000.0
+                            ));
+                            loss.set_label(&format!("{:.1} %", c.loss_pct));
+                            received.set_label(&format!(
+                                "{} of {} packets",
+                                c.outcome.recv_packets, c.outcome.wire_packets_sent
+                            ));
+                        }
+                        None => {
+                            caption.set_label("Measured over the real data plane");
+                            loss.set_label("\u{2014}");
+                            let b = r.blast.unwrap_or_default();
+                            received.set_label(&format!(
+                                "{} of {} packets",
+                                b.recv_packets, b.wire_packets_sent
+                            ));
+                        }
+                    }
                     recommended.set_label(&mbit(rec));
                     results.set_visible(true);
                     let applied = {
@@ -180,18 +199,33 @@ pub fn push(
     });
 }
 
-/// The screenshot scenes' burst: a link that ramps up and settles near 380 Mbit/s.
-fn canned(mut progress: impl FnMut(u32)) -> Result<ProbeOutcome, String> {
-    for kbps in [40_000, 180_000, 310_000, 355_000, 372_000, 380_000, 376_000] {
+/// The screenshot scenes' measurement: a link whose ramp proved ~940 Mbit/s, then a clean
+/// round at half of it.
+fn canned(mut progress: impl FnMut(u32)) -> Result<SpeedReport, String> {
+    for kbps in [40_000, 180_000, 310_000, 410_000, 462_000, 470_000, 468_000] {
         progress(kbps);
     }
-    Ok(ProbeOutcome {
+    let outcome = punktfunk_core::client::ProbeOutcome {
         done: true,
-        throughput_kbps: 377_000,
-        loss_pct: 0.2,
-        recv_packets: 61_870,
-        wire_packets_sent: 62_000,
-        ..ProbeOutcome::default()
+        throughput_kbps: 468_000,
+        loss_pct: 0.0,
+        recv_packets: 97_900,
+        wire_packets_sent: 97_900,
+        gap_p50_us: 100,
+        gap_p99_us: 400,
+        ..Default::default()
+    };
+    Ok(SpeedReport {
+        ceiling_kbps: 940_000,
+        wall: true,
+        clean: Some(CleanRound {
+            rate_kbps: 470_000,
+            loss_pct: 0.0,
+            jitter_us: 300,
+            reorders: 0,
+            outcome,
+        }),
+        blast: None,
     })
 }
 

@@ -717,17 +717,23 @@ impl ServiceState {
                     Ok(r) => {
                         tracing::info!(
                             host = %host_name,
-                            kbps = r.throughput_kbps,
-                            loss = r.loss_pct,
+                            ceiling_kbps = r.ceiling_kbps,
+                            wall = r.wall,
+                            clean_loss = r.clean.map(|c| c.loss_pct),
                             "speed test finished"
                         );
                         console.advance_speed(
                             &key,
                             SpeedPhase::Done {
-                                throughput_kbps: r.throughput_kbps,
-                                loss_pct: r.loss_pct,
+                                throughput_kbps: r.ceiling_kbps,
+                                wall: r.wall,
+                                clean: r.clean.map(|c| pf_console_ui::model::CleanRound {
+                                    rate_kbps: c.rate_kbps,
+                                    loss_pct: c.loss_pct,
+                                    jitter_us: c.jitter_us,
+                                }),
                                 recommended_kbps: pf_client_core::speed::recommended_kbps(
-                                    r.throughput_kbps,
+                                    r.ceiling_kbps,
                                 ),
                             },
                         );

@@ -15,7 +15,7 @@ private final class ProbeToken: @unchecked Sendable {
     var cancelled = false
 }
 
-/// What the host is asked to burst: its whole probe ceiling (it clamps to ≤ 3 Gbps), so the
+/// What the host is asked to burst: far more than any link carries (it clamps to ≤ 10 Gbit/s), so the
 /// measurement finds where delivery falls off rather than an artificial cap. Five seconds lets the
 /// host's send and this device's receive settle; a short probe swings wildly on the same link.
 private let probeTargetKbps: UInt32 = 3_000_000

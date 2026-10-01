@@ -201,14 +201,27 @@ pub enum SpeedPhase {
         kbps: u32,
     },
     Failed(String),
-    /// `recommended_kbps` keeps headroom under `throughput_kbps` for FEC and for the loss a
-    /// real stream meets — [`pf_client_core::speed::recommended_kbps`], so every client
+    /// `throughput_kbps` is what the link carries; `wall` says the ramp found its limit
+    /// rather than a floor. `recommended_kbps` keeps headroom under it for FEC and for the
+    /// loss a real stream meets — [`pf_client_core::speed::recommended_kbps`], so every client
     /// recommends the same kilobit.
     Done {
         throughput_kbps: u32,
-        loss_pct: f32,
+        wall: bool,
+        /// The round under the ceiling; `None` toward a host without a ramp, which gets no
+        /// loss line — a blast's loss is the blast's.
+        clean: Option<CleanRound>,
         recommended_kbps: u32,
     },
+}
+
+/// One round at a rate the link holds: the loss figure a speed test shows.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CleanRound {
+    pub rate_kbps: u32,
+    pub loss_pct: f32,
+    /// Spread of the inter-arrival gap, µs.
+    pub jitter_us: u32,
 }
 
 #[derive(Default)]

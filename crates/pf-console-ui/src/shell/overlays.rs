@@ -151,11 +151,11 @@ impl Shell {
                     ),
                     SpeedPhase::Done {
                         throughput_kbps,
-                        loss_pct,
+                        wall,
+                        clean,
                         recommended_kbps,
                     } => {
-                        let measured =
-                            format!("{} \u{b7} {loss_pct:.1} % loss", mbps(*throughput_kbps));
+                        let measured = speed_headline(*throughput_kbps, *wall, clean.as_ref());
                         match &pinned_by {
                             // Read-only: the default is not the layer this host streams at.
                             Some(name) => (
@@ -354,8 +354,14 @@ impl Shell {
         self.draw_takeover_field(canvas, w, h, t);
         let (done, rec) = measured(&sp.phase);
         // Measured, the figure is the headline: the caption names the host and the loss.
-        let caption = match sp.phase {
-            SpeedPhase::Done { loss_pct, .. } => format!("{} \u{b7} {loss_pct:.1} % loss", sp.name),
+        let caption = match &sp.phase {
+            SpeedPhase::Done { clean: Some(c), .. } => format!(
+                "{} \u{b7} {:.1} % loss at {}",
+                sp.name,
+                c.loss_pct,
+                mbps(c.rate_kbps)
+            ),
+            SpeedPhase::Done { .. } => sp.name.clone(),
             _ => title.to_string(),
         };
         let title = caption.as_str();
@@ -693,6 +699,30 @@ fn launch_layout(w: f64, h: f64, k: f64, rest: f64, title_h: impl Fn(f64) -> f64
         col_y: cover_y + ch + gap,
         dw,
         title_h,
+    }
+}
+
+/// The headline once there is an answer: what the link carries, and the clean round's loss
+/// and jitter at its rate. Without a round (an older host) the figure stands alone — a
+/// blast's loss is not the link's.
+fn speed_headline(
+    ceiling_kbps: u32,
+    wall: bool,
+    clean: Option<&crate::model::CleanRound>,
+) -> String {
+    let carries = if wall {
+        format!("Link carries {}.", mbps(ceiling_kbps))
+    } else {
+        format!("Link carries at least {}.", mbps(ceiling_kbps))
+    };
+    match clean {
+        Some(c) => format!(
+            "{carries} At {}: {:.1} % loss, {:.1} ms jitter",
+            mbps(c.rate_kbps),
+            c.loss_pct,
+            f64::from(c.jitter_us) / 1000.0
+        ),
+        None => format!("{} measured", mbps(ceiling_kbps)),
     }
 }
 

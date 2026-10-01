@@ -323,6 +323,21 @@ impl Reassembler {
             stats
                 .probe_last_arrival_ns
                 .store(now_ns, std::sync::atomic::Ordering::Relaxed);
+            // The gap to the previous probe packet, and a key that must not go backwards.
+            let prev = stats
+                .probe_prev_arrival_ns
+                .swap(now_ns, std::sync::atomic::Ordering::Relaxed);
+            if prev != 0 {
+                let i = crate::stats::probe_gap_bucket(now_ns.saturating_sub(prev) / 1_000);
+                stats.probe_gap_buckets[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            let key = (u64::from(hdr.frame_index) << 16 | u64::from(hdr.shard_index)) + 1;
+            let last = stats
+                .probe_last_key
+                .swap(key, std::sync::atomic::Ordering::Relaxed);
+            if last != 0 && key < last {
+                StatsCounters::add(&stats.probe_reorders, 1);
+            }
         } else if hdr.shard_index < hdr.data_shards {
             // DATA payload only. ABR compares delivered throughput to an encoder
             // target, so parity, headers, and probe filler stay out of the numerator.

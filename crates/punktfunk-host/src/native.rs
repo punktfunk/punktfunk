@@ -3605,10 +3605,11 @@ mod tests {
         host.join().unwrap().unwrap();
     }
 
-    /// Spin up a synthetic host on `port` and dial it with `params`; the host joins on drop
-    /// of the returned client.
+    /// Spin up a host of `source` on `port` and dial it with `params`; the host joins on
+    /// drop of the returned client.
     fn synthetic_session(
         port: u16,
+        source: Punktfunk1Source,
         params: impl FnOnce(
             punktfunk_core::client::ConnectParams,
         ) -> punktfunk_core::client::ConnectParams,
@@ -3620,7 +3621,7 @@ mod tests {
         let host = std::thread::spawn(move || {
             run_ephemeral(Punktfunk1Options {
                 port,
-                source: Punktfunk1Source::Synthetic,
+                source,
                 seconds: 0,
                 frames: 600,
                 max_sessions: 1,
@@ -3668,12 +3669,14 @@ mod tests {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, FORCED_PROFILE_NONE};
-        let (client, host) = synthetic_session(19783, |p| punktfunk_core::client::ConnectParams {
-            delivery: Some(DeliveryAsk {
-                profile: 1,
-                flags: EXT_DELIVERY_FACTS,
-            }),
-            ..p
+        let (client, host) = synthetic_session(19783, Punktfunk1Source::Synthetic, |p| {
+            punktfunk_core::client::ConnectParams {
+                delivery: Some(DeliveryAsk {
+                    profile: 1,
+                    flags: EXT_DELIVERY_FACTS,
+                }),
+                ..p
+            }
         });
         assert!(
             wait_for(|| client.delivery().is_some()),
@@ -3701,7 +3704,7 @@ mod tests {
     fn a_client_that_asks_nothing_streams_burst() {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let (client, host) = synthetic_session(19784, |p| p);
+        let (client, host) = synthetic_session(19784, Punktfunk1Source::Synthetic, |p| p);
         std::thread::sleep(std::time::Duration::from_secs(1));
         assert!(client.delivery().is_none(), "no tag, no answer");
         assert!(client.host_facts().is_none());
@@ -3709,6 +3712,65 @@ mod tests {
             client.set_delivery(1),
             Err(punktfunk_core::PunktfunkError::Unsupported(_))
         ));
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// Toward a host without a ramp the speed test is the single blast, and says nothing
+    /// about loss: there is no clean round to say it with.
+    #[test]
+    fn a_host_without_a_ramp_keeps_the_single_burst() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::health;
+        let (client, host) = synthetic_session(19785, Punktfunk1Source::Synthetic, |p| p);
+        assert_eq!(
+            client.host_caps2() & punktfunk_core::quic::HOST_CAP2_RAMP,
+            0,
+            "the plain synthetic source serves no ramp"
+        );
+        let r = health::speed_test(&client, |_| {}).expect("the blast reports");
+        assert!(r.clean.is_none(), "no ramp, no clean round");
+        assert!(!r.wall);
+        let blast = r.blast.expect("the blast's own reading stands");
+        assert!(blast.done && blast.wire_packets_sent > 0);
+        assert_eq!(r.ceiling_kbps, blast.throughput_kbps);
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// Toward a host that serves the ramp, the ceiling is what the ramp proved and the clean
+    /// round runs at half of it, with its own loss and jitter.
+    #[test]
+    fn the_clean_round_runs_under_the_ceiling_over_a_session() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::health;
+        let source = Punktfunk1Source::SyntheticAbr(SynthAbrShape {
+            content: Content::Steady { fill_pct: 100 },
+            recovery: std::time::Duration::ZERO,
+            answer: KeyframeAnswer::Idr,
+            idr_pct: DEFAULT_IDR_PCT,
+            bringup: std::time::Duration::from_secs(2),
+            serve_ramp: true,
+        });
+        let (client, host) = synthetic_session(19786, source, |p| p);
+        assert_ne!(
+            client.host_caps2() & punktfunk_core::quic::HOST_CAP2_RAMP,
+            0
+        );
+        let mut polls = 0u32;
+        let r = health::speed_test(&client, |_| polls += 1).expect("the round reports");
+        let clean = r.clean.expect("a ramp host gets a clean round");
+        assert!(r.ceiling_kbps > 0, "the ramp proved a rate");
+        assert_eq!(clean.rate_kbps, health::clean_rate_kbps(r.ceiling_kbps));
+        // The figure itself is not asserted: a loopback ramp proves gigabits, and at that
+        // rate this process's own receive buffer drops — the round measures the path it is
+        // given.
+        assert!(clean.outcome.done && clean.outcome.wire_packets_sent > 0);
+        assert!(clean.outcome.recv_packets > 0);
+        assert!(r.blast.is_none());
+        assert!(polls > 0, "the round reported its progress");
         drop(client);
         host.join().unwrap().unwrap();
     }

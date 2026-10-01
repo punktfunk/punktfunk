@@ -1303,42 +1303,47 @@ from the config directory for a true factory reset."
                 return CONNECT_FAILED;
             }
         };
-        if let Err(e) = client.request_probe(3_000_000, 2_000) {
-            eprintln!("probe: {e:?}");
-            return CONNECT_FAILED;
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            std::thread::sleep(Duration::from_millis(250));
-            let r = client.probe_result();
-            if r.done {
-                std::thread::sleep(Duration::from_millis(400));
-                let r = client.probe_result();
-                let recommended = r.throughput_kbps / 10 * 7;
-                if has(args, "--json") {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "mbps": f64::from(r.throughput_kbps) / 1000.0,
-                            "loss_pct": r.loss_pct,
-                            "recommended_kbps": recommended,
-                        })
-                    );
-                } else {
-                    println!(
-                        "{:.0} Mbit/s measured · {:.1}% loss · recommended {:.0} Mbit/s",
-                        f64::from(r.throughput_kbps) / 1000.0,
-                        r.loss_pct,
-                        f64::from(recommended) / 1000.0
-                    );
-                }
-                return OK;
-            }
-            if std::time::Instant::now() > deadline {
-                eprintln!("probe timed out");
+        use punktfunk_core::client::health;
+        let r = match health::speed_test(&client, |_| {}) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("speed test: {e:?}");
                 return CONNECT_FAILED;
             }
+        };
+        let recommended = health::recommended_kbps(r.ceiling_kbps);
+        if has(args, "--json") {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "mbps": f64::from(r.ceiling_kbps) / 1000.0,
+                    "wall": r.wall,
+                    "clean": r.clean.map(|c| serde_json::json!({
+                        "rate_mbps": f64::from(c.rate_kbps) / 1000.0,
+                        "loss_pct": c.loss_pct,
+                        "jitter_ms": f64::from(c.jitter_us) / 1000.0,
+                        "reorders": c.reorders,
+                    })),
+                    "recommended_kbps": recommended,
+                })
+            );
+        } else {
+            let clean = match r.clean {
+                Some(c) => format!(
+                    " · at {:.0} Mbit/s: {:.1}% loss, {:.1} ms jitter",
+                    f64::from(c.rate_kbps) / 1000.0,
+                    c.loss_pct,
+                    f64::from(c.jitter_us) / 1000.0
+                ),
+                None => String::new(),
+            };
+            println!(
+                "{:.0} Mbit/s measured{clean} · recommended {:.0} Mbit/s",
+                f64::from(r.ceiling_kbps) / 1000.0,
+                f64::from(recommended) / 1000.0
+            );
         }
+        OK
     }
 
     /// `presets list` — the presets this device has, and what each overrides. `legacy` is the

@@ -52,6 +52,10 @@ pub(crate) struct ProbeState {
     /// A bring-up ramp step. Its delivered figures keep moving after the host
     /// report lands — see [`refresh_delivered`](Self::refresh_delivered).
     pub(crate) ramp: bool,
+    /// Probe inter-arrival gaps and reorders, mirrored while bursting
+    /// ([`crate::stats::Stats::probe_gap_buckets`]).
+    pub(crate) gap_buckets: [u32; crate::stats::PROBE_GAP_BUCKETS],
+    pub(crate) reorders: u32,
 }
 
 impl ProbeState {
@@ -156,6 +160,12 @@ pub struct ProbeOutcome {
     pub host_drop_pct: f32,
     pub wire_packets_sent: u32,
     pub send_dropped: u32,
+    /// Inter-arrival gap between probe packets, µs, to a tenth of a millisecond:
+    /// the median and the 99th percentile. Their difference is the path's jitter.
+    pub gap_p50_us: u32,
+    pub gap_p99_us: u32,
+    /// Probe packets that arrived behind a later one.
+    pub reorders: u32,
 }
 
 #[cfg(test)]

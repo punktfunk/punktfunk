@@ -1065,7 +1065,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         public let elapsedMs: UInt32
         /// Measured goodput, kilobits per second.
         public let throughputKbps: UInt32
-        /// Delivery loss `(hostBytes − recvBytes) / hostBytes`, percent (0 if unknown).
+        /// Link loss `(wire packets sent − received) / wire packets sent`, percent (0 if unknown).
         public let lossPct: Float
 
         public init(
@@ -1084,9 +1084,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// Start a bandwidth speed test: the host bursts filler over the data plane at
-    /// `targetKbps` of goodput for `durationMs` (clamped host-side to ≤ 3 Gbps / ≤ 5 s),
-    /// briefly pausing video. Non-blocking — poll `probeResult()` until `done`. Starting
-    /// a probe resets any prior measurement. Silently dropped after close.
+    /// `targetKbps` of goodput for `durationMs` (clamped host-side to ≤ 10 Gbit/s / ≤ 5 s)
+    /// beside the video it is already sending. Non-blocking — poll `probeResult()` until
+    /// `done`. Starting a probe resets any prior measurement. Silently dropped after close.
     public func startSpeedTest(targetKbps: UInt32, durationMs: UInt32) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_speed_test(h, targetKbps, durationMs)

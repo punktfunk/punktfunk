@@ -50,6 +50,37 @@ pub struct Stats {
     /// duration overstates the link. Zeroed on arm (`Session::reset_probe_arrivals`).
     pub probe_first_arrival_ns: u64,
     pub probe_last_arrival_ns: u64,
+    /// Inter-arrival gaps between probe packets, bucketed at [`PROBE_GAP_BUCKET_US`]; the
+    /// last bucket holds every longer gap. Zeroed with the arrival stamps.
+    pub probe_gap_buckets: [u32; PROBE_GAP_BUCKETS],
+    /// Probe packets that arrived behind a later one.
+    pub probe_reorders: u32,
+}
+
+/// Thirty-two buckets of 100 µs: a percentile to a tenth of a millisecond, and an array
+/// `Default` still derives.
+pub const PROBE_GAP_BUCKETS: usize = 32;
+pub const PROBE_GAP_BUCKET_US: u32 = 100;
+
+pub fn probe_gap_bucket(gap_us: u64) -> usize {
+    ((gap_us / u64::from(PROBE_GAP_BUCKET_US)) as usize).min(PROBE_GAP_BUCKETS - 1)
+}
+
+/// The `q`-quantile of bucketed gaps as its bucket's upper edge, µs; `0` with no samples.
+pub fn probe_gap_percentile(buckets: &[u32; PROBE_GAP_BUCKETS], q: f64) -> u32 {
+    let total: u64 = buckets.iter().map(|&b| u64::from(b)).sum();
+    if total == 0 {
+        return 0;
+    }
+    let rank = ((total as f64 * q) as u64).min(total - 1);
+    let mut seen = 0u64;
+    for (i, &b) in buckets.iter().enumerate() {
+        seen += u64::from(b);
+        if seen > rank {
+            return (i as u32 + 1) * PROBE_GAP_BUCKET_US;
+        }
+    }
+    PROBE_GAP_BUCKETS as u32 * PROBE_GAP_BUCKET_US
 }
 
 /// Atomic accumulators owned by a [`Session`](crate::session::Session). Snapshot
@@ -74,6 +105,12 @@ pub struct StatsCounters {
     pub probe_bytes_received: AtomicU64,
     pub probe_first_arrival_ns: AtomicU64,
     pub probe_last_arrival_ns: AtomicU64,
+    pub probe_gap_buckets: [std::sync::atomic::AtomicU32; PROBE_GAP_BUCKETS],
+    /// The previous probe packet's arrival, for the gap; `0` = none since the last arm.
+    pub probe_prev_arrival_ns: AtomicU64,
+    /// `(frame_index << 16 | shard_index) + 1` of the last probe packet; `0` = none.
+    pub probe_last_key: AtomicU64,
+    pub probe_reorders: AtomicU64,
 }
 
 impl StatsCounters {
@@ -101,6 +138,8 @@ impl StatsCounters {
             probe_bytes_received: self.probe_bytes_received.load(l),
             probe_first_arrival_ns: self.probe_first_arrival_ns.load(l),
             probe_last_arrival_ns: self.probe_last_arrival_ns.load(l),
+            probe_gap_buckets: std::array::from_fn(|i| self.probe_gap_buckets[i].load(l)),
+            probe_reorders: self.probe_reorders.load(l).min(u64::from(u32::MAX)) as u32,
         }
     }
 }
