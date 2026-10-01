@@ -5,8 +5,9 @@ use super::*;
 use std::process::Stdio;
 
 /// Run `cmd` inside the live session (managed / SteamOS / attach — [`spawn()`]'s nesting does not
-/// apply). Best-effort display env from a process already inside; without it, host env (a
-/// `steam steam://…` still reaches the running Steam over its pipe).
+/// apply). `DISPLAY` comes from a process already inside, `WAYLAND_DISPLAY` from
+/// [`nested_wayland_display`]; with no such process, host env (a `steam steam://…` still reaches
+/// the running Steam over its pipe).
 pub fn launch_into_session(
     cmd: &str,
     seat: Option<&str>,
@@ -48,7 +49,10 @@ pub fn launch_into_session(
             if let Some(d) = x11 {
                 c.env("DISPLAY", d);
             }
-            c.env("WAYLAND_DISPLAY", NESTED_WAYLAND_DISPLAY);
+            match nested_wayland_display(cmd) {
+                Some(w) => c.env("WAYLAND_DISPLAY", w),
+                None => c.env_remove("WAYLAND_DISPLAY"),
+            };
         }
         None => tracing::warn!(
             command = %cmd,
@@ -171,6 +175,18 @@ fn cgroup_is_punktfunk_owned(cgroup: &str) -> bool {
 /// First token, not a `steam://` URI: a bare `steam -gamepadui` needs the instance free more, not less.
 pub(crate) fn is_steam_launch(cmd: &str) -> bool {
     cmd.split_whitespace().next() == Some("steam")
+}
+
+/// `WAYLAND_DISPLAY` for `cmd` inside gamescope; `None` leaves it unset, as gamescope does.
+/// pressure-vessel turns an empty value into a `wayland-0` it never binds: the WSI layer then
+/// refuses the game's swapchain, and Proton's Wayland switch keys on the name alone. A flatpak
+/// command gets empty, which names no socket: flatpak reads unset as `wayland-0`, the desktop's
+/// socket on a desktop box, and withholds X11 from a `fallback-x11` app.
+pub(super) fn nested_wayland_display(cmd: &str) -> Option<&'static str> {
+    // Exec templates single-quote every element.
+    cmd.split_whitespace()
+        .any(|t| t.trim_matches('\'') == "flatpak")
+        .then_some("")
 }
 
 /// May `cmd` take the seat's env? Only a launch that talks to that seat's own Steam. A Lutris,
@@ -478,6 +494,25 @@ mod tests {
         assert!(is_steam_launch("steam"));
         // A command that merely mentions steam elsewhere is not a Steam client launch.
         assert!(!is_steam_launch("mygame --steam-overlay"));
+    }
+
+    #[test]
+    fn only_flatpak_gets_an_empty_wayland_display() {
+        assert_eq!(
+            nested_wayland_display("steam -gamepadui steam://rungameid/1145350"),
+            None
+        );
+        assert_eq!(nested_wayland_display("lutris lutris:rungameid/42"), None);
+        assert_eq!(
+            nested_wayland_display("flatpak run com.heroicgameslauncher.hgl"),
+            Some("")
+        );
+        assert_eq!(
+            nested_wayland_display(
+                "cd '/mnt/games' && 'flatpak' 'run' 'net.rpcs3.RPCS3' '--no-gui'"
+            ),
+            Some("")
+        );
     }
 
     #[test]
