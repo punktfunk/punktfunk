@@ -662,9 +662,10 @@ impl VkBridge {
     pub fn forget_fd(&mut self, fd: i32) {
         if let Some(s) = self.src_cache.remove(&fd) {
             // SAFETY: `s.buffer`/`s.memory` were created by `import_src` and are owned by the
-            // removed cache entry, so each is destroyed once. No GPU work still references
-            // them: every import fence-waits before return, and this is the owning thread.
+            // removed cache entry, so each is destroyed once. A planar copy reads them on the
+            // GPU after `convert` returns, so the device idles first; this is the owning thread.
             unsafe {
+                let _ = self.device.device_wait_idle();
                 self.device.destroy_buffer(s.buffer, None);
                 self.device.free_memory(s.memory, None);
             }

@@ -171,8 +171,8 @@ pub struct OutputFormat {
     /// with a shared fence after each convert (`design/pyrowave-windows-host-zerocopy.md`).
     /// Forces NV12 4:2:0 SDR (never BGRA-passthrough / P010). `false` off Windows / non-wavelet.
     pub pyrowave: bool,
-    /// This session's encoder can ingest producer-native NV12 (Linux Vulkan Video on
-    /// H265/AV1; `pf_encode::linux_native_nv12_ok`). Capture offers gamescope the NV12 pod
+    /// This session's encoder can ingest producer-native NV12 (`pf_encode::linux_native_nv12_ok`:
+    /// the AMD/Intel passthrough or NVENC's raw lane). Capture offers gamescope the NV12 pod
     /// only when set: every other Linux arm reads packed RGB. Always `false` on Windows.
     pub nv12_native: bool,
     /// Cursor-forward channel: Windows IDD-push delivers the driver's hardware-cursor

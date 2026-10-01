@@ -261,6 +261,15 @@ fn cursor_mark(captured: &CapturedFrame) -> Option<(u64, i32, i32)> {
         .map(|ov| (ov.serial, ov.x, ov.y))
 }
 
+/// A producer NV12's chroma `(offset, stride)`: the reported plane, else the contiguous one
+/// below the luma. `None` for packed RGB, which the worker converts instead of copying.
+fn chroma_plane(captured: &CapturedFrame, d: &DmabufFrame) -> Option<(u32, u32)> {
+    (captured.format == pf_frame::PixelFormat::Nv12).then(|| {
+        d.plane1
+            .unwrap_or((d.offset + d.stride * captured.height, d.stride))
+    })
+}
+
 /// Retrieve thread: blocking-lock, copy, unlock, send. Exits when the job channel closes —
 /// teardown drops the sender and joins before destroy, so `enc`/`bs` outlive uses here.
 fn retrieve_loop(
@@ -954,8 +963,9 @@ impl NvencCudaEncoder {
     }
 
     /// The slot layout a raw dmabuf session encodes: YUV444 for a 4:4:4 session, NVENC's
-    /// packed 10-bit for an HDR capture, else NV12 (`PUNKTFUNK_NV12`) or packed ARGB. A 10-bit
-    /// SDR session keeps packed ARGB: NVENC widens only packed RGB to 10 bits.
+    /// packed 10-bit for an HDR capture, NV12 for a producer's own NV12 (copied, not
+    /// converted), else NV12 (`PUNKTFUNK_NV12`) or packed ARGB. A 10-bit SDR session keeps
+    /// packed ARGB: NVENC widens only packed RGB to 10 bits.
     fn raw_buffer_format(&self, fmt: pf_frame::PixelFormat) -> nv::NV_ENC_BUFFER_FORMAT {
         use nv::NV_ENC_BUFFER_FORMAT as F;
         if self.s.chroma_444 {
@@ -964,6 +974,7 @@ impl NvencCudaEncoder {
         match fmt {
             pf_frame::PixelFormat::X2Rgb10 => F::NV_ENC_BUFFER_FORMAT_ARGB10,
             pf_frame::PixelFormat::X2Bgr10 => F::NV_ENC_BUFFER_FORMAT_ABGR10,
+            pf_frame::PixelFormat::Nv12 => F::NV_ENC_BUFFER_FORMAT_NV12,
             _ if pf_zerocopy::nv12_enabled() && self.depth_asked < 10 => {
                 F::NV_ENC_BUFFER_FORMAT_NV12
             }
@@ -996,13 +1007,18 @@ impl NvencCudaEncoder {
         // A repeat of the frame just converted (the source produced nothing new) is cloned
         // from its slot: one copy, no second worker round trip. The pass bakes the pointer in,
         // so a cursor that moved over a still source is a different picture and must convert.
+        // A producer NV12 is copied fresh instead: the host blends its pointer after the copy,
+        // and a clone would carry the last blend into a second one.
         let mark = LastRaw {
             pts_ns: captured.pts_ns,
             fd: d.fd.as_raw_fd(),
             slot,
             cursor: cursor_mark(captured),
         };
-        if let Some(last) = self.last_raw {
+        if let Some(last) = self
+            .last_raw
+            .filter(|_| chroma_plane(captured, d).is_none())
+        {
             if last.pts_ns == mark.pts_ns
                 && last.fd == mark.fd
                 && last.cursor == mark.cursor
@@ -1120,7 +1136,9 @@ impl NvencCudaEncoder {
             worker.register_slot(target.id as u32, fd, size)?;
             self.worker_slots.insert(target.id);
         }
+        // The worker copies a producer NV12 without a pass to blend in; the host blends after.
         let cursor = match &captured.cursor {
+            _ if chroma_plane(captured, d).is_some() => None,
             Some(ov) if ov.visible && ov.w > 0 && ov.h > 0 && !ov.rgba.is_empty() => {
                 if self.worker_cursor_serial != ov.serial {
                     // A PQ frame takes the cursor re-encoded as PQ; sRGB bytes would be read as PQ.
@@ -1149,6 +1167,7 @@ impl NvencCudaEncoder {
             stride: d.stride,
             width: captured.width,
             height: captured.height,
+            plane1: chroma_plane(captured, d),
         };
         let out = pf_zerocopy::ConvertOut {
             mode: fmt.mode(),
@@ -1408,9 +1427,10 @@ impl NvencCudaEncoder {
         (ordered, cursor_ordered)
     }
 
-    /// Fill ring slot `slot` with this frame. A held dmabuf goes through the worker's fused
-    /// pass, cursor included (`true`); a CUDA buffer is copied in, reframed when the session
-    /// scales, and leaves the cursor to [`Self::blend_cursor`] (`false`).
+    /// Fill ring slot `slot` with this frame. A held RGB dmabuf goes through the worker's fused
+    /// pass, cursor included (`true`). A producer NV12 is copied by the worker, and a CUDA buffer
+    /// is copied in and reframed when the session scales; both leave the cursor to
+    /// [`Self::blend_cursor`] (`false`).
     fn fill_slot(
         &mut self,
         captured: &CapturedFrame,
@@ -1421,7 +1441,7 @@ impl NvencCudaEncoder {
         let buf = match src {
             Source::Dmabuf(d) => {
                 self.convert_raw(captured, d, slot, ordered)?;
-                return Ok(true);
+                return Ok(chroma_plane(captured, d).is_none());
             }
             Source::Cuda(buf) => buf,
         };

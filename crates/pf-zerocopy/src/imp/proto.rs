@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped on any wire change. Echoed in [`Reply::Ready`]; the host refuses a mismatch.
 /// Same binary (`/proc/self/exe`) — trips only a stale re-exec.
-pub const PROTO_VERSION: u32 = 3;
+pub const PROTO_VERSION: u32 = 4;
 
 /// Mirrors the `EglImporter` entry points. Append-only: a worker can outlive a replaced host,
 /// so an unknown variant must fail decode, not remap.
@@ -97,7 +97,8 @@ pub enum Request {
 }
 
 /// A dmabuf as the fused convert reads it. `fd` is process-local and never on the wire: the
-/// worker fills it from its cache.
+/// worker fills it from its cache. `plane1` is a producer NV12's chroma `(offset, stride)` in
+/// the same fd; the worker copies such a frame into the slot instead of converting it.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConvertSrc {
     #[serde(skip)]
@@ -108,6 +109,7 @@ pub struct ConvertSrc {
     pub stride: u32,
     pub width: u32,
     pub height: u32,
+    pub plane1: Option<(u32, u32)>,
 }
 
 /// The slot layout the pass writes: `mode` as `convert_img.comp` numbers it (0 ARGB, 1 NV12,
@@ -205,6 +207,34 @@ mod tests {
         let (got, fd) = ipc::recv::<Request>(b.as_fd(), &mut buf).unwrap();
         assert_eq!(got, req);
         assert!(fd.is_none());
+
+        // A producer NV12 rides with its chroma plane; the fd stays process-local.
+        let planar = Request::Convert {
+            key: 9,
+            has_fd: false,
+            src: ConvertSrc {
+                fd: 0,
+                fourcc: u32::from_le_bytes(*b"NV12"),
+                modifier: 0,
+                offset: 0,
+                stride: 3840,
+                width: 3840,
+                height: 2160,
+                plane1: Some((3840 * 2160, 3840)),
+            },
+            slot: 2,
+            out: ConvertOut {
+                mode: 1,
+                width: 3840,
+                height: 2160,
+                pitch_w: 960,
+                plane_rows: 2160,
+            },
+            cursor: None,
+        };
+        ipc::send(a.as_fd(), &planar, None).unwrap();
+        let (got, _) = ipc::recv::<Request>(b.as_fd(), &mut buf).unwrap();
+        assert_eq!(got, planar);
 
         let reply = Reply::Frame {
             id: 7,
