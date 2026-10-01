@@ -836,20 +836,18 @@ public final class StreamLayerView: NSView {
         return CGPoint(x: onScreen.x, y: primaryHeight - onScreen.y)
     }
 
-    /// A single local monitor for motion + buttons, installed only while captured. A local
-    /// monitor is more robust than view overrides for relative motion: it sidesteps the
-    /// `window.acceptsMouseMovedEvents`/tracking-area/responder-chain requirements, and
-    /// since the cursor is frozen mid-view while captured every such event belongs here.
-    /// ALL four motion types are covered so motion keeps flowing during a button-held drag,
-    /// not just `.mouseMoved`. NSEvent deltas under disassociation are OS-pointer-
-    /// acceleration-applied (not raw HID) — what Moonlight's macOS client ships; if the
-    /// host re-accelerates there's mild double-acceleration, acceptable and fixable later
-    /// via IOHID. Events are returned (not swallowed): the cursor is frozen, so they're
+    /// One local monitor for motion + buttons, installed only while captured. A monitor needs
+    /// no `acceptsMouseMovedEvents`, tracking area or responder chain, and with the cursor
+    /// frozen mid-view every such event belongs here. All four motion types are covered, so
+    /// motion keeps flowing through a button-held drag. Deltas carry the OS pointer
+    /// acceleration, not raw HID. Events are returned: the cursor is frozen, so they are
     /// inert locally.
     ///
-    /// In the desktop mouse model the cursor is NOT frozen, so bare `.mouseMoved` events are
-    /// only generated while `window.acceptsMouseMovedEvents` is true — we enable it here and
-    /// restore it on removal so absolute hover-motion keeps flowing without a click held. A
+    /// Coalescing is off while installed. AppKit otherwise merges the moves that queue behind
+    /// a busy main thread, and the host gets fewer, larger steps than the mouse reported.
+    ///
+    /// In the desktop mouse model the cursor is free, so bare `.mouseMoved` events exist only
+    /// while `window.acceptsMouseMovedEvents` is true: raised here, restored on removal. A
     /// press there reaches the host only on the video.
     private func installMouseMonitor() {
         guard mouseEventMonitor == nil else { return }
@@ -857,6 +855,7 @@ public final class StreamLayerView: NSView {
             savedAcceptsMouseMoved = window?.acceptsMouseMovedEvents
             window?.acceptsMouseMovedEvents = true
         }
+        NSEvent.isMouseCoalescingEnabled = false
         mouseEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [
             .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
             .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
@@ -903,6 +902,7 @@ public final class StreamLayerView: NSView {
         if let monitor = mouseEventMonitor {
             NSEvent.removeMonitor(monitor)
             mouseEventMonitor = nil
+            NSEvent.isMouseCoalescingEnabled = true // AppKit's default
             if streamInputDebug { streamInputLog.debug("mouse NSEvent monitor removed (capture released)") }
         }
         // Restore the window's prior mouse-moved-events setting if we raised it (cursor mode).
