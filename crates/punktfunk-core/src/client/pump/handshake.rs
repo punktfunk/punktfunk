@@ -190,6 +190,9 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         if let Ok(sock) = transport.try_clone_socket() {
             crate::transport::spawn_data_punch(sock, shutdown.clone());
         }
+        if let Ok(sock) = transport.try_clone_socket() {
+            *args.shared.data_sock.lock().unwrap() = Some(sock);
+        }
         let mut session = Session::new(welcome.session_config(Role::Client), Box::new(transport))?;
         // PyroWave: aged-out lossy frames as blocks-with-holes. All-intra renders
         // localized blur, better than a freeze.

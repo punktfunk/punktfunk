@@ -137,10 +137,9 @@ pub struct HostFacts {
     pub forced_profile: u8,
 }
 
-pub const IFACE_KIND_UNKNOWN: u8 = 0;
-pub const IFACE_KIND_ETHERNET: u8 = 1;
-pub const IFACE_KIND_WIFI: u8 = 2;
-pub const IFACE_KIND_OTHER: u8 = 3;
+pub use crate::transport::{
+    IFACE_KIND_ETHERNET, IFACE_KIND_OTHER, IFACE_KIND_UNKNOWN, IFACE_KIND_WIFI,
+};
 /// [`HostFacts::forced_profile`] when nothing is pinned.
 pub const FORCED_PROFILE_NONE: u8 = 0xFF;
 

@@ -238,6 +238,17 @@ Asks the host directly (no mDNS), so routed/VPN hosts answer too. The
 reference may be an unsaved address — this verb answers \"can I reach it\",
 not \"do I know it\". Exit 0 reachable, 2 not; one line either way."
             }
+            "network-check" => {
+                "\
+punktfunk network-check <host-ref> [--json] — what the path to a host does
+
+Opens a diagnostic session that streams nothing, runs the speed test, two
+bursty legs at the clean round's rate and a slow round, reads both ends'
+network facts, and names what it found: a faster host port, a receiver that
+drops line-rate bursts, a small receive buffer, a link fault, a queue, Wi-Fi.
+Each finding says which delivery profile helps, if one does. Exit 0 when the
+check ran, whatever it found."
+            }
             "speed-test" => {
                 "\
 punktfunk speed-test <host-ref> [--json] — measure the real data plane
@@ -439,6 +450,7 @@ from the config directory for a true factory reset."
             "open" => open(&rest),
             "reachable" => reachable(&rest),
             "speed-test" => speed_test(&rest),
+            "network-check" => network_check(&rest),
             "presets" => presets(&rest, false),
             "profiles" => presets(&rest, true),
             "reset" => reset(),
@@ -1346,6 +1358,162 @@ from the config directory for a true factory reset."
         OK
     }
 
+    /// `network-check <host-ref>` — the speed test and the shaped legs over a probe-only
+    /// session, then every finding by id with its figures and the profile it offers.
+    fn network_check(args: &[String]) -> u8 {
+        use punktfunk_core::client::health::{self, FindingId, LegShape};
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, EXT_DELIVERY_PROBE_ONLY};
+        let Some(reference) = positional(args, 0) else {
+            eprintln!("usage: punktfunk network-check <host-ref>");
+            return UNRESOLVED;
+        };
+        let (known, i) = match resolve(&reference) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        let host = &known.hosts[i];
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!("{} isn't paired yet", host.name);
+            return NEEDS_INTERACTION;
+        };
+        let identity = match trust::load_or_create_identity() {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("client identity: {e:#}");
+                return CONNECT_FAILED;
+            }
+        };
+        let mode = punktfunk_core::config::Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let params = punktfunk_core::client::ConnectParams {
+            name: Some(punktfunk_core::client::device_name()),
+            pin: Some(pin),
+            identity: Some(identity),
+            delivery: Some(DeliveryAsk {
+                profile: 0,
+                flags: EXT_DELIVERY_FACTS | EXT_DELIVERY_PROBE_ONLY,
+            }),
+            ..punktfunk_core::client::ConnectParams::new(
+                &host.addr,
+                host.port,
+                mode,
+                Duration::from_secs(15),
+            )
+        };
+        let client = match punktfunk_core::client::NativeClient::connect(params) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("connect: {e:?}");
+                return CONNECT_FAILED;
+            }
+        };
+        let r = match health::health_check(&client, |_| {}) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("network check: {e:?}");
+                return CONNECT_FAILED;
+            }
+        };
+        let label = |id: FindingId| match id {
+            FindingId::SpeedMismatch => "the host's port is faster than this device's",
+            FindingId::BurstIntolerant => "this device drops the head of a line-rate burst",
+            FindingId::ReceiveBuffer => "loss in this device's receive buffer",
+            FindingId::LinkFault => "loss at a rate no link refuses: cable, port or driver",
+            FindingId::QueueBuildUp => "something on the path buffers",
+            FindingId::HostSendBuffer => "the host's send buffer refused packets",
+            FindingId::Wifi => "this device is on Wi-Fi",
+        };
+        let leg_name = |s: LegShape| match s {
+            LegShape::FrameBursts => "bursts",
+            LegShape::Capped => "capped",
+        };
+        if has(args, "--json") {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "ceiling_mbps": f64::from(r.speed.ceiling_kbps) / 1000.0,
+                    "wall": r.speed.wall,
+                    "clean": r.speed.clean.map(|c| serde_json::json!({
+                        "rate_mbps": f64::from(c.rate_kbps) / 1000.0,
+                        "loss_pct": c.loss_pct,
+                        "jitter_ms": f64::from(c.jitter_us) / 1000.0,
+                        "reorders": c.reorders,
+                    })),
+                    "client": {
+                        "iface_kind": r.client.link.kind,
+                        "link_mbps": r.client.link.mbps,
+                        "rcvbuf_kb": r.client.rcvbuf_kb,
+                    },
+                    "host": r.host.map(|h| serde_json::json!({
+                        "iface_kind": h.iface_kind,
+                        "link_mbps": h.link_mbps,
+                        "sndbuf_kb": h.sndbuf_kb,
+                        "forced_profile": h.forced_profile,
+                    })),
+                    "legs": r.legs.iter().map(|l| serde_json::json!({
+                        "shape": leg_name(l.shape),
+                        "loss_pct": l.outcome.loss_pct,
+                        "jitter_ms": f64::from(l.outcome.gap_p99_us.saturating_sub(l.outcome.gap_p50_us)) / 1000.0,
+                        "socket_drops": l.socket_drops,
+                    })).collect::<Vec<_>>(),
+                    "slow": r.slow.map(|s| serde_json::json!({
+                        "loss_pct": s.loss_pct,
+                        "jitter_ms": f64::from(s.gap_p99_us.saturating_sub(s.gap_p50_us)) / 1000.0,
+                    })),
+                    "findings": r.findings.iter().map(|f| serde_json::json!({
+                        "id": f.id as u8,
+                        "label": label(f.id),
+                        "severity": f.severity as u8,
+                        "numbers": f.numbers,
+                        "profile": f.profile,
+                    })).collect::<Vec<_>>(),
+                })
+            );
+        } else {
+            println!(
+                "Link carries {}{:.0} Mbit/s.",
+                if r.speed.wall { "" } else { "at least " },
+                f64::from(r.speed.ceiling_kbps) / 1000.0
+            );
+            if let Some(c) = r.speed.clean {
+                println!(
+                    "At {:.0} Mbit/s: {:.1} % loss, {:.1} ms jitter.",
+                    f64::from(c.rate_kbps) / 1000.0,
+                    c.loss_pct,
+                    f64::from(c.jitter_us) / 1000.0
+                );
+            }
+            for l in &r.legs {
+                println!(
+                    "{}: {:.1} % loss{}",
+                    leg_name(l.shape),
+                    l.outcome.loss_pct,
+                    l.socket_drops
+                        .map(|d| format!(", {d} dropped at this socket"))
+                        .unwrap_or_default()
+                );
+            }
+            if r.findings.is_empty() {
+                println!("Nothing to fix.");
+            }
+            for f in &r.findings {
+                println!(
+                    "- {}{}",
+                    label(f.id),
+                    match f.profile {
+                        Some(1) => " — paced delivery (capped) would help",
+                        Some(2) => " — paced delivery (smooth) would help",
+                        _ => "",
+                    }
+                );
+            }
+        }
+        OK
+    }
+
     /// `presets list` — the presets this device has, and what each overrides. `legacy` is the
     /// `profiles` spelling, whose `--json` keeps the pre-rename `profiles` key.
     fn presets(args: &[String], legacy: bool) -> u8 {
@@ -1535,6 +1703,7 @@ from the config directory for a true factory reset."
                 "open",
                 "reachable",
                 "speed-test",
+                "network-check",
                 "presets",
                 "reset",
             ] {

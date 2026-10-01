@@ -1248,6 +1248,30 @@ impl NativeClient {
             .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
     }
 
+    /// Packets the OS dropped at this session's receive buffer so far; `None` where the
+    /// platform keeps no per-socket figure ([`crate::transport::sockstat`]).
+    pub fn socket_drops(&self) -> Option<u64> {
+        let sock = self.shared.data_sock.lock().unwrap();
+        sock.as_ref()
+            .and_then(crate::transport::sockstat::socket_drops)
+    }
+
+    /// The receive buffer the OS granted the data socket, KiB; `0` before the dial lands.
+    pub fn recv_buffer_kb(&self) -> u32 {
+        let sock = self.shared.data_sock.lock().unwrap();
+        sock.as_ref()
+            .map_or(0, crate::transport::sockstat::recv_buffer_kb)
+    }
+
+    /// The address this session's data leaves from, once the dial has landed.
+    pub fn local_ip(&self) -> Option<std::net::IpAddr> {
+        let sock = self.shared.data_sock.lock().unwrap();
+        sock.as_ref()
+            .and_then(|s| s.local_addr().ok())
+            .map(|a| a.ip())
+            .filter(|ip| !ip.is_unspecified())
+    }
+
     /// Whether a burst is in flight — an embedder speed test or the startup capacity probe. Loss
     /// inside it is the burst's own doing on a link it exceeds, so a "connection issues" notice
     /// gated on this stays quiet for it.

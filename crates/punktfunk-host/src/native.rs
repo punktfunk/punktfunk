@@ -3767,6 +3767,49 @@ mod tests {
         host.join().unwrap().unwrap();
     }
 
+    /// The whole check over a probe-only session: the ramp proves a ceiling, the clean
+    /// round runs under it, both shaped legs run back to back, and the host's facts arrive.
+    #[test]
+    fn the_network_check_runs_its_legs_over_a_probe_only_session() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::health::{self, LegShape};
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, EXT_DELIVERY_PROBE_ONLY};
+        let source = Punktfunk1Source::SyntheticAbr(SynthAbrShape {
+            content: Content::Steady { fill_pct: 100 },
+            recovery: std::time::Duration::ZERO,
+            answer: KeyframeAnswer::Idr,
+            idr_pct: DEFAULT_IDR_PCT,
+            bringup: std::time::Duration::from_secs(2),
+            serve_ramp: true,
+        });
+        let (client, host) =
+            synthetic_session(19788, source, |p| punktfunk_core::client::ConnectParams {
+                delivery: Some(DeliveryAsk {
+                    profile: 0,
+                    flags: EXT_DELIVERY_FACTS | EXT_DELIVERY_PROBE_ONLY,
+                }),
+                ..p
+            });
+        let r = health::health_check(&client, |_| {}).expect("the check reports");
+        assert!(r.speed.clean.is_some(), "a ramp host gets a clean round");
+        assert_eq!(
+            r.legs.iter().map(|l| l.shape).collect::<Vec<_>>(),
+            vec![LegShape::FrameBursts, LegShape::Capped]
+        );
+        for leg in &r.legs {
+            assert!(
+                leg.outcome.done && leg.outcome.wire_packets_sent > 0,
+                "{leg:?}"
+            );
+        }
+        let facts = r.host.expect("the host's facts arrived");
+        assert!(facts.sndbuf_kb > 0);
+        assert!(r.client.rcvbuf_kb > 0, "the client read its own grant");
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
     /// Toward a host without a ramp the speed test is the single blast, and says nothing
     /// about loss: there is no clean round to say it with.
     #[test]
