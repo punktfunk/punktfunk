@@ -871,8 +871,8 @@ const QUERY_TIMEOUT_MS: i64 = 50;
 /// What the retrieve thread and the encode thread share: `(pts_ns, forced-IDR, recovery-anchor)`
 /// per submitted frame. The component is deliberately not in here: AMF documents `SubmitInput` and
 /// `QueryOutput` as a thread pair, so only the queue needs a lock, and it is never held across a
-/// `QueryOutput`.
-type OutQueue = AuQueue<(u64, bool, bool)>;
+/// `QueryOutput`. The extra `bool` is "the component has answered EOF since the last Drain".
+type OutQueue = AuQueue<(u64, bool, bool), bool>;
 
 /// The retrieve thread and its queue. The thread owns every `QueryOutput` on the component, so
 /// the encode thread never waits on VCN — it takes finished AUs off the queue, and a caller that
@@ -911,7 +911,16 @@ fn retrieve_loop(
     stop: &AtomicBool,
 ) {
     pf_frame::thread_qos::boost_thread_priority(false);
+    // An empty answer this fast was a poll, whatever `blocking` says: HEVC before its first
+    // submit, or a runtime that took the timeout and ignores it. Unpaced, that spins a core.
+    const POLL: std::time::Duration = std::time::Duration::from_millis(1);
     while !stop.load(Ordering::Acquire) {
+        let asked = std::time::Instant::now();
+        let pace = || {
+            if !blocking || asked.elapsed() < POLL {
+                std::thread::sleep(std::time::Duration::from_micros(250));
+            }
+        };
         match drain_one_output(&comp, output_data_type, output_key_max) {
             Ok(DrainOutcome::Frame { data, key_prop }) => {
                 let mut g = q.lock();
@@ -940,17 +949,11 @@ fn retrieve_loop(
             // behind the Drain. EOF repeats on every call while the component sits drained and
             // the loop only exits on `stop`, so pace it like NotReady.
             Ok(DrainOutcome::Eof) => {
-                if !blocking {
-                    std::thread::sleep(std::time::Duration::from_micros(250));
-                }
+                q.lock().extra = true;
+                pace();
             }
-            Ok(DrainOutcome::NotReady) => {
-                // Without `QueryTimeout` the call is a poll; keep the old sampling interval,
-                // which now costs this thread rather than the encode thread.
-                if !blocking {
-                    std::thread::sleep(std::time::Duration::from_micros(250));
-                }
-            }
+            // Without `QueryTimeout` the call is a poll, sampled at this interval.
+            Ok(DrainOutcome::NotReady) => pace(),
             Err(e) => {
                 q.fail(&mut q.lock(), || format!("{e:#}"));
                 return;
@@ -959,7 +962,8 @@ fn retrieve_loop(
     }
 }
 
-/// Ask the component to let `QueryOutput` block. `false` means the driver declined and the
+/// Ask the component to let `QueryOutput` block. Static: it takes hold at the next `Init`, and
+/// set after one it is accepted and ignored. `false` means the driver declined and the
 /// retrieve thread samples instead — older AMF runtimes have no such property.
 fn set_query_timeout(comp: &Component, name: &HSTRING) -> bool {
     comp.set_prop(name, AmfVariant::from_i64(QUERY_TIMEOUT_MS), false)
@@ -1357,6 +1361,7 @@ impl AmfEncoder {
         amf_ok(r, "AMF InitDX11 (capturer device)")?;
         let mut comp = lib.create_component(&ctx, self.props.component)?;
         let (ir_active, ltr_active) = self.apply_static_props(&comp)?;
+        let blocking = set_query_timeout(&comp, self.props.query_timeout);
         let (fmt, ring_format) = input_formats(self.input).context("AMF input format")?;
         amf_ok(
             comp.init(fmt, self.width as i32, self.height as i32),
@@ -1416,7 +1421,6 @@ impl AmfEncoder {
         );
         // The retrieve thread starts against the initialized component; `Inner` joins it
         // before its own reference drops, and `reset` stops it by hand.
-        let blocking = set_query_timeout(&comp, self.props.query_timeout);
         let comp = Arc::new(comp);
         let retrieve = Retrieve::start(Arc::clone(&comp), &self.props, blocking)?;
         tracing::debug!(
@@ -2070,6 +2074,7 @@ impl Encoder for AmfEncoder {
         // The format the frames arrive in, as at the open: re-Init'd as NV12, a BGRA session
         // takes every surface and never returns an access unit.
         let fmt = input_formats(self.input).map(|(fmt, _)| fmt);
+        let mut blocking = false;
         // The joined thread dropped its clone, so this is the only reference.
         let rebuilt = match Arc::get_mut(&mut inner.comp) {
             Some(comp) => {
@@ -2086,6 +2091,7 @@ impl Encoder for AmfEncoder {
                         self.ltr_slots = [None; NUM_LTR_SLOTS];
                         self.next_ltr_slot = 0;
                         self.pending_force = None;
+                        blocking = set_query_timeout(comp, self.props.query_timeout);
                         comp.init(fmt, self.width as i32, self.height as i32) == sys::AMF_OK
                     }
                     _ => false,
@@ -2097,7 +2103,6 @@ impl Encoder for AmfEncoder {
         if rebuilt {
             // The component is live again, so it needs its retrieve thread back. Without one no
             // AU would ever be taken off it and the rebuild would read as a second wedge.
-            let blocking = set_query_timeout(&inner.comp, self.props.query_timeout);
             match Retrieve::start(Arc::clone(&inner.comp), &self.props, blocking) {
                 Ok(r) => {
                     inner.retrieve = r;
@@ -2178,6 +2183,7 @@ impl Encoder for AmfEncoder {
             return Ok(());
         };
         // Drain = EOS; remaining AUs surface until AMF_EOF.
+        inner.retrieve.q.lock().extra = false;
         let r = inner.comp.drain();
         if r != sys::AMF_OK {
             tracing::debug!(
@@ -2187,10 +2193,15 @@ impl Encoder for AmfEncoder {
             );
         }
         // The owed AUs surface on the retrieve thread; wait for the last of them here so no
-        // frame submitted after this can be paired with one. Past the budget the component is
-        // at end-of-stream, so what is still owed never comes: those entries are stale.
+        // frame submitted after this can be paired with one, and for the EOF behind them: the
+        // component refuses input until `QueryOutput` has answered it. Past the budget what is
+        // still owed never comes: those entries are stale.
         let deadline = std::time::Instant::now() + INPUT_DRAIN_BUDGET;
-        while inner.retrieve.q.in_flight() > 0 && std::time::Instant::now() < deadline {
+        let draining = |q: &OutQueue| {
+            let g = q.lock();
+            !g.pending.is_empty() || (r == sys::AMF_OK && !g.extra)
+        };
+        while draining(&inner.retrieve.q) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_micros(250));
         }
         let stale = std::mem::take(&mut inner.retrieve.q.lock().pending).len();
@@ -2608,6 +2619,83 @@ mod tests {
                 );
                 assert!(again[0].keyframe, "{codec:?}: a reset restarts on an IDR");
             }
+        }
+    }
+
+    /// An open encoder with nothing to encode costs no CPU: its retrieve thread parks in
+    /// `QueryOutput` or samples it, never spins on it. Skips without AMD.
+    #[test]
+    fn amf_idle_encoder_does_not_spin_live() {
+        use windows::Win32::Foundation::FILETIME;
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        if let Err(e) = try_factory() {
+            eprintln!("skipping: AMF runtime unavailable ({e})");
+            return;
+        }
+        let Some(device) = amd_d3d11_device() else {
+            eprintln!("skipping: no AMD adapter on this box");
+            return;
+        };
+        // Kernel plus user time of this process, in 100 ns units.
+        let cpu = || {
+            let mut t = [FILETIME::default(); 4];
+            let [created, exited, kernel, user] = &mut t;
+            // SAFETY: the pseudo-handle is always valid; the four out-params are locals.
+            unsafe { GetProcessTimes(GetCurrentProcess(), created, exited, kernel, user) }
+                .expect("GetProcessTimes");
+            let ticks =
+                |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+            ticks(t[2]) + ticks(t[3])
+        };
+        let (w, h) = (640u32, 480u32);
+        let tex = nv12_texture(&device, w, h, None, BIND_SR);
+        for codec in [Codec::H265, Codec::H264] {
+            let mut enc = AmfEncoder::open(
+                codec,
+                PixelFormat::Nv12,
+                w,
+                h,
+                60,
+                2_000_000,
+                8,
+                ChromaFormat::Yuv420,
+                false,
+                None,
+            )
+            .expect("open");
+            let frame = CapturedFrame {
+                provenance: Default::default(),
+                width: w,
+                height: h,
+                pts_ns: 1,
+                format: PixelFormat::Nv12,
+                payload: FramePayload::D3d11(pf_frame::dxgi::D3d11Frame {
+                    texture: tex.clone(),
+                    device: device.clone(),
+                    pyro: None,
+                }),
+                cursor: None,
+            };
+            enc.submit(&frame).expect("submit");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while enc.poll().expect("poll").is_none() {
+                assert!(std::time::Instant::now() < deadline, "{codec:?}: no AU");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            // The quietest of three windows, so another test's burst cannot fail this one.
+            let idle_ms = (0..3)
+                .map(|_| {
+                    let before = cpu();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    (cpu() - before) / 10_000
+                })
+                .min()
+                .unwrap_or(0);
+            eprintln!("{codec:?}: {idle_ms} ms of CPU in 200 ms idle");
+            assert!(
+                idle_ms < 60,
+                "{codec:?}: the idle encoder burned {idle_ms} ms of 200"
+            );
         }
     }
 

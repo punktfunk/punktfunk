@@ -133,11 +133,6 @@ impl<P, X> AuQueue<P, X> {
         self.have.set();
     }
 
-    /// Frames still owed an AU.
-    pub fn in_flight(&self) -> usize {
-        self.lock().pending.len()
-    }
-
     /// Forfeit everything owed: a restart voids the reference chain, so the AUs behind it no
     /// longer decode against what the client holds. `extra` is the backend's to reset.
     pub fn reset(&self) {
