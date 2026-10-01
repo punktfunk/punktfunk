@@ -78,6 +78,9 @@ pub(crate) fn native_budget(
     }
 }
 
+/// Smallest microburst: one GSO super-packet. [`DeliveryProfile::Smooth`]'s whole allowance.
+pub(crate) const BURST_MIN: usize = 16 * 1024;
+
 /// Native microburst: bytes that leave unpaced, sized as 10 ms at the pace
 /// rate, clamped to [16 KiB, 256 KiB]. An absolute floor (128 KiB) swallows
 /// whole frames at Wi-Fi rates, so the train goes out unpaced. 5 Mbps stream
@@ -85,7 +88,6 @@ pub(crate) fn native_budget(
 /// clamps at 256 KiB. `pace_rate_bps == 0` keeps `max(128 KiB, wire/4)`.
 pub(crate) fn auto_burst_bytes(pace_rate_bps: u64, wire_bytes: usize) -> usize {
     const BURST_MS: u64 = 10;
-    const BURST_MIN: usize = 16 * 1024;
     const BURST_MAX: usize = 256 * 1024;
     if pace_rate_bps == 0 {
         return (wire_bytes / 4).max(128 * 1024);
@@ -93,6 +95,167 @@ pub(crate) fn auto_burst_bytes(pace_rate_bps: u64, wire_bytes: usize) -> usize {
     usize::try_from(pace_rate_bps * BURST_MS / 8000)
         .unwrap_or(BURST_MAX)
         .clamp(BURST_MIN, BURST_MAX)
+}
+
+/// How one session's packets leave the socket. A client asks for one per session;
+/// [`forced_delivery`] pins one for every session. Nothing here picks one on its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum DeliveryProfile {
+    /// The microburst leaves at line rate; only overflow is paced.
+    #[default]
+    Burst = 0,
+    /// The microburst leaves on a [`GroupClock`] at `max(CAP_FLOOR_BPS, pace rate)`, so a
+    /// host whose port is faster than the client's cannot fill the switch queue between.
+    Capped = 1,
+    /// The allowance is one super-packet ([`BURST_MIN`]); the rest spreads at the pace
+    /// rate. About a third of a frame interval of extra latency, for a receiver that
+    /// loses the head of every line-rate burst.
+    Smooth = 2,
+}
+
+impl DeliveryProfile {
+    /// The floor of `Capped`'s clock: a fifth under 1 GbE.
+    pub(crate) const CAP_FLOOR_BPS: u64 = 800_000_000;
+
+    pub(crate) fn from_u8(v: u8) -> Self {
+        match v {
+            1 => DeliveryProfile::Capped,
+            2 => DeliveryProfile::Smooth,
+            _ => DeliveryProfile::Burst,
+        }
+    }
+
+    /// Bytes of one AU that leave unpaced at `pace_rate_bps`.
+    pub(crate) fn burst_bytes(self, pace_rate_bps: u64, wire_bytes: usize) -> usize {
+        match self {
+            DeliveryProfile::Smooth => BURST_MIN,
+            _ => auto_burst_bytes(pace_rate_bps, wire_bytes),
+        }
+    }
+
+    /// The rate `Capped` holds the microburst to; `None` for the others.
+    pub(crate) fn cap_bps(self, pace_rate_bps: u64) -> Option<u64> {
+        (self == DeliveryProfile::Capped).then(|| pace_rate_bps.max(Self::CAP_FLOOR_BPS))
+    }
+}
+
+/// `PUNKTFUNK_DELIVERY=burst|capped|smooth`, read once: pins a profile for every session of
+/// both planes, over whatever a client asks. Unset leaves the choice to the client.
+pub(crate) fn forced_delivery() -> Option<DeliveryProfile> {
+    static FORCED: std::sync::OnceLock<Option<DeliveryProfile>> = std::sync::OnceLock::new();
+    *FORCED.get_or_init(|| {
+        let s = pf_host_config::knob("PUNKTFUNK_DELIVERY")?;
+        let profile = parse_delivery(&s);
+        match profile {
+            Some(p) => tracing::info!(profile = ?p, "PUNKTFUNK_DELIVERY pins the delivery profile"),
+            None => tracing::warn!(
+                value = %s,
+                "PUNKTFUNK_DELIVERY not recognised — burst, capped or smooth"
+            ),
+        }
+        profile
+    })
+}
+
+fn parse_delivery(s: &str) -> Option<DeliveryProfile> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "burst" => Some(DeliveryProfile::Burst),
+        "capped" => Some(DeliveryProfile::Capped),
+        "smooth" => Some(DeliveryProfile::Smooth),
+        _ => None,
+    }
+}
+
+/// Line-rate cap on a microburst: bytes leave on a clock at `rate_bps`, carried across
+/// AUs so back-to-back frames cannot add up to a blast. A clock in the past restarts at
+/// `now`: a late frame is owed no catch-up.
+#[derive(Debug)]
+pub(crate) struct GroupClock {
+    rate_bps: u64,
+    next: Instant,
+}
+
+impl GroupClock {
+    pub(crate) fn new(rate_bps: u64, now: Instant) -> Self {
+        GroupClock {
+            rate_bps: rate_bps.max(1),
+            next: now,
+        }
+    }
+
+    pub(crate) fn set_rate(&mut self, rate_bps: u64) {
+        self.rate_bps = rate_bps.max(1);
+    }
+
+    /// The wait owed before `bytes` may leave; the clock advances by their wire time.
+    /// A sub-floor wait the caller skips stays owed, so the rate holds over a few groups.
+    pub(crate) fn wait(&mut self, bytes: usize, now: Instant) -> Duration {
+        let ahead = self.next.saturating_duration_since(now);
+        let start = if ahead.is_zero() { now } else { self.next };
+        self.next = start
+            + Duration::from_nanos((bytes as u64).saturating_mul(8_000_000_000) / self.rate_bps);
+        ahead
+    }
+}
+
+/// One session's pacing inputs, resolved per AU by its send loop.
+pub(crate) struct Pacing {
+    /// `PUNKTFUNK_PACE_BURST_KB`: a pinned allowance over the profile's.
+    pub(crate) burst_cap: Option<usize>,
+    pub(crate) pace_rate_bps: u64,
+    pub(crate) max_spread: Duration,
+    pub(crate) profile: DeliveryProfile,
+    /// `Capped`'s clock, carried across AUs; `None` under the other profiles.
+    pub(crate) clock: Option<GroupClock>,
+}
+
+impl Pacing {
+    pub(crate) fn new(burst_cap: Option<usize>) -> Self {
+        Pacing {
+            burst_cap,
+            pace_rate_bps: 0,
+            max_spread: MAX_PACE_SPREAD,
+            profile: DeliveryProfile::Burst,
+            clock: None,
+        }
+    }
+
+    /// Per AU: the live rate, the spread bound and the profile. The clock follows the
+    /// profile and keeps its phase across rate changes.
+    pub(crate) fn update(
+        &mut self,
+        pace_rate_bps: u64,
+        max_spread: Duration,
+        profile: DeliveryProfile,
+    ) {
+        self.pace_rate_bps = pace_rate_bps;
+        self.max_spread = max_spread;
+        self.profile = profile;
+        match profile.cap_bps(pace_rate_bps) {
+            Some(rate) => self
+                .clock
+                .get_or_insert_with(|| GroupClock::new(rate, Instant::now()))
+                .set_rate(rate),
+            None => self.clock = None,
+        }
+    }
+
+    /// Unpaced bytes of an AU of `wire_bytes`.
+    pub(crate) fn burst_bytes(&self, wire_bytes: usize) -> usize {
+        self.burst_cap
+            .unwrap_or_else(|| self.profile.burst_bytes(self.pace_rate_bps, wire_bytes))
+    }
+
+    /// Bytes per paced group. `Smooth` bounds a group to its allowance, or half a
+    /// millisecond at the rate, so the first paced group cannot re-grow the burst; the
+    /// others keep the caller's packet-count group.
+    pub(crate) fn group_bytes(&self) -> usize {
+        match self.profile {
+            DeliveryProfile::Smooth => BURST_MIN.max((self.pace_rate_bps / 16_000) as usize),
+            _ => usize::MAX,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -171,12 +334,14 @@ pub(crate) fn schedule<T: AsRef<[u8]>>(
 }
 
 /// Burst, then sleep each overflow chunk toward its slice of the budget
-/// (sub-`sleep_floor` waits skipped). A `send` error aborts the frame —
-/// native bails the session, GameStream stops the stream.
+/// (sub-`sleep_floor` waits skipped). With a `clock` the burst's chunks wait on it
+/// instead of leaving at line rate ([`DeliveryProfile::Capped`]). A `send` error
+/// aborts the frame — native bails the session, GameStream stops the stream.
 pub(crate) fn pace_frame<T: AsRef<[u8]>, E>(
     packets: &[T],
     budget: PaceBudget,
     cfg: &PaceCfg,
+    mut clock: Option<&mut GroupClock>,
     mut send: impl FnMut(&[T]) -> Result<(), E>,
 ) -> Result<PaceStat, E> {
     let start = Instant::now();
@@ -197,6 +362,13 @@ pub(crate) fn pace_frame<T: AsRef<[u8]>, E>(
     };
     let sched = schedule(packets, cfg, budget_est);
     for chunk in packets[..sched.burst_len].chunks(sched.chunk) {
+        if let Some(clock) = clock.as_deref_mut() {
+            let bytes: usize = chunk.iter().map(|p| p.as_ref().len()).sum();
+            let ahead = clock.wait(bytes, Instant::now());
+            if ahead >= cfg.sleep_floor {
+                std::thread::sleep(ahead);
+            }
+        }
         send(chunk)?;
     }
     let paced = sched.burst_len < packets.len();
@@ -471,6 +643,7 @@ mod tests {
             &pkts,
             PaceBudget::Fixed(Duration::ZERO),
             &native_cfg(10 * 1024),
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -487,6 +660,7 @@ mod tests {
             &pkts,
             PaceBudget::Fixed(Duration::ZERO),
             &native_cfg(128 * 1024),
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -508,6 +682,7 @@ mod tests {
                 chunk: ChunkPolicy::Adaptive { base: 16, max: 64 },
                 sleep_floor: Duration::from_micros(500),
             },
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -526,6 +701,7 @@ mod tests {
             &pkts,
             PaceBudget::Fixed(Duration::ZERO),
             &gs_cfg(16 * 1024),
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -543,6 +719,7 @@ mod tests {
             &pkts,
             PaceBudget::Fixed(Duration::ZERO),
             &gs_cfg(16 * 1024),
+            None,
             |_chunk| {
                 calls += 1;
                 if calls == 2 {
@@ -599,6 +776,7 @@ mod tests {
                 cap: Duration::ZERO,
             },
             &cfg,
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -623,6 +801,7 @@ mod tests {
                 cap: Duration::from_micros(2_500),
             },
             &cfg,
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -649,6 +828,7 @@ mod tests {
                 cap: Duration::MAX,
             },
             &cfg,
+            None,
             |chunk| {
                 seen.push(chunk.len());
                 Ok::<(), std::io::Error>(())
@@ -730,6 +910,152 @@ mod tests {
         // `PUNKTFUNK_PACE_FACTOR=0`: fraction-of-frame burst.
         assert_eq!(auto_burst_bytes(0, 4_000_000), 1_000_000);
         assert_eq!(auto_burst_bytes(0, 40_000), 128 * 1024);
+    }
+
+    /// `Smooth` is one super-packet whatever the rate; the other profiles keep the
+    /// 10 ms allowance; only `Capped` has a clock, floored at 0.8 Gbit/s.
+    #[test]
+    fn smooth_is_the_sixteen_kib_allowance() {
+        for rate in [15_000_000u64, 240_000_000, 3_000_000_000] {
+            assert_eq!(
+                DeliveryProfile::Smooth.burst_bytes(rate, 500_000),
+                BURST_MIN
+            );
+            assert_eq!(
+                DeliveryProfile::Burst.burst_bytes(rate, 500_000),
+                auto_burst_bytes(rate, 500_000)
+            );
+            assert_eq!(
+                DeliveryProfile::Capped.burst_bytes(rate, 500_000),
+                auto_burst_bytes(rate, 500_000)
+            );
+            assert_eq!(DeliveryProfile::Burst.cap_bps(rate), None);
+            assert_eq!(DeliveryProfile::Smooth.cap_bps(rate), None);
+        }
+        assert_eq!(
+            DeliveryProfile::Capped.cap_bps(240_000_000),
+            Some(DeliveryProfile::CAP_FLOOR_BPS)
+        );
+        assert_eq!(
+            DeliveryProfile::Capped.cap_bps(2_400_000_000),
+            Some(2_400_000_000)
+        );
+        // `Smooth` bounds a paced group to its allowance, or half a millisecond at the rate.
+        let mut p = Pacing::new(None);
+        p.update(
+            240_000_000,
+            Duration::from_millis(33),
+            DeliveryProfile::Smooth,
+        );
+        assert_eq!(p.group_bytes(), BURST_MIN);
+        p.update(
+            1_000_000_000,
+            Duration::from_millis(33),
+            DeliveryProfile::Smooth,
+        );
+        assert_eq!(p.group_bytes(), 62_500);
+        p.update(
+            1_000_000_000,
+            Duration::from_millis(33),
+            DeliveryProfile::Burst,
+        );
+        assert_eq!(p.group_bytes(), usize::MAX);
+        // A pinned `PUNKTFUNK_PACE_BURST_KB` wins over the profile's allowance.
+        let mut p = Pacing::new(Some(32 * 1024));
+        p.update(
+            240_000_000,
+            Duration::from_millis(33),
+            DeliveryProfile::Smooth,
+        );
+        assert_eq!(p.burst_bytes(500_000), 32 * 1024);
+    }
+
+    #[test]
+    fn an_unknown_delivery_value_is_burst() {
+        assert_eq!(parse_delivery(" Capped "), Some(DeliveryProfile::Capped));
+        assert_eq!(parse_delivery("smooth"), Some(DeliveryProfile::Smooth));
+        assert_eq!(parse_delivery("burst"), Some(DeliveryProfile::Burst));
+        assert_eq!(parse_delivery("paced"), None);
+        assert_eq!(DeliveryProfile::from_u8(7), DeliveryProfile::Burst);
+        assert_eq!(DeliveryProfile::from_u8(1), DeliveryProfile::Capped);
+    }
+
+    /// The clock owes the wire time of what already left, carries it across AUs, and
+    /// never owes a catch-up after idle. The profile owns the clock: it appears under
+    /// `Capped` and goes with it.
+    #[test]
+    fn a_group_clock_carries_its_phase_and_owes_no_catch_up() {
+        let t0 = Instant::now();
+        let mut c = GroupClock::new(800_000_000, t0);
+        assert_eq!(c.wait(64 * 1024, t0), Duration::ZERO);
+        // 64 KiB at 0.8 Gbit/s = 655.36 µs.
+        assert_eq!(c.wait(64 * 1024, t0), Duration::from_nanos(655_360));
+        // A skipped sub-floor wait stays owed: the third group waits for both.
+        assert_eq!(c.wait(64 * 1024, t0), Duration::from_nanos(1_310_720));
+        // Idle past the clock: restart at `now`, nothing owed.
+        let later = t0 + Duration::from_millis(10);
+        assert_eq!(c.wait(64 * 1024, later), Duration::ZERO);
+        assert_eq!(c.wait(1, later), Duration::from_nanos(655_360));
+
+        let mut p = Pacing::new(None);
+        p.update(
+            240_000_000,
+            Duration::from_millis(33),
+            DeliveryProfile::Capped,
+        );
+        assert!(p.clock.is_some());
+        p.update(
+            240_000_000,
+            Duration::from_millis(33),
+            DeliveryProfile::Burst,
+        );
+        assert!(p.clock.is_none());
+    }
+
+    /// Under a clock the burst's chunks leave on it: 219 × 1200 B (all under the 256 KiB
+    /// cap) take ≥ 2 ms at 0.8 Gbit/s instead of one blast, and the next frame starts
+    /// behind the first one's clock.
+    #[test]
+    fn capped_burst_leaves_in_groups_on_one_clock() {
+        let pkts = packets(219, 1200);
+        let cfg = native_cfg(256 * 1024);
+        let mut clock = GroupClock::new(800_000_000, Instant::now());
+        let t0 = Instant::now();
+        let mut sends = 0usize;
+        let stat = pace_frame(
+            &pkts,
+            PaceBudget::Fixed(Duration::ZERO),
+            &cfg,
+            Some(&mut clock),
+            |chunk| {
+                sends += chunk.len();
+                Ok::<(), std::io::Error>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(sends, 219);
+        assert!(!stat.paced, "under the cap nothing is overflow");
+        // 262 800 B × 8 / 0.8 Gbit/s = 2.63 ms, less the last chunk's own wire time.
+        assert!(
+            t0.elapsed() >= Duration::from_millis(2),
+            "capped burst left in {:?}",
+            t0.elapsed()
+        );
+        assert!(
+            clock.wait(0, Instant::now()) <= Duration::from_micros(400),
+            "the clock ends with the last chunk"
+        );
+        // Without a clock the same frame is one blast.
+        let t1 = Instant::now();
+        pace_frame(
+            &pkts,
+            PaceBudget::Fixed(Duration::ZERO),
+            &cfg,
+            None,
+            |_chunk| Ok::<(), std::io::Error>(()),
+        )
+        .unwrap();
+        assert!(t1.elapsed() < Duration::from_millis(1));
     }
 
     #[test]

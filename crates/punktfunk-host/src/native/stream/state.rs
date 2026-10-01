@@ -805,6 +805,7 @@ impl StreamState {
             bitrate_kbps: live_bitrate.clone(),
             link_kbps,
             link_paced: budget_identity,
+            delivery: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             bringup: bringup.clone(),
             wire_sock,
             driver_dropped: driver_dropped.clone(),

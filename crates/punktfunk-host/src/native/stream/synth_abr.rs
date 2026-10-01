@@ -329,6 +329,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         // No client ramp reaches the synthetic source; the factor paces it.
         link_kbps: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         link_paced: false,
+        delivery: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         bringup: bringup.clone(),
         wire_sock,
         driver_dropped: Arc::new(AtomicU64::new(0)),
