@@ -119,6 +119,18 @@ impl Shell {
         st.win.grid_err_us.clear();
         let unshown = self.presenter.take_unshown();
         st.last_forced = forced;
+        // Drained once: the native lane's count where it showed anything, else the
+        // compositor's word on the swapchain.
+        #[cfg(target_os = "linux")]
+        let native_zero_copy = self.presenter.take_native_zero_copy();
+        #[cfg(not(target_os = "linux"))]
+        let native_zero_copy = (0u32, 0u32);
+        #[cfg(target_os = "linux")]
+        let scanout = (native_zero_copy.1 > 0)
+            .then_some(native_zero_copy)
+            .or_else(|| self.presenter.take_scanout());
+        #[cfg(not(target_os = "linux"))]
+        let scanout = None;
         let present = PresentCounters {
             mode: self.presenter.present_mode_name(),
             vrr: st.cadence.verdict(),
@@ -127,6 +139,7 @@ impl Shell {
             gated,
             forced,
             forwarded,
+            scanout,
         };
         let (pace_ms, latch_ms) = close_window(
             st,
@@ -171,10 +184,6 @@ impl Shell {
             } else {
                 0
             };
-            #[cfg(target_os = "linux")]
-            let native_zero_copy = self.presenter.take_native_zero_copy();
-            #[cfg(not(target_os = "linux"))]
-            let native_zero_copy = (0u32, 0u32);
             tracing::info!(
                 smoothing = present.smoothing,
                 // The latency intent held for its due time: a measured VRR panel.
@@ -185,6 +194,7 @@ impl Shell {
                 glass = self.presenter.glass_source(),
                 vrr = present.vrr.label(),
                 native_zero_copy = ?native_zero_copy,
+                scanout = ?present.scanout,
                 replaced,
                 q_drop,
                 forwarded = present.forwarded,
@@ -1002,6 +1012,9 @@ pub(super) struct PresentCounters {
     pub(super) forced: u32,
     /// Wake-forwarder displacements: the loop stalled two frame intervals.
     pub(super) forwarded: u32,
+    /// (flipped without a copy, shown) this window, by the compositor's own word; `None`
+    /// where it never says (KWin before 6.7, Windows, macOS).
+    pub(super) scanout: Option<(u32, u32)>,
 }
 
 /// Close the overlay window: the connector's snapshot plus what only the presenter knows,
@@ -1087,6 +1100,15 @@ pub(super) fn desktop_extras(
         }
         if p.smoothing {
             t.push_str(" · smoothing");
+        }
+        // The compositor's word, only where it gives one.
+        match p.scanout {
+            Some((zc, shown)) if shown > 0 && zc == shown => t.push_str(" · scanout"),
+            Some((0, shown)) if shown > 0 => t.push_str(" · composited"),
+            Some((zc, shown)) if shown > 0 => {
+                t.push_str(&format!(" · scanout {}%", zc * 100 / shown));
+            }
+            _ => {}
         }
         for (name, n) in [
             ("qdrop", p.q_drop),
@@ -1257,6 +1279,7 @@ mod tests {
             gated: 0,
             forced: 0,
             forwarded: 0,
+            scanout: None,
         }
     }
 
@@ -1267,6 +1290,20 @@ mod tests {
         let quiet = desktop_extras(&counters(), None, None, 0);
         assert_eq!(quiet.len(), 1);
         assert_eq!(quiet[0].text, "present: fifo");
+        // The compositor's word on scanout: whole, none, or a share; silence where it
+        // never speaks or showed nothing.
+        for (scanout, want) in [
+            (Some((60, 60)), "present: fifo · scanout"),
+            (Some((0, 60)), "present: fifo · composited"),
+            (Some((30, 60)), "present: fifo · scanout 50%"),
+            (Some((0, 0)), "present: fifo"),
+        ] {
+            let p = PresentCounters {
+                scanout,
+                ..counters()
+            };
+            assert_eq!(desktop_extras(&p, None, None, 0)[0].text, want);
+        }
         assert!(
             !quiet[0].advanced_only,
             "Standard Detailed shows the present path too"

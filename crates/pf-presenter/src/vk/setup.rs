@@ -1105,6 +1105,10 @@ impl Presenter {
                 None
             },
             #[cfg(target_os = "linux")]
+            scanout: (0, 0),
+            #[cfg(target_os = "linux")]
+            scanout_reported: false,
+            #[cfg(target_os = "linux")]
             native: if crate::wl_native::enabled() {
                 crate::wl_native::NativeLane::new(window, native_timelines).unwrap_or_else(|e| {
                     tracing::warn!(error = %format!("{e:#}"), "native scanout lane unavailable");

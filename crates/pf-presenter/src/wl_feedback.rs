@@ -8,8 +8,8 @@
 //!
 //! SDL owns the socket: its pump reads the events and [`SurfaceFeedback::take`] dispatches
 //! them from a private queue, as the native lane does. Times arrive on CLOCK_MONOTONIC and
-//! move onto the session clock as they land. Opt-in (`PUNKTFUNK_SURFACE_FEEDBACK=1`) until
-//! read against a panel.
+//! move onto the session clock as they land. The `zero_copy` kind bit is the only word a
+//! client gets on whether the compositor scans its buffer out; the stats line shows it.
 
 use anyhow::{Context as _, Result};
 use sdl3::video::WindowContext;
@@ -25,9 +25,9 @@ use wayland_protocols::wp::presentation_time::client::{
 
 const CLOCK_MONOTONIC: u32 = 1;
 
-/// `PUNKTFUNK_SURFACE_FEEDBACK=1` arms the probe.
+/// On unless `PUNKTFUNK_SURFACE_FEEDBACK=0`: one feedback object per present.
 pub fn enabled() -> bool {
-    std::env::var("PUNKTFUNK_SURFACE_FEEDBACK").is_ok_and(|v| v != "0")
+    std::env::var("PUNKTFUNK_SURFACE_FEEDBACK").map_or(true, |v| v != "0")
 }
 
 /// One present the compositor answered: the id the presenter gave it, and when the

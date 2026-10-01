@@ -340,6 +340,13 @@ pub struct Presenter {
     /// The compositor's own stamp per swapchain present, beside the driver's.
     #[cfg(target_os = "linux")]
     feedback: Option<crate::wl_feedback::SurfaceFeedback>,
+    /// (flipped without a copy, shown) since the last take, from the compositor's stamps.
+    #[cfg(target_os = "linux")]
+    scanout: (u32, u32),
+    /// The compositor has flagged a zero-copy flip at least once. KWin before 6.7 never
+    /// sets the bit, so until then a zero means nothing.
+    #[cfg(target_os = "linux")]
+    scanout_reported: bool,
     /// Exportable copies of Vulkan Video or PyroWave pictures for the lane; built on the
     /// first one.
     #[cfg(target_os = "linux")]
@@ -1194,6 +1201,15 @@ impl Presenter {
         self.present_timer.as_ref().map_or(0, |t| t.take_unshown())
     }
 
+    /// (flipped without a copy, shown) since the last call, by the compositor's own word.
+    /// `None` until the compositor has ever flagged a flip: a zero from one that never
+    /// says so is not "composited".
+    #[cfg(target_os = "linux")]
+    pub(crate) fn take_scanout(&mut self) -> Option<(u32, u32)> {
+        let out = std::mem::take(&mut self.scanout);
+        self.scanout_reported.then_some(out)
+    }
+
     /// (zero-copy, presented) the native lane counted since the last call.
     #[cfg(target_os = "linux")]
     pub(crate) fn take_native_zero_copy(&mut self) -> (u32, u32) {
@@ -1324,6 +1340,13 @@ impl Presenter {
         #[cfg(target_os = "linux")]
         if let Some(fb) = self.feedback.as_mut() {
             for s in fb.take() {
+                if s.displayed_ns.is_some() {
+                    self.scanout.1 += 1;
+                    if s.zero_copy {
+                        self.scanout.0 += 1;
+                        self.scanout_reported = true;
+                    }
+                }
                 tracing::trace!(
                     target: "pf_glass",
                     id = s.present_id,
