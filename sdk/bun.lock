@@ -21,7 +21,7 @@
     },
   },
   "overrides": {
-    "undici": "^8.9.0",
+    "undici": "^8.10.2",
   },
   "packages": {
     "@effect/openapi-generator": ["@effect/openapi-generator@4.0.0-beta.98", "", { "dependencies": { "swagger2openapi": "^7.0.8" }, "peerDependencies": { "@effect/platform-node": "^4.0.0-beta.98", "effect": "^4.0.0-beta.98" }, "bin": { "openapigen": "dist/bin.js" } }, "sha512-7bqawr/HqJWqQ8H/bHyzBlLPA3LIIm3Y+cGYlIxnC/QVK795QpiEXb7uxTnP7V7w49V0sBtTerv4/9ZjsMffLQ=="],
@@ -172,7 +172,7 @@
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
-    "undici": ["undici@8.10.0", "", {}, "sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ=="],
+    "undici": ["undici@8.11.2", "", {}, "sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ=="],
 
     "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
 

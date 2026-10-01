@@ -313,9 +313,9 @@
     url = "https://registry.npmjs.org/undici-types/-/undici-types-8.3.0.tgz";
     hash = "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==";
   };
-  "undici@8.10.0" = fetchurl {
-    url = "https://registry.npmjs.org/undici/-/undici-8.10.0.tgz";
-    hash = "sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ==";
+  "undici@8.11.2" = fetchurl {
+    url = "https://registry.npmjs.org/undici/-/undici-8.11.2.tgz";
+    hash = "sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==";
   };
   "uuid@14.0.1" = fetchurl {
     url = "https://registry.npmjs.org/uuid/-/uuid-14.0.1.tgz";
