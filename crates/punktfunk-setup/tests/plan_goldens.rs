@@ -825,7 +825,12 @@ fn trap_steamos_forwards_the_gamestream_choice_to_the_script() {
     let cmds = plan_for(&fresh("steamos", Family::Steamos), &on).commands();
     assert!(
         cmds.iter()
-            .any(|c| c.ends_with("scripts/steamdeck/install.sh --gamestream")),
+            .any(|c| c.contains("scripts/steamdeck/install.sh --gamestream")),
+        "{cmds:?}"
+    );
+    // The console there reads web.env, which only the script writes.
+    assert!(
+        cmds.iter().any(|c| c.ends_with(" --web-bind=0.0.0.0")),
         "{cmds:?}"
     );
 }

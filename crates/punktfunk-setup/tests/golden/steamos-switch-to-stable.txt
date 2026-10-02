@@ -10,7 +10,7 @@
   + git -C ~/punktfunk checkout stable
   + git -C ~/punktfunk merge --ff-only origin/stable
   !! the build runs on this device — it asks for your sudo password first, then takes about 20 minutes on a first run (about a minute on a re-run) and prints nothing until it finishes
-  + bash ~/punktfunk/scripts/steamdeck/install.sh
+  + bash ~/punktfunk/scripts/steamdeck/install.sh --web-bind=0.0.0.0
   ok would set clipboard="files" in /box/config/punktfunk/host-settings.json
 ==> Checking for Sunshine / Apollo / Vibeshine
   ok No conflicting game-streaming host detected.
