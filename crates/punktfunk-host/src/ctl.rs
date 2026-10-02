@@ -57,12 +57,12 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             Ok(())
         }
         "status" => {
-            let v = Client::connect(None)?.get("/api/v1/status")?;
+            let v = Client::one_shot()?.get("/api/v1/status")?;
             out(json, &v, render_status);
             Ok(())
         }
         "sessions" => {
-            let v = Client::connect(None)?.get("/api/v1/status")?;
+            let v = Client::one_shot()?.get("/api/v1/status")?;
             let slice = json!({
                 "active_sessions": v.get("active_sessions").cloned().unwrap_or(Value::Null),
                 "video_streaming": v.get("video_streaming").cloned().unwrap_or(Value::Null),
@@ -76,30 +76,30 @@ fn run(args: &[&str], json: bool) -> Result<()> {
         }
         // `/status` has no device names. `/local/summary` is the one endpoint that names the client.
         "summary" => {
-            let v = Client::connect(None)?.get("/api/v1/local/summary")?;
+            let v = Client::one_shot()?.get("/api/v1/local/summary")?;
             out(json, &v, render_summary);
             Ok(())
         }
         "stop-session" => {
-            let v = Client::connect(None)?.delete("/api/v1/session")?;
+            let v = Client::one_shot()?.delete("/api/v1/session")?;
             out(json, &v, |_| println!("session stopped"));
             Ok(())
         }
         "end-game" => {
-            let v = Client::connect(None)?.post("/api/v1/game/end", &json!({}))?;
+            let v = Client::one_shot()?.post("/api/v1/game/end", &json!({}))?;
             out(json, &v, |_| println!("game ended"));
             Ok(())
         }
         "pair" => pair(rest, json),
         "pending" => {
-            let v = Client::connect(None)?.get("/api/v1/native/pending")?;
+            let v = Client::one_shot()?.get("/api/v1/native/pending")?;
             out(json, &v, render_pending);
             Ok(())
         }
         "approve" => approve(rest, json),
         "deny" => {
             let id = one_id(rest, "deny")?;
-            let v = Client::connect(None)?
+            let v = Client::one_shot()?
                 .post(&format!("/api/v1/native/pending/{id}/deny"), &json!({}))?;
             out(json, &v, move |_| println!("denied device {id}"));
             Ok(())
@@ -116,7 +116,7 @@ fn run(args: &[&str], json: bool) -> Result<()> {
                 "fingerprint": fingerprint,
                 "peer_ip": peer_ip,
             });
-            let v = Client::connect(None)?.post("/api/v1/pair/pin", &body)?;
+            let v = Client::one_shot()?.post("/api/v1/pair/pin", &body)?;
             out(json, &v, |_| println!("PIN submitted"));
             Ok(())
         }
@@ -129,7 +129,7 @@ fn run(args: &[&str], json: bool) -> Result<()> {
             Ok(())
         }
         "clients" => {
-            let c = Client::connect(None)?;
+            let c = Client::one_shot()?;
             // Both planes, labelled. A one-plane list is how "I unpaired it and it still connects" happens.
             let both = json!({
                 "native": c.get("/api/v1/native/clients")?,
@@ -162,7 +162,7 @@ fn run(args: &[&str], json: bool) -> Result<()> {
 }
 
 fn pair(args: &[&str], json: bool) -> Result<()> {
-    let c = Client::connect(None)?;
+    let c = Client::one_shot()?;
     match args.first().copied() {
         Some("arm") => {
             let mut body = json!({});
@@ -217,7 +217,7 @@ fn approve(args: &[&str], json: bool) -> Result<()> {
     if let Some(exp) = num_flag(args, "--expires-in")? {
         body["expires_in_secs"] = json!(exp);
     }
-    let v = Client::connect(None)?.post(&format!("/api/v1/native/pending/{id}/approve"), &body)?;
+    let v = Client::one_shot()?.post(&format!("/api/v1/native/pending/{id}/approve"), &body)?;
     out(json, &v, move |_| println!("approved device {id}"));
     Ok(())
 }
@@ -227,7 +227,7 @@ fn rename(args: &[&str], json: bool) -> Result<()> {
         (Some(fp), Some(name)) => (*fp, *name),
         _ => return Err(Failure::usage("rename: <fingerprint> <name>")),
     };
-    let c = Client::connect(None)?;
+    let c = Client::one_shot()?;
     // Native first, GameStream on API error: a fingerprint lives in exactly one store.
     let native = c.patch(
         &format!("/api/v1/native/clients/{fp}"),
@@ -245,7 +245,7 @@ fn rename(args: &[&str], json: bool) -> Result<()> {
 }
 
 fn unpair(args: &[&str], json: bool) -> Result<()> {
-    let c = Client::connect(None)?;
+    let c = Client::one_shot()?;
     if args.contains(&"--all") {
         // `--all` is the only mass-destructive verb. JSON cannot prompt, so it needs `--yes`.
         if !args.contains(&"--yes") {
@@ -291,7 +291,7 @@ fn access(args: &[&str], json: bool) -> Result<()> {
     };
     // Presets only. A bitmask on argv is how a digit-wrong grant hands a device the keyboard.
     let grants = grants_for(preset)?;
-    let v = Client::connect(None)?.patch(
+    let v = Client::one_shot()?.patch(
         &format!("/api/v1/native/clients/{fp}"),
         &json!({ "grants": grants }),
     )?;
@@ -308,7 +308,7 @@ fn access(args: &[&str], json: bool) -> Result<()> {
 /// than owning them, so it never lists them. Read `[]` as "this host does not track
 /// them", never as "there are none".
 fn display(args: &[&str], json: bool) -> Result<()> {
-    let c = Client::connect(None)?;
+    let c = Client::one_shot()?;
     match args.first().copied() {
         Some("preset") => {
             let id = args
@@ -462,7 +462,7 @@ fn render_display(v: &Value) {
 /// arms as a side effect of being read: arming writes a recording on `stop`, and the
 /// capture is one host-wide slot the console also drives.
 fn stats(args: &[&str], json: bool) -> Result<()> {
-    let c = Client::connect(None)?;
+    let c = Client::one_shot()?;
     match args.first().copied() {
         Some("record") => match args.get(1).copied() {
             Some("start") => {

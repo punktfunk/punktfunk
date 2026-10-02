@@ -80,6 +80,11 @@ impl Client {
         Self::connect_in(&pf_paths::config_dir(), global_timeout)
     }
 
+    /// [`Self::connect`] for a one-shot verb: each call ends within [`CALL_TIMEOUT`].
+    pub fn one_shot() -> Result<Client> {
+        Self::connect(Some(CALL_TIMEOUT))
+    }
+
     /// Explicit config dir so pin-mismatch tests need no `PUNKTFUNK_CONFIG_DIR`
     /// (`unsafe` since edition 2024).
     pub fn connect_in(dir: &Path, global_timeout: Option<Duration>) -> Result<Client> {
