@@ -441,14 +441,16 @@ impl SimpleComponent for AppModel {
         let parked = PENDING_LINKS.with_borrow_mut(std::mem::take);
         // Where a bare launch opens (design/default-host.md). Only a bare one: `--connect`,
         // `--browse` and every headless verb have already exec'd or returned before the
-        // application object exists, and a parked link is explicit intent that wins outright.
+        // application object exists, and a link is explicit intent that wins outright. A link
+        // that launched this process is not parked yet: GApplication's `open` follows startup.
+        let bare = parked.is_empty() && crate::cli::deep_link_arg().is_none();
         let console_home = cfg!(feature = "console")
             && crate::shots::shot_scene().is_none()
             && model.store.settings().gamepad_ui() == GamepadUi::Always;
-        if parked.is_empty() && console_home {
+        if bare && console_home {
             // The console follows Start in itself.
             sender.input(AppMsg::OpenConsole);
-        } else if parked.is_empty() {
+        } else if bare {
             let settings = model.store.settings();
             let known = model.store.hosts();
             let (default, source) = start::default_host_with_source(&settings, &known);
