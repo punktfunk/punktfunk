@@ -46,3 +46,6 @@ __pycache__/
 # Gradle build output inside the vendored pyrowave Granite Android platform (regenerated, never ours to commit)
 /crates/pyrowave-sys/vendor/pyrowave/Granite/application/platforms/android/**/.gradle/
 /crates/pyrowave-sys/vendor/pyrowave/Granite/application/platforms/android/**/build/
+
+# Editor state; the VS Code Swift extension regenerates launch.json
+.vscode/
