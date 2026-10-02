@@ -19,6 +19,7 @@ These links are the **stable** channel. For builds of `main`, see [Release Chann
 | iPhone, iPad, Apple TV (17+) | [App Store](#ios-ipados-apple-tv) |
 | Android 9+ phone or TV | [Google Play or APK](#android) |
 | LG webOS TV | [Community client](#lg-webos-tv-community) |
+| Samsung TV | [Samsung TV](/docs/samsung-tv) |
 | Anything else | [Moonlight](/docs/moonlight) |
 
 ## Linux desktop (Flatpak)
