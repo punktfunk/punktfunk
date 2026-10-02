@@ -330,7 +330,8 @@ pub struct HostConfig {
     pub on_disconnect_cmd: Option<String>,
     /// Row `max_fps` — game-side frame limiter. `None` (`0`) = no limit. Caps
     /// compositor render rate, not the session: a 120 Hz session over a 60 fps cap
-    /// still sends 120 frames (60 repeats). gamescope: `--nested-refresh`, 1..=240.
+    /// sends the game's 60 frames; repeats only fill a stalled source. gamescope:
+    /// `--nested-refresh`, 1..=240.
     pub max_fps: Option<u32>,
     /// Row `pyrowave_bpp` — bits per pixel a PyroWave frame gets at 4:2:0 SDR.
     pub pyrowave_bpp: f64,

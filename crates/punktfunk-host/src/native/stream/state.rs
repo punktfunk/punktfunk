@@ -1088,13 +1088,14 @@ impl StreamState {
             if !self.follow_source_mode()? {
                 continue;
             }
+            let (t_cap, repeat) = (tick.t_cap, tick.repeat);
             match self.encode_and_send(tick)? {
                 Flow::Next => {}
                 Flow::Continue => continue,
                 Flow::Break => break,
             }
             self.adapt_depth();
-            self.sleep_to_next(tick.t_cap);
+            self.sleep_to_next(t_cap, repeat);
         }
         self.drain();
         drop(self.frame_tx);
