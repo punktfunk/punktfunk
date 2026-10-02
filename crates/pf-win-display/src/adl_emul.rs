@@ -672,8 +672,9 @@ fn encode_journal(connectors: &[i32]) -> Vec<u8> {
 }
 
 /// The leased connector indices in a marker. An older host's bare `{"locked":true}` (or an
-/// unreadable marker) decodes as an empty list, which unlocks every connector as it always did.
-fn decode_journal(bytes: &[u8]) -> Vec<i32> {
+/// unreadable marker) is `None`, which unlocks every connector as it always did. An empty lease
+/// pinned nothing, so it unlocks nothing: the operator's own pins stay.
+fn decode_journal(bytes: &[u8]) -> Option<Vec<i32>> {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|v| v.get("connectors")?.as_array().cloned())
@@ -682,7 +683,6 @@ fn decode_journal(bytes: &[u8]) -> Vec<i32> {
                 .filter_map(|c| c.as_i64().and_then(|c| i32::try_from(c).ok()))
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// The connector index a lock record names: `adapterN.connectorM[TYPE]` → `M`.
@@ -763,25 +763,32 @@ pub fn lock_for_stream() -> bool {
 /// written) unlocks every connector. Idempotent.
 pub fn unlock_after_stream() {
     let leased = std::fs::read(journal_path())
-        .map(|b| decode_journal(&b))
-        .unwrap_or_default();
+        .ok()
+        .and_then(|b| decode_journal(&b));
     // The journal is the ONLY record that a connector is still pinned, and a pin outlives the
     // process (sometimes a reboot). Clearing it after a failed unlock strands the operator's
     // connector on a dummy EDID with nothing left to retry from, so keep it unless every
-    // unlock reported ADL_OK. `startup_recover` retries on the next start.
+    // unlock reported ADL_OK or the documented no-op. `startup_recover` retries on the next start.
     let unlocked = |outcome: &RunOutcome| {
-        !matches!(outcome, RunOutcome::InitFailed(_)) && outcome.records().iter().all(|r| r.ok())
+        !matches!(outcome, RunOutcome::InitFailed(_))
+            && outcome
+                .records()
+                .iter()
+                .all(|r| r.ok() || is_expected_noop(r))
     };
     let mut all_ok = true;
-    if leased.is_empty() {
-        let outcome = run(EmulAction::Unlock, None);
-        tracing_log("edid_lock", &outcome);
-        all_ok = unlocked(&outcome);
-    } else {
-        for c in leased {
-            let outcome = run(EmulAction::Unlock, Some(c));
+    match leased {
+        None => {
+            let outcome = run(EmulAction::Unlock, None);
             tracing_log("edid_lock", &outcome);
-            all_ok &= unlocked(&outcome);
+            all_ok = unlocked(&outcome);
+        }
+        Some(leased) => {
+            for c in leased {
+                let outcome = run(EmulAction::Unlock, Some(c));
+                tracing_log("edid_lock", &outcome);
+                all_ok &= unlocked(&outcome);
+            }
         }
     }
     if all_ok {
@@ -811,12 +818,14 @@ mod tests {
     use super::*;
 
     /// The lease round-trips; an older bare marker (or garbage) means "unlock everything", the
-    /// pre-lease behaviour; the connector index comes out of the lock record's target name.
+    /// pre-lease behaviour, and an empty lease unlocks nothing; the connector index comes out of
+    /// the lock record's target name.
     #[test]
     fn edid_lock_lease_round_trips_and_reads_the_bare_marker() {
-        assert_eq!(decode_journal(&encode_journal(&[2, 5])), vec![2, 5]);
-        assert!(decode_journal(br#"{"locked":true}"#).is_empty());
-        assert!(decode_journal(b"garbage").is_empty());
+        assert_eq!(decode_journal(&encode_journal(&[2, 5])), Some(vec![2, 5]));
+        assert_eq!(decode_journal(&encode_journal(&[])), Some(vec![]));
+        assert_eq!(decode_journal(br#"{"locked":true}"#), None);
+        assert_eq!(decode_journal(b"garbage"), None);
         assert_eq!(connector_of("adapter0.connector3[HDMI]"), Some(3));
         assert_eq!(connector_of("adapter0"), None);
     }
