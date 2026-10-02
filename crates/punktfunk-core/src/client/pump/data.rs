@@ -198,7 +198,9 @@ impl DataPump {
             if let Some(window) = tick.window {
                 self.close_window(&mut lp, window, request_kbps);
             }
-            match self.session.poll_frame() {
+            let polled = self.session.poll_frame();
+            self.ask_for_short_tails();
+            match polled {
                 Ok(frame) => self.on_frame(&mut lp, frame, clock_offset_ns, probe_active),
                 Err(PunktfunkError::NoFrame) => std::thread::sleep(Duration::from_micros(300)),
                 Err(_) => break,
@@ -570,6 +572,32 @@ impl DataPump {
         }
     }
 
+    /// Ask for recovery the moment a frame's last shard lands short of what its parity can
+    /// rebuild, a frame interval before the next frame shows the gap, so the host's next
+    /// encode is the anchor. The decode side's gap still arms the freeze. All-intra frames
+    /// reference nothing, and a stream nobody decodes yet starts on an IDR: neither asks.
+    fn ask_for_short_tails(&mut self) {
+        let tails: Vec<u32> = self.session.take_short_tails().collect();
+        if tails.is_empty()
+            || self.negotiated_codec == crate::quic::CODEC_PYROWAVE
+            || !self.shared.frames.consumer_seen()
+        {
+            return;
+        }
+        let now = Instant::now();
+        for idx in tails {
+            if let Some((missing, recovery)) = self.session.missing_beyond_parity(idx) {
+                self.shared
+                    .short_frames
+                    .lock()
+                    .unwrap()
+                    .note(idx, missing, recovery);
+            }
+            let ask = self.shared.rfi.lock().unwrap().tail_short(idx, now);
+            super::super::send_recovery(&self.shared, &self.ctrl_tx, ask);
+        }
+    }
+
     /// One polled frame. Probe filler is skipped, a frame with no decoder
     /// yet is held or dropped, a stale backlog jumps to live, the rest queue.
     fn on_frame(
@@ -744,12 +772,10 @@ mod tests {
         assert_eq!(take_pipeline_gap(&slot), None);
     }
 
-    /// Idle client-role loopback. The pump under test is its report tick,
-    /// not frames.
-    fn idle_client_session() -> (crate::transport::LoopbackTransport, Session) {
-        let (host_tp, client_tp) = crate::transport::loopback_pair(0, 0);
-        let cfg = crate::config::Config {
-            role: crate::config::Role::Client,
+    /// The loopback sessions' config, for either end.
+    fn loopback_config(role: crate::config::Role) -> crate::config::Config {
+        crate::config::Config {
+            role,
             phase: crate::config::ProtocolPhase::P2Punktfunk,
             fec: crate::config::FecConfig {
                 scheme: crate::config::FecScheme::Gf16,
@@ -762,9 +788,112 @@ mod tests {
             key: crate::crypto::SessionKey::Aes128Gcm([7u8; 16]),
             salt: [1, 2, 3, 4],
             loopback_drop_period: 0,
-        };
+        }
+    }
+
+    /// Idle client-role loopback. The pump under test is its report tick,
+    /// not frames.
+    fn idle_client_session() -> (crate::transport::LoopbackTransport, Session) {
+        let (host_tp, client_tp) = crate::transport::loopback_pair(0, 0);
+        let cfg = loopback_config(crate::config::Role::Client);
         // Keep the host end so the link stays whole for the pump's run.
         (host_tp, Session::new(cfg, Box::new(client_tp)).unwrap())
+    }
+
+    /// A pump on an idle loopback with an explicit rate, so no controller or probe runs.
+    fn test_pump(
+        session: Session,
+        shared: Arc<ClientShared>,
+        codec: u8,
+    ) -> (DataPump, tokio::sync::mpsc::Receiver<CtrlRequest>) {
+        let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(8);
+        let pump = DataPump {
+            session,
+            shared,
+            ctrl_tx,
+            clock_gen: Arc::new(AtomicU32::new(0)),
+            encode_lat: Arc::new(Mutex::new(Default::default())),
+            mode_gen: Arc::new(AtomicU32::new(0)),
+            bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
+            recovery_kf: Arc::new(AtomicU32::new(0)),
+            pipeline_gap: Arc::new(AtomicU32::new(0)),
+            bitrate_kbps: 20_000,
+            resolved_bitrate_kbps: 20_000,
+            negotiated_codec: codec,
+            bit_depth: 8,
+            chroma_format: 0,
+            marks_repeats: false,
+            serves_ramp: false,
+            reads_delivery: false,
+            audio_reserved_kbps: 256,
+            stream_cap_kbps: 100_000,
+            refresh_hz: 60,
+        };
+        (pump, ctrl_rx)
+    }
+
+    /// The first RFI the pump sends within `wait`, skipping its reports.
+    fn first_rfi(
+        rx: &mut tokio::sync::mpsc::Receiver<CtrlRequest>,
+        wait: Duration,
+    ) -> Option<(u32, u32)> {
+        let deadline = Instant::now() + wait;
+        loop {
+            match rx.try_recv() {
+                Ok(CtrlRequest::Rfi(r)) => return Some((r.first_frame, r.last_frame)),
+                Ok(_) => {}
+                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// A frame whose head is lost asks for recovery when its own tail lands, before any
+    /// later frame could show the gap. No decode loop runs here, so only the pump can ask.
+    /// A PyroWave stream references nothing and asks nothing.
+    #[test]
+    fn a_frame_whose_head_is_lost_asks_for_recovery_at_its_tail() {
+        use crate::transport::Transport;
+        let mode = crate::config::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        for (codec, expect) in [
+            (crate::quic::CODEC_HEVC, Some((1, 1))),
+            (crate::quic::CODEC_PYROWAVE, None),
+        ] {
+            let (host_tp, session) = idle_client_session();
+            let shared = Arc::new(ClientShared::new(mode));
+            let _ = shared.frames.pop(Duration::ZERO); // a decoder is attached
+            let (pump, mut ctrl_rx) = test_pump(session, shared.clone(), codec);
+            let pump_thread = std::thread::spawn(move || pump.run());
+
+            let mut pk =
+                crate::packet::Packetizer::new(&loopback_config(crate::config::Role::Host));
+            let coder = crate::fec::coder_for(crate::config::FecScheme::Gf16);
+            // 8 data shards, 2 parity: three lost at the head cannot be rebuilt.
+            let frame = vec![7u8; 8 * 1024];
+            let pts = crate::quic::wall_clock_ns();
+            for p in pk.packetize(&frame, pts, 0, coder.as_ref()).unwrap() {
+                host_tp.send(&p).unwrap();
+            }
+            let lossy = pk
+                .packetize(&frame, pts + 10_000_000, 0, coder.as_ref())
+                .unwrap();
+            assert_eq!(lossy.len(), 10);
+            for p in &lossy[3..] {
+                host_tp.send(p).unwrap();
+            }
+            assert_eq!(
+                first_rfi(&mut ctrl_rx, Duration::from_millis(500)),
+                expect,
+                "codec {codec}"
+            );
+
+            shared.shutdown.store(true, Ordering::SeqCst);
+            pump_thread.join().unwrap();
+        }
     }
 
     /// Host-rebuild repair, end to end: a real [`PipelineGap`] on a real
@@ -828,31 +957,11 @@ mod tests {
 
         // Explicit bitrate (not Automatic): keep the controller and the
         // startup probe out. The probe would discard a window of its own.
-        let (pump_ctrl_tx, mut pump_ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(8);
         let pump_shared = Arc::new(ClientShared::new(mode));
         let (_host_tp, session) = idle_client_session();
-        let pump = DataPump {
-            session,
-            shared: pump_shared.clone(),
-            ctrl_tx: pump_ctrl_tx,
-            clock_gen: Arc::new(AtomicU32::new(0)),
-            encode_lat: Arc::new(Mutex::new(Default::default())),
-            mode_gen: Arc::new(AtomicU32::new(0)),
-            bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
-            recovery_kf: Arc::new(AtomicU32::new(0)),
-            pipeline_gap: pipeline_gap.clone(),
-            bitrate_kbps: 20_000,
-            resolved_bitrate_kbps: 20_000,
-            negotiated_codec: crate::quic::CODEC_HEVC,
-            bit_depth: 8,
-            chroma_format: 0,
-            marks_repeats: false,
-            serves_ramp: false,
-            reads_delivery: false,
-            audio_reserved_kbps: 256,
-            stream_cap_kbps: 100_000,
-            refresh_hz: 60,
-        };
+        let (mut pump, mut pump_ctrl_rx) =
+            test_pump(session, pump_shared.clone(), crate::quic::CODEC_HEVC);
+        pump.pipeline_gap = pipeline_gap.clone();
         let started = Instant::now();
         let pump_thread = std::thread::spawn(move || pump.run());
 
