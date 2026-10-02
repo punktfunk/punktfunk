@@ -14,9 +14,10 @@
 //! unauthenticated (the spec is in-tree). Default bind is all interfaces;
 //! `--mgmt-bind 127.0.0.1:47990` restores loopback-only.
 
-use crate::gamestream::tls::serve_https;
+use crate::gamestream::tls::serve_https_with_plain;
 use crate::host::AppState;
 use anyhow::{Context, Result};
+use axum::http::StatusCode;
 use axum::{middleware, routing::get, Json, Router};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -43,7 +44,7 @@ mod plugin_access;
 pub(crate) mod plugins;
 mod session;
 mod settings;
-mod shared;
+pub(crate) mod shared;
 mod stats;
 mod store;
 #[cfg(test)]
@@ -245,7 +246,35 @@ pub async fn run(
         identity_fingerprint,
         browser_plane,
     );
-    serve_https(opts.bind, app, tls).await
+    // The plane's `/mgmt` tunnel dispatches into this very router. A second `app()` would mint
+    // its own `DeviceAuth`, and a token earned on one would be refused by the other.
+    crate::webtransport::mgmt::publish_router(app.clone());
+    // Plain HTTP answers only while the plane runs: a host serving no browsers listens exactly
+    // as it did before.
+    let plain = browser_plane.then(bootstrap_app);
+    serve_https_with_plain(opts.bind, app, tls, plain).await
+}
+
+/// What the management port says to a peer that speaks plain HTTP: where the browser plane is,
+/// and nothing else.
+///
+/// A packaged TV page runs from `file://`, and nothing there completes a TLS connection to a
+/// self-signed certificate — so it cannot read the plane's certificate hash over HTTPS, and
+/// without the hash it cannot dial. This one route carries exactly what HTTPS already serves
+/// to anyone (`mgmt::webtransport`): a hash any peer learns by connecting, and an attestation
+/// a paired page verifies against the identity it pinned, so an on-path substitution is caught
+/// there. Every other path answers 404; no state, no credential, no `require_auth` to bypass.
+/// Behind the CORS layer, because a browser page served over `http://` reads it cross-origin.
+fn bootstrap_app() -> Router {
+    Router::new()
+        .route("/api/v1/webtransport", get(webtransport::get_webtransport))
+        .fallback(|| async {
+            shared::api_error(
+                StatusCode::NOT_FOUND,
+                "only GET /api/v1/webtransport answers over plain HTTP",
+            )
+        })
+        .layer(middleware::from_fn(cors::cors))
 }
 
 /// Handler tests call this directly (not only [`run`]).

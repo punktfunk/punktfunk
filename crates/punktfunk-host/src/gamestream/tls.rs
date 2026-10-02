@@ -106,6 +106,9 @@ impl Drop for IpGuard {
     }
 }
 
+/// The first byte of a TLS record: a ClientHello opens with it, and no HTTP method does.
+const TLS_HANDSHAKE: u8 = 0x16;
+
 /// HTTPS server that surfaces the verified client cert to handlers.
 /// `axum_server` cannot expose the peer cert, so this runs the rustls
 /// handshake (tokio-rustls) and attaches [`PeerCertFingerprint`] on every
@@ -115,27 +118,51 @@ pub(crate) async fn serve_https(
     app: Router,
     tls: Arc<ServerConfig>,
 ) -> Result<()> {
-    serve_governed(bind, app, Some(tls)).await
+    serve_governed(bind, app, Some(tls), None).await
+}
+
+/// [`serve_https`], and a peer that speaks plain HTTP on the same port is answered by `plain`
+/// instead: the one route a packaged page reads before it can dial the browser plane
+/// (`mgmt::bootstrap_app`). The first byte tells the two apart, and nothing else changes —
+/// a TLS peer never sees the sniff, and `None` drops plaintext as [`serve_https`] does.
+pub(crate) async fn serve_https_with_plain(
+    bind: SocketAddr,
+    app: Router,
+    tls: Arc<ServerConfig>,
+    plain: Option<Router>,
+) -> Result<()> {
+    serve_governed(bind, app, Some(tls), plain).await
 }
 
 /// Same acceptor without TLS — the plain nvhttp listener (47989). Pre-auth
 /// by protocol; still needs the connection ceilings.
 pub(crate) async fn serve_plain(bind: SocketAddr, app: Router) -> Result<()> {
-    serve_governed(bind, app, None).await
+    serve_governed(bind, app, None, None).await
 }
 
 async fn serve_governed(
     bind: SocketAddr,
     app: Router,
     tls: Option<Arc<ServerConfig>>,
+    plain: Option<Router>,
 ) -> Result<()> {
-    let acceptor = tls.map(tokio_rustls::TlsAcceptor::from);
     let listener = bind_exclusive(bind)
         .and_then(|l| {
             l.set_nonblocking(true)?;
             tokio::net::TcpListener::from_std(l)
         })
         .with_context(|| format!("bind HTTP(S) {bind}"))?;
+    serve_listener(listener, app, tls, plain).await
+}
+
+/// The accept loop on a bound socket. Split from the bind so a test serves a port it chose.
+async fn serve_listener(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    tls: Option<Arc<ServerConfig>>,
+    plain: Option<Router>,
+) -> Result<()> {
+    let acceptor = tls.map(tokio_rustls::TlsAcceptor::from);
     let conns = Arc::new(tokio::sync::Semaphore::new(MAX_CONNS));
     let per_ip: Arc<std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>> =
         Arc::default();
@@ -169,12 +196,36 @@ async fn serve_governed(
         };
         let acceptor = acceptor.clone();
         let app = app.clone();
+        let plain = plain.clone();
         let local = tcp.local_addr().ok().map(LocalAddr);
         tokio::spawn(async move {
             let _permit = permit;
             let _ip_guard = ip_guard;
             match &acceptor {
                 Some(acceptor) => {
+                    // One byte peeked and left in the socket, so the handshake that follows
+                    // still reads it as its own first byte.
+                    if let Some(plain) = plain {
+                        let mut first = [0u8; 1];
+                        let peeked =
+                            tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, tcp.peek(&mut first)).await;
+                        match peeked {
+                            Ok(Ok(1)) if first[0] != TLS_HANDSHAKE => {
+                                serve_conn(
+                                    tcp,
+                                    plain,
+                                    PeerCertFingerprint(None),
+                                    PeerAddr(peer),
+                                    local,
+                                )
+                                .await;
+                                return;
+                            }
+                            Ok(Ok(1)) => {}
+                            // Closed before a byte, or dawdling: no slot for either.
+                            _ => return,
+                        }
+                    }
                     let tls_stream =
                         match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
                             .await
@@ -308,6 +359,74 @@ mod governed_tests {
         }
         assert_eq!(ok, MAX_CONNS_PER_IP * 3);
         assert_eq!(h2.current_max_send_streams(), MAX_H2_STREAMS as usize);
+    }
+
+    /// A GET on the TLS port in plain text reaches the plain router, and only where one is
+    /// offered; a TLS peer on the same socket is served as before. The nvhttp listener offers
+    /// none, so the sniff is the management port's alone.
+    #[tokio::test]
+    async fn plain_http_on_the_tls_port_reaches_the_plain_router_only_where_offered() {
+        punktfunk_core::tls::install_default_provider();
+        let id = crate::identity::ephemeral().unwrap();
+        let server_tls = server_config_optional_client(&id.cert_pem, &id.key_pem).unwrap();
+        let secure = Router::new().route("/", get(|| async { "over tls" }));
+        let plain = Router::new()
+            .route("/api/v1/webtransport", get(|| async { "the plane" }))
+            .fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "no") });
+        let bind = |plain: Option<Router>, tls: Arc<ServerConfig>| {
+            let secure = secure.clone();
+            async move {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                tokio::spawn(serve_listener(listener, secure, Some(tls), plain));
+                addr
+            }
+        };
+        let http = |addr: SocketAddr, path: &'static str| async move {
+            let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+            tcp.write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+            let mut out = Vec::new();
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(5), tcp.read_to_end(&mut out))
+                    .await;
+            String::from_utf8_lossy(&out).into_owned()
+        };
+
+        let offered = bind(Some(plain), server_tls.clone()).await;
+        let answer = http(offered, "/api/v1/webtransport").await;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(answer.ends_with("the plane"), "{answer}");
+        let other = http(offered, "/").await;
+        assert!(other.starts_with("HTTP/1.1 404"), "{other}");
+
+        let mut client = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(punktfunk_core::tls::PinVerify::new(None)))
+            .with_no_client_auth();
+        client.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let tcp = tokio::net::TcpStream::connect(offered).await.unwrap();
+        let mut tls = tokio_rustls::TlsConnector::from(Arc::new(client))
+            .connect("localhost".try_into().unwrap(), tcp)
+            .await
+            .unwrap();
+        tls.write_all(b"GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        let _ = tls.read_to_end(&mut out).await;
+        let over_tls = String::from_utf8_lossy(&out);
+        assert!(over_tls.starts_with("HTTP/1.1 200"), "{over_tls}");
+        assert!(over_tls.ends_with("over tls"), "{over_tls}");
+
+        // No plain router: the TLS acceptor meets the GET and answers with its alert, as it
+        // always has. Nothing HTTP comes back.
+        let unoffered = bind(None, server_tls).await;
+        let refused = http(unoffered, "/api/v1/webtransport").await;
+        assert!(!refused.starts_with("HTTP/"), "{refused:?}");
     }
 
     #[tokio::test]
