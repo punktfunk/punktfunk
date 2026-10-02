@@ -66,6 +66,8 @@ windows = { workspace = true, features = [
     "objidl",
     # SetCurrentProcessExplicitAppUserModelID + ShellLink/IShellLinkW.
     "shobjidl_core",
+    # SHGetKnownFolderPath: the Desktop the "Create shortcut" writer saves to.
+    "shlobj_core",
     "synchapi",
     "winerror",
     # Windowing, messages, icons, and the deep-link receiver's message-only window + COPYDATASTRUCT.
