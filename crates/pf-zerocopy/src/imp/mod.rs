@@ -331,6 +331,7 @@ struct ZeroCopyHealthState {
     gpu_negotiation_failed: AtomicBool,
     passthrough_tiled_refused: AtomicBool,
     hdr_tiled_refused: AtomicBool,
+    planar_refused: AtomicBool,
 }
 
 /// Failure memory for one capture identity. Clones share only that source's verdicts;
@@ -438,6 +439,16 @@ impl ZeroCopyHealth {
 
     pub fn refuse_hdr_tiled(&self) -> bool {
         !self.0.hdr_tiled_refused.swap(true, Ordering::Relaxed)
+    }
+
+    /// The producer's NV12/P010 offer is withdrawn: the CPU de-pad reads one packed plane,
+    /// so a planar frame the raw passthrough declines has no lane at all.
+    pub fn planar_refused(&self) -> bool {
+        self.0.planar_refused.load(Ordering::Relaxed)
+    }
+
+    pub fn refuse_planar(&self) {
+        self.0.planar_refused.store(true, Ordering::Relaxed);
     }
 }
 
@@ -742,6 +753,15 @@ mod tests {
         assert!(health.hdr_tiled_refused());
         assert!(!other.passthrough_tiled_refused());
         assert!(!other.hdr_tiled_refused());
+    }
+
+    #[test]
+    fn planar_refusal_is_sticky_per_identity() {
+        let health = zero_copy_health(0x2a01);
+        health.refuse_planar();
+        assert!(zero_copy_health(0x2a01).planar_refused());
+        assert!(!zero_copy_health(0x2a02).planar_refused());
+        assert!(!health.raw_disabled(), "packed passthrough stays available");
     }
 
     #[test]

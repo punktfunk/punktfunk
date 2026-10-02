@@ -127,8 +127,8 @@ struct CaptureSignals {
     /// This stream drives the graph: the producer paints only in cycles the
     /// loop thread's pacer starts on its requests. Cleared with `streaming`.
     driving: Arc<AtomicBool>,
-    /// GPU import is gone for this stream (worker death, or tiled imports
-    /// failed — CPU fallback would de-pad scrambled tiles). Never cleared.
+    /// GPU import is gone for this stream (worker death, or a tiled or planar
+    /// frame the CPU de-pad cannot read). Never cleared.
     broken: Arc<AtomicBool>,
     /// The stream reached `Error` (e.g. "no more input formats"). Terminal: it never delivers.
     errored: Arc<AtomicBool>,
@@ -512,6 +512,7 @@ fn spawn_pipewire(
         gpu_dmabuf_negotiation_failed: signals.health.gpu_negotiation_disabled(),
         // Default ON; `=0` (any falsy spelling, shared parser) restores packed RGB.
         native_nv12_env_on: pf_host_config::env_on("PUNKTFUNK_PIPEWIRE_NV12").unwrap_or(true),
+        planar_refused: signals.health.planar_refused(),
         hdr_cuda_ok: policy.hdr_cuda_ok,
         nv12_env_on: pf_zerocopy::nv12_enabled(),
         nvenc_raw: policy.nvenc_raw_dmabuf,
@@ -619,8 +620,8 @@ impl Capturer for PortalCapturer {
     fn try_latest(&mut self) -> Result<Option<CapturedFrame>> {
         if self.signals.broken.load(Ordering::Relaxed) {
             return Err(anyhow!(
-                "zero-copy GPU import lost (node {}): the import worker died or tiled imports \
-                 failed repeatedly — rebuilding capture",
+                "zero-copy GPU import lost (node {}): the import worker died, or a tiled or \
+                 planar offer failed — rebuilding capture",
                 self.node_id
             )
             .context(super::DisplayStillAlive));
@@ -766,8 +767,8 @@ impl PortalCapturer {
         loop {
             if self.signals.broken.load(Ordering::Relaxed) {
                 return Err(anyhow!(
-                    "zero-copy GPU import lost (node {}): the import worker died or tiled imports \
-                     failed repeatedly — rebuilding capture",
+                    "zero-copy GPU import lost (node {}): the import worker died, or a tiled or \
+                     planar offer failed — rebuilding capture",
                     self.node_id
                 ));
             }

@@ -119,12 +119,13 @@ impl FenceWaitStats {
 }
 
 /// Run the fallback for a broken raw-passthrough frame: pick the action for
-/// `(reason, ud.modifier)`, emit its once-per-reason line, and act on it.
+/// `(reason, ud.modifier, planar)`, emit its once-per-reason line, and act on it.
 /// `true` = the caller falls through to the mmap de-pad; `false` = the frame
-/// ends here — dropped, or the tiled offer refused and the capture flagged to
-/// rebuild on LINEAR.
+/// ends here — dropped, or the tiled or planar offer refused and the capture
+/// flagged to rebuild without it.
 fn handle_passthrough_fallback(ud: &mut UserData, reason: PassthroughFallback) -> bool {
-    let action = passthrough_fallback_action(reason, ud.modifier);
+    let planar = matches!(ud.format, Some(PixelFormat::Nv12 | PixelFormat::P010));
+    let action = passthrough_fallback_action(reason, ud.modifier, planar);
     // Once per distinct reason (`.process` is per-frame). The running count separates a
     // persistent downgrade from a one-frame hiccup at renegotiation.
     if let Some(frames) = ud.passthrough_fallbacks.note(reason) {
@@ -145,6 +146,10 @@ fn handle_passthrough_fallback(ud: &mut UserData, reason: PassthroughFallback) -
                     "the tiled offer is refused for this capture identity and it rebuilds on \
                      LINEAR"
                 }
+                PassthroughFallbackAction::DropPlanarAndRebuild => {
+                    "the CPU path reads packed RGB only, so the planar offer is refused for \
+                     this capture identity and it rebuilds on packed RGB"
+                }
             },
             reason.hint()
         );
@@ -160,6 +165,11 @@ fn handle_passthrough_fallback(ud: &mut UserData, reason: PassthroughFallback) -
                     reason.as_str()
                 );
             }
+            ud.signals.broken.store(true, Ordering::Relaxed);
+            false
+        }
+        PassthroughFallbackAction::DropPlanarAndRebuild => {
+            ud.signals.health.refuse_planar();
             ud.signals.broken.store(true, Ordering::Relaxed);
             false
         }
