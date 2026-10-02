@@ -295,8 +295,8 @@ pub fn is_confined(require_pairing: bool, origins: &[String]) -> bool {
     require_pairing || !origins.is_empty()
 }
 
-/// One browser session: check the origin, take a session slot, then hand the connection to
-/// [`session::run`]. `/echo` keeps Phase 1's loopback for the measurement pages.
+/// One browser session: check the origin, then hand the connection to [`session::run`], which
+/// takes the session slot. `/echo` keeps Phase 1's loopback for the measurement pages.
 async fn session(
     incoming: wtransport::endpoint::IncomingSession,
     serving: &Arc<Serving>,
@@ -339,15 +339,8 @@ async fn session(
         return echo(connection).await;
     }
 
-    // Slot after the handshake, as the native plane does: a full host still accepts, so the
-    // browser sees a live path (keep-alive) instead of a silent dial timeout.
-    let permit = sem
-        .clone()
-        .acquire_owned()
-        .await
-        .expect("session semaphore is never closed");
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), permit, sem).await {
+    match session::run(connection.clone(), serving.clone(), sem).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(crate::native::Served::ProbeClose) => {}
         Err(e) => {

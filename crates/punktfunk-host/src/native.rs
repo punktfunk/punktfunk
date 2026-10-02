@@ -1105,16 +1105,16 @@ type AudioCapSlot = Arc<std::sync::Mutex<Option<Box<dyn crate::audio::AudioCaptu
 /// the path; approval streams with no reconnect. Under the pending TTL (10 min).
 const PENDING_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// Park an unpaired knock until the console decides, holding no session slot while it waits.
+/// Park an unpaired knock until the console decides. The caller holds no session slot while
+/// it waits.
 ///
-/// `Ok(Ok(_))` is an approval, with the slot taken back like any fresh client's (waits if busy).
+/// `Ok(Ok(_))` is an approval, with a slot taken like any fresh client's (waits if busy).
 /// `Ok(Err(reason))` is the refusal to send. `Err` means the client left before a decision.
 pub(crate) async fn park_knock(
     conn: &link::SessionLink,
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
-    permit: tokio::sync::OwnedSemaphorePermit,
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<Result<tokio::sync::OwnedSemaphorePermit, punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
@@ -1123,7 +1123,6 @@ pub(crate) async fn park_knock(
     // QUIC-validated source IP for the pending per-source cap. Knock generation makes
     // this connection the one an approval admits — siblings must not all start a session.
     let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()));
-    drop(permit);
     let decision = tokio::select! {
         d = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT) => d,
         _ = conn.closed() => anyhow::bail!("client disconnected before pairing approval"),
@@ -1320,7 +1319,8 @@ async fn serve_session(
                 gate_hello.name.as_deref().unwrap_or(""),
                 &fp_hex,
             );
-            permit = match park_knock(&conn, np, &label, &fp_hex, permit, &sem).await? {
+            drop(permit);
+            permit = match park_knock(&conn, np, &label, &fp_hex, &sem).await? {
                 Ok(permit) => permit,
                 Err(reason) => {
                     close_rejected(&conn, reason).await;

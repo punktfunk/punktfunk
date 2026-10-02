@@ -53,15 +53,13 @@ fn rejected(reason: RejectReason) -> anyhow::Error {
 
 /// Admit the browser, then run the native session on its connection.
 ///
-/// The permit is the same pool the native plane draws from: a browser holds a session slot, not
-/// a browser slot. It is taken before the first read so a slow handshake never lets a host that
-/// is full accept a fifth encoder — which is why every pre-auth read and write is bounded: an
-/// idle peer must give the slot back. An unpaired device gives it back while it waits for the
-/// console, past those bounds; the plane's keep-alive holds the path meanwhile.
+/// `sem` is the pool the native plane draws from: a browser holds a session slot, not a
+/// browser slot. The slot is taken once admission returns, so a peer that stalls before its
+/// device signature holds none. An unpaired device takes one only on approval. A full host
+/// waits here with the session accepted; the plane's keep-alive holds the path meanwhile.
 pub(crate) async fn run(
     conn: Connection,
     serving: Arc<Serving>,
-    permit: tokio::sync::OwnedSemaphorePermit,
     sem: Arc<tokio::sync::Semaphore>,
 ) -> Result<Served> {
     let Some(Admitted {
@@ -75,13 +73,16 @@ pub(crate) async fn run(
         return Ok(Served::Session);
     };
     let permit = match knock {
-        None => permit,
+        None => sem
+            .acquire_owned()
+            .await
+            .expect("session semaphore is never closed"),
         Some(label) => {
             let fp = link
                 .peer_fingerprint()
                 .context("a knock is keyed by its device")?;
             let pairing = &serving.plane.pairing;
-            crate::native::park_knock(&link, pairing, &label, &hex::encode(fp), permit, &sem)
+            crate::native::park_knock(&link, pairing, &label, &hex::encode(fp), &sem)
                 .await?
                 .map_err(rejected)?
         }
@@ -137,7 +138,7 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
     let (device_fp, knock) = if serving.plane.require_pairing {
         let mut nonce = [0u8; 32];
         rand::rng().fill_bytes(&mut nonce);
-        // Bounded too: the write waits on the peer's stream credit while we hold the permit.
+        // Bounded too: the write waits on the peer's stream credit.
         tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
             write_msg(&mut tx, &AuthChallenge { nonce }.encode()),
@@ -503,8 +504,7 @@ mod tests {
         assert_eq!(label, "Safari on Mac");
 
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let permit = sem.clone().try_acquire_owned().unwrap();
-        let park = crate::native::park_knock(&admitted.link, &np, &label, &fp_hex, permit, &sem);
+        let park = crate::native::park_knock(&admitted.link, &np, &label, &fp_hex, &sem);
         let console = async {
             let pending = loop {
                 if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {
