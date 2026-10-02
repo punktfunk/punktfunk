@@ -204,7 +204,8 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 
 /// `None` app is `sleep infinity`. The wrapper relays `LIBEI_SOCKET`, applies the
 /// nested environment, and runs the launch value as the shell command its source promises.
-/// The WSI layer stays out of gamescope's own Vulkan process.
+/// The WSI layer stays out of gamescope's own Vulkan process. Only a flatpak sees gamescope's
+/// Wayland socket ([`shape_flatpak_command`]); everything else gets [`GDK_X11`].
 #[allow(clippy::too_many_arguments)] // one cohesive spawn spec, one call site
 pub(super) fn spawn(
     w: u32,
@@ -268,9 +269,12 @@ pub(super) fn spawn(
         mark_seat_steam_log(home);
     }
     let mut nested_env = wsi.env(hdr);
-    if let Some(w) = nested_wayland_display(&app) {
-        nested_env.push(("WAYLAND_DISPLAY", w.to_string()));
+    // A flatpak's Wayland socket rides its command; GTK in anything else stays on Xwayland.
+    let flatpak = shape_flatpak_command(&app);
+    if flatpak.is_none() {
+        nested_env.push((GDK_X11.0, GDK_X11.1.to_string()));
     }
+    let app = flatpak.unwrap_or(app);
     if let Some(home) = nested_seat_home {
         nested_env.extend(seat::env(home));
     }
