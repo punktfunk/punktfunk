@@ -1077,7 +1077,8 @@ impl Watcher {
                 return;
             }
             if matches!(self.kind, LeaseKind::Child) {
-                if let Some(Ok(Some(_))) = self.child.as_mut().map(|c| c.try_wait()) {
+                // `Err` is ECHILD: the End-game ladder reaped it first. Gone all the same.
+                if let Some(Ok(Some(_)) | Err(_)) = self.child.as_mut().map(|c| c.try_wait()) {
                     self.child = None;
                     shared.forget_child();
                     if shared.spec.is_empty() {
