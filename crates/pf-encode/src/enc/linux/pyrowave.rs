@@ -1574,6 +1574,7 @@ impl PyroWaveEncoder {
                 Err(e) => {
                     if import_failure_feeds_latch(&e) {
                         reject_dmabuf(d, &format!("{e:#}"));
+                        return Err(e.context(super::vk_util::ImportRejected));
                     }
                     return Err(e);
                 }

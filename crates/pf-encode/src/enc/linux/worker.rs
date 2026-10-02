@@ -607,9 +607,11 @@ fn encode_one(
     // AU is ready when `poll` returns and `frame` is alive across both halves.
     let t0 = Instant::now();
     if let Err(e) = enc.submit(&frame) {
+        // Only an import refusal: an OOM or a device loss must not latch the host's capture.
+        let rejected = e.downcast_ref::<super::vk_util::ImportRejected>().is_some();
         return Ok(FromWorker::EncodeErr {
             message: format!("{e:#}"),
-            capture_rebuild: true,
+            capture_rebuild: rejected,
         });
     }
     let Some(au) = enc.poll()? else {

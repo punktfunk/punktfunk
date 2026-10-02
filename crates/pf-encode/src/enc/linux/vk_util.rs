@@ -327,6 +327,17 @@ pub(crate) fn import_failure_feeds_latch(e: &anyhow::Error) -> bool {
     }
 }
 
+/// Context on an import error that [`reject_dmabuf`] took. The encode worker forwards only
+/// these as `capture_rebuild`, so the host's latch sees what an in-process encoder feeds it.
+#[derive(Debug)]
+pub(crate) struct ImportRejected;
+
+impl std::fmt::Display for ImportRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("dmabuf import refused")
+    }
+}
+
 /// Feed a deterministic dmabuf rejection to this capture's health. A completed
 /// latch marks the capturer broken so the next tick rebuilds its offer.
 pub(crate) fn reject_dmabuf(d: &pf_frame::DmabufFrame, reason: &str) {
