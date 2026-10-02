@@ -80,7 +80,8 @@ pub(super) struct StallEvidence {
     /// content stopped. `None` when the ETW session is unavailable.
     pub(super) etw_counts: Option<super::dxgkrnl_etw::EtwWindowCounts>,
     /// Cursor travel during the hole (px, |dx|+|dy|). `Some(0)` = nothing to
-    /// compose (damage-idle); `Some(n>0)` = damage existed and DWM composed
+    /// compose (damage-idle), also under a declared hardware cursor, whose
+    /// travel composes nothing; `Some(n>0)` = damage existed and DWM composed
     /// none of it. `None` = never sampled. The stall-ending frame's own move
     /// is not counted (capturer fold-on-next-call sampler).
     pub(super) cursor_moved_px: Option<u32>,
@@ -167,8 +168,9 @@ pub(super) enum StallVerdict {
     /// The worker kept draining and the pool took nothing: DWM composed nothing while
     /// something on the desktop was dirty.
     ComposeSilence,
-    /// Compose silence with a cursor that never moved: nothing was dirty. An input pause,
-    /// not a display stall — kept out of the metronome and both repeated-stall warns.
+    /// Compose silence with no cursor damage (it never moved, or a hardware cursor carried
+    /// it): nothing was dirty. An input pause, not a display stall — kept out of the
+    /// metronome and both repeated-stall warns.
     DamageIdle,
 }
 
@@ -178,7 +180,7 @@ impl std::fmt::Display for StallVerdict {
             Self::NoTelemetry => "no driver telemetry yet (no verdict)",
             Self::WorkerStalled => "driver-worker-stalled (heartbeat silent) — host CPU/MMCSS or a dead WUDFHost, NOT the display path",
             Self::ComposeSilence => "compose-silence (the driver's pool took no frame) — DWM composed nothing; the disturbance is below capture",
-            Self::DamageIdle => "damage-idle (the cursor sat still through the hole) — nothing was dirty, so DWM correctly composed nothing; an input pause, not a display stall",
+            Self::DamageIdle => "damage-idle (no cursor damage through the hole) — nothing was dirty, so DWM correctly composed nothing; an input pause, not a display stall",
         })
     }
 }
