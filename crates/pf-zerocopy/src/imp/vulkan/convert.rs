@@ -341,7 +341,11 @@ impl VkBridge {
                 .create_buffer(
                     &vk::BufferCreateInfo::default()
                         .size(size)
-                        .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+                        // TRANSFER_DST: a producer NV12/P010 is copied in, not converted.
+                        .usage(
+                            vk::BufferUsageFlags::STORAGE_BUFFER
+                                | vk::BufferUsageFlags::TRANSFER_DST,
+                        )
                         .push_next(&mut ext),
                     None,
                 )
