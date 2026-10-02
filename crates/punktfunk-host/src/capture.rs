@@ -235,6 +235,12 @@ pub fn capture_virtual_output(
     // PipeWire probes only where modifiers are offered: level-21 gamescope, or
     // non-gamescope PyroWave. Direct capture needs the same exact consumer lists.
     let gamescope_tiled = gamescope && pf_vdisplay::gamescope_tiled_capture(None);
+    // NVENC copies a producer's planar frame; an older gamescope composites it through system
+    // RAM, which costs more than the conversion it saves. VAAPI keeps its own rule.
+    let nv12_native = want.nv12_native
+        && (!gamescope
+            || crate::encode::linux_zero_copy_is_vaapi()
+            || pf_vdisplay::gamescope_planar_capture(None));
     let modifier_codec = if gamescope {
         gamescope_tiled.then_some(codec).flatten()
     } else if want.pyrowave {
@@ -253,7 +259,7 @@ pub fn capture_virtual_output(
         match pf_capture::open_direct_output(
             name.clone(),
             keepalive,
-            zero_copy_policy(want.pyrowave, want.nv12_native, codec, bit_depth, want.hdr),
+            zero_copy_policy(want.pyrowave, nv12_native, codec, bit_depth, want.hdr),
         ) {
             Ok(c) => {
                 tracing::info!(output = %name, "capturing the compositor output directly");
@@ -293,7 +299,7 @@ pub fn capture_virtual_output(
                 gamescope_tiled,
                 ..zero_copy_policy(
                     want.pyrowave,
-                    want.nv12_native,
+                    nv12_native,
                     modifier_codec,
                     bit_depth,
                     want.hdr,
