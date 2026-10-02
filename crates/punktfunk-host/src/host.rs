@@ -411,7 +411,7 @@ fn sanitize_display_name(raw: &str) -> String {
     }
 }
 
-/// Load the persisted host uniqueid, or mint from `/proc/sys/kernel/random/uuid` and store it.
+/// Load the persisted host uniqueid, or mint 16 random bytes as hex and store it.
 fn load_or_create_uniqueid() -> Result<String> {
     let path = pf_paths::config_dir().join("uniqueid");
     if let Ok(s) = std::fs::read_to_string(&path) {
@@ -420,15 +420,7 @@ fn load_or_create_uniqueid() -> Result<String> {
             return Ok(t.to_string());
         }
     }
-    let id = std::fs::read_to_string("/proc/sys/kernel/random/uuid")
-        .map(|u| u.trim().replace('-', ""))
-        .unwrap_or_else(|_| {
-            format!(
-                "{:016x}{:016x}",
-                std::process::id(),
-                crate::gamestream::HTTP_PORT
-            )
-        });
+    let id = hex::encode(rand::random::<[u8; 16]>());
     std::fs::create_dir_all(pf_paths::config_dir()).ok();
     std::fs::write(&path, &id).with_context(|| format!("write {}", path.display()))?;
     Ok(id)
