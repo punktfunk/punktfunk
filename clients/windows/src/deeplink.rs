@@ -303,7 +303,16 @@ pub(crate) fn write_shortcut(label: &str, url: &str) -> Result<std::path::PathBu
     use windows::Win32::wtypesbase::CLSCTX_INPROC_SERVER;
 
     let desktop = desktop_dir()?;
-    let path = desktop.join(format!("{}.lnk", file_name(label)));
+    // Never over another shortcut: two hosts can share a label, and the user's own files
+    // live here too.
+    let stem = file_name(label);
+    let path = (1..)
+        .map(|n| match n {
+            1 => desktop.join(format!("{stem}.lnk")),
+            n => desktop.join(format!("{stem} ({n}).lnk")),
+        })
+        .find(|p| !p.exists())
+        .expect("an unused shortcut name");
     // Alias when packaged, absolute path when not — see the doc comment above.
     let target = if has_package_identity() {
         "punktfunk-client.exe".to_string()
