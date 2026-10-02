@@ -184,6 +184,9 @@ pub(crate) struct Shared {
     /// Library-fetch generation (the speed test's guard pattern): bumped per fetch so a
     /// superseded worker (re-open, Retry, another host) stops publishing.
     pub(crate) library_gen: std::sync::atomic::AtomicU64,
+    /// PIN-pairing generation (the same guard): bumped per attempt and by Cancel, so a
+    /// ceremony the user left still saves its pin but neither connects nor navigates.
+    pub(crate) pair_gen: std::sync::atomic::AtomicU64,
 }
 
 pub struct AppCtx {

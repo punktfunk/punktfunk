@@ -7,6 +7,7 @@ use super::lucide;
 use super::style::*;
 use super::{Screen, Svc};
 use crate::trust;
+use std::sync::atomic::Ordering;
 use windows_reactor::*;
 
 pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
@@ -38,7 +39,9 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
                 let pin = live.borrow().trim().to_string();
                 let (ctx3, ss, st, target3) =
                     (ctx2.clone(), ss.clone(), st.clone(), target2.clone());
+                let generation = ctx3.shared.pair_gen.fetch_add(1, Ordering::SeqCst) + 1;
                 std::thread::spawn(move || {
+                    let current = || ctx3.shared.pair_gen.load(Ordering::SeqCst) == generation;
                     match trust::pair_with_host(
                         &target3.addr,
                         target3.port,
@@ -55,6 +58,9 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
                                 true,
                                 &target3.mac,
                             );
+                            if !current() {
+                                return;
+                            }
                             connect(&ctx3, &target3, Some(fp), &ss, &st);
                             // After `connect`, which clears the status line. The stream runs
                             // on the pin in memory; the next launch asks for a PIN again.
@@ -63,6 +69,9 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
                             }
                         }
                         Err(e) => {
+                            if !current() {
+                                return;
+                            }
                             // Cause-specific: wrong PIN vs pairing-not-armed vs unreachable —
                             // never blame the PIN for a dead network path (shared wording).
                             st.call(trust::pair_error_message(&e));
@@ -73,10 +82,11 @@ pub(crate) fn pair_page(props: &Svc, cx: &mut RenderCx) -> Element {
             })
     };
     let cancel_btn = {
-        let ss = set_screen.clone();
-        button("Cancel")
-            .icon(lucide::icon("x"))
-            .on_click(move || ss.call(Screen::Hosts))
+        let (ss, ctx2) = (set_screen.clone(), ctx.clone());
+        button("Cancel").icon(lucide::icon("x")).on_click(move || {
+            ctx2.shared.pair_gen.fetch_add(1, Ordering::SeqCst);
+            ss.call(Screen::Hosts);
+        })
     };
     // The no-PIN alternative offered alongside the PIN ceremony: open an identified connect that
     // the host parks until the operator approves this device in its console (delegated approval).
