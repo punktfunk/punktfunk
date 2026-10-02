@@ -1639,7 +1639,7 @@ fn pad_render_thread(
                 // An unplugged pad stops signalling without an error: end, and the worker
                 // re-correlates, as the main render path reopens.
                 silent_waits += 1;
-                if silent_waits >= crate::audio_wasapi::EVENT_SILENT_WAITS {
+                if silent_waits >= crate::audio::EVENT_SILENT_WAITS {
                     return Err(anyhow!("the pad render event stopped"));
                 }
                 continue;
