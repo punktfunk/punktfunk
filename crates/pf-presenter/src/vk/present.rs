@@ -738,11 +738,22 @@ impl Presenter {
                     }
                 }
 
-                // `Redraw` on the direct path: the same planes and push constants, no new decode
-                // wait (the last real submit waited it) and no timeline signal (that value is
-                // spent). The native frame returns to its decode layout as on a real frame.
+                // `Redraw` of a frame drawn direct: the same planes and push constants, no new
+                // decode wait (the last real submit waited it) and no timeline signal (that value
+                // is spent). The native frame returns to its decode layout as on a real frame.
+                // Off the direct path (a new size or fit) the planes go to the video image first:
+                // a direct frame never wrote it.
                 Lane::Redraw => {
-                    if let (Some((l, _)), Some(target)) = (direct, direct_target) {
+                    let target = direct_target.or_else(|| {
+                        self.video.as_ref().map(|v| CscTarget::Video {
+                            framebuffer: v.framebuffer,
+                            extent: vk::Extent2D {
+                                width: v.width,
+                                height: v.height,
+                            },
+                        })
+                    });
+                    if let (Some(l), Some(target)) = (last, target) {
                         match l.src {
                             DirectSrc::Native => {
                                 if let Some(Retired::NativeVk(f)) = &self.retired_hw {
