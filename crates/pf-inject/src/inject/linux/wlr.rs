@@ -106,8 +106,17 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
                 _ => {}
             },
             // Drop the gone head; the pointer may still be bound to it until the next `retarget`.
+            // The connection outlives every virtual head: release a removed output's proxy.
             wl_registry::Event::GlobalRemove { name } => {
-                state.outputs.retain(|o| o.global != name);
+                state.outputs.retain(|o| {
+                    if o.global != name {
+                        return true;
+                    }
+                    if o.proxy.version() >= 3 {
+                        o.proxy.release();
+                    }
+                    false
+                });
             }
             _ => {}
         }
