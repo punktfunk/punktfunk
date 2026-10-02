@@ -1147,12 +1147,14 @@ impl Presenter {
                 .image_indices(&indices);
             // The id names the `done_sem` value either way; only present-wait carries it
             // to the driver, in the struct of the generation the waiter runs on.
-            if self.glass_active() {
+            let glass = self.glass_active();
+            if glass {
                 self.next_present_id += 1;
             }
-            // The compositor stamps the commit this present makes.
+            // The compositor stamps the commit this present makes. Only a waiter's sample
+            // can take it; without one the answers would pile up unread.
             #[cfg(target_os = "linux")]
-            if let Some(fb) = self.feedback.as_mut().filter(|_| !redraw) {
+            if let Some(fb) = self.feedback.as_mut().filter(|_| glass && !redraw) {
                 fb.request(self.next_present_id);
             }
             if self.present_id2 {

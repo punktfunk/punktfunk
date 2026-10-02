@@ -45,6 +45,7 @@ impl Shell {
             && self.presenter.needs_glass_gate()
             && self.presenter.present_timing_active()
             && (!estimated || st.cadence.verdict() == Cadence::Fixed)
+            && st.cadence.verdict() != Cadence::Variable
         {
             if let Some(f) = to_present.take() {
                 if st.gate.open(self.presenter.presents_outstanding(), now_ns) {
@@ -267,11 +268,9 @@ impl StreamState {
             && self.source_interval_ns.abs_diff(period as i64) < period / 10;
         let mut stamps = Vec::with_capacity(samples.len());
         let mut glass = Vec::with_capacity(samples.len());
-        // The engine's stamps are display times in any present mode; a wake time is one
-        // only where the wait ends on a vblank.
-        let exact = !samples.is_empty() && samples.iter().all(|s| s.exact);
         for s in samples {
             self.win.exact += u32::from(s.exact);
+            self.cadence.note_source(s.pts_ns);
             if self.last_displayed_ns != 0 && s.displayed_ns > self.last_displayed_ns {
                 let off = off_grid_ns(s.displayed_ns - self.last_displayed_ns, self.mode_period_ns);
                 self.win
@@ -323,24 +322,28 @@ impl StreamState {
             self.last_shown_pts_ns = s.pts_ns;
             self.last_displayed_ns = s.displayed_ns;
             stamps.push(s.displayed_ns);
-            glass.push((s.displayed_ns, s.pts_ns));
+            // An exact stamp (the engine's or the compositor's) is a display time in any
+            // mode; a wake time is one only where the wait ends on a vblank.
+            if s.exact || vblank_locked {
+                glass.push((s.displayed_ns, s.pts_ns));
+            }
         }
         self.clock.note_batch(&stamps, self.store.is_smoothing());
-        // VRR probe: healthy-window stamps only. Use the display mode's period
-        // (not the learned one — a slow stream makes the learner adopt our
-        // cadence as "the grid"). Wake-time stamps count in the FIFO family only:
-        // a MAILBOX or IMMEDIATE wait does not end on a vblank, so it would look like
-        // VRR. The engine's own stamps are display times in every mode.
+        // VRR probe: healthy-window stamps only, against the display mode's period (the
+        // learned one adopts a slow stream's cadence as "the grid").
         let healthy = self.last_forced == 0;
-        if exact || vblank_locked {
-            self.cadence.note(&glass, self.mode_period_ns, healthy);
-        }
+        self.cadence.note(&glass, self.mode_period_ns, healthy);
         // Phase-locked capture, the presenter's half: publish the grid the
         // local clock just learned, so the report and the scheduler cannot
         // disagree.
         if let Some(grid) = &self.latch_grid {
-            grid.period_ns
-                .store(self.clock.period_ns(), Ordering::Relaxed);
+            // Under measured variable refresh the learned period is our own cadence, not
+            // a grid the host may lock to: publish none.
+            let period = match self.cadence.verdict() {
+                Cadence::Variable => 0,
+                _ => self.clock.period_ns(),
+            };
+            grid.period_ns.store(period, Ordering::Relaxed);
             grid.anchor_ns
                 .store(self.clock.anchor_ns(), Ordering::Relaxed);
             grid.need_ns
@@ -912,6 +915,12 @@ impl StreamState {
             refresh_hz = hz,
             "display changed — relearning the latch grid"
         );
+    }
+
+    /// Focus or fullscreen changed under the window: the compositor may have switched
+    /// variable refresh on or off. The panel grid stands; the verdict is re-measured.
+    pub(super) fn forget_refresh_verdict(&mut self) {
+        self.cadence.reset();
     }
 }
 
