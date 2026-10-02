@@ -24,8 +24,8 @@ use crate::overlay::{
     RingFacts, RingInput, SessionPhase,
 };
 use crate::present_pace::{
-    Cadence, CadenceProbe, FrameStore, LatchClock, PresentGate, SourcePacer, MARGIN_MAX_NS,
-    MARGIN_STEP_NS,
+    off_grid_ns, Cadence, CadenceProbe, FrameStore, LatchClock, PresentGate, SourcePacer,
+    MARGIN_MAX_NS, MARGIN_STEP_NS,
 };
 use crate::touch::{Abs, Act};
 use crate::vk::{FrameInput, Presented, Presenter};
