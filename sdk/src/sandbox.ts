@@ -66,7 +66,26 @@ export interface SandboxPaths {
 	home: string;
 	/** A plugin without network: the runner's dir its UI socket goes in, and the forwarded port. */
 	ui?: { dir: string; port: number };
+	/** The host's `/home` when it is a link ({@link homeLink}), mirrored inside. */
+	homeLink?: HomeLink;
 }
+
+/** A link at `path` holding `target` and resolving to `real`: Fedora Atomic's `/home` → `var/home`. */
+export interface HomeLink {
+	path: string;
+	target: string;
+	real: string;
+}
+
+/** `p` when it is a link, else `undefined`. */
+export const homeLink = (p = "/home"): HomeLink | undefined => {
+	try {
+		if (!fs.lstatSync(p).isSymbolicLink()) return undefined;
+		return { path: p, target: fs.readlinkSync(p), real: fs.realpathSync(p) };
+	} catch {
+		return undefined;
+	}
+};
 
 /**
  * The `bwrap` argv for one plugin: everything before the program it runs.
@@ -74,6 +93,9 @@ export interface SandboxPaths {
  * Read-only for the system, the plugin's own code, manifest `reads`, and granted roots; read-write
  * for exactly its state dir, manifest `writes`, grants marked `write: true`, and `/tmp` (VirtualHere's
  * client IPC is a FIFO pair there, which is why the unit keeps the real `/tmp`).
+ *
+ * The host's `/home` link is mirrored and every host path binds where it resolves, so a canonical
+ * grant and a launcher's `$HOME` path both resolve, and `realpath` inside agrees with the host.
  */
 /**
  * The namespaces and the minimal root every sandbox gets, shared with {@link sandboxProbe} so a
@@ -141,10 +163,17 @@ export const bwrapArgv = (
 		argv.push("--setenv", k, v);
 	}
 	if (manifest.network) argv.push("--share-net");
+	// Before any bind: a bind under the link's spelling would make it a directory.
+	const link = paths.homeLink;
+	if (link) argv.push("--symlink", link.target, link.path);
+	const at = (p: string): string =>
+		link && (p === link.path || p.startsWith(`${link.path}/`))
+			? link.real + p.slice(link.path.length)
+			: p;
 	// Its own code, its own state, its own token, and the way to the host.
-	argv.push("--ro-bind", paths.pluginsDir, paths.pluginsDir);
-	argv.push("--ro-bind", paths.bun, paths.bun);
-	argv.push("--ro-bind", paths.runner, paths.runner);
+	argv.push("--ro-bind", paths.pluginsDir, at(paths.pluginsDir));
+	argv.push("--ro-bind", paths.bun, at(paths.bun));
+	argv.push("--ro-bind", paths.runner, at(paths.runner));
 	// A Nix-built bun loads its libc from the store, and NixOS tools live under the system
 	// profile. Both are world-readable already.
 	if (paths.bun.startsWith("/nix/store/")) {
@@ -168,17 +197,17 @@ export const bwrapArgv = (
 	// than a sandbox that refuses to start.
 	for (const p of manifest.reads ?? []) {
 		const abs = expandHome(p, paths.home);
-		if (bindable(abs, paths.home)) argv.push("--ro-bind-try", abs, abs);
+		if (bindable(abs, paths.home)) argv.push("--ro-bind-try", abs, at(abs));
 	}
 	for (const p of manifest.writes ?? []) {
 		const abs = expandHome(p, paths.home);
-		if (bindable(abs, paths.home)) argv.push("--bind-try", abs, abs);
+		if (bindable(abs, paths.home)) argv.push("--bind-try", abs, at(abs));
 	}
 	// Operator grants are read-only unless one opts into write.
 	for (const grant of grants) {
 		const abs = expandHome(grant.path, paths.home);
 		if (bindable(abs, paths.home))
-			argv.push(grant.write ? "--bind-try" : "--ro-bind-try", abs, abs);
+			argv.push(grant.write ? "--bind-try" : "--ro-bind-try", abs, at(abs));
 	}
 	return argv;
 };
