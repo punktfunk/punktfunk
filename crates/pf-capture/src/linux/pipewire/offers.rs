@@ -99,7 +99,7 @@ pub(super) fn probe_producer(
         })
         .register();
     // Round 1 replays the globals and binds; round 2 lands the bind's `info` and formats.
-    // The timer bounds a daemon that never answers.
+    // The one timer bounds every round together: a daemon that never answers.
     let awaited: Rc<Cell<Option<pw::spa::utils::result::AsyncSeq>>> = Rc::new(Cell::new(None));
     let _core_l = core
         .add_listener_local()
@@ -112,9 +112,13 @@ pub(super) fn probe_producer(
             }
         })
         .register();
+    let timed_out = Rc::new(Cell::new(false));
     let guard = mainloop.loop_().add_timer({
-        let ml = mainloop.clone();
-        move |_| ml.quit()
+        let (ml, timed_out) = (mainloop.clone(), timed_out.clone());
+        move |_| {
+            timed_out.set(true);
+            ml.quit();
+        }
     });
     let _ = guard.update_timer(Some(std::time::Duration::from_secs(2)), None);
     for _ in 0..3 {
@@ -123,7 +127,7 @@ pub(super) fn probe_producer(
         };
         awaited.set(Some(seq));
         mainloop.run();
-        if found.get().is_some() && mhz.get().is_some() {
+        if timed_out.get() || (found.get().is_some() && mhz.get().is_some()) {
             break;
         }
     }
