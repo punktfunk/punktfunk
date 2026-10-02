@@ -781,11 +781,12 @@ impl CapacityProbe {
     }
 
     /// The request never reached the control task: nothing is in flight, so
-    /// nothing is owed.
+    /// nothing is owed. A dropped burst measured nothing, as a timed-out one.
     pub(crate) fn on_dropped(&mut self) {
         self.result_by = None;
-        if let Some(r) = self.ramp.as_mut() {
-            r.no_wall();
+        match self.ramp.as_mut() {
+            Some(r) if !r.done => r.no_wall(),
+            _ => self.no_evidence = true,
         }
     }
 
@@ -1629,6 +1630,21 @@ mod tests {
         assert!(p.poll(now + PROBE_DELAY, 1, 1).is_none());
         assert_eq!(p.take_ramped(now), None);
         assert!(!p.ramping());
+    }
+
+    /// A burst the control queue dropped measured nothing, as a timed-out one:
+    /// the controller must not stay blind at its starting ceiling.
+    #[test]
+    fn a_dropped_burst_is_no_evidence() {
+        let now = Instant::now();
+        let mut p = CapacityProbe::new(true, false, None, 100_000, now);
+        assert!(!p.take_no_evidence());
+        assert!(
+            p.poll(now + PROBE_DELAY, 1, 1).is_some(),
+            "the burst goes out"
+        );
+        p.on_dropped();
+        assert!(p.take_no_evidence());
     }
 
     /// An embedder speed test finishes too, and its numbers are not the
