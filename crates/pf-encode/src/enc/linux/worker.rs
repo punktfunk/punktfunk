@@ -255,7 +255,8 @@ pub(crate) fn recv_eintr<T: DeserializeOwned>(
     loop {
         if let Some(deadline) = deadline {
             let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            // Under a microsecond `set_recv_timeout` clears the timeout: that is spent too.
+            if left < Duration::from_micros(1) {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "encode worker did not answer within its budget",
