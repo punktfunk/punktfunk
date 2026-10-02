@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Once, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -2163,40 +2163,51 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// Background timer (started once): tear down a monitor past its linger
-    /// deadline so a physical-screen user gets their screen back.
+    /// Background timer: tear down a monitor past its linger deadline so a
+    /// physical-screen user gets their screen back. Marked started only once the
+    /// spawn succeeded, as `registry::linux::ensure_timer`: a `Once` would spend
+    /// itself on a failed spawn and leave every kept monitor unreaped.
     fn ensure_linger_timer(&'static self) {
-        static TIMER: Once = Once::new();
-        TIMER.call_once(|| {
-            thread::Builder::new()
-                .name("vdisplay-linger".into())
-                .spawn(move || {
-                    loop {
-                        thread::sleep(Duration::from_millis(500));
-                        let dev = self.device_handle();
-                        let mut g = self.state.lock().unwrap();
-                        let now = Instant::now();
-                        let expired: Vec<u32> = g
-                            .slots
-                            .iter()
-                            .filter_map(|(slot, s)| {
-                                matches!(s, SlotState::Lingering { until, .. } if now >= *until)
-                                    .then_some(*slot)
-                            })
-                            .collect();
-                        for slot in expired {
-                            if let Some(SlotState::Lingering { mon, .. }) = g.slots.remove(&slot) {
-                                // Teardown under the state lock. Dropping it
-                                // first let a concurrent acquire ADD + isolate
-                                // while this REMOVE/restore was in flight; the
-                                // late restore then de-isolated the new session.
-                                self.teardown_removed(dev.as_deref(), &mut g, mon);
-                            }
+        static STARTED: Mutex<bool> = Mutex::new(false);
+        let mut started = STARTED.lock().unwrap_or_else(|e| e.into_inner());
+        if *started {
+            return;
+        }
+        let spawned = thread::Builder::new()
+            .name("vdisplay-linger".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(500));
+                    let dev = self.device_handle();
+                    let mut g = self.state.lock().unwrap();
+                    let now = Instant::now();
+                    let expired: Vec<u32> = g
+                        .slots
+                        .iter()
+                        .filter_map(|(slot, s)| {
+                            matches!(s, SlotState::Lingering { until, .. } if now >= *until)
+                                .then_some(*slot)
+                        })
+                        .collect();
+                    for slot in expired {
+                        if let Some(SlotState::Lingering { mon, .. }) = g.slots.remove(&slot) {
+                            // Teardown under the state lock. Dropping it
+                            // first let a concurrent acquire ADD + isolate
+                            // while this REMOVE/restore was in flight; the
+                            // late restore then de-isolated the new session.
+                            self.teardown_removed(dev.as_deref(), &mut g, mon);
                         }
                     }
-                })
-                .ok();
-        });
+                }
+            });
+        match spawned {
+            Ok(_) => *started = true,
+            Err(e) => tracing::error!(
+                error = %e,
+                "virtual display: could not start the linger timer — kept monitors will not \
+                 expire until a later session retries"
+            ),
+        }
     }
 }
 
