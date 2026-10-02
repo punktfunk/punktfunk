@@ -8,6 +8,7 @@
 
 import AVFoundation
 import Foundation
+import PunktfunkCore
 
 private let log = ClientLog(category: "audio")
 
@@ -54,6 +55,11 @@ enum AudioDrain {
                 // 2 ms is not judged on a 5 ms clock.
                 pcm = try connection.nextAudioPcm(
                     timeoutMs: decoded ? UInt32(frameMS) : 100)
+            } catch PunktfunkClientError.status(let rc)
+                where rc == PUNKTFUNK_STATUS_BAD_PACKET.rawValue
+            {
+                // One undecodable packet costs that packet, as on the desktop: not the audio.
+                return true
             } catch {
                 return false // session closed
             }
