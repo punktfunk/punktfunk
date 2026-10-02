@@ -958,7 +958,9 @@ impl LibraryPage {
                 group: self.group,
                 search: &self.search,
                 columns: self.columns,
-                paired_hosts: self.view.desktops.borrow().len(),
+                desktops: (self.view.desktops.borrow().iter())
+                    .map(|d| format!("{}\0{}\0{}\0{}", d.req.card_key(), d.name, d.os, d.playing))
+                    .collect(),
             })
         };
         let built = started.elapsed().as_secs_f64() * 1000.0;

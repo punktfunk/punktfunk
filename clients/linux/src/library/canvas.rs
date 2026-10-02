@@ -30,7 +30,7 @@ enum Kind {
 fn kind(row: &Row) -> Kind {
     match row {
         Row::Heading(_) => Kind::Heading,
-        Row::Desktops => Kind::Desktops,
+        Row::Desktops(_) => Kind::Desktops,
         Row::Band { caption, .. } => Kind::Band(*caption),
         Row::Posters { caption, .. } => Kind::Posters(*caption),
     }
