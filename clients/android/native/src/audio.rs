@@ -1035,7 +1035,11 @@ impl<'a> Plane<'a> {
             drought,
             last_packet: std::time::Instant::now(),
             av_sync_enabled,
-            av: punktfunk_core::audio::AvSync::new_at_rate(fmt.channels, fmt.rate_hz),
+            av: {
+                let mut av = punktfunk_core::audio::AvSync::new_at_rate(fmt.channels, fmt.rate_hz);
+                av.set_frame_us(fmt.frame_us);
+                av
+            },
             video_e2e: client.video_e2e_shared(),
             av_offset_out: client.audio_av_offset_shared(),
             buffer_ms_out: client.audio_buffer_ms_shared(),

@@ -81,9 +81,9 @@ const AV_EWMA_TAU_MS: u32 = 2_000;
 /// Offsets inside this band are left alone. Correcting a few ms costs a real discontinuity and
 /// buys nothing a listener can perceive; the deadband stops the loop hunting around zero.
 pub(super) const AV_DEADBAND_MS: u32 = 10;
-/// Observations folded before the first correction is offered. The offset is derived from a
-/// clock skew estimate and a video figure that both need a moment to settle after connect;
-/// acting on the first sample would chase the handshake, not the stream.
+/// Audio observed before the first correction is offered, in [`FRAME_MS`] frames (500 ms). The
+/// offset is derived from a clock skew estimate and a video figure that both need a moment to
+/// settle after connect; acting on the first sample would chase the handshake, not the stream.
 const AV_MIN_OBSERVATIONS: u32 = 100;
 /// An offset larger than this is not believed. A wall-clock step, a paused host, or a stale
 /// video figure can all produce an enormous apparent misalignment, and steering the ring by
@@ -107,6 +107,10 @@ pub struct AvSync {
     /// to the picture it belongs with.
     offset_avg_ns: f32,
     observations: u32,
+    /// Audio the observations cover: one frame each.
+    observed_us: u64,
+    /// One observation's frame, for the EWMA weight; see [`AvSync::set_frame_us`].
+    frame_us: u32,
     implausible: bool,
     /// Last depth offered outside the deadband; what the deadband keeps asking for.
     held: Option<usize>,
@@ -143,9 +147,17 @@ impl AvSync {
             channels: channels.max(1),
             offset_avg_ns: 0.0,
             observations: 0,
+            observed_us: 0,
+            frame_us: FRAME_MS * 1000,
             implausible: false,
             held: None,
         }
+    }
+
+    /// The negotiated frame, one per [`Self::observe`] call. Default [`FRAME_MS`]; a lossless
+    /// plane sends 1–4 ms frames, and the weights are in audio time, not calls.
+    pub fn set_frame_us(&mut self, frame_us: u32) {
+        self.frame_us = frame_us.max(1);
     }
 
     fn samples_ms(&self, samples: usize) -> u32 {
@@ -173,20 +185,21 @@ impl AvSync {
         }
         self.implausible = false;
 
-        // Weight by one protocol frame so the time constant means the same thing regardless of
-        // how often the caller observes.
-        let alpha = (FRAME_MS as f32 / AV_EWMA_TAU_MS as f32).clamp(0.0, 1.0);
+        // Weight by this plane's frame: the caller observes once per packet, so the time
+        // constant stays in audio time whatever the frame length.
+        let alpha = (self.frame_us as f32 / (AV_EWMA_TAU_MS * 1000) as f32).clamp(0.0, 1.0);
         if self.observations == 0 {
             self.offset_avg_ns = offset_ns as f32;
         } else {
             self.offset_avg_ns += (offset_ns as f32 - self.offset_avg_ns) * alpha;
         }
         self.observations = self.observations.saturating_add(1);
+        self.observed_us = self.observed_us.saturating_add(u64::from(self.frame_us));
         self.settled().then_some(self.offset_avg_ns as i64)
     }
 
     pub fn settled(&self) -> bool {
-        self.observations >= AV_MIN_OBSERVATIONS
+        self.observed_us >= u64::from(AV_MIN_OBSERVATIONS * FRAME_MS * 1000)
     }
 
     /// Smoothed offset in ms (positive = audio late), for the HUD. Reported while still settling
@@ -274,6 +287,28 @@ mod tests {
         assert!(s.desired_depth(30 * pm).is_none());
         settle(&mut s, 50, 30 * pm, pm, AV_MIN_OBSERVATIONS);
         assert!(s.settled(), "should act once the evidence is in");
+    }
+
+    /// A 2 ms lossless plane observes 2.5× as often; settling and smoothing stay in audio time.
+    #[test]
+    fn short_frames_settle_on_the_same_span_of_audio() {
+        let pm = per_ms(2);
+        let mut s = AvSync::new(2);
+        s.set_frame_us(2_000);
+        settle(&mut s, 50, 30 * pm, pm, AV_MIN_OBSERVATIONS);
+        assert!(
+            !s.settled(),
+            "100 × 2 ms is 200 ms of audio, not the 500 ms gate"
+        );
+        settle(&mut s, 50, 30 * pm, pm, AV_MIN_OBSERVATIONS * 3 / 2);
+        assert!(s.settled());
+        // One 2 ms observation moves the average by 2/2000 of the step, not 5/2000.
+        s.observe(obs(70, 30 * pm, pm));
+        assert!(
+            (s.offset_avg_ns / 1e6 - 50.02).abs() < 0.001,
+            "{}",
+            s.offset_avg_ns
+        );
     }
 
     #[test]

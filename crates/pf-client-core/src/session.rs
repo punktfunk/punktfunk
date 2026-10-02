@@ -1683,6 +1683,7 @@ fn spawn_audio(
             // Last decoded frame per channel: the PLC unit, 0 until something decodes.
             let mut frame_samples = 0usize;
             let mut av = punktfunk_core::audio::AvSync::new_at_rate(channels, rate_hz);
+            av.set_frame_us(frame_us);
             if !av_sync_enabled {
                 tracing::info!("A/V sync disabled by PUNKTFUNK_NO_AV_SYNC");
             }
