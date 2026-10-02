@@ -3,7 +3,7 @@
 //! (Mutter keeps the implicit grab; the Windows touch refresher re-injects a held contact).
 
 use punktfunk_core::input::{InputEvent, InputKind};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Per kind. A flood of never-released codes cannot grow the sets; codes past it stay latched.
 const MAX_HELD: usize = 256;
@@ -12,17 +12,32 @@ const MAX_HELD: usize = 256;
 #[derive(Default)]
 pub struct HeldInput {
     buttons: HashSet<u32>,
-    keys: HashSet<u32>,
+    /// Code → the press's [`crate::KEY_FLAG_SEMANTIC_VK`]: the release resolves a semantic key
+    /// through the host layout, a positional one through the fixed table.
+    keys: HashMap<u32, u32>,
     touch: HashSet<u32>,
 }
 
 impl HeldInput {
     pub fn note(&mut self, ev: &InputEvent) {
+        match ev.kind {
+            InputKind::KeyDown
+                if self.keys.len() < MAX_HELD || self.keys.contains_key(&ev.code) =>
+            {
+                self.keys
+                    .insert(ev.code, ev.flags & crate::KEY_FLAG_SEMANTIC_VK);
+                return;
+            }
+            InputKind::KeyDown => return,
+            InputKind::KeyUp => {
+                self.keys.remove(&ev.code);
+                return;
+            }
+            _ => {}
+        }
         let (set, down) = match ev.kind {
             InputKind::MouseButtonDown => (&mut self.buttons, true),
             InputKind::MouseButtonUp => (&mut self.buttons, false),
-            InputKind::KeyDown => (&mut self.keys, true),
-            InputKind::KeyUp => (&mut self.keys, false),
             // Only an Up ends a contact: the refresher defeats Windows' own staleness lift.
             InputKind::TouchDown => (&mut self.touch, true),
             InputKind::TouchUp => (&mut self.touch, false),
@@ -55,7 +70,10 @@ impl HeldInput {
                 .drain()
                 .map(|c| up(InputKind::MouseButtonUp, c)),
         );
-        out.extend(self.keys.drain().map(|c| up(InputKind::KeyUp, c)));
+        out.extend(self.keys.drain().map(|(c, flags)| InputEvent {
+            flags,
+            ..up(InputKind::KeyUp, c)
+        }));
         out.extend(self.touch.drain().map(|c| up(InputKind::TouchUp, c)));
         out
     }
@@ -101,5 +119,19 @@ mod tests {
         );
         assert!(held.is_empty());
         assert!(held.release().is_empty());
+    }
+
+    /// A semantic press releases semantically, or a non-US layout lifts a different scancode.
+    #[test]
+    fn a_held_key_releases_with_its_semantic_flag() {
+        let mut held = HeldInput::default();
+        held.note(&InputEvent {
+            flags: crate::KEY_FLAG_SEMANTIC_VK | 1,
+            ..ev(InputKind::KeyDown, 0x5A)
+        });
+        held.note(&ev(InputKind::KeyDown, 0x41));
+        let mut ups: Vec<_> = held.release().iter().map(|e| (e.code, e.flags)).collect();
+        ups.sort();
+        assert_eq!(ups, [(0x41, 0), (0x5A, crate::KEY_FLAG_SEMANTIC_VK)]);
     }
 }
