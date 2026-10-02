@@ -361,16 +361,17 @@ impl VirtualDisplay for GamescopeDisplay {
                         .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
                 })
                 .flatten(),
+            started: Instant::now(),
         };
         // Give up early if the process is already gone: a `vkCreateDevice` failure exits in under
-        // a second, and waiting 15 s on its corpse would blame the GPU.
+        // a second, and waiting 15 s on its corpse would blame the GPU. Dropping `proc` logs the
+        // tail of gamescope's own log, which says which.
         let node_id =
             wait_for_node(Duration::from_secs(15), &log, &mut proc.child).ok_or_else(|| {
                 anyhow!(
                     "gamescope published no PipeWire node within 15s (or exited first) — it may \
                      have failed to start, or headless capture may be unsupported on this \
-                     GPU/driver; its own log says which (see {})",
-                    log.display()
+                     GPU/driver; the tail of its log just above says which"
                 )
             })?;
         tracing::info!(

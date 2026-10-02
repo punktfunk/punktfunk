@@ -429,10 +429,45 @@ pub(super) struct GamescopeProc {
     pub(super) relay: std::path::PathBuf,
     /// Home of the Steam this spawn nests, when it runs one: the seat's, or the box's own.
     pub(super) steam_home: Option<std::path::PathBuf>,
+    pub(super) started: Instant,
+}
+
+/// A launch that fails ends within seconds; a game that ran this long logs nothing at teardown.
+const EARLY_END: Duration = Duration::from_secs(60);
+
+/// About forty lines: enough for the game's own last words and gamescope's exit.
+const LOG_TAIL_BYTES: u64 = 4096;
+
+/// The end of `log`, cut at a line start. Empty when it cannot be read.
+fn log_tail(log: &std::path::Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(log) else {
+        return String::new();
+    };
+    let len = f.metadata().map_or(0, |m| m.len());
+    let from = len.saturating_sub(LOG_TAIL_BYTES);
+    let mut buf = Vec::new();
+    if f.seek(SeekFrom::Start(from)).is_err() || f.read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let text = match from {
+        0 => &text[..],
+        _ => text.split_once('\n').map_or("", |(_, rest)| rest),
+    };
+    text.trim_end().to_string()
 }
 
 impl Drop for GamescopeProc {
     fn drop(&mut self) {
+        // The log is about to go, and a launch that died at once left its reason only there.
+        if self.started.elapsed() < EARLY_END {
+            tracing::warn!(
+                exited = ?self.child.try_wait().ok().flatten(),
+                tail = %log_tail(&self.log),
+                "gamescope session ended within a minute of its spawn"
+            );
+        }
         // A Steam that loses its compositor dies mid-write; ask it to quit first.
         if let Some(home) = &self.steam_home {
             let nested = home_steam_pid(home).filter(|&pid| descends_from(pid, self.child.id()));
@@ -495,6 +530,23 @@ mod tests {
             "90",
             "unset, we advertise exactly the rate the client asked for"
         );
+    }
+
+    #[test]
+    fn log_tail_keeps_the_end_from_a_line_start() {
+        let path = std::env::temp_dir().join(format!("pf-gs-tail-{}.log", std::process::id()));
+        std::fs::write(&path, "first\nlast words\n").unwrap();
+        assert_eq!(log_tail(&path), "first\nlast words");
+        let long: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&path, &long).unwrap();
+        let tail = log_tail(&path);
+        assert!(
+            tail.starts_with("line ") && tail.ends_with("line 1999"),
+            "{tail}"
+        );
+        assert!(tail.len() as u64 <= LOG_TAIL_BYTES);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(log_tail(&path), "");
     }
 
     #[test]
