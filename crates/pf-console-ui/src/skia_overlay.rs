@@ -285,6 +285,7 @@ impl Overlay for SkiaOverlay {
             if let sdl3::event::Event::KeyDown {
                 scancode: Some(sc),
                 keymod,
+                repeat,
                 ..
             } = event
             {
@@ -294,7 +295,7 @@ impl Overlay for SkiaOverlay {
                         .intersects(Mod::LCTRLMOD | Mod::RCTRLMOD | Mod::LALTMOD | Mod::RALTMOD)
                 {
                     if let Some(key) = key_of(*sc) {
-                        return self.ring.key(key);
+                        return self.ring.key(key, *repeat);
                     }
                 }
             }

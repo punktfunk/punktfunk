@@ -901,9 +901,13 @@ impl Ring {
     /// Tab is the keyboard's own step, and the only one that visits every stop: the six
     /// discs then the centre. The arrows speak the pad's language, where the centre is a
     /// released stick rather than a direction.
-    pub fn key(&mut self, key: Key) -> bool {
+    /// A held key's repeats step but never act: two repeats arm and fire End stream.
+    pub fn key(&mut self, key: Key, repeat: bool) -> bool {
         if !self.open() {
             return false;
+        }
+        if repeat && matches!(key, Key::Escape | Key::Return | Key::Space | Key::Y) {
+            return true;
         }
         if key == Key::Tab && !self.sheet && self.editing.is_none() {
             self.touch();
@@ -1609,27 +1613,40 @@ mod tests {
 
         // Tab tours the six discs and comes back through the centre.
         for k in 0..6 {
-            r.key(Key::Tab);
+            r.key(Key::Tab, false);
             assert_eq!(r.highlight(), Some(k));
         }
-        r.key(Key::Tab);
+        r.key(Key::Tab, false);
         assert_eq!(r.highlight(), Some(6), "after the last disc, the centre");
 
         // Up is 12 o'clock, and from 12 o'clock it is the centre. Down the same at 6.
-        r.key(Key::Up);
+        r.key(Key::Up, false);
         assert_eq!(r.highlight(), Some(0));
-        r.key(Key::Up);
+        r.key(Key::Up, false);
         assert_eq!(r.highlight(), Some(6));
-        r.key(Key::Down);
+        r.key(Key::Down, false);
         assert_eq!(r.highlight(), Some(3));
-        r.key(Key::Down);
+        r.key(Key::Down, false);
         assert_eq!(r.highlight(), Some(6));
 
         // The arrows still step the ring itself, and never onto the centre.
-        r.key(Key::Right);
+        r.key(Key::Right, false);
         assert_eq!(r.highlight(), Some(0));
-        r.key(Key::Left);
+        r.key(Key::Left, false);
         assert_eq!(r.highlight(), Some(5));
+    }
+
+    /// A held Enter opens the sheet and goes no further: its repeats are not presses.
+    #[test]
+    fn a_held_enter_never_ends_the_stream() {
+        let mut r = Ring::new();
+        r.set_facts(&facts());
+        r.input(RingInput::Toggle { x: 1.0, y: 1.0 });
+        r.key(Key::Return, false);
+        for _ in 0..20 {
+            r.key(Key::Return, true);
+        }
+        assert_eq!(r.take_command(), None);
     }
 
     /// The sheet is the whole catalogue, so an action the ring can actually fire must be on
