@@ -422,7 +422,9 @@ impl Encoder for NativeVaapiEncoder {
         }
         let wave = self.wave;
         let mark = wave.map_or(WaveMark::None, |w| w.mark(self.wave_spoiled));
-        match (self.anchor.take(), wave) {
+        // An owed IDR outranks a recovery anchor, as on NVENC and Vulkan.
+        let anchor = self.anchor.take().filter(|_| !self.force_kf);
+        match (anchor, wave) {
             (Some(slot), _) => session.encode_anchored(slot)?,
             (None, Some(w)) => {
                 let (first_row, rows) = w.stripe(session.wave_rows());
@@ -549,6 +551,8 @@ impl Encoder for NativeVaapiEncoder {
     }
 
     fn distrust_references(&mut self) {
+        // A pending anchor names a slot that is no longer trusted.
+        self.anchor = None;
         if let Some(s) = &mut self.session {
             s.distrust_all();
         }
