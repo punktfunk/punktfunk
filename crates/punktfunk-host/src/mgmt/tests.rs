@@ -1663,6 +1663,10 @@ async fn a_token_minted_by_another_process_authenticates() {
     };
     assert_eq!(send(&app, put("fresh")).await.0, StatusCode::NO_CONTENT);
     assert_eq!(send(&app, put("demo")).await.0, StatusCode::FORBIDDEN);
+
+    // `plugins remove` revokes in another process too: the token stops working at once.
+    std::fs::write(run.join("plugin-tokens.json"), "{}").unwrap();
+    assert_eq!(send(&app, put("fresh")).await.0, StatusCode::UNAUTHORIZED);
 }
 
 /// Same rule on the library side: a provider's entries belong to the plugin that owns the id.
