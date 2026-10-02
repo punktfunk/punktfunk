@@ -724,12 +724,12 @@ impl CapacityProbe {
     /// IDR, so the burst waits another delay.
     ///
     /// Two counts, deliberately. `frames_completed` is the session's, which
-    /// includes the burst's own filler AUs — the reassembler has no
-    /// probe/video split at the completion (`session.rs`). `video_aus` is what
-    /// the embedder forwarded as picture. The legacy burst reads the first
-    /// because that is what it has always read and no filler exists before it;
-    /// the ramp must read the second, because its own filler would otherwise
-    /// end it one tick after its first step.
+    /// includes probe filler AUs — the reassembler has no probe/video split at
+    /// the completion (`session.rs`). `video_aus` is what the embedder
+    /// forwarded as picture. The ramp reads the second, or its own filler
+    /// would end it one tick after its first step, and so does the burst a
+    /// cut-short ramp arms behind that filler. A burst with no ramp before it
+    /// reads the first, which no filler precedes.
     pub(crate) fn poll(
         &mut self,
         now: Instant,
@@ -743,7 +743,12 @@ impl CapacityProbe {
         if !due {
             return None;
         }
-        if self.active || frames_completed == 0 {
+        let pictures = if self.ramp.is_some() {
+            video_aus
+        } else {
+            frames_completed
+        };
+        if self.active || pictures == 0 {
             self.fire_at = Some(now + PROBE_DELAY);
             return None;
         }
@@ -1149,6 +1154,29 @@ mod tests {
         assert_eq!(pinned_ramp_max_kbps(778_000, None), 6_224_000);
         assert_eq!(pinned_ramp_max_kbps(778_000, Some(320_000)), 320_000);
         assert_eq!(pinned_ramp_max_kbps(u32::MAX, None), u32::MAX);
+    }
+
+    /// The burst a cut-short ramp arms waits for a picture; the ramp's own
+    /// filler in the session's completions is not one.
+    #[test]
+    fn a_cut_short_ramps_burst_waits_for_video_not_filler() {
+        let mut rig = Rig::new(1_000_000, None);
+        assert_eq!(rig.step(1_000_000, u32::MAX), None);
+        rig.p.on_dropped();
+        assert!(
+            rig.p.take_ramped(rig.now).is_some(),
+            "cut short, burst armed"
+        );
+        let completed = rig.completed;
+        assert!(completed > 0, "step one's filler completed");
+        let wait = PROBE_DELAY.as_millis() as u64 + 1;
+        let at = rig.at(wait);
+        assert!(rig.p.poll(at, completed, 0).is_none(), "no picture yet");
+        let at = rig.at(wait);
+        assert!(
+            rig.p.poll(at, completed, 1).is_some(),
+            "video flows: it fires"
+        );
     }
 
     /// Video is the end of the ramp, whatever step is in flight: from the
