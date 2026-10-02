@@ -96,6 +96,14 @@ enum class ScreenLayout(val label: String) {
         if (offered.isEmpty()) this else offered[(offered.indexOf(this) + 1) % offered.size]
 }
 
+/** A library tag naming a two-screen console — a ROM manager's slug or name, spelled any way. */
+internal fun twoScreenPlatform(tag: String?): Boolean =
+    tag?.lowercase()?.filter { it.isLetterOrDigit() }?.let { it in TWO_SCREEN_TAGS } == true
+
+private val TWO_SCREEN_TAGS = setOf(
+    "nds", "nintendods", "3ds", "n3ds", "nintendo3ds", "new3ds", "newnintendo3ds", "wiiu", "nintendowiiu",
+)
+
 /**
  * The page the player last picked, and each pair's layout, kept across streams. The controller
  * page is never kept: showing it connects a pad, and a stream must not connect one on its own.

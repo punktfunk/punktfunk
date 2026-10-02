@@ -107,9 +107,11 @@ class CompanionDisplayTest {
         assertEquals(ScreenLayout.SWAPPED, CompanionMemory.layout(compose.activity, second.name))
         assertEquals(second.displayId, pictureDisplay(compose.activity, compose.activity.display!!).displayId)
 
+        // Across both: no panel on either screen, and the pair is spanned for the next connect.
         compose.onNodeWithText("Screens").performClick()
-        compose.waitUntil(5_000) { panelDisplay() == second.displayId }
-        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(compose.activity, second.name))
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Actions").fetchSemanticsNodes().isEmpty() }
+        assertEquals(ScreenLayout.SPANNED, CompanionMemory.layout(compose.activity, second.name))
+        assertEquals(true, pictureSpanned(compose.activity))
         assertEquals(emptyList<SessionEndReason>(), ended)
     }
 }

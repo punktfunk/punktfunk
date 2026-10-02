@@ -151,6 +151,23 @@ class CompanionPanelTest {
     }
 
     @Test
+    fun aTwoScreenConsoleIsKnownByAnySpelling() {
+        for (tag in listOf("nds", "Nintendo DS", "3DS", "Nintendo 3DS", "New Nintendo 3DS", "wiiu", "Wii U")) {
+            assertEquals(tag, true, twoScreenPlatform(tag))
+        }
+        for (tag in listOf(null, "", "steam", "Nintendo Switch", "gba")) {
+            assertEquals(tag, false, twoScreenPlatform(tag))
+        }
+    }
+
+    @Test
+    fun aSpannedPictureAsksForTwoHalves() {
+        val context = compose.activity
+        val (w, h, hz) = nativeDisplayMode(context, spanned = false)
+        assertEquals(Triple(w, 2 * h, hz), nativeDisplayMode(context, spanned = true))
+    }
+
+    @Test
     fun theCycleSkipsWhatThePairCannotBuild() {
         val two = listOf(ScreenLayout.PANEL, ScreenLayout.SWAPPED)
         assertEquals(ScreenLayout.SWAPPED, ScreenLayout.PANEL.next(two))

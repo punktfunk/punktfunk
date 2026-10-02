@@ -12,6 +12,7 @@ import android.hardware.usb.UsbManager
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.text.InputType
 import android.util.Log
 import android.view.KeyEvent
@@ -47,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -241,15 +243,30 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     val hingeCompanion = fold?.carriesCompanion(rootSize.height) == true
     val companionDisplay = rememberCompanionDisplay().takeUnless { hingeCompanion }
     val companionUp = hingeCompanion || companionDisplay != null
+    // Spanning the picture needs the ASurfaceControl presenter's second layer: API 29 up, never
+    // ChromeOS. ponytail: a static gate; an ASC init failure elsewhere leaves the second window
+    // dark, which the pf-present log names.
+    val spannable = remember { !isChromeOs && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q }
     // Which screen of the pair holds the picture — or both: the layout the player cycled to,
-    // kept per second screen. A hinge's two halves are one display, so they share one key.
+    // kept per second screen. A hinge's two halves are one display, so they share one key. A
+    // two-screen console's launch starts spanned and leaves the memory alone.
     val screenKey = companionDisplay?.name ?: "hinge".takeIf { hingeCompanion }
     var layoutPick by remember(screenKey) {
-        mutableStateOf(screenKey?.let { CompanionMemory.layout(context, it) } ?: ScreenLayout.PANEL)
+        mutableStateOf(
+            when {
+                screenKey == null -> ScreenLayout.PANEL
+                spannable && twoScreenPlatform(session.launchHold?.game?.platform) -> ScreenLayout.SPANNED
+                else -> CompanionMemory.layout(context, screenKey)
+            },
+        )
     }
-    // The layouts this pair can build; Spanned joins once the presenter splits the picture.
-    val layoutsOffered = if (screenKey == null) emptyList() else listOf(ScreenLayout.PANEL, ScreenLayout.SWAPPED)
+    val layoutsOffered = when {
+        screenKey == null -> emptyList()
+        spannable -> ScreenLayout.entries
+        else -> listOf(ScreenLayout.PANEL, ScreenLayout.SWAPPED)
+    }
     val layout = layoutPick.takeIf { it in layoutsOffered } ?: ScreenLayout.PANEL
+    val spanned = layout == ScreenLayout.SPANNED
     // The POINTER grant gates every touch capture layer: "don't capture what can't land".
     val pointerOk = ui.accessGrants and SessionAccess.POINTER != 0
     val companionPages = companionPages(pointerOk, padShown || activity?.gamepadRouter?.sendsEnabled() == true)
@@ -384,22 +401,45 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     var modePicked by remember(handle) { mutableStateOf(false) }
 
     /**
-     * The pair's next layout, remembered. What Automatic resolved follows the picture to its
-     * screen: live where the host takes the switch, else from the next connect, which resolves
-     * against the same screen ([pictureDisplay]).
+     * What Automatic resolves for layout [l] on this pair, asked when it differs from the live
+     * mode: live where the host takes the switch, else from the next connect, which resolves
+     * against the same screen ([pictureDisplay]) and the kept layout ([pictureSpanned]).
      */
+    fun askModeFor(l: ScreenLayout) {
+        val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
+        if (companionDisplay == null || modePicked || !automatic) return
+        // ponytail: the picture screen follows the KEPT layout, so a launch that spans over a
+        // kept swap asks at the second screen's width; the next cycle sets it right.
+        val (baseW, baseH, hz) = initialSettings.effectiveMode(context, spanned = l == ScreenLayout.SPANNED)
+        val (w, h) = RenderScale.apply(
+            baseW, baseH, initialSettings.renderScale, RenderScale.maxDimension(initialSettings.codec),
+        )
+        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz)
+    }
+
+    /** The pair's next layout, remembered, and the mode that goes with it. */
     fun cycleScreens() {
         val key = screenKey ?: return
         layoutPick = layout.next(layoutsOffered)
         CompanionMemory.keepLayout(context, key, layoutPick)
         runCatching { NativeBridge.nativeLogDisplay("screens: ${layoutPick.name.lowercase()} $key") }
-        val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
-        if (companionDisplay == null || modePicked || !automatic) return
-        val (baseW, baseH, hz) = initialSettings.effectiveMode(context)
-        val (w, h) = RenderScale.apply(
-            baseW, baseH, initialSettings.renderScale, RenderScale.maxDimension(initialSettings.codec),
+        askModeFor(layoutPick)
+    }
+    // A layout the connect did not ask for — a two-screen console's launch — asks now.
+    LaunchedEffect(handle, screenKey) {
+        if (screenKey != null && layout != CompanionMemory.layout(context, screenKey)) askModeFor(layout)
+    }
+    // Which picture layers show: the second window's alone with the picture below on a second
+    // display, both when it spans, else the activity's.
+    LaunchedEffect(handle, layout, companionDisplay?.displayId) {
+        NativeBridge.nativePictureShown(
+            handle,
+            when {
+                spanned -> NativeBridge.PICTURE_FIRST or NativeBridge.PICTURE_SECOND
+                layout == ScreenLayout.SWAPPED && companionDisplay != null -> NativeBridge.PICTURE_SECOND
+                else -> NativeBridge.PICTURE_FIRST
+            },
         )
-        if (!intArrayOf(w, h, hz).contentEquals(requestedMode)) switchMode(w, h, hz)
     }
     // What the ring's slots and the companion's action tiles do this session.
     val ringActions = RingActions(
@@ -519,49 +559,31 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     // box it lands in is the window's live cutout-safe width: it follows a flip to the other
     // landscape. Left and right are physical sides, so an RTL layout cannot swap them.
     val safe = initialSettings.width == SAFE_AREA_MODE
-    // The picture and everything drawn on it or read off it: the video, the HUD and hints, the
-    // gesture layer, the pad and the ring. It measures against its own box, so it runs the same in
-    // the activity's window and on a second screen.
-    val picture: @Composable (Modifier) -> Unit = { modifier ->
-        Box(
-            modifier = modifier
-                .then(
-                    if (safe) {
-                        Modifier.windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
-                    } else {
-                        Modifier
-                    },
-                )
-                .onSizeChanged { containerSize = it },
-        ) {
-            // MediaCodec scales whatever it decodes to fill the Surface, so the SurfaceView carries the
-            // picture's shape: it is laid out at the placement's whole-pixel rect, and native crops the
-            // source to the part that stays visible (Crop to fill). The gesture layer below spans the
-            // WHOLE container and maps every absolute contact through the same placement, so a swipe
-            // that starts on a bar still registers and lands on the nearest picture edge.
-            val frameMap = videoFrame().at(containerSize)
-            val place = frameMap.placement
-            LaunchedEffect(handle, place, frameMap.width, frameMap.height) {
-                NativeBridge.nativeVideoSourceCrop(
-                    handle,
-                    (place.srcX / frameMap.width).toFloat(),
-                    (place.srcY / frameMap.height).toFloat(),
-                    ((place.srcX + place.srcW) / frameMap.width).toFloat(),
-                    ((place.srcY + place.srcH) / frameMap.height).toFloat(),
-                )
+    // A surface laid out at the frame's placement: MediaCodec scales whatever it decodes to fill
+    // the Surface, so the SurfaceView carries the picture's shape, and native crops the source to
+    // the part that stays visible (Crop to fill).
+    fun videoRect(frameMap: FrameMap): Modifier = if (frameMap.isEmpty) {
+        Modifier.fillMaxSize()
+    } else {
+        val place = frameMap.placement
+        Modifier
+            .offset { IntOffset(place.dstX, place.dstY) }
+            .layout { measurable, _ ->
+                val p = measurable.measure(Constraints.fixed(place.dstW, place.dstH))
+                layout(place.dstW, place.dstH) { p.place(0, 0) }
             }
-            val videoRect = if (frameMap.isEmpty) {
-                Modifier.fillMaxSize()
-            } else {
-                Modifier
-                    .offset { IntOffset(place.dstX, place.dstY) }
-                    .layout { measurable, _ ->
-                        val p = measurable.measure(Constraints.fixed(place.dstW, place.dstH))
-                        layout(place.dstW, place.dstH) { p.place(0, 0) }
-                    }
+    }
+    // The decoder's window: the activity's video SurfaceView, created once per stream. Movable
+    // content, so the picture can take a hinge's lower half and come back without the surface —
+    // and with it the decoder — being recreated.
+    val videoSurface = remember(handle) {
+        movableContentOf { frameMap: FrameMap ->
+            LaunchedEffect(handle, frameMap) {
+                val c = frameMap.sourceCrop()
+                NativeBridge.nativeVideoSourceCrop(handle, c[0], c[1], c[2], c[3])
             }
             AndroidView(
-                modifier = videoRect,
+                modifier = videoRect(frameMap),
                 factory = { ctx ->
                     SurfaceView(ctx).apply {
                         videoView = this
@@ -692,156 +714,209 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
                     }
                 },
             )
-            // Live stats HUD (FPS / throughput / capture→client latency), drawn over the video but
-            // BEFORE the transparent gesture layer below, so it shows through and never eats touches.
-            // A companion panel carries it instead.
-            val statsShown = !companionUp && statsOn && statsLines.isNotEmpty()
-            val statsCorner = hudAlignment(initialSettings.hudPlacement)
-            if (statsShown) {
-                val placement = Modifier.align(statsCorner).padding(12.dp)
-                OsdScaled { StatsOverlay(statsLines, placement, initialSettings.statsScalePct / 100f) }
-            }
-            // The Access chip — what this session is allowed to do, said in the preset vocabulary
-            // ("Controller only · 1 h 58 m left"), shown while the stats HUD is on. It rides the
-            // stats tier rather than standing for the whole stream: a pill that never goes away is
-            // chrome you read as distraction. Full control with no expiry — every session against an
-            // old host, and most against a new one — shows NOTHING: the chip exists for the sessions
-            // where input silently not landing needs an explanation, not as new chrome on everyone's
-            // stream. TopEnd, in the shared pill family (TopStart is the HUD's, TopCentre the
-            // transient cues', BottomCentre the banner's).
-            val accessChip = when {
-                ui.statsVerbosity == StatsVerbosity.OFF -> null
-                ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
-                ui.accessRemaining > 0 ->
-                    "${SessionAccess.label(ui.accessGrants)} · " +
-                        "${SessionAccess.remainingLabel(ui.accessRemaining)} left"
-                else -> SessionAccess.label(ui.accessGrants)
-            }
-            // Same corner, stacked: the mute sentence stands whatever the stats tier, because a
-            // player who cannot hear is owed the reason even with chrome off. Top left while the
-            // stats panel holds the top right.
-            if (accessChip != null || ui.audioMuteLabel != null) {
-                val left = statsShown && statsCorner == Alignment.TopEnd
-                OsdScaled {
-                    Column(
-                        Modifier.align(if (left) Alignment.TopStart else Alignment.TopEnd).padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        horizontalAlignment = if (left) Alignment.Start else Alignment.End,
-                    ) {
-                        ui.audioMuteLabel?.let { AccessChip(it) }
-                        accessChip?.let { AccessChip(it) }
-                    }
-                }
-            }
-            // "Hold to quit" hint while the gamepad exit chord is armed — the exit debounces on a ~1 s
-            // hold, so without this cue a couch user reads the (deliberately no-longer-instant) chord as
-            // broken. Purely visual; it sits above the video and below the gesture layer.
-            if (ui.exitArming) {
-                OsdScaled { ExitChordHint(Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
-            }
-            // Remote-pointer mode hint — the remote's keys are remapped while it's on, so say so.
-            if (ui.remotePointerOn) {
-                OsdScaled { RemotePointerHint(Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
-            }
-            // The exit hint (desktop parity): one line on how to leave with the input in hand, the
-            // pad chord when a controller is here. Without one, leaving is a slot in the quick-action
-            // dial, so the line names what opens it. Recomputed rather than captured: a pad can wake
-            // mid-hint. Above the video and below the gesture layer, so it never eats a touch.
-            //
-            // Bottom-centre, which MotionUnreachableHint also owns at t≈0. The hint YIELDS: the
-            // notice reports something broken about THIS session, the hint repeats every stream.
-            if (initialSettings.exitHint && banner.up && !ui.motionHint && !touchHint) OsdScaled {
-                StreamStartBanner(
-                    text = when {
-                        ui.padPresent -> "Hold L1 + R1 + Start + Select to leave"
-                        backOpensRing -> "Back opens quick actions"
-                        gestures -> "A two-finger twist opens quick actions"
-                        else -> "Ctrl+Alt+Shift+O opens quick actions"
-                    },
-                    alpha = banner.alpha,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
-                )
-            }
-            // Touch input per the Settings model: trackpad/direct-pointer mouse (the shared gesture
-            // vocabulary), the same gestures with nothing sent (Off, so a miss beside the pad stays
-            // put), or real multi-touch passthrough — see TouchInput.kt. Passthrough gets no
-            // keyboard gesture: its fingers belong to the host verbatim (a swipe there may BE a
-            // host-OS gesture), so intercepting three fingers would corrupt real multi-touch.
-            // Stylus lane (design/pen-tablet-input.md §7): against a HOST_CAP_PEN host a stylus
-            // splits out of BOTH touch models onto the pen plane; its heartbeat coroutine keeps a
-            // stationary held stroke alive (and its cancellation lifts everything on teardown).
-            // The POINTER grant gates the whole touch/stylus capture layer — "don't capture what
-            // can't land": ungranted, no gesture handler is installed at all (and no pen lane opens),
-            // rather than fingers being read into events the host will drop. Keyed on the grant so an
-            // AccessUpdate flipping it mid-session swaps the layer live.
-            val stylus = remember(handle, pointerOk) {
-                if (pointerOk && NativeBridge.nativeHostSupportsPen(handle)) StylusStream(handle) else null
-            }
-            if (stylus != null) {
-                LaunchedEffect(stylus) { stylus.heartbeatLoop() }
-            }
+        }
+    }
+    // The second picture window's surface, for the presenter's second layer (design §4): the
+    // picture on a second display, or its lower half there or below a hinge.
+    val pictureSurface: @Composable (FrameMap) -> Unit = { frameMap ->
+        LaunchedEffect(handle, frameMap) {
+            val c = frameMap.sourceCrop()
+            NativeBridge.nativePictureCrop(handle, c[0], c[1], c[2], c[3])
+        }
+        PictureSurface(handle, videoRect(frameMap))
+    }
+    // The row the two screens split a spanned picture at: half for a second display (the mode
+    // is two equal halves), the hinge's share of the panel on a fold.
+    fun splitRow(): Int {
+        val h = videoFrame().height
+        val s = split?.takeIf { companionDisplay == null } ?: return h / 2
+        val panel = (rootSize.height - s.hingePx).coerceAtLeast(1)
+        return (h.toLong() * s.videoPx / panel).toInt().coerceIn(0, h)
+    }
+    fun upperFrame(): VideoFrame =
+        videoFrame().let { if (spanned) VideoFrame(it.fit, it.width, it.height, 0, splitRow()) else it }
+    fun lowerFrame(): VideoFrame =
+        videoFrame().let { val top = splitRow(); VideoFrame(it.fit, it.width, it.height, top, it.height - top) }
+    /**
+     * The picture in one box: [surface] at [frame]'s placement, the gesture layer over it, and
+     * with [chrome] everything else drawn on it or read off it — the HUD and hints, the pad, the
+     * ring. [frame] is the whole picture, or the half this box shows when it spans two screens.
+     * The box with the chrome is the one the mouse and the ring measure against.
+     */
+    val picture: @Composable (Modifier, () -> VideoFrame, @Composable (FrameMap) -> Unit, Boolean) -> Unit =
+        { modifier, frame, surface, chrome ->
+            var size by remember { mutableStateOf(IntSize.Zero) }
             Box(
-                Modifier.fillMaxSize().pointerInput(handle, touchMode, pointerOk) {
-                    when {
-                        !pointerOk -> {} // no capture — the Access chip is what says why
-                        touchMode == TouchMode.TOUCH ->
-                            streamTouchPassthrough(NativeTouchSink(handle), stylus, ::videoFrame)
-                        else -> streamTouchInput(
-                            if (touchMode == TouchMode.OFF) DroppedTouchSink else NativeTouchSink(handle),
-                            stylus,
-                            ::videoFrame,
-                            trackpad = touchMode != TouchMode.POINTER,
-                            onCycleStats = { ui.statsVerbosity = ui.statsVerbosity.next() },
-                            onKeyboard = showKeyboard,
-                            // The two-finger twist turns the quick-action ring, frame by frame.
-                            onDial = { ev ->
-                                when (ev) {
-                                    is DialEvent.Turn ->
-                                        if (ring.turn(ev.progress, ev.clockwise, ev.x, ev.y)) haptics.tick()
-                                    DialEvent.Commit -> { ring.commit(); haptics.confirm() }
-                                    DialEvent.Cancel -> ring.cancel()
-                                }
+                modifier = modifier
+                    .then(
+                        if (safe) {
+                            Modifier.windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .onSizeChanged {
+                        size = it
+                        if (chrome) containerSize = it
+                    },
+            ) {
+                surface(frame().at(size))
+                if (chrome) {
+                    // Live stats HUD (FPS / throughput / capture→client latency), drawn over the video
+                    // but BEFORE the transparent gesture layer below, so it shows through and never
+                    // eats touches. A companion panel carries it instead.
+                    val statsShown = !companionUp && statsOn && statsLines.isNotEmpty()
+                    val statsCorner = hudAlignment(initialSettings.hudPlacement)
+                    if (statsShown) {
+                        val placement = Modifier.align(statsCorner).padding(12.dp)
+                        OsdScaled { StatsOverlay(statsLines, placement, initialSettings.statsScalePct / 100f) }
+                    }
+                    // The Access chip — what this session is allowed to do, said in the preset
+                    // vocabulary ("Controller only · 1 h 58 m left"), shown while the stats HUD is on.
+                    // It rides the stats tier rather than standing for the whole stream: a pill that
+                    // never goes away is chrome you read as distraction. Full control with no expiry —
+                    // every session against an old host, and most against a new one — shows NOTHING:
+                    // the chip exists for the sessions where input silently not landing needs an
+                    // explanation, not as new chrome on everyone's stream. TopEnd, in the shared pill
+                    // family (TopStart is the HUD's, TopCentre the transient cues', BottomCentre the
+                    // banner's).
+                    val accessChip = when {
+                        ui.statsVerbosity == StatsVerbosity.OFF -> null
+                        ui.accessGrants and SessionAccess.ALL == SessionAccess.ALL && ui.accessRemaining == 0 -> null
+                        ui.accessRemaining > 0 ->
+                            "${SessionAccess.label(ui.accessGrants)} · " +
+                                "${SessionAccess.remainingLabel(ui.accessRemaining)} left"
+                        else -> SessionAccess.label(ui.accessGrants)
+                    }
+                    // Same corner, stacked: the mute sentence stands whatever the stats tier, because
+                    // a player who cannot hear is owed the reason even with chrome off. Top left while
+                    // the stats panel holds the top right.
+                    if (accessChip != null || ui.audioMuteLabel != null) {
+                        val left = statsShown && statsCorner == Alignment.TopEnd
+                        OsdScaled {
+                            Column(
+                                Modifier.align(if (left) Alignment.TopStart else Alignment.TopEnd).padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalAlignment = if (left) Alignment.Start else Alignment.End,
+                            ) {
+                                ui.audioMuteLabel?.let { AccessChip(it) }
+                                accessChip?.let { AccessChip(it) }
+                            }
+                        }
+                    }
+                    // "Hold to quit" hint while the gamepad exit chord is armed — the exit debounces
+                    // on a ~1 s hold, so without this cue a couch user reads the (deliberately
+                    // no-longer-instant) chord as broken. Purely visual; it sits above the video and
+                    // below the gesture layer.
+                    if (ui.exitArming) {
+                        OsdScaled { ExitChordHint(Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
+                    }
+                    // Remote-pointer mode hint — the remote's keys are remapped while it's on, so say so.
+                    if (ui.remotePointerOn) {
+                        OsdScaled { RemotePointerHint(Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
+                    }
+                    // The exit hint (desktop parity): one line on how to leave with the input in hand,
+                    // the pad chord when a controller is here. Without one, leaving is a slot in the
+                    // quick-action dial, so the line names what opens it. Recomputed rather than
+                    // captured: a pad can wake mid-hint. Above the video and below the gesture layer,
+                    // so it never eats a touch.
+                    //
+                    // Bottom-centre, which MotionUnreachableHint also owns at t≈0. The hint YIELDS: the
+                    // notice reports something broken about THIS session, the hint repeats every stream.
+                    if (initialSettings.exitHint && banner.up && !ui.motionHint && !touchHint) OsdScaled {
+                        StreamStartBanner(
+                            text = when {
+                                ui.padPresent -> "Hold L1 + R1 + Start + Select to leave"
+                                backOpensRing -> "Back opens quick actions"
+                                gestures -> "A two-finger twist opens quick actions"
+                                else -> "Ctrl+Alt+Shift+O opens quick actions"
                             },
+                            alpha = banner.alpha,
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
                         )
                     }
-                },
-            )
-            // No standing mic element here: the in-stream mute control is deliberately absent until the
-            // on-screen overlay UI lands and can carry it as one of its controls. Mute itself is intact
-            // — the Select + Y chord toggles it, and the hint below is what confirms the toggle.
-            // Chord confirmation (gamepad/TV) — mute has no standing indicator, so this is the whole
-            // of its feedback: a toggle that showed nothing at all would be indistinguishable from one
-            // that never registered.
-            // The virtual controller: above the gesture layer, so its controls take their fingers
-            // first and every other finger falls through; below the ring, whose scrim owns every
-            // finger while it is up. Composed only while shown (tenet 1) — and with a lower half or
-            // a companion panel it leaves this half entirely for that.
-            if (split == null && !companionUp) PadHalf(virtualPad, overlayCfg.pad, containerSize, haptics, openRingCentred)
-            // The ring, above the gesture layer so its buttons take the finger first. Composed only
-            // while open: a closed overlay costs nothing (tenet 1).
-            OsdScaled {
-                RingOverlay(
-                    state = ring,
-                    cfg = overlayCfg,
-                    actions = ringActions,
-                    containerSize = containerSize,
-                    haptics = haptics,
+                }
+                // Touch input per the Settings model: trackpad/direct-pointer mouse (the shared gesture
+                // vocabulary), the same gestures with nothing sent (Off, so a miss beside the pad stays
+                // put), or real multi-touch passthrough — see TouchInput.kt. Passthrough gets no
+                // keyboard gesture: its fingers belong to the host verbatim (a swipe there may BE a
+                // host-OS gesture), so intercepting three fingers would corrupt real multi-touch.
+                // Stylus lane (design/pen-tablet-input.md §7): against a HOST_CAP_PEN host a stylus
+                // splits out of BOTH touch models onto the pen plane; its heartbeat coroutine keeps a
+                // stationary held stroke alive (and its cancellation lifts everything on teardown).
+                // The POINTER grant gates the whole touch/stylus capture layer — "don't capture what
+                // can't land": ungranted, no gesture handler is installed at all (and no pen lane opens),
+                // rather than fingers being read into events the host will drop. Keyed on the grant so an
+                // AccessUpdate flipping it mid-session swaps the layer live.
+                val stylus = remember(handle, pointerOk) {
+                    if (pointerOk && NativeBridge.nativeHostSupportsPen(handle)) StylusStream(handle) else null
+                }
+                if (stylus != null) {
+                    LaunchedEffect(stylus) { stylus.heartbeatLoop() }
+                }
+                Box(
+                    Modifier.fillMaxSize().pointerInput(handle, touchMode, pointerOk) {
+                        when {
+                            !pointerOk -> {} // no capture — the Access chip is what says why
+                            touchMode == TouchMode.TOUCH ->
+                                streamTouchPassthrough(NativeTouchSink(handle), stylus, frame)
+                            else -> streamTouchInput(
+                                if (touchMode == TouchMode.OFF) DroppedTouchSink else NativeTouchSink(handle),
+                                stylus,
+                                frame,
+                                trackpad = touchMode != TouchMode.POINTER,
+                                onCycleStats = { ui.statsVerbosity = ui.statsVerbosity.next() },
+                                onKeyboard = showKeyboard,
+                                // The two-finger twist turns the quick-action ring, frame by frame.
+                                onDial = { ev ->
+                                    when (ev) {
+                                        is DialEvent.Turn ->
+                                            if (ring.turn(ev.progress, ev.clockwise, ev.x, ev.y)) haptics.tick()
+                                        DialEvent.Commit -> { ring.commit(); haptics.confirm() }
+                                        DialEvent.Cancel -> ring.cancel()
+                                    }
+                                },
+                            )
+                        }
+                    },
                 )
-            }
-            ui.micHint?.let {
-                OsdScaled { MicChordHint(it, Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
-            }
-            // Bottom, not top: this can coincide with a mic-chord confirmation or the exit cue, and a
-            // notice landing on top of one of those would cost the user both.
-            OsdScaled {
-                if (ui.motionHint) {
-                    MotionUnreachableHint(Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
-                } else if (touchHint) {
-                    TouchFallbackHint(Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+                if (chrome) {
+                    // No standing mic element here: the in-stream control is deliberately absent until
+                    // the on-screen overlay UI lands and can carry it as one of its controls. Mute
+                    // itself is intact — the Select + Y chord toggles it, and the hint below is what
+                    // confirms the toggle: a toggle that showed nothing at all would be
+                    // indistinguishable from one that never registered.
+                    // The virtual controller: above the gesture layer, so its controls take their
+                    // fingers first and every other finger falls through; below the ring, whose scrim
+                    // owns every finger while it is up. Composed only while shown (tenet 1) — and with
+                    // a lower half or a companion panel it leaves this half entirely for that.
+                    if (split == null && !companionUp) PadHalf(virtualPad, overlayCfg.pad, containerSize, haptics, openRingCentred)
+                    // The ring, above the gesture layer so its buttons take the finger first. Composed
+                    // only while open: a closed overlay costs nothing (tenet 1).
+                    OsdScaled {
+                        RingOverlay(
+                            state = ring,
+                            cfg = overlayCfg,
+                            actions = ringActions,
+                            containerSize = containerSize,
+                            haptics = haptics,
+                        )
+                    }
+                    ui.micHint?.let {
+                        OsdScaled { MicChordHint(it, Modifier.align(Alignment.TopCenter).padding(top = 16.dp)) }
+                    }
+                    // Bottom, not top: this can coincide with a mic-chord confirmation or the exit cue,
+                    // and a notice landing on top of one of those would cost the user both.
+                    OsdScaled {
+                        if (ui.motionHint) {
+                            MotionUnreachableHint(Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+                        } else if (touchHint) {
+                            TouchFallbackHint(Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+                        }
+                    }
                 }
             }
         }
-    }
     Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { rootSize = it }) {
         // Invisible 1-px focus anchor for the host-typing soft keyboard (three-finger swipe up in
         // the mouse modes) AND the pointer-capture grab target. It never draws or takes touches,
@@ -865,24 +940,38 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
             val upper = Modifier.fillMaxWidth().then(
                 if (split != null) Modifier.height(with(density) { split.videoPx.toDp() }) else Modifier.weight(1f),
             )
-            // Swapped, the panel and the picture trade places.
-            if (layout == ScreenLayout.SWAPPED) Box(upper) { companion() } else picture(upper)
+            when {
+                // The picture below on a second display: the decoder's window stays in this one,
+                // hidden under the panel, so nothing restarts.
+                layout == ScreenLayout.SWAPPED && companionDisplay != null -> Box(upper) {
+                    videoSurface(VideoFrame(videoFit, 0, 0).at(IntSize.Zero))
+                    companion()
+                }
+                layout == ScreenLayout.SWAPPED -> Box(upper) { companion() }
+                else -> picture(upper, ::upperFrame, videoSurface, true)
+            }
             if (split != null) {
                 // The hinge itself: nothing on a creased panel, a real strip on a two-panel device.
                 Spacer(Modifier.height(with(density) { split.hingePx.toDp() }))
                 Box(modifier = Modifier.fillMaxWidth().weight(1f).onSizeChanged { padSize = it }) {
                     when {
                         !hingeCompanion -> PadHalf(virtualPad, overlayCfg.pad, padSize, haptics, openRingCentred)
-                        layout == ScreenLayout.SWAPPED -> picture(Modifier.fillMaxSize())
+                        layout == ScreenLayout.SWAPPED -> picture(Modifier.fillMaxSize(), ::videoFrame, videoSurface, true)
+                        spanned -> picture(Modifier.fillMaxSize(), ::lowerFrame, pictureSurface, false)
                         else -> companion()
                     }
                 }
             }
             companionDisplay?.let {
-                if (layout == ScreenLayout.SWAPPED) {
-                    CompanionOnDisplay(it, pictureHz = streamHz) { picture(Modifier.fillMaxSize()) }
-                } else {
-                    CompanionOnDisplay(it, content = companion)
+                when (layout) {
+                    ScreenLayout.SWAPPED -> CompanionOnDisplay(it, pictureHz = streamHz) {
+                        picture(Modifier.fillMaxSize(), ::videoFrame, pictureSurface, true)
+                    }
+                    // The lower half keeps the panel's own rate: it is the touch screen under a game.
+                    ScreenLayout.SPANNED -> CompanionOnDisplay(it, pictureHz = 0) {
+                        picture(Modifier.fillMaxSize(), ::lowerFrame, pictureSurface, false)
+                    }
+                    ScreenLayout.PANEL -> CompanionOnDisplay(it, content = companion)
                 }
             }
             // Last, so it covers everything: the launched title's poster until its game is up.

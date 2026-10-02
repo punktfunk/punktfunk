@@ -83,32 +83,47 @@ private const val ACCEL_MAX = 3.0f
  * contact is lifted so nothing stays stuck on the host.
  */
 /**
- * The stream frame the gesture layer maps into: how it fills the container ([fit]) and its size.
- * The video SurfaceView is laid out with the same placement, so every absolute mapping — direct
- * pointer, passthrough, the pen lane, the mouse — lands where the picture is. A frame of unknown
- * size (an older native lib) maps the container onto itself.
+ * The stream frame the gesture layer maps into: how it fills the container ([fit]) and its size
+ * — or, when the picture spans two screens, the [span] rows from [originY] down that this
+ * container shows of the [height]-row frame. The video SurfaceView is laid out with the same
+ * placement, so every absolute mapping — direct pointer, passthrough, the pen lane, the mouse —
+ * lands where the picture is. A frame of unknown size (an older native lib) maps the container
+ * onto itself.
  */
-internal class VideoFrame(val fit: VideoFit, val width: Int, val height: Int) {
+internal class VideoFrame(
+    val fit: VideoFit,
+    val width: Int,
+    val height: Int,
+    val originY: Int = 0,
+    val span: Int = height,
+) {
     fun at(size: IntSize): FrameMap =
-        if (width > 0 && height > 0) {
-            FrameMap(VideoFit.place(fit, size.width, size.height, width, height), width, height)
+        if (width > 0 && span > 0) {
+            FrameMap(VideoFit.place(fit, size.width, size.height, width, span), width, height, originY, span)
         } else {
             FrameMap(VideoFit.place(fit, size.width, size.height, size.width, size.height), size.width, size.height)
         }
 }
 
 /**
- * One placement of a [width]×[height] frame in a container. Container points clamp onto the
- * visible frame: a contact on a bar or on a cropped-away edge has no host position of its own.
+ * One placement of the [span] rows from [originY] of a [width]×[height] frame in a container.
+ * Container points clamp onto the visible rows: a contact on a bar or on a cropped-away edge has
+ * no host position of its own. The host always sees the whole frame's size.
  */
-internal class FrameMap(val placement: VideoPlacement, val width: Int, val height: Int) {
-    val isEmpty: Boolean get() = placement.isEmpty || width <= 0 || height <= 0
+internal data class FrameMap(
+    val placement: VideoPlacement,
+    val width: Int,
+    val height: Int,
+    val originY: Int = 0,
+    val span: Int = height,
+) {
+    val isEmpty: Boolean get() = placement.isEmpty || width <= 0 || span <= 0
 
     /** Container x → frame pixel. */
     fun x(viewX: Float): Int = placement.frameX(viewX.toDouble()).roundToInt().coerceIn(0, width - 1)
 
     /** Container y → frame pixel. */
-    fun y(viewY: Float): Int = placement.frameY(viewY.toDouble()).roundToInt().coerceIn(0, height - 1)
+    fun y(viewY: Float): Int = originY + placement.frameY(viewY.toDouble()).roundToInt().coerceIn(0, span - 1)
 
     /** Container x → 0…1 across the frame, the pen plane's unit. */
     fun nx(viewX: Float): Float =
@@ -116,7 +131,19 @@ internal class FrameMap(val placement: VideoPlacement, val width: Int, val heigh
 
     /** Container y → 0…1 down the frame. */
     fun ny(viewY: Float): Float =
-        (placement.frameY(viewY.toDouble()) / (height - 1).coerceAtLeast(1)).toFloat().coerceIn(0f, 1f)
+        ((originY + placement.frameY(viewY.toDouble())) / (height - 1).coerceAtLeast(1)).toFloat().coerceIn(0f, 1f)
+
+    /** The part of the whole frame this placement shows, as fractions: left, top, right, bottom. */
+    fun sourceCrop(): FloatArray {
+        if (isEmpty) return floatArrayOf(0f, 0f, 1f, 1f)
+        val p = placement
+        return floatArrayOf(
+            (p.srcX / width).toFloat(),
+            ((originY + p.srcY) / height).toFloat(),
+            ((p.srcX + p.srcW) / width).toFloat(),
+            ((originY + p.srcY + p.srcH) / height).toFloat(),
+        )
+    }
 }
 
 /** Whether this change belongs to the stylus lane (only when a pen-capable host is live). */
