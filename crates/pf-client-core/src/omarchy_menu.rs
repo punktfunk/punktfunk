@@ -92,7 +92,8 @@ fn write_rows(path: &Path, rows: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Best-effort repaint. A failed spawn is not an error: the file is truth.
+/// Best-effort repaint. A failed spawn is not an error: the file is truth. A thread
+/// reaps the child: every known-hosts save lands here, and a dropped `Child` is a zombie.
 fn refresh() {
     let mut cmd = std::process::Command::new("omarchy-menu");
     // Login sessions export OMARCHY_PATH; ssh and a bare TTY do not, and the
@@ -100,11 +101,14 @@ fn refresh() {
     if std::env::var_os("OMARCHY_PATH").is_none() {
         cmd.env("OMARCHY_PATH", "/usr/share/omarchy");
     }
-    let _ = cmd
+    if let Ok(mut child) = cmd
         .arg("refresh")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
+        .spawn()
+    {
+        std::thread::spawn(move || child.wait());
+    }
 }
 
 fn strip_block(text: &str) -> String {
