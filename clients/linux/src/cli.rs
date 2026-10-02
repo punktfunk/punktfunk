@@ -172,17 +172,19 @@ pub fn headless_library(target: &str) -> glib::ExitCode {
 
 /// Selector for `--set-host`/`--forget-host`: a 64-hex fingerprint pins one entry across IP
 /// changes; anything else is treated as `addr[:port]` (manual entries have no fingerprint).
+/// A colon with an unusable port selects nothing: defaulting it would edit or forget the
+/// record on 9777.
 enum Selector {
     Fp(String),
     Addr(String, u16),
 }
 
-fn parse_selector(s: &str) -> Selector {
+fn parse_selector(s: &str) -> Option<Selector> {
     if s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
-        Selector::Fp(s.to_lowercase())
+        Some(Selector::Fp(s.to_lowercase()))
     } else {
         let (addr, port) = parse_host_port(s);
-        Selector::Addr(addr, port.unwrap_or(9777))
+        Some(Selector::Addr(addr, port?))
     }
 }
 
@@ -259,7 +261,9 @@ pub fn headless_set_host(selector: &str) -> glib::ExitCode {
         port,
         macs,
     };
-    let sel = parse_selector(selector);
+    let Some(sel) = parse_selector(selector) else {
+        return fail(format!("no usable port in {selector:?}"));
+    };
     let mut known = KnownHosts::load();
     let Some(h) = known.hosts.iter_mut().find(|h| sel.matches(h)) else {
         return fail(format!("no saved host matches {selector:?}"));
@@ -282,7 +286,10 @@ pub fn headless_set_host(selector: &str) -> glib::ExitCode {
 /// An address naming two PINNED records is refused: both OS installs of a dual-boot box answer
 /// at one lease, and forgetting a host is not undoable. The fingerprint selects one of them.
 pub fn headless_forget_host(selector: &str) -> glib::ExitCode {
-    let sel = parse_selector(selector);
+    let Some(sel) = parse_selector(selector) else {
+        eprintln!("forget-host: no usable port in {selector:?}");
+        return glib::ExitCode::FAILURE;
+    };
     let mut known = KnownHosts::load();
     if let Selector::Addr(addr, port) = &sel {
         let pinned: Vec<&KnownHost> = known
