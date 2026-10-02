@@ -1553,7 +1553,9 @@ fn windows_term_ladder(shared: &LeaseShared) {
 /// End pids a launch with no lease left adopted: the set it published to
 /// [`crate::launchreg`], and only that set. For
 /// [`crate::session_settings::GameOnNewLaunch::End`] and [`end_detached`].
-/// No lease reports this exit, so the emulator bindings go back from here.
+/// No lease reports this exit. The emulator bindings go back in the caller:
+/// a new launch's prepare reverts them itself, after which a revert here
+/// would undo that launch's own.
 ///
 /// Blocking, bounded by [`TERM_GRACE`].
 pub fn end_previous_launch(title: &str, procs: &[crate::procscan::ProcRef], why: &str) -> usize {
@@ -1576,7 +1578,6 @@ pub fn end_previous_launch(title: &str, procs: &[crate::procscan::ProcRef], why:
         std::thread::sleep(POLL);
         if live().is_empty() {
             tracing::info!(title, "the game closed when asked");
-            crate::emulators::revert_players();
             return first.len();
         }
     }
@@ -1588,7 +1589,6 @@ pub fn end_previous_launch(title: &str, procs: &[crate::procscan::ProcRef], why:
         "the game did not close when asked — killing it"
     );
     force_close(&remaining);
-    crate::emulators::revert_players();
     first.len()
 }
 
@@ -1773,6 +1773,8 @@ pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
             let procs: Vec<crate::procscan::ProcRef> =
                 d.procs.lock().unwrap_or_else(|e| e.into_inner()).clone();
             end_previous_launch(&d.game.title, &procs, why);
+            // No launch follows this one to revert the bindings.
+            crate::emulators::revert_players();
             crate::launchreg::ended(&d.procs);
             crate::events::emit(crate::events::EventKind::GameExited {
                 game: crate::events::GameRefPayload {
