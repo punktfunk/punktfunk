@@ -26,11 +26,9 @@ pub const KWIN_POOL_MAX: i32 = 4;
 ///
 /// KWin schedules each screencast frame on a QTimer whose wait it rounds *up* to a whole
 /// millisecond, so an 8.333 ms frame is scheduled at 9 and the cadence jitters against the
-/// real refresh. A ceiling well above the stream rate keeps that gate below one refresh, so
-/// every real frame passes; without one, a game far above the stream rate and cursor-only
-/// records take a pool buffer each, and KWin drops a frame outright when none is free.
-/// The ceiling is `KWIN_UNPACED_HEADROOM` times the rate, or none when the rate is unknown.
-/// `PUNKTFUNK_KWIN_PACED=1` asks for the stream rate itself.
+/// real refresh. Unpaced, KWin up to 6.7 gets no ceiling and delivers on its damage
+/// signal; KWin 6.8 (millihertz offer) gets the stream rate as its ceiling and paces the
+/// cast at it. `PUNKTFUNK_KWIN_PACED=1` asks every KWin for the stream rate.
 pub fn unpaced_capture() -> bool {
     !pf_host_config::row_bool("PUNKTFUNK_KWIN_PACED")
 }
