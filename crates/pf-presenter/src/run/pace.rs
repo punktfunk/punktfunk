@@ -16,11 +16,10 @@ impl Shell {
         }
         // Present-wait completions drive the latch clock, the glass gate, and the
         // host-facing grid — drained every pass (a 1 Hz batch would starve all three).
-        if self.presenter.present_timing_active() {
-            let samples = self.presenter.take_presented_samples();
-            if !samples.is_empty() {
-                st.fold_glass(&samples, self.presenter.vblank_locked());
-            }
+        // Without a glass clock too: the compositor queues a feedback answer per present.
+        let samples = self.presenter.take_presented_samples();
+        if !samples.is_empty() {
+            st.fold_glass(&samples, self.presenter.vblank_locked());
         }
         st.intake();
         st.win.ticks += 1;
