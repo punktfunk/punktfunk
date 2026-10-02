@@ -43,6 +43,7 @@ pub(crate) fn fresh_facts(id: &str, family: Family) -> Facts {
         web_unit_present: true,
         web_password_present: false,
         web_bind: None,
+        mgmt_bind: None,
         scripting_unit_disabled: false,
         ip: Some("192.168.1.10".into()),
         user: "pf".into(),

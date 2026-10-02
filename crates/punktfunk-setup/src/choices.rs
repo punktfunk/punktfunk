@@ -163,7 +163,9 @@ impl Choices {
             clipboard: pins.clipboard.unwrap_or(true),
             linger,
             start: steamos || !pins.no_start,
-            move_mgmt_port: facts.sunshine_active,
+            // An operator's own bind stays unless `--mgmt-port` names a new one.
+            move_mgmt_port: facts.sunshine_active
+                && (facts.mgmt_bind.is_none() || pins.mgmt_port.is_some()),
             mgmt_port: pins.mgmt_port.unwrap_or(DEFAULT_MGMT_PORT),
             omarchy_setup,
             omarchy_toasts: pins.omarchy_toasts.unwrap_or(omarchy_setup),
@@ -273,6 +275,14 @@ mod tests {
             "Sunshine keeps the Moonlight ports, so compat stays off"
         );
         assert!(sunshine.move_mgmt_port);
+
+        let mut placed = fresh("fedora", Family::Dnf);
+        placed.sunshine_active = true;
+        placed.mgmt_bind = Some("127.0.0.1:48010".into());
+        assert!(
+            !Choices::derive(&placed, &Pins::default()).move_mgmt_port,
+            "a re-run must not widen the operator's own bind"
+        );
     }
 
     #[test]
