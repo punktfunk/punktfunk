@@ -40,6 +40,9 @@ impl HeldInput {
             InputKind::MouseButtonUp => (&mut self.buttons, false),
             // Only an Up ends a contact: the refresher defeats Windows' own staleness lift.
             InputKind::TouchDown => (&mut self.touch, true),
+            // Windows opens a contact on a move whose Down was lost, so a move holds one there.
+            #[cfg(windows)]
+            InputKind::TouchMove => (&mut self.touch, true),
             InputKind::TouchUp => (&mut self.touch, false),
             _ => return,
         };
