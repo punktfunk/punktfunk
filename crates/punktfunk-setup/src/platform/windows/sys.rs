@@ -164,6 +164,33 @@ pub fn create_shortcut(_link: &str, _target: &str) -> Result<(), String> {
     Err("shortcuts are Windows-only".into())
 }
 
+/// The visible desktop and the Start menu's Programs folder, from the shell: OneDrive can move
+/// either away from `%USERPROFILE%`. `None` where the shell has no answer.
+#[cfg(windows)]
+pub fn shell_folders() -> (Option<String>, Option<String>) {
+    use ::windows::core::GUID;
+    use ::windows::Win32::System::Com::CoTaskMemFree;
+    use ::windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Programs, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+    };
+    let get = |id: &GUID| {
+        // SAFETY: `id` is a live known-folder GUID. The path is CoTaskMem the shell hands us:
+        // copied out, then freed once.
+        unsafe {
+            let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
+            let text = p.to_string().ok();
+            CoTaskMemFree(Some(p.0 as *const _));
+            text
+        }
+    };
+    (get(&FOLDERID_Desktop), get(&FOLDERID_Programs))
+}
+
+#[cfg(not(windows))]
+pub fn shell_folders() -> (Option<String>, Option<String>) {
+    (None, None)
+}
+
 #[cfg(windows)]
 pub fn broadcast_env_change() -> Result<(), String> {
     use ::windows::core::w;
