@@ -1013,7 +1013,7 @@ pub(super) struct PresentCounters {
     /// Wake-forwarder displacements: the loop stalled two frame intervals.
     pub(super) forwarded: u32,
     /// (flipped without a copy, shown) this window, by the compositor's own word; `None`
-    /// where it never says (KWin before 6.7, Windows, macOS).
+    /// where it never says (KWin before 6.8, Windows, macOS).
     pub(super) scanout: Option<(u32, u32)>,
 }
 
