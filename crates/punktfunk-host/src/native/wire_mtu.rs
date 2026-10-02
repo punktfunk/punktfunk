@@ -433,43 +433,51 @@ pub(super) fn spawn_watch(
         // Jumbo grow: operator opt-in, client headroom, settled-at-jumbo
         // proof. Ack-gated — no sealed datagram above the old size leaves
         // before the client's ack, even though its buffers are static.
-        let (Some(mtu), Some(r)) = (target_wire_mtu, reneg.as_mut()) else {
+        let Some(r) = reneg.as_mut() else {
             return;
         };
-        let target = jumbo_shard_payload_for(mtu, peer).min(r.client_ceiling as usize);
-        let target = target - target % 2;
-        if target <= current || (settled as usize) < sealed_datagram_bytes(target) {
-            return;
-        }
-        if r.change_tx.send(target as u16).is_err() {
-            return;
-        }
-        let acked = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while let Some(v) = r.ack_rx.recv().await {
-                if v as usize == target {
-                    return true;
+        let grow = target_wire_mtu.map(|mtu| {
+            let target = jumbo_shard_payload_for(mtu, peer).min(r.client_ceiling as usize);
+            (mtu, target - target % 2)
+        });
+        match grow {
+            Some((mtu, target))
+                if target > current && (settled as usize) >= sealed_datagram_bytes(target) =>
+            {
+                if r.change_tx.send(target as u16).is_err() {
+                    return;
                 }
+                let acked = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while let Some(v) = r.ack_rx.recv().await {
+                        if v as usize == target {
+                            return true;
+                        }
+                    }
+                    false
+                })
+                .await
+                .unwrap_or(false);
+                if !acked {
+                    tracing::warn!(peer = %peer, shard_payload = target,
+                        "wire MTU: jumbo grow not acked — staying at the current wire");
+                    return;
+                }
+                if r.apply_tx.send(target).is_err() {
+                    return;
+                }
+                tracing::info!(
+                    peer = %peer,
+                    shard_payload = target,
+                    was = current,
+                    wire_mtu = mtu,
+                    "wire MTU: jumbo grow acked and applied — packets-per-frame cut ~6×"
+                );
+                current = target;
             }
-            false
-        })
-        .await
-        .unwrap_or(false);
-        if !acked {
-            tracing::warn!(peer = %peer, shard_payload = target,
-                "wire MTU: jumbo grow not acked — staying at the current wire");
-            return;
+            // A jumbo start that can be re-keyed needs the same revert as a grow.
+            _ if current > mtu1500_shard_payload_for(peer) => {}
+            _ => return,
         }
-        if r.apply_tx.send(target).is_err() {
-            return;
-        }
-        tracing::info!(
-            peer = %peer,
-            shard_payload = target,
-            was = current,
-            wire_mtu = mtu,
-            "wire MTU: jumbo grow acked and applied — packets-per-frame cut ~6×"
-        );
-        current = target;
         // Revert: quinn's PMTU blackhole detection lowers `current_mtu`
         // when the big packets vanish. Sample and shrink via the same
         // path the down-leg uses.
