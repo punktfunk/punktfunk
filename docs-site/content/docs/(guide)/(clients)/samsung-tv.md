@@ -4,8 +4,9 @@ description: Stream to a Samsung TV with the Punktfunk app for Tizen — turn on
 ---
 
 The Samsung TV app is the [browser client](/docs/browser-client) packaged for Tizen: the same
-page, started in Punktfunk Console for the remote. It runs on sets from 2024 on (Tizen 8.0). It is
-a preview, and it is sideloaded: Samsung's store does not carry it.
+page, started in Punktfunk Console for the remote. It lives in its own repository,
+[client-tizen](https://github.com/punktfunk/client-tizen). It runs on sets from 2024 on (Tizen
+8.0). It is a preview, and it is sideloaded: Samsung's store does not carry it.
 
 The app is signed for the one set it is installed on, so there is no package to download and
 open. Apps2Samsung does the signing and the install from your PC; the CLI route below does the
@@ -45,23 +46,19 @@ makes the certificate for your set and installs apps on it.
 **By hand, with Samsung's tools.** For developers, or a set Apps2Samsung does not reach.
 
 1. Download `punktfunk-tizen-<version>.wgt` from the latest
-   [client-web release](https://github.com/punktfunk/client-web/releases/latest). It is unsigned.
-2. Install Tizen SDK's `web-cli` and `cert-add-on` (Tizen Studio stopped at 6.1; the SDK still ships
-   the command-line tools). `sdb` is Intel-only: on an Apple Silicon Mac run it in an amd64
-   container.
+   [client-tizen release](https://github.com/punktfunk/client-tizen/releases/latest). It is
+   unsigned.
+2. Clone [client-tizen](https://github.com/punktfunk/client-tizen) and build its Tizen CLI image:
+   `docker build --platform linux/amd64 -t punktfunk-tizen-cli:10.0 tools/toolchain`. It holds
+   Tizen SDK 10.0's `web-cli` (`tizen`, `sdb`) and the Samsung certificate extension; `sdb` is
+   Intel-only, which is why it is an amd64 image.
 3. Make a Samsung distributor certificate for your set: `sdb connect <tv address>:26101`, read the
-   DUID with `sdb shell 0 getduid`, and create author and distributor certificates with that DUID
-   through `samsung-tv-cert` (a browser login to your Samsung account is the one manual step). Add
-   them as a security profile.
-4. Unzip the `.wgt`, sign and install it:
-   `tizen package -t wgt -s <profile> -- <dir>`, then `tizen install -n <signed>.wgt -t <model>`,
-   then `tizen run -p punktfunk0.punktfunk`.
-
-Three traps when signing in a container: with no keyring, `tizen security-profiles add` cannot
-store the password, so write `profiles.xml` with the password inline; a `.p12` from
-`samsung-tv-cert` hides its key from Java, so re-export it with `openssl pkcs12 -export`; and a
-password that looks like base64 is taken for an encrypted one, so use one with a character
-outside base64.
+   DUID with `sdb shell 0 getduid`, and run `samsung-tv-cert --duid <DUID> --profile punktfunk`
+   (a browser login to your Samsung account is the one manual step).
+4. Sign and install: `tools/sign.sh punktfunk-tizen-<version>.wgt`, then
+   `TV=<tv address> tools/sign.sh install`. The script's header lists the three signing traps it
+   handles: no keyring in the container, a `.p12` Java cannot read, and a password that looks like
+   base64.
 
 ## 4. Pair and stream
 
