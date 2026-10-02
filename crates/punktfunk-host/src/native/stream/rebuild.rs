@@ -512,13 +512,15 @@ impl StreamState {
         } else {
             self.bitrate_kbps
         };
+        // The encoder's rate, not the wire budget: FEC, framing and audio ride on top of it.
+        let ed = self.enc_now();
         let opened = open_session_encoder(
             &self.plan,
             &*self.capturer,
             &self.frame,
             (self.negotiated.width, self.negotiated.height),
             actual.refresh_hz,
-            |_, _| src_kbps as u64 * 1000,
+            |_, _| ed.enc_kbps(src_kbps) as u64 * 1000,
             self.bit_depth,
             self.client_hdr,
             self.au_seq,
@@ -555,6 +557,11 @@ impl StreamState {
         );
         self.enc = new_enc;
         self.enc_src = (self.frame.format, self.frame.width, self.frame.height);
+        // A ceiling learned from the encoder this one replaces: another geometry or format.
+        self.encoder_ceiling
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         // The delivered mode is the session's now: a rebuild or topology re-assert
         // reopens at it instead of forcing the display back to the client's ask.
         self.cur_mode = actual;
