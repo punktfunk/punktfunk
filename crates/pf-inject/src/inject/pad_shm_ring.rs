@@ -217,9 +217,10 @@ impl OutputDrain {
                 OUT_RING_LEN
             };
             let pending = head.wrapping_sub(self.tail);
-            if pending <= ring_len {
+            if pending < ring_len {
                 // Copy slots first, then re-check head: a writer that lapped the window during
-                // the copy may have overwritten what we read.
+                // the copy may have overwritten what we read. At `ring_len` behind, the write in
+                // flight is into the oldest slot, so a full ring counts as overflow.
                 let n = pending as usize;
                 let mut bufs =
                     [([0u8; 64], 0usize, false); pf_driver_proto::gamepad::OUT_RING_LEN_V22_USIZE];
@@ -233,7 +234,7 @@ impl OutputDrain {
                     shm.read_bytes(slot + 4, &mut buf.0[..buf.1]);
                 }
                 let head2 = shm.load_u32(OFF_RING_HEAD, Ordering::Acquire);
-                if head2.wrapping_sub(self.tail) <= ring_len {
+                if head2.wrapping_sub(self.tail) < ring_len {
                     for (data, len, feature) in bufs.iter().take(n) {
                         if *len > 0 {
                             per_report(&data[..*len], *feature);
@@ -465,6 +466,22 @@ mod tests {
         let (got, resync) = collect(&mut d, &mut buf);
         assert!(!resync);
         assert_eq!(got, vec![vec![0x02, 99]]);
+    }
+
+    #[test]
+    fn a_full_ring_takes_the_salvage_path() {
+        let mut buf = section();
+        let mut d = OutputDrain::new();
+        for i in 0..OUT_RING_LEN as u8 {
+            publish(&mut buf, &[0x02, i]);
+        }
+        let (got, resync) = collect(&mut d, &mut buf);
+        assert!(
+            resync,
+            "the driver's next write lands in the oldest unread slot"
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(&got[0][..2], &[0x02, OUT_RING_LEN as u8 - 1]);
     }
 
     /// 40 pending fits in 56 slots and overflows every poll against the 8-slot ring.

@@ -374,7 +374,8 @@ pub struct PadShm {
     /// Host-stamped `1` ⇔ this section carries `out_ring` and the host drains it. Zeroed
     /// section + old host never writes it, so `0` tells a new driver to stay legacy-only.
     pub out_ring_ver: u32,
-    /// Driver-bumped AFTER writing `out_ring[ring_head % len]`. Overflow is `head - tail > len`.
+    /// Driver-bumped AFTER writing `out_ring[ring_head % len]`. Overflow is `head - tail >= len`:
+    /// at `len` the next write is already landing in the reader's oldest slot.
     /// Same publish-then-bump order as `out_seq` (host Acquire load).
     pub ring_head: u32,
     /// Ring length the driver's slot math is using, (re-)stamped before every `ring_head`
