@@ -332,13 +332,14 @@ fn buffer_format(buf: &cuda::DeviceBuffer, fmt: pf_frame::PixelFormat) -> nv::NV
 
 /// Encode depth and HDR verdict for one capture format.
 ///
-/// Packed 10-bit input is the compositor's HDR surface: BT.2020 PQ. An 8-bit capture reaches a
-/// 10-bit SDR stream only through NVENC's 8→10, which takes PACKED RGB (`ARGB`); a planar 8-bit
-/// surface (NV12/YUV444) fails `register_resource` in a 10-bit session, so it stays 8-bit. HDR
-/// never follows depth alone.
-fn depth_and_hdr(fmt: nv::NV_ENC_BUFFER_FORMAT, depth_asked: u8) -> (u8, bool) {
+/// A 10-bit input pins depth 10 and carries the session's colour (`hdr_asked`): BT.2020 PQ, or
+/// BT.709 when gamescope composited 10-bit SDR. An 8-bit capture reaches a 10-bit SDR stream
+/// only through NVENC's 8→10, which takes PACKED RGB (`ARGB`); a planar 8-bit surface
+/// (NV12/YUV444) fails `register_resource` in a 10-bit session, so it stays 8-bit. An 8-bit
+/// stream is never HDR.
+fn depth_and_hdr(fmt: nv::NV_ENC_BUFFER_FORMAT, depth_asked: u8, hdr_asked: bool) -> (u8, bool) {
     if is_ten_bit_input(fmt) {
-        return (10, true);
+        return (10, hdr_asked);
     }
     let packed_rgb8 = fmt == nv::NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_ARGB;
     (
@@ -351,8 +352,14 @@ fn depth_and_hdr(fmt: nv::NV_ENC_BUFFER_FORMAT, depth_asked: u8) -> (u8, bool) {
     )
 }
 
-/// 10-bit input: packed RGB, or a producer's P010. Both are the compositor's HDR surface.
-/// Bit depth and HDR follow the capture format, not negotiation.
+/// A PQ input: 10-bit in an HDR session. The cursor blends re-encoded as PQ there; sRGB bytes
+/// would be read as PQ.
+fn pq_input(hdr_asked: bool, fmt: pf_frame::PixelFormat) -> bool {
+    hdr_asked && fmt.is_ten_bit()
+}
+
+/// 10-bit input: packed RGB, or a producer's P010. Depth follows the capture format; the
+/// colour is the session's.
 fn is_ten_bit_input(fmt: nv::NV_ENC_BUFFER_FORMAT) -> bool {
     matches!(
         fmt,
@@ -485,6 +492,9 @@ pub struct NvencCudaEncoder {
     /// this, which NVENC writes as a 10-bit stream from the 8-bit surface. The NV12/YUV444
     /// converts write 8-bit planes.
     depth_asked: u8,
+    /// The session's colour for a 10-bit input: BT.2020 PQ, or BT.709 for gamescope's 10-bit
+    /// SDR. An 8-bit input is SDR whatever this says.
+    hdr_asked: bool,
     /// Device copy of the last CPU frame, reused while the size and layout hold.
     upload: Option<cuda::DeviceBuffer>,
     ring: Vec<RingSlot>,
@@ -541,8 +551,9 @@ unsafe impl Send for NvencCudaEncoder {}
 
 impl NvencCudaEncoder {
     /// Same signature as `super::NvencEncoder::open`. `format`/`cuda` are advisory: real input
-    /// comes from the first captured frame. `bit_depth`/`hdr` follow that format, not
-    /// negotiation — a 10-bit session whose capture is 8-bit must encode and label 8-bit.
+    /// comes from the first captured frame, and its depth follows that frame — a 10-bit session
+    /// whose capture is 8-bit must encode and label 8-bit. `hdr` is the session's colour, which
+    /// a 10-bit input carries.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         codec: Codec,
@@ -553,6 +564,7 @@ impl NvencCudaEncoder {
         bitrate_bps: u64,
         _cuda: bool,
         bit_depth: u8,
+        hdr: bool,
         chroma: ChromaFormat,
         cursor_blend: bool,
         max_slices: u32,
@@ -568,6 +580,7 @@ impl NvencCudaEncoder {
             s,
             cu_ctx: ptr::null_mut(),
             depth_asked: bit_depth,
+            hdr_asked: hdr,
             upload: None,
             ring: Vec::new(),
             frames: 0,
@@ -1145,7 +1158,7 @@ impl NvencCudaEncoder {
             Some(ov) if ov.visible && ov.w > 0 && ov.h > 0 && !ov.rgba.is_empty() => {
                 if self.worker_cursor_serial != ov.serial {
                     // A PQ frame takes the cursor re-encoded as PQ; sRGB bytes would be read as PQ.
-                    let rgba = if captured.format.is_hdr() {
+                    let rgba = if pq_input(self.hdr_asked, captured.format) {
                         ov.pq_rgba()
                     } else {
                         ov.rgba.clone()
@@ -1387,10 +1400,10 @@ impl NvencCudaEncoder {
             (self.s.width, self.s.height) = r.out;
         }
         self.s.buffer_fmt = new_fmt;
-        // Depth and HDR from the capture format: a packed-RGB 8-bit surface reaches a
-        // 10-bit SDR stream; a planar 8-bit one (NV12/YUV444) stays 8-bit rather than
-        // failing the 10-bit session.
-        let (depth, hdr) = depth_and_hdr(new_fmt, self.depth_asked);
+        // Depth from the capture format: a packed-RGB 8-bit surface reaches a 10-bit SDR
+        // stream; a planar 8-bit one (NV12/YUV444) stays 8-bit rather than failing the
+        // 10-bit session. Colour is the session's.
+        let (depth, hdr) = depth_and_hdr(new_fmt, self.depth_asked, self.hdr_asked);
         if self.depth_asked >= 10 && depth < 10 {
             tracing::warn!(
                 format = ?captured.format,
@@ -1499,7 +1512,7 @@ impl NvencCudaEncoder {
                 if r.cursor.as_ref().map(|c| c.0) != Some(ov.serial) {
                     let tw = (u64::from(ov.w) * u64::from(ow) / u64::from(w)).max(1) as u32;
                     let th = (u64::from(ov.h) * u64::from(oh) / u64::from(h)).max(1) as u32;
-                    let src = if captured.format.is_hdr() {
+                    let src = if pq_input(self.hdr_asked, captured.format) {
                         ov.pq_rgba()
                     } else {
                         ov.rgba.clone()
@@ -1532,7 +1545,7 @@ impl NvencCudaEncoder {
         };
         if self.cursor_serial != ov.serial {
             // Quiesces in-flight ordered blends before touching staging.
-            let pq = captured.format.is_hdr().then(|| ov.pq_rgba());
+            let pq = pq_input(self.hdr_asked, captured.format).then(|| ov.pq_rgba());
             let bitmap = match &self.reframe {
                 Some(r) => r.cursor.as_ref().map_or(&[][..], |c| c.1.as_slice()),
                 None => pq.as_deref().unwrap_or(&ov.rgba).as_slice(),
@@ -1768,17 +1781,42 @@ mod tests {
     #[test]
     fn depth_and_hdr_needs_packed_rgb_for_ten_bit() {
         use nv::NV_ENC_BUFFER_FORMAT as F;
-        assert_eq!(depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ARGB, 10), (10, false));
-        assert_eq!(depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ARGB, 8), (8, false));
-        assert_eq!(depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_NV12, 10), (8, false));
         assert_eq!(
-            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_YUV444, 10),
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ARGB, 10, false),
+            (10, false)
+        );
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ARGB, 8, false),
             (8, false)
         );
-        assert_eq!(depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ARGB10, 8), (10, true));
         assert_eq!(
-            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ABGR10, 10),
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_NV12, 10, false),
+            (8, false)
+        );
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_YUV444, 10, false),
+            (8, false)
+        );
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ARGB10, 8, true),
             (10, true)
+        );
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ABGR10, 10, true),
+            (10, true)
+        );
+        // A 10-bit input carries the session's colour; an 8-bit stream is never HDR.
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_ABGR10, 10, false),
+            (10, false)
+        );
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_YUV420_10BIT, 10, false),
+            (10, false)
+        );
+        assert_eq!(
+            depth_and_hdr(F::NV_ENC_BUFFER_FORMAT_NV12, 10, true),
+            (8, false)
         );
     }
 
@@ -1928,6 +1966,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -2056,6 +2095,7 @@ mod tests {
             mbps * 1_000_000,
             true,
             if ten_bit { 10 } else { 8 },
+            format.is_ten_bit(),
             ChromaFormat::Yuv420,
             false,
             1,
@@ -2174,8 +2214,8 @@ mod tests {
         }
     }
 
-    /// Hardware: packed 10-bit → `ARGB10`. Bit depth and HDR must be derived from the input,
-    /// not merely requested — that pair selects Main10 / BT.2020 PQ.
+    /// Hardware: packed 10-bit → `ARGB10`. Depth follows the input and the session's HDR
+    /// verdict rides on it — that pair selects Main10 / BT.2020 PQ.
     #[test]
     #[ignore = "requires an NVIDIA GPU + driver with 10-bit encode"]
     fn nvenc_cuda_hdr10_packed_rgb() {
@@ -2192,6 +2232,7 @@ mod tests {
                 20_000_000,
                 true,
                 10,
+                true,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -2280,6 +2321,7 @@ mod tests {
             8_000_000,
             false,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -2391,6 +2433,7 @@ mod tests {
             8_000_000,
             true,
             10,
+            true,
             ChromaFormat::Yuv420,
             true, // Vulkan slot ring + 10-bit blend
             4,
@@ -2472,6 +2515,7 @@ mod tests {
                 40_000_000,
                 true,
                 10,
+                false,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -2531,6 +2575,7 @@ mod tests {
                 40_000_000,
                 true,
                 10,
+                fmt.is_ten_bit(),
                 chroma,
                 false,
                 4,
@@ -2583,6 +2628,7 @@ mod tests {
             40_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv444,
             false,
             4,
@@ -2628,6 +2674,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -2699,6 +2746,7 @@ mod tests {
             BPS,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -2831,6 +2879,7 @@ mod tests {
                 BPS,
                 true,
                 8,
+                false,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -2956,6 +3005,7 @@ mod tests {
             BPS,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3077,6 +3127,7 @@ mod tests {
                 BPS,
                 true,
                 8,
+                false,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -3176,6 +3227,7 @@ mod tests {
                 BPS,
                 true,
                 8,
+                false,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -3264,6 +3316,7 @@ mod tests {
             400_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3356,6 +3409,7 @@ mod tests {
                 BPS,
                 true,
                 10,
+                false,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -3454,6 +3508,7 @@ mod tests {
                     bps,
                     true,
                     8,
+                    false,
                     ChromaFormat::Yuv420,
                     false,
                     4,
@@ -3503,6 +3558,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3531,6 +3587,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3564,6 +3621,7 @@ mod tests {
                 20_000_000,
                 true,
                 8,
+                false,
                 ChromaFormat::Yuv420,
                 false,
                 4,
@@ -3597,6 +3655,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3751,6 +3810,7 @@ mod tests {
             8_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3809,6 +3869,7 @@ mod tests {
             8_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -3869,6 +3930,7 @@ mod tests {
             8_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             true, // Vulkan slot ring + blend
             4,
@@ -3944,6 +4006,7 @@ mod tests {
             8_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -4018,6 +4081,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -4100,6 +4164,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             4,
@@ -4193,6 +4258,7 @@ mod tests {
             20_000_000,
             true,
             8,
+            false,
             ChromaFormat::Yuv420,
             false,
             1, // client never advertised multi-slice

@@ -77,6 +77,7 @@ pub(in crate::native) fn prepare_display(
         compositor == pf_vdisplay::Compositor::Gamescope,
         None,
     );
+    plan.sdr10_native = crate::session_plan::sdr10_native_for(&plan, compositor, None);
     if codec == crate::encode::Codec::PyroWave {
         plan.wire_chunk = Some(shard_payload as usize);
     }
@@ -339,6 +340,7 @@ pub(super) fn open_session_encoder(
                 bitrate_bps(width, height),
                 frame.is_cuda(),
                 bit_depth,
+                plan.hdr,
                 plan.chroma,
                 plan.cursor_blend,
                 plan.max_slices,

@@ -43,7 +43,8 @@ pub enum PixelFormat {
     /// 8-bit BT.709 limited YUV 4:2:0 (DXGI `NV12`). D3D11 video-processor output so CSC
     /// does not contend with the 3D engine; NVENC ingests `NV12` natively (no RGB→YUV).
     Nv12,
-    /// 10-bit BT.2020 PQ limited YUV 4:2:0 (DXGI `P010`). HDR analogue of [`Nv12`]; NVENC `YUV420_10BIT`.
+    /// 10-bit limited YUV 4:2:0 (DXGI `P010`): BT.2020 PQ, or BT.709 SDR from gamescope on
+    /// Linux. The session's HDR verdict says which, never the format. NVENC `YUV420_10BIT`.
     P010,
     /// Linear scRGB half floats (DXGI `R16G16B16A16_FLOAT`), 8 bpp: what Windows composes an
     /// HDR desktop in. 1.0 is 80 nits, BT.709 primaries. GPU-only; AMF ingests it as `RGBA_F16`.
@@ -52,7 +53,8 @@ pub enum PixelFormat {
     /// ([`FramePayload::Cuda`] / `DeviceBuffer::yuv444`); never a CPU payload. NVENC Range-Extensions.
     Yuv444,
     /// Packed `x:R:G:B 2:10:10:10` LE (SPA `xRGB_210LE`, DRM `XR30`, NVENC `ARGB10`).
-    /// As a u32: B 0-9, G 10-19, R 20-29. Linux HDR screencast: PQ BT.2020. Not used on Windows.
+    /// As a u32: B 0-9, G 10-19, R 20-29. Linux 10-bit screencast: BT.2020 PQ, or BT.709 SDR
+    /// from gamescope. Not used on Windows.
     X2Rgb10,
     /// Packed `x:B:G:R 2:10:10:10` LE (SPA `xBGR_210LE`, DRM `XB30`, NVENC `ABGR10`).
     /// As a u32: R 0-9, G 10-19, B 20-29 — same memory as Windows [`Rgb10a2`](Self::Rgb10a2).
@@ -71,15 +73,15 @@ impl PixelFormat {
         }
     }
 
-    /// Linux HDR (BT.2020 PQ) packed RGB. Not Windows `Rgb10a2`.
-    pub fn is_hdr_rgb10(self) -> bool {
+    /// Linux packed 10-bit RGB. Not Windows `Rgb10a2`.
+    pub fn is_rgb10(self) -> bool {
         matches!(self, PixelFormat::X2Rgb10 | PixelFormat::X2Bgr10)
     }
 
-    /// BT.2020 PQ capture: packed 10-bit RGB or the producer's `P010`. Encoder colour and
-    /// HDR metadata key on this, not on the packed-RGB layout.
-    pub fn is_hdr(self) -> bool {
-        self.is_hdr_rgb10() || self == PixelFormat::P010
+    /// A 10-bit Linux capture: packed 10-bit RGB or the producer's `P010`. Depth only — the
+    /// colour (BT.2020 PQ or BT.709) is the session's verdict, never read off the format.
+    pub fn is_ten_bit(self) -> bool {
+        self.is_rgb10() || self == PixelFormat::P010
     }
 }
 
@@ -110,12 +112,12 @@ mod pixel_format_tests {
     use super::PixelFormat;
 
     #[test]
-    fn p010_is_hdr_but_not_packed_rgb() {
-        assert!(PixelFormat::P010.is_hdr());
-        assert!(!PixelFormat::P010.is_hdr_rgb10());
-        assert!(PixelFormat::X2Bgr10.is_hdr());
-        assert!(!PixelFormat::Nv12.is_hdr());
-        assert!(!PixelFormat::Bgrx.is_hdr());
+    fn p010_is_ten_bit_but_not_packed_rgb() {
+        assert!(PixelFormat::P010.is_ten_bit());
+        assert!(!PixelFormat::P010.is_rgb10());
+        assert!(PixelFormat::X2Bgr10.is_ten_bit());
+        assert!(!PixelFormat::Nv12.is_ten_bit());
+        assert!(!PixelFormat::Bgrx.is_ten_bit());
     }
 }
 
@@ -163,6 +165,10 @@ pub struct OutputFormat {
     /// (skip the NV12 convert) so direct-NVENC can widen 8→10. NVENC encodes Main10 under
     /// BT.709 VUI. Mutually exclusive with `hdr`.
     pub ten_bit_sdr: bool,
+    /// The source composites 10-bit SDR itself (Linux: our gamescope from `+pfhdr26`), so the
+    /// capturer offers its P010 and packed 10-bit formats under BT.709 ahead of 8-bit. Implies
+    /// `ten_bit_sdr`. Always `false` on Windows.
+    pub sdr10_native: bool,
     /// Full-chroma 4:4:4: capturer must not subsample. Windows IDD-push passes BGRA through
     /// (skip BGRA→NV12) so NVENC CSCs to 4:4:4 under the VUI matrix. Linux forces CPU RGB
     /// that the encoder swscales to `YUV444P`. `false` on every 4:2:0 session.
@@ -191,6 +197,7 @@ impl OutputFormat {
             hdr,
             // GameStream/spike: no 10-bit SDR, 4:4:4, PyroWave, or cursor-forward (native-only).
             ten_bit_sdr: false,
+            sdr10_native: false,
             chroma_444: false,
             pyrowave: false,
             hw_cursor: false,

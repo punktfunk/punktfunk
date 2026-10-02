@@ -873,6 +873,7 @@ fn gs_open_encoder(
                 enc_bps,
                 frame.is_cuda(),
                 gs_bit_depth(frame.format),
+                cfg.hdr,
                 // Stock Moonlight cannot decode 4:4:4.
                 encode::ChromaFormat::Yuv420,
                 cursor_blend,

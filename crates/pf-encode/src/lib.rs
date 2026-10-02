@@ -153,6 +153,8 @@ pub fn open_video(
     bitrate_bps: u64,
     cuda: bool,
     bit_depth: u8,
+    // The handshake's HDR verdict; 10-bit without it is BT.709.
+    hdr: bool,
     chroma: ChromaFormat,
     // Backends whose fast path can't blend (Vulkan EFC) key off `cursor_blend`.
     cursor_blend: bool,
@@ -169,6 +171,7 @@ pub fn open_video(
         bitrate_bps: bitrate_bps.max(MIN_BITRATE_BPS),
         cuda,
         bit_depth,
+        hdr,
         chroma,
         cursor_blend,
         max_slices,
@@ -321,6 +324,9 @@ struct OpenParams {
     bitrate_bps: u64,
     cuda: bool,
     bit_depth: u8,
+    /// The session's colour: BT.2020 PQ, else BT.709 at either depth. Never read off the
+    /// format — gamescope hands 10-bit SDR over as P010 or packed RGB too.
+    hdr: bool,
     chroma: ChromaFormat,
     cursor_blend: bool,
     max_slices: u32,

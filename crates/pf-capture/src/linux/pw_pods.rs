@@ -144,13 +144,14 @@ fn mandatory_id(key: u32, id: u32) -> pw::spa::pod::Property {
 }
 
 /// A dmabuf offer: the raw-video base plus a MANDATORY modifier Choice enum. A YUV format
-/// also pins the matrix its bitstream declares, limited range: BT.709 for NV12, BT.2020 for
-/// P010. Packed RGB pins none — it is not YUV.
+/// also pins the matrix its bitstream declares, limited range: BT.709 for NV12 and SDR P010,
+/// BT.2020 for PQ P010. Packed RGB pins none — it is not YUV.
 fn dmabuf_format(
     format: VideoFormat,
     modifiers: &[u64],
     preferred: Option<(u32, u32, u32)>,
     pacing: Pacing,
+    pq: bool,
 ) -> pw::spa::pod::Object {
     use pw::spa::param::format::FormatProperties;
     use pw::spa::sys;
@@ -161,7 +162,8 @@ fn dmabuf_format(
     );
     let matrix = match format {
         VideoFormat::NV12 => Some(sys::SPA_VIDEO_COLOR_MATRIX_BT709),
-        VideoFormat::P010_10LE => Some(sys::SPA_VIDEO_COLOR_MATRIX_BT2020),
+        VideoFormat::P010_10LE if pq => Some(sys::SPA_VIDEO_COLOR_MATRIX_BT2020),
+        VideoFormat::P010_10LE => Some(sys::SPA_VIDEO_COLOR_MATRIX_BT709),
         _ => None,
     };
     if let Some(matrix) = matrix {
@@ -188,14 +190,36 @@ fn dmabuf_format(
     obj
 }
 
-/// SDR dmabuf `EnumFormat`; see [`dmabuf_format`] for the colour pins.
+/// 8-bit SDR dmabuf `EnumFormat`; see [`dmabuf_format`] for the colour pins.
 pub(super) fn build_dmabuf_format(
     format: VideoFormat,
     modifiers: &[u64],
     preferred: Option<(u32, u32, u32)>,
     pacing: Pacing,
 ) -> Result<Vec<u8>> {
-    serialize_pod(dmabuf_format(format, modifiers, preferred, pacing))
+    serialize_pod(dmabuf_format(format, modifiers, preferred, pacing, false))
+}
+
+/// 10-bit SDR dmabuf `EnumFormat`, for a producer that composites it (gamescope from
+/// `+pfhdr26`). sRGB transfer and BT.709 primaries are MANDATORY: a producer whose 10-bit pods
+/// are PQ-only fails to intersect, and the 8-bit pods behind this one take the stream.
+pub(super) fn build_sdr10_dmabuf_format(
+    format: VideoFormat,
+    modifiers: &[u64],
+    preferred: Option<(u32, u32, u32)>,
+    pacing: Pacing,
+) -> Result<Vec<u8>> {
+    use pw::spa::sys;
+    let mut obj = dmabuf_format(format, modifiers, preferred, pacing, false);
+    obj.properties.push(mandatory_id(
+        sys::SPA_FORMAT_VIDEO_transferFunction,
+        sys::SPA_VIDEO_TRANSFER_SRGB,
+    ));
+    obj.properties.push(mandatory_id(
+        sys::SPA_FORMAT_VIDEO_colorPrimaries,
+        sys::SPA_VIDEO_COLOR_PRIMARIES_BT709,
+    ));
+    serialize_pod(obj)
 }
 
 /// PQ (`SPA_VIDEO_TRANSFER_SMPTE2084`). 14 is the wire ABI in
@@ -203,9 +227,9 @@ pub(super) fn build_dmabuf_format(
 /// `GstVideoTransferFunction`). Not taken from `pw::spa::sys` because older
 /// distro headers omit the symbol and bindgen then fails the host compile.
 /// A libspa without it fails to intersect this offer and the session stays SDR.
-const SPA_VIDEO_TRANSFER_SMPTE2084: u32 = 14;
+pub(super) const SPA_VIDEO_TRANSFER_SMPTE2084: u32 = 14;
 
-/// 10-bit PQ formats in negotiation order. The first compatible consumer pod
+/// 10-bit packed formats in negotiation order. The first compatible consumer pod
 /// wins, so this is colour correctness, not style: NVIDIA does not implement
 /// linear-tiled `A2R10G10B10`, and gamescope's mappable capture then writes
 /// XBGR bytes under an `XRGB2101010` label. Host mappings all look right, so
@@ -227,7 +251,7 @@ pub(super) fn build_hdr_dmabuf_format(
     pacing: Pacing,
 ) -> Result<Vec<u8>> {
     use pw::spa::sys;
-    let mut obj = dmabuf_format(format, modifiers, preferred, pacing);
+    let mut obj = dmabuf_format(format, modifiers, preferred, pacing, true);
     obj.properties.push(mandatory_id(
         sys::SPA_FORMAT_VIDEO_transferFunction,
         SPA_VIDEO_TRANSFER_SMPTE2084,

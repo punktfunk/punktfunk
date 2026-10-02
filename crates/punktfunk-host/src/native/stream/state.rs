@@ -338,6 +338,11 @@ impl StreamState {
             ctx.compositor == pf_vdisplay::Compositor::Gamescope,
             ctx.gamescope_route.as_ref(),
         );
+        plan.sdr10_native = crate::session_plan::sdr10_native_for(
+            &plan,
+            ctx.compositor,
+            ctx.gamescope_route.as_ref(),
+        );
         if ctx.common.codec == crate::encode::Codec::PyroWave {
             plan.wire_chunk = Some(ctx.common.session.shard_payload());
         }

@@ -929,16 +929,18 @@ impl VulkanVideoEncoder {
         fps: u32,
         bitrate_bps: u64,
         cursor_blend: bool,
-        // Negotiated depth. A 10-bit SDR session captures an 8-bit surface, so `format` is not
-        // 10-bit and the depth must come from here; HDR is 10-bit by its packed/P010 format.
+        // Negotiated depth. A 10-bit SDR session may capture an 8-bit surface, so `format` is
+        // not 10-bit and the depth must come from here.
         bit_depth: u8,
+        // The session's colour: BT.2020 PQ, else BT.709. Not read off `format`: gamescope's
+        // P010 and packed 10-bit are SDR too.
+        hdr: bool,
     ) -> Result<Self> {
         // A producer's own planar picture: NV12 at eight bits, P010 at ten.
         let native_nv12 = matches!(format, PixelFormat::Nv12 | PixelFormat::P010);
-        // Colour: HDR is BT.2020 PQ, keyed on the packed-10/P010 capture format. Dispatcher already
-        // consulted `probe_encode_caps`; the profile query inside open re-checks.
-        let is_hdr = format.is_hdr();
-        // Depth: HDR, or a 10-bit SDR session on an 8-bit capture (`bit_depth == 10`, BT.709).
+        // Dispatcher already consulted `probe_encode_caps`; the profile query inside open re-checks.
+        let is_hdr = hdr;
+        // Depth: HDR, or a 10-bit SDR session (BT.709) on an 8-bit or a 10-bit capture.
         let ten_bit = is_hdr || bit_depth >= 10;
         // Native planar is NV12 at eight bits or P010 at ten — a crossed pair (e.g. P010 bytes
         // on an 8-bit session) describes no source this encoder can program.
@@ -5172,9 +5174,18 @@ mod tests {
     #[ignore = "needs VK_VALVE_video_encode_rgb_conversion (RADV >= Mesa 26.0 on EFC hardware)"]
     fn vulkan_encode_cursor_switch_follows_the_cursor() {
         let (w, h) = (256, 256);
-        let mut enc =
-            VulkanVideoEncoder::open(Codec::Av1, PixelFormat::Bgrx, w, h, 60, 10_000_000, true, 8)
-                .expect("open");
+        let mut enc = VulkanVideoEncoder::open(
+            Codec::Av1,
+            PixelFormat::Bgrx,
+            w,
+            h,
+            60,
+            10_000_000,
+            true,
+            8,
+            false,
+        )
+        .expect("open");
         assert!(
             enc.rgb.is_none() && enc.cursor_switch,
             "a blend session opens on the CSC"

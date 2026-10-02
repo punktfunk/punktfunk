@@ -229,23 +229,23 @@ pub(super) fn packed_modifier_offers(
     (modifiers, modifiers_bgra, extend_pyrowave)
 }
 
-/// Packed 10-bit offers. Tiled has two readers: NVENC's raw convert, and the VA
-/// encoder's own import — the latter only for `encoder_modifiers`-proved
-/// modifiers. Every other arm de-tiles into 8 bits, so tiled is offered only
-/// while one lane holds the stream. LINEAR is always appended once.
+/// Packed 10-bit offers, PQ or gamescope's SDR (`want_ten_bit`). Tiled has two readers:
+/// NVENC's raw convert, and the VA encoder's own import — the latter only for
+/// `encoder_modifiers`-proved modifiers. Every other arm de-tiles into 8 bits, so tiled is
+/// offered only while one lane holds the stream. LINEAR is always appended once.
 pub(super) fn hdr_modifier_offers(
     policy: &ZeroCopyPolicy,
     health: &pf_zerocopy::ZeroCopyHealth,
     importer: Option<&mut pf_zerocopy::Importer>,
-    want_hdr: bool,
+    want_ten_bit: bool,
     vaapi_passthrough: bool,
     producer_is_gamescope: bool,
     nvenc_raw: bool,
 ) -> Vec<(VideoFormat, Vec<u64>)> {
     let mut importer = importer;
     let hdr_tiled_raw =
-        want_hdr && policy.gamescope_tiled && nvenc_raw && !health.hdr_tiled_refused();
-    let hdr_tiled_direct = want_hdr
+        want_ten_bit && policy.gamescope_tiled && nvenc_raw && !health.hdr_tiled_refused();
+    let hdr_tiled_direct = want_ten_bit
         && vaapi_passthrough
         && producer_is_gamescope
         && policy.gamescope_tiled

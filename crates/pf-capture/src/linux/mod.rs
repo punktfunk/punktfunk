@@ -87,6 +87,9 @@ struct CaptureOpts {
     /// planar 8-bit surface fails a 10-bit NVENC session; packed RGB is the only 8-bit input
     /// it accepts there.
     ten_bit_sdr: bool,
+    /// The producer offers 10-bit SDR (gamescope from `+pfhdr26`): its P010 and packed 10-bit
+    /// pods go out under BT.709 ahead of the 8-bit ones, which stay as the fallback.
+    sdr10_native: bool,
     /// Skip buffers until negotiated size matches `preferred` — KWin virtual
     /// outputs birth a sacrificial mode then renegotiate (`kwin.rs` `create`).
     /// `false` elsewhere: Mutter sizes from negotiation; gamescope fixates.
@@ -334,6 +337,7 @@ impl PortalCapturer {
                 want_444: false,
                 want_hdr,
                 ten_bit_sdr: false,
+                sdr10_native: false,
                 expect_exact_dims: false,
                 // Portal-monitor is Mutter's stale-meta id-0 contract. KWin
                 // portal capture would rewrite per buffer; nothing routes
@@ -367,6 +371,7 @@ impl PortalCapturer {
             want_444: opts.want_444,
             want_hdr: opts.want_hdr,
             ten_bit_sdr: opts.ten_bit_sdr,
+            sdr10_native: opts.sdr10_native,
             expect_exact_dims: opts.expect_exact_dims,
             cursor_id0_hides: kwin,
             producer_is_gamescope: opts.producer == super::Producer::Gamescope,
@@ -469,6 +474,7 @@ fn spawn_pipewire(
         allow_zerocopy,
         want_444,
         want_hdr,
+        sdr10_native,
         ..
     } = opts;
     // Wakeup edges only; depth 1 is right — a coalesced edge loses nothing
@@ -503,6 +509,8 @@ fn spawn_pipewire(
         zerocopy,
         force_shm,
         want_hdr,
+        // SHM is 8-bit, like HDR above.
+        sdr10_native: sdr10_native && !force_shm,
         want_444,
         backend_is_vaapi: policy.backend_is_vaapi,
         pyrowave_session: policy.pyrowave_session,

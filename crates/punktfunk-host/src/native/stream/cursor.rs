@@ -117,6 +117,7 @@ impl StreamState {
             route,
         );
         self.plan.gamescope_cursor = crate::session_plan::gamescope_cursor_for(gamescope, route);
+        self.plan.sdr10_native = crate::session_plan::sdr10_native_for(&self.plan, c, route);
         (self.gamescope_composite, self.metadata_composite) =
             composite_plan(&self.plan, self.cursor_fwd.is_some(), gamescope);
         self.plan.cursor_forward || self.metadata_composite

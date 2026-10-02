@@ -93,6 +93,10 @@ pub struct SessionPlan {
     /// so the host composites. `false` when gamescope paints the cursor itself
     /// (`pf_vdisplay::gamescope_composites_cursor`) — otherwise a second pointer.
     pub gamescope_cursor: bool,
+    /// The source composites 10-bit SDR itself (our gamescope from `+pfhdr26`), so a 10-bit
+    /// SDR session takes its P010 or packed 10-bit RGB under BT.709 instead of widening an
+    /// 8-bit capture. Set only via [`sdr10_native_for`]; `false` everywhere else.
+    pub sdr10_native: bool,
     /// Encoder slice-count ceiling from [`VIDEO_CAP_MULTI_SLICE`](punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE):
     /// 32 when the bit is set (backend default; no client-side cap), 1 when not
     /// (single-slice frames for TV-SoC decoders). Applied to every encoder this
@@ -126,8 +130,9 @@ impl SessionPlan {
             wire_chunk: None,
             cursor_blend,
             cursor_forward,
-            // Callers that know the compositor overwrite this; default off for everyone else.
+            // Callers that know the compositor overwrite these; default off for everyone else.
             gamescope_cursor: false,
+            sdr10_native: false,
             max_slices: if multi_slice { 32 } else { 1 },
             reframe_to: None,
         }
@@ -178,6 +183,7 @@ impl SessionPlan {
             // 10-bit without HDR = 10-bit SDR: Windows expands BGRA 8→10 (`Rgb10a2Sdr`)
             // and does not touch the display's colour state.
             ten_bit_sdr: self.bit_depth == 10 && !self.hdr,
+            sdr10_native: self.sdr10_native,
             hw_cursor: self.cursor_forward,
             // 4:4:4 needs a full-chroma source: Windows stays on RGB (not NV12/P010)
             // so NVENC can CSC to 4:4:4.
@@ -193,6 +199,7 @@ impl SessionPlan {
                 self.bit_depth,
                 self.hdr,
                 self.cursor_blend,
+                self.sdr10_native,
             ),
             #[cfg(not(target_os = "linux"))]
             nv12_native: false,
@@ -301,6 +308,18 @@ pub(crate) fn gamescope_cursor_for(
     gamescope_route: Option<&pf_vdisplay::GamescopeRoute>,
 ) -> bool {
     gamescope_needs_host_cursor(gamescope, gamescope_route)
+}
+
+/// [`SessionPlan::sdr10_native`] for `plan` on `compositor`: a 10-bit SDR session whose
+/// gamescope composites 10-bit SDR itself (`+pfhdr26`).
+pub(crate) fn sdr10_native_for(
+    plan: &SessionPlan,
+    compositor: crate::vdisplay::Compositor,
+    gamescope_route: Option<&pf_vdisplay::GamescopeRoute>,
+) -> bool {
+    plan.bit_depth == 10
+        && !plan.hdr
+        && crate::capture::capturer_delivers_sdr10_for(Some(compositor), gamescope_route)
 }
 
 #[cfg(target_os = "windows")]

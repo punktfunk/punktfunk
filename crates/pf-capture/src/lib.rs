@@ -763,6 +763,9 @@ pub struct VirtualOutputOpts {
     pub want_hdr: bool,
     /// 10-bit SDR: keep packed RGB so direct NVENC widens 8→10.
     pub ten_bit_sdr: bool,
+    /// The producer composites 10-bit SDR itself (gamescope from `+pfhdr26`): offer its P010
+    /// and packed 10-bit formats under BT.709 ahead of the 8-bit ones. Implies `ten_bit_sdr`.
+    pub sdr10_native: bool,
     /// Skip buffers until the negotiated size matches the preferred mode (KWin's
     /// sacrificial birth mode).
     pub expect_exact_dims: bool,

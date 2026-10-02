@@ -292,6 +292,7 @@ pub fn capture_virtual_output(
             want_444: want.chroma_444,
             want_hdr: want.hdr,
             ten_bit_sdr: want.ten_bit_sdr,
+            sdr10_native: want.sdr10_native,
             expect_exact_dims: vout.expect_exact_dims,
             producer,
             policy: pf_capture::ZeroCopyPolicy {
@@ -336,6 +337,16 @@ pub fn capturer_supports_hdr_for(
     }
     let _ = (compositor, gamescope_route);
     pf_capture::capturer_supports_hdr()
+}
+
+/// Does the source composite 10-bit SDR itself? Only our gamescope from `+pfhdr26`, which
+/// offers its 10-bit formats under BT.709; that session needs no widening opt-in.
+pub fn capturer_delivers_sdr10_for(
+    compositor: Option<crate::vdisplay::Compositor>,
+    gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
+) -> bool {
+    compositor == Some(crate::vdisplay::Compositor::Gamescope)
+        && pf_vdisplay::gamescope_sdr10_capture(gamescope_route)
 }
 
 #[cfg(target_os = "windows")]
@@ -567,6 +578,7 @@ mod live_tests {
             gpu: true,
             hdr: false,
             ten_bit_sdr: false,
+            sdr10_native: false,
             chroma_444: false,
             pyrowave: false,
             nv12_native: false,
@@ -688,6 +700,7 @@ mod live_tests {
             gpu: true,
             hdr: false,
             ten_bit_sdr: false,
+            sdr10_native: false,
             chroma_444: false,
             pyrowave: false,
             nv12_native: false,

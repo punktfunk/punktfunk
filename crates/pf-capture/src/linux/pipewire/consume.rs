@@ -614,12 +614,12 @@ fn try_gpu_hold(ud: &mut UserData, a: &mut Arrival) -> bool {
     let mut gpu_import_broken = false;
     if ud.signals.has_importer.load(Ordering::Relaxed) {
         if let Some(fmt) = ud.format {
-            let hdr_tiled = fmt.is_hdr_rgb10() && ud.modifier != 0;
+            let hdr_tiled = fmt.is_rgb10() && ud.modifier != 0;
             if hdr_tiled && !ud.hdr_tiled_raw {
                 warn_once(
-                    "HDR frame arrived with a tiled modifier — the GPU de-tile blit is 8-bit, so \
-                     this stream falls back to the CPU path (the producer ignored our LINEAR-only \
-                     HDR offer)",
+                    "10-bit frame arrived with a tiled modifier — the GPU de-tile blit is 8-bit, \
+                     so this stream falls back to the CPU path (the producer ignored our \
+                     LINEAR-only 10-bit offer)",
                 );
             }
             if datas[0].type_() == pw::spa::buffer::DataType::DmaBuf
