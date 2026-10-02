@@ -270,18 +270,21 @@ impl RemoteImporter {
                 };
                 let shared = self.shared.clone();
                 let release = Box::new(move || {
-                    // Recycle is fire-and-forget (EPIPE if dead). This Arc keeps mapping
-                    // and socket alive until the last frame drops; a retired mapping
-                    // closes here with its last ref.
-                    let _ = ipc::send(shared.sock.as_fd(), &Request::Release { id }, None);
-                    let mut g = shared.mappings.lock().unwrap();
-                    if let Some(entry) = g.get_mut(&id) {
-                        entry.refs = entry.refs.saturating_sub(1);
-                        if entry.retired && entry.refs == 0 {
-                            let entry = g.remove(&id).expect("entry exists");
-                            close_mapping(&entry.m);
+                    // A retired mapping closes with its last ref BEFORE the worker hears
+                    // Release, which may free the allocation: CUDA leaves a free under an open
+                    // importer undefined. Recycle is fire-and-forget (EPIPE if dead); this Arc
+                    // keeps mapping and socket alive until the last frame drops.
+                    {
+                        let mut g = shared.mappings.lock().unwrap();
+                        if let Some(entry) = g.get_mut(&id) {
+                            entry.refs = entry.refs.saturating_sub(1);
+                            if entry.retired && entry.refs == 0 {
+                                let entry = g.remove(&id).expect("entry exists");
+                                close_mapping(&entry.m);
+                            }
                         }
                     }
+                    let _ = ipc::send(shared.sock.as_fd(), &Request::Release { id }, None);
                 });
                 // Wire has no plane format; layout is the ImportKind we asked for.
                 let yuv444 = kind.layout() == cuda::PlaneLayout::Yuv444;
