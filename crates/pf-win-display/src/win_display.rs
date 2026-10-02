@@ -1830,7 +1830,9 @@ fn restore_displays_ccd_inner(saved: &SavedConfig) -> bool {
         .iter()
         .filter(|t| t.external_physical)
         .fold((0u32, 0u32), |(c, a), t| (c + 1, a + u32::from(t.active)));
-    if connected > 0 && lit == 0 {
+    // A lit internal panel is a lit desk: "PC screen only" leaves a connected TV dark on purpose.
+    let panel_lit = inventory.iter().any(|t| t.internal_panel && t.active);
+    if connected > 0 && lit == 0 && !panel_lit {
         let dark: Vec<(CcdTargetKey, String)> = inventory
             .iter()
             .filter(|t| t.external_physical && !t.active)
