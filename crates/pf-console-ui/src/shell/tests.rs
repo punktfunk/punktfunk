@@ -890,6 +890,24 @@ fn a_search_and_its_empty_result_raster() {
     assert!(shelf.no_match());
 }
 
+/// A hardware Space types through TextInput alone. As Confirm it also typed the
+/// keyboard's focused key.
+#[test]
+fn a_hardware_space_types_one_space() {
+    let host = hosts().remove(0);
+    let search = crate::screens::search::SearchScreen::new(&host, &Default::default());
+    let (mut s, _console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Search(search),
+    ]);
+    s.text_input("hollow");
+    s.key(crate::input::Key::Space, false, false);
+    s.text_input(" ");
+    s.text_input("knight");
+    let typed = s.edit_field().map(|f| f.text);
+    assert_eq!(typed.as_deref(), Some("hollow knight"));
+}
+
 #[test]
 fn every_settings_tab_rasters() {
     let fonts = crate::theme::build_fonts().unwrap();

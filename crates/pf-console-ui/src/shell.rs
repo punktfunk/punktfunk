@@ -1684,8 +1684,8 @@ impl Shell {
         self.input_source = Some(source);
     }
 
-    /// Keyboard fallback. Arrows and Enter/Esc are menu events; Y/X mirror
-    /// Secondary/Tertiary (suppressed while editing — those keys are text).
+    /// Keyboard fallback. Arrows and Enter/Esc are menu events; Space confirms and Y/X
+    /// mirror Secondary/Tertiary (suppressed while editing — those keys are text).
     /// `shift` only affects Tab.
     pub(crate) fn key(&mut self, key: crate::input::Key, shift: bool, repeat: bool) -> bool {
         use crate::input::Key as S;
@@ -1704,7 +1704,8 @@ impl Shell {
             S::Right => MenuEvent::Move(MenuDir::Right),
             S::Up => MenuEvent::Move(MenuDir::Up),
             S::Down => MenuEvent::Move(MenuDir::Down),
-            S::Return | S::Space if !repeat => MenuEvent::Confirm,
+            S::Return if !repeat => MenuEvent::Confirm,
+            S::Space if !repeat && !editing => MenuEvent::Confirm,
             S::Escape | S::Backspace if !repeat => MenuEvent::Back,
             S::PageUp if !repeat => MenuEvent::JumpBack,
             S::PageDown if !repeat => MenuEvent::JumpForward,
