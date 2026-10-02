@@ -1052,8 +1052,9 @@ fn ensure_session<'a>(
         // surfaces are fine: exported PRIME fds keep the pixels alive.
         old.destroy(d);
     }
-    // New generation: a stale token must not free an index in the replacement pool.
-    *generation += 1;
+    // New generation, unique in the process: a stale token must not free an index in the
+    // replacement pool, and the presenter's cache must not take it for a past stream's.
+    *generation = u64::from(crate::video::next_pool_generation());
     let mut built = Session::build(d, codec, shape)?;
     built.generation = *generation;
     Ok(slot.insert(built))

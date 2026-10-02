@@ -853,9 +853,6 @@ pub(crate) struct HandoffRing {
     planar_nv12: bool,
     planar_p010: bool,
     planar_ring: Option<PlanarRing>,
-    /// Next ring generation, shared by both rings so the presenter's import cache never
-    /// sees one generation twice.
-    generation: u32,
     /// Blt GPU timing; `None` when the device has no timestamp queries.
     timer: Option<BltTimer>,
     window: HandoffWindow,
@@ -889,7 +886,6 @@ impl HandoffRing {
             planar_nv12: false,
             planar_p010: false,
             planar_ring: None,
-            generation: 0,
             timer,
             window: HandoffWindow::new(),
         })
@@ -933,8 +929,8 @@ impl HandoffRing {
             .as_ref()
             .is_none_or(|r| r.width != width || r.height != height || r.format != format);
         if rebuild {
-            let generation = self.generation;
-            self.generation += 1;
+            // Process-unique: the presenter's import cache outlives this ring and its stream.
+            let generation = crate::video::next_pool_generation();
             self.planar_ring = Some(PlanarRing::build(
                 &self.device,
                 width,
@@ -1056,8 +1052,8 @@ impl HandoffRing {
             .as_ref()
             .is_none_or(|r| r.width != width || r.height != height || r.pq_out != pq_out);
         if rebuild {
-            let generation = self.generation;
-            self.generation += 1;
+            // Process-unique: the presenter's import cache outlives this ring and its stream.
+            let generation = crate::video::next_pool_generation();
             self.ring = Some(SharedRing::build(
                 &self.device,
                 &video_device,

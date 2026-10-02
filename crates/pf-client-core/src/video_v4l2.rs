@@ -397,7 +397,6 @@ pub(crate) struct StatefulRung<D: Opened = Node> {
     node: PathBuf,
     planner: Planner,
     session: Option<Session<D>>,
-    pools: u32,
     next_stamp: u64,
     health: DecodeHealth,
     recovery_request: bool,
@@ -448,7 +447,6 @@ impl<D: Opened> StatefulRung<D> {
             node,
             planner,
             session: None,
-            pools: 0,
             next_stamp: 0,
             health: DecodeHealth {
                 // The driver has no per-picture status query this rung reads.
@@ -656,11 +654,10 @@ impl<D: Opened> StatefulRung<D> {
         let decoder = Stateful::open(node, fourcc, shape.coded.0, shape.coded.1, &[wanted])
             .map_err(|e| anyhow!("{e}"))
             .context("start the V4L2 decoder")?;
-        self.pools += 1;
         Ok(self.session.insert(Session {
             decoder,
             shape,
-            pool: self.pools,
+            pool: crate::video::next_pool_generation(),
             exports: Arc::new(Vec::new()),
             exported_generation: 0,
             pending: VecDeque::new(),

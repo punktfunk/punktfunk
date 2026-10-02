@@ -100,7 +100,6 @@ pub(crate) struct StatelessHevc<D: OpenedStateless = RequestNode> {
     node: PathBuf,
     planner: Box<H265Planner>,
     session: Option<Session<D>>,
-    pools: u32,
     health: DecodeHealth,
     recovery_request: bool,
     release_tx: mpsc::Sender<Release>,
@@ -115,7 +114,6 @@ impl<D: OpenedStateless> StatelessHevc<D> {
             node,
             planner: Box::new(H265Planner::new()),
             session: None,
-            pools: 0,
             health: DecodeHealth {
                 // The driver has no per-picture status query this rung reads.
                 status_queries: false,
@@ -260,11 +258,10 @@ impl<D: OpenedStateless> StatelessHevc<D> {
             buffers = decoder.buffers(),
             "native V4L2 stateless picture pool ready"
         );
-        self.pools += 1;
         self.session = Some(Session {
             decoder,
             shape,
-            pool: self.pools,
+            pool: crate::video::next_pool_generation(),
             exports: None,
         });
         Ok(())

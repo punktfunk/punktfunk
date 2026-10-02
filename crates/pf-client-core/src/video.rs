@@ -885,6 +885,14 @@ pub fn decode_pinned_to_software(pref: &str) -> bool {
 ///
 /// Trimmed: a trailing space matched no [`native_vulkan_gate`] arm and fell
 /// through to `auto`. Whitespace-only is absent, not a pin to `""` (the auto family).
+/// A pool generation no other pool in this process had. The presenter's import caches
+/// outlive a stream, so a decoder counting from zero would hand the next stream keys that
+/// still name the last one's surfaces.
+pub(crate) fn next_pool_generation() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn resolve_decoder_pref(env: Option<&str>, pref: &str) -> String {
     env.map(str::trim)
         .filter(|v| !v.is_empty())
