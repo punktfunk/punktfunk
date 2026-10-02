@@ -59,6 +59,12 @@ impl HeldInput {
 
     /// The matching up for everything still held; leaves nothing held.
     pub fn release(&mut self) -> Vec<InputEvent> {
+        self.release_classes(true, true)
+    }
+
+    /// [`Self::release`] for keys and/or pointer (buttons and touches): a session that loses
+    /// one grant mid-press keeps what the other holds.
+    pub fn release_classes(&mut self, keys: bool, pointer: bool) -> Vec<InputEvent> {
         let up = |kind, code| InputEvent {
             kind,
             _pad: [0; 3],
@@ -68,16 +74,22 @@ impl HeldInput {
             flags: 0,
         };
         let mut out = Vec::new();
-        out.extend(
-            self.buttons
-                .drain()
-                .map(|c| up(InputKind::MouseButtonUp, c)),
-        );
-        out.extend(self.keys.drain().map(|(c, flags)| InputEvent {
-            flags,
-            ..up(InputKind::KeyUp, c)
-        }));
-        out.extend(self.touch.drain().map(|c| up(InputKind::TouchUp, c)));
+        if pointer {
+            out.extend(
+                self.buttons
+                    .drain()
+                    .map(|c| up(InputKind::MouseButtonUp, c)),
+            );
+        }
+        if keys {
+            out.extend(self.keys.drain().map(|(c, flags)| InputEvent {
+                flags,
+                ..up(InputKind::KeyUp, c)
+            }));
+        }
+        if pointer {
+            out.extend(self.touch.drain().map(|c| up(InputKind::TouchUp, c)));
+        }
         out
     }
 }
@@ -95,6 +107,19 @@ mod tests {
             y: 0,
             flags: 0,
         }
+    }
+
+    #[test]
+    fn a_withdrawn_class_lets_go_of_its_own_only() {
+        let mut held = HeldInput::default();
+        held.note(&ev(InputKind::KeyDown, 30));
+        held.note(&ev(InputKind::MouseButtonDown, 1));
+        let ups = held.release_classes(true, false);
+        assert_eq!(ups.len(), 1);
+        assert!(matches!(ups[0].kind, InputKind::KeyUp));
+        let ups = held.release();
+        assert_eq!(ups.len(), 1);
+        assert!(matches!(ups[0].kind, InputKind::MouseButtonUp));
     }
 
     #[test]
