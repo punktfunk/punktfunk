@@ -273,12 +273,15 @@ fun SpeedTestPrompt(
     phase: SpeedTestPhase,
     onApply: (toPreset: Boolean) -> Unit,
     onDismiss: () -> Unit,
+    // The profile a finding offered: remembered on this host's record, asked for from the
+    // next connect. Absent when nothing was offered.
+    onUsePacedDelivery: (profile: Int) -> Unit = {},
 ) {
     val done = phase as? SpeedTestPhase.Done
     PunktfunkDialog(
-        title = "Network speed test",
+        title = "Network check",
         onDismiss = onDismiss,
-        // Measuring bursts traffic for two seconds; a tap outside must not abandon it midway.
+        // Measuring runs probes for ten seconds and more; a tap outside must not abandon it midway.
         dismissOnOutsideTap = phase !is SpeedTestPhase.Measuring,
         actions = buildList {
             if (done != null) {
@@ -295,6 +298,9 @@ fun SpeedTestPrompt(
                 if (target is SpeedTestTarget.Ask) {
                     add(DialogAction("Set as default") { onApply(false) })
                 }
+                done.offeredProfile?.let { profile ->
+                    add(DialogAction("Use paced delivery (${profileName(profile)})") { onUsePacedDelivery(profile) })
+                }
             }
             add(DialogAction("Close", primary = done == null, onClick = onDismiss))
         },
@@ -304,7 +310,7 @@ fun SpeedTestPrompt(
             SpeedTestPhase.Connecting -> PromptText("Connecting…")
             SpeedTestPhase.Measuring ->
                 PromptText(
-                    "Measuring — the host is bursting test traffic for two seconds.",
+                    "Measuring — the host is sending test traffic. This takes a few seconds.",
                 )
             is SpeedTestPhase.Failed -> Text(
                 phase.message,
@@ -313,11 +319,12 @@ fun SpeedTestPrompt(
             )
             is SpeedTestPhase.Done -> {
                 Text(
-                    "%.0f Mbit/s measured · %.1f %% loss".format(phase.measuredMbps, phase.lossPct),
+                    speedTestHeadline(phase),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
+                phase.findings.forEach { f -> PromptText(findingText(f.id, f.numbers)) }
                 PromptText(
                     "Recommended bitrate: %.0f Mbit/s".format(phase.recommendedMbps),
                 )
@@ -325,6 +332,17 @@ fun SpeedTestPrompt(
             }
         }
     }
+}
+
+/**
+ * What the link carries, then the clean round's loss and jitter at its rate; without a round
+ * (a host without a ramp) the figure stands alone — a blast's loss is not the link's.
+ */
+internal fun speedTestHeadline(done: SpeedTestPhase.Done): String {
+    val carries = if (done.wall) "Link carries %.0f Mbit/s." else "Link carries at least %.0f Mbit/s."
+    val clean = done.clean ?: return "%.0f Mbit/s measured".format(done.measuredMbps)
+    return carries.format(done.measuredMbps) + " At %.0f Mbit/s: %.1f %% loss, %.1f ms jitter"
+        .format(clean.rateKbps / 1000.0, clean.lossPct, clean.jitterUs / 1000.0)
 }
 
 /** One line saying which layer an Apply will write to, and why that one. */

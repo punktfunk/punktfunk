@@ -57,26 +57,116 @@ sealed interface SpeedTestPhase {
     data class Failed(val message: String) : SpeedTestPhase
 
     /**
-     * [recommendedKbps] is 70 % of the measured throughput — headroom for the FEC overhead and for
-     * the loss a real stream will meet, the same margin the desktop clients apply.
+     * [throughputKbps] is what the link carries; [lossPct] is the clean round's at a rate the
+     * link holds (`0.0` with no round). [recommendedKbps] is 70 % of the ceiling — headroom for
+     * the FEC overhead and for the loss a real stream will meet, the same margin the desktop
+     * clients apply. [findings] is what the check found, by id.
      */
     data class Done(
         val throughputKbps: Int,
         val lossPct: Double,
         val recommendedKbps: Int,
+        val wall: Boolean = false,
+        val clean: CleanRound? = null,
+        val findings: List<Finding> = emptyList(),
     ) : SpeedTestPhase {
         val measuredMbps: Double get() = throughputKbps / 1000.0
         val recommendedMbps: Double get() = recommendedKbps / 1000.0
+
+        /** The delivery profile the first finding that names one offers, else null. */
+        val offeredProfile: Int? get() = findings.firstOrNull { it.profile != 0 }?.profile
     }
 }
 
+/** One round at a rate the link holds: the loss figure the test shows. */
+data class CleanRound(val rateKbps: Int, val lossPct: Double, val jitterUs: Int)
+
 /**
- * Connect to [host]:[port], run one burst, and report. Blocking-ish (it suspends on IO) — call
- * from a coroutine; [onPhase] is invoked as it progresses so the dialog can narrate.
+ * One finding of the network check, by id (the Rust `FindingId` as a byte): the words are
+ * [findingText]'s; [profile] is the delivery profile that helps (`1` capped, `2` smooth, `0`
+ * none).
+ */
+data class Finding(val id: Int, val severity: Int, val numbers: List<Int>, val profile: Int)
+
+/** The network check's flat report ([NativeBridge.nativeNetworkCheck]) as a [SpeedTestPhase.Done]. */
+fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
+    if (v.size < 17) return null
+    val ceilingKbps = v[0].toInt()
+    val clean = if (v[2] != 0.0) CleanRound(v[3].toInt(), v[4], v[5].toInt()) else null
+    val n = v[16].toInt()
+    if (v.size < 17 + n * 6) return null
+    val findings = (0 until n).map { i ->
+        val base = 17 + i * 6
+        Finding(
+            id = v[base].toInt(),
+            severity = v[base + 1].toInt(),
+            profile = v[base + 2].toInt(),
+            numbers = listOf(v[base + 3].toInt(), v[base + 4].toInt(), v[base + 5].toInt()),
+        )
+    }
+    return SpeedTestPhase.Done(
+        throughputKbps = ceilingKbps,
+        lossPct = clean?.lossPct ?: 0.0,
+        // Integer arithmetic in this order (not `* 0.7`) so the recommendation matches the
+        // desktop clients' to the kilobit.
+        recommendedKbps = ceilingKbps / 10 * 7,
+        wall = v[1] != 0.0,
+        clean = clean,
+        findings = findings,
+    )
+}
+
+/**
+ * A finding in words — what did not happen, then the next move — the same sentences every
+ * shell shows. The offered profile is the dialog's button, not a sentence here.
+ */
+fun findingText(id: Int, numbers: List<Int>): String {
+    val a = numbers.getOrElse(0) { 0 }
+    val b = numbers.getOrElse(1) { 0 }
+    val pct = { x: Int -> x / 100.0 }
+    return when (id) {
+        1 -> if (a > 0 && b > 0) {
+            "The host's port is faster than this device's ($a vs $b Mbit/s), so bursts overflow " +
+                "the switch between them."
+        } else {
+            "The host's port is faster than this device's, so bursts overflow the switch between them."
+        }
+        2 -> "This device drops the start of every burst (%.1f %% lost) — the adapter's power saving " +
+            "is the usual cause.".let { it.format(pct(a)) }
+        3 -> if (a > 0) {
+            "This device's own receive buffer dropped $a packets; the system caps it at $b KB."
+        } else {
+            "The system caps this device's receive buffer at $b KB."
+        }
+        4 -> "Loss at a rate no link refuses (%.1f %%): check the cable, the port or the adapter driver."
+            .format(pct(a))
+        5 -> "Something on the path buffers instead of dropping (%.0f ms spread); keep the bitrate under %.0f Mbit/s."
+            .format(a / 1000.0, b / 1000.0)
+        6 -> if (a > 0) {
+            "The host's send buffer refused $a packets; raise its limit."
+        } else {
+            "The host's send buffer is capped at $b KB; raise its limit."
+        }
+        7 -> if (a > 0) "This device is on Wi-Fi; bursts lose %.1f %%.".format(pct(a)) else "This device is on Wi-Fi."
+        else -> "Finding $id."
+    }
+}
+
+/** What an offered profile is called on a button. */
+fun profileName(profile: Int): String = when (profile) {
+    1 -> "capped"
+    2 -> "smooth"
+    else -> "none"
+}
+
+/**
+ * Connect to [host]:[port] as a diagnostic session, run the network check, and report. Suspends
+ * on IO — call from a coroutine; [onPhase] is invoked as it progresses so the dialog can narrate.
  *
- * The connect is deliberately minimal: 1280×720@60, no launch, host-default bitrate. Nothing here
- * presents a frame, and asking a host to spin up a 4K encode for a three-second measurement would
- * be rude to it and slower for us.
+ * The connect is deliberately minimal: 1280×720@60, no launch, host-default bitrate, and probes
+ * only — the host builds no display or encoder for it. The check itself is the core's
+ * (`client::health::health_check`): the ceiling the bring-up ramp proved, a clean round at half of
+ * it, two shaped legs, both ends' facts, and the findings.
  */
 suspend fun runSpeedTest(
     context: Context,
@@ -84,8 +174,8 @@ suspend fun runSpeedTest(
     host: String,
     port: Int,
     pinHex: String,
-    // The burst's live throughput (kbps) at every poll, for a caller that graphs it.
-    onProgress: (Int) -> Unit = {},
+    // Kept for the console's graph; the check reports once, when it is done.
+    @Suppress("UNUSED_PARAMETER") onProgress: (Int) -> Unit = {},
     onPhase: (SpeedTestPhase) -> Unit,
 ) {
     onPhase(SpeedTestPhase.Connecting)
@@ -100,6 +190,7 @@ suspend fun runSpeedTest(
     val handle = connectToHost(
         context, probeSettings, identity, host, port, pinHex,
         launch = null, dialer = "speed-test", timeoutMs = SPEED_TEST_CONNECT_TIMEOUT_MS,
+        deliveryFlags = DELIVERY_FACTS or DELIVERY_PROBE_ONLY,
     )
     if (handle == 0L) {
         onPhase(
@@ -111,44 +202,19 @@ suspend fun runSpeedTest(
     }
     try {
         onPhase(SpeedTestPhase.Measuring)
-        if (!NativeBridge.nativeSpeedTest(handle, TARGET_KBPS, BURST_MS)) {
-            onPhase(SpeedTestPhase.Failed("The host wouldn't start a measurement."))
-            return
-        }
-        var waited = 0
-        while (waited < POLL_BUDGET_MS) {
-            delay(POLL_INTERVAL_MS.toLong())
-            waited += POLL_INTERVAL_MS
-            val r = NativeBridge.nativeProbeResult(handle)
-            if (r == null || r.size < 3) {
-                onPhase(SpeedTestPhase.Failed("The session ended before the measurement finished."))
-                return
-            }
-            if (r[0] == 0.0) {
-                onProgress(r[1].toInt())
-                continue
-            }
-            // Let the last UDP shards land before tearing the session down, or the tail of the
-            // burst is counted as loss that never happened.
-            delay(SETTLE_MS)
-            val settled = NativeBridge.nativeProbeResult(handle) ?: r
-            val kbps = settled[1].toInt()
-            onPhase(
-                SpeedTestPhase.Done(
-                    throughputKbps = kbps,
-                    lossPct = settled[2],
-                    // Integer arithmetic in this order (not `* 0.7`) so the recommendation matches
-                    // the desktop clients' to the kilobit.
-                    recommendedKbps = kbps / 10 * 7,
-                ),
-            )
-            return
-        }
-        onPhase(SpeedTestPhase.Failed("The measurement timed out."))
+        val report = withContext(Dispatchers.IO) { NativeBridge.nativeNetworkCheck(handle) }
+        val done = report?.let(::parseNetworkCheck)
+        onPhase(done ?: SpeedTestPhase.Failed("The host wouldn't run the measurement."))
     } finally {
         withContext(Dispatchers.IO) { NativeBridge.nativeClose(handle) }
     }
 }
+
+/** `EXT_DELIVERY_FACTS`: ask the host for its own network facts. */
+const val DELIVERY_FACTS = 1
+
+/** `EXT_DELIVERY_PROBE_ONLY`: a diagnostic session that builds no pipeline. */
+const val DELIVERY_PROBE_ONLY = 2
 
 /**
  * Write a measured bitrate into the layer [target] names. [toPreset] picks the side of a
@@ -181,12 +247,4 @@ fun applySpeedTestResult(
     }
 }
 
-/** Ask for far more than any real link can carry, so the link is what limits the answer. */
-private const val TARGET_KBPS = 3_000_000
-
-/** Long enough to fill the pipe and settle, short enough not to interrupt anyone for long. */
-private const val BURST_MS = 2_000
-private const val POLL_INTERVAL_MS = 250
-private const val POLL_BUDGET_MS = 10_000
-private const val SETTLE_MS = 400L
 private const val SPEED_TEST_CONNECT_TIMEOUT_MS = 15_000

@@ -16,7 +16,9 @@ use punktfunk_core::client::{ConnectParams, NativeClient};
 use punktfunk_core::config::Mode;
 use std::time::Duration;
 
-pub use punktfunk_core::client::health::{recommended_kbps, CleanRound, SpeedReport};
+pub use punktfunk_core::client::health::{
+    recommended_kbps, CleanRound, Finding, HealthReport, SpeedReport,
+};
 
 /// Connect to `addr`:`port`, measure, and return the report. Blocking — call it on a
 /// worker thread.

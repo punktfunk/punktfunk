@@ -7,7 +7,6 @@ use super::style::*;
 use super::{Screen, Svc};
 use crate::trust::KnownHosts;
 use pf_client_core::presets::PresetsFile;
-use pf_client_core::speed::run_speed_probe;
 use windows_reactor::*;
 
 /// Speed-test lifecycle. Held as ROOT state (the probe worker completes it via
@@ -24,6 +23,8 @@ pub(crate) enum SpeedState {
         /// host without a ramp, which gets no loss line.
         clean: Option<(f64, f32, f64)>,
         recommended_kbps: u32,
+        /// What the check found: `(id, figures, offered profile)` per finding.
+        findings: Vec<(u8, [u32; 3], Option<u8>)>,
     },
 }
 
@@ -59,19 +60,20 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             std::thread::Builder::new()
                 .name("pf-speedtest".into())
                 .spawn(move || {
-                    let outcome = run_speed_probe(
+                    let outcome = pf_client_core::speed::run_network_check_with(
                         &target.addr,
                         target.port,
                         target.fp_hex.as_deref(),
                         identity,
+                        |_| {},
                     );
                     if shared.speed_gen.load(Ordering::SeqCst) != generation {
                         return; // superseded
                     }
                     set_speed.call(match outcome {
                         Ok(r) => SpeedState::Done {
-                            mbps: f64::from(r.ceiling_kbps) / 1000.0,
-                            clean: r.clean.map(|c| {
+                            mbps: f64::from(r.speed.ceiling_kbps) / 1000.0,
+                            clean: r.speed.clean.map(|c| {
                                 (
                                     f64::from(c.rate_kbps) / 1000.0,
                                     c.loss_pct,
@@ -79,8 +81,13 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                                 )
                             }),
                             recommended_kbps: pf_client_core::speed::recommended_kbps(
-                                r.ceiling_kbps,
+                                r.speed.ceiling_kbps,
                             ),
+                            findings: r
+                                .findings
+                                .iter()
+                                .map(|f| (f.id as u8, f.numbers, f.profile))
+                                .collect(),
                         },
                         Err(msg) => SpeedState::Failed(msg),
                     });
@@ -130,6 +137,7 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             mbps,
             clean,
             recommended_kbps,
+            findings,
         } => {
             let recommended_mbps = f64::from(*recommended_kbps) / 1000.0;
             // A measured bitrate belongs in the layer the TESTED host actually reads it from
@@ -213,6 +221,33 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                     );
                 }
             }
+            // The profile a finding offered goes on this host's record; the next connect asks
+            // for it. Only a saved host has a record.
+            if let (Some(profile), Some(fp)) = (
+                findings.iter().find_map(|(_, _, p)| *p),
+                target.fp_hex.clone(),
+            ) {
+                let ss = set_screen.clone();
+                buttons.push(
+                    button(format!(
+                        "Use paced delivery ({})",
+                        pf_client_core::findings::profile_name(profile)
+                    ))
+                    .icon(lucide::icon("check"))
+                    .on_click(move || {
+                        let mut known = KnownHosts::load();
+                        if let Some(h) = known.hosts.iter_mut().find(|h| h.fp_hex == fp) {
+                            h.delivery = Some(profile);
+                            if let Err(e) = known.save() {
+                                tracing::warn!(error = %format!("{e:#}"),
+                                    "saving the host's delivery profile");
+                            }
+                        }
+                        ss.call(Screen::Hosts);
+                    })
+                    .into(),
+                );
+            }
             buttons.push({
                 let ss = set_screen.clone();
                 button("Close")
@@ -220,6 +255,16 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                     .on_click(move || ss.call(Screen::Hosts))
                     .into()
             });
+            let finding_lines: Vec<Element> = findings
+                .iter()
+                .map(|(id, numbers, _)| {
+                    text_block(pf_client_core::findings::text(*id, *numbers))
+                        .font_size(12.0)
+                        .foreground(ThemeRef::SecondaryText)
+                        .horizontal_alignment(HorizontalAlignment::Center)
+                        .into()
+                })
+                .collect();
             let results = card(
                 vstack((
                     text_block(format!("{mbps:.0} Mbit/s"))
@@ -242,6 +287,7 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                     .font_size(12.0)
                     .foreground(ThemeRef::SecondaryText)
                     .horizontal_alignment(HorizontalAlignment::Center),
+                    vstack(finding_lines).spacing(4.0),
                     hstack(buttons)
                         .spacing(8.0)
                         .horizontal_alignment(HorizontalAlignment::Center),

@@ -59,8 +59,8 @@ pub struct Stats {
 
 /// Thirty-two buckets of 100 µs: a percentile to a tenth of a millisecond, and an array
 /// `Default` still derives.
-pub const PROBE_GAP_BUCKETS: usize = 32;
-pub const PROBE_GAP_BUCKET_US: u32 = 100;
+pub(crate) const PROBE_GAP_BUCKETS: usize = 32;
+pub(crate) const PROBE_GAP_BUCKET_US: u32 = 100;
 
 pub fn probe_gap_bucket(gap_us: u64) -> usize {
     ((gap_us / u64::from(PROBE_GAP_BUCKET_US)) as usize).min(PROBE_GAP_BUCKETS - 1)

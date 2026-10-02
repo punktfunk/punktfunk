@@ -207,9 +207,13 @@ pub enum SpeedPhase {
     /// recommends the same kilobit.
     Done {
         throughput_kbps: u32,
+        /// Defaults, like `clean` and `findings`: a driver that only measured speed sends
+        /// the two figures it always sent.
+        #[serde(default)]
         wall: bool,
         /// The round under the ceiling; `None` toward a host without a ramp, which gets no
         /// loss line — a blast's loss is the blast's.
+        #[serde(default)]
         clean: Option<CleanRound>,
         recommended_kbps: u32,
         /// What the network check found; empty from a driver that only measured speed.

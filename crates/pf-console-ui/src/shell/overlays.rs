@@ -725,66 +725,10 @@ fn speed_headline(
     }
 }
 
-/// One finding in words: what did not happen and the next move, from its id and figures.
-/// The offered profile is the Secondary hint, not a sentence here.
+/// One finding in words ([`pf_client_core::findings::text`]). The offered profile is the
+/// Secondary hint, not a sentence here.
 pub(crate) fn finding_text(f: &crate::model::FindingRow) -> String {
-    let [a, b, c] = f.numbers;
-    let pct = |x: u32| f64::from(x) / 100.0;
-    match f.id {
-        1 => {
-            if a > 0 && b > 0 {
-                format!(
-                    "The host's port is faster than this device's ({a} vs {b} Mbit/s), so \
-                     bursts overflow the switch between them."
-                )
-            } else {
-                "The host's port is faster than this device's, so bursts overflow the \
-                 switch between them."
-                    .to_string()
-            }
-        }
-        2 => format!(
-            "This device drops the start of every burst ({:.1} % lost) \u{2014} the \
-             adapter's power saving is the usual cause.",
-            pct(a)
-        ),
-        3 => {
-            if a > 0 {
-                format!(
-                    "This device's own receive buffer dropped {a} packets; the system caps it \
-                     at {b} KB."
-                )
-            } else {
-                format!("The system caps this device's receive buffer at {b} KB.")
-            }
-        }
-        4 => format!(
-            "Loss at a rate no link refuses ({:.1} %): check the cable, the port or the \
-             adapter driver.",
-            pct(a)
-        ),
-        5 => format!(
-            "Something on the path buffers instead of dropping ({:.0} ms spread); keep the \
-             bitrate under {}.",
-            f64::from(a) / 1000.0,
-            mbps(b)
-        ),
-        6 => {
-            if a > 0 {
-                format!("The host's send buffer refused {a} packets; raise its limit.")
-            } else {
-                format!("The host's send buffer is capped at {b} KB; raise its limit.")
-            }
-        }
-        7 => {
-            if a > 0 {
-                format!("This device is on Wi-Fi; bursts lose {:.1} %.", pct(a))
-            } else {
-                "This device is on Wi-Fi.".to_string()
-            }
-        }
-        _ => format!("Finding {} ({a}, {b}, {c}).", f.id),
-    }
+    pf_client_core::findings::text(f.id, f.numbers)
 }
 
 /// The measured rate and its recommendation, once there is an answer.

@@ -140,35 +140,41 @@ extension ConsoleModel {
         Task.detached(priority: .userInitiated) { [weak self] in
             let conn: PunktfunkConnection
             do {
+                // A diagnostic session: probes only, the host's facts asked for.
                 conn = try PunktfunkConnection(
                     host: addr, port: port, width: 1280, height: 720, refreshHz: 60,
-                    pinSHA256: pin, identity: identity)
+                    pinSHA256: pin, identity: identity,
+                    deliveryFlags: PunktfunkConnection.deliveryFacts
+                        | PunktfunkConnection.deliveryProbeOnly)
             } catch {
                 await self?.pushSpeed(key, ["Failed": "Couldn't reach \(addr) — it may be asleep."])
                 return
             }
             defer { conn.close() }
-            conn.startSpeedTest(targetKbps: 3_000_000, durationMs: 5_000)
             await self?.pushSpeed(key, "Measuring")
-            // The host clamps the burst to five seconds; its report lands just after.
-            let deadline = Date().addingTimeInterval(13)
-            while Date() < deadline {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard let r = conn.probeResult() else { break }
-                guard r.done else {
-                    // The live figure, for the console's graph.
-                    await self?.pushSpeed(key, ["Progress": ["kbps": r.throughputKbps]])
-                    continue
-                }
-                let done: [String: Any] = [
-                    "throughput_kbps": r.throughputKbps, "loss_pct": r.lossPct,
-                    "recommended_kbps": r.throughputKbps / 10 * 7,
-                ]
-                await self?.pushSpeed(key, ["Done": done])
+            // The whole check, reported once: the ceiling, the clean round and the findings.
+            guard let r = conn.networkCheck() else {
+                await self?.pushSpeed(
+                    key, ["Failed": "The measurement never finished — the connection may have dropped."])
                 return
             }
-            await self?.pushSpeed(
-                key, ["Failed": "The measurement never finished — the connection may have dropped."])
+            var done: [String: Any] = [
+                "throughput_kbps": r.ceilingKbps, "wall": r.wall,
+                "loss_pct": r.clean?.lossPct ?? 0,
+                "recommended_kbps": r.ceilingKbps / 10 * 7,
+                "findings": r.findings.map { f -> [String: Any] in
+                    [
+                        "id": f.id, "severity": f.severity, "numbers": f.numbers,
+                        "profile": f.profile == 0 ? NSNull() : f.profile,
+                    ]
+                },
+            ]
+            if let c = r.clean {
+                done["clean"] = ["rate_kbps": c.rateKbps, "loss_pct": c.lossPct, "jitter_us": c.jitterUs]
+            } else {
+                done["clean"] = NSNull()
+            }
+            await self?.pushSpeed(key, ["Done": done])
         }
     }
 

@@ -18,14 +18,14 @@ use crate::transport::ifinfo::LinkFacts;
 use crate::transport::IFACE_KIND_WIFI;
 use std::time::{Duration, Instant};
 
-pub const CLEAN_ROUND_MS: u32 = 2_000;
+const CLEAN_ROUND_MS: u32 = 2_000;
 /// The clean round's share of the ceiling: under the wall by more than the session itself
 /// keeps, so its loss is the path's, not the round's.
-pub const CLEAN_ROUND_PCT: u32 = 50;
+const CLEAN_ROUND_PCT: u32 = 50;
 /// The blast toward a host without a ramp: far more than any link carries, so the link is
 /// what limits the answer.
-pub const BLAST_KBPS: u32 = 3_000_000;
-pub const BLAST_MS: u32 = 2_000;
+const BLAST_KBPS: u32 = 3_000_000;
+const BLAST_MS: u32 = 2_000;
 /// The ramp stops within the bring-up gap; longer means it was cut short or declined.
 const RAMP_WAIT: Duration = Duration::from_secs(4);
 /// The clean round runs after the first video frame: until then the host serves every
@@ -267,13 +267,13 @@ pub struct HealthReport {
     pub findings: Vec<Finding>,
 }
 
-pub const LEG_MS: u32 = 1_000;
-pub const LEG_HZ: u16 = 60;
-pub const CAPPED_GROUP_BYTES: u32 = 64 * 1024;
-pub const CAPPED_RATE_KBPS: u32 = 800_000;
+const LEG_MS: u32 = 1_000;
+const LEG_HZ: u16 = 60;
+const CAPPED_GROUP_BYTES: u32 = 64 * 1024;
+const CAPPED_RATE_KBPS: u32 = 800_000;
 /// A rate no link refuses, for the link-fault round.
-pub const SLOW_ROUND_KBPS: u32 = 5_000;
-pub const SLOW_ROUND_MS: u32 = 3_000;
+const SLOW_ROUND_KBPS: u32 = 5_000;
+const SLOW_ROUND_MS: u32 = 3_000;
 /// The clean round's loss that sends the check looking for a link fault.
 const SLOW_ROUND_TRIGGER_PCT: f32 = 0.1;
 /// A leg that loses this much is a finding.

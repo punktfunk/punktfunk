@@ -1007,8 +1007,31 @@ object SkiaConsole {
                 "Done",
                 JSONObject()
                     .put("throughput_kbps", p.throughputKbps)
-                    .put("loss_pct", p.lossPct)
-                    .put("recommended_kbps", p.recommendedKbps),
+                    .put("wall", p.wall)
+                    .put(
+                        "clean",
+                        p.clean?.let {
+                            JSONObject()
+                                .put("rate_kbps", it.rateKbps)
+                                .put("loss_pct", it.lossPct)
+                                .put("jitter_us", it.jitterUs)
+                        } ?: JSONObject.NULL,
+                    )
+                    .put("recommended_kbps", p.recommendedKbps)
+                    .put(
+                        "findings",
+                        org.json.JSONArray().also { arr ->
+                            p.findings.forEach { f ->
+                                arr.put(
+                                    JSONObject()
+                                        .put("id", f.id)
+                                        .put("severity", f.severity)
+                                        .put("numbers", org.json.JSONArray(f.numbers))
+                                        .put("profile", if (f.profile == 0) JSONObject.NULL else f.profile),
+                                )
+                            }
+                        },
+                    ),
             ).toString()
         }
         NativeBridge.nativeConsoleAdvanceSpeed(handle, key, json)

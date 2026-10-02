@@ -7,7 +7,7 @@ use crate::store::Store;
 use adw::prelude::*;
 use gtk::glib;
 use pf_client_core::presets::StreamPreset;
-use pf_client_core::speed::{recommended_kbps, CleanRound, SpeedReport};
+use pf_client_core::speed::{recommended_kbps, CleanRound, HealthReport, SpeedReport};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -59,6 +59,11 @@ pub fn push(
         row("Current bitrate"),
     );
     current.set_label(&bitrate_label(chart.borrow().current));
+    // What the check found, one row each; hidden until there is something to say.
+    let findings = adw::PreferencesGroup::builder()
+        .title("What the check found")
+        .build();
+    findings.set_visible(false);
     let buttons = gtk::Box::builder()
         .spacing(12)
         .halign(gtk::Align::Center)
@@ -74,6 +79,7 @@ pub fn push(
     body.append(&area);
     body.append(&legend());
     body.append(&results);
+    body.append(&findings);
     body.append(&buttons);
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&adw::HeaderBar::new());
@@ -87,9 +93,11 @@ pub fn push(
 
     enum Probe {
         Sample(u32),
-        Done(Result<SpeedReport, String>),
+        Done(Result<HealthReport, String>),
     }
     let (tx, rx) = async_channel::unbounded::<Probe>();
+    // The host's record and name, for the offer: `req` moves into the worker below.
+    let (offer_fp, host_name) = (req.fp_hex.clone(), req.name.clone());
     std::thread::Builder::new()
         .name("punktfunk-speed".into())
         .spawn(move || {
@@ -100,7 +108,7 @@ pub fn push(
                 canned(progress)
             } else {
                 let fp = req.fp_hex.as_deref();
-                pf_client_core::speed::run_speed_probe_with(
+                pf_client_core::speed::run_network_check_with(
                     &req.addr, req.port, fp, identity, progress,
                 )
             };
@@ -124,10 +132,11 @@ pub fn push(
                     headline.set_label("Couldn't measure");
                     caption.set_label(&msg);
                 }
-                Probe::Done(Ok(r)) => {
+                Probe::Done(Ok(report)) => {
                     if let Some(done) = done.take() {
                         done();
                     }
+                    let r = report.speed;
                     let rec = recommended_kbps(r.ceiling_kbps);
                     {
                         let mut c = chart.borrow_mut();
@@ -136,6 +145,44 @@ pub fn push(
                     }
                     area.queue_draw();
                     headline.set_label(&mbit(r.ceiling_kbps));
+                    for f in &report.findings {
+                        let row = adw::ActionRow::builder()
+                            .title(pf_client_core::findings::text(f.id as u8, f.numbers))
+                            .title_lines(0)
+                            .build();
+                        findings.add(&row);
+                    }
+                    findings.set_visible(!report.findings.is_empty());
+                    // The profile a finding offered goes on this host's record; the next
+                    // connect asks for it. Only a saved host has a record.
+                    let offered = report.findings.iter().find_map(|f| f.profile);
+                    if let (Some(profile), Some(fp)) = (offered, offer_fp.clone()) {
+                        let b = gtk::Button::builder()
+                            .label(format!(
+                                "Use paced delivery ({})",
+                                pf_client_core::findings::profile_name(profile)
+                            ))
+                            .css_classes(["pill"])
+                            .build();
+                        let (store, toasts, name) =
+                            (store.clone(), toasts.clone(), host_name.clone());
+                        b.connect_clicked(move |_| {
+                            let written = store.update_hosts(|k| {
+                                k.hosts.iter_mut().find(|h| h.fp_hex == fp).map(|h| {
+                                    h.delivery = Some(profile);
+                                })
+                            });
+                            let text = match written {
+                                Ok(Some(())) => format!(
+                                    "Paced delivery set for {name} \u{2014} it applies from the \
+                                     next connect"
+                                ),
+                                _ => "Couldn't save the host's record".to_string(),
+                            };
+                            toasts.add_toast(adw::Toast::new(&text));
+                        });
+                        buttons.append(&b);
+                    }
                     // The loss figure is the clean round's, at a rate the link holds. A host
                     // without a ramp only ever measured the blast, which says nothing.
                     match r.clean {
@@ -200,8 +247,8 @@ pub fn push(
 }
 
 /// The screenshot scenes' measurement: a link whose ramp proved ~940 Mbit/s, then a clean
-/// round at half of it.
-fn canned(mut progress: impl FnMut(u32)) -> Result<SpeedReport, String> {
+/// round at half of it, and nothing to fix.
+fn canned(mut progress: impl FnMut(u32)) -> Result<HealthReport, String> {
     for kbps in [40_000, 180_000, 310_000, 410_000, 462_000, 470_000, 468_000] {
         progress(kbps);
     }
@@ -215,17 +262,20 @@ fn canned(mut progress: impl FnMut(u32)) -> Result<SpeedReport, String> {
         gap_p99_us: 400,
         ..Default::default()
     };
-    Ok(SpeedReport {
-        ceiling_kbps: 940_000,
-        wall: true,
-        clean: Some(CleanRound {
-            rate_kbps: 470_000,
-            loss_pct: 0.0,
-            jitter_us: 300,
-            reorders: 0,
-            outcome,
-        }),
-        blast: None,
+    Ok(HealthReport {
+        speed: SpeedReport {
+            ceiling_kbps: 940_000,
+            wall: true,
+            clean: Some(CleanRound {
+                rate_kbps: 470_000,
+                loss_pct: 0.0,
+                jitter_us: 300,
+                reorders: 0,
+                outcome,
+            }),
+            blast: None,
+        },
+        ..Default::default()
     })
 }
 

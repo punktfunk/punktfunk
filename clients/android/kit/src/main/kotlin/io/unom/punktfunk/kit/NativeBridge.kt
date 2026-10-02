@@ -201,6 +201,16 @@ object NativeBridge {
     external fun nativeProbeResult(handle: Long): DoubleArray?
 
     /**
+     * Run the network check over this session and return its report: `[ceilingKbps, wall,
+     * hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs, clientIfaceKind, clientLinkMbps,
+     * clientRcvbufKb, hasHost, hostIfaceKind, hostLinkMbps, hostSndbufKb, nLegs, burstsLossPct,
+     * cappedLossPct, nFindings]` then `[id, severity, profile, n0, n1, n2]` per finding. Blocking
+     * for ten to twenty seconds — call it off the main thread. Null on a dead handle or when the
+     * check could not run.
+     */
+    external fun nativeNetworkCheck(handle: Long): DoubleArray?
+
+    /**
      * Apply the user's "Low-latency mode (experimental)" toggle to the process-wide transport
      * defaults — today just DSCP/QoS marking on the media sockets. Must be called BEFORE
      * [nativeConnect] (the tag is applied at socket creation); `HostConnect.connectToHost` does.

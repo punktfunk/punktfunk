@@ -57,6 +57,10 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     /// Tailscale address anywhere — so when `address` goes silent the sweep asks these too.
     /// Optional and appended last for the same widget-contract reason; nil until the first move.
     public var previousAddresses: [String]?
+    /// The delivery profile to ask this host for (1 capped, 2 smooth), set from a network check's
+    /// finding. Per host: a Wi-Fi TV and a wired desk differ. nil asks nothing, and nil is what an
+    /// older saved record decodes to.
+    public var delivery: Int?
 
     /// How many left-behind addresses a host keeps.
     public static let maxPreviousAddresses = 3

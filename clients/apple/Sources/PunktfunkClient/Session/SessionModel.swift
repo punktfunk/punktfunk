@@ -505,6 +505,9 @@ final class SessionModel: ObservableObject {
                 // it (~180 s) — outwait that window so a slow approval still lands here. Normal
                 // connects keep the snappy default.
                 timeoutMs: requestAccess ? 185_000 : 10_000,
+                // The profile a network check left on this host's record; a host that does not
+                // read the ask streams as it always has.
+                deliveryProfile: UInt8(clamping: host.delivery ?? 0),
                 settings: effective) }
             await MainActor.run { [weak self] in
                 guard let self else { return }

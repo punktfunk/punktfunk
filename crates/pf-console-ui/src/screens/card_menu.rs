@@ -418,7 +418,11 @@ impl CardMenu {
                     if on { "On" } else { "Off" }
                 )
             }
-            Action::SpeedTest => "Test network speed\u{2026}".into(),
+            // The session binary runs the whole check; the other shells measure speed.
+            Action::SpeedTest => match ctx.device.platform {
+                crate::platform::Platform::Desktop => "Check network\u{2026}".into(),
+                _ => "Test network speed\u{2026}".into(),
+            },
             Action::Clipboard => format!(
                 "Shared clipboard: {}",
                 if self.host().clipboard_sync {

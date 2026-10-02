@@ -52,6 +52,8 @@ internal fun ConnectPrompts(
     /** true = write the measured bitrate to the preset, false = to the global default. */
     onApplySpeedTest: (Boolean) -> Unit,
     onDismissSpeedTest: () -> Unit,
+    /** The delivery profile a finding offered, to remember on the tested host's record. */
+    onUsePacedDelivery: (Int) -> Unit,
     // ---- edit host ---------------------------------------------------------------------------
     editTarget: KnownHost?,
     /** A MAC from the live advert, for a host whose own is not learned yet. */
@@ -108,6 +110,7 @@ internal fun ConnectPrompts(
         SpeedTestPrompt(
             speedTest.host.name, speedTestTarget, speedTestPhase,
             onApplySpeedTest, onDismissSpeedTest,
+            onUsePacedDelivery = onUsePacedDelivery,
         )
     }
 

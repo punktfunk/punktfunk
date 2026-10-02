@@ -63,6 +63,11 @@ data class KnownHost(
      */
     val presetId: String? = null,
     /**
+     * The delivery profile to ask this host for (`1` capped, `2` smooth), set from a network
+     * check's finding. Per host: a Wi-Fi TV and a wired desk differ. `0` asks nothing.
+     */
+    val delivery: Int = 0,
+    /**
      * Presets pinned as their own cards for this host (design §5.2a). Presentation only: order is
      * card order, and this is NOT the default binding ([presetId] is). Duplicates and presets
      * that no longer exist are dropped when the cards are rendered.
@@ -394,6 +399,7 @@ class KnownHostStore(context: Context) {
             .put("mgmt", host.mgmtPort ?: 0)
             .put("clip", host.clipboardSync)
             .put("preset", host.presetId ?: "")
+            .put("delivery", host.delivery)
             .put("pins", JSONArray(host.pinnedPresetIds))
             .put("game_presets", JSONObject(host.gamePresets))
             // The pre-rename keys too, so an older build of this app keeps the bindings.
@@ -425,6 +431,7 @@ class KnownHostStore(context: Context) {
                 clipboardSync = j.optBoolean("clip", false),
                 // `profile` and `game_profiles` are the pre-rename keys, read when the new key is absent.
                 presetId = j.optString(newOrOld(j, "preset", "profile"), "").ifEmpty { null },
+                delivery = j.optInt("delivery", 0),
                 pinnedPresetIds = stringList(j.optJSONArray("pins")),
                 gamePresets = stringMap(
                     j.optJSONObject(newOrOld(j, "game_presets", "game_profiles")),

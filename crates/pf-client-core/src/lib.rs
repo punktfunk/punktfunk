@@ -56,6 +56,8 @@ pub mod library_cache;
 #[cfg(desktop)]
 pub mod art_cache;
 // Host power actions (`design/host-actions.md`). Android gets the row type and labels; ureq stays desktop-gated (Android uses OkHttp).
+/// A network check's findings in words, for every shell.
+pub mod findings;
 #[cfg(portable)]
 pub mod host_actions;
 // Log ring (note/render, std only) on every platform. `send_to_host` stays desktop-gated; Android posts via OkHttp (`SkiaConsole.sendLogs`).
