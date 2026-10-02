@@ -458,8 +458,10 @@ pub fn parse_addr_port(s: &str) -> Option<(String, u16)> {
 
 /// Printable non-space ASCII without shell metacharacters. Decky puts the id in a
 /// Steam launch-option env token; a quote or backtick breaks downstream. Opaque to us.
+/// No leading `-`: the id rides session argv, where `--browse` would read as a flag.
 fn is_safe_launch_id(id: &str) -> bool {
     !id.is_empty()
+        && !id.starts_with('-')
         && id
             .bytes()
             .all(|b| (0x21..=0x7e).contains(&b) && !br#""'\$`"#.contains(&b))
