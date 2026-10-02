@@ -485,6 +485,12 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
             pages = companionPages,
             page = companionPage,
             onPage = { companionPick = it; CompanionMemory.keep(context, it) },
+            header = PanelHeader(
+                title = listOfNotNull(hostRecord?.name, streamedGame?.title ?: session.launchHold?.game?.title)
+                    .joinToString(" · ").ifEmpty { "Punktfunk" },
+                detail = requestedMode.takeIf { it.size >= 3 && it[0] > 0 }
+                    ?.let { "${it[0]}×${it[1]} · ${it[2]} Hz" }.orEmpty(),
+            ),
             stats = statsLines,
             tier = hudTier,
             onTier = { ui.statsVerbosity = it },

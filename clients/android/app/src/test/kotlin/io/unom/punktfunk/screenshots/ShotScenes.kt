@@ -562,6 +562,7 @@ internal fun CompanionScene(page: io.unom.punktfunk.CompanionPage) {
         pages = io.unom.punktfunk.CompanionPage.entries,
         page = page,
         onPage = {},
+        header = io.unom.punktfunk.PanelHeader("Living Room PC · Starfall Vale", "1920×1080 · 120 Hz"),
         stats = shotLines(StatsVerbosity.NORMAL, 1920, 1080, 120, 119.0, 92.1, loss = false),
         tier = StatsVerbosity.NORMAL,
         onTier = {},

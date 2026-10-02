@@ -122,6 +122,20 @@ class ScreenshotTest {
         CompanionScene(io.unom.punktfunk.CompanionPage.ACTIONS)
     }
 
+    // The same panel at the Retroid Dual Screen add-on's size (1920×1080 at about 400 dpi): the
+    // wide class, where the stats lay out in two columns.
+    @Test
+    @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
+    fun companionStatsWide() = shootRoot("companion-stats", statusBar = false, device = "addon") {
+        CompanionScene(io.unom.punktfunk.CompanionPage.STATS)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
+    fun companionActionsWide() = shootRoot("companion-actions", statusBar = false, device = "addon") {
+        CompanionScene(io.unom.punktfunk.CompanionPage.ACTIONS)
+    }
+
     // The touch flow is a Material dialog over the host grid (a separate window → shootScreen).
     @Test
     fun connecting() = shootScreen("connecting") {

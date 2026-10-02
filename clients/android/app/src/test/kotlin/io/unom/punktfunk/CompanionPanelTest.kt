@@ -70,6 +70,7 @@ class CompanionPanelTest {
         compose.setContent {
             CompanionPanel(
                 pages = CompanionPage.entries, page = page, onPage = onPage,
+                header = PanelHeader("Living Room PC", "1920×1080 · 60 Hz"),
                 stats = emptyList(), tier = StatsVerbosity.NORMAL, onTier = {},
                 cfg = OverlayConfig.platformDefault(), actions = fakeRingActions(fired),
                 haptics = ConsoleHaptics(null), trackpad = {}, pad = {},

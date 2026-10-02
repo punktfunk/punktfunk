@@ -108,11 +108,12 @@ internal fun CompanionOnDisplay(display: Display, pictureHz: Int? = null, conten
     DisposableEffect(activity, display.displayId, generation, pictureHz) {
         val p = Presentation(activity, display)
         p.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        // Its own window, so the app theme the activity's composition sits under is set again here.
         val view = ComposeView(p.context).apply {
             setViewTreeLifecycleOwner(activity)
             setViewTreeViewModelStoreOwner(activity)
             setViewTreeSavedStateRegistryOwner(activity)
-            setContent { latest() }
+            setContent { PunktfunkTheme { latest() } }
         }
         if (pictureHz != null) p.window?.let { holdPicture(it, view, display, pictureHz) }
         p.setContentView(view)
