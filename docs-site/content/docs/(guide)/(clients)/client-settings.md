@@ -57,9 +57,15 @@ Android. Most settings can differ per [preset](/docs/presets-and-links); the exc
 | **Video decoder**, **GPU** | Automatic | The decoder and graphics card this device uses. Change them only to debug; `PUNKTFUNK_DECODER` [overrides](/docs/configuration#client-side-native-clients) the decoder. | Linux, Windows. **GPU**: Windows, and Linux with more than one GPU. |
 | **Low-latency mode** | On | Asks the decoder and system for their low-latency paths. Turn it off if a device misbehaves. | Android |
 
-**Test network speed…** in a host card's menu suggests a bitrate (Android: **Network speed test**;
-Linux and Apple: on the host page). With PyroWave the bitrate row is greyed: the host sets the rate from its
-[bits per pixel](/docs/pyrowave#bits-per-pixel).
+**Test network speed…** in a host card's menu measures the link — what it carries, then loss and
+jitter at half of that, a rate the link holds — and suggests a bitrate (Android: **Network speed
+test**; Linux and Apple: on the host page). On the Linux and Windows session shells it also names
+what the link does: a host port faster than this device's, an adapter that drops the start of each
+burst, a small receive buffer, a link fault, a queue, Wi-Fi. Where one helps, it offers **paced
+delivery** for that host: the host then spreads each frame's packets instead of sending them in one
+burst, which costs a few milliseconds a frame and is remembered per host, never for every host. A
+host that cannot do it streams as it always has. With PyroWave the bitrate row is greyed: the host
+sets the rate from its [bits per pixel](/docs/pyrowave#bits-per-pixel).
 
 ## Audio
 
