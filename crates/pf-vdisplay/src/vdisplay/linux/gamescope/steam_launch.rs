@@ -183,9 +183,9 @@ pub(crate) fn is_steam_launch(cmd: &str) -> bool {
 /// command gets empty, which names no socket: flatpak reads unset as `wayland-0`, the desktop's
 /// socket on a desktop box, and withholds X11 from a `fallback-x11` app.
 pub(super) fn nested_wayland_display(cmd: &str) -> Option<&'static str> {
-    // Exec templates single-quote every element.
+    // Exec templates single-quote every element; desktop entries name `/usr/bin/flatpak`.
     cmd.split_whitespace()
-        .any(|t| t.trim_matches('\'') == "flatpak")
+        .any(|t| t.trim_matches('\'').rsplit('/').next() == Some("flatpak"))
         .then_some("")
 }
 
@@ -513,6 +513,15 @@ mod tests {
             ),
             Some("")
         );
+        // A flatpak desktop entry's `Exec=`, field codes stripped.
+        assert_eq!(
+            nested_wayland_display(
+                "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=xonotic-sdl \
+                 org.xonotic.Xonotic"
+            ),
+            Some("")
+        );
+        assert_eq!(nested_wayland_display("flatpak-spawn --host mygame"), None);
     }
 
     #[test]
