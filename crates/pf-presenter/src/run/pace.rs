@@ -267,6 +267,7 @@ impl StreamState {
             && !self.store.is_smoothing()
             && self.source_interval_ns.abs_diff(period as i64) < period / 10;
         let mut stamps = Vec::with_capacity(samples.len());
+        let mut glass = Vec::with_capacity(samples.len());
         // The engine's stamps are display times in any present mode; a wake time is one
         // only where the wait ends on a vblank.
         let exact = !samples.is_empty() && samples.iter().all(|s| s.exact);
@@ -323,6 +324,7 @@ impl StreamState {
             self.last_shown_pts_ns = s.pts_ns;
             self.last_displayed_ns = s.displayed_ns;
             stamps.push(s.displayed_ns);
+            glass.push((s.displayed_ns, s.pts_ns));
         }
         self.clock.note_batch(&stamps, self.store.is_smoothing());
         // VRR probe: healthy-window stamps only. Use the display mode's period
@@ -332,7 +334,7 @@ impl StreamState {
         // VRR. The engine's own stamps are display times in every mode.
         let healthy = self.last_forced == 0;
         if exact || vblank_locked {
-            self.cadence.note(&stamps, self.mode_period_ns, healthy);
+            self.cadence.note(&glass, self.mode_period_ns, healthy);
         }
         // Phase-locked capture, the presenter's half: publish the grid the
         // local clock just learned, so the report and the scheduler cannot
@@ -707,15 +709,6 @@ impl PresentWindow {
         self.exact = 0;
         self.leads.clear();
     }
-}
-
-/// How far `delta_ns` sits from the nearest whole number of `period_ns`.
-fn off_grid_ns(delta_ns: u64, period_ns: u64) -> u64 {
-    if period_ns == 0 {
-        return 0;
-    }
-    let rem = delta_ns % period_ns;
-    rem.min(period_ns - rem)
 }
 
 /// Display time against the frame's host capture stamp, in the host clock. `None` for a

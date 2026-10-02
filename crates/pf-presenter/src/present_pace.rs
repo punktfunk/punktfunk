@@ -277,13 +277,17 @@ impl Cadence {
 /// Discriminator is quantization. A fixed panel lands stamps on the vblank grid
 /// (spacing ≈ k×period for whole k, including a slower stream). Live VRR refreshes
 /// when we present, so spacing follows our cadence. Distance of each delta to the
-/// nearest period multiple: tight ⇒ Fixed, consistently off ⇒ Variable. A stream
-/// at exact panel rate is indistinguishable (delta ≈ period); VRR has nothing to do.
+/// nearest period multiple: tight ⇒ Fixed, consistently off ⇒ Variable. A source
+/// spacing that is itself a period multiple — the panel's own rate, or a whole
+/// fraction of it — lands on the grid under either regime, so those deltas are no
+/// evidence and the verdict stands until the cadence leaves the grid again.
 pub(crate) struct CadenceProbe {
     /// Off-grid distances as a fraction of the period, in thousandths.
     off_grid_milli: Vec<u32>,
-    /// Previous stamp, kept across calls: the live drain hands one sample at a time.
+    /// Previous glass stamp and its source stamp, kept across calls: the live drain
+    /// hands one sample at a time.
     last_ns: u64,
+    last_pts_ns: u64,
     /// Last round's reading; a verdict publishes only after [`CADENCE_STABLE_ROUNDS`] agree.
     candidate: Cadence,
     agree_rounds: u8,
@@ -304,14 +308,30 @@ const CADENCE_MIN_SAMPLES: usize = 24;
 const CADENCE_STABLE_ROUNDS: u8 = 2;
 /// Median off-grid distance under this fraction of a period reads as grid-locked.
 /// Stamps carry wait-then-read-clock jitter; 150‰ is loose — the two regimes
-/// differ by far more.
+/// differ by far more. A source spacing inside it proves nothing either way.
 const CADENCE_FIXED_MILLI: u32 = 150;
+
+/// How far `delta_ns` sits from the nearest whole number of `period_ns`.
+pub(crate) fn off_grid_ns(delta_ns: u64, period_ns: u64) -> u64 {
+    if period_ns == 0 {
+        return 0;
+    }
+    let rem = delta_ns % period_ns;
+    // A delta just under k×period is on the grid, not a whole period away from k-1.
+    rem.min(period_ns - rem)
+}
+
+/// [`off_grid_ns`] as thousandths of the period.
+fn off_grid_milli(delta_ns: u64, period_ns: u64) -> u32 {
+    (off_grid_ns(delta_ns, period_ns).saturating_mul(1000) / period_ns.max(1)) as u32
+}
 
 impl CadenceProbe {
     pub(crate) fn new() -> CadenceProbe {
         CadenceProbe {
             off_grid_milli: Vec::with_capacity(64),
             last_ns: 0,
+            last_pts_ns: 0,
             candidate: Cadence::Unknown,
             agree_rounds: 0,
             verdict: Cadence::Unknown,
@@ -339,29 +359,33 @@ impl CadenceProbe {
         }
     }
 
-    /// Fold on-glass stamps against the learned panel period. Spacing is against the
-    /// previous stamp, whatever the batch size.
+    /// Fold shown frames as `(displayed_ns, pts_ns)` against the display mode's period.
+    /// Spacing is against the previous frame, whatever the batch size, and a delta
+    /// counts only where the source spacing is off the grid: at the panel's rate the
+    /// glass sits on it under either regime.
     ///
     /// `healthy` is "presents were flowing" (no stale force-opens). A distressed
-    /// pipeline smears spacings for non-panel reasons; evidence is dropped but
-    /// `last_ns` still advances so the timeline stays continuous.
-    pub(crate) fn note(&mut self, stamps: &[u64], period_ns: u64, healthy: bool) {
+    /// pipeline smears spacings for non-panel reasons; evidence is dropped but the
+    /// previous stamps still advance so the timeline stays continuous.
+    pub(crate) fn note(&mut self, frames: &[(u64, u64)], period_ns: u64, healthy: bool) {
         if period_ns == 0 || !healthy {
-            self.last_ns = stamps.last().copied().unwrap_or(self.last_ns);
+            if let Some(&(s, pts)) = frames.last() {
+                self.last_ns = s;
+                self.last_pts_ns = pts;
+            }
             return;
         }
-        for &s in stamps {
+        for &(s, pts) in frames {
             let prev = std::mem::replace(&mut self.last_ns, s);
-            if prev == 0 || s <= prev {
+            let prev_pts = std::mem::replace(&mut self.last_pts_ns, pts);
+            if prev == 0 || s <= prev || prev_pts == 0 || pts <= prev_pts {
                 continue;
             }
-            let delta = s - prev;
-            let rem = delta % period_ns;
-            // Distance to the nearest multiple: a delta just under k×period is on the
-            // grid, not a whole period away from k-1.
-            let off = rem.min(period_ns - rem);
+            if off_grid_milli(pts - prev_pts, period_ns) <= CADENCE_FIXED_MILLI {
+                continue;
+            }
             self.off_grid_milli
-                .push((off.saturating_mul(1000) / period_ns) as u32);
+                .push(off_grid_milli(s - prev, period_ns));
             // A round closes on sample count, inside the loop — not once per call.
             // Per-call evaluation would make the verdict depend on how the caller batches.
             self.close_round_if_ready();
@@ -405,6 +429,7 @@ impl CadenceProbe {
     pub(crate) fn reset(&mut self) {
         self.off_grid_milli.clear();
         self.last_ns = 0;
+        self.last_pts_ns = 0;
         self.candidate = Cadence::Unknown;
         self.agree_rounds = 0;
         self.verdict = Cadence::Unknown;
@@ -822,72 +847,127 @@ mod tests {
         );
     }
 
-    /// Fixed = on the vblank grid (including a slower stream at k×period). Variable =
-    /// off that grid.
+    /// `(displayed, pts)` for a source at `src` spacing on a fixed panel: each frame
+    /// lands on the next grid line at or after it.
+    fn fixed_panel(start: u64, n: usize, period: u64, src: u64) -> Vec<(u64, u64)> {
+        (0..n as u64)
+            .map(|i| {
+                let pts = start + i * src;
+                (pts.div_ceil(period) * period, pts)
+            })
+            .collect()
+    }
+
+    /// `(displayed, pts)` under live VRR: the glass follows the source.
+    fn vrr_panel(start: u64, n: usize, src: u64) -> Vec<(u64, u64)> {
+        (0..n as u64)
+            .map(|i| (start + i * src, start + i * src))
+            .collect()
+    }
+
+    /// Frames for CADENCE_STABLE_ROUNDS full rounds: a verdict publishes only after
+    /// consecutive rounds agree.
+    const ROUNDS: usize = CADENCE_MIN_SAMPLES * CADENCE_STABLE_ROUNDS as usize + 4;
+
+    /// Fixed = on the vblank grid, whatever the source does. Variable = off that grid,
+    /// following the source.
     #[test]
     fn cadence_probe_separates_grid_locked_from_variable() {
         const P: u64 = 8_333_333; // 120 Hz
-                                  // CADENCE_STABLE_ROUNDS full rounds: a verdict publishes only after consecutive
-                                  // rounds agree.
-        const ROUNDS: u64 = (CADENCE_MIN_SAMPLES as u64) * (CADENCE_STABLE_ROUNDS as u64) + 4;
+        let src = P * 3 / 2; // 80 fps: well off the grid
 
         let mut probe = CadenceProbe::new();
         assert_eq!(probe.verdict(), Cadence::Unknown, "no evidence yet");
-        let stamps: Vec<u64> = (0..ROUNDS).map(|i| 1_000_000_000 + i * P).collect();
-        probe.note(&stamps, P, true);
+        probe.note(&fixed_panel(1_000_000_000, ROUNDS, P, src), P, true);
         assert_eq!(probe.verdict(), Cadence::Fixed);
 
-        // Half panel rate: 2×P is still grid-locked, not Variable.
-        let mut probe = CadenceProbe::new();
-        let stamps: Vec<u64> = (0..ROUNDS).map(|i| 1_000_000_000 + i * 2 * P).collect();
-        probe.note(&stamps, P, true);
-        assert_eq!(
-            probe.verdict(),
-            Cadence::Fixed,
-            "a slower stream on a fixed panel picks a larger k, it does not leave the grid"
-        );
-
-        // ±0.5 ms jitter on an 8.3 ms period is not VRR.
-        let mut probe = CadenceProbe::new();
+        // ±0.5 ms stamp jitter on an 8.3 ms grid is not VRR.
         let jitter = [0i64, 300_000, -250_000, 120_000, -400_000, 80_000];
-        let stamps: Vec<u64> = (0..ROUNDS as usize)
-            .map(|i| (1_000_000_000 + i as i64 * P as i64 + jitter[i % jitter.len()]) as u64)
+        let shaky: Vec<(u64, u64)> = fixed_panel(1_000_000_000, ROUNDS, P, src)
+            .iter()
+            .enumerate()
+            .map(|(i, &(s, pts))| ((s as i64 + jitter[i % jitter.len()]) as u64, pts))
             .collect();
-        probe.note(&stamps, P, true);
+        let mut probe = CadenceProbe::new();
+        probe.note(&shaky, P, true);
         assert_eq!(probe.verdict(), Cadence::Fixed, "jitter is not VRR");
 
         // 100 fps on a 120 Hz-max panel: 10 ms is not a multiple of 8.33 ms.
         let mut probe = CadenceProbe::new();
-        let stamps: Vec<u64> = (0..ROUNDS)
-            .map(|i| 1_000_000_000 + i * 10_000_000)
-            .collect();
-        probe.note(&stamps, P, true);
+        probe.note(&vrr_panel(1_000_000_000, ROUNDS, 10_000_000), P, true);
         assert_eq!(probe.verdict(), Cadence::Variable);
 
         probe.reset();
         assert_eq!(probe.verdict(), Cadence::Unknown);
 
         let mut probe = CadenceProbe::new();
-        probe.note(&[1_000_000_000, 1_010_000_000, 1_020_000_000], P, true);
-        assert_eq!(probe.verdict(), Cadence::Unknown);
+        probe.note(&vrr_panel(1_000_000_000, 3, 10_000_000), P, true);
+        assert_eq!(
+            probe.verdict(),
+            Cadence::Unknown,
+            "three frames are not a round"
+        );
 
-        // Live drain is one stamp per pass; spacings must still be measured.
+        // Live drain is one frame per pass; spacings must still be measured.
         let mut probe = CadenceProbe::new();
-        for i in 0..ROUNDS {
-            probe.note(&[1_000_000_000 + i * 10_000_000], P, true); // 100 fps, off a 120 Hz grid
+        for f in vrr_panel(1_000_000_000, ROUNDS, 10_000_000) {
+            probe.note(&[f], P, true);
         }
         assert_eq!(
             probe.verdict(),
             Cadence::Variable,
-            "one-sample batches must still yield spacings"
+            "one-frame batches must still yield spacings"
         );
 
         let mut probe = CadenceProbe::new();
-        let stamps: Vec<u64> = (0..ROUNDS)
-            .map(|i| 1_000_000_000 + i * 10_000_000)
-            .collect();
-        probe.note(&stamps, 0, true);
+        probe.note(&vrr_panel(1_000_000_000, ROUNDS, 10_000_000), 0, true);
         assert_eq!(probe.verdict(), Cadence::Unknown);
+    }
+
+    /// The panel's own rate, or a whole fraction of it, lands on the grid under either
+    /// regime: those frames change nothing, the last verdict stands. Before any verdict
+    /// they leave Unknown — an unproven "vrr no" would be a claim.
+    #[test]
+    fn a_stream_at_the_panel_rate_keeps_the_last_verdict() {
+        const P: u64 = 10_309_278; // 97 Hz
+        const IDLE: u64 = 15_873_015; // 63 fps host repeats: 1.54 periods
+        let t = |n: usize| 1_000_000_000 + n as u64 * 20_000_000;
+
+        let mut probe = CadenceProbe::new();
+        probe.note(&vrr_panel(t(0), ROUNDS, IDLE), P, true);
+        assert_eq!(
+            probe.verdict(),
+            Cadence::Variable,
+            "idle repeats measure VRR"
+        );
+        probe.note(&vrr_panel(t(ROUNDS), 4 * ROUNDS, P), P, true);
+        assert_eq!(
+            probe.verdict(),
+            Cadence::Variable,
+            "motion at the panel rate is no evidence"
+        );
+        probe.note(&vrr_panel(t(5 * ROUNDS), 4 * ROUNDS, 2 * P), P, true);
+        assert_eq!(
+            probe.verdict(),
+            Cadence::Variable,
+            "half rate: two periods either way"
+        );
+
+        let mut probe = CadenceProbe::new();
+        probe.note(&fixed_panel(t(0), 4 * ROUNDS, P, P), P, true);
+        assert_eq!(
+            probe.verdict(),
+            Cadence::Unknown,
+            "a fixed panel at its rate: unproven"
+        );
+        probe.note(&fixed_panel(t(4 * ROUNDS), ROUNDS, P, IDLE), P, true);
+        assert_eq!(probe.verdict(), Cadence::Fixed);
+        probe.note(&vrr_panel(t(5 * ROUNDS), 4 * ROUNDS, P), P, true);
+        assert_eq!(
+            probe.verdict(),
+            Cadence::Fixed,
+            "panel-rate frames keep the verdict"
+        );
     }
 
     /// Half the mode rate on a VRR panel: the stamps sit on the mode grid, the output's
@@ -896,9 +976,12 @@ mod tests {
     fn a_measured_refresh_outranks_the_stamps() {
         const P: u64 = 6_060_606;
         let mut p = CadenceProbe::new();
-        let stamps: Vec<u64> = (1..=60).map(|i| i * 2 * P).collect();
-        p.note(&stamps, P, true);
-        assert_eq!(p.verdict(), Cadence::Fixed, "stamps alone: on the grid");
+        p.note(&vrr_panel(1_000_000_000, 60, 2 * P), P, true);
+        assert_eq!(
+            p.verdict(),
+            Cadence::Unknown,
+            "stamps alone: on the grid, unproven"
+        );
         p.note_refresh(2 * P, P);
         assert_eq!(p.verdict(), Cadence::Variable);
         p.note_refresh(P + P / 20, P);
@@ -922,20 +1005,18 @@ mod tests {
         );
     }
 
-    /// Batching must not change the verdict: live drain is one stamp, tests hand over
+    /// Batching must not change the verdict: live drain is one frame, tests hand over
     /// vectors.
     #[test]
     fn cadence_verdict_is_independent_of_batching() {
         const P: u64 = 8_333_333;
-        let n = (CADENCE_MIN_SAMPLES as u64) * (CADENCE_STABLE_ROUNDS as u64) + 4;
-
-        let stamps: Vec<u64> = (0..n).map(|i| 1_000_000_000 + i * P).collect();
+        let frames = fixed_panel(1_000_000_000, ROUNDS, P, P * 3 / 2);
         let mut bulk = CadenceProbe::new();
-        bulk.note(&stamps, P, true);
+        bulk.note(&frames, P, true);
 
         let mut drip = CadenceProbe::new();
-        for s in &stamps {
-            drip.note(&[*s], P, true);
+        for f in &frames {
+            drip.note(&[*f], P, true);
         }
 
         assert_eq!(bulk.verdict(), Cadence::Fixed);
