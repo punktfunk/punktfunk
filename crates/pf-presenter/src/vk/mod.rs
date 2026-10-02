@@ -343,7 +343,7 @@ pub struct Presenter {
     /// (flipped without a copy, shown) since the last take, from the compositor's stamps.
     #[cfg(target_os = "linux")]
     scanout: (u32, u32),
-    /// The compositor has flagged a zero-copy flip at least once. KWin before 6.7 never
+    /// The compositor has flagged a zero-copy flip at least once. KWin before 6.8 never
     /// sets the bit, so until then a zero means nothing.
     #[cfg(target_os = "linux")]
     scanout_reported: bool,
