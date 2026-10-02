@@ -18,7 +18,10 @@ use std::sync::Arc;
 use wayland_backend::client::{Backend, ObjectId};
 use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
 use wayland_client::protocol::{wl_registry, wl_surface};
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_protocols::wp::content_type::v1::client::{
+    wp_content_type_manager_v1 as ctm, wp_content_type_v1 as ct,
+};
 use wayland_protocols::wp::presentation_time::client::{
     wp_presentation, wp_presentation_feedback as pfb,
 };
@@ -63,6 +66,9 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     ) {
     }
 }
+
+delegate_noop!(State: ignore ctm::WpContentTypeManagerV1);
+delegate_noop!(State: ignore ct::WpContentTypeV1);
 
 impl Dispatch<wp_presentation::WpPresentation, ()> for State {
     fn event(
@@ -140,6 +146,8 @@ pub struct SurfaceFeedback {
     globals: Option<GlobalList>,
     surface: wl_surface::WlSurface,
     presentation: wp_presentation::WpPresentation,
+    /// The window's content tag, held for the session: dropping it untags the surface.
+    _content_type: Option<ct::WpContentTypeV1>,
     dead: bool,
     // SAFETY: field drop order keeps SDL's display alive past every borrowed proxy and queue.
     _window: Arc<WindowContext>,
@@ -186,6 +194,14 @@ impl SurfaceFeedback {
                 .context("SDL wl_surface id")?;
         let surface =
             wl_surface::WlSurface::from_id(&conn, surface_id).context("SDL wl_surface proxy")?;
+        // Tag the surface as a game for the compositors that act on it: Hyprland's
+        // fullscreen-game refresh mode, KWin's content-type hint to the display.
+        let manager: Option<ctm::WpContentTypeManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
+        let content_type = manager.map(|m| {
+            let t = m.get_surface_content_type(&surface, &qh, ());
+            t.set_content_type(ct::Type::Game);
+            t
+        });
         let mut state = State::default();
         for _ in 0..4 {
             queue
@@ -202,7 +218,10 @@ impl SurfaceFeedback {
             );
             return Ok(None);
         }
-        tracing::info!("surface feedback armed on SDL's surface (wp_presentation)");
+        tracing::info!(
+            game_tag = content_type.is_some(),
+            "surface feedback armed on SDL's surface (wp_presentation)"
+        );
         Ok(Some(Self {
             conn,
             queue,
@@ -211,6 +230,7 @@ impl SurfaceFeedback {
             globals: Some(globals),
             surface,
             presentation,
+            _content_type: content_type,
             dead: false,
             _window: window.context(),
         }))
