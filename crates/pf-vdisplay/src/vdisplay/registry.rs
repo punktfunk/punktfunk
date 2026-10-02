@@ -88,10 +88,11 @@ pub fn acquire(
     let out = linux::acquire(vd, mode, quit, supersedes, false);
     #[cfg(not(target_os = "linux"))]
     let out = {
-        // Windows linger/quit is `VirtualDisplay::set_quit_flag` on the backend
-        // (set before any `create`, so retry-hold sees it), not these params.
+        // Windows reads quit off the backend (`VirtualDisplay::set_quit_flag`). Set here too,
+        // so a caller that never set it (GameStream's Quit App) still skips linger.
         // Supersede is Linux-pool-only; the manager resizes in place.
-        let _ = (quit, supersedes);
+        let _ = supersedes;
+        vd.set_quit_flag(quit);
         vd.create(mode)
     };
     // `Created` is existence, not reuse. Linux has `reused_gen`; Windows does
