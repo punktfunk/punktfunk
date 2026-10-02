@@ -1241,33 +1241,38 @@ impl ServiceState {
             .discovered
             .values()
             .filter(|d| !known.hosts.iter().any(|h| discovery::same_host(h, d)))
-            .map(|d| HostRow {
-                key: if d.fp_hex.is_empty() {
+            .map(|d| {
+                let key = if d.fp_hex.is_empty() {
                     format!("{}:{}", d.addr, d.port)
                 } else {
                     d.fp_hex.clone()
-                },
-                // Discovered, not saved: no store record, so no id to point at.
-                id: None,
-                name: host_display_name(&d.name, &d.addr),
-                addr: d.addr.clone(),
-                port: d.port,
-                fp_hex: d.fp_hex.clone(),
-                paired: false,
-                saved: false,
-                online: true,
-                mgmt_port: d.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
-                can_wake: false,
-                clipboard_sync: false,
-                last_used: None,
-                os: d.os.clone(),
-                // Discovered but unsaved: not paired, so there is nothing it would let us
-                // do, and no identity to ask what it is running.
-                actions: Vec::new(),
-                pin: None,
-                bound_preset: None,
-                running: String::new(),
-                game_presets: Default::default(),
+                };
+                let online = probed.get(&key).copied().unwrap_or(false);
+                HostRow {
+                    key,
+                    // Discovered, not saved: no store record, so no id to point at.
+                    id: None,
+                    name: host_display_name(&d.name, &d.addr),
+                    addr: d.addr.clone(),
+                    port: d.port,
+                    fp_hex: d.fp_hex.clone(),
+                    paired: false,
+                    saved: false,
+                    // The probe, as for saved rows: an advert outlives a host that went to sleep.
+                    online,
+                    mgmt_port: d.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
+                    can_wake: false,
+                    clipboard_sync: false,
+                    last_used: None,
+                    os: d.os.clone(),
+                    // Discovered but unsaved: not paired, so there is nothing it would let us
+                    // do, and no identity to ask what it is running.
+                    actions: Vec::new(),
+                    pin: None,
+                    bound_preset: None,
+                    running: String::new(),
+                    game_presets: Default::default(),
+                }
             })
             .collect();
         extra.sort_by_key(|h| h.name.to_lowercase());
