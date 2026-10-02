@@ -396,6 +396,10 @@ impl Overlay for SkiaOverlay {
             SessionPhase::Ended(_) | SessionPhase::Reconnecting(_) => self.streaming_since = None,
             SessionPhase::Connecting | SessionPhase::Failed(_) => {}
         }
+        // An open ring is the ended stream's. Left up, it masks the next stream's pad.
+        if matches!(phase, SessionPhase::Ended(_) | SessionPhase::Failed(_)) {
+            self.ring.input(RingInput::Cancel);
+        }
         if let Some(shell) = &mut self.shell {
             shell.session_phase(phase);
         }
