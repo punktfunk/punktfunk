@@ -1888,10 +1888,10 @@ impl Shell {
     }
 
     /// Back on the tab strip. The same button backs out of every screen, so exit is a
-    /// question, not a press. An Apple app and a browser page cannot close themselves:
-    /// there the press does nothing, and a TV remote's Menu is the system's (`at_root`).
+    /// question, not a press. Where the app cannot quit the press does nothing, and a TV
+    /// remote's Menu is the system's (`at_root`).
     fn ask_exit(&mut self) -> Option<MenuPulse> {
-        if matches!(self.device.platform, Platform::Apple | Platform::Web) {
+        if !self.device.platform.can_quit() {
             return Some(MenuPulse::Boundary);
         }
         let exit = crate::screens::prompt::PromptScreen::exit();

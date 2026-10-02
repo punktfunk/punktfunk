@@ -34,6 +34,11 @@ impl Platform {
         Platform::Web,
         Platform::Apple,
     ];
+
+    /// Whether the app may close itself. An Apple app and a browser page cannot.
+    pub fn can_quit(self) -> bool {
+        !matches!(self, Platform::Apple | Platform::Web)
+    }
 }
 
 /// A native screen the platform owns. The shell sends

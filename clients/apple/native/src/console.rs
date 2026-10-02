@@ -184,8 +184,7 @@ pub unsafe extern "C" fn punktfunk_console_new(
         if mtl_device.is_null() || mtl_queue.is_null() {
             return std::ptr::null_mut();
         }
-        // The shell has no Apple row set yet; Android's is the nearest (touch, pads, phones).
-        let (opts, entry, store) = opts.into_console(Platform::Android);
+        let (opts, entry, store) = opts.into_console(Platform::Apple);
         let cache_bytes = opts.gpu_cache_bytes;
         // SAFETY: a live device and a queue on it, per this function's contract; Skia retains
         // both for the context's lifetime.
