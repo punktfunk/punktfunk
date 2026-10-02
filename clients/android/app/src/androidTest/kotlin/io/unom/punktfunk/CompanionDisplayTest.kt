@@ -71,6 +71,25 @@ class CompanionDisplayTest {
     private fun panelDisplay(): Int? = compose.onAllNodesWithText("Actions").fetchSemanticsNodes()
         .singleOrNull()?.let { (it.root as? ViewRootForTest)?.view?.display?.displayId }
 
+    /**
+     * A 1080p panel at the 160 dpi default — what a USB-C add-on with no EDID size reports —
+     * counts on a handheld; the same panel at a real 45″ density does not.
+     */
+    @Test
+    fun aSizelessPanelCountsAndATvDoesNot() {
+        val dm = compose.activity.getSystemService(DisplayManager::class.java)
+        fun attach(spec: String): Display? {
+            shell("settings put global overlay_display_devices $spec")
+            val deadline = SystemClock.uptimeMillis() + 5_000
+            while (dm.displays.size < 2 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100)
+            return companionDisplay(compose.activity, dm)
+        }
+        assertEquals(true, attach("1920x1080/160") != null)
+        shell("settings delete global overlay_display_devices")
+        SystemClock.sleep(500)
+        assertEquals(null, attach("1920x1080/48"))
+    }
+
     @Test
     fun thePanelComesUpOnTheSecondScreenAndLeavesWithTheStream() {
         var streaming by mutableStateOf(true)

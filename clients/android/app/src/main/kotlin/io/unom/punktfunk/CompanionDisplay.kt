@@ -53,12 +53,28 @@ private fun Display.diagonalInches(context: Context): Float {
     return hypot(m.widthPixels / m.xdpi, m.heightPixels / m.ydpi)
 }
 
-/** A public display, other than the default and [context]'s own, small enough to be held. */
+/** No physical size behind the metrics: no dpi at all, or exactly Android's 160 dpi default. */
+private fun Display.sizeless(context: Context): Boolean {
+    val m = context.createDisplayContext(this).resources.displayMetrics
+    return m.xdpi <= 0f || m.ydpi <= 0f || (m.densityDpi == 160 && m.xdpi == 160f && m.ydpi == 160f)
+}
+
+/**
+ * The size rule (design §7): a measured diagonal of at most 7″ — or no measure at all while this
+ * device's own display is a handheld's, since a USB-C DisplayPort panel whose EDID carries no
+ * size gets the default density and reads as a 14″ monitor.
+ */
+internal fun companionFits(diagonalInches: Float, sizeless: Boolean, handheld: Boolean): Boolean =
+    diagonalInches <= COMPANION_MAX_INCHES || (sizeless && handheld)
+
+/** A public display, other than the default and [context]'s own, that [companionFits]. */
 internal fun companionDisplay(context: Context, dm: DisplayManager): Display? {
-    val own = ContextCompat.getDisplayOrDefault(context).displayId
+    val ownDisplay = ContextCompat.getDisplayOrDefault(context)
+    val handheld = ownDisplay.diagonalInches(context) <= COMPANION_MAX_INCHES
     return dm.displays.firstOrNull { d ->
-        d.displayId != Display.DEFAULT_DISPLAY && d.displayId != own &&
-            d.flags and Display.FLAG_PRIVATE == 0 && d.diagonalInches(context) <= COMPANION_MAX_INCHES
+        d.displayId != Display.DEFAULT_DISPLAY && d.displayId != ownDisplay.displayId &&
+            d.flags and Display.FLAG_PRIVATE == 0 &&
+            companionFits(d.diagonalInches(context), d.sizeless(context), handheld)
     }
 }
 
@@ -111,7 +127,8 @@ internal fun describeDisplays(context: Context, dm: DisplayManager): String {
         val m = context.createDisplayContext(d).resources.displayMetrics
         "id=${d.displayId} \"${d.name}\" ${m.widthPixels}x${m.heightPixels} dpi=${m.densityDpi} " +
             "xdpi=${m.xdpi.roundToInt()} in=${String.format(Locale.ROOT, "%.1f", d.diagonalInches(context))} " +
-            "flags=0x${Integer.toHexString(d.flags)} presentation=${d.displayId in presentation}"
+            "sizeless=${d.sizeless(context)} flags=0x${Integer.toHexString(d.flags)} " +
+            "presentation=${d.displayId in presentation}"
     }
 }
 
