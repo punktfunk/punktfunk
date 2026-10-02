@@ -101,10 +101,12 @@ impl PluginManifest {
         self.root_of(candidate).is_some()
     }
 
-    /// The most specific declared root or grant that holds `candidate`. A `..` segment is
-    /// refused outright. Lexical first; a path that resolves then matches through its canonical
-    /// form, because `/home` may be a link (`/var/home` on Fedora Atomic) and grants are stored
-    /// canonical. Windows compares the way grants are stored (`\\?\`, either slash, any case).
+    /// The most specific declared root or grant that holds `candidate`, spelled as `candidate`
+    /// spells it. A `..` segment is refused outright. Lexical first; then through the canonical
+    /// form of its nearest existing ancestor, because `/home` may be a link (`/var/home` on
+    /// Fedora Atomic), grants are stored canonical, and a rom may not be downloaded yet. A
+    /// Flatpak `--filesystem=` recreates only the links in the spelling it is given.
+    /// Windows compares the way grants are stored (`\\?\`, either slash, any case).
     pub fn root_of(&self, candidate: &Path) -> Option<PathBuf> {
         if !candidate.is_absolute()
             || candidate
@@ -123,15 +125,31 @@ impl PluginManifest {
         if !lexical.is_empty() {
             return longest(lexical);
         }
-        let real = candidate.canonicalize().ok()?;
-        longest(
+        let real = canonical_prefix(candidate)?;
+        let root = longest(
             roots
                 .iter()
                 .filter_map(|root| root.canonicalize().ok())
                 .filter(|root| super::access::within(&real, root))
                 .collect(),
-        )
+        )?;
+        let spelled = candidate
+            .ancestors()
+            .find(|a| canonical_prefix(a).as_deref() == Some(root.as_path()));
+        Some(spelled.map_or(root.clone(), Path::to_path_buf))
     }
+}
+
+/// `p` with its nearest existing ancestor canonicalized and the rest appended as written.
+fn canonical_prefix(p: &Path) -> Option<PathBuf> {
+    p.ancestors().find_map(|a| {
+        let (real, rest) = (a.canonicalize().ok()?, p.strip_prefix(a).ok()?);
+        Some(if rest.as_os_str().is_empty() {
+            real
+        } else {
+            real.join(rest)
+        })
+    })
 }
 
 /// `~/x` under every home it may mean ([`plugin_homes`]); any other path as written.
@@ -456,6 +474,10 @@ mod manifest_tests {
         let m = manifest(&[roms.to_str().unwrap()]);
         assert!(m.confines(&linked.join("x.sfc")));
         assert!(!m.confines(&root.join("var/home/u/other")));
+        // A rom not downloaded yet, and the root as the launch path spells it (Flatpak's view).
+        assert_eq!(m.root_of(&linked.join("snes/y.sfc")), Some(linked.clone()));
+        assert_eq!(m.root_of(&roms.join("x.sfc")), Some(roms.clone()));
+        assert_eq!(m.root_of(&root.join("home/u/other/y.sfc")), None);
     }
 
     #[test]
