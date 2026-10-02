@@ -134,22 +134,32 @@ fn temp_sibling(path: &Path) -> PathBuf {
 /// while every setting evaporates.
 ///
 /// A failed rename writes the target in place (same path the identity files already use)
-/// and reads the bytes back — `Ok(())` alone was the silent-loss failure mode. The
-/// temp+rename stays the normal route everywhere it works.
+/// and reads the bytes back — `Ok(())` alone was the silent-loss failure mode. A failed
+/// temp write returns its error and leaves the target alone: an in-place write would
+/// truncate the store and then fail the same way.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = temp_sibling(path);
-    let atomic = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
-    let Err(e) = atomic else {
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        store_health::record(path, &e);
+        return Err(e);
+    }
+    let Err(e) = std::fs::rename(&tmp, path) else {
         store_health::clear();
         return Ok(());
     };
     // Drop the temp so the next writer (or a backup tool) does not see it.
     let _ = std::fs::remove_file(&tmp);
+    write_in_place(path, bytes, &e)
+}
+
+/// The rename-free route: write over the target, then read it back.
+fn write_in_place(path: &Path, bytes: &[u8], rename_err: &std::io::Error) -> std::io::Result<()> {
     match std::fs::write(path, bytes) {
         Ok(()) => {
             tracing::warn!(
                 path = %path.display(),
-                error = %e,
+                error = %rename_err,
                 "atomic replace unavailable in this install; wrote the config in place instead",
             );
             // Read back: a write that returned `Ok(())` and vanished is the failure mode.
@@ -172,8 +182,8 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
                 }
             }
         }
-        // Both routes failed. Report the in-place error (permission/space); the rename's
-        // may only say the paths landed on different volumes.
+        // Report the in-place error (permission/space); the rename's may only say the
+        // paths landed on different volumes.
         Err(direct) => {
             store_health::record(path, &direct);
             Err(direct)
@@ -323,7 +333,7 @@ mod tests {
     /// When temp+rename is unavailable, bytes must still reach the target. Simulated
     /// by parking a directory on the temp sibling so the atomic leg cannot complete.
     #[test]
-    fn the_atomic_route_failing_falls_back_to_an_in_place_write() {
+    fn a_failed_temp_write_leaves_the_store_alone() {
         let _guard = store_health_lock();
         let dir = std::env::temp_dir().join(format!(
             "pf-client-core-inplace-{}-{}",
@@ -340,8 +350,13 @@ mod tests {
         std::fs::create_dir_all(temp_sibling(&p)).unwrap();
         assert!(temp_sibling(&p).is_dir());
 
-        // Success must be readable back — `Ok(())` that lost the bytes is the failure mode.
-        write_atomic(&p, b"{\"new\":true}").unwrap();
+        assert!(write_atomic(&p, b"{\"new\":true}").is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"old\":true}");
+        assert!(store_health::last_error().is_some());
+
+        // A failed rename writes in place. Success must be readable back.
+        let cross_volume = std::io::Error::other("not the same device");
+        write_in_place(&p, b"{\"new\":true}", &cross_volume).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"new\":true}");
         assert_eq!(store_health::last_error(), None);
 
