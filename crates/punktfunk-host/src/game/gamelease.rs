@@ -532,11 +532,12 @@ fn spawn_watcher(
 ) -> Option<std::thread::JoinHandle<()>> {
     // Untracked: nothing to observe. Nested with a spec: watch the game;
     // node-death misses a Steam launch that nests the resident client.
-    // Nested with empty spec: node-death is the backstop.
-    if matches!(shared.kind, LeaseKind::Untracked) {
-        return None;
-    }
-    if matches!(shared.kind, LeaseKind::Nested) && shared.spec.is_empty() {
+    // Nested with empty spec: node-death is the backstop. Unwatched, a spawned
+    // child is still ours to reap, or each launch leaves a zombie.
+    if matches!(shared.kind, LeaseKind::Untracked)
+        || (matches!(shared.kind, LeaseKind::Nested) && shared.spec.is_empty())
+    {
+        reap_later(child);
         return None;
     }
     // No matcher (macOS has no launch path): status lease, no poll.
@@ -1387,7 +1388,6 @@ fn start_secs(p: crate::procscan::ProcRef) -> f64 {
 /// The session left but the game runs on: wait for the child on a thread of
 /// its own so it never lingers as a zombie under the host. One thread per
 /// unwatched game, gone with it.
-#[cfg(any(target_os = "linux", windows))]
 fn reap_later(child: Option<std::process::Child>) {
     let Some(mut c) = child else {
         return;
