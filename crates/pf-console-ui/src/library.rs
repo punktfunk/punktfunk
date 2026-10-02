@@ -246,8 +246,22 @@ impl LibraryShared {
     /// Must go through here, not `set_phase(Loading)`. A cache that answers before the next
     /// frame would otherwise leave the epoch unchanged and the shelf on the previous host.
     pub fn begin_fetch(&self) {
+        self.begin(false);
+    }
+
+    /// [`Self::begin_fetch`] for another host than the list on hand, which goes too. The
+    /// shell calls it as it sends the fetch, so a shelf pushed with that fetch never syncs
+    /// the previous host's titles; the platform's own call can be a service tick away.
+    pub(crate) fn begin_host_fetch(&self) {
+        self.begin(true);
+    }
+
+    fn begin(&self, new_host: bool) {
         let mut s = self.0.lock().unwrap();
         s.phase = LibraryPhase::Loading;
+        if new_host {
+            s.games.clear();
+        }
         // Previous host's stale note is not this fetch's; a cached render re-declares it.
         s.stale = Stale::No;
         // The previous host's posters are not this fetch's.

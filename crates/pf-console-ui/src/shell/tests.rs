@@ -509,6 +509,31 @@ fn down_from_a_card_lands_on_its_games_and_launches_there() {
     }
 }
 
+/// A shelf pushed with its fetch never adopts the list the model still holds: until the
+/// platform answers, that list is the previous host's.
+#[test]
+fn a_fetch_clears_the_previous_hosts_list() {
+    let (mut s, _console, library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    library.set_games(vec![crate::library::LibraryGame {
+        id: "steam:570".into(),
+        title: "Dota 2".into(),
+        store: "steam".into(),
+        launcher: false,
+        icon: String::new(),
+        platform: None,
+        developer: None,
+        year: None,
+        genres: Vec::new(),
+        stats: None,
+        running: false,
+        endable: false,
+    }]);
+    s.sync();
+    let snap = library.snapshot();
+    assert!(matches!(snap.phase, crate::library::LibraryPhase::Loading));
+    assert!(snap.games.is_empty());
+}
+
 /// Y on a pinned card must carry that preset into the library. Falling back to the
 /// host default would ignore the pin, which is why the card exists.
 #[test]

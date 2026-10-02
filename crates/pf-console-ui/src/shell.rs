@@ -1123,13 +1123,13 @@ impl Shell {
             return;
         };
         let host = host.clone();
-        self.library_fp = Some(host.fp_hex.clone());
+        home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
+        self.note_fetch(&host.fp_hex);
         self.bus.send(ConsoleCmd::FetchLibrary {
             addr: host.addr.clone(),
             mgmt: host.mgmt_port,
             fp_hex: host.fp_hex.clone(),
         });
-        home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
     }
 
     /// This pairing is what turned its host into the default one. False for a second or
@@ -1388,6 +1388,15 @@ impl Shell {
             .cloned()
     }
 
+    /// A library fetch for `fp_hex` is going out. Another host's list leaves the model now,
+    /// before a shelf pushed with the fetch syncs it as its own.
+    fn note_fetch(&mut self, fp_hex: &str) {
+        if self.library_fp.as_deref() != Some(fp_hex) {
+            self.library.begin_host_fetch();
+        }
+        self.library_fp = Some(fp_hex.to_string());
+    }
+
     /// A fresh shelf for `host`, its fetch sent.
     fn shelf_root(&mut self, host: &HostRow) -> Screen {
         self.bus.send(ConsoleCmd::FetchLibrary {
@@ -1396,7 +1405,7 @@ impl Shell {
             fp_hex: host.fp_hex.clone(),
         });
         self.games_key = Some(host.key.clone());
-        self.library_fp = Some(host.fp_hex.clone());
+        self.note_fetch(&host.fp_hex);
         Screen::Library(crate::screens::library::LibraryScreen::new(host))
     }
 
@@ -1798,7 +1807,7 @@ impl Shell {
     fn apply(&mut self, fx: Outbox) {
         for cmd in fx.cmds {
             if let ConsoleCmd::FetchLibrary { fp_hex, .. } = &cmd {
-                self.library_fp = Some(fp_hex.clone());
+                self.note_fetch(fp_hex);
             }
             // Gate wake in this call, like `connecting`. First WakeStatus is
             // ~100 ms–1 s away; without a placeholder the cursor keeps moving
