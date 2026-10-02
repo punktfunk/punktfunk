@@ -698,6 +698,16 @@ pub fn gamescope_planar_capture(route: Option<&GamescopeRoute>) -> bool {
     )
 }
 
+/// May a 10-bit SDR session take this gamescope's own 10-bit SDR (P010 or packed RGB under
+/// BT.709)? Same two terms as [`gamescope_hdr_available`]; `false` captures 8-bit and widens.
+pub fn gamescope_sdr10_capture(route: Option<&GamescopeRoute>) -> bool {
+    gamescope_ours_and(
+        route,
+        #[cfg(target_os = "linux")]
+        gamescope::gamescope_captures_sdr10,
+    )
+}
+
 /// Shared half of the HDR/cursor answers: this host must **spawn** the
 /// session (an attach inherits someone else's flags), then `probe` the binary.
 ///

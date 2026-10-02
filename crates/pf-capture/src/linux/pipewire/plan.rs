@@ -13,6 +13,8 @@ pub(in crate::linux) struct NegotiationInputs {
     /// `PUNKTFUNK_FORCE_SHM` — race-free download path.
     pub force_shm: bool,
     pub want_hdr: bool,
+    /// The producer offers 10-bit SDR: a 10-bit SDR session takes its P010 where HDR does.
+    pub sdr10_native: bool,
     pub want_444: bool,
     pub backend_is_vaapi: bool,
     pub pyrowave_session: bool,
@@ -82,8 +84,8 @@ pub(in crate::linux) struct NegotiationPlan {
     pub nvenc_raw: bool,
     pub vaapi_passthrough: bool,
     pub prefer_native_nv12: bool,
-    /// The HDR twin of [`prefer_native_nv12`](Self::prefer_native_nv12): gamescope's P010
-    /// pod goes first.
+    /// The 10-bit twin of [`prefer_native_nv12`](Self::prefer_native_nv12): gamescope's P010
+    /// pod goes first, PQ for HDR or BT.709 for its own 10-bit SDR.
     pub prefer_native_p010: bool,
     /// Carried so [`want_dmabuf`](Self::want_dmabuf) needs no second copy.
     pub force_shm: bool,
@@ -100,9 +102,9 @@ pub(in crate::linux) struct NegotiationPlan {
 ///    direct raw lanes may offer proved tiled formats, guarded again per frame.
 /// 2. 4:4:4 never prefers producer NV12 or P010 (must not subsample).
 /// 3. Producer-native planar only on a `native_nv12_session` under a raw lane (VAAPI's
-///    passthrough or NVENC's): NV12 for SDR, P010 for HDR. The CUDA importer expects packed
-///    RGB, so a tripped raw latch withdraws the planar offer, and so does a planar frame the
-///    passthrough declined (`planar_refused`).
+///    passthrough or NVENC's): NV12 at 8 bits, P010 for HDR and for a producer's own 10-bit
+///    SDR. The CUDA importer expects packed RGB, so a tripped raw latch withdraws the planar
+///    offer, and so does a planar frame the passthrough declined (`planar_refused`).
 /// 4. Raw passthrough is off once its latch has fired.
 pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPlan {
     // Consumer imports raw dmabufs: VAAPI (libva + GPU CSC) or PyroWave (its Vulkan device).
@@ -127,8 +129,9 @@ pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPla
         && planar_lane
         && !i.pyrowave_session
         && !i.want_444;
-    let prefer_native_nv12 = native_planar && !i.want_hdr;
-    let prefer_native_p010 = native_planar && i.want_hdr;
+    let ten_bit = i.want_hdr || i.sdr10_native;
+    let prefer_native_nv12 = native_planar && !ten_bit;
+    let prefer_native_p010 = native_planar && ten_bit;
     NegotiationPlan {
         build_importer,
         import_policy: ImportPolicy {
@@ -440,8 +443,8 @@ pub(in crate::linux) fn gpu_import(
         return ImportOutcome::Dropped; // format has no DRM fourcc mapping
     };
     let modifier = (modifier != 0).then_some(modifier);
-    let ten_bit = fmt.is_hdr_rgb10();
-    // The raw lane let go of a tiled HDR stream. Rebuild it on the LINEAR offer.
+    let ten_bit = fmt.is_rgb10();
+    // The raw lane let go of a tiled 10-bit stream. Rebuild it on the LINEAR offer.
     if ten_bit && modifier.is_some() {
         if signals.health.refuse_hdr_tiled() {
             tracing::warn!(
@@ -607,6 +610,7 @@ mod tests {
             zerocopy: true,
             force_shm: false,
             want_hdr: false,
+            sdr10_native: false,
             want_444: false,
             backend_is_vaapi: false,
             pyrowave_session: false,
@@ -629,6 +633,32 @@ mod tests {
             native_nv12_session: true,
             ..nvenc()
         }
+    }
+
+    /// A producer's own 10-bit SDR takes P010 where HDR does, on both planar lanes; 4:4:4
+    /// still refuses it.
+    #[test]
+    fn producer_sdr10_takes_p010() {
+        let nvenc_native = NegotiationInputs {
+            nvenc_raw: true,
+            native_nv12_session: true,
+            ..nvenc()
+        };
+        for base in [vaapi_native_nv12(), nvenc_native] {
+            let p = negotiation_plan(NegotiationInputs {
+                sdr10_native: true,
+                ..base
+            });
+            assert!(p.prefer_native_p010 && !p.prefer_native_nv12);
+        }
+        assert!(
+            !negotiation_plan(NegotiationInputs {
+                sdr10_native: true,
+                want_444: true,
+                ..vaapi_native_nv12()
+            })
+            .prefer_native_p010
+        );
     }
 
     /// Pins the four invariants documented on [`negotiation_plan`].

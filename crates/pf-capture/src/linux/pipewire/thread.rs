@@ -12,8 +12,9 @@ use crate::linux::pw_cursor::{update_cursor_meta, CursorState};
 use crate::linux::pw_pods::{
     build_cursor_meta_param, build_damage_meta_param, build_default_format_obj,
     build_dmabuf_buffers, build_dmabuf_format, build_hdr_dmabuf_format, build_header_meta_param,
-    build_mappable_buffers, build_shm_only_buffers, build_sync_timeline_meta_param, serialize_pod,
-    video_raw, Extent, Pacing, HDR_FORMAT_ORDER,
+    build_mappable_buffers, build_sdr10_dmabuf_format, build_shm_only_buffers,
+    build_sync_timeline_meta_param, serialize_pod, video_raw, Extent, Pacing, HDR_FORMAT_ORDER,
+    SPA_VIDEO_TRANSFER_SMPTE2084,
 };
 use crate::linux::sync_timeline::{hand_back, SyncDevice};
 use crate::linux::{CaptureOpts, CaptureSignals};
@@ -130,7 +131,7 @@ pub(in crate::linux) fn pipewire_thread(
         .store(importer.is_some(), Ordering::Relaxed);
     *signals.importer.lock().unwrap_or_else(|e| e.into_inner()) = importer;
     let signals_exit = signals.clone();
-    let hdr_tiled_raw = opts.want_hdr
+    let hdr_tiled_raw = (opts.want_hdr || opts.sdr10_native)
         && policy.gamescope_tiled
         && plan.nvenc_raw
         && !signals.health.hdr_tiled_refused();
@@ -368,7 +369,7 @@ fn resolve_offer(
         policy,
         health,
         importer.as_mut(),
-        opts.want_hdr,
+        opts.want_hdr || opts.sdr10_native,
         plan.vaapi_passthrough,
         opts.producer_is_gamescope,
         plan.nvenc_raw,
@@ -410,7 +411,7 @@ fn log_resolved_arm(
     tracing::info!(
         capture_arm = arm.as_str(),
         consumer = consumer.as_str(),
-        modifier_count = if opts.want_hdr {
+        modifier_count = if opts.want_hdr || opts.sdr10_native {
             offer
                 .hdr_modifiers
                 .iter()
@@ -550,6 +551,22 @@ fn build_params(
             return Ok(vec![serialize_pod(o)?]);
         }
         let mut pods = Vec::with_capacity(if plan.prefer_native_nv12 { 3 } else { 2 });
+        if opts.sdr10_native {
+            // gamescope's own 10-bit SDR, in the HDR set's order: P010 leads when the encoder
+            // takes it, then packed 10-bit. The 8-bit pods stay behind as the fallback, so a
+            // gamescope whose 10-bit pods are PQ-only still links.
+            if plan.prefer_native_p010 {
+                pods.push(build_sdr10_dmabuf_format(
+                    VideoFormat::P010_10LE,
+                    &[0],
+                    preferred,
+                    pacing,
+                )?);
+            }
+            for (fmt, list) in &offer.hdr_modifiers {
+                pods.push(build_sdr10_dmabuf_format(*fmt, list, preferred, pacing)?);
+            }
+        }
         if plan.prefer_native_nv12 {
             // First compatible consumer pod wins. Pinning BT.709 limited selects gamescope's
             // RGB→NV12 shader with our bitstream colorimetry.
@@ -700,9 +717,10 @@ fn on_param_changed(_stream: &pw::stream::Stream, ud: &mut UserData, id: u32, pa
     );
     ud.format = map_format(ud.info.format());
     ud.modifier = ud.info.modifier();
-    // 10-bit PQ is only offered with MANDATORY BT.2020/PQ, so a 10-bit negotiation
-    // is HDR — still log the producer's fixated transfer/primaries.
-    let hdr = ud.format.is_some_and(|f| f.is_hdr());
+    // A 10-bit format is HDR only when the producer fixated PQ on it: gamescope offers its
+    // 10-bit formats under BT.709 too (`sdr10_native`).
+    let hdr = ud.format.is_some_and(|f| f.is_ten_bit())
+        && ud.info.transfer_function() == SPA_VIDEO_TRANSFER_SMPTE2084;
     ud.signals.hdr_negotiated.store(hdr, Ordering::Relaxed);
     tracing::info!(
         width = sz.width,
@@ -1154,6 +1172,7 @@ mod tests {
             want_444: false,
             want_hdr: false,
             ten_bit_sdr: false,
+            sdr10_native: false,
             expect_exact_dims: false,
             cursor_id0_hides: false,
             producer_is_gamescope: false,

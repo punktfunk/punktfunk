@@ -39,8 +39,8 @@ fn map_format(f: VideoFormat) -> Option<PixelFormat> {
         VideoFormat::RGB => PixelFormat::Rgb,
         VideoFormat::BGR => PixelFormat::Bgr,
         VideoFormat::NV12 => PixelFormat::Nv12,
-        // Only the `want_hdr` offer negotiates these (MANDATORY PQ/BT.2020): packed
-        // 2:10:10:10, or gamescope's own P010.
+        // The 10-bit offers negotiate these: PQ (`want_hdr`) or gamescope's BT.709 SDR
+        // (`sdr10_native`). The fixated transfer function says which.
         VideoFormat::xRGB_210LE => PixelFormat::X2Rgb10,
         VideoFormat::xBGR_210LE => PixelFormat::X2Bgr10,
         VideoFormat::P010_10LE => PixelFormat::P010,

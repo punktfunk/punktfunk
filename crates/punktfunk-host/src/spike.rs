@@ -164,6 +164,7 @@ pub fn run(opts: Options) -> Result<()> {
             opts.bitrate_bps,
             first.is_cuda(),
             bit_depth,
+            hdr,
             encode::ChromaFormat::Yuv420,
             false, // no cursor to blend
             4,     // no client decoder; keep the backend multi-slice default
