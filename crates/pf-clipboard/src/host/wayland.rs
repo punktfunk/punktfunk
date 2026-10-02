@@ -44,6 +44,8 @@ struct State {
     /// Own `set_selection` echoes still to drop. Session bumps; dispatch is the only decrementer.
     /// A counter, not a bool: back-to-back offers would leak a self-echo through a flag.
     suppress_echoes: Arc<AtomicU32>,
+    /// Our source that holds the selection, until the compositor cancels it.
+    owner: Arc<Mutex<Option<ObjectId>>>,
     tx: tokio::sync::mpsc::UnboundedSender<ClipEvent>,
 }
 
@@ -173,7 +175,7 @@ impl Dispatch<ExtDataControlOfferV1, ()> for State {
 impl Dispatch<ExtDataControlSourceV1, ()> for State {
     fn event(
         state: &mut Self,
-        _src: &ExtDataControlSourceV1,
+        src: &ExtDataControlSourceV1,
         event: ext_data_control_source_v1::Event,
         _: &(),
         _: &Connection,
@@ -191,7 +193,13 @@ impl Dispatch<ExtDataControlSourceV1, ()> for State {
                 // Unknown MIME: closing the fd is an empty paste, not a hang.
                 None => drop(fd),
             },
-            Event::Cancelled => {}
+            // Another client took the selection. By id: a replaced source's late cancel is not ours.
+            Event::Cancelled => {
+                let mut owner = state.owner.lock().unwrap();
+                if owner.as_ref() == Some(&src.id()) {
+                    *owner = None;
+                }
+            }
             _ => {}
         }
     }
@@ -204,6 +212,7 @@ pub struct ClipboardBackend {
     qh: QueueHandle<State>,
     current: Arc<Mutex<Option<CurrentSelection>>>,
     suppress_echoes: Arc<AtomicU32>,
+    owner: Arc<Mutex<Option<ObjectId>>>,
     active_source: Mutex<Option<ExtDataControlSourceV1>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -225,12 +234,14 @@ impl ClipboardBackend {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let current = Arc::new(Mutex::new(None));
         let suppress_echoes = Arc::new(AtomicU32::new(0));
+        let owner = Arc::new(Mutex::new(None));
         let mut state = State {
             mgr: None,
             seat: None,
             pending: HashMap::new(),
             current: current.clone(),
             suppress_echoes: suppress_echoes.clone(),
+            owner: owner.clone(),
             tx,
         };
         queue
@@ -269,6 +280,7 @@ impl ClipboardBackend {
                 qh,
                 current,
                 suppress_echoes,
+                owner,
                 active_source: Mutex::new(None),
                 stop,
                 thread: Some(thread),
@@ -288,6 +300,7 @@ impl ClipboardBackend {
             src.offer(m.clone());
         }
         self.suppress_echoes.fetch_add(1, Ordering::SeqCst);
+        *self.owner.lock().unwrap() = Some(src.id());
         self.device.set_selection(Some(&src));
         self.conn.flush().context("flush set_selection")?;
         let mut slot = self.active_source.lock().unwrap();
@@ -298,11 +311,16 @@ impl ClipboardBackend {
         Ok(())
     }
 
+    /// Unsets the selection only while our source still holds it: a null `set_selection`
+    /// clears whatever does, including a host copy made since.
     pub fn clear_offer(&self) -> Result<()> {
         let mut slot = self.active_source.lock().unwrap();
         if let Some(old) = slot.take() {
-            self.suppress_echoes.fetch_add(1, Ordering::SeqCst);
-            self.device.set_selection(None);
+            let ours = self.owner.lock().unwrap().take() == Some(old.id());
+            if ours {
+                self.suppress_echoes.fetch_add(1, Ordering::SeqCst);
+                self.device.set_selection(None);
+            }
             old.destroy();
             self.conn.flush().context("flush clear selection")?;
         }
