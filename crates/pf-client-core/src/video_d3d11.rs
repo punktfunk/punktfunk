@@ -930,7 +930,7 @@ impl HandoffRing {
             .is_none_or(|r| r.width != width || r.height != height || r.format != format);
         if rebuild {
             // Process-unique: the presenter's import cache outlives this ring and its stream.
-            let generation = crate::video::next_pool_generation();
+            let generation = crate::video_types::next_pool_generation();
             self.planar_ring = Some(PlanarRing::build(
                 &self.device,
                 width,
@@ -1053,7 +1053,7 @@ impl HandoffRing {
             .is_none_or(|r| r.width != width || r.height != height || r.pq_out != pq_out);
         if rebuild {
             // Process-unique: the presenter's import cache outlives this ring and its stream.
-            let generation = crate::video::next_pool_generation();
+            let generation = crate::video_types::next_pool_generation();
             self.ring = Some(SharedRing::build(
                 &self.device,
                 &video_device,

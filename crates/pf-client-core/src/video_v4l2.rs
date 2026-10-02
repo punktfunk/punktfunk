@@ -657,7 +657,7 @@ impl<D: Opened> StatefulRung<D> {
         Ok(self.session.insert(Session {
             decoder,
             shape,
-            pool: crate::video::next_pool_generation(),
+            pool: crate::video_types::next_pool_generation(),
             exports: Arc::new(Vec::new()),
             exported_generation: 0,
             pending: VecDeque::new(),

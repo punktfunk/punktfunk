@@ -261,7 +261,7 @@ impl<D: OpenedStateless> StatelessHevc<D> {
         self.session = Some(Session {
             decoder,
             shape,
-            pool: crate::video::next_pool_generation(),
+            pool: crate::video_types::next_pool_generation(),
             exports: None,
         });
         Ok(())

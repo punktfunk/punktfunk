@@ -121,3 +121,11 @@ pub fn umd_version_parts(raw: i64) -> [u16; 4] {
         v as u16,
     ]
 }
+
+/// A pool generation no other pool in this process had. The presenter's import caches
+/// outlive a stream, so a decoder counting from zero would hand the next stream keys that
+/// still name the last one's surfaces.
+pub(crate) fn next_pool_generation() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
