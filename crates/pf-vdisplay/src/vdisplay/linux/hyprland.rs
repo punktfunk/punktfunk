@@ -746,6 +746,21 @@ pub(crate) fn dpms_other_heads(on: bool) -> Vec<String> {
     changed
 }
 
+/// DPMS on for exactly `names`, the heads [`dpms_other_heads`] darkened. The ones now on.
+pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| match dpms_one(name, true) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(output = %name, error = %format!("{e:#}"), "hyprland: monitor not re-lit");
+                false
+            }
+        })
+        .cloned()
+        .collect()
+}
+
 /// DPMS state Hyprland reports for `name` (`hyprctl -j monitors all`'s
 /// `dpmsStatus`). `None` when unlisted or the field is missing. A DPMS-off
 /// monitor stays listed — the readback [`dpms_one`] is built around.
