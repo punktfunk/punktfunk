@@ -672,10 +672,16 @@ impl ServiceState {
         let shared = self.library.clone();
         let identity = self.identity.clone();
         let pin = trust::parse_hex32(&fp_hex);
+        // A newer fetch owns the model by the time a slow host answers: its titles are not
+        // this host's to badge.
+        let epoch = shared.fetch_epoch();
         std::thread::Builder::new()
             .name("punktfunk-running".into())
             .spawn(move || {
-                shared.set_running(&library::fetch_running(&addr, mgmt, &identity, pin));
+                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                if shared.fetch_epoch() == epoch {
+                    shared.set_running(&running);
+                }
             })
             .ok();
     }

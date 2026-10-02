@@ -1152,11 +1152,15 @@ object SkiaConsole {
         if (refreshOnly) {
             // Silent path — no notice, but the failed load still gets its retry.
             if (id == null) { identities.blockedMessage(); return }
+            // A newer fetch owns the shelf by the time a slow host answers: not its titles.
+            val gen = fetchGen.get()
             ioPool.execute {
                 val games = LibraryClient.fetchRunning(addr, mgmt, id.certPem, id.privateKeyPem, fp)
                 main.post {
                     if (handle == 0L) return@post
-                    NativeBridge.nativeConsoleLibraryRunning(handle, ConsoleJson.runningGames(games))
+                    if (gen == fetchGen.get()) {
+                        NativeBridge.nativeConsoleLibraryRunning(handle, ConsoleJson.runningGames(games))
+                    }
                     // The carousel behind the shelf shows the same fact from its own map; this
                     // answer is fresher than anything its TTL would fetch.
                     nowPlayingAt[fp] = android.os.SystemClock.elapsedRealtime()

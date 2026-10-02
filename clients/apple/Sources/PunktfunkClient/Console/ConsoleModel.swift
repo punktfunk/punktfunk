@@ -81,6 +81,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     /// The shelf the console has open, so a fetch knows whose catalog it is filling.
     private var shelf: StoredHost?
     var fetching: Task<Void, Never>?
+    /// Bumped by each list fetch. A running-titles answer from before it is another host's.
+    var fetchSerial = 0
     /// The posters of the last list fetch; a new fetch cancels it.
     var artTask: Task<Void, Never>?
 
