@@ -478,6 +478,7 @@ impl GamepadPump {
         self.worker.gesture_poll();
         self.worker.maybe_fire_disconnect();
         self.worker.menu_poll();
+        self.worker.battery_poll();
         self.worker.render_feedback();
     }
 
