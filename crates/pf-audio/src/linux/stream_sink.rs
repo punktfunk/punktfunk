@@ -161,8 +161,8 @@ impl DefaultClaim {
             }
             Err(e) => {
                 if first {
-                    // Nothing to restore — release hands election back to WirePlumber
-                    // (`Delete`), which is also correct if it starts working by then.
+                    // Nothing to restore: release deletes the key only if a later claim
+                    // landed ours there, and leaves an operator's own pick alone.
                     ledger.note_previous(None, self.ours, None);
                 }
                 tracing::warn!(error = %format!("{e:#}"), key = self.configured_key,
@@ -223,6 +223,16 @@ impl DefaultClaim {
     fn apply(&self, restore: Restore) {
         let value = match &restore {
             Restore::Value(v) => Some(v.as_str()),
+            // Delete only our own claim. A key naming no node of ours is the operator's pick
+            // since, or a claim that never landed: deleting it would lose their choice.
+            Restore::Delete
+                if self
+                    .read()
+                    .is_ok_and(|c| !c.as_deref().is_some_and(|v| v.contains(self.ours))) =>
+            {
+                let _ = std::fs::remove_file(self.saved_path());
+                return;
+            }
             Restore::Delete => None,
         };
         match self.write(value) {

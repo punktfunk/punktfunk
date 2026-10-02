@@ -284,10 +284,9 @@ impl DeepLink {
     pub fn for_host(host: &KnownHost, launch: Option<&str>, preset: Option<&str>) -> DeepLink {
         DeepLink {
             route: Route::Connect,
-            host_ref: host
-                .id
-                .clone()
-                .unwrap_or_else(|| format!("{}:{}", host.addr, host.port)),
+            host_ref: host.id.clone().unwrap_or_else(|| {
+                punktfunk_core::discovery::join_host_port(&host.addr, host.port)
+            }),
             fp: (!host.fp_hex.is_empty()).then(|| host.fp_hex.clone()),
             host: Some((host.addr.clone(), host.port)),
             launch: launch.map(str::to_string),
@@ -458,8 +457,10 @@ pub fn parse_addr_port(s: &str) -> Option<(String, u16)> {
 
 /// Printable non-space ASCII without shell metacharacters. Decky puts the id in a
 /// Steam launch-option env token; a quote or backtick breaks downstream. Opaque to us.
+/// No leading `-`: the id rides session argv, where `--browse` would read as a flag.
 fn is_safe_launch_id(id: &str) -> bool {
     !id.is_empty()
+        && !id.starts_with('-')
         && id
             .bytes()
             .all(|b| (0x21..=0x7e).contains(&b) && !br#""'\$`"#.contains(&b))
@@ -804,6 +805,13 @@ mod tests {
         assert_eq!(
             DeepLink::for_host(&plain, None, None).host_ref,
             "192.168.1.50:7777"
+        );
+        plain.addr = "fd00::5".into();
+        let v6 = DeepLink::for_host(&plain, None, None);
+        assert_eq!(v6.host_ref, "[fd00::5]:7777");
+        assert_eq!(
+            parse_addr_port(&v6.host_ref),
+            Some(("fd00::5".into(), 7777))
         );
 
         let link = DeepLink {

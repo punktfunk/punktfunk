@@ -108,7 +108,8 @@ pub fn start(
     counters: Arc<crate::session_status::SessionCounters>,
     life: GameLifetime,
 ) {
-    let _ = std::thread::Builder::new()
+    let exited = media_exited.clone();
+    if std::thread::Builder::new()
         .name("punktfunk-video".into())
         .spawn(move || {
             crate::native::boost_thread_priority(true);
@@ -244,7 +245,13 @@ pub fn start(
             tracing::info!("video stream stopped");
             // After capturer re-pool, lease, marker, events — `/resume` may start successors.
             media_exited.fetch_add(1, Ordering::SeqCst);
-        });
+        })
+        .is_err()
+    {
+        // Never started, so it will not count its exit: count it here, or every later
+        // launch waits out its deadline for this thread.
+        exited.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -159,11 +159,13 @@ fn release_locked(st: &mut State, why: &str) {
 ///
 /// Acquire is the expensive edge (thread spawn + D-Bus). It happens here,
 /// outside the lock, so a hot `note_input` never queues behind a logind call.
+/// A refusal stands for this watcher; the next stream asks again.
 #[cfg(target_os = "linux")]
 fn watch() {
     if hold_desktop_inhibit() {
         return;
     }
+    let mut refused = false;
     loop {
         std::thread::sleep(WATCH_TICK);
         {
@@ -184,8 +186,12 @@ fn watch() {
                 continue;
             }
         }
+        if refused {
+            continue; // the next stream's watcher asks logind again
+        }
         let Some(fd) = acquire() else {
-            continue; // no logind / refused — `acquire` logged once; do not spin
+            refused = true; // no logind / refused, and `acquire` said so
+            continue;
         };
         let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         if st.count == 0 || !quiet_for(LAST_INPUT_MS.load(Ordering::Relaxed), now_ms()) {

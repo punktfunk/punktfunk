@@ -873,6 +873,19 @@ impl WirePads {
         Some(idx)
     }
 
+    /// Every attached pad back to rest, still attached. A withdrawn gamepad grant filters out
+    /// the releases that would have got it there. The pads whose state changed.
+    fn rest_all(&mut self) -> Vec<usize> {
+        let moved: Vec<usize> = self
+            .attached()
+            .filter(|&i| self.state[i] != Default::default())
+            .collect();
+        for &i in &moved {
+            self.state[i] = Default::default();
+        }
+        moved
+    }
+
     /// A hot-unplug. `None` = stale or out of range; `Some(true)` = the pad was attached
     /// and its cleared [`Self::frame`] fires each backend's unplug sweep.
     fn remove(&mut self, pad: u8, seq: u8) -> Option<bool> {
@@ -1085,11 +1098,29 @@ pub(super) fn input_thread(
     // Injector is host-lifetime: matching ups for whatever is still held go out at session end.
     let mut held = crate::inject::held::HeldInput::default();
     let mut pen = PenSession::new();
+    let mut granted = grants.load(Ordering::Relaxed);
     loop {
         // A reconnect or steal sets `stop` while this connection is still open and
         // claims this session's OS slots 1.5 s later; the channel outlives that.
         if stop.load(Ordering::SeqCst) {
             break;
+        }
+        // A grant withdrawn mid-session filters that class's releases from here on: let go
+        // of what it holds now, or a key, button or stick stays down for the session.
+        let now_granted = grants.load(Ordering::Relaxed);
+        let lost = granted & !now_granted;
+        granted = now_granted;
+        if lost != 0 {
+            use punktfunk_core::quic::{GRANT_GAMEPAD, GRANT_KEYBOARD, GRANT_POINTER};
+            let ups = held.release_classes(lost & GRANT_KEYBOARD != 0, lost & GRANT_POINTER != 0);
+            for ev in ups {
+                let _ = inj_tx.send(ev);
+            }
+            if lost & GRANT_GAMEPAD != 0 {
+                for idx in wire.rest_all() {
+                    pads.apply_wire(&wire, idx, &pad_feed);
+                }
+            }
         }
         // A console just opened the Controllers page. A held button sends no further
         // frames, so re-publish every live pad or the page draws nothing until the

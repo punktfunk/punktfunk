@@ -579,7 +579,7 @@ fn relight(d: Darkened) {
         }
         // Per-name: a head unplugged meanwhile fails its one command; the others still re-light.
         Darkened::Sway(outputs) => {
-            let back = crate::wlroots::dpms_other_heads(true);
+            let back = crate::wlroots::relight_heads(&outputs);
             if back.is_empty() {
                 tracing::error!(
                     ?outputs,
@@ -591,7 +591,7 @@ fn relight(d: Darkened) {
             }
         }
         Darkened::Hyprland(outputs) => {
-            let back = crate::hyprland::dpms_other_heads(true);
+            let back = crate::hyprland::relight_heads(&outputs);
             if back.is_empty() {
                 tracing::error!(
                     ?outputs,

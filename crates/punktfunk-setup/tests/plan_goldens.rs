@@ -66,7 +66,7 @@ fn fresh(id: &str, family: Family) -> Facts {
         web_unit_present: false,
         web_password_present: false,
         web_bind: None,
-        scripting_unit_disabled: false,
+        mgmt_bind: None,
         ip: Some("192.168.1.10".into()),
         user: "pf".into(),
     }
@@ -87,6 +87,7 @@ fn installed(id: &str, family: Family, channel: Channel) -> Facts {
         web_unit_present: true,
         web_password_present: true,
         web_bind: None,
+        mgmt_bind: None,
         in_input_group: true,
         ..fresh(id, family)
     }
@@ -814,6 +815,25 @@ fn trap_the_steamos_build_is_announced_before_it_runs() {
     );
 }
 
+/// The on-device build ends the run, so the client's flatpak has to come before it.
+#[test]
+fn trap_steamos_installs_the_client_before_the_build() {
+    let both = Pins {
+        host: true,
+        client: true,
+        ..pins()
+    };
+    let cmds = plan_for(&fresh("steamos", Family::Steamos), &both).commands();
+    let flatpak = cmds.iter().position(|c| c.starts_with("flatpak install"));
+    let build = cmds
+        .iter()
+        .position(|c| c.contains("scripts/steamdeck/install.sh"));
+    assert!(
+        matches!((flatpak, build), (Some(f), Some(b)) if f < b),
+        "{cmds:?}"
+    );
+}
+
 /// The build script takes `--gamestream` and stores it before it starts the host; a setting
 /// written after the script would wait for a restart.
 #[test]
@@ -825,7 +845,12 @@ fn trap_steamos_forwards_the_gamestream_choice_to_the_script() {
     let cmds = plan_for(&fresh("steamos", Family::Steamos), &on).commands();
     assert!(
         cmds.iter()
-            .any(|c| c.ends_with("scripts/steamdeck/install.sh --gamestream")),
+            .any(|c| c.contains("scripts/steamdeck/install.sh --gamestream")),
+        "{cmds:?}"
+    );
+    // The console there reads web.env, which only the script writes.
+    assert!(
+        cmds.iter().any(|c| c.ends_with(" --web-bind=0.0.0.0")),
         "{cmds:?}"
     );
 }
@@ -919,6 +944,45 @@ fn trap_switch_pkgs_carries_packages_the_installer_never_installed() {
         text.contains("punktfunk-client"),
         "the client was stranded:\n{text}"
     );
+}
+
+/// An installed apt box updates against fresh lists, or `apt install` reports the old build
+/// as the newest.
+#[test]
+fn trap_an_installed_apt_box_refreshes_before_it_updates() {
+    let facts = installed("debian", Family::Apt, Channel::Stable);
+    let cmds = plan_for(&facts, &pins()).commands();
+    let update = cmds.iter().position(|c| c == "sudo apt update");
+    let install = cmds.iter().position(|c| c.starts_with("sudo apt install"));
+    assert!(
+        matches!((update, install), (Some(u), Some(i)) if u < i),
+        "{cmds:?}"
+    );
+}
+
+/// A client-only box switching channel reinstalls its client, never the host.
+#[test]
+fn trap_a_client_only_switch_installs_no_host() {
+    for (id, family) in [
+        ("debian", Family::Apt),
+        ("fedora", Family::Dnf),
+        ("arch", Family::Pacman),
+    ] {
+        let mut facts = installed(id, family, Channel::Stable);
+        facts.installed_pf = vec!["punktfunk-client".into()];
+        let to_canary = Pins {
+            host: false,
+            client: true,
+            channel: Some(Channel::Canary),
+            ..pins()
+        };
+        let text = render(&facts, &Choices::derive(&facts, &to_canary));
+        assert!(
+            !text.contains("punktfunk-web") && !text.contains("punktfunk-scripting"),
+            "{id}:\n{text}"
+        );
+        assert!(text.contains("punktfunk-client"), "{id}:\n{text}");
+    }
 }
 
 /// dnf goes down with distro-sync; install alone only ever moves up.

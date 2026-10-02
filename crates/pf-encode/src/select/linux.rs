@@ -672,10 +672,12 @@ pub fn nvenc_codec_support() -> CodecSupport {
 ///
 /// Cached per selected GPU, like [`windows_codec_support`]: a console
 /// preference change moves the render node and the Vulkan device both probes
-/// open.
+/// open. The Vulkan encoding row keys it too: it applies at the next session.
 pub fn vaapi_codec_support() -> CodecSupport {
-    static CACHE: ProbeCache<String, CodecSupport> = OnceLock::new();
-    probe_cached(&CACHE, pf_gpu::selection_key(), probe_vaapi_codec_support)
+    static CACHE: ProbeCache<(String, bool), CodecSupport> = OnceLock::new();
+    let vulkan = pf_host_config::row_bool("PUNKTFUNK_VULKAN_ENCODE");
+    let key = (pf_gpu::selection_key(), vulkan);
+    probe_cached(&CACHE, key, probe_vaapi_codec_support)
 }
 
 /// The uncached half of [`vaapi_codec_support`].

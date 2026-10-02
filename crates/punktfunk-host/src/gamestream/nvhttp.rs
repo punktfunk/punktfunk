@@ -284,12 +284,16 @@ async fn launch_under(
                 // A drop, not a quit — the same as a native steal victim. `launch` clears
                 // first, so the control tick tells the old client while its media stop.
                 tracing::info!("GameStream launch STEAL — ending the live session");
-                use std::sync::atomic::Ordering::SeqCst;
-                let before = st.media_exited.load(SeqCst);
-                let live = u64::from(st.streaming.load(SeqCst))
-                    + u64::from(st.audio_streaming.load(SeqCst));
                 st.end_session("another client took the session");
-                wait_media_exit(&st, before, live).await;
+            }
+            // A previous session's media threads hold the fixed ports and finish with host-wide
+            // teardown. A `/cancel` just before this lowered the flags long before they exit;
+            // with a flag still up the session is live and its threads are not leaving.
+            {
+                use std::sync::atomic::Ordering::SeqCst;
+                if !st.streaming.load(SeqCst) && !st.audio_streaming.load(SeqCst) {
+                    wait_media_idle(&st).await;
+                }
             }
             // Bind unauthenticated RTSP/UDP to this paired client's source IP.
             session.peer_ip = addr.map(|Extension(PeerAddr(a))| a.ip());
@@ -358,6 +362,14 @@ async fn h_resume(
         let Some(session) = launch.as_mut() else {
             return xml(error_xml(NO_SESSION));
         };
+        // Again under the lock: during the wait another client's launch can have taken the
+        // session, and its keys and address must not become this caller's.
+        if let (Some(owner), Some(caller)) = (session.owner_fp, peer_fp(&peer)) {
+            if owner != caller {
+                tracing::warn!("resume rejected — the session changed hands while it stopped");
+                return xml(error_xml(NOT_OWNER));
+            }
+        }
         if q.contains_key("rikey") {
             match parse_rikey(&q) {
                 Ok((gcm_key, rikeyid)) => {
@@ -432,6 +444,32 @@ async fn h_unpair(
 
 /// Wait for `expected` stopped media threads to exit, so their teardown cannot stomp a
 /// successor's capturer or flags. 2 s bound: a timeout proceeds, media-less at worst.
+/// Until every media thread started has exited, at most 2 s, so the old session's ports are
+/// free and its capturer and lease teardown done before this session's PLAY.
+async fn wait_media_idle(st: &AppState) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let live = || {
+        st.media_started
+            .load(SeqCst)
+            .saturating_sub(st.media_exited.load(SeqCst))
+    };
+    if live() == 0 {
+        return;
+    }
+    tracing::info!(
+        threads = live(),
+        "stopping the previous connection's media threads"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while live() > 0 {
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!("previous media threads still exiting after 2 s; proceeding");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 async fn wait_media_exit(st: &AppState, before: u64, expected: u64) {
     if expected == 0 {
         return;

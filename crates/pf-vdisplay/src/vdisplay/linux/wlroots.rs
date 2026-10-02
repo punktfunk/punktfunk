@@ -699,6 +699,21 @@ pub(crate) fn dpms_other_heads(on: bool) -> Vec<String> {
     changed
 }
 
+/// `dpms on` for exactly `names`, the heads [`dpms_other_heads`] darkened. The ones that took it.
+pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| match swaymsg(&dpms_argv(name, true)) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(output = %name, error = %format!("{e:#}"), "wlroots: output not re-lit");
+                false
+            }
+        })
+        .cloned()
+        .collect()
+}
+
 /// `output <name> enable`. Sway keeps a disabled output's config, so this restores
 /// mode/position/scale; Hyprland needs `reload` instead.
 fn enable_argv(name: &str) -> [&str; 3] {

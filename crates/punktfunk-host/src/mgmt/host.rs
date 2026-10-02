@@ -635,6 +635,14 @@ pub(crate) async fn get_status(
     // Native plane, published by the video loop; lives outside `AppState` (see `session_status`).
     let native = crate::session_status::snapshot();
 
+    // A paired device reads every row but only its own identity: the others' names and
+    // fingerprints stay off its lane, as the rosters do. `client` is a fingerprint prefix.
+    let caller = match (lane, &device) {
+        (AuthLane::Cert, Some(d)) => Some(d.0 .0.as_str()),
+        (AuthLane::Cert, None) => Some(""),
+        _ => None,
+    };
+    let shown = |client: &str| caller.is_none_or(|fp| !client.is_empty() && fp.starts_with(client));
     // One row per live session, for the Dashboard's list and the per-session routes. Both
     // planes register, so a compat session carries an id like any other and its stop and
     // keyframe reach it. The lanes it does not have stay absent rather than reading as off.
@@ -642,11 +650,12 @@ pub(crate) async fn get_status(
         .iter()
         .map(|s| {
             let native_plane = s.plane != crate::events::Plane::Gamestream;
+            let own = shown(&s.client);
             SessionRow {
                 id: Some(s.id),
                 plane: s.plane,
-                client: s.client.clone(),
-                client_name: s.client_name.clone(),
+                client: if own { s.client.clone() } else { String::new() },
+                client_name: s.client_name.clone().filter(|_| own),
                 preset_name: s.preset_name.clone(),
                 mode: crate::events::mode_str(s.width, s.height, s.fps),
                 hdr: s.hdr,
@@ -744,7 +753,11 @@ pub(crate) async fn get_status(
             .into_iter()
             .map(|g| ActiveGame {
                 session_id: g.session_id,
-                client: g.client,
+                client: if shown(&g.client) {
+                    g.client
+                } else {
+                    String::new()
+                },
                 app_id: g.app_id,
                 title: g.title,
                 store: g.store,

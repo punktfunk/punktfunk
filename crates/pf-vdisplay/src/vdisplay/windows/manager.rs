@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Once, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -695,7 +695,7 @@ impl VirtualDisplayManager {
                     old_target = %old_key,
                     "IDD-push reconnect — preempting the kept (lingering/pinned) monitor, recreating a fresh one"
                 );
-                self.teardown_removed(&dev, &mut inner, mon);
+                self.teardown_removed(Some(&*dev), &mut inner, mon);
                 // Let the OS finish the ASYNC monitor departure before the next ADD; a back-to-back
                 // REMOVE→ADD races the teardown and the ADD IOCTL is rejected under reconnect churn.
                 // Verified-state wait, ceiling = the old fixed 400 ms settle (latency plan P0.3).
@@ -723,7 +723,7 @@ impl VirtualDisplayManager {
                     wudf_pid = mon.wudf_pid,
                     "virtual monitor's WUDFHost is gone — preempting the dead monitor, recreating"
                 );
-                self.teardown_removed(&dev, &mut inner, mon);
+                self.teardown_removed(Some(&*dev), &mut inner, mon);
                 // Same async-departure settle as the reconnect preempt above (verified wait, P0.3).
                 let _ = wait_target_departed(old_key, Duration::from_millis(400));
             }
@@ -1917,11 +1917,12 @@ impl VirtualDisplayManager {
         // left with zero displays.
         inner.group.ccd_exclusive = false;
         if let Some(saved) = inner.group.ccd_saved.take() {
+            // Clears the isolate crash journal, or keeps it when the desk stayed dark.
             restore_displays_ccd(&saved);
+        } else {
+            // A failed isolate leaves no snapshot. The group is gone, so its journal goes too.
+            pf_win_display::win_display::isolate_journal::clear();
         }
-        // Clear the isolate crash journal even when there was no snapshot
-        // (failed isolate leaves `ccd_saved` None). The group is gone.
-        pf_win_display::win_display::isolate_journal::clear();
         // DDC wake outside the `ccd_saved` gate: panels were commanded
         // dark before isolate, which can return None. Nested in that arm
         // the wake never ran and the live link never DPMS-wakes them.
@@ -1948,7 +1949,7 @@ impl VirtualDisplayManager {
     /// Tear down `mon`, already removed from `inner.slots`. Last member: stop
     /// the pinger and restore group topology. Non-last: re-issue isolate over
     /// the shrunk set. Then REMOVE. Consumes `mon`.
-    fn teardown_removed(&self, dev: &ControlDevice, inner: &mut MgrInner, mon: Monitor) {
+    fn teardown_removed(&self, dev: Option<&ControlDevice>, inner: &mut MgrInner, mon: Monitor) {
         // Runs under the `state` lock, so a REMOVE/CCD-restore that never
         // returns blocks every future `acquire` with nothing in the log.
         // One ERROR after 10 s turns that silent wedge into a diagnosis.
@@ -1994,7 +1995,19 @@ impl VirtualDisplayManager {
                 ShrinkAction::Nothing => {}
             }
         }
-        if let Err(e) = self.driver.remove_monitor(dev, &mon.key) {
+        // A retired handle means the driver died or was cycled, and its monitors with it: the
+        // REMOVE is moot, but the group's restore above still owes the operator their desk.
+        let removed = match dev {
+            Some(dev) => self.driver.remove_monitor(dev, &mon.key),
+            None => {
+                tracing::info!(
+                    target_id = mon.target_id,
+                    "virtual-display: driver handle retired — the monitor went with it"
+                );
+                Ok(())
+            }
+        };
+        if let Err(e) = removed {
             // Device died under this monitor — retire so the next session reopens.
             if is_device_gone(&e) {
                 self.invalidate_device(&e);
@@ -2075,27 +2088,15 @@ impl VirtualDisplayManager {
                 );
             }
             // Under the state lock, so a racing `acquire` waits rather than ADD
-            // into an in-flight REMOVE. No handle is impossible with a live
-            // monitor; an expired linger lets the timer retry rather than leak.
-            Linger::Immediate => match self.device_handle() {
-                Some(dev) => {
-                    tracing::info!(
-                        slot,
-                        quit_now,
-                        "virtual-display: last session left — tearing down now, no linger"
-                    );
-                    self.teardown_removed(&dev, &mut inner, mon);
-                }
-                None => {
-                    inner.slots.insert(
-                        slot,
-                        SlotState::Lingering {
-                            mon,
-                            until: Instant::now(),
-                        },
-                    );
-                }
-            },
+            // into an in-flight REMOVE.
+            Linger::Immediate => {
+                tracing::info!(
+                    slot,
+                    quit_now,
+                    "virtual-display: last session left — tearing down now, no linger"
+                );
+                self.teardown_removed(self.device_handle().as_deref(), &mut inner, mon);
+            }
         }
     }
 
@@ -2129,7 +2130,7 @@ impl VirtualDisplayManager {
                             old_target = mon.target_id,
                             "IDD-push setup: force-preempting the stuck-Active prior monitor (its IddCx swap-chain is dead)"
                         );
-                        self.teardown_removed(&dev, &mut inner, mon);
+                        self.teardown_removed(Some(&*dev), &mut inner, mon);
                         // Async departure before the next ADD (same 400 ms
                         // ceiling as acquire's Lingering-preempt).
                         thread::sleep(Duration::from_millis(400));
@@ -2162,42 +2163,51 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// Background timer (started once): tear down a monitor past its linger
-    /// deadline so a physical-screen user gets their screen back.
+    /// Background timer: tear down a monitor past its linger deadline so a
+    /// physical-screen user gets their screen back. Marked started only once the
+    /// spawn succeeded, as `registry::linux::ensure_timer`: a `Once` would spend
+    /// itself on a failed spawn and leave every kept monitor unreaped.
     fn ensure_linger_timer(&'static self) {
-        static TIMER: Once = Once::new();
-        TIMER.call_once(|| {
-            thread::Builder::new()
-                .name("vdisplay-linger".into())
-                .spawn(move || {
-                    loop {
-                        thread::sleep(Duration::from_millis(500));
-                        let Some(dev) = self.device_handle() else {
-                            continue;
-                        };
-                        let mut g = self.state.lock().unwrap();
-                        let now = Instant::now();
-                        let expired: Vec<u32> = g
-                            .slots
-                            .iter()
-                            .filter_map(|(slot, s)| {
-                                matches!(s, SlotState::Lingering { until, .. } if now >= *until)
-                                    .then_some(*slot)
-                            })
-                            .collect();
-                        for slot in expired {
-                            if let Some(SlotState::Lingering { mon, .. }) = g.slots.remove(&slot) {
-                                // Teardown under the state lock. Dropping it
-                                // first let a concurrent acquire ADD + isolate
-                                // while this REMOVE/restore was in flight; the
-                                // late restore then de-isolated the new session.
-                                self.teardown_removed(&dev, &mut g, mon);
-                            }
+        static STARTED: Mutex<bool> = Mutex::new(false);
+        let mut started = STARTED.lock().unwrap_or_else(|e| e.into_inner());
+        if *started {
+            return;
+        }
+        let spawned = thread::Builder::new()
+            .name("vdisplay-linger".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(500));
+                    let dev = self.device_handle();
+                    let mut g = self.state.lock().unwrap();
+                    let now = Instant::now();
+                    let expired: Vec<u32> = g
+                        .slots
+                        .iter()
+                        .filter_map(|(slot, s)| {
+                            matches!(s, SlotState::Lingering { until, .. } if now >= *until)
+                                .then_some(*slot)
+                        })
+                        .collect();
+                    for slot in expired {
+                        if let Some(SlotState::Lingering { mon, .. }) = g.slots.remove(&slot) {
+                            // Teardown under the state lock. Dropping it
+                            // first let a concurrent acquire ADD + isolate
+                            // while this REMOVE/restore was in flight; the
+                            // late restore then de-isolated the new session.
+                            self.teardown_removed(dev.as_deref(), &mut g, mon);
                         }
                     }
-                })
-                .ok();
-        });
+                }
+            });
+        match spawned {
+            Ok(_) => *started = true,
+            Err(e) => tracing::error!(
+                error = %e,
+                "virtual display: could not start the linger timer — kept monitors will not \
+                 expire until a later session retries"
+            ),
+        }
     }
 }
 
@@ -2419,9 +2429,7 @@ impl VirtualDisplayManager {
     /// `slot` is a [`ManagedInfo::generation`]; `None` releases every kept one.
     /// Active monitors are refused. Returns the number released.
     pub(crate) fn force_release(&self, slot: Option<u64>) -> usize {
-        let Some(dev) = self.device_handle() else {
-            return 0;
-        };
+        let dev = self.device_handle();
         let mut inner = self.state.lock().unwrap();
         let kept: Vec<u32> = inner
             .slots
@@ -2440,7 +2448,7 @@ impl VirtualDisplayManager {
             if let Some(SlotState::Lingering { mon, .. } | SlotState::Pinned { mon }) =
                 inner.slots.remove(&k)
             {
-                self.teardown_removed(&dev, &mut inner, mon);
+                self.teardown_removed(dev.as_deref(), &mut inner, mon);
                 released += 1;
             }
         }

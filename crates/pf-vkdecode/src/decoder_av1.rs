@@ -440,6 +440,15 @@ impl VkDecoder<Av1> {
                 .map_err(|r| caps_query_error(r, key))?;
             self.codec.caps = Some((key, derive_caps(&raw, wanted)?));
         }
+        // Applied grain needs an output distinct from the reconstructed reference, DISTINCT
+        // reported or not: an in-place device would grain its own references. Let the ladder demote.
+        if key.film_grain && self.codec.caps.as_ref().is_some_and(|(_, c)| c.coincide) {
+            return Err(VkDecodeError::Unsupported(
+                "AV1 film grain needs an output picture apart from the reference, and this \
+                 device decodes in place"
+                    .into(),
+            ));
+        }
         // Declared level above maxLevel is not a refusal: extent and DPB depth
         // are the physical facts. `seq_level_idx` 31 is Annex A's "maximum
         // parameters", not a level; sequence headers carry none to the driver.

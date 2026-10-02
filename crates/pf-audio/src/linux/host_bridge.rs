@@ -30,6 +30,31 @@ fn hold_pin(id: u32) {
     *PIN_HOLDS.lock().unwrap().entry(id).or_default() += 1;
 }
 
+/// Host stopping: unpin every app this process still pins, so its streams follow the default
+/// again. The process exits without the bridges' own [`HostBridge::clear`].
+pub(super) fn release_all_pins() {
+    let ids: Vec<u32> = PIN_HOLDS
+        .lock()
+        .unwrap()
+        .drain()
+        .map(|(id, _)| id)
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let Ok(session) = super::pw_oneshot::OneShot::connect("unpin", super::pw_oneshot::TIMEOUT)
+    else {
+        return;
+    };
+    let Ok((metadata, _)) = session.default_metadata() else {
+        return;
+    };
+    for id in ids {
+        metadata.set_property(id, "target.object", None, None);
+    }
+    let _ = session.round(); // flush before the proxies drop
+}
+
 /// `true` = no other bridge still holds `id`'s pin.
 fn release_pin(id: u32) -> bool {
     let mut holds = PIN_HOLDS.lock().unwrap();

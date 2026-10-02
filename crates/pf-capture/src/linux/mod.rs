@@ -159,6 +159,9 @@ struct CaptureSignals {
     importer: Arc<std::sync::Mutex<Option<pf_zerocopy::Importer>>>,
     /// `importer` is `Some`. Read per frame on the loop thread without the lock.
     has_importer: Arc<AtomicBool>,
+    /// `importer` runs in this process, its GL context current on the loop thread only. Read per
+    /// frame without the lock, which the consumer holds across a whole worker import.
+    importer_in_process: Arc<AtomicBool>,
 }
 
 /// Producer identity plus the consumer policy whose failures must stay independent.
@@ -191,6 +194,7 @@ impl CaptureSignals {
             frame_size: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             importer: Arc::new(std::sync::Mutex::new(None)),
             has_importer: Arc::new(AtomicBool::new(false)),
+            importer_in_process: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -523,7 +527,9 @@ fn spawn_pipewire(
         planar_refused: signals.health.planar_refused(),
         hdr_cuda_ok: policy.hdr_cuda_ok,
         nv12_env_on: pf_zerocopy::nv12_enabled(),
-        nvenc_raw: policy.nvenc_raw_dmabuf,
+        // A tiled refusal keeps NVENC on the CUDA import, as on the direct path: the raw lane
+        // would be offered the same tiled modifiers again.
+        nvenc_raw: policy.nvenc_raw_dmabuf && !signals.health.passthrough_tiled_refused(),
     });
     let vaapi_dmabuf = plan.vaapi_passthrough;
     let import_policy = plan.import_policy;

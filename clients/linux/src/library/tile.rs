@@ -25,7 +25,7 @@ pub fn bind(holder: &gtk::Box, view: &Rc<View>, row: &Row) {
             label.set_label(text);
         }
         // A few hosts: rebuilt on each bind.
-        Row::Desktops => {
+        Row::Desktops(_) => {
             let slot = reuse(holder, "desktops", || {
                 gtk::Box::new(gtk::Orientation::Vertical, 0)
             });

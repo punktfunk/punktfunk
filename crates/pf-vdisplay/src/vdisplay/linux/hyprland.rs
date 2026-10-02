@@ -502,9 +502,19 @@ fn watch_config_reloads(name: String, mode: Mode) -> Option<ReloadWatcher> {
     let stopper = sock.try_clone().ok()?;
     WINDOW_WATCHERS.fetch_add(1, Ordering::Relaxed);
     thread::spawn(move || {
-        for line in std::io::BufReader::new(sock).lines() {
+        // The count is live readers: however this thread ends, it leaves the count.
+        struct Listening;
+        impl Drop for Listening {
+            fn drop(&mut self) {
+                WINDOW_WATCHERS.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        let _listening = Listening;
+        // Lossy: a window title that is not UTF-8 must not end the reader.
+        for line in std::io::BufReader::new(sock).split(b'\n') {
             // Guard shutdown or compositor gone — nothing left to re-apply to.
             let Ok(line) = line else { return };
+            let line = String::from_utf8_lossy(&line);
             if is_window_event(&line) {
                 WINDOW_GEN.fetch_add(1, Ordering::Relaxed);
             }
@@ -530,8 +540,8 @@ fn watch_config_reloads(name: String, mode: Mode) -> Option<ReloadWatcher> {
     Some(ReloadWatcher(stopper))
 }
 
-/// Ends [`watch_config_reloads`]'s thread by shutting its socket down, and
-/// drops this head out of [`WINDOW_WATCHERS`].
+/// Ends [`watch_config_reloads`]'s thread by shutting its socket down. The thread
+/// leaves [`WINDOW_WATCHERS`] as it exits.
 ///
 /// The thread is parked in a blocking read. A stop flag would leave it alive
 /// until the compositor emitted an event — one stranded thread per session,
@@ -540,7 +550,6 @@ struct ReloadWatcher(UnixStream);
 
 impl Drop for ReloadWatcher {
     fn drop(&mut self) {
-        WINDOW_WATCHERS.fetch_sub(1, Ordering::Relaxed);
         let _ = self.0.shutdown(std::net::Shutdown::Both);
     }
 }
@@ -735,6 +744,21 @@ pub(crate) fn dpms_other_heads(on: bool) -> Vec<String> {
         }
     }
     changed
+}
+
+/// DPMS on for exactly `names`, the heads [`dpms_other_heads`] darkened. The ones now on.
+pub(crate) fn relight_heads(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| match dpms_one(name, true) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(output = %name, error = %format!("{e:#}"), "hyprland: monitor not re-lit");
+                false
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 /// DPMS state Hyprland reports for `name` (`hyprctl -j monitors all`'s
@@ -952,6 +976,15 @@ pub(crate) fn claim_workspace(name: &str, want: Option<i64>) -> Option<(i64, i64
     }
 }
 
+/// Workspace `id` holds no window. An unreadable count reads as occupied.
+fn workspace_empty(id: i64) -> bool {
+    hyprctl_json(&["workspaces"]).is_ok_and(|p| {
+        workspace_slots(&p, "")
+            .iter()
+            .any(|w| w.id == id && w.empty)
+    })
+}
+
 /// `hyprctl -j workspaces` reduced to the pick. A missing `windows` count
 /// reads as occupied, so a payload this host cannot parse costs a free id and
 /// never puts the game on the operator's desk.
@@ -1072,12 +1105,15 @@ fn first_physical_dest(heads: &[crate::monitors::PhysicalMonitor], ours: &str) -
 }
 
 /// Re-home the streamed workspace onto a remaining physical, then remove is safe.
-/// Headless: skip the move. Windows are never destroyed.
+/// Headless: skip the move. Windows are never destroyed. An empty workspace stays: it has
+/// nothing to save, and switching to it would take focus from a replacement head that now
+/// shows the game (a resize leaves the retired head an empty one).
 fn evacuate_workspace(ours: &str) {
     let dest = list_monitors()
         .ok()
         .and_then(|heads| first_physical_dest(&heads, ours));
-    match evacuate_plan(active_workspace_id(ours), dest.as_deref()) {
+    let workspace = active_workspace_id(ours).filter(|&id| !workspace_empty(id));
+    match evacuate_plan(workspace, dest.as_deref()) {
         Evacuate::Limbo => {}
         Evacuate::ToPhysical { workspace, dest } => {
             if let Err(e) = workspace_to_monitor(workspace, &dest) {

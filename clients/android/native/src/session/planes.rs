@@ -82,6 +82,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
             surface_size: h.surface_size.clone(),
             src_crop: h.src_crop.clone(),
             decoded_size: h.decoded_size.clone(),
+            restart: h
+                .video_started
+                .swap(true, std::sync::atomic::Ordering::Relaxed),
         };
         let join = match std::thread::Builder::new()
             .name("pf-decode".into())

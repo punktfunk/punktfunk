@@ -60,6 +60,7 @@ impl StreamState {
         // this SET_ENCODE rebuilds it — the frame wait below cannot come first. A re-arrival gets its
         // swap chain after the arrival, so an open in that window fails for a display about to be
         // fine: retry to its own deadline rather than drop the resize to a full rebuild.
+        self.close_open_frame();
         let pre_opened = if self.plan.capture == crate::session_plan::CaptureBackend::IddPush {
             let opened = loop {
                 match crate::capture::open_driver_encoder(
@@ -184,6 +185,7 @@ impl StreamState {
             },
         };
         self.enc = new_enc;
+        self.carry_pipelining();
         self.frame = new_frame;
         self.interval = std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64);
         trace.mark("encoder_open");

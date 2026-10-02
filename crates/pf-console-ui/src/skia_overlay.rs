@@ -285,6 +285,7 @@ impl Overlay for SkiaOverlay {
             if let sdl3::event::Event::KeyDown {
                 scancode: Some(sc),
                 keymod,
+                repeat,
                 ..
             } = event
             {
@@ -294,7 +295,7 @@ impl Overlay for SkiaOverlay {
                         .intersects(Mod::LCTRLMOD | Mod::RCTRLMOD | Mod::LALTMOD | Mod::RALTMOD)
                 {
                     if let Some(key) = key_of(*sc) {
-                        return self.ring.key(key);
+                        return self.ring.key(key, *repeat);
                     }
                 }
             }
@@ -394,6 +395,10 @@ impl Overlay for SkiaOverlay {
             SessionPhase::Streaming => self.streaming_since = Some(Instant::now()),
             SessionPhase::Ended(_) | SessionPhase::Reconnecting(_) => self.streaming_since = None,
             SessionPhase::Connecting | SessionPhase::Failed(_) => {}
+        }
+        // An open ring is the ended stream's. Left up, it masks the next stream's pad.
+        if matches!(phase, SessionPhase::Ended(_) | SessionPhase::Failed(_)) {
+            self.ring.input(RingInput::Cancel);
         }
         if let Some(shell) = &mut self.shell {
             shell.session_phase(phase);

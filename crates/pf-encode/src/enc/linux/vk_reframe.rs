@@ -205,11 +205,12 @@ impl Reframe {
             ],
             &[],
         );
-        let barrier = |img, old, new, dst_access| {
+        // `src_access`: a pass's `imageStore`s must be made available before the next reads.
+        let barrier = |img, old, new, src_access, dst_access| {
             vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
                 .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                .src_access_mask(vk::AccessFlags2::NONE)
+                .src_access_mask(src_access)
                 .dst_access_mask(dst_access)
                 .old_layout(old)
                 .new_layout(new)
@@ -223,13 +224,14 @@ impl Reframe {
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
+        let none = vk::AccessFlags2::NONE;
         let write_access = vk::AccessFlags2::SHADER_WRITE;
         let read_access = vk::AccessFlags2::SHADER_READ;
         device.cmd_pipeline_barrier2(
             cmd,
             &vk::DependencyInfo::default().image_memory_barriers(&[
-                barrier(s.tmp.0, undefined, general, write_access),
-                barrier(s.dst.0, undefined, general, write_access),
+                barrier(s.tmp.0, undefined, general, none, write_access),
+                barrier(s.dst.0, undefined, general, none, write_access),
             ]),
         );
         device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipe);
@@ -283,6 +285,7 @@ impl Reframe {
                 s.tmp.0,
                 general,
                 read,
+                write_access,
                 read_access,
             )]),
         );
@@ -301,6 +304,7 @@ impl Reframe {
                 s.dst.0,
                 general,
                 read,
+                write_access,
                 read_access,
             )]),
         );

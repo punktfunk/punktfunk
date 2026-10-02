@@ -92,7 +92,8 @@ fn write_rows(path: &Path, rows: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Best-effort repaint. A failed spawn is not an error: the file is truth.
+/// Best-effort repaint. A failed spawn is not an error: the file is truth. A thread
+/// reaps the child: every known-hosts save lands here, and a dropped `Child` is a zombie.
 fn refresh() {
     let mut cmd = std::process::Command::new("omarchy-menu");
     // Login sessions export OMARCHY_PATH; ssh and a bare TTY do not, and the
@@ -100,11 +101,14 @@ fn refresh() {
     if std::env::var_os("OMARCHY_PATH").is_none() {
         cmd.env("OMARCHY_PATH", "/usr/share/omarchy");
     }
-    let _ = cmd
+    if let Ok(mut child) = cmd
         .arg("refresh")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
+        .spawn()
+    {
+        std::thread::spawn(move || child.wait());
+    }
 }
 
 fn strip_block(text: &str) -> String {
@@ -252,7 +256,7 @@ fn rows_for(known: &KnownHosts) -> String {
             id.push('-');
         }
         let label = if h.name.is_empty() { &h.addr } else { &h.name };
-        let target = format!("{}:{}", h.addr, h.port);
+        let target = punktfunk_core::client::join_host_port(&h.addr, h.port);
         out.push_str(&format!(
             "  \"punktfunk.connect-{id}\": {{\"icon\":\"\u{f0318}\",\"label\":{},\"description\":{},\"aliases\":[\"connect\"],\"action\":{}}},\n",
             j(label),
@@ -317,6 +321,8 @@ mod tests {
         assert!(with_ours.contains("personal.notes"), "their row survives");
         assert!(with_ours.contains("punktfunk.connect-desk"));
         assert!(with_ours.contains("punktfunk.wake-desk"));
+        let v6 = rows_for(&known(vec![host("Lab", "fd00::5", false)]));
+        assert!(v6.contains("--connect '[fd00::5]:"), "{v6}");
         // Idempotent: a second pass replaces, never stacks.
         let again = insert_block(&strip_block(&with_ours), &rows_for(&known(vec![]))).unwrap();
         assert_eq!(again.matches(BEGIN).count(), 1);

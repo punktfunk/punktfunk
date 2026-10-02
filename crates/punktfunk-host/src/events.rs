@@ -28,7 +28,7 @@ const BROADCAST_CAPACITY: usize = 256;
 /// One lifecycle event as it appears on the wire (`data:` of one SSE frame).
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
 pub struct HostEvent {
-    /// 1-based; a consumer resumes with `since = last seen`.
+    /// Rises by one per event, past every earlier boot's. Resume with `since = last seen`.
     pub seq: u64,
     /// Unix milliseconds — the [`crate::log_capture::LogEntry`] convention.
     pub ts_ms: u64,
@@ -658,12 +658,12 @@ struct Ring {
 }
 
 impl EventBus {
-    fn new() -> Self {
+    fn new(first_seq: u64) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             inner: Mutex::new(Ring {
                 events: VecDeque::with_capacity(RING_CAPACITY),
-                next_seq: 1,
+                next_seq: first_seq,
             }),
             tx,
         }
@@ -722,7 +722,9 @@ impl EventBus {
 /// share it without threading an `Arc`.
 pub fn bus() -> &'static EventBus {
     static BUS: OnceLock<EventBus> = OnceLock::new();
-    BUS.get_or_init(EventBus::new)
+    // A thousand seqs per millisecond of boot time: each boot starts above the last one's
+    // seqs, so a cursor from before a restart reads as dropped. Below 2^53 until 2255.
+    BUS.get_or_init(|| EventBus::new(crate::clock::unix_ms() * 1000))
 }
 
 /// Non-blocking; safe from any thread, including RAII `Drop` paths.
@@ -742,7 +744,7 @@ mod tests {
 
     #[test]
     fn seq_is_monotonic_and_catch_up_resumes() {
-        let bus = EventBus::new();
+        let bus = EventBus::new(1);
         for i in 0..5 {
             bus.emit(ev(&format!("m{i}")));
         }
@@ -769,7 +771,7 @@ mod tests {
 
     #[test]
     fn eviction_reports_dropped() {
-        let bus = EventBus::new();
+        let bus = EventBus::new(1);
         for i in 0..(RING_CAPACITY + 50) {
             bus.emit(ev(&format!("m{i}")));
         }
@@ -782,9 +784,16 @@ mod tests {
         assert_eq!(sub.catch_up.len(), RING_CAPACITY);
     }
 
+    #[test]
+    fn a_cursor_from_an_earlier_boot_reads_as_dropped() {
+        // A boot an hour back that emitted 437 events.
+        let earlier = (crate::clock::unix_ms() - 3_600_000) * 1000 + 437;
+        assert!(bus().subscribe(earlier).dropped);
+    }
+
     #[tokio::test]
     async fn live_tail_continues_exactly_after_catch_up() {
-        let bus = EventBus::new();
+        let bus = EventBus::new(1);
         bus.emit(ev("before-1"));
         bus.emit(ev("before-2"));
         let mut sub = bus.subscribe(0);

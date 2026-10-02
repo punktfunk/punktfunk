@@ -403,7 +403,7 @@ pub fn can_encode_444(codec: Codec) -> bool {
 }
 
 /// Whether the active backend can emit 10-bit for `codec` (HEVC Main10 / AV1).
-/// Cached per (GPU, codec) before Welcome, like [`can_encode_444`]. Without
+/// Cached per (GPU, codec, Vulkan encoding row) before Welcome, like [`can_encode_444`]. Without
 /// this gate `PUNKTFUNK_10BIT` would negotiate 10-bit and then emit 8-bit
 /// (label HDR / stream SDR).
 pub fn can_encode_10bit(codec: Codec) -> bool {
@@ -416,12 +416,18 @@ pub fn can_encode_10bit(codec: Codec) -> bool {
         // this OS. See `design/pyrowave-444-hdr.md`.
         return cfg!(target_os = "windows") || cfg!(feature = "pyrowave");
     }
-    static CACHE: ProbeCache<(String, &'static str), bool> = OnceLock::new();
-    probe_cached(&CACHE, (pf_gpu::selection_key(), codec.label()), || {
-        let supported = imp::ten_bit(codec);
-        tracing::info!(codec = ?codec, supported, "10-bit encode capability probed");
-        supported
-    })
+    // The Vulkan encoding row decides what Linux AMD/Intel opens, per session.
+    let vulkan = pf_host_config::row_bool("PUNKTFUNK_VULKAN_ENCODE");
+    static CACHE: ProbeCache<(String, &'static str, bool), bool> = OnceLock::new();
+    probe_cached(
+        &CACHE,
+        (pf_gpu::selection_key(), codec.label(), vulkan),
+        || {
+            let supported = imp::ten_bit(codec);
+            tracing::info!(codec = ?codec, supported, "10-bit encode capability probed");
+            supported
+        },
+    )
 }
 
 /// GPU-resident frames (software is the only CPU path). Single source for

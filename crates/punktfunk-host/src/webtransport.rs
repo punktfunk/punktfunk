@@ -199,9 +199,9 @@ fn mint(
 
 /// Run the plane until the process ends, re-minting the identity as it ages out.
 ///
-/// A rotation rebuilds the endpoint, which drops whatever is connected. Once every twelve days,
-/// and a browser reconnects on its own — cheaper than teaching quinn to swap a certificate under
-/// live sessions, and the reconnect path has to work anyway.
+/// A rotation swaps the certificate on the bound endpoint: live sessions keep the one they
+/// authenticated against, new ones get the new one. A rebind would fail while any session
+/// still holds the socket.
 ///
 /// `sem` is the native plane's session pool. A browser takes a slot from it like any client, so
 /// `max_concurrent` means what it says whichever carrier the sessions arrive on.
@@ -211,6 +211,7 @@ pub(crate) async fn serve(
     sem: Arc<tokio::sync::Semaphore>,
 ) -> Result<()> {
     let port = plane.bind.port();
+    let mut bound = None;
     loop {
         let (identity, publish) = mint(port, &plane.sans, &plane.identity)?;
         // Sessions bind to this exact certificate, so a rotation cannot leave one authenticating
@@ -229,7 +230,16 @@ pub(crate) async fn serve(
         .build();
         // Bind first, publish second. The other order leaves the route advertising a hash for a
         // plane that never came up, which reads as the API lying.
-        let endpoint = match Endpoint::server(config).context("bind the WebTransport endpoint") {
+        let endpoint = match &bound {
+            None => Endpoint::server(config)
+                .context("bind the WebTransport endpoint")
+                .map(|e| &*bound.insert(e)),
+            Some(endpoint) => endpoint
+                .reload_config(config, false)
+                .context("swap the WebTransport certificate")
+                .map(|()| endpoint),
+        };
+        let endpoint = match endpoint {
             Ok(endpoint) => endpoint,
             Err(e) => {
                 withdraw();
@@ -258,7 +268,7 @@ pub(crate) async fn serve(
 }
 
 async fn accept_loop(
-    endpoint: Endpoint<wtransport::endpoint::endpoint_side::Server>,
+    endpoint: &Endpoint<wtransport::endpoint::endpoint_side::Server>,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
 ) {
@@ -295,8 +305,8 @@ pub fn is_confined(require_pairing: bool, origins: &[String]) -> bool {
     require_pairing || !origins.is_empty()
 }
 
-/// One browser session: check the origin, take a session slot, then hand the connection to
-/// [`session::run`]. `/echo` keeps Phase 1's loopback for the measurement pages.
+/// One browser session: check the origin, then hand the connection to [`session::run`], which
+/// takes the session slot. `/echo` keeps Phase 1's loopback for the measurement pages.
 async fn session(
     incoming: wtransport::endpoint::IncomingSession,
     serving: &Arc<Serving>,
@@ -339,15 +349,8 @@ async fn session(
         return echo(connection).await;
     }
 
-    // Slot after the handshake, as the native plane does: a full host still accepts, so the
-    // browser sees a live path (keep-alive) instead of a silent dial timeout.
-    let permit = sem
-        .clone()
-        .acquire_owned()
-        .await
-        .expect("session semaphore is never closed");
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), permit, sem).await {
+    match session::run(connection.clone(), serving.clone(), sem).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(crate::native::Served::ProbeClose) => {}
         Err(e) => {

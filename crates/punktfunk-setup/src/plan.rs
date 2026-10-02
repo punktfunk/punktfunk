@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::choices::{Action, Choices};
+use crate::choices::{Action, Choices, Components};
 use crate::facts::{Channel, Facts, Family, Firewall, DOCS};
 use crate::platform;
 
@@ -291,11 +291,18 @@ fn install_phase(
         // deliver a fix and only an uninstall could. Minus the repo write: having a channel is
         // how we got here, so re-importing the signing key every time buys nothing.
         let repo = backend.write_repo(facts, choices);
-        let steps = backend
-            .install(facts, choices)
-            .into_iter()
-            .filter(|step| !repo.contains(step))
-            .collect();
+        let mut steps = flatpak_client(facts, choices);
+        steps.extend(
+            backend
+                .install(facts, choices)
+                .into_iter()
+                // Not `apt update`: `apt install` reads the lists from the last refresh, which
+                // can predate the build this run exists to deliver.
+                .filter(|step| {
+                    !repo.contains(step)
+                        || matches!(&step.action, StepAction::Run(c) if c == "sudo apt update")
+                }),
+        );
         plan.push(
             Phase::Install,
             format!(
@@ -311,22 +318,18 @@ fn install_phase(
     } else {
         String::new()
     };
-    let mut steps = vec![];
+    let mut steps = flatpak_client(facts, choices);
     // The family backend also installs a native client in the same transaction, including
     // a client-only run on apt, dnf, and pacman.
     let native_client = choices.components.client && facts.family.has_native_client();
     if choices.components.host || native_client {
         steps.extend(backend.install(facts, choices));
     }
-    // Families with no `punktfunk-client` take the user-scope flatpak instead of skipping.
     if choices.components.client {
         if !what.is_empty() {
             what.push(' ');
         }
         what.push_str("client");
-        if !facts.family.has_native_client() {
-            steps.extend(platform::backend(Family::Flatpak).install(facts, choices));
-        }
     }
     // SteamOS compiles `main` on the device, so naming a package channel here would be a lie.
     let how = if facts.family == Family::Steamos {
@@ -336,6 +339,16 @@ fn install_phase(
     };
     plan.push(Phase::Install, format!("Installing: {what} ({how})"), steps);
     choices.components.host && facts.family.installs_console()
+}
+
+/// The user-scope flatpak for a family with no `punktfunk-client`, unless it is already there.
+/// Planned before the host steps: SteamOS's on-device build is the step that ends the run.
+fn flatpak_client(facts: &Facts, choices: &Choices) -> Vec<Step> {
+    if choices.components.client && !facts.family.has_native_client() && !facts.has_flatpak_client {
+        platform::backend(Family::Flatpak).install(facts, choices)
+    } else {
+        vec![]
+    }
 }
 
 /// Everything from here to the start phase is generic Linux wiring — a group, a wide-open
@@ -530,8 +543,12 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
             ),
         ));
     }
-    // apt/dnf/sysext already start the plugin runner; Arch does not.
-    if facts.scripting_unit_disabled {
+    // apt/dnf/sysext already start the plugin runner; Arch does not. Only on the run that
+    // installs it: a re-run must not turn back on a runner the operator switched off.
+    if console_installed
+        && facts.family == Family::Pacman
+        && facts.missing.iter().any(|m| m == "plugin-runner")
+    {
         units.push("punktfunk-scripting".to_string());
     }
     steps.push(Step {
@@ -548,10 +565,17 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
     steps
 }
 
-/// Union the family's three with anything already installed, or `punktfunk-gamescope`
-/// and `punktfunk-client` stay on the channel the box just left.
-pub fn switch_pkgs(base: &[&str], installed: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = base.iter().map(|s| (*s).to_string()).collect();
+/// What this run's components name (the family's three for a host, the client) plus anything
+/// already installed, or `punktfunk-gamescope` stays on the channel the box just left. A
+/// client-only switch never pulls the host in.
+pub fn switch_pkgs(base: &[&str], installed: &[String], components: Components) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if components.host {
+        out.extend(base.iter().map(|s| (*s).to_string()));
+    }
+    if components.client {
+        out.push("punktfunk-client".to_string());
+    }
     for pkg in installed {
         if !out.contains(pkg) {
             out.push(pkg.clone());

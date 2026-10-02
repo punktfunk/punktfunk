@@ -58,6 +58,17 @@ impl Shared {
     /// A change from the editor: the blob, the row's summary, and whoever asked to know.
     fn write(&self, cfg: &OverlayConfig) {
         *self.blob.borrow_mut() = cfg.to_json();
+        self.publish(cfg);
+    }
+
+    /// Back to the platform default, which is the EMPTY blob, like every other client's reset.
+    /// Emptied before anyone hears of it: the binder saves the blob as it is notified.
+    fn reset(&self) {
+        self.blob.borrow_mut().clear();
+        self.publish(&self.cfg());
+    }
+
+    fn publish(&self, cfg: &OverlayConfig) {
         self.row.set_subtitle(&summary(cfg));
         for f in self.changed.borrow().iter() {
             f();
@@ -324,10 +335,7 @@ fn editor_page(shared: &Shared) -> adw::NavigationPage {
                 if response != "reset" {
                     return;
                 }
-                // The platform default is the EMPTY blob, like every other client's reset.
-                *shared.blob.borrow_mut() = String::new();
-                shared.write(&shared.cfg());
-                *shared.blob.borrow_mut() = String::new();
+                shared.reset();
                 if let Some(f) = rebuild.borrow().as_ref() {
                     f();
                 }

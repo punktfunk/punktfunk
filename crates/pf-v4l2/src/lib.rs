@@ -64,23 +64,31 @@ fn ioctl_none(fd: RawFd, request: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Wait on one fd. True when any of `events` is ready.
+/// Wait on one fd. True when any of `events` is ready. A signal resumes the wait for what is
+/// left of `timeout`: read as a timeout, it would fail a request that is still running.
 fn poll(fd: RawFd, events: libc::c_short, timeout: Duration) -> std::io::Result<bool> {
+    let deadline = std::time::Instant::now() + timeout;
     let mut pfd = libc::pollfd {
         fd,
         events,
         revents: 0,
     };
-    let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
-    // SAFETY: `pfd` is one live `pollfd` and the count passed is 1.
-    let r = unsafe { libc::poll(&mut pfd, 1, ms) };
-    if r < 0 {
+    let r = loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let ms = left.as_millis().min(i32::MAX as u128) as i32;
+        // SAFETY: `pfd` is one live `pollfd` and the count passed is 1.
+        let r = unsafe { libc::poll(&mut pfd, 1, ms) };
+        if r >= 0 {
+            break r;
+        }
         let e = std::io::Error::last_os_error();
         if e.kind() != std::io::ErrorKind::Interrupted {
             return Err(e);
         }
-        return Ok(false);
-    }
+        if left.is_zero() {
+            return Ok(false);
+        }
+    };
     // A queue that is not streaming polls as an error at once; without this
     // pause a caller's deadline loop would spin.
     if r > 0 && pfd.revents & events == 0 {

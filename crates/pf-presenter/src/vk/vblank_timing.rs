@@ -1,13 +1,14 @@
 //! Glass stamps without `VK_KHR_present_wait`: a waiter on the window's output vblank.
 //!
 //! A driver without `VK_KHR_present_wait` (AMD on Windows) leaves the panel unmeasured.
-//! `IDXGIOutput::WaitForVBlank` returns once per refresh of the monitor under the
-//! window; a FIFO present is taken to be on glass at the first vblank after it was
-//! submitted with its GPU work done, one present per vblank. An estimate, labelled
+//! `IDXGIOutput::WaitForVBlank` returns once per refresh of the monitor under the window; a
+//! FIFO present is taken to be on glass at the first vblank after it was submitted with its
+//! GPU work done, one present per vblank. Under MAILBOX or IMMEDIATE the newest ready
+//! present takes that vblank and the ones before it are replaced. An estimate, labelled
 //! `glass=est`: it feeds the ledger and the VRR verdict, never the latch grid, and the
 //! glass gate only while the panel runs at its mode rate. Under variable refresh the
-//! vblanks follow the presents; the waiter publishes their spacing, the one direct
-//! reading of the panel's refresh this path has.
+//! vblanks follow the presents; the waiter publishes their spacing, the one direct reading
+//! of the panel's refresh this path has.
 //!
 //! Never touches the swapchain, so no drain before a swapchain teardown. It reads the
 //! presenter's `done_sem` only, which outlives it: the presenter drops this waiter first.
@@ -34,6 +35,8 @@ struct Job {
     decoded_ns: u64,
     submitted_ns: u64,
     queued: Instant,
+    /// MAILBOX/IMMEDIATE: a newer ready present replaces this one at the vblank.
+    latest_wins: bool,
 }
 
 /// A present whose GPU work never signals within this leaves the count without a
@@ -154,6 +157,16 @@ fn run(
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
+        // Replaced presents never reach the glass: settle them without a sample.
+        let mut replaced = 0;
+        while queue.len() > 1
+            && queue[0].latest_wins
+            && queue[1].submitted_ns < vblank_ns
+            && gpu_done(&device, queue[1].done)
+        {
+            queue.pop_front();
+            replaced += 1;
+        }
         // One present per vblank, in submission order: the first vblank after it was
         // submitted with its GPU work done. Work that finished inside the driver's flip
         // deadline reads one vblank early.
@@ -177,8 +190,9 @@ fn run(
             }
             _ => false,
         };
-        if settled {
-            pending.fetch_sub(1, Ordering::AcqRel);
+        let settled = replaced + usize::from(settled);
+        if settled > 0 {
+            pending.fetch_sub(settled, Ordering::AcqRel);
             if let Some(cb) = wake.lock().unwrap().as_ref() {
                 cb();
             }
@@ -245,6 +259,7 @@ impl VblankTimer {
         pts_ns: u64,
         decoded_ns: u64,
         submitted_ns: u64,
+        latest_wins: bool,
     ) {
         if let Some(tx) = &self.tx {
             self.pending.fetch_add(1, Ordering::AcqRel);
@@ -254,6 +269,7 @@ impl VblankTimer {
                 decoded_ns,
                 submitted_ns,
                 queued: Instant::now(),
+                latest_wins,
             };
             if tx.send(Msg::Present(job)).is_err() {
                 self.pending.fetch_sub(1, Ordering::AcqRel);

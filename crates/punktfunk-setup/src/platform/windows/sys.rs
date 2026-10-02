@@ -164,6 +164,82 @@ pub fn create_shortcut(_link: &str, _target: &str) -> Result<(), String> {
     Err("shortcuts are Windows-only".into())
 }
 
+/// The visible desktop and the Start menu's Programs folder, from the shell: OneDrive can move
+/// either away from `%USERPROFILE%`. `None` where the shell has no answer.
+#[cfg(windows)]
+pub fn shell_folders() -> (Option<String>, Option<String>) {
+    use ::windows::core::GUID;
+    use ::windows::Win32::System::Com::CoTaskMemFree;
+    use ::windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Programs, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+    };
+    let get = |id: &GUID| {
+        // SAFETY: `id` is a live known-folder GUID. The path is CoTaskMem the shell hands us:
+        // copied out, then freed once.
+        unsafe {
+            let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
+            let text = p.to_string().ok();
+            CoTaskMemFree(Some(p.0 as *const _));
+            text
+        }
+    };
+    (get(&FOLDERID_Desktop), get(&FOLDERID_Programs))
+}
+
+#[cfg(not(windows))]
+pub fn shell_folders() -> (Option<String>, Option<String>) {
+    (None, None)
+}
+
+/// A `REG_SZ` / `REG_EXPAND_SZ` value under `HKLM\…` or `HKCU\…`, unexpanded, through the
+/// registry API: no code-page round trip. `None` when absent or unreadable.
+#[cfg(windows)]
+pub fn reg_string(key: &str, name: &str) -> Option<String> {
+    use ::windows::core::HSTRING;
+    use ::windows::Win32::Foundation::ERROR_MORE_DATA;
+    use ::windows::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ,
+        RRF_RT_REG_SZ,
+    };
+    let (hive, sub) = key.split_once('\\')?;
+    let hive = match hive {
+        "HKLM" | "HKEY_LOCAL_MACHINE" => HKEY_LOCAL_MACHINE,
+        "HKCU" | "HKEY_CURRENT_USER" => HKEY_CURRENT_USER,
+        _ => return None,
+    };
+    let (sub, name) = (HSTRING::from(sub), HSTRING::from(name));
+    let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    let mut bytes = 0u32;
+    // SAFETY: `sub` and `name` are live NUL-terminated strings; a null data pointer asks only
+    // for the size, written to the live local `bytes`.
+    unsafe { RegGetValueW(hive, &sub, &name, flags, None, None, Some(&mut bytes)) }
+        .ok()
+        .ok()?;
+    // Three tries: the value can grow between the size query and the read.
+    for _ in 0..3 {
+        let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
+        // SAFETY: as above; `buf` is writable for `bytes` bytes and outlives the call.
+        let got = unsafe {
+            RegGetValueW(
+                hive,
+                &sub,
+                &name,
+                flags,
+                None,
+                Some(buf.as_mut_ptr().cast()),
+                Some(&mut bytes),
+            )
+        };
+        if got == ERROR_MORE_DATA {
+            continue;
+        }
+        got.ok().ok()?;
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        return Some(String::from_utf16_lossy(&buf[..len]));
+    }
+    None
+}
+
 #[cfg(windows)]
 pub fn broadcast_env_change() -> Result<(), String> {
     use ::windows::core::w;

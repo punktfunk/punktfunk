@@ -13,6 +13,7 @@
 
 use super::gamepad_raii::{
     create_swdevice, DriverAttach, PadChannel, ProofTransport, SwDevice, SwDeviceProfile,
+    TRUST_MAILBOX_ENV,
 };
 use anyhow::Result;
 use pf_driver_proto::mouse::{input_report, mouse_boot_name, MouseShm, MOUSE_MAGIC};
@@ -80,6 +81,11 @@ impl VirtualMouse {
             enumerator: "punktfunk",
         }) {
             Ok((sw, id)) => (Some(sw), id),
+            // Without a devnode the sealed channel refuses the mailbox pid, so the mouse would
+            // never come up: fail, and the keeper retries. The trusted mailbox can still serve.
+            Err(e) if std::env::var_os(TRUST_MAILBOX_ENV).is_none() => {
+                return Err(e.context("create the pf_mouse devnode"));
+            }
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "SwDeviceCreate failed; falling back to an out-of-band pf_mouse devnode");
                 (None, None)

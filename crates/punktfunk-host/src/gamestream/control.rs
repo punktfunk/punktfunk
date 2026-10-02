@@ -363,6 +363,11 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                                 let from = p.address().map(|a| a.ip());
                                 if accept_connect(launch, from) {
                                     tracing::info!("control: client connected");
+                                    // A reconnect that replaces a tracked peer: that peer's
+                                    // late Disconnect is ignored below, so release what it held.
+                                    if peer.id.is_some_and(|id| id != p.id()) {
+                                        peer.reset(&inj_tx);
+                                    }
                                     peer.id = Some(p.id());
                                 } else {
                                     tracing::warn!(
@@ -684,7 +689,14 @@ fn on_receive(
         let inner = u16::from_le_bytes([pt[0], pt[1]]);
         if inner == 0x0301 {
             if let Some((first, last)) = decode_rfi_range(&pt) {
-                *state.rfi_range.lock().unwrap() = Some((first, last));
+                // Merged with a range the video thread has not drained yet: each lost frame
+                // must stay invalid. Too wide a merge becomes a keyframe there.
+                let mut slot = state.rfi_range.lock().unwrap();
+                *slot = Some(match *slot {
+                    Some((pf, pl)) => (pf.min(first), pl.max(last)),
+                    None => (first, last),
+                });
+                drop(slot);
                 tracing::debug!(first, last, "control: RFI request → invalidate ref frames");
             } else {
                 state

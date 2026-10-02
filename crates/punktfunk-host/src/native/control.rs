@@ -412,7 +412,7 @@ pub(super) async fn run(task: Task) {
             msg = ctrl_reader.read_msg() => {
                 let Ok(msg) = msg else { break };
                 if let Ok(edge) = punktfunk_core::quic::InputEdge::decode(&msg) {
-                    offer_edge(edge.0, &session_grants, &input_tx, &counters, &mut denied);
+                    offer_edge(edge.0, &session_grants, &input_tx, &counters, &mut denied).await;
                 } else if let Ok(req) = Reconfigure::decode(&msg) {
                     let now = std::time::Instant::now();
                     // Same bound as the handshake: `> 0` alone acked a mode that cannot land.
@@ -962,9 +962,10 @@ fn clip_offer_permitted(grants: u32, clip_enabled: bool) -> bool {
 }
 
 /// A key edge off the control stream joins the datagram plane's queue: the same grant
-/// gate, the same count, and the same drop when the input thread is behind — stale
-/// input is already worthless. The lane keeps its order; the queue keeps it too.
-fn offer_edge(
+/// gate and count, and a press drops when the input thread is behind. A release waits up
+/// to [`RELEASE_WAIT`] for room: a lost one holds the key down on the host, and this lane
+/// exists so none is lost. The lane keeps its order; the queue keeps it too.
+async fn offer_edge(
     ev: InputEvent,
     grants: &AtomicU32,
     input_tx: &std::sync::mpsc::SyncSender<super::input::ClientInput>,
@@ -982,12 +983,32 @@ fn offer_edge(
     if matches!(ev.kind, InputKind::KeyDown | InputKind::KeyUp) {
         ev.flags &= !crate::inject::KEY_FLAG_SEMANTIC_VK;
     }
-    if let Err(std::sync::mpsc::TrySendError::Full(_)) =
-        input_tx.try_send(super::input::ClientInput::Event(ev))
-    {
-        counters.input_dropped.fetch_add(1, Ordering::Relaxed);
+    let release = matches!(
+        ev.kind,
+        InputKind::KeyUp | InputKind::MouseButtonUp | InputKind::TouchUp
+    );
+    let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+    let mut msg = super::input::ClientInput::Event(ev);
+    loop {
+        match input_tx.try_send(msg) {
+            Err(std::sync::mpsc::TrySendError::Full(back))
+                if release && tokio::time::Instant::now() < deadline =>
+            {
+                msg = back;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                counters.input_dropped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Ok(()) | Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+        }
     }
 }
+
+/// A blocking pad create or the 200 ms "owned elsewhere" wait stalls the input thread; a
+/// release outlasts both. Longer, and the session is gone anyway.
+const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[cfg(test)]
 mod tests {
@@ -1432,9 +1453,10 @@ mod tests {
     }
 
     /// A key edge off the control stream takes the datagram path's grant gate, count and
-    /// queue; the in-process flag never survives the wire; a full queue drops and counts.
-    #[test]
-    fn an_edge_off_the_control_stream_joins_the_input_queue() {
+    /// queue; the in-process flag never survives the wire; a full queue drops a press and
+    /// counts it, and holds a release until there is room.
+    #[tokio::test]
+    async fn an_edge_off_the_control_stream_joins_the_input_queue() {
         use punktfunk_core::quic::{GRANT_ALL, GRANT_PRESET_CONTROLLER_ONLY};
         let (tx, rx) = std::sync::mpsc::sync_channel::<super::super::input::ClientInput>(1);
         let counters = crate::session_status::SessionCounters::default();
@@ -1453,21 +1475,39 @@ mod tests {
             &tx,
             &counters,
             &mut denied,
-        );
+        )
+        .await;
         assert!(rx.try_recv().is_err(), "no keyboard grant, no event");
         assert_eq!(counters.input_events.load(Ordering::Relaxed), 0);
 
         let grants = AtomicU32::new(GRANT_ALL);
-        offer_edge(key, &grants, &tx, &counters, &mut denied);
+        offer_edge(key, &grants, &tx, &counters, &mut denied).await;
         match rx.try_recv() {
             Ok(super::super::input::ClientInput::Event(ev)) => {
                 assert_eq!((ev.kind, ev.code, ev.flags), (InputKind::KeyDown, 0x41, 4))
             }
             other => panic!("the edge, unflagged: {}", other.is_ok()),
         }
-        offer_edge(key, &grants, &tx, &counters, &mut denied);
-        offer_edge(key, &grants, &tx, &counters, &mut denied);
+        offer_edge(key, &grants, &tx, &counters, &mut denied).await;
+        offer_edge(key, &grants, &tx, &counters, &mut denied).await;
         assert_eq!(counters.input_events.load(Ordering::Relaxed), 3);
+        assert_eq!(counters.input_dropped.load(Ordering::Relaxed), 1);
+
+        // The queue is full; a release waits for the input thread instead of dropping.
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let _ = rx.recv();
+            rx.recv().map(|m| match m {
+                super::super::input::ClientInput::Event(ev) => ev.kind,
+                _ => InputKind::KeyDown,
+            })
+        });
+        let up = InputEvent {
+            kind: InputKind::KeyUp,
+            ..key
+        };
+        offer_edge(up, &grants, &tx, &counters, &mut denied).await;
+        assert_eq!(drain.join().unwrap().ok(), Some(InputKind::KeyUp));
         assert_eq!(counters.input_dropped.load(Ordering::Relaxed), 1);
     }
 }

@@ -727,7 +727,12 @@ from the config directory for a true factory reset."
                     return UNRESOLVED;
                 };
                 let (addr, port) = split_host_port(&target);
-                let fp = value(args, "--fp").unwrap_or_default();
+                // Lowercase, as every pin is stored and matched.
+                let fp = value(args, "--fp").unwrap_or_default().to_ascii_lowercase();
+                if !fp.is_empty() && trust::parse_hex32(&fp).is_none() {
+                    eprintln!("--fp takes the host's 64-hex-digit fingerprint");
+                    return UNRESOLVED;
+                }
                 let name = value(args, "--name");
                 let mut known = KnownHosts::load();
                 if let Some(i) = add_target(&known, &addr, port, &fp) {
@@ -1566,7 +1571,10 @@ from the config directory for a true factory reset."
         }
         let mut known = KnownHosts::load();
         known.hosts.clear();
-        let _ = known.save();
+        if let Err(e) = known.save() {
+            eprintln!("couldn't forget the saved hosts: {e:#}");
+            return CONNECT_FAILED;
+        }
         trust::Settings::default().save();
         println!("client state reset");
         OK

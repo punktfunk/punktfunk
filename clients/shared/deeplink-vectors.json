@@ -326,6 +326,11 @@
       "error": "bad-launch-id"
     },
     {
+      "name": "launch-id-that-reads-as-a-flag",
+      "url": "punktfunk://connect/Desk?launch=--browse",
+      "error": "bad-launch-id"
+    },
+    {
       "name": "launch-id-over-the-cap",
       "url": "punktfunk://connect/Desk?launch=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "error": "param-too-long"

@@ -59,8 +59,9 @@ const DRM_IOCTL_I915_GEM_WAIT: u64 = ioc(3, 0x40 + 0x2c, std::mem::size_of::<I91
 /// An i915 render node and the one GEM handle it waits on.
 pub struct I915Boost {
     node: OwnedFd,
-    /// The dma-buf fd it came from (identity only, never used) and the handle.
-    tracked: Option<(RawFd, u32)>,
+    /// The imported dma-buf's inode and the handle. The inode names the buffer; an fd number
+    /// comes back for the next buffer once the old one closes.
+    tracked: Option<(libc::ino_t, u32)>,
 }
 
 impl I915Boost {
@@ -83,10 +84,13 @@ impl I915Boost {
             })
     }
 
-    /// Wait on `dmabuf_fd` from now on. The same fd again costs nothing; a new one is
+    /// Wait on `dmabuf_fd` from now on. The same buffer again costs an `fstat`; a new one is
     /// imported and the old handle closed. `false` when the import was refused.
     pub fn track(&mut self, dmabuf_fd: RawFd) -> bool {
-        if self.tracked.is_some_and(|(fd, _)| fd == dmabuf_fd) {
+        let Some(ino) = inode(dmabuf_fd) else {
+            return false;
+        };
+        if self.tracked.is_some_and(|(i, _)| i == ino) {
             return true;
         }
         let mut req = DrmPrimeHandle {
@@ -107,7 +111,7 @@ impl I915Boost {
             return false;
         }
         self.close_tracked();
-        self.tracked = Some((dmabuf_fd, req.handle));
+        self.tracked = Some((ino, req.handle));
         true
     }
 
@@ -145,6 +149,12 @@ impl Drop for I915Boost {
     fn drop(&mut self) {
         self.close_tracked();
     }
+}
+
+fn inode(fd: RawFd) -> Option<libc::ino_t> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fstat fills the whole `stat` when it returns 0, and only then is it read.
+    unsafe { (libc::fstat(fd, st.as_mut_ptr()) == 0).then(|| st.assume_init().st_ino) }
 }
 
 /// The DRM driver name behind `fd` (`i915`, `xe`, `amdgpu`, …).

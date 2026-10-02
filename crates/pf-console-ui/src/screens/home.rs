@@ -473,6 +473,16 @@ impl HomeScreen {
             if !self.below && shelf.has_titles() {
                 shelf.set_quiet(false);
                 self.below = true;
+                // A quiet shelf shows no focus, so a tap that wakes it only takes focus, as on
+                // any card not yet focused. A mouse wakes it on hover first.
+                if p.kind == PointerKind::Press {
+                    let take_focus = Pointer {
+                        kind: PointerKind::Move,
+                        ..p
+                    };
+                    shelf.pointer(take_focus, ctx, fx);
+                    return true;
+                }
             }
             return shelf.pointer(p, ctx, fx);
         }

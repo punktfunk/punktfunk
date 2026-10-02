@@ -507,9 +507,10 @@ impl BitrateController {
     }
 
     /// Size encode thresholds in frame budgets, not the 120 Hz [`ENCODE_RISE_US`]
-    /// durations. Ignored for a nonsense rate — the defaults stand.
+    /// durations. Ignored for a nonsense rate — the defaults stand. Past 1 MHz the
+    /// budget rounds to 0 µs, which the decode check divides by.
     pub(crate) fn set_frame_budget(&mut self, refresh_hz: u32) {
-        if refresh_hz > 0 {
+        if (1..=1_000_000).contains(&refresh_hz) {
             self.frame_budget_us = Some(1_000_000 / refresh_hz as i64);
         }
     }

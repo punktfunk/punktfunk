@@ -1253,6 +1253,9 @@ pub fn isolate_displays_ccd_checked(
         .filter(|k| !keep.contains(k))
         .collect();
     isolate_journal::mark(&doomed);
+    // The database keys a layout by the connected set: save only when nothing else is connected,
+    // or an inactive physical would inherit the virtual-only layout on its next arrival.
+    let sole = available_target_keys().is_some_and(|keys| keys.iter().all(|k| keep.contains(k)));
 
     // Re-query and re-apply until only the keep set is active. One apply can
     // leave a panel lit; the lock screen must not land there.
@@ -1287,7 +1290,7 @@ pub fn isolate_displays_ccd_checked(
             anchor_kept_sources_at_origin(&paths, &mut modes);
         }
         // Re-commit even when nothing was deactivated: a GDI mode-set does not
-        // drive IddCx COMMIT_MODES. SAVE_TO_DATABASE only for a sole path.
+        // drive IddCx COMMIT_MODES. SAVE_TO_DATABASE only on a `sole` box.
         // Pick the supplied shape once so a desktop retry does not log twice.
         let keep_only = (others > 0 && attempt >= 2).then(|| {
             // Attempt 2+: keep-only arrays. Last attempt also drops
@@ -1317,7 +1320,7 @@ pub fn isolate_displays_ccd_checked(
                         | SDC_USE_SUPPLIED_DISPLAY_CONFIG
                         | SDC_ALLOW_CHANGES
                         | SDC_FORCE_MODE_ENUMERATION;
-                    if others == 0 {
+                    if sole {
                         flags |= SDC_SAVE_TO_DATABASE;
                     }
                     SetDisplayConfig(Some(paths.as_slice()), Some(modes.as_slice()), flags)
@@ -1830,7 +1833,9 @@ fn restore_displays_ccd_inner(saved: &SavedConfig) -> bool {
         .iter()
         .filter(|t| t.external_physical)
         .fold((0u32, 0u32), |(c, a), t| (c + 1, a + u32::from(t.active)));
-    if connected > 0 && lit == 0 {
+    // A lit internal panel is a lit desk: "PC screen only" leaves a connected TV dark on purpose.
+    let panel_lit = inventory.iter().any(|t| t.internal_panel && t.active);
+    if connected > 0 && lit == 0 && !panel_lit {
         let dark: Vec<(CcdTargetKey, String)> = inventory
             .iter()
             .filter(|t| t.external_physical && !t.active)

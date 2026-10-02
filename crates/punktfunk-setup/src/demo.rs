@@ -77,7 +77,7 @@ fn box_of(id: &str, pretty: &str, version: &str, family: Family, docs: &str) -> 
         web_unit_present: true,
         web_password_present: false,
         web_bind: None,
-        scripting_unit_disabled: false,
+        mgmt_bind: None,
         ip: Some("192.168.1.24".into()),
         user: "you".into(),
     }

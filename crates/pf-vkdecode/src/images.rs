@@ -272,11 +272,30 @@ impl PicturePool {
     }
 }
 
+/// Bound on [`PicturePool`]'s drop wait: a presenter copy takes milliseconds.
+const DROP_WAIT_NS: u64 = 1_000_000_000;
+
 impl Drop for PicturePool {
     fn drop(&mut self) {
+        // A picture's last value includes the presenter's write-back (`frame.value + 1`), and
+        // the native lane sends its token while that copy still runs: wait it out before the
+        // image and the semaphore the copy signals are destroyed. Bounded; a wedge forfeits.
+        let (sems, values): (Vec<_>, Vec<_>) = self
+            .pictures
+            .iter()
+            .filter(|p| p.value > 0)
+            .map(|p| (p.semaphore, p.value))
+            .unzip();
+        if !sems.is_empty() {
+            let info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&sems)
+                .values(&values);
+            // SAFETY: live device; every semaphore is one of this pool's own timelines.
+            let _ = unsafe { self.device.wait_semaphores(&info, DROP_WAIT_NS) };
+        }
         // SAFETY: own handles on the contract-live device. The decoder drains
-        // decode work before drop/retire; a retired pool drops only after the
-        // last release token (presenter's fence wait). Destroys ignore NULL.
+        // decode work before drop/retire, and the wait above covers the presenter's
+        // last use of each picture. Destroys ignore NULL.
         unsafe {
             for p in self.pictures.drain(..) {
                 self.device.destroy_image_view(p.view, None);

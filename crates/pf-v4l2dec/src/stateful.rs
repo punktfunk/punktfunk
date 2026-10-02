@@ -247,10 +247,12 @@ impl<D: Device> Stateful<D> {
         let Some(index) = self.free_inputs.pop() else {
             return Err(Error::Stalled);
         };
+        // A refused buffer was never queued, so no dequeue returns it: it is still ours.
         op(
             "queue an access unit",
             self.dev.queue_output(index, au, stamp),
         )
+        .inspect_err(|_| self.free_inputs.push(index))
     }
 
     /// The next decoded picture, waiting up to `timeout` for one.

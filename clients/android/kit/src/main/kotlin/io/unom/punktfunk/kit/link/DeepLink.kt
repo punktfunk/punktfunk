@@ -262,10 +262,11 @@ object DeepLinks {
      * The launch-id charset the whole product already agrees on: printable, non-space ASCII with no
      * shell metacharacters (Decky rides ids through Steam launch options as an env token, so a
      * quote or a backtick genuinely breaks something downstream). Validation only — the id is
-     * opaque and the host matches it verbatim against its own library.
+     * opaque and the host matches it verbatim against its own library. No leading `-`: the id
+     * rides session argv, where `--browse` would read as a flag.
      */
     private fun isSafeLaunchId(id: String): Boolean =
-        id.isNotEmpty() && id.toByteArray(StandardCharsets.UTF_8)
+        id.isNotEmpty() && !id.startsWith('-') && id.toByteArray(StandardCharsets.UTF_8)
             .all { it in 0x21..0x7e && it.toInt().toChar() !in "\"'\\$`" }
 
     /**

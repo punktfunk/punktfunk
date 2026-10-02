@@ -433,9 +433,15 @@ fn pad_capture_thread(
             match capture_client.get_next_packet_size() {
                 Ok(Some(0)) | Ok(None) => break,
                 Ok(Some(_n)) => {
-                    capture_client
+                    let before = bytes.len();
+                    let info = capture_client
                         .read_from_device_to_deque(&mut bytes)
                         .context("read pad loopback")?;
+                    // WASAPI: a SILENT packet's data is not defined; it is silence, or noise
+                    // through the pad's speaker and coils.
+                    if info.flags.silent {
+                        bytes.range_mut(before..).for_each(|b| *b = 0);
+                    }
                 }
                 Err(e) => return Err(anyhow!("get_next_packet_size: {e}")),
             }

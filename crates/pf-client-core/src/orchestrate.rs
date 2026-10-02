@@ -218,7 +218,7 @@ impl ConnectPlan {
     pub fn session_args(&self) -> Vec<String> {
         let mut args = vec![
             "--connect".into(),
-            format!("{}:{}", self.host.addr, self.host.port),
+            punktfunk_core::client::join_host_port(&self.host.addr, self.host.port),
         ];
         if let Some(fp) = &self.host.fp_hex {
             args.push("--fp".into());
@@ -1154,6 +1154,11 @@ mod tests {
         let args = plan.session_args();
         let i = args.iter().position(|a| a == "--preset").unwrap();
         assert_eq!(args[i + 1], "");
+
+        // An IPv6 address keeps its port: the session splits `--connect` on the last colon.
+        plan.host.addr = "fd00::5".into();
+        plan.host.port = 9800;
+        assert_eq!(plan.session_args()[1], "[fd00::5]:9800");
     }
 
     /// Unknown host is a prompt, a contradicted pin is a refusal, an unhonorable

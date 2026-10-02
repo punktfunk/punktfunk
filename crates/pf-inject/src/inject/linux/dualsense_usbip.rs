@@ -517,6 +517,8 @@ impl DualSenseUsbip {
         let report = Arc::new(Mutex::new([0u8; DS_INPUT_REPORT_LEN]));
         let feedback = Arc::new(Mutex::new(DsFeedback::default()));
         let (tx, rx) = sync_channel::<Vec<f32>>(AUDIO_QUEUE_DEPTH);
+        // Pads already up, so the bind wait below judges this pad's own device.
+        let before: Vec<_> = vhci_dualsenses().map(|t| t.sysfs_path).collect();
 
         let attach = attach_device(
             || build_device(index, &report, &feedback, &tx),
@@ -526,7 +528,7 @@ impl DualSenseUsbip {
         // `vhci_hcd` accepts the socket immediately and enumerates later. A bad URB or
         // descriptor then appears and vanishes. Return `Ok` only after a HID driver binds;
         // this transport replaces uhid, so the caller's uhid fallback covers the rest.
-        if let Err(e) = wait_until_bound(index) {
+        if let Err(e) = wait_until_bound(index, &before) {
             drop(attach); // detach the port before the caller retries or degrades
             return Err(e);
         }
@@ -580,8 +582,9 @@ const BIND_GRACE: std::time::Duration = std::time::Duration::from_millis(3000);
 /// Wait until a HID driver has bound the pad's HID interface, or the grace expires.
 ///
 /// The `usb_device` node alone is not enough: it can appear and vanish when a later URB
-/// fails. A bound HID driver with an `input` child means the pad actually came up.
-fn wait_until_bound(index: u8) -> Result<()> {
+/// fails. A bound HID driver with an `input` child means the pad actually came up. Only a
+/// node outside `before` (the pads already attached) is this pad's.
+fn wait_until_bound(index: u8, before: &[std::path::PathBuf]) -> Result<()> {
     let grace = std::env::var("PUNKTFUNK_DUALSENSE_USBIP_GRACE_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -594,7 +597,7 @@ fn wait_until_bound(index: u8) -> Result<()> {
     let deadline = Instant::now() + grace;
     let mut saw_device = false;
     loop {
-        if let Some(t) = find_usb_topology() {
+        if let Some(t) = vhci_dualsenses().find(|t| !before.contains(&t.sysfs_path)) {
             saw_device = true;
             if hid_input_bound(&t.sysfs_path) {
                 tracing::debug!(
@@ -670,30 +673,37 @@ pub struct UsbTopology {
 /// Matches vendor/product under `vhci_hcd`; several pads return the first (hardware
 /// has no `iSerialNumber` either).
 pub fn find_usb_topology() -> Option<UsbTopology> {
+    vhci_dualsenses().next()
+}
+
+/// Every virtual DualSense `usb_device` under `vhci_hcd`.
+fn vhci_dualsenses() -> impl Iterator<Item = UsbTopology> {
     let attr = |dir: &std::path::Path, name: &str| {
         std::fs::read_to_string(dir.join(name))
             .ok()
             .map(|s| s.trim().to_string())
     };
-    for entry in std::fs::read_dir("/sys/bus/usb/devices").ok()?.flatten() {
+    let entries = std::fs::read_dir("/sys/bus/usb/devices")
+        .into_iter()
+        .flatten();
+    entries.flatten().filter_map(move |entry| {
         let dir = entry.path();
         // Interfaces (`11-2:1.0`) have no idVendor; only usb_device nodes do.
         if attr(&dir, "idVendor").as_deref() != Some("054c")
             || attr(&dir, "idProduct").as_deref() != Some("0ce6")
         {
-            continue;
+            return None;
         }
         let real = std::fs::canonicalize(&dir).unwrap_or(dir);
         if !real.to_string_lossy().contains("vhci_hcd") {
-            continue; // a physically plugged pad, not ours
+            return None; // a physically plugged pad, not ours
         }
-        return Some(UsbTopology {
+        Some(UsbTopology {
             busnum: attr(&real, "busnum").unwrap_or_default(),
             devnum: attr(&real, "devnum").unwrap_or_default(),
             sysfs_path: real,
-        });
-    }
-    None
+        })
+    })
 }
 
 /// Prefer usbip DualSense over uhid when the `PUNKTFUNK_DUALSENSE_USBIP` row is on.

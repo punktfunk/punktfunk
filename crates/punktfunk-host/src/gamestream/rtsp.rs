@@ -318,6 +318,7 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
                 Some(cfg) if !state.streaming.swap(true, Ordering::SeqCst) => {
                     let app = super::apps::by_id(ls.appid);
                     tracing::info!(app = ?app.as_ref().map(|a| &a.title), "RTSP PLAY — starting video stream");
+                    state.media_started.fetch_add(1, Ordering::SeqCst);
                     stream::start(
                         cfg,
                         app,
@@ -357,6 +358,7 @@ fn handle_request(req: &Request, state: &Arc<AppState>, peer: Option<SocketAddr>
             // its Opus payload is AES-CBC sealed.
             if !state.audio_streaming.swap(true, Ordering::SeqCst) {
                 tracing::info!("RTSP PLAY — starting audio stream");
+                state.media_started.fetch_add(1, Ordering::SeqCst);
                 let params = audio::AudioParams {
                     host_audio: ls.host_audio,
                     ..*state.gs.audio_params.lock().unwrap()

@@ -410,6 +410,11 @@ impl StreamState {
             }
         }
         if send_gone {
+            // The send thread ended. With the loop stopping or the link closed that is the
+            // session ending; otherwise it died on an error it logged, which is not a clean end.
+            if !self.stop.load(Ordering::SeqCst) && self.conn.close_reason().is_none() {
+                anyhow::bail!("video send thread stopped");
+            }
             return Ok(Flow::Break);
         }
         self.check_encode_stall(depth, poll_err)?;

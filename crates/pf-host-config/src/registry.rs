@@ -300,6 +300,12 @@ const GAMEPADS: &[&str] = &[
     "dualshock4",
     "steamdeck",
     "steamcontroller2",
+    "switchpro",
+    "joyconpair",
+    "8bitdoultimate2",
+    "8bitdopro2",
+    "8bitdopro3",
+    "horipadsteam",
 ];
 #[cfg(not(target_os = "windows"))]
 const GAMEPADS: &[&str] = &[
@@ -313,9 +319,42 @@ const GAMEPADS: &[&str] = &[
     "steamdeck",
     "steamcontroller",
     "steamcontroller2",
+    "steamcontroller2puck",
     "switchpro",
+    "joyconpair",
+    "switch2pro",
+    "switch2gamecube",
+    "8bitdoultimate2",
+    "8bitdopro2",
+    "8bitdopro3",
+    "horipadsteam",
 ];
+// Windows builds the Puck as a cabled pad and both Switch 2 pads as a Switch Pro.
+#[cfg(target_os = "windows")]
 const GAMEPAD_SPELLINGS: &[(&str, &str)] = &[
+    ("steamcontroller2puck", "steamcontroller2"),
+    ("switch2pro", "switchpro"),
+    ("switch2gamecube", "switchpro"),
+    ("xbox", "xbox360"),
+    ("x360", "xbox360"),
+    ("series", "xboxone"),
+    ("ds", "dualsense"),
+    ("ps5", "dualsense"),
+    ("edge", "dualsenseedge"),
+    ("ds4", "dualshock4"),
+    ("ps4", "dualshock4"),
+    ("deck", "steamdeck"),
+    ("switch", "switchpro"),
+    ("sc2", "steamcontroller2"),
+    ("joycons", "joyconpair"),
+    ("hori", "horipadsteam"),
+];
+#[cfg(not(target_os = "windows"))]
+const GAMEPAD_SPELLINGS: &[(&str, &str)] = &[
+    ("joycons", "joyconpair"),
+    ("hori", "horipadsteam"),
+    ("gamecube", "switch2gamecube"),
+    ("sc2puck", "steamcontroller2puck"),
     ("xbox", "xbox360"),
     ("x360", "xbox360"),
     ("series", "xboxone"),

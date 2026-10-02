@@ -302,10 +302,17 @@ pub(crate) fn write_shortcut(label: &str, url: &str) -> Result<std::path::PathBu
     use windows::Win32::shobjidl_core::{IShellLinkW, ShellLink};
     use windows::Win32::wtypesbase::CLSCTX_INPROC_SERVER;
 
-    let desktop = std::env::var("USERPROFILE")
-        .map(|p| std::path::PathBuf::from(p).join("Desktop"))
-        .map_err(|_| "USERPROFILE isn't set".to_string())?;
-    let path = desktop.join(format!("{}.lnk", file_name(label)));
+    let desktop = desktop_dir()?;
+    // Never over another shortcut: two hosts can share a label, and the user's own files
+    // live here too.
+    let stem = file_name(label);
+    let path = (1..)
+        .map(|n| match n {
+            1 => desktop.join(format!("{stem}.lnk")),
+            n => desktop.join(format!("{stem} ({n}).lnk")),
+        })
+        .find(|p| !p.exists())
+        .expect("an unused shortcut name");
     // Alias when packaged, absolute path when not — see the doc comment above.
     let target = if has_package_identity() {
         "punktfunk-client.exe".to_string()
@@ -343,6 +350,26 @@ pub(crate) fn write_shortcut(label: &str, url: &str) -> Result<std::path::PathBu
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(path)
+}
+
+/// The user's Desktop as the shell resolves it. OneDrive Known Folder Move and policy redirect
+/// it away from `%USERPROFILE%\Desktop`, which may then be stale or missing.
+fn desktop_dir() -> Result<std::path::PathBuf, String> {
+    use windows::Win32::combaseapi::CoTaskMemFree;
+    use windows::Win32::shlobj_core::SHGetKnownFolderPath;
+    // FOLDERID_Desktop: this windows-rs rev ships no knownfolders constants.
+    const FOLDERID_DESKTOP: windows::core::GUID =
+        windows::core::GUID::from_u128(0xb4bfcc3a_db2c_424c_b029_7fe99a87c641);
+    // SAFETY: the GUID is a live constant; on success the returned string is the shell's
+    // CoTaskMem allocation, copied out before it is freed exactly once.
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_DESKTOP, 0, None)
+            .map_err(|e| format!("Desktop folder: {e}"))?;
+        let path = p.to_string();
+        CoTaskMemFree(p.0.cast());
+        path.map(std::path::PathBuf::from)
+            .map_err(|e| format!("Desktop folder: {e}"))
+    }
 }
 
 /// A filename Windows will accept: its reserved characters replaced, length capped, and never

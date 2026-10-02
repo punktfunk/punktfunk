@@ -453,7 +453,8 @@ public struct DeepLink: Equatable, Sendable {
         // `"`, `'`, `\`, `$`, backtick — spelled as bytes because a Swift literal holding all five
         // is its own little escaping puzzle, and this list must read exactly like the Rust one.
         let forbidden: Set<UInt8> = [0x22, 0x27, 0x5C, 0x24, 0x60]
-        return !id.isEmpty && id.utf8.allSatisfy { (0x21...0x7e).contains($0) && !forbidden.contains($0) }
+        // No leading `-`: the id rides session argv, where `--browse` would read as a flag.
+        return !id.isEmpty && !id.hasPrefix("-") && id.utf8.allSatisfy { (0x21...0x7e).contains($0) && !forbidden.contains($0) }
     }
 
     /// Strict percent-decoding: `%` must be followed by exactly two hex digits, the result must be

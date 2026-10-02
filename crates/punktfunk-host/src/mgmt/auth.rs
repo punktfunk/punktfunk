@@ -206,7 +206,7 @@ pub(crate) async fn require_auth(
         let from_loopback = req
             .extensions()
             .get::<PeerAddr>()
-            .is_none_or(|a| a.0.ip().is_loopback());
+            .is_none_or(|a| a.0.ip().to_canonical().is_loopback());
         return if from_loopback {
             forward(req, next, AuthLane::Public).await
         } else {
@@ -249,11 +249,12 @@ pub(crate) async fn require_auth(
         }
     }
     // Full admin surface, so loopback only — the listener binds all interfaces so paired
-    // clients can browse the library. No PeerAddr ⇒ unit test ⇒ treat as loopback.
+    // clients can browse the library. No PeerAddr ⇒ unit test ⇒ treat as loopback. Canonical:
+    // a dual-stack bind hands a local IPv4 caller over as ::ffff:127.0.0.1.
     let from_loopback = req
         .extensions()
         .get::<PeerAddr>()
-        .is_none_or(|a| a.0.ip().is_loopback());
+        .is_none_or(|a| a.0.ip().to_canonical().is_loopback());
     if !from_loopback {
         return api_error(
             StatusCode::UNAUTHORIZED,
@@ -286,14 +287,13 @@ pub(crate) async fn require_auth(
                     .find(|(_, pt)| token_eq(token, pt))
                     .map(|(id, _)| id.clone())
             };
-            let mut who = find(&st.plugin_tokens.read().unwrap_or_else(|p| p.into_inner()));
-            // `plugins add` mints in its own process: the file has the token before memory does.
-            if who.is_none() {
-                if let Some(fresh) = crate::mgmt_token::read_per_plugin(&st.config_dir) {
-                    who = find(&fresh);
-                    *st.plugin_tokens.write().unwrap_or_else(|p| p.into_inner()) = fresh;
-                }
+            // The file is the truth: `plugins add` mints and `plugins remove` revokes in their
+            // own process, so a hit on memory alone keeps a removed plugin's token alive. A
+            // small file, read per plugin request on the loopback lane.
+            if let Some(fresh) = crate::mgmt_token::read_per_plugin(&st.config_dir) {
+                *st.plugin_tokens.write().unwrap_or_else(|p| p.into_inner()) = fresh;
             }
+            let who = find(&st.plugin_tokens.read().unwrap_or_else(|p| p.into_inner()));
             match who {
                 Some(id) => forward_plugin(req, next, Some(PluginIdentity(id))).await,
                 None => api_error(

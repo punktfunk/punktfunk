@@ -218,6 +218,8 @@ impl ChoiceRow {
         RowRestore {
             row: self.row.clone(),
             selected: Rc::downgrade(&self.selected),
+            value_label: self.value_label.as_ref().map(|l| l.downgrade()),
+            options: Rc::downgrade(&self.options),
         }
     }
 }
@@ -226,6 +228,9 @@ impl ChoiceRow {
 pub struct RowRestore {
     row: adw::PreferencesRow,
     selected: std::rc::Weak<Cell<u32>>,
+    /// Subpage mode's value label: the pick already wrote it before the handler ran.
+    value_label: Option<gtk::glib::WeakRef<gtk::Label>>,
+    options: std::rc::Weak<RefCell<Vec<String>>>,
 }
 
 /// Move a row's selection without running its handlers — for a handler that has just decided
@@ -238,6 +243,10 @@ pub fn restore_selected(r: &RowRestore, i: u32) {
     selected.set(i);
     if let Some(combo) = r.row.downcast_ref::<adw::ComboRow>() {
         combo.set_selected(i);
+    }
+    let label = r.value_label.as_ref().and_then(gtk::glib::WeakRef::upgrade);
+    if let (Some(label), Some(options)) = (label, r.options.upgrade()) {
+        label.set_text(options.borrow().get(i as usize).map_or("", String::as_str));
     }
 }
 

@@ -129,6 +129,10 @@ fn main() {
     // picks it up once the window is live) and start listening for links from later instances.
     if let Some(url) = link {
         deeplink::queue(url);
+    } else {
+        // A plain launch holds the mutex too, or the next link finds no primary and opens
+        // a second shell. A launched link already tried to claim it above.
+        deeplink::claim_primary();
     }
     deeplink::install_receiver();
     let outcome = app::run(identity, gamepad);

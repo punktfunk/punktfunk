@@ -512,7 +512,7 @@ impl KnownHosts {
     /// identity. Both OS installs of a dual-boot box answer at one lease with one MAC
     /// and a certificate each, so retiring by address takes the sibling the user
     /// paired. A re-keyed host leaves its old card behind for one Forget.
-    /// Box fields (MAC, OS, preset, pins, last_used) ride onto the survivor. Not
+    /// Box fields (typed name, MAC, OS, preset, pins, last_used) ride onto the survivor. Not
     /// carried: `paired`, `clipboard_sync` (cert decisions), and the stable id (a deep
     /// link must not silently retarget).
     ///
@@ -540,6 +540,13 @@ impl KnownHosts {
                 addr = %addr, port, kept_fp = %fp_hex,
                 "retiring the unpinned placeholder this decision pins"
             );
+            // Same rule as `upsert`: a synthesised name (empty, or the address) yields.
+            if (h.name.is_empty() || h.name == h.addr)
+                && !old.name.is_empty()
+                && old.name != old.addr
+            {
+                h.name = old.name;
+            }
             if h.mac.is_empty() {
                 h.mac = old.mac;
             }
@@ -1483,8 +1490,9 @@ mod tests {
         assert_eq!(k.hosts.len(), 1);
         assert_eq!(k.hosts[0].name, "Desk");
 
+        // The CLI pairs with the address as the name.
         k.upsert_trusted(KnownHost {
-            name: "Desk".into(),
+            name: "192.168.1.9".into(),
             addr: "192.168.1.9".into(),
             port: 9777,
             fp_hex: fp('a'),
@@ -1492,6 +1500,7 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(k.hosts.len(), 1);
+        assert_eq!(k.hosts[0].name, "Desk");
         assert_eq!(k.hosts[0].mac, macs);
         assert!(k.add(&HostEdit::default()).is_err());
     }

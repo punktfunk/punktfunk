@@ -79,9 +79,11 @@ fn extract_and_run(exe: &Path, data: &[u8], payload: &[u8]) -> Result<ExitCode, 
     // %ProgramData% (the /LOG file lives elsewhere). Best effort — a locked file is not a
     // failed install.
     let _ = std::fs::remove_dir_all(&root);
-    Ok(ExitCode::from(
-        status.code().unwrap_or(1).clamp(0, 255) as u8
-    ))
+    // A crash status (NTSTATUS) is negative as an i32; clamped, it would read as success.
+    Ok(match status.code().map(u8::try_from) {
+        Some(Ok(code)) => ExitCode::from(code),
+        _ => ExitCode::FAILURE,
+    })
 }
 
 /// Elevated: `%ProgramData%\punktfunk\setup\<pid>-<hex>`, protected before anything lands in

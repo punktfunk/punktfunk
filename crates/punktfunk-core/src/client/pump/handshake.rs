@@ -19,9 +19,7 @@ pub(super) struct HandshakeOut {
 pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<HandshakeOut> {
     let p = &args.params;
     let (pin, shutdown) = (p.pin, &args.shared.shutdown);
-    let remote: std::net::SocketAddr = join_host_port(&p.host, p.port)
-        .parse()
-        .map_err(|_| PunktfunkError::InvalidArg("host:port"))?;
+    let remote = dial_addr(&p.host, p.port).await?;
     let (ep, observed) = endpoint::client_pinned_with_identity(
         pin,
         p.identity.as_ref().map(|(c, k)| (c.as_str(), k.as_str())),
@@ -239,7 +237,23 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             welcome.host_caps,
         ))
     };
-    match handshake.await {
+    // Cancel and the connect deadline (both `shutdown`) reach a parked handshake too: the host
+    // withdraws a request-access knock only when the connection closes.
+    let cancelled = async {
+        while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    };
+    let outcome = tokio::select! {
+        r = handshake => Some(r),
+        () = cancelled => None,
+    };
+    let Some(outcome) = outcome else {
+        conn.close(crate::quic::QUIT_CLOSE_CODE.into(), b"client cancelled");
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), ep.wait_idle()).await;
+        return Err(PunktfunkError::Timeout);
+    };
+    match outcome {
         Ok((session, send, recv, negotiated, host_caps)) => Ok(HandshakeOut {
             conn,
             ep,

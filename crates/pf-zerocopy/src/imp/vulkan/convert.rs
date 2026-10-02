@@ -62,7 +62,8 @@ struct SrcImage {
     view: vk::ImageView,
     /// Geometry the image was created for; a change re-imports.
     shape: (u32, u64, u32, u32, u32, u32),
-    /// First acquire transitions from PREINITIALIZED; later ones from the read layout.
+    /// A submitted pass has acquired it: the first acquire transitions from PREINITIALIZED,
+    /// later ones from the read layout.
     acquired: bool,
 }
 
@@ -341,7 +342,11 @@ impl VkBridge {
                 .create_buffer(
                     &vk::BufferCreateInfo::default()
                         .size(size)
-                        .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+                        // TRANSFER_DST: a producer NV12/P010 is copied in, not converted.
+                        .usage(
+                            vk::BufferUsageFlags::STORAGE_BUFFER
+                                | vk::BufferUsageFlags::TRANSFER_DST,
+                        )
                         .push_next(&mut ext),
                     None,
                 )
@@ -553,7 +558,8 @@ impl VkBridge {
         }
     }
 
-    /// Import (or reuse) the dmabuf as a sampled image with its explicit modifier layout.
+    /// Import (or reuse) the dmabuf as a sampled image with its explicit modifier layout, and
+    /// whether no submitted pass has acquired it yet.
     unsafe fn src_image(&mut self, s: &ConvertSrc) -> Result<(vk::Image, vk::ImageView, bool)> {
         // SAFETY: raw Vulkan on this bridge's own device: every info struct is a local that
         // outlives the call, each fallible step destroys what it created, and the fence wait
@@ -563,9 +569,7 @@ impl VkBridge {
             let st = self.conv.as_mut().expect("convert state");
             if let Some(img) = st.srcs.get_mut(&s.fd) {
                 if img.shape == shape {
-                    let first = !img.acquired;
-                    img.acquired = true;
-                    return Ok((img.image, img.view, first));
+                    return Ok((img.image, img.view, !img.acquired));
                 }
                 let old = st.srcs.remove(&s.fd).expect("checked");
                 let _ = self.device.device_wait_idle();
@@ -613,7 +617,7 @@ impl VkBridge {
                     memory,
                     view,
                     shape,
-                    acquired: true,
+                    acquired: false,
                 },
             );
             Ok((image, view, true))
@@ -799,7 +803,12 @@ impl VkBridge {
                 1,
             );
             d.end_command_buffer(cmd).context("end convert cmd")?;
-            self.submit_pass(idx, cmd, value)
+            let value = self.submit_pass(idx, cmd, value)?;
+            // Only a submitted pass took the image out of PREINITIALIZED.
+            if let Some(img) = self.conv.as_mut().and_then(|st| st.srcs.get_mut(&src.fd)) {
+                img.acquired = true;
+            }
+            Ok(value)
         }
     }
 

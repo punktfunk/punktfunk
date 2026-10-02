@@ -288,10 +288,19 @@ fn route_watch() {
         // SAFETY: `buf` is writable for `buf.len()` bytes and outlives the call.
         let n = unsafe { libc::recv(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
         if n < 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                continue;
+            let e = std::io::Error::last_os_error();
+            match e.raw_os_error() {
+                Some(libc::EINTR) => continue,
+                // A burst overran the socket buffer: those events are gone, the socket is not.
+                Some(libc::ENOBUFS) => {
+                    suppressed += 1;
+                    continue;
+                }
+                _ => {
+                    tracing::debug!(error = %e, "netlink route watch ended — no network-change log");
+                    break;
+                }
             }
-            break;
         }
         if minute.elapsed() >= Duration::from_secs(60) {
             if suppressed > 0 || repeats > 0 {

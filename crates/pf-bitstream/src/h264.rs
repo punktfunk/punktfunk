@@ -1220,23 +1220,44 @@ impl H264Planner {
         out
     }
 
+    /// Every operation runs, so one that names a lost picture cannot skip the marking after it.
+    /// Unmarking a picture this DPB never held (MMCO 1/2) leaves it as the encoder's is: no error.
+    /// The first other failure is returned once the list is done.
     fn handle_memory_management_ops(&mut self, pic: &mut PictureData) -> Result<(), MmcoError> {
         let markings = pic.ref_pic_marking.clone();
+        let mut first_err = None;
 
         for marking in &markings.inner {
-            match marking.memory_management_control_operation {
+            let op = marking.memory_management_control_operation;
+            let done = match op {
                 0 => break,
-                1 => self.dpb.mmco_op_1(pic, marking)?,
-                2 => self.dpb.mmco_op_2(pic, marking)?,
-                3 => self.dpb.mmco_op_3(pic, marking)?,
-                4 => self.max_long_term_frame_idx = self.dpb.mmco_op_4(marking),
-                5 => self.max_long_term_frame_idx = self.dpb.mmco_op_5(pic),
-                6 => self.dpb.mmco_op_6(pic, marking),
-                other => return Err(MmcoError::UnknownMmco(other)),
+                1 => self.dpb.mmco_op_1(pic, marking),
+                2 => self.dpb.mmco_op_2(pic, marking),
+                3 => self.dpb.mmco_op_3(pic, marking),
+                4 => {
+                    self.max_long_term_frame_idx = self.dpb.mmco_op_4(marking);
+                    Ok(())
+                }
+                5 => {
+                    self.max_long_term_frame_idx = self.dpb.mmco_op_5(pic);
+                    Ok(())
+                }
+                6 => {
+                    self.dpb.mmco_op_6(pic, marking);
+                    Ok(())
+                }
+                other => Err(MmcoError::UnknownMmco(other)),
+            };
+            match done {
+                Err(MmcoError::NoShortTermPic) if matches!(op, 1 | 2) => {}
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+                Ok(()) => {}
             }
         }
 
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     }
 
     fn reference_pic_marking(&mut self, pic: &mut PictureData, sps: &Sps) -> Result<(), MmcoError> {
@@ -1914,6 +1935,36 @@ mod tests {
         let flush = planner.flush();
         assert!(flush.outputs.contains(&lt_id));
         assert!(flush.removed.contains(&lt_id));
+    }
+
+    #[test]
+    fn unmarking_a_lost_long_term_picture_is_clean_and_the_marking_after_it_runs() {
+        let (sps, pps) = authored_sps_pps();
+        let mut au0 = Vec::new();
+        Synthesizer::<'_, Sps, _>::synthesize(3, &sps, &mut au0, true).unwrap();
+        Synthesizer::<'_, Pps, _>::synthesize(3, &pps, &mut au0, true).unwrap();
+        au0.extend(write_idr_slice());
+        // AU1 drops long_term_pic_num 0, which only a lost AU had marked (an LTR recovery
+        // rejecting the other slot), then pins itself long-term with MMCO 4 + 6.
+        let au1 = write_p_slice(1, 2, 1, 1, Some(&[(2, 0), (4, 1), (6, 0)]));
+        let au2 = write_p_slice(2, 4, 1, 2, None);
+
+        let mut planner = H264Planner::new();
+        planner.plan_au(&au0).unwrap();
+        let p1 = planner.plan_au(&au1).unwrap();
+        let p2 = planner.plan_au(&au2).unwrap();
+        assert!(
+            picture_warnings(&p1).is_empty(),
+            "nothing lost reaches AU1: {p1:?}"
+        );
+        let lt_id = p1.dpb.stored.unwrap();
+        assert!(
+            p2.slices[0]
+                .ref_list0
+                .iter()
+                .any(|r| r.id == lt_id && r.is_long_term),
+            "MMCO 6 after the failed MMCO 2 must still run"
+        );
     }
 
     #[test]

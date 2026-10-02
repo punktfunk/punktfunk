@@ -60,8 +60,8 @@ fn no_answer() -> anyhow::Error {
     )
 }
 
-/// The steps after `create_session`, under the deadline. On timeout the
-/// half-built session is closed: nothing else ends it.
+/// The steps after `create_session`, under the deadline. On a timeout or a failed step the
+/// half-built session is closed: nothing else ends it, and a started cast keeps casting.
 pub async fn finish_or_close<T, C>(
     deadline: tokio::time::Instant,
     steps: impl Future<Output = anyhow::Result<T>>,
@@ -71,7 +71,11 @@ where
     C: Future<Output = ashpd::Result<()>>,
 {
     match tokio::time::timeout_at(deadline, steps).await {
-        Ok(result) => result,
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => {
+            close_session(close()).await;
+            Err(e)
+        }
         Err(_) => {
             close_session(close()).await;
             Err(no_answer())
@@ -229,6 +233,22 @@ mod handshake_bound_tests {
         let result = run(finish_or_close(
             tokio::time::Instant::now(),
             std::future::pending::<anyhow::Result<()>>(),
+            || async {
+                closed.store(true, Ordering::Relaxed);
+                Ok::<(), ashpd::Error>(())
+            },
+        ));
+        assert!(result.is_err());
+        assert!(closed.load(Ordering::Relaxed));
+    }
+
+    /// A step past `start` that fails (no streams, no PipeWire remote) closes the live cast too.
+    #[test]
+    fn a_failed_step_closes_the_half_built_session() {
+        let closed = AtomicBool::new(false);
+        let result = run(finish_or_close(
+            tokio::time::Instant::now() + Duration::from_secs(5),
+            async { Err::<(), _>(anyhow::anyhow!("portal returned no streams")) },
             || async {
                 closed.store(true, Ordering::Relaxed);
                 Ok::<(), ashpd::Error>(())

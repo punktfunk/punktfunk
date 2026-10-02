@@ -91,7 +91,9 @@ impl Scanner {
                     .process_name
                     .as_deref()
                     .is_some_and(|w| same_name(&image, w));
-            if hit {
+            // The hints come from a plugin and the ladder kills as SYSTEM: only a process in
+            // our session counts, the rule a plugin-reported pid already meets.
+            if hit && crate::game_term::in_our_session(pid) {
                 out.push(ProcRef { pid, start });
             }
         }

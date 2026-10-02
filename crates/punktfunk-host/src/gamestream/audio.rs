@@ -224,7 +224,8 @@ pub fn start(
     // Last act of this thread: `/resume` waits on `AppState::media_exited`.
     media_exited: Arc<std::sync::atomic::AtomicU64>,
 ) {
-    let _ = std::thread::Builder::new()
+    let exited = media_exited.clone();
+    if std::thread::Builder::new()
         .name("punktfunk-audio".into())
         .spawn(move || {
             tracing::info!(?params, "audio stream starting");
@@ -243,7 +244,13 @@ pub fn start(
             running.store(false, Ordering::SeqCst);
             tracing::info!("audio stream stopped");
             media_exited.fetch_add(1, Ordering::SeqCst);
-        });
+        })
+        .is_err()
+    {
+        // Never started, so it will not count its exit: count it here, or every later
+        // launch waits out its deadline for this thread.
+        exited.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // one call site (`start`), which carries the same allow

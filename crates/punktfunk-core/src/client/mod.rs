@@ -92,16 +92,28 @@ pub(crate) fn client_label() -> String {
         .clone()
 }
 
-/// Bracket a bare IPv6 literal so `SocketAddr` parse succeeds (`fd00::1` → `[fd00::1]:4770`).
-/// Without brackets the joined string never parses and the error blames the caller's input.
-/// V4, hostnames, and already-bracketed input pass through. A v6 dial still fails at connect
-/// while the sockets are IPv4-bound.
-fn join_host_port(host: &str, port: u16) -> String {
-    if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
+pub use crate::discovery::join_host_port;
+
+/// The address to dial: an IP literal as written, else the name's first IPv4 answer (MagicDNS,
+/// `.local`). The client endpoint binds IPv4, so a v6 answer is the fallback only.
+async fn dial_addr(host: &str, port: u16) -> Result<std::net::SocketAddr> {
+    if let Ok(addr) = join_host_port(host, port).parse() {
+        return Ok(addr);
     }
+    let mut first = None;
+    for addr in tokio::net::lookup_host((host, port)).await? {
+        if addr.is_ipv4() {
+            return Ok(addr);
+        }
+        first.get_or_insert(addr);
+    }
+    first.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{host} has no address"),
+        )
+        .into()
+    })
 }
 
 /// Hard cap, not working depth: 12 × 10–20 ms frames ≈ 120–240 ms. A filled tokio mpsc
@@ -684,7 +696,11 @@ impl NativeClient {
         let negotiated = loop {
             match ready_rx.recv_timeout(READY_POLL) {
                 Ok(Ok(t)) => break t,
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => {
+                    // Stops what the handshake already started, such as the data punch.
+                    shared.shutdown.store(true, Ordering::SeqCst);
+                    return Err(e);
+                }
                 // Keep waiting unless budget spent or cancelled. Disconnected = worker died
                 // without reporting; the give-up arm below covers it. Cancel and expiry share
                 // that arm: both owe the host the same close.
@@ -783,9 +799,7 @@ impl NativeClient {
             .ok()?;
         let host = host.to_string();
         rt.block_on(async move {
-            // Hostname (MagicDNS, `.local`), not always an IP literal — resolve, don't parse.
-            let mut addrs = tokio::net::lookup_host((host.as_str(), port)).await.ok()?;
-            let remote = addrs.next()?;
+            let remote = dial_addr(&host, port).await.ok()?;
             // pin = None accepts any cert and records it. Failures are DNS / no route /
             // connect timeout.
             let (ep, observed) = endpoint::client_pinned_with_identity(None, None);
@@ -1829,7 +1843,30 @@ mod latest_of_tests {
 
 #[cfg(test)]
 mod host_port_tests {
-    use super::join_host_port;
+    use super::{dial_addr, join_host_port};
+
+    #[test]
+    fn a_name_dials_its_ipv4_answer_and_a_literal_dials_as_written() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let at = |s: &str| s.parse::<std::net::SocketAddr>().unwrap();
+            assert_eq!(
+                dial_addr("localhost", 9777).await.unwrap(),
+                at("127.0.0.1:9777")
+            );
+            assert_eq!(
+                dial_addr("fd00::1", 9777).await.unwrap(),
+                at("[fd00::1]:9777")
+            );
+            assert_eq!(
+                dial_addr("192.168.1.9", 9777).await.unwrap(),
+                at("192.168.1.9:9777")
+            );
+        });
+    }
 
     #[test]
     fn brackets_bare_ipv6_only() {

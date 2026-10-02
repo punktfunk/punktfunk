@@ -38,6 +38,7 @@ pub(super) fn release_default_mic() {
 pub(super) fn restore_defaults() {
     stream_sink::SINK.release_all();
     stream_sink::SOURCE.release_all();
+    host_bridge::release_all_pins();
 }
 
 pub(super) fn heal_defaults() {
@@ -529,7 +530,11 @@ impl PwMicSource {
                 ring,
             }),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(anyhow!("pipewire virtual-mic init timed out")),
+            Err(_) => {
+                // The thread may still come up; it must not outlive this error with a live source.
+                let _ = quit_tx.send(Terminate);
+                Err(anyhow!("pipewire virtual-mic init timed out"))
+            }
         }
     }
 }

@@ -979,7 +979,10 @@ fn shortcut_editor(
                         move || {
                             let mut u = ui.clone();
                             if let Some(d) = u.draft.as_mut() {
+                                // Win is never captured from the keyboard: its toggle stands.
+                                let win = d.chord.mods[3];
                                 d.chord.mods = mods_of(mask);
+                                d.chord.mods[3] = win;
                                 d.chord.key = Some(name.to_string());
                             }
                             u.capture = false;

@@ -28,7 +28,7 @@ use pf_presenter::overlay::OverlayAction;
 use pf_presenter::ActionOutcome;
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -327,9 +327,9 @@ pub fn run(target: Option<&str>) -> u8 {
 /// A console row key → its index in the known-hosts store. The key is the pinned
 /// fingerprint when there is one, else `addr:port` (see the row builder) — which names
 /// the placeholder there, never a record pinned at that address. A pinned CARD's key
-/// carries the preset id past a NUL — the console strips that before it sends a
-/// command, so nothing here has to.
+/// carries the preset id past a NUL, dropped here: a card sends the key it shows.
 fn index_for_key(known: &trust::KnownHosts, key: &str) -> Option<usize> {
+    let key = key.split('\0').next().unwrap_or(key);
     known
         .hosts
         .iter()
@@ -429,6 +429,7 @@ impl Service {
                     probe_inflight: Arc::new(AtomicBool::new(false)),
                     last_probe: Instant::now() - Duration::from_secs(60),
                     wake_cancel: None,
+                    pair_gen: Arc::new(AtomicU64::new(0)),
                     rescan: None,
                 }
                 .run(stop_w)
@@ -460,6 +461,9 @@ struct ServiceState {
     last_probe: Instant,
     /// Cancels the active wake thread (it owns the model's wake status).
     wake_cancel: Option<Arc<AtomicBool>>,
+    /// Bumped per pairing. A ceremony the player left still persists, but only the
+    /// newest one writes the shared phase.
+    pair_gen: Arc<AtomicU64>,
     /// Forces the mDNS browse to re-query. Installed by `run`; `None` before it starts.
     rescan: Option<discovery::Rescan>,
 }
@@ -672,10 +676,16 @@ impl ServiceState {
         let shared = self.library.clone();
         let identity = self.identity.clone();
         let pin = trust::parse_hex32(&fp_hex);
+        // A newer fetch owns the model by the time a slow host answers: its titles are not
+        // this host's to badge.
+        let epoch = shared.fetch_epoch();
         std::thread::Builder::new()
             .name("punktfunk-running".into())
             .spawn(move || {
-                shared.set_running(&library::fetch_running(&addr, mgmt, &identity, pin));
+                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                if shared.fetch_epoch() == epoch {
+                    shared.set_running(&running);
+                }
             })
             .ok();
     }
@@ -791,13 +801,18 @@ impl ServiceState {
         let identity = self.identity.clone();
         let pin = trust::parse_hex32(&fp_hex);
         let console = self.console.clone();
+        // As in `refresh_running`: the player may be on another host's shelf by the answer.
+        let epoch = shared.fetch_epoch();
         std::thread::Builder::new()
             .name("punktfunk-endgame".into())
             .spawn(move || {
                 let outcome = library::end_game(&addr, mgmt, &identity, pin, &app_id);
                 tracing::info!(app = %app_id, ?outcome, "end game");
                 console.set_notice(outcome.notice(&title));
-                shared.set_running(&library::fetch_running(&addr, mgmt, &identity, pin));
+                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                if shared.fetch_epoch() == epoch {
+                    shared.set_running(&running);
+                }
             })
             .ok();
     }
@@ -815,9 +830,12 @@ impl ServiceState {
         self.console.set_pair(PairPhase::Busy);
         let console = self.console.clone();
         let identity = self.identity.clone();
+        let generation = self.pair_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let pair_gen = self.pair_gen.clone();
         std::thread::Builder::new()
             .name("punktfunk-pair".into())
             .spawn(move || {
+                let current = || pair_gen.load(Ordering::SeqCst) == generation;
                 match trust::pair_with_host(&addr, port, &identity, &pin, &device_name) {
                     Ok(fp) => {
                         let fp_hex = trust::hex(&fp);
@@ -826,16 +844,24 @@ impl ServiceState {
                             .find(|(f, _)| *f == fp_hex)
                             .or_else(|| named.iter().find(|(f, _)| f.is_empty()))
                             .map_or_else(|| addr.clone(), |(_, n)| n.clone());
-                        if let Err(e) = trust::persist_host(&name, &addr, port, &fp_hex, true, &[])
-                        {
-                            tracing::warn!(error = %format!("{e:#}"), "saving the paired host");
+                        let saved = trust::persist_host(&name, &addr, port, &fp_hex, true, &[]);
+                        if !current() {
+                            return;
                         }
-                        console.set_pair(PairPhase::Paired { key: fp_hex });
+                        match saved {
+                            Ok(()) => console.set_pair(PairPhase::Paired { key: fp_hex }),
+                            // Not "Paired": the pin is gone by the next launch.
+                            Err(e) => console.set_pair(PairPhase::Failed(format!(
+                                "Paired, but couldn't save — {e:#}"
+                            ))),
+                        }
                     }
                     Err(e) => {
                         // Cause-specific wording (wrong PIN vs not-armed vs unreachable
                         // vs a typed host rejection) — shared with every other surface.
-                        console.set_pair(PairPhase::Failed(trust::pair_error_message(&e)));
+                        if current() {
+                            console.set_pair(PairPhase::Failed(trust::pair_error_message(&e)));
+                        }
                     }
                 }
             })
@@ -952,7 +978,15 @@ impl ServiceState {
             .map(|i| known.hosts[i].mac.clone())
             .unwrap_or_default();
         if macs.is_empty() {
-            self.console.set_pair(PairPhase::Idle); // no-op; keep state sane
+            // Nothing to send: end the takeover the shell opened for this wake.
+            self.console.set_wake(Some(WakeStatus {
+                key: row.key,
+                name: row.name,
+                seconds: 0,
+                timed_out: true,
+                online: false,
+                then_connect,
+            }));
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1207,33 +1241,38 @@ impl ServiceState {
             .discovered
             .values()
             .filter(|d| !known.hosts.iter().any(|h| discovery::same_host(h, d)))
-            .map(|d| HostRow {
-                key: if d.fp_hex.is_empty() {
+            .map(|d| {
+                let key = if d.fp_hex.is_empty() {
                     format!("{}:{}", d.addr, d.port)
                 } else {
                     d.fp_hex.clone()
-                },
-                // Discovered, not saved: no store record, so no id to point at.
-                id: None,
-                name: host_display_name(&d.name, &d.addr),
-                addr: d.addr.clone(),
-                port: d.port,
-                fp_hex: d.fp_hex.clone(),
-                paired: false,
-                saved: false,
-                online: true,
-                mgmt_port: d.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
-                can_wake: false,
-                clipboard_sync: false,
-                last_used: None,
-                os: d.os.clone(),
-                // Discovered but unsaved: not paired, so there is nothing it would let us
-                // do, and no identity to ask what it is running.
-                actions: Vec::new(),
-                pin: None,
-                bound_preset: None,
-                running: String::new(),
-                game_presets: Default::default(),
+                };
+                let online = probed.get(&key).copied().unwrap_or(false);
+                HostRow {
+                    key,
+                    // Discovered, not saved: no store record, so no id to point at.
+                    id: None,
+                    name: host_display_name(&d.name, &d.addr),
+                    addr: d.addr.clone(),
+                    port: d.port,
+                    fp_hex: d.fp_hex.clone(),
+                    paired: false,
+                    saved: false,
+                    // The probe, as for saved rows: an advert outlives a host that went to sleep.
+                    online,
+                    mgmt_port: d.mgmt_port.unwrap_or(library::DEFAULT_MGMT_PORT),
+                    can_wake: false,
+                    clipboard_sync: false,
+                    last_used: None,
+                    os: d.os.clone(),
+                    // Discovered but unsaved: not paired, so there is nothing it would let us
+                    // do, and no identity to ask what it is running.
+                    actions: Vec::new(),
+                    pin: None,
+                    bound_preset: None,
+                    running: String::new(),
+                    game_presets: Default::default(),
+                }
             })
             .collect();
         extra.sort_by_key(|h| h.name.to_lowercase());
@@ -1448,7 +1487,10 @@ fn spawn_fetch(
                 // What the host has up right now, so a title the player can return to says so.
                 // Deliberately after the catalog — a slow `/status` must not hold the titles
                 // back — and never fatal: an older host answers nothing and every badge stays off.
-                shared.set_running(&library::fetch_running(&addr, mgmt, &identity, pin));
+                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                if mine() {
+                    shared.set_running(&running);
+                }
             }
             if !jobs.is_empty() {
                 let rx = library::spawn_art_fetch(base, identity, pin, jobs);

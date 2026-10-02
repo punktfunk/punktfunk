@@ -443,6 +443,9 @@ pub(crate) async fn serve(
     prewarm::spawn_run("host start");
 
     loop {
+        // A finished task stays in the set until joined; a serving host never reaches the drain
+        // below, and every client probe is a task.
+        while sessions.try_join_next().is_some() {}
         let incoming = tokio::select! {
             i = ep.accept() => match i {
                 Some(i) => i,
@@ -483,17 +486,10 @@ pub(crate) async fn serve(
             if max_sessions != 0 && n >= max_sessions {
                 done.notify_one();
             }
-            // Slot after handshake: a full host still accepts, so the waiter sees a live path
-            // (keep-alive) instead of a silent dial timeout.
-            let permit = sem
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("session semaphore is never closed");
             let peer = conn.remote_address();
             tracing::info!(%peer, "punktfunk/1 client connected");
-            // `serve_session` owns the permit: released while a knock is parked, re-acquired on
-            // approval. A setup failure still needs a typed close (cheap clone).
+            // `serve_session` takes the slot once the peer has spoken: released while a knock is
+            // parked, re-acquired on approval. A setup failure still needs a typed close.
             let sem_session = sem;
             let conn_err = conn.clone();
             match serve_session(
@@ -506,7 +502,6 @@ pub(crate) async fn serve(
                 &np,
                 &last_pairing,
                 stats,
-                permit,
                 sem_session,
             )
             .await
@@ -1110,16 +1105,16 @@ type AudioCapSlot = Arc<std::sync::Mutex<Option<Box<dyn crate::audio::AudioCaptu
 /// the path; approval streams with no reconnect. Under the pending TTL (10 min).
 const PENDING_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// Park an unpaired knock until the console decides, holding no session slot while it waits.
+/// Park an unpaired knock until the console decides. The caller holds no session slot while
+/// it waits.
 ///
-/// `Ok(Ok(_))` is an approval, with the slot taken back like any fresh client's (waits if busy).
+/// `Ok(Ok(_))` is an approval, with a slot taken like any fresh client's (waits if busy).
 /// `Ok(Err(reason))` is the refusal to send. `Err` means the client left before a decision.
 pub(crate) async fn park_knock(
     conn: &link::SessionLink,
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
-    permit: tokio::sync::OwnedSemaphorePermit,
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<Result<tokio::sync::OwnedSemaphorePermit, punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
@@ -1128,7 +1123,6 @@ pub(crate) async fn park_knock(
     // QUIC-validated source IP for the pending per-source cap. Knock generation makes
     // this connection the one an approval admits — siblings must not all start a session.
     let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()));
-    drop(permit);
     let decision = tokio::select! {
         d = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT) => d,
         _ = conn.closed() => anyhow::bail!("client disconnected before pairing approval"),
@@ -1188,8 +1182,7 @@ async fn serve_session(
     np_arc: &Arc<NativePairing>,
     last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
     stats: Arc<StatsRecorder>,
-    // Owned here: an unpaired knock releases it while parked and re-acquires on approval.
-    mut permit: tokio::sync::OwnedSemaphorePermit,
+    // The session slots. An unpaired knock releases its slot while parked, re-acquires on approval.
     sem: Arc<tokio::sync::Semaphore>,
 ) -> Result<Served> {
     let np: &NativePairing = np_arc;
@@ -1272,6 +1265,14 @@ async fn serve_session(
             .map(|()| Served::Session);
     }
 
+    // A slot only once the peer has spoken: one that stalls the handshake holds none, so it
+    // cannot queue paired clients behind it. A full host still accepts, so the waiter sees a
+    // live path (keep-alive) instead of a silent dial timeout.
+    let mut permit = sem
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("session semaphore is never closed");
     // Pairing gate outside the handshake future: approval wait must not be bound by
     // HANDSHAKE_TIMEOUT, and the NVENC permit is released while parked.
     if opts.require_pairing {
@@ -1318,7 +1319,8 @@ async fn serve_session(
                 gate_hello.name.as_deref().unwrap_or(""),
                 &fp_hex,
             );
-            permit = match park_knock(&conn, np, &label, &fp_hex, permit, &sem).await? {
+            drop(permit);
+            permit = match park_knock(&conn, np, &label, &fp_hex, &sem).await? {
                 Ok(permit) => permit,
                 Err(reason) => {
                     close_rejected(&conn, reason).await;

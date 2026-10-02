@@ -509,6 +509,80 @@ fn down_from_a_card_lands_on_its_games_and_launches_there() {
     }
 }
 
+/// A shelf pushed with its fetch never adopts the list the model still holds: until the
+/// platform answers, that list is the previous host's.
+#[test]
+fn a_fetch_clears_the_previous_hosts_list() {
+    let (mut s, _console, library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    library.set_games(vec![crate::library::LibraryGame {
+        id: "steam:570".into(),
+        title: "Dota 2".into(),
+        store: "steam".into(),
+        launcher: false,
+        icon: String::new(),
+        platform: None,
+        developer: None,
+        year: None,
+        genres: Vec::new(),
+        stats: None,
+        running: false,
+        endable: false,
+    }]);
+    s.sync();
+    let snap = library.snapshot();
+    assert!(matches!(snap.phase, crate::library::LibraryPhase::Loading));
+    assert!(snap.games.is_empty());
+}
+
+/// A woken host connects once, though the service clears its status only at its next
+/// bus drain.
+#[test]
+fn a_woken_host_connects_once() {
+    let host = hosts().remove(0);
+    let (mut s, console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    console.set_wake(Some(crate::model::WakeStatus {
+        key: host.key.clone(),
+        name: host.name.clone(),
+        seconds: 12,
+        timed_out: false,
+        online: true,
+        then_connect: true,
+    }));
+    for _ in 0..5 {
+        s.sync();
+    }
+    let launches = std::iter::from_fn(|| s.take_action())
+        .filter(|a| matches!(a, OverlayAction::Launch { .. }))
+        .count();
+    assert_eq!(launches, 1);
+}
+
+/// A pairing result belongs to the host the PIN went to: another host's Pair screen on
+/// top neither shows it nor closes on it.
+#[test]
+fn a_pairing_result_stays_with_its_own_host() {
+    let rows = hosts();
+    let (a, b) = (rows[0].clone(), rows[1].clone());
+    let (mut s, console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Pair(crate::screens::pair::PairScreen::new(&b, "deck")),
+    ]);
+    s.pairing = Some((a.addr.clone(), a.port));
+    console.set_pair(PairPhase::Paired { key: a.key.clone() });
+    s.sync();
+    assert!(
+        matches!(s.stack.last(), Some(Screen::Pair(_))),
+        "B's screen stays"
+    );
+    s.pairing = Some((b.addr.clone(), b.port));
+    console.set_pair(PairPhase::Paired { key: b.key.clone() });
+    s.sync();
+    assert!(
+        !matches!(s.stack.last(), Some(Screen::Pair(_))),
+        "its own result closes it"
+    );
+}
+
 /// Y on a pinned card must carry that preset into the library. Falling back to the
 /// host default would ignore the pin, which is why the card exists.
 #[test]
@@ -888,6 +962,24 @@ fn a_search_and_its_empty_result_raster() {
         panic!("the results replace the search");
     };
     assert!(shelf.no_match());
+}
+
+/// A hardware Space types through TextInput alone. As Confirm it also typed the
+/// keyboard's focused key.
+#[test]
+fn a_hardware_space_types_one_space() {
+    let host = hosts().remove(0);
+    let search = crate::screens::search::SearchScreen::new(&host, &Default::default());
+    let (mut s, _console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Search(search),
+    ]);
+    s.text_input("hollow");
+    s.key(crate::input::Key::Space, false, false);
+    s.text_input(" ");
+    s.text_input("knight");
+    let typed = s.edit_field().map(|f| f.text);
+    assert_eq!(typed.as_deref(), Some("hollow knight"));
 }
 
 #[test]

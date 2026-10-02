@@ -324,16 +324,15 @@ struct AvSync {
     /// sits an order of magnitude above it. The deadband is what keeps the loop from hunting
     /// forever around zero, which would be audible in a way the misalignment it chased was not.
     static let deadbandMS = 10
-    /// Observations folded before the first correction is offered. The offset is derived from a
-    /// clock skew estimate and a video figure that both need a moment to settle after connect;
-    /// acting on the first sample would chase the handshake, not the stream.
+    /// Audio observed before the first correction is offered, in `frameMS` frames (500 ms). The
+    /// offset is derived from a clock skew estimate and a video figure that both need a moment to
+    /// settle after connect; acting on the first sample would chase the handshake, not the stream.
     private static let minObservations = 100
     /// An offset larger than this is not believed. A wall-clock step, a paused host, or a stale
     /// video figure can all produce an enormous apparent misalignment, and steering the ring by it
     /// would empty or overfill it outright. Beyond this the loop reports and waits rather than acts.
     private static let saneLimitMS = 1_000
-    /// The protocol's default frame, in ms — the EWMA weight, so the time constant holds however
-    /// often the caller observes. A shorter lossless frame only settles the average sooner.
+    /// The protocol's default frame, in ms. `init` takes the negotiated one.
     private static let frameMS = JitterPolicy.frameMS
 
     /// The negotiated layout, in the same two numbers `AudioRing` keeps and for the same reason —
@@ -345,6 +344,11 @@ struct AvSync {
     /// the picture it belongs with.
     private var offsetAvgNs: Float = 0
     private var observations = 0
+    /// Audio the observations cover: one frame each.
+    private var observedUs = 0
+    /// One observation's frame, for the EWMA weight. The caller observes once per packet, so
+    /// weights are in audio time, not calls.
+    private let frameUs: Int
     /// Set once an observation lands outside `saneLimitMS`, for reporting.
     private(set) var implausible = false
     /// Last depth offered outside the deadband; what the deadband keeps asking for.
@@ -355,9 +359,10 @@ struct AvSync {
     /// gives: the ms ⇄ sample conversion multiplies before it divides, so the 44.1 kHz family is
     /// representable here too and the depth this type proposes lands in the units the ring measures
     /// itself in. Mirrors `AvSync::new_at_rate`.
-    init(channels: Int, rateHz: Int) {
+    init(channels: Int, rateHz: Int, frameUs: Int = frameMS * 1_000) {
         self.rateHz = max(rateHz, 1)
         self.channels = max(channels, 1)
+        self.frameUs = max(frameUs, 1)
     }
 
     /// Interleaved samples to whole milliseconds — see `audioSamplesToMs`.
@@ -417,18 +422,19 @@ struct AvSync {
         implausible = false
 
         // `Float`, like core's `f32`, so both sides round the same way.
-        let alpha = min(max(Float(Self.frameMS) / Float(Self.ewmaTauMS), 0), 1)
+        let alpha = min(max(Float(frameUs) / Float(Self.ewmaTauMS * 1_000), 0), 1)
         if observations == 0 {
             offsetAvgNs = Float(offsetNs)
         } else {
             offsetAvgNs += (Float(offsetNs) - offsetAvgNs) * alpha
         }
         observations += 1
+        observedUs += frameUs
         return settled ? Int64(offsetAvgNs) : nil
     }
 
     /// Enough evidence folded to act on.
-    var settled: Bool { observations >= Self.minObservations }
+    var settled: Bool { observedUs >= Self.minObservations * Self.frameMS * 1_000 }
 
     /// The smoothed offset in ms (positive = audio late), for the HUD. Reported as soon as it is
     /// measured, including while still settling — a number the operator can watch converge is more

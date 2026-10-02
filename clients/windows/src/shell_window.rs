@@ -12,7 +12,8 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::windef::{HWND, RECT};
 use windows::Win32::winuser::{
-    FindWindowW, GetWindowRect, IsWindow, SetForegroundWindow, ShowWindow, SW_HIDE, SW_SHOW,
+    FindWindowW, GetWindowRect, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_HIDE,
+    SW_SHOW,
 };
 
 static SHELL_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -66,9 +67,14 @@ pub(crate) fn restore() {
 
 /// The shell window's top-left in desktop coordinates — passed to the spawned session
 /// (`--window-pos`) so its window opens on the SAME monitor, roughly where the shell is,
-/// and the visibility handoff reads as one window changing content.
+/// and the visibility handoff reads as one window changing content. `None` while minimized:
+/// an iconic window's rect sits at (-32000, -32000), off every display.
 pub(crate) fn position() -> Option<(i32, i32)> {
     let h = shell_hwnd()?;
+    // SAFETY: `h` is the validated shell window handle.
+    if unsafe { IsIconic(h) }.as_bool() {
+        return None;
+    }
     let mut r = RECT::default();
     // SAFETY: `h` is the validated shell window handle and `r` is a live local the call fills.
     if !unsafe { GetWindowRect(h, &mut r) }.as_bool() {

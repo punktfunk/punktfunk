@@ -154,7 +154,20 @@ impl CursorShared {
                     continue;
                 }
             }
-            let shape = self.cached.as_ref()?;
+            // Hidden before any shape was seen is still a hide the client must hear.
+            let Some(shape) = self.cached.as_ref() else {
+                return (hdr.visible == 0).then(|| pf_frame::CursorOverlay {
+                    x: hdr.x,
+                    y: hdr.y,
+                    w: 0,
+                    h: 0,
+                    rgba: std::sync::Arc::new(Vec::new()),
+                    serial: 0,
+                    hot_x: 0,
+                    hot_y: 0,
+                    visible: false,
+                });
+            };
             return Some(pf_frame::CursorOverlay {
                 x: hdr.x,
                 y: hdr.y,

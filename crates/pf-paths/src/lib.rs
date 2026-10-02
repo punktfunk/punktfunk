@@ -426,9 +426,11 @@ fn restrict_dir_to_system_admins(dir: &std::path::Path, deep: bool, users_read: 
 /// Unix: create and re-chmod 0600 so it is never group/world-readable.
 /// Windows: `OpenOptions` cannot pass `SECURITY_ATTRIBUTES` and this crate
 /// forbids `unsafe`, so the file is created empty, `icacls`'d, then written.
-/// The DACL step is fatal; a failure unlinks the still-empty file. Do not
-/// write first: the config dir grants `Users (OI)(CI)(RX)`, so a newborn
-/// secret is Users-readable for the life of the `icacls` child.
+/// The DACL step is fatal; a failure unlinks the still-empty file. The config
+/// dir grants `Users (OI)(CI)(RX)`, and Windows checks access only at open, so
+/// the file is held unshared: no reader can open it while that DACL stands and
+/// keep the handle for the bytes. `icacls` opens for the DACL alone, which
+/// sharing does not gate.
 /// The bytes reach the disk before return, so a rename after it never publishes an empty file.
 pub fn write_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
@@ -454,9 +456,7 @@ pub fn write_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::Re
     {
         use std::os::windows::fs::OpenOptionsExt;
         const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
-        opts.share_mode(SHARE_READ_WRITE)
-            .custom_flags(OPEN_REPARSE_POINT);
+        opts.share_mode(0).custom_flags(OPEN_REPARSE_POINT);
     }
     let mut f = opts.open(path)?;
     #[cfg(windows)]

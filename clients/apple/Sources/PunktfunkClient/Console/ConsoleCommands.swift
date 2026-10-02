@@ -210,6 +210,8 @@ extension ConsoleModel {
     /// runs, then what the host answers. `refreshOnly` asks about running titles alone.
     func fetchLibrary(addr: String, mgmt: UInt16, fp: String, refreshOnly: Bool) {
         guard let host = host(fp: fp, addr: addr, port: 0) else { return }
+        if !refreshOnly { fetchSerial += 1 }
+        let serial = fetchSerial
         // The demo host serves no management API; its shelf is built in. The shot harness has
         // no host to ask, so every host shows that shelf there.
         #if DEBUG
@@ -250,6 +252,8 @@ extension ConsoleModel {
             let running = await LibraryClient.running(
                 address: addr, port: mgmt, certPEM: identity.certPEM, keyPEM: identity.keyPEM,
                 hostFingerprint: host.pinnedSHA256)
+            // A newer fetch owns the shelf by the time a slow host answers: not its titles.
+            guard serial == self.fetchSerial else { return }
             bridge.push(.libraryRunning, ConsoleJSON.runningGames(running))
             if refreshOnly { return }
             do {

@@ -259,6 +259,7 @@ impl StreamState {
             *fwd = super::super::cursor_fwd::CursorForwarder::new();
         }
         self.enc = p.enc;
+        self.carry_pipelining();
         self.frame = p.frame;
         self.interval = p.interval;
         self.cur_node_id = p.node_id;
@@ -269,6 +270,34 @@ impl StreamState {
         }
         self.inflight.clear();
         self.watchdog.on_au();
+    }
+
+    /// Close a frame whose tail never came, as the loop does at the next first chunk, before a
+    /// replacement encoder opens at `au_seq`. Left to the loop, that close would land after the
+    /// new encoder numbered its first AU, one behind the wire for the rest of the session.
+    pub(super) fn close_open_frame(&mut self) {
+        if std::mem::take(&mut self.wire_frame_open) {
+            if self.inflight.len() > 1 {
+                self.inflight.pop_front();
+            }
+            self.au_seq = self.au_seq.wrapping_add(1);
+        }
+    }
+
+    /// A fresh encoder retrieves synchronously. The session's pipelined escalation carries onto
+    /// it, or the flags claim a mode the encoder is not in and escalation never fires again.
+    pub(super) fn carry_pipelining(&mut self) {
+        if self.deescalating {
+            // The wind-back the old encoder owed: the new one is already there.
+            self.deescalating = false;
+            self.pipelined_active = false;
+            self.pipeline_asked = false;
+        } else if self.pipelined_active {
+            self.pipelined_active = self.enc.set_pipelined(true);
+        } else {
+            // A refusal was the old encoder's; this one may say yes.
+            self.pipeline_asked = false;
+        }
     }
 
     pub(super) fn adopt_reframe(&self, reframe: punktfunk_core::video_fit::Reframe) {

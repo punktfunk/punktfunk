@@ -29,8 +29,9 @@ pub enum Caption {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     Heading(String),
-    /// One wide tile per paired host.
-    Desktops,
+    /// One wide tile per paired host, each named by what it shows. A tile binds its host by
+    /// index, so a changed host list must rebind the band.
+    Desktops(Vec<String>),
     /// A horizontal band of posters.
     Band {
         tiles: Vec<Tile>,
@@ -51,7 +52,8 @@ pub struct Layout<'a> {
     pub group: Option<GroupBy>,
     pub search: &'a str,
     pub columns: usize,
-    pub paired_hosts: usize,
+    /// What each paired host's Desktops tile shows, in order.
+    pub desktops: Vec<String>,
 }
 
 impl Layout<'_> {
@@ -81,7 +83,7 @@ pub fn rows(l: &Layout) -> Vec<Row> {
     let desktops_on = l
         .sections
         .iter()
-        .any(|(s, on)| *s == Section::Desktops && *on && l.paired_hosts > 0);
+        .any(|(s, on)| *s == Section::Desktops && *on && !l.desktops.is_empty());
     for (section, on) in l.sections {
         if !on {
             continue;
@@ -93,9 +95,9 @@ pub fn rows(l: &Layout) -> Vec<Row> {
             }
         };
         match section {
-            Section::Desktops if l.paired_hosts > 0 => {
+            Section::Desktops if !l.desktops.is_empty() => {
                 out.push(Row::Heading("Desktops".into()));
-                out.push(Row::Desktops);
+                out.push(Row::Desktops(l.desktops.clone()));
             }
             Section::Recent => {
                 let mut played: Vec<usize> = (0..l.games.len())
@@ -229,7 +231,7 @@ mod tests {
             group: None,
             search,
             columns: 2,
-            paired_hosts: 1,
+            desktops: vec!["desk".into()],
         }
     }
 
@@ -304,7 +306,7 @@ mod tests {
         let favorites = vec!["a".to_string(), "b".to_string()];
         let order = sections("");
         let rows = rows(&layout(&games, &order, &favorites, "hAd"));
-        assert!(rows.contains(&Row::Desktops));
+        assert!(rows.iter().any(|r| matches!(r, Row::Desktops(_))));
         for r in &rows {
             if let Row::Band { tiles, .. } | Row::Posters { tiles, .. } = r {
                 assert_eq!(tiles, &[Tile::Game(0)]);

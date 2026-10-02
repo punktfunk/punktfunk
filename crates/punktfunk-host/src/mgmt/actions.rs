@@ -431,9 +431,7 @@ async fn invoke_display_next(
     }
     let switched = tokio::task::spawn_blocking(|| {
         let (from, to) = next_monitor_target().map_err(|r| (StatusCode::CONFLICT, r.into()))?;
-        let mut policy = crate::vdisplay::policy::prefs().get();
-        policy.capture_monitor = Some(to.clone());
-        super::display::write(policy).map_err(|e| {
+        super::display::write_with(|p| p.capture_monitor = Some(to.clone())).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Couldn't save the streamed monitor — {e:#}"),

@@ -464,6 +464,12 @@ pub(super) async fn negotiate(
                 joined = Some((display, view));
             }
             Admission::Steal(victims) => {
+                // A mode this session cannot encode fails below anyway: check it before the
+                // victims lose their stream for nothing. A steal keeps the requested mode.
+                crate::encode::validate_dimensions(codec, hello.mode.width, hello.mode.height)
+                    .context("client-requested mode")?;
+                crate::encode::validate_refresh(hello.mode.refresh_hz)
+                    .context("client-requested mode")?;
                 tracing::info!(
                     victims = victims.len(),
                     "mode-conflict: STEAL — preempting the live session(s)"

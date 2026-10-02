@@ -50,6 +50,7 @@ struct MsghdrX {
 // Hand-written Darwin `msghdr_x` (`libc` has none). A wrong offset hands the
 // kernel a bad pointer or length. 32-bit fields pad before the following
 // pointers — easy to get wrong silently.
+#[cfg(target_vendor = "apple")]
 const _: () = {
     use std::mem::{offset_of, size_of};
     assert!(size_of::<MsghdrX>() == 56);

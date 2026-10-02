@@ -138,7 +138,7 @@ impl PkgBackend for Apt {
         let mut steps = self.write_repo(facts, choices);
         steps.push(Step {
             action: StepAction::AptSwitch {
-                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf),
+                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf, choices.components),
             },
             ends_run: false,
         });
@@ -223,10 +223,10 @@ impl PkgBackend for Dnf {
     fn switch(&self, facts: &Facts, choices: &Choices) -> Vec<Step> {
         let (_, install) = split_at("fedora", "sudo dnf install");
         let mut steps = self.write_repo(facts, choices);
-        steps.push(Step::run(install[0].clone()));
+        steps.push(Step::run(compose_install(&install[0], choices)));
         steps.push(Step::run(format!(
             "sudo dnf distro-sync {}",
-            switch_pkgs(&self.base_pkgs(), &facts.installed_pf).join(" ")
+            switch_pkgs(&self.base_pkgs(), &facts.installed_pf, choices.components).join(" ")
         )));
         steps
     }
@@ -320,7 +320,7 @@ impl PkgBackend for Pacman {
         steps.push(Step::run("sudo pacman -Sy"));
         steps.push(Step {
             action: StepAction::PacmanSwitch {
-                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf),
+                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf, choices.components),
             },
             ends_run: false,
         });
@@ -545,11 +545,16 @@ fn steamos_build(build: &str, choices: &Choices) -> Vec<Step> {
         Level::Warn,
         "the build runs on this device — it asks for your sudo password first, then takes about 20 minutes on a first run (about a minute on a re-run) and prints nothing until it finishes",
     )];
-    steps.push(Step::run(if choices.gamestream {
-        format!("{build} --gamestream")
-    } else {
-        build.to_string()
-    }));
+    let mut line = build.to_string();
+    if choices.gamestream {
+        line.push_str(" --gamestream");
+    }
+    // The console here reads web.env, which the script writes; host.env's line would go
+    // unread. The script keeps an existing web.env line. An address is shell-safe as it is.
+    if choices.web_bind.parse::<std::net::IpAddr>().is_ok() {
+        line.push_str(&format!(" --web-bind={}", choices.web_bind));
+    }
+    steps.push(Step::run(line));
     // After the build, never before: that script writes host.env defaults only when the
     // file is absent, and one of them (RADV_PERFTEST=video_encode) turns Vulkan encode on
     // for Van Gogh. The port move below still lands in host.env.

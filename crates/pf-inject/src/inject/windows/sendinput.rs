@@ -309,7 +309,7 @@ fn key_input(
         positional_vk_to_scan(vk)
     };
     let (scan, extended) = match table {
-        // Typing area: never E0-extended.
+        // Typing area: never E0-extended. Keypad Enter is.
         Some(scan) => (scan, crate::keymap::vk_forced_extended(vk)),
         None => {
             let sc_ex = map(vk);
@@ -391,9 +391,11 @@ fn key(ki: KEYBDINPUT) -> INPUT {
 /// of Linux `crate::vk_to_evdev` — for the typing area the evdev code IS the set-1
 /// scancode. Other layout-invariant keys are absent (`MapVirtualKeyExW` resolves them
 /// under any layout); the IME keys it resolves only under a Korean or Japanese one, so
-/// they carry the scancode the physical key sends. Never E0-extended.
+/// they carry the scancode the physical key sends. Never E0-extended, but for keypad Enter.
 fn positional_vk_to_scan(vk: u16) -> Option<u16> {
     Some(match vk {
+        // Keypad Enter, which clients send as VK_SEPARATOR and no layout maps: E0 1C.
+        0x6C => 0x1C,                    // VK_SEPARATOR
         0x30 => 0x0B,                    // VK_0
         0x31..=0x39 => vk - 0x31 + 0x02, // VK_1..VK_9 → 0x02..0x0A
         0x41 => 0x1E,                    // A
@@ -576,5 +578,13 @@ mod tests {
         assert_eq!(positional_vk_to_scan(0x90), None); // VK_NUMLOCK
         assert!(!crate::keymap::vk_forced_extended(0x90));
         assert!(!crate::keymap::vk_forced_extended(crate::keymap::VK_PAUSE));
+    }
+
+    /// Keypad Enter is E0 1C even though `MapVirtualKeyExW` knows no VK_SEPARATOR.
+    #[test]
+    fn keypad_enter_is_extended_return() {
+        let ki = key_input(0x6C, false, true, |_| 0).expect("keypad Enter maps");
+        assert_eq!(ki.wScan, 0x1C);
+        assert!(ki.dwFlags.contains(KEYEVENTF_EXTENDEDKEY));
     }
 }

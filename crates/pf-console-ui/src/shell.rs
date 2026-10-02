@@ -370,6 +370,9 @@ pub(crate) struct Shell {
     games_key: Option<String>,
     /// Whose list the shared library holds: the host of the last `FetchLibrary` sent.
     library_fp: Option<String>,
+    /// The host the last `Pair` went to. The one pairing phase is its, so another host's
+    /// Pair screen on top neither shows it nor closes on it.
+    pairing: Option<(String, u16)>,
     /// Focus is on the tab strip, not the screen.
     strip_focus: bool,
     /// The shell moved focus to the strip because the root had nothing to focus. It goes
@@ -506,6 +509,7 @@ impl Shell {
             parked: [None, None, None, None],
             games_key: None,
             library_fp: None,
+            pairing: None,
             strip_focus: false,
             strip_parked: false,
             root_targets: None,
@@ -1031,6 +1035,12 @@ impl Shell {
 
     fn sync_pair(&mut self) {
         let pair = self.console.pair();
+        let pairing = self.pairing.clone();
+        let ours = |s: &Screen| match (s, &pairing) {
+            (Screen::Pair(p), Some((addr, port))) => p.target() == (addr.as_str(), *port),
+            _ => false,
+        };
+        let top_is_ours = self.stack.last().is_some_and(ours);
         match &pair {
             PairPhase::Idle => {}
             PairPhase::Paired { key } => {
@@ -1041,7 +1051,8 @@ impl Shell {
                     .map_or_else(|| "the host".to_string(), |h| h.name.clone());
                 self.show_toast_kind(format!("Paired with {name}"), ToastKind::Success);
                 self.console.set_pair(PairPhase::Idle);
-                if matches!(self.stack.last(), Some(Screen::Pair(_))) {
+                self.pairing = None;
+                if top_is_ours {
                     self.apply_nav(Nav::Pop);
                 }
                 // The first pairing is where the default host comes into being, so show
@@ -1052,18 +1063,20 @@ impl Shell {
                 }
             }
             phase => {
-                if let Some(Screen::Pair(p)) = self.stack.last_mut() {
+                if let (true, Some(Screen::Pair(p))) = (top_is_ours, self.stack.last_mut()) {
                     p.apply_phase(phase);
                 }
                 if matches!(phase, PairPhase::Failed(_)) {
                     self.console.set_pair(PairPhase::Idle);
+                    self.pairing = None;
                 }
             }
         }
     }
 
     /// Mirrors the service's wake and speed status. A woken host with `then_connect` goes
-    /// straight into its connect.
+    /// straight into its connect, once: the slot is cleared here, not at the service's next
+    /// bus drain.
     fn sync_wake(&mut self) {
         match self.console.wake() {
             Some(w) => {
@@ -1085,6 +1098,7 @@ impl Shell {
                         .map(|h| ConnectIntent::to_host(h, None))
                 });
                 self.bus.send(ConsoleCmd::CancelWake);
+                self.console.set_wake(None);
                 self.wake = None;
                 if let Some(Some(intent)) = intent {
                     self.start_connect(intent);
@@ -1123,13 +1137,13 @@ impl Shell {
             return;
         };
         let host = host.clone();
-        self.library_fp = Some(host.fp_hex.clone());
+        home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
+        self.note_fetch(&host.fp_hex);
         self.bus.send(ConsoleCmd::FetchLibrary {
             addr: host.addr.clone(),
             mgmt: host.mgmt_port,
             fp_hex: host.fp_hex.clone(),
         });
-        home.set_shelf(crate::screens::library::LibraryScreen::embedded(&host));
     }
 
     /// This pairing is what turned its host into the default one. False for a second or
@@ -1388,15 +1402,25 @@ impl Shell {
             .cloned()
     }
 
+    /// A library fetch for `fp_hex` is about to go out. Another host's list leaves the model
+    /// now, before a shelf pushed with the fetch syncs it as its own. Call it before the send:
+    /// after, it could wipe what the platform's fetch already delivered.
+    pub(crate) fn note_fetch(&mut self, fp_hex: &str) {
+        if self.library_fp.as_deref() != Some(fp_hex) {
+            self.library.begin_host_fetch();
+        }
+        self.library_fp = Some(fp_hex.to_string());
+    }
+
     /// A fresh shelf for `host`, its fetch sent.
     fn shelf_root(&mut self, host: &HostRow) -> Screen {
+        self.note_fetch(&host.fp_hex);
         self.bus.send(ConsoleCmd::FetchLibrary {
             addr: host.addr.clone(),
             mgmt: host.mgmt_port,
             fp_hex: host.fp_hex.clone(),
         });
         self.games_key = Some(host.key.clone());
-        self.library_fp = Some(host.fp_hex.clone());
         Screen::Library(crate::screens::library::LibraryScreen::new(host))
     }
 
@@ -1684,8 +1708,8 @@ impl Shell {
         self.input_source = Some(source);
     }
 
-    /// Keyboard fallback. Arrows and Enter/Esc are menu events; Y/X mirror
-    /// Secondary/Tertiary (suppressed while editing — those keys are text).
+    /// Keyboard fallback. Arrows and Enter/Esc are menu events; Space confirms and Y/X
+    /// mirror Secondary/Tertiary (suppressed while editing — those keys are text).
     /// `shift` only affects Tab.
     pub(crate) fn key(&mut self, key: crate::input::Key, shift: bool, repeat: bool) -> bool {
         use crate::input::Key as S;
@@ -1704,7 +1728,8 @@ impl Shell {
             S::Right => MenuEvent::Move(MenuDir::Right),
             S::Up => MenuEvent::Move(MenuDir::Up),
             S::Down => MenuEvent::Move(MenuDir::Down),
-            S::Return | S::Space if !repeat => MenuEvent::Confirm,
+            S::Return if !repeat => MenuEvent::Confirm,
+            S::Space if !repeat && !editing => MenuEvent::Confirm,
             S::Escape | S::Backspace if !repeat => MenuEvent::Back,
             S::PageUp if !repeat => MenuEvent::JumpBack,
             S::PageDown if !repeat => MenuEvent::JumpForward,
@@ -1797,7 +1822,10 @@ impl Shell {
     fn apply(&mut self, fx: Outbox) {
         for cmd in fx.cmds {
             if let ConsoleCmd::FetchLibrary { fp_hex, .. } = &cmd {
-                self.library_fp = Some(fp_hex.clone());
+                self.note_fetch(fp_hex);
+            }
+            if let ConsoleCmd::Pair { addr, port, .. } = &cmd {
+                self.pairing = Some((addr.clone(), *port));
             }
             // Gate wake in this call, like `connecting`. First WakeStatus is
             // ~100 ms–1 s away; without a placeholder the cursor keeps moving

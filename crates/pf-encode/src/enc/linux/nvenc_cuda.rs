@@ -1013,6 +1013,8 @@ impl NvencCudaEncoder {
     ) -> Result<()> {
         let fmt = slot_fmt_of(self.s.buffer_fmt);
         let SlotSurface::Vk(dst) = &self.ring[slot].surface else {
+            // A ring rebuilt on CUDA surfaces: the capture must fall back to the import path.
+            super::vk_util::reject_dmabuf(d, "no Vulkan input slots");
             bail!("NVENC (Linux): a raw dmabuf submit needs Vulkan input slots");
         };
         let dst = *dst;
@@ -1584,7 +1586,11 @@ impl Encoder for NvencCudaEncoder {
             (FramePayload::Cuda(b), _) => Source::Cuda(b),
             (_, Some(b)) => Source::Cuda(b),
             (FramePayload::Dmabuf(d), _) if self.raw_wanted => Source::Dmabuf(d),
-            _ => bail!("Linux direct-NVENC needs a CUDA or CPU frame; got a dmabuf"),
+            (FramePayload::Dmabuf(d), _) => {
+                super::vk_util::reject_dmabuf(d, "this session takes no raw dmabuf");
+                bail!("Linux direct-NVENC needs a CUDA or CPU frame; got a dmabuf")
+            }
+            _ => bail!("Linux direct-NVENC needs a CUDA or CPU frame"),
         };
         let result = self.submit_device(captured, src);
         if let Some(b) = uploaded {

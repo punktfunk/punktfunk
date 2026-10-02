@@ -127,6 +127,7 @@ impl StreamState {
             self.live_bitrate.store(applied_kbps, Ordering::Relaxed);
             return;
         }
+        self.close_open_frame();
         let hz = interval_hz(self.interval);
         let rebuild_t0 = std::time::Instant::now();
         match open_session_encoder(
@@ -155,6 +156,7 @@ impl StreamState {
                     "encoder rebuilt at new bitrate (adaptive bitrate)"
                 );
                 self.enc = new_enc;
+                self.carry_pipelining();
                 self.note_applied_rate(new_kbps, applied_kbps);
                 self.counters.note_bitrate(applied_kbps);
                 self.bitrate_kbps = applied_kbps;
@@ -254,7 +256,11 @@ impl StreamState {
                 outage_ms,
                 "capture recovered from a source stall — forcing an IDR, announcing the gap"
             );
-            want_kf = true;
+            // The host's own repair, not a client ask: straight to the encoder, then stamped so
+            // the cooldown swallows the client's echo of the same freeze. Through the gate, the
+            // stamp would coalesce this IDR itself.
+            self.enc.request_keyframe();
+            self.counters.link.note_idr();
             self.inflight.clear();
             self.last_forced_idr = Some(std::time::Instant::now());
             announce_pipeline_gap(&self.gap_tx, outage_ms);

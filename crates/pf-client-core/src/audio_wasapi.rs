@@ -260,9 +260,13 @@ impl AudioPlayer {
                 })
             }
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(anyhow!(
-                "wasapi render init timed out (no render endpoint?)"
-            )),
+            Err(_) => {
+                // A late open must not leave a thread playing into nothing for the process.
+                stop.store(true, Ordering::SeqCst);
+                Err(anyhow!(
+                    "wasapi render init timed out (no render endpoint?)"
+                ))
+            }
         }
     }
 
@@ -298,7 +302,7 @@ impl Drop for AudioPlayer {
 
 /// A running shared-mode stream signals every engine period (~10 ms); this many silent 100 ms
 /// waits in a row mean the endpoint is gone without an error (unplug, exclusive grab).
-const EVENT_SILENT_WAITS: u32 = 10;
+pub(crate) const EVENT_SILENT_WAITS: u32 = 10;
 /// How often a stream on the default endpoint checks that the default is still it.
 const DEFAULT_CHECK_EVERY: Duration = Duration::from_secs(1);
 /// Settle between losing an endpoint and reopening: a route change is not instantaneous.

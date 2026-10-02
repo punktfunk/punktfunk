@@ -100,7 +100,6 @@ pub(crate) struct StatelessHevc<D: OpenedStateless = RequestNode> {
     node: PathBuf,
     planner: Box<H265Planner>,
     session: Option<Session<D>>,
-    pools: u32,
     health: DecodeHealth,
     recovery_request: bool,
     release_tx: mpsc::Sender<Release>,
@@ -115,7 +114,6 @@ impl<D: OpenedStateless> StatelessHevc<D> {
             node,
             planner: Box::new(H265Planner::new()),
             session: None,
-            pools: 0,
             health: DecodeHealth {
                 // The driver has no per-picture status query this rung reads.
                 status_queries: false,
@@ -174,6 +172,11 @@ impl<D: OpenedStateless> StatelessHevc<D> {
         if facts.damaged {
             self.recovery_request = true;
         }
+        // No session (the last request failed): only a keyframe starts one.
+        if self.session.is_none() && !pic.is_irap {
+            self.recovery_request = true;
+            return Ok(None);
+        }
         self.ensure_session(&plan, au)?;
         let s = self.session.as_mut().expect("just ensured");
         let shown = match s.decoder.decode(&plan, au, facts) {
@@ -184,7 +187,13 @@ impl<D: OpenedStateless> StatelessHevc<D> {
                 self.recovery_request = true;
                 return Ok(Some((None, true)));
             }
-            Err(e) => return Err(anyhow!("{e}")),
+            // A failed request keeps its OUTPUT buffer bound, so every later picture would
+            // fail on it: drop the session and reopen at the next keyframe.
+            Err(e) => {
+                self.session = None;
+                self.recovery_request = true;
+                return Err(anyhow!("{e}"));
+            }
         };
         // Hosts send one picture per unit; a bump of several keeps the newest.
         let mut newest: Option<Shown<Facts>> = None;
@@ -249,11 +258,10 @@ impl<D: OpenedStateless> StatelessHevc<D> {
             buffers = decoder.buffers(),
             "native V4L2 stateless picture pool ready"
         );
-        self.pools += 1;
         self.session = Some(Session {
             decoder,
             shape,
-            pool: self.pools,
+            pool: crate::video_types::next_pool_generation(),
             exports: None,
         });
         Ok(())

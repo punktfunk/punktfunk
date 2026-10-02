@@ -1045,9 +1045,14 @@ impl NativeLane {
         self.flush();
     }
 
-    /// Drop the buffer under `key`. The compositor keeps its own reference to a buffer it
-    /// still shows; the hold goes now.
+    /// Drop the buffer under `key` and its timelines. The compositor keeps its own reference
+    /// to a buffer it still shows; the hold goes now.
     pub fn forget(&mut self, key: u64) {
+        if let Some((a, r)) = self.timelines.remove(&key) {
+            a.destroy();
+            r.destroy();
+        }
+        self.state.explicit_keys.remove(&key);
         match self.state.imports.remove(&key) {
             Some(Import::Ready(slot)) => {
                 self.state.by_buffer.remove(&slot.buffer.id());

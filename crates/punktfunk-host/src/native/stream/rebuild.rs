@@ -78,6 +78,7 @@ impl StreamState {
             (self.gamescope_composite, self.metadata_composite),
         );
         let hw_cursor = self.retarget_cursor_plan(sw.compositor, switched_route.as_ref());
+        self.close_open_frame();
         let rebuilt = (|| -> Result<(Box<dyn crate::vdisplay::VirtualDisplay>, Pipeline)> {
             let mut new_vd = crate::vdisplay::open(sw.compositor)?;
             new_vd.set_hw_cursor(hw_cursor);
@@ -162,6 +163,7 @@ impl StreamState {
         } else {
             self.bitrate_kbps
         };
+        self.close_open_frame();
         #[cfg(target_os = "windows")]
         let fast_done = self.plan.capture == crate::session_plan::CaptureBackend::IddPush
             && self.resize(new_mode, mode_bitrate, resize_trace.as_ref(), false);
@@ -260,6 +262,7 @@ impl StreamState {
              the capture attachment in place at the current mode"
         );
         let trace = crate::bringup::Trace::start("reassert-recover", self.resize_ms.clone());
+        self.close_open_frame();
         if !self.resize(self.cur_mode, self.bitrate_kbps, trace.as_ref(), true) {
             // The in-place recovery proves the OS resumed presenting by waiting for a NEWER
             // frame, which an idle desktop never produces — so its failure is not evidence
@@ -349,6 +352,7 @@ impl StreamState {
                 );
             }
         }
+        self.close_open_frame();
         let pipe = 'built: {
             // The import side broke under a display that is still up: re-attach to it
             // before creating another. On KWin a create is a new virtual output, and #1443
@@ -512,13 +516,16 @@ impl StreamState {
         } else {
             self.bitrate_kbps
         };
+        self.close_open_frame();
+        // The encoder's rate, not the wire budget: FEC, framing and audio ride on top of it.
+        let ed = self.enc_now();
         let opened = open_session_encoder(
             &self.plan,
             &*self.capturer,
             &self.frame,
             (self.negotiated.width, self.negotiated.height),
             actual.refresh_hz,
-            |_, _| src_kbps as u64 * 1000,
+            |_, _| ed.enc_kbps(src_kbps) as u64 * 1000,
             self.bit_depth,
             self.client_hdr,
             self.au_seq,
@@ -554,7 +561,13 @@ impl StreamState {
              the encoder at the delivered size"
         );
         self.enc = new_enc;
+        self.carry_pipelining();
         self.enc_src = (self.frame.format, self.frame.width, self.frame.height);
+        // A ceiling learned from the encoder this one replaces: another geometry or format.
+        self.encoder_ceiling
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         // The delivered mode is the session's now: a rebuild or topology re-assert
         // reopens at it instead of forcing the display back to the client's ask.
         self.cur_mode = actual;

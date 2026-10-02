@@ -745,10 +745,10 @@ fn run_hook_process(
 
 /// Runs a Windows hook as the signed-in user of the host's WTS session.
 ///
-/// [`crate::interactive::spawn_as_current_session_user`] has no env or stdin,
-/// so the event JSON path is the last argument. A non-SYSTEM host falls back to
-/// its own token with the event environment and JSON on stdin. The call blocks
-/// for the configured timeout while the detached user process runs.
+/// That launch has no env or stdin, so the event JSON path is the last argument; the file
+/// sits in the user's own `TEMP`, which they can read. A non-SYSTEM host falls back to its
+/// own token with the event environment and JSON on stdin. Either way the call waits for the
+/// command to exit, ending it at `timeout`.
 #[cfg(windows)]
 fn run_hook_process(
     cmd: &str,
@@ -766,19 +766,42 @@ fn run_hook_process(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
-    let json_path = std::env::temp_dir().join(stamp);
-    if std::fs::write(&json_path, event_json).is_err() {
-        tracing::warn!(cmd = %label, "hook: event JSON temp file not written");
-    }
-    let cmdline = format!("{cmd} \"{}\"", json_path.display());
-    match crate::interactive::spawn_as_current_session_user(&cmdline, None) {
-        Ok(pid) => {
-            tracing::debug!(cmd = %label, pid, "hook command launched as the current WTS session user");
-            // The launch returns no child handle, so cleanup waits for the configured ceiling.
-            std::thread::sleep(timeout);
+    let write = |dir: &std::path::Path| {
+        let p = dir.join(&stamp);
+        std::fs::write(&p, event_json).map(|()| p)
+    };
+    // In the user's TEMP when a session user exists, as that user; else in our own.
+    let (written, as_user) = match crate::interactive::in_session_user_temp(write) {
+        Ok(w) => (w, true),
+        Err(_) => (write(&std::env::temp_dir()), false),
+    };
+    let json_path = written.unwrap_or_else(|e| {
+        tracing::warn!(cmd = %label, error = %e, "hook: event JSON temp file not written");
+        std::env::temp_dir().join(&stamp)
+    });
+    let remove = || {
+        if as_user {
+            let _ = crate::interactive::in_session_user_temp(|_| std::fs::remove_file(&json_path));
+        } else {
             let _ = std::fs::remove_file(&json_path);
-            // A detached user process has no observable status; successful launch arms prep undo.
-            true
+        }
+    };
+    let cmdline = format!("{cmd} \"{}\"", json_path.display());
+    match crate::interactive::run_as_current_session_user(&cmdline, timeout) {
+        Ok(code) => {
+            remove();
+            match code {
+                Some(0) => true,
+                Some(code) => {
+                    tracing::warn!(cmd = %label, code, "hook command exited non-zero");
+                    false
+                }
+                None => {
+                    tracing::warn!(cmd = %label, timeout_s = timeout.as_secs(),
+                        "hook command timed out — killing it");
+                    false
+                }
+            }
         }
         Err(e) if running_as_system() => {
             // A SYSTEM fallback would change the hook's principal, so a missing session user skips it.
@@ -788,7 +811,7 @@ fn run_hook_process(
                 "hook SKIPPED: the host's WTS session has no user token, and this host is SYSTEM — \
                  hooks run as the session user and never fall back to SYSTEM"
             );
-            let _ = std::fs::remove_file(&json_path);
+            remove();
             false
         }
         Err(e) => {
@@ -829,7 +852,7 @@ fn run_hook_process(
                     tracing::error!(cmd = %label, error = %e, "hook command did not launch")
                 }
             }
-            let _ = std::fs::remove_file(&json_path);
+            remove();
             ok
         }
     }

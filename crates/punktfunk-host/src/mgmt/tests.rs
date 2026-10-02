@@ -465,6 +465,27 @@ async fn bearer_admin_is_loopback_only() {
         StatusCode::UNAUTHORIZED,
         "the bearer token must be accepted from a loopback peer"
     );
+    // A dual-stack bind hands local IPv4 over IPv4-mapped; a mapped LAN peer stays out.
+    let mapped_loopback: SocketAddr = "[::ffff:127.0.0.1]:33333".parse().unwrap();
+    let mapped_lan: SocketAddr = "[::ffff:192.168.1.50]:54321".parse().unwrap();
+    assert_ne!(
+        app.clone()
+            .oneshot(bearer(mapped_loopback))
+            .await
+            .expect("infallible")
+            .status(),
+        StatusCode::UNAUTHORIZED,
+        "a mapped loopback peer is loopback"
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(bearer(mapped_lan))
+            .await
+            .expect("infallible")
+            .status(),
+        StatusCode::UNAUTHORIZED,
+        "a mapped LAN peer is not"
+    );
 
     let np = Arc::new(
         crate::native_pairing::NativePairing::load_with(
@@ -1642,6 +1663,10 @@ async fn a_token_minted_by_another_process_authenticates() {
     };
     assert_eq!(send(&app, put("fresh")).await.0, StatusCode::NO_CONTENT);
     assert_eq!(send(&app, put("demo")).await.0, StatusCode::FORBIDDEN);
+
+    // `plugins remove` revokes in another process too: the token stops working at once.
+    std::fs::write(run.join("plugin-tokens.json"), "{}").unwrap();
+    assert_eq!(send(&app, put("fresh")).await.0, StatusCode::UNAUTHORIZED);
 }
 
 /// Same rule on the library side: a provider's entries belong to the plugin that owns the id.

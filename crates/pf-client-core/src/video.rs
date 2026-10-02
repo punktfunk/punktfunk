@@ -532,8 +532,17 @@ enum Backend {
     Software(SoftwareDecoder),
 }
 
+/// New-rung frames handed on before a demoted Vulkan rung's pools may go, and their floor
+/// age: the same displacement PyroWave waits for its retired rings (depth-2 channel).
+const RETIRE_HANDOVERS: u32 = 8;
+const RETIRE_MIN_AGE: std::time::Duration = std::time::Duration::from_millis(250);
+
 pub struct Decoder {
     backend: Backend,
+    /// A native Vulkan rung demoted away, with the new rung's handovers since and when.
+    /// The presenter can re-sample its last picture until a new one displaces it, so its
+    /// pools outlive the swap ([`RETIRE_HANDOVERS`]).
+    retiring: Option<(Box<NativeVulkanDecoder>, u32, std::time::Instant)>,
     /// Negotiated `quic::CODEC_*` bit. Every rung map and the software refusal
     /// key on it, so a demotion rebuilds for the same codec.
     wire_codec: u8,
@@ -1309,6 +1318,7 @@ impl Decoder {
             log_rung(&backend, wire);
             Ok(Decoder {
                 entered_rungs: rung_bit(&backend),
+                retiring: None,
                 backend,
                 wire_codec: wire,
                 vaapi_fails: 0,
@@ -1722,6 +1732,7 @@ impl Decoder {
             vk: None,
             stream: StreamFormat::SDR_420_8,
             entered_rungs: 0,
+            retiring: None,
             #[cfg(windows)]
             d3d11_import: false,
             #[cfg(windows)]
@@ -1741,7 +1752,9 @@ impl Decoder {
     /// site cannot forget [`Self::entered_rungs`] and loop the ladder.
     fn install(&mut self, backend: Backend) {
         self.entered_rungs |= rung_bit(&backend);
-        self.backend = backend;
+        if let Backend::NativeVulkan(old) = std::mem::replace(&mut self.backend, backend) {
+            self.retiring = Some((old, 0, std::time::Instant::now()));
+        }
         self.vaapi_fails = 0;
         self.first_fail = None;
         self.delivered = false;
@@ -1825,6 +1838,22 @@ impl Decoder {
     /// alignment; `complete` is false for a partial delivery (PyroWave only,
     /// as localized blur).
     pub fn decode_frame(
+        &mut self,
+        au: &[u8],
+        user_flags: u32,
+        complete: bool,
+    ) -> Result<Option<DecodedImage>> {
+        let out = self.decode_frame_inner(au, user_flags, complete);
+        if let (Ok(Some(_)), Some(r)) = (&out, self.retiring.as_mut()) {
+            r.1 += 1;
+            if r.1 >= RETIRE_HANDOVERS && r.2.elapsed() >= RETIRE_MIN_AGE {
+                self.retiring = None;
+            }
+        }
+        out
+    }
+
+    fn decode_frame_inner(
         &mut self,
         au: &[u8],
         // Only the PyroWave backend reads the flags; without that feature the param is unused.

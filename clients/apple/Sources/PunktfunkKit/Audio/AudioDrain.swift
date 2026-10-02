@@ -8,6 +8,7 @@
 
 import AVFoundation
 import Foundation
+import PunktfunkCore
 
 private let log = ClientLog(category: "audio")
 
@@ -28,7 +29,7 @@ enum AudioDrain {
     let thread = Thread { [connection, flag, done] in
         defer { done.signal() }
         var drained = 0
-        var av = AvSync(channels: channels, rateHz: rateHz)
+        var av = AvSync(channels: channels, rateHz: rateHz, frameUs: frameUs)
         // The drought half of concealment: core heals a gap only once a later packet reveals
         // it, so a wire that simply goes quiet drains the ring into a de-prime whose re-prime is
         // a longer artifact than the missing audio. Given the SESSION's frame, like the ring —
@@ -54,6 +55,11 @@ enum AudioDrain {
                 // 2 ms is not judged on a 5 ms clock.
                 pcm = try connection.nextAudioPcm(
                     timeoutMs: decoded ? UInt32(frameMS) : 100)
+            } catch PunktfunkClientError.status(let rc)
+                where rc == PUNKTFUNK_STATUS_BAD_PACKET.rawValue
+            {
+                // One undecodable packet costs that packet, as on the desktop: not the audio.
+                return true
             } catch {
                 return false // session closed
             }

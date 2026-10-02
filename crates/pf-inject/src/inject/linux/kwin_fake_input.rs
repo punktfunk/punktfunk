@@ -164,6 +164,10 @@ impl Dispatch<WlRegistry, ()> for State {
                         if let Some(x) = &o.xdg_output {
                             x.destroy();
                         }
+                        // The connection outlives every virtual head: release its proxy too.
+                        if o.wl_output.version() >= 3 {
+                            o.wl_output.release();
+                        }
                         false
                     } else {
                         true

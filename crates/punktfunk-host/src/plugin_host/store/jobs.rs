@@ -383,22 +383,44 @@ fn run_install(id: &str, plan: Plan, plugin_tokens: &crate::mgmt::PluginTokens) 
         }
     })?;
 
-    if let (Some(want), Some(got)) = (plan.version.as_deref(), installed.version.as_deref()) {
-        if want != got {
-            // Do not leave an unreviewed version under a verified badge.
-            log_line(id, format!("rolling back: expected {want}, found {got}"));
-            set_phase(id, "rolling back");
-            let _ = run_runner(
-                id,
-                &[
-                    "remove".to_string(),
-                    pkg.clone(),
-                    "--plugins".to_string(),
-                    dir.to_string_lossy().into_owned(),
-                ],
-            );
-            bail!("installed {pkg}@{got} but the catalog pinned {want} — rolled back");
-        }
+    // Do not leave an unreviewed version under a verified badge. The pin is checked again on
+    // what bun fetched: the check above asked the registry separately, which can answer bun
+    // with other bytes.
+    let drift = match (plan.version.as_deref(), installed.version.as_deref()) {
+        (Some(want), Some(got)) if want != got => Some(format!(
+            "installed {pkg}@{got} but the catalog pinned {want}"
+        )),
+        (_, Some(got)) => plan.integrity.as_deref().and_then(|want| {
+            let lock = std::fs::read_to_string(dir.join("bun.lock")).ok();
+            match lock.as_deref().and_then(|l| locked_integrity(l, &pkg, got)) {
+                Some(locked) if locked != want => Some(format!(
+                    "bun installed {pkg}@{got} as {locked} but the catalog pins {want}"
+                )),
+                Some(_) => None,
+                None => {
+                    log_line(
+                        id,
+                        format!("integrity not re-checked: no bun.lock entry for {pkg}"),
+                    );
+                    None
+                }
+            }
+        }),
+        _ => None,
+    };
+    if let Some(why) = drift {
+        log_line(id, format!("rolling back: {why}"));
+        set_phase(id, "rolling back");
+        let _ = run_runner(
+            id,
+            &[
+                "remove".to_string(),
+                pkg.clone(),
+                "--plugins".to_string(),
+                dir.to_string_lossy().into_owned(),
+            ],
+        );
+        bail!("{why} — rolled back");
     }
 
     set_phase(id, "recording");
@@ -482,13 +504,17 @@ fn restart_runner(id: &str) {
 fn run_runner(id: &str, args: &[String]) -> Result<()> {
     let (program, prefix) = crate::plugins::runner_command()?;
     tracing::info!(job = %id, program = %program.display(), ?args, "spawning the plugin runner");
-    let mut child = Command::new(&program)
-        .args(&prefix)
+    let mut cmd = Command::new(&program);
+    cmd.args(&prefix)
         .args(args)
         // `bun add` must not block on a prompt inside a service.
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Own process group, so a timeout also ends the bun the runner started.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("run the plugin runner ({})", program.display()))?;
 
@@ -508,6 +534,13 @@ fn run_runner(id: &str, args: &[String]) -> Result<()> {
         match child.try_wait().context("wait for the plugin runner")? {
             Some(status) => break status,
             None if Instant::now() >= deadline => {
+                #[cfg(unix)]
+                {
+                    // SAFETY: kill(2) with a negative pid signals the process group created
+                    // above; no memory is touched.
+                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                }
+                #[cfg(not(unix))]
                 let _ = child.kill();
                 let _ = child.wait();
                 bail!(
@@ -583,9 +616,38 @@ fn registry_integrity(registry: &str, pkg: &str, version: &str) -> Result<String
         .context("the registry did not advertise an integrity hash for this version")
 }
 
+/// The integrity `bun.lock` records for the top-level `pkg@version`. The text lockfile keeps
+/// one package per line, its integrity the last string: `"pkg": ["pkg@1.0.0", "", {…}, "sha512-…"],`.
+fn locked_integrity(lock: &str, pkg: &str, version: &str) -> Option<String> {
+    let head = format!("\"{pkg}\": [\"{pkg}@{version}\",");
+    let line = lock.lines().map(str::trim).find(|l| l.starts_with(&head))?;
+    let tail = line.trim_end_matches(',').strip_suffix(']')?.trim_end();
+    let tail = tail.strip_suffix('"')?;
+    Some(tail[tail.rfind('"')? + 1..].to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locked_integrity_reads_the_top_level_entry() {
+        let lock = r#"{
+  "packages": {
+    "@p/plugin-x": ["@p/plugin-x@1.2.0", "", { "dependencies": { "a": "^1" } }, "sha512-top=="],
+    "@p/plugin-y/@p/plugin-x": ["@p/plugin-x@0.9.0", "", {}, "sha512-nested=="],
+    "@p/plugin-z": ["@p/plugin-z@2.0.0", "https://r.example/", {}, "sha512-last=="]
+  }
+}"#;
+        let got = |pkg, v| locked_integrity(lock, pkg, v);
+        assert_eq!(got("@p/plugin-x", "1.2.0").as_deref(), Some("sha512-top=="));
+        assert_eq!(
+            got("@p/plugin-z", "2.0.0").as_deref(),
+            Some("sha512-last==")
+        );
+        assert_eq!(got("@p/plugin-x", "0.9.0"), None);
+        assert_eq!(got("@p/plugin-q", "1.0.0"), None);
+    }
 
     #[test]
     fn spec_validation_refuses_the_dangerous_shapes() {

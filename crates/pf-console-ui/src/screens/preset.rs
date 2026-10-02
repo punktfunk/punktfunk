@@ -515,7 +515,9 @@ impl PresetEdit {
         true
     }
 
-    /// Step the row at the preset's value and keep what changed as its override.
+    /// Step the row at the preset's value and keep what changed as its override. Android's
+    /// safe-area mode is a device setting no preset holds: a Resolution step that moved only
+    /// that steps on, or Native could never be left.
     fn step(
         &mut self,
         id: super::settings::RowId,
@@ -525,8 +527,18 @@ impl PresetEdit {
         fx: &mut Outbox,
     ) -> Option<MenuPulse> {
         let before = self.overlay.apply(ctx.settings);
+        let overlay = &self.overlay;
         let after = self.in_preset(ctx, |ctx| {
-            adjust(id, delta, wrap, ctx).then(|| ctx.settings.clone())
+            if !adjust(id, delta, wrap, ctx) {
+                return None;
+            }
+            let mut held = overlay.clone();
+            held.absorb(&before, ctx.settings);
+            let unheld = id == super::settings::RowId::Resolution && held == *overlay;
+            if unheld && !adjust(id, delta, wrap, ctx) {
+                return None;
+            }
+            Some(ctx.settings.clone())
         });
         let Some(after) = after else {
             return Some(MenuPulse::Boundary);
@@ -620,6 +632,29 @@ mod tests {
         let mut fx = Outbox::default();
         with_ctx(|ctx| s.menu(MenuEvent::Tertiary, ctx, &mut fx));
         assert_eq!(saved(&fx).hdr_enabled, None, "back on the global value");
+    }
+
+    /// On a phone the step from Native lands on the first size, not on the safe-area slot
+    /// the preset cannot hold.
+    #[test]
+    fn a_preset_resolution_steps_past_the_safe_area_slot() {
+        let mut s = PresetEdit::new("p1".into(), "Couch".into(), SettingsOverlay::default());
+        let mut settings = Settings::default();
+        let library = crate::library::LibraryShared::default();
+        let phone = crate::screens::Device {
+            platform: crate::platform::Platform::Android,
+            fallback_ui: true,
+            ..crate::screens::Device::test()
+        };
+        let mut ctx = Ctx {
+            device: &phone,
+            ..Ctx::test(&mut settings, &library)
+        };
+        let mut fx = Outbox::default();
+        let pulse = s.step(RowId::Resolution, 1, false, &mut ctx, &mut fx);
+        assert!(matches!(pulse, Some(MenuPulse::Move)));
+        let o = saved(&fx);
+        assert_eq!((o.width, o.height), (Some(1280), Some(720)));
     }
 
     /// Only rows a preset can hold are listed, each under its section.

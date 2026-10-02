@@ -335,6 +335,17 @@ pub(crate) struct UsbipAttachment {
 
 impl Drop for UsbipAttachment {
     fn drop(&mut self) {
+        // The kernel frees a port when its connection dies, and another pad can hold it by now:
+        // detach only while it still carries our socket. A CLI attach has no fd to compare.
+        if let Some(sock) = &self._client_sock {
+            if !vhci_port_holds(self.vhci_port, sock.as_raw_fd()) {
+                tracing::debug!(
+                    port = self.vhci_port,
+                    "vhci port no longer ours — not detaching"
+                );
+                return;
+            }
+        }
         if let Err(e) = vhci_detach(self.vhci_port) {
             tracing::debug!(port = self.vhci_port, error = %e, "vhci detach failed (device may already be gone)");
         }
@@ -608,6 +619,22 @@ fn parse_status_row(line: &str) -> Option<(u16, bool, u32)> {
 /// Kernel `VDEV_ST_NULL`: a free vhci port.
 const VDEV_ST_NULL: u32 = 4;
 
+/// Whether `port` is in use on socket `fd`. An unreadable `status` answers yes, the old detach.
+fn vhci_port_holds(port: u16, fd: std::os::fd::RawFd) -> bool {
+    read_status().map_or(true, |s| s.lines().any(|l| row_holds(l, port, fd)))
+}
+
+/// One `status` row is `port`, in use, on socket `fd` (its `sockfd` column).
+fn row_holds(line: &str, port: u16, fd: std::os::fd::RawFd) -> bool {
+    let t: Vec<&str> = line.split_whitespace().collect();
+    let sockfd = match t.first() {
+        Some(&"hs") | Some(&"ss") => t.get(5),
+        _ => t.get(4),
+    };
+    parse_status_row(line).is_some_and(|(p, _, sta)| p == port && sta != VDEV_ST_NULL)
+        && sockfd.and_then(|s| s.parse::<std::os::fd::RawFd>().ok()) == Some(fd)
+}
+
 /// Free port matching speed (`usbip_speed >= 5` is SuperSpeed).
 fn vhci_find_free_port(usbip_speed: u32) -> Result<u16> {
     let want_ss = usbip_speed >= 5;
@@ -711,6 +738,11 @@ mod tests {
             None
         );
         assert_eq!(parse_status_row(""), None);
+        // Ownership is the sockfd column: a freed port, or one reused on another socket, is not ours.
+        assert!(row_holds("hs  0000 006 002 00010002 000017 1-1", 0, 17));
+        assert!(!row_holds("hs  0000 006 002 00010002 000018 1-1", 0, 17));
+        assert!(!row_holds("hs  0000 004 000 00000000 000000 0-0", 0, 0));
+        assert!(row_holds("0001 006 002 00010002 000017 1-1", 1, 17));
     }
 
     #[test]

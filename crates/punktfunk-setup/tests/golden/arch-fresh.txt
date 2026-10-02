@@ -21,7 +21,7 @@
 ==> Firewall
   ok no active firewall found — nothing to open (https://docs.punktfunk.unom.io/docs/ports if you add one later)
 ==> Starting the host and the web console
-  + systemctl --user enable --now punktfunk-host punktfunk-web
+  + systemctl --user enable --now punktfunk-host punktfunk-web punktfunk-scripting
   + certutil -A -d sql:/box/home/.pki/nssdb -n punktfunk-console -t C,, -i /box/config/punktfunk/native-cert.pem
 ==> Checking
 

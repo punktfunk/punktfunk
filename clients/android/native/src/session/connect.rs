@@ -604,6 +604,7 @@ fn connect(req: ConnectRequest) -> jlong {
                 stats: Arc::new(crate::stats::VideoStats::new(client.hud_shared())),
                 client,
                 video: Mutex::new(None),
+                video_started: std::sync::atomic::AtomicBool::new(false),
                 drain: Mutex::new(None),
                 #[cfg(target_os = "android")]
                 audio: Mutex::new(None),
