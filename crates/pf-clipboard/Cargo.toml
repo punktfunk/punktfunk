@@ -39,6 +39,8 @@ libc = "0.2"
 wayland-client = "0.31"
 # `staging`: `ext_data_control_v1` (the session-clipboard protocol) ships in the staging set.
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+# gamescope's clipboard lives on its Xwayland as ICCCM selections; `xfixes` reports owner changes.
+x11rb = { version = "0.14", default-features = false, features = ["xfixes"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The Win32 clipboard on a hidden message-loop window: `WM_CLIPBOARDUPDATE` listener + OLE

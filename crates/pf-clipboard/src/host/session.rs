@@ -32,10 +32,11 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 pub async fn start(
     conn: quinn::Connection,
     clip_enabled: Arc<AtomicBool>,
+    target: crate::ClipTarget,
     cmd_rx: UnboundedReceiver<ClipCoordCmd>,
     offer_tx: UnboundedSender<ClipOffer>,
 ) -> bool {
-    match HostClipboard::open().await {
+    match HostClipboard::open(target).await {
         Ok((backend, clip_rx)) => {
             tokio::spawn(run(
                 conn,

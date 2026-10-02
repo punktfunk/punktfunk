@@ -6,9 +6,12 @@
 //!
 //! Linux prefers [`wayland`] (`ext-data-control-v1`). GNOME has no data-control;
 //! [`mutter`] uses `org.gnome.Mutter.RemoteDesktop.Session` directly — the xdg
-//! portal needs an interactive grant a headless host cannot answer.
+//! portal needs an interactive grant a headless host cannot answer. A gamescope
+//! session uses [`gamescope`], text on its Xwayland.
 //! [`windows`] watches `WM_CLIPBOARDUPDATE` and serves via `WM_RENDERFORMAT`.
 
+#[cfg(target_os = "linux")]
+mod gamescope;
 #[cfg(target_os = "linux")]
 mod mutter;
 #[cfg(target_os = "linux")]
@@ -105,18 +108,26 @@ pub enum HostClipboard {
     DataControl(Box<wayland::ClipboardBackend>),
     #[cfg(target_os = "linux")]
     Mutter(mutter::MutterClipboard),
+    #[cfg(target_os = "linux")]
+    Gamescope(gamescope::GamescopeClipboard),
     #[cfg(target_os = "windows")]
     Windows(windows::WindowsClipboard),
 }
 
 impl HostClipboard {
-    /// No compositor (gamescope) → error; caller reports `BACKEND_UNAVAILABLE`.
-    pub async fn open() -> anyhow::Result<(
+    /// No clipboard the session can reach → error; caller reports `BACKEND_UNAVAILABLE`.
+    pub async fn open(
+        target: crate::ClipTarget,
+    ) -> anyhow::Result<(
         HostClipboard,
         tokio::sync::mpsc::UnboundedReceiver<ClipEvent>,
     )> {
         #[cfg(target_os = "linux")]
         {
+            if let crate::ClipTarget::Gamescope(xwayland) = target {
+                let (g, rx) = gamescope::GamescopeClipboard::open(xwayland)?;
+                return Ok((HostClipboard::Gamescope(g), rx));
+            }
             // Bind does blocking Wayland roundtrips; keep them off the reactor.
             let dc = tokio::task::spawn_blocking(wayland::ClipboardBackend::open)
                 .await
@@ -135,6 +146,7 @@ impl HostClipboard {
         }
         #[cfg(target_os = "windows")]
         {
+            let _ = target;
             let (b, rx) = windows::WindowsClipboard::open().await?;
             Ok((HostClipboard::Windows(b), rx))
         }
@@ -147,6 +159,8 @@ impl HostClipboard {
             HostClipboard::DataControl(b) => b.current_wire_mimes(),
             #[cfg(target_os = "linux")]
             HostClipboard::Mutter(m) => m.current_wire_mimes(),
+            #[cfg(target_os = "linux")]
+            HostClipboard::Gamescope(g) => g.current_wire_mimes(),
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => w.current_wire_mimes(),
         }
@@ -161,6 +175,8 @@ impl HostClipboard {
                 m.set_offer(wire_mimes);
                 Ok(())
             }
+            #[cfg(target_os = "linux")]
+            HostClipboard::Gamescope(g) => g.set_offer(wire_mimes),
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => {
                 w.set_offer(wire_mimes);
@@ -178,6 +194,8 @@ impl HostClipboard {
                 m.clear_offer();
                 Ok(())
             }
+            #[cfg(target_os = "linux")]
+            HostClipboard::Gamescope(g) => g.clear_offer(),
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => {
                 w.clear_offer();
@@ -186,8 +204,8 @@ impl HostClipboard {
         }
     }
 
-    /// Data-control blocks on a pipe (offloaded); Mutter round-trips D-Bus;
-    /// Windows reads on a blocking thread.
+    /// Data-control blocks on a pipe (offloaded); Mutter round-trips D-Bus; gamescope
+    /// converts on its Xwayland; Windows reads on a blocking thread.
     pub async fn read_current(self: &Arc<Self>, wire_mime: &str) -> anyhow::Result<Vec<u8>> {
         match &**self {
             #[cfg(target_os = "linux")]
@@ -203,6 +221,8 @@ impl HostClipboard {
             }
             #[cfg(target_os = "linux")]
             HostClipboard::Mutter(m) => m.read_current(wire_mime).await,
+            #[cfg(target_os = "linux")]
+            HostClipboard::Gamescope(g) => g.read_current(wire_mime).await,
             #[cfg(target_os = "windows")]
             HostClipboard::Windows(w) => w.read_current(wire_mime).await,
         }

@@ -132,7 +132,8 @@ chain, and what to check when a stream comes out SDR, is on [HDR](/docs/hdr#linu
 - **Touch is a single-finger pointer**: taps and drags work, pinch doesn't. The trackpad and pointer
   [touch modes](/docs/input#touch-modes) are unaffected.
 - **Desktop [mouse mode](/docs/input#mouse-modes) is unavailable**; the mouse stays captured.
-- **No [clipboard](/docs/clipboard)**: gamescope offers the host none.
+- **The [clipboard](/docs/clipboard) carries text only**: gamescope keeps one plain-text
+  clipboard.
 
 To stream the Plasma desktop of a Steam box instead, see [KDE Plasma](/docs/kde).
 
