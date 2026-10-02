@@ -57,7 +57,7 @@ restart*.
 | Voice chat apps (Linux, Windows) | `PUNKTFUNK_AUDIO_VOICE_APPS` | comma list | — | next session |
 | Controller speaker (Linux, Windows) | `PUNKTFUNK_PAD_AUDIO` | `on` · `off` | `on` | next session |
 | Audio redundancy | `PUNKTFUNK_AUDIO_REDUNDANCY` | `auto` · `on` · `off` | `auto` | next session |
-| Default gamepad (Linux, Windows) | `PUNKTFUNK_GAMEPAD` | `auto` · `xbox360` · `xboxone` · `xboxelite` · `dualsense` · `dualsenseedge` · `dualshock4` · `steamdeck` · `steamcontroller` · `steamcontroller2` · `switchpro` | `auto` | next session |
+| Default gamepad (Linux, Windows) | `PUNKTFUNK_GAMEPAD` | `auto` · `xbox360` · `xboxone` · `xboxelite` · `dualsense` · `dualsenseedge` · `dualshock4` · `steamdeck` · `steamcontroller` · `steamcontroller2` · `steamcontroller2puck` · `switchpro` · `joyconpair` · `switch2pro` · `switch2gamecube` · `8bitdoultimate2` · `8bitdopro2` · `8bitdopro3` · `horipadsteam` | `auto` | next session |
 | Pen input (Linux, Windows) | `PUNKTFUNK_PEN` | `on` · `off` | `on` | next session |
 | Steam USB gadget (Linux) | `PUNKTFUNK_STEAM_GADGET` | `auto` · `on` · `off` | `auto` | next session |
 | DualSense over USB/IP (Linux) | `PUNKTFUNK_DUALSENSE_USBIP` | `on` · `off` | `off` | next session |
@@ -83,7 +83,8 @@ restart*.
 
 The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc` · `amf` · `qsv` ·
 `mf`, and **Default gamepad** takes `auto` · `xbox360` · `xboxone` · `xboxelite` · `dualsense` ·
-`dualsenseedge` · `dualshock4` · `steamdeck` · `steamcontroller2`. Older names still work:
+`dualsenseedge` · `dualshock4` · `steamdeck` · `steamcontroller2` · `switchpro` · `joyconpair` ·
+`8bitdoultimate2` · `8bitdopro2` · `8bitdopro3` · `horipadsteam`. Older names still work:
 `PUNKTFUNK_GS_ENCRYPT`, `PUNKTFUNK_GS_ADAPT`, `PUNKTFUNK_HOST_AUDIO=1` (**Where audio plays** =
 `host_and_client`) and `PUNKTFUNK_KEEP_DEFAULT=1` (= `follow_default`).
 
