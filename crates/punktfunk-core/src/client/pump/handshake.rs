@@ -19,9 +19,7 @@ pub(super) struct HandshakeOut {
 pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<HandshakeOut> {
     let p = &args.params;
     let (pin, shutdown) = (p.pin, &args.shared.shutdown);
-    let remote: std::net::SocketAddr = join_host_port(&p.host, p.port)
-        .parse()
-        .map_err(|_| PunktfunkError::InvalidArg("host:port"))?;
+    let remote = dial_addr(&p.host, p.port).await?;
     let (ep, observed) = endpoint::client_pinned_with_identity(
         pin,
         p.identity.as_ref().map(|(c, k)| (c.as_str(), k.as_str())),

@@ -1,7 +1,7 @@
 //! The client-side PIN pairing ceremony (SPAKE2): `NativeClient::pair`.
 
 use super::worker::reject_from_close;
-use super::{join_host_port, NativeClient};
+use super::{dial_addr, NativeClient};
 use crate::error::{PunktfunkError, Result};
 use crate::quic::{endpoint, io};
 use std::time::Duration;
@@ -28,11 +28,9 @@ impl NativeClient {
             .map_err(PunktfunkError::Io)?;
         let pin = pin.to_string();
         let name = name.to_string();
-        let remote: std::net::SocketAddr = join_host_port(host, port)
-            .parse()
-            .map_err(|_| PunktfunkError::InvalidArg("host:port"))?;
 
         rt.block_on(async move {
+            let remote = dial_addr(host, port).await?;
             // quinn's driver is spawned on the current runtime.
             let (ep, observed) = endpoint::client_pinned_with_identity(None, Some(identity));
             let ep = ep.map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
