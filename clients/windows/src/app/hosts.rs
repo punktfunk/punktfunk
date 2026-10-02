@@ -405,7 +405,8 @@ fn edit_editor(
             .header("Preset")
             .selected_index(current as i32)
             .on_selection_changed(move |i: i32| {
-                let Some(id) = ids.get(i.max(0) as usize) else {
+                // -1 is "nothing selected": not a pick of the first preset.
+                let Some(id) = usize::try_from(i).ok().and_then(|i| ids.get(i)) else {
                     return;
                 };
                 let mut known = KnownHosts::load();

@@ -305,10 +305,11 @@ fn sort_row(current: SortKey, on_pick: impl Fn(SortKey) + 'static) -> Element {
         ComboBox::new(names)
             .selected_index(index as i32)
             .on_selection_changed(move |i: i32| {
-                let key = SortKey::ALL
-                    .get(i.max(0) as usize)
-                    .copied()
-                    .unwrap_or_default();
+                // -1 is "nothing selected": not a pick of the first sort.
+                let Some(key) = usize::try_from(i).ok().and_then(|i| SortKey::ALL.get(i)) else {
+                    return;
+                };
+                let key = *key;
                 let mut settings = Settings::load();
                 settings.library_sort = key.id().to_string();
                 settings.save();

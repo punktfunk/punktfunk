@@ -591,8 +591,12 @@ fn setting_combo(
     ComboBox::new(names)
         .selected_index(current as i32)
         .on_selection_changed(move |i: i32| {
+            // -1 is "nothing selected", which an in-place items rebuild raises: not a pick.
+            let Ok(i) = usize::try_from(i) else {
+                return;
+            };
             commit(&ctx, &scope, (rev, &set_rev), |s| {
-                apply(s, (i.max(0) as usize).min(max));
+                apply(s, i.min(max));
             });
         })
 }
@@ -1610,7 +1614,10 @@ fn controllers_section(cx: &Cx) -> Vec<Element> {
         ComboBox::new(fwd_names)
             .selected_index(fwd_i as i32)
             .on_selection_changed(move |i: i32| {
-                let sel = i.max(0) as usize;
+                // -1 is "nothing selected" (a pad list rebuilt in place): not a pick.
+                let Ok(sel) = usize::try_from(i) else {
+                    return;
+                };
                 let key = if sel == 0 {
                     None
                 } else {
