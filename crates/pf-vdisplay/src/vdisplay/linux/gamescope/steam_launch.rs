@@ -188,7 +188,7 @@ pub(super) const GDK_X11: (&str, &str) = ("GDK_BACKEND", "x11");
 
 /// Points a flatpak at gamescope's socket under a `wayland-` name. Flatpak reads an unset
 /// `WAYLAND_DISPLAY` as `wayland-0`, the desktop's; from 1.19 it reads any other name that way too.
-const FLATPAK_WAYLAND: &str = "ln -sfn \"$GAMESCOPE_WAYLAND_DISPLAY\" \
+pub(super) const FLATPAK_WAYLAND: &str = "ln -sfn \"$GAMESCOPE_WAYLAND_DISPLAY\" \
     \"$XDG_RUNTIME_DIR/wayland-$GAMESCOPE_WAYLAND_DISPLAY\" 2>/dev/null; \
     export WAYLAND_DISPLAY=\"wayland-$GAMESCOPE_WAYLAND_DISPLAY\"; ";
 

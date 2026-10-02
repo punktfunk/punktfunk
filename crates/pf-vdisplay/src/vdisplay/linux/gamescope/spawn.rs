@@ -205,7 +205,8 @@ pub(super) fn resolved_spawn_app(cmd: Option<&str>) -> Option<String> {
 /// `None` app is `sleep infinity`. The wrapper relays `LIBEI_SOCKET`, applies the
 /// nested environment, and runs the launch value as the shell command its source promises.
 /// The WSI layer stays out of gamescope's own Vulkan process. Only a flatpak sees gamescope's
-/// Wayland socket ([`shape_flatpak_command`]); everything else gets [`GDK_X11`].
+/// Wayland socket ([`shape_flatpak_command`], or the shim around a nested Steam); everything
+/// else gets [`GDK_X11`].
 #[allow(clippy::too_many_arguments)] // one cohesive spawn spec, one call site
 pub(super) fn spawn(
     w: u32,
@@ -278,12 +279,11 @@ pub(super) fn spawn(
     if let Some(home) = nested_seat_home {
         nested_env.extend(seat::env(home));
     }
-    let script = nested_wrapper_script(
-        &relay,
-        splash_exe.is_some(),
-        &nested_env,
-        &seat_sandbox_argv(iso, nested_seat_home.is_some()),
-    );
+    let mut filter = seat_sandbox_argv(iso, nested_seat_home.is_some());
+    if is_steam_launch(&app) {
+        filter = sandbox::with_flatpak_shim(filter);
+    }
+    let script = nested_wrapper_script(&relay, splash_exe.is_some(), &nested_env, &filter);
     cmd.args(["sh", "-c", &script, "sh"]);
     if let Some(exe) = &splash_exe {
         cmd.arg(exe);

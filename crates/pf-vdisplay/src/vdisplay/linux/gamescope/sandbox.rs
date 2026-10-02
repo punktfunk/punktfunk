@@ -74,9 +74,13 @@ pub(crate) fn plan(iso: Option<&crate::SessionIsolation>, has_seat_home: bool) -
 /// `bwrap` as an absolute path. The nested shell runs under gamescope's `PATH`, which is not
 /// ours, so the argv names the binary we resolved.
 fn bwrap_bin() -> Option<PathBuf> {
+    on_path("bwrap")
+}
+
+fn on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|d| d.join("bwrap"))
+        .map(|d| d.join(name))
         .find(|p| p.is_file())
 }
 
@@ -146,9 +150,226 @@ pub(crate) fn aux_nodes(dev: &Path) -> Vec<String> {
     out
 }
 
+/// Off-switch for [`with_flatpak_shim`].
+const FLATPAK_SHIM_ENV: &str = "PUNKTFUNK_GAMESCOPE_FLATPAK_SHIM";
+
+/// A local bwrap that has not answered by now never will.
+const NEST_PROBE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `filter` plus a shim over the flatpak binary, for everything the nested Steam starts.
+///
+/// Steam runs a shortcut's `/usr/bin/flatpak` by absolute path with Steam's own environment,
+/// which every game shares, so neither `PATH` nor `WAYLAND_DISPLAY` reaches the shortcut alone.
+/// The shim gives `flatpak run` what [`super::shape_flatpak_command`] gives a direct launch.
+/// `filter` is the seat sandbox's argv, or empty. It comes back unchanged when flatpak is not
+/// installed or bwrap cannot nest here, as pressure-vessel and flatpak must inside it.
+pub(crate) fn with_flatpak_shim(mut filter: Vec<String>) -> Vec<String> {
+    if pf_host_config::env_on(FLATPAK_SHIM_ENV) == Some(false) {
+        return filter;
+    }
+    let Some(flatpak) = on_path("flatpak").and_then(|p| std::fs::canonicalize(p).ok()) else {
+        return filter;
+    };
+    let bwrap = filter.first().map(PathBuf::from).or_else(bwrap_bin);
+    let Some(bwrap) = bwrap.filter(|b| nests(b)) else {
+        tracing::warn!(
+            "gamescope: bwrap cannot run here, so a Steam shortcut to a flatpak may open on the \
+             desktop instead of the stream — install bubblewrap and allow user namespaces"
+        );
+        return filter;
+    };
+    let dir = Path::new(&crate::session::runtime_dir()).join("punktfunk-flatpak");
+    let binds = match write_shim(&dir, &flatpak) {
+        Ok(binds) => binds,
+        Err(e) => {
+            tracing::warn!(dir = %dir.display(), error = %e, "gamescope: flatpak shim not written");
+            return filter;
+        }
+    };
+    if filter.is_empty() {
+        let root = ["--dev-bind", "/", "/", "--die-with-parent"];
+        filter.push(bwrap.to_string_lossy().into_owned());
+        filter.extend(root.map(String::from));
+    }
+    filter.extend(binds);
+    tracing::info!(
+        flatpak = %flatpak.display(),
+        "gamescope: the flatpaks this Steam starts get gamescope's Wayland socket and X11"
+    );
+    filter
+}
+
+/// Writes the shim under `dir` and returns the binds that put it over `real`. The real binary
+/// stays reachable at `flatpak.real`, an empty file outside the namespace.
+fn write_shim(dir: &Path, real: &Path) -> std::io::Result<Vec<String>> {
+    pf_paths::create_private_dir(dir)?;
+    let (shim, mount) = (dir.join("flatpak"), dir.join("flatpak.real"));
+    std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(&mount)?;
+    // A rename, never a rewrite: a running session's namespace still has the old file bound.
+    let tmp = dir.join(format!("flatpak.{}", std::process::id()));
+    std::fs::write(&tmp, shim_script(&mount))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    std::fs::rename(&tmp, &shim)?;
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    Ok(vec![
+        "--ro-bind".into(),
+        s(real),
+        s(&mount),
+        "--ro-bind".into(),
+        s(&shim),
+        s(real),
+    ])
+}
+
+/// Adds `--socket=x11` after `run` and points `WAYLAND_DISPLAY` at gamescope; any other flatpak
+/// command passes through.
+fn shim_script(real: &Path) -> String {
+    // `for a` walks the original arguments while `set --` rebuilds them; the first word that is
+    // not an option is the flatpak command.
+    let lines = [
+        "#!/bin/sh".to_string(),
+        "cmd=".into(),
+        "for a do".into(),
+        "shift".into(),
+        "set -- \"$@\" \"$a\"".into(),
+        "if [ -z \"$cmd\" ] && [ \"${a#-}\" = \"$a\" ]; then".into(),
+        "cmd=$a".into(),
+        "if [ \"$a\" = run ]; then set -- \"$@\" --socket=x11; fi".into(),
+        "fi".into(),
+        "done".into(),
+        format!("if [ \"$cmd\" = run ]; then {}fi", super::FLATPAK_WAYLAND),
+        format!("exec {} \"$@\"", super::shell_word(&real.to_string_lossy())),
+    ];
+    lines.join("\n") + "\n"
+}
+
+/// Whether bwrap runs nested here, as pressure-vessel and flatpak will inside the shim's
+/// namespace. Once per host: user namespaces do not come and go.
+fn nests(bwrap: &Path) -> bool {
+    static NESTS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NESTS.get_or_init(|| {
+        let mut cmd = std::process::Command::new(bwrap);
+        cmd.args(["--dev-bind", "/", "/", "--"])
+            .arg(bwrap)
+            .args(["--dev-bind", "/", "/", "--", "true"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        matches!(crate::proc::status_within(&mut cmd, NEST_PROBE), Ok(s) if s.success())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shim run against a stand-in flatpak that prints what it got.
+    fn run_shim(args: &[&str]) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "pf-flatpak-shim-{}-{}",
+            std::process::id(),
+            args.len()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real");
+        std::fs::write(
+            &real,
+            "#!/bin/sh\nprintf '%s|' \"$@\"\nprintf 'WL=%s' \"${WAYLAND_DISPLAY-unset}\"\n",
+        )
+        .unwrap();
+        let shim = dir.join("shim");
+        std::fs::write(&shim, shim_script(&real)).unwrap();
+        for p in [&real, &shim] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = std::process::Command::new(&shim)
+            .args(args)
+            .env("GAMESCOPE_WAYLAND_DISPLAY", "gamescope-3")
+            .env("XDG_RUNTIME_DIR", &dir)
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[test]
+    fn the_flatpak_shim_shapes_run_and_nothing_else() {
+        assert_eq!(
+            run_shim(&[
+                "--user",
+                "run",
+                "--branch=stable",
+                "org.x.Y",
+                "--fullscreen"
+            ]),
+            "--user|run|--socket=x11|--branch=stable|org.x.Y|--fullscreen|WL=wayland-gamescope-3"
+        );
+        // An app argument named `run` is the app's.
+        assert_eq!(
+            run_shim(&["run", "org.x.Y", "run"]),
+            "run|--socket=x11|org.x.Y|run|WL=wayland-gamescope-3"
+        );
+        assert_eq!(run_shim(&["info", "org.x.Y"]), "info|org.x.Y|WL=unset");
+    }
+
+    /// The whole mount namespace, as a normal user with `bwrap` and a stand-in `flatpak` first
+    /// on `PATH`: `cargo test -p pf-vdisplay --lib -- --ignored live_flatpak_shim`. A nested
+    /// `bwrap` must still run, as pressure-vessel and the real flatpak start one.
+    #[test]
+    #[ignore = "needs bwrap, user namespaces and a stand-in flatpak on PATH"]
+    fn live_flatpak_shim_covers_an_absolute_flatpak() {
+        let flatpak = std::fs::canonicalize(on_path("flatpak").unwrap()).unwrap();
+        let mut argv = with_flatpak_shim(Vec::new());
+        assert!(!argv.is_empty(), "the shim did not apply");
+        let inner = format!(
+            "{} --user run org.x.Y; {} --dev-bind / / true && echo nested-ok",
+            flatpak.display(),
+            bwrap_bin().unwrap().display()
+        );
+        argv.extend(["sh".into(), "-c".into(), inner]);
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("GAMESCOPE_WAYLAND_DISPLAY", "gamescope-5")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("--user|run|--socket=x11|org.x.Y|WL=wayland-gamescope-5"),
+            "{text} / {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("nested-ok"), "{text}");
+    }
+
+    /// The real binary is parked before the shim covers its path, and both are read-only.
+    #[test]
+    fn the_shim_binds_park_the_real_flatpak() {
+        let dir = std::env::temp_dir().join(format!("pf-flatpak-binds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let binds = write_shim(&dir, Path::new("/usr/bin/flatpak")).unwrap();
+        let spell = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        assert_eq!(
+            binds,
+            [
+                "--ro-bind".to_string(),
+                "/usr/bin/flatpak".into(),
+                spell("flatpak.real"),
+                "--ro-bind".into(),
+                spell("flatpak"),
+                "/usr/bin/flatpak".into(),
+            ]
+        );
+        assert!(dir.join("flatpak.real").is_file(), "the mount point exists");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn joined(argv: &[String], flag: &str) -> Vec<Vec<String>> {
         argv.iter()
