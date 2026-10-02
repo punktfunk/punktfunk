@@ -1086,11 +1086,13 @@ impl NvSession {
         };
         // The first frame after invalidation. A simultaneous forced IDR is itself the re-anchor.
         let anchor = std::mem::take(&mut self.pending_anchor) && flags == 0;
-        // The wave: an IDR flushes it, queue and all; its start frame asks for the sweep.
+        // An IDR flushes the wave, queue and all, and every picture from it on is clean; a
+        // wave's start frame asks for the sweep.
         if flags != 0 {
             self.wave = None;
             self.wave_spoiled = false;
             self.wave_queued = false;
+            self.wave_span = self.wave_span.map(|(s, close)| (s, close.min(pts as i64)));
         }
         let wave = self.wave;
         let mark = wave.map_or(WaveMark::None, |w| w.mark(self.wave_spoiled));
