@@ -1479,6 +1479,10 @@ impl Worker {
                 if !system_forward && matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1) {
                     continue;
                 }
+                // A trackpad click forwards as a surface, and its release never clears a bit.
+                if Self::steam_click_surface(slot, b).is_some() {
+                    continue;
+                }
                 if slot.pad.button(b) {
                     slot.held_buttons.push(bit);
                 }
