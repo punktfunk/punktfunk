@@ -269,7 +269,11 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     val spanned = layout == ScreenLayout.SPANNED
     // The POINTER grant gates every touch capture layer: "don't capture what can't land".
     val pointerOk = ui.accessGrants and SessionAccess.POINTER != 0
-    val companionPages = companionPages(pointerOk, padShown || activity?.gamepadRouter?.sendsEnabled() == true)
+    val companionPages = companionPages(
+        pointerOk,
+        padShown || activity?.gamepadRouter?.sendsEnabled() == true,
+        keyboard = ui.accessGrants and SessionAccess.KEYBOARD != 0,
+    )
     var companionPick by remember { mutableStateOf(CompanionMemory.page(context)) }
     val companionPage = companionPick.takeIf { it in companionPages } ?: CompanionPage.STATS
     LaunchedEffect(padShown) { if (padShown) companionPick = CompanionPage.PAD }
@@ -544,6 +548,7 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
             cfg = overlayCfg,
             actions = ringActions,
             haptics = haptics,
+            keys = KeySink { vk, down -> NativeBridge.nativeSendKey(handle, vk, down, 0) },
             trackpad = {
                 streamTouchInput(
                     NativeTouchSink(handle), null, ::videoFrame, trackpad = true,

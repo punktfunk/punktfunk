@@ -136,6 +136,19 @@ class ScreenshotTest {
         CompanionScene(io.unom.punktfunk.CompanionPage.ACTIONS)
     }
 
+    // The keyboard page: five rows on the Thor's panel, the function row above them on the add-on's.
+    @Test
+    @Config(sdk = [36], qualifiers = "w472dp-h411dp-xxhdpi")
+    fun companionKeyboard() = shootRoot("companion-keyboard", statusBar = false) {
+        CompanionScene(io.unom.punktfunk.CompanionPage.KEYBOARD)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
+    fun companionKeyboardWide() = shootRoot("companion-keyboard", statusBar = false, device = "addon") {
+        CompanionScene(io.unom.punktfunk.CompanionPage.KEYBOARD)
+    }
+
     // The touch flow is a Material dialog over the host grid (a separate window → shootScreen).
     @Test
     fun connecting() = shootScreen("connecting") {

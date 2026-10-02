@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.FilledTonalButton
@@ -72,13 +72,24 @@ import io.unom.punktfunk.components.SectionLabel
 internal enum class CompanionPage(val label: String, val icon: ImageVector) {
     STATS("Stats", Icons.Filled.Insights),
     ACTIONS("Actions", Icons.Filled.Apps),
+    KEYBOARD("Keyboard", Icons.Filled.Keyboard),
     TRACKPAD("Trackpad", Icons.Filled.TouchApp),
     PAD("Controller", Icons.Filled.SportsEsports),
 }
 
-/** The pages a session offers: the trackpad needs the pointer grant, the controller a pad the host takes. */
-internal fun companionPages(pointer: Boolean, pad: Boolean): List<CompanionPage> =
-    CompanionPage.entries.filter { (it != CompanionPage.TRACKPAD || pointer) && (it != CompanionPage.PAD || pad) }
+/**
+ * The pages a session offers: the keyboard needs its grant, the trackpad the pointer grant, the
+ * controller a pad the host takes.
+ */
+internal fun companionPages(pointer: Boolean, pad: Boolean, keyboard: Boolean): List<CompanionPage> =
+    CompanionPage.entries.filter {
+        when (it) {
+            CompanionPage.KEYBOARD -> keyboard
+            CompanionPage.TRACKPAD -> pointer
+            CompanionPage.PAD -> pad
+            else -> true
+        }
+    }
 
 /** Which screen of a pair holds the picture — or both (design/android-dual-screen.md §3). */
 enum class ScreenLayout(val label: String) {
@@ -142,11 +153,12 @@ internal data class PanelHeader(val title: String, val detail: String = "")
 
 /**
  * The actions page in three groups. Session: what this stream can do, in the sheet's order.
- * Host: the host's actions and the shortcuts. Leave: the ways out. Statistics has a page of its
- * own, and Send text needs a keyboard that the second display's unfocusable window cannot take.
+ * Host: the host's actions and the shortcuts. Leave: the ways out. Statistics and the keyboard
+ * have pages of their own, and Send text needs an IME that the second display's unfocusable
+ * window cannot take.
  */
 private val SESSION_SLOTS = listOf(
-    SlotId.Guide, SlotId.Qam, SlotId.Keyboard, SlotId.TouchMode, SlotId.PadMouse, SlotId.Pad,
+    SlotId.Guide, SlotId.Qam, SlotId.TouchMode, SlotId.PadMouse, SlotId.Pad,
     SlotId.SwapScreens, SlotId.Mic, SlotId.StreamMute,
 )
 private val EXIT_SLOTS = listOf(SlotId.DisconnectLinger, SlotId.EndStream)
@@ -159,9 +171,9 @@ private val PAGE_PADDING = PaddingValues(start = 4.dp, end = 16.dp)
 
 /**
  * The panel. [page] is one of [pages]; the controller's rail item connects the virtual pad when
- * none is up, since picking it is the ask. [trackpad] is the gesture handler its page runs, [pad]
- * the virtual controller at its page's size. Black, not the theme's surface: the panel is an OLED
- * under a game.
+ * none is up, since picking it is the ask. [keys] takes the keyboard page's edges, [trackpad] is
+ * the gesture handler its page runs, [pad] the virtual controller at its page's size. Black, not
+ * the theme's surface: the panel is an OLED under a game.
  */
 @Composable
 internal fun CompanionPanel(
@@ -175,6 +187,7 @@ internal fun CompanionPanel(
     cfg: OverlayConfig,
     actions: RingActions,
     haptics: ConsoleHaptics,
+    keys: KeySink,
     trackpad: suspend PointerInputScope.() -> Unit,
     pad: @Composable (IntSize) -> Unit,
     modifier: Modifier = Modifier,
@@ -201,6 +214,7 @@ internal fun CompanionPanel(
                 when (page) {
                     CompanionPage.STATS -> StatsPage(stats, tier, onTier)
                     CompanionPage.ACTIONS -> ActionsPage(cfg, actions, haptics)
+                    CompanionPage.KEYBOARD -> CompanionKeyboard(keys, haptics)
                     CompanionPage.TRACKPAD -> TrackpadPage(trackpad)
                     CompanionPage.PAD -> PadPage(actions, pad)
                 }
@@ -324,9 +338,10 @@ private fun ActionTile(spec: SlotSpec, armed: Boolean, onTap: () -> Unit) {
         shape = MaterialTheme.shapes.large,
         color = fill,
         contentColor = tint,
+        // One height for every tile, so a row never steps.
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 88.dp)
+            .height(108.dp)
             .semantics {
                 stateDescription = when {
                     armed -> "armed — press again"

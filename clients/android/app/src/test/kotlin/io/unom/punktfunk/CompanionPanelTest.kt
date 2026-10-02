@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
@@ -66,6 +67,7 @@ class CompanionPanelTest {
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val fired = mutableListOf<String>()
+    private val keys = mutableListOf<Pair<Int, Boolean>>()
 
     private fun show(page: CompanionPage, onPage: (CompanionPage) -> Unit = {}) {
         compose.setContent {
@@ -74,9 +76,34 @@ class CompanionPanelTest {
                 header = PanelHeader("Living Room PC", "1920×1080 · 60 Hz"),
                 stats = emptyList(), tier = StatsVerbosity.NORMAL, onTier = {},
                 cfg = OverlayConfig.platformDefault(), actions = fakeRingActions(fired),
-                haptics = ConsoleHaptics(null), trackpad = {}, pad = {},
+                haptics = ConsoleHaptics(null), keys = { vk, down -> keys += vk to down },
+                trackpad = {}, pad = {},
             )
         }
+    }
+
+    @Test
+    fun aKeyGoesDownAndUp() {
+        show(CompanionPage.KEYBOARD)
+        compose.onNodeWithText("a").performClick()
+        assertEquals(listOf(0x41 to true, 0x41 to false), keys)
+    }
+
+    @Test
+    fun aModifierHoldsUntilTheNextKeyLifts() {
+        show(CompanionPage.KEYBOARD)
+        compose.onAllNodesWithText("Shift")[0].performClick()
+        assertEquals(listOf(0x10 to true), keys)
+        compose.onNodeWithText("a").performClick()
+        assertEquals(listOf(0x10 to true, 0x41 to true, 0x41 to false, 0x10 to false), keys)
+    }
+
+    @Test
+    fun aSecondTapReleasesAModifier() {
+        show(CompanionPage.KEYBOARD)
+        compose.onAllNodesWithText("Ctrl")[0].performClick()
+        compose.onAllNodesWithText("Ctrl")[0].performClick()
+        assertEquals(listOf(0x11 to true, 0x11 to false), keys)
     }
 
     @Test
@@ -117,9 +144,13 @@ class CompanionPanelTest {
     fun pagesFollowTheGrants() {
         assertEquals(
             listOf(CompanionPage.STATS, CompanionPage.ACTIONS),
-            companionPages(pointer = false, pad = false),
+            companionPages(pointer = false, pad = false, keyboard = false),
         )
-        assertEquals(CompanionPage.entries, companionPages(pointer = true, pad = true))
+        assertEquals(
+            listOf(CompanionPage.STATS, CompanionPage.ACTIONS, CompanionPage.KEYBOARD),
+            companionPages(pointer = false, pad = false, keyboard = true),
+        )
+        assertEquals(CompanionPage.entries, companionPages(pointer = true, pad = true, keyboard = true))
     }
 
     @Test

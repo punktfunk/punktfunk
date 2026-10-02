@@ -569,6 +569,7 @@ internal fun CompanionScene(page: io.unom.punktfunk.CompanionPage) {
         cfg = io.unom.punktfunk.OverlayConfig.platformDefault(),
         actions = io.unom.punktfunk.fakeRingActions(),
         haptics = remember { io.unom.punktfunk.ConsoleHaptics(null) },
+        keys = { _, _ -> },
         trackpad = {},
         pad = {},
     )
