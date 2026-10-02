@@ -298,7 +298,7 @@ const PROOF_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 /// Opt-in fallback when there is no `SwDeviceCreate` instance id (`devgen`/`devcon`).
 /// Trusts the mailbox `driver_pid` — the path [`PadChannel::pump`] otherwise refuses.
 /// Per-boot, logged loudly. Normal pads and the resident mouse never need it.
-const TRUST_MAILBOX_ENV: &str = "PUNKTFUNK_PAD_CHANNEL_TRUST_MAILBOX";
+pub(super) const TRUST_MAILBOX_ENV: &str = "PUNKTFUNK_PAD_CHANNEL_TRUST_MAILBOX";
 
 /// Unanswered proof queries before one operator-facing warn.
 /// At [`PROOF_PROBE_INTERVAL`] this is ~5 s — past attach and the eager window.
