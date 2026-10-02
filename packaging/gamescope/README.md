@@ -40,6 +40,7 @@ The patches here add the missing half, and nothing else. See
 | `0027-pipewire-repaint-the-composited-cursor-on-a-shape-ch.patch` | With `--pipewire-composite-cursor`, the capture repaints on a shape change without motion (a busy cursor, the I-beam over text) and erases a cursor that hides without moving: `MouseCursor` counts its image rebuilds and the repaint test compares the count, and a hidden or empty image counts as not drawn, as in `MouseCursor::paint` | **Yes** — the same gap exists wherever the capture composites the cursor |
 | `0028-wlserver-forget-the-pointer-bound-when-its-surface-g.patch` | Forget the X window extent 0017 caches for the pointer bound when its `wlr_surface` is destroyed, so a surface allocated later at the same address never inherits the old window's bounds | **Yes** — with 0017 |
 | `0029-steamcompmgr-take-a-game-out-of-iconic-when-input-re.patch` | When input focus returns from an overlay to the focus window, set its `WM_STATE` back to Normal. A fullscreen game that minimized itself on losing input to the Steam overlay otherwise stays iconic: gamescope fakes the iconic state and clears it only on a focus-window change, Wine keeps the client window at 160x31, and the WSI layer stops bypassing Xwayland | **Yes** — upstream already clears it on a focus-window change |
+| `0030-pipewire-keep-the-planar-capture-s-RGB-intermediate-.patch` | An NV12/P010 capture composites into a pooled RGB texture and converts from there. Allocate that capture pool in device memory; only the screenshot pool is read through a mapping. Upstream made every pooled texture mappable, which is system RAM on a discrete GPU: on an RTX 5070 Ti at 2560×1440 the planar capture moved 5.5 GB/s each way over PCIe and held the GPU at 85 % for a desktop | **Yes** — any discrete-GPU consumer of the NV12 capture pays it |
 
 ### Why the headless patch matters
 
@@ -140,6 +141,7 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr22` | …and a planar (NV12/P010) capture dmabuf exports its chroma plane where the driver put it (no new capability: the host reads a second data block whenever one is there) |
 | `+pfhdr23` | …and the composited cursor follows a shape change or a hide, and the pointer bound forgets a closed window (no new capability) |
 | `+pfhdr24` | …and input back from an overlay takes the focused game out of iconic (no new capability) |
+| `+pfhdr25` | …and a planar capture composites through device memory; NVENC hosts offer NV12/P010 from this level |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
