@@ -7,7 +7,8 @@ Stream in a browser tab with nothing to install: you run the page once on your n
 browser there opens it. The browser client is a preview; the [native apps](/docs/clients) give the
 better picture and the lower latency.
 
-It needs a browser with WebTransport and WebCodecs: current Chrome, Edge, Safari or Firefox.
+It needs a browser with WebTransport and WebCodecs: current Chrome, Edge, Safari or Firefox. On a
+Samsung TV the same page installs as an app: [Samsung TV](/docs/samsung-tv).
 
 ## 1. Turn on browser streaming on the host
 
