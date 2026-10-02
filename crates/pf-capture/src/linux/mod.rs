@@ -1020,16 +1020,21 @@ pub struct WlCapturer {
     /// Holds the compositor output; dropped after the thread is joined, unless a
     /// capture-only rebuild took it back (`take_keepalive`).
     keepalive: Option<Box<dyn Send>>,
+    /// The output's mastering volume while the pool is 10-bit PQ. Fixed for the capture's
+    /// life: a re-lit output ends the thread and the rebuild reads it again.
+    hdr_meta: Option<pf_frame::HdrMeta>,
 }
 
 impl WlCapturer {
     /// Open the named compositor output with identity-scoped failure health.
     /// Missing protocol/output or no consumer-importable dmabuf keeps the portal path,
-    /// so a failure hands `keepalive` back for it.
+    /// so a failure hands `keepalive` back for it. `want_hdr` captures the output's
+    /// packed 10-bit buffer and fails unless the output is lit in BT.2020 PQ.
     pub fn open(
         output_name: String,
         keepalive: Box<dyn Send>,
         policy: ZeroCopyPolicy,
+        want_hdr: bool,
     ) -> std::result::Result<WlCapturer, (anyhow::Error, Box<dyn Send>)> {
         let slot: FrameSlot = Arc::new(std::sync::Mutex::new(None));
         use std::hash::{Hash, Hasher};
@@ -1038,7 +1043,7 @@ impl WlCapturer {
         let identity = health_identity(hash.finish() | (1 << 63), &policy);
         let signals = CaptureSignals::new(pf_zerocopy::zero_copy_health(identity));
         signals.active.store(true, Ordering::Relaxed);
-        let h = match wl_capture::spawn(output_name.clone(), policy, slot, signals) {
+        let h = match wl_capture::spawn(output_name.clone(), policy, want_hdr, slot, signals) {
             Ok(h) => h,
             Err(e) => return Err((e, keepalive)),
         };
@@ -1050,6 +1055,7 @@ impl WlCapturer {
             quit: h.quit,
             join: Some(h.join),
             keepalive: Some(keepalive),
+            hdr_meta: h.hdr_meta,
         })
     }
 
@@ -1131,6 +1137,10 @@ impl Capturer for WlCapturer {
     fn take_keepalive(&mut self) -> Option<Box<dyn Send>> {
         self.keepalive.take()
     }
+
+    fn hdr_meta(&self) -> Option<pf_frame::HdrMeta> {
+        self.hdr_meta
+    }
 }
 
 impl Drop for WlCapturer {
@@ -1169,6 +1179,7 @@ mod pipewire;
 mod gbm_pool;
 // Direct `ext-image-copy-capture-v1` capture, with no portal and no PipeWire.
 mod wl_capture;
+pub(crate) use wl_capture::output_is_hdr10;
 // Negotiation POD builders and cursor-meta parser + CPU blits. Pure enough
 // to unit-test without a compositor.
 mod pw_cursor;
@@ -1280,6 +1291,7 @@ mod wl_capturer_tests {
             quit: Arc::new(AtomicBool::new(false)),
             join: None,
             keepalive: None,
+            hdr_meta: None,
         };
         edge.try_send(()).expect("empty channel");
         assert!(

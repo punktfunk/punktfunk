@@ -145,6 +145,10 @@ pub struct HyprlandDisplay {
     handoff_cast: bool,
     /// `mode_conflict: join`: the registry shares a live head and casts it for this session.
     join_live: bool,
+    /// The session negotiated BT.2020 PQ: the next `create` lights its head 10-bit HDR.
+    hdr: bool,
+    /// The client panel's volume, the HDR head's mastering target when known.
+    client_hdr: Option<pf_frame::HdrMeta>,
 }
 
 impl Drop for HyprlandDisplay {
@@ -173,6 +177,8 @@ impl HyprlandDisplay {
             pending_cast: None,
             handoff_cast: false,
             join_live: false,
+            hdr: false,
+            client_hdr: None,
         })
     }
 
@@ -315,6 +321,19 @@ impl VirtualDisplay for HyprlandDisplay {
         self.hw_cursor
     }
 
+    fn set_client_hdr(&mut self, hdr: Option<pf_frame::HdrMeta>) {
+        self.client_hdr = hdr;
+    }
+
+    fn set_hdr(&mut self, on: bool) {
+        self.hdr = on;
+    }
+
+    fn hdr(&self) -> bool {
+        // Reuse key: an sRGB head handed to an HDR session would be captured as PQ.
+        self.hdr
+    }
+
     fn last_portal_cursor_mode(&self) -> Option<crate::PortalCursorMode> {
         self.last_cursor_mode
     }
@@ -348,7 +367,9 @@ impl VirtualDisplay for HyprlandDisplay {
             .with_context(|| format!("waiting for headless output {name} to appear"))?;
 
         // Client mode is also the frame clock: a headless output is timer-paced from it.
-        set_monitor_rule(&name, mode).with_context(|| format!("set monitor rule for {name}"))?;
+        let colour =
+            apply_monitor_rule(&name, mode, self.hdr.then(|| HdrRule::new(self.client_hdr)))
+                .with_context(|| format!("set monitor rule for {name}"))?;
 
         // Portal fd stays off this output so the registry can linger the named
         // head. [`session_cast_for`] hands the fd to the session, not the pool.
@@ -373,6 +394,7 @@ impl VirtualDisplay for HyprlandDisplay {
             h = mode.height,
             hz = mode.refresh_hz,
             cursor = cursor_mode.name(),
+            hdr = colour.is_some(),
             "hyprland headless output ready"
         );
         // Last, so no failure path unwinds past the restore hand-off.
@@ -383,7 +405,7 @@ impl VirtualDisplay for HyprlandDisplay {
             adopt_active_workspace(&prev, &name);
         }
         let output_keepalive = OutputKeepalive {
-            _reload: watch_config_reloads(name.clone(), mode),
+            _reload: watch_config_reloads(name.clone(), mode, colour),
             _output: output,
         };
         let keepalive: Box<dyn Send> = match direct_cast {
@@ -482,10 +504,14 @@ fn start_cast(name: &str, hw_cursor: bool) -> Result<(OwnedFd, u32, crate::porta
 /// One subscription, not polling, so an idle session costs nothing — and one
 /// socket, so the window list rides this reader rather than opening a second.
 ///
-/// The MODE only. A reload also undoes `topology: exclusive` head disables, but
-/// re-disabling them here races teardown's [`restore_heads`] (`hyprctl reload`
-/// to re-light): the watcher and that restore do not share a lifetime.
-fn watch_config_reloads(name: String, mode: Mode) -> Option<ReloadWatcher> {
+/// The MODE and its colour only. A reload also undoes `topology: exclusive` head
+/// disables, but re-disabling them here races teardown's [`restore_heads`]
+/// (`hyprctl reload` to re-light): the watcher and that restore do not share a lifetime.
+fn watch_config_reloads(
+    name: String,
+    mode: Mode,
+    colour: Option<HdrRule>,
+) -> Option<ReloadWatcher> {
     let path = event_socket_path()?;
     let sock = match UnixStream::connect(&path) {
         Ok(s) => s,
@@ -525,7 +551,7 @@ fn watch_config_reloads(name: String, mode: Mode) -> Option<ReloadWatcher> {
                 output = %name, w = mode.width, h = mode.height,
                 "hyprland: config reloaded — re-applying the streamed head's monitor rule"
             );
-            if let Err(e) = set_monitor_rule(&name, mode) {
+            if let Err(e) = set_monitor_rule(&name, mode, colour) {
                 // Errors only when the head has no framebuffer — gone after a
                 // reload (teardown, or compositor restart). Stop.
                 tracing::warn!(
@@ -1496,6 +1522,107 @@ fn monitor_exists(name: &str) -> Result<bool> {
     Ok(monitor(name, false)?.is_some())
 }
 
+/// Colour rule for an HDR session's head: 10-bit, BT.2020 PQ, the EDID gates forced on
+/// (a headless output has no EDID), SDR content at the configured nits, and the client
+/// panel's volume as the mastering target when it sent one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HdrRule {
+    sdr_nits: u32,
+    /// Min cd/m² × 10000, max cd/m², max frame-average cd/m² — the client's panel.
+    volume: Option<(u32, u32, u16)>,
+}
+
+impl HdrRule {
+    fn new(client: Option<pf_frame::HdrMeta>) -> Self {
+        HdrRule {
+            sdr_nits: pf_host_config::config().gamescope_sdr_nits.unwrap_or(203),
+            volume: client.map(|m| {
+                (
+                    m.min_display_mastering_luminance,
+                    m.max_display_mastering_luminance / 10_000,
+                    m.max_fall,
+                )
+            }),
+        }
+    }
+
+    /// `key,value` pairs appended to the hyprlang `monitor` line.
+    fn hyprlang(&self) -> String {
+        let mut s = format!(
+            ",bitdepth,10,cm,hdr,supports_wide_color,1,supports_hdr,1,sdr_max_luminance,{}",
+            self.sdr_nits
+        );
+        if let Some((min, max, avg)) = self.volume {
+            s.push_str(&format!(",min_luminance,{}", f64::from(min) / 10_000.0));
+            if max > 0 {
+                s.push_str(&format!(",max_luminance,{max}"));
+            }
+            if avg > 0 {
+                s.push_str(&format!(",max_avg_luminance,{avg}"));
+            }
+        }
+        s
+    }
+
+    /// `key = value` fields appended inside `hl.monitor{}`.
+    fn lua(&self) -> String {
+        let mut s = format!(
+            ", bitdepth = 10, cm = \"hdr\", supports_wide_color = 1, supports_hdr = 1, \
+             sdr_max_luminance = {}",
+            self.sdr_nits
+        );
+        if let Some((min, max, avg)) = self.volume {
+            s.push_str(&format!(", min_luminance = {}", f64::from(min) / 10_000.0));
+            if max > 0 {
+                s.push_str(&format!(", max_luminance = {max}"));
+            }
+            if avg > 0 {
+                s.push_str(&format!(", max_avg_luminance = {avg}"));
+            }
+        }
+        s
+    }
+}
+
+/// A `hyprctl` `currentFormat` with ten bits per channel.
+fn ten_bit_format(format: &str) -> bool {
+    format.contains("2101010") || format.contains("1010102")
+}
+
+/// The head's `currentFormat` from `hyprctl -j monitors all`, or `None` if absent.
+fn monitor_format(name: &str) -> Option<String> {
+    monitor(name, true)
+        .ok()
+        .flatten()
+        .and_then(|m| m.get("currentFormat")?.as_str().map(str::to_owned))
+}
+
+/// [`set_monitor_rule`], HDR first. A compositor that rejects the colour keys, or backs
+/// them with an 8-bit framebuffer, gets the SDR rule instead; the latch tells the next
+/// handshake, and this session ends at its first HDR capture with the reconnect advice.
+fn apply_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result<Option<HdrRule>> {
+    let Some(rule) = colour else {
+        return set_monitor_rule(name, mode, None).map(|()| None);
+    };
+    let lit = match set_monitor_rule(name, mode, Some(rule)) {
+        Ok(()) => monitor_format(name).is_some_and(|f| ten_bit_format(&f)),
+        Err(e) => {
+            tracing::debug!(output = %name, error = %format!("{e:#}"), "HDR monitor rule rejected");
+            false
+        }
+    };
+    if lit {
+        return Ok(Some(rule));
+    }
+    tracing::warn!(
+        output = %name,
+        "Hyprland did not light the streamed head in 10-bit HDR — streaming SDR; this host \
+         offers SDR until it restarts"
+    );
+    pf_capture::note_hdr_capture_failed(pf_capture::HdrSource::VirtualOutput);
+    set_monitor_rule(name, mode, None).map(|()| None)
+}
+
 /// Set the client's exact mode on `name`, both config eras.
 ///
 /// `hyprctl keyword monitor NAME,WxH@Hz,auto,1` is hyprlang (the default,
@@ -1503,13 +1630,21 @@ fn monitor_exists(name: &str) -> Result<bool> {
 /// `hyprctl eval 'hl.monitor{…}'` only when `keyword` is gone. Either way,
 /// confirm the output adopted the mode — some forms print `ok` for a command
 /// they ignored. A headless output starts at 0×0; if neither form yields a
-/// usable size, the compositor could not back the mode.
-fn set_monitor_rule(name: &str, mode: Mode) -> Result<()> {
+/// usable size, the compositor could not back the mode. `colour` appends the
+/// HDR keys to both forms.
+fn set_monitor_rule(name: &str, mode: Mode, colour: Option<HdrRule>) -> Result<()> {
     let hz = mode.refresh_hz.max(1);
-    let spec = format!("{name},{}x{}@{hz},auto,1", mode.width, mode.height);
+    let spec = format!(
+        "{name},{}x{}@{hz},auto,1{}",
+        mode.width,
+        mode.height,
+        colour.map(|c| c.hyprlang()).unwrap_or_default()
+    );
     let lua = format!(
-        "hl.monitor{{ output = \"{name}\", mode = \"{}x{}@{hz}\", position = \"auto\", scale = 1 }}",
-        mode.width, mode.height
+        "hl.monitor{{ output = \"{name}\", mode = \"{}x{}@{hz}\", position = \"auto\", scale = 1{} }}",
+        mode.width,
+        mode.height,
+        colour.map(|c| c.lua()).unwrap_or_default()
     );
     let keyword: Vec<&str> = vec!["keyword", "monitor", &spec];
     let eval: Vec<&str> = vec!["eval", &lua];
@@ -2173,5 +2308,57 @@ mod tests {
                 "{said:?} must match a marker in hyprctl_dispatch"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod hdr_rule_tests {
+    use super::{ten_bit_format, HdrRule};
+
+    #[test]
+    fn the_hdr_rule_forces_the_edid_gates_a_headless_output_cannot_pass() {
+        let rule = HdrRule {
+            sdr_nits: 203,
+            volume: None,
+        };
+        assert_eq!(
+            rule.hyprlang(),
+            ",bitdepth,10,cm,hdr,supports_wide_color,1,supports_hdr,1,sdr_max_luminance,203"
+        );
+        assert_eq!(
+            rule.lua(),
+            ", bitdepth = 10, cm = \"hdr\", supports_wide_color = 1, supports_hdr = 1, \
+             sdr_max_luminance = 203"
+        );
+    }
+
+    #[test]
+    fn the_client_panel_volume_becomes_the_mastering_target() {
+        // 0.005 cd/m² min, 1000 cd/m² max, 400 cd/m² frame average.
+        let rule = HdrRule {
+            sdr_nits: 203,
+            volume: Some((50, 1000, 400)),
+        };
+        assert!(rule
+            .hyprlang()
+            .ends_with(",min_luminance,0.005,max_luminance,1000,max_avg_luminance,400"));
+        assert!(rule
+            .lua()
+            .ends_with(", min_luminance = 0.005, max_luminance = 1000, max_avg_luminance = 400"));
+        // Unknown max and average (0) are left to Hyprland's defaults.
+        let unknown = HdrRule {
+            sdr_nits: 203,
+            volume: Some((50, 0, 0)),
+        };
+        assert!(unknown.hyprlang().ends_with(",min_luminance,0.005"));
+    }
+
+    #[test]
+    fn only_a_ten_bit_current_format_counts_as_lit() {
+        assert!(ten_bit_format("XBGR2101010"));
+        assert!(ten_bit_format("ABGR2101010"));
+        assert!(ten_bit_format("RGBA1010102"));
+        assert!(!ten_bit_format("XRGB8888"));
+        assert!(!ten_bit_format("Invalid"));
     }
 }
