@@ -449,6 +449,13 @@ fn startup(args: &[String]) {
 
 fn real_main() -> Result<()> {
     take_env_credentials();
+    #[cfg(target_os = "linux")]
+    if let Some(value) = encode::anv_video_encode_flag() {
+        // SAFETY: right after `take_env_credentials`, so still single-threaded, and no Vulkan
+        // instance exists yet (Mesa reads the variable when its ICD loads).
+        unsafe { std::env::set_var("ANV_DEBUG", &value) };
+        tracing::debug!(value, "ANV_DEBUG opted into Mesa Vulkan Video encode");
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if matches!(

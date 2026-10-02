@@ -287,7 +287,8 @@ impl ProfileStack {
 }
 
 /// First physical device with a `VIDEO_ENCODE` queue family advertising `codec_op` (llvmpipe
-/// advertises none). Shared by [`VulkanVideoEncoder::open_inner`] and [`probe_encode_caps`].
+/// advertises none) whose driver [`super::vk_util::encode_trusted`] accepts. Shared by
+/// [`VulkanVideoEncoder::open_inner`] and [`probe_encode_caps`].
 ///
 /// # Safety
 /// `instance` must be a live `ash::Instance` and `devices` handles enumerated from it.
@@ -297,6 +298,9 @@ unsafe fn find_encode_device(
     codec_op: vk::VideoCodecOperationFlagsKHR,
 ) -> Option<(vk::PhysicalDevice, u32)> {
     for &pd in devices {
+        if !super::vk_util::encode_trusted(&instance.get_physical_device_properties(pd)) {
+            continue;
+        }
         let qf_len = instance.get_physical_device_queue_family_properties2_len(pd);
         let mut video = vec![vk::QueueFamilyVideoPropertiesKHR::default(); qf_len];
         let mut qf = vec![vk::QueueFamilyProperties2::default(); qf_len];
