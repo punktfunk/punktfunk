@@ -347,6 +347,12 @@ pub struct Presenter {
     /// sets the bit, so until then a zero means nothing.
     #[cfg(target_os = "linux")]
     scanout_reported: bool,
+    /// Compositor stamps by present id, waiting for the driver's sample of the same present.
+    #[cfg(target_os = "linux")]
+    compositor_stamps: std::collections::HashMap<u64, u64>,
+    /// Driver samples without an exact stamp, held one pass for their compositor stamp.
+    #[cfg(target_os = "linux")]
+    held: Vec<present_timing::PresentedSample>,
     /// Exportable copies of Vulkan Video or PyroWave pictures for the lane; built on the
     /// first one.
     #[cfg(target_os = "linux")]
@@ -1367,16 +1373,17 @@ impl Presenter {
         if let Some(t) = &self.vblank_timer {
             out.extend(t.take_samples());
         }
-        // Both stamps per present, joined offline by id.
+        // Both stamps per present: the compositor's joins the driver's below, by id.
         #[cfg(target_os = "linux")]
         if let Some(fb) = self.feedback.as_mut() {
             for s in fb.take() {
-                if s.displayed_ns.is_some() {
+                if let Some(t) = s.displayed_ns {
                     self.scanout.1 += 1;
                     if s.zero_copy {
                         self.scanout.0 += 1;
                         self.scanout_reported = true;
                     }
+                    self.compositor_stamps.insert(s.present_id, t);
                 }
                 tracing::trace!(
                     target: "pf_glass",
@@ -1416,7 +1423,62 @@ impl Presenter {
                 }
             }));
         }
+        #[cfg(target_os = "linux")]
+        {
+            out = self.join_compositor_stamps(out);
+        }
         out
+    }
+
+    /// A driver sample without the engine's stamp takes the compositor's for the same
+    /// present. One with neither yet waits a pass, and everything behind it waits too so
+    /// stamps leave in order; after that it goes out on its wake time. The map keeps only
+    /// ids newer than the last sample out.
+    #[cfg(target_os = "linux")]
+    fn join_compositor_stamps(
+        &mut self,
+        fresh: Vec<present_timing::PresentedSample>,
+    ) -> Vec<present_timing::PresentedSample> {
+        let mut ready = Vec::with_capacity(self.held.len() + fresh.len());
+        for mut s in self.held.drain(..) {
+            Self::take_stamp(&mut self.compositor_stamps, &mut s);
+            ready.push(s);
+        }
+        let mut holding = false;
+        for mut s in fresh {
+            let joined = Self::take_stamp(&mut self.compositor_stamps, &mut s);
+            holding |= !joined && s.present_id != 0;
+            if holding {
+                self.held.push(s);
+            } else {
+                ready.push(s);
+            }
+        }
+        if let Some(last) = ready.last() {
+            let floor = last.present_id.saturating_sub(64);
+            self.compositor_stamps.retain(|&id, _| id >= floor);
+        }
+        ready
+    }
+
+    /// `true` once the sample carries an exact display time, its own or the compositor's.
+    #[cfg(target_os = "linux")]
+    fn take_stamp(
+        stamps: &mut std::collections::HashMap<u64, u64>,
+        s: &mut present_timing::PresentedSample,
+    ) -> bool {
+        let stamp = stamps.remove(&s.present_id);
+        if s.exact {
+            return true;
+        }
+        match stamp {
+            Some(t) => {
+                s.displayed_ns = t;
+                s.exact = true;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Device handles the overlay renders on. Valid for the presenter's lifetime; the

@@ -1109,6 +1109,10 @@ impl Presenter {
             #[cfg(target_os = "linux")]
             scanout_reported: false,
             #[cfg(target_os = "linux")]
+            compositor_stamps: std::collections::HashMap::new(),
+            #[cfg(target_os = "linux")]
+            held: Vec::new(),
+            #[cfg(target_os = "linux")]
             native: if crate::wl_native::enabled() {
                 crate::wl_native::NativeLane::new(window, native_timelines).unwrap_or_else(|e| {
                     tracing::warn!(error = %format!("{e:#}"), "native scanout lane unavailable");
@@ -1456,6 +1460,15 @@ fn present_mode_chain(pref: PresentPref) -> Vec<vk::PresentModeKHR> {
     chain
 }
 
+/// The device feature says the mode may be asked for; only the surface's list says it is
+/// served. A ladder led by a mode this surface lacks would land on plain FIFO.
+fn serve_offered(pref: PresentPref, modes: &[vk::PresentModeKHR]) -> PresentPref {
+    PresentPref {
+        fifo_latest_ready: pref.fifo_latest_ready && modes.contains(&fifo_latest_ready::MODE),
+        ..pref
+    }
+}
+
 /// `PUNKTFUNK_VRR_FIFO=1` opts into the FIFO-first ladder for variable-refresh panels.
 fn vrr_fifo_opt_in() -> bool {
     std::env::var("PUNKTFUNK_VRR_FIFO").is_ok_and(|v| v != "0")
@@ -1521,7 +1534,7 @@ fn pick_present_mode(
         available = ?modes,
         "surface present modes"
     );
-    let chain = present_mode_chain(pref);
+    let chain = present_mode_chain(serve_offered(pref, &modes));
     let chosen = chain
         .iter()
         .copied()
@@ -1544,6 +1557,29 @@ fn pick_present_mode(
 mod tests {
     use super::*;
     use vk::PresentModeKHR as M;
+
+    /// A device that enables LATEST_READY for a surface that does not list it must not
+    /// lead with the FIFO family: that lands on plain FIFO.
+    #[test]
+    fn the_vrr_ladder_needs_the_surface_to_list_the_mode() {
+        let pref = || PresentPref {
+            vsync: true,
+            allow_vrr: true,
+            fullscreen: true,
+            vrr_fifo_opt_in: false,
+            fifo_latest_ready: true,
+        };
+        let listed = [fifo_latest_ready::MODE, M::MAILBOX, M::FIFO];
+        assert_eq!(
+            present_mode_chain(serve_offered(pref(), &listed))[0],
+            fifo_latest_ready::MODE
+        );
+        let unlisted = [M::MAILBOX, M::FIFO];
+        assert_eq!(
+            present_mode_chain(serve_offered(pref(), &unlisted))[0],
+            M::MAILBOX
+        );
+    }
 
     /// Preference ladders. Every chain ends at FIFO, which the spec guarantees —
     /// otherwise a surface that refuses every earlier entry has no landing.

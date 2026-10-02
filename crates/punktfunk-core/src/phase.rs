@@ -350,6 +350,13 @@ impl CadenceClock {
         // of frames — the failure the cushion exists to prevent.
     }
 
+    /// Switch cushion policy mid-stream: re-anchors like [`reset`](Self::reset), and
+    /// the measured jitter survives for the same reason.
+    pub fn retune(&mut self, tuning: CadenceTuning) {
+        self.tuning = tuning;
+        self.reset();
+    }
+
     /// Due time in the present-clock domain. May be earlier than `ready_ns`
     /// (late): present at the next opportunity; do not clamp to now — that
     /// would turn every late frame into a fresh anchor.
@@ -763,6 +770,16 @@ mod tests {
             "a frame that arrived 30 ms late must read as already due"
         );
         assert_eq!(c.health().late, 1);
+    }
+
+    #[test]
+    fn retune_keeps_the_measured_jitter() {
+        let mut c = settled(400, 500_000);
+        let before = c.health();
+        c.retune(CadenceTuning::vrr_latency());
+        let after = c.health();
+        assert_eq!(after.jitter_ns, before.jitter_ns);
+        assert_eq!(after.frames, before.frames);
     }
 
     #[test]
