@@ -754,6 +754,8 @@ impl MenuList {
 
     fn step(&mut self, delta: i32, len: usize) -> Option<MenuPulse> {
         self.follow = true;
+        // Rows can shrink under the cursor (another writer forgot a host): step from the last.
+        self.cursor = self.cursor.min(len.saturating_sub(1));
         let target = self.cursor as i32 + delta;
         if len == 0 || target < 0 || target >= len as i32 {
             // End of the list: Boundary pulse plus a rubbery vertical recoil.
@@ -2411,6 +2413,16 @@ mod tests {
                 .count();
         }
         differing
+    }
+
+    /// Rows shrink under a cursor when another writer forgets a host.
+    #[test]
+    fn a_cursor_past_a_shrunk_list_steps_back_onto_it() {
+        let mut list = MenuList::new();
+        list.jump_to(4);
+        let (_, pulse) = list.menu(MenuEvent::Move(MenuDir::Up), 2);
+        assert!(matches!(pulse, Some(MenuPulse::Move)));
+        assert_eq!(list.cursor, 0);
     }
 
     /// Stepping one row must leave every other row's pixels unchanged. One
