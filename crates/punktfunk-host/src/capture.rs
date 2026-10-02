@@ -179,6 +179,11 @@ impl OutputLease {
         })
     }
 
+    /// The gamescope instance this output belongs to; `None` for the box's own session.
+    pub(crate) fn seat(&self) -> Option<&str> {
+        self.seat.as_deref()
+    }
+
     /// The output as a fresh capture sees it. Never a birth-size gate: the output already
     /// sits at its mode.
     pub(crate) fn into_output(self, keepalive: Box<dyn Send>) -> crate::vdisplay::VirtualOutput {

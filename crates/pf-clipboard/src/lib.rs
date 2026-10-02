@@ -10,7 +10,7 @@
 //! `design/clipboard-and-file-transfer.md`.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use punktfunk_core::quic::ClipOffer;
 
@@ -59,26 +59,56 @@ pub struct ClipCoord {
     pub offer_rx: tokio::sync::mpsc::UnboundedReceiver<ClipOffer>,
 }
 
-/// Open a backend and spawn [`host::session`], or return an inert handle
-/// (`available = false`). `has_compositor` is false for the protocol-test
-/// source, which has no display clipboard to share.
+/// Where a session's clipboard lives.
+pub enum ClipTarget {
+    /// No display clipboard: the protocol-test source.
+    None,
+    /// The compositor the process environment names.
+    Session,
+    /// A gamescope session's Xwayland, once the stream has one.
+    Gamescope(GamescopeXwayland),
+}
+
+/// The X displays of the session's gamescope, set by the stream once it has a gamescope. The
+/// clipboard waits until then: at handshake the gamescope may not exist yet.
+#[derive(Clone, Default)]
+pub struct GamescopeXwayland(Arc<Mutex<Option<Displays>>>);
+
+type Displays = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
+impl GamescopeXwayland {
+    /// `displays` lists the session gamescope's X displays, first one preferred.
+    pub fn set(&self, displays: impl Fn() -> Vec<String> + Send + Sync + 'static) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(displays));
+    }
+
+    /// Empty until [`Self::set`]; a lookup runs outside the lock.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn displays(&self) -> Vec<String> {
+        let displays = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        displays.map(|f| f()).unwrap_or_default()
+    }
+}
+
+/// Open the backend `target` names and spawn [`host::session`], or return an inert handle
+/// (`available = false`).
 pub async fn start(
     conn: quinn::Connection,
     clip_enabled: Arc<AtomicBool>,
-    has_compositor: bool,
+    target: ClipTarget,
 ) -> ClipCoord {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (offer_tx, offer_rx) = tokio::sync::mpsc::unbounded_channel();
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    let available = if has_compositor && enabled() {
-        host::session::start(conn, clip_enabled, cmd_rx, offer_tx).await
+    let available = if !matches!(target, ClipTarget::None) && enabled() {
+        host::session::start(conn, clip_enabled, target, cmd_rx, offer_tx).await
     } else {
         drop((conn, clip_enabled, cmd_rx, offer_tx));
         false
     };
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let available = {
-        let _ = (conn, clip_enabled, cmd_rx, offer_tx, has_compositor);
+        let _ = (conn, clip_enabled, cmd_rx, offer_tx, target);
         false
     };
     ClipCoord {

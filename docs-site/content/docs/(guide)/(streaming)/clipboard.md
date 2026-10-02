@@ -54,7 +54,8 @@ A `PUNKTFUNK_CLIPBOARD` line in `host.env` overrides step 1 and locks it in the 
 
 A Linux host needs a desktop that offers a clipboard to it: `ext-data-control-v1` (KWin, Sway,
 Hyprland and other wlroots compositors) or GNOME's remote-desktop clipboard. A
-[gamescope](/docs/gamescope) session has none. A Windows host always has one.
+[gamescope](/docs/gamescope) session keeps one plain-text clipboard, so only text crosses there.
+A Windows host always has one.
 
 ## Why the toggle does nothing (or is greyed out)
 
@@ -69,7 +70,8 @@ Work down this list:
 | Your client's switch is off for this host, or you changed it while streaming | Step 3, then reconnect. |
 | Your device's access level lacks **Clipboard** | Step 2. |
 | You're on Linux, a Steam Deck or an Apple TV | These clients don't move the clipboard yet. |
-| The host's session has no clipboard (gamescope, or a desktop without the protocols above) | The host log says `clipboard backend unavailable`. Stream a desktop session instead. |
+| The host's desktop has no clipboard (none of the protocols above) | The host log says `clipboard backend unavailable`. Stream another desktop session instead. |
+| A picture doesn't cross in a gamescope session | gamescope's clipboard holds text only. |
 
 The host logs a `clipboard control` line for each stream with what it decided. See
 [Troubleshooting](/docs/troubleshooting) for where the log is.

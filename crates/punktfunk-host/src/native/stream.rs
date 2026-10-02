@@ -720,6 +720,9 @@ pub(super) struct SessionContext {
     pub(super) reframe_to: Option<(punktfunk_core::video_fit::VideoFit, (u32, u32))>,
     /// The encoder's framing, published for the input thread.
     pub(super) frame_map: super::input::FrameMap,
+    /// The session gamescope's X displays, published for the clipboard.
+    #[cfg(target_os = "linux")]
+    pub(super) gamescope_xwayland: pf_clipboard::GamescopeXwayland,
     pub(super) resize_ms: Arc<AtomicU32>,
     #[cfg(target_os = "linux")]
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,

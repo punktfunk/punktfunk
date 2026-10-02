@@ -169,6 +169,9 @@ pub(super) struct StreamState {
     /// The live encoder's framing: forwarded cursor positions map through it, and so does
     /// the input thread's absolute input. Written on every encoder open.
     pub(super) frame_map: super::super::input::FrameMap,
+    /// The session gamescope's X displays, for the clipboard. Written on every capture attach.
+    #[cfg(target_os = "linux")]
+    pub(super) gamescope_xwayland: pf_clipboard::GamescopeXwayland,
     pub(super) bringup: Arc<crate::bringup::Trace>,
     pub(super) resize_ms: Arc<AtomicU32>,
     pub(super) stats: Arc<StatsRecorder>,
@@ -237,8 +240,9 @@ impl StreamState {
     }
 
     /// Swap the built pipeline in and forget every owed AU and the last forwarded cursor shape:
-    /// a new capturer numbers its shapes from 1 again. The caller retires the old lease,
-    /// re-arms the IDR clock, and re-reads `enc_src` as its path requires.
+    /// a new capturer numbers its shapes from 1 again. The clipboard follows the new capture's
+    /// gamescope. The caller retires the old lease, re-arms the IDR clock, and re-reads
+    /// `enc_src` as its path requires.
     pub(super) fn adopt_pipeline(&mut self, p: Pipeline) {
         // A ceiling was learned from the encoder this one replaces. It survives
         // a rebuild that opens on the same source; a different geometry or
@@ -266,6 +270,7 @@ impl StreamState {
         self.cur_display_gen = p.display_gen;
         #[cfg(target_os = "linux")]
         {
+            publish_gamescope_xwayland(&self.gamescope_xwayland, p.lease.as_ref());
             self.lease = p.lease;
         }
         self.inflight.clear();
@@ -452,6 +457,8 @@ impl StreamState {
             join_live,
             reframe_to: _,
             frame_map,
+            #[cfg(target_os = "linux")]
+            gamescope_xwayland,
             resize_ms,
             #[cfg(target_os = "linux")]
             input_tx,
@@ -603,6 +610,8 @@ impl StreamState {
             lease,
         } = pipe;
         *frame_map.lock().unwrap_or_else(|e| e.into_inner()) = reframe;
+        #[cfg(target_os = "linux")]
+        publish_gamescope_xwayland(&gamescope_xwayland, lease.as_ref());
         let enc_src = (frame.format, frame.width, frame.height);
         #[cfg(target_os = "linux")]
         let no_overlay_means_off_output = settle_portal_cursor(&*vd, &mut metadata_composite);
@@ -927,6 +936,8 @@ impl StreamState {
             client_hdr,
             join_live,
             frame_map,
+            #[cfg(target_os = "linux")]
+            gamescope_xwayland,
             bringup,
             resize_ms,
             stats,
@@ -1191,6 +1202,22 @@ fn launch_verdict(
             &format!("Couldn't start {title} — this host had nothing to run for it."),
         ),
     }
+}
+
+/// Point the clipboard at the gamescope behind `lease`. A lease with no seat is the box's own
+/// gamescope, which the unscoped lookup finds; a non-gamescope session never reads this.
+#[cfg(target_os = "linux")]
+fn publish_gamescope_xwayland(
+    xwayland: &pf_clipboard::GamescopeXwayland,
+    lease: Option<&crate::capture::OutputLease>,
+) {
+    let seat = lease.and_then(|l| l.seat()).map(str::to_owned);
+    xwayland.set(move || {
+        pf_vdisplay::gamescope_xwayland_cursor_targets(seat.as_deref())
+            .into_iter()
+            .map(|(display, _)| display)
+            .collect()
+    });
 }
 
 /// Announce a host-local rebuild gap so the client does not score a straddling window as congestion.

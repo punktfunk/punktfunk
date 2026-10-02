@@ -1509,6 +1509,8 @@ pub(crate) async fn run_admitted(
     });
     // Filled by the stream thread's encoder open; the input thread reads it.
     let frame_map = input::FrameMap::default();
+    // Filled by the stream thread once it has a gamescope; the clipboard reads it.
+    let gamescope_xwayland = pf_clipboard::GamescopeXwayland::default();
     // Live reconfigure is off for gamescope (resize must not relaunch the title),
     // `identity: per-client-mode` (resize would resolve a different slot), a monitor
     // mirror (physical head ignores the requested mode) and a `join` session (the mode
@@ -1583,7 +1585,7 @@ pub(crate) async fn run_admitted(
         &conn,
         initial_grants,
         clip_enabled.clone(),
-        compositor.is_some(),
+        clip_target(compositor, &gamescope_xwayland),
     )
     .await;
     let clip_available = clip.available;
@@ -2059,6 +2061,8 @@ pub(crate) async fn run_admitted(
                         join_live,
                         reframe_to,
                         frame_map,
+                        #[cfg(target_os = "linux")]
+                        gamescope_xwayland,
                         resize_ms: resize_ms_dp,
                         #[cfg(target_os = "linux")]
                         input_tx: input_tx_stream,
@@ -2212,13 +2216,13 @@ async fn start_clipboard(
     conn: &link::SessionLink,
     grants: u32,
     enabled: Arc<AtomicBool>,
-    desktop: bool,
+    target: pf_clipboard::ClipTarget,
 ) -> pf_clipboard::ClipCoord {
     let quic = (grants & GRANT_CLIPBOARD != 0)
         .then(|| conn.as_quic().cloned())
         .flatten();
     if let Some(quic) = quic {
-        return pf_clipboard::start(quic, enabled, desktop).await;
+        return pf_clipboard::start(quic, enabled, target).await;
     }
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (_offer_tx, offer_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2226,6 +2230,21 @@ async fn start_clipboard(
         available: false,
         cmd_tx,
         offer_rx,
+    }
+}
+
+/// The clipboard a session on `compositor` shares. gamescope keeps its own, on its Xwayland;
+/// the desktop the process env names is somebody else's.
+fn clip_target(
+    compositor: Option<crate::vdisplay::Compositor>,
+    gamescope_xwayland: &pf_clipboard::GamescopeXwayland,
+) -> pf_clipboard::ClipTarget {
+    match compositor {
+        None => pf_clipboard::ClipTarget::None,
+        Some(crate::vdisplay::Compositor::Gamescope) => {
+            pf_clipboard::ClipTarget::Gamescope(gamescope_xwayland.clone())
+        }
+        Some(_) => pf_clipboard::ClipTarget::Session,
     }
 }
 
