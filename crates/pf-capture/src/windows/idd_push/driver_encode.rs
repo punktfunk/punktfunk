@@ -545,27 +545,34 @@ impl Encoder for EncoderProxy {
     }
 
     fn poll(&mut self) -> Result<Option<EncodedFrame>> {
-        // Whole access units: chunks concatenate in order until LAST closes it.
+        // Whole access units: chunks concatenate in order until LAST closes it. A FIRST
+        // mid-assembly means the driver dropped this AU's tail and moved on: the prefix is
+        // discarded and the next AU starts over, as `poll_chunked` does for the streamed wire.
+        let start = |c: AuChunk| EncodedFrame {
+            data: c.data,
+            pts_ns: c.pts_ns,
+            keyframe: c.keyframe,
+            recovery_anchor: c.recovery_anchor,
+            recovery_point: c.recovery_point,
+            recovery_close: c.recovery_close,
+            chunk_aligned: c.chunk_aligned,
+        };
         let Some(first) = self.poll_chunk()? else {
             return Ok(None);
         };
-        let mut frame = EncodedFrame {
-            data: first.data,
-            pts_ns: first.pts_ns,
-            keyframe: first.keyframe,
-            recovery_anchor: first.recovery_anchor,
-            recovery_point: first.recovery_point,
-            recovery_close: first.recovery_close,
-            chunk_aligned: first.chunk_aligned,
-        };
         let mut last = first.last;
+        let mut frame = start(first);
         while !last {
             let c = self
                 .poll_chunk()?
                 .context("driver encode: access unit ended without its LAST chunk")?;
-            frame.data.extend_from_slice(&c.data);
-            frame.keyframe |= c.keyframe;
             last = c.last;
+            if c.first {
+                frame = start(c);
+            } else {
+                frame.data.extend_from_slice(&c.data);
+                frame.keyframe |= c.keyframe;
+            }
         }
         Ok(Some(frame))
     }
