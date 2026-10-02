@@ -421,7 +421,7 @@ const STREAM_CHUNK_TARGET_BYTES: usize = 256 * 1024;
 const STREAM_CHUNK_MIN_KIB: usize = 4;
 const STREAM_CHUNK_MAX_KIB: usize = 8192;
 
-/// Whether this process offers streamed-AU chunks. Default off.
+/// Whether the knobs in force arm streamed-AU chunks. Default off.
 ///
 /// An unpinned streamed frame (final block never arrived, `frame_bytes` still
 /// 0) is excluded from partial delivery; the whole-AU path still hands the
@@ -430,10 +430,7 @@ const STREAM_CHUNK_MAX_KIB: usize = 8192;
 /// `PUNKTFUNK_PYROWAVE_STREAMED_AU=1` arms it. Outer gates remain the client's
 /// `VIDEO_CAP_STREAMED_AU` and the host's `PUNKTFUNK_STREAMED_AU`.
 fn stream_armed() -> bool {
-    static ARMED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // Latched once: `supports_chunked_poll` is re-queried per AU; a live knob
-    // would flip the wire shape under an open `StreamedAu`.
-    *ARMED.get_or_init(|| crate::knobs::get().pyrowave_streamed_au == 1)
+    crate::knobs::get().pyrowave_streamed_au == 1
 }
 
 /// Never below one window: a target of 0 would yield an empty chunk that spins.
@@ -449,18 +446,18 @@ fn chunk_step(window: usize, target: usize) -> usize {
 /// `plan.wire_chunk = Some(session.shard_payload())`.
 /// `PUNKTFUNK_PYROWAVE_CHUNK_KIB` overrides the target (clamped to
 /// [`STREAM_CHUNK_MIN_KIB`]..=[`STREAM_CHUNK_MAX_KIB`]); garbage uses the default.
+/// Reads the knobs in force; [`AuStream`] latches the answer per encoder.
 pub fn stream_chunk_step(wire_chunk: Option<usize>) -> Option<usize> {
     let window = wire_chunk.filter(|&w| w > 0)?;
     if !stream_armed() {
         return None;
     }
-    static TARGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let target = *TARGET.get_or_init(|| match crate::knobs::get().pyrowave_chunk_64kib {
+    let target = match crate::knobs::get().pyrowave_chunk_64kib {
         0 => STREAM_CHUNK_TARGET_BYTES,
         // 64 KiB steps; the floor rounds down to the encoder's own minimum.
         steps => (usize::from(steps) * 64 * 1024)
             .clamp(STREAM_CHUNK_MIN_KIB * 1024, STREAM_CHUNK_MAX_KIB * 1024),
-    });
+    };
     Some(chunk_step(window, target))
 }
 
@@ -549,6 +546,9 @@ impl AuChunker {
 pub struct AuStream {
     /// Datagram-aligned packetize boundary. `None` = one dense packet per AU.
     pub wire_chunk: Option<usize>,
+    /// The streamed cut, fixed at [`Self::set_chunking`]: `supports_chunked_poll` is asked per
+    /// AU, and a knob read live would flip the wire shape between them.
+    step: Option<usize>,
     /// AU being handed out in streamed chunks (`Some` between `first` and `last`).
     chunker: Option<AuChunker>,
 }
@@ -561,12 +561,13 @@ impl AuStream {
             return false;
         }
         self.wire_chunk = Some(shard_payload);
+        self.step = stream_chunk_step(self.wire_chunk);
         true
     }
 
     /// [`crate::Encoder::supports_chunked_poll`].
     pub fn supports_chunked_poll(&self) -> bool {
-        stream_chunk_step(self.wire_chunk).is_some()
+        self.step.is_some()
     }
 
     /// Each AU drains through one method: a whole-AU `poll` while a cut is open would emit the
@@ -597,7 +598,7 @@ impl AuStream {
 
     /// Start handing out `f`: window-aligned pieces when streaming is armed, else whole.
     pub fn cut(&mut self, f: crate::EncodedFrame) -> Option<crate::AuChunk> {
-        match stream_chunk_step(self.wire_chunk) {
+        match self.step {
             Some(step) => self.chunker.insert(AuChunker::new(f, step)).next(),
             None => Some(crate::AuChunk::whole(f)),
         }
