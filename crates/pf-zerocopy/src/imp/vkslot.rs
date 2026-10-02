@@ -19,7 +19,7 @@
 
 use super::cuda::{self, CUdeviceptr, PlaneLayout};
 use super::vkdev;
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{anyhow, ensure, Context as _, Result};
 use ash::vk;
 use std::os::fd::{FromRawFd as _, OwnedFd};
 
@@ -47,6 +47,9 @@ pub enum SlotFormat {
     X2Rgb10,
     /// Packed 10-bit `x:B:G:R` 2:10:10:10 LE (NVENC `ABGR10`). [`X2Rgb10`](Self::X2Rgb10) with R/B swapped.
     X2Bgr10,
+    /// P010: 16-bit Y `[0, H)` then interleaved 16-bit UV `[H, 3H/2)` under one pitch, NV12's
+    /// geometry at twice the row bytes. A producer's own P010 is copied in; no blend, no reframe.
+    P010,
 }
 
 impl SlotFormat {
@@ -58,6 +61,7 @@ impl SlotFormat {
             SlotFormat::Yuv444 => 2,
             SlotFormat::X2Rgb10 => 3,
             SlotFormat::X2Bgr10 => 4,
+            SlotFormat::P010 => 5,
         }
     }
     /// One 32-bit word per pixel: same slot geometry and one-invocation-per-pixel dispatch.
@@ -71,19 +75,25 @@ impl SlotFormat {
             SlotFormat::Argb => 0,
             SlotFormat::X2Rgb10 => 1,
             SlotFormat::X2Bgr10 => 2,
-            SlotFormat::Nv12 | SlotFormat::Yuv444 => 3,
+            SlotFormat::Nv12 | SlotFormat::Yuv444 | SlotFormat::P010 => 3,
         }
     }
     /// The CUDA plane layout this slot holds, under one pitch.
     pub fn layout(self) -> PlaneLayout {
         match self {
-            SlotFormat::Nv12 => PlaneLayout::Nv12,
+            SlotFormat::Nv12 | SlotFormat::P010 => PlaneLayout::Nv12,
             SlotFormat::Yuv444 => PlaneLayout::Yuv444,
             SlotFormat::Argb | SlotFormat::X2Rgb10 | SlotFormat::X2Bgr10 => PlaneLayout::Packed32,
         }
     }
-    // A plane's row bytes never depend on the height, nor its rows on the width.
+    // A plane's row bytes never depend on the height, nor its rows on the width. P010 is NV12
+    // at two bytes a sample.
     fn row_bytes(self, width: u32) -> u64 {
+        let width = if self == SlotFormat::P010 {
+            width * 2
+        } else {
+            width
+        };
         self.layout().stacked(width, 1).0 as u64
     }
     /// Rows the layout holds for `height` luma rows (NV12 adds its chroma rows, YUV444 its
@@ -919,6 +929,7 @@ impl VkSlotBlend {
         ox: i32,
         oy: i32,
     ) -> Result<()> {
+        ensure!(fmt != SlotFormat::P010, "a P010 slot has no cursor blend");
         let Some((push, gx, gy)) = Self::blend_geometry(slot, fmt, surf_w, cw, ch, ox, oy) else {
             return Ok(());
         };
@@ -964,6 +975,7 @@ impl VkSlotBlend {
         ox: i32,
         oy: i32,
     ) -> Result<()> {
+        ensure!(fmt != SlotFormat::P010, "a P010 slot has no cursor blend");
         let Some((push, gx, gy)) = Self::blend_geometry(slot, fmt, surf_w, cw, ch, ox, oy) else {
             return Ok(());
         };
@@ -1050,6 +1062,7 @@ impl VkSlotBlend {
         crop: [u32; 4],
         out: (u32, u32),
     ) -> Result<()> {
+        ensure!(fmt != SlotFormat::P010, "a P010 slot has no reframe");
         let passes = reframe_passes(fmt, src, dst, crop, out);
         let need = passes
             .iter()
@@ -1547,6 +1560,7 @@ mod tests {
                             0xC000_0000 | (v << 20) | ((v * 2) << 10) | (v * 4),
                         ),
                         SlotFormat::Nv12 | SlotFormat::Yuv444 => bytes[row + x as usize] = v as u8,
+                        SlotFormat::P010 => unreachable!("a P010 slot has no reframe"),
                     }
                 }
             }
@@ -1603,6 +1617,7 @@ mod tests {
                         SlotFormat::Nv12 | SlotFormat::Yuv444 => {
                             near(u32::from(got[off + x as usize]), want, "luma");
                         }
+                        SlotFormat::P010 => unreachable!("a P010 slot has no reframe"),
                     }
                 }
             }

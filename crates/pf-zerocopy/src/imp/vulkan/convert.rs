@@ -17,7 +17,7 @@
 use super::VkBridge;
 use crate::imp::proto::{ConvertOut, ConvertSrc, CursorRect};
 use crate::imp::vkdev;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use ash::vk;
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
@@ -667,6 +667,7 @@ impl VkBridge {
             if src.plane1.is_some() {
                 return self.copy_planar(src, slot, out, need);
             }
+            ensure!(out.mode != 5, "a P010 slot takes only a producer's P010");
             if let Some(c) = cursor {
                 match self.conv.as_ref().expect("state").cursor_dims {
                     None => bail!("cursor rect without an uploaded bitmap"),
@@ -861,8 +862,8 @@ impl VkBridge {
         Ok(value)
     }
 
-    /// A producer NV12 needs no conversion: copy its two LINEAR planes into the slot, luma at
-    /// the slot pitch, chroma `plane_rows` below. The cursor is the host's to blend afterwards.
+    /// A producer NV12 or P010 needs no conversion: copy its two LINEAR planes into the slot,
+    /// luma at the slot pitch, chroma `plane_rows` below. The host blends any cursor after.
     unsafe fn copy_planar(
         &mut self,
         src: &ConvertSrc,
@@ -872,7 +873,7 @@ impl VkBridge {
     ) -> Result<u64> {
         if src.modifier != 0 {
             bail!(
-                "a producer NV12 must be LINEAR to copy, got modifier {:#x}",
+                "a producer planar frame must be LINEAR to copy, got modifier {:#x}",
                 src.modifier
             );
         }
@@ -895,7 +896,7 @@ impl VkBridge {
                 let s = &self.src_cache[&src.fd];
                 (s.buffer, s.size)
             };
-            anyhow::ensure!(src_size >= span, "dmabuf smaller than the NV12 planes");
+            anyhow::ensure!(src_size >= span, "dmabuf smaller than its planes");
             let (idx, cmd, _, value) = self.next_pass()?;
             let qf = self.qf;
             let st = self.conv.as_ref().expect("state");
@@ -940,8 +941,8 @@ impl VkBridge {
     }
 }
 
-/// The copies that place a producer NV12 in a slot laid out as `out`: luma rows at the slot
-/// pitch, chroma rows from `pitch * plane_rows`. A plane whose stride already equals the slot
+/// The copies that place a producer NV12 or P010 in a slot laid out as `out`: luma rows at the
+/// slot pitch, chroma rows from `pitch * plane_rows`. A plane whose stride already equals the slot
 /// pitch is one region; any other is a region per row. The last row copies only `width` bytes,
 /// so a tightly sized buffer is never read past its end. A frame and slot of different sizes
 /// (a resize in flight) copy their common top-left corner.
@@ -949,13 +950,23 @@ fn planar_regions(src: &ConvertSrc, out: &ConvertOut) -> Result<Vec<vk::BufferCo
     let (off1, stride1) = src
         .plane1
         .ok_or_else(|| anyhow!("a planar source without its chroma plane"))?;
+    // A chroma row is as wide as a luma row (U and V interleaved); P010 takes two bytes a sample.
+    let (bytes, mode) = match &src.fourcc.to_le_bytes() {
+        b"NV12" => (1, 1),
+        b"P010" => (2, 5),
+        _ => bail!("fourcc {:#010x} is not a planar 4:2:0 layout", src.fourcc),
+    };
+    ensure!(
+        out.mode == mode,
+        "a mode-{mode} source cannot fill a mode-{} slot",
+        out.mode
+    );
     let pitch = u64::from(out.pitch_w) * 4;
-    // NV12: a byte per luma sample, and a chroma row is the same width (U and V interleaved).
     let (width, height) = (src.width.min(out.width), src.height.min(out.height));
-    let row = u64::from(width);
+    let row = u64::from(width) * bytes;
     if u64::from(src.stride) < row || u64::from(stride1) < row {
         bail!(
-            "NV12 strides {}/{stride1} are short of a {row}-byte row",
+            "plane strides {}/{stride1} are short of a {row}-byte row",
             src.stride
         );
     }
@@ -993,12 +1004,14 @@ fn planar_regions(src: &ConvertSrc, out: &ConvertOut) -> Result<Vec<vk::BufferCo
     Ok(regions)
 }
 
-/// Refuse a layout whose rows `convert_img.comp` would write past: a row pitch shorter than
-/// the row, fewer plane rows than picture rows, or a mode the shader does not know.
+/// Refuse a layout whose rows `convert_img.comp` or the plane copy would write past: a row
+/// pitch shorter than the row, fewer plane rows than picture rows, or an unknown mode. Mode 5
+/// is a producer's P010, which only the plane copy writes.
 fn check_layout(out: &ConvertOut) -> Result<()> {
     let row_bytes = match out.mode {
         0 | 3 | 4 => u64::from(out.width) * 4,
         1 | 2 => u64::from(out.width),
+        5 => u64::from(out.width) * 2,
         m => bail!("unknown convert mode {m}"),
     };
     if u64::from(out.pitch_w) * 4 < row_bytes {
@@ -1007,7 +1020,7 @@ fn check_layout(out: &ConvertOut) -> Result<()> {
             out.pitch_w
         );
     }
-    if matches!(out.mode, 1 | 2) && out.plane_rows < out.height {
+    if matches!(out.mode, 1 | 2 | 5) && out.plane_rows < out.height {
         bail!(
             "{} plane rows cannot hold a {}-row picture",
             out.plane_rows,
@@ -1017,11 +1030,11 @@ fn check_layout(out: &ConvertOut) -> Result<()> {
     Ok(())
 }
 
-/// Bytes the slot must hold for `out`: packed modes one word per pixel per row, NV12 its
-/// luma rows plus half as many chroma rows, YUV444 three planes.
+/// Bytes the slot must hold for `out`: packed modes one word per pixel per row, NV12 and P010
+/// their luma rows plus half as many chroma rows, YUV444 three planes.
 fn slot_bytes(out: &ConvertOut) -> u64 {
     let rows = match out.mode {
-        1 => u64::from(out.plane_rows) + u64::from(out.plane_rows.div_ceil(2)),
+        1 | 5 => u64::from(out.plane_rows) + u64::from(out.plane_rows.div_ceil(2)),
         2 => 3 * u64::from(out.plane_rows),
         _ => u64::from(out.height),
     };
@@ -1046,6 +1059,7 @@ mod tests {
         assert_eq!(slot_bytes(&out(1)), 64 * 4 * 75);
         assert_eq!(slot_bytes(&out(2)), 64 * 4 * 150);
         assert_eq!(slot_bytes(&out(3)), 64 * 4 * 50);
+        assert_eq!(slot_bytes(&out(5)), 64 * 4 * 75);
         assert_eq!(
             vk_format(fourcc(b'X', b'R', b'2', b'4')),
             Some(vk::Format::B8G8R8A8_UNORM)
@@ -1107,6 +1121,29 @@ mod tests {
         let r = planar_regions(&small, &out).unwrap();
         assert_eq!(r.len(), 3 + 2);
         assert!(r.iter().all(|r| r.size == 50));
+        // P010 copies two bytes a sample, into a mode-5 slot only.
+        let p010 = ConvertSrc {
+            fourcc: fourcc(b'P', b'0', b'1', b'0'),
+            plane1: Some((64 + 256 * 5, 256)),
+            ..src(256)
+        };
+        let wide = ConvertOut {
+            mode: 5,
+            pitch_w: 64,
+            ..out
+        };
+        let r = planar_regions(&p010, &wide).unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].size, 256 * 4 + 200);
+        assert_eq!(r[1].dst_offset, 256 * 6);
+        assert!(
+            planar_regions(&p010, &out).is_err(),
+            "P010 into an NV12 slot"
+        );
+        assert!(
+            planar_regions(&src(128), &wide).is_err(),
+            "NV12 into a P010 slot"
+        );
         // A stride short of a row, or no chroma plane, is refused.
         assert!(planar_regions(&src(99), &out).is_err());
         assert!(planar_regions(
@@ -1143,7 +1180,12 @@ mod tests {
             check_layout(&out(2, 25, 49)).is_err(),
             "plane rows short of the height"
         );
-        assert!(check_layout(&out(5, 1000, 1000)).is_err(), "unknown mode");
+        assert!(check_layout(&out(5, 50, 50)).is_ok());
+        assert!(
+            check_layout(&out(5, 49, 50)).is_err(),
+            "P010 luma row is 50 words"
+        );
+        assert!(check_layout(&out(6, 1000, 1000)).is_err(), "unknown mode");
     }
 
     /// The BT.709 limited-range bytes `convert_img.comp` writes, in f32 like the shader.

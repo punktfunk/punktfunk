@@ -97,9 +97,9 @@ pub(in crate::linux) struct NegotiationPlan {
 /// 1. HDR never takes the 8-bit EGL de-tile blit. An EGL/CUDA fallback offers LINEAR;
 ///    direct raw lanes may offer proved tiled formats, guarded again per frame.
 /// 2. 4:4:4 never prefers producer NV12 or P010 (must not subsample).
-/// 3. Producer-native planar only on a `native_nv12_session` under a raw lane: VAAPI's
-///    passthrough takes NV12 for SDR and P010 for HDR; NVENC's raw lane takes NV12 only. The
-///    CUDA importer expects packed RGB, so a tripped raw latch withdraws the planar offer.
+/// 3. Producer-native planar only on a `native_nv12_session` under a raw lane (VAAPI's
+///    passthrough or NVENC's): NV12 for SDR, P010 for HDR. The CUDA importer expects packed
+///    RGB, so a tripped raw latch withdraws the planar offer.
 /// 4. Raw passthrough is off once its latch has fired.
 pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPlan {
     // Consumer imports raw dmabufs: VAAPI (libva + GPU CSC) or PyroWave (its Vulkan device).
@@ -116,8 +116,8 @@ pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPla
     let vaapi_passthrough =
         i.zerocopy && !i.force_shm && raw_passthrough && !i.raw_dmabuf_import_disabled;
     let nvenc_raw = build_importer && i.nvenc_raw && !i.force_shm && !i.raw_dmabuf_import_disabled;
-    // NVENC's raw lane copies a producer NV12 into its slot; it has no P010 slot.
-    let planar_lane = (i.backend_is_vaapi && vaapi_passthrough) || (nvenc_raw && !i.want_hdr);
+    // NVENC's raw lane copies a producer NV12 or P010 into its slot.
+    let planar_lane = (i.backend_is_vaapi && vaapi_passthrough) || nvenc_raw;
     let native_planar = i.native_nv12_env_on
         && i.native_nv12_session
         && planar_lane
@@ -705,19 +705,25 @@ mod tests {
             .prefer_native_nv12,
             "no passthrough (force_shm) ⇒ no native NV12"
         );
-        // NVENC's raw lane takes a producer NV12 (copied into its slot), never P010, and a
-        // tripped raw latch or a lane-less session withdraws it: the importer reads RGB only.
+        // NVENC's raw lane takes a producer NV12 or P010 (copied into its slot), and a tripped
+        // raw latch or a lane-less session withdraws it: the importer reads RGB only.
         let nvenc_native = NegotiationInputs {
             nvenc_raw: true,
             native_nv12_session: true,
             ..nvenc()
         };
         assert!(negotiation_plan(nvenc_native).prefer_native_nv12);
+        let hdr = negotiation_plan(NegotiationInputs {
+            want_hdr: true,
+            ..nvenc_native
+        });
+        assert!(hdr.prefer_native_p010 && !hdr.prefer_native_nv12);
         for (why, inputs) in [
             (
-                "HDR",
+                "HDR raw latch",
                 NegotiationInputs {
                     want_hdr: true,
+                    raw_dmabuf_import_disabled: true,
                     ..nvenc_native
                 },
             ),
