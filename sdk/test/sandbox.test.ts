@@ -8,6 +8,7 @@ import {
 	bwrapArgv,
 	expandHome,
 	grantedRoots,
+	homeLink,
 	netlinkFilter,
 	type PluginManifest,
 	readManifest,
@@ -215,6 +216,48 @@ describe("bwrapArgv", () => {
 		expect(binds(argv, "--ro-bind-try")).toContainEqual(["/mnt/legacy", "/mnt/legacy"]);
 		expect(binds(argv, "--bind-try")).toContainEqual(["/mnt/write", "/mnt/write"]);
 		expect(argv.join(" ")).not.toContain("not/absolute");
+	});
+
+	test("mirrors a linked /home and binds home paths where they resolve, as on Fedora Atomic", () => {
+		const homeLink = { path: "/home", target: "var/home", real: "/var/home" };
+		const argv = bwrapArgv(manifest({ reads: ["~/.config/heroic"] }), { ...paths, homeLink }, [
+			{ path: "/var/home/u/Games/Heroic", write: false },
+			{ path: "/mnt/games", write: false },
+		]);
+		// The link goes in before any bind: a bind under `/home` would make it a directory.
+		const link = argv.indexOf("--symlink", argv.indexOf("/sbin"));
+		expect(argv.slice(link, link + 3)).toEqual(["--symlink", "var/home", "/home"]);
+		expect(argv.indexOf(paths.pluginsDir)).toBeGreaterThan(link);
+		// Heroic's `/home/u/Games/Heroic/<game>` then resolves through the link to the canonical grant.
+		const ro = binds(argv, "--ro-bind-try");
+		expect(ro).toContainEqual(["/home/u/.config/heroic", "/var/home/u/.config/heroic"]);
+		expect(ro).toContainEqual(["/var/home/u/Games/Heroic", "/var/home/u/Games/Heroic"]);
+		expect(ro).toContainEqual(["/mnt/games", "/mnt/games"]);
+		expect(binds(argv, "--ro-bind")).toContainEqual([
+			paths.pluginsDir,
+			"/var/home/u/.config/punktfunk/plugins",
+		]);
+		const all = [...binds(argv, "--bind"), ...binds(argv, "--ro-bind"), ...ro];
+		expect(all.filter(([, dest]) => dest.startsWith("/home/"))).toEqual([]);
+	});
+});
+
+describe("homeLink", () => {
+	test("reads a link and nothing else", () => {
+		const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pf-homelink-")));
+		fs.mkdirSync(path.join(root, "var/home"), { recursive: true });
+		fs.symlinkSync("var/home", path.join(root, "home"));
+		try {
+			expect(homeLink(path.join(root, "home"))).toEqual({
+				path: path.join(root, "home"),
+				target: "var/home",
+				real: path.join(root, "var/home"),
+			});
+			expect(homeLink(path.join(root, "var/home"))).toBeUndefined();
+			expect(homeLink(path.join(root, "missing"))).toBeUndefined();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

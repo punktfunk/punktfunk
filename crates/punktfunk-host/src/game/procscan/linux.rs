@@ -208,21 +208,27 @@ impl Scanner {
                     return true;
                 }
             }
+            // argv keeps the launcher's spelling; the image is canonical. Through a link (Fedora
+            // Atomic's `/home` → `var/home`) the two differ, so either spelling counts here.
             if let Some(dir) = install_dir {
                 // Path separator after the directory so `/games/x` is not satisfied by `/games/xyz/…`.
                 // (`Path::starts_with` on the image already compares whole components.)
-                let needle = dir.as_os_str().as_encoded_bytes();
+                let dirs = [dir, spec.install_dir.as_deref().unwrap_or(dir)];
                 let under_dir = |arg: &[u8]| {
-                    arg.strip_prefix(needle)
-                        .is_some_and(|rest| rest.first() == Some(&b'/'))
+                    dirs.iter().any(|d| {
+                        arg.strip_prefix(d.as_os_str().as_encoded_bytes())
+                            .is_some_and(|rest| rest.first() == Some(&b'/'))
+                    })
                 };
                 if cmdline.split(|&b| b == 0).any(under_dir) {
                     return true;
                 }
             }
             if let Some(want) = exe {
-                let needle = want.as_os_str().as_encoded_bytes();
-                if cmdline.split(|&b| b == 0).any(|arg| arg == needle) {
+                let exes = [want, spec.exe.as_deref().unwrap_or(want)];
+                let is_exe =
+                    |arg: &[u8]| exes.iter().any(|e| arg == e.as_os_str().as_encoded_bytes());
+                if cmdline.split(|&b| b == 0).any(is_exe) {
                     return true;
                 }
             }
@@ -453,6 +459,27 @@ mod tests {
             pids(s.find(&DetectSpec::dir("/games/elden"), None)),
             vec![20]
         );
+    }
+
+    #[test]
+    fn matches_a_cmdline_spelled_through_a_linked_home() {
+        // Fedora Atomic: the launcher records `/home/u/…`, which canonicalizes to `/var/home/u/…`.
+        let fs = tempfile::tempdir().expect("tempdir");
+        let real = fs.path().join("var/home/u/Games/Crysis");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("Crysis.exe"), b"").unwrap();
+        std::os::unix::fs::symlink(fs.path().join("var/home"), fs.path().join("home")).unwrap();
+        let dir = fs.path().join("home/u/Games/Crysis");
+        let arg: &'static str = Box::leak(format!("{}/Crysis.exe", dir.display()).into_boxed_str());
+        let td = fake_proc_root(
+            1000.0,
+            &[FakeProc::new(20, 50_000)
+                .exe("/steam/runtime/proton")
+                .cmdline(&["proton", "waitforexitandrun", arg])],
+        );
+        let s = scanner(td.path());
+        assert_eq!(pids(s.find(&DetectSpec::dir(&dir), None)), vec![20]);
+        assert_eq!(pids(s.find(&DetectSpec::exe(arg), None)), vec![20]);
     }
 
     #[test]
