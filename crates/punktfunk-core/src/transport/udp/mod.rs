@@ -244,6 +244,12 @@ impl UdpTransport {
                 {
                     break
                 }
+                // A datagram past `buf` (Windows WSAEMSGSIZE, 10040), a stale ICMP or a signal:
+                // not the punch either, and the deadline still bounds the wait.
+                Err(e)
+                    if (cfg!(windows) && e.raw_os_error() == Some(10040))
+                        || e.kind() == std::io::ErrorKind::Interrupted
+                        || is_transient_io(&e) => {}
                 Err(e) => return Err(e),
             }
         }
