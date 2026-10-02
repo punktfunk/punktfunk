@@ -82,13 +82,13 @@ pub fn main(args: &[String]) -> Result<()> {
         Some("grant") => grant(
             args.get(1).map(String::as_str),
             args.get(2).map(String::as_str),
-            &args[3..],
+            args.get(3..).unwrap_or_default(),
         ),
         Some("access") => access_list(&args[1..]),
         Some("revoke") => revoke(
             args.get(1).map(String::as_str),
             args.get(2).map(String::as_str),
-            &args[3..],
+            args.get(3..).unwrap_or_default(),
         ),
         Some("-h") | Some("--help") | Some("help") | None => {
             print_usage();
