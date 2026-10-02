@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Fri, 2 Oct 2026 20:00:25 +0200
+Subject: [PATCH] steamcompmgr: keep --framerate-limit as the floor under a
+ request for 0
+
+The CLI limit seeds the refresh-cycle override, and any later request
+replaces it. Steam sends its "Framerate limit" state on every launch,
+and the default state is Off: a request for 0 that clears the override
+and the cap with it. On a headless output the limiter is the focused
+app's only pace, so the session that asked for a cap runs unpaced the
+moment Steam starts a game.
+
+Keep the CLI value aside and fall back to it, as a plain cap without
+refresh switching, whenever a request for 0 would otherwise clear the
+cap. An explicit value from Steam still replaces it, and a request that
+only changes the refresh rate (Steam's "Disable Frame Limiter") stays
+uncapped as asked. The legacy GAMESCOPE_FPS_LIMIT atom at 0 falls back
+the same way.
+
+Stamp pfhdr27.
+---
+ src/meson.build      |  3 ++-
+ src/steamcompmgr.cpp | 25 +++++++++++++++++++++----
+ 2 files changed, 23 insertions(+), 5 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index f0ddff5..8b9e3aa 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -207,7 +207,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr24 — …and input back from an overlay takes the focused game out of iconic
+ #   +pfhdr25 — …and a planar capture composites through device memory, not system RAM
+ #   +pfhdr26 — …and the 10-bit capture formats are offered as SDR (BT.709) too
+-version_tag = vcs_tag + '+pfhdr26' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr27 — …and --framerate-limit is the floor a refresh-cycle request for 0 falls back to
++version_tag = vcs_tag + '+pfhdr27' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 229fdf0..f1fd486 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -975,6 +975,9 @@ static const uint64_t g_uDynamicRefreshDelay = 600'000'000; // 600ms
+ static int g_nCombinedAppRefreshCycleOverride[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { 0, 0 };
+ bool g_nCombinedAppRefreshCycleChangeRefresh[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { true, true };
+ bool g_nCombinedAppRefreshCycleChangeFPS[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { true, true };
++// `--framerate-limit`: the cap a refresh-cycle request for 0 falls back to. On a headless
++// output the limiter is the focused app's only pace, so Steam's "Off" must not leave none.
++static int g_nCLIFramerateLimit = 0;
+ 
+ static void _update_app_target_refresh_cycle()
+ {
+@@ -984,21 +987,31 @@ static void _update_app_target_refresh_cycle()
+ 	gamescope::GamescopeScreenType type = GetBackend()->GetCurrentConnector()->GetScreenType();
+ 
+ 	int target_fps = g_nCombinedAppRefreshCycleOverride[type];
++	bool change_fps_cap = g_nCombinedAppRefreshCycleChangeFPS[ type ];
++	bool change_refresh = g_nCombinedAppRefreshCycleChangeRefresh[ type ];
+ 
+ 	g_nDynamicRefreshRate[ type ] = 0;
+ 	g_nSteamCompMgrTargetFPS = 0;
+ 
++	// A 0 that would clear the cap takes the CLI limit instead, as a plain cap. A request
++	// that only changes refresh (Steam's "Disable Frame Limiter") stays uncapped as asked.
++	if ( !target_fps && change_fps_cap && g_nCLIFramerateLimit )
++	{
++		target_fps = g_nCLIFramerateLimit;
++		change_refresh = false;
++	}
++
+ 	if ( !target_fps )
+ 	{
+ 		return;
+ 	}
+ 
+-	if ( g_nCombinedAppRefreshCycleChangeFPS[ type ] )
++	if ( change_fps_cap )
+ 	{
+ 		g_nSteamCompMgrTargetFPS = target_fps;
+ 	}
+ 
+-	if ( g_nCombinedAppRefreshCycleChangeRefresh[ type ] )
++	if ( change_refresh )
+ 	{
+ 		auto rates = GetBackend()->GetCurrentConnector()->GetValidDynamicRefreshRates();
+ 
+@@ -6500,6 +6513,9 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+ 	if ( ev->atom == ctx->atoms.gamescopeFPSLimit )
+ 	{
+ 		g_nSteamCompMgrTargetFPS = get_prop( ctx, ctx->root, ctx->atoms.gamescopeFPSLimit, 0 );
++		// The legacy atom's 0 falls back to the CLI limit as well.
++		if ( !g_nSteamCompMgrTargetFPS )
++			g_nSteamCompMgrTargetFPS = g_nCLIFramerateLimit;
+ 		update_runtime_info();
+ 	}
+ 	for (int i = 0; i < gamescope::GAMESCOPE_SCREEN_TYPE_COUNT; i++)
+@@ -8679,8 +8695,9 @@ steamcompmgr_main(int argc, char **argv)
+ 					g_flHDRItmTargetNits = atof(optarg);
+ 				} else if (strcmp(opt_name, "framerate-limit") == 0) {
+ 					const int nTargetFPS = atoi( optarg );
+-					// Seed both screen types; Steam can replace or clear either override.
+-					// The CLI limit must not enable dynamic refresh switching.
++					// Seed both screen types; Steam can replace either override, and a request
++					// for 0 falls back to this limit. It must not enable refresh switching.
++					g_nCLIFramerateLimit = nTargetFPS;
+ 					for ( int i = 0; i < gamescope::GAMESCOPE_SCREEN_TYPE_COUNT; i++ )
+ 					{
+ 						steamcompmgr_set_app_refresh_cycle_override(
+-- 
+2.54.0 (Apple Git-157)
+
