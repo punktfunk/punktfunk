@@ -486,6 +486,12 @@ pub struct PunktfunkProbeResult {
     /// Wire packets the host put on the link, and the ones its send buffer dropped.
     pub wire_packets_sent: u32,
     pub send_dropped: u32,
+    /// Probe inter-arrival gap, µs, to a tenth of a millisecond: median and 99th percentile.
+    /// Their difference is the path's jitter.
+    pub gap_p50_us: u32,
+    pub gap_p99_us: u32,
+    /// Probe packets that arrived behind a later one.
+    pub reorders: u32,
 }
 
 /// Start a bandwidth speed test: host bursts filler at `target_kbps` goodput for
@@ -538,8 +544,121 @@ pub unsafe extern "C" fn punktfunk_connection_probe_result(
                 host_drop_pct: o.host_drop_pct,
                 wire_packets_sent: o.wire_packets_sent,
                 send_dropped: o.send_dropped,
+                gap_p50_us: o.gap_p50_us,
+                gap_p99_us: o.gap_p99_us,
+                reorders: o.reorders,
             };
         }
+        PunktfunkStatus::Ok
+    })
+}
+
+/// One finding of the network check: the id names the text the app shows
+/// ([`punktfunk_core::client::health::FindingId`] as a byte), `numbers` are its figures,
+/// `profile` is the delivery profile that helps (`1` capped, `2` smooth, `0` none).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PunktfunkHealthFinding {
+    pub id: u8,
+    pub severity: u8,
+    pub profile: u8,
+    pub numbers: [u32; 3],
+}
+
+/// Most findings one report carries; the rules can produce seven.
+pub const PUNKTFUNK_HEALTH_FINDINGS_MAX: usize = 8;
+
+/// The network check's report ([`punktfunk_core::client::health::HealthReport`]), flat.
+/// `has_clean` 0 = a host without a ramp (no loss figure is honest); `has_host` 0 = the
+/// host sent no facts; a leg or fact that was not sampled reads `0`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PunktfunkHealthReport {
+    pub ceiling_kbps: u32,
+    pub wall: u8,
+    pub has_clean: u8,
+    pub clean_rate_kbps: u32,
+    pub clean_loss_pct: f32,
+    pub clean_jitter_us: u32,
+    pub client_iface_kind: u8,
+    pub client_link_mbps: u32,
+    pub client_rcvbuf_kb: u32,
+    pub has_host: u8,
+    pub host_iface_kind: u8,
+    pub host_link_mbps: u32,
+    pub host_sndbuf_kb: u32,
+    /// Loss of the bursts leg and the capped leg, percent; `n_legs` says how many ran.
+    pub n_legs: u8,
+    pub leg_loss_pct: [f32; 2],
+    pub n_findings: u8,
+    pub findings: [PunktfunkHealthFinding; PUNKTFUNK_HEALTH_FINDINGS_MAX],
+}
+
+/// Run the network check over this connection and write its report into `*out`. Blocking
+/// for ten to twenty seconds — call it off the main thread. The connection should have been
+/// dialled with a delivery ask of probes only and facts; without one the check is the speed
+/// test alone. Errors: `Unsupported` when the host declined, `Timeout` when a round never
+/// reported.
+///
+/// # Safety
+/// `c` is a valid connection handle; `out` is writable for one `PunktfunkHealthReport`
+/// (NULL is an error).
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_network_check(
+    c: *const PunktfunkConnection,
+    out: *mut PunktfunkHealthReport,
+) -> PunktfunkStatus {
+    use punktfunk_core::client::health::{self, LegShape, SpeedError};
+    with_conn!(c => {
+        if out.is_null() {
+            return PunktfunkStatus::NullPointer;
+        }
+        let r = match health::health_check(&c.inner, |_| {}) {
+            Ok(r) => r,
+            Err(SpeedError::Request(e)) => return status_of(Err::<(), _>(e)),
+            Err(SpeedError::Declined) => return PunktfunkStatus::Unsupported,
+            Err(SpeedError::Timeout) => return PunktfunkStatus::Timeout,
+        };
+        let mut rep = PunktfunkHealthReport {
+            ceiling_kbps: r.speed.ceiling_kbps,
+            wall: r.speed.wall as u8,
+            client_iface_kind: r.client.link.kind,
+            client_link_mbps: r.client.link.mbps,
+            client_rcvbuf_kb: r.client.rcvbuf_kb,
+            ..Default::default()
+        };
+        if let Some(cl) = r.speed.clean {
+            rep.has_clean = 1;
+            rep.clean_rate_kbps = cl.rate_kbps;
+            rep.clean_loss_pct = cl.loss_pct;
+            rep.clean_jitter_us = cl.jitter_us;
+        }
+        if let Some(h) = r.host {
+            rep.has_host = 1;
+            rep.host_iface_kind = h.iface_kind;
+            rep.host_link_mbps = h.link_mbps;
+            rep.host_sndbuf_kb = h.sndbuf_kb;
+        }
+        for leg in &r.legs {
+            let slot = match leg.shape {
+                LegShape::FrameBursts => 0,
+                LegShape::Capped => 1,
+            };
+            rep.leg_loss_pct[slot] = leg.outcome.loss_pct;
+            rep.n_legs = rep.n_legs.max(slot as u8 + 1);
+        }
+        for (slot, f) in r.findings.iter().take(PUNKTFUNK_HEALTH_FINDINGS_MAX).enumerate() {
+            rep.findings[slot] = PunktfunkHealthFinding {
+                id: f.id as u8,
+                severity: f.severity as u8,
+                profile: f.profile.unwrap_or(0),
+                numbers: f.numbers,
+            };
+            rep.n_findings = slot as u8 + 1;
+        }
+        // SAFETY: `out` is a caller-owned `#[repr(C)]` slot, written once by value.
+        unsafe { *out = rep };
         PunktfunkStatus::Ok
     })
 }

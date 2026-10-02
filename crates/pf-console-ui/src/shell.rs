@@ -1517,6 +1517,17 @@ impl Shell {
                     self.show_toast(text);
                     return Some(MenuPulse::Confirm);
                 }
+                // The profile a finding offered goes on this host's record; the next
+                // connect asks for it.
+                MenuEvent::Secondary => {
+                    let (key, name, profile) = self.speed_offered_profile()?;
+                    self.bus.send(ConsoleCmd::SetHostDelivery { key, profile });
+                    self.close_speed();
+                    self.show_toast(format!(
+                        "Paced delivery set for {name} \u{2014} it applies from the next connect"
+                    ));
+                    return Some(MenuPulse::Confirm);
+                }
                 _ => return None,
             }
         }
@@ -1741,6 +1752,17 @@ impl Shell {
         self.speed_pinned_by(&sp.key)
             .is_none()
             .then_some(recommended_kbps)
+    }
+
+    /// The host and the profile Secondary would remember, from the first finding that offers
+    /// one; `None` with no answer yet or nothing offered.
+    fn speed_offered_profile(&self) -> Option<(String, String, u8)> {
+        let sp = self.speed.as_ref()?;
+        let SpeedPhase::Done { findings, .. } = &sp.phase else {
+            return None;
+        };
+        let profile = findings.iter().find_map(|f| f.profile)?;
+        Some((sp.key.clone(), sp.name.clone(), profile))
     }
 
     /// Name of the preset this host resolves bitrate from, when that preset PINS one.

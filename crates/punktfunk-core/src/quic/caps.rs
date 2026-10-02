@@ -408,6 +408,7 @@ mod tests {
         ("EXT_TAG_PADDING", EXT_TAG_PADDING),
         ("EXT_TAG_CLIENT", EXT_TAG_CLIENT),
         ("EXT_TAG_ABR", EXT_TAG_ABR),
+        ("EXT_TAG_DELIVERY", EXT_TAG_DELIVERY),
         ("EXT_TAG_PRESET", EXT_TAG_PRESET),
     ];
 

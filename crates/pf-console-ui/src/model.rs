@@ -201,14 +201,45 @@ pub enum SpeedPhase {
         kbps: u32,
     },
     Failed(String),
-    /// `recommended_kbps` keeps headroom under `throughput_kbps` for FEC and for the loss a
-    /// real stream meets — [`pf_client_core::speed::recommended_kbps`], so every client
+    /// `throughput_kbps` is what the link carries; `wall` says the ramp found its limit
+    /// rather than a floor. `recommended_kbps` keeps headroom under it for FEC and for the
+    /// loss a real stream meets — [`pf_client_core::speed::recommended_kbps`], so every client
     /// recommends the same kilobit.
     Done {
         throughput_kbps: u32,
-        loss_pct: f32,
+        /// Defaults, like `clean` and `findings`: a driver that only measured speed sends
+        /// the two figures it always sent.
+        #[serde(default)]
+        wall: bool,
+        /// The round under the ceiling; `None` toward a host without a ramp, which gets no
+        /// loss line — a blast's loss is the blast's.
+        #[serde(default)]
+        clean: Option<CleanRound>,
         recommended_kbps: u32,
+        /// What the network check found; empty from a driver that only measured speed.
+        #[serde(default)]
+        findings: Vec<FindingRow>,
     },
+}
+
+/// One round at a rate the link holds: the loss figure a speed test shows.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CleanRound {
+    pub rate_kbps: u32,
+    pub loss_pct: f32,
+    /// Spread of the inter-arrival gap, µs.
+    pub jitter_us: u32,
+}
+
+/// One finding of the network check, by id ([`punktfunk_core::client::health::FindingId`]
+/// as a byte); the words are [`crate::shell`]'s. `profile` is the delivery profile that
+/// helps (`1` capped, `2` smooth), when one does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FindingRow {
+    pub id: u8,
+    pub severity: u8,
+    pub numbers: [u32; 3],
+    pub profile: Option<u8>,
 }
 
 #[derive(Default)]
@@ -413,6 +444,12 @@ pub enum ConsoleCmd {
         port: u16,
         fp_hex: String,
         host_name: String,
+    },
+    /// Remember the delivery profile a network check offered for this host (`1` capped,
+    /// `2` smooth, `0` none); the next connect asks for it. Per host, never global.
+    SetHostDelivery {
+        key: String,
+        profile: u8,
     },
     /// Save a manually entered host, unpaired, and refresh the rows.
     SaveHost {

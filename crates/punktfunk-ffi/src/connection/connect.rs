@@ -781,6 +781,14 @@ pub struct PunktfunkConnectOpts {
     pub preset_id: *const std::os::raw::c_char,
     /// The preset's display name, or null. Read only beside a non-null `preset_id`.
     pub preset_name: *const std::os::raw::c_char,
+    /// The delivery ask (`EXT_TAG_DELIVERY`): the profile on the host's record (`1` capped,
+    /// `2` smooth) and the flags a network check sets (`1` facts, `2` probes only). Both `0`
+    /// asks nothing, which is what a shorter prefix defaults to.
+    pub delivery_profile: u8,
+    /// See `delivery_profile`.
+    pub delivery_flags: u8,
+    /// Always `0`. Fills what would otherwise be tail padding, as `reserved0` does.
+    pub reserved2: [u8; 6],
 }
 
 // No tail padding (append contract). On grow: freeze `CONNECT_OPTS_MIN_SIZE`, update these sizes.
@@ -790,13 +798,15 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 120
+        size_of::<PunktfunkConnectOpts>() == 128
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
+            && offset_of!(PunktfunkConnectOpts, delivery_profile) == 120
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 84
+        size_of::<PunktfunkConnectOpts>() == 92
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
+            && offset_of!(PunktfunkConnectOpts, delivery_profile) == 84
     );
 };
 
@@ -832,6 +842,9 @@ impl Default for PunktfunkConnectOpts {
             reserved0: [0; 3],
             preset_id: ptr::null(),
             preset_name: ptr::null(),
+            delivery_profile: 0,
+            delivery_flags: 0,
+            reserved2: [0; 6],
         }
     }
 }
@@ -1067,6 +1080,12 @@ unsafe fn connect_params(
         pin,
         identity,
         preset,
+        delivery: (o.delivery_profile != 0 || o.delivery_flags != 0).then_some(
+            punktfunk_core::quic::DeliveryAsk {
+                profile: o.delivery_profile,
+                flags: o.delivery_flags,
+            },
+        ),
         // The rest stays default: Legacy coupling (embedders decode what the host answers),
         // no display volume, whole AUs (`PunktfunkFrame` cannot tell a part), no abort.
         ..punktfunk_core::client::ConnectParams::new(

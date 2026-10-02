@@ -119,6 +119,30 @@ class SpeedTestTest {
     }
 
     @Test
+    fun theFlatReportParsesIntoFindings() {
+        // Header of 17, then one finding of six: a faster host port offering the capped profile.
+        val v = doubleArrayOf(
+            940_000.0, 1.0, 1.0, 470_000.0, 0.0, 300.0, 1.0, 1000.0, 32_768.0, 1.0, 1.0, 2500.0,
+            32_768.0, 2.0, 2.0, 0.1, 1.0,
+            1.0, 2.0, 1.0, 2500.0, 1000.0, 200.0,
+        )
+        val done = parseNetworkCheck(v)!!
+        assertEquals(940_000, done.throughputKbps)
+        assertTrue(done.wall)
+        assertEquals(470_000, done.clean!!.rateKbps)
+        assertEquals(658_000, done.recommendedKbps)
+        assertEquals(1, done.findings.size)
+        assertEquals(1, done.offeredProfile)
+        assertEquals(listOf(2500, 1000, 200), done.findings[0].numbers)
+        assertTrue(findingText(1, done.findings[0].numbers).contains("2500 vs 1000"))
+        assertTrue(findingText(7, listOf(0, 0, 0)).endsWith("Wi-Fi."))
+        // A report short of its header, or of its findings, is no report.
+        assertEquals(null, parseNetworkCheck(doubleArrayOf(1.0, 2.0)))
+        assertEquals(null, parseNetworkCheck(v.copyOf(20)))
+        assertEquals("capped", profileName(1))
+    }
+
+    @Test
     fun theRecommendationLeavesHeadroom() {
         // 70 % of measured, in the desktop clients' integer order — a stream needs room for the
         // FEC overhead and for the loss a burst measurement doesn't see.

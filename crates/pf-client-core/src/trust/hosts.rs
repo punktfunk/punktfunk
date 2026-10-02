@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// The delivery ask for a dial pinned to `fp`: the profile a network check left on that
+/// host's record, or `None` when there is no record or it asks nothing.
+pub fn delivery_ask_for(fp: Option<&[u8; 32]>) -> Option<punktfunk_core::quic::DeliveryAsk> {
+    let fp_hex: String = fp?.iter().map(|b| format!("{b:02x}")).collect();
+    let profile = KnownHosts::load().find_by_fp(&fp_hex)?.delivery?;
+    Some(punktfunk_core::quic::DeliveryAsk { profile, flags: 0 })
+}
+
 /// One trusted host: pinned cert fingerprint, how trust was granted, last-reached address.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(remote = "Self")]
@@ -43,6 +51,10 @@ pub struct KnownHost {
     /// `None` or a deleted id → global defaults; a dangling binding never blocks a connect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset_id: Option<String>,
+    /// The delivery profile to ask this host for (`1` capped, `2` smooth), set from a network
+    /// check's finding. Per host: a Wi-Fi TV and a wired desk differ. `None` asks nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<u8>,
     /// Extra preset cards for this host; order = card order. Presentation only — not
     /// the default (`preset_id`). Duplicates and dangling ids are dropped at resolve.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -124,6 +136,7 @@ impl Default for KnownHost {
             mgmt_port: None,
             clipboard_sync: false,
             preset_id: None,
+            delivery: None,
             pinned_presets: Vec::new(),
             game_presets: BTreeMap::new(),
             id: Some(crate::presets::new_record_uuid()),
@@ -868,6 +881,7 @@ mod tests {
                 mgmt_port: Some(47991),
                 clipboard_sync: true,
                 preset_id: Some("aaaaaaaaaaaa".into()),
+                delivery: None,
                 pinned_presets: vec!["bbbbbbbbbbbb".into()],
                 game_presets: [("halo".to_string(), "cccccccccccc".to_string())].into(),
                 id: Some("11111111-2222-4333-8444-555555555555".into()),
@@ -905,6 +919,7 @@ mod tests {
         k.upsert(KnownHost {
             fp_hex: fp.into(),
             preset_id: Some("cccccccccccc".into()),
+            delivery: None,
             pinned_presets: vec!["dddddddddddd".into()],
             ..Default::default()
         });
@@ -994,6 +1009,7 @@ mod tests {
                 mgmt_port: Some(47991),
                 clipboard_sync: true,
                 preset_id: Some("aaaaaaaaaaaa".into()),
+                delivery: None,
                 pinned_presets: vec!["bbbbbbbbbbbb".into()],
                 game_presets: [("halo".to_string(), "cccccccccccc".to_string())].into(),
                 id: Some("11111111-2222-4333-8444-555555555555".into()),
@@ -1040,6 +1056,7 @@ mod tests {
                 paired: true,
                 clipboard_sync: true,
                 preset_id: Some("aaaaaaaaaaaa".into()),
+                delivery: None,
                 id: Some("11111111-2222-4333-8444-555555555555".into()),
                 ..Default::default()
             }],

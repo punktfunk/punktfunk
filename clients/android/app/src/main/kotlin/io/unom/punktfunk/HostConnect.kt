@@ -135,6 +135,9 @@ suspend fun connectToHost(
     dialer: String,
     timeoutMs: Int = CONNECT_TIMEOUT_MS,
     preset: StreamPreset? = null,
+    // What a network check asks besides the profile on the host's record ([DELIVERY_FACTS],
+    // [DELIVERY_PROBE_ONLY]); a plain connect asks nothing besides.
+    deliveryFlags: Int = 0,
 ): Long {
     // One launch, one session: every shell's connect lands here, so the refusal lives here too.
     if (!SessionGate.take()) {
@@ -142,7 +145,10 @@ suspend fun connectToHost(
         return 0L
     }
     try {
-        return dial(context, settings, identity, host, port, pinHex, launch, dialer, timeoutMs, preset)
+        return dial(
+            context, settings, identity, host, port, pinHex, launch, dialer, timeoutMs, preset,
+            deliveryFlags,
+        )
     } finally {
         SessionGate.release()
     }
@@ -160,6 +166,7 @@ private suspend fun dial(
     dialer: String,
     timeoutMs: Int,
     preset: StreamPreset?,
+    deliveryFlags: Int,
 ): Long {
     // Advertise HDR only when the user enabled it AND this device's display can present it (else the
     // host sends a proper SDR stream rather than PQ the panel would mis-tone-map).
@@ -254,6 +261,10 @@ private suspend fun dial(
             dialer = "android ${appVersion(context)} $dialer",
             presetId = preset?.id,
             presetName = preset?.name,
+            // The profile a network check left on this host's record; a host that does not read
+            // the ask streams as it always has.
+            deliveryProfile = if (pinHex.isEmpty()) 0 else KnownHostStore(context).getByFp(pinHex)?.delivery ?: 0,
+            deliveryFlags = deliveryFlags,
         )
         NativeBridge.nativeConnect(request.toJson())
     }

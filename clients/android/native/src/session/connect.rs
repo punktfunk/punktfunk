@@ -357,6 +357,12 @@ struct ConnectRequest {
     /// Soft codec preference wire byte (0 = Auto).
     #[serde(default)]
     preferred_codec: u8,
+    /// The delivery ask (`EXT_TAG_DELIVERY`): the profile on the host's record, and the flags
+    /// a network check sets (facts, probes only). `0`/`0` asks nothing.
+    #[serde(default)]
+    delivery_profile: u8,
+    #[serde(default)]
+    delivery_flags: u8,
     /// Handshake budget: short for a normal connect, long (≥ the host's approval-park window) for
     /// the no-PIN "request access" path so a slow operator approval lands on this connection.
     timeout_ms: u64,
@@ -435,6 +441,8 @@ fn connect(req: ConnectRequest) -> jlong {
         audio_bits,
         video_codecs,
         preferred_codec,
+        delivery_profile,
+        delivery_flags,
         timeout_ms,
         launch,
         device_name,
@@ -505,6 +513,12 @@ fn connect(req: ConnectRequest) -> jlong {
     let (audio_rate_hz, audio_bits) =
         resolve_requested_audio_format(audio_rate_hz, audio_bits, audio_channels);
     let params = ConnectParams {
+        delivery: (delivery_profile != 0 || delivery_flags != 0).then_some(
+            punktfunk_core::quic::DeliveryAsk {
+                profile: delivery_profile,
+                flags: delivery_flags,
+            },
+        ),
         compositor: CompositorPref::from_u8(compositor_pref),
         gamepad: GamepadPref::from_u8(gamepad_pref),
         bitrate_kbps, // 0 = host default

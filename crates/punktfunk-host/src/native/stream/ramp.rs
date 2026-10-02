@@ -34,7 +34,7 @@ pub(super) struct RampServer {
     idle: Option<(Session, ProbeReceiver)>,
 }
 
-type ProbeReceiver = std::sync::mpsc::Receiver<ProbeRequest>;
+type ProbeReceiver = std::sync::mpsc::Receiver<ProbeShaped>;
 
 impl RampServer {
     /// Take the session for the bring-up gap. `open` is the flag the control
@@ -164,7 +164,7 @@ fn serve(
         match probe_rx.recv_timeout(std::time::Duration::from_millis(2)) {
             Ok(req) => {
                 quiet_since = None;
-                let req = ProbeRequest {
+                let req = ProbeShaped {
                     duration_ms: req.duration_ms.min(RAMP_STEP_MAX_MS),
                     ..req
                 };
@@ -232,10 +232,13 @@ mod tests {
         );
         for target_kbps in [5_000, 10_000] {
             req_tx
-                .send(ProbeRequest {
-                    target_kbps,
-                    duration_ms: 25,
-                })
+                .send(
+                    ProbeRequest {
+                        target_kbps,
+                        duration_ms: 25,
+                    }
+                    .into(),
+                )
                 .expect("the server is listening");
         }
         // Both results, then the hand-over: the step in flight finishes first.
@@ -282,10 +285,13 @@ mod tests {
             false,
         );
         req_tx
-            .send(ProbeRequest {
-                target_kbps: 40_000,
-                duration_ms: RAMP_STEP_MAX_MS,
-            })
+            .send(
+                ProbeRequest {
+                    target_kbps: 40_000,
+                    duration_ms: RAMP_STEP_MAX_MS,
+                }
+                .into(),
+            )
             .expect("the server is listening");
         std::thread::sleep(std::time::Duration::from_millis(5)); // mid-step
         let started = std::time::Instant::now();
@@ -365,10 +371,13 @@ mod tests {
             false,
         );
         req_tx
-            .send(ProbeRequest {
-                target_kbps: 20_000,
-                duration_ms: 800,
-            })
+            .send(
+                ProbeRequest {
+                    target_kbps: 20_000,
+                    duration_ms: 800,
+                }
+                .into(),
+            )
             .expect("the server is listening");
         let started = std::time::Instant::now();
         let r = loop {
@@ -404,10 +413,13 @@ mod tests {
             true,
         );
         req_tx
-            .send(ProbeRequest {
-                target_kbps: 20_000,
-                duration_ms: 25,
-            })
+            .send(
+                ProbeRequest {
+                    target_kbps: 20_000,
+                    duration_ms: 25,
+                }
+                .into(),
+            )
             .expect("the server is listening");
         // The pipeline reports ready while the step is in flight: `finish`
         // blocks on the grace, so it goes on its own thread.
@@ -418,10 +430,13 @@ mod tests {
             "ready mid-step still leaves the window open for the closing pin"
         );
         req_tx
-            .send(ProbeRequest {
-                target_kbps: 40_000,
-                duration_ms: 25,
-            })
+            .send(
+                ProbeRequest {
+                    target_kbps: 40_000,
+                    duration_ms: 25,
+                }
+                .into(),
+            )
             .expect("the grace still serves");
         let (session, _rx) = finishing.join().expect("finish returns");
         assert!(!open.load(Ordering::SeqCst));

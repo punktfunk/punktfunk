@@ -231,6 +231,12 @@ impl Session {
         let l = std::sync::atomic::Ordering::Relaxed;
         self.stats.probe_first_arrival_ns.store(0, l);
         self.stats.probe_last_arrival_ns.store(0, l);
+        self.stats.probe_prev_arrival_ns.store(0, l);
+        self.stats.probe_last_key.store(0, l);
+        self.stats.probe_reorders.store(0, l);
+        for b in &self.stats.probe_gap_buckets {
+            b.store(0, l);
+        }
     }
 
     /// Seal one plaintext packet into reused `wire` in place. Layout is

@@ -67,6 +67,8 @@ impl ControlTask {
             audio_mute,
             pad_slots,
             launch_outcome,
+            delivery,
+            host_facts,
             ..
         } = &*shared;
         // Mid-stream clock re-sync ([`ClockResync`]): a batch every
@@ -93,6 +95,8 @@ impl ControlTask {
                     let bytes = match req {
                         CtrlRequest::Mode(m) => Reconfigure { mode: m }.encode(),
                         CtrlRequest::Probe(p) => p.encode(),
+                        CtrlRequest::ProbeShaped(p) => p.encode(),
+                        CtrlRequest::SetDelivery(profile) => crate::quic::SetDelivery { profile }.encode(),
                         CtrlRequest::Keyframe => {
                             recovery_kf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             RequestKeyframe.encode()
@@ -186,6 +190,15 @@ impl ControlTask {
                             client_interval_ms = p.client_interval_ms,
                             "speed-test probe result"
                         );
+                    } else if let Ok(ack) = crate::quic::DeliveryChanged::decode(&msg) {
+                        *delivery.lock().unwrap() = Some(ack);
+                        tracing::info!(
+                            profile = ack.profile,
+                            forced = ack.forced,
+                            "host set the delivery profile"
+                        );
+                    } else if let Ok(facts) = crate::quic::HostFacts::decode(&msg) {
+                        *host_facts.lock().unwrap() = Some(facts);
                     } else if let Ok(ack) = BitrateChanged::decode(&msg) {
                         // Host clamp is authoritative. Park it for the pump
                         // controller; any ack also means this host renegotiates.

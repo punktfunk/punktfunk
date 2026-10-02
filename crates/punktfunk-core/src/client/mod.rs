@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 mod control;
 pub(crate) mod frame_channel;
+pub mod health;
 mod pad_mouse;
 mod pad_touch;
 mod pairing;
@@ -545,6 +546,10 @@ pub struct ConnectParams {
     /// Settings preset this dial names ([`crate::quic::EXT_TAG_PRESET`]); the host shows it and
     /// hands it to hooks, the stream is unchanged. `None` names none.
     pub preset: Option<crate::quic::SessionPreset>,
+    /// The delivery profile to stream under and what to ask besides
+    /// ([`crate::quic::EXT_TAG_DELIVERY`]); `None` asks nothing. A host that reads it answers
+    /// in [`NativeClient::delivery`].
+    pub delivery: Option<crate::quic::DeliveryAsk>,
     /// Handshake budget. The dial re-dials inside it, so a waking host is not a failure.
     pub timeout: Duration,
     /// Abort while blocked: a request-access knock parks ~185 s. Never alias the session's
@@ -578,6 +583,7 @@ impl ConnectParams {
             pin: None,
             identity: None,
             preset: None,
+            delivery: None,
             timeout,
             cancel: None,
         }
@@ -619,6 +625,7 @@ impl NativeClient {
             std::sync::mpsc::sync_channel::<crate::quic::AccessUpdate>(ACCESS_QUEUE);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Negotiated>>();
         let shared = Arc::new(ClientShared::new(params.mode));
+        *shared.delivery_ask.lock().unwrap() = params.delivery;
 
         let cancel = params.cancel.take();
         let (timeout, bitrate_kbps, requested_gamepad) =
@@ -1165,10 +1172,30 @@ impl NativeClient {
             }));
     }
 
-    /// Burst filler at `target_kbps` for `duration_ms`, pausing video. Non-blocking; poll
+    /// Burst filler at `target_kbps` for `duration_ms` beside the video. Non-blocking; poll
     /// [`NativeClient::probe_result`] until `done`. Resets any prior measurement. Host clamps
     /// ≤ 10 Gbps, ≤ 5 s.
     pub fn request_probe(&self, target_kbps: u32, duration_ms: u32) -> Result<()> {
+        self.send_probe(
+            duration_ms,
+            CtrlRequest::Probe(ProbeRequest {
+                target_kbps,
+                duration_ms,
+            }),
+        )
+    }
+
+    /// A shaped burst ([`crate::quic::ProbeShaped`]): frame-sized bursts at line rate, or
+    /// capped groups, at the same average rate. Same polling as [`Self::request_probe`].
+    /// Refused toward a host that never answered the delivery tag ([`Self::delivery`]).
+    pub fn request_probe_shaped(&self, shape: crate::quic::ProbeShaped) -> Result<()> {
+        self.delivery().ok_or(PunktfunkError::Unsupported(
+            "host does not read delivery messages",
+        ))?;
+        self.send_probe(shape.duration_ms, CtrlRequest::ProbeShaped(shape))
+    }
+
+    fn send_probe(&self, duration_ms: u32, req: CtrlRequest) -> Result<()> {
         *self.shared.probe.lock().unwrap() = ProbeState {
             active: true,
             duration_ms,
@@ -1176,10 +1203,7 @@ impl NativeClient {
         };
         let sent = self
             .ctrl_tx
-            .try_send(CtrlRequest::Probe(ProbeRequest {
-                target_kbps,
-                duration_ms,
-            }))
+            .try_send(req)
             .map_err(|_| PunktfunkError::Closed);
         if sent.is_err() {
             // Send failed: nothing will answer. Leaving `active` would suppress the pump's
@@ -1187,6 +1211,65 @@ impl NativeClient {
             self.shared.probe.lock().unwrap().active = false;
         }
         sent
+    }
+
+    /// Stream under `profile` (`0` burst, `1` capped, `2` smooth) from the next frame; the
+    /// host's answer lands in [`Self::delivery`]. Refused toward a host that never answered
+    /// the delivery tag.
+    pub fn set_delivery(&self, profile: u8) -> Result<()> {
+        self.delivery().ok_or(PunktfunkError::Unsupported(
+            "host does not read delivery messages",
+        ))?;
+        self.ctrl_tx
+            .try_send(CtrlRequest::SetDelivery(profile))
+            .map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// The profile this session streams under, as the host last said, and whether the host
+    /// pins one for every session. `None` until the host answers — for ever, from one that
+    /// does not read the tag, or when the dial asked nothing.
+    pub fn delivery(&self) -> Option<crate::quic::DeliveryChanged> {
+        *self.shared.delivery.lock().unwrap()
+    }
+
+    /// What the host said about its end of the path, when the dial asked for it.
+    pub fn host_facts(&self) -> Option<crate::quic::HostFacts> {
+        *self.shared.host_facts.lock().unwrap()
+    }
+
+    /// This dial's delivery ask ([`ConnectParams::delivery`]).
+    pub fn delivery_ask(&self) -> Option<crate::quic::DeliveryAsk> {
+        *self.shared.delivery_ask.lock().unwrap()
+    }
+
+    /// A diagnostic session: the dial asked for probes only, so no video ever comes.
+    pub fn probe_only(&self) -> bool {
+        self.delivery_ask()
+            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
+    }
+
+    /// Packets the OS dropped at this session's receive buffer so far; `None` where the
+    /// platform keeps no per-socket figure ([`crate::transport::sockstat`]).
+    pub fn socket_drops(&self) -> Option<u64> {
+        let sock = self.shared.data_sock.lock().unwrap();
+        sock.as_ref()
+            .and_then(crate::transport::sockstat::socket_drops)
+    }
+
+    /// The receive buffer the OS granted the data socket, KiB; `0` before the dial lands.
+    pub fn recv_buffer_kb(&self) -> u32 {
+        let sock = self.shared.data_sock.lock().unwrap();
+        sock.as_ref()
+            .map_or(0, crate::transport::sockstat::recv_buffer_kb)
+    }
+
+    /// The address this session's data leaves from, once the dial has landed.
+    pub fn local_ip(&self) -> Option<std::net::IpAddr> {
+        let sock = self.shared.data_sock.lock().unwrap();
+        sock.as_ref()
+            .and_then(|s| s.local_addr().ok())
+            .map(|a| a.ip())
+            .filter(|ip| !ip.is_unspecified())
     }
 
     /// Whether a burst is in flight — an embedder speed test or the startup capacity probe. Loss
@@ -1245,6 +1328,9 @@ impl NativeClient {
             host_drop_pct,
             wire_packets_sent: p.host_wire_packets,
             send_dropped: p.host_send_dropped,
+            gap_p50_us: crate::stats::probe_gap_percentile(&p.gap_buckets, 0.5),
+            gap_p99_us: crate::stats::probe_gap_percentile(&p.gap_buckets, 0.99),
+            reorders: p.reorders,
         }
     }
 

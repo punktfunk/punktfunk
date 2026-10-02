@@ -1,10 +1,22 @@
 //! Pluggable packet I/O. The hot path calls [`Transport::send`] / [`Transport::recv`]
 //! directly — no async runtime is involved.
 
+/// Interface kinds, as [`ifinfo`] reads them and the wire carries them
+/// ([`crate::quic::HostFacts`]).
+pub const IFACE_KIND_UNKNOWN: u8 = 0;
+pub const IFACE_KIND_ETHERNET: u8 = 1;
+pub const IFACE_KIND_WIFI: u8 = 2;
+/// Loopback, a tunnel, a bridge: a link with no wire of its own.
+pub const IFACE_KIND_OTHER: u8 = 3;
+
+#[cfg(not(target_family = "wasm"))]
+pub mod ifinfo;
 mod loopback;
 mod qos;
 #[cfg(windows)]
 mod qos_windows;
+#[cfg(not(target_family = "wasm"))]
+pub mod sockstat;
 mod udp;
 
 pub use loopback::{loopback_pair, LoopbackTransport};

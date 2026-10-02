@@ -107,12 +107,30 @@ impl WireProbe {
     }
 }
 
+/// What this host knows about its own end of the path, for a client that asked
+/// ([`punktfunk_core::quic::HostFacts`]): the data socket's interface kind and link speed
+/// ([`punktfunk_core::transport::ifinfo`]), its granted send buffer, and the pinned profile.
+pub fn host_facts(sock: Option<&UdpSocket>) -> punktfunk_core::quic::HostFacts {
+    use punktfunk_core::quic::FORCED_PROFILE_NONE;
+    let link = sock
+        .and_then(|s| s.local_addr().ok())
+        .map_or(Default::default(), |a| {
+            punktfunk_core::transport::ifinfo::link_facts(a.ip())
+        });
+    let sndbuf_kb = sock
+        .and_then(|s| socket2::SockRef::from(s).send_buffer_size().ok())
+        .map_or(0, |b| (b / 1024) as u32);
+    punktfunk_core::quic::HostFacts {
+        iface_kind: link.kind,
+        link_mbps: link.mbps,
+        sndbuf_kb,
+        forced_profile: crate::send_pacing::forced_delivery()
+            .map_or(FORCED_PROFILE_NONE, |p| p as u8),
+    }
+}
+
 fn iface_for(ip: IpAddr) -> Option<String> {
-    if_addrs::get_if_addrs()
-        .ok()?
-        .into_iter()
-        .find(|i| i.ip() == ip)
-        .map(|i| i.name)
+    punktfunk_core::transport::ifinfo::iface_for(ip)
 }
 
 #[cfg(target_os = "linux")]

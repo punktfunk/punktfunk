@@ -93,12 +93,33 @@ fn delivery_share(
         .flatten()
 }
 
+/// The profile this session streams under from the next frame: the client's ask, unless
+/// `PUNKTFUNK_DELIVERY` pins one for every session. Stored for the send loop and answered.
+fn apply_delivery(
+    delivery: &std::sync::atomic::AtomicU8,
+    asked: u8,
+) -> punktfunk_core::quic::DeliveryChanged {
+    let forced = crate::send_pacing::forced_delivery();
+    let profile = forced.unwrap_or_else(|| crate::send_pacing::DeliveryProfile::from_u8(asked));
+    delivery.store(profile as u8, Ordering::Relaxed);
+    tracing::info!(
+        asked,
+        profile = ?profile,
+        forced = forced.is_some(),
+        "delivery profile set"
+    );
+    punktfunk_core::quic::DeliveryChanged {
+        profile: profile as u8,
+        forced: forced.is_some(),
+    }
+}
+
 /// Whether this probe request is as short as a bring-up ramp step.
 ///
 /// The length bound is the ramp's exemption from the spacing. Without it a
 /// client could hold the window open with 5 s bursts at the probe ceiling,
 /// which is the uplink-pinning the spacing exists against.
-fn is_ramp_length(req: &ProbeRequest) -> bool {
+fn is_ramp_length(req: &ProbeShaped) -> bool {
     req.duration_ms <= super::stream::RAMP_STEP_MAX_MS
 }
 
@@ -212,6 +233,13 @@ pub(super) struct Task {
     /// may carry the reason byte. Clear for every shipped client, which rejects
     /// a longer ack, and for every client behind a host without `HOST_CAP2_EXT`.
     pub(super) ack_reason: bool,
+    /// `EXT_TAG_DELIVERY` on the client's `Start`: answered once this task runs.
+    pub(super) delivery_ask: Option<punktfunk_core::quic::DeliveryAsk>,
+    /// Sent after the answer when the ask set `EXT_DELIVERY_FACTS`.
+    pub(super) host_facts: Option<punktfunk_core::quic::HostFacts>,
+    /// A diagnostic session (`EXT_DELIVERY_PROBE_ONLY`): every probe is served, with no
+    /// spacing. The session holds no pipeline, and the stream thread bounds what it costs.
+    pub(super) probe_only: bool,
     /// The control halves of the session's channels to the stream thread.
     pub(super) ends: super::wiring::ControlEnds,
     /// Encoder truth read at `SetBitrate`, so the ack never exceeds what the encoder will run,
@@ -261,6 +289,9 @@ pub(super) async fn run(task: Task) {
         wire_bytes,
         audio_kbps,
         ack_reason,
+        delivery_ask,
+        host_facts,
+        probe_only,
         ends:
             super::wiring::ControlEnds {
                 reconfig_tx,
@@ -286,6 +317,7 @@ pub(super) async fn run(task: Task) {
                 fec_target,
                 fec_requested,
                 link_kbps,
+                delivery,
                 phase: phase_ctl,
                 ramp_open,
                 cursor_client_draws,
@@ -356,6 +388,22 @@ pub(super) async fn run(task: Task) {
     link_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // `interval` fires immediately; the first tick would close an empty window at 0 s.
     link_tick.tick().await;
+    // Answer the Start tag: what this session streams under, then the host's facts when
+    // asked. The answer is also how the client learns this host reads delivery at all.
+    if let Some(ask) = delivery_ask {
+        let ack = apply_delivery(&delivery, ask.profile);
+        if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+            return;
+        }
+        if let Some(facts) = host_facts {
+            if io::write_msg(&mut ctrl_send, &facts.encode())
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
     // `select!` drops this future whenever a sibling fires. `io::read_msg`
     // would lose a partial frame and misalign the rest of the session.
     let mut ctrl_reader = io::MsgReader::new(ctrl_recv);
@@ -461,6 +509,11 @@ pub(super) async fn run(task: Task) {
                                 break;
                             }
                         }
+                    }
+                } else if let Ok(req) = punktfunk_core::quic::SetDelivery::decode(&msg) {
+                    let ack = apply_delivery(&delivery, req.profile);
+                    if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                        break;
                     }
                 } else if let Ok(rep) = LinkReport::decode(&msg) {
                     link_kbps.store(rep.proven_kbps, Ordering::Relaxed);
@@ -599,9 +652,14 @@ pub(super) async fn run(task: Task) {
                         "client acked shard-payload change"
                     );
                     let _ = shard_ack_tx.send(ack.shard_payload);
-                } else if let Ok(req) = ProbeRequest::decode(&msg) {
+                } else if let Ok(req) = ProbeRequest::decode(&msg)
+                    .map(ProbeShaped::from)
+                    .or_else(|_| ProbeShaped::decode(&msg))
+                {
                     let open = ramp_open.load(Ordering::SeqCst);
-                    if !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open) {
+                    if !probe_only
+                        && !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open)
+                    {
                         tracing::warn!(
                             target_kbps = req.target_kbps,
                             "speed-test probe rejected (rate-limited)"
@@ -1216,9 +1274,12 @@ mod tests {
     /// with no ramp behind it is spaced too.
     #[test]
     fn only_a_short_step_of_the_ramp_skips_the_spacing() {
-        let req = |duration_ms| ProbeRequest {
-            target_kbps: 40_000,
-            duration_ms,
+        let req = |duration_ms| -> ProbeShaped {
+            ProbeRequest {
+                target_kbps: 40_000,
+                duration_ms,
+            }
+            .into()
         };
         assert!(is_ramp_length(&req(25)));
         assert!(is_ramp_length(&req(super::stream::RAMP_STEP_MAX_MS)));

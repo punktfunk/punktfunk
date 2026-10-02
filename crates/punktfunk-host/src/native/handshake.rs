@@ -311,6 +311,9 @@ pub(super) struct Negotiated {
     pub(super) preset: Option<crate::events::PresetRef>,
     /// `EXT_TAG_ABR` on `Start` (`0` = absent): the ABR wire features this client reads.
     pub(super) abr_features: u8,
+    /// `EXT_TAG_DELIVERY` on `Start`: the profile and the extras the client asked for;
+    /// `None` asked nothing and is answered with nothing.
+    pub(super) delivery_ask: Option<punktfunk_core::quic::DeliveryAsk>,
     pub(super) compositor: Option<crate::vdisplay::Compositor>,
     /// Gamescope sub-mode as a value, not process env — a concurrent connect would overwrite env.
     pub(super) gamescope_route: Option<crate::vdisplay::GamescopeRoute>,
@@ -834,6 +837,7 @@ pub(super) async fn negotiate(
     // cannot read, and bits this host does not know are ignored.
     let abr_features = punktfunk_core::quic::ext_abr_features(&start_ext);
     let preset = punktfunk_core::quic::SessionPreset::from_ext(&start_ext).map(Into::into);
+    let delivery_ask = punktfunk_core::quic::DeliveryAsk::from_ext(&start_ext);
     bringup.mark("start");
     // `wire_mtu::spawn_watch` is started by `serve_session` once the control-task channels
     // exist; it also drives mid-session shard renegotiation (needs the control writer).
@@ -846,6 +850,7 @@ pub(super) async fn negotiate(
         client_label,
         preset,
         abr_features,
+        delivery_ask,
         compositor,
         gamescope_route,
         prep,

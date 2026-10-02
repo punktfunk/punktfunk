@@ -156,7 +156,9 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         // answer two ways.
         let abr = [crate::quic::EXT_ABR_ACK_REASON];
         let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
-        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr, &preset);
+        // The delivery ask rides only when the dial made one; a host that reads it answers.
+        let delivery: Vec<u8> = p.delivery.map(|d| d.encode().to_vec()).unwrap_or_default();
+        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr, &preset, &delivery);
         let start_msg = if ext.is_empty() {
             start.encode()
         } else {
@@ -187,6 +189,9 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         // Stops with the shared shutdown flag.
         if let Ok(sock) = transport.try_clone_socket() {
             crate::transport::spawn_data_punch(sock, shutdown.clone());
+        }
+        if let Ok(sock) = transport.try_clone_socket() {
+            *args.shared.data_sock.lock().unwrap() = Some(sock);
         }
         let mut session = Session::new(welcome.session_config(Role::Client), Box::new(transport))?;
         // PyroWave: aged-out lossy frames as blocks-with-holes. All-intra renders

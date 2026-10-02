@@ -1033,8 +1033,9 @@ fn spawn_packetizer(
 /// [`auto_burst_bytes`](crate::send_pacing::auto_burst_bytes); only IDR / scene-change overflow
 /// spreads at ~3× stream rate, bounded to ~2 frame intervals. Chunking is ≤ 12 steps, chunk ≥
 /// 16: every paced step ends in `thread::sleep` whose overshoot must stay bitrate-independent.
-/// Send failure ends the whole session via `on_lost` — audio would otherwise keep streaming at
-/// the dead endpoint.
+/// Moonlight cannot ask for a delivery profile, so `PUNKTFUNK_DELIVERY` is the only way to
+/// one here. Send failure ends the whole session via `on_lost` — audio would otherwise keep
+/// streaming at the dead endpoint.
 #[allow(clippy::too_many_arguments)]
 fn spawn_sender(
     sock: UdpSocket,
@@ -1053,6 +1054,8 @@ fn spawn_sender(
             crate::native::boost_thread_priority(false);
             let mut sent: u64 = 0;
             let mut dropped: u64 = 0;
+            let profile = crate::send_pacing::forced_delivery().unwrap_or_default();
+            let mut pacing = crate::send_pacing::Pacing::new(None);
             while let Ok(mut batch) = rx.recv() {
                 dropped += crate::send_pacing::inject_video_drop(&mut batch);
                 if batch.is_empty() {
@@ -1060,7 +1063,8 @@ fn spawn_sender(
                 }
                 let wire_bytes: usize = batch.iter().map(|p| p.len()).sum();
                 let pace_rate = pace_rate_bps.load(Ordering::Relaxed);
-                let burst_bytes = crate::send_pacing::auto_burst_bytes(pace_rate, wire_bytes);
+                pacing.update(pace_rate, frame_interval * 2, profile);
+                let burst_bytes = pacing.burst_bytes(wire_bytes);
                 let cfg = crate::send_pacing::PaceCfg {
                     burst_bytes: Some(burst_bytes),
                     chunk: crate::send_pacing::ChunkPolicy::Bounded {
@@ -1076,11 +1080,17 @@ fn spawn_sender(
                     overflow_bytes,
                     frame_interval * 2,
                 );
-                let r = crate::send_pacing::pace_frame(&batch, budget, &cfg, |chunk| {
-                    sendmmsg_all(&sock, chunk)?;
-                    sent += chunk.len() as u64;
-                    Ok::<(), std::io::Error>(())
-                });
+                let r = crate::send_pacing::pace_frame(
+                    &batch,
+                    budget,
+                    &cfg,
+                    pacing.clock.as_mut(),
+                    |chunk| {
+                        sendmmsg_all(&sock, chunk)?;
+                        sent += chunk.len() as u64;
+                        Ok::<(), std::io::Error>(())
+                    },
+                );
                 match r {
                     Ok(stat) => {
                         // A stalled reader must not grow this unbounded.

@@ -168,6 +168,45 @@ pub const EXT_ABR_ACK_REASON: u8 = 0x01;
 /// nothing about the stream. Absent when the client streams with its plain settings.
 pub const EXT_TAG_PRESET: u16 = 4;
 
+/// Extension tag `5` on `Start`: `[profile, flags]` — the delivery profile this client
+/// asks the host to stream under (`0` burst, `1` capped, `2` smooth) and what it wants
+/// besides ([`EXT_DELIVERY_FACTS`], [`EXT_DELIVERY_PROBE_ONLY`]). A host that reads the tag
+/// answers it with [`DeliveryChanged`](super::control::DeliveryChanged), and that answer is
+/// the client's licence to send anything else about delivery; a host that skips it answers
+/// nothing and streams as it always has. Absent = asks nothing.
+pub const EXT_TAG_DELIVERY: u16 = 5;
+
+/// [`EXT_TAG_DELIVERY`] flag bit 0: send [`HostFacts`](super::control::HostFacts) once.
+pub const EXT_DELIVERY_FACTS: u8 = 0x01;
+
+/// [`EXT_TAG_DELIVERY`] flag bit 1: a diagnostic session — serve probes from the punched
+/// data plane and never build a pipeline.
+pub const EXT_DELIVERY_PROBE_ONLY: u8 = 0x02;
+
+/// What a client asks about delivery on `Start` ([`EXT_TAG_DELIVERY`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeliveryAsk {
+    /// `0` burst, `1` capped, `2` smooth; the host maps anything else to burst.
+    pub profile: u8,
+    pub flags: u8,
+}
+
+impl DeliveryAsk {
+    pub fn encode(&self) -> [u8; 2] {
+        [self.profile, self.flags]
+    }
+
+    /// The ask in a decoded block; `None` when the tag is absent or empty. A one-byte
+    /// value asks for a profile and nothing else.
+    pub fn from_ext(entries: &[(u16, &[u8])]) -> Option<DeliveryAsk> {
+        let (_, v) = entries.iter().find(|(tag, _)| *tag == EXT_TAG_DELIVERY)?;
+        Some(DeliveryAsk {
+            profile: *v.first()?,
+            flags: v.get(1).copied().unwrap_or(0),
+        })
+    }
+}
+
 /// Longest [`SessionPreset::id`], printable ASCII.
 pub const PRESET_ID_MAX: usize = 32;
 /// Longest [`SessionPreset::name`] in UTF-8 bytes.
@@ -222,29 +261,34 @@ impl SessionPreset {
     }
 }
 
-/// The extension entries a client appends to its `Start`: label, features, then the preset.
+/// The extension entries a client appends to its `Start`: label, features, the preset,
+/// then the delivery ask.
 ///
 /// Empty toward a host without [`HOST_CAP2_EXT`](super::HOST_CAP2_EXT): that host reads
 /// `Start`'s six frozen bytes and nothing else, so it never learns the ABR features and
-/// never lengthens an ack — today's behaviour, reached by never being told. An empty label
-/// or preset says nothing rather than saying nothing at length.
+/// never lengthens an ack — today's behaviour, reached by never being told. An empty label,
+/// preset or ask says nothing rather than saying nothing at length.
 #[cfg(any(feature = "quic", test))]
 pub(crate) fn start_ext<'a>(
     host_caps2: u8,
     label: &'a str,
     abr: &'a [u8],
     preset: &'a [u8],
+    delivery: &'a [u8],
 ) -> Vec<(u16, &'a [u8])> {
     if host_caps2 & super::HOST_CAP2_EXT == 0 {
         return Vec::new();
     }
-    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(3);
+    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(4);
     if !label.is_empty() {
         out.push((EXT_TAG_CLIENT, label.as_bytes()));
     }
     out.push((EXT_TAG_ABR, abr));
     if !preset.is_empty() {
         out.push((EXT_TAG_PRESET, preset));
+    }
+    if !delivery.is_empty() {
+        out.push((EXT_TAG_DELIVERY, delivery));
     }
     out
 }
@@ -2415,15 +2459,15 @@ mod tests {
     #[test]
     fn an_old_host_is_told_nothing_and_answers_as_it_always_did() {
         let abr = [EXT_ABR_ACK_REASON];
-        assert!(start_ext(0, "android 0.38.0", &abr, &[]).is_empty());
-        assert!(start_ext(HOST_CAP2_REPEAT_MARK | HOST_CAP2_TOUCH, "x", &abr, &[]).is_empty());
+        assert!(start_ext(0, "android 0.38.0", &abr, &[], &[]).is_empty());
+        assert!(start_ext(HOST_CAP2_REPEAT_MARK | HOST_CAP2_TOUCH, "x", &abr, &[], &[]).is_empty());
         // A host that does parse it hears both, the log label first.
-        let ext = start_ext(HOST_CAP2_EXT, "android 0.38.0", &abr, &[]);
+        let ext = start_ext(HOST_CAP2_EXT, "android 0.38.0", &abr, &[], &[]);
         assert_eq!(ext.len(), 2);
         assert_eq!(ext[0].0, EXT_TAG_CLIENT);
         assert_eq!(ext_abr_features(&ext), EXT_ABR_ACK_REASON);
         // No label is still a tag: the feature byte does not ride on a log line.
-        let ext = start_ext(HOST_CAP2_EXT, "", &abr, &[]);
+        let ext = start_ext(HOST_CAP2_EXT, "", &abr, &[], &[]);
         assert_eq!(ext, vec![(EXT_TAG_ABR, &abr[..])]);
     }
 
@@ -2432,15 +2476,15 @@ mod tests {
         let preset = SessionPreset::new("3f9a0c11e2b4", "Docked").unwrap();
         let bytes = preset.encode();
         let abr = [EXT_ABR_ACK_REASON];
-        let block = encode_ext_block(&start_ext(HOST_CAP2_EXT, "deck", &abr, &bytes)).unwrap();
+        let block = encode_ext_block(&start_ext(HOST_CAP2_EXT, "deck", &abr, &bytes, &[])).unwrap();
         let got = decode_ext_block(&block).unwrap();
         assert_eq!(SessionPreset::from_ext(&got), Some(preset));
         // Nothing set, nothing sent; an old host hears none of it.
         assert_eq!(
-            SessionPreset::from_ext(&start_ext(HOST_CAP2_EXT, "", &abr, &[])),
+            SessionPreset::from_ext(&start_ext(HOST_CAP2_EXT, "", &abr, &[], &[])),
             None
         );
-        assert!(start_ext(0, "", &abr, &bytes).is_empty());
+        assert!(start_ext(0, "", &abr, &bytes, &[]).is_empty());
         // A hostile value is bounded, never a failed handshake.
         let long = SessionPreset::new(&"a".repeat(99), &"\u{7}n".repeat(99)).unwrap();
         assert_eq!(long.id.len(), PRESET_ID_MAX);

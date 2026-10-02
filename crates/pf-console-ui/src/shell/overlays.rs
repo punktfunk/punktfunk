@@ -151,34 +151,33 @@ impl Shell {
                     ),
                     SpeedPhase::Done {
                         throughput_kbps,
-                        loss_pct,
+                        wall,
+                        clean,
                         recommended_kbps,
+                        findings,
                     } => {
-                        let measured =
-                            format!("{} \u{b7} {loss_pct:.1} % loss", mbps(*throughput_kbps));
+                        let measured = speed_headline(*throughput_kbps, *wall, clean.as_ref());
+                        let mut lines: Vec<String> = findings.iter().map(finding_text).collect();
+                        let mut hints = Vec::new();
                         match &pinned_by {
                             // Read-only: the default is not the layer this host streams at.
-                            Some(name) => (
-                                1.0,
-                                false,
-                                measured,
-                                format!(
-                                    "\u{201c}{name}\u{201d} sets this host's bitrate \u{2014} \
-                                     change it there to use this."
-                                ),
-                                vec![close],
-                            ),
-                            None => (
-                                1.0,
-                                false,
-                                measured,
-                                format!(
+                            Some(name) => lines.push(format!(
+                                "\u{201c}{name}\u{201d} sets this host's bitrate \u{2014} \
+                                 change it there to use this."
+                            )),
+                            None => {
+                                lines.push(format!(
                                     "{} recommended, leaving headroom for FEC and loss.",
                                     mbps(*recommended_kbps)
-                                ),
-                                vec![Hint::new(HintKey::Confirm, "Set as the default"), close],
-                            ),
+                                ));
+                                hints.push(Hint::new(HintKey::Confirm, "Set as the default"));
+                            }
                         }
+                        if findings.iter().any(|f| f.profile.is_some()) {
+                            hints.push(Hint::new(HintKey::Secondary, "Use paced delivery"));
+                        }
+                        hints.push(close);
+                        (1.0, false, measured, lines.join("\n"), hints)
                     }
                 })
             } else {
@@ -354,8 +353,14 @@ impl Shell {
         self.draw_takeover_field(canvas, w, h, t);
         let (done, rec) = measured(&sp.phase);
         // Measured, the figure is the headline: the caption names the host and the loss.
-        let caption = match sp.phase {
-            SpeedPhase::Done { loss_pct, .. } => format!("{} \u{b7} {loss_pct:.1} % loss", sp.name),
+        let caption = match &sp.phase {
+            SpeedPhase::Done { clean: Some(c), .. } => format!(
+                "{} \u{b7} {:.1} % loss at {}",
+                sp.name,
+                c.loss_pct,
+                mbps(c.rate_kbps)
+            ),
+            SpeedPhase::Done { .. } => sp.name.clone(),
             _ => title.to_string(),
         };
         let title = caption.as_str();
@@ -694,6 +699,36 @@ fn launch_layout(w: f64, h: f64, k: f64, rest: f64, title_h: impl Fn(f64) -> f64
         dw,
         title_h,
     }
+}
+
+/// The headline once there is an answer: what the link carries, and the clean round's loss
+/// and jitter at its rate. Without a round (an older host) the figure stands alone — a
+/// blast's loss is not the link's.
+fn speed_headline(
+    ceiling_kbps: u32,
+    wall: bool,
+    clean: Option<&crate::model::CleanRound>,
+) -> String {
+    let carries = if wall {
+        format!("Link carries {}.", mbps(ceiling_kbps))
+    } else {
+        format!("Link carries at least {}.", mbps(ceiling_kbps))
+    };
+    match clean {
+        Some(c) => format!(
+            "{carries} At {}: {:.1} % loss, {:.1} ms jitter",
+            mbps(c.rate_kbps),
+            c.loss_pct,
+            f64::from(c.jitter_us) / 1000.0
+        ),
+        None => format!("{} measured", mbps(ceiling_kbps)),
+    }
+}
+
+/// One finding in words ([`pf_client_core::findings::text`]). The offered profile is the
+/// Secondary hint, not a sentence here.
+pub(crate) fn finding_text(f: &crate::model::FindingRow) -> String {
+    pf_client_core::findings::text(f.id, f.numbers)
 }
 
 /// The measured rate and its recommendation, once there is an answer.

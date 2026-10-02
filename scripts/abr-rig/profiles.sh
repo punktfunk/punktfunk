@@ -61,6 +61,19 @@ profile() {
       RATE_KBIT=1000000; DELAY_MS=1; BUFFER_MS=20
       MODE=3840x2160x120; ACHIEVABLE_KBPS=150000
       ;;
+    # The 2.5 G host → 1 G client hop: a 1 Gbit/s link whose queue is one switch's SRAM
+    # (1 ms ≈ 125 KB). A line-rate burst overruns it on IDRs; `PUNKTFUNK_DELIVERY=capped`
+    # does not.
+    lan_1g_switch)
+      RATE_KBIT=1000000; DELAY_MS=1; BUFFER_MS=1
+      MODE=3840x2160x120; ACHIEVABLE_KBPS=150000
+      ;;
+    # An untuned receiver on 1 Gbit/s: a queue the size of Linux's default socket buffer
+    # (2 ms ≈ 250 KB). `PUNKTFUNK_DELIVERY=smooth` keeps a frame under it.
+    lan_1g_smallbuf)
+      RATE_KBIT=1000000; DELAY_MS=1; BUFFER_MS=2
+      MODE=3840x2160x120; ACHIEVABLE_KBPS=150000
+      ;;
     # C1: the G5's clean start. 60 ms is what a switch holds.
     wifi_tv)
       RATE_KBIT=245000; DELAY_MS=3; BUFFER_MS=60
@@ -176,7 +189,7 @@ profile() {
       PROBES=2
       ;;
     *)
-      echo "unknown profile '$1' (lan_1g wifi_tv wifi_tv_probe_damage wan_wg_12 \
+      echo "unknown profile '$1' (lan_1g lan_1g_switch lan_1g_smallbuf wifi_tv wifi_tv_probe_damage wan_wg_12 \
 lte_variable wan_still ramp_loss nowall_720p policer_20 shared_two_auto shared_both shared_newcomer \
 shared_fixed_plus_auto shared_fixed_survivor shared_leaver shared_lone shared_fixed_lone)" >&2
       return 1

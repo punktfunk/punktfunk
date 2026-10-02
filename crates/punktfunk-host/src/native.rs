@@ -23,8 +23,8 @@ use punktfunk_core::packet::{FLAG_PIC, FLAG_PROBE, FLAG_SOF};
 use punktfunk_core::quic::{
     classify, endpoint, io, AccessUpdate, AckReason, BitrateChanged, ClockEcho, ClockProbe,
     ColorInfo, GrantClass, Hello, LinkReport, LossReport, PairRequest, PipelineGap, ProbeRequest,
-    ProbeResult, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate, Start,
-    Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
+    ProbeResult, ProbeShaped, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate,
+    Start, Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
 };
 use punktfunk_core::transport::UdpTransport;
 use punktfunk_core::Session;
@@ -1464,6 +1464,7 @@ pub(crate) async fn run_admitted(
         client_label,
         preset: session_preset,
         abr_features,
+        delivery_ask,
         compositor,
         gamescope_route,
         prep,
@@ -1489,6 +1490,14 @@ pub(crate) async fn run_admitted(
     .await
     .map_err(|_| anyhow!("handshake timed out after {HANDSHAKE_TIMEOUT:?}"))??;
     let (ctrl_send, ctrl_recv) = (send, recv);
+    // The host's half of the path, for a client that asked; read while the data socket is
+    // still in hand.
+    let host_facts = delivery_ask
+        .filter(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_FACTS != 0)
+        .map(|_| crate::telemetry::net_health::host_facts(data_sock.as_ref()));
+    // A diagnostic session: the stream thread serves probes and builds nothing.
+    let probe_only =
+        delivery_ask.is_some_and(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0);
     let join_live = joined.is_some();
     let reframe_to = joined.as_ref().map(|(_, view)| {
         (
@@ -1641,6 +1650,9 @@ pub(crate) async fn run_admitted(
             + punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
         audio_kbps: audio_reserved_kbps(&welcome),
         ack_reason: abr_features & punktfunk_core::quic::EXT_ABR_ACK_REASON != 0,
+        delivery_ask,
+        host_facts,
+        probe_only,
         ends: control_ends,
         shared: shared.clone(),
         clip_enabled: clip_enabled.clone(),
@@ -1985,6 +1997,11 @@ pub(crate) async fn run_admitted(
                 bit_depth,
                 chroma,
             };
+            // A display prep that started at Welcome (Windows) goes unreceived here and
+            // aborts into keep-alive: the tag arrives on Start, after the prep began.
+            if probe_only {
+                return stream::probe_only_stream(&mut common, probe_seq);
+            }
             match source {
                 Punktfunk1Source::Software => software_stream(
                     &mut common.session,
@@ -3593,6 +3610,261 @@ mod tests {
             .expect("host declines the fetch (no backend) → Error event");
         assert!(matches!(err, ClipEventCore::Error { .. }));
 
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// Spin up a host of `source` on `port` and dial it with `params`; the host joins on
+    /// drop of the returned client.
+    fn synthetic_session(
+        port: u16,
+        source: Punktfunk1Source,
+        params: impl FnOnce(
+            punktfunk_core::client::ConnectParams,
+        ) -> punktfunk_core::client::ConnectParams,
+    ) -> (
+        punktfunk_core::client::NativeClient,
+        std::thread::JoinHandle<anyhow::Result<()>>,
+    ) {
+        use punktfunk_core::client::{ConnectParams, NativeClient};
+        let host = std::thread::spawn(move || {
+            run_ephemeral(Punktfunk1Options {
+                port,
+                source,
+                seconds: 0,
+                frames: 600,
+                max_sessions: 1,
+                max_concurrent: 1,
+                require_pairing: false,
+                allow_pairing: false,
+                pairing_pin: None,
+                paired_store: None,
+                data_port: None,
+                idle_timeout: None,
+                mdns: false,
+            })
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let mode = punktfunk_core::Mode {
+            width: 1280,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let client = NativeClient::connect(params(ConnectParams::new(
+            "127.0.0.1",
+            port,
+            mode,
+            std::time::Duration::from_secs(10),
+        )))
+        .expect("client connects to synthetic host");
+        (client, host)
+    }
+
+    fn wait_for(pred: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if pred() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// `EXT_TAG_DELIVERY` on `Start` is answered with the profile the session streams
+    /// under and, when asked, the host's facts; a later `SetDelivery` is answered too.
+    #[test]
+    fn a_client_that_asks_for_a_profile_is_answered() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, FORCED_PROFILE_NONE};
+        let (client, host) = synthetic_session(19783, Punktfunk1Source::Synthetic, |p| {
+            punktfunk_core::client::ConnectParams {
+                delivery: Some(DeliveryAsk {
+                    profile: 1,
+                    flags: EXT_DELIVERY_FACTS,
+                }),
+                ..p
+            }
+        });
+        assert!(
+            wait_for(|| client.delivery().is_some()),
+            "the host answers the tag"
+        );
+        let answer = client.delivery().unwrap();
+        assert_eq!((answer.profile, answer.forced), (1, false));
+        let facts = client
+            .host_facts()
+            .expect("facts follow the answer when asked");
+        assert!(facts.sndbuf_kb > 0, "the data socket has a send buffer");
+        assert_eq!(facts.forced_profile, FORCED_PROFILE_NONE);
+        client.set_delivery(2).unwrap();
+        assert!(
+            wait_for(|| client.delivery().map(|d| d.profile) == Some(2)),
+            "SetDelivery is answered"
+        );
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// A client that asks nothing hears nothing and may send nothing: the session streams
+    /// as every shipped client's does.
+    #[test]
+    fn a_client_that_asks_nothing_streams_burst() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let (client, host) = synthetic_session(19784, Punktfunk1Source::Synthetic, |p| p);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert!(client.delivery().is_none(), "no tag, no answer");
+        assert!(client.host_facts().is_none());
+        assert!(matches!(
+            client.set_delivery(1),
+            Err(punktfunk_core::PunktfunkError::Unsupported(_))
+        ));
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// A `Start` that asks for probes only gets a session that serves every probe in full,
+    /// back to back, and shows no video: nothing was built to show.
+    #[test]
+    fn a_probe_only_start_serves_probes_without_a_pipeline() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_PROBE_ONLY};
+        let (client, host) = synthetic_session(19787, Punktfunk1Source::Synthetic, |p| {
+            punktfunk_core::client::ConnectParams {
+                delivery: Some(DeliveryAsk {
+                    profile: 0,
+                    flags: EXT_DELIVERY_PROBE_ONLY,
+                }),
+                ..p
+            }
+        });
+        assert!(client.probe_only());
+        assert!(
+            wait_for(|| client.delivery().is_some()),
+            "the tag is answered"
+        );
+        // Two long rounds back to back: a streaming session would clamp neither and
+        // refuse the second for ten seconds.
+        for _ in 0..2 {
+            client.request_probe(20_000, 600).unwrap();
+            assert!(wait_for(|| client.probe_result().done), "the round reports");
+            let r = client.probe_result();
+            assert!(r.wire_packets_sent > 0, "served, not declined");
+            assert!(
+                r.elapsed_ms >= 300,
+                "served in full, not as a 50 ms step: {}",
+                r.elapsed_ms
+            );
+        }
+        assert!(matches!(
+            client.next_frame(std::time::Duration::from_millis(500)),
+            Err(punktfunk_core::PunktfunkError::NoFrame)
+        ));
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// The whole check over a probe-only session: the ramp proves a ceiling, the clean
+    /// round runs under it, both shaped legs run back to back, and the host's facts arrive.
+    #[test]
+    fn the_network_check_runs_its_legs_over_a_probe_only_session() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::health::{self, LegShape};
+        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, EXT_DELIVERY_PROBE_ONLY};
+        let source = Punktfunk1Source::SyntheticAbr(SynthAbrShape {
+            content: Content::Steady { fill_pct: 100 },
+            recovery: std::time::Duration::ZERO,
+            answer: KeyframeAnswer::Idr,
+            idr_pct: DEFAULT_IDR_PCT,
+            bringup: std::time::Duration::from_secs(2),
+            serve_ramp: true,
+        });
+        let (client, host) =
+            synthetic_session(19788, source, |p| punktfunk_core::client::ConnectParams {
+                delivery: Some(DeliveryAsk {
+                    profile: 0,
+                    flags: EXT_DELIVERY_FACTS | EXT_DELIVERY_PROBE_ONLY,
+                }),
+                ..p
+            });
+        let r = health::health_check(&client, |_| {}).expect("the check reports");
+        assert!(r.speed.clean.is_some(), "a ramp host gets a clean round");
+        assert_eq!(
+            r.legs.iter().map(|l| l.shape).collect::<Vec<_>>(),
+            vec![LegShape::FrameBursts, LegShape::Capped]
+        );
+        for leg in &r.legs {
+            assert!(
+                leg.outcome.done && leg.outcome.wire_packets_sent > 0,
+                "{leg:?}"
+            );
+        }
+        let facts = r.host.expect("the host's facts arrived");
+        assert!(facts.sndbuf_kb > 0);
+        assert!(r.client.rcvbuf_kb > 0, "the client read its own grant");
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// Toward a host without a ramp the speed test is the single blast, and says nothing
+    /// about loss: there is no clean round to say it with.
+    #[test]
+    fn a_host_without_a_ramp_keeps_the_single_burst() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::health;
+        let (client, host) = synthetic_session(19785, Punktfunk1Source::Synthetic, |p| p);
+        assert_eq!(
+            client.host_caps2() & punktfunk_core::quic::HOST_CAP2_RAMP,
+            0,
+            "the plain synthetic source serves no ramp"
+        );
+        let r = health::speed_test(&client, |_| {}).expect("the blast reports");
+        assert!(r.clean.is_none(), "no ramp, no clean round");
+        assert!(!r.wall);
+        let blast = r.blast.expect("the blast's own reading stands");
+        assert!(blast.done && blast.wire_packets_sent > 0);
+        assert_eq!(r.ceiling_kbps, blast.throughput_kbps);
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// Toward a host that serves the ramp, the ceiling is what the ramp proved and the clean
+    /// round runs at half of it, with its own loss and jitter.
+    #[test]
+    fn the_clean_round_runs_under_the_ceiling_over_a_session() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::health;
+        let source = Punktfunk1Source::SyntheticAbr(SynthAbrShape {
+            content: Content::Steady { fill_pct: 100 },
+            recovery: std::time::Duration::ZERO,
+            answer: KeyframeAnswer::Idr,
+            idr_pct: DEFAULT_IDR_PCT,
+            bringup: std::time::Duration::from_secs(2),
+            serve_ramp: true,
+        });
+        let (client, host) = synthetic_session(19786, source, |p| p);
+        assert_ne!(
+            client.host_caps2() & punktfunk_core::quic::HOST_CAP2_RAMP,
+            0
+        );
+        let mut polls = 0u32;
+        let r = health::speed_test(&client, |_| polls += 1).expect("the round reports");
+        let clean = r.clean.expect("a ramp host gets a clean round");
+        assert!(r.ceiling_kbps > 0, "the ramp proved a rate");
+        assert_eq!(clean.rate_kbps, health::clean_rate_kbps(r.ceiling_kbps));
+        // The figure itself is not asserted: a loopback ramp proves gigabits, and at that
+        // rate this process's own receive buffer drops — the round measures the path it is
+        // given.
+        assert!(clean.outcome.done && clean.outcome.wire_packets_sent > 0);
+        assert!(clean.outcome.recv_packets > 0);
+        assert!(r.blast.is_none());
+        assert!(polls > 0, "the round reported its progress");
         drop(client);
         host.join().unwrap().unwrap();
     }

@@ -15,7 +15,7 @@ private final class ProbeToken: @unchecked Sendable {
     var cancelled = false
 }
 
-/// What the host is asked to burst: its whole probe ceiling (it clamps to ≤ 3 Gbps), so the
+/// What the host is asked to burst: far more than any link carries (it clamps to ≤ 10 Gbit/s), so the
 /// measurement finds where delivery falls off rather than an artificial cap. Five seconds lets the
 /// host's send and this device's receive settle; a short probe swings wildly on the same link.
 private let probeTargetKbps: UInt32 = 3_000_000
@@ -47,6 +47,10 @@ struct SpeedTestView: View {
     @State private var token = ProbeToken()
     /// What the last Apply changed, said under the buttons.
     @State private var applied: String?
+    /// The check's report behind `phase == .done`: the findings and the offered profile.
+    @State private var report: PunktfunkConnection.HealthReport?
+    /// Where an offered profile is remembered, on this host's record.
+    @ObservedObject private var hostStore = HostStore.shared
 
     #if os(tvOS)
     private let chartHeight: CGFloat = 360
@@ -63,10 +67,12 @@ struct SpeedTestView: View {
                     .frame(height: chartHeight)
                 if case .done(let result) = phase {
                     stats(result)
+                    if let report { findings(report) }
                 }
                 controls
-                Text("Measures the stream's own path to \(host.displayName) for five seconds. "
-                    + "The recommendation leaves about 30% headroom for encoder bursts.")
+                Text("Measures the stream's own path to \(host.displayName): what it carries, loss "
+                    + "and jitter at a rate it holds, and what the link does. The recommendation "
+                    + "leaves about 30% headroom for encoder bursts.")
                     .font(.geist(12, relativeTo: .caption))
                     .foregroundStyle(.secondary)
             }
@@ -120,8 +126,8 @@ struct SpeedTestView: View {
         switch phase {
         case .idle: "Ready to measure the link to \(host.displayName)."
         case .connecting: "Connecting to \(host.displayName)…"
-        case .probing: "Measuring. The host is bursting probe data."
-        case .done: "Measured goodput from \(host.displayName)."
+        case .probing: "Measuring the link. This takes a few seconds."
+        case .done: Self.doneCaption(report, host: host.displayName)
         case .failed(let message): message
         }
     }
@@ -196,13 +202,100 @@ struct SpeedTestView: View {
 
     private func stats(_ result: PunktfunkConnection.ProbeResult) -> some View {
         HStack(spacing: 12) {
-            tile("Loss", String(format: "%.1f %%", result.lossPct))
+            // The loss and jitter are the clean round's, at a rate the link holds; a host without
+            // a ramp only measured a blast, and a blast's loss is not the link's.
+            tile("Loss", report?.clean.map { String(format: "%.1f %%", $0.lossPct) } ?? "—")
             tile(
-                "Received",
-                ByteCountFormatter.string(
-                    fromByteCount: Int64(result.recvBytes), countStyle: .binary))
+                "Jitter",
+                report?.clean.map { String(format: "%.1f ms", Double($0.jitterUs) / 1000) } ?? "—")
             tile("Recommended", Self.recommendedKbps(result).map { Self.mbpsLabel(kbps: $0) } ?? "—")
         }
+    }
+
+    /// What the check found, one line each, and the offer when a finding names a profile.
+    private func findings(_ r: PunktfunkConnection.HealthReport) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(r.findings.enumerated()), id: \.offset) { _, f in
+                Text(Self.findingText(f))
+                    .font(.geist(13, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+            }
+            if let profile = r.offeredProfile {
+                Button("Use paced delivery (\(Self.profileName(profile)))") {
+                    var updated = host
+                    updated.delivery = Int(profile)
+                    hostStore.update(updated)
+                    applied = "Paced delivery is on for \(host.displayName) from the next session."
+                }
+            }
+        }
+    }
+
+    /// The caption once there is an answer: what the link carries and, with a clean round, the
+    /// rate that loss and jitter were measured at.
+    static func doneCaption(_ r: PunktfunkConnection.HealthReport?, host: String) -> String {
+        guard let r else { return "Measured goodput from \(host)." }
+        let carries = r.wall
+            ? "The link to \(host) carries \(mbpsLabel(kbps: Int(r.ceilingKbps)))."
+            : "The link to \(host) carries at least \(mbpsLabel(kbps: Int(r.ceilingKbps)))."
+        guard let c = r.clean else { return carries }
+        return carries + " Measured at \(mbpsLabel(kbps: Int(c.rateKbps)))."
+    }
+
+    /// A finding in words — what did not happen, then the next move — the same sentences every
+    /// shell shows. The offered profile is the button, not a sentence here.
+    static func findingText(_ f: PunktfunkConnection.HealthFinding) -> String {
+        let a = Int(f.numbers.first ?? 0)
+        let b = Int(f.numbers.dropFirst().first ?? 0)
+        switch f.id {
+        case 1:
+            return a > 0 && b > 0
+                ? "The host's port is faster than this device's (\(a) vs \(b) Mbit/s), so bursts "
+                    + "overflow the switch between them."
+                : "The host's port is faster than this device's, so bursts overflow the switch "
+                    + "between them."
+        case 2:
+            return String(
+                format: "This device drops the start of every burst (%.1f %% lost) — the adapter's "
+                    + "power saving is the usual cause.", Double(a) / 100)
+        case 3:
+            return a > 0
+                ? "This device's own receive buffer dropped \(a) packets; the system caps it at \(b) KB."
+                : "The system caps this device's receive buffer at \(b) KB."
+        case 4:
+            return String(
+                format: "Loss at a rate no link refuses (%.1f %%): check the cable, the port or the "
+                    + "adapter driver.", Double(a) / 100)
+        case 5:
+            return String(
+                format: "Something on the path buffers instead of dropping (%.0f ms spread); keep "
+                    + "the bitrate under %.0f Mbit/s.", Double(a) / 1000, Double(b) / 1000)
+        case 6:
+            return a > 0
+                ? "The host's send buffer refused \(a) packets; raise its limit."
+                : "The host's send buffer is capped at \(b) KB; raise its limit."
+        case 7:
+            return a > 0
+                ? String(format: "This device is on Wi-Fi; bursts lose %.1f %%.", Double(a) / 100)
+                : "This device is on Wi-Fi."
+        default:
+            return "Finding \(f.id)."
+        }
+    }
+
+    static func profileName(_ profile: UInt8) -> String {
+        switch profile {
+        case 1: "capped"
+        case 2: "smooth"
+        default: "none"
+        }
+    }
+
+    /// The check's report as the page's measurement: the ceiling, and the clean round's loss.
+    static func probeResult(from r: PunktfunkConnection.HealthReport) -> PunktfunkConnection.ProbeResult {
+        PunktfunkConnection.ProbeResult(
+            done: true, recvBytes: 0, recvPackets: 0, hostBytes: 0, hostPackets: 0, elapsedMs: 0,
+            throughputKbps: r.ceilingKbps, lossPct: r.clean?.lossPct ?? 0)
     }
 
     private func tile(_ label: String, _ value: String) -> some View {
@@ -316,6 +409,7 @@ struct SpeedTestView: View {
         phase = .connecting
         trace = PunktfunkConnection.ProbeTrace()
         applied = nil
+        report = nil
         let address = host.address
         let port = host.port
         let pin = host.pinnedSHA256
@@ -328,9 +422,12 @@ struct SpeedTestView: View {
             let identity = (try? ClientIdentityStore.shared.load())?.identity
             let conn: PunktfunkConnection
             do {
+                // A diagnostic session: probes only, the host's facts asked for.
                 conn = try PunktfunkConnection(
                     host: address, port: port, width: w, height: h, refreshHz: fps,
-                    pinSHA256: pin, identity: identity)
+                    pinSHA256: pin, identity: identity,
+                    deliveryFlags: PunktfunkConnection.deliveryFacts
+                        | PunktfunkConnection.deliveryProbeOnly)
             } catch {
                 await MainActor.run {
                     guard !token.cancelled else { return }
@@ -342,31 +439,19 @@ struct SpeedTestView: View {
             }
             defer { conn.close() }
 
-            conn.startSpeedTest(targetKbps: probeTargetKbps, durationMs: probeDurationMs)
             await MainActor.run { if !token.cancelled { phase = .probing } }
-
-            // Poll until the host's end-of-burst report lands, or a generous deadline: the host
-            // clamps the burst to ≤ 5 s.
-            let deadline = Date().addingTimeInterval(Double(probeDurationMs) / 1000 + 8)
-            var final: PunktfunkConnection.ProbeResult?
-            while !token.cancelled, Date() < deadline {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard let result = conn.probeResult() else { break } // closed underneath us
-                await MainActor.run {
-                    if !token.cancelled {
-                        withAnimation(.easeOut(duration: 0.2)) { trace.add(result) }
-                    }
-                }
-                if result.done {
-                    final = result
-                    break
-                }
-            }
-            let result = final
+            // The whole check, reported once: the ceiling the bring-up ramp proved, a clean round
+            // at half of it, two shaped legs, both ends' facts, and the findings. It blocks this
+            // detached task for ten to twenty seconds.
+            let checked = conn.networkCheck()
             await MainActor.run {
                 guard !token.cancelled else { return }
-                phase = result.map { .done($0) }
-                    ?? .failed("The measurement never finished. The connection may have dropped.")
+                if let r = checked {
+                    report = r
+                    phase = .done(Self.probeResult(from: r))
+                } else {
+                    phase = .failed("The measurement never finished. The connection may have dropped.")
+                }
             }
         }
     }

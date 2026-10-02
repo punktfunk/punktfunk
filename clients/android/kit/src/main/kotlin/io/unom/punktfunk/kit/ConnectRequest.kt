@@ -85,6 +85,10 @@ data class ConnectRequest(
     val presetId: String? = null,
     /** That preset's name, for people. */
     val presetName: String? = null,
+    /** The delivery profile on the host's record (`1` capped, `2` smooth); `0` asks nothing. */
+    val deliveryProfile: Int = 0,
+    /** What a network check asks besides: the host's facts (`1`), probes only (`2`). */
+    val deliveryFlags: Int = 0,
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -107,6 +111,8 @@ data class ConnectRequest(
         .put("audio_bits", audioBits)
         .put("video_codecs", videoCodecs)
         .put("preferred_codec", preferredCodec)
+        .put("delivery_profile", deliveryProfile)
+        .put("delivery_flags", deliveryFlags)
         .put("timeout_ms", timeoutMs)
         .put("launch", launch ?: JSONObject.NULL)
         .put("device_name", deviceName ?: JSONObject.NULL)

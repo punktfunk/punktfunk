@@ -334,6 +334,11 @@ impl DataPump {
             } else {
                 (st.probe_first_arrival_ns, st.probe_last_arrival_ns)
             };
+            // The snapshot predates the arm's reset; its gaps belong to the burst before.
+            if !arming {
+                p.gap_buckets = st.probe_gap_buckets;
+                p.reorders = st.probe_reorders;
+            }
             p.base_packets.get_or_insert(st.probe_packets_received);
             p.base_bytes.get_or_insert(st.probe_bytes_received);
         } else if p.done && p.ramp {

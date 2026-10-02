@@ -23,6 +23,9 @@ const PACE_FACTOR: u64 = 3;
 /// `send_pacing.rs` `MAX_PACE_SPREAD`.
 const MAX_PACE_SPREAD_MS: u64 = 100;
 
+/// The `Smooth` delivery profile's allowance (`send_pacing.rs` `BURST_MIN`).
+const SMOOTH_BURST_BYTES: u64 = 16 * 1024;
+
 /// Bytes that leave unpaced (`send_pacing.rs` `auto_burst_bytes`).
 pub(super) fn auto_burst_bytes(pace_rate_bps: u64, wire_bytes: usize) -> usize {
     const BURST_MS: u64 = 10;
@@ -199,6 +202,9 @@ pub(super) struct HostCfg {
     /// except the bring-up ramp's verdict, once, inside the window, and only
     /// ever lower (`native/control.rs` `PyroWavePin`).
     pub pinned: bool,
+    /// The session streams under the `Smooth` delivery profile: a 16 KiB
+    /// allowance, the rest spread at the pace rate.
+    pub smooth_delivery: bool,
 }
 
 impl Default for HostCfg {
@@ -227,6 +233,7 @@ impl Default for HostCfg {
             answers_probes: true,
             acks: true,
             pinned: false,
+            smooth_delivery: false,
         }
     }
 }
@@ -669,7 +676,11 @@ impl Host {
         // Pacer: the burst leaves now, the overflow over its wire time at 3×
         // the budget, bounded by MAX_PACE_SPREAD.
         let pace_rate_bps = self.budget_kbps as u64 * 1_000 * PACE_FACTOR;
-        let burst = auto_burst_bytes(pace_rate_bps, wire_bytes as usize) as u64;
+        let burst = if self.cfg.smooth_delivery {
+            SMOOTH_BURST_BYTES
+        } else {
+            auto_burst_bytes(pace_rate_bps, wire_bytes as usize) as u64
+        };
         let overflow = wire_bytes.saturating_sub(burst);
         let spread_ms = if overflow > 0 && pace_rate_bps > 0 {
             (overflow * 8 * 1_000 / pace_rate_bps).clamp(1, MAX_PACE_SPREAD_MS)

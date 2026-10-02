@@ -101,7 +101,8 @@ punktfunk library <host-ref> --json           # the host's games
 punktfunk launch <host-ref> --game <id>       # stream, waking the host first
 punktfunk end-game <host-ref> --game <id>     # close a game this device launched
 punktfunk open 'punktfunk://connect/<host-ref>'
-punktfunk speed-test <host-ref>               # measure the link, suggest a bitrate
+punktfunk speed-test <host-ref>               # what the link carries, loss at a rate it holds
+punktfunk network-check <host-ref>            # the speed test plus what the link does, by finding
 ```
 
 A `<host-ref>` is a saved host's id, its name or its address. Also: `hosts add`, `hosts forget`,

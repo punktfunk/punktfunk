@@ -896,6 +896,10 @@ public final class PunktfunkConnection: @unchecked Sendable {
         launchID: String? = nil,
         deviceName: String? = nil, // nil = this device's OS name (`DeviceName.current`)
         timeoutMs: UInt32 = 10_000,
+        // The delivery ask: the profile on the host's record (1 capped, 2 smooth) and the flags a
+        // network check sets (`deliveryFacts`, `deliveryProbeOnly`). 0/0 asks nothing.
+        deliveryProfile: UInt8 = 0,
+        deliveryFlags: UInt8 = 0,
         settings: EffectiveSettings = EffectiveSettings(defaults: .standard)
     ) throws {
         self.settings = settings
@@ -933,6 +937,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
         opts.bitrate_kbps = bitrateKbps
         opts.video_caps = videoCaps
         opts.audio_channels = audioChannels
+        opts.delivery_profile = deliveryProfile
+        opts.delivery_flags = deliveryFlags
         opts.audio_rate_hz = wantsHiRes ? audioRateHz : 0
         opts.audio_bits = wantsHiRes ? audioBits : 0
         opts.video_codecs = videoCodecs
@@ -1065,7 +1071,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         public let elapsedMs: UInt32
         /// Measured goodput, kilobits per second.
         public let throughputKbps: UInt32
-        /// Delivery loss `(hostBytes − recvBytes) / hostBytes`, percent (0 if unknown).
+        /// Link loss `(wire packets sent − received) / wire packets sent`, percent (0 if unknown).
         public let lossPct: Float
 
         public init(
@@ -1084,9 +1090,9 @@ public final class PunktfunkConnection: @unchecked Sendable {
     }
 
     /// Start a bandwidth speed test: the host bursts filler over the data plane at
-    /// `targetKbps` of goodput for `durationMs` (clamped host-side to ≤ 3 Gbps / ≤ 5 s),
-    /// briefly pausing video. Non-blocking — poll `probeResult()` until `done`. Starting
-    /// a probe resets any prior measurement. Silently dropped after close.
+    /// `targetKbps` of goodput for `durationMs` (clamped host-side to ≤ 10 Gbit/s / ≤ 5 s)
+    /// beside the video it is already sending. Non-blocking — poll `probeResult()` until
+    /// `done`. Starting a probe resets any prior measurement. Silently dropped after close.
     public func startSpeedTest(targetKbps: UInt32, durationMs: UInt32) {
         withLiveHandle(or: ()) { h in
             _ = punktfunk_connection_speed_test(h, targetKbps, durationMs)
@@ -1105,6 +1111,84 @@ public final class PunktfunkConnection: @unchecked Sendable {
                 hostBytes: out.host_bytes, hostPackets: out.host_packets,
                 elapsedMs: out.elapsed_ms, throughputKbps: out.throughput_kbps,
                 lossPct: out.loss_pct)
+        }
+    }
+
+    /// `EXT_DELIVERY_FACTS`: ask the host for its own network facts.
+    public static let deliveryFacts: UInt8 = 1
+    /// `EXT_DELIVERY_PROBE_ONLY`: a diagnostic session that builds no pipeline.
+    public static let deliveryProbeOnly: UInt8 = 2
+
+    /// One round at a rate the link holds: the loss figure a speed test shows.
+    public struct CleanRound: Sendable, Equatable {
+        public let rateKbps: UInt32
+        public let lossPct: Float
+        /// Spread of the inter-arrival gap, microseconds.
+        public let jitterUs: UInt32
+    }
+
+    /// One finding of the network check, by id (the core's `FindingId` as a byte); the words are
+    /// the app's. `profile` is the delivery profile that helps (1 capped, 2 smooth, 0 none).
+    public struct HealthFinding: Sendable, Equatable {
+        public let id: UInt8
+        public let severity: UInt8
+        public let profile: UInt8
+        public let numbers: [UInt32]
+    }
+
+    /// The network check's report (see `networkCheck()`).
+    public struct HealthReport: Sendable, Equatable {
+        /// What the link carries, kbps; `wall` = the ramp found its limit rather than a floor.
+        public let ceilingKbps: UInt32
+        public let wall: Bool
+        /// nil toward a host without a ramp, where no loss figure is honest.
+        public let clean: CleanRound?
+        public let clientIfaceKind: UInt8
+        public let clientLinkMbps: UInt32
+        public let clientRcvbufKb: UInt32
+        public let hostIfaceKind: UInt8?
+        public let hostLinkMbps: UInt32
+        public let hostSndbufKb: UInt32
+        /// Loss of the bursts leg and the capped leg, percent, as many as ran.
+        public let legLossPct: [Float]
+        public let findings: [HealthFinding]
+
+        /// The profile the first finding that names one offers, else nil.
+        public var offeredProfile: UInt8? { findings.first { $0.profile != 0 }?.profile }
+    }
+
+    /// Run the network check over this connection: the ceiling the bring-up ramp proved, a clean
+    /// round at half of it, two shaped legs, both ends' facts, and the findings. Blocking for ten
+    /// to twenty seconds — call it off the main thread. The connection should have been dialled
+    /// with `deliveryFlags: deliveryFacts | deliveryProbeOnly`; without them the check is the
+    /// speed test alone. nil when the host declined, a round never reported, or after close.
+    public func networkCheck() -> HealthReport? {
+        return withLiveHandle(or: nil) { h in
+            var out = PunktfunkHealthReport()
+            guard punktfunk_connection_network_check(h, &out) == statusOK else { return nil }
+            let clean: CleanRound? = out.has_clean != 0
+                ? CleanRound(rateKbps: out.clean_rate_kbps, lossPct: out.clean_loss_pct,
+                             jitterUs: out.clean_jitter_us)
+                : nil
+            let legs: [Float] = withUnsafeBytes(of: out.leg_loss_pct) { raw in
+                Array(raw.bindMemory(to: Float.self).prefix(Int(out.n_legs)))
+            }
+            let findings: [HealthFinding] = withUnsafeBytes(of: out.findings) { raw in
+                raw.bindMemory(to: PunktfunkHealthFinding.self).prefix(Int(out.n_findings)).map { f in
+                    let numbers = withUnsafeBytes(of: f.numbers) { n in
+                        Array(n.bindMemory(to: UInt32.self))
+                    }
+                    return HealthFinding(id: f.id, severity: f.severity, profile: f.profile,
+                                         numbers: numbers)
+                }
+            }
+            return HealthReport(
+                ceilingKbps: out.ceiling_kbps, wall: out.wall != 0, clean: clean,
+                clientIfaceKind: out.client_iface_kind, clientLinkMbps: out.client_link_mbps,
+                clientRcvbufKb: out.client_rcvbuf_kb,
+                hostIfaceKind: out.has_host != 0 ? out.host_iface_kind : nil,
+                hostLinkMbps: out.host_link_mbps, hostSndbufKb: out.host_sndbuf_kb,
+                legLossPct: legs, findings: findings)
         }
     }
 
