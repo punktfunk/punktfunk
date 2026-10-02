@@ -1356,12 +1356,18 @@ fn restart_audio_endpoint_services() -> Result<()> {
         .open_service("AudioEndpointBuilder", access)
         .context("open AudioEndpointBuilder")?;
     stop_and_wait(&audiosrv, "Audiosrv")?;
-    stop_and_wait(&aeb, "AudioEndpointBuilder")?;
-    aeb.start(&[] as &[&std::ffi::OsStr])
-        .context("start AudioEndpointBuilder")?;
-    audiosrv
-        .start(&[] as &[&std::ffi::OsStr])
-        .context("start Audiosrv")?;
+    let no_args: &[&std::ffi::OsStr] = &[];
+    let cycle = || -> Result<()> {
+        stop_and_wait(&aeb, "AudioEndpointBuilder")?;
+        aeb.start(no_args).context("start AudioEndpointBuilder")?;
+        audiosrv.start(no_args).context("start Audiosrv")
+    };
+    // Audiosrv is down from here: a failure must not leave the box without sound.
+    if let Err(e) = cycle() {
+        let _ = aeb.start(no_args);
+        let _ = audiosrv.start(no_args);
+        return Err(e);
+    }
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let state = audiosrv.query_status().context("query Audiosrv status")?;
