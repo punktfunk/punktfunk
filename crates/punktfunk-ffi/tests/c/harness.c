@@ -42,10 +42,12 @@ int main(void) {
      * staticlib this harness links always carries quic (see the -lopus/Security link line), so
      * the check only needs the define. */
 #ifdef PUNKTFUNK_FEATURE_QUIC
-    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 120u : 84u)
-        || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu\n",
-                sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit));
+    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 128u : 92u)
+        || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
+        || offsetof(PunktfunkConnectOpts, delivery_profile) != (sizeof(void *) == 8 ? 120u : 84u)) {
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_profile at %zu\n",
+                sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
+                offsetof(PunktfunkConnectOpts, delivery_profile));
         return 1;
     }
     {
