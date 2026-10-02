@@ -1708,7 +1708,7 @@ impl AmfEncoder {
         } else {
             LtrStep::default()
         };
-        let recovery_anchor = force_slot.is_some();
+        let mut recovery_anchor = force_slot.is_some();
         #[cfg(test)]
         if self.fail_submit_at == Some(cur_idx) {
             bail!("test hook: frame {cur_idx} refused after the LTR decision");
@@ -1831,8 +1831,10 @@ impl AmfEncoder {
                         amf_code = r,
                         "AMF LTR force-reference rejected — forcing an IDR on the next frame"
                     );
-                    // The host booked a recovery on this frame; make the next one real.
+                    // The host booked a recovery on this frame; make the next one real. This
+                    // one still predicts from the damage, so it lifts no freeze.
                     self.force_kf = true;
+                    recovery_anchor = false;
                 }
             }
         }
