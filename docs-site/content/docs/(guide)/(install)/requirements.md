@@ -60,7 +60,7 @@ input: a denial shows as black frames and dropped input, not as an error.
 | GPU | Encoder | You need |
 |---|---|---|
 | NVIDIA | NVENC | Driver 535 or newer with its GL/EGL userspace, and `nvidia-drm modeset=1` |
-| AMD, Intel | Vulkan Video (HEVC, AV1), VAAPI (H.264 and fallback) | Current Mesa with its Vulkan driver, and the VAAPI driver |
+| AMD, Intel | Vulkan Video (HEVC, AV1), VAAPI (H.264 and fallback) | Current Mesa with its Vulkan driver (26.2 or newer for Vulkan Video on Intel), and the VAAPI driver |
 | None | Software H.264 | `PUNKTFUNK_ENCODER=software`, a fallback rather than a daily driver |
 
 Your distro's install page installs the right driver packages. On Intel Gen12 (Tiger Lake) and

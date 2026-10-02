@@ -184,7 +184,7 @@ crates/pf-win-display/src/win_display.rs:2
 crates/punktfunk-core/src/quic/endpoint.rs:2
 crates/punktfunk-host/src/hostsys/identity.rs:3
 crates/punktfunk-host/src/library/art.rs:2
-crates/punktfunk-host/src/main.rs:1
+crates/punktfunk-host/src/main.rs:2
 crates/punktfunk-host/src/mgmt/tests.rs:3
 crates/punktfunk-host/src/native.rs:2
 crates/punktfunk-host/src/windows/service/host_env.rs:1

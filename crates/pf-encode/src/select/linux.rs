@@ -4,6 +4,8 @@
 
 use super::*;
 
+pub use crate::vk_util::anv_video_encode_flag;
+
 /// [`crate::open_video`]'s backend half.
 pub(crate) fn open(p: &OpenParams) -> Result<(Box<dyn Encoder>, &'static str)> {
     open_video_backend_linux(pf_host_config::config().encoder_pref.as_str(), p)
