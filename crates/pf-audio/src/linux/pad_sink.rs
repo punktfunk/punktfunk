@@ -339,7 +339,11 @@ impl PadSinkCapturer {
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(anyhow!("pipewire pad-sink init timed out")),
+            Err(_) => {
+                // The thread may still come up; it must not outlive this error with live sinks.
+                let _ = quit_tx.send(Terminate);
+                return Err(anyhow!("pipewire pad-sink init timed out"));
+            }
         }
         let split_log = if split_name.is_empty() {
             "(suppressed)"
