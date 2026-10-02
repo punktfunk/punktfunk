@@ -1221,9 +1221,14 @@ fn apply_virtual_primary(ours: &str) -> Vec<(String, String)> {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    // Disable still-enabled non-managed outputs (bootstrap / physical). Capture each
-    // with its current mode so teardown restores the real refresh.
-    let others = other_enabled_outputs();
+    // Disable still-enabled non-managed outputs (bootstrap / physical), but the ones the
+    // operator keeps lit, as the in-process path does. Capture each with its current mode
+    // so teardown restores the real refresh.
+    let keep = crate::policy::prefs().get().keep_monitors;
+    let others: Vec<_> = other_enabled_outputs()
+        .into_iter()
+        .filter(|(name, _)| crate::monitors::darkens(name, true, false, false, &keep))
+        .collect();
     let mut args: Vec<String> = others
         .iter()
         .map(|(o, _mode)| format!("output.{o}.disable"))
