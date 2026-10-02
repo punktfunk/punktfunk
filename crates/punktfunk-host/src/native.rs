@@ -443,6 +443,9 @@ pub(crate) async fn serve(
     prewarm::spawn_run("host start");
 
     loop {
+        // A finished task stays in the set until joined; a serving host never reaches the drain
+        // below, and every client probe is a task.
+        while sessions.try_join_next().is_some() {}
         let incoming = tokio::select! {
             i = ep.accept() => match i {
                 Some(i) => i,
