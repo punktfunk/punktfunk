@@ -952,6 +952,15 @@ pub(crate) fn claim_workspace(name: &str, want: Option<i64>) -> Option<(i64, i64
     }
 }
 
+/// Workspace `id` holds no window. An unreadable count reads as occupied.
+fn workspace_empty(id: i64) -> bool {
+    hyprctl_json(&["workspaces"]).is_ok_and(|p| {
+        workspace_slots(&p, "")
+            .iter()
+            .any(|w| w.id == id && w.empty)
+    })
+}
+
 /// `hyprctl -j workspaces` reduced to the pick. A missing `windows` count
 /// reads as occupied, so a payload this host cannot parse costs a free id and
 /// never puts the game on the operator's desk.
@@ -1072,12 +1081,15 @@ fn first_physical_dest(heads: &[crate::monitors::PhysicalMonitor], ours: &str) -
 }
 
 /// Re-home the streamed workspace onto a remaining physical, then remove is safe.
-/// Headless: skip the move. Windows are never destroyed.
+/// Headless: skip the move. Windows are never destroyed. An empty workspace stays: it has
+/// nothing to save, and switching to it would take focus from a replacement head that now
+/// shows the game (a resize leaves the retired head an empty one).
 fn evacuate_workspace(ours: &str) {
     let dest = list_monitors()
         .ok()
         .and_then(|heads| first_physical_dest(&heads, ours));
-    match evacuate_plan(active_workspace_id(ours), dest.as_deref()) {
+    let workspace = active_workspace_id(ours).filter(|&id| !workspace_empty(id));
+    match evacuate_plan(workspace, dest.as_deref()) {
         Evacuate::Limbo => {}
         Evacuate::ToPhysical { workspace, dest } => {
             if let Err(e) = workspace_to_monitor(workspace, &dest) {
