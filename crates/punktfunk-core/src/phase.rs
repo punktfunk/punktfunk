@@ -158,14 +158,18 @@ const NEED_DECAY_AFTER: u8 = 30;
 /// for nothing. One frame in twenty missing, two windows running, raises the need: past
 /// the misses' p75 lead when half the window missed, by a nudge when fewer did. The need
 /// gives back a nudge after [`NEED_DECAY_AFTER`] clean windows, so a burst does not hold
-/// for the session. Misses that would push it to a whole period are not about lead, and
-/// the need parks at zero for the stream.
+/// for the session. Misses that would push it to a whole period are not about lead: the
+/// need parks at zero for the stream once that happens three raises running. One such
+/// window is the host still moving the arrival phase, and a stream parked on it could
+/// never learn its real margin.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LatchNeed {
     need_ns: i64,
     streak: u8,
     /// Clean windows since the last change.
     clean: u8,
+    /// Raises in a row that wanted more than a period leaves room for.
+    ceiling: u8,
     parked: bool,
 }
 
@@ -191,6 +195,7 @@ impl LatchNeed {
                 return false;
             }
             self.clean = 0;
+            self.ceiling = 0;
             self.need_ns = (self.need_ns - NEED_NUDGE_NS).max(0);
             return true;
         }
@@ -208,11 +213,16 @@ impl LatchNeed {
             self.need_ns + NEED_NUDGE_NS
         };
         if want > period_ns - NEED_HEADROOM_NS {
+            self.ceiling += 1;
+            if self.ceiling < 3 {
+                return false;
+            }
             self.parked = true;
             self.need_ns = 0;
-        } else {
-            self.need_ns = want;
+            return true;
         }
+        self.ceiling = 0;
+        self.need_ns = want;
         true
     }
 }
@@ -1093,6 +1103,22 @@ mod latch_need_tests {
         }
         assert_eq!(need.need_ns(), 0);
         assert!(!window(&mut need, HOST_LEAD, 60), "parked for the stream");
+    }
+
+    /// While the host still moves the arrival phase, one window can miss at a lead near
+    /// the period. That window teaches nothing; the next real misses still raise the need.
+    #[test]
+    fn one_window_near_the_period_does_not_park() {
+        let mut need = LatchNeed::default();
+        window(&mut need, 14_700_000, 60);
+        assert!(
+            !window(&mut need, 14_700_000, 60),
+            "near the period: no raise"
+        );
+        assert_eq!(need.need_ns(), 0);
+        window(&mut need, 3_000_000, 60);
+        assert!(window(&mut need, 3_000_000, 60), "a real miss still raises");
+        assert_eq!(need.need_ns(), 3_500_000);
     }
 }
 
