@@ -1917,11 +1917,12 @@ impl VirtualDisplayManager {
         // left with zero displays.
         inner.group.ccd_exclusive = false;
         if let Some(saved) = inner.group.ccd_saved.take() {
+            // Clears the isolate crash journal, or keeps it when the desk stayed dark.
             restore_displays_ccd(&saved);
+        } else {
+            // A failed isolate leaves no snapshot. The group is gone, so its journal goes too.
+            pf_win_display::win_display::isolate_journal::clear();
         }
-        // Clear the isolate crash journal even when there was no snapshot
-        // (failed isolate leaves `ccd_saved` None). The group is gone.
-        pf_win_display::win_display::isolate_journal::clear();
         // DDC wake outside the `ccd_saved` gate: panels were commanded
         // dark before isolate, which can return None. Nested in that arm
         // the wake never ran and the live link never DPMS-wakes them.
