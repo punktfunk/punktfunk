@@ -32,23 +32,30 @@ pub fn spawn_pin(pad: u8) {
         .name(format!("punktfunk1-padvol{pad}"))
         .spawn(move || {
             // Connect errors retry like an absent card: attach is when the graph is busy.
-            // Only the last failure is reported.
+            // Only the last failure is reported. The whole window runs: another pad's card
+            // can be the first one found, with this pad's own still to land.
             let mut last_err = None;
+            let mut pinned = false;
             for _ in 0..ATTEMPTS {
                 match pin_pad_sinks() {
                     Ok(0) => {}
                     Ok(n) => {
-                        tracing::info!(
-                            pad,
-                            sinks = n,
-                            "pad card sink pinned to 0 dB (WirePlumber starts every new card at \
-                             40% = -23.88 dB, and host+client stack)"
-                        );
-                        return;
+                        if !pinned {
+                            tracing::info!(
+                                pad,
+                                sinks = n,
+                                "pad card sink pinned to 0 dB (WirePlumber starts every new card \
+                                 at 40% = -23.88 dB, and host+client stack)"
+                            );
+                        }
+                        pinned = true;
                     }
                     Err(e) => last_err = Some(format!("{e:#}")),
                 }
                 std::thread::sleep(INTERVAL);
+            }
+            if pinned {
+                return;
             }
             tracing::debug!(
                 pad,
