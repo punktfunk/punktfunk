@@ -797,13 +797,18 @@ impl ServiceState {
         let identity = self.identity.clone();
         let pin = trust::parse_hex32(&fp_hex);
         let console = self.console.clone();
+        // As in `refresh_running`: the player may be on another host's shelf by the answer.
+        let epoch = shared.fetch_epoch();
         std::thread::Builder::new()
             .name("punktfunk-endgame".into())
             .spawn(move || {
                 let outcome = library::end_game(&addr, mgmt, &identity, pin, &app_id);
                 tracing::info!(app = %app_id, ?outcome, "end game");
                 console.set_notice(outcome.notice(&title));
-                shared.set_running(&library::fetch_running(&addr, mgmt, &identity, pin));
+                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                if shared.fetch_epoch() == epoch {
+                    shared.set_running(&running);
+                }
             })
             .ok();
     }
@@ -1462,7 +1467,10 @@ fn spawn_fetch(
                 // What the host has up right now, so a title the player can return to says so.
                 // Deliberately after the catalog — a slow `/status` must not hold the titles
                 // back — and never fatal: an older host answers nothing and every badge stays off.
-                shared.set_running(&library::fetch_running(&addr, mgmt, &identity, pin));
+                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                if mine() {
+                    shared.set_running(&running);
+                }
             }
             if !jobs.is_empty() {
                 let rx = library::spawn_art_fetch(base, identity, pin, jobs);
