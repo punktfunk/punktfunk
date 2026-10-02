@@ -83,6 +83,8 @@ struct FrameBuf {
     blocks: HashMap<u16, BlockState>,
     /// Blocks reconstructed into `buf`. A failed block never counts; the frame ages out.
     blocks_ok: usize,
+    /// A block's last shard arrived and parity could not close it. Reported once.
+    short_tail: bool,
 }
 
 /// Per-session header bounds, applied before any allocation. Derived from [`Config`].
@@ -156,6 +158,10 @@ const RECOVERY_POOL_MAX: usize = 512;
 /// clock read.
 const SHARD_DELAY_SAMPLES: usize = 256;
 
+/// Short tails held between drains ([`Reassembler::take_short_tails`]). The pump drains
+/// every iteration, so this bounds only a consumer that stopped reading.
+const SHORT_TAIL_SAMPLES: usize = 64;
+
 /// Bytes a [`BlockState`] charges the in-flight budget. Vectors size from header
 /// fields, so a slice-streamed frame can mint thousands of blocks while `buf` stays
 /// near zero — they must meter like the buffer. `pub(super)` so budget tests read
@@ -217,6 +223,8 @@ pub struct Reassembler {
     /// is timed here and nowhere else, which is what keeps the delay signal alive
     /// while the queue is deepest.
     shard_delay_ns: Vec<i64>,
+    /// Video frames whose tail arrived short, oldest first ([`Self::take_short_tails`]).
+    short_tails: Vec<u32>,
 }
 
 impl Reassembler {
@@ -231,6 +239,7 @@ impl Reassembler {
             recovery_pool: Vec::new(),
             in_flight_bytes: 0,
             shard_delay_ns: Vec::with_capacity(SHARD_DELAY_SAMPLES),
+            short_tails: Vec::new(),
         }
     }
 
@@ -239,6 +248,14 @@ impl Reassembler {
     /// completed AU.
     pub fn take_shard_delays(&mut self) -> std::vec::Drain<'_, i64> {
         self.shard_delay_ns.drain(..)
+    }
+
+    /// Video frames whose block tail arrived short of what parity can rebuild, since the
+    /// last call. A block sends its parity last, so its last shard closes it: without a
+    /// reordered shard still on the way, the frame is lost now, a frame interval before
+    /// the next frame's arrival shows the gap.
+    pub fn take_short_tails(&mut self) -> std::vec::Drain<'_, u32> {
+        self.short_tails.drain(..)
     }
 
     pub fn set_deliver_partial(&mut self, on: bool) {
@@ -301,6 +318,7 @@ impl Reassembler {
             recovery_pool,
             in_flight_bytes,
             shard_delay_ns,
+            short_tails,
         } = self;
         let parts = *deliver_parts;
 
@@ -399,6 +417,7 @@ impl Reassembler {
                     buf: vec![0; buf_len],
                     blocks: HashMap::new(),
                     blocks_ok: 0,
+                    short_tail: false,
                 })
             }
         };
@@ -449,6 +468,7 @@ impl Reassembler {
                 buf,
                 blocks,
                 blocks_ok,
+                short_tail,
                 ..
             } = &mut *frame;
             // First packet sizes the block. `data_shards` is already pinned;
@@ -558,6 +578,14 @@ impl Reassembler {
                 block.reconstructed = missing > 0;
                 StatsCounters::add(&stats.fec_recovered_shards, missing as u64);
                 *blocks_ok += 1;
+            } else if g.shard_index + 1 == g.data_shards + g.recovery_shards
+                && !is_probe
+                && !*short_tail
+            {
+                *short_tail = true;
+                if short_tails.len() < SHORT_TAIL_SAMPLES {
+                    short_tails.push(hdr.frame_index);
+                }
             }
         }
 
@@ -603,6 +631,7 @@ impl Reassembler {
         // Samples of the backlog that was just thrown away describe a queue the
         // session no longer has.
         self.shard_delay_ns.clear();
+        self.short_tails.clear();
     }
 
     /// Test-only in-flight byte commitment. Mixed-geometry tests assert it returns

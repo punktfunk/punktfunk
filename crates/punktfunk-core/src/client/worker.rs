@@ -72,6 +72,8 @@ pub(crate) struct ClientShared {
     pub(crate) recent_rfis: Mutex<RecentRfis>,
     /// What each frame the pump skipped past still lacked, for the RFI line.
     pub(crate) short_frames: Mutex<ShortFrames>,
+    /// Loss asks: the decode side's gaps and the pump's short tails, one throttle.
+    pub(crate) rfi: Mutex<RfiRecovery>,
     /// Per-pad render caps (bit0 haptics, bit1 speaker). OR'd into GamepadArrival flags
     /// (bits 8/9) toward a `HOST_CAP_PAD_AUDIO` host only.
     pub(crate) pad_audio_caps: [AtomicU8; crate::input::MAX_PADS],
@@ -125,6 +127,7 @@ impl ClientShared {
             rate_cut: AtomicU8::new(0),
             recent_rfis: Mutex::default(),
             short_frames: Mutex::default(),
+            rfi: Mutex::default(),
             pad_audio_caps: std::array::from_fn(|_| AtomicU8::new(0)),
             pad_mouse: Default::default(),
             scroll_invert: AtomicBool::new(false),

@@ -277,9 +277,6 @@ pub struct NativeClient {
     pub host_caps2: u8,
     /// `0` when the host did not advertise a management port.
     pub mgmt_port: u16,
-    /// Shared loss-range detector for [`note_frame_index`](Self::note_frame_index): next
-    /// expected `frame_index` plus RFI throttle. Avoids per-embedder wrapping arithmetic.
-    rfi: Mutex<RfiRecovery>,
     /// `displayed + clock_offset − pts` (ns). `0` = nothing presented yet. Presenter writes;
     /// audio reads to land with the picture ([`crate::audio::AvSync`]). Lives next to
     /// `clock_offset` because neither plane owns the other.
@@ -436,6 +433,62 @@ fn register_hot_tid(reg: &Mutex<Vec<i32>>) {
                 v.push(t);
             }
         }
+    }
+}
+
+/// Queue an RFI and log it at info, the most Android keeps. `missing_shards` is what
+/// `first_frame` lacked past its parity when its tail arrived or a later frame overtook
+/// it; absent when none of it arrived.
+fn send_rfi(
+    shared: &ClientShared,
+    ctrl_tx: &tokio::sync::mpsc::Sender<CtrlRequest>,
+    first_frame: u32,
+    last_frame: u32,
+) -> Result<()> {
+    ctrl_tx
+        .try_send(CtrlRequest::Rfi(RfiRequest {
+            first_frame,
+            last_frame,
+        }))
+        .map_err(|_| PunktfunkError::Closed)?;
+    let short = shared.short_frames.lock().unwrap().get(first_frame);
+    tracing::info!(
+        first = first_frame,
+        last = last_frame,
+        missing_shards = short.map(|s| s.0),
+        recovery_shards = short.map(|s| s.1),
+        "reference-frame invalidation requested"
+    );
+    Ok(())
+}
+
+/// Queue an IDR ask and drop the lost range an RFI still owes; the IDR repairs it.
+fn send_keyframe(
+    shared: &ClientShared,
+    ctrl_tx: &tokio::sync::mpsc::Sender<CtrlRequest>,
+) -> Result<()> {
+    ctrl_tx
+        .try_send(CtrlRequest::Keyframe)
+        .map_err(|_| PunktfunkError::Closed)?;
+    shared.rfi.lock().unwrap().keyframe_requested();
+    Ok(())
+}
+
+/// Fire a recovery ask. Call with the `rfi` lock released.
+fn send_recovery(
+    shared: &ClientShared,
+    ctrl_tx: &tokio::sync::mpsc::Sender<CtrlRequest>,
+    ask: RecoveryAsk,
+) {
+    match ask {
+        RecoveryAsk::Rfi(first, last) => {
+            let _ = send_rfi(shared, ctrl_tx, first, last);
+        }
+        // Wider than RFI_MAX_RANGE: RFI cannot repair it; resync on a keyframe.
+        RecoveryAsk::Keyframe => {
+            let _ = send_keyframe(shared, ctrl_tx);
+        }
+        RecoveryAsk::None => {}
     }
 }
 
@@ -744,7 +797,6 @@ impl NativeClient {
             host_caps2: negotiated.host_caps2,
             mgmt_port: negotiated.mgmt_port,
             worker: Some(worker),
-            rfi: Mutex::new(RfiRecovery::default()),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
             audio_buffer_ms: Arc::new(AtomicU32::new(0)),
@@ -846,11 +898,7 @@ impl NativeClient {
     /// requests flood the control stream. Drops the lost range an RFI still owes; the
     /// IDR repairs it.
     pub fn request_keyframe(&self) -> Result<()> {
-        self.ctrl_tx
-            .try_send(CtrlRequest::Keyframe)
-            .map_err(|_| PunktfunkError::Closed)?;
-        self.rfi.lock().unwrap().keyframe_requested();
-        Ok(())
+        send_keyframe(&self.shared, &self.ctrl_tx)
     }
 
     /// Recover `[first_frame, last_frame]` by RFI instead of a full IDR. Capable hosts emit a
@@ -858,29 +906,14 @@ impl NativeClient {
     /// ([`request_keyframe`](Self::request_keyframe)). Prefer on loss; keyframe is the backstop
     /// when the recovery frame itself is lost. Fire-and-forget; throttle like keyframe.
     ///
-    /// Every RFI a client sends passes here and is logged at info, the most Android keeps.
-    /// `missing_shards` is what `first_frame` lacked past its parity when a later frame
-    /// overtook it; absent when none of it arrived.
+    /// Every RFI a client sends is logged at info with what its first frame lacked.
     pub fn request_rfi(&self, first_frame: u32, last_frame: u32) -> Result<()> {
-        self.ctrl_tx
-            .try_send(CtrlRequest::Rfi(RfiRequest {
-                first_frame,
-                last_frame,
-            }))
-            .map_err(|_| PunktfunkError::Closed)?;
-        let short = self.shared.short_frames.lock().unwrap().get(first_frame);
-        tracing::info!(
-            first = first_frame,
-            last = last_frame,
-            missing_shards = short.map(|s| s.0),
-            recovery_shards = short.map(|s| s.1),
-            "reference-frame invalidation requested"
-        );
-        Ok(())
+        send_rfi(&self.shared, &self.ctrl_tx, first_frame, last_frame)
     }
 
     /// Feed each received AU's `frame_index` (receive order). A forward gap fires a throttled
-    /// [`request_rfi`](Self::request_rfi) for `[first_missing, frame_index-1]`. Call every frame;
+    /// [`request_rfi`](Self::request_rfi) for `[first_missing, frame_index-1]`, less frames the
+    /// pump already asked for when their tail arrived short. Call every frame;
     /// [`frames_dropped`](Self::frames_dropped) + [`request_keyframe`](Self::request_keyframe)
     /// stays the backstop when the recovery frame is lost.
     ///
@@ -892,11 +925,12 @@ impl NativeClient {
     pub fn observe_frame_index(&self, frame_index: u32) -> FrameOrder {
         // Update under the lock; fire the request after releasing it.
         let (order, ask) = self
+            .shared
             .rfi
             .lock()
             .unwrap()
             .observe(frame_index, Instant::now());
-        self.send_recovery(ask);
+        send_recovery(&self.shared, &self.ctrl_tx, ask);
         order
     }
 
@@ -905,22 +939,8 @@ impl NativeClient {
     /// the next arrival; [`observe_frame_index`](Self::observe_frame_index) sends it
     /// there too.
     pub fn flush_frame_recovery(&self) {
-        let ask = self.rfi.lock().unwrap().flush(Instant::now());
-        self.send_recovery(ask);
-    }
-
-    /// Fire a recovery ask. Called after the `rfi` lock is released.
-    fn send_recovery(&self, ask: RecoveryAsk) {
-        match ask {
-            RecoveryAsk::Rfi(first, last) => {
-                let _ = self.request_rfi(first, last);
-            }
-            // Wider than RFI_MAX_RANGE: RFI cannot repair it; resync on a keyframe.
-            RecoveryAsk::Keyframe => {
-                let _ = self.request_keyframe();
-            }
-            RecoveryAsk::None => {}
-        }
+        let ask = self.shared.rfi.lock().unwrap().flush(Instant::now());
+        send_recovery(&self.shared, &self.ctrl_tx, ask);
     }
 
     /// [`observe_frame_index`](Self::observe_frame_index) as the gap width, `0` when none.

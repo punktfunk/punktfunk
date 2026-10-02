@@ -1,5 +1,5 @@
-//! Client-side loss-range detector (`RfiRecovery::observe`), the recent-RFI count, and
-//! what the short frames an RFI names still lacked.
+//! Client-side loss asks (`RfiRecovery`: the decoder's gaps and the pump's short tails),
+//! the recent-RFI count, and what the short frames an RFI names still lacked.
 
 use std::time::{Duration, Instant};
 
@@ -7,16 +7,28 @@ use std::time::{Duration, Instant};
 /// The host coalesces further.
 const RFI_THROTTLE: Duration = Duration::from_millis(100);
 
-/// Gap detector behind [`NativeClient::note_frame_index`]. Wrapping `frame_index`
-/// arithmetic lives here so embedders do not each re-derive it.
+/// Short tails remembered so the decoder's later gap over them asks nothing. The gap
+/// arrives within the loss window (~120 ms), a few frames at any rate.
+const ASKED_TAILS: usize = 32;
+
+/// Loss asks behind one throttle: the decoder's gaps ([`NativeClient::note_frame_index`])
+/// and the pump's short tails ([`Self::tail_short`]). Wrapping `frame_index` arithmetic
+/// lives here so embedders do not each re-derive it.
 #[derive(Default)]
 pub(crate) struct RfiRecovery {
     next_expected: Option<u32>,
     last_req: Option<Instant>,
-    /// Lost range the throttle swallowed, widened by later gaps; sent by the first
-    /// `observe` or `flush` after the window opens. Otherwise a second gap inside the
-    /// window (a lost recovery anchor) asks nothing until the 500 ms backstop.
+    /// Lost range the throttle swallowed, widened by later asks; sent by the first
+    /// `observe`, `tail_short` or `flush` after the window opens. Otherwise a second gap
+    /// inside the window (a lost recovery anchor) asks nothing until the 500 ms backstop.
     pending: Option<(u32, u32)>,
+    /// Frames already asked for at their tail, newest last.
+    asked: std::collections::VecDeque<u32>,
+}
+
+/// `a` is ahead of `b` in half-space wrap order.
+fn ahead_of(a: u32, b: u32) -> bool {
+    a != b && a.wrapping_sub(b) < u32::MAX / 2
 }
 
 /// Where one AU's `frame_index` falls in receive order, from
@@ -42,10 +54,10 @@ pub(crate) enum RecoveryAsk {
 
 impl RfiRecovery {
     /// `order` and `ask` are independent: throttle can yield [`RecoveryAsk::None`]
-    /// on a [`FrameOrder::Gap`], and an in-order frame can carry the ask a throttled
-    /// gap deferred. Pass the gap width to
-    /// [`crate::reanchor::ReanchorGate::arm_expecting_drops`] or the reassembler's
-    /// later `frames_dropped` climb is counted as a second loss.
+    /// on a [`FrameOrder::Gap`], so can a gap whose frames were asked for at their tail,
+    /// and an in-order frame can carry the ask a throttled gap deferred. Pass the gap
+    /// width to [`crate::reanchor::ReanchorGate::arm_expecting_drops`] or the
+    /// reassembler's later `frames_dropped` climb is counted as a second loss.
     pub(crate) fn observe(&mut self, frame_index: u32, now: Instant) -> (FrameOrder, RecoveryAsk) {
         let order = match self.next_expected {
             Some(exp) => {
@@ -58,8 +70,9 @@ impl RfiRecovery {
                     // Advance past this frame so the same gap cannot re-fire. The oldest
                     // unsent loss stays `first`: the host invalidates everything since it.
                     self.next_expected = Some(frame_index.wrapping_add(1));
-                    let first = self.pending.map_or(exp, |(first, _)| first);
-                    self.pending = Some((first, frame_index.wrapping_sub(1)));
+                    if let Some(lost) = self.unasked(exp, frame_index.wrapping_sub(1)) {
+                        self.widen(lost);
+                    }
                     FrameOrder::Gap(ahead)
                 } else {
                     // Leave next_expected: a rewind would false-gap the next in-order frame.
@@ -72,6 +85,50 @@ impl RfiRecovery {
             }
         };
         (order, self.flush(now))
+    }
+
+    /// The pump saw `frame_index`'s last shard arrive short of what its parity can
+    /// rebuild. Asks now, a frame interval before the next frame shows the gap, so the
+    /// host's next encode is the anchor. A frame the decoder already passed, or one
+    /// asked for before, asks nothing new.
+    pub(crate) fn tail_short(&mut self, frame_index: u32, now: Instant) -> RecoveryAsk {
+        let passed = self
+            .next_expected
+            .is_some_and(|exp| ahead_of(exp, frame_index));
+        if !passed && !self.asked.contains(&frame_index) {
+            if self.asked.len() == ASKED_TAILS {
+                self.asked.pop_front();
+            }
+            self.asked.push_back(frame_index);
+            self.widen((frame_index, frame_index));
+        }
+        self.flush(now)
+    }
+
+    /// `[first, last]` less the frames asked for at their tail at either end; `None`
+    /// when every one was.
+    fn unasked(&self, mut first: u32, mut last: u32) -> Option<(u32, u32)> {
+        while self.asked.contains(&first) {
+            if first == last {
+                return None;
+            }
+            first = first.wrapping_add(1);
+        }
+        while self.asked.contains(&last) {
+            last = last.wrapping_sub(1);
+        }
+        Some((first, last))
+    }
+
+    /// Merge `lost` into the pending range: oldest first, newest last.
+    fn widen(&mut self, (first, last): (u32, u32)) {
+        self.pending = Some(match self.pending {
+            Some((f, l)) => (
+                if ahead_of(f, first) { first } else { f },
+                if ahead_of(last, l) { last } else { l },
+            ),
+            None => (first, last),
+        });
     }
 
     /// An IDR was asked for: it repairs every frame the pending range names. The RFI
@@ -128,10 +185,10 @@ impl RecentRfis {
 /// jump-to-live, so a gap is still here when the decoder reaches it.
 const SHORT_FRAMES: usize = 16;
 
-/// Frames the pump skipped past while they were still short, each with
-/// `(missing, recovery)` from [`crate::session::Session::missing_beyond_parity`].
-/// The pump writes on a forward gap; [`NativeClient::request_rfi`] reads the first
-/// frame of its range. Both are rare, so a lock is fine.
+/// Frames the pump saw short, each with `(missing, recovery)` from
+/// [`crate::session::Session::missing_beyond_parity`]. The pump writes on a short tail
+/// or a forward gap; [`NativeClient::request_rfi`] reads the first frame of its range.
+/// Both are rare, so a lock is fine.
 ///
 /// [`NativeClient::request_rfi`]: super::NativeClient::request_rfi
 #[derive(Default)]
@@ -351,6 +408,74 @@ mod rfi_recovery_tests {
             r.observe(jump + 10, t + Duration::from_millis(1)),
             (Gap(8), RecoveryAsk::None)
         );
+    }
+
+    #[test]
+    fn a_short_tail_asks_before_the_gap_and_the_gap_asks_nothing() {
+        let mut r = RfiRecovery::default();
+        let t = base();
+        r.observe(100, t);
+        assert_eq!(r.tail_short(101, t), RecoveryAsk::Rfi(101, 101));
+        let later = t + RFI_THROTTLE;
+        assert_eq!(r.observe(102, later), (Gap(1), RecoveryAsk::None));
+        assert_eq!(r.flush(later), RecoveryAsk::None);
+    }
+
+    #[test]
+    fn a_gap_wider_than_the_short_tails_asks_for_the_rest() {
+        let mut r = RfiRecovery::default();
+        let t = base();
+        r.observe(100, t);
+        assert_eq!(r.tail_short(101, t), RecoveryAsk::Rfi(101, 101));
+        let later = t + RFI_THROTTLE;
+        assert_eq!(r.observe(103, later), (Gap(2), RecoveryAsk::Rfi(102, 102)));
+        let mut r = RfiRecovery::default();
+        r.observe(100, t);
+        assert_eq!(r.tail_short(102, t), RecoveryAsk::Rfi(102, 102));
+        assert_eq!(r.observe(103, later), (Gap(2), RecoveryAsk::Rfi(101, 101)));
+    }
+
+    #[test]
+    fn a_throttled_short_tail_goes_out_once() {
+        let mut r = RfiRecovery::default();
+        let t0 = base();
+        r.observe(100, t0);
+        assert_eq!(r.observe(102, t0), (Gap(1), RecoveryAsk::Rfi(101, 101)));
+        let t1 = t0 + Duration::from_millis(30);
+        assert_eq!(r.tail_short(105, t1), RecoveryAsk::None);
+        assert_eq!(r.observe(103, t1), (InOrder, RecoveryAsk::None));
+        assert_eq!(r.observe(104, t1), (InOrder, RecoveryAsk::None));
+        assert_eq!(r.observe(106, t1), (Gap(1), RecoveryAsk::None));
+        assert_eq!(r.flush(t0 + RFI_THROTTLE), RecoveryAsk::Rfi(105, 105));
+        assert_eq!(r.flush(t0 + RFI_THROTTLE * 2), RecoveryAsk::None);
+    }
+
+    #[test]
+    fn a_short_tail_the_decoder_passed_or_already_asked_asks_nothing() {
+        let mut r = RfiRecovery::default();
+        let t = base();
+        r.observe(100, t);
+        assert_eq!(r.observe(102, t), (Gap(1), RecoveryAsk::Rfi(101, 101)));
+        let later = t + RFI_THROTTLE;
+        assert_eq!(r.tail_short(101, later), RecoveryAsk::None, "passed");
+        assert_eq!(r.tail_short(103, later), RecoveryAsk::Rfi(103, 103));
+        let much_later = later + RFI_THROTTLE;
+        assert_eq!(r.tail_short(103, much_later), RecoveryAsk::None, "asked");
+    }
+
+    #[test]
+    fn short_tails_merge_across_the_wrap() {
+        let mut r = RfiRecovery::default();
+        let t0 = base();
+        r.observe(u32::MAX - 3, t0);
+        assert_eq!(
+            r.tail_short(u32::MAX - 2, t0),
+            RecoveryAsk::Rfi(u32::MAX - 2, u32::MAX - 2)
+        );
+        let t1 = t0 + Duration::from_millis(30);
+        assert_eq!(r.tail_short(0, t1), RecoveryAsk::None);
+        assert_eq!(r.tail_short(u32::MAX, t1), RecoveryAsk::None);
+        assert_eq!(r.flush(t0 + RFI_THROTTLE), RecoveryAsk::Rfi(u32::MAX, 0));
     }
 
     #[test]

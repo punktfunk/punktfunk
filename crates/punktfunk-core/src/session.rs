@@ -886,6 +886,11 @@ impl Session {
         self.reassembler.take_shard_delays()
     }
 
+    /// See [`Reassembler::take_short_tails`].
+    pub fn take_short_tails(&mut self) -> std::vec::Drain<'_, u32> {
+        self.reassembler.take_short_tails()
+    }
+
     /// See [`Reassembler::missing_beyond_parity`].
     pub fn missing_beyond_parity(&self, frame_index: u32) -> Option<(u32, u32)> {
         self.reassembler.missing_beyond_parity(frame_index)

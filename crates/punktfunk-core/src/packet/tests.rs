@@ -500,6 +500,62 @@ fn missing_beyond_parity_counts_what_parity_cannot_rebuild() {
     );
 }
 
+/// A block's last shard that leaves it short is the early loss signal: once per frame, only
+/// when parity cannot close it, never for probe filler, and gone after a reset.
+#[test]
+fn a_short_tail_is_reported_once_when_parity_cannot_close_the_block() {
+    let cfg = e2e_config(FecScheme::Gf16, 50);
+    let coder = coder_for(FecScheme::Gf16);
+    let mut pk = Packetizer::new(&cfg);
+    let mut rig = Rig::new(&cfg);
+    // Frame 0: 64 B = 4 data + 2 parity. The head's three data shards are lost.
+    let head_lost = pk.packetize(&[1u8; 64], 1_000, 0, coder.as_ref()).unwrap();
+    for i in [3, 4] {
+        assert!(rig.push(&head_lost[i]).is_none());
+    }
+    assert_eq!(
+        rig.r.take_short_tails().count(),
+        0,
+        "parity still on the way"
+    );
+    assert!(rig.push(&head_lost[5]).is_none());
+    assert_eq!(rig.r.take_short_tails().collect::<Vec<_>>(), vec![0]);
+    rig.push(&head_lost[5]);
+    assert_eq!(rig.r.take_short_tails().count(), 0, "a duplicate tail");
+
+    // Frame 1: one data shard lost, parity closes it.
+    let repaired = pk.packetize(&[2u8; 64], 2_000, 0, coder.as_ref()).unwrap();
+    assert!(rig.push_all(&repaired[1..]).is_some());
+    // Frame 2: the tail itself is lost; only the gap can tell.
+    let tail_lost = pk.packetize(&[3u8; 64], 3_000, 0, coder.as_ref()).unwrap();
+    for i in [2, 3, 4] {
+        rig.push(&tail_lost[i]);
+    }
+    assert_eq!(rig.r.take_short_tails().count(), 0);
+
+    // Frame 3: blocks (4+2) and (3+2). Block 1's data is lost; block 0 completes.
+    let two = pk.packetize(&[4u8; 100], 4_000, 0, coder.as_ref()).unwrap();
+    for i in [0, 1, 2, 3, 7, 8, 9, 10] {
+        rig.push(&two[i]);
+    }
+    assert_eq!(rig.r.take_short_tails().collect::<Vec<_>>(), vec![3]);
+
+    // Probe filler never reports, and a reset forgets what was not drained.
+    let probe = pk.packetize(&[5u8; 64], 5_000, 0, coder.as_ref()).unwrap();
+    for i in [3, 4, 5] {
+        let _ = rig.r.push(
+            &patch(&probe[i], |h| h.user_flags = FLAG_PROBE as u32),
+            rig.coder.as_ref(),
+            &rig.stats,
+        );
+    }
+    assert_eq!(rig.r.take_short_tails().count(), 0, "probe filler");
+    let last = pk.packetize(&[6u8; 64], 6_000, 0, coder.as_ref()).unwrap();
+    rig.push(&last[5]);
+    rig.r.reset();
+    assert_eq!(rig.r.take_short_tails().count(), 0, "reset");
+}
+
 /// In-flight budget is [`IN_FLIGHT_BUF_FACTOR`] × max_frame_bytes, not one max-size buffer per first shard.
 #[test]
 fn in_flight_buffer_budget_bounds_allocation() {
