@@ -1331,6 +1331,7 @@ impl Worker {
         crate::sc2_capture::Gate {
             masked: self.masked,
             system_forward: self.system_forward,
+            chords: self.chords_live,
         }
     }
 
@@ -1753,7 +1754,10 @@ impl Worker {
                     self.refresh_active();
                 }
                 Ok(Ctl::KindOverride(pref)) => self.kind_override = pref,
-                Ok(Ctl::ChordsLive(on)) => self.chords_live = on,
+                Ok(Ctl::ChordsLive(on)) => {
+                    self.chords_live = on;
+                    self.push_sc2_gate();
+                }
                 Ok(Ctl::SystemButtons {
                     forward_raw,
                     gesture,
