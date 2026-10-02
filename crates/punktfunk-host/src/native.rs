@@ -486,17 +486,10 @@ pub(crate) async fn serve(
             if max_sessions != 0 && n >= max_sessions {
                 done.notify_one();
             }
-            // Slot after handshake: a full host still accepts, so the waiter sees a live path
-            // (keep-alive) instead of a silent dial timeout.
-            let permit = sem
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("session semaphore is never closed");
             let peer = conn.remote_address();
             tracing::info!(%peer, "punktfunk/1 client connected");
-            // `serve_session` owns the permit: released while a knock is parked, re-acquired on
-            // approval. A setup failure still needs a typed close (cheap clone).
+            // `serve_session` takes the slot once the peer has spoken: released while a knock is
+            // parked, re-acquired on approval. A setup failure still needs a typed close.
             let sem_session = sem;
             let conn_err = conn.clone();
             match serve_session(
@@ -509,7 +502,6 @@ pub(crate) async fn serve(
                 &np,
                 &last_pairing,
                 stats,
-                permit,
                 sem_session,
             )
             .await
@@ -1191,8 +1183,7 @@ async fn serve_session(
     np_arc: &Arc<NativePairing>,
     last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
     stats: Arc<StatsRecorder>,
-    // Owned here: an unpaired knock releases it while parked and re-acquires on approval.
-    mut permit: tokio::sync::OwnedSemaphorePermit,
+    // The session slots. An unpaired knock releases its slot while parked, re-acquires on approval.
     sem: Arc<tokio::sync::Semaphore>,
 ) -> Result<Served> {
     let np: &NativePairing = np_arc;
@@ -1275,6 +1266,14 @@ async fn serve_session(
             .map(|()| Served::Session);
     }
 
+    // A slot only once the peer has spoken: one that stalls the handshake holds none, so it
+    // cannot queue paired clients behind it. A full host still accepts, so the waiter sees a
+    // live path (keep-alive) instead of a silent dial timeout.
+    let mut permit = sem
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("session semaphore is never closed");
     // Pairing gate outside the handshake future: approval wait must not be bound by
     // HANDSHAKE_TIMEOUT, and the NVENC permit is released while parked.
     if opts.require_pairing {
