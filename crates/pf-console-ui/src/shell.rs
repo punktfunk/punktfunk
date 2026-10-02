@@ -1075,7 +1075,8 @@ impl Shell {
     }
 
     /// Mirrors the service's wake and speed status. A woken host with `then_connect` goes
-    /// straight into its connect.
+    /// straight into its connect, once: the slot is cleared here, not at the service's next
+    /// bus drain.
     fn sync_wake(&mut self) {
         match self.console.wake() {
             Some(w) => {
@@ -1097,6 +1098,7 @@ impl Shell {
                         .map(|h| ConnectIntent::to_host(h, None))
                 });
                 self.bus.send(ConsoleCmd::CancelWake);
+                self.console.set_wake(None);
                 self.wake = None;
                 if let Some(Some(intent)) = intent {
                     self.start_connect(intent);

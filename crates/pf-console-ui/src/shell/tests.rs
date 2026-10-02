@@ -534,6 +534,29 @@ fn a_fetch_clears_the_previous_hosts_list() {
     assert!(snap.games.is_empty());
 }
 
+/// A woken host connects once, though the service clears its status only at its next
+/// bus drain.
+#[test]
+fn a_woken_host_connects_once() {
+    let host = hosts().remove(0);
+    let (mut s, console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    console.set_wake(Some(crate::model::WakeStatus {
+        key: host.key.clone(),
+        name: host.name.clone(),
+        seconds: 12,
+        timed_out: false,
+        online: true,
+        then_connect: true,
+    }));
+    for _ in 0..5 {
+        s.sync();
+    }
+    let launches = std::iter::from_fn(|| s.take_action())
+        .filter(|a| matches!(a, OverlayAction::Launch { .. }))
+        .count();
+    assert_eq!(launches, 1);
+}
+
 /// A pairing result belongs to the host the PIN went to: another host's Pair screen on
 /// top neither shows it nor closes on it.
 #[test]
