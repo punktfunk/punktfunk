@@ -252,7 +252,7 @@ fn rows_for(known: &KnownHosts) -> String {
             id.push('-');
         }
         let label = if h.name.is_empty() { &h.addr } else { &h.name };
-        let target = format!("{}:{}", h.addr, h.port);
+        let target = punktfunk_core::client::join_host_port(&h.addr, h.port);
         out.push_str(&format!(
             "  \"punktfunk.connect-{id}\": {{\"icon\":\"\u{f0318}\",\"label\":{},\"description\":{},\"aliases\":[\"connect\"],\"action\":{}}},\n",
             j(label),
@@ -317,6 +317,8 @@ mod tests {
         assert!(with_ours.contains("personal.notes"), "their row survives");
         assert!(with_ours.contains("punktfunk.connect-desk"));
         assert!(with_ours.contains("punktfunk.wake-desk"));
+        let v6 = rows_for(&known(vec![host("Lab", "fd00::5", false)]));
+        assert!(v6.contains("--connect '[fd00::5]:"), "{v6}");
         // Idempotent: a second pass replaces, never stacks.
         let again = insert_block(&strip_block(&with_ours), &rows_for(&known(vec![]))).unwrap();
         assert_eq!(again.matches(BEGIN).count(), 1);

@@ -287,7 +287,7 @@ impl DeepLink {
             host_ref: host
                 .id
                 .clone()
-                .unwrap_or_else(|| format!("{}:{}", host.addr, host.port)),
+                .unwrap_or_else(|| punktfunk_core::client::join_host_port(&host.addr, host.port)),
             fp: (!host.fp_hex.is_empty()).then(|| host.fp_hex.clone()),
             host: Some((host.addr.clone(), host.port)),
             launch: launch.map(str::to_string),
@@ -806,6 +806,13 @@ mod tests {
         assert_eq!(
             DeepLink::for_host(&plain, None, None).host_ref,
             "192.168.1.50:7777"
+        );
+        plain.addr = "fd00::5".into();
+        let v6 = DeepLink::for_host(&plain, None, None);
+        assert_eq!(v6.host_ref, "[fd00::5]:7777");
+        assert_eq!(
+            parse_addr_port(&v6.host_ref),
+            Some(("fd00::5".into(), 7777))
         );
 
         let link = DeepLink {
