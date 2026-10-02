@@ -446,11 +446,13 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         }
     }
 
-    /// The system keyboard closed: its text replaces the field's, and the field closes.
+    /// The system keyboard closed: its text replaces the field's, and the field closes. The
+    /// console's Backspace drops one Unicode scalar, so the clear counts scalars, not
+    /// characters: a flag or an accent is several.
     func finishEntry(_ text: String) {
         guard let entry = systemEntry else { return }
         systemEntry = nil
-        for _ in entry.text {
+        for _ in entry.text.unicodeScalars {
             bridge.key(.backspace)
         }
         bridge.text(text)
