@@ -1356,16 +1356,18 @@ impl Presenter {
                     "compositor stamp"
                 );
             }
-            for s in &out {
-                tracing::trace!(
-                    target: "pf_glass",
-                    id = s.present_id,
-                    displayed_ns = s.displayed_ns,
-                    submitted_ns = s.submitted_ns,
-                    exact = s.exact,
-                    "driver stamp"
-                );
-            }
+        }
+        // The driver's half of the join, on every OS: a Windows build without it has no
+        // reader of the id at all.
+        for s in &out {
+            tracing::trace!(
+                target: "pf_glass",
+                id = s.present_id,
+                displayed_ns = s.displayed_ns,
+                submitted_ns = s.submitted_ns,
+                exact = s.exact,
+                "driver stamp"
+            );
         }
         #[cfg(target_os = "linux")]
         if let Some(lane) = self.native.as_mut() {
