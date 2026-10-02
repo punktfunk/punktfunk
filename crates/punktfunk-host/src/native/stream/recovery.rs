@@ -155,6 +155,7 @@ impl StreamState {
                     "encoder rebuilt at new bitrate (adaptive bitrate)"
                 );
                 self.enc = new_enc;
+                self.carry_pipelining();
                 self.note_applied_rate(new_kbps, applied_kbps);
                 self.counters.note_bitrate(applied_kbps);
                 self.bitrate_kbps = applied_kbps;

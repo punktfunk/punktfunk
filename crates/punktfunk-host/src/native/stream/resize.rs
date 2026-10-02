@@ -184,6 +184,7 @@ impl StreamState {
             },
         };
         self.enc = new_enc;
+        self.carry_pipelining();
         self.frame = new_frame;
         self.interval = std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64);
         trace.mark("encoder_open");

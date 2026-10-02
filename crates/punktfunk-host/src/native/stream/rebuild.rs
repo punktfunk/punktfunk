@@ -556,6 +556,7 @@ impl StreamState {
              the encoder at the delivered size"
         );
         self.enc = new_enc;
+        self.carry_pipelining();
         self.enc_src = (self.frame.format, self.frame.width, self.frame.height);
         // A ceiling learned from the encoder this one replaces: another geometry or format.
         self.encoder_ceiling

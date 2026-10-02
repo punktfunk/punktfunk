@@ -259,6 +259,7 @@ impl StreamState {
             *fwd = super::super::cursor_fwd::CursorForwarder::new();
         }
         self.enc = p.enc;
+        self.carry_pipelining();
         self.frame = p.frame;
         self.interval = p.interval;
         self.cur_node_id = p.node_id;
@@ -269,6 +270,22 @@ impl StreamState {
         }
         self.inflight.clear();
         self.watchdog.on_au();
+    }
+
+    /// A fresh encoder retrieves synchronously. The session's pipelined escalation carries onto
+    /// it, or the flags claim a mode the encoder is not in and escalation never fires again.
+    pub(super) fn carry_pipelining(&mut self) {
+        if self.deescalating {
+            // The wind-back the old encoder owed: the new one is already there.
+            self.deescalating = false;
+            self.pipelined_active = false;
+            self.pipeline_asked = false;
+        } else if self.pipelined_active {
+            self.pipelined_active = self.enc.set_pipelined(true);
+        } else {
+            // A refusal was the old encoder's; this one may say yes.
+            self.pipeline_asked = false;
+        }
     }
 
     pub(super) fn adopt_reframe(&self, reframe: punktfunk_core::video_fit::Reframe) {
