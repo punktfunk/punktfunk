@@ -86,6 +86,11 @@ impl PairScreen {
         &self.host_name
     }
 
+    /// The address and port its PIN goes to.
+    pub(crate) fn target(&self) -> (&str, u16) {
+        (&self.addr, self.port)
+    }
+
     /// Paired is popped by the shell, not this screen.
     pub(crate) fn apply_phase(&mut self, phase: &PairPhase) {
         match phase {

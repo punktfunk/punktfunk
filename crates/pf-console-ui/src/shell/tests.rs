@@ -534,6 +534,32 @@ fn a_fetch_clears_the_previous_hosts_list() {
     assert!(snap.games.is_empty());
 }
 
+/// A pairing result belongs to the host the PIN went to: another host's Pair screen on
+/// top neither shows it nor closes on it.
+#[test]
+fn a_pairing_result_stays_with_its_own_host() {
+    let rows = hosts();
+    let (a, b) = (rows[0].clone(), rows[1].clone());
+    let (mut s, console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Pair(crate::screens::pair::PairScreen::new(&b, "deck")),
+    ]);
+    s.pairing = Some((a.addr.clone(), a.port));
+    console.set_pair(PairPhase::Paired { key: a.key.clone() });
+    s.sync();
+    assert!(
+        matches!(s.stack.last(), Some(Screen::Pair(_))),
+        "B's screen stays"
+    );
+    s.pairing = Some((b.addr.clone(), b.port));
+    console.set_pair(PairPhase::Paired { key: b.key.clone() });
+    s.sync();
+    assert!(
+        !matches!(s.stack.last(), Some(Screen::Pair(_))),
+        "its own result closes it"
+    );
+}
+
 /// Y on a pinned card must carry that preset into the library. Falling back to the
 /// host default would ignore the pin, which is why the card exists.
 #[test]

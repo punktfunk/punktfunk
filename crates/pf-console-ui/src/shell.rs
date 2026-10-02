@@ -370,6 +370,9 @@ pub(crate) struct Shell {
     games_key: Option<String>,
     /// Whose list the shared library holds: the host of the last `FetchLibrary` sent.
     library_fp: Option<String>,
+    /// The host the last `Pair` went to. The one pairing phase is its, so another host's
+    /// Pair screen on top neither shows it nor closes on it.
+    pairing: Option<(String, u16)>,
     /// Focus is on the tab strip, not the screen.
     strip_focus: bool,
     /// The shell moved focus to the strip because the root had nothing to focus. It goes
@@ -506,6 +509,7 @@ impl Shell {
             parked: [None, None, None, None],
             games_key: None,
             library_fp: None,
+            pairing: None,
             strip_focus: false,
             strip_parked: false,
             root_targets: None,
@@ -1031,6 +1035,12 @@ impl Shell {
 
     fn sync_pair(&mut self) {
         let pair = self.console.pair();
+        let pairing = self.pairing.clone();
+        let ours = |s: &Screen| match (s, &pairing) {
+            (Screen::Pair(p), Some((addr, port))) => p.target() == (addr.as_str(), *port),
+            _ => false,
+        };
+        let top_is_ours = self.stack.last().is_some_and(ours);
         match &pair {
             PairPhase::Idle => {}
             PairPhase::Paired { key } => {
@@ -1041,7 +1051,8 @@ impl Shell {
                     .map_or_else(|| "the host".to_string(), |h| h.name.clone());
                 self.show_toast_kind(format!("Paired with {name}"), ToastKind::Success);
                 self.console.set_pair(PairPhase::Idle);
-                if matches!(self.stack.last(), Some(Screen::Pair(_))) {
+                self.pairing = None;
+                if top_is_ours {
                     self.apply_nav(Nav::Pop);
                 }
                 // The first pairing is where the default host comes into being, so show
@@ -1052,11 +1063,12 @@ impl Shell {
                 }
             }
             phase => {
-                if let Some(Screen::Pair(p)) = self.stack.last_mut() {
+                if let (true, Some(Screen::Pair(p))) = (top_is_ours, self.stack.last_mut()) {
                     p.apply_phase(phase);
                 }
                 if matches!(phase, PairPhase::Failed(_)) {
                     self.console.set_pair(PairPhase::Idle);
+                    self.pairing = None;
                 }
             }
         }
@@ -1808,6 +1820,9 @@ impl Shell {
         for cmd in fx.cmds {
             if let ConsoleCmd::FetchLibrary { fp_hex, .. } = &cmd {
                 self.note_fetch(fp_hex);
+            }
+            if let ConsoleCmd::Pair { addr, port, .. } = &cmd {
+                self.pairing = Some((addr.clone(), *port));
             }
             // Gate wake in this call, like `connecting`. First WakeStatus is
             // ~100 ms–1 s away; without a placeholder the cursor keeps moving
