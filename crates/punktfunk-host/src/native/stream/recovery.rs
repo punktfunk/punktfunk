@@ -254,7 +254,11 @@ impl StreamState {
                 outage_ms,
                 "capture recovered from a source stall — forcing an IDR, announcing the gap"
             );
-            want_kf = true;
+            // The host's own repair, not a client ask: straight to the encoder, then stamped so
+            // the cooldown swallows the client's echo of the same freeze. Through the gate, the
+            // stamp would coalesce this IDR itself.
+            self.enc.request_keyframe();
+            self.counters.link.note_idr();
             self.inflight.clear();
             self.last_forced_idr = Some(std::time::Instant::now());
             announce_pipeline_gap(&self.gap_tx, outage_ms);
