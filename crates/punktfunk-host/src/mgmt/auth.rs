@@ -206,7 +206,7 @@ pub(crate) async fn require_auth(
         let from_loopback = req
             .extensions()
             .get::<PeerAddr>()
-            .is_none_or(|a| a.0.ip().is_loopback());
+            .is_none_or(|a| a.0.ip().to_canonical().is_loopback());
         return if from_loopback {
             forward(req, next, AuthLane::Public).await
         } else {
@@ -249,11 +249,12 @@ pub(crate) async fn require_auth(
         }
     }
     // Full admin surface, so loopback only — the listener binds all interfaces so paired
-    // clients can browse the library. No PeerAddr ⇒ unit test ⇒ treat as loopback.
+    // clients can browse the library. No PeerAddr ⇒ unit test ⇒ treat as loopback. Canonical:
+    // a dual-stack bind hands a local IPv4 caller over as ::ffff:127.0.0.1.
     let from_loopback = req
         .extensions()
         .get::<PeerAddr>()
-        .is_none_or(|a| a.0.ip().is_loopback());
+        .is_none_or(|a| a.0.ip().to_canonical().is_loopback());
     if !from_loopback {
         return api_error(
             StatusCode::UNAUTHORIZED,
