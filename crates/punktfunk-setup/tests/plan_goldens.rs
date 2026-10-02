@@ -945,6 +945,20 @@ fn trap_switch_pkgs_carries_packages_the_installer_never_installed() {
     );
 }
 
+/// An installed apt box updates against fresh lists, or `apt install` reports the old build
+/// as the newest.
+#[test]
+fn trap_an_installed_apt_box_refreshes_before_it_updates() {
+    let facts = installed("debian", Family::Apt, Channel::Stable);
+    let cmds = plan_for(&facts, &pins()).commands();
+    let update = cmds.iter().position(|c| c == "sudo apt update");
+    let install = cmds.iter().position(|c| c.starts_with("sudo apt install"));
+    assert!(
+        matches!((update, install), (Some(u), Some(i)) if u < i),
+        "{cmds:?}"
+    );
+}
+
 /// A client-only box switching channel reinstalls its client, never the host.
 #[test]
 fn trap_a_client_only_switch_installs_no_host() {

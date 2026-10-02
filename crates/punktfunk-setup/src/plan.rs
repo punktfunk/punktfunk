@@ -296,7 +296,12 @@ fn install_phase(
             backend
                 .install(facts, choices)
                 .into_iter()
-                .filter(|step| !repo.contains(step)),
+                // Not `apt update`: `apt install` reads the lists from the last refresh, which
+                // can predate the build this run exists to deliver.
+                .filter(|step| {
+                    !repo.contains(step)
+                        || matches!(&step.action, StepAction::Run(c) if c == "sudo apt update")
+                }),
         );
         plan.push(
             Phase::Install,
