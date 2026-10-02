@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::choices::{Action, Choices};
+use crate::choices::{Action, Choices, Components};
 use crate::facts::{Channel, Facts, Family, Firewall, DOCS};
 use crate::platform;
 
@@ -548,10 +548,17 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
     steps
 }
 
-/// Union the family's three with anything already installed, or `punktfunk-gamescope`
-/// and `punktfunk-client` stay on the channel the box just left.
-pub fn switch_pkgs(base: &[&str], installed: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = base.iter().map(|s| (*s).to_string()).collect();
+/// What this run's components name (the family's three for a host, the client) plus anything
+/// already installed, or `punktfunk-gamescope` stays on the channel the box just left. A
+/// client-only switch never pulls the host in.
+pub fn switch_pkgs(base: &[&str], installed: &[String], components: Components) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if components.host {
+        out.extend(base.iter().map(|s| (*s).to_string()));
+    }
+    if components.client {
+        out.push("punktfunk-client".to_string());
+    }
     for pkg in installed {
         if !out.contains(pkg) {
             out.push(pkg.clone());

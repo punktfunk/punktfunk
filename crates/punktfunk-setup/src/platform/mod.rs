@@ -138,7 +138,7 @@ impl PkgBackend for Apt {
         let mut steps = self.write_repo(facts, choices);
         steps.push(Step {
             action: StepAction::AptSwitch {
-                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf),
+                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf, choices.components),
             },
             ends_run: false,
         });
@@ -223,10 +223,10 @@ impl PkgBackend for Dnf {
     fn switch(&self, facts: &Facts, choices: &Choices) -> Vec<Step> {
         let (_, install) = split_at("fedora", "sudo dnf install");
         let mut steps = self.write_repo(facts, choices);
-        steps.push(Step::run(install[0].clone()));
+        steps.push(Step::run(compose_install(&install[0], choices)));
         steps.push(Step::run(format!(
             "sudo dnf distro-sync {}",
-            switch_pkgs(&self.base_pkgs(), &facts.installed_pf).join(" ")
+            switch_pkgs(&self.base_pkgs(), &facts.installed_pf, choices.components).join(" ")
         )));
         steps
     }
@@ -320,7 +320,7 @@ impl PkgBackend for Pacman {
         steps.push(Step::run("sudo pacman -Sy"));
         steps.push(Step {
             action: StepAction::PacmanSwitch {
-                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf),
+                pkgs: switch_pkgs(&self.base_pkgs(), &facts.installed_pf, choices.components),
             },
             ends_run: false,
         });

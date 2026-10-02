@@ -926,6 +926,31 @@ fn trap_switch_pkgs_carries_packages_the_installer_never_installed() {
     );
 }
 
+/// A client-only box switching channel reinstalls its client, never the host.
+#[test]
+fn trap_a_client_only_switch_installs_no_host() {
+    for (id, family) in [
+        ("debian", Family::Apt),
+        ("fedora", Family::Dnf),
+        ("arch", Family::Pacman),
+    ] {
+        let mut facts = installed(id, family, Channel::Stable);
+        facts.installed_pf = vec!["punktfunk-client".into()];
+        let to_canary = Pins {
+            host: false,
+            client: true,
+            channel: Some(Channel::Canary),
+            ..pins()
+        };
+        let text = render(&facts, &Choices::derive(&facts, &to_canary));
+        assert!(
+            !text.contains("punktfunk-web") && !text.contains("punktfunk-scripting"),
+            "{id}:\n{text}"
+        );
+        assert!(text.contains("punktfunk-client"), "{id}:\n{text}");
+    }
+}
+
 /// dnf goes down with distro-sync; install alone only ever moves up.
 #[test]
 fn trap_dnf_switch_installs_then_distro_syncs() {
