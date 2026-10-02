@@ -502,9 +502,19 @@ fn watch_config_reloads(name: String, mode: Mode) -> Option<ReloadWatcher> {
     let stopper = sock.try_clone().ok()?;
     WINDOW_WATCHERS.fetch_add(1, Ordering::Relaxed);
     thread::spawn(move || {
-        for line in std::io::BufReader::new(sock).lines() {
+        // The count is live readers: however this thread ends, it leaves the count.
+        struct Listening;
+        impl Drop for Listening {
+            fn drop(&mut self) {
+                WINDOW_WATCHERS.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        let _listening = Listening;
+        // Lossy: a window title that is not UTF-8 must not end the reader.
+        for line in std::io::BufReader::new(sock).split(b'\n') {
             // Guard shutdown or compositor gone — nothing left to re-apply to.
             let Ok(line) = line else { return };
+            let line = String::from_utf8_lossy(&line);
             if is_window_event(&line) {
                 WINDOW_GEN.fetch_add(1, Ordering::Relaxed);
             }
@@ -530,8 +540,8 @@ fn watch_config_reloads(name: String, mode: Mode) -> Option<ReloadWatcher> {
     Some(ReloadWatcher(stopper))
 }
 
-/// Ends [`watch_config_reloads`]'s thread by shutting its socket down, and
-/// drops this head out of [`WINDOW_WATCHERS`].
+/// Ends [`watch_config_reloads`]'s thread by shutting its socket down. The thread
+/// leaves [`WINDOW_WATCHERS`] as it exits.
 ///
 /// The thread is parked in a blocking read. A stop flag would leave it alive
 /// until the compositor emitted an event — one stranded thread per session,
@@ -540,7 +550,6 @@ struct ReloadWatcher(UnixStream);
 
 impl Drop for ReloadWatcher {
     fn drop(&mut self) {
-        WINDOW_WATCHERS.fetch_sub(1, Ordering::Relaxed);
         let _ = self.0.shutdown(std::net::Shutdown::Both);
     }
 }
