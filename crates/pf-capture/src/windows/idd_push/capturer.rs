@@ -141,7 +141,13 @@ impl IddPushCapturer {
                 etw,
                 etw_counts,
                 // Gap accumulator only; this call's pending (ending-frame move) is still unfolded.
-                cursor_moved_px: self.cursor.moved_px(),
+                // Under a declared hardware cursor pointer travel composes nothing, so it is no
+                // witness: the hole reads as damage-idle, as `health` reads it.
+                cursor_moved_px: if self.cursor_shared.is_some() || self.composite_cursor {
+                    Some(0)
+                } else {
+                    self.cursor.moved_px()
+                },
             };
             self.stall_watch.report(&stall, now, &evidence);
         }

@@ -159,7 +159,8 @@ pub struct Drive<'a> {
     au_published: bool,
     /// Consecutive `submit` failures; see [`MAX_SUBMIT_FAILURES`].
     submit_failures: u32,
-    /// A keyframe was asked for; if nothing composes, re-encode the stash instead of waiting.
+    /// A keyframe or an RFI anchor is owed; if nothing composes, re-encode the stash instead
+    /// of waiting.
     want_republish: bool,
     /// The frame last taken is a cursor-only re-encode.
     cursor_only: bool,
@@ -239,7 +240,8 @@ impl Drive<'_> {
     }
 
     /// The `ENCODE_CTL` ops queued since the last frame, in order. An RFI the backend cannot
-    /// honour becomes a keyframe request, the host's own fallback.
+    /// honour becomes a keyframe request, the host's own fallback. Either way the recovery
+    /// frame rides the next encode, and a still desktop composes none: the stash carries it.
     fn drain_ctl(&mut self) {
         for op in self.session.take_ctl() {
             match op {
@@ -253,8 +255,8 @@ impl Drive<'_> {
                         .invalidate_ref_frames(i64::from(first), i64::from(last))
                     {
                         self.enc.request_keyframe();
-                        self.want_republish = true;
                     }
+                    self.want_republish = true;
                 }
                 Ctl::DistrustReferences => self.enc.distrust_references(),
                 Ctl::ReconfigureBitrate(kbps) => {
@@ -285,8 +287,8 @@ impl Drive<'_> {
         }
     }
 
-    /// The next frame to submit: a composed one, else the stash for a keyframe request nothing
-    /// composed for, else a cursor-only re-encode. The request survives a turn that found the
+    /// The next frame to submit: a composed one, else the stash for a recovery ask nothing
+    /// composed for, else a cursor-only re-encode. The ask survives a turn that found the
     /// stash slot busy — the AU owed on it is about to free it. Every frame taken stamps
     /// `last_frame`: that is the clock the cursor-only cap runs on.
     fn take_next(&mut self) -> Option<(usize, u64, u64)> {
