@@ -38,6 +38,7 @@ pub(super) fn release_default_mic() {
 pub(super) fn restore_defaults() {
     stream_sink::SINK.release_all();
     stream_sink::SOURCE.release_all();
+    host_bridge::release_all_pins();
 }
 
 pub(super) fn heal_defaults() {
