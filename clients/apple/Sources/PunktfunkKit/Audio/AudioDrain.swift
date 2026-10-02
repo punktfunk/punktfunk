@@ -28,7 +28,7 @@ enum AudioDrain {
     let thread = Thread { [connection, flag, done] in
         defer { done.signal() }
         var drained = 0
-        var av = AvSync(channels: channels, rateHz: rateHz)
+        var av = AvSync(channels: channels, rateHz: rateHz, frameUs: frameUs)
         // The drought half of concealment: core heals a gap only once a later packet reveals
         // it, so a wire that simply goes quiet drains the ring into a de-prime whose re-prime is
         // a longer artifact than the missing audio. Given the SESSION's frame, like the ring —

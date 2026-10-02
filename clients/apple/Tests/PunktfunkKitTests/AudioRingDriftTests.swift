@@ -372,6 +372,19 @@ final class AudioRingDriftTests: XCTestCase {
         XCTAssertTrue(s.settled, "should act once the evidence is in")
     }
 
+    /// A 2 ms lossless plane observes 2.5× as often; settling and smoothing stay in audio time.
+    func testAvSyncShortFramesSettleOnTheSameSpanOfAudio() {
+        let depth = 200 * perMS
+        var s = AvSync(channels: channels, rateHz: 48_000, frameUs: 2_000)
+        settle(&s, offsetMS: 0, depth: depth, count: 100)
+        XCTAssertFalse(s.settled, "100 × 2 ms is 200 ms of audio, not the 500 ms gate")
+        settle(&s, offsetMS: 0, depth: depth, count: 150)
+        XCTAssertTrue(s.settled)
+        // 1 s of audio at τ = 2 s covers 1 − e^−0.5 ≈ 39% of a step; 5 ms weights would say 71%.
+        settle(&s, offsetMS: 100, depth: depth, count: 500)
+        XCTAssertTrue((37...41).contains(s.offsetMS), "\(s.offsetMS)")
+    }
+
     /// No frame on the glass ⇒ no reference ⇒ the loop says nothing, however many observations
     /// arrive. This is the state every session starts in, and the one the stage-1 fallback
     /// presenter stays in for its whole life.
