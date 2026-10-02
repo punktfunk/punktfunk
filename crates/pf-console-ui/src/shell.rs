@@ -1402,8 +1402,9 @@ impl Shell {
             .cloned()
     }
 
-    /// A library fetch for `fp_hex` is going out. Another host's list leaves the model now,
-    /// before a shelf pushed with the fetch syncs it as its own.
+    /// A library fetch for `fp_hex` is about to go out. Another host's list leaves the model
+    /// now, before a shelf pushed with the fetch syncs it as its own. Call it before the send:
+    /// after, it could wipe what the platform's fetch already delivered.
     fn note_fetch(&mut self, fp_hex: &str) {
         if self.library_fp.as_deref() != Some(fp_hex) {
             self.library.begin_host_fetch();
@@ -1413,13 +1414,13 @@ impl Shell {
 
     /// A fresh shelf for `host`, its fetch sent.
     fn shelf_root(&mut self, host: &HostRow) -> Screen {
+        self.note_fetch(&host.fp_hex);
         self.bus.send(ConsoleCmd::FetchLibrary {
             addr: host.addr.clone(),
             mgmt: host.mgmt_port,
             fp_hex: host.fp_hex.clone(),
         });
         self.games_key = Some(host.key.clone());
-        self.note_fetch(&host.fp_hex);
         Screen::Library(crate::screens::library::LibraryScreen::new(host))
     }
 
