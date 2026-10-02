@@ -4,7 +4,9 @@
 //! click is not forwarded). Release on Ctrl+Alt+Shift+Q or focus loss; held
 //! keys/buttons flush as ups. While captured, SDL relative mouse mode hides,
 //! confines, and feeds raw deltas as `MouseMove`. Focus-loss re-engages on
-//! gain; the chord stays released until the user opts in.
+//! gain; the chord stays released until the user opts in. A pointer the compositor
+//! warps (the Steam Frame's laser) is placed, not summed, when the host takes
+//! absolute input.
 //!
 //! Keys are SDL scancodes → VK via `keymap_sdl` (layout-independent). Relative
 //! motion coalesces to one summed `MouseMove` per loop — a 1000 Hz mouse would
@@ -339,17 +341,22 @@ impl Capture {
         }
     }
 
-    /// Frame position under the video fit. Latest-wins: intermediates add nothing
-    /// (deltas must sum).
+    /// Frame position under the video fit: the desktop model's motion, or a warped
+    /// pointer under capture. Latest-wins: intermediates add nothing (deltas must sum).
     pub fn on_motion_abs(&mut self, abs: Abs) {
-        if self.captured && self.desktop {
+        if self.captured && self.abs_ok {
             self.last_abs = Some((abs.x, abs.y));
             self.pending_abs = Some(abs);
         }
     }
 
+    /// The host takes `MouseMoveAbs`, so a warped pointer can be placed under capture.
+    pub fn abs_ok(&self) -> bool {
+        self.abs_ok
+    }
+
     /// Where this client last put the host pointer, in frame pixels; `None` before any
-    /// desktop-model motion. The local cursor follows the host from here when they differ.
+    /// absolute motion. The local cursor follows the host from here when they differ.
     pub fn last_abs(&self) -> Option<(i32, i32)> {
         self.last_abs
     }
