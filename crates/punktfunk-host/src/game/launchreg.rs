@@ -289,10 +289,22 @@ pub fn unlaunched(procs: &LiveProcs) {
 
 /// The ladder is through: drop the record so the next claim starts the
 /// title. Same identity as [`ending`], so a record a newer session took
-/// over meanwhile stays that session's.
+/// over meanwhile stays that session's. One a live session still holds is
+/// un-launched instead, as [`unlaunched`] does: that [`Claim`]'s [`Drop`]
+/// finds records by title, and would otherwise decrement a newer one's hold.
 pub fn ended(procs: &LiveProcs) {
     let mut recs = reg().records.lock().unwrap_or_else(|e| e.into_inner());
-    recs.retain(|r| !Arc::ptr_eq(&r.procs, procs));
+    recs.retain_mut(|r| {
+        if !Arc::ptr_eq(&r.procs, procs) {
+            return true;
+        }
+        if r.holders > 0 {
+            r.launched = false;
+            r.ending = false;
+            return true;
+        }
+        false
+    });
 }
 
 /// A host launch still running with no session holding it — what
