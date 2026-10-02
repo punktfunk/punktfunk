@@ -1632,11 +1632,19 @@ fn pad_render_thread(
         let mut ring: std::collections::VecDeque<u8> = std::collections::VecDeque::new();
         let mut primed = false;
         let mut out = Vec::new();
+        let mut silent_waits: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
             if h_event.wait_for_event(100).is_err() {
+                // An unplugged pad stops signalling without an error: end, and the worker
+                // re-correlates, as the main render path reopens.
+                silent_waits += 1;
+                if silent_waits >= crate::audio_wasapi::EVENT_SILENT_WAITS {
+                    return Err(anyhow!("the pad render event stopped"));
+                }
                 continue;
             }
+            silent_waits = 0;
             while let Ok(mut chunk) = pcm_rx.try_recv() {
                 for s in chunk.iter() {
                     ring.extend(s.to_le_bytes());
