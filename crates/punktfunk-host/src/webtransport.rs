@@ -55,8 +55,8 @@ pub struct Published {
     pub cert_hash: String,
     /// Unix seconds. A client past this must re-fetch before dialling.
     pub expires_at: u64,
-    /// Proof that this plane belongs to the host a browser paired with. Absent on the legacy
-    /// RSA identity ([`crate::identity`]), which the browser verifier does not implement.
+    /// Proof that this plane belongs to the host a browser paired with. Absent when the native
+    /// identity ([`crate::identity`]) is not P-256, which the browser verifier does not implement.
     pub attestation: Option<CertAttestation>,
 }
 
@@ -82,8 +82,8 @@ const CERT_SIG_CONTEXT: &str = "punktfunk-wt-cert-v1:";
 
 /// Sign `cert_hash` with the native identity, and hand back the certificate that verifies it.
 ///
-/// `None` rather than an error on the legacy RSA identity: a host still serving that pair has no
-/// browser pairings to break, and failing start-up over it would be worse than not attesting.
+/// `None` rather than an error when the identity is not P-256: failing start-up over it would be
+/// worse than not attesting.
 fn attest(ident: &crate::identity::NativeIdentity, cert_hash: &str) -> Option<CertAttestation> {
     use base64::Engine as _;
     let key = rcgen::KeyPair::from_pem(&ident.key_pem).ok()?;

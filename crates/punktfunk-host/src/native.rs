@@ -7,7 +7,7 @@
 //! isolated gamescope spawns do not. Data plane is native threads, not async.
 //! A session also carries desktop Opus (`AUDIO_MAGIC`) and gamepads (`RUMBLE_MAGIC`).
 //!
-//! Serves `~/.config/punktfunk/cert.pem` (shared with GameStream pairing) and logs
+//! Serves `~/.config/punktfunk/native-cert.pem` (shared with the mgmt API) and logs
 //! the SHA-256 fingerprint clients pin. `punktfunk-probe --connect host:9777` is
 //! the counterpart. Evidence: `design/` and the tests below.
 
@@ -307,7 +307,7 @@ pub(crate) async fn serve(
     mgmt_port: u16,
     np: Arc<NativePairing>,
     stats: Arc<StatsRecorder>,
-    // Caller-resolved so the planes cannot race adoption (P-256 vs legacy RSA).
+    // Caller-resolved so the planes cannot race the first-run mint.
     identity: crate::identity::NativeIdentity,
     // The browser plane, when the operator asked for it. Spawned from here, not joined: a browser
     // runs this plane's session on this plane's capturer, injector and session pool.
