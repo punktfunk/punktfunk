@@ -460,6 +460,18 @@ fun nativeDisplayMode(
 }
 
 /**
+ * The Aspect row's Screen and Safe area sizes, in the panel's own pixels
+ * ([Resolutions.panelScreens]). A phone set to a lower resolution renders below its panel, and
+ * [nativeDisplayMode] reads what it renders.
+ */
+fun panelScreens(context: Context): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+    val (w, h, _) = nativeDisplayMode(context)
+    val (sw, sh, _) = safeDisplayMode(context)
+    val modes = probeDisplay(context)?.supportedModes.orEmpty().map { it.physicalWidth to it.physicalHeight }
+    return Resolutions.panelScreens(w to h, sw to sh, modes)
+}
+
+/**
  * Sentinel [Settings.width]/[Settings.height] meaning "the native mode, narrowed so the picture
  * clears the display cutout" — resolved at connect by [safeDisplayMode], exactly as `0` is resolved
  * by [nativeDisplayMode]. Negative, so it can never collide with a real size; distinct from the
@@ -744,6 +756,23 @@ object Resolutions {
         fun device(a: Aspect) = a.label == SCREEN || a.label == SAFE_AREA
         return families.indexOfFirst { device(it) && within(it, DEVICE_TOLERANCE) }.takeIf { it >= 0 }
             ?: families.indexOfFirst { !device(it) && within(it, TOLERANCE) }.takeIf { it >= 0 }
+    }
+
+    /** The panel as the largest of [modes] in the [current] mode's shape, and the [safe] area
+     * scaled up to it with even sides. Both stay at [current] when no mode is larger. */
+    fun panelScreens(
+        current: Pair<Int, Int>,
+        safe: Pair<Int, Int>,
+        modes: List<Pair<Int, Int>>,
+    ): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+        val (cw, ch) = current
+        if (cw <= 0 || ch <= 0) return current to safe
+        val panel = (modes.map { (a, b) -> maxOf(a, b) to minOf(a, b) } + current)
+            .filter { (w, h) -> h > 0 && kotlin.math.abs(w.toDouble() * ch / (h.toDouble() * cw) - 1) < DEVICE_TOLERANCE }
+            .maxBy { (w, h) -> w.toLong() * h }
+        if (panel == current) return current to safe
+        fun up(side: Int) = (side.toLong() * panel.second / ch).toInt() / 2 * 2
+        return panel to if (safe == current) panel else up(safe.first) to up(safe.second)
     }
 }
 

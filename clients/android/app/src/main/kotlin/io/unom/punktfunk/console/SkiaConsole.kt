@@ -244,9 +244,8 @@ object SkiaConsole {
             .put("entry", startEntry(initial, pendingLink, presets))
         // A phone's own shape leads the Aspect row; a TV's panel is a standard one.
         if (!io.unom.punktfunk.isTvDevice(app)) {
-            val (nw, nh, _) = io.unom.punktfunk.nativeDisplayMode(app)
-            val (sw, sh, _) = io.unom.punktfunk.safeDisplayMode(app)
-            opts.put("screen", JSONArray(listOf(nw, nh))).put("safe_area", JSONArray(listOf(sw, sh)))
+            val (panel, safe) = io.unom.punktfunk.panelScreens(app)
+            opts.put("screen", JSONArray(panel.toList())).put("safe_area", JSONArray(safe.toList()))
         }
         handle = runCatching { NativeBridge.nativeConsoleCreate(opts.toString()) }.getOrDefault(0L)
         if (handle == 0L) {

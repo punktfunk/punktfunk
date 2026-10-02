@@ -815,7 +815,8 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
     // until an edit actually makes it custom (or a preset is re-picked). Custom itself is detected
     // from the stored size, never flagged (see [isCustomResolution]), so nothing new persists.
     var customPicked by remember { mutableStateOf(false) }
-    val families = remember(nw, nh, sw, sh) { Resolutions.families(nw to nh, sw to sh) }
+    val (panel, panelSafe) = panelScreens(context)
+    val families = remember(panel, panelSafe) { Resolutions.families(panel, panelSafe) }
     val showCustom = customPicked || s.isCustomResolution(families)
     var customBitratePicked by remember { mutableStateOf(false) }
     SettingsGroup("Resolution") {

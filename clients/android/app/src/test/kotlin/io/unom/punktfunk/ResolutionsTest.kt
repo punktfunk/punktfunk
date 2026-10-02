@@ -84,4 +84,19 @@ class ResolutionsTest {
         assertTrue(!Settings(width = 1280, height = 800).isCustomResolution()) // the Deck, 16:10
         assertTrue(!Settings(width = 0, height = 0).isCustomResolution())
     }
+
+    /** A Pixel 8 Pro set to its lower resolution still lists its panel's own size. */
+    @Test
+    fun aPhoneBelowItsPanelStillListsThePanel() {
+        val modes = listOf(1008 to 2244, 1344 to 2992, 1008 to 2244, 1344 to 2992)
+        val (panel, safe) = Resolutions.panelScreens(2244 to 1008, 2144 to 1008, modes)
+        assertEquals(2992 to 1344, panel)
+        assertEquals(2858 to 1344, safe)
+        assertTrue(2992 to 1344 in Resolutions.families(panel, safe)[0].sizes)
+        // No cutout: the safe area stays the panel, so it adds no entry.
+        assertEquals(panel to panel, Resolutions.panelScreens(2244 to 1008, 2244 to 1008, modes))
+        // A mode of another shape is some other panel.
+        val other = Resolutions.panelScreens(2244 to 1008, 2144 to 1008, listOf(2160 to 3840))
+        assertEquals((2244 to 1008) to (2144 to 1008), other)
+    }
 }
