@@ -272,6 +272,18 @@ impl StreamState {
         self.watchdog.on_au();
     }
 
+    /// Close a frame whose tail never came, as the loop does at the next first chunk, before a
+    /// replacement encoder opens at `au_seq`. Left to the loop, that close would land after the
+    /// new encoder numbered its first AU, one behind the wire for the rest of the session.
+    pub(super) fn close_open_frame(&mut self) {
+        if std::mem::take(&mut self.wire_frame_open) {
+            if self.inflight.len() > 1 {
+                self.inflight.pop_front();
+            }
+            self.au_seq = self.au_seq.wrapping_add(1);
+        }
+    }
+
     /// A fresh encoder retrieves synchronously. The session's pipelined escalation carries onto
     /// it, or the flags claim a mode the encoder is not in and escalation never fires again.
     pub(super) fn carry_pipelining(&mut self) {

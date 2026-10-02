@@ -127,6 +127,7 @@ impl StreamState {
             self.live_bitrate.store(applied_kbps, Ordering::Relaxed);
             return;
         }
+        self.close_open_frame();
         let hz = interval_hz(self.interval);
         let rebuild_t0 = std::time::Instant::now();
         match open_session_encoder(
