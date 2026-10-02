@@ -566,9 +566,11 @@ impl WinExecutor<'_> {
             return Ok(());
         }
         let name = "pf-tray-launch";
+        // Quoted: the task splits an unquoted `/TR` at its first space (`C:\Program Files`).
+        let tr = format!("\"{exe}\"");
         for argv in [
             vec![
-                "schtasks", "/Create", "/TN", name, "/TR", exe, "/SC", "ONCE", "/ST", "00:00",
+                "schtasks", "/Create", "/TN", name, "/TR", &tr, "/SC", "ONCE", "/ST", "00:00",
                 "/IT", "/F",
             ],
             vec!["schtasks", "/Run", "/TN", name],
