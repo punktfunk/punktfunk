@@ -504,13 +504,17 @@ fn restart_runner(id: &str) {
 fn run_runner(id: &str, args: &[String]) -> Result<()> {
     let (program, prefix) = crate::plugins::runner_command()?;
     tracing::info!(job = %id, program = %program.display(), ?args, "spawning the plugin runner");
-    let mut child = Command::new(&program)
-        .args(&prefix)
+    let mut cmd = Command::new(&program);
+    cmd.args(&prefix)
         .args(args)
         // `bun add` must not block on a prompt inside a service.
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Own process group, so a timeout also ends the bun the runner started.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("run the plugin runner ({})", program.display()))?;
 
@@ -530,6 +534,13 @@ fn run_runner(id: &str, args: &[String]) -> Result<()> {
         match child.try_wait().context("wait for the plugin runner")? {
             Some(status) => break status,
             None if Instant::now() >= deadline => {
+                #[cfg(unix)]
+                {
+                    // SAFETY: kill(2) with a negative pid signals the process group created
+                    // above; no memory is touched.
+                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                }
+                #[cfg(not(unix))]
                 let _ = child.kill();
                 let _ = child.wait();
                 bail!(
