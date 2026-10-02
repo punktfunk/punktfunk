@@ -38,7 +38,13 @@ impl AppModel {
         opts: SpawnOpts,
         sender: &ComponentSender<Self>,
     ) {
+        // A request-access start carries the cancel its waiting dialog arms; one that never
+        // spawns must close that dialog, or its Cancel tears down a session it does not own.
+        let request = opts.cancel.is_some();
         if std::mem::replace(&mut self.busy, true) {
+            if request {
+                self.close_waiting();
+            }
             return;
         }
         self.hosts.emit(HostsMsg::ClearError);
@@ -51,6 +57,9 @@ impl AppModel {
         match spawn::spawn_session(sender.input_sender().clone(), req, fp_hex, tofu, opts) {
             Ok(child) => self.session = Some(child),
             Err(e) => {
+                if request {
+                    self.close_waiting();
+                }
                 self.busy = false;
                 self.hosts.emit(HostsMsg::SetSession(None));
                 self.hosts.emit(HostsMsg::ShowError(e));
