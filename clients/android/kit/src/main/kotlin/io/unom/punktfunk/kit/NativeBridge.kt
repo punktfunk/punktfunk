@@ -315,6 +315,32 @@ object NativeBridge {
     external fun nativeVideoSourceCrop(handle: Long, left: Float, top: Float, right: Float, bottom: Float)
 
     /**
+     * A dual-screen handheld's second picture window: a `SurfaceView` on the lower screen that
+     * the ASurfaceControl presenter composites the same decoded frame into, with its own part
+     * of the frame ([nativePictureCrop]) and size ([nativePictureSurfaceSize]). `null` drops it.
+     * The surface may come and go any number of times in a stream; the decoder never restarts
+     * for it. [width]/[height] are the view's pixel size at the call (0 = not laid out yet).
+     * No-op on a `0` handle.
+     */
+    external fun nativePictureWindow(handle: Long, surface: android.view.Surface?, width: Int, height: Int)
+
+    /** The second picture window's live pixel size, from its every `surfaceChanged`. */
+    external fun nativePictureSurfaceSize(handle: Long, width: Int, height: Int)
+
+    /** The part of the frame the second picture window shows, as fractions like [nativeVideoSourceCrop]. */
+    external fun nativePictureCrop(handle: Long, left: Float, top: Float, right: Float, bottom: Float)
+
+    /**
+     * Which picture layers show: [PICTURE_FIRST] the first window's, [PICTURE_SECOND] the second's,
+     * OR'd. A hidden layer keeps its window and takes no frame, so a layout change costs no
+     * decoder restart. One atomic store, UI-safe.
+     */
+    external fun nativePictureShown(handle: Long, mask: Int)
+
+    const val PICTURE_FIRST = 1
+    const val PICTURE_SECOND = 2
+
+    /**
      * The decoder's picture size as `[width, height]`, or `null` before its first output format.
      * Differs from [nativeVideoSize] when the host frames the picture for this device (a join, a
      * mirrored head). One atomic load; UI-safe.

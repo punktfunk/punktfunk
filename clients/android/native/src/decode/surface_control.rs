@@ -5,13 +5,15 @@
 //! timeline and hands back the *real* present feedback, instead of the MediaCodec→SurfaceView→
 //! BufferQueue path that predicts the latch and hopes the `OnFrameRendered` callbacks arrive.
 //!
-//! A `Layer` owns one `ASurfaceControl` created as a child of the SurfaceView's `ANativeWindow`;
-//! the decoder renders into an `AImageReader` and the
-//! presenter composites each acquired `AHardwareBuffer` onto this layer via an `ASurfaceTransaction`
-//! that carries a desired present time (the single actuator both present modes drive) and an
-//! acquire fence. Every applied transaction registers a one-shot completion callback that reports
-//! the frame's latch time, its present fence and the *previous* buffer's release fence back
-//! through the decode loop's event channel — the real vsync the slot scheduler is phased on.
+//! A `Layer` owns one `ASurfaceControl` created as a child of a SurfaceView's `ANativeWindow`;
+//! the decoder renders into an `AImageReader` and the presenter composites each acquired
+//! `AHardwareBuffer` onto every shown layer in one `ASurfaceTransaction` ([`present`]) that
+//! carries a desired present time (the single actuator both present modes drive) and an acquire
+//! fence. A dual-screen handheld's second window is a second layer taking the same buffer with
+//! its own crop (design `android-dual-screen.md` §4). Every applied transaction registers a
+//! one-shot completion callback that reports the frame's latch time, its present fence and the
+//! *previous* buffer's release fence — one per layer, merged — back through the decode loop's
+//! event channel — the real vsync the slot scheduler is phased on.
 //!
 //! Every `ASurface*` entry point is **API 29** — above the crate's minSdk-28 floor — so all are
 //! `dlsym`-resolved from `libandroid.so`, exactly as [`crate::adpf`] and [`super::vsync`] resolve
@@ -161,6 +163,7 @@ type StatsGetPrevReleaseFenceFn =
     unsafe extern "C" fn(*mut ASurfaceTransactionStats, *mut ASurfaceControl) -> RawFd;
 type StatsGetPresentFenceFn = unsafe extern "C" fn(*mut ASurfaceTransactionStats) -> RawFd;
 
+#[derive(Clone, Copy)]
 struct Api {
     create_from_window: CreateFromWindowFn,
     ac_release: AcReleaseFn,
@@ -262,8 +265,9 @@ pub(super) struct PresentComplete {
     /// real `latch` stat, both of which the predicted path could only guess at.
     pub latch_ns: i64,
     /// The release fence for the buffer this transaction REPLACED (the previous frame on the
-    /// layer), or `None` when the platform reports none. The loop deletes that buffer's image with
-    /// this fence so it is returned to the reader's pool only once SurfaceFlinger is done with it.
+    /// layers, every layer's fence merged into one), or `None` when the platform reports none.
+    /// The loop deletes that buffer's image with this fence so it is returned to the reader's
+    /// pool only once SurfaceFlinger is done with it on every display.
     pub prev_release_fence: Option<OwnedFd>,
     /// The present fence: signals at the hardware vsync that scanned this frame out. Usually still
     /// pending when the completion arrives; [`fence_signal_ns`] reads it later, never waits.
@@ -276,10 +280,10 @@ pub(super) struct PresentComplete {
 struct CompleteCtx {
     tx: mpsc::Sender<DecodeEvent>,
     seq: u64,
-    /// A shared reference to the layer's `ASurfaceControl`, needed to read the per-surface release
-    /// fence out of the stats. Holding the `Arc` keeps the control alive for the callback even if
-    /// the layer was already dropped.
-    sc: Arc<ScHandle>,
+    /// Shared references to every layer's `ASurfaceControl` in the transaction, needed to read the
+    /// per-surface release fences out of the stats. Holding the `Arc`s keeps each control alive
+    /// for the callback even if its layer was already dropped.
+    scs: Vec<Arc<ScHandle>>,
     prev_fence_fn: StatsGetPrevReleaseFenceFn,
     present_fence_fn: StatsGetPresentFenceFn,
     latch_fn: StatsGetLatchTimeFn,
@@ -301,16 +305,24 @@ unsafe extern "C" fn on_complete(context: *mut c_void, stats: *mut ASurfaceTrans
         // SAFETY: `stats` is valid for the duration of this callback (platform contract).
         unsafe { (ctx.latch_fn)(stats) }
     };
-    let prev_release_fence = if stats.is_null() {
-        None
-    } else {
-        // SAFETY: valid stats + the layer's live `ASurfaceControl`; a returned fd is owned by us
-        // and closed via `OwnedFd`. `-1` means no fence.
-        let fd = unsafe { (ctx.prev_fence_fn)(stats, ctx.sc.sc) };
-        // SAFETY: a non-negative fd returned by `getPreviousReleaseFenceFd` is a fresh owned fence
-        // descriptor whose ownership the API transfers to us; wrapping it in `OwnedFd` closes it.
-        (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
-    };
+    // One fence per layer, merged: the buffer is free only once every display is done with it.
+    let mut prev_release_fence: Option<OwnedFd> = None;
+    if !stats.is_null() {
+        for sc in &ctx.scs {
+            // SAFETY: valid stats + a live `ASurfaceControl` (the `Arc` holds it); a returned fd
+            // is owned by us and closed via `OwnedFd`. `-1` means no fence.
+            let fd = unsafe { (ctx.prev_fence_fn)(stats, sc.sc) };
+            // SAFETY: a non-negative fd returned by `getPreviousReleaseFenceFd` is a fresh owned
+            // fence descriptor whose ownership the API transfers to us; `OwnedFd` closes it.
+            let Some(fence) = (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) }) else {
+                continue;
+            };
+            prev_release_fence = Some(match prev_release_fence.take() {
+                None => fence,
+                Some(prior) => merge_fences(prior, fence),
+            });
+        }
+    }
     let present_fence = if stats.is_null() {
         None
     } else {
@@ -328,7 +340,7 @@ unsafe extern "C" fn on_complete(context: *mut c_void, stats: *mut ASurfaceTrans
     }));
 }
 
-/// One `ASurfaceControl` layer, a child of the SurfaceView's window, that the presenter composites
+/// One `ASurfaceControl` layer, a child of a SurfaceView's window, that the presenter composites
 /// decoded buffers onto. Owns nothing thread-shared; lives on and is dropped by the decode loop.
 pub(super) struct Layer {
     api: Api,
@@ -401,40 +413,28 @@ impl Layer {
             .unwrap_or((self.fallback_w, self.fallback_h))
     }
 
-    /// Present one decoded buffer at `desired_present_ns` (`CLOCK_MONOTONIC`; `0` = ASAP).
-    /// SurfaceFlinger takes `acquire_fence` only after transaction creation succeeds; otherwise
-    /// the caller keeps it to release the unused image safely. The completion reports the latch
-    /// and previous-buffer release fence on `ev_tx`, tagged with `seq`.
+    /// Put `buffer` on this layer in `txn`: the crop, the destination, the colour, and on the
+    /// first stage after a show the visibility, z-order and frame-rate vote. `fence_fd` is the
+    /// acquire fence `setBuffer` takes ownership of (`-1` = none).
     ///
-    /// `dataspace` is the `ADataSpace` value (`0` leaves the layer default). `hdr` is the
-    /// session's HDR10 volume for SurfaceFlinger's tone-mapper. `frame_rate` votes once (`0.0`
-    /// skips). `false` means the caller still owns the buffer and fence.
+    /// # Safety
+    /// `txn` is a live transaction this call's caller applies or deletes exactly once.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn present(
+    unsafe fn stage(
         &mut self,
+        txn: *mut ASurfaceTransaction,
         buffer: &HardwareBuffer,
         src_w: i32,
         src_h: i32,
-        acquire_fence: &mut Option<OwnedFd>,
-        desired_present_ns: i64,
+        fence_fd: RawFd,
         dataspace: i32,
         hdr: Option<&punktfunk_core::quic::HdrMeta>,
         frame_rate: f32,
-        seq: u64,
-        ev_tx: &mpsc::Sender<DecodeEvent>,
-    ) -> bool {
-        // SAFETY: `txn_create` returns a fresh transaction or null; every setter below takes that
-        // transaction + this layer's live `sc` + valid arguments; `apply`/`delete` consume it once.
+    ) {
+        // SAFETY: every setter takes the caller's live transaction + this layer's live `sc` +
+        // valid arguments.
         unsafe {
-            let txn = (self.api.txn_create)();
-            if txn.is_null() {
-                return false;
-            }
             let sc = self.sc.sc;
-            let fence_fd = acquire_fence
-                .take()
-                .map(std::os::fd::IntoRawFd::into_raw_fd)
-                .unwrap_or(-1);
             (self.api.txn_set_buffer)(txn, sc, buffer.as_ptr(), fence_fd);
             let src = crop_rect(
                 crate::session::unpack_src_crop(self.src_crop.load(Ordering::Relaxed)),
@@ -479,29 +479,14 @@ impl Layer {
                 }
                 self.configured = true;
             }
-            (self.api.txn_set_present_time)(txn, desired_present_ns);
-            // One-shot completion context, reclaimed inside the callback. The `Arc` clone keeps the
-            // control alive for the callback even past the layer's own drop.
-            let ctx = Box::into_raw(Box::new(CompleteCtx {
-                tx: ev_tx.clone(),
-                seq,
-                sc: self.sc.clone(),
-                prev_fence_fn: self.api.stats_prev_release_fence,
-                present_fence_fn: self.api.stats_present_fence,
-                latch_fn: self.api.stats_latch_time,
-            }));
-            (self.api.txn_set_on_complete)(txn, ctx as *mut c_void, on_complete);
-            (self.api.txn_apply)(txn);
-            (self.api.txn_delete)(txn);
         }
-        true
     }
 
-    /// Take the layer off the screen. Dropping it does not: a released child stays on display
-    /// as long as its parent does, over whatever layer replaced it.
-    pub(super) fn hide(&self) {
-        // SAFETY: as in `present`: a fresh transaction or null, this layer's live `sc`, applied
-        // and deleted once.
+    /// Take the layer off the screen; the next [`present`] that includes it shows it again.
+    /// Dropping it does not hide it: a released child stays on display as long as its parent
+    /// does, over whatever layer replaced it.
+    pub(super) fn hide(&mut self) {
+        // SAFETY: a fresh transaction or null, this layer's live `sc`, applied and deleted once.
         unsafe {
             let txn = (self.api.txn_create)();
             if txn.is_null() {
@@ -511,7 +496,75 @@ impl Layer {
             (self.api.txn_apply)(txn);
             (self.api.txn_delete)(txn);
         }
+        self.configured = false;
     }
+}
+
+/// Present one decoded buffer on every layer in `layers` at `desired_present_ns`
+/// (`CLOCK_MONOTONIC`; `0` = ASAP), one transaction. SurfaceFlinger takes `acquire_fence` only
+/// after transaction creation succeeds; otherwise the caller keeps it to release the unused image
+/// safely. Each layer past the first gets its own duplicate of the fence, since `setBuffer` owns
+/// the descriptor it is handed. The completion reports the latch and the merged previous-buffer
+/// release fence on `ev_tx`, tagged with `seq`.
+///
+/// `dataspace` is the `ADataSpace` value (`0` leaves the layer default). `hdr` is the session's
+/// HDR10 volume for SurfaceFlinger's tone-mapper. `frame_rate` votes once per layer (`0.0`
+/// skips). `false` means the caller still owns the buffer and fence.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn present(
+    layers: &mut [&mut Layer],
+    buffer: &HardwareBuffer,
+    src_w: i32,
+    src_h: i32,
+    acquire_fence: &mut Option<OwnedFd>,
+    desired_present_ns: i64,
+    dataspace: i32,
+    hdr: Option<&punktfunk_core::quic::HdrMeta>,
+    frame_rate: f32,
+    seq: u64,
+    ev_tx: &mpsc::Sender<DecodeEvent>,
+) -> bool {
+    let Some(api) = layers.first().map(|l| l.api) else {
+        return false;
+    };
+    // SAFETY: `txn_create` returns a fresh transaction or null; `stage` and the setters below take
+    // that transaction + live layers + valid arguments; `apply`/`delete` consume it once.
+    unsafe {
+        let txn = (api.txn_create)();
+        if txn.is_null() {
+            return false;
+        }
+        let dups: Vec<RawFd> = (1..layers.len())
+            .map(|_| {
+                acquire_fence
+                    .as_ref()
+                    .and_then(|f| f.try_clone().ok())
+                    .map_or(-1, std::os::fd::IntoRawFd::into_raw_fd)
+            })
+            .collect();
+        let first_fd = acquire_fence
+            .take()
+            .map_or(-1, std::os::fd::IntoRawFd::into_raw_fd);
+        for (i, layer) in layers.iter_mut().enumerate() {
+            let fd = if i == 0 { first_fd } else { dups[i - 1] };
+            layer.stage(txn, buffer, src_w, src_h, fd, dataspace, hdr, frame_rate);
+        }
+        (api.txn_set_present_time)(txn, desired_present_ns);
+        // One-shot completion context, reclaimed inside the callback. The `Arc` clones keep the
+        // controls alive for the callback even past a layer's own drop.
+        let ctx = Box::into_raw(Box::new(CompleteCtx {
+            tx: ev_tx.clone(),
+            seq,
+            scs: layers.iter().map(|l| l.sc.clone()).collect(),
+            prev_fence_fn: api.stats_prev_release_fence,
+            present_fence_fn: api.stats_present_fence,
+            latch_fn: api.stats_latch_time,
+        }));
+        (api.txn_set_on_complete)(txn, ctx as *mut c_void, on_complete);
+        (api.txn_apply)(txn);
+        (api.txn_delete)(txn);
+    }
+    true
 }
 
 // ---- Present-fence timestamps (libsync, API 26) -----------------------------------------------
@@ -539,10 +592,12 @@ struct SyncFenceInfo {
 
 type SyncFileInfoFn = unsafe extern "C" fn(i32) -> *mut SyncFileInfo;
 type SyncFileInfoFreeFn = unsafe extern "C" fn(*mut SyncFileInfo);
+type SyncMergeFn = unsafe extern "C" fn(*const std::ffi::c_char, i32, i32) -> i32;
 
 struct SyncApi {
     info: SyncFileInfoFn,
     free: SyncFileInfoFreeFn,
+    merge: SyncMergeFn,
 }
 
 fn sync_api() -> Option<&'static SyncApi> {
@@ -558,10 +613,28 @@ fn sync_api() -> Option<&'static SyncApi> {
             Some(SyncApi {
                 info: crate::sym(lib, c"sync_file_info")?,
                 free: crate::sym(lib, c"sync_file_info_free")?,
+                merge: crate::sym(lib, c"sync_merge")?,
             })
         }
     })
     .as_ref()
+}
+
+/// One fence that signals once both do. Without libsync the first stands in for both: a buffer
+/// could then return to the pool while the other display still reads it — a tear at worst,
+/// never a fault (SurfaceFlinger holds its own reference).
+fn merge_fences(a: OwnedFd, b: OwnedFd) -> OwnedFd {
+    let Some(api) = sync_api() else {
+        return a;
+    };
+    // SAFETY: two valid fence fds we own; `sync_merge` returns a new fd (or `-1`) and leaves both
+    // inputs ours to close, which the `OwnedFd` drops do.
+    let fd = unsafe { (api.merge)(c"punktfunk-release".as_ptr(), a.as_raw_fd(), b.as_raw_fd()) };
+    if fd < 0 {
+        return a;
+    }
+    // SAFETY: a non-negative `sync_merge` result is a fresh fd we own.
+    unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
 /// The instant `fence` signalled (`CLOCK_MONOTONIC` ns), or `None` while it is still pending, on

@@ -196,6 +196,10 @@ pub(crate) struct DecodeOptions {
     pub src_crop: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Where the decoder publishes its picture size, packed by [`crate::session::pack_surface_size`].
     pub decoded_size: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// A dual-screen handheld's second picture window and the layers-shown mask. The
+    /// ASurfaceControl backend alone reads it; the SurfaceView presenter and PyroWave have one
+    /// surface and show the whole picture there.
+    pub layers: std::sync::Arc<crate::session::PictureLayers>,
     /// Not the session's first video start: the stream is mid-flight, so the fresh decoder
     /// holds no reference picture the next P-frames lean on.
     pub restart: bool,

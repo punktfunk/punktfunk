@@ -19,7 +19,7 @@ use punktfunk_core::client::NativeClient;
 use punktfunk_core::fp::{hex, parse_hex32};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
@@ -105,6 +105,41 @@ pub(crate) struct SessionHandle {
     /// A host that frames the picture for this device (a join, a mirrored head) can send a size
     /// other than the negotiated mode, and the UI places against what is decoded. `0` = none yet.
     pub decoded_size: Arc<AtomicU64>,
+    /// A dual-screen handheld's second picture window and which layers show (design
+    /// `android-dual-screen.md` §4), read by the ASurfaceControl presenter.
+    pub layers: Arc<PictureLayers>,
+}
+
+/// The ASurfaceControl presenter's second layer: a `SurfaceView` on the lower screen that takes
+/// the same decoded buffer with its own crop and size, and the mask of layers that show. Kotlin
+/// writes it from the UI thread; the decode thread reads it before every present.
+#[derive(Default)]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) struct PictureLayers {
+    /// The second window, or `None`. `generation` steps on every change, so the decode thread
+    /// rebuilds its layer on the new window.
+    #[cfg(target_os = "android")]
+    pub second_window: Mutex<Option<ndk::native_window::NativeWindow>>,
+    pub generation: AtomicU64,
+    /// The second `SurfaceView`'s live size and the part of the frame it shows, packed as the
+    /// primary's (`pack_surface_size`, `pack_src_crop`).
+    pub second_size: Arc<AtomicU64>,
+    pub second_crop: Arc<AtomicU64>,
+    /// Bit 0 the primary layer, bit 1 the second; a clear bit hides the layer. `0` reads as the
+    /// primary alone.
+    pub shown: AtomicU8,
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+impl PictureLayers {
+    pub(crate) const PRIMARY: u8 = 1;
+    pub(crate) const SECOND: u8 = 2;
+
+    pub(crate) fn new() -> PictureLayers {
+        let l = PictureLayers::default();
+        l.shown.store(Self::PRIMARY, Ordering::Relaxed);
+        l
+    }
 }
 
 /// A process-local table behind the opaque `jlong` keys Kotlin holds. A lookup hands out an

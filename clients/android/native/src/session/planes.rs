@@ -82,6 +82,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeStartVideo(
             surface_size: h.surface_size.clone(),
             src_crop: h.src_crop.clone(),
             decoded_size: h.decoded_size.clone(),
+            layers: h.layers.clone(),
             restart: h
                 .video_started
                 .swap(true, std::sync::atomic::Ordering::Relaxed),
@@ -159,6 +160,107 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSource
             super::pack_src_crop(left, top, right, bottom),
             std::sync::atomic::Ordering::Relaxed,
         );
+    })
+}
+
+/// `NativeBridge.nativePictureWindow(handle, surface?, width, height)` — the second picture
+/// window of a dual-screen handheld (design `android-dual-screen.md` §4), or `null` to drop it.
+/// The decode thread builds a compositor layer on it at its next present and takes it down the
+/// same way; the surface may come and go any number of times in a stream. No-op on a `0` handle.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePictureWindow(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    surface: JObject,
+    width: jint,
+    height: jint,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let Some(h) = SESSIONS.get(handle) else {
+            return Ok(());
+        };
+        let window = if surface.is_null() {
+            None
+        } else {
+            // SAFETY: a non-null `surface` is a live `Surface` (Kotlin declares `Surface?`).
+            unsafe { crate::window_from_surface(env, &surface) }
+        };
+        h.layers.second_size.store(
+            super::pack_surface_size(width, height),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        *lock_recover(&h.layers.second_window) = window;
+        h.layers
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// `NativeBridge.nativePictureSurfaceSize(handle, width, height)` — the second picture window's
+/// live size, as [`Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSurfaceSize`] is the first's.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePictureSurfaceSize(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    width: jint,
+    height: jint,
+) {
+    jni_guard((), || {
+        let packed = super::pack_surface_size(width, height);
+        if packed == 0 {
+            return;
+        }
+        if let Some(h) = SESSIONS.get(handle) {
+            h.layers
+                .second_size
+                .store(packed, std::sync::atomic::Ordering::Relaxed);
+        }
+    })
+}
+
+/// `NativeBridge.nativePictureCrop(handle, left, top, right, bottom)` — the part of the frame
+/// the second window shows, as [`Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoSourceCrop`]
+/// is the first's.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePictureCrop(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    left: jfloat,
+    top: jfloat,
+    right: jfloat,
+    bottom: jfloat,
+) {
+    jni_guard((), || {
+        if let Some(h) = SESSIONS.get(handle) {
+            h.layers.second_crop.store(
+                super::pack_src_crop(left, top, right, bottom),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    })
+}
+
+/// `NativeBridge.nativePictureShown(handle, mask)` — which picture layers show: bit 0 the
+/// first window's, bit 1 the second's. A hidden layer keeps its window and takes no buffer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePictureShown(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    mask: jint,
+) {
+    jni_guard((), || {
+        if let Some(h) = SESSIONS.get(handle) {
+            h.layers
+                .shown
+                .store((mask & 0b11) as u8, std::sync::atomic::Ordering::Relaxed);
+        }
     })
 }
 
