@@ -432,8 +432,10 @@ pub(super) fn spawn(
             return Err(e);
         }
         Err(_) => {
+            // Detached, not joined: a wedged compositor holds the thread in a roundtrip that
+            // never reads `quit`. It exits once that returns.
             quit.store(true, Ordering::Relaxed);
-            let _ = join.join();
+            drop(join);
             bail!("direct wayland capture did not start within 5s");
         }
     }
