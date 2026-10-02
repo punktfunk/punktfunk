@@ -87,8 +87,16 @@ fn command_for(spec: &LaunchSpec) -> Option<String> {
             "lutris" => Some("lutris".into()),
             _ => None,
         },
-        // The plugin sends an id; the command is whatever the installed entry says (`desktop.rs`).
-        "desktop_id" => super::desktop::desktop_command(&spec.value).map(|(cmd, _)| cmd),
+        // The plugin sends an id; the command is whatever the installed entry says (`desktop.rs`),
+        // run from its `Path=` the way a desktop launcher does: Wine and GOG entries load data
+        // by relative path.
+        "desktop_id" => super::desktop::desktop_command(&spec.value).map(|(cmd, cwd)| match cwd {
+            Some(dir) => format!(
+                "cd {} && {cmd}",
+                super::exec::sh_quote(&dir.to_string_lossy())
+            ),
+            None => cmd,
+        }),
         "command" => (!spec.value.trim().is_empty()).then(|| spec.value.clone()),
         _ => None,
     }
