@@ -49,11 +49,17 @@ impl<In: Transport> Connector<In> for PinnedTlsConnector {
             return Ok(Some(Either::A(transport)));
         }
 
-        let name: rustls::pki_types::ServerName<'_> = details
+        let host = details
             .uri
             .authority()
             .ok_or(ureq::Error::Tls("uri has no authority"))?
-            .host()
+            .host();
+        // An IPv6 literal keeps its URI brackets in `host()`; a server name never has them.
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host);
+        let name: rustls::pki_types::ServerName<'_> = host
             .try_into()
             .map_err(|_| ureq::Error::Tls("invalid DNS name"))?;
         let conn = rustls::ClientConnection::new(self.config.clone(), name.to_owned())?;
