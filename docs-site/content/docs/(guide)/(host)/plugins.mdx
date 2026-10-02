@@ -24,7 +24,7 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
 | **EA app** | Windows | Games the EA app installed, launched through the EA app. |
 | **Rockstar Games** | Windows | Games the Rockstar Games Launcher installed, launched through the launcher. |
 | **Game slots** | Linux, Windows | Keeps a copy of a game's config or saves for each device and swaps it in at launch ([below](#game-slots)). |
-| **RTSS Frame Cap** | Windows | Caps the game at the client's refresh rate through a [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) you install. |
+| **RTSS Frame Cap** | Windows | Caps the game at the client's refresh rate through a [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) you install ([below](#rtss-frame-cap)). |
 | **itch.io** | Linux, Windows | Games installed by the itch app, with covers. |
 | **Waydroid** | Linux | The Android apps installed in Waydroid. |
 | **ROM Manager** | Linux, Windows | Your ROM folders, matched to installed emulators ([below](#rom-manager)). |
@@ -243,6 +243,31 @@ It only swaps games a client launches from its library, never one already runnin
 paired devices. A folder that Steam Cloud syncs raises Steam's conflict dialog after a swap: track
 the game's config instead, or turn Steam Cloud off for that game. Details:
 [the plugin's repository](https://git.unom.io/unom/punktfunk-plugin-game-slots).
+
+## RTSS Frame Cap
+
+Caps the game at the refresh rate the client streams at, through
+[RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/),
+and puts your own limit back when the stream ends. RTSS is a separate download; Punktfunk bundles
+none of it.
+
+1. Install RTSS and turn on **Start with Windows** in its main window. RTSS enforces the cap
+   inside the game, so it must be running when the game starts.
+2. Install **RTSS Frame Cap** from **Plugins**, or run `punktfunk-host plugins add rtss`.
+3. Let the plugin write RTSS's profiles. Once, from an elevated PowerShell:
+
+   ```powershell
+   icacls "C:\Program Files (x86)\RivaTuner Statistics Server\Profiles" /grant "*S-1-5-19:(OI)(CI)M"
+   ```
+
+   The console can't do this step: it never gives a plugin write access inside Program Files.
+4. Start the stream, then the game. A game that was already running keeps the limit it started
+   with.
+
+Nothing capped? Open **Troubleshooting** and pick the `plugin:rtss` source: each missing step is a
+`FAIL` line with the command that fixes it, and each stream start logs `rtss: 120 fps for …`. A
+per-game profile in RTSS overrides the cap. Details and the `doctor` command:
+[the plugin's repository](https://git.unom.io/unom/punktfunk-plugin-rtss).
 
 ## Troubleshooting
 
