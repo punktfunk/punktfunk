@@ -237,7 +237,23 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             welcome.host_caps,
         ))
     };
-    match handshake.await {
+    // Cancel and the connect deadline (both `shutdown`) reach a parked handshake too: the host
+    // withdraws a request-access knock only when the connection closes.
+    let cancelled = async {
+        while !shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    };
+    let outcome = tokio::select! {
+        r = handshake => Some(r),
+        () = cancelled => None,
+    };
+    let Some(outcome) = outcome else {
+        conn.close(crate::quic::QUIT_CLOSE_CODE.into(), b"client cancelled");
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), ep.wait_idle()).await;
+        return Err(PunktfunkError::Timeout);
+    };
+    match outcome {
         Ok((session, send, recv, negotiated, host_caps)) => Ok(HandshakeOut {
             conn,
             ep,
