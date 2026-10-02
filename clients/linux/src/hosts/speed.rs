@@ -93,7 +93,8 @@ pub fn push(
 
     enum Probe {
         Sample(u32),
-        Done(Result<HealthReport, String>),
+        // Boxed: the report is 300 bytes against a sample's four.
+        Done(Result<Box<HealthReport>, String>),
     }
     let (tx, rx) = async_channel::unbounded::<Probe>();
     // The host's record and name, for the offer: `req` moves into the worker below.
@@ -112,7 +113,7 @@ pub fn push(
                     &req.addr, req.port, fp, identity, progress,
                 )
             };
-            let _ = tx.send_blocking(Probe::Done(result));
+            let _ = tx.send_blocking(Probe::Done(result.map(Box::new)));
         })
         .expect("spawn speed thread");
     let toasts = toasts.clone();
