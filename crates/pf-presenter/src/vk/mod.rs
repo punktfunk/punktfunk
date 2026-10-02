@@ -369,6 +369,9 @@ pub struct Presenter {
     /// Explicit-sync timelines per VAAPI pool slot the lane has shown.
     #[cfg(target_os = "linux")]
     vaapi_sync: std::collections::HashMap<u64, sync_timeline::Timelines>,
+    /// Pool slots offered to the lane, so a rebuilt pool's old ones can go.
+    #[cfg(target_os = "linux")]
+    native_keys: Vec<u64>,
     /// The lane's last frame was PQ, shown through the compositor's colour management.
     native_pq: bool,
     /// `flip` diagnostic: when it started; the lane owns even periods, the swapchain odd.
@@ -568,8 +571,26 @@ impl Presenter {
         let Some(lane) = self.native.as_mut().filter(|_| !self.overlay_blocks_native) else {
             return Outcome::Declined(d);
         };
+        // A rebuilt pool never shows its old slots again: their buffers and timelines go,
+        // or each rebuild keeps the old pool pinned in the compositor.
+        let generation = d.pool_key >> 32;
+        let (sync, device) = (&mut self.vaapi_sync, &self.device);
+        self.native_keys.retain(|&k| {
+            if k >> 32 == generation {
+                return true;
+            }
+            lane.forget(k);
+            if let Some(t) = sync.remove(&k) {
+                // SAFETY: host-signalled only; the compositor holds its own syncobj refs.
+                unsafe { t.destroy(device) };
+            }
+            false
+        });
         if !lane.takes(&d, view, self.video_fit) {
             return Outcome::Declined(d);
+        }
+        if !self.native_keys.contains(&d.pool_key) {
+            self.native_keys.push(d.pool_key);
         }
         // Owning the window, a new pool slot imports on the spot; before, it imports in the
         // background while the swapchain still draws.

@@ -1131,6 +1131,8 @@ impl Presenter {
             overlay_shown: None,
             #[cfg(target_os = "linux")]
             vaapi_sync: Default::default(),
+            #[cfg(target_os = "linux")]
+            native_keys: Vec::new(),
             native_pq: false,
             #[cfg(target_os = "linux")]
             native_flip: crate::wl_native::flip_mode().then(std::time::Instant::now),
