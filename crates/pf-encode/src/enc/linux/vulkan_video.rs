@@ -16,8 +16,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use super::vk_util::{
-    color_range, find_mem_preferring, import_failure_feeds_latch, make_host_buffer,
-    make_plain_image, make_view, normalize_cpu_rgb, pixel_to_vk, reject_dmabuf,
+    color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
+    imported_release_barrier, make_host_buffer, make_plain_image, make_view, normalize_cpu_rgb,
+    pixel_to_vk, reject_dmabuf,
 };
 use crate::rfi::Wave;
 use crate::{Codec, EncodedFrame, Encoder, EncoderCaps};
@@ -68,56 +69,6 @@ const fn native_planar_format_matches(format: PixelFormat, ten_bit: bool) -> boo
     )
 }
 
-/// Ownership/visibility acquire for an EXCLUSIVE-sharing imported image: `foreign_qfi` →
-/// `dst_qfi`, discarding (`fresh`, UNDEFINED) or keeping (GENERAL) prior contents.
-fn imported_acquire_barrier(
-    image: vk::Image,
-    fresh: bool,
-    foreign_qfi: u32,
-    dst_qfi: u32,
-    dst_stage: vk::PipelineStageFlags2,
-    dst_access: vk::AccessFlags2,
-    new_layout: vk::ImageLayout,
-) -> vk::ImageMemoryBarrier2<'static> {
-    vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::NONE)
-        .src_access_mask(vk::AccessFlags2::NONE)
-        .dst_stage_mask(dst_stage)
-        .dst_access_mask(dst_access)
-        .old_layout(if fresh {
-            vk::ImageLayout::UNDEFINED
-        } else {
-            vk::ImageLayout::GENERAL
-        })
-        .new_layout(new_layout)
-        .src_queue_family_index(foreign_qfi)
-        .dst_queue_family_index(dst_qfi)
-        .image(image)
-        .subresource_range(color_range(0))
-}
-
-/// Ownership release back to the foreign producer family after the last read of an imported
-/// image, landing in GENERAL (the layout every later cached acquire expects).
-fn imported_release_barrier(
-    image: vk::Image,
-    old_layout: vk::ImageLayout,
-    src_qfi: u32,
-    foreign_qfi: u32,
-    src_stage: vk::PipelineStageFlags2,
-    src_access: vk::AccessFlags2,
-) -> vk::ImageMemoryBarrier2<'static> {
-    vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(src_stage)
-        .src_access_mask(src_access)
-        .dst_stage_mask(vk::PipelineStageFlags2::NONE)
-        .dst_access_mask(vk::AccessFlags2::NONE)
-        .old_layout(old_layout)
-        .new_layout(vk::ImageLayout::GENERAL)
-        .src_queue_family_index(src_qfi)
-        .dst_queue_family_index(foreign_qfi)
-        .image(image)
-        .subresource_range(color_range(0))
-}
 // RGB→NV12 BT.709 CSC. Source `rgb2yuv.comp`; regenerate with
 // `glslangValidator -V rgb2yuv.comp -o rgb2yuv.spv`.
 const CSC_SPV: &[u8] = include_bytes!("rgb2yuv.spv");

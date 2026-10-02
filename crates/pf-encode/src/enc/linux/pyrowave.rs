@@ -20,8 +20,9 @@
 // Every unsafe block in this module carries a `// SAFETY:` proof (parent module enforces it).
 
 use super::vk_util::{
-    color_range, import_failure_feeds_latch, import_rgb_dmabuf, make_host_buffer, make_plain_image,
-    normalize_cpu_rgb, pixel_to_vk, reject_dmabuf, select_physical_device,
+    color_range, import_failure_feeds_latch, import_rgb_dmabuf, imported_acquire_barrier,
+    imported_release_barrier, make_host_buffer, make_plain_image, normalize_cpu_rgb, pixel_to_vk,
+    reject_dmabuf, select_physical_device,
 };
 use crate::pyrowave_ffi::{packetize, pw_check};
 use crate::pyrowave_wire::{AuStream, FrameBudget};
@@ -1698,34 +1699,25 @@ impl PyroWaveEncoder {
 
             let cursor_pc = self.prep_cursor(slot, frame.cursor.as_ref())?;
 
-            let rgb_view = match &frame.payload {
+            let (rgb_view, imported) = match &frame.payload {
                 FramePayload::Dmabuf(d) => {
                     let (img, view, fresh) = self.import_cached(d, frame.width, frame.height)?;
-                    let (old, src_qf, dst_qf) = if fresh {
-                        (vk::ImageLayout::UNDEFINED, self.foreign_qfi, self.family)
-                    } else {
-                        (
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            vk::QUEUE_FAMILY_IGNORED,
-                            vk::QUEUE_FAMILY_IGNORED,
-                        )
-                    };
-                    let acq = vk::ImageMemoryBarrier2::default()
-                        .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                        .src_access_mask(vk::AccessFlags2::NONE)
-                        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-                        .old_layout(old)
-                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                        .src_queue_family_index(src_qf)
-                        .dst_queue_family_index(dst_qf)
-                        .image(img)
-                        .subresource_range(color_range(0));
+                    // Fresh or cached, acquire from the producer's family: it rewrote the
+                    // buffer since. A cached one sits in GENERAL where the release left it.
+                    let acq = imported_acquire_barrier(
+                        img,
+                        fresh,
+                        self.foreign_qfi,
+                        self.family,
+                        vk::PipelineStageFlags2::COMPUTE_SHADER,
+                        vk::AccessFlags2::SHADER_READ,
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    );
                     dev.cmd_pipeline_barrier2(
                         cmd,
                         &vk::DependencyInfo::default().image_memory_barriers(&[acq]),
                     );
-                    view
+                    (view, Some(img))
                 }
                 FramePayload::Cpu(bytes) => {
                     // 24-bpp Rgb/Bgr expands 3→4 first (`normalize_cpu_rgb`).
@@ -1784,7 +1776,7 @@ impl PyroWaveEncoder {
                         cmd,
                         &vk::DependencyInfo::default().image_memory_barriers(&[to_read]),
                     );
-                    view
+                    (view, None)
                 }
                 _ => bail!("pyrowave: unsupported FramePayload (need Dmabuf or Cpu RGB)"),
             };
@@ -1834,6 +1826,21 @@ impl PyroWaveEncoder {
                 dev.cmd_dispatch(cmd, w.div_ceil(8), h.div_ceil(8), 1);
             } else {
                 dev.cmd_dispatch(cmd, (w / 2).div_ceil(8), (h / 2).div_ceil(8), 1);
+            }
+            // The CSC was the source's last read: hand it back to the producer's family.
+            if let Some(img) = imported {
+                let rel = imported_release_barrier(
+                    img,
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    self.family,
+                    self.foreign_qfi,
+                    vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    vk::AccessFlags2::SHADER_READ,
+                );
+                dev.cmd_pipeline_barrier2(
+                    cmd,
+                    &vk::DependencyInfo::default().image_memory_barriers(&[rel]),
+                );
             }
             if let Some(pool) = ts_pool {
                 dev.cmd_write_timestamp2(cmd, vk::PipelineStageFlags2::ALL_COMMANDS, pool, q0 + 1);
