@@ -1550,7 +1550,11 @@ impl PadOut {
                 thread: Some(thread),
             }),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(anyhow!("pad-audio render init timed out")),
+            Err(_) => {
+                // A late open must not leave a thread holding the pad endpoint.
+                stop.store(true, Ordering::SeqCst);
+                Err(anyhow!("pad-audio render init timed out"))
+            }
         }
     }
 

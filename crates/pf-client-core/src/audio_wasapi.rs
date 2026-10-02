@@ -260,9 +260,13 @@ impl AudioPlayer {
                 })
             }
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(anyhow!(
-                "wasapi render init timed out (no render endpoint?)"
-            )),
+            Err(_) => {
+                // A late open must not leave a thread playing into nothing for the process.
+                stop.store(true, Ordering::SeqCst);
+                Err(anyhow!(
+                    "wasapi render init timed out (no render endpoint?)"
+                ))
+            }
         }
     }
 
