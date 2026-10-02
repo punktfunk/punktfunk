@@ -295,6 +295,11 @@ fn game_link(target: &super::Target, game_id: &str) -> Option<String> {
 /// The shelf's sort picker. Presentation only, like the console's bar: it writes the shared
 /// `library_sort` and re-renders what is already fetched — nothing is refetched, and no other
 /// setting on the page is touched, so a load-modify-save of the whole file is honest here.
+/// The stored sort. `use_state` evaluates its seed on every render and this page re-renders on
+/// each poster that lands, so the file is read once per process; a pick updates this too, since
+/// the page remounts on every visit.
+static STORED_SORT: std::sync::Mutex<Option<SortKey>> = std::sync::Mutex::new(None);
+
 fn sort_row(current: SortKey, on_pick: impl Fn(SortKey) + 'static) -> Element {
     let names: Vec<String> = SortKey::ALL.iter().map(|k| k.label().to_string()).collect();
     let index = SortKey::ALL.iter().position(|k| *k == current).unwrap_or(0);
@@ -313,6 +318,7 @@ fn sort_row(current: SortKey, on_pick: impl Fn(SortKey) + 'static) -> Element {
                 let mut settings = Settings::load();
                 settings.library_sort = key.id().to_string();
                 settings.save();
+                *STORED_SORT.lock().unwrap() = Some(key);
                 on_pick(key);
             }),
     ))
@@ -483,10 +489,10 @@ pub(crate) fn library_page(props: &LibraryProps, cx: &mut RenderCx) -> Element {
     // Responsive poster columns from the live window width (the hosts page's pattern).
     let window = cx.use_inner_size();
     // Shared `library_sort`: the same four orders the console's bar and the GTK dialog offer.
-    // `use_state` evaluates its seed on every render and this page re-renders on each poster
-    // that lands, so the stored value is read once per process rather than once per frame.
-    static STORED_SORT: std::sync::OnceLock<SortKey> = std::sync::OnceLock::new();
-    let seed = *STORED_SORT.get_or_init(|| SortKey::parse(&Settings::load().library_sort));
+    let seed = *STORED_SORT
+        .lock()
+        .unwrap()
+        .get_or_insert_with(|| SortKey::parse(&Settings::load().library_sort));
     let (sort, set_sort) = cx.use_state(seed);
     let content_w = (window.width - 64.0).clamp(POSTER_MIN_WIDTH, 1120.0);
     let cols =
