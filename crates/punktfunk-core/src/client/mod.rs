@@ -96,7 +96,7 @@ pub(crate) fn client_label() -> String {
 /// Without brackets the joined string never parses and the error blames the caller's input.
 /// V4, hostnames, and already-bracketed input pass through. A v6 dial still fails at connect
 /// while the sockets are IPv4-bound.
-fn join_host_port(host: &str, port: u16) -> String {
+pub fn join_host_port(host: &str, port: u16) -> String {
     if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")
     } else {
