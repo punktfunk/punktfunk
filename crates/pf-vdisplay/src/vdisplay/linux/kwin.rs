@@ -193,6 +193,10 @@ impl KwinDisplay {
     }
 }
 
+/// Serializes `create`, process-wide, as wlroots' `CREATE_LOCK` and Mutter's `TOPOLOGY_LOCK`
+/// do: concurrent sessions can share an output name, and only creation order tells them apart.
+static CREATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl VirtualDisplay for KwinDisplay {
     fn name(&self) -> &'static str {
         "kwin"
@@ -267,6 +271,9 @@ impl VirtualDisplay for KwinDisplay {
     }
 
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
+        // One create at a time: a shared identity names every output `Virtual-punktfunk`, and
+        // resolving by name and size would otherwise hand a concurrent sibling's output to us.
+        let _create = CREATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Per-slot name: a resolved identity becomes `punktfunk-<id>` (KWin exposes
         // `Virtual-punktfunk-<id>` and keys config by name). Shared/anonymous stays
         // `punktfunk`. Two concurrent sessions must not share one name.
