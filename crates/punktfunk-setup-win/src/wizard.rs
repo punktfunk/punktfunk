@@ -756,19 +756,35 @@ fn back_button(ctx: &Ctx, cur: WizStep) -> Element {
         .into()
 }
 
+/// Pick Custom or Recommended. Recommended installs the defaults, so it drops what an earlier
+/// Custom pass edited on Configure; the network answer and the password stay.
+fn choose(ctx: &Ctx, custom: bool) {
+    if !custom {
+        let s = &ctx.screen;
+        let mut defaults = WinChoices::derive(&s.facts, ctx.preset.artifact);
+        defaults.web_password = s.choices.web_password.clone();
+        defaults.network = s.choices.network.clone();
+        ctx.set_screen.call(WinScreen::new(
+            s.facts.clone(),
+            defaults,
+            ctx.preset.artifact,
+        ));
+    }
+    ctx.set_custom.call(custom);
+}
+
 /// One of the two setup options on Welcome: a radio in a card, the whole card tappable. The
 /// chosen one shows an accent ring drawn OVER the card (a stroke-only rectangle, so taps pass
 /// through) that fades in and out — the card itself never changes size, so nothing shifts.
 fn option_card(ctx: &Ctx, custom: bool, title: &str, detail: &str) -> Element {
     let selected = ctx.custom == custom;
-    let pick = ctx.set_custom.clone();
-    let tap = ctx.set_custom.clone();
+    let (pick, tap) = (ctx.clone(), ctx.clone());
     let card = border(
         vstack((
             RadioButton::new(title)
                 .group("setup")
                 .checked(selected)
-                .on_checked(move || pick.call(custom)),
+                .on_checked(move || choose(&pick, custom)),
             text_block(detail)
                 .wrap()
                 .font_size(12.5)
@@ -782,7 +798,7 @@ fn option_card(ctx: &Ctx, custom: bool, title: &str, detail: &str) -> Element {
     .border_thickness(Thickness::uniform(1.0))
     .corner_radius(10.0)
     .padding(edges(16.0, 12.0, 16.0, 14.0))
-    .on_tapped(move || tap.call(custom));
+    .on_tapped(move || choose(&tap, custom));
     let ring = Shape::rectangle()
         .stroke(brand::VIOLET)
         .stroke_thickness(2.0)
