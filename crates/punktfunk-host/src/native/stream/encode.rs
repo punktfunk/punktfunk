@@ -41,6 +41,10 @@ fn mark_recovery_boundary(ir_wave_pos: &mut u32, is_keyframe: bool, period: u32)
 /// Depth-1 by default: depth-2 holds a ready AU a whole interval unpolled (~13 ms extra at 60 fps).
 /// Escalate to the capturer's max only when cadence cannot hold at depth-1 (GPU contention).
 /// `PUNKTFUNK_IDD_ADAPTIVE=0` pins the capturer's full depth. Off when max depth is already 1.
+/// Where a driven producer's frame should land: this much before the submit grid point.
+/// The hold under the lock is this margin, and the paint lead is steered to keep it.
+const PAINT_MARGIN_NS: i64 = 2_000_000;
+
 fn idd_adaptive_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_IDD_ADAPTIVE").unwrap_or(true))
@@ -207,20 +211,29 @@ impl StreamState {
                 }
                 self.phase.set_applied(self.phase_ctl.applied_readout());
             }
-            // A request-driven producer paints on the grid itself, one capture-to-submit
-            // time plus a millisecond ahead, so the hold below shrinks to that millisecond.
-            let lead_ns = (self.cap_to_submit_ns + 1_000_000).clamp(1_000_000, interval_ns / 2);
+            // A request-driven producer paints on the grid itself, `paint_lead_ns` ahead of
+            // the submit point, so the hold below is a margin, not a period. The lead is
+            // steered from where this frame landed: a source frame picked up `margin`
+            // before a point is on time; past it, or earlier than the margin, moves the
+            // paint by a quarter of the error.
+            let now = std::time::Instant::now();
+            if source {
+                if let Some(late) = self.phase_ctl.lateness(now, interval_ns) {
+                    let mut err = (late + PAINT_MARGIN_NS).rem_euclid(interval_ns);
+                    if err > interval_ns / 2 {
+                        err -= interval_ns;
+                    }
+                    // Up to nearly a period: a slow render plus hand-over can need most of
+                    // one, and a lead is phase, not rate — the pacer caps the paints.
+                    self.paint_lead_ns = (self.paint_lead_ns + err / 4)
+                        .clamp(PAINT_MARGIN_NS, interval_ns - PAINT_MARGIN_NS);
+                }
+            }
             self.capturer
-                .set_paint_grid(self.phase_ctl.paint_grid(interval_ns, lead_ns));
-            if let Some(t) = self
-                .phase_ctl
-                .next_submit_target(std::time::Instant::now(), interval_ns)
-            {
-                let now = std::time::Instant::now();
+                .set_paint_grid(self.phase_ctl.paint_grid(interval_ns, self.paint_lead_ns));
+            if let Some(t) = self.phase_ctl.next_submit_target(now, interval_ns) {
                 if t > now {
-                    let hold = t.duration_since(now);
-                    std::thread::sleep(hold);
-                    self.last_hold_ns = hold.as_nanos() as i64;
+                    std::thread::sleep(t.duration_since(now));
                 }
             }
         }
@@ -283,16 +296,11 @@ impl StreamState {
     pub(super) fn encode_and_send(&mut self, tick: Tick) -> Result<Flow> {
         self.encode_chain_ns = 0;
         let Tick {
-            t_cap,
+            t_cap: _,
             cap_us,
             repeat,
             measure,
         } = tick;
-        // Capture to submit less the grid hold, smoothed: how early a producer must paint
-        // for the submit grid. Counting the hold would move the paint earlier every tick.
-        let hold = std::mem::take(&mut self.last_hold_ns);
-        let cap_to_submit = (t_cap.elapsed().as_nanos() as i64 - hold).max(0);
-        self.cap_to_submit_ns += (cap_to_submit - self.cap_to_submit_ns) / 8;
         let hdr_meta = self
             .capturer
             .hdr_meta()

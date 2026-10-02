@@ -171,15 +171,15 @@ impl Pacer {
         }
         let now = std::time::Instant::now();
         // The cap: one paint per wire interval. On a grid, the next point at or after the
-        // cap (less a little slack, so jitter never skips a point) instead of the cap itself.
+        // later of now and the cap, both less a little slack: a timer that fires a few
+        // microseconds past the point must take it, not the one a period later.
         let cap = self.last_paint.get().map(|t| t + self.interval);
         let period = self
             .grid_period_ns
             .load(std::sync::atomic::Ordering::Relaxed);
         let next = if period > 0 {
-            let floor = cap
-                .map(|c| c.checked_sub(GRID_SLACK).unwrap_or(c))
-                .map_or(now, |c| c.max(now));
+            let floor = cap.map_or(now, |c| c.max(now));
+            let floor = floor.checked_sub(GRID_SLACK).unwrap_or(floor);
             let anchor = self
                 .grid_anchor_ns
                 .load(std::sync::atomic::Ordering::Relaxed);

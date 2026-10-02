@@ -87,6 +87,9 @@ impl PhaseController {
     const DEADBAND_NS: i64 = 300_000;
     /// SurfaceFlinger-class compositors need the frame ~2.5 ms before latch; `uncertainty_ns` widens this.
     const TARGET_LEAD_FLOOR_NS: i64 = 2_500_000;
+    /// How far past a grid point a frame may land and still submit at once instead of
+    /// waiting for the next: the jitter of a producer painting for that point.
+    const SUBMIT_SLACK_NS: i64 = 3_000_000;
     /// Below this circular coherence (‰) the arrival phase is smeared. `u16::MAX` bypasses the gate.
     const COHERENCE_FLOOR_MILLI: u16 = 300;
     /// Within this of ±period/2, sampling noise flips the sign — damp until the error commits.
@@ -227,11 +230,28 @@ impl PhaseController {
         let elapsed = now.duration_since(epoch).as_nanos() as i64;
         let k = (elapsed - self.offset_ns).div_euclid(period_ns) + 1;
         let target_ns = k * period_ns + self.offset_ns;
+        // A frame a hair past a grid point submits now: a producer painting for that
+        // point jitters either side of it, and a period's hold for a late microsecond
+        // splits the arrival phase in two, which reads as incoherent at the client.
+        if elapsed - (target_ns - period_ns) < Self::SUBMIT_SLACK_NS {
+            return Some(now);
+        }
         let target = epoch + std::time::Duration::from_nanos(target_ns.max(0) as u64);
         if target.duration_since(now).as_nanos() as i64 > period_ns {
             return Some(now);
         }
         Some(target)
+    }
+
+    /// How far `now` sits past the last submit grid point, ns in `[0, period)`; `None`
+    /// disengaged. A driven producer's paint lead is steered from this.
+    pub(super) fn lateness(&self, now: std::time::Instant, period_ns: i64) -> Option<i64> {
+        let epoch = self.epoch?;
+        if period_ns <= 0 {
+            return None;
+        }
+        let elapsed = now.duration_since(epoch).as_nanos() as i64;
+        Some((elapsed - self.offset_ns).rem_euclid(period_ns))
     }
 
     pub(super) fn applied_readout(&self) -> i64 {
@@ -435,6 +455,47 @@ mod tests {
         assert!(err.abs() < 1_000_000, "…and lock, residual {err} ns");
     }
 
+    /// Lateness is the distance past the last grid point: a millisecond past one reads
+    /// 1 ms, a millisecond before the next reads a period less one.
+    #[test]
+    fn lateness_is_measured_from_the_last_grid_point() {
+        let mut c = PhaseController::new();
+        assert_eq!(c.lateness(std::time::Instant::now(), SIM_P), None);
+        let epoch = std::time::Instant::now() - std::time::Duration::from_millis(50);
+        c.epoch = Some(epoch);
+        c.offset_ns = 1_000_000;
+        let point = epoch + std::time::Duration::from_nanos((c.offset_ns + 10 * SIM_P) as u64);
+        let late = c
+            .lateness(point + std::time::Duration::from_millis(1), SIM_P)
+            .unwrap();
+        assert!((late - 1_000_000).abs() < 1_000, "got {late}");
+        let early = c
+            .lateness(point - std::time::Duration::from_millis(1), SIM_P)
+            .unwrap();
+        assert!((early - (SIM_P - 1_000_000)).abs() < 1_000, "got {early}");
+    }
+
+    /// A frame that lands a millisecond past a grid point submits now; one four
+    /// milliseconds past it waits for the next point.
+    #[test]
+    fn a_frame_just_past_a_grid_point_submits_at_once() {
+        let mut c = PhaseController::new();
+        c.epoch = Some(std::time::Instant::now() - std::time::Duration::from_millis(50));
+        c.offset_ns = 1_000_000;
+        let t1 = c
+            .next_submit_target(std::time::Instant::now(), SIM_P)
+            .unwrap();
+        let late = t1 + std::time::Duration::from_millis(1);
+        assert_eq!(c.next_submit_target(late, SIM_P), Some(late));
+        let later = t1 + std::time::Duration::from_millis(4);
+        let next = c.next_submit_target(later, SIM_P).unwrap();
+        let dt = next.duration_since(t1).as_nanos() as i64;
+        assert!(
+            (dt - SIM_P).abs() < 1_000,
+            "past the slack: the next point, got {dt}"
+        );
+    }
+
     #[test]
     fn submit_grid_is_periodic_and_offset_shifted() {
         let mut c = PhaseController::new();
@@ -442,8 +503,9 @@ mod tests {
         c.offset_ns = 1_000_000;
         let now = std::time::Instant::now();
         let t1 = c.next_submit_target(now, SIM_P).unwrap();
+        // Past the submit slack: the point after, not "now".
         let t2 = c
-            .next_submit_target(t1 + std::time::Duration::from_nanos(1), SIM_P)
+            .next_submit_target(t1 + std::time::Duration::from_millis(4), SIM_P)
             .unwrap();
         let dt = t2.duration_since(t1).as_nanos() as i64;
         assert!(
