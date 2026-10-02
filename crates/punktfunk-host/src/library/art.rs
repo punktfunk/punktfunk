@@ -326,11 +326,16 @@ fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
     if starts(&[0x00, 0x00, 0x01, 0x00]) {
         return Some("image/x-icon");
     }
-    // TGA has no magic number. Validate the fixed header fields instead (colour-map type is 0/1,
-    // image type is one of the six defined codes) — enough that no plausible secret passes.
+    // TGA has no magic number. Validate the fixed header fields instead: colour-map type 0/1,
+    // an image type that carries pixels (0 is "no image data"), a non-zero size and a pixel
+    // depth TGA defines. A zero- or length-prefixed binary fails at least one of them.
+    let le16 = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
     if bytes.len() >= 18
         && matches!(bytes[1], 0 | 1)
-        && matches!(bytes[2], 0 | 1 | 2 | 3 | 9 | 10 | 11)
+        && matches!(bytes[2], 1 | 2 | 3 | 9 | 10 | 11)
+        && le16(12) != 0
+        && le16(14) != 0
+        && matches!(bytes[16], 8 | 15 | 16 | 24 | 32)
     {
         return Some("image/x-tga");
     }
@@ -346,8 +351,12 @@ pub fn art_path_is_servable(value: &str) -> bool {
     // percent-decode of a path that legitimately contains `%`.
     let value = file_url_to_path(value);
     let p = Path::new(&*value);
-    let ext_ok = p
-        .extension()
+    has_image_extension(p) && art_path_is_confined(p)
+}
+
+/// One of the image extensions the proxy serves.
+fn has_image_extension(p: &Path) -> bool {
+    p.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .is_some_and(|e| {
@@ -355,8 +364,7 @@ pub fn art_path_is_servable(value: &str) -> bool {
                 e.as_str(),
                 "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "ico" | "tga"
             )
-        });
-    ext_ok && art_path_is_confined(p)
+        })
 }
 
 /// Reject a local-file art value the proxy would refuse to serve, so it never reaches the
@@ -421,9 +429,19 @@ pub fn local_art_bytes(path: &str) -> Option<(Vec<u8>, String)> {
     // Re-check confinement and size on the opened handle, then read that handle with a hard cap.
     // A link swap cannot substitute a different file between validation and consumption.
     let p = std::path::Path::new(&*path);
-    let mut f = std::fs::File::open(p).ok()?;
+    // Only a regular file opens: opening a FIFO named `x.png` blocks its thread for good. Non-
+    // blocking too, for a swap between the check and the open.
+    if !std::fs::metadata(p).ok()?.is_file() {
+        return None;
+    }
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+    let mut f = open.open(p).ok()?;
     let real = plat::final_path_of(&f)?;
-    if !resolved_art_path_is_confined(&real) {
+    // The extension was the requested path's; a symlink named `.tga` can point anywhere.
+    if !has_image_extension(&real) || !resolved_art_path_is_confined(&real) {
         tracing::debug!(
             path = %path,
             "art proxy: opened file resolves outside the allowed art roots"
@@ -1231,6 +1249,14 @@ mod tests {
         assert_eq!(sniff_image_type(b"-----BEGIN PRIVATE KEY-----"), None);
         assert_eq!(sniff_image_type(b"9f8a7b6c5d4e3f2a1b0c"), None);
         assert_eq!(sniff_image_type(b""), None);
+        // TGA: a true-colour 640x480 24-bit header passes; a zero-prefixed binary does not.
+        let mut tga = [0u8; 18];
+        tga[2] = 2;
+        tga[12..14].copy_from_slice(&640u16.to_le_bytes());
+        tga[14..16].copy_from_slice(&480u16.to_le_bytes());
+        tga[16] = 24;
+        assert_eq!(sniff_image_type(&tga), Some("image/x-tga"));
+        assert_eq!(sniff_image_type(&[0u8; 64]), None);
     }
 
     /// Point the store at a scratch dir and the plugin roots at one that does not exist, so a
