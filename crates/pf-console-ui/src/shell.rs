@@ -1405,7 +1405,7 @@ impl Shell {
     /// A library fetch for `fp_hex` is about to go out. Another host's list leaves the model
     /// now, before a shelf pushed with the fetch syncs it as its own. Call it before the send:
     /// after, it could wipe what the platform's fetch already delivered.
-    fn note_fetch(&mut self, fp_hex: &str) {
+    pub(crate) fn note_fetch(&mut self, fp_hex: &str) {
         if self.library_fp.as_deref() != Some(fp_hex) {
             self.library.begin_host_fetch();
         }

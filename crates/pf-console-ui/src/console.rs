@@ -287,6 +287,11 @@ impl Console {
         let fetch = entry_fetch(&entry);
         let stack = entry_stack(entry, self.shell.device_name());
         if let Some(cmd) = fetch {
+            // The shell's record of whose list the model holds, or the parked Hosts shelf
+            // takes this host's games as its own.
+            if let ConsoleCmd::FetchLibrary { fp_hex, .. } = &cmd {
+                self.shell.note_fetch(fp_hex);
+            }
             self.shell.send_cmd(cmd);
         }
         self.shell.replace_stack(stack);
