@@ -295,12 +295,15 @@ fn refs(
     let h = &*plan.header;
     // `RefFrameMapTextureIndex` is the whole store by SLOT — same job as
     // `RefFrameList`; an LTR no slice names still has to appear.
+    // A store picture this map never assigned (a rebuilt session, whose planner still holds
+    // the old store) stays unused, as in H.264 and HEVC: failing here would refuse even the
+    // key frame that ends it. A named reference without a surface is still refused below.
     let mut ref_frame_map = [UNUSED_INDEX; NUM_REF_SLOTS];
     for r in &plan.dpb_refs {
-        let slot = slots
-            .slot_of(r.id)
-            .ok_or(PlanToDxvaAv1Error::UnresolvedReference(r.id))?;
-        ref_frame_map[usize::from(r.slot)] = slot;
+        match slots.slot_of(r.id) {
+            Some(slot) => ref_frame_map[usize::from(r.slot)] = slot,
+            None => tracing::trace!(id = r.id, "a stored AV1 picture holds no slot in this map"),
+        }
     }
 
     // Seven reference NAMES: slot, coded size, global motion (module docs).
@@ -719,6 +722,34 @@ mod tests {
             );
         }
         dx
+    }
+
+    /// A rebuilt session's fresh map holds none of the planner's stored pictures. The key
+    /// frame that starts it over still converts; failing it would wedge every frame after.
+    #[test]
+    fn a_key_frame_converts_into_a_fresh_map_beside_an_old_store() {
+        let mut planner = Av1Planner::new();
+        let mut old = SlotMap::new(NUM_REF_SLOTS);
+        let packets: Vec<&[u8]> = IvfIterator::new(AV1_25FPS).take(4).collect();
+        for &packet in &packets {
+            for plan in planner.plan_au(packet).expect("the clean vector plans") {
+                if plan.dpb.stored.is_some() {
+                    convert(packet, &plan, &mut old);
+                }
+            }
+        }
+        let mut fresh = SlotMap::new(NUM_REF_SLOTS);
+        let key = packets[0];
+        let plans = planner.plan_au(key).expect("the key frame plans again");
+        let plan = plans
+            .iter()
+            .find(|p| p.dpb.stored.is_some())
+            .expect("a decoded key frame");
+        assert!(
+            !plan.dpb_refs.is_empty(),
+            "the store still holds the old pictures"
+        );
+        plan_to_dxva_av1(key, plan, &mut fresh).expect("the key frame converts");
     }
 
     /// Decode target never shares a surface with a picture the submission names.
