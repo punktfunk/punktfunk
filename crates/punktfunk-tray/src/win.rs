@@ -640,6 +640,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             }
             LRESULT(0)
         }
+        // `wparam` FALSE: the sign-out or shutdown was cancelled, so the tray stays.
+        WM_ENDSESSION if wparam.0 == 0 => LRESULT(0),
         WM_CLOSE | WM_ENDSESSION => {
             // SAFETY: as above — triggers WM_DESTROY below.
             unsafe {
