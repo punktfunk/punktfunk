@@ -142,6 +142,12 @@ impl Importer {
         Ok(Importer::Remote(client::RemoteImporter::spawn()?))
     }
 
+    /// In-process: its GL context is current only on the thread that built it, so every
+    /// import stays on that thread.
+    pub fn in_process(&self) -> bool {
+        matches!(self, Importer::InProc(_))
+    }
+
     pub fn supported_modifiers(&mut self, fourcc: u32) -> Vec<u64> {
         match self {
             Importer::Remote(r) => r.supported_modifiers(fourcc),

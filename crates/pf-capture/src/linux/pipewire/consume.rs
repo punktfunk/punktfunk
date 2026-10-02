@@ -605,7 +605,8 @@ fn try_passthrough(ud: &mut UserData, a: &mut Arrival) -> bool {
 /// dmabuf + importer: hand the held buffer to the consumer, which imports at its own tick
 /// (`import_held`), so arrivals above the wire rate cost nothing here. A buffer that cannot be
 /// held is dropped while holds are possible at all (every hold is with the encoder) and
-/// imported here only when this pool can never hold. A producer NV12 rides only a hold, with
+/// imported here only when this pool can never hold. An in-process importer always imports
+/// here: its GL context is current on this thread. A producer NV12 rides only a hold, with
 /// its chroma plane: the importer reads packed RGB, so an unheld one feeds the raw latch,
 /// which withdraws the planar offer. `true` = the frame ends here; `false` = take the CPU
 /// de-pad.
@@ -636,7 +637,15 @@ fn try_gpu_hold(ud: &mut UserData, a: &mut Arrival) -> bool {
                 let Ok(plane1) = second_plane(fmt, datas) else {
                     return true;
                 };
-                if let Some(dup) = dup_data_fd(&datas[0]) {
+                // An in-process importer's GL context is current on this thread only.
+                let consumer_imports = !ud
+                    .signals
+                    .importer
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .is_some_and(pf_zerocopy::Importer::in_process);
+                if let Some(dup) = consumer_imports.then(|| dup_data_fd(&datas[0])).flatten() {
                     if let Some(hold) = ud.try_defer(a.pw_buf, a.stream) {
                         let frame = CapturedFrame {
                             provenance: Default::default(),
