@@ -174,6 +174,11 @@ impl<D: OpenedStateless> StatelessHevc<D> {
         if facts.damaged {
             self.recovery_request = true;
         }
+        // No session (the last request failed): only a keyframe starts one.
+        if self.session.is_none() && !pic.is_irap {
+            self.recovery_request = true;
+            return Ok(None);
+        }
         self.ensure_session(&plan, au)?;
         let s = self.session.as_mut().expect("just ensured");
         let shown = match s.decoder.decode(&plan, au, facts) {
@@ -184,7 +189,13 @@ impl<D: OpenedStateless> StatelessHevc<D> {
                 self.recovery_request = true;
                 return Ok(Some((None, true)));
             }
-            Err(e) => return Err(anyhow!("{e}")),
+            // A failed request keeps its OUTPUT buffer bound, so every later picture would
+            // fail on it: drop the session and reopen at the next keyframe.
+            Err(e) => {
+                self.session = None;
+                self.recovery_request = true;
+                return Err(anyhow!("{e}"));
+            }
         };
         // Hosts send one picture per unit; a bump of several keeps the newest.
         let mut newest: Option<Shown<Facts>> = None;
