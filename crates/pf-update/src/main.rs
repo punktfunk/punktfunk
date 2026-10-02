@@ -161,6 +161,7 @@ mod linux_main {
         match kind {
             "apt" => {
                 // Restrict apt-get update to our list when it exists; a full refresh is slower, not safer.
+                // List-Cleanup=0: apt otherwise deletes every list the restricted sources omit.
                 let ours = "/etc/apt/sources.list.d/punktfunk.list";
                 let mut update = Command::new("apt-get");
                 update.env("DEBIAN_FRONTEND", "noninteractive");
@@ -171,6 +172,8 @@ mod linux_main {
                         &format!("Dir::Etc::sourcelist={ours}"),
                         "-o",
                         "Dir::Etc::sourceparts=-",
+                        "-o",
+                        "APT::Get::List-Cleanup=0",
                     ]);
                 } else {
                     update.arg("update");
