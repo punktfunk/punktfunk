@@ -132,7 +132,7 @@ fn scrub_desktop_manager_env() {
 fn scrub_desktop_manager_env() {}
 
 /// Desktop compositor whose kept PipeWire outputs die with the instance. `Gaming` / `None` are not.
-fn is_desktop_kind(kind: ActiveKind) -> bool {
+pub(crate) fn is_desktop_kind(kind: ActiveKind) -> bool {
     matches!(
         kind,
         ActiveKind::DesktopKde
