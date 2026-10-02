@@ -241,10 +241,15 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     val hingeCompanion = fold?.carriesCompanion(rootSize.height) == true
     val companionDisplay = rememberCompanionDisplay().takeUnless { hingeCompanion }
     val companionUp = hingeCompanion || companionDisplay != null
-    // Which screen of the pair holds the picture: the player's swap, kept per second screen. A
-    // hinge's two halves are one display, so they share one key.
-    val swapKey = companionDisplay?.name ?: "hinge".takeIf { hingeCompanion }
-    var swapped by remember(swapKey) { mutableStateOf(swapKey != null && CompanionMemory.swapped(context, swapKey)) }
+    // Which screen of the pair holds the picture — or both: the layout the player cycled to,
+    // kept per second screen. A hinge's two halves are one display, so they share one key.
+    val screenKey = companionDisplay?.name ?: "hinge".takeIf { hingeCompanion }
+    var layoutPick by remember(screenKey) {
+        mutableStateOf(screenKey?.let { CompanionMemory.layout(context, it) } ?: ScreenLayout.PANEL)
+    }
+    // The layouts this pair can build; Spanned joins once the presenter splits the picture.
+    val layoutsOffered = if (screenKey == null) emptyList() else listOf(ScreenLayout.PANEL, ScreenLayout.SWAPPED)
+    val layout = layoutPick.takeIf { it in layoutsOffered } ?: ScreenLayout.PANEL
     // The POINTER grant gates every touch capture layer: "don't capture what can't land".
     val pointerOk = ui.accessGrants and SessionAccess.POINTER != 0
     val companionPages = companionPages(pointerOk, padShown || activity?.gamepadRouter?.sendsEnabled() == true)
@@ -379,14 +384,15 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     var modePicked by remember(handle) { mutableStateOf(false) }
 
     /**
-     * The picture and the panel trade screens, and the pair remembers it. What Automatic resolved
-     * follows the picture to the other display: live where the host takes the switch, else from
-     * the next connect, which resolves against the same screen ([pictureDisplay]).
+     * The pair's next layout, remembered. What Automatic resolved follows the picture to its
+     * screen: live where the host takes the switch, else from the next connect, which resolves
+     * against the same screen ([pictureDisplay]).
      */
-    fun swapScreens(key: String) {
-        swapped = !swapped
-        CompanionMemory.keepSwap(context, key, swapped)
-        runCatching { NativeBridge.nativeLogDisplay("swap: picture ${if (swapped) "on" else "off"} $key") }
+    fun cycleScreens() {
+        val key = screenKey ?: return
+        layoutPick = layout.next(layoutsOffered)
+        CompanionMemory.keepLayout(context, key, layoutPick)
+        runCatching { NativeBridge.nativeLogDisplay("screens: ${layoutPick.name.lowercase()} $key") }
         val automatic = initialSettings.width <= 0 || initialSettings.height <= 0 || initialSettings.hz <= 0
         if (companionDisplay == null || modePicked || !automatic) return
         val (baseW, baseH, hz) = initialSettings.effectiveMode(context)
@@ -472,8 +478,9 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
             modePicked = true
             switchMode(w, h, hz)
         },
-        screensSwappable = { swapKey != null },
-        swapScreens = { swapKey?.let(::swapScreens) },
+        screenLayouts = { layoutsOffered },
+        screenLayout = { layout },
+        cycleScreens = ::cycleScreens,
     )
     // The summon rides a pointer gesture but TYPES, so it also needs the KEYBOARD grant
     // (dismissing is always allowed).
@@ -859,20 +866,20 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
                 if (split != null) Modifier.height(with(density) { split.videoPx.toDp() }) else Modifier.weight(1f),
             )
             // Swapped, the panel and the picture trade places.
-            if (swapped) Box(upper) { companion() } else picture(upper)
+            if (layout == ScreenLayout.SWAPPED) Box(upper) { companion() } else picture(upper)
             if (split != null) {
                 // The hinge itself: nothing on a creased panel, a real strip on a two-panel device.
                 Spacer(Modifier.height(with(density) { split.hingePx.toDp() }))
                 Box(modifier = Modifier.fillMaxWidth().weight(1f).onSizeChanged { padSize = it }) {
                     when {
                         !hingeCompanion -> PadHalf(virtualPad, overlayCfg.pad, padSize, haptics, openRingCentred)
-                        swapped -> picture(Modifier.fillMaxSize())
+                        layout == ScreenLayout.SWAPPED -> picture(Modifier.fillMaxSize())
                         else -> companion()
                     }
                 }
             }
             companionDisplay?.let {
-                if (swapped) {
+                if (layout == ScreenLayout.SWAPPED) {
                     CompanionOnDisplay(it, pictureHz = streamHz) { picture(Modifier.fillMaxSize()) }
                 } else {
                     CompanionOnDisplay(it, content = companion)

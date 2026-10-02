@@ -19,8 +19,6 @@ import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.models.ActiveSession
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -66,7 +64,7 @@ class CompanionDisplayTest {
 
     private fun forgetSwap() {
         val dm = compose.activity.getSystemService(DisplayManager::class.java)
-        companionDisplay(compose.activity, dm)?.let { CompanionMemory.keepSwap(compose.activity, it.name, false) }
+        companionDisplay(compose.activity, dm)?.let { CompanionMemory.keepLayout(compose.activity, it.name, ScreenLayout.PANEL) }
     }
 
     /** The display whose window draws the panel's Actions tab. */
@@ -104,14 +102,14 @@ class CompanionDisplayTest {
         compose.waitUntil(5_000) { panelDisplay() == second.displayId }
         compose.onNodeWithText("Actions").performClick()
 
-        compose.onNodeWithText("Swap screens").performClick()
+        compose.onNodeWithText("Screens").performClick()
         compose.waitUntil(5_000) { panelDisplay() == own }
-        assertTrue(CompanionMemory.swapped(compose.activity, second.name))
+        assertEquals(ScreenLayout.SWAPPED, CompanionMemory.layout(compose.activity, second.name))
         assertEquals(second.displayId, pictureDisplay(compose.activity, compose.activity.display!!).displayId)
 
-        compose.onNodeWithText("Swap screens").performClick()
+        compose.onNodeWithText("Screens").performClick()
         compose.waitUntil(5_000) { panelDisplay() == second.displayId }
-        assertFalse(CompanionMemory.swapped(compose.activity, second.name))
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(compose.activity, second.name))
         assertEquals(emptyList<SessionEndReason>(), ended)
     }
 }

@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
@@ -49,8 +50,8 @@ internal fun fakeRingActions(fired: MutableList<String> = mutableListOf()) = Rin
     toggleStreamMute = {},
     currentMode = { intArrayOf(1920, 1080, 60) },
     requestMode = { _, _, _ -> },
-    screensSwappable = { true },
-    swapScreens = { fired += "swap" },
+    screenLayouts = { ScreenLayout.entries },
+    cycleScreens = { fired += "screens" },
 )
 
 /**
@@ -96,11 +97,11 @@ class CompanionPanelTest {
     }
 
     @Test
-    fun theSwapTileTradesTheScreens() {
+    fun theScreensTileCyclesTheLayout() {
         show(CompanionPage.ACTIONS)
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Swap screens"))
-        compose.onNodeWithText("Swap screens").performClick()
-        assertEquals(listOf("swap"), fired)
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Screens"))
+        compose.onNodeWithText("Screens").performClick()
+        assertEquals(listOf("screens"), fired)
     }
 
     @Test
@@ -130,12 +131,31 @@ class CompanionPanelTest {
     }
 
     @Test
-    fun eachSecondScreenKeepsItsOwnSwap() {
+    fun eachSecondScreenKeepsItsOwnLayout() {
         val context = compose.activity
-        CompanionMemory.keepSwap(context, "Built-in Screen 2", true)
-        assertEquals(true, CompanionMemory.swapped(context, "Built-in Screen 2"))
-        assertEquals(false, CompanionMemory.swapped(context, "HDMI Screen"))
-        CompanionMemory.keepSwap(context, "Built-in Screen 2", false)
-        assertEquals(false, CompanionMemory.swapped(context, "Built-in Screen 2"))
+        CompanionMemory.keepLayout(context, "Built-in Screen 2", ScreenLayout.SPANNED)
+        assertEquals(ScreenLayout.SPANNED, CompanionMemory.layout(context, "Built-in Screen 2"))
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(context, "HDMI Screen"))
+        CompanionMemory.keepLayout(context, "Built-in Screen 2", ScreenLayout.PANEL)
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(context, "Built-in Screen 2"))
+    }
+
+    @Test
+    fun aSwapKeptBeforeLayoutsReadsAsThePictureBelow() {
+        val context = compose.activity
+        context.getSharedPreferences("punktfunk_companion", Context.MODE_PRIVATE)
+            .edit().putBoolean("swap:Old Screen", true).commit()
+        assertEquals(ScreenLayout.SWAPPED, CompanionMemory.layout(context, "Old Screen"))
+        CompanionMemory.keepLayout(context, "Old Screen", ScreenLayout.PANEL)
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(context, "Old Screen"))
+    }
+
+    @Test
+    fun theCycleSkipsWhatThePairCannotBuild() {
+        val two = listOf(ScreenLayout.PANEL, ScreenLayout.SWAPPED)
+        assertEquals(ScreenLayout.SWAPPED, ScreenLayout.PANEL.next(two))
+        assertEquals(ScreenLayout.PANEL, ScreenLayout.SWAPPED.next(two))
+        assertEquals(ScreenLayout.PANEL, ScreenLayout.SPANNED.next(two))
+        assertEquals(ScreenLayout.PANEL, ScreenLayout.PANEL.next(emptyList()))
     }
 }

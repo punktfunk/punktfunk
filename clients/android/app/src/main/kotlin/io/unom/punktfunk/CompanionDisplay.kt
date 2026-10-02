@@ -57,10 +57,11 @@ internal fun companionDisplay(context: Context, dm: DisplayManager): Display? {
     }
 }
 
-/** The screen the picture goes to: the second screen the player swapped it onto, else [own]. */
+/** The screen the picture goes to: the second screen the player put it on, else [own]. */
 internal fun pictureDisplay(context: Context, own: Display): Display {
     val dm = context.getSystemService(DisplayManager::class.java) ?: return own
-    return companionDisplay(context, dm)?.takeIf { CompanionMemory.swapped(context, it.name) } ?: own
+    return companionDisplay(context, dm)
+        ?.takeIf { CompanionMemory.layout(context, it.name) == ScreenLayout.SWAPPED } ?: own
 }
 
 /** Every display as one `pf.display` line: what a dual-screen device reports, for its bundle. */

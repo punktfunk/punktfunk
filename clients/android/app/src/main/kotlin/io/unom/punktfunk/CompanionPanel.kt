@@ -80,10 +80,25 @@ internal enum class CompanionPage(val label: String, val icon: ImageVector) {
 internal fun companionPages(pointer: Boolean, pad: Boolean): List<CompanionPage> =
     CompanionPage.entries.filter { (it != CompanionPage.TRACKPAD || pointer) && (it != CompanionPage.PAD || pad) }
 
+/** Which screen of a pair holds the picture — or both (design/android-dual-screen.md §3). */
+enum class ScreenLayout(val label: String) {
+    /** The picture above, the panel below: the default. */
+    PANEL("Panel below"),
+
+    /** The panel above, the picture below. */
+    SWAPPED("Picture below"),
+
+    /** One picture across both: its top half above, its bottom half below. */
+    SPANNED("Across both");
+
+    /** The layout after this one in [offered], wrapping; the first offered when this one is not. */
+    fun next(offered: List<ScreenLayout>): ScreenLayout =
+        if (offered.isEmpty()) this else offered[(offered.indexOf(this) + 1) % offered.size]
+}
+
 /**
- * The page the player last picked, and which screen of each pair holds the picture, kept across
- * streams. The controller page is never kept: showing it connects a pad, and a stream must not
- * connect one on its own.
+ * The page the player last picked, and each pair's layout, kept across streams. The controller
+ * page is never kept: showing it connects a pad, and a stream must not connect one on its own.
  */
 internal object CompanionMemory {
     private const val PREFS = "punktfunk_companion"
@@ -101,11 +116,16 @@ internal object CompanionMemory {
         if (page != CompanionPage.PAD) prefs(context).edit().putString(PAGE, page.name).apply()
     }
 
-    /** True when the player moved the picture onto the second screen [screen] names. */
-    fun swapped(context: Context, screen: String): Boolean = prefs(context).getBoolean("swap:$screen", false)
+    /** The layout the pair [screen] names last had. A swap kept before layouts existed is the picture below. */
+    fun layout(context: Context, screen: String): ScreenLayout {
+        val p = prefs(context)
+        val name = p.getString("layout:$screen", null)
+        ScreenLayout.entries.firstOrNull { it.name == name }?.let { return it }
+        return if (p.getBoolean("swap:$screen", false)) ScreenLayout.SWAPPED else ScreenLayout.PANEL
+    }
 
-    fun keepSwap(context: Context, screen: String, swapped: Boolean) {
-        prefs(context).edit().putBoolean("swap:$screen", swapped).apply()
+    fun keepLayout(context: Context, screen: String, layout: ScreenLayout) {
+        prefs(context).edit().putString("layout:$screen", layout.name).remove("swap:$screen").apply()
     }
 }
 
