@@ -656,6 +656,25 @@ mod session_main {
         }
     }
 
+    /// SDL falls back to XWayland where the compositor lacks `wp_fifo_v1` (KWin before
+    /// 6.4, Mutter before 48). The compositor stamps, the native lane and colour
+    /// management live on the Wayland surface, so a Wayland session stays Wayland. A
+    /// driver the environment names, or gamescope's nested display, is left alone.
+    #[cfg(target_os = "linux")]
+    #[allow(unsafe_code)] // the SAFETY-commented single-threaded-startup env write below
+    fn prefer_wayland() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none()
+            || std::env::var_os("SDL_VIDEO_DRIVER").is_some()
+            || std::env::var_os("SDL_VIDEODRIVER").is_some()
+            || pf_client_core::gamescope::under_gamescope()
+        {
+            return;
+        }
+        // SAFETY: called at the top of `run()`, before this process creates any thread.
+        unsafe { std::env::set_var("SDL_VIDEO_DRIVER", "wayland") };
+        tracing::info!("SDL kept on Wayland (WAYLAND_DISPLAY is set)");
+    }
+
     /// `current` with `token` appended to its comma list; `None` when it is already there.
     #[cfg(target_os = "linux")]
     fn with_token(current: Option<&str>, token: &str) -> Option<String> {
@@ -736,6 +755,8 @@ mod session_main {
         // decoder's `auto` path can take Vulkan Video. Windows drivers expose theirs already.
         #[cfg(target_os = "linux")]
         enable_mesa_video_decode();
+        #[cfg(target_os = "linux")]
+        prefer_wayland();
 
         // `--list-adapters`: print the Vulkan physical devices' marketing names (one per
         // line, discrete first) for the desktop shells' GPU picker, then exit.
