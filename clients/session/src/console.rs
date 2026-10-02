@@ -28,7 +28,7 @@ use pf_presenter::overlay::OverlayAction;
 use pf_presenter::ActionOutcome;
 use std::collections::{HashMap, VecDeque};
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -429,6 +429,7 @@ impl Service {
                     probe_inflight: Arc::new(AtomicBool::new(false)),
                     last_probe: Instant::now() - Duration::from_secs(60),
                     wake_cancel: None,
+                    pair_gen: Arc::new(AtomicU64::new(0)),
                     rescan: None,
                 }
                 .run(stop_w)
@@ -460,6 +461,9 @@ struct ServiceState {
     last_probe: Instant,
     /// Cancels the active wake thread (it owns the model's wake status).
     wake_cancel: Option<Arc<AtomicBool>>,
+    /// Bumped per pairing. A ceremony the player left still persists, but only the
+    /// newest one writes the shared phase.
+    pair_gen: Arc<AtomicU64>,
     /// Forces the mDNS browse to re-query. Installed by `run`; `None` before it starts.
     rescan: Option<discovery::Rescan>,
 }
@@ -826,9 +830,12 @@ impl ServiceState {
         self.console.set_pair(PairPhase::Busy);
         let console = self.console.clone();
         let identity = self.identity.clone();
+        let generation = self.pair_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let pair_gen = self.pair_gen.clone();
         std::thread::Builder::new()
             .name("punktfunk-pair".into())
             .spawn(move || {
+                let current = || pair_gen.load(Ordering::SeqCst) == generation;
                 match trust::pair_with_host(&addr, port, &identity, &pin, &device_name) {
                     Ok(fp) => {
                         let fp_hex = trust::hex(&fp);
@@ -837,16 +844,24 @@ impl ServiceState {
                             .find(|(f, _)| *f == fp_hex)
                             .or_else(|| named.iter().find(|(f, _)| f.is_empty()))
                             .map_or_else(|| addr.clone(), |(_, n)| n.clone());
-                        if let Err(e) = trust::persist_host(&name, &addr, port, &fp_hex, true, &[])
-                        {
-                            tracing::warn!(error = %format!("{e:#}"), "saving the paired host");
+                        let saved = trust::persist_host(&name, &addr, port, &fp_hex, true, &[]);
+                        if !current() {
+                            return;
                         }
-                        console.set_pair(PairPhase::Paired { key: fp_hex });
+                        match saved {
+                            Ok(()) => console.set_pair(PairPhase::Paired { key: fp_hex }),
+                            // Not "Paired": the pin is gone by the next launch.
+                            Err(e) => console.set_pair(PairPhase::Failed(format!(
+                                "Paired, but couldn't save — {e:#}"
+                            ))),
+                        }
                     }
                     Err(e) => {
                         // Cause-specific wording (wrong PIN vs not-armed vs unreachable
                         // vs a typed host rejection) — shared with every other surface.
-                        console.set_pair(PairPhase::Failed(trust::pair_error_message(&e)));
+                        if current() {
+                            console.set_pair(PairPhase::Failed(trust::pair_error_message(&e)));
+                        }
                     }
                 }
             })
