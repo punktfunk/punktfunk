@@ -1310,14 +1310,21 @@ impl NvSession {
         };
         // SAFETY: a `pending` entry implies the live session and a submitted encode on `p.bs`.
         // The blocking lock copies, then unlocks.
-        let lock = unsafe { BitstreamLock::new(self.api, self.encoder, p.bs, false, None) }
-            .map_err(|e| nvenc_status::call_err("lock_bitstream", e))?;
+        let lock = match unsafe { BitstreamLock::new(self.api, self.encoder, p.bs, false, None) } {
+            Ok(lock) => lock,
+            Err(e) => {
+                // SAFETY: the mapping for this retired encode, unmapped once. As in
+                // `absorb_done`, the error surfaces after it so the rebuild starts clean.
+                unsafe { self.unmap(p.map) };
+                return Err(nvenc_status::call_err("lock_bitstream", e));
+            }
+        };
         let data = lock.bytes().to_vec();
         let keyframe = lock.keyframe();
-        lock.unlock()
-            .map_err(|e| nvenc_status::call_err("unlock_bitstream", e))?;
+        let unlocked = lock.unlock();
         // SAFETY: the mapping for this retired encode, unmapped once.
         unsafe { self.unmap(p.map) };
+        unlocked.map_err(|e| nvenc_status::call_err("unlock_bitstream", e))?;
         // Sync depth-1: the lock blocked until the ASIC finished.
         self.feed_split_arbiter();
         let data = self.av1_hdr_obus(data, keyframe);
@@ -1413,13 +1420,20 @@ impl NvSession {
 
         // The AU tail must not ride a +1 tick (depth-1 pump contract).
         let p = self.pending.pop_front().expect("front() checked above");
+        // This AU ends here however the finish goes: a stale cursor would cut the next one.
+        let cs = self.chunk.take().unwrap_or_else(ChunkState::new);
         // SAFETY: as in `poll`: the popped encode on the live session. Every read of the locked
         // bytes happens before its unlock.
-        let lock = unsafe { BitstreamLock::new(self.api, self.encoder, p.bs, false, None) }
-            .map_err(|e| nvenc_status::call_err("lock_bitstream (chunk finish)", e))?;
+        let lock = match unsafe { BitstreamLock::new(self.api, self.encoder, p.bs, false, None) } {
+            Ok(lock) => lock,
+            Err(e) => {
+                // SAFETY: the mapping for this retired encode, unmapped once, error or not.
+                unsafe { self.unmap(p.map) };
+                return Err(nvenc_status::call_err("lock_bitstream (chunk finish)", e));
+            }
+        };
         let full = lock.bytes();
         let total = full.len();
-        let cs = self.chunk.take().unwrap_or_else(ChunkState::new);
         // The doNotWait bytes must be a byte-exact prefix of the finished AU, or the wire already
         // carries undetectable corruption. Latch sub-frame off and bail into stall recovery
         // (rebuild without sub-frame, IDR).
@@ -1444,10 +1458,10 @@ impl NvSession {
         }
         let data = full[cs.emitted..].to_vec();
         let keyframe = lock.keyframe();
-        lock.unlock()
-            .map_err(|e| nvenc_status::call_err("unlock_bitstream (chunk finish)", e))?;
+        let unlocked = lock.unlock();
         // SAFETY: the mapping for this retired encode, unmapped once.
         unsafe { self.unmap(p.map) };
+        unlocked.map_err(|e| nvenc_status::call_err("unlock_bitstream (chunk finish)", e))?;
         if cs.opened && keyframe != p.idr_hint {
             // P-only + infinite GOP never diverges; if it did, earlier chunks had the wrong flag.
             tracing::warn!(
