@@ -323,7 +323,14 @@ pub fn for_provider(id: &str) -> Option<PluginManifest> {
 }
 
 /// The provider id package `pkg` declares, read before an uninstall takes its files away.
+/// A bare name is the runner's first-party shorthand: `playnite` is `@punktfunk/plugin-playnite`.
 pub fn id_of_package(pkg: &str) -> Option<String> {
+    let pkg = match pkg.trim() {
+        p if p.starts_with('@') || p.contains('/') || p.starts_with("punktfunk-plugin-") => {
+            p.to_string()
+        }
+        bare => format!("@punktfunk/plugin-{bare}"),
+    };
     let dir = pf_paths::config_dir()
         .join("plugins")
         .join("node_modules")
