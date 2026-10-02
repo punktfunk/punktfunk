@@ -56,6 +56,10 @@ pub(crate) struct SessionHandle {
     /// survives surface teardown and recreate.
     pub stats: Arc<crate::stats::VideoStats>,
     video: Mutex<Option<VideoThread>>,
+    /// Set by the first `nativeStartVideo`. A later one (a recreated surface) builds a decoder
+    /// mid-stream, which must wait for a keyframe and ask for one.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) video_started: std::sync::atomic::AtomicBool,
     /// The background keep-alive's AU drain: the decode thread is down (its Surface is gone) but
     /// something must still pop the frame queue, or the standing-queue detector jumps to live and
     /// asks the host for a keyframe every `FLUSH_COOLDOWN` for the whole background stay. Reuses

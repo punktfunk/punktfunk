@@ -196,6 +196,9 @@ pub(crate) struct DecodeOptions {
     pub src_crop: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Where the decoder publishes its picture size, packed by [`crate::session::pack_surface_size`].
     pub decoded_size: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Not the session's first video start: the stream is mid-flight, so the fresh decoder
+    /// holds no reference picture the next P-frames lean on.
+    pub restart: bool,
 }
 
 /// The decode entry point on the `pf-decode` thread: dispatches to the codec's loop. All of
