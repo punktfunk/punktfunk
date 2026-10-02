@@ -706,7 +706,11 @@ impl NativeClient {
         let negotiated = loop {
             match ready_rx.recv_timeout(READY_POLL) {
                 Ok(Ok(t)) => break t,
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => {
+                    // Stops what the handshake already started, such as the data punch.
+                    shared.shutdown.store(true, Ordering::SeqCst);
+                    return Err(e);
+                }
                 // Keep waiting unless budget spent or cancelled. Disconnected = worker died
                 // without reporting; the give-up arm below covers it. Cancel and expiry share
                 // that arm: both owe the host the same close.
