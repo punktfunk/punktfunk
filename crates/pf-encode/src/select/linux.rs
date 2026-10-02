@@ -115,16 +115,17 @@ fn open_video_backend_linux(
              punktfunk-host/pyrowave (the advertisement bit should not have been set)"
         );
     }
-    // Default VAAPI. With `vulkan-encode` + `PUNKTFUNK_VULKAN_ENCODE`, HEVC/AV1
-    // opens Vulkan Video first; a failed open falls back
-    // so the stream does not die. `format`/`bit_depth`/`chroma` are VAAPI-only
-    // — Vulkan imports the dmabuf and does its own CSC.
-    let open_amd_intel = || -> Result<(Box<dyn Encoder>, &'static str)> {
+    // Default VAAPI. HEVC/AV1 open Vulkan Video first when the probe says yes, or always under
+    // a `vulkan` pin; a failed open falls back so the stream does not die, since the
+    // advertisement counts VAAPI's HEVC. Vulkan imports the dmabuf and does its own CSC.
+    let open_amd_intel = |pinned: bool| -> Result<(Box<dyn Encoder>, &'static str)> {
         // Vulkan when the device probe says yes (same profile query the open makes). Gamescope
         // has no embedded cursor — CSC blend is the only pointer path. A `no` goes to VAAPI here,
         // not a failed open. Vulkan gets `bit_depth`; the rule only picks the arm.
+        #[cfg(not(feature = "vulkan-encode"))]
+        let _ = pinned;
         #[cfg(feature = "vulkan-encode")]
-        if amd_intel_opens_vulkan(codec, bit_depth == 10, hdr) {
+        if pinned || amd_intel_opens_vulkan(codec, bit_depth == 10, hdr) {
             match vulkan_video::VulkanVideoEncoder::open(
                 codec,
                 format,
@@ -169,7 +170,7 @@ fn open_video_backend_linux(
     // Same resolver the capability mirrors consult, so the alias table exists once.
     match resolve_linux_backend(pref, linux_auto_is_vaapi, cuda) {
         Some(LinuxBackend::Nvenc) => open_nvidia(),
-        Some(LinuxBackend::AmdIntel) => open_amd_intel(),
+        Some(LinuxBackend::AmdIntel) => open_amd_intel(false),
         Some(LinuxBackend::Vulkan) => {
             #[cfg(feature = "vulkan-encode")]
             {
@@ -178,18 +179,7 @@ fn open_video_backend_linux(
                         "the Vulkan Video encoder supports HEVC + AV1; the session negotiated {codec:?}"
                     );
                 }
-                vulkan_video::VulkanVideoEncoder::open(
-                    codec,
-                    format,
-                    width,
-                    height,
-                    fps,
-                    bitrate_bps,
-                    p.cursor_blend,
-                    bit_depth,
-                    hdr,
-                )
-                .map(|e| (Box::new(e) as Box<dyn Encoder>, "vulkan"))
+                open_amd_intel(true)
             }
             #[cfg(not(feature = "vulkan-encode"))]
             {
@@ -982,6 +972,34 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.to_string().contains("H.264"), "{err:#}");
+    }
+
+    /// A `vulkan` pin the GPU can't open falls back to VAAPI rather than failing the session.
+    /// GPU-free: without a device the error must be VAAPI's, not Vulkan's.
+    #[cfg(feature = "vulkan-encode")]
+    #[test]
+    fn a_vulkan_pin_falls_back_to_vaapi() {
+        let hevc = OpenParams {
+            codec: Codec::H265,
+            format: PixelFormat::Bgrx,
+            width: 64,
+            height: 64,
+            fps: 30,
+            bitrate_bps: 1_000_000,
+            cuda: false,
+            bit_depth: 8,
+            hdr: false,
+            chroma: ChromaFormat::Yuv420,
+            cursor_blend: false,
+            max_slices: 4,
+        };
+        match open_video_backend_linux("vulkan", &hevc) {
+            Ok((_, label)) => assert!(matches!(label, "vulkan" | "vaapi-native"), "{label}"),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                assert!(msg.contains("libva") || msg.contains("VAAPI"), "{msg}");
+            }
+        }
     }
 
     /// `auto` on an AMD/Intel box opens the native VAAPI session.
