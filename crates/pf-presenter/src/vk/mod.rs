@@ -1240,7 +1240,7 @@ impl Presenter {
         }
         #[cfg(windows)]
         if let Some(t) = &self.vblank_timer {
-            t.enqueue(done, pts_ns, decoded_ns, now_ns);
+            t.enqueue(done, pts_ns, decoded_ns, now_ns, !self.vblank_locked());
         }
     }
 
