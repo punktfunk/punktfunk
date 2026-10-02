@@ -363,6 +363,11 @@ fn spawn(state: Arc<AppState>) -> Result<Running> {
                                 let from = p.address().map(|a| a.ip());
                                 if accept_connect(launch, from) {
                                     tracing::info!("control: client connected");
+                                    // A reconnect that replaces a tracked peer: that peer's
+                                    // late Disconnect is ignored below, so release what it held.
+                                    if peer.id.is_some_and(|id| id != p.id()) {
+                                        peer.reset(&inj_tx);
+                                    }
                                     peer.id = Some(p.id());
                                 } else {
                                     tracing::warn!(
