@@ -377,9 +377,9 @@ impl WinExecutor<'_> {
         };
         let current = self.run.reg_string(key, "Path").unwrap_or_default();
         let Some(new) = (if add {
-            path_with(&current, dir)
+            path_with(&current, dir, &|e| self.sub(e))
         } else {
-            path_without(&current, dir)
+            path_without(&current, dir, &|e| self.sub(e))
         }) else {
             self.ui.ok(&format!("{scope} PATH already right"));
             return Ok(());
@@ -701,13 +701,10 @@ fn file_names(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
-/// `None` = already an entry (case-insensitive, slash-insensitive).
-fn path_with(current: &str, dir: &str) -> Option<String> {
-    let want = dir.trim_end_matches('\\');
-    if current
-        .split(';')
-        .any(|e| e.trim_end_matches('\\').eq_ignore_ascii_case(want))
-    {
+/// `None` = already an entry (case-insensitive, slash-insensitive). `expand` resolves a
+/// `%LocalAppData%` entry, so a fresh install's literal one matches an upgrade's expanded dir.
+fn path_with(current: &str, dir: &str, expand: &dyn Fn(&str) -> String) -> Option<String> {
+    if current.split(';').any(|e| same_entry(e, dir, expand)) {
         return None;
     }
     if current.is_empty() {
@@ -718,16 +715,21 @@ fn path_with(current: &str, dir: &str) -> Option<String> {
 }
 
 /// `None` = the dir was not an entry. Rebuilds entry-by-entry, never a substring delete.
-fn path_without(current: &str, dir: &str) -> Option<String> {
-    let want = dir.trim_end_matches('\\');
+fn path_without(current: &str, dir: &str, expand: &dyn Fn(&str) -> String) -> Option<String> {
     let kept: Vec<&str> = current
         .split(';')
-        .filter(|e| !e.trim_end_matches('\\').eq_ignore_ascii_case(want))
+        .filter(|e| !same_entry(e, dir, expand))
         .collect();
     if kept.len() == current.split(';').count() {
         return None;
     }
     Some(kept.join(";"))
+}
+
+fn same_entry(entry: &str, dir: &str, expand: &dyn Fn(&str) -> String) -> bool {
+    let (a, b) = (expand(entry), expand(dir));
+    a.trim_end_matches('\\')
+        .eq_ignore_ascii_case(b.trim_end_matches('\\'))
 }
 
 /// PID column of `netstat -ano` rows whose local address ends in `ports`. STATE is localized;
@@ -862,14 +864,24 @@ mod tests {
 
     #[test]
     fn path_edit_is_containment_checked_and_entry_exact() {
-        assert_eq!(path_with(r"C:\a;C:\b", r"C:\c").unwrap(), r"C:\a;C:\b;C:\c");
-        assert!(path_with(r"C:\a;c:\PF\", r"C:\pf").is_none());
+        let id = |e: &str| e.to_string();
+        assert_eq!(
+            path_with(r"C:\a;C:\b", r"C:\c", &id).unwrap(),
+            r"C:\a;C:\b;C:\c"
+        );
+        assert!(path_with(r"C:\a;c:\PF\", r"C:\pf", &id).is_none());
+        // A fresh install's literal entry is the upgrade's expanded dir.
+        let lad = |e: &str| e.replace("%LocalAppData%", r"C:\Users\me\AppData\Local");
+        let literal = r"C:\a;%LocalAppData%\Programs\Punktfunk";
+        let expanded = r"C:\Users\me\AppData\Local\Programs\Punktfunk";
+        assert!(path_with(literal, expanded, &lad).is_none());
+        assert_eq!(path_without(literal, expanded, &lad).unwrap(), r"C:\a");
         // Entry-by-entry: a substring of another entry survives.
         assert_eq!(
-            path_without(r"C:\pf;C:\pf-tools;C:\b", r"C:\pf").unwrap(),
+            path_without(r"C:\pf;C:\pf-tools;C:\b", r"C:\pf", &id).unwrap(),
             r"C:\pf-tools;C:\b"
         );
-        assert!(path_without(r"C:\a", r"C:\nope").is_none());
+        assert!(path_without(r"C:\a", r"C:\nope", &id).is_none());
     }
 
     #[test]
