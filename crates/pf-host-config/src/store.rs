@@ -219,7 +219,7 @@ pub fn save_at(path: &Path, patch: &Map<String, Value>) -> Result<(), SaveError>
 }
 
 fn merge_into(path: &Path, patch: &Map<String, Value>) -> Result<(), SaveError> {
-    let mut file = load_file(path);
+    let mut file = read_file(path).map_err(SaveError::Io)?;
     apply_patch(&mut file, patch)?;
     write_file(path, &file).map_err(SaveError::Io)
 }
@@ -254,28 +254,31 @@ fn write_file(path: &Path, file: &Map<String, Value>) -> std::io::Result<()> {
 }
 
 /// Every key, unknown ones included, so a save from an older host keeps a newer host's keys.
-fn load_file(path: &Path) -> Map<String, Value> {
+/// A file that exists but is not a JSON object is an error, so a save never overwrites it.
+fn read_file(path: &Path) -> std::io::Result<Map<String, Value>> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Map::new(),
-        Err(e) => {
-            warn_once(format!(
-                "punktfunk: {} is unreadable ({e}) — using env and defaults",
-                path.display()
-            ));
-            return Map::new();
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(e) => return Err(e),
     };
     match serde_json::from_str::<Value>(&text) {
-        Ok(Value::Object(m)) => m,
-        _ => {
-            warn_once(format!(
-                "punktfunk: {} is not a JSON object — using env and defaults",
-                path.display()
-            ));
-            Map::new()
-        }
+        Ok(Value::Object(m)) => Ok(m),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a JSON object",
+        )),
     }
+}
+
+/// [`read_file`], with env and defaults standing in for a store that does not read.
+fn load_file(path: &Path) -> Map<String, Value> {
+    read_file(path).unwrap_or_else(|e| {
+        warn_once(format!(
+            "punktfunk: {}: {e} — using env and defaults",
+            path.display()
+        ));
+        Map::new()
+    })
 }
 
 fn build_current() -> Snapshot {
@@ -504,6 +507,10 @@ mod tests {
         std::fs::write(&path, b"[1,2]").unwrap();
         assert!(load_file(&path).is_empty());
         assert!(load_file(&dir.join("absent.json")).is_empty());
+        // A save refuses to replace a store it cannot read, rather than wipe its keys.
+        std::fs::write(&path, b"{\"host_name\": \"x\",}").unwrap();
+        assert!(merge_into(&path, &obj(json!({"max_fps": 60}))).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{\"host_name\": \"x\",}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
