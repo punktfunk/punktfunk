@@ -451,6 +451,16 @@ impl Presenter {
         if let Some(f) = self.retired_hw.take() {
             f.destroy(&self.device);
         }
+        // The ended decoder's pool: cached imports pin its memory, and only a later
+        // hardware frame would retire them.
+        #[cfg(target_os = "linux")]
+        if let Some(hw) = self.hw.as_mut() {
+            hw.imports.destroy_all(&self.device);
+        }
+        #[cfg(windows)]
+        if let Some(hw) = self.hw_win.as_mut() {
+            hw.imports.destroy_all(&self.device);
+        }
         self.direct_last = None;
         if let Some(v) = self.video.take() {
             v.destroy(&self.device);
