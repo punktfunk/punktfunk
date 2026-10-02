@@ -2,7 +2,7 @@
 //! ~1 Hz decode-stats drain for the HUD.
 
 use jni::errors::LogErrorAndDefault;
-use jni::objects::{JIntArray, JObject, JString};
+use jni::objects::{JFloatArray, JIntArray, JObject, JString};
 use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::EnvUnowned;
 
@@ -422,8 +422,75 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsL
                 role: Role::Warn,
             });
         }
+        h.stats.keep_sample(sample_of(&s, judder));
         let lines = hud::format(&s, StatsVerbosity::from_index(tier.max(0) as u32), advanced);
         env.new_string(hud::encode_lines(&lines))
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// The window as the companion panel's graphs read it, by the index `NativeBridge.STAT_*` names.
+/// Rates are per second of the window; a `-1` is a figure this platform does not have.
+fn sample_of(s: &punktfunk_core::hud::StatsSnapshot, judder: u32) -> Vec<f32> {
+    let secs = s.window_ms.max(1) as f32 / 1000.0;
+    let per_sec = |n: u32| n as f32 / secs;
+    let ms = |us: u32| us as f32 / 1000.0;
+    let opt = |v: Option<u32>| v.map_or(-1.0, per_sec);
+    // The headline is capture → displayed; capture → decoded stands in until something reaches glass.
+    let e2e = if s.e2e.n > 0 { &s.e2e } else { &s.e2e_decoded };
+    vec![
+        s.window_ms as f32,
+        per_sec(s.received),
+        opt(s.decoded),
+        opt(s.presented),
+        s.bytes as f32 * 8.0 / secs / 1e6,
+        s.target_kbps as f32 / 1000.0,
+        ms(e2e.p50_us),
+        ms(e2e.p95_us),
+        if s.shave_os_floor {
+            ms(s.os_floor.p50_us)
+        } else {
+            0.0
+        },
+        ms(s.host.p50_us),
+        ms(s.net.p50_us),
+        ms(s.decode.p50_us),
+        ms(s.display.p50_us),
+        s.lost as f32,
+        s.skipped.map_or(-1.0, |n| n as f32),
+        s.fec as f32,
+        s.rtt_us.map_or(-1.0, ms),
+        s.audio_buffer_ms as f32,
+        s.av_offset_ms as f32,
+        judder as f32,
+        s.refresh_hz as f32,
+        s.width as f32,
+        s.height as f32,
+        s.rfis_last_min as f32,
+        e2e.n as f32,
+    ]
+}
+
+/// `NativeBridge.nativeVideoStatsSample(handle): FloatArray?` — the last window
+/// [`Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsLines`] formatted, as numbers, or
+/// `null` before the first. Reads a copy; never closes a window.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeVideoStatsSample<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    handle: jlong,
+) -> JFloatArray<'local> {
+    env.with_env(|env| -> jni::errors::Result<JFloatArray<'local>> {
+        let sample = SESSIONS
+            .get(handle)
+            .map(|h| h.stats.sample())
+            .unwrap_or_default();
+        if sample.is_empty() {
+            return Ok(JFloatArray::default());
+        }
+        let arr = env.new_float_array(sample.len())?;
+        arr.set_region(env, 0, &sample)?;
+        Ok(arr)
     })
     .resolve::<LogErrorAndDefault>()
 }

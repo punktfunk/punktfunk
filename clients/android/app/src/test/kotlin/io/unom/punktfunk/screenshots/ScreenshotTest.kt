@@ -122,8 +122,14 @@ class ScreenshotTest {
         CompanionScene(io.unom.punktfunk.CompanionPage.ACTIONS)
     }
 
+    @Test
+    @Config(sdk = [36], qualifiers = "w472dp-h411dp-xxhdpi")
+    fun companionStatsText() = shootRoot("companion-stats-text", statusBar = false) {
+        CompanionScene(io.unom.punktfunk.CompanionPage.STATS, io.unom.punktfunk.StatsView.TEXT)
+    }
+
     // The same panel at the Retroid Dual Screen add-on's size (1920×1080 at about 400 dpi): the
-    // wide class, where the stats lay out in two columns.
+    // wide class, where the charts sit side by side and the text lines in two columns.
     @Test
     @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
     fun companionStatsWide() = shootRoot("companion-stats", statusBar = false, device = "addon") {

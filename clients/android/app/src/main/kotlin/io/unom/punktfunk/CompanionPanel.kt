@@ -115,13 +115,21 @@ private val TWO_SCREEN_TAGS = setOf(
     "nds", "nintendods", "3ds", "n3ds", "nintendo3ds", "new3ds", "newnintendo3ds", "wiiu", "nintendowiiu",
 )
 
+/** How the stats page shows the window: the graphs (the default), or the HUD's lines. */
+internal enum class StatsView(val label: String) {
+    GRAPHS("Graphs"),
+    TEXT("Text"),
+}
+
 /**
- * The page the player last picked, and each pair's layout, kept across streams. The controller
- * page is never kept: showing it connects a pad, and a stream must not connect one on its own.
+ * The page and stats view the player last picked, and each pair's layout, kept across streams.
+ * The controller page is never kept: showing it connects a pad, and a stream must not connect
+ * one on its own.
  */
 internal object CompanionMemory {
     private const val PREFS = "punktfunk_companion"
     private const val PAGE = "page"
+    private const val STATS_VIEW = "stats_view"
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -133,6 +141,15 @@ internal object CompanionMemory {
 
     fun keep(context: Context, page: CompanionPage) {
         if (page != CompanionPage.PAD) prefs(context).edit().putString(PAGE, page.name).apply()
+    }
+
+    fun statsView(context: Context): StatsView {
+        val name = prefs(context).getString(STATS_VIEW, null)
+        return StatsView.entries.firstOrNull { it.name == name } ?: StatsView.GRAPHS
+    }
+
+    fun keepStatsView(context: Context, view: StatsView) {
+        prefs(context).edit().putString(STATS_VIEW, view.name).apply()
     }
 
     /** The layout the pair [screen] names last had. A swap kept before layouts existed is the picture below. */
@@ -171,9 +188,10 @@ private val PAGE_PADDING = PaddingValues(start = 4.dp, end = 16.dp)
 
 /**
  * The panel. [page] is one of [pages]; the controller's rail item connects the virtual pad when
- * none is up, since picking it is the ask. [keys] takes the keyboard page's edges, [trackpad] is
- * the gesture handler its page runs, [pad] the virtual controller at its page's size. Black, not
- * the theme's surface: the panel is an OLED under a game.
+ * none is up, since picking it is the ask. [history] is the stats window the graphs draw and
+ * [stats] its lines; [statsView] picks between them. [keys] takes the keyboard page's edges,
+ * [trackpad] is the gesture handler its page runs, [pad] the virtual controller at its page's
+ * size. Black, not the theme's surface: the panel is an OLED under a game.
  */
 @Composable
 internal fun CompanionPanel(
@@ -181,7 +199,10 @@ internal fun CompanionPanel(
     page: CompanionPage,
     onPage: (CompanionPage) -> Unit,
     header: PanelHeader,
+    history: StatsHistory,
     stats: List<HudLine>,
+    statsView: StatsView,
+    onStatsView: (StatsView) -> Unit,
     tier: StatsVerbosity,
     onTier: (StatsVerbosity) -> Unit,
     cfg: OverlayConfig,
@@ -212,7 +233,7 @@ internal fun CompanionPanel(
             Header(header)
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 when (page) {
-                    CompanionPage.STATS -> StatsPage(stats, tier, onTier)
+                    CompanionPage.STATS -> StatsPage(history, stats, statsView, onStatsView, tier, onTier)
                     CompanionPage.ACTIONS -> ActionsPage(cfg, actions, haptics)
                     CompanionPage.KEYBOARD -> CompanionKeyboard(keys, haptics)
                     CompanionPage.TRACKPAD -> TrackpadPage(trackpad)
@@ -239,24 +260,62 @@ private fun Header(h: PanelHeader) {
     }
 }
 
-/** The HUD's lines at arm's length: the tier to pick on top, larger type below, two columns when wide. Never Off here. */
+/**
+ * The window two ways: the graphs, or the HUD's lines at arm's length with the tier to pick —
+ * two columns when wide. Never Off here.
+ */
 @Composable
-private fun StatsPage(lines: List<HudLine>, tier: StatsVerbosity, onTier: (StatsVerbosity) -> Unit) {
+private fun StatsPage(
+    history: StatsHistory,
+    lines: List<HudLine>,
+    view: StatsView,
+    onView: (StatsView) -> Unit,
+    tier: StatsVerbosity,
+    onTier: (StatsVerbosity) -> Unit,
+) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val columns = if (maxWidth >= WIDE && lines.size > 3) 2 else 1
+        val wide = maxWidth >= WIDE
+        val columns = if (wide && lines.size > 3) 2 else 1
         Column(Modifier.fillMaxSize().padding(PAGE_PADDING)) {
-            val tiers = listOf(StatsVerbosity.COMPACT, StatsVerbosity.NORMAL, StatsVerbosity.DETAILED)
-            SingleChoiceSegmentedButtonRow {
-                tiers.forEachIndexed { i, t ->
-                    SegmentedButton(
-                        selected = t == tier,
-                        onClick = { onTier(t) },
-                        shape = SegmentedButtonDefaults.itemShape(index = i, count = tiers.size),
-                    ) { Text(t.label) }
+            val views: @Composable () -> Unit = {
+                SingleChoiceSegmentedButtonRow {
+                    StatsView.entries.forEachIndexed { i, v ->
+                        SegmentedButton(
+                            selected = v == view,
+                            onClick = { onView(v) },
+                            shape = SegmentedButtonDefaults.itemShape(index = i, count = StatsView.entries.size),
+                        ) { Text(v.label, maxLines = 1) }
+                    }
+                }
+            }
+            val tiers: @Composable () -> Unit = {
+                val all = listOf(StatsVerbosity.COMPACT, StatsVerbosity.NORMAL, StatsVerbosity.DETAILED)
+                SingleChoiceSegmentedButtonRow {
+                    all.forEachIndexed { i, t ->
+                        SegmentedButton(
+                            selected = t == tier,
+                            onClick = { onTier(t) },
+                            shape = SegmentedButtonDefaults.itemShape(index = i, count = all.size),
+                        ) { Text(t.label, maxLines = 1) }
+                    }
+                }
+            }
+            // The tier only matters to the text; beside the view switch where there is width, under it on a Thor.
+            if (wide) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    views()
+                    if (view == StatsView.TEXT) tiers()
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    views()
+                    if (view == StatsView.TEXT) tiers()
                 }
             }
             Spacer(Modifier.height(12.dp))
-            if (lines.isEmpty()) {
+            if (view == StatsView.GRAPHS) {
+                StatsGraphs(history, wide, Modifier.padding(bottom = 12.dp))
+            } else if (lines.isEmpty()) {
                 Text(
                     "The numbers arrive within a second.",
                     style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,

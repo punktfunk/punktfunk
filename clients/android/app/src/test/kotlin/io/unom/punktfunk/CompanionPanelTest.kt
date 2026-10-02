@@ -2,6 +2,7 @@ package io.unom.punktfunk
 
 import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -69,17 +70,45 @@ class CompanionPanelTest {
     private val fired = mutableListOf<String>()
     private val keys = mutableListOf<Pair<Int, Boolean>>()
 
-    private fun show(page: CompanionPage, onPage: (CompanionPage) -> Unit = {}) {
+    private fun show(
+        page: CompanionPage,
+        statsView: StatsView = StatsView.TEXT,
+        onStatsView: (StatsView) -> Unit = {},
+        onPage: (CompanionPage) -> Unit = {},
+    ) {
         compose.setContent {
             CompanionPanel(
                 pages = CompanionPage.entries, page = page, onPage = onPage,
                 header = PanelHeader("Living Room PC", "1920×1080 · 60 Hz"),
-                stats = emptyList(), tier = StatsVerbosity.NORMAL, onTier = {},
+                history = StatsHistory.demo(), stats = emptyList(),
+                statsView = statsView, onStatsView = onStatsView,
+                tier = StatsVerbosity.NORMAL, onTier = {},
                 cfg = OverlayConfig.platformDefault(), actions = fakeRingActions(fired),
                 haptics = ConsoleHaptics(null), keys = { vk, down -> keys += vk to down },
                 trackpad = {}, pad = {},
             )
         }
+    }
+
+    @Test
+    fun theGraphsShowTheFiguresAndNoTier() {
+        var picked: StatsView? = null
+        show(CompanionPage.STATS, statsView = StatsView.GRAPHS, onStatsView = { picked = it })
+        // The tile and the chart both say it; the legend names the two lines.
+        compose.onAllNodesWithText("Frame rate").assertCountEquals(2)
+        compose.onNodeWithText("received").assertExists()
+        compose.onNodeWithText("Detailed").assertDoesNotExist()
+        compose.onNodeWithText("Text").performClick()
+        assertEquals(StatsView.TEXT, picked)
+    }
+
+    @Test
+    fun theTextViewBringsTheTierAndTheViewIsRemembered() {
+        show(CompanionPage.STATS, statsView = StatsView.TEXT)
+        compose.onNodeWithText("Detailed").assertExists()
+        assertEquals(StatsView.GRAPHS, CompanionMemory.statsView(compose.activity))
+        CompanionMemory.keepStatsView(compose.activity, StatsView.TEXT)
+        assertEquals(StatsView.TEXT, CompanionMemory.statsView(compose.activity))
     }
 
     @Test

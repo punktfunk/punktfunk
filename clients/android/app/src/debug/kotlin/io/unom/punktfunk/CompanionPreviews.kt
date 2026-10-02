@@ -49,13 +49,17 @@ private val previewStats = listOf(
 
 @Composable
 private fun PreviewPanel(page: CompanionPage, onPage: (CompanionPage) -> Unit = {}) {
+    var view by remember { mutableStateOf(StatsView.GRAPHS) }
     MaterialTheme(colorScheme = BrandDark, typography = PunktfunkTypography) {
         CompanionPanel(
             pages = CompanionPage.entries,
             page = page,
             onPage = onPage,
             header = PanelHeader("Living Room PC · Starfall Vale", "1920×1080 · 120 Hz"),
+            history = remember { StatsHistory.demo() },
             stats = previewStats,
+            statsView = view,
+            onStatsView = { view = it },
             tier = StatsVerbosity.NORMAL,
             onTier = {},
             cfg = OverlayConfig.platformDefault(),

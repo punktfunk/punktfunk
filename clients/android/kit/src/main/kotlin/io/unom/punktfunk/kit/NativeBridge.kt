@@ -382,6 +382,42 @@ object NativeBridge {
     external fun nativeSetVideoStatsEnabled(handle: Long, enabled: Boolean)
 
     /**
+     * The last window [nativeVideoStatsLines] formatted, as numbers indexed by the `STAT_*`
+     * constants, or `null` before the first. A copy; it never closes a window, so the graphs and
+     * the lines read the same second. `-1` is a figure this platform does not have.
+     */
+    external fun nativeVideoStatsSample(handle: Long): FloatArray?
+
+    const val STAT_WINDOW_MS = 0
+    const val STAT_RECEIVED_FPS = 1
+    const val STAT_DECODED_FPS = 2
+    const val STAT_PRESENTED_FPS = 3
+    const val STAT_MBPS = 4
+    const val STAT_TARGET_MBPS = 5
+    const val STAT_E2E_P50_MS = 6
+    const val STAT_E2E_P95_MS = 7
+    /** The OS present pipeline's share, already inside the end-to-end figures. */
+    const val STAT_OS_FLOOR_MS = 8
+    const val STAT_HOST_MS = 9
+    const val STAT_NET_MS = 10
+    const val STAT_DECODE_MS = 11
+    const val STAT_DISPLAY_MS = 12
+    const val STAT_LOST = 13
+    const val STAT_SKIPPED = 14
+    const val STAT_FEC = 15
+    const val STAT_RTT_MS = 16
+    const val STAT_AUDIO_BUFFER_MS = 17
+    const val STAT_AV_OFFSET_MS = 18
+    const val STAT_JUDDER_PERMILLE = 19
+    const val STAT_REFRESH_HZ = 20
+    const val STAT_WIDTH = 21
+    const val STAT_HEIGHT = 22
+    const val STAT_RFIS_LAST_MIN = 23
+    /** Frames behind the end-to-end figures; 0 = nothing displayed this window. */
+    const val STAT_E2E_SAMPLES = 24
+    const val STAT_COUNT = 25
+
+    /**
      * Start host→client audio: Opus decode → jitter ring → AAudio, all in Rust.
      * [lowLatencyMode] (the experimental toggle) additionally tags the stream usage=Game for the
      * HAL's game-audio routing. No-op if already started. Best-effort — a failure leaves video

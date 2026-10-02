@@ -16,6 +16,9 @@ pub struct VideoStats {
     /// compositor coalesced onto one vsync. Gauges; the presenter owns the window.
     judder_permille: AtomicU32,
     coalesced: AtomicU64,
+    /// The last window as numbers (`nativeVideoStatsSample`), kept beside the lines each
+    /// `nativeVideoStatsLines` call formats, so the two views read one window. Empty until then.
+    sample: Mutex<Vec<f32>>,
 }
 
 /// A realtime stamp as the core takes it. A stamp that never happened reads 0.
@@ -31,7 +34,17 @@ impl VideoStats {
             decoder: Mutex::new(None),
             judder_permille: AtomicU32::new(0),
             coalesced: AtomicU64::new(0),
+            sample: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn keep_sample(&self, sample: Vec<f32>) {
+        *crate::session::lock_recover(&self.sample) = sample;
+    }
+
+    /// The last window's numbers; empty before the first formatted window.
+    pub fn sample(&self) -> Vec<f32> {
+        crate::session::lock_recover(&self.sample).clone()
     }
 
     /// Whether the overlay wants samples. The decode paths skip their clock reads while not.

@@ -289,7 +289,10 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
         else -> ui.statsVerbosity
     }
     val statsOn = hudTier != StatsVerbosity.OFF
-    val statsLines by rememberStatsLines(session, statsOn, hudTier)
+    // The panel's graphs read the same windows as the lines; the view is remembered.
+    val statsHistory = remember(handle) { StatsHistory() }
+    val statsLines by rememberStatsLines(session, statsOn, hudTier, statsHistory)
+    var statsView by remember { mutableStateOf(CompanionMemory.statsView(context)) }
 
     // Host-gone watchdog and the live access level.
     SessionWatchEffect(handle, initialAccess, ui, peripherals, onSessionEnded)
@@ -542,7 +545,10 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
                 detail = requestedMode.takeIf { it.size >= 3 && it[0] > 0 }
                     ?.let { "${it[0]}×${it[1]} · ${it[2]} Hz" }.orEmpty(),
             ),
+            history = statsHistory,
             stats = statsLines,
+            statsView = statsView,
+            onStatsView = { statsView = it; CompanionMemory.keepStatsView(context, it) },
             tier = hudTier,
             onTier = { ui.statsVerbosity = it },
             cfg = overlayCfg,
