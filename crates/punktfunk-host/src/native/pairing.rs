@@ -89,14 +89,20 @@ where
     let proof = PairProof::decode(&proof).map_err(|e| anyhow!("PairProof decode: {e:?}"))?;
 
     // Wrong PIN or split certs: different SPAKE2 key; MAC mismatch. No offline search.
-    let ok = pake::verify(&confirms.client, &proof.confirm);
-
-    if ok {
-        if let Err(e) = np.add_with_access(&req.name, &hex::encode(client_fp), access) {
-            tracing::error!(error = %format!("{e:#}"), "paired clients not saved");
-        }
-        tracing::info!(name = %name, "pairing complete — client trusted");
-    } else {
+    let verified = pake::verify(&confirms.client, &proof.confirm);
+    // A pin the store did not keep is no pairing: the client would knock as unpaired next time.
+    let ok = verified
+        && match np.add_with_access(&req.name, &hex::encode(client_fp), access) {
+            Ok(()) => {
+                tracing::info!(name = %name, "pairing complete — client trusted");
+                true
+            }
+            Err(e) => {
+                tracing::error!(error = %format!("{e:#}"), "paired clients not saved");
+                false
+            }
+        };
+    if !verified {
         tracing::warn!(name = %name, "pairing rejected (wrong PIN) — fingerprint not stored");
     }
     // Same flow-control trap as the challenge write.
@@ -112,7 +118,8 @@ where
     // peer must not occupy the sequential host.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), conn.closed()).await;
     conn.close(0, b"pairing done");
-    anyhow::ensure!(ok, "pairing rejected (wrong PIN)");
+    anyhow::ensure!(verified, "pairing rejected (wrong PIN)");
+    anyhow::ensure!(ok, "pairing not saved");
     Ok(())
 }
 
