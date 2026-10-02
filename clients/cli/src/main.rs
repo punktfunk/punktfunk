@@ -63,6 +63,7 @@ punktfunk — the Punktfunk client, headless
   punktfunk open <punktfunk://…> [--yes]
   punktfunk reachable <host-ref>
   punktfunk speed-test <host-ref>
+  punktfunk network-check <host-ref> [--json]
   punktfunk presets list [--json]
   punktfunk reset
 
