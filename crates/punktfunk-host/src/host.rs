@@ -65,6 +65,9 @@ pub struct AppState {
     /// `/resume` waits on this so the old capturer-pool and lease teardown finish before
     /// the successor starts.
     pub media_exited: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Bumped as each media thread is started; less [`Self::media_exited`], the threads still
+    /// alive, which the flags cannot say once `end_session` has lowered them.
+    pub media_started: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Client IDR / reference-frame invalidation request. Video thread forces a keyframe and clears it.
     pub force_idr: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Client 0x0301 lost-frame range. Video thread drains it into `Encoder::invalidate_ref_frames`,
@@ -110,6 +113,7 @@ impl AppState {
             loss_stats: std::sync::Arc::new(crate::gamestream::GsLossStats::default()),
             counters: Arc::new(crate::session_status::SessionCounters::default()),
             media_exited: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            media_started: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             audio_cap: std::sync::Arc::new(std::sync::Mutex::new(None)),
             stats,
             access: std::sync::OnceLock::new(),
