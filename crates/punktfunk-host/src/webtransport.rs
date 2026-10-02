@@ -19,6 +19,7 @@
 //! certificate back to the host fingerprint it pinned.
 
 mod datagrams;
+pub(crate) mod mgmt;
 mod session;
 
 pub(crate) use datagrams::WebTransportPlane;
@@ -290,8 +291,16 @@ async fn accept_loop(
 /// open can reach the plane — the browser will not stop it. An empty allowlist means "anything",
 /// which is what a host with no configured origins has to mean until the console can offer the
 /// choice; the log line below is what tells an operator which value to set.
+///
+/// A session with no `Origin` passes whatever the list says. A browser stamps the header on
+/// every page's dial and no page can strip it, so the list still stops every hostile page; what
+/// omits it is not a page — a packaged TV app, a native tool — and a client like that could
+/// send any origin it chose, so refusing it keeps out nobody. Pairing is what admits a device.
 fn origin_allowed(origin: Option<&str>, allowed: &[String]) -> bool {
-    allowed.is_empty() || origin.is_some_and(|o| allowed.iter().any(|a| a == o))
+    match origin {
+        None => true,
+        Some(o) => allowed.is_empty() || allowed.iter().any(|a| a == o),
+    }
 }
 
 /// May this plane bind at all?
@@ -347,6 +356,11 @@ async fn session(
     // streams on every other path.
     if path == "/echo" {
         return echo(connection).await;
+    }
+    // The management API for a page that cannot `fetch` the host: no streaming slot, no
+    // handshake clock, its own caps (`mgmt`).
+    if path == "/mgmt" {
+        return mgmt::serve(connection, serving).await;
     }
 
     let peer = connection.remote_address();
@@ -465,8 +479,9 @@ mod tests {
         let allowed = vec!["https://host.local:47990".to_string()];
         assert!(origin_allowed(Some("https://host.local:47990"), &allowed));
         assert!(!origin_allowed(Some("https://evil.example"), &allowed));
-        // A peer that sends no Origin at all must not slip past a configured list.
-        assert!(!origin_allowed(None, &allowed));
+        // No Origin is not a page: a packaged TV app dials without one, and a browser cannot.
+        // The list is a rule for pages, so it does not apply.
+        assert!(origin_allowed(None, &allowed));
         // Exact match only: a prefix or a suffix is a different origin.
         assert!(!origin_allowed(
             Some("https://host.local:47990.evil.example"),

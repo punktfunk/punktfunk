@@ -4408,6 +4408,188 @@ async fn provider_running_report_validation() {
     crate::runstate::forget("playnite");
 }
 
+/// Plain HTTP on the management port answers the plane's route and nothing else, with the
+/// cross-origin headers a page served over `http://` needs to read it.
+#[tokio::test]
+async fn the_plaintext_router_carries_one_route() {
+    let app = super::bootstrap_app();
+    // No plane runs in a test, so the route answers for itself: 404 with its own sentence.
+    let (status, body) = send(&app, get_req("/api/v1/webtransport")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        body["error"].as_str().unwrap().contains("not enabled"),
+        "{body}"
+    );
+    for path in [
+        "/api/v1/health",
+        "/api/v1/local/summary",
+        "/api/v1/openapi.json",
+        "/api/docs",
+    ] {
+        let (status, body) = send(&app, get_req(path)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert!(
+            body["error"].as_str().unwrap().contains("plain HTTP"),
+            "{path}: {body}"
+        );
+    }
+    let mut req = get_req("/api/v1/webtransport");
+    req.headers_mut().insert(
+        axum::http::header::ORIGIN,
+        axum::http::HeaderValue::from_static("http://127.0.0.1:5173"),
+    );
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "http://127.0.0.1:5173",
+        "a page reads the bootstrap cross-origin"
+    );
+}
+
+/// The tunnel's one catastrophic mistake would be a request with no `PeerAddr`: the gate reads
+/// that as loopback, and loopback is admin. Pinned from both sides — the same request straight
+/// into the router, with nothing stamped, IS admin.
+#[tokio::test]
+async fn a_tunnelled_request_is_the_lan_peer_it_came_from() {
+    use crate::webtransport::mgmt::{dispatch, Head};
+    let app = test_app(test_state(), None);
+    let lan: std::net::SocketAddr = "192.168.1.44:52000".parse().unwrap();
+    let plane: std::net::SocketAddr = "0.0.0.0:9778".parse().unwrap();
+    let head = |m: &str, p: &str, h: &[(&str, &str)]| Head {
+        m: m.into(),
+        p: p.into(),
+        h: h.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect(),
+    };
+    let admin = [("authorization", "Bearer test-secret")];
+    let via = |head: Head| {
+        let app = app.clone();
+        async move { dispatch(&app, lan, plane, head, Vec::new()).await.status() }
+    };
+
+    assert_eq!(
+        via(head("GET", "/api/v1/clients", &admin)).await,
+        StatusCode::UNAUTHORIZED,
+        "the admin bearer is loopback-only, and a tunnel is never loopback"
+    );
+    assert_eq!(
+        send(&app, get_req("/api/v1/clients")).await.0,
+        StatusCode::OK,
+        "unstamped, the very same request is admin: that is the hole the stamp closes"
+    );
+    assert_eq!(
+        via(head("GET", "/api/v1/health", &[])).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        via(head("GET", "/api/v1/local/summary", &[])).await,
+        StatusCode::FORBIDDEN,
+        "the position-authenticated lane is refused by the tunnel itself"
+    );
+    assert_eq!(
+        via(head("DELETE", "/api/v1/clients", &admin)).await,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        via(head("GET", "/api/docs", &[])).await,
+        StatusCode::FORBIDDEN,
+        "nothing outside the versioned API"
+    );
+}
+
+/// A device token earned through the tunnel buys the paired-device lane through the tunnel, and
+/// no more — the roster that names every other device stays admin.
+#[tokio::test]
+async fn a_tunnelled_device_token_reads_the_library_and_no_more() {
+    use crate::webtransport::mgmt::{dispatch, Head};
+    use base64::Engine as _;
+    use rcgen::{KeyPair, PublicKeyData as _, SigningKey as _, PKCS_ECDSA_P256_SHA256};
+
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let path = std::env::temp_dir().join(format!("pf-mgmt-tunnel-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let np =
+        Arc::new(crate::native_pairing::NativePairing::load_with(Some(path), None, false).unwrap());
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let spki = key.subject_public_key_info();
+    let fp = hex::encode(crate::webtransport::sha256(&spki));
+    np.add("Samsung TV", &fp).unwrap();
+    let app = test_app_native(test_state(), np);
+    let lan: std::net::SocketAddr = "192.168.5.63:40100".parse().unwrap();
+    let plane: std::net::SocketAddr = "0.0.0.0:9778".parse().unwrap();
+    let call = |m: &str, p: &str, h: Vec<(String, String)>, body: Vec<u8>| {
+        let app = app.clone();
+        let head = Head {
+            m: m.into(),
+            p: p.into(),
+            h,
+        };
+        async move {
+            let res = dispatch(&app, lan, plane, head, body).await;
+            let status = res.status();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            let json = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .unwrap_or(serde_json::Value::Null);
+            (status, json)
+        }
+    };
+
+    let (status, challenge) = call("POST", "/api/v1/auth/device/challenge", vec![], vec![]).await;
+    assert_eq!(status, StatusCode::OK);
+    let nonce = challenge["nonce"].as_str().unwrap().to_string();
+    let raw: Vec<u8> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&nonce[i..i + 2], 16).unwrap())
+        .collect();
+    let mut n = [0u8; 32];
+    n.copy_from_slice(&raw);
+    // `[0x5a; 32]` is the binding `test_app_native` installs as the host identity.
+    let signature = b64.encode(
+        key.sign(&punktfunk_core::quic::auth_signed_message(&[0x5a; 32], &n))
+            .unwrap(),
+    );
+    let body = serde_json::json!({
+        "device_key": b64.encode(&spki),
+        "nonce": nonce,
+        "signature": signature,
+    })
+    .to_string()
+    .into_bytes();
+    let json = vec![("content-type".to_string(), "application/json".to_string())];
+    let (status, grant) = call("POST", "/api/v1/auth/device/token", json, body).await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let bearer = vec![(
+        "authorization".to_string(),
+        format!("Bearer {}", grant["token"].as_str().unwrap()),
+    )];
+
+    let (status, _) = call(
+        "GET",
+        "/api/v1/library/page?limit=50",
+        bearer.clone(),
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the library, on the paired-device lane"
+    );
+    let (status, _) = call("GET", "/api/v1/status", bearer.clone(), vec![]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call("GET", "/api/v1/native/clients", bearer.clone(), vec![]).await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "a device token must not reach the admin lane"
+    );
+    let (status, _) = call("GET", "/api/v1/clients", bearer, vec![]).await;
+    assert_ne!(status, StatusCode::OK);
+}
+
 /// The browser's whole route into the management API: challenge, sign, exchange, then use the
 /// token on the paired-device lane — and be refused everywhere that lane does not reach.
 ///
