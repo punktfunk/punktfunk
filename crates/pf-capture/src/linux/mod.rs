@@ -527,7 +527,9 @@ fn spawn_pipewire(
         planar_refused: signals.health.planar_refused(),
         hdr_cuda_ok: policy.hdr_cuda_ok,
         nv12_env_on: pf_zerocopy::nv12_enabled(),
-        nvenc_raw: policy.nvenc_raw_dmabuf,
+        // A tiled refusal keeps NVENC on the CUDA import, as on the direct path: the raw lane
+        // would be offered the same tiled modifiers again.
+        nvenc_raw: policy.nvenc_raw_dmabuf && !signals.health.passthrough_tiled_refused(),
     });
     let vaapi_dmabuf = plan.vaapi_passthrough;
     let import_policy = plan.import_policy;

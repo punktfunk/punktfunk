@@ -187,13 +187,15 @@ pub(super) fn packed_modifier_offers(
         modifiers = i.supported_modifiers(pf_frame::drm_fourcc(PixelFormat::Bgrx).unwrap());
         modifiers_bgra = i.supported_modifiers(pf_frame::drm_fourcc(PixelFormat::Bgra).unwrap());
     }
-    // PyroWave imports through Vulkan, not libva. Its per-fourcc lists come from the
-    // facade so capture never calls `encode`; gamescope has its separately gated seed.
-    let extend_pyrowave = vaapi_passthrough && policy.pyrowave_session && !producer_is_gamescope;
     // The direct-import lane's tiled offer comes from what the session encoder
     // proved (`ZeroCopyPolicy::encoder_modifiers`), per fourcc. A refused tiled
     // offer or a non-gamescope producer keeps the importer's list alone.
     let tiled_refused = health.passthrough_tiled_refused();
+    // PyroWave imports through Vulkan, not libva. Its per-fourcc lists come from the
+    // facade so capture never calls `encode`; gamescope has its separately gated seed. A
+    // refused tiled offer leaves LINEAR, or the rebuild would be offered the same tiles.
+    let extend_pyrowave =
+        vaapi_passthrough && policy.pyrowave_session && !producer_is_gamescope && !tiled_refused;
     let seed_encoder_mods =
         vaapi_passthrough && producer_is_gamescope && policy.gamescope_tiled && !tiled_refused;
     for (fourcc, mods) in &policy.encoder_modifiers {
