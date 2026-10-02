@@ -256,10 +256,10 @@ fn arp_install(run: &dyn CommandRunner) -> Option<WinInstall> {
 }
 
 fn arp_install_at(run: &dyn CommandRunner, key: &str) -> Option<WinInstall> {
-    let out = run.probe("reg", &["query", key]).filter(|o| o.ok())?;
+    run.probe("reg", &["query", key]).filter(|o| o.ok())?;
     Some(WinInstall {
-        version: parse_reg_value(&out.stdout, "DisplayVersion"),
-        location: parse_reg_value(&out.stdout, "InstallLocation"),
+        version: run.reg_string(key, "DisplayVersion"),
+        location: run.reg_string(key, "InstallLocation"),
     })
 }
 

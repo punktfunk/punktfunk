@@ -375,12 +375,7 @@ impl WinExecutor<'_> {
         } else {
             r"HKCU\Environment"
         };
-        let current = self
-            .run
-            .probe("reg", &["query", key, "/v", "Path"])
-            .filter(|o| o.ok())
-            .and_then(|o| super::parse_reg_value(&o.stdout, "Path"))
-            .unwrap_or_default();
+        let current = self.run.reg_string(key, "Path").unwrap_or_default();
         let Some(new) = (if add {
             path_with(&current, dir)
         } else {

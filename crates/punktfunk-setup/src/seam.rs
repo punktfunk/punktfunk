@@ -144,6 +144,21 @@ pub trait CommandRunner {
 
     fn which(&self, program: &str) -> bool;
 
+    /// A string value under registry `key`, unexpanded; `None` when absent. This default reads
+    /// `reg query` text, all a fake has. [`SystemRunner`] reads the registry on Windows: `reg`
+    /// prints data in the console code page, which mangles a non-ASCII path.
+    fn reg_string(&self, key: &str, name: &str) -> Option<String> {
+        let parse = |o: Output| crate::platform::windows::parse_reg_value(&o.stdout, name);
+        self.probe("reg", &["query", key, "/v", name])
+            .filter(|o| o.ok())
+            .and_then(parse)
+            .or_else(|| {
+                self.probe("reg", &["query", key])
+                    .filter(|o| o.ok())
+                    .and_then(parse)
+            })
+    }
+
     fn first_line(&self, program: &str, args: &[&str]) -> Option<String> {
         let out = self.probe(program, args)?;
         if !out.ok() {
@@ -234,6 +249,11 @@ impl Default for SystemRunner {
 }
 
 impl CommandRunner for SystemRunner {
+    #[cfg(windows)]
+    fn reg_string(&self, key: &str, name: &str) -> Option<String> {
+        crate::platform::windows::sys::reg_string(key, name)
+    }
+
     fn run_shell(&self, cmd: &str, stdin: Stdin) -> Result<(), RunFailed> {
         match self.sh(cmd, stdin).status() {
             Ok(s) if s.success() => Ok(()),
