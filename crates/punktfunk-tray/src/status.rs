@@ -226,7 +226,8 @@ fn poll_loop(
     // `/login`, not `/`: `/` 302s, and `max_redirects(0)` does not follow it.
     let console_url = format!("https://127.0.0.1:{web_port}/login");
     // Not `agent`: that name shadows the fn and the next call would bind this value.
-    let mgmt_agent = agent(load_pin());
+    let mut pin = load_pin();
+    let mut mgmt_agent = agent(pin);
     // Unpinned: the console is a different server and may present a different cert.
     let console_agent = agent(None);
     let mut last: Option<(TrayStatus, bool)> = None;
@@ -235,6 +236,13 @@ fn poll_loop(
     // One miss is not down: a cold SSR can outrun the 2 s timeout.
     let mut console_misses = 0u32;
     loop {
+        // The host can switch certificates under a running tray: a legacy-cert migration, an
+        // identity reset. A stale pin would fail every fetch until the next login.
+        let fresh = load_pin();
+        if fresh != pin {
+            pin = fresh;
+            mgmt_agent = agent(pin);
+        }
         let svc = probe_service();
         let summary = if svc == ServiceState::Running {
             let s = fetch_summary(&mgmt_agent, &summary_url());
