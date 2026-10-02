@@ -121,26 +121,37 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
                     .suppress_echoes
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| c.checked_sub(1))
                     .is_ok();
+                // Every offer this drops is destroyed: the compositor keeps one alive until then.
                 match id {
                     Some(offer) => {
                         let mimes = state.pending.remove(&offer.id()).unwrap_or_default();
                         if suppressed {
+                            offer.destroy();
                             return;
                         }
                         let wire = super::offer_wire_mimes(&mimes)
                             .into_iter()
                             .map(str::to_string)
                             .collect::<Vec<_>>();
-                        *state.current.lock().unwrap() = Some(CurrentSelection { offer, mimes });
+                        let next = CurrentSelection { offer, mimes };
+                        if let Some(old) = state.current.lock().unwrap().replace(next) {
+                            old.offer.destroy();
+                        }
                         let _ = state.tx.send(ClipEvent::Selection { mimes: wire });
                     }
                     None => {
-                        *state.current.lock().unwrap() = None;
+                        if let Some(old) = state.current.lock().unwrap().take() {
+                            old.offer.destroy();
+                        }
                         if !suppressed {
                             let _ = state.tx.send(ClipEvent::Selection { mimes: Vec::new() });
                         }
                     }
                 }
+            }
+            Event::PrimarySelection { id: Some(offer) } => {
+                state.pending.remove(&offer.id());
+                offer.destroy();
             }
             Event::Finished => {
                 let _ = state.tx.send(ClipEvent::Closed);
