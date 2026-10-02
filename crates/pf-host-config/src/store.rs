@@ -156,15 +156,18 @@ pub(crate) fn knob_in(rows: &[Resolved], name: &str) -> Option<String> {
     let Some(r) = rows.iter().find(|r| r.setting.env == name) else {
         return std::env::var(name).ok();
     };
-    // An env value keeps its own spelling; an alias that selects a value stands for it.
+    // An env value keeps its own spelling; an alias that selects a value stands for it. An enum
+    // row reads canonical: its spellings are the registry's, and every reader takes the options.
     if r.source == Source::Env {
         let origin = r.origin?;
-        return match r.setting.aliases.iter().find(|a| a.name == origin) {
-            Some(registry::Alias { value: Some(v), .. }) => Some(v.to_string()),
-            _ => std::env::var(origin).ok(),
-        };
-    }
-    if r.source == Source::Default || r.value == r.setting.default.to_value() {
+        match r.setting.aliases.iter().find(|a| a.name == origin) {
+            Some(registry::Alias { value: Some(v), .. }) => return Some(v.to_string()),
+            _ if !matches!(r.setting.kind, registry::Kind::Enum(_)) => {
+                return std::env::var(origin).ok()
+            }
+            _ => {}
+        }
+    } else if r.source == Source::Default || r.value == r.setting.default.to_value() {
         return None;
     }
     Some(match &r.value {
@@ -530,6 +533,20 @@ mod tests {
             "at its default the reader decides"
         );
         assert_eq!(knob_in(&rows, "PUNKTFUNK_NOT_A_KNOB"), None);
+    }
+
+    #[test]
+    fn an_env_enum_reads_in_the_spelling_the_console_shows() {
+        let knob = |raw: &str| {
+            let pairs = [("PUNKTFUNK_GAMESTREAM_ENCRYPT", raw)];
+            knob_in(
+                &resolve(&env_of(&pairs), &Map::new(), &[]),
+                "PUNKTFUNK_GAMESTREAM_ENCRYPT",
+            )
+        };
+        assert_eq!(knob("video_only").as_deref(), Some("video"));
+        assert_eq!(knob("Off").as_deref(), Some("0"));
+        assert_eq!(knob("supported").as_deref(), Some("supported"));
     }
 
     #[test]
