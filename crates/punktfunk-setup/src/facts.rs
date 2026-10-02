@@ -253,7 +253,6 @@ pub struct Facts {
     /// an operator's bind alone, as on Windows.
     #[serde(default)]
     pub mgmt_bind: Option<String>,
-    pub scripting_unit_disabled: bool,
     pub ip: Option<String>,
     pub user: String,
 }
@@ -323,8 +322,6 @@ impl Facts {
                 .is_ok_and(|m| m.len() > 0),
             web_bind: env_line(&paths.host_env(), "PUNKTFUNK_UI_BIND"),
             mgmt_bind: env_line(&paths.host_env(), "PUNKTFUNK_MGMT_BIND"),
-            scripting_unit_disabled: unit_files(run, "punktfunk-scripting.service")
-                .contains("disabled"),
             ip: local_ip(run),
             user,
             os,

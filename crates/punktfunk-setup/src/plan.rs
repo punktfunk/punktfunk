@@ -543,8 +543,12 @@ fn start_steps(facts: &Facts, choices: &Choices, console_installed: bool) -> Vec
             ),
         ));
     }
-    // apt/dnf/sysext already start the plugin runner; Arch does not.
-    if facts.scripting_unit_disabled {
+    // apt/dnf/sysext already start the plugin runner; Arch does not. Only on the run that
+    // installs it: a re-run must not turn back on a runner the operator switched off.
+    if console_installed
+        && facts.family == Family::Pacman
+        && facts.missing.iter().any(|m| m == "plugin-runner")
+    {
         units.push("punktfunk-scripting".to_string());
     }
     steps.push(Step {
