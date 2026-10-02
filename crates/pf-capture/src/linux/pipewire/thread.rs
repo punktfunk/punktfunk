@@ -129,6 +129,12 @@ pub(in crate::linux) fn pipewire_thread(
     signals
         .has_importer
         .store(importer.is_some(), Ordering::Relaxed);
+    signals.importer_in_process.store(
+        importer
+            .as_ref()
+            .is_some_and(pf_zerocopy::Importer::in_process),
+        Ordering::Relaxed,
+    );
     *signals.importer.lock().unwrap_or_else(|e| e.into_inner()) = importer;
     let signals_exit = signals.clone();
     let hdr_tiled_raw = (opts.want_hdr || opts.sdr10_native)

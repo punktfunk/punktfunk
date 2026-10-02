@@ -638,13 +638,7 @@ fn try_gpu_hold(ud: &mut UserData, a: &mut Arrival) -> bool {
                     return true;
                 };
                 // An in-process importer's GL context is current on this thread only.
-                let consumer_imports = !ud
-                    .signals
-                    .importer
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .as_ref()
-                    .is_some_and(pf_zerocopy::Importer::in_process);
+                let consumer_imports = !ud.signals.importer_in_process.load(Ordering::Relaxed);
                 if let Some(dup) = consumer_imports.then(|| dup_data_fd(&datas[0])).flatten() {
                     if let Some(hold) = ud.try_defer(a.pw_buf, a.stream) {
                         let frame = CapturedFrame {

@@ -159,6 +159,9 @@ struct CaptureSignals {
     importer: Arc<std::sync::Mutex<Option<pf_zerocopy::Importer>>>,
     /// `importer` is `Some`. Read per frame on the loop thread without the lock.
     has_importer: Arc<AtomicBool>,
+    /// `importer` runs in this process, its GL context current on the loop thread only. Read per
+    /// frame without the lock, which the consumer holds across a whole worker import.
+    importer_in_process: Arc<AtomicBool>,
 }
 
 /// Producer identity plus the consumer policy whose failures must stay independent.
@@ -191,6 +194,7 @@ impl CaptureSignals {
             frame_size: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             importer: Arc::new(std::sync::Mutex::new(None)),
             has_importer: Arc::new(AtomicBool::new(false)),
+            importer_in_process: Arc::new(AtomicBool::new(false)),
         }
     }
 }
