@@ -35,7 +35,12 @@ static RING: LazyLock<Mutex<Ring>> = LazyLock::new(|| {
 /// No trailing newline. Truncates at 2048 bytes so one event cannot evict the whole ring.
 pub fn note(mut line: String) {
     if line.len() > 2048 {
-        line.truncate(2048);
+        // On a char boundary: `truncate` panics inside a multi-byte character.
+        let mut end = 2048;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        line.truncate(end);
         line.push('…');
     }
     let mut r = RING.lock().unwrap_or_else(|e| e.into_inner());
