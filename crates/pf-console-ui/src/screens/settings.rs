@@ -248,7 +248,7 @@ pub(crate) fn own_stats_corner(platform: crate::platform::Platform) -> HudCorner
     use crate::platform::Platform;
     match platform {
         Platform::Desktop | Platform::Android => HudCorner::TopLeft,
-        Platform::Apple | Platform::WebOS | Platform::Web => HudCorner::TopRight,
+        Platform::Apple | Platform::WebOS | Platform::Web | Platform::Tizen => HudCorner::TopRight,
     }
 }
 
@@ -539,7 +539,7 @@ fn family(
 fn has_window(device: &crate::screens::Device) -> bool {
     use crate::platform::Platform;
     match device.platform {
-        Platform::Desktop | Platform::Web => true,
+        Platform::Desktop | Platform::Web | Platform::Tizen => true,
         Platform::Apple => !device.tv,
         Platform::Android | Platform::WebOS => false,
     }
@@ -596,7 +596,8 @@ pub(crate) fn bitrate_ceiling_kbps(platform: crate::platform::Platform) -> u32 {
         crate::platform::Platform::Desktop
         | crate::platform::Platform::Android
         | crate::platform::Platform::Web
-        | crate::platform::Platform::Apple => CUSTOM_MAX_MBPS * 1_000,
+        | crate::platform::Platform::Apple
+        | crate::platform::Platform::Tizen => CUSTOM_MAX_MBPS * 1_000,
     }
 }
 
@@ -626,10 +627,11 @@ const CODECS: [(&str, &str); 5] = [
 ];
 
 /// The codecs this platform decodes. The TV's NDL pipeline takes H.264 and HEVC only:
-/// no AV1 (never presented a picture) and no PyroWave (no Vulkan presentation).
+/// no AV1 (never presented a picture) and no PyroWave (no Vulkan presentation). A Samsung set
+/// is the same pair: its WebCodecs says yes to AV1 without ever having been measured on one.
 fn codecs(platform: crate::platform::Platform) -> &'static [(&'static str, &'static str)] {
     match platform {
-        crate::platform::Platform::WebOS => &CODECS[..3],
+        crate::platform::Platform::WebOS | crate::platform::Platform::Tizen => &CODECS[..3],
         _ => &CODECS,
     }
 }
@@ -1447,7 +1449,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         | RowId::PadForward
         | RowId::SystemButtons
         | RowId::GuideGesture
-        | RowId::Touch => &[Desktop, Android, Apple, Platform::Web],
+        | RowId::Touch => &[Desktop, Android, Apple, Platform::Web, Platform::Tizen],
         // DualSense voice coils and speaker: no Apple or browser client plays them.
         RowId::PadHaptics | RowId::PadSpeaker => &[Desktop, Android, WebOS],
         // Every client ships third-party code. The browser build has no bundle to list.
@@ -1457,7 +1459,7 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::DsCapture => &[Android, WebOS],
         // Apple reads `UIAccessibility.isReduceMotionEnabled` and follows it, so the shell has
         // nothing to ask. The others carry a row because they cannot see the OS switch.
-        RowId::ReduceMotion => &[Desktop, Android, WebOS, Platform::Web],
+        RowId::ReduceMotion => &[Desktop, Android, WebOS, Platform::Web, Platform::Tizen],
         // Which pad is player 1 — a question only a client that can narrow forwarding to one pad
         // has to answer. Android's router, webOS's slot table and the browser's Gamepad API give
         // every controller its own wire slot, so there is nothing to pick.
@@ -1546,7 +1548,7 @@ fn fresh_settings(device: &crate::screens::Device) -> pf_client_core::trust::Set
             s.vsync = false;
             set_extra_bool(&mut s, device_keys::SC2, false);
         }
-        Platform::Desktop | Platform::WebOS | Platform::Web => {}
+        Platform::Desktop | Platform::WebOS | Platform::Web | Platform::Tizen => {}
     }
     s
 }
@@ -2297,7 +2299,11 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
                  Ctrl+Alt+Shift+M switches live while streaming."
             }
             // No live chord to name: none of these hosts binds one.
-            Platform::Android | Platform::WebOS | Platform::Web | Platform::Apple => {
+            Platform::Android
+            | Platform::WebOS
+            | Platform::Web
+            | Platform::Apple
+            | Platform::Tizen => {
                 "How a physical mouse drives the host: Capture locks the pointer (relative, \
                  for games), Desktop leaves it free and sends absolute positions."
             }
@@ -2354,7 +2360,11 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
                 "How much the overlay shows: Compact (one line) → Normal → Detailed. \
                  Ctrl+Alt+Shift+S cycles it live while streaming."
             }
-            Platform::Android | Platform::WebOS | Platform::Web | Platform::Apple => {
+            Platform::Android
+            | Platform::WebOS
+            | Platform::Web
+            | Platform::Apple
+            | Platform::Tizen => {
                 "How much the overlay shows: Compact (one line) → Normal → Detailed."
             }
         },
@@ -2423,9 +2433,13 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
              the plain immediate left click."
         }
         RowId::GamepadUi => match platform {
-            // `row_on` offers this to Android, webOS and Apple; Desktop and Web are here
-            // for exhaustiveness, never to be read.
-            Platform::Desktop | Platform::Android | Platform::Web | Platform::Apple => {
+            // `row_on` offers this to Android, webOS and Apple; Desktop, Web and Tizen are
+            // here for exhaustiveness, never to be read.
+            Platform::Desktop
+            | Platform::Android
+            | Platform::Web
+            | Platform::Apple
+            | Platform::Tizen => {
                 "Front the app with this console instead of the touch interface. Off returns \
                  to the touch home immediately — switch it back on there."
             }
@@ -2435,7 +2449,11 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             }
         },
         RowId::GamepadUiMode => match platform {
-            Platform::Desktop | Platform::Android | Platform::Web | Platform::Apple => {
+            Platform::Desktop
+            | Platform::Android
+            | Platform::Web
+            | Platform::Apple
+            | Platform::Tizen => {
                 "When this console fronts the app: whenever a controller is attached, or \
                  always — for a device that lives docked to a TV. The switch above turns it \
                  off altogether."

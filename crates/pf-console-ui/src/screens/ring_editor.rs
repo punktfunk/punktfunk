@@ -36,9 +36,9 @@ const RING_W: f64 = 2.0 * RING_ABOVE + 24.0;
 /// Same platform mapping the in-stream ring uses to pick a default blob.
 pub(crate) fn ring_platform(platform: crate::platform::Platform) -> RingPlatform {
     match platform {
-        crate::platform::Platform::Desktop | crate::platform::Platform::Web => {
-            RingPlatform::Desktop
-        }
+        crate::platform::Platform::Desktop
+        | crate::platform::Platform::Web
+        | crate::platform::Platform::Tizen => RingPlatform::Desktop,
         // Glass either way: a phone or iPad's screen, and the Siri Remote's trackpad.
         crate::platform::Platform::Android | crate::platform::Platform::Apple => {
             RingPlatform::Touch
