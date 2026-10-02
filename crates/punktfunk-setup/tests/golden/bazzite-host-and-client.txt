@@ -6,9 +6,9 @@
   Start at boot with nobody logged in: yes  (Bazzite hosts are usually headless)
   Web console reachable from: this local network
 ==> Installing: host web-console plugin-runner client (stable channel)
+  + flatpak install --user -y https://flatpak.unom.io/io.unom.Punktfunk.flatpakref
   + curl -fsSLO https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/bazzite/punktfunk-sysext.sh
   + sudo bash punktfunk-sysext.sh install
-  + flatpak install --user -y https://flatpak.unom.io/io.unom.Punktfunk.flatpakref
 ==> Checking for Sunshine / Apollo / Vibeshine
   ok No conflicting game-streaming host detected.
 ==> Options (each one can be changed later)

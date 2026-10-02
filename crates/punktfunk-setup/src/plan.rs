@@ -291,11 +291,13 @@ fn install_phase(
         // deliver a fix and only an uninstall could. Minus the repo write: having a channel is
         // how we got here, so re-importing the signing key every time buys nothing.
         let repo = backend.write_repo(facts, choices);
-        let steps = backend
-            .install(facts, choices)
-            .into_iter()
-            .filter(|step| !repo.contains(step))
-            .collect();
+        let mut steps = flatpak_client(facts, choices);
+        steps.extend(
+            backend
+                .install(facts, choices)
+                .into_iter()
+                .filter(|step| !repo.contains(step)),
+        );
         plan.push(
             Phase::Install,
             format!(
@@ -311,22 +313,18 @@ fn install_phase(
     } else {
         String::new()
     };
-    let mut steps = vec![];
+    let mut steps = flatpak_client(facts, choices);
     // The family backend also installs a native client in the same transaction, including
     // a client-only run on apt, dnf, and pacman.
     let native_client = choices.components.client && facts.family.has_native_client();
     if choices.components.host || native_client {
         steps.extend(backend.install(facts, choices));
     }
-    // Families with no `punktfunk-client` take the user-scope flatpak instead of skipping.
     if choices.components.client {
         if !what.is_empty() {
             what.push(' ');
         }
         what.push_str("client");
-        if !facts.family.has_native_client() {
-            steps.extend(platform::backend(Family::Flatpak).install(facts, choices));
-        }
     }
     // SteamOS compiles `main` on the device, so naming a package channel here would be a lie.
     let how = if facts.family == Family::Steamos {
@@ -336,6 +334,16 @@ fn install_phase(
     };
     plan.push(Phase::Install, format!("Installing: {what} ({how})"), steps);
     choices.components.host && facts.family.installs_console()
+}
+
+/// The user-scope flatpak for a family with no `punktfunk-client`, unless it is already there.
+/// Planned before the host steps: SteamOS's on-device build is the step that ends the run.
+fn flatpak_client(facts: &Facts, choices: &Choices) -> Vec<Step> {
+    if choices.components.client && !facts.family.has_native_client() && !facts.has_flatpak_client {
+        platform::backend(Family::Flatpak).install(facts, choices)
+    } else {
+        vec![]
+    }
 }
 
 /// Everything from here to the start phase is generic Linux wiring — a group, a wide-open

@@ -814,6 +814,25 @@ fn trap_the_steamos_build_is_announced_before_it_runs() {
     );
 }
 
+/// The on-device build ends the run, so the client's flatpak has to come before it.
+#[test]
+fn trap_steamos_installs_the_client_before_the_build() {
+    let both = Pins {
+        host: true,
+        client: true,
+        ..pins()
+    };
+    let cmds = plan_for(&fresh("steamos", Family::Steamos), &both).commands();
+    let flatpak = cmds.iter().position(|c| c.starts_with("flatpak install"));
+    let build = cmds
+        .iter()
+        .position(|c| c.contains("scripts/steamdeck/install.sh"));
+    assert!(
+        matches!((flatpak, build), (Some(f), Some(b)) if f < b),
+        "{cmds:?}"
+    );
+}
+
 /// The build script takes `--gamestream` and stores it before it starts the host; a setting
 /// written after the script would wait for a restart.
 #[test]
