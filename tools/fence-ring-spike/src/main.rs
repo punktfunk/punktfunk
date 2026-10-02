@@ -777,7 +777,11 @@ mod win {
     fn pace(next: &mut Instant, interval: Duration, chaos: bool) {
         let mut target = *next;
         if chaos {
-            let j = (Instant::now().elapsed().subsec_nanos() % 8_000_000) as u64;
+            // The wall clock's nanos, not an `Instant` read back at once (tens of ns, always).
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos());
+            let j = u64::from(nanos % 8_000_000);
             target += Duration::from_nanos(j);
         }
         let now = Instant::now();
