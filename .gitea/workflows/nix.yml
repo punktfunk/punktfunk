@@ -42,6 +42,10 @@
 #             is its own store path, and a plain main push is not published: users never get it.
 #             This is the expensive tier and why the job timeout is 180 rather than 90.
 #
+#             A canary run first bumps nixpkgs to the newest nixos-unstable and pushes that lock to
+#             main once it built. A system whose nixpkgs follows ours then hits the cache for the
+#             host, client and gamescope too, which the NixOS module builds from the system's pkgs.
+#
 #             Only OUR paths are published — see the step for why that is both correct and the
 #             difference between ~300 MB and several GB per publish.
 #
@@ -279,7 +283,7 @@ jobs:
           # unom-1's SSH host key, `ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST"`. Gated here with
           # the rest: no pinned host key, no publish — never a first-contact-trusts-anything deploy.
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          # Moves the nix-* channel branch after the publish.
+          # Pushes a nixpkgs bump to main and moves the nix-* channel branch after the publish.
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         # Guard BEFORE the build, not before the upload: an unconfigured cache must not cost an
         # hour of rustc first. No-ops cleanly until the secret exists, exactly as flatpak.yml's
@@ -295,22 +299,49 @@ jobs:
           if [ -z "${NIX_CACHE_SIGNING_KEY:-}" ] || [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_KNOWN_HOSTS:-}" ] || [ -z "${REGISTRY_TOKEN:-}" ]; then
             skip "::warning::NIX_CACHE_SIGNING_KEY/DEPLOY_HOST/DEPLOY_KNOWN_HOSTS/REGISTRY_TOKEN not set — skipping the binary cache publish (see packaging/nix/README.md)."
           fi
-          if [ "$EVENT" = schedule ] && [ "$(git ls-remote origin refs/heads/nix-canary | cut -f1)" = "$GITHUB_SHA" ]; then
-            skip "nix-canary is already at $GITHUB_SHA"
+          # Canary carries the newest nixos-unstable. The bump is a local commit until the publish
+          # step pushes it; `[skip ci]` because this run has already built every Nix package on it.
+          if [ "$CHANNEL" = canary ]; then
+            "$NIX" flake update nixpkgs || echo "::warning::nixpkgs did not update; publishing the current lock"
+            if ! git diff --quiet flake.lock; then
+              day="$(node -p 'new Date(JSON.parse(require("fs").readFileSync("flake.lock")).nodes.nixpkgs.locked.lastModified * 1e3).toISOString().slice(0, 10)')"
+              git -c user.name="punktfunk CI" -c user.email=ci@noreply.git.unom.io commit -q flake.lock \
+                -m "chore(nix): bump nixpkgs to nixos-unstable $day" -m "[skip ci]"
+            fi
+          fi
+          SHA="$(git rev-parse HEAD)"
+          CANARY="$(git ls-remote origin refs/heads/nix-canary | cut -f1)"
+          if [ "$EVENT" = schedule ] && [ "$CANARY" = "$SHA" ]; then
+            skip "nix-canary is already at $SHA"
           fi
           echo "go=true" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "publishing $GITHUB_SHA to nix-$CHANNEL"
+          echo "canary=$CANARY" >> "$GITHUB_OUTPUT"
+          echo "publishing $SHA to nix-$CHANNEL"
 
       - name: Build the publishable packages
+        id: build
         if: ${{ steps.cachecfg.outputs.go == 'true' }}
+        env:
+          CANARY: ${{ steps.cachecfg.outputs.canary }}
         # Everything a user can install. punktfunk-gamescope earns its place here more than any
         # other: host.gamescopeHdr DEFAULTS TRUE, so without it in the cache every
         # `services.punktfunk.host.enable = true` still compiles a compositor from source.
         run: |
-          "$NIX" build --print-build-logs \
-            .#punktfunk-host .#punktfunk-client .#punktfunk-tray \
-            .#punktfunk-web .#punktfunk-scripting .#punktfunk-gamescope
+          set -eu
+          build() {
+            "$NIX" build --print-build-logs \
+              .#punktfunk-host .#punktfunk-client .#punktfunk-tray \
+              .#punktfunk-web .#punktfunk-scripting .#punktfunk-gamescope
+          }
+          # A bump that does not build (nixpkgs' gamescope moving past our patches) still publishes
+          # main on the current lock, unless nix-canary already holds it; the last step then fails.
+          if ! build; then
+            if [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || [ "$CANARY" = "$GITHUB_SHA" ]; then exit 1; fi
+            echo "bump_failed=true" >> "$GITHUB_OUTPUT"
+            git reset -q --hard "$GITHUB_SHA"
+            build
+          fi
           # This is now the heaviest job on the fleet — a full workspace build plus gamescope fills
           # the store with tens of GB, and this fleet ran a runner out of disk on 2026-08-06. Record
           # the headroom AFTER the build too, or a future "no space left on device" is a guess.
@@ -412,22 +443,39 @@ jobs:
           [ "$miss" = 404 ] || { echo "::error::cache returns $miss for an absent path; nix needs 404 or every user build fails"; exit 1; }
           echo "published → $CACHE_URL"
 
-          # 6) Point the channel at the commit just published, and only now, so the branch never
+          # 6) A nixpkgs bump lands on main before a channel names it, or the channel would hold a
+          #    commit off main and never fast-forward again. Fast-forward only: if main moved during
+          #    the build the push is refused, and the next run bumps again. The empty extraheader
+          #    drops checkout's own token, so the push authenticates as REGISTRY_TOKEN.
+          SHA="$(git rev-parse HEAD)"
+          if [ "$SHA" != "$GITHUB_SHA" ]; then
+            git -c "http.$GITHUB_SERVER_URL/.extraheader=" push \
+              "https://ci:$REGISTRY_TOKEN@${GITHUB_SERVER_URL#https://}/$GITHUB_REPOSITORY.git" "$SHA:refs/heads/main" \
+              || { echo "::warning::main moved during the build; the nixpkgs bump waits for the next run"; exit 0; }
+          fi
+
+          # 7) Point the channel at the commit just published, and only now, so the branch never
           #    names a commit the cache lacks. No force: Gitea answers a non-fast-forward with 422,
           #    so a run that finishes after a newer one leaves the channel where it is.
           BRANCH="nix-$CHANNEL"
           API="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/branches"
           AUTH="Authorization: token $REGISTRY_TOKEN"
           code="$(curl -sS --retry 3 -o branch.out -w '%{http_code}' -X PUT "$API/$BRANCH" \
-            -H "$AUTH" -H 'Content-Type: application/json' -d "{\"new_commit_id\":\"$GITHUB_SHA\"}")"
+            -H "$AUTH" -H 'Content-Type: application/json' -d "{\"new_commit_id\":\"$SHA\"}")"
           case "$code" in
             204) ;;
             404) curl -fsS --retry 3 -X POST "$API" -H "$AUTH" -H 'Content-Type: application/json' \
-                   -d "{\"new_branch_name\":\"$BRANCH\",\"old_ref_name\":\"$GITHUB_SHA\"}" > /dev/null ;;
-            422) echo "::warning::$BRANCH is already past $GITHUB_SHA; left in place"; exit 0 ;;
+                   -d "{\"new_branch_name\":\"$BRANCH\",\"old_ref_name\":\"$SHA\"}" > /dev/null ;;
+            422) echo "::warning::$BRANCH is already past $SHA; left in place"; exit 0 ;;
             *) echo "::error::moving $BRANCH returned $code: $(cat branch.out)"; exit 1 ;;
           esac
-          echo "$BRANCH → $GITHUB_SHA"
+          echo "$BRANCH → $SHA"
+
+      - name: Fail on a nixpkgs bump that does not build
+        if: ${{ steps.build.outputs.bump_failed == 'true' }}
+        run: |
+          echo "::error::the nixpkgs bump does not build (see the build step); nix-canary was published on the current lock"
+          exit 1
 
       # Opt-in only: the full Rust workspace through crane, which is the hour-long leg.
       # Accept BOTH shapes. A checkbox dispatched from the Gitea UI arrives as the STRING

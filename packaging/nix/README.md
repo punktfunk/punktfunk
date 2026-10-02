@@ -47,15 +47,23 @@ A bare URL follows `main`, which is almost never the published commit.
 The cache serves its own public key at `https://nix.unom.io/punktfunk-cache.pub`, which is the
 source of truth to check any pinned copy against.
 
-**The module builds the host, client and gamescope from your nixpkgs**, so the cache never holds
-them. They dlopen Mesa from `/run/opengl-driver`, which loads only on the glibc it was built for or
-newer; a pinned nixpkgs older than yours leaves AMD and Intel with no EGL, Vulkan or VA-API. The web
-console and runner load no driver and still come from the cache. `packages.…` stay pinned for
-`nix build` and `nix run`.
+**The module builds the host, client and gamescope from your nixpkgs.** They dlopen Mesa from
+`/run/opengl-driver`, which loads only on the glibc it was built for or newer; a pinned nixpkgs
+older than yours leaves AMD and Intel with no EGL, Vulkan or VA-API. The cache holds them only for
+the nixpkgs in our `flake.lock`, so they hit it when your system's nixpkgs follows ours:
 
-**`nixpkgs.follows` turns the rest of the cache off.** Every store path is keyed by the exact inputs
-it was built from, so pointing punktfunk's nixpkgs at yours makes every path miss. It buys one
-shared nixpkgs in the closure instead of two.
+```nix
+inputs.nixpkgs.follows = "punktfunk/nixpkgs";
+```
+
+The canary nightly bumps that nixpkgs to the newest nixos-unstable and pushes the lock to `main` once
+it built; a release carries the lock it was tagged with. Overlays or config that change Mesa,
+PipeWire or another dependency still miss. The web console and runner load no driver and come from
+the cache either way. `packages.…` stay pinned for `nix build` and `nix run`.
+
+**`punktfunk.inputs.nixpkgs.follows` turns the rest of the cache off.** Every store path is keyed by
+the exact inputs it was built from, so pointing punktfunk's nixpkgs at yours makes every path miss.
+It buys one shared nixpkgs in the closure instead of two.
 
 **Why not cachix.** Punktfunk self-hosts every other channel, and a Nix cache is static files behind
 a web server, so it rides the same box and deploy key as the rest. It speaks plain binary-cache
