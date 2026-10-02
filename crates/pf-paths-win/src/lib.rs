@@ -17,9 +17,10 @@ fn other(msg: String) -> std::io::Error {
 }
 
 /// `path` exists and an unprivileged account owns it. The two rename-aside sites that adopt
-/// an Administrators-owned file from a prior install go through this.
+/// an Administrators-owned file from a prior install go through this. An unreadable owner
+/// counts as planted: a planter can deny admins `READ_CONTROL` on their own file.
 pub fn planted_by_non_admin(path: &Path) -> bool {
-    path.exists() && is_admin_owned(path) == Some(false)
+    path.exists() && is_admin_owned(path) != Some(true)
 }
 
 /// Rename a planted file to `<path>.untrusted`, replacing an earlier one. Best-effort by
