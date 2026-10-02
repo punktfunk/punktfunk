@@ -587,7 +587,7 @@ fn menu_sample(pad: &sdl3::gamepad::Gamepad) -> MenuSample {
 /// The Skia console already merges this way (`console/mod.rs`); this is the desktop half.
 fn merge_samples(samples: &[MenuSample]) -> MenuSample {
     let mut out = MenuSample::default();
-    let mut best = -1i32;
+    let mut best = -1i64;
     for s in samples {
         for i in 0..out.buttons.len() {
             out.buttons[i] |= s.buttons[i];
@@ -595,7 +595,8 @@ fn merge_samples(samples: &[MenuSample]) -> MenuSample {
         for i in 0..out.dpad.len() {
             out.dpad[i] |= s.dpad[i];
         }
-        let mag = i32::from(s.lx).pow(2) + i32::from(s.ly).pow(2);
+        // i64: two i16::MIN squares sum past i32::MAX.
+        let mag = i64::from(s.lx).pow(2) + i64::from(s.ly).pow(2);
         if mag > best {
             best = mag;
             out.lx = s.lx;
