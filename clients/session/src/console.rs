@@ -327,9 +327,9 @@ pub fn run(target: Option<&str>) -> u8 {
 /// A console row key → its index in the known-hosts store. The key is the pinned
 /// fingerprint when there is one, else `addr:port` (see the row builder) — which names
 /// the placeholder there, never a record pinned at that address. A pinned CARD's key
-/// carries the preset id past a NUL — the console strips that before it sends a
-/// command, so nothing here has to.
+/// carries the preset id past a NUL, dropped here: a card sends the key it shows.
 fn index_for_key(known: &trust::KnownHosts, key: &str) -> Option<usize> {
+    let key = key.split('\0').next().unwrap_or(key);
     known
         .hosts
         .iter()
@@ -958,7 +958,15 @@ impl ServiceState {
             .map(|i| known.hosts[i].mac.clone())
             .unwrap_or_default();
         if macs.is_empty() {
-            self.console.set_pair(PairPhase::Idle); // no-op; keep state sane
+            // Nothing to send: end the takeover the shell opened for this wake.
+            self.console.set_wake(Some(WakeStatus {
+                key: row.key,
+                name: row.name,
+                seconds: 0,
+                timed_out: true,
+                online: false,
+                then_connect,
+            }));
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
