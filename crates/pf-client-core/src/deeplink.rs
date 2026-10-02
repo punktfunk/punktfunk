@@ -284,10 +284,9 @@ impl DeepLink {
     pub fn for_host(host: &KnownHost, launch: Option<&str>, preset: Option<&str>) -> DeepLink {
         DeepLink {
             route: Route::Connect,
-            host_ref: host
-                .id
-                .clone()
-                .unwrap_or_else(|| punktfunk_core::client::join_host_port(&host.addr, host.port)),
+            host_ref: host.id.clone().unwrap_or_else(|| {
+                punktfunk_core::discovery::join_host_port(&host.addr, host.port)
+            }),
             fp: (!host.fp_hex.is_empty()).then(|| host.fp_hex.clone()),
             host: Some((host.addr.clone(), host.port)),
             launch: launch.map(str::to_string),
