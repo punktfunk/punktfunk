@@ -362,6 +362,14 @@ async fn h_resume(
         let Some(session) = launch.as_mut() else {
             return xml(error_xml(NO_SESSION));
         };
+        // Again under the lock: during the wait another client's launch can have taken the
+        // session, and its keys and address must not become this caller's.
+        if let (Some(owner), Some(caller)) = (session.owner_fp, peer_fp(&peer)) {
+            if owner != caller {
+                tracing::warn!("resume rejected — the session changed hands while it stopped");
+                return xml(error_xml(NOT_OWNER));
+            }
+        }
         if q.contains_key("rikey") {
             match parse_rikey(&q) {
                 Ok((gcm_key, rikeyid)) => {
