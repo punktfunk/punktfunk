@@ -42,6 +42,7 @@ The patches here add the missing half, and nothing else. See
 | `0029-steamcompmgr-take-a-game-out-of-iconic-when-input-re.patch` | When input focus returns from an overlay to the focus window, set its `WM_STATE` back to Normal. A fullscreen game that minimized itself on losing input to the Steam overlay otherwise stays iconic: gamescope fakes the iconic state and clears it only on a focus-window change, Wine keeps the client window at 160x31, and the WSI layer stops bypassing Xwayland | **Yes** — upstream already clears it on a focus-window change |
 | `0030-pipewire-keep-the-planar-capture-s-RGB-intermediate-.patch` | An NV12/P010 capture composites into a pooled RGB texture and converts from there. Allocate that capture pool in device memory; only the screenshot pool is read through a mapping. Upstream made every pooled texture mappable, which is system RAM on a discrete GPU: on an RTX 5070 Ti at 2560×1440 the planar capture moved 5.5 GB/s each way over PCIe and held the GPU at 85 % for a desktop | **Yes** — any discrete-GPU consumer of the NV12 capture pays it |
 | `0031-pipewire-offer-the-10-bit-capture-formats-as-SDR-too.patch` | Offer each 10-bit capture format (xBGR/xRGB 2:10:10:10, P010) a second time with BT.709 primaries and the sRGB-family transfer the SDR composite writes, after the PQ pod. `paint_pipewire` keys the PQ LUT set on the negotiated transfer function instead of the DRM format, and the P010 pass applies a 10-bit BT.709 matrix on the sRGB codes an SDR composite stores. Every YCbCr capture already composites through the 10-bit RGB intermediate, so a 10-bit SDR stream carries the composite's own precision | **Yes** — any consumer that wants 10-bit without PQ |
+| `0032-steamcompmgr-keep-framerate-limit-as-the-floor-under.patch` | A refresh-cycle request for 0 (Steam's "Framerate limit: Off", or the legacy `GAMESCOPE_FPS_LIMIT` atom at 0) falls back to the CLI `--framerate-limit` as a plain cap instead of clearing it. Steam's explicit values still win, and a request that only changes refresh (Steam's "Disable Frame Limiter") stays uncapped | **Yes** — on a headless output the limiter is the focused app's only pace; `0012` let Steam's default state remove it |
 
 ### Why the headless patch matters
 
@@ -144,6 +145,7 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr24` | …and input back from an overlay takes the focused game out of iconic (no new capability) |
 | `+pfhdr25` | …and a planar capture composites through device memory; NVENC hosts offer NV12/P010 from this level |
 | `+pfhdr26` | …and the 10-bit capture formats are offered as BT.709 SDR too; a 10-bit SDR session takes P010 or packed 10-bit from this level instead of widening 8-bit |
+| `+pfhdr27` | …and `--framerate-limit` is the floor a refresh-cycle request for 0 falls back to; Steam's "Off" no longer leaves a headless session unpaced |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is

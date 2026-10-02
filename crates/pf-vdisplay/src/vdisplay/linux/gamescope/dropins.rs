@@ -116,6 +116,7 @@ pub(super) fn write_steamos_dropin(
             .collect::<Vec<_>>()
             .join(" "),
     );
+    tracing::info!(game_cap = %game_cap(game_hz(mode.refresh_hz)), "gamescope: managed session's game cap");
     write_steamos_dropin_body(&body)
 }
 
@@ -231,6 +232,7 @@ pub(super) fn write_session_plus_dropin(
         hdr_args = our_flags(hdr, game_hz(mode.refresh_hz)).join(" "),
         wsi = wsi.unit_lines(hdr),
     );
+    tracing::info!(game_cap = %game_cap(game_hz(mode.refresh_hz)), "gamescope: managed session's game cap");
     std::fs::write(&path, body).with_context(|| format!("write drop-in {}", path.display()))?;
     Ok(true)
 }

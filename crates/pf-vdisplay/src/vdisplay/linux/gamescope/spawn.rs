@@ -111,6 +111,17 @@ fn adaptive_sync_args(game_hz: u32) -> Vec<String> {
     ]
 }
 
+/// The game cap as the log states it, so an unpaced game can be told from a paced one.
+pub(super) fn game_cap(game_hz: u32) -> String {
+    if !adaptive_sync_args(game_hz).is_empty() {
+        format!("{game_hz} fps")
+    } else if !pf_host_config::config().gamescope_vrr {
+        "off (PUNKTFUNK_GAMESCOPE_VRR=0)".to_string()
+    } else {
+        "off (needs punktfunk-gamescope +pfhdr10)".to_string()
+    }
+}
+
 /// gamescope reads only `XKB_DEFAULT_*`, never `localectl`'s xorg.conf.d. Empty when unconfigured
 /// so we do not invent a layout. Headless still needs the stub-keyboard patch or Xwayland stays US.
 fn xkb_env() -> Vec<(&'static str, String)> {
@@ -303,6 +314,7 @@ pub(super) fn spawn(
     tracing::info!(
         w, h, hz, steam_mode, hdr, ?wsi,
         bin = %gamescope_bin(),
+        game_cap = %game_cap(game_hz(hz)),
         splash = splash_exe.is_some(),
         %app,
         held_launch = deferred.as_deref().unwrap_or("-"),
