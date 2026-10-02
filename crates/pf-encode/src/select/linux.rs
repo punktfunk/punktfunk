@@ -302,12 +302,17 @@ const fn native_planar_depth_matches(bit_depth: u8, hdr: bool) -> bool {
 
 /// Whether this session can ingest a producer's own NV12 without a host pass. Both AMD/Intel
 /// lanes can: Vulkan Video imports it as its picture, the native libva session encodes it as
-/// imported. AV1 is Vulkan Video's alone. The NVENC lane's fused convert reads RGB only.
-pub fn linux_native_nv12_ok(codec: Codec, bit_depth: u8, hdr: bool) -> bool {
-    if !linux_zero_copy_is_vaapi() {
+/// imported. AV1 is Vulkan Video's alone there, and neither has a pass to blend a pointer
+/// into, so a `cursor_blend` session captures RGB. NVENC's raw lane copies the two planes into
+/// its own slot. It blends a pointer into NV12 but not P010, so HDR there needs no blend.
+pub fn linux_native_nv12_ok(codec: Codec, bit_depth: u8, hdr: bool, cursor_blend: bool) -> bool {
+    if !native_planar_depth_matches(bit_depth, hdr) {
         return false;
     }
-    if !native_planar_depth_matches(bit_depth, hdr) {
+    if !linux_zero_copy_is_vaapi() {
+        return !(hdr && cursor_blend) && codec != Codec::PyroWave && linux_nvenc_raw_dmabuf_ok();
+    }
+    if cursor_blend {
         return false;
     }
     match codec {

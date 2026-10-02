@@ -17,7 +17,7 @@
 use super::VkBridge;
 use crate::imp::proto::{ConvertOut, ConvertSrc, CursorRect};
 use crate::imp::vkdev;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use ash::vk;
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
@@ -664,6 +664,10 @@ impl VkBridge {
             }
             check_layout(out)?;
             let need = slot_bytes(out);
+            if src.plane1.is_some() {
+                return self.copy_planar(src, slot, out, need);
+            }
+            ensure!(out.mode != 5, "a P010 slot takes only a producer's P010");
             if let Some(c) = cursor {
                 match self.conv.as_ref().expect("state").cursor_dims {
                     None => bail!("cursor rect without an uploaded bitmap"),
@@ -683,26 +687,9 @@ impl VkBridge {
                 self.ensure_cursor_capacity(16)?;
             }
             let qf = self.qf;
+            let (idx, cmd, dset, value) = self.next_pass()?;
             let d = &self.device;
             let st = self.conv.as_ref().expect("state");
-            let idx = st.next;
-            let frame = &st.frames[idx];
-            // Reusing this command buffer waits its own last pass; with `FRAMES` rotating
-            // the host consumed that slot long ago.
-            if frame.ticket > 0 {
-                let sems = [st.timeline];
-                let values = [frame.ticket];
-                st.ts
-                    .wait_semaphores(
-                        &vk::SemaphoreWaitInfo::default()
-                            .semaphores(&sems)
-                            .values(&values),
-                        1_000_000_000,
-                    )
-                    .context("wait convert timeline (reuse)")?;
-            }
-            let (cmd, dset) = (frame.cmd, frame.dset);
-            let value = st.ticket + 1;
             let slot_buf = st
                 .slots
                 .get(&slot)
@@ -812,12 +799,51 @@ impl VkBridge {
                 1,
             );
             d.end_command_buffer(cmd).context("end convert cmd")?;
-            let cmds = [cmd];
+            self.submit_pass(idx, cmd, value)
+        }
+    }
+
+    /// The next rotating pass: its index, command buffer, descriptor set, and the timeline value
+    /// it will signal. Reusing a command buffer waits its own last pass; with `FRAMES` rotating
+    /// the host consumed that slot long ago.
+    unsafe fn next_pass(&mut self) -> Result<(usize, vk::CommandBuffer, vk::DescriptorSet, u64)> {
+        let st = self.conv.as_ref().expect("state");
+        let idx = st.next;
+        let frame = &st.frames[idx];
+        if frame.ticket > 0 {
             let sems = [st.timeline];
-            let values = [value];
-            let mut tsi =
-                vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
-            if let Err(e) = d.queue_submit(
+            let values = [frame.ticket];
+            // SAFETY: the timeline belongs to this bridge's live device; the wait info's arrays
+            // are locals that outlive the call.
+            unsafe {
+                st.ts.wait_semaphores(
+                    &vk::SemaphoreWaitInfo::default()
+                        .semaphores(&sems)
+                        .values(&values),
+                    1_000_000_000,
+                )
+            }
+            .context("wait convert timeline (reuse)")?;
+        }
+        Ok((idx, frame.cmd, frame.dset, st.ticket + 1))
+    }
+
+    /// Submit the recorded `cmd` signalling `value` on the exported timeline, and rotate.
+    unsafe fn submit_pass(
+        &mut self,
+        idx: usize,
+        cmd: vk::CommandBuffer,
+        value: u64,
+    ) -> Result<u64> {
+        let st = self.conv.as_ref().expect("state");
+        let cmds = [cmd];
+        let sems = [st.timeline];
+        let values = [value];
+        let mut tsi = vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
+        // SAFETY: `cmd` was recorded on this bridge's device and is not pending (`next_pass`
+        // waited its last value); every info array is a local that outlives the call.
+        unsafe {
+            if let Err(e) = self.device.queue_submit(
                 self.queue,
                 &[vk::SubmitInfo::default()
                     .command_buffers(&cmds)
@@ -825,24 +851,167 @@ impl VkBridge {
                     .push_next(&mut tsi)],
                 vk::Fence::null(),
             ) {
-                let _ = d.device_wait_idle();
+                let _ = self.device.device_wait_idle();
                 return Err(e).context("submit convert");
             }
-            let st = self.conv.as_mut().expect("state");
-            st.frames[idx].ticket = value;
-            st.ticket = value;
-            st.next = (idx + 1) % FRAMES;
-            Ok(value)
+        }
+        let st = self.conv.as_mut().expect("state");
+        st.frames[idx].ticket = value;
+        st.ticket = value;
+        st.next = (idx + 1) % FRAMES;
+        Ok(value)
+    }
+
+    /// A producer NV12 or P010 needs no conversion: copy its two LINEAR planes into the slot,
+    /// luma at the slot pitch, chroma `plane_rows` below. The host blends any cursor after.
+    unsafe fn copy_planar(
+        &mut self,
+        src: &ConvertSrc,
+        slot: u32,
+        out: &ConvertOut,
+        need: u64,
+    ) -> Result<u64> {
+        if src.modifier != 0 {
+            bail!(
+                "a producer planar frame must be LINEAR to copy, got modifier {:#x}",
+                src.modifier
+            );
+        }
+        let regions = planar_regions(src, out)?;
+        let span = regions
+            .iter()
+            .map(|r| r.src_offset + r.size)
+            .max()
+            .unwrap_or(0);
+        // SAFETY: raw Vulkan on this bridge's own device. `src.fd` is the worker's cached dmabuf
+        // fd, open for this call (`import_src` dups it). The cached import's size is re-checked
+        // against this frame's span, and the slot's against `need`, so every region is in range.
+        unsafe {
+            if !self.src_cache.contains_key(&src.fd) {
+                let size = libc::lseek(src.fd, 0, libc::SEEK_END);
+                anyhow::ensure!(size > 0, "lseek(dmabuf)");
+                self.import_src(src.fd, size as u64)?;
+            }
+            let (src_buffer, src_size) = {
+                let s = &self.src_cache[&src.fd];
+                (s.buffer, s.size)
+            };
+            anyhow::ensure!(src_size >= span, "dmabuf smaller than its planes");
+            let (idx, cmd, _, value) = self.next_pass()?;
+            let qf = self.qf;
+            let st = self.conv.as_ref().expect("state");
+            let slot_buf = st
+                .slots
+                .get(&slot)
+                .ok_or_else(|| anyhow!("slot {slot} not registered"))?;
+            if slot_buf.size < need {
+                bail!(
+                    "slot {slot} holds {} bytes, layout needs {need}",
+                    slot_buf.size
+                );
+            }
+            let d = &self.device;
+            d.begin_command_buffer(
+                cmd,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .context("begin copy cmd")?;
+            // The compositor owns this memory: acquire its writes, as the image path does.
+            let acquire = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .src_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+                .dst_queue_family_index(qf)
+                .buffer(src_buffer)
+                .size(vk::WHOLE_SIZE);
+            d.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[acquire],
+                &[],
+            );
+            d.cmd_copy_buffer(cmd, src_buffer, slot_buf.buffer, &regions);
+            d.end_command_buffer(cmd).context("end copy cmd")?;
+            self.submit_pass(idx, cmd, value)
         }
     }
 }
 
-/// Refuse a layout whose rows `convert_img.comp` would write past: a row pitch shorter than
-/// the row, fewer plane rows than picture rows, or a mode the shader does not know.
+/// The copies that place a producer NV12 or P010 in a slot laid out as `out`: luma rows at the
+/// slot pitch, chroma rows from `pitch * plane_rows`. A plane whose stride already equals the slot
+/// pitch is one region; any other is a region per row. The last row copies only `width` bytes,
+/// so a tightly sized buffer is never read past its end. A frame and slot of different sizes
+/// (a resize in flight) copy their common top-left corner.
+fn planar_regions(src: &ConvertSrc, out: &ConvertOut) -> Result<Vec<vk::BufferCopy>> {
+    let (off1, stride1) = src
+        .plane1
+        .ok_or_else(|| anyhow!("a planar source without its chroma plane"))?;
+    // A chroma row is as wide as a luma row (U and V interleaved); P010 takes two bytes a sample.
+    let (bytes, mode) = match &src.fourcc.to_le_bytes() {
+        b"NV12" => (1, 1),
+        b"P010" => (2, 5),
+        _ => bail!("fourcc {:#010x} is not a planar 4:2:0 layout", src.fourcc),
+    };
+    ensure!(
+        out.mode == mode,
+        "a mode-{mode} source cannot fill a mode-{} slot",
+        out.mode
+    );
+    let pitch = u64::from(out.pitch_w) * 4;
+    let (width, height) = (src.width.min(out.width), src.height.min(out.height));
+    let row = u64::from(width) * bytes;
+    if u64::from(src.stride) < row || u64::from(stride1) < row {
+        bail!(
+            "plane strides {}/{stride1} are short of a {row}-byte row",
+            src.stride
+        );
+    }
+    let mut regions = Vec::new();
+    let mut plane = |src_off: u64, stride: u64, dst_off: u64, rows: u64| {
+        if rows == 0 {
+            return;
+        }
+        if stride == pitch {
+            regions.push(vk::BufferCopy {
+                src_offset: src_off,
+                dst_offset: dst_off,
+                size: stride * (rows - 1) + row,
+            });
+        } else {
+            regions.extend((0..rows).map(|r| vk::BufferCopy {
+                src_offset: src_off + r * stride,
+                dst_offset: dst_off + r * pitch,
+                size: row,
+            }));
+        }
+    };
+    plane(
+        u64::from(src.offset),
+        u64::from(src.stride),
+        0,
+        u64::from(height),
+    );
+    plane(
+        u64::from(off1),
+        u64::from(stride1),
+        pitch * u64::from(out.plane_rows),
+        u64::from(height.div_ceil(2)),
+    );
+    Ok(regions)
+}
+
+/// Refuse a layout whose rows `convert_img.comp` or the plane copy would write past: a row
+/// pitch shorter than the row, fewer plane rows than picture rows, or an unknown mode. Mode 5
+/// is a producer's P010, which only the plane copy writes.
 fn check_layout(out: &ConvertOut) -> Result<()> {
     let row_bytes = match out.mode {
         0 | 3 | 4 => u64::from(out.width) * 4,
         1 | 2 => u64::from(out.width),
+        5 => u64::from(out.width) * 2,
         m => bail!("unknown convert mode {m}"),
     };
     if u64::from(out.pitch_w) * 4 < row_bytes {
@@ -851,7 +1020,7 @@ fn check_layout(out: &ConvertOut) -> Result<()> {
             out.pitch_w
         );
     }
-    if matches!(out.mode, 1 | 2) && out.plane_rows < out.height {
+    if matches!(out.mode, 1 | 2 | 5) && out.plane_rows < out.height {
         bail!(
             "{} plane rows cannot hold a {}-row picture",
             out.plane_rows,
@@ -861,11 +1030,11 @@ fn check_layout(out: &ConvertOut) -> Result<()> {
     Ok(())
 }
 
-/// Bytes the slot must hold for `out`: packed modes one word per pixel per row, NV12 its
-/// luma rows plus half as many chroma rows, YUV444 three planes.
+/// Bytes the slot must hold for `out`: packed modes one word per pixel per row, NV12 and P010
+/// their luma rows plus half as many chroma rows, YUV444 three planes.
 fn slot_bytes(out: &ConvertOut) -> u64 {
     let rows = match out.mode {
-        1 => u64::from(out.plane_rows) + u64::from(out.plane_rows.div_ceil(2)),
+        1 | 5 => u64::from(out.plane_rows) + u64::from(out.plane_rows.div_ceil(2)),
         2 => 3 * u64::from(out.plane_rows),
         _ => u64::from(out.height),
     };
@@ -890,6 +1059,7 @@ mod tests {
         assert_eq!(slot_bytes(&out(1)), 64 * 4 * 75);
         assert_eq!(slot_bytes(&out(2)), 64 * 4 * 150);
         assert_eq!(slot_bytes(&out(3)), 64 * 4 * 50);
+        assert_eq!(slot_bytes(&out(5)), 64 * 4 * 75);
         assert_eq!(
             vk_format(fourcc(b'X', b'R', b'2', b'4')),
             Some(vk::Format::B8G8R8A8_UNORM)
@@ -899,6 +1069,91 @@ mod tests {
             Some(vk::Format::A2B10G10R10_UNORM_PACK32)
         );
         assert_eq!(vk_format(0), None);
+    }
+
+    /// A producer NV12 lands at the slot's layout: one region per plane when the strides match
+    /// the slot pitch, a region per row otherwise, never a byte past the last row.
+    #[test]
+    fn planar_regions_place_both_planes_in_the_slot() {
+        let src = |stride: u32| ConvertSrc {
+            fd: 0,
+            fourcc: fourcc(b'N', b'V', b'1', b'2'),
+            modifier: 0,
+            offset: 64,
+            stride,
+            width: 100,
+            height: 5,
+            plane1: Some((64 + stride * 5, stride)),
+        };
+        let out = ConvertOut {
+            mode: 1,
+            width: 100,
+            height: 5,
+            pitch_w: 32,
+            plane_rows: 6,
+        };
+        // Matching strides: luma 5 rows, chroma 3 rows, each ending at its last row's width.
+        let r = planar_regions(&src(128), &out).unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(
+            (r[0].src_offset, r[0].dst_offset, r[0].size),
+            (64, 0, 128 * 4 + 100)
+        );
+        assert_eq!(
+            (r[1].src_offset, r[1].dst_offset, r[1].size),
+            (64 + 128 * 5, 128 * 6, 128 * 2 + 100)
+        );
+        // A tighter producer stride: one region per row, each at the slot pitch.
+        let r = planar_regions(&src(112), &out).unwrap();
+        assert_eq!(r.len(), 5 + 3);
+        assert_eq!(
+            (r[1].src_offset, r[1].dst_offset, r[1].size),
+            (64 + 112, 128, 100)
+        );
+        assert_eq!(r[5].dst_offset, 128 * 6);
+        assert_eq!(r[7].src_offset, 64 + 112 * 5 + 112 * 2);
+        // A smaller frame copies its own rows, never past its planes.
+        let small = ConvertSrc {
+            width: 50,
+            height: 3,
+            ..src(112)
+        };
+        let r = planar_regions(&small, &out).unwrap();
+        assert_eq!(r.len(), 3 + 2);
+        assert!(r.iter().all(|r| r.size == 50));
+        // P010 copies two bytes a sample, into a mode-5 slot only.
+        let p010 = ConvertSrc {
+            fourcc: fourcc(b'P', b'0', b'1', b'0'),
+            plane1: Some((64 + 256 * 5, 256)),
+            ..src(256)
+        };
+        let wide = ConvertOut {
+            mode: 5,
+            pitch_w: 64,
+            ..out
+        };
+        let r = planar_regions(&p010, &wide).unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].size, 256 * 4 + 200);
+        assert_eq!(r[1].dst_offset, 256 * 6);
+        assert!(
+            planar_regions(&p010, &out).is_err(),
+            "P010 into an NV12 slot"
+        );
+        assert!(
+            planar_regions(&src(128), &wide).is_err(),
+            "NV12 into a P010 slot"
+        );
+        // A stride short of a row, or no chroma plane, is refused.
+        assert!(planar_regions(&src(99), &out).is_err());
+        assert!(planar_regions(
+            &ConvertSrc {
+                plane1: None,
+                ..src(128)
+            },
+            &out
+        )
+        .is_err());
     }
 
     /// Layouts the shader would write past are refused before any GPU work.
@@ -925,7 +1180,12 @@ mod tests {
             check_layout(&out(2, 25, 49)).is_err(),
             "plane rows short of the height"
         );
-        assert!(check_layout(&out(5, 1000, 1000)).is_err(), "unknown mode");
+        assert!(check_layout(&out(5, 50, 50)).is_ok());
+        assert!(
+            check_layout(&out(5, 49, 50)).is_err(),
+            "P010 luma row is 50 words"
+        );
+        assert!(check_layout(&out(6, 1000, 1000)).is_err(), "unknown mode");
     }
 
     /// The BT.709 limited-range bytes `convert_img.comp` writes, in f32 like the shader.
@@ -984,6 +1244,7 @@ mod tests {
             stride: src_img.stride,
             width: W,
             height: H,
+            plane1: None,
         };
         let rect = Some(proto::CursorRect {
             x: cx,

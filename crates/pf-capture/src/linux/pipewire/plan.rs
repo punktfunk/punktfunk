@@ -97,9 +97,9 @@ pub(in crate::linux) struct NegotiationPlan {
 /// 1. HDR never takes the 8-bit EGL de-tile blit. An EGL/CUDA fallback offers LINEAR;
 ///    direct raw lanes may offer proved tiled formats, guarded again per frame.
 /// 2. 4:4:4 never prefers producer NV12 or P010 (must not subsample).
-/// 3. Producer-native planar only on a `native_nv12_session` under active raw passthrough
-///    (the VAAPI session takes RGB; the CUDA importer expects packed RGB): NV12 for SDR,
-///    P010 for HDR.
+/// 3. Producer-native planar only on a `native_nv12_session` under a raw lane (VAAPI's
+///    passthrough or NVENC's): NV12 for SDR, P010 for HDR. The CUDA importer expects packed
+///    RGB, so a tripped raw latch withdraws the planar offer.
 /// 4. Raw passthrough is off once its latch has fired.
 pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPlan {
     // Consumer imports raw dmabufs: VAAPI (libva + GPU CSC) or PyroWave (its Vulkan device).
@@ -115,10 +115,12 @@ pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPla
         && (!i.want_hdr || i.hdr_cuda_ok);
     let vaapi_passthrough =
         i.zerocopy && !i.force_shm && raw_passthrough && !i.raw_dmabuf_import_disabled;
+    let nvenc_raw = build_importer && i.nvenc_raw && !i.force_shm && !i.raw_dmabuf_import_disabled;
+    // NVENC's raw lane copies a producer NV12 or P010 into its slot.
+    let planar_lane = (i.backend_is_vaapi && vaapi_passthrough) || nvenc_raw;
     let native_planar = i.native_nv12_env_on
         && i.native_nv12_session
-        && i.backend_is_vaapi
-        && vaapi_passthrough
+        && planar_lane
         && !i.pyrowave_session
         && !i.want_444;
     let prefer_native_nv12 = native_planar && !i.want_hdr;
@@ -129,7 +131,7 @@ pub(in crate::linux) fn negotiation_plan(i: NegotiationInputs) -> NegotiationPla
             nv12: i.nv12_env_on,
             yuv444: i.want_444,
         },
-        nvenc_raw: build_importer && i.nvenc_raw && !i.force_shm && !i.raw_dmabuf_import_disabled,
+        nvenc_raw,
         vaapi_passthrough,
         prefer_native_nv12,
         prefer_native_p010,
@@ -703,6 +705,60 @@ mod tests {
             .prefer_native_nv12,
             "no passthrough (force_shm) ⇒ no native NV12"
         );
+        // NVENC's raw lane takes a producer NV12 or P010 (copied into its slot), and a tripped
+        // raw latch or a lane-less session withdraws it: the importer reads RGB only.
+        let nvenc_native = NegotiationInputs {
+            nvenc_raw: true,
+            native_nv12_session: true,
+            ..nvenc()
+        };
+        assert!(negotiation_plan(nvenc_native).prefer_native_nv12);
+        let hdr = negotiation_plan(NegotiationInputs {
+            want_hdr: true,
+            ..nvenc_native
+        });
+        assert!(hdr.prefer_native_p010 && !hdr.prefer_native_nv12);
+        for (why, inputs) in [
+            (
+                "HDR raw latch",
+                NegotiationInputs {
+                    want_hdr: true,
+                    raw_dmabuf_import_disabled: true,
+                    ..nvenc_native
+                },
+            ),
+            (
+                "4:4:4",
+                NegotiationInputs {
+                    want_444: true,
+                    ..nvenc_native
+                },
+            ),
+            (
+                "raw latch",
+                NegotiationInputs {
+                    raw_dmabuf_import_disabled: true,
+                    ..nvenc_native
+                },
+            ),
+            (
+                "no raw lane",
+                NegotiationInputs {
+                    nvenc_raw: false,
+                    ..nvenc_native
+                },
+            ),
+            (
+                "SHM",
+                NegotiationInputs {
+                    force_shm: true,
+                    ..nvenc_native
+                },
+            ),
+        ] {
+            let p = negotiation_plan(inputs);
+            assert!(!p.prefer_native_nv12 && !p.prefer_native_p010, "{why}");
+        }
         // A PyroWave session takes the passthrough but its CSC ingests packed RGB only.
         for want_hdr in [false, true] {
             let p = negotiation_plan(NegotiationInputs {

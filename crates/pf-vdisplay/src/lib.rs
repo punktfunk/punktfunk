@@ -687,6 +687,17 @@ pub fn gamescope_tiled_capture(route: Option<&GamescopeRoute>) -> bool {
     )
 }
 
+/// May an NVENC capture take this gamescope's NV12/P010? Same two terms as
+/// [`gamescope_hdr_available`]; `false` keeps packed RGB, which costs NVIDIA less than a
+/// planar capture composited through system RAM.
+pub fn gamescope_planar_capture(route: Option<&GamescopeRoute>) -> bool {
+    gamescope_ours_and(
+        route,
+        #[cfg(target_os = "linux")]
+        gamescope::gamescope_planar_capture_in_vram,
+    )
+}
+
 /// Shared half of the HDR/cursor answers: this host must **spawn** the
 /// session (an attach inherits someone else's flags), then `probe` the binary.
 ///

@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
+Date: Fri, 2 Oct 2026 02:08:43 +0200
+Subject: [PATCH] pipewire: keep the planar capture's RGB intermediate in
+ device memory
+
+An NV12 or P010 capture composites into a pooled RGB texture and converts
+it to the YUV buffer from there. Every pooled texture was created
+mappable, which is HOST_CACHED memory: system RAM on a discrete GPU. The
+composite then wrote each frame across PCIe and the conversion read it
+back. On an RTX 5070 Ti at 2560x1440 that was 5.5 GB/s each way and 85 %
+of the GPU for a desktop, against 50 MB/s and 12 % for the same session
+captured as packed RGB.
+
+Only screenshots read the pool through a mapping. Pass the choice in:
+the screenshot pool stays mappable, the capture pool lives in device
+memory. Stamp pfhdr25.
+---
+ src/meson.build      |  3 ++-
+ src/rendervulkan.cpp | 10 ++++++----
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 52b9914..19a68ac 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -205,7 +205,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr22 — …and a planar capture dmabuf exports its chroma plane where the driver put it
+ #   +pfhdr23 — …and the composited cursor follows a shape change or a hide, and the pointer bound forgets a closed window
+ #   +pfhdr24 — …and input back from an overlay takes the focused game out of iconic
+-version_tag = vcs_tag + '+pfhdr24' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr25 — …and a planar capture composites through device memory, not system RAM
++version_tag = vcs_tag + '+pfhdr25' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+index 5e87eb9..5e3b185 100644
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -3729,7 +3729,7 @@ void vulkan_garbage_collect( void )
+ 	g_device.garbageCollect();
+ }
+ 
+-static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace )
++static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace, bool mappable )
+ {
+ 	for (auto& pTexture : pool)
+ 	{
+@@ -3747,7 +3747,8 @@ static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_
+ 			pTexture = new CVulkanTexture();
+ 
+ 			CVulkanTexture::createFlags textureFlags;
+-			textureFlags.bMappable = true;
++			// A mappable image is HOST_CACHED memory: system RAM on a discrete GPU.
++			textureFlags.bMappable = mappable;
+ 			textureFlags.bTransferDst = true;
+ 			textureFlags.bStorage = true;
+ 			textureFlags.bSampled = true; // required for RGB-to-NV12 shader to sample this texture
+@@ -3776,7 +3777,7 @@ static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_
+ 
+ gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace)
+ {
+-	auto texture = acquire_pooled_texture(g_output.pScreenshotTextures, width, height, exportable, drmFormat, colorspace);
++	auto texture = acquire_pooled_texture(g_output.pScreenshotTextures, width, height, exportable, drmFormat, colorspace, true);
+ 	if (!texture)
+ 		vk_log.errorf("Unable to acquire screenshot texture. Out of textures.");
+ 	return texture;
+@@ -3784,7 +3785,8 @@ gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width,
+ 
+ gamescope::Rc<CVulkanTexture> vulkan_acquire_capture_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace)
+ {
+-	auto texture = acquire_pooled_texture(g_output.pCaptureTextures, width, height, exportable, drmFormat, colorspace);
++	// The planar capture's RGB intermediate: composited and sampled on the GPU, never mapped.
++	auto texture = acquire_pooled_texture(g_output.pCaptureTextures, width, height, exportable, drmFormat, colorspace, false);
+ 	if (!texture)
+ 		vk_log.errorf("Unable to acquire capture texture. Out of textures.");
+ 	return texture;
+-- 
+2.54.0 (Apple Git-157)
+

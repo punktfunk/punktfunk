@@ -351,7 +351,7 @@ fn resolve_offer(
             } else {
                 "NV12"
             },
-            "zero-copy: preferring gamescope's producer-side planar LINEAR DMA-BUF (no host \
+            "zero-copy: offering the producer's own planar LINEAR DMA-BUF first (no host \
              RGB CSC; PUNKTFUNK_PIPEWIRE_NV12=0 restores the packed-RGB negotiation)"
         );
     }

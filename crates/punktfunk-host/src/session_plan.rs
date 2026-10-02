@@ -185,13 +185,15 @@ impl SessionPlan {
             // Windows: IDD-push makes the NV12 out-ring shareable and signals a shared
             // fence for Vulkan import. Linux: facade flips to raw-dmabuf (see above).
             pyrowave: self.codec == crate::encode::Codec::PyroWave,
-            // Native NV12 (gamescope) is Linux Vulkan Video only, resolved from the
-            // plan's codec so capture never reaches into encode. That path has no CSC
-            // to fold the cursor, so any `cursor_blend` session captures RGB instead
-            // (compute-CSC / VkSlotBlend). `cursor_blend` subsumes `gamescope_cursor`.
+            // Native NV12 (gamescope), resolved from the plan's codec so capture never
+            // reaches into encode. `cursor_blend` subsumes `gamescope_cursor`.
             #[cfg(target_os = "linux")]
-            nv12_native: crate::encode::linux_native_nv12_ok(self.codec, self.bit_depth, self.hdr)
-                && !self.cursor_blend,
+            nv12_native: crate::encode::linux_native_nv12_ok(
+                self.codec,
+                self.bit_depth,
+                self.hdr,
+                self.cursor_blend,
+            ),
             #[cfg(not(target_os = "linux"))]
             nv12_native: false,
         }

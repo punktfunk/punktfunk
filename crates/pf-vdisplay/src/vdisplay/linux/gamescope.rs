@@ -43,8 +43,8 @@ mod wsi;
 pub(crate) use discovery::{
     display_presenting, foreign_gamescope_running, game_session_exited,
     gamescope_can_composite_cursor, gamescope_hdr_capable, gamescope_offers_tiled_capture,
-    is_available, steam_appid_from_launch, wait_for_steam_game_exit, xwayland_cursor_targets,
-    SteamGameWatch,
+    gamescope_planar_capture_in_vram, is_available, steam_appid_from_launch,
+    wait_for_steam_game_exit, xwayland_cursor_targets, SteamGameWatch,
 };
 pub(crate) use heads::list_monitors;
 pub(crate) use splash::run as splash_run;
