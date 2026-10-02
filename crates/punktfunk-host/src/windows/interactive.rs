@@ -15,14 +15,15 @@ use std::time::Duration;
 use windows::core::{Owned, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Security::{
-    DuplicateTokenEx, SecurityImpersonation, TokenPrimary, TOKEN_ALL_ACCESS,
+    DuplicateTokenEx, ImpersonateLoggedOnUser, RevertToSelf, SecurityImpersonation, TokenPrimary,
+    TOKEN_ALL_ACCESS,
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::RemoteDesktop::{ProcessIdToSessionId, WTSQueryUserToken};
 use windows::Win32::System::Threading::{
-    CreateProcessAsUserW, GetExitCodeProcess, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-    STARTUPINFOW,
+    CreateProcessAsUserW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT,
+    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTUPINFOW,
 };
 
 /// Resolves one process through an injected WTS session query. A failed query
@@ -86,33 +87,69 @@ pub fn spawn_as_current_session_user(cmdline: &str, workdir: Option<&Path>) -> R
     Ok(pid)
 }
 
+/// [`spawn_as_current_session_user`], waited on for up to `timeout`. The exit code, or `None`
+/// when the process still ran at `timeout` and was ended.
+pub fn run_as_current_session_user(cmdline: &str, timeout: Duration) -> Result<Option<u32>> {
+    let (process, _) = launch(cmdline, None, PROCESS_CREATION_FLAGS(0))?;
+    let code = wait_exit(&process, timeout)?;
+    if code.is_none() {
+        // SAFETY: `process` is a live owned handle with the terminate right its creator holds.
+        let _ = unsafe { TerminateProcess(*process, 1) };
+    }
+    Ok(code)
+}
+
 /// [`spawn_as_current_session_user`] for a console helper of our own: no window on the
 /// user's desktop, and the caller learns the exit code. Errs when the helper is still
 /// running after `timeout`; it keeps running on its own then.
 pub fn run_hidden_as_current_session_user(cmdline: &str, timeout: Duration) -> Result<u32> {
     let (process, _) = launch(cmdline, None, CREATE_NO_WINDOW)?;
+    match wait_exit(&process, timeout)? {
+        Some(code) => Ok(code),
+        None => bail!("helper still running after {timeout:?}"),
+    }
+}
+
+/// Waits up to `timeout` for `process`: its exit code, or `None` while it still runs.
+fn wait_exit(process: &Owned<HANDLE>, timeout: Duration) -> Result<Option<u32>> {
     let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
     // SAFETY: `process` is a live owned handle for both calls and `code` a live out-param.
     let (waited, got, code) = unsafe {
-        let waited = WaitForSingleObject(*process, millis);
+        let waited = WaitForSingleObject(**process, millis);
         let mut code = 0u32;
-        let got = GetExitCodeProcess(*process, &mut code);
+        let got = GetExitCodeProcess(**process, &mut code);
         (waited, got, code)
     };
     if waited != WAIT_OBJECT_0 {
-        bail!("helper still running after {timeout:?}");
+        return Ok(None);
     }
     got.context("GetExitCodeProcess")?;
-    Ok(code)
+    Ok(Some(code))
 }
 
-/// The `CreateProcessAsUserW` core both launchers share. `extra` joins the creation flags.
-/// Returns the child's process handle and pid; its thread handle closes here.
-fn launch(
-    cmdline: &str,
-    workdir: Option<&Path>,
-    extra: PROCESS_CREATION_FLAGS,
-) -> Result<(Owned<HANDLE>, u32)> {
+/// Runs `f` on the session user's `TEMP`, impersonating that user. A file there stays readable
+/// to a process launched as them; SYSTEM's own temp does not. The path comes from the user's
+/// environment, so the file work must not carry this host's rights.
+pub fn in_session_user_temp<R>(f: impl FnOnce(&Path) -> R) -> Result<R> {
+    let primary = session_user_token()?;
+    let temp = user_env_block(&primary)
+        .split(|&u| u == 0)
+        .map(String::from_utf16_lossy)
+        .find_map(|e| {
+            let (k, v) = e.split_once('=')?;
+            k.eq_ignore_ascii_case("TEMP").then(|| PathBuf::from(v))
+        })
+        .context("the session user has no TEMP")?;
+    // SAFETY: `primary` is the live token above; this thread reverts before returning.
+    unsafe { ImpersonateLoggedOnUser(*primary) }.context("ImpersonateLoggedOnUser")?;
+    let out = f(&temp);
+    // SAFETY: ends the impersonation this thread began above.
+    unsafe { RevertToSelf() }.context("RevertToSelf")?;
+    Ok(out)
+}
+
+/// A primary token for the signed-in user of this process's WTS session. Needs SYSTEM.
+fn session_user_token() -> Result<Owned<HANDLE>> {
     let session = current_process_session_id()?;
     let mut user_token = HANDLE::default();
     // SAFETY: `session` is a plain id and `user_token` a live local out-param.
@@ -136,12 +173,15 @@ fn launch(
     }
     .context("DuplicateTokenEx(TokenPrimary)")?;
     // SAFETY: the duplicate succeeded, so `primary` is a second token this frame alone owns.
-    let primary = unsafe { Owned::new(primary) };
+    Ok(unsafe { Owned::new(primary) })
+}
 
+/// `primary`'s environment block with this host's settings overlaid ([`merged_env_block`]).
+fn user_env_block(primary: &Owned<HANDLE>) -> Vec<u16> {
     let mut env_block: *mut core::ffi::c_void = std::ptr::null_mut();
-    // SAFETY: `env_block` is a live local out-param and `primary` the live token above; on success
+    // SAFETY: `env_block` is a live local out-param and `primary` a live token; on success
     // the call stores an owned block pointer, destroyed exactly once below.
-    let _ = unsafe { CreateEnvironmentBlock(&mut env_block, Some(*primary), false) };
+    let _ = unsafe { CreateEnvironmentBlock(&mut env_block, Some(**primary), false) };
     // SAFETY: `env_block` is either still null (the call above failed) or the double-null-terminated
     // UTF-16 block `CreateEnvironmentBlock` just wrote — exactly the two states the helper accepts.
     let merged_env = unsafe { merged_env_block(env_block as *const u16, true) };
@@ -150,6 +190,18 @@ fn launch(
         // read after — `merged_env` owns its own copy of the parsed entries.
         let _ = unsafe { DestroyEnvironmentBlock(env_block) };
     }
+    merged_env
+}
+
+/// The `CreateProcessAsUserW` core both launchers share. `extra` joins the creation flags.
+/// Returns the child's process handle and pid; its thread handle closes here.
+fn launch(
+    cmdline: &str,
+    workdir: Option<&Path>,
+    extra: PROCESS_CREATION_FLAGS,
+) -> Result<(Owned<HANDLE>, u32)> {
+    let primary = session_user_token()?;
+    let merged_env = user_env_block(&primary);
 
     // The target user's interactive desktop is not inherited from the LocalSystem caller.
     let mut desktop: Vec<u16> = "winsta0\\default\0".encode_utf16().collect();
