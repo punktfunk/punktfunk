@@ -239,9 +239,12 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     // player flips between. Only while streaming; showing the pad brings its page forward.
     val density = LocalDensity.current
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
+    // The Second screen setting (off: a phone on a TV) keeps the pair from forming at all; a
+    // half-open fold then still takes the pad alone, as before the panel existed.
+    val secondScreen = initialSettings.secondScreen
     val fold = rememberFoldHinge()?.let { foldSplit(it, rootSize) }
-    val hingeCompanion = fold?.carriesCompanion(rootSize.height) == true
-    val companionDisplay = rememberCompanionDisplay().takeUnless { hingeCompanion }
+    val hingeCompanion = secondScreen && fold?.carriesCompanion(rootSize.height) == true
+    val companionDisplay = rememberCompanionDisplay().takeIf { secondScreen && !hingeCompanion }
     val companionUp = hingeCompanion || companionDisplay != null
     // Spanning the picture needs the ASurfaceControl presenter's second layer: API 29 up, never
     // ChromeOS. ponytail: a static gate; an ASC init failure elsewhere leaves the second window

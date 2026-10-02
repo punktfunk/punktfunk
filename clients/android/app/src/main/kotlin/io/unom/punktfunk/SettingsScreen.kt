@@ -806,11 +806,11 @@ private fun GeneralSettings(s: Settings, update: (Settings) -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: android.content.Context) {
-    val (nw, nh, nhz) = nativeDisplayMode(context)
+    val (nw, nh, nhz) = nativeDisplayMode(context, secondScreen = s.secondScreen)
     // The safe-area row carries its resolved size the same way the native row does. On a display with
     // no cutout this equals the native mode — the row stays, honestly showing that it changes nothing
     // here, rather than silently vanishing on some devices and not others.
-    val (sw, sh, _) = safeDisplayMode(context)
+    val (sw, sh, _) = safeDisplayMode(context, secondScreen = s.secondScreen)
     // "Custom…" picked while the stored size is still a preset — keeps the size fields visible
     // until an edit actually makes it custom (or a preset is re-picked). Custom itself is detected
     // from the stored size, never flagged (see [isCustomResolution]), so nothing new persists.
@@ -961,6 +961,18 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
             caption = "Lowest latency shows each frame the moment it can reach the panel; " +
                 "Smoothness buffers a little to absorb network jitter.",
         ) { v -> update(s.copy(presentPriority = v)) }
+    }
+
+    SettingsGroup("Second screen") {
+        ToggleRow(
+            title = "Second screen",
+            subtitle = "A smaller second screen — a dual-screen handheld's lower panel, a foldable " +
+                "half open — shows the companion panel, or the picture with Screens. Off leaves it " +
+                "to the system: for a phone on a TV.",
+            checked = s.secondScreen,
+            field = "android.second_screen",
+            onCheckedChange = { on -> update(s.copy(secondScreen = on)) },
+        )
     }
 
     val d = Settings()

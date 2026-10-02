@@ -27,6 +27,7 @@
     { "key": "refresh_hz", "label": "Refresh rate", "category": "display", "advanced": false },
     { "key": "bitrate_kbps", "label": "Bitrate", "category": "display", "advanced": false },
     { "key": "video_fit", "label": "Picture fit", "category": "display", "advanced": false },
+    { "key": "second_screen", "label": "Second screen", "category": "display", "advanced": false },
     { "key": "hdr_enabled", "label": "10-bit HDR", "category": "display", "advanced": false },
     { "key": "present_priority", "label": "Prioritize", "category": "display", "advanced": false },
     { "key": "smooth_buffer", "label": "Smoothness buffer", "category": "display", "advanced": true },

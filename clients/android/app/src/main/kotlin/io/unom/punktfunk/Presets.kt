@@ -35,6 +35,9 @@ data class SettingsOverlay(
     val bitrateKbps: Int? = null,
     val renderScale: Double? = null,
     val videoFit: String? = null,
+    /** Android's second screen (a dual-screen handheld's lower panel): off for a preset that
+     *  plays on a TV the size rule mistakes for one. */
+    val secondScreen: Boolean? = null,
     val codec: String? = null,
     val hdrEnabled: Boolean? = null,
     val tenBitSdr: Boolean? = null,

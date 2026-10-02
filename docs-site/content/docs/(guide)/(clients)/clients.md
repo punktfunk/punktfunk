@@ -75,7 +75,7 @@ lower one shows **Stats**, **Actions** (the buttons of the
 [quick-action dial](/docs/input#the-quick-action-dial)), a **Keyboard**, a **Trackpad** and the
 **Controller** (the [virtual controller](/docs/input#virtual-controller)) — or, with **Screens**,
 the picture itself, below or across both screens
-([dual-screen handhelds](/docs/input#dual-screen-handhelds)). There is nothing to set. If the lower screen stays dark while you stream, end the stream and
+([dual-screen handhelds](/docs/input#dual-screen-handhelds)). **Settings → Display → Second screen** turns it off — for a phone on a TV — and a preset can carry that. If the lower screen stays dark while you stream, end the stream and
 [send your logs](/docs/report-an-issue): they record the screens your device reported.
 
 ## webOS (LG TV) — community
