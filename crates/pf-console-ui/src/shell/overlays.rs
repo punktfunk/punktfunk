@@ -154,31 +154,30 @@ impl Shell {
                         wall,
                         clean,
                         recommended_kbps,
+                        findings,
                     } => {
                         let measured = speed_headline(*throughput_kbps, *wall, clean.as_ref());
+                        let mut lines: Vec<String> = findings.iter().map(finding_text).collect();
+                        let mut hints = Vec::new();
                         match &pinned_by {
                             // Read-only: the default is not the layer this host streams at.
-                            Some(name) => (
-                                1.0,
-                                false,
-                                measured,
-                                format!(
-                                    "\u{201c}{name}\u{201d} sets this host's bitrate \u{2014} \
-                                     change it there to use this."
-                                ),
-                                vec![close],
-                            ),
-                            None => (
-                                1.0,
-                                false,
-                                measured,
-                                format!(
+                            Some(name) => lines.push(format!(
+                                "\u{201c}{name}\u{201d} sets this host's bitrate \u{2014} \
+                                 change it there to use this."
+                            )),
+                            None => {
+                                lines.push(format!(
                                     "{} recommended, leaving headroom for FEC and loss.",
                                     mbps(*recommended_kbps)
-                                ),
-                                vec![Hint::new(HintKey::Confirm, "Set as the default"), close],
-                            ),
+                                ));
+                                hints.push(Hint::new(HintKey::Confirm, "Set as the default"));
+                            }
                         }
+                        if findings.iter().any(|f| f.profile.is_some()) {
+                            hints.push(Hint::new(HintKey::Secondary, "Use paced delivery"));
+                        }
+                        hints.push(close);
+                        (1.0, false, measured, lines.join("\n"), hints)
                     }
                 })
             } else {
@@ -723,6 +722,68 @@ fn speed_headline(
             f64::from(c.jitter_us) / 1000.0
         ),
         None => format!("{} measured", mbps(ceiling_kbps)),
+    }
+}
+
+/// One finding in words: what did not happen and the next move, from its id and figures.
+/// The offered profile is the Secondary hint, not a sentence here.
+pub(crate) fn finding_text(f: &crate::model::FindingRow) -> String {
+    let [a, b, c] = f.numbers;
+    let pct = |x: u32| f64::from(x) / 100.0;
+    match f.id {
+        1 => {
+            if a > 0 && b > 0 {
+                format!(
+                    "The host's port is faster than this device's ({a} vs {b} Mbit/s), so \
+                     bursts overflow the switch between them."
+                )
+            } else {
+                "The host's port is faster than this device's, so bursts overflow the \
+                 switch between them."
+                    .to_string()
+            }
+        }
+        2 => format!(
+            "This device drops the start of every burst ({:.1} % lost) \u{2014} the \
+             adapter's power saving is the usual cause.",
+            pct(a)
+        ),
+        3 => {
+            if a > 0 {
+                format!(
+                    "This device's own receive buffer dropped {a} packets; the system caps it \
+                     at {b} KB."
+                )
+            } else {
+                format!("The system caps this device's receive buffer at {b} KB.")
+            }
+        }
+        4 => format!(
+            "Loss at a rate no link refuses ({:.1} %): check the cable, the port or the \
+             adapter driver.",
+            pct(a)
+        ),
+        5 => format!(
+            "Something on the path buffers instead of dropping ({:.0} ms spread); keep the \
+             bitrate under {}.",
+            f64::from(a) / 1000.0,
+            mbps(b)
+        ),
+        6 => {
+            if a > 0 {
+                format!("The host's send buffer refused {a} packets; raise its limit.")
+            } else {
+                format!("The host's send buffer is capped at {b} KB; raise its limit.")
+            }
+        }
+        7 => {
+            if a > 0 {
+                format!("This device is on Wi-Fi; bursts lose {:.1} %.", pct(a))
+            } else {
+                "This device is on Wi-Fi.".to_string()
+            }
+        }
+        _ => format!("Finding {} ({a}, {b}, {c}).", f.id),
     }
 }
 

@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// The delivery ask for a dial pinned to `fp`: the profile a network check left on that
+/// host's record, or `None` when there is no record or it asks nothing.
+pub fn delivery_ask_for(fp: Option<&[u8; 32]>) -> Option<punktfunk_core::quic::DeliveryAsk> {
+    let fp_hex: String = fp?.iter().map(|b| format!("{b:02x}")).collect();
+    let profile = KnownHosts::load().find_by_fp(&fp_hex)?.delivery?;
+    Some(punktfunk_core::quic::DeliveryAsk { profile, flags: 0 })
+}
+
 /// One trusted host: pinned cert fingerprint, how trust was granted, last-reached address.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(remote = "Self")]

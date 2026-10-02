@@ -48,6 +48,76 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSpeedTest(
     })
 }
 
+/// `NativeBridge.nativeNetworkCheck(handle): DoubleArray?` — run the network check over this
+/// session and return its report. Blocking for ten to twenty seconds: call it off the main
+/// thread. `null` on a `0` handle or when the check could not run.
+///
+/// Layout: `[ceilingKbps, wall, hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs,
+/// clientIfaceKind, clientLinkMbps, clientRcvbufKb, hasHost, hostIfaceKind, hostLinkMbps,
+/// hostSndbufKb, nLegs, burstsLossPct, cappedLossPct, nFindings]` then six per finding:
+/// `[id, severity, profile, n0, n1, n2]` (`profile` 0 = none, 1 capped, 2 smooth).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNetworkCheck<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    handle: jlong,
+) -> JDoubleArray<'local> {
+    use punktfunk_core::client::health::{self, LegShape};
+    env.with_env(|env| -> jni::errors::Result<JDoubleArray<'local>> {
+        let Some(h) = SESSIONS.get(handle) else {
+            return Ok(JDoubleArray::default());
+        };
+        let r = match health::health_check(&h.client, |_| {}) {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("network check: {e:?}");
+                return Ok(JDoubleArray::default());
+            }
+        };
+        let clean = r.speed.clean;
+        let host = r.host;
+        let leg = |shape| {
+            r.legs
+                .iter()
+                .find(|l| l.shape == shape)
+                .map_or(0.0, |l| f64::from(l.outcome.loss_pct))
+        };
+        let mut values: Vec<f64> = vec![
+            f64::from(r.speed.ceiling_kbps),
+            f64::from(u8::from(r.speed.wall)),
+            f64::from(u8::from(clean.is_some())),
+            clean.map_or(0.0, |c| f64::from(c.rate_kbps)),
+            clean.map_or(0.0, |c| f64::from(c.loss_pct)),
+            clean.map_or(0.0, |c| f64::from(c.jitter_us)),
+            f64::from(r.client.link.kind),
+            f64::from(r.client.link.mbps),
+            f64::from(r.client.rcvbuf_kb),
+            f64::from(u8::from(host.is_some())),
+            host.map_or(0.0, |h| f64::from(h.iface_kind)),
+            host.map_or(0.0, |h| f64::from(h.link_mbps)),
+            host.map_or(0.0, |h| f64::from(h.sndbuf_kb)),
+            r.legs.len() as f64,
+            leg(LegShape::FrameBursts),
+            leg(LegShape::Capped),
+            r.findings.len() as f64,
+        ];
+        for f in &r.findings {
+            values.extend([
+                f64::from(f.id as u8),
+                f64::from(f.severity as u8),
+                f64::from(f.profile.unwrap_or(0)),
+                f64::from(f.numbers[0]),
+                f64::from(f.numbers[1]),
+                f64::from(f.numbers[2]),
+            ]);
+        }
+        let arr = env.new_double_array(values.len())?;
+        arr.set_region(env, 0, &values)?;
+        Ok(arr)
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
 /// `NativeBridge.nativeProbeResult(handle): DoubleArray?` — the current measurement, partial until
 /// `[0] == 1`. Safe to poll; before any probe it reports zeros. `null` on a `0` handle.
 ///

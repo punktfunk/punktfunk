@@ -13,7 +13,8 @@
 
 // `unsafe` is crate-denied. Parsers of network bytes stay safe Rust. Carve-outs are
 // only `client` (`extern "C"`) and transport syscall shims that move caller-owned
-// buffers (`udp/{apple,linux,windows}`, `qos_windows`). A wire parser may not add a
+// buffers (`udp/{apple,linux,windows}`, `qos_windows`) and the socket and interface
+// readers (`ifinfo`, `sockstat`). A wire parser may not add a
 // carve-out; SAFETY proofs sit next to each `unsafe`.
 #![deny(unsafe_code)]
 #![forbid(unsafe_op_in_unsafe_fn)]

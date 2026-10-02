@@ -654,6 +654,9 @@ fn dial(
         preset: params.preset_id.as_deref().and_then(|id| {
             punktfunk_core::quic::SessionPreset::new(id, params.preset.as_deref().unwrap_or(""))
         }),
+        // What a network check found this host wants, kept on its record: the ask is per
+        // host, and a host that does not read it streams as it always has.
+        delivery: crate::trust::delivery_ask_for(params.pin.as_ref()),
         // Session stop flag, so cancel reaches a dial that has not landed. Without
         // it this parks the pump for the whole budget (185 s on a request-access
         // connect the host holds pending) and cancel cannot be answered until return.

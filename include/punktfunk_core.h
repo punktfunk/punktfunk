@@ -2026,6 +2026,51 @@ typedef struct {
     uint32_t reorders;
 } PunktfunkProbeResult;
 
+/**
+ * One finding of the network check: the id names the text the app shows
+ * (`punktfunk_core::client::health::FindingId` as a byte), `numbers` are its figures,
+ * `profile` is the delivery profile that helps (`1` capped, `2` smooth, `0` none).
+ */
+typedef struct PunktfunkHealthFinding {
+    uint8_t id;
+    uint8_t severity;
+    uint8_t profile;
+    uint32_t numbers[3];
+} PunktfunkHealthFinding;
+
+/**
+ * Most findings one report carries; the rules can produce seven.
+ */
+#define PUNKTFUNK_HEALTH_FINDINGS_MAX 8
+
+/**
+ * The network check's report, flat. `has_clean` 0 = a host without a ramp (no loss figure
+ * is honest); `has_host` 0 = the host sent no facts; a leg or fact that was not sampled
+ * reads `0`.
+ */
+typedef struct PunktfunkHealthReport {
+    uint32_t ceiling_kbps;
+    uint8_t wall;
+    uint8_t has_clean;
+    uint32_t clean_rate_kbps;
+    float clean_loss_pct;
+    uint32_t clean_jitter_us;
+    uint8_t client_iface_kind;
+    uint32_t client_link_mbps;
+    uint32_t client_rcvbuf_kb;
+    uint8_t has_host;
+    uint8_t host_iface_kind;
+    uint32_t host_link_mbps;
+    uint32_t host_sndbuf_kb;
+    /**
+     * Loss of the bursts leg and the capped leg, percent; `n_legs` says how many ran.
+     */
+    uint8_t n_legs;
+    float leg_loss_pct[2];
+    uint8_t n_findings;
+    PunktfunkHealthFinding findings[PUNKTFUNK_HEALTH_FINDINGS_MAX];
+} PunktfunkHealthReport;
+
 // [`punktfunk_av1_sequence_info`]'s answer: what an `av1C` record and a colour description
 // take from an AV1 sequence header. Colour codes are ITU-T H.273, 2 when none is coded.
 typedef struct {
@@ -3523,6 +3568,18 @@ PunktfunkStatus punktfunk_connection_speed_test(const PunktfunkConnection *c,
 // (NULL is an error).
 PunktfunkStatus punktfunk_connection_probe_result(const PunktfunkConnection *c,
                                                   PunktfunkProbeResult *out);
+
+// Run the network check over this connection and write its report into `*out`. Blocking
+// for ten to twenty seconds — call it off the main thread. The connection should have been
+// dialled with a delivery ask of probes only and facts; without one the check is the speed
+// test alone. Errors: `Unsupported` when the host declined, `Timeout` when a round never
+// reported.
+//
+// # Safety
+// `c` is a valid connection handle; `out` is writable for one `PunktfunkHealthReport`
+// (NULL is an error).
+PunktfunkStatus punktfunk_connection_network_check(const PunktfunkConnection *c,
+                                                   PunktfunkHealthReport *out);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

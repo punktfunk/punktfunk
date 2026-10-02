@@ -3,6 +3,10 @@
 //! answer through `SO_MEMINFO`; the other platforms have no per-socket figure and answer
 //! `None`, which a reader reports as "not sampled", never as zero.
 
+// Crate-wide deny(unsafe_code) carve-out (lib.rs): one `getsockopt` into a record this
+// function owns; nothing here interprets network bytes.
+#![allow(unsafe_code)]
+
 use std::net::UdpSocket;
 
 /// Packets dropped at this socket's receive buffer since it was opened.

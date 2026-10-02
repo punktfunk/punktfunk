@@ -212,6 +212,9 @@ pub enum SpeedPhase {
         /// loss line — a blast's loss is the blast's.
         clean: Option<CleanRound>,
         recommended_kbps: u32,
+        /// What the network check found; empty from a driver that only measured speed.
+        #[serde(default)]
+        findings: Vec<FindingRow>,
     },
 }
 
@@ -222,6 +225,17 @@ pub struct CleanRound {
     pub loss_pct: f32,
     /// Spread of the inter-arrival gap, µs.
     pub jitter_us: u32,
+}
+
+/// One finding of the network check, by id ([`punktfunk_core::client::health::FindingId`]
+/// as a byte); the words are [`crate::shell`]'s. `profile` is the delivery profile that
+/// helps (`1` capped, `2` smooth), when one does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FindingRow {
+    pub id: u8,
+    pub severity: u8,
+    pub numbers: [u32; 3],
+    pub profile: Option<u8>,
 }
 
 #[derive(Default)]
@@ -426,6 +440,12 @@ pub enum ConsoleCmd {
         port: u16,
         fp_hex: String,
         host_name: String,
+    },
+    /// Remember the delivery profile a network check offered for this host (`1` capped,
+    /// `2` smooth, `0` none); the next connect asks for it. Per host, never global.
+    SetHostDelivery {
+        key: String,
+        profile: u8,
     },
     /// Save a manually entered host, unpaired, and refresh the rows.
     SaveHost {

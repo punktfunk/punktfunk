@@ -564,6 +564,7 @@ impl ServiceState {
                 addr,
                 port,
             } => self.update_host(key, name, addr, port),
+            ConsoleCmd::SetHostDelivery { key, profile } => self.set_host_delivery(key, profile),
             ConsoleCmd::ForgetHost { key } => self.forget_host(key),
             ConsoleCmd::UnpairHost { key } => self.unpair_host(key),
             ConsoleCmd::Wake { key, then_connect } => self.wake(key, then_connect),
@@ -712,29 +713,41 @@ impl ServiceState {
                 console.advance_speed(&key, SpeedPhase::Measuring);
                 let fp = (!fp_hex.is_empty()).then_some(fp_hex.as_str());
                 let progress = |kbps| console.advance_speed(&key, SpeedPhase::Progress { kbps });
-                let run = pf_client_core::speed::run_speed_probe_with;
+                // The whole check, not just the speed: the takeover lists what it found.
+                let run = pf_client_core::speed::run_network_check_with;
                 match run(&addr, port, fp, identity, progress) {
                     Ok(r) => {
                         tracing::info!(
                             host = %host_name,
-                            ceiling_kbps = r.ceiling_kbps,
-                            wall = r.wall,
-                            clean_loss = r.clean.map(|c| c.loss_pct),
-                            "speed test finished"
+                            ceiling_kbps = r.speed.ceiling_kbps,
+                            wall = r.speed.wall,
+                            clean_loss = r.speed.clean.map(|c| c.loss_pct),
+                            findings = ?r.findings.iter().map(|f| f.id).collect::<Vec<_>>(),
+                            "network check finished"
                         );
                         console.advance_speed(
                             &key,
                             SpeedPhase::Done {
-                                throughput_kbps: r.ceiling_kbps,
-                                wall: r.wall,
-                                clean: r.clean.map(|c| pf_console_ui::model::CleanRound {
+                                throughput_kbps: r.speed.ceiling_kbps,
+                                wall: r.speed.wall,
+                                clean: r.speed.clean.map(|c| pf_console_ui::model::CleanRound {
                                     rate_kbps: c.rate_kbps,
                                     loss_pct: c.loss_pct,
                                     jitter_us: c.jitter_us,
                                 }),
                                 recommended_kbps: pf_client_core::speed::recommended_kbps(
-                                    r.ceiling_kbps,
+                                    r.speed.ceiling_kbps,
                                 ),
+                                findings: r
+                                    .findings
+                                    .iter()
+                                    .map(|f| pf_console_ui::model::FindingRow {
+                                        id: f.id as u8,
+                                        severity: f.severity as u8,
+                                        numbers: f.numbers,
+                                        profile: f.profile,
+                                    })
+                                    .collect(),
                             },
                         );
                     }
@@ -870,6 +883,18 @@ impl ServiceState {
         h.move_to(&addr, port);
         self.save_known(&known);
         self.last_probe = Instant::now() - Duration::from_secs(60); // the address moved
+    }
+
+    /// The profile a network check offered, remembered on the host's record; `0` clears it.
+    /// The next connect to this host asks for it (`pf_client_core::session::dial`).
+    fn set_host_delivery(&mut self, key: String, profile: u8) {
+        let mut known = trust::KnownHosts::load();
+        let Some(h) = index_for_key(&known, &key).and_then(|i| known.hosts.get_mut(i)) else {
+            tracing::warn!(%key, "delivery profile for an unknown host — ignoring");
+            return;
+        };
+        h.delivery = (profile != 0).then_some(profile);
+        self.save_known(&known);
     }
 
     fn forget_host(&mut self, key: String) {
