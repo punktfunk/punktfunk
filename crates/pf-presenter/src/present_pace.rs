@@ -297,6 +297,9 @@ pub(crate) struct CadenceProbe {
     refresh_variable: Option<bool>,
     /// The presentation engine says it runs variable refresh. It outranks everything.
     engine_variable: bool,
+    /// The stream's own spacing, smoothed, from every shown frame's source stamp.
+    src_spacing_ns: u64,
+    src_last_pts_ns: u64,
 }
 
 /// Enough deltas to distinguish jitter from a real off-grid cadence.
@@ -337,7 +340,24 @@ impl CadenceProbe {
             verdict: Cadence::Unknown,
             refresh_variable: None,
             engine_variable: false,
+            src_spacing_ns: 0,
+            src_last_pts_ns: 0,
         }
+    }
+
+    /// Every shown frame's source stamp, whatever its glass stamp is worth: the stream's
+    /// own spacing tells a panel-rate stream from a slower one.
+    pub(crate) fn note_source(&mut self, pts_ns: u64) {
+        let prev = std::mem::replace(&mut self.src_last_pts_ns, pts_ns);
+        if prev == 0 || pts_ns <= prev {
+            return;
+        }
+        let d = pts_ns - prev;
+        self.src_spacing_ns = if self.src_spacing_ns == 0 {
+            d
+        } else {
+            (self.src_spacing_ns * 7 + d) / 8
+        };
     }
 
     /// The engine's own word on variable refresh, where it gives one.
@@ -348,9 +368,15 @@ impl CadenceProbe {
     /// The output's measured vblank spacing, where a waiter reads it. A fixed panel
     /// refreshes at its mode period whatever is presented, so a spacing well off it is
     /// variable refresh — also at a whole divisor of the mode rate (60 on 120), where
-    /// present stamps alone read as grid-locked. At the mode period the panel is fixed,
-    /// or a variable one runs flat out: nothing to pace either way.
+    /// present stamps alone read as grid-locked. At the mode period under a slower stream
+    /// the panel is fixed; under a stream at that rate it proves nothing.
     pub(crate) fn note_refresh(&mut self, refresh_ns: u64, mode_period_ns: u64) {
+        let at_mode = refresh_ns * 100 < mode_period_ns * 103;
+        let stream_at_panel_rate = self.src_spacing_ns > 0
+            && self.src_spacing_ns.abs_diff(mode_period_ns) * 10 <= mode_period_ns;
+        if at_mode && stream_at_panel_rate {
+            return;
+        }
         // 10 % on, 3 % off: a stream hovering at the panel's top rate does not flap.
         if refresh_ns * 100 > mode_period_ns * 110 {
             self.refresh_variable = Some(true);
@@ -496,8 +522,8 @@ impl SourcePacer {
 
     /// Follow the measured refresh verdict for this intent. Snapping onto the latch grid
     /// carries roughly half a refresh of slack; presenting at the due time carries none,
-    /// so the cushions differ. Re-tuning re-anchors (tuning is fixed at construction),
-    /// so this keys off the probe's published verdict, not a per-window reading.
+    /// so the cushions differ. Re-tuning re-anchors and keeps the measured jitter, so
+    /// this keys off the probe's published verdict, not a per-window reading.
     /// Smoothness with no glass grid (`grid_known` false: no present-wait) runs free — a
     /// grid anchored on submit instants learns the stream's own cadence as the panel.
     /// The latency intent paces only where VRR is measured: a VRR panel shows every
@@ -511,7 +537,7 @@ impl SourcePacer {
         };
         if mode != self.mode {
             self.mode = mode;
-            self.clock = CadenceClock::new(match mode {
+            self.clock.retune(match mode {
                 PaceMode::Snap => CadenceTuning::snapping(),
                 PaceMode::Free => CadenceTuning::free_running(),
                 PaceMode::VrrLatency => CadenceTuning::vrr_latency(),
@@ -1005,6 +1031,34 @@ mod tests {
         );
     }
 
+    /// The output's spacing at the mode period proves nothing while the stream itself
+    /// runs at that rate; under a slower stream it is a fixed panel.
+    #[test]
+    fn a_panel_rate_stream_at_the_mode_period_is_no_evidence() {
+        const P: u64 = 6_944_444; // 144 Hz
+        let mut p = CadenceProbe::new();
+        for i in 1..=16u64 {
+            p.note_source(1_000_000_000 + i * P);
+        }
+        p.note_refresh(P + P / 50, P);
+        assert_eq!(p.verdict(), Cadence::Unknown, "at the panel rate: unproven");
+        p.note_refresh(P * 3 / 2, P);
+        assert_eq!(p.verdict(), Cadence::Variable);
+        p.note_refresh(P, P);
+        assert_eq!(p.verdict(), Cadence::Variable, "the last reading stands");
+
+        let mut slow = CadenceProbe::new();
+        for i in 1..=16u64 {
+            slow.note_source(1_000_000_000 + i * 2 * P);
+        }
+        slow.note_refresh(P, P);
+        assert_eq!(
+            slow.verdict(),
+            Cadence::Fixed,
+            "a slower stream on a panel at its mode rate"
+        );
+    }
+
     /// Batching must not change the verdict: live drain is one frame, tests hand over
     /// vectors.
     #[test]
@@ -1087,7 +1141,7 @@ mod tests {
     }
 
     /// Measured VRR: no grid to snap to, so the due time is presented directly and
-    /// the cushion covers the distribution. Re-tuning is a fresh loop, so this
+    /// the cushion covers the distribution. Re-tuning keeps the loop, so this
     /// follows the published verdict.
     #[test]
     fn a_measured_vrr_verdict_switches_the_cushion_policy() {
@@ -1103,7 +1157,7 @@ mod tests {
         );
         p.follow(Cadence::Variable, true, true);
         assert!(p.free_running());
-        assert_eq!(p.health().frames, 0, "re-tuning is a fresh loop");
+        assert_eq!(p.health().frames, 200, "re-tuning keeps the loop's history");
         p.follow(Cadence::Unknown, true, true);
         assert!(
             !p.free_running(),

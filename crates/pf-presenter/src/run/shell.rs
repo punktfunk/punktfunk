@@ -152,19 +152,11 @@ impl Shell {
         #[cfg(target_os = "linux")]
         let overlay_focus = pf_client_core::overlay_focus::OverlayFocus::start();
 
-        let native = window
-            .get_display()
-            .and_then(|d| d.get_mode())
-            .map(|m| native_mode(m.w, m.h, m.pixel_density, m.refresh_rate))
-            .ok()
-            // A zero-sized mode is as useless as no mode. Without this filter a display
-            // that reports 0×0 streams a 0×0 request.
-            .filter(|m: &Mode| m.width > 0 && m.height > 0)
-            .unwrap_or(Mode {
-                width: 1920,
-                height: 1080,
-                refresh_hz: 60,
-            });
+        let native = native_mode_of(&window).unwrap_or(Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        });
 
         let event_pump = sdl
             .event_pump()
@@ -414,6 +406,17 @@ impl Shell {
         }
         Ok(())
     }
+}
+
+/// The window's display mode as a stream request: size, density and refresh. `None` for
+/// a display that reports no mode or a zero size, which would stream a 0×0 request.
+pub(super) fn native_mode_of(window: &sdl3::video::Window) -> Option<Mode> {
+    window
+        .get_display()
+        .and_then(|d| d.get_mode())
+        .ok()
+        .map(|m| native_mode(m.w, m.h, m.pixel_density, m.refresh_rate))
+        .filter(|m| m.width > 0 && m.height > 0)
 }
 
 /// Apply capture to the window: pointer lock (relative mouse + hidden cursor) and a

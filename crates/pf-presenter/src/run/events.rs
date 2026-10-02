@@ -43,6 +43,9 @@ impl Shell {
                 ..
             } if self.window.get_display().is_ok_and(|d| d == display) => {
                 self.presenter.retarget_glass(&self.window);
+                if let Some(m) = super::shell::native_mode_of(&self.window) {
+                    self.native = m;
+                }
                 if let Some(st) = stream.as_mut() {
                     st.relearn_grid(&self.window);
                 }
@@ -162,6 +165,10 @@ impl Shell {
         match win_event {
             WindowEvent::FocusLost => {
                 self.scroll_routing.focus_lost();
+                // The compositor may take variable refresh away from an unfocused window.
+                if let Some(st) = stream.as_mut() {
+                    st.forget_refresh_verdict();
+                }
                 if let Some(cap) = capture_mut(stream) {
                     if cap.release(false) {
                         self.capture_off();
@@ -174,6 +181,9 @@ impl Shell {
                 self.focus_lost = true;
             }
             WindowEvent::FocusGained => {
+                if let Some(st) = stream.as_mut() {
+                    st.forget_refresh_verdict();
+                }
                 // Unlike capture, the controller mask has no "the user meant it"
                 // variant — it only mirrors who owns the pad — so regaining focus
                 // always lifts its half.
@@ -204,6 +214,9 @@ impl Shell {
                     if let Err(e) = self.window.set_fullscreen(false) {
                         tracing::warn!(error = %e, "fullscreen exit failed");
                     }
+                    if let Some(st) = stream.as_mut() {
+                        st.forget_refresh_verdict();
+                    }
                     return Ok(());
                 }
                 self.presenter.present(
@@ -223,6 +236,10 @@ impl Shell {
             // the old panel. A 60 Hz-seeded clock must not keep pacing a 144 Hz panel.
             WindowEvent::DisplayChanged(..) => {
                 self.presenter.retarget_glass(&self.window);
+                // The next stream asks this display for its mode, not the one at open.
+                if let Some(m) = super::shell::native_mode_of(&self.window) {
+                    self.native = m;
+                }
                 if let Some(st) = stream.as_mut() {
                     st.relearn_grid(&self.window);
                 }
@@ -336,6 +353,9 @@ impl Shell {
             Chord::Fullscreen => {
                 self.fullscreen = !self.fullscreen;
                 tracing::debug!(fullscreen = self.fullscreen, "fullscreen toggle");
+                if let Some(st) = stream.as_mut() {
+                    st.forget_refresh_verdict();
+                }
                 if let Err(e) = self.window.set_fullscreen(self.fullscreen) {
                     tracing::warn!(error = %e, fullscreen = self.fullscreen, "fullscreen toggle failed");
                 }
@@ -683,6 +703,9 @@ impl Shell {
             if self.fullscreen && !self.opts.fullscreen {
                 self.fullscreen = false;
                 let _ = self.window.set_fullscreen(false);
+                if let Some(st) = stream.as_mut() {
+                    st.forget_refresh_verdict();
+                }
             }
         }
         // Escape chord held past the threshold: the controller's disconnect.
