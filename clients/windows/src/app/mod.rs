@@ -447,9 +447,17 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                 Err(e) => return refuse(e.message()),
             };
             // Rule 2 of §3: never preempt a live session. Only this layer knows one is running,
-            // which is why the brain leaves the check here.
-            if matches!(screen_now, Screen::Stream | Screen::Connecting) {
-                return refuse("A session is already running \u{2014} end it first.".into());
+            // which is why the brain leaves the check here: the child itself, or a connect
+            // still waiting on a wake or an approval. The screen stays where it is.
+            let busy = matches!(
+                screen_now,
+                Screen::Stream | Screen::Connecting | Screen::Waking | Screen::RequestAccess
+            ) || ctx.shared.session.lock().unwrap().is_running();
+            if busy {
+                let msg = "A session is already running \u{2014} end it first.";
+                tracing::info!(msg, "deep link refused");
+                set_status.call(msg.into());
+                return;
             }
             let known = KnownHosts::load();
             let plan = pf_client_core::orchestrate::plan_from_link(
