@@ -878,8 +878,27 @@ impl DisplayPolicyStore {
     /// Persist + adopt. Memory changes only after the disk write; the
     /// whole transaction holds [`Self::write`].
     pub fn set(&self, policy: DisplayPolicy) -> Result<()> {
-        let policy = policy.sanitized();
         let _tx = self.write.lock().unwrap_or_else(|e| e.into_inner());
+        self.store(policy)
+    }
+
+    /// `edit` the stored policy and persist it, the read inside the same
+    /// transaction: a writer that read, edited and then [`Self::set`] lost
+    /// whatever another writer saved in between. `edit` returning `false`
+    /// writes nothing; so does the result.
+    pub fn update(&self, edit: impl FnOnce(&mut DisplayPolicy) -> bool) -> Result<bool> {
+        let _tx = self.write.lock().unwrap_or_else(|e| e.into_inner());
+        let mut policy = self.get();
+        if !edit(&mut policy) {
+            return Ok(false);
+        }
+        self.store(policy)?;
+        Ok(true)
+    }
+
+    /// The write under [`Self::write`], which the caller holds.
+    fn store(&self, policy: DisplayPolicy) -> Result<()> {
+        let policy = policy.sanitized();
         pf_paths::replace_secret_file(&self.path, &serde_json::to_vec_pretty(&policy)?)?;
         *self.cur.lock().unwrap() = Some(policy);
         Ok(())
@@ -1444,6 +1463,19 @@ mod tests {
 
         let reopened = DisplayPolicyStore::load_from(path.clone());
         assert_eq!(reopened.configured().unwrap().preset, Preset::SharedDesktop);
+
+        // An update edits what is stored, keeping what another writer saved.
+        assert!(store
+            .update(|p| {
+                p.edid_lock = true;
+                true
+            })
+            .unwrap());
+        assert!(!store.update(|_| false).unwrap(), "no edit, no write");
+        let reopened = DisplayPolicyStore::load_from(path.clone());
+        let stored = reopened.configured().unwrap();
+        assert!(stored.edid_lock);
+        assert_eq!(stored.preset, Preset::SharedDesktop);
 
         let _ = std::fs::remove_file(&path);
     }

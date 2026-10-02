@@ -284,9 +284,18 @@ pub(super) fn write(policy: crate::vdisplay::policy::DisplayPolicy) -> anyhow::R
              monitor is Linux-only (no Windows mirror backend); the pin was NOT stored"
         );
     }
-    let store = crate::vdisplay::policy::prefs();
-    let policy = with_stored_overlays(policy, &store.get());
-    store.set(policy)?;
+    write_with(|stored| *stored = with_stored_overlays(policy, stored))
+}
+
+/// One edit of the stored host policy, read and written in one store transaction, then the
+/// anchor re-aim [`write`] does.
+pub(super) fn write_with(
+    edit: impl FnOnce(&mut crate::vdisplay::policy::DisplayPolicy),
+) -> anyhow::Result<()> {
+    crate::vdisplay::policy::prefs().update(|p| {
+        edit(p);
+        true
+    })?;
     #[cfg(target_os = "linux")]
     crate::refresh_capture_monitor_anchor("display policy updated");
     Ok(())
@@ -371,11 +380,13 @@ pub(crate) async fn set_display_client(
     if overlay.is_empty() && store.configured().is_none() {
         return Json(display_settings_state()).into_response();
     }
-    let mut policy = store.get();
     // `sanitized` drops an overlay that pins nothing, so this covers the reset
     // case too without a second path.
-    policy.clients.insert(key.clone(), overlay);
-    if let Err(e) = store.set(policy) {
+    let saved = store.update(|p| {
+        p.clients.insert(key.clone(), overlay);
+        true
+    });
+    if let Err(e) = saved {
         return api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Couldn't save the display settings for this device — {e:#}"),
@@ -401,17 +412,17 @@ pub(crate) async fn set_display_client(
 pub(crate) async fn delete_display_client(Path(fingerprint): Path<String>) -> Response {
     let key = fingerprint.trim().to_ascii_lowercase();
     let store = crate::vdisplay::policy::prefs();
-    let mut policy = store.get();
     // Already following the host: nothing to write, and a no-op write would
     // rewrite the file on every unpair.
-    if policy.clients.remove(&key).is_none() {
-        return Json(display_settings_state()).into_response();
-    }
-    if let Err(e) = store.set(policy) {
-        return api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Couldn't clear the display settings for this device — {e:#}"),
-        );
+    match store.update(|p| p.clients.remove(&key).is_some()) {
+        Ok(false) => return Json(display_settings_state()).into_response(),
+        Ok(true) => {}
+        Err(e) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Couldn't clear the display settings for this device — {e:#}"),
+            );
+        }
     }
     tracing::info!(fingerprint = %key, "management API: per-device display overlay cleared");
     Json(display_settings_state()).into_response()
@@ -422,12 +433,9 @@ pub(crate) async fn delete_display_client(Path(fingerprint): Path<String>) -> Re
 pub(crate) fn forget_display_overlay(fingerprint: &str) {
     let key = fingerprint.trim().to_ascii_lowercase();
     let store = crate::vdisplay::policy::prefs();
-    let mut policy = store.get();
-    if policy.clients.remove(&key).is_none() {
-        return;
-    }
-    match store.set(policy) {
-        Ok(()) => tracing::info!(fingerprint = %key,
+    match store.update(|p| p.clients.remove(&key).is_some()) {
+        Ok(false) => {}
+        Ok(true) => tracing::info!(fingerprint = %key,
             "unpaired: dropped this device's display settings"),
         Err(e) => tracing::warn!(fingerprint = %key,
             "unpaired: could not drop this device's display settings ({e:#}) — a device \
@@ -690,8 +698,11 @@ pub(crate) struct DisplayLayoutRequest {
 )]
 pub(crate) async fn set_display_layout(ApiJson(req): ApiJson<DisplayLayoutRequest>) -> Response {
     let store = crate::vdisplay::policy::prefs();
-    let policy = store.get().with_manual_layout(req.positions);
-    if let Err(e) = store.set(policy) {
+    let saved = store.update(|p| {
+        *p = p.clone().with_manual_layout(req.positions);
+        true
+    });
+    if let Err(e) = saved {
         return api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Couldn't save the display layout — {e:#}"),
