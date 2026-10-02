@@ -26,6 +26,11 @@ pub struct CreateOptions {
     /// A TV. Absent means a handheld or a desktop.
     #[serde(default)]
     pub tv: bool,
+    /// The browser host runs as a Samsung TV app, and fronts the shell as [`Platform::Tizen`]
+    /// rather than [`Platform::Web`]. Only that host sets it; the native hosts name their
+    /// platform in code.
+    #[serde(default)]
+    pub tizen: bool,
     /// The host's own keyboard types into every field (`edit_text` tells it which), so the
     /// console never draws its tray: an Apple TV's, where iPhone typing works.
     #[serde(default)]

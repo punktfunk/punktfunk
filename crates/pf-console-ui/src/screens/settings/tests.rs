@@ -1307,7 +1307,8 @@ fn every_platform_offers_rows() {
             | Platform::Android
             | Platform::WebOS
             | Platform::Web
-            | Platform::Apple => {}
+            | Platform::Apple
+            | Platform::Tizen => {}
         }
         let n = TABS
             .iter()
@@ -1316,6 +1317,39 @@ fn every_platform_offers_rows() {
             .count();
         assert!(n > 0, "{p:?} offers no settings rows at all");
     }
+}
+
+/// A Samsung set fronts the same page as the browser, so it answers the row tables exactly as
+/// Web does; it is held by a remote and must exit on Back at the root, so those two answers are
+/// the TV's. The codec row offers what the set decodes: no AV1, no PyroWave.
+#[test]
+fn tizen_is_web_with_a_remote_and_an_exit() {
+    use crate::glyphs::GlyphStyle;
+    use crate::platform::Platform;
+    for id in TABS.iter().flat_map(|(_, rows)| rows.iter()) {
+        assert_eq!(
+            row_on(*id, Platform::Tizen),
+            row_on(*id, Platform::Web),
+            "{id:?}: a packaged page offers what the page offers"
+        );
+    }
+    assert!(
+        Platform::Tizen.can_quit(),
+        "Back at the root exits a Samsung app"
+    );
+    assert!(!Platform::Web.can_quit());
+    assert_eq!(GlyphStyle::keys(Platform::Tizen), GlyphStyle::Remote);
+    assert_eq!(GlyphStyle::keys(Platform::Web), GlyphStyle::Keyboard);
+    let offered: Vec<&str> = codecs(Platform::Tizen).iter().map(|(id, _)| *id).collect();
+    assert_eq!(offered, ["auto", "hevc", "h264"]);
+    assert_eq!(
+        own_stats_corner(Platform::Tizen),
+        own_stats_corner(Platform::Web)
+    );
+    assert_eq!(
+        bitrate_ceiling_kbps(Platform::Tizen),
+        bitrate_ceiling_kbps(Platform::Web)
+    );
 }
 
 #[test]
