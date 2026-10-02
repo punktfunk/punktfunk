@@ -103,8 +103,10 @@ pub(super) fn run_apply(
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Last look before SYSTEM executes from here: the hardening above is best-effort.
-    crate::install::ensure_admin_only_source(&dir)
-        .map_err(|e| ("applying", format!("staging dir {}: {e:#}", dir.display())))?;
+    crate::install::ensure_admin_only_source(&dir).map_err(|e| {
+        let _ = std::fs::remove_file(jobs::intent_path());
+        ("applying", format!("staging dir {}: {e:#}", dir.display()))
+    })?;
 
     let spawned = {
         use std::os::windows::process::CommandExt as _;
@@ -116,11 +118,21 @@ pub(super) fn run_apply(
             .spawn()
     };
     match spawned {
-        Ok(child) => {
-            // Detached: the child must outlive us. Dropping a Child does not kill it.
-            drop(child);
+        Ok(mut child) => {
             stage("restarting");
-            Ok(())
+            // The installer stops this service, waited, before it exits. Outliving it means
+            // the upgrade did not replace this host, and no restart will reconcile the intent.
+            let Ok(status) = child.wait() else {
+                return Ok(());
+            };
+            let _ = std::fs::remove_file(jobs::intent_path());
+            Err((
+                "restarting",
+                format!(
+                    "installer exited ({status}) with this host still running — log: {}",
+                    log.display()
+                ),
+            ))
         }
         Err(e) => {
             let _ = std::fs::remove_file(jobs::intent_path());
