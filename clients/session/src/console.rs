@@ -597,11 +597,8 @@ impl ServiceState {
                     r.request();
                 }
             }
-            // A platform-native screen (webOS) — the desktop shell has no such row, so this
-            // never arrives here.
-            ConsoleCmd::OpenPlatformScreen { .. } => {}
-            // Grants and rumble tests from the controllers screen. Android-only for the same
-            // reason: the settings row that opens that screen is not on the desktop's list.
+            // Grants and rumble tests from the controllers screen, Android-only: the settings row
+            // that opens that screen is not on the desktop's list.
             ConsoleCmd::PadAction { .. } => {}
             // The Controllers tab offers no input test on the desktop.
             ConsoleCmd::PadTest { .. } => {}

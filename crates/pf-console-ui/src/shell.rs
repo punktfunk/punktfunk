@@ -289,6 +289,9 @@ const LAUNCH_HOLD_MAX: f64 = 120.0;
 pub struct ConsoleOptions {
     /// Hostname registered as the default pairing device name.
     pub device_name: String,
+    /// The About row's version, verbatim. `None` shows this kit's version: right where the
+    /// app ships from this workspace.
+    pub version: Option<String>,
     /// Steam Deck: Steam's keyboard types; this shell never draws one.
     pub deck: bool,
     /// A TV (Apple TV, Android TV): rows for a clipboard or a phone's sensors do nothing.
@@ -307,7 +310,7 @@ pub struct ConsoleOptions {
     /// Settings and preset catalog. `None` uses the desktop file store
     /// (`pf_client_core::trust`); every other host must supply one.
     pub store: Option<Arc<dyn SettingsStore>>,
-    /// Which settings rows exist and which platform-native screens may open.
+    /// Which settings rows exist.
     pub platform: Platform,
     /// Skia GPU resource-cache budget, bytes. Desktop default is
     /// [`DEFAULT_GPU_CACHE_BYTES`]; a memory-tight box may go down to
@@ -329,6 +332,7 @@ impl ConsoleOptions {
     pub fn desktop(device_name: String, deck: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
+            version: None,
             deck,
             tv: false,
             fallback_ui: false,
@@ -540,6 +544,7 @@ impl Shell {
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
                 name: opts.device_name,
+                version: opts.version.unwrap_or_else(|| crate::VERSION.into()),
             },
             hosts: Vec::new(),
             hosts_gen: u64::MAX,

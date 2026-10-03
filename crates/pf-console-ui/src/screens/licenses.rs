@@ -234,10 +234,7 @@ impl LicensesScreen {
                 });
             }
         };
-        push(
-            Style::Title,
-            &format!("Punktfunk {}", env!("CARGO_PKG_VERSION")),
-        );
+        push(Style::Title, &format!("Punktfunk {}", crate::VERSION));
         push(
             Style::Body,
             "Punktfunk is licensed under MIT OR Apache-2.0, at your option.",
