@@ -1070,8 +1070,6 @@
 	"setting_gamescope_sdr_nits_hint": "Wie hell SDR-Inhalte in einem HDR-Stream wirken.",
 	"setting_gamescope_refresh_rates": "Weitere Bildraten",
 	"setting_gamescope_refresh_rates_hint": "Zusätzliche Raten in Hz, zu denen ein Gerät wechseln kann.",
-	"setting_gamescope_steam": "Steam-Integration",
-	"setting_gamescope_steam_hint": "Startet jede Spielmodus-Sitzung mit Steam-Integration, nicht nur Steam-Spiele.",
 	"setting_gamescope_splash": "Startbild",
 	"setting_gamescope_splash_hint": "Zeigt ein Startbild, damit eine neue Sitzung sofort ein Bild hat.",
 	"setting_gamescope_isolate": "Getrennte Sitzungen",

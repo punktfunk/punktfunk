@@ -237,10 +237,6 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_gamescope_refresh_rates,
 		hint: m.setting_gamescope_refresh_rates_hint,
 	},
-	gamescope_steam: {
-		label: m.setting_gamescope_steam,
-		hint: m.setting_gamescope_steam_hint,
-	},
 	gamescope_splash: {
 		label: m.setting_gamescope_splash,
 		hint: m.setting_gamescope_splash_hint,

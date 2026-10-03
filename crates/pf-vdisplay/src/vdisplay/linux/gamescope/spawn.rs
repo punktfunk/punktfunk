@@ -233,8 +233,7 @@ pub(super) fn spawn(
         .map(|i| i.ei_relay.clone())
         .unwrap_or_else(ei_socket_file);
     let _ = std::fs::remove_file(&relay); // stale socket path from a previous session
-                                          // `--steam` when launching Steam; the global knob still forces it on for every spawn.
-    let steam_mode = pf_host_config::config().gamescope_steam || is_steam_launch(&app);
+    let steam_mode = is_steam_launch(&app);
     // Default off: forces relative mode, which would break absolute-pointer games/menus.
     let grab_cursor = game_launch && pf_host_config::config().gamescope_grab_cursor;
     // Without a painting client gamescope pushes no capture buffers.
