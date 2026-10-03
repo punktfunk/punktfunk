@@ -143,6 +143,8 @@ install -Dm0644 packaging/linux/io.unom.Punktfunk.Host.desktop \
 install -Dm0755 "$TRAY_BIN"                        "$STAGE/usr/bin/punktfunk-tray"
 install -Dm0644 packaging/linux/io.unom.Punktfunk.Tray.desktop \
     "$STAGE/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop"
+install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
+    "$STAGE/usr/share/applications/io.unom.Punktfunk.StartHost.desktop"
 for sz in 22x22 48x48; do
   for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
     install -Dm0644 "$png" "$STAGE/usr/share/icons/hicolor/$sz/apps/$(basename "$png")"

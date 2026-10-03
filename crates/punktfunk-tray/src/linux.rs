@@ -2,9 +2,9 @@
 //!
 //! The host, its web console and its plugin runner are systemd **user** units
 //! (`status::UNITS`). Each gets a submenu with its state and start/stop/restart via
-//! `systemctl --user` — no polkit. "Start host" starts all three. KDE renders SNI
-//! natively; GNOME needs the AppIndicator extension or the icon is missing.
-//! `--autostart` then exits silently instead of failing every login.
+//! `systemctl --user` — no polkit. "Start host" and `--start-host` (the launcher)
+//! start all three. KDE renders SNI natively; GNOME needs the AppIndicator extension
+//! or the icon is missing. `--autostart` then exits silently instead of failing every login.
 //!
 //! One instance per session (`flock` on `$XDG_RUNTIME_DIR/punktfunk-tray.lock`).
 //! Status model and poller: `status.rs`. Service-vs-machine restart wording:
@@ -245,10 +245,17 @@ fn acquire_instance_lock() -> Option<std::fs::File> {
 }
 
 pub fn run(args: crate::Args) -> anyhow::Result<()> {
-    let _ = args.start_host; // Windows Start-menu link; the tray menu starts a Linux host
     if args.quit {
         // Windows-only convenience for the uninstaller; nothing to do here.
         return Ok(());
+    }
+    if args.start_host {
+        // Before the instance lock, so a launch beside a running tray still starts them.
+        // `--no-block`: the console's start would wait for the host's first files.
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "start", "--no-block"])
+            .args(status::UNITS.map(|(unit, _)| unit))
+            .status();
     }
     if args.autostart && !host_present() {
         return Ok(());
