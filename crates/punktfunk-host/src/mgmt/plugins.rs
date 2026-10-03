@@ -41,6 +41,9 @@ pub(crate) struct PluginUi {
     /// Serves `GET/PUT /__game?entry=<id>`, a tab on each library entry's page.
     #[serde(default)]
     pub game: bool,
+    /// Serves `POST /__install`: installs, pauses, cancels and removes its titles' files.
+    #[serde(default)]
+    pub install: bool,
 }
 
 fn yes() -> bool {
@@ -95,6 +98,8 @@ pub(crate) struct PluginUiPublic {
     pub config: bool,
     /// See [`PluginUi::game`].
     pub game: bool,
+    /// See [`PluginUi::install`].
+    pub install: bool,
 }
 
 /// Listing row. Never carries the secret — the browser reaches the UI only through the console proxy.
@@ -126,6 +131,7 @@ struct StoredUi {
     page: bool,
     config: bool,
     game: bool,
+    install: bool,
 }
 
 /// `expires_at` is monotonic [`Instant`] — a wall-clock jump must not expire a live lease.
@@ -220,6 +226,7 @@ impl PluginRegistry {
                     page: u.page,
                     config: u.config,
                     game: u.game,
+                    install: u.install,
                 }),
                 category: s.category.clone(),
             })
@@ -230,12 +237,16 @@ impl PluginRegistry {
 
     /// Does not prune — a stale entry is reaped by the next [`snapshot`](Self::snapshot).
     fn credential(&self, id: &str) -> Option<UiCredential> {
+        self.credential_if(id, |_| true)
+    }
+
+    fn credential_if(&self, id: &str, serves: impl Fn(&StoredUi) -> bool) -> Option<UiCredential> {
         let map = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let s = map.get(id)?;
         if !s.is_live() {
             return None;
         }
-        let ui = s.ui.as_ref()?;
+        let ui = s.ui.as_ref().filter(|u| serves(u))?;
         Some(UiCredential {
             port: ui.port,
             secret: ui.secret.clone(),
@@ -313,6 +324,11 @@ pub(crate) fn ui_credential(id: &str) -> Option<UiCredential> {
     registry().credential(id)
 }
 
+/// `{port, secret}` of live plugin `id` when it serves `/__install`.
+pub(crate) fn installer(id: &str) -> Option<UiCredential> {
+    registry().credential_if(id, |u| u.install)
+}
+
 /// Bypass the HTTP router so [`crate::library::ask_plugin_launch`] tests can hit a stub server.
 #[cfg(test)]
 pub(crate) fn register_ui_for_test(id: &str, port: u16, secret: &str) {
@@ -328,6 +344,7 @@ pub(crate) fn register_ui_for_test(id: &str, port: u16, secret: &str) {
                 page: true,
                 config: false,
                 game: false,
+                install: false,
             }),
             category: None,
             holds: Vec::new(),
@@ -459,6 +476,7 @@ fn validate_ui(u: PluginUi) -> Result<StoredUi, String> {
         page: u.page,
         config: u.config,
         game: u.game,
+        install: u.install,
     })
 }
 
@@ -625,6 +643,7 @@ mod tests {
                 page: true,
                 config: false,
                 game: false,
+                install: false,
             }),
             category: None,
             holds: Vec::new(),

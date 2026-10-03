@@ -756,6 +756,27 @@ impl AccessStore {
         })
     }
 
+    /// Whether plugin `id` may write `path`: under a writable root its manifest declares or a
+    /// write grant. A path that doesn't resolve is checked as given.
+    pub fn may_write(&self, id: &str, path: &Path) -> bool {
+        let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let declared: Vec<(PathBuf, bool)> = crate::plugins::manifest::for_provider(id)
+            .map(|m| {
+                m.writes
+                    .iter()
+                    .map(|p| (home_path(p, &self.policy), true))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let grants = self
+            .load_access()
+            .get(id)
+            .map(|e| e.grants.clone())
+            .unwrap_or_default();
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        covers(&declared, &grants, &canonical, true, &self.policy)
+    }
+
     /// The emulator a pending row asks for, when it is one.
     pub fn pending_emulator(&self, id: &str, path: &str) -> Option<String> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());

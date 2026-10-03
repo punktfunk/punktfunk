@@ -327,7 +327,19 @@ fn run(
             claim: launch_claim,
             stamp: launch_stamp,
             prep: _prep,
-        } = crate::session_launch::prepare(target.as_ref(), &owner, &prep_cmds, &prep_env);
+            declined,
+            waiting: _waiting,
+        } = crate::session_launch::prepare(target.as_ref(), &owner, &prep_cmds, &prep_env, &|| {
+            life.quit.load(Ordering::Relaxed)
+        });
+        // The title's files never arrived: Moonlight has no notice channel, so stream without it.
+        let target = match declined {
+            Some(sentence) => {
+                tracing::warn!(reason = %sentence, "streaming without the launched title");
+                None
+            }
+            None => target,
+        };
         // Re-runnable: the encode loop calls it again on a mid-stream capture loss.
         let GsSource {
             mut capturer,

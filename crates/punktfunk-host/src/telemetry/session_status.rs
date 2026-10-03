@@ -1105,6 +1105,7 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
 }
 
 /// One launched game as `/status` reports it.
+#[derive(Clone)]
 pub struct GameSnapshot {
     /// Streaming session, or `None` if the session is gone and the game is in
     /// its reconnect window.
@@ -1229,7 +1230,50 @@ pub fn games() -> Vec<GameSnapshot> {
                 launched_by: Some(d.fingerprint),
             }),
     );
+    // A waiting launch's row stands in until its session lists the game itself.
+    for (_, w) in waiting()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+    {
+        if !out
+            .iter()
+            .any(|g| g.app_id == w.app_id && g.launched_by == w.launched_by)
+        {
+            out.push(w.clone());
+        }
+    }
     out
+}
+
+/// Launches waiting for their title's files: `launching` rows before their session has a
+/// lease, so a client polling `/status` sees the launch it asked for.
+fn waiting() -> &'static Mutex<Vec<(u64, GameSnapshot)>> {
+    static W: OnceLock<Mutex<Vec<(u64, GameSnapshot)>>> = OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+/// One waiting launch's row in [`games`]; dropping it takes the row away.
+pub struct WaitingRow(u64);
+
+impl Drop for WaitingRow {
+    fn drop(&mut self) {
+        waiting()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(token, _)| *token != self.0);
+    }
+}
+
+/// List `row` (state `launching`) in [`games`] while the guard lives.
+pub fn waiting_launch(row: GameSnapshot) -> WaitingRow {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let token = NEXT.fetch_add(1, Ordering::Relaxed);
+    waiting()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((token, row));
+    WaitingRow(token)
 }
 
 /// Leases on games that are still on a streaming session, filtered by `app_id`

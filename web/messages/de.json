@@ -144,6 +144,7 @@
 	"activity_display_released": "Anzeige freigegeben",
 	"activity_library_changed": "Bibliothek geändert",
 	"activity_emulators_changed": "Emulatoren geändert",
+	"activity_downloads_changed": "Downloads geändert",
 	"activity_update_available": "Update verfügbar",
 	"activity_update_applied": "Update angewendet",
 	"activity_plugins_changed": "Plugins geändert",

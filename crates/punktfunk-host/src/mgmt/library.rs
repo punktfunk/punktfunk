@@ -119,6 +119,7 @@ pub(crate) async fn get_library(
     if lane.is_operator() {
         let mut rows = crate::library::all_games_for_operator();
         rows.retain(|r| matches_query(&r.entry, &q));
+        crate::library::downloads::fill_free(rows.iter_mut().map(|r| &mut r.entry));
         for r in &mut rows {
             crate::library::proxy_art(&r.entry.id, &mut r.entry.art);
         }
@@ -126,6 +127,7 @@ pub(crate) async fn get_library(
     }
     let mut games = crate::library::all_games();
     games.retain(|g| matches_query(g, &q));
+    crate::library::downloads::fill_free(games.iter_mut());
     // Rewrite to the art proxy: an on-host path a client cannot reach, and a CDN URL every
     // client would otherwise fetch over the WAN for itself.
     for g in &mut games {
@@ -140,7 +142,8 @@ pub(crate) async fn get_library(
 /// What a lane other than the operator's may not read. `cert_may_access` allows the library
 /// reads, so paired clients see these bodies: a custom entry's `launch.value` is the operator's
 /// shell command and is cleared, `kind` stays so launchability still renders. `ids` and
-/// `filled` serve metadata sources and the console; a player needs neither.
+/// `filled` serve metadata sources and the console; a player needs neither, nor the folder a
+/// title installs into.
 fn redact_for_lane(g: &mut crate::library::GameEntry, lane: &AuthLane) {
     if lane.is_operator() {
         return;
@@ -153,6 +156,9 @@ fn redact_for_lane(g: &mut crate::library::GameEntry, lane: &AuthLane) {
     if matches!(lane, AuthLane::Cert) {
         g.ids.clear();
         g.filled.clear();
+        if let Some(i) = g.install.as_mut() {
+            i.target = None;
+        }
     }
 }
 
@@ -163,6 +169,7 @@ pub(crate) struct LibraryPageQuery {
     q: Option<String>,
     role: Option<String>,
     id: Option<String>,
+    install: Option<String>,
     limit: Option<u32>,
     cursor: Option<String>,
 }
@@ -185,6 +192,15 @@ pub(crate) struct LibraryPage {
     total: usize,
     /// Platforms among the titles matching every filter but `platform`, largest first.
     platforms: Vec<PlatformCount>,
+    /// Titles not installed on this host among those matching every filter but `install`.
+    /// Absent when there are none.
+    #[serde(skip_serializing_if = "is_zero")]
+    #[schema(required = false)]
+    not_installed: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// 60 fills a wide grid a few rows deep; 200 bounds one response.
@@ -211,9 +227,9 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
 /// Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the
 /// last title sent; pass it back as `cursor` for the next page. It is a place in the order, not
 /// an offset: a title added or removed between two pages neither repeats nor skips one.
-/// `q` matches inside the title, any case. `provider`, `platform` and `role` (`game`,
-/// `launcher`) narrow, and `id` names one title, for a caller that needs only that entry.
-/// Lanes see what `GET /library` shows them.
+/// `q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,
+/// `launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a
+/// caller that needs only that entry. Lanes see what `GET /library` shows them.
 #[utoipa::path(
     get,
     path = "/library/page",
@@ -227,6 +243,7 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
         ("platform" = Option<String>, Query, description = "Only entries on this platform (case-insensitive, e.g. `PS2`)"),
         ("role" = Option<String>, Query, description = "`game` or `launcher`"),
         ("id" = Option<String>, Query, description = "Only the entry with this library id"),
+        ("install" = Option<String>, Query, description = "`installed` (on this host) or `missing` (not installed)"),
     ),
     responses(
         (status = OK, description = "One page, the total and the platform counts", body = LibraryPage),
@@ -292,6 +309,13 @@ pub(crate) async fn get_library_page(
         platform: q.platform.clone(),
     };
     rows.retain(|(g, _)| matches_query(g, &by_platform));
+    let missing = |g: &crate::library::GameEntry| g.install.as_ref().is_some_and(|i| i.missing());
+    let not_installed = rows.iter().filter(|(g, _)| missing(g)).count();
+    match q.install.as_deref() {
+        Some("missing") => rows.retain(|(g, _)| missing(g)),
+        Some("installed") => rows.retain(|(g, _)| !missing(g)),
+        _ => {}
+    }
     let total = rows.len();
     // The library arrives sorted by `sort_key` and the filters keep that order.
     let start = after.map_or(0, |key| rows.partition_point(|(g, _)| sort_key(g) <= key));
@@ -308,6 +332,7 @@ pub(crate) async fn get_library_page(
     let next_cursor = more
         .then(|| items.last().map(|r| encode_cursor(&sort_key(&r.entry))))
         .flatten();
+    crate::library::downloads::fill_free(items.iter_mut().map(|r| &mut r.entry));
     for r in &mut items {
         crate::library::proxy_art(&r.entry.id, &mut r.entry.art);
         redact_for_lane(&mut r.entry, &lane);
@@ -317,6 +342,7 @@ pub(crate) async fn get_library_page(
         next_cursor,
         total,
         platforms,
+        not_installed,
     })
     .into_response()
 }

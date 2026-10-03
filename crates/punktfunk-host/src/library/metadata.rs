@@ -562,6 +562,7 @@ mod tests {
             stats: None,
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
+            install: None,
             meta: GameMeta::default(),
         }
     }
