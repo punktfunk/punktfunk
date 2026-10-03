@@ -100,8 +100,9 @@ Click **Display settings…** on a device in **Displays** or **Devices**. Each q
 - **Your monitors while streaming** (Linux hosts);
 - **Largest screen this device gets**, such as `2560x1440@60`. The device is told the smaller mode
   when it asks for more;
-- **Scale its screen at** (Linux hosts): the starting scale on GNOME, until you change the scale in
-  the desktop.
+- **Scale its screen at** (GNOME hosts): the starting scale, until you change the scale in the
+  desktop. On KDE, set the scale in System Settings while the device streams; KDE keeps it for
+  that device.
 
 **Follow the host in everything** removes the device's overrides.
 
