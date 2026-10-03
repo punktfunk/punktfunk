@@ -247,6 +247,34 @@ impl V2Message for Pending {
         Ok(Pending {})
     }
 }
+
+/// Longest [`Redirect::addr`]: a host name (RFC 1035) or an IP literal.
+pub const REDIRECT_ADDR_MAX: usize = 253;
+
+/// Longest profile id on any wire or ABI: `char id[65]` on the C side.
+pub const PROFILE_ID_MAX: usize = 64;
+
+/// `host → client`, instead of `ServerHello`: the session runs on another host of this box.
+/// The client dials `addr:port` with the same `ClientHello`, once; an empty `addr` is the
+/// address it dialed. `profile` is the id the host resolved, `seat_no` and `seat_name` the
+/// seat, and `occupant` the device already there when this one joins a live session.
+/// `punktfunk/2` only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Redirect {
+    pub addr: String,
+    pub port: u16,
+    pub profile: String,
+    pub seat_no: u8,
+    pub seat_name: String,
+    pub occupant: String,
+}
+
+v2_message!(Redirect = reg::MSG_REDIRECT,
+    { 1 => addr, 2 => port, 3 => profile, 4 => seat_no, 5 => seat_name, 6 => occupant },
+    check |m| m.port != 0 && m.addr.len() <= REDIRECT_ADDR_MAX
+        && m.profile.len() <= PROFILE_ID_MAX && m.seat_name.len() <= HELLO_NAME_MAX
+        && m.occupant.len() <= HELLO_NAME_MAX);
+
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
 v2_message!(ClipFetch = reg::MSG_CLIP_FETCH, { 1 => seq, 2 => file_index, 3 => mime },
@@ -432,6 +460,14 @@ mod tests {
             code: 0x67,
             reason: "update both".into(),
         });
+        round_trip(Redirect {
+            addr: "couch-pc.local".into(),
+            port: 9778,
+            profile: "9a3f1c2b7e40".into(),
+            seat_no: 1,
+            seat_name: "Seat 1".into(),
+            occupant: "Ben's Apple TV".into(),
+        });
         round_trip(Reconfigure { mode });
         round_trip(Reconfigured {
             accepted: true,
@@ -573,6 +609,21 @@ mod tests {
             PairResult { ok: true }.encode_v2(),
             [0x13, 0x03, 0x01, 0x01, 0x01]
         );
+        assert_eq!(
+            Redirect {
+                addr: String::new(),
+                port: 9778,
+                profile: "ab".into(),
+                seat_no: 2,
+                seat_name: String::new(),
+                occupant: String::new(),
+            }
+            .encode_v2(),
+            [
+                0x05, 0x11, 0x01, 0x00, 0x02, 0x02, 0x32, 0x26, 0x03, 0x02, 0x61, 0x62, 0x04, 0x01,
+                0x02, 0x05, 0x00, 0x06, 0x00
+            ]
+        );
     }
 
     #[test]
@@ -589,6 +640,23 @@ mod tests {
             reason: long(REFUSED_REASON_MAX + 1),
         };
         assert!(Refused::from_body(&bad_reason.fields().into_body()).is_err());
+        let nowhere = Redirect {
+            port: 0,
+            ..Redirect::default()
+        };
+        assert!(Redirect::from_body(&nowhere.fields().into_body()).is_err());
+        let far = Redirect {
+            addr: long(REDIRECT_ADDR_MAX + 1),
+            port: 9778,
+            ..Redirect::default()
+        };
+        assert!(Redirect::from_body(&far.fields().into_body()).is_err());
+        let nobody = Redirect {
+            port: 9778,
+            profile: long(PROFILE_ID_MAX + 1),
+            ..Redirect::default()
+        };
+        assert!(Redirect::from_body(&nobody.fields().into_body()).is_err());
         let bad_cursor = CursorShape {
             serial: 1,
             w: CURSOR_SHAPE_MAX_SIDE + 1,

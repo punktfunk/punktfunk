@@ -64,6 +64,8 @@ mod pad_uplink;
 use input::{input_thread, ClientInput};
 
 mod handshake;
+#[cfg(test)]
+pub(crate) use handshake::redirect;
 /// `PUNKTFUNK_WIRE_MTU`, the control-connection path-MTU watch, and the per-peer shard clamp.
 mod wire_mtu;
 

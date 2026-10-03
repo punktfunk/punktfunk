@@ -3,7 +3,8 @@
 //! Pairing stays in `serve_session`: the delegated-approval wait must outlive this handshake
 //! timeout and must release the session permit. This module then admits the client, negotiates
 //! encode / audio / cursor, binds the data-plane UDP socket, and returns the values
-//! `serve_session` needs to stand the session up.
+//! `serve_session` needs to stand the session up. On `punktfunk/2` a client can instead be
+//! sent to another host of the box before any `Welcome` ([`redirect`]).
 //!
 //! Evidence: `design/hi-res-audio.md`, `design/remote-desktop-sweep.md`.
 
@@ -325,6 +326,26 @@ pub(super) struct Negotiated {
     pub(super) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
     /// Native feature bits in force ([`ServerHello::features`]).
     pub(super) features: punktfunk_core::quic::v2::features::FeatureSet,
+}
+
+/// How long the host holds the connection after a `Redirect` for the client to read it and
+/// leave. A close first could outrun the frame.
+const REDIRECT_LINGER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Send the client to another host of this box instead of a `ServerHello`: the frame, then the
+/// client's close, then ours. Placement by profile is the caller.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) async fn redirect(
+    conn: &super::link::SessionLink,
+    send: &mut super::link::CtlSend,
+    to: &punktfunk_core::quic::v2::msg::Redirect,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    punktfunk_core::quic::v2::io::send(send, to).await?;
+    send.flush().await?;
+    let _ = tokio::time::timeout(REDIRECT_LINGER, conn.closed()).await;
+    conn.close(punktfunk_core::quic::QUIT_CLOSE_CODE, b"redirected");
+    Ok(())
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them

@@ -1,11 +1,12 @@
-//! Connect + handshake: cert-pinned `pkf2` dial, Hello/Welcome/Start on the control stream
-//! (translated at its edge into `ClientHello`/`ServerHello`/`Ready`), wall-clock skew, and the
-//! [`Session`] over the connection's own socket, keyed from its exporter. A typed application
+//! Connect + handshake: cert-pinned `pkf2` dial, `ClientHello`/`ServerHello`/`Ready` on the
+//! control stream, wall-clock skew, and the [`Session`] over the connection's own socket, keyed from its exporter. A typed application
 //! close from the host is [`PunktfunkError::Rejected`], not a transport error; a host that
-//! answers no `pkf2` is the wire-version rejection.
+//! answers no `pkf2` is the wire-version rejection. A host may answer with a `Redirect`
+//! instead: the session runs on another host of the same box, and the dial repeats there, once.
 
 use super::*;
 use crate::crypto::MediaSuite;
+use crate::quic::v2::msg::Redirect;
 
 pub(super) struct HandshakeOut {
     pub(super) conn: ClientConn,
@@ -19,10 +20,63 @@ pub(super) struct HandshakeOut {
     pub(super) host_caps: u8,
 }
 
+/// What one dial came to: a session, or the host's word that it runs elsewhere on the box.
+enum Dialed {
+    Session(Box<HandshakeOut>),
+    Redirected(Redirect),
+}
+
+/// The handshake's end: a session, or the host's `Redirect`.
+enum Step {
+    Session(Box<(Session, CtlSend, CtlRecv, Negotiated, u8)>),
+    Redirected(Redirect),
+}
+
 pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<HandshakeOut> {
     let p = &args.params;
+    // One connect budget covers a redirect's second dial.
+    let deadline = tokio::time::Instant::now() + p.timeout;
+    let (mut host, mut port) = (p.host.clone(), p.port);
+    let mut redirected = false;
+    loop {
+        match dial(args, &host, port, deadline).await? {
+            Dialed::Session(out) => return Ok(*out),
+            Dialed::Redirected(to) => follow(&mut redirected, &mut host, &mut port, &to)?,
+        }
+    }
+}
+
+/// Take a `Redirect` once: the next dial goes to its address and port with the same pin and
+/// the same `ClientHello`. A second one on the same connect is a host that can't place this
+/// client, not a seat.
+fn follow(redirected: &mut bool, host: &mut String, port: &mut u16, to: &Redirect) -> Result<()> {
+    if std::mem::replace(redirected, true) {
+        return Err(PunktfunkError::InvalidArg(
+            "redirected twice on one connect",
+        ));
+    }
+    tracing::info!(
+        addr = %to.addr,
+        port = to.port,
+        seat = %to.seat_name,
+        "redirected to another host of this box"
+    );
+    if !to.addr.is_empty() {
+        *host = to.addr.clone();
+    }
+    *port = to.port;
+    Ok(())
+}
+
+async fn dial(
+    args: &WorkerArgs,
+    host: &str,
+    port: u16,
+    deadline: tokio::time::Instant,
+) -> Result<Dialed> {
+    let p = &args.params;
     let (pin, shutdown) = (p.pin, &args.shared.shutdown);
-    let remote = dial_addr(&p.host, p.port).await?;
+    let remote = dial_addr(host, port).await?;
     let identity = p.identity.as_ref().map(|(c, k)| (c.as_str(), k.as_str()));
     let io_err = |e: endpoint::anyhow_result::Error| {
         PunktfunkError::Io(std::io::Error::other(e.to_string()))
@@ -35,9 +89,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
     const DIAL_ATTEMPT: std::time::Duration = std::time::Duration::from_secs(3);
     // Leave Hello/Welcome/clock-sync room after a late dial, still inside the budget.
     const CONTROL_HEADROOM: std::time::Duration = std::time::Duration::from_secs(2);
-    let start = tokio::time::Instant::now();
-    let deadline = start + p.timeout;
-    let redial_until = start + p.timeout.saturating_sub(CONTROL_HEADROOM);
+    let redial_until = deadline.checked_sub(CONTROL_HEADROOM).unwrap_or(deadline);
     let conn = loop {
         let connecting = ep
             .connect(remote, "punktfunk")
@@ -150,7 +202,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             },
             // The `Start` entries: every host reads them.
             start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
-            resume: crate::client::resume::peek(&p.host, p.port),
+            resume: crate::client::resume::peek(host, port),
             suites: if wants_chacha {
                 vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
             } else {
@@ -160,13 +212,14 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         };
         v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
-        crate::client::resume::take(&p.host, p.port);
+        crate::client::resume::take(host, port);
         // `Pending` repeats while the host asks its console about this device.
         let mut waiting = false;
         let server = loop {
             let (ty, body) = recv.read_frame().await?;
             match ty {
                 ServerHello::TYPE => break ServerHello::from_body(&body)?,
+                Redirect::TYPE => return Ok(Step::Redirected(Redirect::from_body(&body)?)),
                 registry::MSG_PENDING if !std::mem::replace(&mut waiting, true) => {
                     tracing::info!("the host is waiting for this device to be approved");
                 }
@@ -235,7 +288,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         if p.frame_parts && welcome.codec != crate::quic::CODEC_PYROWAVE {
             session.set_deliver_frame_parts(true);
         }
-        Ok::<_, PunktfunkError>((
+        Ok::<_, PunktfunkError>(Step::Session(Box::new((
             session,
             send,
             recv,
@@ -267,7 +320,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 expires_in_secs: welcome.expires_in_secs,
             },
             welcome.host_caps,
-        ))
+        ))))
     };
     // Cancel and the connect deadline (both `shutdown`) reach a parked handshake too: the host
     // withdraws a request-access knock only when the connection closes.
@@ -286,15 +339,25 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         return Err(PunktfunkError::Timeout);
     };
     match outcome {
-        Ok((session, send, recv, negotiated, host_caps)) => Ok(HandshakeOut {
-            conn: ClientConn::new(conn),
-            ep,
-            session,
-            ctrl_send: send,
-            ctrl_recv: recv,
-            negotiated,
-            host_caps,
-        }),
+        Ok(Step::Session(landed)) => {
+            let (session, send, recv, negotiated, host_caps) = *landed;
+            Ok(Dialed::Session(Box::new(HandshakeOut {
+                conn: ClientConn::new(conn),
+                ep,
+                session,
+                ctrl_send: send,
+                ctrl_recv: recv,
+                negotiated,
+                host_caps,
+            })))
+        }
+        // Nothing of this connection carries over; the next dial is a fresh handshake.
+        Ok(Step::Redirected(to)) => {
+            conn.close(crate::quic::QUIT_CLOSE_CODE.into(), b"redirected");
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(300), ep.wait_idle()).await;
+            Ok(Dialed::Redirected(to))
+        }
         Err(e) => {
             // Typed close can land after the stream error (reset/FIN vs CONNECTION_CLOSE).
             // Brief wait so a host setup failure is `Rejected`, not mid-frame EOF.
@@ -307,5 +370,34 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 None => e,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The first redirect moves the dial, an empty address keeps the host, and a second
+    /// redirect on the same connect is refused with the dial left where the first put it.
+    #[test]
+    fn one_redirect_per_connect() {
+        let (mut redirected, mut host, mut port) = (false, "couch-pc".to_string(), 9777);
+        let same_box = Redirect {
+            port: 9778,
+            ..Redirect::default()
+        };
+        follow(&mut redirected, &mut host, &mut port, &same_box).unwrap();
+        assert_eq!((host.as_str(), port), ("couch-pc", 9778));
+        let elsewhere = Redirect {
+            addr: "10.0.0.5".into(),
+            port: 9779,
+            ..Redirect::default()
+        };
+        assert!(follow(&mut redirected, &mut host, &mut port, &elsewhere).is_err());
+        assert_eq!((host.as_str(), port), ("couch-pc", 9778));
+
+        let (mut redirected, mut host, mut port) = (false, "couch-pc".to_string(), 9777);
+        follow(&mut redirected, &mut host, &mut port, &elsewhere).unwrap();
+        assert_eq!((host.as_str(), port), ("10.0.0.5", 9779));
     }
 }
