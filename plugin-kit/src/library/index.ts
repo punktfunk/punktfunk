@@ -5,6 +5,7 @@
 // `defineLibraryPlugin`. See design/library-scanner-plugins.md D10.
 export {
 	defineLibraryPlugin,
+	type LibraryInstall,
 	type LibraryPlugin,
 	type LibraryPluginDef,
 	type ScanReport,

@@ -18,6 +18,13 @@ import {
 } from "../access.js";
 import { type CliCommand, runPluginCli } from "../cli.js";
 import { type ConfigService, makeConfigService } from "../config.js";
+import {
+	type DownloadReporter,
+	downloadReporter,
+	type InstallAction,
+	type InstallAsk,
+	type ServeUiInstall,
+} from "../downloads.js";
 import { HostClient, type PluginInfo } from "../host-client.js";
 import { ProviderClient, type ProviderClientService } from "../reconcile.js";
 import { definePluginKit, type PluginKitDef } from "../runtime.js";
@@ -111,7 +118,39 @@ export interface LibraryPluginDef<S extends Schema.Top> {
 	};
 	/** How long the host waits for a hold, 1–120 000 ms. Default 30 000. */
 	readonly holdTimeoutMs?: number;
+	/** The host's install asks for this plugin's titles, each with the config. See `serveUi`. */
+	readonly install?: LibraryInstall<S["Type"]>;
+	/**
+	 * Runs beside the sync for the plugin's life: report each title's download through
+	 * `reporter`. `config` reads the current settings.
+	 */
+	readonly downloads?: (
+		reporter: DownloadReporter,
+		config: Effect.Effect<S["Type"], unknown>,
+	) => Effect.Effect<void>;
 }
+
+/** {@link ServeUiInstall}, with the plugin's config as each handler's second argument. */
+export type LibraryInstall<Cfg> = {
+	readonly [A in InstallAction]: (
+		ask: InstallAsk,
+		cfg: Cfg,
+	) => Effect.Effect<void, unknown>;
+};
+
+const withConfig = <Cfg>(
+	install: LibraryInstall<Cfg>,
+	config: Effect.Effect<Cfg, unknown>,
+): ServeUiInstall => {
+	const ask = (action: InstallAction) => (a: InstallAsk) =>
+		config.pipe(Effect.flatMap((cfg) => install[action](a, cfg)));
+	return {
+		start: ask("start"),
+		pause: ask("pause"),
+		cancel: ask("cancel"),
+		uninstall: ask("uninstall"),
+	};
+};
 
 /** `--flag value` from an argv slice, or undefined. */
 const flagValue = (
@@ -314,7 +353,14 @@ export const defineLibraryPlugin = <S extends Schema.Top>(
 			...(def.holdTimeoutMs !== undefined
 				? { holdTimeoutMs: def.holdTimeoutMs }
 				: {}),
+			...(def.install
+				? { install: withConfig(def.install, cfgService.load) }
+				: {}),
 		});
+		if (def.downloads) {
+			const reporter = yield* downloadReporter(def.name);
+			yield* Effect.forkScoped(def.downloads(reporter, cfgService.load));
+		}
 
 		yield* engine.start;
 		// A saved settings change is exactly when a user expects the library to update — and it may
