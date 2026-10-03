@@ -191,6 +191,23 @@ pub(crate) async fn request_plugin_access(
             };
             let outcome = if !crate::emulators::valid_core(core) {
                 refused("bad_core")
+            } else if let Some(dir) = cores_dir
+                .as_ref()
+                .filter(|d| crate::emulators::has_core(d, core))
+            {
+                // A sandbox that can't read the folder sees no cores; one already there needs
+                // only the folder.
+                let folder = [(dir.to_string_lossy().into_owned(), false)];
+                match st.access.request(&id, &folder, reason.clone()) {
+                    Ok(m) => {
+                        changed |= m.changed;
+                        m.value
+                            .into_iter()
+                            .next()
+                            .unwrap_or_else(|| refused("not_directory"))
+                    }
+                    Err(e) => return store_err(e, "record the core request"),
+                }
             } else if let Some(dir) = &cores_dir {
                 match st.access.request_core(&id, core, dir, reason.clone()) {
                     Ok(m) => {

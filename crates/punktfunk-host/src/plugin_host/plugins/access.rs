@@ -871,14 +871,12 @@ impl AccessStore {
                 grants_changed = true;
             }
             Decision::Deny => {
+                // Every row on the folder goes, as an allow takes them all: RetroArch's cores
+                // share one.
                 let found = pending_all.get_mut(id).is_some_and(|rows| {
-                    match rows.iter().position(|p| same_path(&p.path, &stored_path)) {
-                        Some(i) => {
-                            rows.remove(i);
-                            true
-                        }
-                        None => false,
-                    }
+                    let before = rows.len();
+                    rows.retain(|p| !same_path(&p.path, &stored_path));
+                    rows.len() != before
                 });
                 if !found {
                     return Err(io::Error::new(
@@ -1613,6 +1611,25 @@ mod tests {
         let snap = s2.snapshot_for("demo").unwrap();
         assert!(snap.pending.is_empty());
         assert_eq!(snap.denied, vec![raw.clone()]);
+    }
+
+    #[test]
+    fn one_no_on_the_cores_folder_takes_every_core_asked_there() {
+        let f = fixture();
+        let cores = f.dir("data/retroarch/cores");
+        let s = f.store();
+        for core in ["snes9x", "mgba"] {
+            assert_eq!(
+                s.request_core("demo", core, &cores, None)
+                    .unwrap()
+                    .value
+                    .outcome,
+                "pending"
+            );
+        }
+        s.decide("demo", cores.to_str().unwrap(), Decision::Deny, "console")
+            .unwrap();
+        assert!(s.snapshot_for("demo").unwrap().pending.is_empty());
     }
 
     #[test]

@@ -74,6 +74,15 @@ pub fn install_core(core: &str) -> hermir::Result<PathBuf> {
     open()?.install_core(core, &Quiet)
 }
 
+/// Whether RetroArch's cores folder `dir` already holds `core`, under the name hermir gives it.
+pub fn has_core(dir: &Path, core: &str) -> bool {
+    dir.join(format!(
+        "{core}_libretro.{}",
+        std::env::consts::DLL_EXTENSION
+    ))
+    .is_file()
+}
+
 /// The pads this host made for its players, in the order they appeared: seat 1 is the first.
 /// Linux reads them off `/proc/bus/input/devices` — a virtual device with a vendor the host's
 /// pad backends present is one of ours. With none up yet (the client's pad frames arrive
@@ -265,5 +274,16 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         );
         assert_eq!(pads[0].sdl_guid(true), "030081b85e0400008e02000010010000");
         assert!(virtual_pads("").is_empty());
+    }
+
+    #[test]
+    fn a_core_counts_as_present_only_under_the_name_retroarch_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = std::env::consts::DLL_EXTENSION;
+        std::fs::write(dir.path().join(format!("snes9x_libretro.{ext}")), b"").unwrap();
+        std::fs::write(dir.path().join("mgba_libretro.zip"), b"").unwrap();
+        assert!(has_core(dir.path(), "snes9x"));
+        assert!(!has_core(dir.path(), "mgba"));
+        assert!(!has_core(dir.path(), "ppsspp"));
     }
 }
