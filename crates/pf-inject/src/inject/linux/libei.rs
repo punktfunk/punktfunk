@@ -357,12 +357,14 @@ async fn connect_mutter() -> Result<(Box<dyn Send>, zbus::Proxy<'static>, std::o
 /// Poll `file` for the EIS socket path (gamescope relays `LIBEI_SOCKET` there), then
 /// connect. A bare name is resolved against `XDG_RUNTIME_DIR`, matching libei.
 /// Line 2, when present, is compositor output `WxH` — gamescope's EIS region is
-/// degenerate, so geometry cannot come from the protocol.
+/// degenerate, so geometry cannot come from the protocol. A file still empty at the
+/// deadline is a gamescope built without libei: it has no EIS to connect to.
 async fn connect_socket_file(file: &std::path::Path) -> Result<(UnixStream, Option<(u32, u32)>)> {
     // Re-read and retry: the file may still name a dead session's socket, or the
     // live one is not listening yet. Bound so a wedged compositor still errors.
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     let mut logged = String::new();
+    let mut blank = false;
     loop {
         // Refuse a symlink. The file lives under `$XDG_RUNTIME_DIR` (0700), but
         // following one would connect to an attacker-chosen EIS server.
@@ -378,6 +380,7 @@ async fn connect_socket_file(file: &std::path::Path) -> Result<(UnixStream, Opti
         if let Ok(s) = std::fs::read_to_string(file) {
             let mut file_lines = s.lines();
             let name = file_lines.next().unwrap_or("").trim();
+            blank = name.is_empty();
             let hint = file_lines.next().and_then(|l| {
                 let (w, h) = l.trim().split_once('x')?;
                 Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
@@ -409,6 +412,12 @@ async fn connect_socket_file(file: &std::path::Path) -> Result<(UnixStream, Opti
             }
         }
         if std::time::Instant::now() >= deadline {
+            if blank {
+                return Err(anyhow!(
+                    "gamescope left {} empty: built without libei, so keyboard and mouse can't reach it",
+                    file.display()
+                ));
+            }
             return Err(anyhow!(
                 "EIS socket from {} never became connectable (gamescope not up, or its EIS crashed)",
                 file.display()
