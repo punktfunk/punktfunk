@@ -744,8 +744,12 @@ mod session_main {
 
     pub fn run() -> u8 {
         // Logs to STDERR — stdout is the machine interface (ready/stats/error lines) — plus
-        // the ring "Send logs to host" uploads.
-        pf_client_core::logring::init_tracing(std::io::stderr, true);
+        // the ring "Send logs to host" uploads. A shell pipes stderr into its log file, so
+        // colour only on a terminal.
+        pf_client_core::logring::init_tracing(
+            std::io::stderr,
+            std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        );
         // SEH last-resort: a driver AV otherwise leaves only an exit code in the shell's log.
         #[cfg(windows)]
         punktfunk_core::crash::install();

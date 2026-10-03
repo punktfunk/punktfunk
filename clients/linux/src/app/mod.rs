@@ -682,8 +682,11 @@ fn clear_steam_sdl_device_filter() {
 
 pub fn run() -> glib::ExitCode {
     // Logs to stdout and the ring "Send logs to host" uploads. The spawned session's stderr
-    // joins the ring too, so a bundle carries the stream's trail.
-    pf_client_core::logring::init_tracing(std::io::stdout, true);
+    // joins the ring too, so a bundle carries the stream's trail. Colour only on a terminal.
+    pf_client_core::logring::init_tracing(
+        std::io::stdout,
+        std::io::IsTerminal::is_terminal(&std::io::stdout()),
+    );
     // Steam launches its shortcuts with SDL_GAMECONTROLLER_IGNORE_DEVICES naming every
     // physical pad Steam Input has virtualized; the Settings controller list needs the
     // real devices (same rationale as the session binary).
