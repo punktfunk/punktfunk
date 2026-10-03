@@ -7,8 +7,9 @@
 //! session through [`ClientMedia`], a bounded queue. Video never enters an async runtime.
 //!
 //! Host: [`MediaSender`] sends media on a clone of the endpoint's socket, toward the
-//! connection's current address and from the address the client dialed, so a client that
-//! roams keeps its video once QUIC has validated the new path.
+//! connection's current address and from the address the client dialed. quinn moves that
+//! address on the first authenticated packet from a new one and validates it afterwards, so
+//! media follows a migration before QUIC has confirmed it.
 
 use super::Transport;
 use quinn::udp::{RecvMeta, Transmit, UdpSocketState};
@@ -436,8 +437,8 @@ impl Transport for MediaSender {
     }
 
     /// Runs of equal-size packets leave as one offloaded send, each run within the platform's
-    /// segment limit and the IPv6+UDP payload bound; the last packet of a run may be shorter.
-    /// An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
+    /// segment limit and under the UDP payload bound of either IP family; the last packet of a
+    /// run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
