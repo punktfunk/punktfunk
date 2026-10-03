@@ -34,8 +34,9 @@ what changed, the [release notes](https://git.unom.io/unom/punktfunk/releases).
 
 ## Not planned, or blocked upstream
 
-- **HDR on Mutter, KWin and wlroots virtual displays.** Those compositors' virtual outputs are
-  SDR-only upstream. gamescope and the GNOME 50+ monitor mirror carry HDR — see [HDR](/docs/hdr).
+- **HDR on Mutter, KWin and Sway virtual displays.** Those compositors' virtual outputs are
+  SDR-only upstream. gamescope, Hyprland and the GNOME 50+ monitor mirror carry HDR — see
+  [HDR](/docs/hdr).
 - **Hosting on macOS, iOS, tvOS or Android.** They are client-only platforms.
 - **HEVC 4:4:4 on AMD.** AMD's encoder can't produce it. Intel's VAAPI path has no 4:4:4 yet
   either. [PyroWave](/docs/pyrowave) carries full chroma on both.

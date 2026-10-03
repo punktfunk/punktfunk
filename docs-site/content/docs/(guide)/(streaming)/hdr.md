@@ -36,7 +36,7 @@ and forces it off for an SDR session; Windows' own **Use HDR** switch doesn't ma
 
 ### Linux + gamescope
 
-The only Linux route to HDR for the Punktfunk apps.
+The Linux route to HDR on KDE and GNOME, and in Game Mode everywhere.
 
 1. Install **`punktfunk-gamescope`**; stock gamescope captures 8-bit.
    [HDR on gamescope](/docs/gamescope#hdr-on-gamescope) has the package for your distro.
@@ -67,10 +67,21 @@ A Punktfunk app connecting to a GNOME host gets SDR.
 With `PUNKTFUNK_CAPTURE_MONITOR=<connector>` set, only that monitor's HDR mode counts. If no
 monitor is in HDR mode, the session streams SDR and says so in the host log.
 
+### Linux + Hyprland
+
+A virtual display is lit in 10-bit HDR when the client asks for HDR: the host adds
+`bitdepth 10`, `cm hdr`, `supports_hdr` and `supports_wide_color` to the streamed head's
+monitor rule. SDR content inside it starts at **SDR brightness** (the Game Mode setting,
+203 nits). The client panel's volume, when the app sends it, becomes the head's mastering
+target. An older Hyprland that refuses those keys streams SDR until the host restarts.
+
+**Streaming a physical monitor** on Hyprland is HDR when that monitor is in HDR mode. Nothing
+to set on the host.
+
 ### Other Linux desktops
 
-SDR. KDE, GNOME's virtual displays and the wlroots-family compositors capture 8-bit, and so does
-streaming a physical monitor to a Punktfunk app. No setting changes this.
+SDR. KDE and GNOME's virtual displays capture 8-bit, and so does streaming a physical monitor
+on KDE to a Punktfunk app. No setting changes this.
 
 ## Per client
 

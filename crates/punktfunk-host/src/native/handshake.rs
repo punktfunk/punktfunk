@@ -918,9 +918,9 @@ async fn negotiate_video_format(
     let client_supports_10bit = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_10BIT != 0;
     // `VIDEO_CAP_HDR` is BT.2020 PQ. `VIDEO_CAP_10BIT` alone is 10-bit SDR (Main10, display untouched).
     let client_wants_hdr = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_HDR != 0;
-    // Source-aware: Linux HDR depends on the compositor just resolved. Gamescope folds in
-    // `hdr_capture_failed(VirtualOutput)`; GameStream's rtsp.rs check has no twin here because
-    // that latch is per-source and this gate already used this session's source.
+    // Source-aware: Linux HDR depends on the compositor just resolved. Gamescope and direct
+    // capture fold in `hdr_capture_failed(VirtualOutput)`; GameStream's rtsp.rs check has no
+    // twin here: that latch is per-source and this gate already used this session's source.
     let capture_supports_hdr =
         crate::capture::capturer_supports_hdr_for(compositor, gamescope_route);
     // No desktop delivers more than 8 bits of SDR, so SDR-10 there only widens: a colour pass

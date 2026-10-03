@@ -265,6 +265,7 @@ pub fn capture_virtual_output(
             name.clone(),
             keepalive,
             zero_copy_policy(want.pyrowave, nv12_native, codec, bit_depth, want.hdr),
+            want.hdr,
         ) {
             Ok(c) => {
                 tracing::info!(output = %name, "capturing the compositor output directly");
@@ -326,22 +327,53 @@ pub fn capture_virtual_output(
 /// Windows: IDD-push enables advanced colour, so the platform answer.
 /// Linux + gamescope: host knob, `packaging/gamescope` 10-bit BT.2020/PQ, a
 /// spawned (not attached-foreign) sub-mode, and no earlier virtual-output HDR
-/// downgrade latched. Anything else on Linux is 8-bit; GNOME 50+ portal HDR is
-/// the GameStream plane (`gamestream::host_hdr_capable` + live monitor probe).
+/// downgrade latched. Hyprland and wlroots: direct capture of a head lit in
+/// BT.2020 PQ ([`direct_capture_hdr`]). Anything else on Linux is 8-bit; GNOME
+/// 50+ portal HDR is the GameStream plane (`gamestream::host_hdr_capable`).
 pub fn capturer_supports_hdr_for(
     compositor: Option<crate::vdisplay::Compositor>,
     gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
 ) -> bool {
     #[cfg(target_os = "linux")]
     {
-        if compositor == Some(crate::vdisplay::Compositor::Gamescope) {
-            return pf_host_config::config().gamescope_hdr
-                && pf_vdisplay::gamescope_hdr_available(gamescope_route)
-                && !pf_capture::hdr_capture_failed(pf_capture::HdrSource::VirtualOutput);
+        use crate::vdisplay::Compositor;
+        match compositor {
+            Some(Compositor::Gamescope) => {
+                return pf_host_config::config().gamescope_hdr
+                    && pf_vdisplay::gamescope_hdr_available(gamescope_route)
+                    && !pf_capture::hdr_capture_failed(pf_capture::HdrSource::VirtualOutput);
+            }
+            Some(c @ (Compositor::Hyprland | Compositor::Wlroots)) => {
+                return direct_capture_hdr(c);
+            }
+            _ => {}
         }
     }
     let _ = (compositor, gamescope_route);
     pf_capture::capturer_supports_hdr()
+}
+
+/// Direct capture's HDR answer. A pinned head must already be lit in BT.2020 PQ (its
+/// `wp_color_management_v1` description); a Hyprland headless output is created in HDR
+/// by its backend. Needs an encoder that reads packed 10-bit RGB off a dmabuf, and no
+/// virtual-output latch from a rule or offer that did not take.
+#[cfg(target_os = "linux")]
+fn direct_capture_hdr(compositor: crate::vdisplay::Compositor) -> bool {
+    if !pf_capture::direct_capture()
+        || pf_capture::hdr_capture_failed(pf_capture::HdrSource::VirtualOutput)
+    {
+        return false;
+    }
+    let ingests_rgb10 = crate::encode::linux_zero_copy_is_vaapi()
+        || pf_encode::linux_hdr_cuda_ok()
+        || pf_encode::linux_nvenc_raw_dmabuf_ok();
+    if !ingests_rgb10 {
+        return false;
+    }
+    match pf_vdisplay::capture_monitor() {
+        Some(head) => pf_capture::output_hdr(&head) == Some(true),
+        None => compositor == crate::vdisplay::Compositor::Hyprland,
+    }
 }
 
 /// Does the source composite 10-bit SDR itself? Only our gamescope from `+pfhdr26`, which

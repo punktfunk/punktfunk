@@ -553,8 +553,9 @@ pub fn capturer_supports_hdr() -> bool {
 pub enum HdrSource {
     /// GNOME 50+ portal monitor mirror (`open_portal_monitor` with `want_hdr`).
     PortalMonitor,
-    /// Compositor virtual output (`open_virtual_output` with `want_hdr`) —
-    /// gamescope's PipeWire node with the carried `pipewire-hdr` patch.
+    /// Compositor virtual output (`open_virtual_output` with `want_hdr`): gamescope's
+    /// PipeWire node with the carried `pipewire-hdr` patch, or a Hyprland head that
+    /// would not light in 10-bit HDR.
     VirtualOutput,
 }
 
@@ -595,8 +596,8 @@ pub fn note_hdr_capture_failed(source: HdrSource) {
             ),
             HdrSource::VirtualOutput => tracing::warn!(
                 "HDR capture negotiation failed on the virtual output — this host will offer SDR \
-                 for gamescope until that display is torn down (is the spawned gamescope the \
-                 punktfunk build? see packaging/gamescope)"
+                 for virtual outputs until a gamescope display is torn down or the host restarts \
+                 (gamescope: is the spawned build punktfunk's? see packaging/gamescope)"
             ),
         }
     }
@@ -796,6 +797,9 @@ pub fn open_virtual_output(
 /// Direct `ext-image-copy-capture-v1` capturer for a compositor output the host has
 /// already created, named by its `wl_output.name`. The capturer owns `keepalive`.
 ///
+/// `want_hdr` takes the output's packed 10-bit buffer and its `wp_color_management_v1`
+/// mastering volume; it fails unless the output is lit in BT.2020 PQ.
+///
 /// Fails for every reason the caller should fall back to the portal: the compositor
 /// lacks the protocol, the output is gone, or nothing it offers can be imported by this
 /// session's encoder. The failure hands `keepalive` back for that fallback.
@@ -804,9 +808,18 @@ pub fn open_direct_output(
     output_name: String,
     keepalive: Box<dyn Send>,
     policy: ZeroCopyPolicy,
+    want_hdr: bool,
 ) -> std::result::Result<Box<dyn Capturer>, (anyhow::Error, Box<dyn Send>)> {
-    linux::WlCapturer::open(output_name, keepalive, policy)
+    linux::WlCapturer::open(output_name, keepalive, policy, want_hdr)
         .map(|c| Box::new(c) as Box<dyn Capturer>)
+}
+
+/// Whether the compositor output named `output_name` is lit in HDR (BT.2020 PQ), read
+/// from its `wp_color_management_v1` description. `None` when the compositor has no colour
+/// management or no such output — direct capture then has no HDR to offer.
+#[cfg(target_os = "linux")]
+pub fn output_hdr(output_name: &str) -> Option<bool> {
+    linux::output_is_hdr10(output_name)
 }
 
 /// Windows IDD direct-push capturer on a pf-vdisplay target. `sender` delivers
