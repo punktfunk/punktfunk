@@ -80,7 +80,9 @@ pub use blur::{set_style_override, Style as BackdropStyle};
 pub use console::{Console, ConsoleEntry, ConsoleHandles, InputSource, Insets, Viewport};
 pub use input::Key;
 pub use library::decode_poster_off_thread;
-pub use library::{DecodedPoster, LibraryGame, LibraryPhase, LibraryShared, Stale};
+pub use library::{
+    DecodedPoster, DownloadsPush, LibraryGame, LibraryPhase, LibraryShared, Stale, TitleFiles,
+};
 pub use model::{
     ConsoleBus, ConsoleCmd, ConsoleShared, HostAction, HostRow, LicenseSection, OtherDevice,
     PadTestState, PairPhase, PresetChip, SpeedPhase, SpeedStatus, WakeStatus,

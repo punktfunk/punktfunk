@@ -301,6 +301,7 @@ mod tests {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         }
     }
 

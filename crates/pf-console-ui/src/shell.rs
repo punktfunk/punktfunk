@@ -274,6 +274,8 @@ fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> Option<Stri
 
 /// Poll interval for the launch hold, and the retry when an answer never lands.
 const LAUNCH_POLL: f64 = 1.0;
+/// Seconds between `/status` reads while a shelf tile shows a live download.
+const DOWNLOADS_POLL: f64 = 2.0;
 const LAUNCH_POLL_STALL: f64 = 5.0;
 /// The host lists nothing for the title: the launch did not resolve
 /// (no recipe, launcher missing). The host logs it and streams on; so do we.
@@ -389,6 +391,8 @@ pub(crate) struct Shell {
     motion: Motion,
     console: ConsoleShared,
     library: LibraryShared,
+    /// When [`Shell::tick_downloads`] last asked the host.
+    downloads_polled: f64,
     bus: ConsoleBus,
     actions: VecDeque<OverlayAction>,
     settings: trust::Settings,
@@ -520,6 +524,7 @@ impl Shell {
             motion: Motion::None,
             console,
             library,
+            downloads_polled: f64::NEG_INFINITY,
             bus,
             actions: VecDeque::new(),
             mesh_palette: settings.ui_palette.clone(),
@@ -975,7 +980,29 @@ impl Shell {
         self.sync_wake();
         self.home_shelf();
         self.tick_launch();
+        self.tick_downloads();
         self.settle_focus();
+    }
+
+    /// While the shelf on top shows a live download and no launch hold polls already, re-read
+    /// `/status` every [`DOWNLOADS_POLL`] so its tile's percentage moves.
+    fn tick_downloads(&mut self) {
+        let t = self.t();
+        if self.launching.is_some() || t - self.downloads_polled < DOWNLOADS_POLL {
+            return;
+        }
+        if !self.library.any_live_download() {
+            return;
+        }
+        let Some(lib) = self.stack.last().and_then(Screen::shelf) else {
+            return;
+        };
+        self.downloads_polled = t;
+        self.bus.send(ConsoleCmd::RefreshRunning {
+            addr: lib.host_addr().to_string(),
+            mgmt: lib.host_mgmt_port(),
+            fp_hex: lib.host_fp_hex().to_string(),
+        });
     }
 
     /// Settings writes palette/follow-OS into `self.settings`; recompile here so the
@@ -2260,6 +2287,7 @@ fn stand_in_games() -> Vec<crate::library::LibraryGame> {
         stats: None,
         running: i == 1,
         endable: false,
+        install: None,
     };
     let stores = ["steam", "lutris", "gog", "epic", "custom", "heroic"];
     let mut out: Vec<_> = (0..12)

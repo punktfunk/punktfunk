@@ -1,6 +1,7 @@
 //! One title as the Games tab draws it, after the Apple library's card.
 //!
-//! The 2:3 poster carries its store badge top-left and the Resume badge top-right. Under it
+//! The 2:3 poster carries its store badge top-left and the Resume badge top-right, or the
+//! title's files badge when it isn't installed or is downloading. Under it
 //! run the title on two held lines, the host's OS mark and name, and a caption where the row
 //! or the sort has one. The focus plate is the lift, so the card never grows. The host desk
 //! tile, the section heading and the focused-title band sit here too.
@@ -53,6 +54,10 @@ impl Card<'_> {
         store_badge(canvas, fonts, self.game, cover, k, false, alpha);
         if self.game.running {
             running_badge(canvas, fonts, cover, k, alpha);
+        } else if let Some(b) = self.game.install.as_ref().and_then(|f| {
+            pf_client_core::library::TileBadge::for_title(Some(&f.install), f.download.as_ref())
+        }) {
+            files_badge(canvas, fonts, cover, k, alpha, &b);
         }
         let ink = |a: f32| {
             let c = fg(a);
@@ -242,6 +247,48 @@ pub(super) fn running_badge(canvas: &Canvas, fonts: &Fonts, rect: Rect, k: f64, 
         canvas,
         LABEL,
         x + 7.0 * k,
+        y + bh / 2.0 + size * 0.36,
+        W::SemiBold,
+        size,
+        ink,
+    );
+}
+
+/// A title's files in `rect`'s top-right: a mark and `42 %`, `26 GB` or `Not installed`, on
+/// a dark plate that reads over any poster.
+fn files_badge(
+    canvas: &Canvas,
+    fonts: &Fonts,
+    rect: Rect,
+    k: f64,
+    alpha: f32,
+    badge: &pf_client_core::library::TileBadge,
+) {
+    let size = 11.0 * k;
+    let mark = 12.0 * k;
+    let tw = f64::from(fonts.measure(&badge.text, W::SemiBold, size));
+    let (bw, bh) = (tw + mark + 18.0 * k, 19.0 * k);
+    let pad = 7.0 * k;
+    let x = f64::from(rect.right) - pad - bw;
+    let y = f64::from(rect.top) + pad;
+    let r = Rect::from_xywh(x as f32, y as f32, bw as f32, bh as f32);
+    canvas.draw_rrect(
+        RRect::new_rect_xy(r, r.height() / 2.0, r.height() / 2.0),
+        &fill(Color4f::new(0.0, 0.0, 0.0, 0.72 * alpha)),
+    );
+    let ink = Color4f::new(1.0, 1.0, 1.0, 0.94 * alpha);
+    let icon = match badge.icon {
+        "alert" => "triangle-alert",
+        name => name,
+    };
+    if let Some(icon) = crate::icons::by_name(icon) {
+        let (cx, cy) = (x + 6.0 * k + mark / 2.0, y + bh / 2.0);
+        crate::icons::draw_icon(canvas, icon, cx as f32, cy as f32, mark as f32, ink);
+    }
+    fonts.draw(
+        canvas,
+        &badge.text,
+        x + mark + 11.0 * k,
         y + bh / 2.0 + size * 0.36,
         W::SemiBold,
         size,

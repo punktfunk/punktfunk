@@ -4,7 +4,8 @@
 //! [`CardMenu::actions`] owns the verbs.
 //!
 //! A host card's menu is five rows at most, a pinned card's three, a discovered one's two,
-//! a poster's four; a poster's Details is its card, cover and facts beside its verbs. Every
+//! a poster's four, plus its files and End game; a poster's Details is its card, cover and
+//! facts beside its verbs. Every
 //! row carries an icon; Back leaves any of them. Tests in this module pin each menu's rows,
 //! the arm-then-fire rule and the host-key NUL split (`console-ui-redesign.md` §2).
 
@@ -16,6 +17,7 @@ use crate::screens::{Ctx, Outbox, Screen};
 use crate::store::SettingsStore;
 use crate::theme::{edge, fg, Fonts, W};
 use crate::widgets::{blurb, ListMsg, MenuList, RowSpec, TabStrip, TAB_STRIP_H};
+use pf_client_core::library::InstallAction;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::start;
 use skia_safe::{Canvas, Image, Rect};
@@ -41,6 +43,8 @@ enum Action {
     Play,
     /// End the title on the host: only one this device launched and the host still runs.
     EndGame,
+    /// Start, resume, pause or remove the title's download: the one its files allow.
+    Files(InstallAction),
     /// Mark or unmark the title on this device.
     Favorite,
     /// The poster's card: cover, facts, and its verbs.
@@ -232,8 +236,8 @@ impl CardMenu {
                     .chain((0..store.presets().len()).map(|i| Action::Preset(Some(i))))
                     .collect();
             }
-            // No Play row: the poster's OK launches it. The Mac's four rows, and End game
-            // while the host runs a launch of this device's.
+            // No Play row: the poster's OK launches it. The Mac's four rows, the title's files,
+            // and End game while the host runs a launch of this device's.
             (Subject::Game { game, .. }, Mode::Menu) => {
                 let mut rows = vec![
                     Action::PlayWith,
@@ -241,6 +245,12 @@ impl CardMenu {
                     Action::TitleDetails,
                     Action::CopyLink,
                 ];
+                rows.extend(
+                    game.install
+                        .as_ref()
+                        .and_then(|f| f.action)
+                        .map(Action::Files),
+                );
                 rows.extend(game.endable.then_some(Action::EndGame));
                 return rows;
             }
@@ -251,6 +261,12 @@ impl CardMenu {
                     Action::BindPreset,
                     Action::CopyLink,
                 ];
+                rows.extend(
+                    game.install
+                        .as_ref()
+                        .and_then(|f| f.action)
+                        .map(Action::Files),
+                );
                 rows.extend(game.endable.then_some(Action::EndGame));
                 return rows;
             }
@@ -357,6 +373,9 @@ impl CardMenu {
             Action::SendLogs => "scroll-text",
             Action::Forget => "trash-2",
             Action::EndGame => "x",
+            Action::Files(InstallAction::Install | InstallAction::Resume) => "download",
+            Action::Files(InstallAction::Pause) => "pause",
+            Action::Files(InstallAction::Remove) => "trash-2",
         }
     }
 
@@ -401,6 +420,13 @@ impl CardMenu {
                 "End game \u{2014} press again".into()
             }
             Action::EndGame => "End game".into(),
+            Action::Files(InstallAction::Remove) if self.armed == Some(a) => {
+                "Remove download \u{2014} press again".into()
+            }
+            Action::Files(f) => match &self.subject {
+                Subject::Game { game, .. } => f.label(game.install.as_ref().map(|i| &i.install)),
+                Subject::Host(_) => String::new(),
+            },
             Action::Favorite if self.is_favorite(ctx.settings) => "Remove from Favorites".into(),
             Action::Favorite => "Add to Favorites".into(),
             Action::TitleDetails => "Details\u{2026}".into(),
@@ -756,6 +782,31 @@ impl CardMenu {
                 fx.toast = Some(format!("Ending {}\u{2026}", game.title));
                 fx.pop();
             }
+            // Removing loses the download: arm, then fire.
+            Action::Files(InstallAction::Remove) if self.armed != Some(action) => {
+                self.armed = Some(action)
+            }
+            Action::Files(f) => {
+                let Subject::Game { host, game, .. } = &self.subject else {
+                    return;
+                };
+                fx.cmds.push(ConsoleCmd::Install {
+                    addr: host.addr.clone(),
+                    mgmt: host.mgmt_port,
+                    fp_hex: host.fp_hex.clone(),
+                    app_id: game.id.clone(),
+                    title: game.title.clone(),
+                    action: f,
+                });
+                fx.toast = Some(match f {
+                    InstallAction::Install | InstallAction::Resume => {
+                        format!("Starting {}'s download\u{2026}", game.title)
+                    }
+                    InstallAction::Pause => format!("Pausing {}'s download\u{2026}", game.title),
+                    InstallAction::Remove => format!("Removing {}\u{2026}", game.title),
+                });
+                fx.pop();
+            }
             Action::Forget if self.armed != Some(Action::Forget) => {
                 self.armed = Some(Action::Forget)
             }
@@ -1062,6 +1113,7 @@ mod tests {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         }
     }
 
@@ -1434,6 +1486,46 @@ mod tests {
                 fp_hex: "aa".into(),
                 app_id: "steam:367520".into(),
                 title: "Hollow Knight".into(),
+            }]
+        );
+    }
+
+    /// A title's files row is the one its store state allows, and Remove arms first.
+    #[test]
+    fn a_titles_files_row_follows_its_install_and_remove_arms_first() {
+        let installed = |action| {
+            let mut g = game();
+            g.install = Some(crate::library::TitleFiles {
+                install: pf_client_core::library::TitleInstall {
+                    state: "installed".into(),
+                    size_bytes: Some(26_000_000_000),
+                    free_bytes: None,
+                },
+                download: None,
+                action,
+            });
+            g
+        };
+        assert!(!rows(&CardMenu::for_game(&host(), &installed(None), None))
+            .iter()
+            .any(|a| matches!(a, Action::Files(_))));
+        let remove = Action::Files(InstallAction::Remove);
+        let mut s = CardMenu::for_game(&host(), &installed(Some(InstallAction::Remove)), None);
+        assert!(rows(&s).contains(&remove));
+        assert_eq!(label(&s, remove), "Remove download \u{b7} 26 GB");
+        let mut fx = Outbox::default();
+        run_action(&mut s, remove, &mut fx);
+        assert!(fx.cmds.is_empty(), "the first press only arms");
+        run_action(&mut s, remove, &mut fx);
+        assert_eq!(
+            fx.cmds,
+            vec![ConsoleCmd::Install {
+                addr: "10.0.0.5".into(),
+                mgmt: 9778,
+                fp_hex: "aa".into(),
+                app_id: "steam:367520".into(),
+                title: "Hollow Knight".into(),
+                action: InstallAction::Remove,
             }]
         );
     }

@@ -45,6 +45,8 @@ pub const COPY: &str = "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -
 pub const CORNER_DOWN_LEFT: &str = "M9 10L4 15L9 20M20 4v7a4 4 0 0 1-4 4H4";
 /// Lucide `cpu`.
 pub const CPU: &str = "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2zM10 9h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1zM15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2";
+/// Lucide `download`.
+pub const DOWNLOAD: &str = "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10L12 15L17 10M12 15L12 3";
 /// Lucide `ellipsis`.
 pub const ELLIPSIS: &str = "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0";
 /// Lucide `eye`.
@@ -92,6 +94,8 @@ pub const PALETTE: &str = "M13 6.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0M17 10.5a
 /// Lucide `panel-right`.
 pub const PANEL_RIGHT: &str =
     "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2zM15 3v18";
+/// Lucide `pause`.
+pub const PAUSE: &str = "M15 4h2a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-14a1 1 0 0 1 1 -1zM7 4h2a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-14a1 1 0 0 1 1 -1z";
 /// Lucide `pencil`.
 pub const PENCIL: &str = "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4";
 /// Lucide `pin`.
@@ -129,6 +133,9 @@ pub const STAR: &str = "M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 
 pub const SUN: &str = "M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41";
 /// Lucide `trash-2`.
 pub const TRASH_2: &str = "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11L10 17M14 11L14 17";
+/// Lucide `triangle-alert`.
+pub const TRIANGLE_ALERT: &str =
+    "M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01";
 /// Lucide `tv`.
 pub const TV: &str =
     "M4 7h16a2 2 0 0 1 2 2v11a2 2 0 0 1 -2 2h-16a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2zM17 2L12 7L7 2";
@@ -159,6 +166,7 @@ pub const ALL: &[(&str, &str, char)] = &[
     ("copy", COPY, '\u{e0a2}'),
     ("corner-down-left", CORNER_DOWN_LEFT, '\u{e0a5}'),
     ("cpu", CPU, '\u{e0ad}'),
+    ("download", DOWNLOAD, '\u{e0b6}'),
     ("ellipsis", ELLIPSIS, '\u{e0ba}'),
     ("eye", EYE, '\u{e0be}'),
     ("film", FILM, '\u{e0d4}'),
@@ -181,6 +189,7 @@ pub const ALL: &[(&str, &str, char)] = &[
     ("mouse", MOUSE, '\u{e28e}'),
     ("palette", PALETTE, '\u{e1dd}'),
     ("panel-right", PANEL_RIGHT, '\u{e436}'),
+    ("pause", PAUSE, '\u{e132}'),
     ("pencil", PENCIL, '\u{e1f9}'),
     ("pin", PIN, '\u{e259}'),
     ("play", PLAY, '\u{e140}'),
@@ -199,6 +208,7 @@ pub const ALL: &[(&str, &str, char)] = &[
     ("star", STAR, '\u{e17a}'),
     ("sun", SUN, '\u{e17c}'),
     ("trash-2", TRASH_2, '\u{e18e}'),
+    ("triangle-alert", TRIANGLE_ALERT, '\u{e193}'),
     ("tv", TV, '\u{e195}'),
     ("undo-2", UNDO_2, '\u{e2a1}'),
     ("volume-2", VOLUME_2, '\u{e1ab}'),

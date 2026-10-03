@@ -569,6 +569,17 @@ pub enum ConsoleCmd {
         app_id: String,
         title: String,
     },
+    /// Start, resume, pause or remove a title's download (`/api/v1/library/install/{id}`).
+    /// The outcome is a notice ([`pf_client_core::library::InstallOutcome::notice`]), then a
+    /// running refresh.
+    Install {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        app_id: String,
+        title: String,
+        action: pf_client_core::library::InstallAction,
+    },
 }
 
 /// Overlay→binary command queue. Same locking as the shared models. Drain cadence

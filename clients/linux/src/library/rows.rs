@@ -191,6 +191,7 @@ mod tests {
 
     fn game(id: &str, title: &str, played: u64) -> GameEntry {
         GameEntry {
+            install: None,
             id: id.into(),
             store: "steam".into(),
             title: title.into(),
@@ -212,6 +213,7 @@ mod tests {
 
     fn launcher(id: &str) -> GameEntry {
         GameEntry {
+            install: None,
             role: Some("launcher".into()),
             ..game(id, id, 0)
         }

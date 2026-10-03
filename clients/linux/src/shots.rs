@@ -255,6 +255,7 @@ fn mock_library() -> (
 ) {
     let game =
         |id: &str, store: &str, title: &str, played: u64| pf_client_core::library::GameEntry {
+            install: None,
             id: id.to_string(),
             store: store.to_string(),
             title: title.to_string(),
@@ -274,6 +275,7 @@ fn mock_library() -> (
         };
     let games = vec![
         pf_client_core::library::GameEntry {
+            install: None,
             role: Some("launcher".into()),
             icon: Some("steam".into()),
             ..game("steam:bigpicture", "steam", "Steam", 0)
@@ -303,6 +305,7 @@ fn bench_library(n: usize) -> Vec<pf_client_core::library::GameEntry> {
     const STORES: &[&str] = &["steam", "gog", "epic", "heroic", "lutris", "custom"];
     (0..n)
         .map(|i| pf_client_core::library::GameEntry {
+            install: None,
             id: format!("bench:{i}"),
             store: STORES[i % STORES.len()].to_string(),
             title: format!(

@@ -322,6 +322,7 @@ mod tests {
         launcher: bool,
     ) -> GameEntry {
         GameEntry {
+            install: None,
             id: id.into(),
             store: store.into(),
             title: title.into(),
@@ -470,6 +471,7 @@ mod tests {
             .expect("library")
             .iter()
             .map(|e| GameEntry {
+                install: None,
                 id: e["id"].as_str().expect("id").to_string(),
                 store: e["store"].as_str().expect("store").to_string(),
                 title: e["title"].as_str().expect("title").to_string(),
