@@ -4149,7 +4149,6 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
             fingerprint: None,
             preset: None,
             plane: crate::events::Plane::Native,
-            wire: 1,
             spec: crate::library::DetectSpec::dir(tmp.path()),
             nested: false,
             scope_pid: None,
