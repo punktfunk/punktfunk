@@ -58,6 +58,9 @@ pub struct GsPointer {
     /// emulate a mouse: the first finger drives the pointer and left button instead. Decided at
     /// the first touch, once the session's injector is known.
     touch_as_mouse: Option<bool>,
+    /// gamescope reads no tablet, so there the pen is one more finger. Decided at the first
+    /// pen packet, once the session's injector is known.
+    pen_as_touch: Option<bool>,
 }
 
 impl GsPointer {
@@ -70,11 +73,15 @@ impl GsPointer {
             touch_ids: Vec::new(),
             touch_seen: false,
             touch_as_mouse: None,
+            pen_as_touch: None,
         }
     }
 
     pub fn apply(&mut self, p: &SsPointer, sink: impl FnMut(InputEvent)) {
         match p {
+            SsPointer::Pen(pen) if *self.pen_as_touch.get_or_insert_with(pen_misses_session) => {
+                self.apply_touch(&pen_contact(pen), sink)
+            }
             SsPointer::Pen(pen) => self.apply_pen(pen),
             SsPointer::Touch(touch) => self.apply_touch(touch, sink),
         }
@@ -230,6 +237,32 @@ impl GsPointer {
     }
 }
 
+/// Touch id the pen takes when it lands as touch.
+const PEN_CONTACT_ID: u32 = u32::MAX;
+
+/// The pen as a contact. Touch has no hover or button-only kind, so those drop.
+fn pen_contact(p: &SsPen) -> SsTouch {
+    SsTouch {
+        event_type: p.event_type,
+        rotation: p.rotation,
+        pointer_id: PEN_CONTACT_ID,
+        x: p.x,
+        y: p.y,
+        pressure_or_distance: p.pressure_or_distance,
+    }
+}
+
+/// This plane injects through the shared backend, so it names the session's compositor.
+#[cfg(target_os = "linux")]
+fn pen_misses_session() -> bool {
+    crate::inject::default_backend() == crate::inject::Backend::GamescopeEi
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pen_misses_session() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +414,33 @@ mod tests {
         got.clear();
         g.apply_touch(&t(LI_TOUCH_EVENT_CANCEL_ALL, 0, 0.0), |e| got.push(e));
         assert!(got.is_empty());
+    }
+
+    #[test]
+    fn pen_lands_as_touch_where_no_tablet_is_read() {
+        let mut g = GsPointer {
+            touch_as_mouse: Some(false),
+            pen_as_touch: Some(true),
+            ..GsPointer::new()
+        };
+        let mut got: Vec<InputEvent> = Vec::new();
+        for ev in [
+            LI_TOUCH_EVENT_HOVER,
+            LI_TOUCH_EVENT_DOWN,
+            LI_TOUCH_EVENT_MOVE,
+            LI_TOUCH_EVENT_UP,
+        ] {
+            g.apply(&SsPointer::Pen(pen(ev, 0.5, 0.5, 0.5)), |e| got.push(e));
+        }
+        let kinds: Vec<(InputKind, u32)> = got.iter().map(|e| (e.kind, e.code)).collect();
+        assert_eq!(
+            kinds,
+            [
+                (InputKind::TouchDown, PEN_CONTACT_ID),
+                (InputKind::TouchMove, PEN_CONTACT_ID),
+                (InputKind::TouchUp, PEN_CONTACT_ID),
+            ]
+        );
+        assert!(!g.pen.active(), "the tablet saw the pen");
     }
 }

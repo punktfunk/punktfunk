@@ -264,6 +264,12 @@ pub(super) fn cursor_forward(
     }
 }
 
+/// Whether the session's compositor reads the uinput tablet pen batches land on. gamescope
+/// reads none, so its clients send the pen as touch.
+fn pen_reaches(compositor: Option<crate::vdisplay::Compositor>) -> bool {
+    compositor != Some(crate::vdisplay::Compositor::Gamescope)
+}
+
 /// [`Hello::preferred_codec`] for the negotiation line. `none` is auto; a byte this build
 /// does not know is `unknown` rather than blank.
 fn codec_pref_label(preferred: u8) -> &'static str {
@@ -663,7 +669,7 @@ pub(super) async fn negotiate(
             }
             // Pen batches → per-session uinput tablet. Without the bit, clients fold pen into
             // touch/pointer and `NativeClient::send_pen` refuses.
-            | if crate::inject::pen_supported() {
+            | if crate::inject::pen_supported() && pen_reaches(compositor) {
                 punktfunk_core::quic::HOST_CAP_PEN
             } else {
                 0
@@ -1150,6 +1156,18 @@ mod tests {
             linux_chroma_under_hdr(Yuv444, true, Codec::PyroWave),
             Yuv444
         );
+    }
+
+    /// gamescope reads no tablet, so its sessions withhold `HOST_CAP_PEN` and the pen
+    /// arrives as touch.
+    #[test]
+    fn pen_cap_skips_gamescope() {
+        use crate::vdisplay::Compositor;
+        assert!(!pen_reaches(Some(Compositor::Gamescope)));
+        for c in [Compositor::Kwin, Compositor::Mutter, Compositor::Windows] {
+            assert!(pen_reaches(Some(c)), "{c:?}");
+        }
+        assert!(pen_reaches(None));
     }
 
     /// The negotiation line names the preference, and a preference that lost says which
