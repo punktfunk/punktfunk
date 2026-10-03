@@ -1,21 +1,25 @@
-//! A live controller test: the driving pad's family drawn large, each button lit while held,
-//! the sticks tilting and the triggers filling, and the last thing that moved named. Raised
-//! by the Controllers tab's Test card.
+//! A live controller test: the driving pad drawn large, each button lit while held, the sticks
+//! tilting and the triggers filling, and the last thing that moved named. Raised by the
+//! Controllers tab's Test card.
 //!
 //! While it is on top the shell asks the host for [`PadTestState`]s and the host stops
 //! turning the pad into menu moves ([`crate::model::ConsoleCmd::PadTest`]), so B shows as a
 //! button instead of backing out. Holding B for [`HOLD_TO_LEAVE`] leaves; a remote or keyboard
 //! Back leaves at once.
 
-use crate::glyphs::{self, GlyphStyle, Hint, HintKey};
-use crate::icons::{self, Icon};
+use crate::glyphs::{Hint, HintKey};
 use crate::model::PadTestState;
+use crate::pad_art::{self, PadArt, Part};
 use crate::screens::{Ctx, Outbox};
-use crate::theme::{accent, fg, fill, on_accent, stroke, Fonts, W};
+use crate::theme::{accent, card_face, fg, fill, on_accent, over, shaded, stroke, Fonts, W};
 use crate::widgets::blurb;
 use pf_client_core::menu_nav::{MenuEvent, MenuPulse};
 use punktfunk_core::config::GamepadPref;
-use skia_safe::{Canvas, Point, RRect, Rect};
+use skia_safe::utils::parse_path;
+use skia_safe::{
+    gradient, BlurStyle, Canvas, Color4f, MaskFilter, PaintCap, PaintJoin, Path, Point, Rect,
+    TileMode,
+};
 
 pub(crate) const HOLD_TO_LEAVE: f64 = 1.0;
 /// An axis has to move this far to count as the last input.
@@ -28,6 +32,8 @@ pub(crate) struct InputTestScreen {
     b_since: Option<f64>,
     /// The driving pad's family, set by the shell each frame.
     pub(crate) pref: Option<GamepadPref>,
+    /// The drawing for `pref`, parsed once per controller rather than every frame.
+    drawing: Option<Drawing>,
     pub(crate) done: bool,
 }
 
@@ -38,6 +44,7 @@ impl InputTestScreen {
             last: None,
             b_since: None,
             pref: None,
+            drawing: None,
             done: false,
         }
     }
@@ -97,24 +104,33 @@ impl InputTestScreen {
             rect,
             k,
         );
+        let art = art_for(self.pref);
+        if !self
+            .drawing
+            .as_ref()
+            .is_some_and(|d| std::ptr::eq(d.art, art))
+        {
+            self.drawing = Some(Drawing::new(art));
+        }
+        let Some(drawing) = &self.drawing else { return };
         let line = 40.0 * k;
-        let avail_h = f64::from(rect.bottom - below.top) - line;
-        // The drawing spans about 20 of its 24 units in height.
-        let box_px = (f64::from(rect.width()) * 0.8)
-            .min(avail_h * 24.0 / 20.0)
-            .min(640.0 * k);
-        let x = f64::from(rect.center_x()) - box_px / 2.0;
-        let top = f64::from(below.top) - box_px / 24.0;
-        draw_pad(canvas, fonts, self.pref, &self.state, x, top, box_px, k);
+        let gap = 16.0 * k;
+        let avail_w = (f64::from(rect.width()) * 0.8).min(760.0 * k);
+        let avail_h = f64::from(rect.bottom - below.top) - line - 2.0 * gap;
+        let scale = (avail_w / f64::from(art.w)).min(avail_h / f64::from(art.h));
+        let (w, h) = (f64::from(art.w) * scale, f64::from(art.h) * scale);
+        let x = f64::from(rect.center_x()) - w / 2.0;
+        let top = f64::from(below.top) + gap;
+        draw_pad(canvas, fonts, drawing, &self.state, x, top, scale, k);
         let last = match &self.last {
             Some(input) => format!("Last input \u{2014} {input}"),
             None => "Press a button or move a stick".into(),
         };
         let size = 15.0 * k;
-        let w = f64::from(fonts.measure(&last, W::Regular, size));
-        let y = top + box_px * 20.5 / 24.0 + line * 0.6;
+        let tw = f64::from(fonts.measure(&last, W::Regular, size));
+        let y = top + h + gap + line * 0.5;
         let cx = f64::from(rect.center_x());
-        fonts.draw(canvas, &last, cx - w / 2.0, y, W::Regular, size, fg(0.6));
+        fonts.draw(canvas, &last, cx - tw / 2.0, y, W::Regular, size, fg(0.6));
     }
 }
 
@@ -128,246 +144,204 @@ impl PadTestState {
     fn held(&self, name: &str) -> bool {
         self.held.iter().any(|b| b == name)
     }
-}
 
-/// Where a family's controls sit on its outline, in the outline's 24-unit box.
-#[derive(Clone, Copy)]
-struct Layout {
-    icon: Icon,
-    ls: (f32, f32),
-    rs: (f32, f32),
-    /// The stick wells' radius.
-    well: f32,
-    dpad: (f32, f32),
-    face: (f32, f32),
-    back: (f32, f32),
-    start: (f32, f32),
-    guide: (f32, f32),
-    /// The left shoulder's centre x and the body's top under it; the right mirrors it.
-    shoulder: (f32, f32),
-}
-
-fn layout(pref: Option<GamepadPref>) -> Layout {
-    use GamepadPref as P;
-    let xbox_one = Layout {
-        icon: icons::PAD_XBOX_ONE,
-        ls: (6.8, 9.1),
-        rs: (14.2, 12.9),
-        well: 1.5,
-        dpad: (9.8, 12.9),
-        face: (17.2, 9.1),
-        back: (10.3, 8.4),
-        start: (13.7, 8.4),
-        guide: (12.0, 6.5),
-        shoulder: (6.2, 4.7),
-    };
-    let dualsense = Layout {
-        icon: icons::PAD_DUALSENSE,
-        ls: (8.6, 12.4),
-        rs: (15.4, 12.4),
-        dpad: (5.0, 9.2),
-        face: (19.0, 9.2),
-        back: (6.8, 6.4),
-        start: (17.2, 6.4),
-        guide: (12.0, 12.4),
-        shoulder: (5.4, 4.9),
-        ..xbox_one
-    };
-    match pref {
-        // 8BitDo and HORI have no outline of their own: the nearest silhouette.
-        Some(P::XboxOne | P::SteamController2Puck | P::EightBitDoUltimate2 | P::HoripadSteam)
-        | None => xbox_one,
-        Some(P::Auto | P::Xbox360) => Layout {
-            icon: icons::PAD_XBOX_360,
-            ls: (6.4, 9.4),
-            rs: (15.4, 12.8),
-            dpad: (8.6, 12.8),
-            face: (17.6, 9.4),
-            back: (9.6, 8.0),
-            start: (14.4, 8.0),
-            guide: (12.0, 8.0),
-            shoulder: (5.8, 4.1),
-            ..xbox_one
-        },
-        Some(P::XboxElite) => Layout {
-            icon: icons::PAD_XBOX_ELITE,
-            ..xbox_one
-        },
-        Some(P::DualShock4) => Layout {
-            icon: icons::PAD_DUALSHOCK_4,
-            dpad: (5.2, 9.3),
-            face: (18.8, 9.3),
-            back: (8.4, 6.9),
-            start: (15.6, 6.9),
-            shoulder: (5.4, 5.2),
-            ..dualsense
-        },
-        Some(P::DualSense) => dualsense,
-        Some(P::DualSenseEdge) => Layout {
-            icon: icons::PAD_DUALSENSE_EDGE,
-            ..dualsense
-        },
-        Some(
-            P::SwitchPro
-            | P::EightBitDoPro2
-            | P::EightBitDoPro3
-            | P::JoyConPair
-            | P::Switch2Pro
-            | P::Switch2GameCube,
-        ) => Layout {
-            icon: icons::PAD_SWITCH_PRO,
-            ls: (6.3, 8.6),
-            rs: (14.7, 12.3),
-            dpad: (9.3, 12.3),
-            face: (17.7, 8.6),
-            back: (10.3, 7.2),
-            start: (13.7, 7.2),
-            guide: (13.4, 9.5),
-            shoulder: (5.8, 4.5),
-            ..xbox_one
-        },
-        // The left pad is the d-pad, the right pad the right stick.
-        Some(P::SteamController) => Layout {
-            icon: icons::PAD_STEAM_CONTROLLER,
-            ls: (8.9, 12.4),
-            rs: (17.7, 8.6),
-            dpad: (6.3, 8.6),
-            face: (15.2, 12.3),
-            back: (10.3, 8.9),
-            start: (13.7, 8.9),
-            guide: (12.0, 7.0),
-            shoulder: (5.6, 4.4),
-            ..xbox_one
-        },
-        Some(P::SteamController2) => Layout {
-            icon: icons::PAD_STEAM_CONTROLLER_2,
-            ls: (9.0, 8.0),
-            rs: (15.0, 8.0),
-            well: 1.2,
-            dpad: (4.9, 9.6),
-            face: (19.1, 9.6),
-            back: (10.9, 5.9),
-            start: (13.1, 5.9),
-            guide: (12.0, 10.4),
-            shoulder: (5.4, 4.4),
-        },
-        Some(P::SteamDeck) => Layout {
-            icon: icons::PAD_STEAM_DECK,
-            ls: (4.1, 9.6),
-            rs: (19.9, 9.6),
-            well: 1.1,
-            dpad: (4.0, 13.4),
-            face: (20.0, 13.4),
-            back: (6.1, 7.6),
-            start: (17.9, 7.6),
-            guide: (6.0, 16.3),
-            shoulder: (4.4, 6.6),
-        },
+    /// A stick's deflection, −1…1 each, +y down.
+    fn tilt(&self, stick: &str) -> (f32, f32) {
+        let (x, y) = if stick == "LS" {
+            ("LX", "LY")
+        } else {
+            ("RX", "RY")
+        };
+        (self.axis(x).clamp(-1.0, 1.0), self.axis(y).clamp(-1.0, 1.0))
     }
 }
 
-/// The controller `box_px` wide with its outline box's top-left at `(x, y)`, lit from `state`.
-/// Sticks read −1…1 with +y down; triggers 0…1.
+/// The drawing for a pad family. Auto is the host's default build, the Xbox 360; an unknown
+/// pad draws as the One.
+fn art_for(pref: Option<GamepadPref>) -> &'static PadArt {
+    let kind = match pref {
+        None => "xboxone",
+        Some(GamepadPref::Auto) => "xbox360",
+        Some(p) => p.as_str(),
+    };
+    (pad_art::art(kind).or_else(|| pad_art::art("xbox360"))).expect("xbox360 has a master")
+}
+
+/// A [`PadArt`] with its path data parsed, one entry per part.
+struct Drawing {
+    art: &'static PadArt,
+    paths: Vec<Option<Path>>,
+}
+
+impl Drawing {
+    fn new(art: &'static PadArt) -> Drawing {
+        let paths = (art.parts.iter())
+            .map(|part| match part {
+                Part::Body(d)
+                | Part::Panel(d)
+                | Part::Line(d)
+                | Part::Button(_, d)
+                | Part::Trigger(_, d)
+                | Part::Glyph { d, .. }
+                | Part::Mark { d, .. } => parse_path::from_svg(d),
+                Part::Stick { .. } | Part::Label { .. } => None,
+            })
+            .collect();
+        Drawing { art, paths }
+    }
+}
+
+/// A cap's radius and its travel, as fractions of the well's.
+const CAP: f32 = 0.72;
+const TRAVEL: f32 = 0.42;
+
+/// `drawing` at `scale` px per millimetre, top-left at `(x, y)`, lit from `state`. Every fill
+/// is the foreground over an opaque card face, so a bumper hides the trigger behind it. The
+/// web console's `PadDiagram.tsx` draws the same parts with the same tones.
 #[allow(clippy::too_many_arguments)]
 fn draw_pad(
     canvas: &Canvas,
     fonts: &Fonts,
-    pref: Option<GamepadPref>,
+    drawing: &Drawing,
     state: &PadTestState,
     x: f64,
     y: f64,
-    box_px: f64,
+    scale: f64,
     k: f64,
 ) {
-    let l = layout(pref);
-    let f = (box_px / 24.0) as f32;
-    let (ox, oy) = (x as f32, y as f32);
-    let at = |(u, v): (f32, f32)| Point::new(ox + u * f, oy + v * f);
-    let rr = |c: Point, w: f32, h: f32, r: f32| {
-        let rect = Rect::from_xywh(c.x - w * f / 2.0, c.y - h * f / 2.0, w * f, h * f);
-        RRect::new_rect_xy(rect, r * f, r * f)
+    let s = scale as f32;
+    // One screen pixel, in millimetres.
+    let px = k as f32 / s;
+    let base = card_face(0.12);
+    let tone = |share: f32| over(fg(share), base);
+    let black = |share: f32| over(Color4f::new(0.0, 0.0, 0.0, share), base);
+    let rim = |color: Color4f, width: f32| {
+        let mut p = stroke(color, width * px);
+        p.set_stroke_join(PaintJoin::Round);
+        p
     };
-    let lit = |on: bool| fill(if on { accent(1.0) } else { fg(0.1) });
+    let ink = |on: bool| if on { on_accent() } else { tone(0.75) };
+    let glow = || {
+        let mut p = fill(accent(0.9));
+        p.set_mask_filter(MaskFilter::blur(BlurStyle::Normal, 1.5 * px, None));
+        p
+    };
 
-    // Shoulders: a bumper on the body's top edge, the trigger above it filling as pulled.
-    for (right, bumper, trigger) in [(false, "LB", "LT"), (true, "RB", "RT")] {
-        let cx = if right {
-            24.0 - l.shoulder.0
-        } else {
-            l.shoulder.0
-        };
-        let top = l.shoulder.1;
-        canvas.draw_rrect(
-            rr(at((cx, top - 0.75)), 3.2, 0.8, 0.4),
-            &lit(state.held(bumper)),
-        );
-        let track = rr(at((cx, top - 2.2)), 2.5, 1.4, 0.45);
-        canvas.draw_rrect(track, &fill(fg(0.1)));
-        let pull = if state.held(trigger) {
-            1.0
-        } else {
-            state.axis(trigger).clamp(0.0, 1.0)
-        };
-        if pull > 0.0 {
-            canvas.save();
-            let r = track.rect();
-            canvas.clip_rect(
-                Rect::from_ltrb(r.left, r.bottom - r.height() * pull, r.right, r.bottom),
-                None,
-                true,
-            );
-            canvas.draw_rrect(track, &fill(accent(1.0)));
-            canvas.restore();
+    canvas.save();
+    canvas.translate((x as f32, y as f32));
+    canvas.scale((s, s));
+    for (part, path) in drawing.art.parts.iter().zip(&drawing.paths) {
+        match (part, path) {
+            (Part::Body(_), Some(path)) => {
+                // The shell catches the light from above.
+                let b = path.bounds();
+                let mut shell = shaded();
+                shell.set_shader(gradient::shaders::linear_gradient(
+                    (Point::new(0.0, b.top), Point::new(0.0, b.bottom)),
+                    &gradient::Gradient::new(
+                        gradient::Colors::new_evenly_spaced(
+                            &[tone(0.11), tone(0.04)],
+                            TileMode::Clamp,
+                            None,
+                        ),
+                        gradient::Interpolation::default(),
+                    ),
+                    None,
+                ));
+                canvas.draw_path(path, &shell);
+                canvas.draw_path(path, &rim(tone(0.32), 1.5));
+            }
+            (Part::Panel(_), Some(path)) => {
+                canvas.draw_path(path, &fill(black(0.25)));
+            }
+            (Part::Line(_), Some(path)) => {
+                canvas.draw_path(path, &rim(tone(0.22), 1.0));
+            }
+            (Part::Button(id, _), Some(path)) => {
+                let on = state.held(id);
+                if on {
+                    canvas.draw_path(path, &glow());
+                }
+                canvas.draw_path(path, &fill(if on { accent(1.0) } else { tone(0.14) }));
+                canvas.draw_path(path, &rim(if on { accent(1.0) } else { tone(0.3) }, 1.0));
+            }
+            (Part::Trigger(id, _), Some(path)) => {
+                let pull = if state.held(id) {
+                    1.0
+                } else {
+                    state.axis(id).clamp(0.0, 1.0)
+                };
+                canvas.draw_path(path, &fill(tone(0.14)));
+                if pull > 0.0 {
+                    // Fills from the tip as it is pulled.
+                    let b = path.bounds();
+                    canvas.save();
+                    canvas.clip_path(path, None, true);
+                    let lit = Rect::from_ltrb(b.left, b.top, b.right, b.top + b.height() * pull);
+                    canvas.draw_rect(lit, &fill(accent(1.0)));
+                    canvas.restore();
+                }
+                let edge = if pull > 0.0 { accent(1.0) } else { tone(0.3) };
+                canvas.draw_path(path, &rim(edge, 1.0));
+            }
+            (&Part::Stick { id, cx, cy, r, pad }, _) => {
+                let on = state.held(id);
+                let (dx, dy) = state.tilt(id);
+                let travel = r * if pad { 0.8 } else { TRAVEL };
+                let well = if on && pad {
+                    over(accent(0.4), base)
+                } else {
+                    black(0.32)
+                };
+                canvas.draw_circle((cx, cy), r, &fill(well));
+                canvas.draw_circle((cx, cy), r, &rim(tone(0.18), 1.0));
+                let cap = Point::new(cx + dx * travel, cy + dy * travel);
+                if pad {
+                    if dx != 0.0 || dy != 0.0 {
+                        canvas.draw_circle(cap, r * 0.16, &fill(accent(1.0)));
+                    }
+                    continue;
+                }
+                if on {
+                    canvas.draw_circle(cap, r * CAP, &glow());
+                }
+                let face = if on { accent(1.0) } else { tone(0.24) };
+                canvas.draw_circle(cap, r * CAP, &fill(face));
+                let edge = if on { accent(1.0) } else { tone(0.45) };
+                canvas.draw_circle(cap, r * CAP, &rim(edge, 1.0));
+                // The cap's dish.
+                let dish = if on { on_accent() } else { tone(0.12) };
+                canvas.draw_circle(cap, r * CAP * 0.58, &rim(dish, 1.0));
+            }
+            (Part::Glyph { on, w, .. }, Some(path)) => {
+                let mut p = stroke(ink(state.held(on)), *w);
+                p.set_stroke_cap(PaintCap::Round);
+                p.set_stroke_join(PaintJoin::Round);
+                canvas.draw_path(path, &p);
+            }
+            (Part::Mark { on, .. }, Some(path)) => {
+                canvas.draw_path(path, &fill(ink(state.held(on))));
+            }
+            (
+                &Part::Label {
+                    on,
+                    x,
+                    y,
+                    size,
+                    text,
+                },
+                _,
+            ) => {
+                let size = f64::from(size);
+                let w = f64::from(fonts.measure(text, W::SemiBold, size));
+                let (lx, ly) = (f64::from(x) - w / 2.0, f64::from(y) + size * 0.36);
+                fonts.draw(canvas, text, lx, ly, W::SemiBold, size, ink(state.held(on)));
+            }
+            // A path that does not parse draws nothing; the master tests keep that out.
+            (_, None) => {}
         }
     }
-    canvas.draw_rrect(rr(at(l.back), 1.0, 0.55, 0.275), &lit(state.held("Back")));
-    canvas.draw_rrect(rr(at(l.start), 1.0, 0.55, 0.275), &lit(state.held("Start")));
-    canvas.draw_circle(at(l.guide), 0.7 * f, &lit(state.held("Guide")));
-    // The d-pad: four arms round an unlit centre.
-    canvas.draw_rrect(rr(at(l.dpad), 0.72, 0.72, 0.1), &fill(fg(0.1)));
-    for (name, dx, dy) in [
-        ("Up", 0.0, -1.0),
-        ("Down", 0.0, 1.0),
-        ("Left", -1.0, 0.0),
-        ("Right", 1.0, 0.0),
-    ] {
-        let c = at((l.dpad.0 + dx * 0.8, l.dpad.1 + dy * 0.8));
-        let (w, h) = if dx == 0.0 { (0.72, 0.9) } else { (0.9, 0.72) };
-        canvas.draw_rrect(rr(c, w, h, 0.18), &lit(state.held(name)));
-    }
-    let style = GlyphStyle::from_pref(pref);
-    for (name, dx, dy) in [
-        ("A", 0.0, 1.0),
-        ("B", 1.0, 0.0),
-        ("X", -1.0, 0.0),
-        ("Y", 0.0, -1.0),
-    ] {
-        let c = at((l.face.0 + dx * 1.3, l.face.1 + dy * 1.3));
-        let on = state.held(name);
-        canvas.draw_circle(c, 0.62 * f, &lit(on));
-        let ink = if on { on_accent() } else { fg(0.85) };
-        glyphs::draw_face(canvas, fonts, name, style, c, 0.62 * f, ink);
-    }
-
-    let weight = (2.2 * k) as f32;
-    let (cx, cy) = (ox + 12.0 * f, oy + 12.0 * f);
-    icons::draw_icon_weight(canvas, l.icon, cx, cy, box_px as f32, weight, fg(0.5));
-    // Each stick: its well, and a cap that tilts with the axes and lights on the click.
-    for (well, ax, ay, click) in [(l.ls, "LX", "LY", "LS"), (l.rs, "RX", "RY", "RS")] {
-        canvas.draw_circle(at(well), l.well * f, &stroke(fg(0.5), weight));
-        let travel = l.well * 0.5;
-        let (dx, dy) = (
-            state.axis(ax).clamp(-1.0, 1.0),
-            state.axis(ay).clamp(-1.0, 1.0),
-        );
-        let cap = at((well.0 + dx * travel, well.1 + dy * travel));
-        let on = state.held(click);
-        canvas.draw_circle(
-            cap,
-            l.well * 0.62 * f,
-            &fill(if on { accent(1.0) } else { fg(0.28) }),
-        );
-    }
+    canvas.restore();
 }
 
 #[cfg(test)]
@@ -406,54 +380,80 @@ mod tests {
         assert!(s.done);
     }
 
-    /// Every family's controls stay inside its outline box.
+    /// Every pad kind has its own drawing; only Auto borrows one.
     #[test]
-    fn every_layout_fits_the_box() {
-        use GamepadPref as P;
-        for pref in [
-            None,
-            Some(P::Auto),
-            Some(P::Xbox360),
-            Some(P::XboxOne),
-            Some(P::XboxElite),
-            Some(P::DualShock4),
-            Some(P::DualSense),
-            Some(P::DualSenseEdge),
-            Some(P::SwitchPro),
-            Some(P::SteamController),
-            Some(P::SteamController2),
-            Some(P::SteamController2Puck),
-            Some(P::SteamDeck),
-            Some(P::EightBitDoUltimate2),
-            Some(P::EightBitDoPro2),
-            Some(P::EightBitDoPro3),
-            Some(P::HoripadSteam),
-            Some(P::JoyConPair),
-            Some(P::Switch2Pro),
-            Some(P::Switch2GameCube),
-        ] {
-            let l = layout(pref);
-            let spots = [l.ls, l.rs, l.dpad, l.face, l.back, l.start, l.guide];
-            for (u, v) in spots {
-                assert!(
-                    (2.0..22.0).contains(&u) && (2.0..22.0).contains(&v),
-                    "{pref:?}"
-                );
+    fn every_pad_kind_has_a_drawing() {
+        for v in 1..=18 {
+            let pref = GamepadPref::from_u8(v);
+            assert_ne!(pref, GamepadPref::Auto, "{v} is a kind");
+            assert!(
+                pad_art::art(pref.as_str()).is_some(),
+                "{pref:?} has no master"
+            );
+        }
+    }
+
+    /// Every part parses and stays in its box, and every pad can light what a test asks for.
+    #[test]
+    fn every_master_parses_and_carries_the_core_controls() {
+        for v in 1..=18 {
+            let pref = GamepadPref::from_u8(v);
+            let art = art_for(Some(pref));
+            let d = Drawing::new(art);
+            let inside = |r: Rect| {
+                r.left >= -0.01
+                    && r.top >= -0.01
+                    && r.right <= art.w + 0.01
+                    && r.bottom <= art.h + 0.01
+            };
+            let mut ids = Vec::new();
+            for (part, path) in art.parts.iter().zip(&d.paths) {
+                match part {
+                    &Part::Stick { id, cx, cy, r, .. } => {
+                        ids.push(id);
+                        let cap = r * (CAP + TRAVEL);
+                        assert!(
+                            inside(Rect::from_ltrb(cx - cap, cy - cap, cx + cap, cy + cap)),
+                            "{pref:?} {id}"
+                        );
+                    }
+                    Part::Label { .. } => {}
+                    Part::Button(id, _) | Part::Trigger(id, _) => {
+                        ids.push(id);
+                        let p = path
+                            .as_ref()
+                            .unwrap_or_else(|| panic!("{pref:?} {id} parses"));
+                        assert!(
+                            inside(p.compute_tight_bounds()),
+                            "{pref:?} {id} leaves the box"
+                        );
+                    }
+                    _ => {
+                        let p = path
+                            .as_ref()
+                            .unwrap_or_else(|| panic!("{pref:?} part parses"));
+                        assert!(inside(p.compute_tight_bounds()), "{pref:?} leaves the box");
+                    }
+                }
             }
-            assert!(l.shoulder.1 - 2.9 >= 0.0, "{pref:?} trigger leaves the box");
+            for id in [
+                "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "LS", "RS", "Up", "Down", "Left",
+                "Right", "Start", "Guide",
+            ] {
+                assert!(ids.contains(&id), "{pref:?} has no {id}");
+            }
         }
     }
 
     /// `PF_CONSOLE_DUMP=dir cargo test -p pf-console-ui --lib dump_pad_test -- --ignored`
-    /// writes each family mid-test for a look.
+    /// writes each pad mid-test for a look.
     #[test]
     #[ignore]
     fn dump_pad_test() {
-        use GamepadPref as P;
         let dir = std::env::var("PF_CONSOLE_DUMP").expect("set PF_CONSOLE_DUMP");
         let fonts = crate::theme::build_fonts().unwrap();
         let s = state(
-            &["A", "RB", "Up", "Start", "LS"],
+            &["A", "RB", "Up", "Start", "LS", "R4", "Touchpad"],
             &[
                 ("LX", -0.7),
                 ("LY", 0.5),
@@ -462,38 +462,21 @@ mod tests {
                 ("RT", 1.0),
             ],
         );
-        let prefs = [
-            ("xbox360", P::Xbox360),
-            ("xboxone", P::XboxOne),
-            ("elite", P::XboxElite),
-            ("ds4", P::DualShock4),
-            ("dualsense", P::DualSense),
-            ("edge", P::DualSenseEdge),
-            ("switch", P::SwitchPro),
-            ("steam", P::SteamController),
-            ("steam2", P::SteamController2),
-            ("deck", P::SteamDeck),
-        ];
-        for (name, pref) in prefs {
-            let mut surface = skia_safe::surfaces::raster_n32_premul((640, 560)).unwrap();
+        for v in 1..=18 {
+            let pref = GamepadPref::from_u8(v);
+            let d = Drawing::new(art_for(Some(pref)));
+            let scale = 600.0 / f64::from(d.art.w);
+            let h = (f64::from(d.art.h) * scale) as i32 + 40;
+            let mut surface = skia_safe::surfaces::raster_n32_premul((640, h)).unwrap();
             surface
                 .canvas()
                 .clear(skia_safe::Color::from_rgb(18, 20, 28));
-            draw_pad(
-                surface.canvas(),
-                &fonts,
-                Some(pref),
-                &s,
-                20.0,
-                0.0,
-                600.0,
-                1.0,
-            );
+            draw_pad(surface.canvas(), &fonts, &d, &s, 20.0, 20.0, scale, 1.0);
             let png = surface
                 .image_snapshot()
                 .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
                 .unwrap();
-            std::fs::write(format!("{dir}/pad-{name}.png"), png.as_bytes()).unwrap();
+            std::fs::write(format!("{dir}/pad-{}.png", pref.as_str()), png.as_bytes()).unwrap();
         }
     }
 }

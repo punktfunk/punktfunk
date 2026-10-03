@@ -1027,8 +1027,7 @@ pub fn match_first_family(mgr: &FontMgr, families: &[&str], style: FontStyle) ->
         .find_map(|f| mgr.match_family_style(f, style))
 }
 
-/// `src` composited over an opaque `dst`, for tests that read contrast off stacked paints.
-#[cfg(test)]
+/// `src` composited over an opaque `dst`: the opaque colour a stacked paint shows.
 pub(crate) fn over(src: Color4f, dst: Color4f) -> Color4f {
     let m = |s: f32, d: f32| s * src.a + d * (1.0 - src.a);
     Color4f::new(m(src.r, dst.r), m(src.g, dst.g), m(src.b, dst.b), 1.0)

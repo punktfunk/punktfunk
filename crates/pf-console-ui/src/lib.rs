@@ -50,6 +50,7 @@ pub mod library;
 pub mod model;
 pub mod os_marks;
 pub mod os_theme;
+mod pad_art;
 pub mod palette;
 pub mod platform;
 pub mod pointer;
