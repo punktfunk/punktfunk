@@ -207,6 +207,28 @@ v2_message!(AudioState = reg::MSG_AUDIO_STATE, { 1 => muted });
 v2_message!(LaunchOutcome = reg::MSG_LAUNCH_OUTCOME, { 1 => kind, 2 => message },
     check |m| m.message.len() <= LAUNCH_MESSAGE_MAX);
 v2_message!(PadSlots = reg::MSG_PAD_SLOTS, { 1 => slots });
+v2_message!(LossReport = reg::MSG_LOSS_REPORT, { 1 => loss_ppm });
+v2_message!(DeliveryReport = reg::MSG_DELIVERY_REPORT, { 1 => packets_received });
+v2_message!(RfiRequest = reg::MSG_RFI_REQUEST, { 1 => first_frame, 2 => last_frame });
+v2_message!(ShardPayloadChanged = reg::MSG_SHARD_PAYLOAD_CHANGED, { 1 => shard_payload });
+v2_message!(ShardPayloadAck = reg::MSG_SHARD_PAYLOAD_ACK, { 1 => shard_payload });
+v2_message!(ClockProbe = reg::MSG_CLOCK_PROBE, { 1 => t1_ns });
+v2_message!(ClockEcho = reg::MSG_CLOCK_ECHO, { 1 => t1_ns, 2 => t2_ns, 3 => t3_ns });
+
+/// No fields: the frame is the ask.
+impl V2Message for RequestKeyframe {
+    const TYPE: u64 = reg::MSG_REQUEST_KEYFRAME;
+
+    fn fields(&self) -> Fields {
+        Fields::new()
+    }
+
+    fn from_body(body: &[u8]) -> Result<Self> {
+        let mut r = FieldReader::new(body);
+        while r.next_field()?.is_some() {}
+        Ok(RequestKeyframe)
+    }
+}
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
 v2_message!(ClipFetch = reg::MSG_CLIP_FETCH, { 1 => seq, 2 => file_index, 3 => mime },

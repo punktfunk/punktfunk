@@ -17,3 +17,4 @@ pub mod hello;
 pub mod io;
 pub mod msg;
 pub mod registry;
+pub mod translate;

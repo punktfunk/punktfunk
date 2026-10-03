@@ -76,6 +76,10 @@ pub const MSG_PROBE_REQUEST: u64 = 0x2B;
 pub const MSG_PROBE_RESULT: u64 = 0x2C;
 /// `client → host`: the display-latch grid for phase lock.
 pub const MSG_PHASE_REPORT: u64 = 0x2D;
+/// `client → host`: shard loss parity repaired over a report window (`LossReport`).
+pub const MSG_LOSS_REPORT: u64 = 0x2E;
+/// `client → host`: media packets received this session (`DeliveryReport`).
+pub const MSG_DELIVERY_REPORT: u64 = 0x2F;
 /// `host → client`: the pointer bitmap changed.
 pub const MSG_CURSOR_SHAPE: u64 = 0x30;
 /// `host → client`: who draws the cursor.
@@ -88,6 +92,18 @@ pub const MSG_AUDIO_STATE: u64 = 0x33;
 pub const MSG_LAUNCH_OUTCOME: u64 = 0x34;
 /// `host → client`: the OS pad slots this session holds.
 pub const MSG_PAD_SLOTS: u64 = 0x35;
+/// `client → host`: invalidate a frame range instead of a keyframe (`RfiRequest`).
+pub const MSG_RFI_REQUEST: u64 = 0x36;
+/// `client → host`: the next frame as a keyframe (`RequestKeyframe`).
+pub const MSG_REQUEST_KEYFRAME: u64 = 0x37;
+/// `host → client`: the sealed shard size changes (`ShardPayloadChanged`).
+pub const MSG_SHARD_PAYLOAD_CHANGED: u64 = 0x38;
+/// `client → host`: the answer to a shard size change (`ShardPayloadAck`).
+pub const MSG_SHARD_PAYLOAD_ACK: u64 = 0x39;
+/// `client → host`: one clock skew round (`ClockProbe`).
+pub const MSG_CLOCK_PROBE: u64 = 0x3A;
+/// `host → client`: the answer to a clock round (`ClockEcho`).
+pub const MSG_CLOCK_ECHO: u64 = 0x3B;
 
 /// `client → host`, control stream: turn the shared clipboard on or off.
 pub const MSG_CLIP_CONTROL: u64 = 0x40;
@@ -100,7 +116,8 @@ pub const MSG_CLIP_FETCH: u64 = 0x43;
 /// Transfer stream, answer: status and size, then the bytes until FIN.
 pub const MSG_CLIP_FETCH_HDR: u64 = 0x44;
 
-/// Input stream: one edge — a key, a button, a touch down or up — in order with the others.
+/// Control stream: one input edge — a key press or release — that must not be lost, in order
+/// with the others. The body is the event's own encoding.
 pub const MSG_INPUT_EVENT: u64 = 0x50;
 
 /// Every frame type, its name and the bound on its body.
@@ -131,12 +148,20 @@ pub const FRAMES: &[(&str, u64, usize)] = &[
     ("MSG_PROBE_REQUEST", MSG_PROBE_REQUEST, 256),
     ("MSG_PROBE_RESULT", MSG_PROBE_RESULT, 256),
     ("MSG_PHASE_REPORT", MSG_PHASE_REPORT, 256),
+    ("MSG_LOSS_REPORT", MSG_LOSS_REPORT, 256),
+    ("MSG_DELIVERY_REPORT", MSG_DELIVERY_REPORT, 256),
     ("MSG_CURSOR_SHAPE", MSG_CURSOR_SHAPE, 128 * 1024),
     ("MSG_CURSOR_RENDER", MSG_CURSOR_RENDER, 256),
     ("MSG_ACCESS_UPDATE", MSG_ACCESS_UPDATE, 256),
     ("MSG_AUDIO_STATE", MSG_AUDIO_STATE, 256),
     ("MSG_LAUNCH_OUTCOME", MSG_LAUNCH_OUTCOME, 1024),
     ("MSG_PAD_SLOTS", MSG_PAD_SLOTS, 256),
+    ("MSG_RFI_REQUEST", MSG_RFI_REQUEST, 256),
+    ("MSG_REQUEST_KEYFRAME", MSG_REQUEST_KEYFRAME, 256),
+    ("MSG_SHARD_PAYLOAD_CHANGED", MSG_SHARD_PAYLOAD_CHANGED, 256),
+    ("MSG_SHARD_PAYLOAD_ACK", MSG_SHARD_PAYLOAD_ACK, 256),
+    ("MSG_CLOCK_PROBE", MSG_CLOCK_PROBE, 256),
+    ("MSG_CLOCK_ECHO", MSG_CLOCK_ECHO, 256),
     ("MSG_CLIP_CONTROL", MSG_CLIP_CONTROL, 256),
     ("MSG_CLIP_STATE", MSG_CLIP_STATE, 256),
     ("MSG_CLIP_OFFER", MSG_CLIP_OFFER, 8 * 1024),
