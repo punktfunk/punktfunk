@@ -305,6 +305,7 @@ struct ContentView: View {
                 LaunchHoldView(
                     entry: hold.entry, host: model.activeHost,
                     connecting: model.connection == nil, windowWait: model.launchWindowWait,
+                    download: model.launchDownload,
                     sourceRect: hold.sourceRect,
                     onShow: { model.revealStream() })
                     // Its own view per launch — a reused one keeps the last flight's state.

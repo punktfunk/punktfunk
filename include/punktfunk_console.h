@@ -45,6 +45,10 @@
 // `0` fresh, `1` waking, `2` offline.
 #define PUNKTFUNK_CONSOLE_PUSH_LIBRARY_STALE 10
 
+// `[{"app_id", "state", "done_bytes", …}]` — the host's downloads, pushed before the same
+// read's [`PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING`].
+#define PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS 19
+
 // `Settings` changed elsewhere; the shell reads it on its next mutation. Not a save.
 #define PUNKTFUNK_CONSOLE_PUSH_SETTINGS 11
 

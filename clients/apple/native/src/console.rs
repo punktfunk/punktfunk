@@ -62,6 +62,9 @@ pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_CACHED: u8 = 8;
 pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING: u8 = 9;
 /// `0` fresh, `1` waking, `2` offline.
 pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_STALE: u8 = 10;
+/// `[{"app_id", "state", "done_bytes", …}]` — the host's downloads, pushed before the same
+/// read's [`PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING`].
+pub const PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS: u8 = 19;
 /// `Settings` changed elsewhere; the shell reads it on its next mutation. Not a save.
 pub const PUNKTFUNK_CONSOLE_PUSH_SETTINGS: u8 = 11;
 /// `[{id, name, overrides}]` — the preset catalog.
@@ -583,6 +586,10 @@ pub unsafe extern "C" fn punktfunk_console_push(
             PUNKTFUNK_CONSOLE_PUSH_LIBRARY_RUNNING => {
                 json::<Vec<pf_client_core::library::RunningGame>>(text)
                     .map(|v| library.set_running(&v))
+            }
+            PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS => {
+                json::<Vec<pf_client_core::library::DownloadProgress>>(text)
+                    .map(|v| library.set_downloads(&v))
             }
             PUNKTFUNK_CONSOLE_PUSH_LIBRARY_STALE => {
                 json::<u8>(text).map(|v| library.set_stale(bridge::stale_code(v)))
