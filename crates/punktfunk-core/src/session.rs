@@ -9,7 +9,7 @@
 //! drains them with [`Session::poll_input`].
 
 use crate::config::{Config, Role};
-use crate::crypto::SessionCrypto;
+use crate::crypto::{MediaKeys, SessionCrypto};
 use crate::error::{PunktfunkError, Result};
 use crate::fec::{coder_for, ErasureCoder};
 use crate::input::InputEvent;
@@ -62,11 +62,14 @@ pub struct Frame {
 }
 
 /// What a `punktfunk/2` session takes beyond [`Config`] ([`Session::new_v2`]).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MediaV2 {
     /// The host instant, Unix ns, that capture time 0 stands for. Both ends learn it in the
     /// handshake; the wire carries microseconds after it.
     pub clock_origin_ns: u64,
+    /// Sealing keys from the connection's exporter. `None` on a carrier that already
+    /// encrypts (WebTransport); `Config::encrypt`, `key` and `salt` are never used.
+    pub keys: Option<MediaKeys>,
 }
 
 /// Which header a session writes. `punktfunk/2` keeps the stamp it puts on every packet;
@@ -220,17 +223,26 @@ impl Session {
         })
     }
 
-    /// A `punktfunk/2` session: [`crate::packet::encode_v2`] headers both ways. Unsealed, for a
-    /// carrier that already encrypts; `config.encrypt` must be off.
+    /// A `punktfunk/2` session: [`crate::packet::encode_v2`] headers both ways, sealed under
+    /// `media.keys` when it has them. `config.encrypt` must be off: v1's key and salt never apply.
     pub fn new_v2(
         config: Config,
         media: MediaV2,
         transport: Box<dyn Transport>,
     ) -> Result<Session> {
         if config.encrypt {
-            return Err(PunktfunkError::Unsupported("sealed punktfunk/2 media"));
+            return Err(PunktfunkError::InvalidArg(
+                "punktfunk/2 media takes its keys from MediaV2",
+            ));
         }
         let mut s = Session::new(config, transport)?;
+        if let Some(keys) = &media.keys {
+            s.crypto = Some(std::sync::Arc::new(SessionCrypto::media(
+                keys,
+                s.config.role,
+            )));
+            s.replay = Some(ReplayWindow::new());
+        }
         s.framing = Framing::V2(V2Stamp {
             seq: 0,
             epoch: 0,
@@ -1020,6 +1032,25 @@ impl Session {
             // decrypt accounting (exception path, not line rate).
             let t_dec = self.perf.is_some().then(std::time::Instant::now);
             let (pkt_range, seq) = match &self.crypto {
+                Some(c) if c.is_media() => {
+                    use crate::packet::V2_CLEAR_LEN;
+                    if len < crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN {
+                        continue;
+                    }
+                    let wire = &mut self.recv_scratch[i][..len];
+                    let low = u32::from_le_bytes(wire[1..V2_CLEAR_LEN].try_into().unwrap());
+                    let reference = self.replay.as_ref().map_or(0, |w| w.reference());
+                    let seq = crate::packet::expand_seq(reference, low);
+                    if !self.replay.as_ref().is_none_or(|w| w.plausible(seq)) {
+                        StatsCounters::add(&self.stats.packets_dropped, 1);
+                        continue;
+                    }
+                    let (aad, rest) = wire.split_at_mut(V2_CLEAR_LEN);
+                    match c.open_media(seq, aad, rest) {
+                        Ok(n) => (0..V2_CLEAR_LEN + n, Some(seq)),
+                        Err(_) => continue,
+                    }
+                }
                 Some(c) => {
                     // A sealed datagram is at least seq prefix + tag; anything shorter is noise.
                     if len < 8 + crate::crypto::TAG_LEN {
@@ -1526,6 +1557,10 @@ mod wire_equivalence_tests {
     }
 
     fn v2_pair(drop_period: u32) -> (Session, Session) {
+        v2_pair_keyed(drop_period, None)
+    }
+
+    fn v2_pair_keyed(drop_period: u32, keys: Option<MediaKeys>) -> (Session, Session) {
         let mk = |role: Role| {
             let mut c = host_cfg(FecScheme::Gf16, 25, false);
             c.role = role;
@@ -1534,11 +1569,16 @@ mod wire_equivalence_tests {
         };
         let media = MediaV2 {
             clock_origin_ns: 1_700_000_000_000_000_000,
+            keys,
         };
         let (ht, ct) = loopback_pair(drop_period, 0);
-        let host = Session::new_v2(mk(Role::Host), media, Box::new(ht)).unwrap();
+        let host = Session::new_v2(mk(Role::Host), media.clone(), Box::new(ht)).unwrap();
         let client = Session::new_v2(mk(Role::Client), media, Box::new(ct)).unwrap();
         (host, client)
+    }
+
+    fn media_keys(suite: crate::crypto::MediaSuite) -> MediaKeys {
+        MediaKeys::derive(&[0x42; 32], suite)
     }
 
     /// Whole frames of every shape cross the `punktfunk/2` wire byte-identical, with their
@@ -1586,8 +1626,7 @@ mod wire_equivalence_tests {
         ));
     }
 
-    /// Parity repairs a dropped shard on the v2 wire, and an encrypted v2 session is refused
-    /// until its keys exist.
+    /// Parity repairs a dropped shard on the v2 wire, and v1's key never seals v2 media.
     #[test]
     fn v2_parity_repairs_loss() {
         // Every 17th packet: at most one loss in any 8 + 2 block, always within parity.
@@ -1606,7 +1645,10 @@ mod wire_equivalence_tests {
         assert!(client.stats().fec_recovered_shards > 0);
         let (h, _) = loopback_pair(0, 0);
         let sealed = host_cfg(FecScheme::Gf16, 25, true);
-        let media = MediaV2 { clock_origin_ns: 0 };
+        let media = MediaV2 {
+            clock_origin_ns: 0,
+            keys: None,
+        };
         assert!(Session::new_v2(sealed, media, Box::new(h)).is_err());
     }
 
@@ -1629,5 +1671,70 @@ mod wire_equivalence_tests {
         let f = client.poll_frame().unwrap();
         assert_eq!((f.frame_index, f.data.len()), (3, src.len()));
         assert_eq!(f.data, src);
+    }
+
+    /// Sealed v2 media crosses under both suites, and every packet is 16 bytes longer than the
+    /// unsealed one: the tag, no sequence prefix.
+    #[test]
+    fn v2_sealed_frames_cross_under_both_suites() {
+        use crate::crypto::MediaSuite;
+        for suite in [MediaSuite::Aes128Gcm, MediaSuite::ChaCha20Poly1305] {
+            let (mut host, mut client) = v2_pair_keyed(0, Some(media_keys(suite)));
+            for i in 0..6usize {
+                let src = pattern(i * 3000 + 1);
+                host.submit_frame(&src, 1_700_000_000_000_000_000 + i as u64 * 1000, 0)
+                    .unwrap();
+                assert_eq!(
+                    client.poll_frame().unwrap().data,
+                    src,
+                    "{suite:?} frame {i}"
+                );
+            }
+            let wires = host.seal_frame(&pattern(100), 0, 0).unwrap();
+            assert_eq!(
+                wires[0].len(),
+                crate::packet::V2_HEADER_LEN + 512 + crate::crypto::TAG_LEN
+            );
+        }
+    }
+
+    /// A tampered clear prefix fails the tag, a replayed packet is dropped, and a frame that
+    /// straddles a key change opens on both sides of it.
+    #[test]
+    fn v2_sealed_wire_resists_tamper_and_replay_across_a_key_change() {
+        let (mut host, mut client) =
+            v2_pair_keyed(0, Some(media_keys(crate::crypto::MediaSuite::Aes128Gcm)));
+        host.next_seq = crate::crypto::MEDIA_KEY_PACKETS - 3;
+        let src = pattern(20 * 512);
+        let wires = host.seal_frame(&src, 1_700_000_000_000_000_000, 0).unwrap();
+        assert!(wires.len() > 6, "the frame must straddle the key change");
+        let mut tampered = wires[0].clone();
+        tampered[0] = crate::packet::V2_STREAM_PROBE;
+        let refs: Vec<&[u8]> = std::iter::once(tampered.as_slice())
+            .chain(wires.iter().map(|w| w.as_slice()))
+            .chain(std::iter::once(wires[1].as_slice()))
+            .collect();
+        host.send_sealed(&refs).unwrap();
+        let f = client.poll_frame().unwrap();
+        assert_eq!(f.data, src);
+        assert!(matches!(client.poll_frame(), Err(PunktfunkError::NoFrame)));
+        assert_eq!(client.stats().packets_received as usize, wires.len());
+        assert!(
+            client.stats().packets_dropped >= 1,
+            "the replayed packet is dropped"
+        );
+    }
+
+    /// A packet number far past the newest is dropped before any key is derived for it.
+    #[test]
+    fn v2_implausible_packet_numbers_are_dropped_unopened() {
+        let (mut host, mut client) =
+            v2_pair_keyed(0, Some(media_keys(crate::crypto::MediaSuite::Aes128Gcm)));
+        host.next_seq = 3 * crate::crypto::MEDIA_KEY_PACKETS;
+        host.submit_frame(&pattern(700), 1_700_000_000_000_000_000, 0)
+            .unwrap();
+        assert!(matches!(client.poll_frame(), Err(PunktfunkError::NoFrame)));
+        assert!(client.stats().packets_dropped >= 2);
+        assert_eq!(client.stats().packets_received, 0);
     }
 }

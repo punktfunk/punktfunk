@@ -68,6 +68,23 @@ impl ReplayWindow {
         }
     }
 
+    /// The packet number a 32-bit one expands around: the highest accepted, 0 before any.
+    pub(super) fn reference(&self) -> u64 {
+        if self.seen {
+            self.highest
+        } else {
+            0
+        }
+    }
+
+    /// Worth an AEAD open: inside the window and at most one media key past the newest. An
+    /// unauthenticated number further ahead would only make the receiver derive keys.
+    pub(super) fn plausible(&self, seq: u64) -> bool {
+        let key = crate::crypto::MEDIA_KEY_PACKETS;
+        let reference = self.reference();
+        seq / key <= reference / key + 1 && reference.saturating_sub(seq) < REPLAY_WINDOW
+    }
+
     pub(super) fn accept(&mut self, seq: u64) -> bool {
         if !self.seen {
             self.seen = true;

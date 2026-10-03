@@ -109,15 +109,22 @@ pub(super) fn hand_chunk(
     Ok(())
 }
 
-/// Buffer `i` is `seq(8) ‖ plaintext ‖ tag scratch`; seals `[8..]` under nonce
-/// `seq_base + i`. Same layout and nonce order as the fused single-lane path.
+/// Buffer `i` is packet `seq_base + i`, sealed in place. `punktfunk/1`: `seq(8) ‖ plaintext ‖
+/// tag scratch`, sealing `[8..]`. `punktfunk/2`: the header's clear prefix is the associated
+/// data and the rest is sealed. Same layout and nonce order as the fused single-lane path.
 pub(super) fn seal_wire_slice(
     c: &SessionCrypto,
     wires: &mut [Vec<u8>],
     seq_base: u64,
 ) -> Result<()> {
     for (i, wire) in wires.iter_mut().enumerate() {
-        c.seal_in_place(seq_base.wrapping_add(i as u64), &mut wire[8..])?;
+        let seq = seq_base.wrapping_add(i as u64);
+        if c.is_media() {
+            let (aad, rest) = wire.split_at_mut(crate::packet::V2_CLEAR_LEN);
+            c.seal_media(seq, aad, rest)?;
+        } else {
+            c.seal_in_place(seq, &mut wire[8..])?;
+        }
     }
     Ok(())
 }
