@@ -265,6 +265,30 @@ fn the_client_uninstall_removes_every_shortcut_the_install_can_create() {
     }
 }
 
+/// The host lays down one Start-menu link, every user's, starting the tray with `--start-host`,
+/// and its uninstall removes it. No desktop link.
+#[test]
+fn the_host_start_menu_link_is_created_then_removed() {
+    let links = |facts: &WinFacts, uninstall: bool| -> Vec<String> {
+        let choices = WinChoices::derive(facts, Artifact::Host);
+        plan::build(facts, &choices, Artifact::Host, uninstall)
+            .steps()
+            .filter_map(|a| match a {
+                WinAction::Shortcut { link, target, args } => {
+                    assert!(target.ends_with(r"\punktfunk-tray.exe"), "{target}");
+                    assert_eq!(args, "--start-host");
+                    Some(link.clone())
+                }
+                WinAction::DeleteFiles { paths } => paths.first().cloned(),
+                _ => None,
+            })
+            .collect()
+    };
+    let link = r"<common start menu>\Punktfunk Host.lnk";
+    assert_eq!(links(&fresh(), false), [link]);
+    assert_eq!(links(&upgrade(), true), [link]);
+}
+
 /// Host and client are two products under two registry keys (D1). On a box where the HOST is
 /// installed and the client is not, deriving the client's choices must read the CLIENT key:
 /// `installed` is the host's, and taking it made the client a false upgrade pinned to

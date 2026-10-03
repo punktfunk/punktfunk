@@ -193,9 +193,7 @@ pub fn serve(
             .context("native pairing store")?,
     );
     // Native identity first. If GameStream writes `cert.pem` before a native pair
-    // exists, the console starts and serves the SAN-less RSA cert. Reading the dir
-    // first also stops `load_or_create` minting a new cert that `load_or_adopt`
-    // would then treat as the pin it was preserving.
+    // exists, the console starts and serves the SAN-less RSA cert.
     let native_ident = crate::identity::load_or_adopt(&np).context("native host identity")?;
     #[cfg(feature = "gamestream")]
     let gs = crate::gamestream::GsState::new(

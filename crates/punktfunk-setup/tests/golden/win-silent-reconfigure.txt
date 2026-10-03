@@ -37,6 +37,8 @@
 ==> Restoring what the stop disabled
   ok would re-enable only the tasks that were enabled before the stop
   + schtasks /Run /TN PunktfunkScripting
+==> Shortcut
+  ok would create <common start menu>\Punktfunk Host.lnk → C:\Program Files\punktfunk\punktfunk-tray.exe --start-host
 ==> Checking the virtual display driver
   + "C:\Program Files\punktfunk\punktfunk-host.exe" driver check
 

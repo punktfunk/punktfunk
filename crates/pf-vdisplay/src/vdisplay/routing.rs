@@ -71,6 +71,18 @@ fn pick_gamescope_mode(
     }
 }
 
+/// The `managed_infra` rung of [`pick_gamescope_mode`]. The SteamOS-session route restarts
+/// `gamescope-session.target`; off SteamOS that ends a live desktop session, the host with it.
+#[cfg(target_os = "linux")]
+fn managed_infra_usable(
+    installed: bool,
+    target_restart: bool,
+    desktop_active: bool,
+    steamos: bool,
+) -> bool {
+    installed && !(target_restart && desktop_active && !steamos)
+}
+
 /// Operator gamescope knobs, sampled once at first use and never written back.
 ///
 /// `node_env` sits above `dedicated_launch` in [`pick_gamescope_mode`]. A live
@@ -170,13 +182,27 @@ pub fn resolve_gamescope_route(
         // `operator_gamescope` takes ENV_LOCK itself; the mutex is not reentrant.
         // Nothing on this path writes the env.
         let ov = operator_gamescope();
+        let installed = gamescope::managed_session_available();
+        let target_restart = gamescope::steamos_session_present();
+        // Only the target-restart route needs the `/proc` session walk.
+        let desktop_active =
+            target_restart && session::is_desktop_kind(crate::detect_active_session().kind);
+        let steamos = pf_host_config::os_release::os_release().is("steamos");
+        let managed_infra =
+            managed_infra_usable(installed, target_restart, desktop_active, steamos);
+        if installed && !managed_infra {
+            tracing::info!(
+                "gamescope: a desktop session is live and the SteamOS session takeover would end \
+                 it — not taking over"
+            );
+        }
         let mode = pick_gamescope_mode(
             dedicated_launch,
             ov.managed,
             ov.attach,
             ov.node.is_some(),
             ov.session.is_some(),
-            gamescope::managed_session_available(),
+            managed_infra,
             gamescope::foreign_gamescope_running(),
         );
         tracing::info!(?mode, "gamescope sub-mode");
@@ -682,6 +708,24 @@ mod tests {
         assert_eq!(pick(true, true, false, false, false, true, false), Managed);
         assert_eq!(pick(true, false, true, false, false, false, false), Attach);
         assert_eq!(pick(true, false, false, true, false, false, false), Attach);
+    }
+
+    #[test]
+    fn a_live_desktop_bars_the_steamos_takeover_off_steamos() {
+        // (installed, target_restart, desktop_active, steamos)
+        let usable = managed_infra_usable;
+        // Valve's session on a Plasma box: restarting its target would end Plasma.
+        assert!(!usable(true, true, true, false));
+        let infra = usable(true, true, true, false);
+        assert_eq!(
+            pick_gamescope_mode(false, false, false, false, false, infra, false),
+            GamescopeMode::Spawn
+        );
+        // Real SteamOS, no desktop, and session-plus's own unit stay managed.
+        assert!(usable(true, true, true, true));
+        assert!(usable(true, true, false, false));
+        assert!(usable(true, false, true, false));
+        assert!(!usable(false, false, true, false));
     }
 
     /// Injector id is a return value, never a `PUNKTFUNK_INPUT_BACKEND` `set_var`

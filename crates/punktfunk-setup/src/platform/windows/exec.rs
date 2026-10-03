@@ -5,10 +5,11 @@
 //! `schtasks` for tasks and the de-elevated tray. SCM stop/wait, `.lnk` writing, the env-change
 //! broadcast, and Appx presence live in `sys.rs` (`cfg(windows)`; error stubs elsewhere).
 //!
-//! Placeholders (`<staging>`, `<temp>`, `<version>`, and the client's `%LocalAppData%`,
-//! `<start menu>`, `<desktop>`) render verbatim in a dry run and are substituted from
-//! `Subst` on a real one — except in the PATH edit, where `%LocalAppData%` stays literal on
-//! purpose: `REG_EXPAND_SZ` expands it per user. Goldens enter through [`render`].
+//! Placeholders (`<staging>`, `<temp>`, `<version>`, the host's `<common start menu>`, and the
+//! client's `%LocalAppData%`, `<start menu>`, `<desktop>`) render verbatim in a dry run and are
+//! substituted from `Subst` on a real one — except in the PATH edit, where `%LocalAppData%`
+//! stays literal on purpose: `REG_EXPAND_SZ` expands it per user. Goldens enter through
+//! [`render`].
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,8 @@ pub struct Subst {
     pub local_app_data: String,
     pub start_menu: String,
     pub desktop: String,
+    /// Every user's Start menu Programs folder, for the host's link.
+    pub common_start_menu: String,
 }
 
 /// `Ok` carries the files a running process kept mapped, queued to be replaced at the next
@@ -129,6 +132,7 @@ impl WinExecutor<'_> {
         s.replace("<staging>", &self.subst.staging)
             .replace("<temp>", &self.subst.temp)
             .replace("<version>", &self.subst.version)
+            .replace("<common start menu>", &self.subst.common_start_menu)
             .replace("<start menu>", &self.subst.start_menu)
             .replace("<desktop>", &self.subst.desktop)
             .replace("%LocalAppData%", &self.subst.local_app_data)
@@ -229,8 +233,8 @@ impl WinExecutor<'_> {
             WinAction::ArpRemove { key } => {
                 self.spawn(&["reg", "delete", key, "/f"].map(str::to_string), true)
             }
-            WinAction::Shortcut { link, target } => {
-                match sys::create_shortcut(&self.sub(link), &self.sub(target)) {
+            WinAction::Shortcut { link, target, args } => {
+                match sys::create_shortcut(&self.sub(link), &self.sub(target), args) {
                     Ok(()) => self.ui.ok(&format!("created {link}")),
                     Err(e) => self.ui.warn(&format!("couldn't create {link}: {e}")),
                 }
@@ -655,7 +659,12 @@ fn dry_line(action: &WinAction) -> Option<String> {
         WinAction::ArpRemove { key } => {
             format!("would remove the Add/Remove Programs entry ({key})")
         }
-        WinAction::Shortcut { link, target } => format!("would create {link} → {target}"),
+        WinAction::Shortcut { link, target, args } if args.is_empty() => {
+            format!("would create {link} → {target}")
+        }
+        WinAction::Shortcut { link, target, args } => {
+            format!("would create {link} → {target} {args}")
+        }
         WinAction::MakeNetworkPrivate { network } => {
             format!("would set network '{network}' to Private")
         }
@@ -837,6 +846,7 @@ mod tests {
                 local_app_data: r"C:\Users\me\AppData\Local".into(),
                 start_menu: r"C:\Users\me\Start Menu\Programs".into(),
                 desktop: r"C:\Users\me\Desktop".into(),
+                common_start_menu: r"C:\ProgramData\Start Menu\Programs".into(),
             },
         }
     }

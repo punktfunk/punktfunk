@@ -36,6 +36,10 @@ pub fn controllers(b: &mut Build) {
             s.gamepad = at(GAMEPADS, i).to_string()
         }),
     );
+    let (field, rumble) =
+        Field::switch(&spec::PAD_RUMBLE, |s| s.pad_rumble, |s, v| s.pad_rumble = v);
+    follows.push(rumble.upcast());
+    b.put(&mut p, Some(&g), field);
 
     // Off sends nothing and never opens a pad, which frees it for USB passthrough, so the rows
     // about a forwarded pad follow this switch.

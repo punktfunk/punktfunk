@@ -362,6 +362,7 @@ mod session_main {
             settings.pad_haptics,
             pf_client_core::pad_audio::speaker_active(&settings.pad_speaker),
         );
+        gamepad.set_rumble(settings.pad_rumble);
         // Short-circuit: Full chroma off must not build an HEVC decoder.
         // The probe constructs one to ask about 4:4:4 profiles.
         let hevc_444_hardware = settings.enable_444
@@ -423,7 +424,7 @@ mod session_main {
 
     /// The window's starting size under Match-window: the persisted last size, so the
     /// first connect's mode already matches the glass; `None` (policy off / never
-    /// stored) = the 1280×720 default.
+    /// stored) = the presenter's default.
     pub(crate) fn window_size(settings: &trust::Settings) -> Option<(u32, u32)> {
         (settings.match_window && settings.last_window_w > 0 && settings.last_window_h > 0)
             .then_some((settings.last_window_w, settings.last_window_h))
@@ -743,8 +744,12 @@ mod session_main {
 
     pub fn run() -> u8 {
         // Logs to STDERR — stdout is the machine interface (ready/stats/error lines) — plus
-        // the ring "Send logs to host" uploads.
-        pf_client_core::logring::init_tracing(std::io::stderr, true);
+        // the ring "Send logs to host" uploads. A shell pipes stderr into its log file, so
+        // colour only on a terminal.
+        pf_client_core::logring::init_tracing(
+            std::io::stderr,
+            std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        );
         // SEH last-resort: a driver AV otherwise leaves only an exit code in the shell's log.
         #[cfg(windows)]
         punktfunk_core::crash::install();

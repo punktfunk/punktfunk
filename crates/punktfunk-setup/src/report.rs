@@ -10,7 +10,7 @@
 
 use crate::choices::{Action, Choices, LAN_BIND, LOOPBACK_BIND};
 use crate::exec::{Opts, Outcome};
-use crate::facts::{Facts, Nvidia, DOCS};
+use crate::facts::{Facts, Family, Nvidia, DOCS};
 use crate::seam::CommandRunner;
 use crate::ui::Reporter;
 
@@ -19,6 +19,15 @@ use crate::ui::Reporter;
 /// console then stores a salted hash, and a forgotten password is reset, not read.
 pub const PASSWORD_READ: &str =
     "sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' ~/.config/punktfunk/web-password";
+
+/// [`PASSWORD_READ`] for this box. SteamOS keeps the password in `web.env`, which its script
+/// writes.
+pub fn password_read(family: Family) -> &'static str {
+    match family {
+        Family::Steamos => "sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' ~/.config/punktfunk/web.env",
+        _ => PASSWORD_READ,
+    }
+}
 
 pub fn banner(ui: &dyn Reporter) {
     ui.blank();
@@ -193,7 +202,10 @@ fn next_steps(
         let password = match choices.web_password {
             Some(_) => "  Password: the one you typed".to_string(),
             None => {
-                format!("  Password — this prints it, until you first sign in: {PASSWORD_READ}")
+                format!(
+                    "  Password — this prints it, until you first sign in: {}",
+                    password_read(facts.family)
+                )
             }
         };
         ui.line(&password);

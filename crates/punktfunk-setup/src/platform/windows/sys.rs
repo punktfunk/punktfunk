@@ -113,7 +113,7 @@ pub fn stop_service_wait(_name: &str) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub fn create_shortcut(link: &str, target: &str) -> Result<(), String> {
+pub fn create_shortcut(link: &str, target: &str, args: &str) -> Result<(), String> {
     use ::windows::core::{Interface, HSTRING};
     use ::windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
@@ -148,6 +148,10 @@ pub fn create_shortcut(link: &str, target: &str) -> Result<(), String> {
                 .map_err(|e| format!("ShellLink: {e}"))?;
             sl.SetPath(&HSTRING::from(target))
                 .map_err(|e| format!("SetPath: {e}"))?;
+            if !args.is_empty() {
+                sl.SetArguments(&HSTRING::from(args))
+                    .map_err(|e| format!("SetArguments: {e}"))?;
+            }
             let pf: IPersistFile = sl.cast().map_err(|e| format!("IPersistFile: {e}"))?;
             pf.Save(&HSTRING::from(path.as_str()), true)
                 .map_err(|e| format!("Save: {e}"))
@@ -160,18 +164,20 @@ pub fn create_shortcut(link: &str, target: &str) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-pub fn create_shortcut(_link: &str, _target: &str) -> Result<(), String> {
+pub fn create_shortcut(_link: &str, _target: &str, _args: &str) -> Result<(), String> {
     Err("shortcuts are Windows-only".into())
 }
 
-/// The visible desktop and the Start menu's Programs folder, from the shell: OneDrive can move
-/// either away from `%USERPROFILE%`. `None` where the shell has no answer.
+/// The visible desktop, this user's and every user's Start menu Programs folder, from the
+/// shell: OneDrive can move the first two away from `%USERPROFILE%`. `None` where the shell
+/// has no answer.
 #[cfg(windows)]
-pub fn shell_folders() -> (Option<String>, Option<String>) {
+pub fn shell_folders() -> (Option<String>, Option<String>, Option<String>) {
     use ::windows::core::GUID;
     use ::windows::Win32::System::Com::CoTaskMemFree;
     use ::windows::Win32::UI::Shell::{
-        FOLDERID_Desktop, FOLDERID_Programs, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+        FOLDERID_CommonPrograms, FOLDERID_Desktop, FOLDERID_Programs, SHGetKnownFolderPath,
+        KF_FLAG_DEFAULT,
     };
     let get = |id: &GUID| {
         // SAFETY: `id` is a live known-folder GUID. The path is CoTaskMem the shell hands us:
@@ -183,12 +189,16 @@ pub fn shell_folders() -> (Option<String>, Option<String>) {
             text
         }
     };
-    (get(&FOLDERID_Desktop), get(&FOLDERID_Programs))
+    (
+        get(&FOLDERID_Desktop),
+        get(&FOLDERID_Programs),
+        get(&FOLDERID_CommonPrograms),
+    )
 }
 
 #[cfg(not(windows))]
-pub fn shell_folders() -> (Option<String>, Option<String>) {
-    (None, None)
+pub fn shell_folders() -> (Option<String>, Option<String>, Option<String>) {
+    (None, None, None)
 }
 
 /// A `REG_SZ` / `REG_EXPAND_SZ` value under `HKLM\…` or `HKCU\…`, unexpanded, through the

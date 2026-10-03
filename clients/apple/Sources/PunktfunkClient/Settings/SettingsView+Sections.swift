@@ -887,7 +887,7 @@ extension SettingsView {
         #if os(macOS)
         "⌃⌥⇧O, the Stream menu or Select + A on a controller opens it mid-stream. "
         #else
-        "A two-finger twist, or Select + A on a controller, opens it mid-stream. "
+        "A two-finger twist, ⌃⌥⇧O on a keyboard or Select + A on a controller opens it mid-stream. "
         #endif
     }
 
@@ -1170,6 +1170,13 @@ extension SettingsView {
                     "Controller type", options: SettingsOptions.padTypes,
                     selection: scoped(SettingsFields.gamepadType))
                     .disabled(!effective.gamepadForwarding)
+            }
+            if !inPresetScope {
+                described("Off, controllers don't vibrate from the stream, whatever the game "
+                    + "sends.") {
+                    Toggle("Controller rumble", isOn: $padRumble)
+                        .disabled(!effective.gamepadForwarding)
+                }
             }
             #if !os(tvOS)
             if homeButtonKept, !inPresetScope, effective.gamepadForwarding,

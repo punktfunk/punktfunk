@@ -34,6 +34,8 @@
 ==> Plugin runner
   + schtasks /Create /TN PunktfunkScripting /XML <generated> /F
   + schtasks /Run /TN PunktfunkScripting
+==> Shortcut
+  ok would create <common start menu>\Punktfunk Host.lnk → C:\Program Files\punktfunk\punktfunk-tray.exe --start-host
 ==> Tray
   ok would start the tray (C:\Program Files\punktfunk\punktfunk-tray.exe) — skipped in silent installs
 ==> Checking the virtual display driver

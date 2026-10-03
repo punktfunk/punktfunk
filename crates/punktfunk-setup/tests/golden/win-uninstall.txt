@@ -19,5 +19,6 @@
   + reg delete HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v PunktfunkTray /f
   + reg delete HKLM\SOFTWARE\Classes\AppUserModelId\unom.punktfunk.tray /f
   + reg delete HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers /v "C:\Program Files\punktfunk\vklayer\pf_vkhdr_layer.json" /f
+  ok would delete <common start menu>\Punktfunk Host.lnk
   ok would remove C:\Program Files\punktfunk
   ok kept on purpose: %ProgramData%\punktfunk (identity, passwords, update cache) and any VB-CABLE install

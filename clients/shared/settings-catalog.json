@@ -56,6 +56,7 @@
     { "key": "cursor_gestures", "label": "Long press to right-click", "category": "input", "advanced": false },
 
     { "key": "gamepad", "label": "Controller type", "category": "controllers", "advanced": false },
+    { "key": "pad_rumble", "label": "Controller rumble", "category": "controllers", "advanced": false },
     { "key": "rumble_on_phone", "label": "Rumble on this phone", "category": "controllers", "advanced": false },
     { "key": "gyro_on_phone", "label": "Gyro from this phone", "category": "controllers", "advanced": false },
     { "key": "gamepad_forwarding", "label": "Forward controllers", "category": "controllers", "advanced": true },

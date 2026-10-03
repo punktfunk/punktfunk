@@ -205,6 +205,8 @@ enum Ctl {
     /// Pad-audio streams to render: bit0 = haptics, bit1 = speaker. Settings half of
     /// the tier-A capability declared at slot open.
     PadAudioPrefs(u8),
+    /// Off drops the host's rumble ([`GamepadService::set_rumble`]).
+    Rumble(bool),
     MenuMode(bool),
     MenuRumble(MenuPulse),
     Mask(bool),
@@ -438,6 +440,12 @@ impl GamepadService {
     pub fn set_pad_audio_prefs(&self, haptics: bool, speaker: bool) {
         let bits = (haptics as u8) | ((speaker as u8) << 1);
         let _ = self.ctl.send(Ctl::PadAudioPrefs(bits));
+    }
+
+    /// Off, the host's rumble never reaches a pad. Call before [`Self::attach`]; the
+    /// default is on.
+    pub fn set_rumble(&self, on: bool) {
+        let _ = self.ctl.send(Ctl::Rumble(on));
     }
 
     pub fn attach(&self, connector: Arc<NativeClient>) {
@@ -941,6 +949,8 @@ struct Worker {
     synthetic_ups: Vec<(u8, u32, Instant)>,
     /// bit0 = haptics, bit1 = speaker. `0` until declared: tier-A detection then never runs.
     pad_audio_prefs: u8,
+    /// Off: wire rumble is drained and dropped.
+    rumble: bool,
     attached: Option<Arc<NativeClient>>,
     escape_tx: async_channel::Sender<()>,
     disconnect_tx: async_channel::Sender<()>,
@@ -1331,6 +1341,7 @@ impl Worker {
         crate::sc2_capture::Gate {
             masked: self.masked,
             system_forward: self.system_forward,
+            chords: self.chords_live,
         }
     }
 
@@ -1753,7 +1764,10 @@ impl Worker {
                     self.refresh_active();
                 }
                 Ok(Ctl::KindOverride(pref)) => self.kind_override = pref,
-                Ok(Ctl::ChordsLive(on)) => self.chords_live = on,
+                Ok(Ctl::ChordsLive(on)) => {
+                    self.chords_live = on;
+                    self.push_sc2_gate();
+                }
                 Ok(Ctl::SystemButtons {
                     forward_raw,
                     gesture,
@@ -1823,6 +1837,7 @@ impl Worker {
                     }
                 }
                 Ok(Ctl::PadAudioPrefs(bits)) => self.pad_audio_prefs = bits & 0x03,
+                Ok(Ctl::Rumble(on)) => self.rumble = on,
                 Ok(Ctl::MenuMode(on)) => {
                     self.menu_mode = on;
                     if on {
@@ -2135,8 +2150,9 @@ impl Worker {
     }
 
     /// Single consumer of rumble + HID output. Engine commands are already effective;
-    /// this worker applies them verbatim. A raw SC2 hands its motors to the host's raw writes.
-    /// A tier-A pad's coils go to whichever of wire rumble and haptics audio is arriving.
+    /// this worker applies them verbatim, or drops them all with rumble off. A raw SC2 hands
+    /// its motors to the host's raw writes. A tier-A pad's coils go to whichever of wire
+    /// rumble and haptics audio is arriving.
     fn render_feedback(&mut self) {
         let Some(connector) = self.attached.clone() else {
             return;
@@ -2151,6 +2167,9 @@ impl Worker {
             }
         }
         while let Ok(cmd) = connector.next_rumble_command(Duration::ZERO) {
+            if !self.rumble {
+                continue;
+            }
             if let Some(slot) = self.slots.iter_mut().find(|s| s.index as u16 == cmd.pad) {
                 if slot.raw_rumble {
                     continue;
@@ -2290,6 +2309,7 @@ impl Worker {
             guide_gesture: false,
             synthetic_ups: Vec::new(),
             pad_audio_prefs: 0,
+            rumble: true,
             attached: None,
             escape_tx,
             disconnect_tx,

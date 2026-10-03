@@ -25,6 +25,9 @@ const ID_WIRELESS: u8 = 0x79;
 /// SDL `TritonButtons` bits that [`Gate::system_forward`] keeps local.
 const BTN_QAM: u32 = 0x0000_0010;
 const BTN_STEAM: u32 = 0x0001_0000;
+/// SDL `TritonButtons` bits of the ring chord, Select (View) then A.
+const BTN_A: u32 = 0x0000_0001;
+const BTN_VIEW: u32 = 0x0000_0040;
 
 /// A queued host write waits at most this long behind a read.
 const READ_TIMEOUT_MS: i32 = 4;
@@ -62,6 +65,8 @@ pub(crate) struct Gate {
     pub masked: bool,
     /// Off: Steam and QAM stay with the local shell, as on the typed plane.
     pub system_forward: bool,
+    /// The typed plane opens the ring on Select+A, so those presses stay off the wire.
+    pub chords: bool,
 }
 
 enum Cmd {
@@ -176,6 +181,7 @@ impl Drop for Dev {
 
 fn run(dev: Dev, rx: &Receiver<Cmd>, client: &NativeClient, pad: u8, mut gate: Gate) {
     let mut imu = ImuGate::default();
+    let mut ring = RingGate::default();
     let mut buf = [0u8; HID_REPORT_MAX];
     loop {
         loop {
@@ -201,7 +207,7 @@ fn run(dev: Dev, rx: &Receiver<Cmd>, client: &NativeClient, pad: u8, mut gate: G
             return;
         }
         let n = n as usize;
-        if n == 0 || !filter_report(&mut buf[..n], gate, &mut imu) {
+        if n == 0 || !filter_report(&mut buf[..n], gate, &mut imu, &mut ring) {
             continue;
         }
         let _ = client.send_rich_input(RichInput::HidReport {
@@ -214,14 +220,17 @@ fn run(dev: Dev, rx: &Receiver<Cmd>, client: &NativeClient, pad: u8, mut gate: G
 
 /// Gate one report in place. False for a report that stays off the wire: slot lifecycle rides
 /// SDL hotplug, and the host queues its own Puck connect edge.
-fn filter_report(r: &mut [u8], gate: Gate, imu: &mut ImuGate) -> bool {
+fn filter_report(r: &mut [u8], gate: Gate, imu: &mut ImuGate, ring: &mut RingGate) -> bool {
     match r[0] {
         ID_WIRELESS | ID_WIRELESS_X => return false,
         ID_STATE | ID_STATE_BLE | ID_STATE_TIMESTAMP if r.len() >= 6 => {
+            let mut b = ring.apply(u32::from_le_bytes([r[2], r[3], r[4], r[5]]), gate);
             if gate.masked {
                 r[2..].fill(0);
-            } else if !gate.system_forward {
-                let b = u32::from_le_bytes([r[2], r[3], r[4], r[5]]) & !(BTN_STEAM | BTN_QAM);
+            } else {
+                if !gate.system_forward {
+                    b &= !(BTN_STEAM | BTN_QAM);
+                }
                 r[2..6].copy_from_slice(&b.to_le_bytes());
             }
         }
@@ -229,6 +238,29 @@ fn filter_report(r: &mut [u8], gate: Gate, imu: &mut ImuGate) -> bool {
     }
     imu.apply(r);
     true
+}
+
+/// Buttons held off the wire until the hardware releases them: the ring chord, decided here
+/// because the typed plane's mask lands reports later, and anything held while masked. Their
+/// presses never went out, so their releases must not either. Apple's `Sc2RingGate` is the twin.
+#[derive(Default)]
+struct RingGate {
+    held: u32,
+    swallow: u32,
+}
+
+impl RingGate {
+    /// What is left of `buttons` for the host. Select first, then A, as on the typed plane.
+    fn apply(&mut self, buttons: u32, gate: Gate) -> u32 {
+        let was = std::mem::replace(&mut self.held, buttons);
+        self.swallow &= buttons;
+        if gate.masked {
+            self.swallow |= buttons;
+        } else if gate.chords && buttons & !was & BTN_A != 0 && was & BTN_VIEW != 0 {
+            self.swallow |= BTN_A | BTN_VIEW;
+        }
+        buttons & !self.swallow
+    }
 }
 
 /// The pad streams IMU only after Steam writes `SETTING_IMU_MODE`. Until then the block and its
@@ -278,6 +310,7 @@ mod tests {
     const OPEN: Gate = Gate {
         masked: false,
         system_forward: true,
+        chords: true,
     };
 
     fn state(ts: u32, buttons: u32) -> [u8; 54] {
@@ -346,21 +379,26 @@ mod tests {
     fn frozen_imu_is_zeroed_and_a_moving_one_passes() {
         let mut imu = ImuGate::default();
         let mut r = state(100, 0);
-        assert!(filter_report(&mut r, OPEN, &mut imu));
+        assert!(filter_report(
+            &mut r,
+            OPEN,
+            &mut imu,
+            &mut RingGate::default()
+        ));
         assert_eq!(r[36], 0, "first sample is unproven");
         let mut r = state(100, 0);
-        filter_report(&mut r, OPEN, &mut imu);
+        filter_report(&mut r, OPEN, &mut imu, &mut RingGate::default());
         assert_eq!(r[36], 0, "frozen timestamp");
         let mut r = state(101, 0);
-        filter_report(&mut r, OPEN, &mut imu);
+        filter_report(&mut r, OPEN, &mut imu, &mut RingGate::default());
         assert_eq!(r[36], 0x11, "moving timestamp");
         for _ in 0..3 {
             let mut r = state(101, 0);
-            filter_report(&mut r, OPEN, &mut imu);
+            filter_report(&mut r, OPEN, &mut imu, &mut RingGate::default());
             assert_eq!(r[36], 0x11, "short repeats pass");
         }
         let mut r = state(101, 0);
-        filter_report(&mut r, OPEN, &mut imu);
+        filter_report(&mut r, OPEN, &mut imu, &mut RingGate::default());
         assert_eq!(r[36], 0, "fourth repeat freezes");
     }
 
@@ -369,9 +407,14 @@ mod tests {
         let mut r = state(5, 0x1);
         let masked = Gate {
             masked: true,
-            system_forward: true,
+            ..OPEN
         };
-        assert!(filter_report(&mut r, masked, &mut ImuGate::default()));
+        assert!(filter_report(
+            &mut r,
+            masked,
+            &mut ImuGate::default(),
+            &mut RingGate::default()
+        ));
         assert_eq!((r[0], r[1]), (ID_STATE, 7));
         assert!(r[2..].iter().all(|&b| b == 0));
     }
@@ -380,10 +423,15 @@ mod tests {
     fn local_system_buttons_stay_off_the_wire() {
         let mut r = state(5, BTN_STEAM | BTN_QAM | 0x1);
         let local = Gate {
-            masked: false,
             system_forward: false,
+            ..OPEN
         };
-        filter_report(&mut r, local, &mut ImuGate::default());
+        filter_report(
+            &mut r,
+            local,
+            &mut ImuGate::default(),
+            &mut RingGate::default(),
+        );
         assert_eq!(u32::from_le_bytes([r[2], r[3], r[4], r[5]]), 0x1);
         assert_eq!(r[10], 0x40);
     }
@@ -391,8 +439,77 @@ mod tests {
     #[test]
     fn wireless_status_never_reaches_the_host() {
         let mut imu = ImuGate::default();
-        assert!(!filter_report(&mut [ID_WIRELESS, 0x01], OPEN, &mut imu));
-        assert!(!filter_report(&mut [ID_WIRELESS_X, 0x02], OPEN, &mut imu));
-        assert!(filter_report(&mut [0x43, 80], OPEN, &mut imu));
+        assert!(!filter_report(
+            &mut [ID_WIRELESS, 0x01],
+            OPEN,
+            &mut imu,
+            &mut RingGate::default()
+        ));
+        assert!(!filter_report(
+            &mut [ID_WIRELESS_X, 0x02],
+            OPEN,
+            &mut imu,
+            &mut RingGate::default()
+        ));
+        assert!(filter_report(
+            &mut [0x43, 80],
+            OPEN,
+            &mut imu,
+            &mut RingGate::default()
+        ));
+    }
+
+    /// Buttons one report puts on the wire through `ring`.
+    fn sent(ring: &mut RingGate, gate: Gate, buttons: u32) -> u32 {
+        let mut r = state(5, buttons);
+        filter_report(&mut r, gate, &mut ImuGate::default(), ring);
+        u32::from_le_bytes([r[2], r[3], r[4], r[5]])
+    }
+
+    #[test]
+    fn select_then_a_stays_off_the_wire_until_each_is_released() {
+        let mut ring = RingGate::default();
+        assert_eq!(sent(&mut ring, OPEN, BTN_VIEW), BTN_VIEW);
+        assert_eq!(
+            sent(&mut ring, OPEN, BTN_VIEW | BTN_A),
+            0,
+            "the chord report"
+        );
+        assert_eq!(sent(&mut ring, OPEN, BTN_VIEW | BTN_A | 0x2), 0x2);
+        assert_eq!(sent(&mut ring, OPEN, BTN_A), 0, "A outlives Select");
+        assert_eq!(sent(&mut ring, OPEN, 0), 0);
+        assert_eq!(
+            sent(&mut ring, OPEN, BTN_A),
+            BTN_A,
+            "a fresh press goes out"
+        );
+    }
+
+    #[test]
+    fn a_then_select_or_no_listener_is_no_chord() {
+        let mut ring = RingGate::default();
+        sent(&mut ring, OPEN, BTN_A);
+        assert_eq!(sent(&mut ring, OPEN, BTN_A | BTN_VIEW), BTN_A | BTN_VIEW);
+        let deaf = Gate {
+            chords: false,
+            ..OPEN
+        };
+        let mut ring = RingGate::default();
+        sent(&mut ring, deaf, BTN_VIEW);
+        assert_eq!(sent(&mut ring, deaf, BTN_VIEW | BTN_A), BTN_VIEW | BTN_A);
+    }
+
+    /// The ring closes on A; the host must not see that A pressed again.
+    #[test]
+    fn a_button_held_through_the_mask_stays_off_until_released() {
+        let mut ring = RingGate::default();
+        let masked = Gate {
+            masked: true,
+            ..OPEN
+        };
+        sent(&mut ring, masked, BTN_A);
+        assert_eq!(sent(&mut ring, OPEN, BTN_A), 0);
+        assert_eq!(sent(&mut ring, OPEN, 0), 0);
+        assert_eq!(sent(&mut ring, OPEN, BTN_A), BTN_A);
     }
 }

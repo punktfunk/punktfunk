@@ -7,27 +7,24 @@
 //! bind those X.509 signature bytes. P-256, not Ed25519: no mainstream browser
 //! accepts an Ed25519 server cert.
 //!
-//! [`load_or_adopt`] is the only writer:
-//! * `native-cert.pem` + `native-key.pem` exist → use them;
-//! * empty native trust store → mint P-256, persist, adopt;
-//! * otherwise live native pairings → keep serving the legacy RSA pair those
-//!   clients pinned, and log how to migrate (unpair all, restart, re-pair).
+//! [`load_or_adopt`] is the only writer: `native-cert.pem` + `native-key.pem`
+//! exist → use them, otherwise mint P-256 and persist it. The legacy RSA
+//! `cert.pem` is GameStream's alone; native clients that pinned it re-pair.
 //!
-//! Tests in this module pin the three branches.
+//! Tests in this module pin both branches.
 
 use anyhow::{Context, Result};
 use pf_paths::config_dir;
 use std::fs;
 
-/// PEM pair both native consumers present. Parsed generically, so RSA
-/// (legacy fallback) and P-256 both fit.
+/// PEM pair both native consumers present.
 #[derive(Clone)]
 pub struct NativeIdentity {
     pub cert_pem: String,
     pub key_pem: String,
 }
 
-/// Resolve the native identity per the module-docs migration rule.
+/// Load the native identity, minting it on first run.
 /// Call once per process, before either plane starts: two concurrent
 /// callers can race the first-run file writes.
 pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<NativeIdentity> {
@@ -54,51 +51,23 @@ pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<Native
             }
         }
     }
-    if np.list().is_empty() {
-        let (cert_pem, key_pem) = generate()?;
-        // Trust-root key: owner-only. Same write path as the cert so first
-        // persist cannot leave a world-readable key.
-        pf_paths::write_secret_file(&key_path, key_pem.as_bytes())
-            .with_context(|| format!("write {}", key_path.display()))?;
-        pf_paths::write_secret_file(&cert_path, cert_pem.as_bytes())
-            .with_context(|| format!("write {}", cert_path.display()))?;
-        tracing::info!(
-            path = %cert_path.display(),
-            "generated the native host identity (ECDSA P-256, SANs, key 0600)"
+    if !np.list().is_empty() {
+        tracing::warn!(
+            "native identity minted while native clients are paired — \
+             those that pinned the legacy RSA cert must re-pair"
         );
-        return Ok(NativeIdentity { cert_pem, key_pem });
     }
-    // Live native pairings pinned the legacy RSA leaf (SHA-256 of DER).
-    // Switching now strands them. PEM-only read: rustls can serve RSA
-    // without linking the `rsa` crate (that crate stays behind `gamestream`).
-    // Same plant check as the P-256 pair: this path adopts too.
-    let legacy_planted = crate::planted::quarantine_planted_secret(&dir.join("cert.pem"))
-        | crate::planted::quarantine_planted_secret(&dir.join("key.pem"));
-    if let (Ok(c), Ok(k)) = (
-        fs::read_to_string(dir.join("cert.pem")),
-        fs::read_to_string(dir.join("key.pem")),
-    ) {
-        if !legacy_planted && !c.trim().is_empty() && !k.trim().is_empty() {
-            tracing::info!(
-                "native identity: keeping the legacy RSA cert — paired native clients pinned it. \
-                 To migrate to the P-256 identity: unpair ALL native clients, restart the host, \
-                 re-pair."
-            );
-            return Ok(NativeIdentity {
-                cert_pem: c,
-                key_pem: k,
-            });
-        }
-    }
-    tracing::warn!(
-        "native identity: paired native clients exist but the legacy cert.pem/key.pem they \
-         pinned is missing — minting the P-256 identity; those clients must re-pair"
-    );
     let (cert_pem, key_pem) = generate()?;
+    // Trust-root key: owner-only. Same write path as the cert so first
+    // persist cannot leave a world-readable key.
     pf_paths::write_secret_file(&key_path, key_pem.as_bytes())
         .with_context(|| format!("write {}", key_path.display()))?;
     pf_paths::write_secret_file(&cert_path, cert_pem.as_bytes())
         .with_context(|| format!("write {}", cert_path.display()))?;
+    tracing::info!(
+        path = %cert_path.display(),
+        "generated the native host identity (ECDSA P-256, SANs, key 0600)"
+    );
     Ok(NativeIdentity { cert_pem, key_pem })
 }
 
@@ -208,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_legacy_rsa_while_native_pairings_exist() {
+    fn mints_p256_over_legacy_rsa_while_native_pairings_exist() {
         let _serial = super::CONFIG_DIR_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -216,26 +185,13 @@ mod tests {
         let _env = EnvGuard::set(tmp.path());
         let np = empty_store(tmp.path());
         np.add("old-client", &"ab".repeat(32)).unwrap();
-        // Opaque bytes on purpose: the fallback serves cert.pem/key.pem
-        // verbatim (PEM-only; no `rsa` crate).
         std::fs::write(tmp.path().join("cert.pem"), "legacy cert pem").unwrap();
         std::fs::write(tmp.path().join("key.pem"), "legacy key pem").unwrap();
         let id = load_or_adopt(&np).unwrap();
-        assert_eq!(id.cert_pem, "legacy cert pem");
-        assert!(!tmp.path().join("native-cert.pem").exists());
-    }
-
-    #[test]
-    fn mints_p256_when_legacy_files_vanished() {
-        let _serial = super::CONFIG_DIR_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set(tmp.path());
-        let np = empty_store(tmp.path());
-        np.add("stranded-client", &"cd".repeat(32)).unwrap();
-        let id = load_or_adopt(&np).unwrap();
         assert!(id.cert_pem.contains("BEGIN CERTIFICATE"));
         assert!(tmp.path().join("native-cert.pem").exists());
+        // GameStream keeps its own pair.
+        let legacy = std::fs::read_to_string(tmp.path().join("cert.pem")).unwrap();
+        assert_eq!(legacy, "legacy cert pem");
     }
 }

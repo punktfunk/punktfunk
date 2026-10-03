@@ -1,0 +1,66 @@
+# AppArmor policy for the plugin runner (punktfunk-scripting.service).
+#
+# Where AppArmor keeps unprivileged user namespaces from unconfined processes
+# (kernel.apparmor_restrict_unprivileged_userns=1, Ubuntu's default), systemd cannot build the
+# unit's mount namespace. The punktfunk-scripting-apparmor user generator then swaps the namespace
+# directives for this profile. It attaches to no path, so elsewhere it is loaded and unused.
+#
+# Site additions go in local/punktfunk-scripting, as a unit's go in a drop-in.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile punktfunk-scripting flags=(attach_disconnected,mediate_deleted) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/private-files-strict>
+
+  # bwrap runs stacked under this profile, so each plugin sandbox is built from these. The
+  # capabilities hold only inside the user namespace bwrap makes.
+  userns,
+  capability sys_admin,
+  capability setpcap,
+  capability net_admin,
+  capability sys_ptrace,
+  capability dac_override,
+  capability sys_resource,
+  mount,
+  umount,
+  pivot_root,
+  # --disable-userns, inside the sandbox's own user namespace.
+  @{PROC}/sys/user/max_user_namespaces w,
+  # A bind must not carry the config dir to a path the file rules below do not cover.
+  deny mount /**/.config/punktfunk{,/,/*} -> /**,
+  deny mount /**/.config{,/} -> /**,
+  deny mount /{,**/}home/{,*,*/} -> /**,
+  deny mount /{,oldroot/} -> /**,
+
+  network,
+  unix,
+  dbus,
+  signal (receive) peer=unconfined,
+  # This tree only. A user manager's change_profile stacks onto unconfined, and bwrap's own
+  # profile stacks onto this one.
+  signal peer="{,bwrap//&}punktfunk-scripting{,//&unconfined,//&unpriv_bwrap}",
+  ptrace (read, trace) peer="{,bwrap//&}punktfunk-scripting{,//&unconfined,//&unpriv_bwrap}",
+
+  # The user's own files, as the unit's binds and write grants reach them.
+  / r,
+  /** rmix,
+  owner /** wlk,
+
+  # The host's config dir: only what the unit binds.
+  deny @{HOME}/.config/punktfunk/** mrwlkx,
+  priority=1 owner @{HOME}/.config/punktfunk/ r,
+  priority=1 owner @{HOME}/.config/punktfunk/{plugin-token,mgmt-endpoint,native-cert.pem,cert.pem} r,
+  priority=1 owner @{HOME}/.config/punktfunk/{scripts,ingest,plugin-run}/{,**} r,
+  priority=1 owner @{HOME}/.config/punktfunk/{plugins,plugin-state}/{,**} mrwlkix,
+
+  # Code written here runs outside this profile at the next login.
+  deny @{HOME}/.config/systemd/** wl,
+  deny @{HOME}/.local/share/systemd/** wl,
+  deny @{HOME}/.config/environment.d/** wl,
+
+  include if exists <local/punktfunk-scripting>
+}

@@ -231,17 +231,20 @@ fn main() {
         // past this filter, so the Logs tab keeps every line stderr drops.
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::Layer;
+        // Colour only on a terminal: the service child's stderr is `host.log`.
+        let fmt = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+        let fmt = if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+            fmt
+        } else {
+            fmt.with_ansi(false)
+        };
         log_capture::install_global(
             tracing_subscriber::registry()
                 .with(
                     log_capture::RingLayer
                         .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
                 )
-                .with(
-                    tracing_subscriber::fmt::layer()
-                        .with_writer(std::io::stderr)
-                        .with_filter(filter),
-                ),
+                .with(fmt.with_filter(filter)),
         );
     }
 

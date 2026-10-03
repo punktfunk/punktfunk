@@ -95,7 +95,7 @@ The drivers carry a separate self-signed certificate (`CN=punktfunk-driver`, SHA
 - **Status icon.** It shows whether the host is running. Its menu opens the console and the logs
   folder, approves pairing, and starts, stops or restarts the host, each behind a UAC prompt. The
   service restarts the icon if it closes; [`punktfunk-host tray`](/docs/host-cli#tray-windows)
-  controls it by hand.
+  controls it by hand. **Punktfunk Host** in the Start menu opens it and starts a stopped host.
 - **Settings.** Change them in the console under **Host** → **Settings**; Moonlight compat is
   **GameStream** there. A line in `%ProgramData%\punktfunk\host.env` pins a setting. After editing
   it, run `punktfunk-host service restart` from an elevated prompt. See
@@ -122,7 +122,8 @@ run a newer setup over the old one. All three keep your config, pairings and con
 ## Uninstalling
 
 Open **Settings** → **Apps** → **Installed apps** → **Punktfunk Host** → **Uninstall**, or run
-`winget uninstall unom.PunktfunkHost`. It removes the service, the status icon, the virtual display,
-gamepad and audio devices with the driver certificate, the scheduled task, the firewall rules, the
-HDR layer and the `PATH` entry. `%ProgramData%\punktfunk` stays, so a reinstall keeps your identity
-and pairings; [Uninstall → Windows host](/docs/uninstall#windows-host) clears it.
+`winget uninstall unom.PunktfunkHost`. It removes the service, the status icon and its Start menu
+entry, the virtual display, gamepad and audio devices with the driver certificate, the scheduled
+task, the firewall rules, the HDR layer and the `PATH` entry. `%ProgramData%\punktfunk` stays, so
+a reinstall keeps your identity and pairings; [Uninstall → Windows host](/docs/uninstall#windows-host)
+clears it.

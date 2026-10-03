@@ -167,6 +167,7 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::QuickActions => "overlay_actions",
         RowId::CursorGestures => "cursor_gestures",
         RowId::PadType => "gamepad",
+        RowId::PadRumble => "pad_rumble",
         RowId::PhoneRumble => "rumble_on_phone",
         RowId::PhoneGyro => "gyro_on_phone",
         RowId::PadForward => "gamepad_forwarding",
@@ -1522,7 +1523,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 66, "{seen:?}");
+    assert_eq!(seen.len(), 67, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"

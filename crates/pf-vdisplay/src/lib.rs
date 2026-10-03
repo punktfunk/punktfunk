@@ -483,7 +483,10 @@ pub enum DriverHealth {
     Ok {
         protocol: u32,
     },
-    /// No device interface at all: not installed, or its host process crashed.
+    /// Installed, its control interface not up yet: still starting, or a crashed host
+    /// process the next connect reloads.
+    Installed,
+    /// No adapter with the driver bound: not installed.
     Absent,
     /// The interface opens but the driver's host process never answers.
     Wedged,

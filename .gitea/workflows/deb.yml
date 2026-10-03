@@ -92,6 +92,8 @@ on:
       - 'packaging/gamescope/**'
       - 'packaging/linux/*.conf'
       - 'packaging/linux/*.desktop'
+      - 'packaging/linux/*.generator'
+      - 'packaging/linux/apparmor/**'
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
       - 'packaging/linux/*.sh'

@@ -54,9 +54,11 @@ TimeoutStopSec=30
 # A loose script that must reach something else still gets a drop-in — `systemctl --user edit
 # punktfunk-scripting` — with `ReadWritePaths=/mnt/games`, or `BindPaths=` inside the home.
 #
-# NOTE: these all need unprivileged user namespaces for a *user* unit, as does bwrap itself; on a
-# kernel that restricts them the runner starts no plugin and the console's Troubleshooting page
-# says so.
+# NOTE: these all need unprivileged user namespaces for a *user* unit, as does bwrap itself. Where
+# AppArmor restricts them (Ubuntu), the punktfunk-scripting-apparmor user generator swaps these
+# directives for the AppArmor profile of that name; a loose script's extra paths then go in
+# /etc/apparmor.d/local/punktfunk-scripting. On any other restricting kernel the runner starts no
+# plugin and the console's Troubleshooting page says so.
 #
 # PrivateTmp is deliberately OFF (field report 2026-08-03, the VirtualHere plugin). A plugin's
 # whole job is integrating with things already running on this box, and on Linux those talk over

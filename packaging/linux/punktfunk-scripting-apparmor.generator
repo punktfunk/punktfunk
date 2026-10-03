@@ -1,0 +1,23 @@
+#!/bin/sh
+# systemd user generator: confine the plugin runner with AppArmor where AppArmor keeps unprivileged
+# user namespaces from unconfined processes. There systemd skips the unit's mount namespace in
+# silence and its bounding-set drop fails, so this drop-in trades every directive that needs a
+# namespace for the punktfunk-scripting profile. A box without the profile fails the unit closed.
+# Elsewhere it writes nothing and the unit keeps its namespace sandbox.
+[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] || exit 0
+dir="$1/punktfunk-scripting.service.d"
+mkdir -p "$dir" || exit 0
+# `zz-` sorts after `systemctl --user edit`'s override.conf and the host's roots drop-in.
+cat > "$dir/zz-apparmor.conf" <<'EOF'
+[Service]
+AppArmorProfile=punktfunk-scripting
+ProtectSystem=no
+ProtectHome=no
+ProtectControlGroups=no
+InaccessiblePaths=
+BindPaths=
+BindReadOnlyPaths=
+ReadWritePaths=
+CapabilityBoundingSet=~
+EOF
+exit 0

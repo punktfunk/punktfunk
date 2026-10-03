@@ -122,7 +122,8 @@ struct ContentView: View {
     #endif
     /// The quick-action ring (design/touch-client-overlay.md §2), one per session. iOS opens it
     /// with the two-finger twist or the exit disc, tvOS with a short Back on the remote, macOS
-    /// with ⌃⌥⇧O or the Stream menu; a pad opens it with `Select+A` on all three (§2.5, §2.6).
+    /// with ⌃⌥⇧O or the Stream menu, an iPad keyboard with ⌃⌥⇧O; a pad opens it with `Select+A`
+    /// on all three (§2.5, §2.6).
     @StateObject private var ring = RingState()
 
     /// The ring this platform draws. macOS takes the DESKTOP default (no soft keyboard, no
@@ -1183,8 +1184,8 @@ struct ContentView: View {
                         name: .punktfunkRingOpen, object: NSNumber(value: open))
                     #endif
                 }
-                #if os(macOS)
-                // ⌃⌥⇧O while input is captured (InputCapture's monitor sees the chord first). It
+                #if !os(tvOS)
+                // ⌃⌥⇧O from InputCapture: the Mac's while captured, the iPad's in both states. It
                 // names its session; the Stream menu's item goes through `sessionFocus` instead.
                 .onReceive(NotificationCenter.default.publisher(
                     for: .punktfunkToggleQuickActions

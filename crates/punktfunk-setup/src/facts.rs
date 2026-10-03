@@ -242,8 +242,8 @@ pub struct Facts {
     pub systemd_pid1: bool,
     pub user_manager: bool,
     pub web_unit_present: bool,
-    /// A console login password already lives in the user's config dir; a re-run must not
-    /// ask about one it would only overwrite.
+    /// A console login password already lives in the user's config dir (`web.env` on SteamOS);
+    /// a re-run must not ask about one it would only overwrite.
     pub web_password_present: bool,
     /// `PUNKTFUNK_UI_BIND` as host.env already names it. A re-run defaults to this, so pressing
     /// Enter through the question can never move a console the operator already placed.
@@ -318,8 +318,9 @@ impl Facts {
             web_unit_present: unit_files(run, "punktfunk-web.service")
                 .lines()
                 .any(|l| l.starts_with("punktfunk-web.service")),
-            web_password_present: std::fs::metadata(paths.config.join("punktfunk/web-password"))
-                .is_ok_and(|m| m.len() > 0),
+            web_password_present: ["web-password", "web.env"].iter().any(|f| {
+                std::fs::metadata(paths.config.join("punktfunk").join(f)).is_ok_and(|m| m.len() > 0)
+            }),
             web_bind: env_line(&paths.host_env(), "PUNKTFUNK_UI_BIND"),
             mgmt_bind: env_line(&paths.host_env(), "PUNKTFUNK_MGMT_BIND"),
             ip: local_ip(run),

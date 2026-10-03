@@ -9,13 +9,18 @@
 #![forbid(unsafe_code)]
 
 fn main() -> std::process::ExitCode {
-    // Stderr is inherited from the host, so these lines land in the same journal.
+    // Stderr is inherited from the host, so these lines land in the same journal, coloured
+    // only on a terminal.
     let filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
-    tracing_subscriber::fmt()
+    let fmt = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+        .with_writer(std::io::stderr);
+    if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        fmt.init();
+    } else {
+        fmt.with_ansi(false).init();
+    }
 
     #[cfg(target_os = "linux")]
     {

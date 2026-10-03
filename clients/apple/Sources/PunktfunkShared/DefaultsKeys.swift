@@ -304,6 +304,10 @@ public enum DefaultsKey {
     /// stream preset. An unknown value reads as the default: a newer client may have shipped a
     /// palette this build doesn't know.
     public static let uiPalette = "punktfunk.uiPalette"
+    /// The cross-client `pad_rumble` key. Off, the host's rumble never reaches a controller or
+    /// this device's own motor. On by default; `GamepadFeedback` reads it per command, so a change
+    /// lands mid-stream. A device preference, never part of a stream preset.
+    public static let padRumble = "punktfunk.padRumble"
     /// iPhone: ALSO play the rumble the host addresses to controller 1 (wire pad 0) on this
     /// device's own Taptic Engine — for phone-clip pads that ship without rumble motors, where
     /// the phone body is the only actuator in the player's hands. Off by default (opt-in); read
@@ -355,10 +359,9 @@ extension Notification.Name {
     /// never reach one. macOS only — the touch clients' fingers reach the ring either way.
     public static let punktfunkRingOpen = Notification.Name("io.unom.punktfunk.ring-open")
 
-    /// Posted by the app's Stream menu ("Quick Actions", ⌃⌥⇧O) and by InputCapture's monitor when the
-    /// same combo fires while input is CAPTURED (a captured stream view never sees the menu's key
-    /// equivalent). The session view toggles the quick-action ring. macOS only — the touch clients
-    /// open the same ring with the two-finger twist, tvOS with a short Back.
+    /// Posted by InputCapture on ⌃⌥⇧O (`object` is the session's connection): on macOS while input
+    /// is CAPTURED, where the Stream menu's key equivalent cannot fire, and on an iPad keyboard in
+    /// both states. The session view toggles the quick-action ring.
     public static let punktfunkToggleQuickActions = Notification.Name("io.unom.punktfunk.toggle-quick-actions")
 
     /// Posted by the app's Stream menu ("Toggle Fullscreen", ⌃⌘F) and by InputCapture's monitor

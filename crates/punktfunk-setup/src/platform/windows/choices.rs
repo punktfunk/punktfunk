@@ -78,7 +78,7 @@ pub struct WinChoices {
     pub allow_public_fw: Option<bool>,
     pub start_service: bool,
     pub tray_autostart: bool,
-    /// Client artifact only; the host creates no shortcuts.
+    /// Client artifact only; the host lays down one Start-menu link and no desktop one.
     pub desktop_icon: bool,
     /// Fresh only. `None` = executor generates 24 hex chars. Never render into a transcript or argv.
     pub web_password: Option<String>,

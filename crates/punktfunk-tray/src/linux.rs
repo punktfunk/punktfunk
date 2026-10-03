@@ -210,6 +210,7 @@ fn acquire_instance_lock() -> Option<std::fs::File> {
 }
 
 pub fn run(args: crate::Args) -> anyhow::Result<()> {
+    let _ = args.start_host; // Windows Start-menu link; the tray menu starts a Linux host
     if args.quit {
         // Windows-only convenience for the uninstaller; nothing to do here.
         return Ok(());

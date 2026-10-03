@@ -596,8 +596,8 @@ fn read_sealed_message(
 /// configs, and the encryption offer. moonlight-common-c picks HEVC or AV1 from those two lines
 /// alone. Shipping modes advertise encryption as SUPPORTED, never REQUESTED.
 fn describe_sdp(codecs: u32) -> String {
-    // Advertise pen/touch only where we can inject (Linux uinput; same gate
-    // as HOST_CAP_PEN). Else 0 so Moonlight keeps client-side mouse emulation.
+    // Advertise pen/touch only where we can inject. Else 0 so Moonlight keeps
+    // client-side mouse emulation. gamescope gets the pen as touch (`GsPointer`).
     // `PUNKTFUNK_PEN=0` is the kill-switch inside `pen_supported`.
     let feature_flags: u32 = if crate::inject::pen_supported() {
         SS_FF_PEN_TOUCH_EVENTS

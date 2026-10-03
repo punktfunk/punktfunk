@@ -815,7 +815,8 @@ private fun DisplaySettings(s: Settings, update: (Settings) -> Unit, context: an
     // until an edit actually makes it custom (or a preset is re-picked). Custom itself is detected
     // from the stored size, never flagged (see [isCustomResolution]), so nothing new persists.
     var customPicked by remember { mutableStateOf(false) }
-    val families = remember(nw, nh, sw, sh) { Resolutions.families(nw to nh, sw to sh) }
+    val (panel, panelSafe) = panelScreens(context)
+    val families = remember(panel, panelSafe) { Resolutions.families(panel, panelSafe) }
     val showCustom = customPicked || s.isCustomResolution(families)
     var customBitratePicked by remember { mutableStateOf(false) }
     SettingsGroup("Resolution") {
@@ -1209,6 +1210,13 @@ private fun ControllerSettings(s: Settings, update: (Settings) -> Unit, onOpenCo
                 "gyroscope, so pick a DualSense-class one if you want motion.",
         ) { g -> update(s.copy(gamepad = g)) }
         DeviceScopeOnly {
+            ToggleRow(
+                title = "Controller rumble",
+                subtitle = "Off, controllers don't vibrate from the stream, whatever the game sends",
+                checked = s.padRumble,
+                enabled = s.gamepadForwarding,
+                onCheckedChange = { on -> update(s.copy(padRumble = on)) },
+            )
             ClickableRow(
                 title = "Connected controllers",
                 subtitle = "What the app detects, with a live input test",

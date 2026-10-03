@@ -31,6 +31,8 @@ pub struct Args {
     pub quit: bool,
     /// Autostart: exit silently when this user is not a host (Linux installs it for every user).
     pub autostart: bool,
+    /// Windows Start-menu link: start a stopped host once, behind one UAC prompt.
+    pub start_host: bool,
     /// Loopback by default; the summary route rejects anything else.
     pub mgmt_addr: String,
     /// `None` re-reads the published endpoint every poll.
@@ -43,6 +45,7 @@ impl Default for Args {
         Args {
             quit: false,
             autostart: false,
+            start_host: false,
             mgmt_addr: "127.0.0.1".into(),
             mgmt_port: None,
             web_port: 47992,
@@ -61,6 +64,7 @@ fn parse_args() -> anyhow::Result<Args> {
         match a.as_str() {
             "--quit" => args.quit = true,
             "--autostart" => args.autostart = true,
+            "--start-host" => args.start_host = true,
             "--mgmt-addr" => args.mgmt_addr = value("--mgmt-addr")?,
             "--mgmt-port" => args.mgmt_port = Some(value("--mgmt-port")?.parse()?),
             "--web-port" => args.web_port = value("--web-port")?.parse()?,
@@ -70,7 +74,7 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             other => anyhow::bail!(
                 "unknown argument '{other}'\n\nUSAGE:\n    punktfunk-tray [--autostart] [--quit] \
-                 [--mgmt-addr <IP>] [--mgmt-port <N>] [--web-port <N>]"
+                 [--start-host] [--mgmt-addr <IP>] [--mgmt-port <N>] [--web-port <N>]"
             ),
         }
     }

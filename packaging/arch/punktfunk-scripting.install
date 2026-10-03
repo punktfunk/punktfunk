@@ -1,0 +1,16 @@
+# pacman scriptlet for the plugin runner — mirrors build-scripting-deb.sh's postinst.
+_load_apparmor() {
+  # Boot loads it from /etc/apparmor.d; this covers the running kernel. Unused unless the
+  # punktfunk-scripting-apparmor generator selects it.
+  if command -v apparmor_parser >/dev/null 2>&1 && aa-enabled --quiet 2>/dev/null; then
+    apparmor_parser -r -T -W /etc/apparmor.d/punktfunk-scripting || true
+  fi
+}
+
+post_install() {
+  _load_apparmor
+}
+
+post_upgrade() {
+  _load_apparmor
+}

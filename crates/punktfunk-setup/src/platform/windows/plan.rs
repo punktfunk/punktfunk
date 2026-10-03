@@ -7,8 +7,8 @@
 //! Every path in a step is a literal string, never a `PathBuf::join` — goldens
 //! must render byte-identically on every OS. Phase order is load-bearing:
 //! stop → files → registry → network → coexistence → drivers →
-//! service → web → plugin runner → restore → tray. `<staging>` and `<temp>` are
-//! placeholders the executor substitutes; dry-run renders them verbatim.
+//! service → web → plugin runner → restore → shortcut → tray. `<staging>` and `<temp>`
+//! are placeholders the executor substitutes; dry-run renders them verbatim.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +39,10 @@ const CLIENT_LINKS: [&str; 3] = [
     r"<start menu>\Punktfunk Console.lnk",
     r"<desktop>\Punktfunk.lnk",
 ];
+
+/// The host's one link, in every user's Start menu: the tray, which starts a stopped host
+/// behind one UAC prompt. No desktop link.
+const HOST_LINK: &str = r"<common start menu>\Punktfunk Host.lnk";
 
 /// Anything in `{app}` that can hold the tree open. Install stops them to replace the files,
 /// uninstall to delete them.
@@ -99,10 +103,11 @@ pub enum WinAction {
     ArpRemove {
         key: String,
     },
-    /// A `.lnk` via `IShellLink` — no compiled tool writes one.
+    /// A `.lnk` via `IShellLink` — no compiled tool writes one. `args` empty = none.
     Shortcut {
         link: String,
         target: String,
+        args: String,
     },
     /// Flip one network to Private. Wizard consent only; never in a silent run.
     MakeNetworkPrivate {
@@ -395,6 +400,15 @@ fn host_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         );
     }
 
+    plan.push(
+        "Shortcut",
+        vec![WinAction::Shortcut {
+            link: HOST_LINK.into(),
+            target: format!("{app}\\punktfunk-tray.exe"),
+            args: "--start-host".into(),
+        }],
+    );
+
     if choices.tray_autostart {
         plan.push(
             "Tray",
@@ -662,6 +676,9 @@ fn host_uninstall(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
                 &format!("{app}\\vklayer\\pf_vkhdr_layer.json"),
                 "/f",
             ]),
+            WinAction::DeleteFiles {
+                paths: vec![HOST_LINK.into()],
+            },
             WinAction::RemoveFiles { dir: app.clone() },
             note(
                 Level::Ok,
@@ -752,6 +769,7 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
     let mut shortcuts = vec![WinAction::Shortcut {
         link: start.into(),
         target: client_exe.clone(),
+        args: String::new(),
     }];
     // The ARM64 session is built without the console (no Skia for the target), so its
     // shortcut would open nothing.
@@ -759,12 +777,14 @@ fn client_install(facts: &WinFacts, choices: &WinChoices) -> WinPlan {
         shortcuts.push(WinAction::Shortcut {
             link: console.into(),
             target: format!("{app}\\punktfunk-console.exe"),
+            args: String::new(),
         });
     }
     if choices.desktop_icon {
         shortcuts.push(WinAction::Shortcut {
             link: desktop.into(),
             target: client_exe.clone(),
+            args: String::new(),
         });
     }
     plan.push("Shortcuts", shortcuts);

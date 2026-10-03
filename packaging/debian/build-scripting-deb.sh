@@ -52,6 +52,11 @@ exec /usr/lib/punktfunk-bun/bun /usr/share/punktfunk-scripting/runner-cli.js "$@
 WRAP
 chmod 0755 "$STAGE/usr/bin/punktfunk-scripting"
 install -Dm0644 scripts/punktfunk-scripting.service "$STAGE/usr/lib/systemd/user/punktfunk-scripting.service"
+# Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
+# sandbox for this profile.
+install -Dm0644 packaging/linux/apparmor/punktfunk-scripting "$STAGE/etc/apparmor.d/punktfunk-scripting"
+install -Dm0755 packaging/linux/punktfunk-scripting-apparmor.generator \
+  "$STAGE/usr/lib/systemd/user-generators/punktfunk-scripting-apparmor"
 install -Dm0644 LICENSE-MIT    "$DOCDIR/LICENSE-MIT"
 install -Dm0644 LICENSE-APACHE "$DOCDIR/LICENSE-APACHE"
 install -Dm0644 sdk/README.md  "$DOCDIR/README.md"
@@ -113,6 +118,10 @@ if [ "$1" = "configure" ]; then
     if [ -z "$2" ] && command -v systemctl >/dev/null 2>&1; then
         systemctl --global enable punktfunk-scripting.service >/dev/null 2>&1 || true
     fi
+    # Boot loads it from /etc/apparmor.d; this covers the running kernel.
+    if command -v apparmor_parser >/dev/null 2>&1 && aa-enabled --quiet 2>/dev/null; then
+        apparmor_parser -r -T -W /etc/apparmor.d/punktfunk-scripting || true
+    fi
     echo "punktfunk-scripting installed and enabled for all users."
     echo "It runs your automation — game-library sources, scripts in"
     echo "    ~/.config/punktfunk/scripts/  (loose .ts/.js files)"
@@ -124,6 +133,7 @@ fi
 exit 0
 EOF
 chmod 0755 "$STAGE/DEBIAN/postinst"
+echo /etc/apparmor.d/punktfunk-scripting > "$STAGE/DEBIAN/conffiles"
 
 mkdir -p dist
 OUT="dist/${PKG}_${VERSION}_${DEB_ARCH}.deb"

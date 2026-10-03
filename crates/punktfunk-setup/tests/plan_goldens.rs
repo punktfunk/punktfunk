@@ -1177,6 +1177,26 @@ fn a_typed_console_password_is_written_but_never_echoed() {
     );
 }
 
+/// The SteamOS build ends the run, and its script takes the typed password into `web.env`, so
+/// the file has to land before it.
+#[test]
+fn steamos_writes_the_typed_password_before_its_build() {
+    let facts = fresh("steamos", Family::Steamos);
+    let mut choices = Choices::derive(&facts, &pins());
+    choices.web_password = Some("correct-horse-battery".into());
+    let kinds: Vec<Phase> = plan::build(&facts, &choices)
+        .phases
+        .iter()
+        .map(|p| p.kind)
+        .collect();
+    let at = |k: Phase| kinds.iter().position(|p| *p == k);
+    assert!(
+        at(Phase::Password).is_some() && at(Phase::Password) < at(Phase::Install),
+        "the build would end the run first: {kinds:?}"
+    );
+    golden("steamos-typed-password", &render(&facts, &choices));
+}
+
 /// The file the console's unit reads as an `EnvironmentFile`, owner-only — a umask of 0022
 /// would otherwise leave the login password readable by everyone on the box.
 #[test]

@@ -650,15 +650,16 @@ class MainActivity : ComponentActivity() {
      * `ANativeWindow_setFrameRate` braces: the surface hint alone is advisory, and several OEM
      * refresh governors (Nothing OS's LTPO logic among them) ignore it entirely for third-party
      * apps — leaving a 120 Hz session presenting on a 60/90 Hz panel, which reads as judder + a
-     * refresh of extra latency. The preferredDisplayModeId is the one signal they all honor. [hz]
-     * ≤ 0 falls back to releasing the pin (the pre-pin behaviour).
+     * refresh of extra latency. The preferredDisplayModeId is the one signal they all honor. A
+     * stream of the panel's own [size] also takes the panel to that size; [setConsoleHighRefreshRate]
+     * puts the user's resolution back. [hz] ≤ 0 falls back to releasing the pin.
      */
-    fun setStreamDisplayMode(hz: Int) {
+    fun setStreamDisplayMode(hz: Int, size: Pair<Int, Int>? = null) {
         if (hz <= 0) {
             setConsoleHighRefreshRate(false)
             return
         }
-        val target = ownDisplay()?.streamModeFor(hz) ?: return
+        val target = ownDisplay()?.streamModeFor(hz, size) ?: return
         window.attributes = window.attributes.apply { preferredDisplayModeId = target.modeId }
     }
 

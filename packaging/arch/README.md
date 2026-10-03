@@ -144,7 +144,7 @@ neither auto-enabled. The commands are on the
   `PF_SRCDIR`, or a git tag for AUR).
 - `punktfunk-host.install` / `punktfunk-client.install` — pacman scriptlets (udev reload + sysctl +
   first-run hint, incl. the ufw/firewalld enable command for whichever is present), mirror the RPM
-  `%post` / deb postinst.
+  `%post` / deb postinst. `punktfunk-scripting.install` loads the runner's AppArmor profile.
 - The firewall openers are shared across all Linux packaging and live in [`../linux/`](../linux/):
   the ufw application profile (`punktfunk.ufw` → `/etc/ufw/applications.d/punktfunk`) and the
   firewalld service definitions (`punktfunk-native.xml` / `punktfunk-gamestream.xml` /

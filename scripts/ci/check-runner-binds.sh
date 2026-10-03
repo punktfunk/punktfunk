@@ -1,13 +1,16 @@
 #!/bin/sh
-# Every config-dir path the plugin runner reads must be bound into its unit's empty home.
+# Every config-dir path the plugin runner reads must be bound into its unit's empty home, and
+# allowed by the AppArmor profile that replaces those binds where namespaces are restricted.
 #
-# `ProtectHome=tmpfs` means an unnamed path does not exist for the runner. Names come from the SDK;
-# for a nested file the first component names the directory bind that keeps renames visible.
+# `ProtectHome=tmpfs` means an unnamed path does not exist for the runner; the profile denies the
+# whole config dir below its allow-list. Names come from the SDK; for a nested file the first
+# component names the directory bind that keeps renames visible.
 set -eu
 cd "$(dirname "$0")/../.."
 
 UNIT=scripts/punktfunk-scripting.service
 NIX=packaging/nix/nixos-module.nix
+AA=packaging/linux/apparmor/punktfunk-scripting
 
 names=$(grep -rhoE 'path\.join\((configDir\(\)|configDir|config), "[^"]+"' sdk/src |
 	sed -E 's/.*"([^"]+)"/\1/' | sort -u)
@@ -20,6 +23,10 @@ for n in $names; do
 			rc=1
 		}
 	done
+	grep '^ *priority=1 ' "$AA" | grep -qE "[/{,]$n[,}/ ]" || {
+		echo "$AA: the runner reads \$config/$n and this profile never allows it"
+		rc=1
+	}
 done
 
 if [ "$rc" != 0 ]; then

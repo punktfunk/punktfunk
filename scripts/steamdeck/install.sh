@@ -278,9 +278,11 @@ elif [ -s "$GRANT_SRC" ]; then
 fi
 
 if [ "$WITH_WEB" = 1 ] && [ ! -f "$CONFIG/web.env" ]; then
-    # Random login password + session secret for the web console, generated once.
-    # `|| true` swallows the SIGPIPE `tr` takes when `head` closes the pipe (pipefail would abort).
-    WEB_PW="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c 12 || true)"
+    # Login password + session secret for the web console, once. The password is the one the
+    # guided installer left in web-password, else random; that file then goes. `%q` because a
+    # shell sources web.env. `|| true`: a missing file and tr's SIGPIPE must not trip pipefail.
+    WEB_PW="$(sed -n 's/^PUNKTFUNK_UI_PASSWORD=//p' "$CONFIG/web-password" 2>/dev/null || true)"
+    [ -n "$WEB_PW" ] || WEB_PW="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c 12 || true)"
     WEB_SECRET="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 32 || true)"
     # `umask 077` around the redirect, not `chmod 600` after it: the heredoc CREATES the file at
     # the ambient umask (0022 on a Deck ⇒ world-readable), so the console password and session
@@ -289,14 +291,15 @@ if [ "$WITH_WEB" = 1 ] && [ ! -f "$CONFIG/web.env" ]; then
     # idempotent belt for a pre-existing file. The console swaps the clear password for a salted
     # hash in this same file on the first sign-in, keeping PUNKTFUNK_UI_SECRET beside it.
     (umask 077; cat > "$CONFIG/web.env" <<EOF
-PUNKTFUNK_UI_PASSWORD=$WEB_PW
+PUNKTFUNK_UI_PASSWORD=$(printf %q "$WEB_PW")
 PUNKTFUNK_UI_SECRET=$WEB_SECRET
 # Where the console listens: 127.0.0.1 (this Deck), 0.0.0.0 (your network), or one address.
 PUNKTFUNK_UI_BIND=$WEB_BIND
 EOF
     )
     chmod 600 "$CONFIG/web.env"
-    ok "wrote web.env (generated login password — read it before your first sign-in)"
+    rm -f "$CONFIG/web-password"
+    ok "wrote web.env (login password — read it before your first sign-in)"
     ok "console bind: $WEB_BIND"
 elif [ "$WITH_WEB" = 1 ] && [ -f "$CONFIG/web.env" ]; then
     # THE belt the comment above promises. It used to live inside the create-only branch, so it

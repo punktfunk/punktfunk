@@ -48,7 +48,8 @@ pub fn subst(root: Option<&Path>, version: &str) -> Subst {
     };
     let env = punktfunk_setup::seam::Env::from_env();
     let var = |k: &str| env.get(k).unwrap_or_default().to_string();
-    let (desktop, programs) = punktfunk_setup::platform::windows::sys::shell_folders();
+    let (desktop, programs, common_programs) =
+        punktfunk_setup::platform::windows::sys::shell_folders();
     Subst {
         version: version.to_string(),
         staging: staging.display().to_string(),
@@ -61,5 +62,11 @@ pub fn subst(root: Option<&Path>, version: &str) -> Subst {
             )
         }),
         desktop: desktop.unwrap_or_else(|| format!("{}\\Desktop", var("USERPROFILE"))),
+        common_start_menu: common_programs.unwrap_or_else(|| {
+            format!(
+                "{}\\Microsoft\\Windows\\Start Menu\\Programs",
+                env.get("ProgramData").unwrap_or(r"C:\ProgramData")
+            )
+        }),
     }
 }

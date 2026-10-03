@@ -580,7 +580,7 @@ fn managed_output(node_id: u32, mode: Mode) -> VirtualOutput {
 
 /// SteamOS launcher present and Bazzite session-plus not: PATH-shim the Deck session, don't spawn
 /// a separate unit.
-fn steamos_session_present() -> bool {
+pub(crate) fn steamos_session_present() -> bool {
     std::path::Path::new(STEAMOS_SESSION_BIN).exists()
         && !std::path::Path::new(SESSION_PLUS_BIN).exists()
 }

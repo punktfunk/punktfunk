@@ -553,6 +553,11 @@ chmod 0755 %{buildroot}%{_bindir}/punktfunk-scripting
 # systemd --user unit — installed but NOT auto-enabled (opt-in; the runner is inert until you add
 # scripts/plugins). Enable with `systemctl --user enable --now punktfunk-scripting`.
 install -Dm0644 scripts/punktfunk-scripting.service %{buildroot}%{_userunitdir}/punktfunk-scripting.service
+# Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
+# sandbox for this profile.
+install -Dm0644 packaging/linux/apparmor/punktfunk-scripting %{buildroot}%{_sysconfdir}/apparmor.d/punktfunk-scripting
+install -Dm0755 packaging/linux/punktfunk-scripting-apparmor.generator \
+  %{buildroot}%{_prefix}/lib/systemd/user-generators/punktfunk-scripting-apparmor
 %endif
 
 %if %{with web} || %{with scripting}
@@ -689,6 +694,9 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %dir %{_datadir}/punktfunk-scripting
 %{_datadir}/punktfunk-scripting/runner-cli.js
 %{_userunitdir}/punktfunk-scripting.service
+%dir %{_sysconfdir}/apparmor.d
+%config(noreplace) %{_sysconfdir}/apparmor.d/punktfunk-scripting
+%{_prefix}/lib/systemd/user-generators/punktfunk-scripting-apparmor
 %endif
 
 %if %{with web} || %{with scripting}
@@ -815,6 +823,10 @@ echo "Then open https://<host-ip>:47992"
 # symlink. $1 == 1 is a first INSTALL — on an upgrade ($1 > 1) this must not undo an operator's mask.
 if [ "$1" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
     systemctl --global enable punktfunk-scripting.service >/dev/null 2>&1 || :
+fi
+# Boot loads it from /etc/apparmor.d; this covers the running kernel.
+if command -v apparmor_parser >/dev/null 2>&1 && aa-enabled --quiet 2>/dev/null; then
+    apparmor_parser -r -T -W %{_sysconfdir}/apparmor.d/punktfunk-scripting || :
 fi
 echo "punktfunk-scripting installed and enabled for all users."
 echo "It runs your automation — game-library sources, scripts in"
