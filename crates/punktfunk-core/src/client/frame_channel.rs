@@ -555,6 +555,7 @@ mod frame_channel_tests {
             frame_index: i,
             pts_ns: i as u64,
             flags: 0,
+            epoch: 0,
             complete: true,
             part: None,
             received_ns: 0,

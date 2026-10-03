@@ -73,6 +73,8 @@ struct FrameBuf {
     block_count: usize,
     pts_ns: u64,
     user_flags: u32,
+    /// Config generation (`punktfunk/2`); every packet of the frame carries the same.
+    epoch: u8,
     /// Leading blocks already handed up as slice-progressive prefix parts.
     next_part_block: u16,
     /// AU shard offset of the next prefix part (`next_part_block`'s start).
@@ -199,8 +201,20 @@ fn reclaim_parity(
     }
 }
 
+/// Which header the reassembler reads.
+#[derive(Clone, Copy, Debug)]
+enum RxFraming {
+    V1,
+    /// `pts_ref_us` is the newest capture time seen, which unwraps the 32-bit field.
+    V2 {
+        clock_origin_ns: u64,
+        pts_ref_us: i64,
+    },
+}
+
 pub struct Reassembler {
     limits: ReassemblerLimits,
+    framing: RxFraming,
     /// Opt-in: emit aged-out [`USER_FLAG_CHUNK_ALIGNED`] frames instead of dropping
     /// them. Still counted in `frames_dropped` — a partial is lost data.
     deliver_partial: bool,
@@ -231,6 +245,7 @@ impl Reassembler {
     pub fn new(limits: ReassemblerLimits) -> Self {
         Reassembler {
             limits,
+            framing: RxFraming::V1,
             deliver_partial: false,
             pending_partial: None,
             deliver_parts: false,
@@ -241,6 +256,15 @@ impl Reassembler {
             shard_delay_ns: Vec::with_capacity(SHARD_DELAY_SAMPLES),
             short_tails: Vec::new(),
         }
+    }
+
+    /// Read `punktfunk/2` packets ([`decode_v2`]) from now on. `clock_origin_ns` is the host
+    /// instant the session's capture times count from.
+    pub fn set_v2(&mut self, clock_origin_ns: u64) {
+        self.framing = RxFraming::V2 {
+            clock_origin_ns,
+            pts_ref_us: 0,
+        };
     }
 
     /// The first-shard delays since the last call, oldest first. Raw
@@ -298,7 +322,14 @@ impl Reassembler {
         coder: &dyn ErasureCoder,
         stats: &StatsCounters,
     ) -> std::result::Result<Option<Frame>, Dropped> {
-        let (hdr, body) = parse_v1(pkt).ok_or(Dropped)?;
+        let (hdr, epoch, body) = match &mut self.framing {
+            RxFraming::V1 => parse_v1(pkt).map(|(h, b)| (h, 0, b)),
+            RxFraming::V2 {
+                clock_origin_ns,
+                pts_ref_us,
+            } => decode_v2(pkt, *clock_origin_ns, pts_ref_us),
+        }
+        .ok_or(Dropped)?;
         let lim = self.limits;
         let g = firewall(&hdr, body.len(), &lim).ok_or(Dropped)?;
         let body = &body[..g.shard_bytes];
@@ -307,6 +338,7 @@ impl Reassembler {
         // frame entry is mutably borrowed.
         let Reassembler {
             limits: _,
+            framing: _,
             deliver_partial,
             pending_partial,
             deliver_parts,
@@ -409,6 +441,7 @@ impl Reassembler {
                     block_count: g.block_count,
                     pts_ns: hdr.pts_ns,
                     user_flags: hdr.user_flags,
+                    epoch,
                     next_part_block: 0,
                     delivered_shards: 0,
                     buf: vec![0; buf_len],
@@ -423,6 +456,7 @@ impl Reassembler {
         // `shard_payload` change from landing a straggler in the wrong geometry.
         // Mixed slice/uniform would firewall under one rule and place under the other.
         if frame.shard_bytes != g.shard_bytes
+            || frame.epoch != epoch
             || (frame.user_flags ^ hdr.user_flags) & crate::packet::USER_FLAG_SLICE_STREAM != 0
         {
             return Err(Dropped);
@@ -971,6 +1005,7 @@ impl FrameBuf {
             frame_index,
             pts_ns: self.pts_ns,
             flags: self.user_flags,
+            epoch: self.epoch,
             complete: true,
             part,
             received_ns: 0, // stamped by Session::poll_frame at the session boundary
@@ -1010,6 +1045,7 @@ impl FrameBuf {
             frame_index,
             pts_ns: self.pts_ns,
             flags: self.user_flags,
+            epoch: self.epoch,
             complete: false,
             part: Some(FramePart {
                 offset: lo as u32,
@@ -1080,6 +1116,7 @@ impl ReassemblyWindow {
                                 frame_index: idx,
                                 pts_ns: f.pts_ns,
                                 flags: f.user_flags,
+                                epoch: f.epoch,
                                 complete: false,
                                 part: None,
                                 received_ns: 0, // stamped by Session::poll_frame at the session boundary
@@ -1136,6 +1173,7 @@ mod reset_tests {
             frame_index: 7,
             pts_ns: 1,
             flags: 0,
+            epoch: 0,
             complete: false,
             part: None,
             received_ns: 0,
