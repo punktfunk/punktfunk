@@ -377,6 +377,14 @@ impl SessionLink {
     }
 
     /// The plane events and session rows name this session by.
+    /// The punktfunk protocol this link speaks: `2` or `1`.
+    pub(crate) fn wire(&self) -> u8 {
+        match self {
+            SessionLink::QuicV2(..) => 2,
+            SessionLink::Quic(_) | SessionLink::Web(..) => 1,
+        }
+    }
+
     pub(crate) fn plane(&self) -> crate::events::Plane {
         match self {
             SessionLink::Quic(_) | SessionLink::QuicV2(..) => crate::events::Plane::Native,

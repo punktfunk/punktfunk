@@ -414,6 +414,7 @@ mod tests {
             mgmt_port: None,
             mac: Vec::new(),
             os: String::new(),
+            wire: Vec::new(),
         };
         let adverts = [advert("saved", "ab"), advert("new", "ef")];
         let cards = discovered_cards(adverts.iter(), &[host("Desk", "10.0.0.2", "ab")], None);

@@ -367,6 +367,7 @@ pub(crate) async fn serve(
             // 0 = standalone (no mgmt API) → do not advertise an `mgmt` port.
             (mgmt_port != 0).then_some(mgmt_port),
             &h.os_chain,
+            opts.protocol2,
         )
         .map_err(|e| tracing::warn!(error = %format!("{e:#}"), "native mDNS advertise failed (continuing)"))
         .ok(),
@@ -2054,6 +2055,7 @@ pub(crate) async fn run_admitted(
     // Client address: what the registry groups sessions of one NAT or tunnel by.
     let peer_ip = conn.remote_address().ip();
     let plane = conn.plane();
+    let wire = conn.wire();
     let result: Result<()> = async {
         let stream_thread = tokio::task::spawn_blocking(move || -> Result<()> {
             let (transport, wire_sock, media) = bind_data_plane(
@@ -2136,6 +2138,7 @@ pub(crate) async fn run_admitted(
                     bringup_delay: shape.bringup,
                     fit_pin: hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave,
                     plane,
+                    wire,
                     peer: peer_ip,
                 }),
                 Punktfunk1Source::Virtual => {

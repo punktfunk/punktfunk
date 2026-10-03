@@ -399,7 +399,8 @@ fn run(args: Args) -> Result<()> {
 
 /// Browse the LAN for native (`_punktfunk._udp`) hosts for `secs` seconds and print them, then
 /// exit — the discovery side of the host's mDNS advert (host crate `discovery.rs`). TXT keys:
-/// `fp` (host cert fingerprint to pin), `pair` (required|optional), `id` (stable host id).
+/// `fp` (host cert fingerprint to pin), `pair` (required|optional), `id` (stable host id),
+/// `wire` (the protocols the host answers).
 fn discover(secs: u64) -> Result<()> {
     use mdns_sd::{ServiceDaemon, ServiceEvent};
     use std::collections::BTreeMap;
@@ -449,9 +450,10 @@ fn discover(secs: u64) -> Result<()> {
                     id
                 };
                 let row = format!(
-                    "  {name:<24} {addr}:{:<6} pair={:<9} fp={fp_short}…",
+                    "  {name:<24} {addr}:{:<6} pair={:<9} wire={:<4} fp={fp_short}…",
                     info.get_port(),
                     val("pair"),
+                    val("wire"),
                 );
                 hosts.insert(key, row);
             }
