@@ -601,6 +601,7 @@ pub struct ConnectParams {
     pub frame_parts: bool,
     /// Offer `punktfunk/2` (ALPN `pkf2`) before `punktfunk/1`. A host that answers it carries
     /// media on the connection's own socket; one that does not runs `punktfunk/1` as before.
+    /// [`ConnectParams::new`] sets it from `PUNKTFUNK_PROTOCOL=2`.
     pub offer_v2: bool,
     /// Store-qualified library id to launch (`steam:570`).
     pub launch: Option<String>,
@@ -646,7 +647,7 @@ impl ConnectParams {
             display_hdr: None,
             client_caps: 0,
             frame_parts: false,
-            offer_v2: false,
+            offer_v2: std::env::var("PUNKTFUNK_PROTOCOL").is_ok_and(|v| v == "2"),
             launch: None,
             name: None,
             pin: None,

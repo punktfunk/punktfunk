@@ -303,6 +303,7 @@ Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI 
 | `PUNKTFUNK_ABR_PROBE_KBPS` | kbps | Upper limit for the startup link measurement. |
 | `PUNKTFUNK_ABR_PROBE` | `0` | Skip the startup link measurement; Automatic then opens at the starting rate and climbs. |
 | `PUNKTFUNK_ABR_MAX_MBPS` | Mbps | Cap on Automatic's ceiling, for a client whose decoder can't keep up with what the link carries. |
+| `PUNKTFUNK_PROTOCOL` | `2` | Offers the host the new `punktfunk/2` protocol first. A host without it streams over `punktfunk/1` as before. A preview. |
 
 ## Bitrate
 
