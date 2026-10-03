@@ -89,13 +89,10 @@ impl Sc2Capture {
         pad: u8,
         gate: Gate,
     ) -> Option<Sc2Capture> {
-        let c_path = std::ffi::CString::new(path).ok()?;
-        // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
-        let dev = Dev(unsafe { hid::SDL_hid_open_path(c_path.as_ptr()) });
-        if dev.0.is_null() {
+        let Some(dev) = Dev::open(path) else {
             tracing::warn!(path, error = %sdl3::get_error(), "open steam controller 2 hid node");
             return None;
-        }
+        };
         dev.send_feature(&NORMALIZE_JOYSTICKS);
         let (tx, rx) = std::sync::mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -132,14 +129,9 @@ impl Drop for Sc2Capture {
 /// Log a HIDAPI pad's report descriptor, once per slot open, so a "Send logs" bundle carries the
 /// capture a native host identity is built from. Silent where the node will not open.
 pub(crate) fn log_descriptor(path: &str, vid: u16, pid: u16) {
-    let Ok(c_path) = std::ffi::CString::new(path) else {
+    let Some(dev) = Dev::open(path) else {
         return;
     };
-    // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
-    let dev = Dev(unsafe { hid::SDL_hid_open_path(c_path.as_ptr()) });
-    if dev.0.is_null() {
-        return;
-    }
     let mut buf = [0u8; 4096];
     // SAFETY: `dev.0` is open and `buf` is writable for its whole length.
     let n = unsafe { hid::SDL_hid_get_report_descriptor(dev.0, buf.as_mut_ptr(), buf.len()) };
@@ -149,18 +141,27 @@ pub(crate) fn log_descriptor(path: &str, vid: u16, pid: u16) {
     }
 }
 
-struct Dev(*mut hid::SDL_hid_device);
+/// A second hidapi handle on an SDL slot's node.
+pub(crate) struct Dev(*mut hid::SDL_hid_device);
 
-// SAFETY: the handle moves into the reader thread once and is used and closed only there.
+// SAFETY: the handle moves into one worker thread once and is used and closed only there.
 unsafe impl Send for Dev {}
 
 impl Dev {
+    /// `None` when the node will not open (not a HIDAPI device, no permission).
+    pub(crate) fn open(path: &str) -> Option<Dev> {
+        let c_path = std::ffi::CString::new(path).ok()?;
+        // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
+        let dev = Dev(unsafe { hid::SDL_hid_open_path(c_path.as_ptr()) });
+        (!dev.0.is_null()).then_some(dev)
+    }
+
     fn send_feature(&self, r: &[u8]) -> i32 {
         // SAFETY: `self.0` is an open handle only this thread uses; `r` is valid for its length.
         unsafe { hid::SDL_hid_send_feature_report(self.0, r.as_ptr(), r.len()) }
     }
 
-    fn write(&self, kind: u8, r: &[u8]) -> i32 {
+    pub(crate) fn write(&self, kind: u8, r: &[u8]) -> i32 {
         match kind {
             // SAFETY: as in `send_feature`.
             HID_RAW_OUTPUT => unsafe { hid::SDL_hid_write(self.0, r.as_ptr(), r.len()) },

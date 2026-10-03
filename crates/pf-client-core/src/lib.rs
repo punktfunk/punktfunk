@@ -103,7 +103,7 @@ pub mod shortcuts;
 // DualSense voice-coil + speaker on the pad's 4-ch device (0xD1 plane): correlation, per-session renderer, tier-A registry the gamepad worker feeds.
 #[cfg(desktop)]
 pub mod pad_audio;
-// Raw HID beside an SDL slot: Steam Controller 2 passthrough and the descriptor log.
+// Raw HID beside an SDL slot: Steam Controller 2 passthrough, the descriptor log, the DualSense Bluetooth audio writer.
 #[cfg(desktop)]
 mod sc2_capture;
 // Override catalog + connect-time resolver (`design/client-settings-profiles.md`). Bindings live on `trust`'s host records.

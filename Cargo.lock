@@ -3939,6 +3939,7 @@ dependencies = [
  "aes-gcm",
  "aws-lc-rs",
  "chacha20poly1305",
+ "crc32fast",
  "criterion",
  "fec-rs",
  "hmac 0.13.0",

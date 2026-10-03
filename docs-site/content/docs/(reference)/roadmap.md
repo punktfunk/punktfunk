@@ -40,5 +40,3 @@ what changed, the [release notes](https://git.unom.io/unom/punktfunk/releases).
 - **Hosting on macOS, iOS, tvOS or Android.** They are client-only platforms.
 - **HEVC 4:4:4 on AMD.** AMD's encoder can't produce it. Intel's VAAPI path has no 4:4:4 yet
   either. [PyroWave](/docs/pyrowave) carries full chroma on both.
-- **DualSense speaker and haptics over Bluetooth.** The controller exposes no audio over Bluetooth,
-  so the client needs it on USB. Rumble, adaptive triggers and the lightbar work either way.

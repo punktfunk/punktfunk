@@ -1818,8 +1818,8 @@ fn controllers_section(cx: &Cx) -> Vec<Element> {
         advanced.push(described_labeled(
             "Controller haptics",
             pad_haptics_toggle,
-            "Play a DualSense's voice-coil haptics on the pad itself. Wired pads only, and \
-             only while controllers are forwarded.",
+            "Play a DualSense's voice-coil haptics on the pad itself, while controllers are \
+             forwarded.",
         ));
         advanced.push(described_labeled(
             "Controller speaker",
