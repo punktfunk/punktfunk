@@ -1471,9 +1471,17 @@ impl Shell {
             return None;
         }
         match self.ok_down.take() {
-            Some((_, false)) => self.menu_event(MenuEvent::Confirm),
+            Some((_, false)) => {
+                let pulse = self.menu_event(MenuEvent::Confirm);
+                self.felt(pulse)
+            }
             _ => None,
         }
+    }
+
+    /// The pulse a pad may play: none while Controller rumble is off.
+    pub(crate) fn felt(&self, pulse: Option<MenuPulse>) -> Option<MenuPulse> {
+        pulse.filter(|_| self.settings.pad_rumble)
     }
 
     /// OK went down on what has focus: its plate and the element dip.
@@ -1504,7 +1512,8 @@ impl Shell {
         if ev == MenuEvent::Confirm {
             self.dip();
         }
-        self.menu_event(ev)
+        let pulse = self.menu_event(ev);
+        self.felt(pulse)
     }
 
     /// [`Self::handle_menu`] without the Confirm dip.

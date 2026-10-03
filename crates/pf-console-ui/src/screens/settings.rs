@@ -63,7 +63,8 @@ pub enum RowId {
     PadForward,
     Pad,
     PadType,
-    /// `trust::Settings::pad_rumble`. Off, the client drops the host's rumble.
+    /// `trust::Settings::pad_rumble`. Off, the client drops the host's rumble and the
+    /// console's own pulses.
     PadRumble,
     SystemButtons,
     GuideGesture,
@@ -2298,7 +2299,7 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
              can't reach the host. A Select tap still goes through, slightly delayed."
         }
         RowId::PadRumble => {
-            "Off, controllers don't vibrate from the stream, whatever the game sends."
+            "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends."
         }
         RowId::PadHaptics => {
             "Play a DualSense's fine-grained haptics on the pad itself instead of plain \

@@ -1172,8 +1172,8 @@ extension SettingsView {
                     .disabled(!effective.gamepadForwarding)
             }
             if !inPresetScope {
-                described("Off, controllers don't vibrate from the stream, whatever the game "
-                    + "sends.") {
+                described("Off, controllers don't vibrate from the stream or in the menus, "
+                    + "whatever the game sends.") {
                     Toggle("Controller rumble", isOn: $padRumble)
                         .disabled(!effective.gamepadForwarding)
                 }
