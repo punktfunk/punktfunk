@@ -8,6 +8,7 @@
 //! The structs in [`super`] are the semantic model both wires share: the v2 codecs read and
 //! write them, so host and client logic does not care which wire a session runs.
 
+pub mod clock;
 pub mod dgram;
 pub mod features;
 pub mod field;

@@ -2595,8 +2595,9 @@ fn bind_data_plane(
             )
             .context("punktfunk/2 media sender")?;
             let media = punktfunk_core::session::MediaV2 {
-                clock_origin_ns: v2.clock_origin_ns,
+                clock_origin_ns: v2.clock.origin_ns(),
                 keys: Some(keys),
+                clock: Some(v2.clock.clone()),
             };
             let wire_sock = v2.media_socket.try_clone().ok();
             return Ok((Box::new(sender), wire_sock, Some(media)));
@@ -3816,7 +3817,8 @@ mod tests {
 
     /// A client that offers `punktfunk/2` streams over it: the handshake crosses the translated
     /// control stream, the media arrives on the connection's own socket under exporter keys,
-    /// and every frame is the host's byte for byte. Control round trips keep working.
+    /// and every frame is the host's byte for byte. Each frame's `HostTiming` names it by the
+    /// session-clock pts it arrived with. Control round trips keep working.
     #[test]
     fn a_punktfunk_2_session_streams_end_to_end() {
         let _registry = crate::session_status::tests::registry_lock();
@@ -3833,16 +3835,23 @@ mod tests {
             }
         });
         let mut got = 0;
+        let mut pts = std::collections::HashSet::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while got < 60 && std::time::Instant::now() < deadline {
             if let Ok(f) = client.next_frame(std::time::Duration::from_millis(200)) {
                 let idx = u32::from_le_bytes(f.data[0..4].try_into().unwrap());
                 assert_eq!(f.data, test_frame(idx, f.data.len()), "frame {idx}");
+                pts.insert(f.pts_ns);
                 got += 1;
             }
         }
         assert_eq!(got, 60, "frames cross the v2 media path");
         assert_eq!(client.wire(), 2, "the host answered punktfunk/2");
+        let mut named = 0;
+        while let Ok(t) = client.next_host_timing(std::time::Duration::from_millis(50)) {
+            named += usize::from(pts.contains(&t.pts_ns));
+        }
+        assert!(named >= 50, "HostTiming names its frames: {named} of 60");
         assert!(
             wait_for(|| client.delivery().map(|d| d.profile) == Some(1)),
             "the host answers the delivery entry the ClientHello carried"

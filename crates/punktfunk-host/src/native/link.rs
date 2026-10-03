@@ -15,6 +15,7 @@
 //! out the `quinn::Connection` underneath, so path and lifecycle questions have one answer for
 //! both. Only the two genuinely carrier-shaped questions branch.
 
+use punktfunk_core::quic::v2::clock::SessionClock;
 use punktfunk_core::quic::v2::io::{V2Reader, V2Writer};
 use punktfunk_core::quic::v2::translate::{RxEdge, SessionFields, TxEdge};
 use std::net::{IpAddr, SocketAddr};
@@ -97,8 +98,9 @@ pub(crate) enum Accepted {
 pub(crate) struct V2Link {
     pub conn: quinn::Connection,
     pub session_id: [u8; 16],
-    /// The host instant, Unix ns, that media capture time 0 stands for.
-    pub clock_origin_ns: u64,
+    /// The session's media clock. Every host stamp it sends leaves in its time: video pts,
+    /// audio and timing datagrams, and clock echoes.
+    pub clock: Arc<SessionClock>,
     pub rx: Arc<Mutex<RxEdge>>,
     pub tx: Arc<Mutex<TxEdge>>,
     /// A clone of the endpoint's socket: media leaves from the address the client dialed.
@@ -110,12 +112,16 @@ impl V2Link {
     pub(crate) fn new(conn: quinn::Connection, media_socket: Arc<std::net::UdpSocket>) -> V2Link {
         let mut session_id = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rng(), &mut session_id);
+        let clock = Arc::new(SessionClock::new());
         V2Link {
             conn,
             session_id,
-            clock_origin_ns: punktfunk_core::quic::wall_clock_ns(),
-            rx: Arc::default(),
-            tx: Arc::default(),
+            rx: Arc::new(Mutex::new(RxEdge {
+                clock: Some(clock.clone()),
+                ..RxEdge::default()
+            })),
+            tx: Arc::new(Mutex::new(TxEdge::host(clock.clone()))),
+            clock,
             media_socket,
             suite: Mutex::new(None),
         }
@@ -130,7 +136,7 @@ impl V2Link {
             .unwrap_or_else(|e| e.into_inner())
             .set_session(SessionFields {
                 session_id: self.session_id,
-                clock_origin_ns: self.clock_origin_ns,
+                clock_origin_ns: self.clock.origin_ns(),
                 suite: Some(suite),
             });
     }
@@ -179,15 +185,20 @@ impl SessionLink {
                 Err(quinn::SendDatagramError::TooLarge) => DatagramSend::TooLarge,
                 Err(_) => DatagramSend::Unavailable,
             },
-            // Every datagram the host sends has a kind; one without is a bug, dropped here.
-            SessionLink::QuicV2(c, _) => match punktfunk_core::quic::v2::dgram::wrap(&payload) {
-                Some(w) => match c.send_datagram(w.into()) {
-                    Ok(()) => DatagramSend::Sent,
-                    Err(quinn::SendDatagramError::TooLarge) => DatagramSend::TooLarge,
-                    Err(_) => DatagramSend::Unavailable,
-                },
-                None => DatagramSend::TooLarge,
-            },
+            // Host stamps leave in session time. Every datagram the host sends has a kind; one
+            // without is a bug, dropped here.
+            SessionLink::QuicV2(c, v2) => {
+                let mut payload = payload;
+                v2.clock.retime_datagram(&mut payload);
+                match punktfunk_core::quic::v2::dgram::wrap(&payload) {
+                    Some(w) => match c.send_datagram(w.into()) {
+                        Ok(()) => DatagramSend::Sent,
+                        Err(quinn::SendDatagramError::TooLarge) => DatagramSend::TooLarge,
+                        Err(_) => DatagramSend::Unavailable,
+                    },
+                    None => DatagramSend::TooLarge,
+                }
+            }
             // Not the quinn connection: a WebTransport datagram carries a session-id prefix, so
             // it has to go through the layer that writes one.
             SessionLink::Web(c, _) => match c.send_datagram(&payload) {

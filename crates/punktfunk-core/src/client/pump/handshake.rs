@@ -263,6 +263,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 let media_v2 = crate::session::MediaV2 {
                     clock_origin_ns: server.clock_origin_ns,
                     keys: Some(keys),
+                    clock: None,
                 };
                 Session::new_v2(cfg, media_v2, Box::new(media))?
             }

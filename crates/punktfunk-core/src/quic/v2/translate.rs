@@ -8,6 +8,7 @@
 //! becomes a `ServerHello` with the session fields [`TxEdge::set_session`] gave it. A client
 //! writes its own handshake frames and uses the same edges after it.
 
+use super::clock::SessionClock;
 use super::hello::{ClientHello, Ready, ServerHello};
 use super::msg::{decode_input_event, encode_input_event, V2Message};
 use super::registry as reg;
@@ -153,11 +154,19 @@ pub struct RxEdge {
     pub client: Option<ClientExtra>,
     /// Client side: set by the `ServerHello` that arrives as `Welcome`.
     pub server: Option<SessionFields>,
+    /// Host side: a `PhaseReport`'s latch arrives in wire time and leaves in host time.
+    pub clock: Option<std::sync::Arc<SessionClock>>,
 }
 
 impl RxEdge {
     pub fn to_v1(&mut self, ty: u64, body: &[u8]) -> Option<Vec<u8>> {
         match ty {
+            reg::MSG_PHASE_REPORT if self.clock.is_some() => {
+                let mut pr = PhaseReport::from_body(body).ok()?;
+                let clock = self.clock.as_ref()?;
+                pr.next_latch_host_ns = clock.to_host(pr.next_latch_host_ns);
+                Some(pr.encode())
+            }
             reg::MSG_CLIENT_HELLO => {
                 let ch = ClientHello::from_body(body).ok()?;
                 self.client = Some(ClientExtra {
@@ -208,6 +217,8 @@ pub struct TxEdge {
     /// `Hello`, the next the `Start`.
     client: Option<ClientExtra>,
     hello_sent: bool,
+    /// Host side: a `ClockEcho` leaves stamped in wire time, the clock its media carries.
+    clock: Option<std::sync::Arc<SessionClock>>,
 }
 
 impl TxEdge {
@@ -216,6 +227,14 @@ impl TxEdge {
     pub fn client(extra: ClientExtra) -> TxEdge {
         TxEdge {
             client: Some(extra),
+            ..TxEdge::default()
+        }
+    }
+
+    /// A host's edge: its clock echoes leave in `clock`'s time.
+    pub fn host(clock: std::sync::Arc<SessionClock>) -> TxEdge {
+        TxEdge {
+            clock: Some(clock),
             ..TxEdge::default()
         }
     }
@@ -253,6 +272,14 @@ impl TxEdge {
                 }
                 .encode_v2(),
             );
+        }
+        if let (Some(clock), Ok(echo)) = (&self.clock, ClockEcho::decode(msg)) {
+            let echo = ClockEcho {
+                t2_ns: clock.to_wire(echo.t2_ns),
+                t3_ns: clock.to_wire(echo.t3_ns),
+                ..echo
+            };
+            return frame_from_v1(&echo.encode());
         }
         frame_from_v1(msg)
     }
@@ -529,6 +556,43 @@ mod tests {
     }
 
     /// A client's own edges carry its handshake through a host's edges and back.
+    /// A host's edges put its clock echoes in wire time and take a client's phase latch back
+    /// to host time; a client's edges change neither.
+    #[test]
+    fn host_edges_carry_session_time() {
+        let clock = std::sync::Arc::new(SessionClock::new());
+        let mut host_tx = TxEdge::host(clock.clone());
+        let now = wall_clock_ns();
+        let echo = ClockEcho {
+            t1_ns: 5,
+            t2_ns: now,
+            t3_ns: now,
+        };
+        let f = host_tx.to_v2(&echo.encode()).unwrap();
+        let (ty, body, _) = split_frame(&f, reg::max_body).unwrap().unwrap();
+        let out = ClockEcho::decode(&RxEdge::default().to_v1(ty, body).unwrap()).unwrap();
+        assert_eq!(out.t1_ns, 5, "the client's own stamp comes back untouched");
+        assert!(out.t2_ns.abs_diff(clock.to_wire(now)) < 1_000_000);
+
+        let report = PhaseReport {
+            next_latch_host_ns: clock.to_wire(now) + 8_000_000,
+            latch_period_ns: 16_666_667,
+            uncertainty_ns: 1,
+            arrival_lead_ns: 2,
+            coherence_milli: 900,
+        };
+        let f = TxEdge::default().to_v2(&report.encode()).unwrap();
+        let (ty, body, _) = split_frame(&f, reg::max_body).unwrap().unwrap();
+        let mut host_rx = RxEdge {
+            clock: Some(clock),
+            ..RxEdge::default()
+        };
+        let back = PhaseReport::decode(&host_rx.to_v1(ty, body).unwrap()).unwrap();
+        let off = back.next_latch_host_ns as i64 - (now + 8_000_000) as i64;
+        assert!(off.abs() < 2_000_000, "latch off by {off}");
+        assert_eq!(back.latch_period_ns, 16_666_667);
+    }
+
     #[test]
     fn a_client_handshake_crosses_both_edges() {
         let hello = Hello::decode(

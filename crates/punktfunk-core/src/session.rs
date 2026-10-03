@@ -70,14 +70,21 @@ pub struct MediaV2 {
     /// Sealing keys from the connection's exporter. `None` on a carrier that already
     /// encrypts (WebTransport); `Config::encrypt`, `key` and `salt` are never used.
     pub keys: Option<MediaKeys>,
+    /// Host: the session clock video pts leave in. Its origin is `clock_origin_ns`. `None`
+    /// on a receiver, and on a sender whose pts are already wire time.
+    pub clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
 }
 
 /// Which header a session writes. `punktfunk/2` keeps the stamp it puts on every packet;
 /// its `seq` is filled per packet.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Framing {
     V1,
-    V2(V2Stamp),
+    /// The stamp, and on the host the session clock its pts leave in.
+    V2(
+        V2Stamp,
+        Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
+    ),
 }
 
 /// One end of a stream. Built for a single [`Role`]; the other role's methods return
@@ -154,7 +161,13 @@ fn stage_wire(
             }
             wire.extend_from_slice(hdr.as_bytes());
         }
-        Framing::V2(stamp) => wire.extend_from_slice(&encode_v2(hdr, &V2Stamp { seq, ..*stamp })),
+        Framing::V2(stamp, clock) => {
+            let pts_ns = clock
+                .as_ref()
+                .map_or(hdr.pts_ns, |c| c.video_to_wire(hdr.pts_ns));
+            let hdr = PacketHeader { pts_ns, ..*hdr };
+            wire.extend_from_slice(&encode_v2(&hdr, &V2Stamp { seq, ..*stamp }))
+        }
     }
     wire.extend_from_slice(body);
     if sealed {
@@ -243,12 +256,15 @@ impl Session {
             )));
             s.replay = Some(ReplayWindow::new());
         }
-        s.framing = Framing::V2(V2Stamp {
-            seq: 0,
-            epoch: 0,
-            clock_origin_ns: media.clock_origin_ns,
-            max_data_per_block: s.config.fec.max_data_per_block,
-        });
+        s.framing = Framing::V2(
+            V2Stamp {
+                seq: 0,
+                epoch: 0,
+                clock_origin_ns: media.clock_origin_ns,
+                max_data_per_block: s.config.fec.max_data_per_block,
+            },
+            media.clock,
+        );
         s.reassembler.set_v2(media.clock_origin_ns);
         Ok(s)
     }
@@ -256,7 +272,7 @@ impl Session {
     /// Host: stamp `epoch` on every packet from the next frame on, after the `StreamConfig`
     /// that announces it. No effect on `punktfunk/1`, which has no epoch.
     pub fn set_epoch(&mut self, epoch: u8) {
-        if let Framing::V2(stamp) = &mut self.framing {
+        if let Framing::V2(stamp, _) = &mut self.framing {
             stamp.epoch = epoch;
         }
     }
@@ -402,8 +418,8 @@ impl Session {
         let header = match self.framing {
             Framing::V1 if sealed => crate::packet::HEADER_LEN + crate::packet::CRYPTO_OVERHEAD,
             Framing::V1 => crate::packet::HEADER_LEN,
-            Framing::V2(_) if sealed => crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN,
-            Framing::V2(_) => crate::packet::V2_HEADER_LEN,
+            Framing::V2(..) if sealed => crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN,
+            Framing::V2(..) => crate::packet::V2_HEADER_LEN,
         };
         self.packetizer.geometry(frame_len).wire_packets()
             * (self.packetizer.shard_payload() + header)
@@ -460,7 +476,7 @@ impl Session {
         geo.check()?;
         let perf_armed = self.seal_perf.is_some();
         let fec_ns = std::sync::atomic::AtomicU64::new(0);
-        let framing = self.framing;
+        let framing = self.framing.clone();
         let Session {
             packetizer,
             coder,
@@ -687,7 +703,7 @@ impl Session {
         let fec_ns = std::sync::atomic::AtomicU64::new(0);
         let mut seal_ns = 0u64;
         let two_lane = self.seal_two_lane;
-        let framing = self.framing;
+        let framing = self.framing.clone();
         let Session {
             packetizer,
             coder,
@@ -912,7 +928,7 @@ impl Session {
                 "poll_input called on a client session",
             ));
         }
-        if matches!(self.framing, Framing::V2(_)) {
+        if matches!(self.framing, Framing::V2(..)) {
             return Err(PunktfunkError::Unsupported("punktfunk/2 input rides QUIC"));
         }
         while let Some(wire) = self.transport.recv()? {
@@ -1140,7 +1156,7 @@ impl Session {
                 "send_input called on a host session",
             ));
         }
-        if matches!(self.framing, Framing::V2(_)) {
+        if matches!(self.framing, Framing::V2(..)) {
             return Err(PunktfunkError::Unsupported("punktfunk/2 input rides QUIC"));
         }
         let pkt = event.encode();
@@ -1561,6 +1577,15 @@ mod wire_equivalence_tests {
     }
 
     fn v2_pair_keyed(drop_period: u32, keys: Option<MediaKeys>) -> (Session, Session) {
+        v2_pair_with(drop_period, keys, None)
+    }
+
+    /// `clock` is the host's alone; the client reads wire time against its origin.
+    fn v2_pair_with(
+        drop_period: u32,
+        keys: Option<MediaKeys>,
+        clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
+    ) -> (Session, Session) {
         let mk = |role: Role| {
             let mut c = host_cfg(FecScheme::Gf16, 25, false);
             c.role = role;
@@ -1568,13 +1593,35 @@ mod wire_equivalence_tests {
             c
         };
         let media = MediaV2 {
-            clock_origin_ns: 1_700_000_000_000_000_000,
+            clock_origin_ns: clock
+                .as_ref()
+                .map_or(1_700_000_000_000_000_000, |c| c.origin_ns()),
             keys,
+            clock: None,
         };
         let (ht, ct) = loopback_pair(drop_period, 0);
-        let host = Session::new_v2(mk(Role::Host), media.clone(), Box::new(ht)).unwrap();
+        let host_media = MediaV2 {
+            clock,
+            ..media.clone()
+        };
+        let host = Session::new_v2(mk(Role::Host), host_media, Box::new(ht)).unwrap();
         let client = Session::new_v2(mk(Role::Client), media, Box::new(ct)).unwrap();
         (host, client)
+    }
+
+    /// A host clock puts session time on the wire: each frame reaches the client at the value
+    /// its `HostTiming` names, near the capture time it left with.
+    #[test]
+    fn v2_frames_carry_the_host_session_clock() {
+        let clock = std::sync::Arc::new(crate::quic::v2::clock::SessionClock::new());
+        let (mut host, mut client) = v2_pair_with(0, None, Some(clock.clone()));
+        for len in [100, 8 * 512 + 1] {
+            let pts = crate::quic::wall_clock_ns();
+            host.submit_frame(&pattern(len), pts, 0).unwrap();
+            let f = client.poll_frame().unwrap();
+            assert_eq!(f.pts_ns, clock.video_to_wire(pts));
+            assert!(f.pts_ns.abs_diff(pts) < 50_000_000, "{} vs {pts}", f.pts_ns);
+        }
     }
 
     fn media_keys(suite: crate::crypto::MediaSuite) -> MediaKeys {
@@ -1648,6 +1695,7 @@ mod wire_equivalence_tests {
         let media = MediaV2 {
             clock_origin_ns: 0,
             keys: None,
+            clock: None,
         };
         assert!(Session::new_v2(sealed, media, Box::new(h)).is_err());
     }
