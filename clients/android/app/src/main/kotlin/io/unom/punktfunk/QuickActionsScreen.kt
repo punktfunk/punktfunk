@@ -323,7 +323,7 @@ private val previewActions = RingActions(
     pointerGranted = { true }, padMouseTarget = { 1 }, padMouseMode = { 0 }, cyclePadMouse = {},
     audioMute = { 0 }, audioMuteLabel = { null }, toggleStreamMute = {},
     currentMode = { intArrayOf(1920, 1080, 60) }, requestMode = { _, _, _ -> },
-    screensSwappable = { true },
+    screenLayouts = { ScreenLayout.entries },
 )
 
 private data class SlotOption(val id: String, val label: String, val note: String? = null)
@@ -349,7 +349,7 @@ private fun slotGroups(cfg: OverlayConfig): List<SlotGroup> {
         )),
         SlotGroup("View", listOf(
             SlotOption("stats", "Statistics"),
-            SlotOption("swap_screens", "Swap screens", "Dual-screen handhelds only"),
+            SlotOption("swap_screens", "Screens", "Dual-screen handhelds: the panel below, the picture below, or across both"),
         )),
         SlotGroup("Audio", listOf(
             SlotOption("mic", "Microphone"),

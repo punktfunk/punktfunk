@@ -32,7 +32,8 @@ use std::time::Instant;
 use super::async_loop::DecodeEvent;
 use super::latency::{now_realtime_ns, p50_max_ms, take_by_pts};
 use super::presenter::{cadence_suffix, PresentPriority};
-use super::surface_control::{fence_signal_ns, Layer, PresentComplete};
+use super::surface_control::{fence_signal_ns, present, Layer, PresentComplete};
+use crate::session::PictureLayers;
 use crate::sys::{now_monotonic_ns, sysprop};
 
 /// Reader pool depth. Must cover the codec's own in-flight outputs + the presenter's held candidate
@@ -139,7 +140,15 @@ pub(super) struct AscBackend {
     reader: ImageReader,
     /// Cached reader window handed to `MediaCodec::configure` as the decoder's output surface.
     reader_window: NativeWindow,
+    /// The picture window's layer, the one the slot clock and the present fence follow.
     layer: Layer,
+    /// A dual-screen handheld's second window's layer, built from `layers` when Kotlin attaches
+    /// one and dropped when it goes; `second_gen` is the generation it was built at.
+    second: Option<Layer>,
+    second_gen: u64,
+    layers: std::sync::Arc<PictureLayers>,
+    /// The layer mask the last present used; a bit that clears hides its layer once.
+    shown: u8,
     /// `None` under latency; the source-cadence loop under smooth.
     cadence: Option<CadenceClock>,
     /// FIFO capacity: 0 = newest-wins (latency); 1..=3 = the smoothing store depth.
@@ -226,7 +235,7 @@ impl AscBackend {
     /// Create the reader + compositor layer, or `None` on API < 29 / init failure (the caller then
     /// runs the SurfaceView presenter). `window` is the SurfaceView's `ANativeWindow`; `src_w/h` the
     /// negotiated decode size; `surface_size` the LIVE view size the layer composites into;
-    /// `src_crop` the part of the buffer it shows;
+    /// `src_crop` the part of the buffer it shows; `layers` the second window and the shown mask;
     /// `panel_hz` the mode-table panel rate (seeds the clock);
     /// `dataspace` the `ADataSpace` from the negotiated colour; `source_hz` the negotiated stream rate.
     ///
@@ -250,6 +259,7 @@ impl AscBackend {
         src_h: i32,
         surface_size: std::sync::Arc<std::sync::atomic::AtomicU64>,
         src_crop: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        layers: std::sync::Arc<PictureLayers>,
         panel_hz: i32,
         dataspace: i32,
         source_hz: u32,
@@ -319,6 +329,12 @@ impl AscBackend {
             reader,
             reader_window,
             layer,
+            second: None,
+            // Behind the live value by one, so the first pump follows a window attached before
+            // the backend came up.
+            second_gen: layers.generation.load(Ordering::Acquire).wrapping_sub(1),
+            layers,
+            shown: PictureLayers::PRIMARY,
             cadence,
             fifo_capacity,
             frame_interval_ns,
@@ -410,6 +426,50 @@ impl AscBackend {
         self.pacing && self.clock.phased()
     }
 
+    /// Follow Kotlin's second window and shown mask: rebuild the second layer on a new window
+    /// (or drop it with the window), and hide a layer whose bit cleared; the next present shows
+    /// the ones set. Nothing shown reads as the first layer: a frame must land somewhere.
+    fn sync_layers(&mut self) {
+        let generation = self.layers.generation.load(Ordering::Acquire);
+        if generation != self.second_gen {
+            self.second_gen = generation;
+            if let Some(mut old) = self.second.take() {
+                old.hide();
+            }
+            let window = crate::session::lock_recover(&self.layers.second_window).clone();
+            self.second = window.and_then(|w| {
+                Layer::create(
+                    &w,
+                    self.layers.second_size.clone(),
+                    self.layers.second_crop.clone(),
+                )
+            });
+            log::info!(
+                "asc: second picture layer {}",
+                if self.second.is_some() { "up" } else { "down" }
+            );
+        }
+        let mut mask = self.layers.shown.load(Ordering::Relaxed);
+        if self.second.is_none() {
+            mask &= PictureLayers::PRIMARY;
+        }
+        if mask == 0 {
+            mask = PictureLayers::PRIMARY;
+        }
+        if mask == self.shown {
+            return;
+        }
+        if self.shown & !mask & PictureLayers::PRIMARY != 0 {
+            self.layer.hide();
+        }
+        if self.shown & !mask & PictureLayers::SECOND != 0 {
+            if let Some(s) = self.second.as_mut() {
+                s.hide();
+            }
+        }
+        self.shown = mask;
+    }
+
     /// The panel period the smoothing store reaches ahead by.
     fn period_ns(&self) -> i64 {
         match self.clock.period_ns() {
@@ -499,16 +559,29 @@ impl AscBackend {
         let earliest = frame.due_ns.map_or(now_mono, |d| d.max(now_mono));
         let (target, slot) = self.next_target(earliest);
         let seq = self.next_seq;
-        let applied = self.layer.present(
+        self.sync_layers();
+        let (src_w, src_h, dataspace, frame_rate) =
+            (self.src_w, self.src_h, self.dataspace, self.frame_rate);
+        let mut targets: Vec<&mut Layer> = Vec::with_capacity(2);
+        if self.shown & PictureLayers::PRIMARY != 0 {
+            targets.push(&mut self.layer);
+        }
+        if self.shown & PictureLayers::SECOND != 0 {
+            if let Some(s) = self.second.as_mut() {
+                targets.push(s);
+            }
+        }
+        let applied = present(
+            &mut targets,
             &frame.buffer,
-            self.src_w,
-            self.src_h,
+            src_w,
+            src_h,
             &mut frame.fence,
             target,
-            self.dataspace,
+            dataspace,
             self.hdr_meta.as_ref(),
-            // The layer's fixed-source rate — applied once, at layer config (see `Layer::present`).
-            self.frame_rate,
+            // Each layer's fixed-source rate — applied once, at layer config (see `Layer::stage`).
+            frame_rate,
             seq,
             ev_tx,
         );
@@ -868,10 +941,14 @@ impl AscBackend {
         self.awaiting.clear();
     }
 
-    /// Tear down everything but the layer, which keeps showing its last frame. A rebuilt
-    /// decoder hides it once its own layer presents (see [`Layer::hide`]).
+    /// Tear down everything but the picture window's layer, which keeps showing its last frame. A
+    /// rebuilt decoder hides it once its own layer presents (see [`Layer::hide`]). The second
+    /// window's layer goes dark here; the rebuilt backend makes its own.
     pub(super) fn into_layer(mut self) -> Layer {
         self.release_all();
+        if let Some(mut s) = self.second.take() {
+            s.hide();
+        }
         self.layer
     }
 }

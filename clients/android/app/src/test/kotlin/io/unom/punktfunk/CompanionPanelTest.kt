@@ -1,9 +1,12 @@
 package io.unom.punktfunk
 
+import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
@@ -49,8 +52,8 @@ internal fun fakeRingActions(fired: MutableList<String> = mutableListOf()) = Rin
     toggleStreamMute = {},
     currentMode = { intArrayOf(1920, 1080, 60) },
     requestMode = { _, _, _ -> },
-    screensSwappable = { true },
-    swapScreens = { fired += "swap" },
+    screenLayouts = { ScreenLayout.entries },
+    cycleScreens = { fired += "screens" },
 )
 
 /**
@@ -65,16 +68,71 @@ class CompanionPanelTest {
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val fired = mutableListOf<String>()
+    private val keys = mutableListOf<Pair<Int, Boolean>>()
 
-    private fun show(page: CompanionPage, onPage: (CompanionPage) -> Unit = {}) {
+    private fun show(
+        page: CompanionPage,
+        statsView: StatsView = StatsView.TEXT,
+        onStatsView: (StatsView) -> Unit = {},
+        onPage: (CompanionPage) -> Unit = {},
+    ) {
         compose.setContent {
             CompanionPanel(
                 pages = CompanionPage.entries, page = page, onPage = onPage,
-                stats = emptyList(), tier = StatsVerbosity.NORMAL, onTier = {},
+                header = PanelHeader("Living Room PC", "1920×1080 · 60 Hz"),
+                history = StatsHistory.demo(), stats = emptyList(),
+                statsView = statsView, onStatsView = onStatsView,
+                tier = StatsVerbosity.NORMAL, onTier = {},
                 cfg = OverlayConfig.platformDefault(), actions = fakeRingActions(fired),
-                haptics = ConsoleHaptics(null), trackpad = {}, pad = {},
+                haptics = ConsoleHaptics(null), keys = { vk, down -> keys += vk to down },
+                trackpad = {}, pad = {},
             )
         }
+    }
+
+    @Test
+    fun theGraphsShowTheFiguresAndNoTier() {
+        var picked: StatsView? = null
+        show(CompanionPage.STATS, statsView = StatsView.GRAPHS, onStatsView = { picked = it })
+        // The tile and the chart both say it; the legend names the two lines.
+        compose.onAllNodesWithText("Frame rate").assertCountEquals(2)
+        compose.onNodeWithText("received").assertExists()
+        compose.onNodeWithText("Detailed").assertDoesNotExist()
+        compose.onNodeWithText("Text").performClick()
+        assertEquals(StatsView.TEXT, picked)
+    }
+
+    @Test
+    fun theTextViewBringsTheTierAndTheViewIsRemembered() {
+        show(CompanionPage.STATS, statsView = StatsView.TEXT)
+        compose.onNodeWithText("Detailed").assertExists()
+        assertEquals(StatsView.GRAPHS, CompanionMemory.statsView(compose.activity))
+        CompanionMemory.keepStatsView(compose.activity, StatsView.TEXT)
+        assertEquals(StatsView.TEXT, CompanionMemory.statsView(compose.activity))
+    }
+
+    @Test
+    fun aKeyGoesDownAndUp() {
+        show(CompanionPage.KEYBOARD)
+        compose.onNodeWithText("a").performClick()
+        assertEquals(listOf(0x41 to true, 0x41 to false), keys)
+    }
+
+    @Test
+    fun aModifierHoldsUntilTheNextKeyLifts() {
+        show(CompanionPage.KEYBOARD)
+        compose.onAllNodesWithText("Shift")[0].performClick()
+        assertEquals(listOf(0x10 to true), keys)
+        compose.onNodeWithText("a").performClick()
+        assertEquals(listOf(0x10 to true, 0x41 to true, 0x41 to false, 0x10 to false), keys)
+    }
+
+    @Test
+    fun aSecondTapReleasesAModifier() {
+        show(CompanionPage.KEYBOARD)
+        compose.onAllNodesWithText("Ctrl")[0].performClick()
+        compose.onAllNodesWithText("Ctrl")[0].performClick()
+        assertEquals(listOf(0x11 to true, 0x11 to false), keys)
     }
 
     @Test
@@ -95,11 +153,11 @@ class CompanionPanelTest {
     }
 
     @Test
-    fun theSwapTileTradesTheScreens() {
+    fun theScreensTileCyclesTheLayout() {
         show(CompanionPage.ACTIONS)
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Swap screens"))
-        compose.onNodeWithText("Swap screens").performClick()
-        assertEquals(listOf("swap"), fired)
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Screens"))
+        compose.onNodeWithText("Screens").performClick()
+        assertEquals(listOf("screens"), fired)
     }
 
     @Test
@@ -115,9 +173,13 @@ class CompanionPanelTest {
     fun pagesFollowTheGrants() {
         assertEquals(
             listOf(CompanionPage.STATS, CompanionPage.ACTIONS),
-            companionPages(pointer = false, pad = false),
+            companionPages(pointer = false, pad = false, keyboard = false),
         )
-        assertEquals(CompanionPage.entries, companionPages(pointer = true, pad = true))
+        assertEquals(
+            listOf(CompanionPage.STATS, CompanionPage.ACTIONS, CompanionPage.KEYBOARD),
+            companionPages(pointer = false, pad = false, keyboard = true),
+        )
+        assertEquals(CompanionPage.entries, companionPages(pointer = true, pad = true, keyboard = true))
     }
 
     @Test
@@ -129,12 +191,48 @@ class CompanionPanelTest {
     }
 
     @Test
-    fun eachSecondScreenKeepsItsOwnSwap() {
+    fun eachSecondScreenKeepsItsOwnLayout() {
         val context = compose.activity
-        CompanionMemory.keepSwap(context, "Built-in Screen 2", true)
-        assertEquals(true, CompanionMemory.swapped(context, "Built-in Screen 2"))
-        assertEquals(false, CompanionMemory.swapped(context, "HDMI Screen"))
-        CompanionMemory.keepSwap(context, "Built-in Screen 2", false)
-        assertEquals(false, CompanionMemory.swapped(context, "Built-in Screen 2"))
+        CompanionMemory.keepLayout(context, "Built-in Screen 2", ScreenLayout.SPANNED)
+        assertEquals(ScreenLayout.SPANNED, CompanionMemory.layout(context, "Built-in Screen 2"))
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(context, "HDMI Screen"))
+        CompanionMemory.keepLayout(context, "Built-in Screen 2", ScreenLayout.PANEL)
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(context, "Built-in Screen 2"))
+    }
+
+    @Test
+    fun aSwapKeptBeforeLayoutsReadsAsThePictureBelow() {
+        val context = compose.activity
+        context.getSharedPreferences("punktfunk_companion", Context.MODE_PRIVATE)
+            .edit().putBoolean("swap:Old Screen", true).commit()
+        assertEquals(ScreenLayout.SWAPPED, CompanionMemory.layout(context, "Old Screen"))
+        CompanionMemory.keepLayout(context, "Old Screen", ScreenLayout.PANEL)
+        assertEquals(ScreenLayout.PANEL, CompanionMemory.layout(context, "Old Screen"))
+    }
+
+    @Test
+    fun aTwoScreenConsoleIsKnownByAnySpelling() {
+        for (tag in listOf("nds", "Nintendo DS", "3DS", "Nintendo 3DS", "New Nintendo 3DS", "wiiu", "Wii U")) {
+            assertEquals(tag, true, twoScreenPlatform(tag))
+        }
+        for (tag in listOf(null, "", "steam", "Nintendo Switch", "gba")) {
+            assertEquals(tag, false, twoScreenPlatform(tag))
+        }
+    }
+
+    @Test
+    fun aSpannedPictureAsksForTwoHalves() {
+        val context = compose.activity
+        val (w, h, hz) = nativeDisplayMode(context, spanned = false)
+        assertEquals(Triple(w, 2 * h, hz), nativeDisplayMode(context, spanned = true))
+    }
+
+    @Test
+    fun theCycleSkipsWhatThePairCannotBuild() {
+        val two = listOf(ScreenLayout.PANEL, ScreenLayout.SWAPPED)
+        assertEquals(ScreenLayout.SWAPPED, ScreenLayout.PANEL.next(two))
+        assertEquals(ScreenLayout.PANEL, ScreenLayout.SWAPPED.next(two))
+        assertEquals(ScreenLayout.PANEL, ScreenLayout.SPANNED.next(two))
+        assertEquals(ScreenLayout.PANEL, ScreenLayout.PANEL.next(emptyList()))
     }
 }

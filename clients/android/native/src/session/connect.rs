@@ -620,6 +620,7 @@ fn connect(req: ConnectRequest) -> jlong {
                 // The full frame until Kotlin places the picture.
                 src_crop: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 decoded_size: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                layers: Arc::new(super::PictureLayers::new()),
             };
             SESSIONS.insert(handle)
         }

@@ -32,6 +32,10 @@ internal object SettingsFields {
             overlay({ it.renderScale }, { o, v -> o.copy(renderScale = v) })),
         field("videoFit", "video_fit", StrKind, { it.videoFit }, { s, v -> s.copy(videoFit = v) },
             overlay({ it.videoFit }, { o, v -> o.copy(videoFit = v) })),
+        // Android alone has a second screen to use; the `android.` key rides a preset's `extra`
+        // on every other client.
+        field("secondScreen", "android.second_screen", BoolKind, { it.secondScreen }, { s, v -> s.copy(secondScreen = v) },
+            overlay({ it.secondScreen }, { o, v -> o.copy(secondScreen = v) }), prefsKey = "second_screen"),
         field("hdrEnabled", "hdr_enabled", BoolKind, { it.hdrEnabled }, { s, v -> s.copy(hdrEnabled = v) },
             overlay({ it.hdrEnabled }, { o, v -> o.copy(hdrEnabled = v) })),
         field("tenBitSdr", "ten_bit_sdr", BoolKind, { it.tenBitSdr }, { s, v -> s.copy(tenBitSdr = v) },

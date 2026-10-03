@@ -153,6 +153,7 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::Compositor => "compositor",
         RowId::Decoder => "decoder",
         RowId::LowLatency => "low_latency",
+        RowId::SecondScreen => "second_screen",
         RowId::Audio => "audio_channels",
         RowId::Mic => "mic_enabled",
         RowId::AudioFormat => "audio_format",
@@ -1254,6 +1255,7 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::GamepadUi,
             RowId::GamepadUiMode,
             RowId::ReduceUiResolution,
+            RowId::SecondScreen,
             RowId::LowLatency,
             RowId::AudioRoute,
             RowId::CursorGestures,
@@ -1520,7 +1522,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 65, "{seen:?}");
+    assert_eq!(seen.len(), 66, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"

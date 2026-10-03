@@ -72,9 +72,11 @@ this off.
 
 On a handheld with a second, smaller screen below the first (an Ayn Thor, a Retroid Pocket with the
 Dual Screen add-on) or a foldable half-opened like a laptop, the stream takes the top screen. The
-lower one has tabs for **Stats**, **Actions** (the buttons of the
-[quick-action dial](/docs/input#the-quick-action-dial)), **Trackpad** and **Controller** (the
-[virtual controller](/docs/input#virtual-controller)). There is nothing to set. If the lower screen stays dark while you stream, end the stream and
+lower one shows **Stats**, **Actions** (the buttons of the
+[quick-action dial](/docs/input#the-quick-action-dial)), a **Keyboard**, a **Trackpad** and the
+**Controller** (the [virtual controller](/docs/input#virtual-controller)) — or, with **Screens**,
+the picture itself, below or across both screens
+([dual-screen handhelds](/docs/input#dual-screen-handhelds)). **Settings → Display → Second screen** turns it off — for a phone on a TV — and a preset can carry that. If the lower screen stays dark while you stream, end the stream and
 [send your logs](/docs/report-an-issue): they record the screens your device reported.
 
 ## webOS (LG TV) — community

@@ -31,7 +31,7 @@ class SettingsFieldsTest {
     /** A value that differs from the default in every row, so a dropped row shows as a mismatch. */
     private fun moved(): Settings = Settings(
         width = 3840, height = 2160, hz = 120,
-        bitrateKbps = 40_000, renderScale = 0.5, videoFit = "crop",
+        bitrateKbps = 40_000, renderScale = 0.5, videoFit = "crop", secondScreen = false,
         hdrEnabled = false, tenBitSdr = true, compositor = 2, gamepad = 3, gamepadForwarding = false,
         systemButtons = "host", guideGesture = "off", audioChannels = 6, audioFormat = AUDIO_FORMAT_LOSSLESS_96,
         codec = "av1", micEnabled = true, echoCancel = false, keepHostAudio = true,

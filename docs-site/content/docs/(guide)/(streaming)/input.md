@@ -230,7 +230,7 @@ What the dial can hold:
 |---|---|
 | Session | **End stream**, **End game** (a game this device launched, then the stream), **Disconnect, keep the game running** |
 | Input | **Touch mode**, **Keyboard**, **Virtual controller**, **Send text**, **Guide button**, **Quick access menu**, **Controller mouse** |
-| View · Audio | **Statistics**, **Swap screens** (dual-screen handhelds), **Microphone**, **Mute this stream** (this device only) |
+| View · Audio | **Statistics**, **Screens** (dual-screen handhelds: the panel below, the picture below, or the picture across both), **Microphone**, **Mute this stream** (this device only) |
 | Host | **Sleep host**, **Restart host**, **Shut down host** ([Host power](/docs/host-power)) |
 | Shortcuts | Key combinations you add, such as Alt+F4 |
 
@@ -288,10 +288,16 @@ or use **Edit layout** to move, resize and hide controls, separately for wide an
 ### Dual-screen handhelds
 
 On an Android handheld with a second screen of 7 inches or less, or a foldable half open, the
-stream takes one screen and a panel takes the other: statistics, the dial's actions, a trackpad
-and the virtual controller. **Swap screens**, on the dial or the panel, trades the two. The
-handheld remembers the swap, and an **Automatic** resolution or refresh follows the picture: at
-once where the host can change mode mid-stream, else from the next connect.
+stream takes one screen and a panel takes the other: statistics, the dial's actions, a keyboard
+that types on the host while the handheld's own buttons stay on the game, a trackpad and the
+virtual controller. **Screens**, on the dial or the panel, cycles three layouts: the panel below
+the picture, the picture below the panel, or **one picture across both screens** — its top half
+above, its bottom half below, the lower screen's touch landing on its half. That last one is how a
+DS or 3DS emulator's two screens land on two screens: set the emulator to a vertical layout with
+no gap, and the split lands on the hinge. A DS, 3DS or Wii U title launched from the library
+starts that way. The handheld remembers the layout per second screen, and an **Automatic**
+resolution follows it — the picture screen's mode, or two of them stacked when the picture spans
+both — at once where the host can change mode mid-stream, else from the next connect.
 
 ## Pen and stylus
 

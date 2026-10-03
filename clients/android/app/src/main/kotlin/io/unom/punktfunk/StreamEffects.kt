@@ -117,15 +117,17 @@ internal fun rememberVirtualPad(
 }
 
 /**
- * The HUD's lines, polled once a second while [statsOn]. Enabling resets the native window, so a
- * re-show never renders stale data; switching off drops the last window for the same reason.
- * [tier] is read at each poll, so a tier change never blanks the numbers.
+ * The HUD's lines, polled once a second while [statsOn], and the same windows as numbers pushed
+ * into [history] for the companion panel's graphs. Enabling resets the native window and the
+ * history, so a re-show never renders stale data; switching off drops the last window for the
+ * same reason. [tier] is read at each poll, so a tier change never blanks the numbers.
  */
 @Composable
 internal fun rememberStatsLines(
     session: ActiveSession,
     statsOn: Boolean,
     tier: StatsVerbosity,
+    history: StatsHistory? = null,
 ): State<List<HudLine>> {
     val handle = session.handle
     val context = LocalContext.current
@@ -134,6 +136,7 @@ internal fun rememberStatsLines(
     LaunchedEffect(handle, statsOn) {
         NativeBridge.nativeSetVideoStatsEnabled(handle, statsOn)
         if (statsOn) {
+            history?.clear()
             while (true) {
                 delay(1000)
                 // The panel's LIVE rate, re-read each poll: a governor that ignored the mode pin
@@ -146,6 +149,7 @@ internal fun rememberStatsLines(
                         session.presetName,
                     ),
                 )
+                if (history != null) StatsSample.of(NativeBridge.nativeVideoStatsSample(handle))?.let(history::push)
             }
         } else {
             lines.value = emptyList()

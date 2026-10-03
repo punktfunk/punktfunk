@@ -315,6 +315,32 @@ object NativeBridge {
     external fun nativeVideoSourceCrop(handle: Long, left: Float, top: Float, right: Float, bottom: Float)
 
     /**
+     * A dual-screen handheld's second picture window: a `SurfaceView` on the lower screen that
+     * the ASurfaceControl presenter composites the same decoded frame into, with its own part
+     * of the frame ([nativePictureCrop]) and size ([nativePictureSurfaceSize]). `null` drops it.
+     * The surface may come and go any number of times in a stream; the decoder never restarts
+     * for it. [width]/[height] are the view's pixel size at the call (0 = not laid out yet).
+     * No-op on a `0` handle.
+     */
+    external fun nativePictureWindow(handle: Long, surface: android.view.Surface?, width: Int, height: Int)
+
+    /** The second picture window's live pixel size, from its every `surfaceChanged`. */
+    external fun nativePictureSurfaceSize(handle: Long, width: Int, height: Int)
+
+    /** The part of the frame the second picture window shows, as fractions like [nativeVideoSourceCrop]. */
+    external fun nativePictureCrop(handle: Long, left: Float, top: Float, right: Float, bottom: Float)
+
+    /**
+     * Which picture layers show: [PICTURE_FIRST] the first window's, [PICTURE_SECOND] the second's,
+     * OR'd. A hidden layer keeps its window and takes no frame, so a layout change costs no
+     * decoder restart. One atomic store, UI-safe.
+     */
+    external fun nativePictureShown(handle: Long, mask: Int)
+
+    const val PICTURE_FIRST = 1
+    const val PICTURE_SECOND = 2
+
+    /**
      * The decoder's picture size as `[width, height]`, or `null` before its first output format.
      * Differs from [nativeVideoSize] when the host frames the picture for this device (a join, a
      * mirrored head). One atomic load; UI-safe.
@@ -354,6 +380,42 @@ object NativeBridge {
      * Sticky for the session (survives video stop/start). No-op on `0`.
      */
     external fun nativeSetVideoStatsEnabled(handle: Long, enabled: Boolean)
+
+    /**
+     * The last window [nativeVideoStatsLines] formatted, as numbers indexed by the `STAT_*`
+     * constants, or `null` before the first. A copy; it never closes a window, so the graphs and
+     * the lines read the same second. `-1` is a figure this platform does not have.
+     */
+    external fun nativeVideoStatsSample(handle: Long): FloatArray?
+
+    const val STAT_WINDOW_MS = 0
+    const val STAT_RECEIVED_FPS = 1
+    const val STAT_DECODED_FPS = 2
+    const val STAT_PRESENTED_FPS = 3
+    const val STAT_MBPS = 4
+    const val STAT_TARGET_MBPS = 5
+    const val STAT_E2E_P50_MS = 6
+    const val STAT_E2E_P95_MS = 7
+    /** The OS present pipeline's share, already inside the end-to-end figures. */
+    const val STAT_OS_FLOOR_MS = 8
+    const val STAT_HOST_MS = 9
+    const val STAT_NET_MS = 10
+    const val STAT_DECODE_MS = 11
+    const val STAT_DISPLAY_MS = 12
+    const val STAT_LOST = 13
+    const val STAT_SKIPPED = 14
+    const val STAT_FEC = 15
+    const val STAT_RTT_MS = 16
+    const val STAT_AUDIO_BUFFER_MS = 17
+    const val STAT_AV_OFFSET_MS = 18
+    const val STAT_JUDDER_PERMILLE = 19
+    const val STAT_REFRESH_HZ = 20
+    const val STAT_WIDTH = 21
+    const val STAT_HEIGHT = 22
+    const val STAT_RFIS_LAST_MIN = 23
+    /** Frames behind the end-to-end figures; 0 = nothing displayed this window. */
+    const val STAT_E2E_SAMPLES = 24
+    const val STAT_COUNT = 25
 
     /**
      * Start host→client audio: Opus decode → jitter ring → AAudio, all in Rust.

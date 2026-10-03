@@ -554,20 +554,29 @@ internal fun StreamBannerScene(pad: Boolean) {
 
 /**
  * The companion panel on a dual-screen handheld's lower screen: the real [CompanionPanel] on
- * [page], with the stream scene's Normal lines and a session where every action is available.
+ * [page], with a demo minute behind the graphs, the stream scene's Normal lines behind the text
+ * view, and a session where every action is available.
  */
 @Composable
-internal fun CompanionScene(page: io.unom.punktfunk.CompanionPage) {
+internal fun CompanionScene(
+    page: io.unom.punktfunk.CompanionPage,
+    statsView: io.unom.punktfunk.StatsView = io.unom.punktfunk.StatsView.GRAPHS,
+) {
     io.unom.punktfunk.CompanionPanel(
         pages = io.unom.punktfunk.CompanionPage.entries,
         page = page,
         onPage = {},
+        header = io.unom.punktfunk.PanelHeader("Living Room PC · Starfall Vale", "1920×1080 · 120 Hz"),
+        history = remember { io.unom.punktfunk.StatsHistory.demo() },
         stats = shotLines(StatsVerbosity.NORMAL, 1920, 1080, 120, 119.0, 92.1, loss = false),
+        statsView = statsView,
+        onStatsView = {},
         tier = StatsVerbosity.NORMAL,
         onTier = {},
         cfg = io.unom.punktfunk.OverlayConfig.platformDefault(),
         actions = io.unom.punktfunk.fakeRingActions(),
         haptics = remember { io.unom.punktfunk.ConsoleHaptics(null) },
+        keys = { _, _ -> },
         trackpad = {},
         pad = {},
     )

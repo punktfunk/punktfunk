@@ -19,8 +19,6 @@ import io.unom.punktfunk.kit.SessionEndReason
 import io.unom.punktfunk.models.ActiveSession
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -66,12 +64,31 @@ class CompanionDisplayTest {
 
     private fun forgetSwap() {
         val dm = compose.activity.getSystemService(DisplayManager::class.java)
-        companionDisplay(compose.activity, dm)?.let { CompanionMemory.keepSwap(compose.activity, it.name, false) }
+        companionDisplay(compose.activity, dm)?.let { CompanionMemory.keepLayout(compose.activity, it.name, ScreenLayout.PANEL) }
     }
 
     /** The display whose window draws the panel's Actions tab. */
     private fun panelDisplay(): Int? = compose.onAllNodesWithText("Actions").fetchSemanticsNodes()
         .singleOrNull()?.let { (it.root as? ViewRootForTest)?.view?.display?.displayId }
+
+    /**
+     * A 1080p panel at the 160 dpi default — what a USB-C add-on with no EDID size reports —
+     * counts on a handheld; the same panel at a real 45″ density does not.
+     */
+    @Test
+    fun aSizelessPanelCountsAndATvDoesNot() {
+        val dm = compose.activity.getSystemService(DisplayManager::class.java)
+        fun attach(spec: String): Display? {
+            shell("settings put global overlay_display_devices $spec")
+            val deadline = SystemClock.uptimeMillis() + 5_000
+            while (dm.displays.size < 2 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100)
+            return companionDisplay(compose.activity, dm)
+        }
+        assertEquals(true, attach("1920x1080/160") != null)
+        shell("settings delete global overlay_display_devices")
+        SystemClock.sleep(500)
+        assertEquals(null, attach("1920x1080/48"))
+    }
 
     @Test
     fun thePanelComesUpOnTheSecondScreenAndLeavesWithTheStream() {
@@ -104,14 +121,16 @@ class CompanionDisplayTest {
         compose.waitUntil(5_000) { panelDisplay() == second.displayId }
         compose.onNodeWithText("Actions").performClick()
 
-        compose.onNodeWithText("Swap screens").performClick()
+        compose.onNodeWithText("Screens").performClick()
         compose.waitUntil(5_000) { panelDisplay() == own }
-        assertTrue(CompanionMemory.swapped(compose.activity, second.name))
+        assertEquals(ScreenLayout.SWAPPED, CompanionMemory.layout(compose.activity, second.name))
         assertEquals(second.displayId, pictureDisplay(compose.activity, compose.activity.display!!).displayId)
 
-        compose.onNodeWithText("Swap screens").performClick()
-        compose.waitUntil(5_000) { panelDisplay() == second.displayId }
-        assertFalse(CompanionMemory.swapped(compose.activity, second.name))
+        // Across both: no panel on either screen, and the pair is spanned for the next connect.
+        compose.onNodeWithText("Screens").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Actions").fetchSemanticsNodes().isEmpty() }
+        assertEquals(ScreenLayout.SPANNED, CompanionMemory.layout(compose.activity, second.name))
+        assertEquals(true, pictureSpanned(compose.activity))
         assertEquals(emptyList<SessionEndReason>(), ended)
     }
 }

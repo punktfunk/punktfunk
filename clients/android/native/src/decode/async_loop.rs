@@ -355,7 +355,7 @@ fn run_codec(
         aux.after_pass(client, work_t0, had_output, presented_now);
         if presented_now {
             state.log_progress();
-            if let Some(layer) = stale.take() {
+            if let Some(mut layer) = stale.take() {
                 layer.hide();
             }
         }
@@ -607,6 +607,7 @@ fn bring_up(
                 mode.height as i32,
                 opts.surface_size.clone(),
                 opts.src_crop.clone(),
+                opts.layers.clone(),
                 opts.panel_hz,
                 color_dataspace(&client.color),
                 mode.refresh_hz,

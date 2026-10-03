@@ -122,6 +122,39 @@ class ScreenshotTest {
         CompanionScene(io.unom.punktfunk.CompanionPage.ACTIONS)
     }
 
+    @Test
+    @Config(sdk = [36], qualifiers = "w472dp-h411dp-xxhdpi")
+    fun companionStatsText() = shootRoot("companion-stats-text", statusBar = false) {
+        CompanionScene(io.unom.punktfunk.CompanionPage.STATS, io.unom.punktfunk.StatsView.TEXT)
+    }
+
+    // The same panel at the Retroid Dual Screen add-on's size (1920×1080 at about 400 dpi): the
+    // wide class, where the charts sit side by side and the text lines in two columns.
+    @Test
+    @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
+    fun companionStatsWide() = shootRoot("companion-stats", statusBar = false, device = "addon") {
+        CompanionScene(io.unom.punktfunk.CompanionPage.STATS)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
+    fun companionActionsWide() = shootRoot("companion-actions", statusBar = false, device = "addon") {
+        CompanionScene(io.unom.punktfunk.CompanionPage.ACTIONS)
+    }
+
+    // The keyboard page: five rows on the Thor's panel, the function row above them on the add-on's.
+    @Test
+    @Config(sdk = [36], qualifiers = "w472dp-h411dp-xxhdpi")
+    fun companionKeyboard() = shootRoot("companion-keyboard", statusBar = false) {
+        CompanionScene(io.unom.punktfunk.CompanionPage.KEYBOARD)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w768dp-h432dp-400dpi")
+    fun companionKeyboardWide() = shootRoot("companion-keyboard", statusBar = false, device = "addon") {
+        CompanionScene(io.unom.punktfunk.CompanionPage.KEYBOARD)
+    }
+
     // The touch flow is a Material dialog over the host grid (a separate window → shootScreen).
     @Test
     fun connecting() = shootScreen("connecting") {
