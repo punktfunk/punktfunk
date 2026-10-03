@@ -1210,6 +1210,13 @@ private fun ControllerSettings(s: Settings, update: (Settings) -> Unit, onOpenCo
                 "gyroscope, so pick a DualSense-class one if you want motion.",
         ) { g -> update(s.copy(gamepad = g)) }
         DeviceScopeOnly {
+            ToggleRow(
+                title = "Controller rumble",
+                subtitle = "Off, controllers don't vibrate from the stream, whatever the game sends",
+                checked = s.padRumble,
+                enabled = s.gamepadForwarding,
+                onCheckedChange = { on -> update(s.copy(padRumble = on)) },
+            )
             ClickableRow(
                 title = "Connected controllers",
                 subtitle = "What the app detects, with a live input test",

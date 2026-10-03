@@ -251,6 +251,8 @@ data class Settings(
      * Only read when [backgroundKeepAlive] is on; the UI offers 1/5/10/30.
      */
     val backgroundTimeoutMinutes: Int = 10,
+    /** Off, the host's rumble never reaches a pad or this phone's motor. Read once per session. */
+    val padRumble: Boolean = true,
     /**
      * Opt-in: ALSO play the rumble the host addresses to controller 1 (wire pad 0) on this
      * phone's own vibration motor — for clip-on gamepads that ship without rumble motors, where

@@ -130,6 +130,7 @@ public enum ConsoleSettings {
         .string("overlay_actions", DefaultsKey.overlayActions, ""),
         .bool("inhibit_shortcuts", DefaultsKey.inhibitShortcuts, true),
         .bool("gamepad_forwarding", DefaultsKey.gamepadForwarding, true),
+        .bool("pad_rumble", DefaultsKey.padRumble, true),
         .string("system_buttons", DefaultsKey.systemButtons, "auto"),
         .string("guide_gesture", DefaultsKey.guideGesture, "auto"),
         .string("stats_verbosity", DefaultsKey.statsVerbosity, "normal"),

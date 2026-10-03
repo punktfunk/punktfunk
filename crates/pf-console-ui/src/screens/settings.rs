@@ -63,6 +63,8 @@ pub enum RowId {
     PadForward,
     Pad,
     PadType,
+    /// `trust::Settings::pad_rumble`. Off, the client drops the host's rumble.
+    PadRumble,
     SystemButtons,
     GuideGesture,
     /// `trust::Settings::pad_haptics`. Negotiated: needs a capable host and a wired DS5.
@@ -487,6 +489,7 @@ const TABS: [(&str, &[RowId]); 7] = [
         &[
             RowId::Controllers,
             RowId::PadType,
+            RowId::PadRumble,
             RowId::PhoneRumble,
             RowId::PhoneGyro,
             RowId::PadForward,
@@ -1460,6 +1463,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         | RowId::Touch => &[Desktop, Android, Apple, Platform::Web, Platform::Tizen],
         // DualSense voice coils and speaker: no Apple or browser client plays them.
         RowId::PadHaptics | RowId::PadSpeaker => &[Desktop, Android, WebOS],
+        // The clients whose rumble paths read the switch.
+        RowId::PadRumble => &[Desktop, Android, Apple],
         // Every client ships third-party code. The browser build has no bundle to list.
         RowId::Licenses => &[Desktop, Android, WebOS, Apple],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
@@ -1649,7 +1654,7 @@ fn row_icon(id: RowId) -> &'static str {
         }
         RowId::Resolution | RowId::ReduceUiResolution => "monitor",
         RowId::Refresh | RowId::Vsync | RowId::AllowVrr => "refresh-cw",
-        RowId::Bitrate | RowId::PadHaptics | RowId::PhoneRumble => "activity",
+        RowId::Bitrate | RowId::PadRumble | RowId::PadHaptics | RowId::PhoneRumble => "activity",
         RowId::VideoFit => "square",
         RowId::Compositor => "panel-right",
         RowId::Codec => "film",
@@ -2030,6 +2035,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
             "Hold Select for guide",
             label_for(&GUIDE_GESTURE, &s.guide_gesture).into(),
         ),
+        RowId::PadRumble => (None, "Controller rumble", on_off(s.pad_rumble).into()),
         RowId::PadHaptics => (None, "Controller haptics", on_off(s.pad_haptics).into()),
         RowId::PadSpeaker => (
             None,
@@ -2171,6 +2177,7 @@ fn row_enabled(id: RowId, s: &pf_client_core::trust::Settings) -> bool {
         RowId::AudioFormat => s.audio_channels == 2,
         RowId::Pad
         | RowId::PadType
+        | RowId::PadRumble
         | RowId::SystemButtons
         | RowId::GuideGesture
         | RowId::PadHaptics
@@ -2289,6 +2296,9 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             "Hold Select on its own to press the host's guide button — keep holding for \
              the host's quick-access menu. Automatic arms it only where the real button \
              can't reach the host. A Select tap still goes through, slightly delayed."
+        }
+        RowId::PadRumble => {
+            "Off, controllers don't vibrate from the stream, whatever the game sends."
         }
         RowId::PadHaptics => {
             "Play a DualSense's fine-grained haptics on the pad itself instead of plain \
@@ -2677,6 +2687,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         RowId::PadType => step_str(&pad_types(platform), &mut s.gamepad, delta, wrap),
         RowId::SystemButtons => step_str(&SYSTEM_BUTTONS, &mut s.system_buttons, delta, wrap),
         RowId::GuideGesture => step_str(&GUIDE_GESTURE, &mut s.guide_gesture, delta, wrap),
+        RowId::PadRumble => toggle(&mut s.pad_rumble, delta, wrap),
         RowId::PadHaptics => toggle(&mut s.pad_haptics, delta, wrap),
         RowId::PadSpeaker => {
             // `"mix"` reads Off; a step writes only `"pad"` / `"off"`.

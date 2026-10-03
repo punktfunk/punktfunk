@@ -217,6 +217,7 @@ internal class StreamPeripherals(
             router,
             bodyVibrator = deviceBodyVibrator(context),
             mirrorPad0 = settings.rumbleOnPhone,
+            rumble = settings.padRumble,
         ).also { it.start() }
         // "Gyro from this phone" (opt-in): this device's IMU speaks for controller 1's motion
         // while wire pad 0 is a controller without a gyro of its own — the rumble mirror's

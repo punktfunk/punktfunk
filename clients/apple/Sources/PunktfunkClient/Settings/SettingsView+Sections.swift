@@ -1171,6 +1171,13 @@ extension SettingsView {
                     selection: scoped(SettingsFields.gamepadType))
                     .disabled(!effective.gamepadForwarding)
             }
+            if !inPresetScope {
+                described("Off, controllers don't vibrate from the stream, whatever the game "
+                    + "sends.") {
+                    Toggle("Controller rumble", isOn: $padRumble)
+                        .disabled(!effective.gamepadForwarding)
+                }
+            }
             #if !os(tvOS)
             if homeButtonKept, !inPresetScope, effective.gamepadForwarding,
                effective.systemButtonsForward, #available(macOS 27.0, iOS 27.0, visionOS 27.0, *) {

@@ -40,6 +40,7 @@ struct SettingsView: View {
     @AppStorage(DefaultsKey.compositor) var compositor = 0
     @AppStorage(DefaultsKey.gamepadType) var gamepadType = 0
     @AppStorage(DefaultsKey.gamepadForwarding) var gamepadForwarding = true
+    @AppStorage(DefaultsKey.padRumble) var padRumble = true
     @AppStorage(DefaultsKey.systemButtons) var systemButtons = "auto"
     @AppStorage(DefaultsKey.guideGesture) var guideGesture = "auto"
     @AppStorage(DefaultsKey.bitrateKbps) var bitrateKbps = 0

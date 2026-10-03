@@ -89,6 +89,7 @@ Touch modes, mouse modes and the in-stream keys are explained on [Input](/docs/i
 |---|---|---|---|
 | **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/automation#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/input#leaving-with-a-controller). | All |
 | **Controller type** | Automatic | The virtual pad the host creates; Automatic matches each controller. An Xbox pad has no gyro: for motion, pick DualSense, DualShock 4 or Steam Deck. | All. **Steam Controller 2**: Linux, Windows, console. |
+| **Controller rumble** | On | Off, controllers don't vibrate from the stream, whatever the game sends. A wired DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
 | **Use controller** | Automatic (all controllers) | Forward only the controller you pick. | Linux, Windows, Apple, console |
 | **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/input#the-guide-button-xbox--ps--steam-and-quick-access). | All |
 | **Hold Select for guide** | Automatic | Hold Select about ⅓ s to press the host's guide button. A Select tap then arrives a beat late. Automatic turns it on in Gaming Mode and on iPhone, iPad and Apple TV. | All |

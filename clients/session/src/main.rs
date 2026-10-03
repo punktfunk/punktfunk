@@ -362,6 +362,7 @@ mod session_main {
             settings.pad_haptics,
             pf_client_core::pad_audio::speaker_active(&settings.pad_speaker),
         );
+        gamepad.set_rumble(settings.pad_rumble);
         // Short-circuit: Full chroma off must not build an HEVC decoder.
         // The probe constructs one to ask about 4:4:4 profiles.
         let hevc_444_hardware = settings.enable_444

@@ -1648,6 +1648,10 @@ fn controllers_section(cx: &Cx) -> Vec<Element> {
     let pad_haptics_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.pad_haptics, |s, on| {
         s.pad_haptics = on
     });
+    let pad_rumble_toggle = setting_toggle(ctx, scope, (rev, set_rev), s.pad_rumble, |s, on| {
+        s.pad_rumble = on
+    })
+    .enabled(s.gamepad_forwarding);
     let pad_speaker_toggle = setting_toggle(
         ctx,
         scope,
@@ -1741,6 +1745,14 @@ fn controllers_section(cx: &Cx) -> Vec<Element> {
                  \u{2014} a DualSense keeps adaptive triggers, lightbar, touchpad and \
                  motion.",
             )),
+            // This device's motors, so defaults scope only, like Controller haptics.
+            (!preset_mode).then(|| {
+                described_labeled(
+                    "Controller rumble",
+                    pad_rumble_toggle,
+                    "Off, controllers don't vibrate from the stream, whatever the game sends.",
+                )
+            }),
         ]
         .into_iter()
         .flatten()

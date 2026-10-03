@@ -347,6 +347,10 @@ pub struct Settings {
     /// Capture endpoint; same semantics as `speaker_device` (`PUNKTFUNK_AUDIO_SOURCE`).
     #[serde(default)]
     pub mic_device: String,
+    /// Off, the client plays no rumble on any pad, whatever the host sends. DualSense
+    /// voice-coil haptics stay under `pad_haptics`.
+    #[serde(default = "default_true")]
+    pub pad_rumble: bool,
     /// DualSense voice-coil haptics (0xD1 kind 0) on a wired pad's audio device.
     /// Gates `CLIENT_CAP_PAD_AUDIO`; wire rumble is suppressed while the stream is
     /// live (see `gamepad.rs`). Default on: no-op without a capable host and a wired DS5.
@@ -600,6 +604,7 @@ impl Default for Settings {
             overlay_actions: String::new(),
             speaker_device: String::new(),
             mic_device: String::new(),
+            pad_rumble: true,
             pad_haptics: true,
             pad_speaker: "pad".into(),
             match_window: false,
@@ -801,8 +806,9 @@ mod tests {
         assert!(!s.show_stats);
         assert_eq!(s.forward_pad, "");
         assert!(s.fullscreen_on_stream);
-        // Echo cancellation post-dates every stored file: it must load on.
+        // Echo cancellation and rumble post-date every stored file: they must load on.
         assert!(s.echo_cancel);
+        assert!(s.pad_rumble);
     }
 
     /// The shared device keys read from `extra` with the other clients' defaults, and

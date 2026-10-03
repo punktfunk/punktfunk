@@ -55,6 +55,7 @@ class SettingsRoundTripTest {
         presentPriority = "smooth",
         smoothBuffer = 2,
         autoWakeEnabled = false,
+        padRumble = false,
         rumbleOnPhone = true,
         gyroOnPhone = true,
         sc2Capture = false,

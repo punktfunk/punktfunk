@@ -38,13 +38,15 @@ import java.nio.ByteBuffer
  * [bodyVibrator] is this device's own motor ([deviceBodyVibrator]). It plays a controller's rumble
  * when [bodyRumbleFor] says the body stands in for that pad. With [mirrorPad0] ("Rumble on this
  * phone", off by default) it also plays every rumble addressed to wire pad 0 (controller 1) — for
- * clip-on gamepads that ship without rumble motors.
+ * clip-on gamepads that ship without rumble motors. With [rumble] off ("Controller rumble") every
+ * rumble command is drained and dropped.
  */
 class GamepadFeedback(
     private val handle: Long,
     private val router: GamepadRouter?,
     private val bodyVibrator: Vibrator? = null,
     private val mirrorPad0: Boolean = false,
+    private val rumble: Boolean = true,
 ) {
     /**
      * A capture link's feedback renderer for the wire pads it owns, consulted BEFORE the
@@ -141,6 +143,7 @@ class GamepadFeedback(
                 // Layout + semantics live in `unpackRumbleEvent` (RumbleWire.kt), tested there
                 // against the Rust packer.
                 val cmd = unpackRumbleEvent(ev) ?: continue // timeout / closed
+                if (!rumble) continue
                 // Rendering is binder calls into the vibrator service, and every one of them can
                 // throw unchecked — DeadSystemRuntimeException when system_server goes down, and
                 // the ordinary RuntimeException a dying service wraps its RemoteException in.

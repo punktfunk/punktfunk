@@ -167,6 +167,7 @@ fn catalog_key(id: RowId) -> Option<&'static str> {
         RowId::QuickActions => "overlay_actions",
         RowId::CursorGestures => "cursor_gestures",
         RowId::PadType => "gamepad",
+        RowId::PadRumble => "pad_rumble",
         RowId::PhoneRumble => "rumble_on_phone",
         RowId::PhoneGyro => "gyro_on_phone",
         RowId::PadForward => "gamepad_forwarding",
