@@ -1750,7 +1750,7 @@ fn controllers_section(cx: &Cx) -> Vec<Element> {
                 described_labeled(
                     "Controller rumble",
                     pad_rumble_toggle,
-                    "Off, controllers don't vibrate from the stream, whatever the game sends.",
+                    "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends.",
                 )
             }),
         ]

@@ -333,6 +333,16 @@ fn a_root_with_nothing_to_focus_parks_focus_on_the_strip() {
     assert!(!s.strip_focus, "the root's targets take it back");
 }
 
+/// Controller rumble off keeps the console's own pulses off the pad; the move still lands.
+#[test]
+fn rumble_off_silences_menu_pulses() {
+    let (mut s, _console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
+    s.sync();
+    s.settings.pad_rumble = false;
+    assert!(s.handle_menu(MenuEvent::Move(MenuDir::Up)).is_none());
+    assert!(s.strip_focus, "up from the host row still lands on its tab");
+}
+
 /// Up that a root screen bumps reaches its tab.
 #[test]
 fn a_bumped_up_at_a_root_reaches_the_strip() {

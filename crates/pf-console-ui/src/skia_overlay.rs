@@ -331,7 +331,11 @@ impl Overlay for SkiaOverlay {
 
     fn handle_menu(&mut self, event: MenuEvent) -> Option<MenuPulse> {
         if !self.console_visible() && self.ring.open() {
-            return self.ring.menu(event);
+            let pulse = self.ring.menu(event);
+            return match &self.shell {
+                Some(s) => s.felt(pulse),
+                None => pulse,
+            };
         }
         if self.console_visible() {
             self.shell.as_mut().and_then(|s| {

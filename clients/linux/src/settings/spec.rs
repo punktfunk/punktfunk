@@ -192,7 +192,7 @@ specs! {
          has no gyroscope, so pick a DualSense-class one if you want motion.",
         Controllers, false, Stream;
     PAD_RUMBLE: "pad_rumble", "Controller rumble",
-        "Off, controllers don't vibrate from the stream, whatever the game sends",
+        "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends",
         Controllers, false, Device;
     FORWARDING: "gamepad_forwarding", "Forward controllers",
         "Send this device's controllers to the host \u{2014} off if it already has them another \

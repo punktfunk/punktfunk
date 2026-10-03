@@ -347,8 +347,8 @@ pub struct Settings {
     /// Capture endpoint; same semantics as `speaker_device` (`PUNKTFUNK_AUDIO_SOURCE`).
     #[serde(default)]
     pub mic_device: String,
-    /// Off, the client plays no rumble on any pad, whatever the host sends. DualSense
-    /// voice-coil haptics stay under `pad_haptics`.
+    /// Off, the client plays no rumble on any pad, whatever the host sends, and the console
+    /// plays no menu pulses. DualSense voice-coil haptics stay under `pad_haptics`.
     #[serde(default = "default_true")]
     pub pad_rumble: bool,
     /// DualSense voice-coil haptics (0xD1 kind 0) on a wired pad's audio device.

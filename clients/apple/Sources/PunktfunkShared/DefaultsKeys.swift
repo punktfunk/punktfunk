@@ -305,8 +305,9 @@ public enum DefaultsKey {
     /// palette this build doesn't know.
     public static let uiPalette = "punktfunk.uiPalette"
     /// The cross-client `pad_rumble` key. Off, the host's rumble never reaches a controller or
-    /// this device's own motor. On by default; `GamepadFeedback` reads it per command, so a change
-    /// lands mid-stream. A device preference, never part of a stream preset.
+    /// this device's own motor, and the console plays no menu pulses. On by default;
+    /// `GamepadFeedback` reads it per command, so a change lands mid-stream. A device
+    /// preference, never part of a stream preset.
     public static let padRumble = "punktfunk.padRumble"
     /// iPhone: ALSO play the rumble the host addresses to controller 1 (wire pad 0) on this
     /// device's own Taptic Engine — for phone-clip pads that ship without rumble motors, where

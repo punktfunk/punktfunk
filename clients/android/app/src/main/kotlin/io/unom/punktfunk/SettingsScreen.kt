@@ -1212,7 +1212,7 @@ private fun ControllerSettings(s: Settings, update: (Settings) -> Unit, onOpenCo
         DeviceScopeOnly {
             ToggleRow(
                 title = "Controller rumble",
-                subtitle = "Off, controllers don't vibrate from the stream, whatever the game sends",
+                subtitle = "Off, controllers don't vibrate from the stream or in the menus, whatever the game sends",
                 checked = s.padRumble,
                 enabled = s.gamepadForwarding,
                 onCheckedChange = { on -> update(s.copy(padRumble = on)) },
