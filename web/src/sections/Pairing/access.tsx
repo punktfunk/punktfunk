@@ -28,10 +28,13 @@ export const GRANT_CLIPBOARD = 0x08;
 export const GRANT_MIC = 0x10;
 export const GRANT_LAUNCH = 0x20;
 export const GRANT_POWER = 0x40;
-export const GRANT_ALL = 0x7f;
+export const GRANT_MANAGE_GAMES = 0x80;
+export const GRANT_ALL = 0xff;
 
 /** `GRANT_ALL` before the Power bit existed (hosts ≤ 0.32.x). */
 const GRANT_ALL_PRE_POWER = 0x3f;
+/** `GRANT_ALL` before the Manage games bit existed. */
+const GRANT_ALL_PRE_MANAGE = 0x7f;
 
 /**
  * The legacy-full read rule (host-actions §4.3): a stored mask that is EXACTLY the pre-power
@@ -39,7 +42,9 @@ const GRANT_ALL_PRE_POWER = 0x3f;
  * `GRANT_ALL`, so the chip stays "Full" and the edit sheet's toggles agree with it.
  */
 export const normalizeLegacyFull = (mask: number): number =>
-	mask === GRANT_ALL_PRE_POWER ? GRANT_ALL : mask;
+	mask === GRANT_ALL_PRE_POWER || mask === GRANT_ALL_PRE_MANAGE
+		? GRANT_ALL
+		: mask;
 
 /** The guest preset (D2): controller only, WITHOUT launch — the owner drives what runs. */
 export const PRESET_CONTROLLER = GRANT_GAMEPAD;
@@ -227,10 +232,15 @@ const GRANT_TOGGLES: {
 		label: () => m.access_grant_power(),
 		caption: () => m.access_grant_power_caption(),
 	},
+	{
+		bit: GRANT_MANAGE_GAMES,
+		label: () => m.access_grant_manage_games(),
+		caption: () => m.access_grant_manage_games_caption(),
+	},
 ];
 
 /**
- * The shared access controls: Access level (three presets + an Advanced expander with the six
+ * The shared access controls: Access level (three presets + an Advanced expander with the
  * grant toggles) and Access expires (Forever / 1 h / 4 h / 8 h / custom). Three grant moments,
  * one component — approve dialog, arm card, edit sheet.
  *

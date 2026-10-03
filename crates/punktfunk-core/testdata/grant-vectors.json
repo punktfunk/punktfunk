@@ -7,23 +7,28 @@
     "CLIPBOARD": 8,
     "MIC": 16,
     "LAUNCH": 32,
-    "POWER": 64
+    "POWER": 64,
+    "MANAGE_GAMES": 128
   },
-  "all": 127,
+  "all": 255,
   "all_pre_power": 63,
+  "all_pre_manage": 127,
   "masks": [
     {"mask": 0, "normalized": 0, "level": "view"},
     {"mask": 1, "normalized": 1, "level": "controller"},
-    {"mask": 127, "normalized": 127, "level": "full"},
-    {"mask": 63, "normalized": 127, "level": "full"},
+    {"mask": 255, "normalized": 255, "level": "full"},
+    {"mask": 63, "normalized": 255, "level": "full"},
     {"mask": 59, "normalized": 59, "level": "custom"},
-    {"mask": 95, "normalized": 95, "level": "custom"},
+    {"mask": 223, "normalized": 223, "level": "custom"},
     {"mask": 9, "normalized": 9, "level": "custom"},
     {"mask": 64, "normalized": 64, "level": "custom"},
-    {"mask": 128, "normalized": 128, "level": "view"},
-    {"mask": 129, "normalized": 129, "level": "controller"},
-    {"mask": 255, "normalized": 255, "level": "full"},
-    {"mask": 191, "normalized": 191, "level": "custom"},
-    {"mask": 319, "normalized": 319, "level": "custom"}
+    {"mask": 127, "normalized": 255, "level": "full"},
+    {"mask": 123, "normalized": 123, "level": "custom"},
+    {"mask": 129, "normalized": 129, "level": "custom"},
+    {"mask": 256, "normalized": 256, "level": "view"},
+    {"mask": 257, "normalized": 257, "level": "controller"},
+    {"mask": 511, "normalized": 511, "level": "full"},
+    {"mask": 319, "normalized": 319, "level": "custom"},
+    {"mask": 383, "normalized": 383, "level": "custom"}
   ]
 }

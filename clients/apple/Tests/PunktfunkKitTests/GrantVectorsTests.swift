@@ -19,6 +19,7 @@ final class GrantVectorsTests: XCTestCase {
             try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         XCTAssertEqual(root["all"] as? Int, Int(PunktfunkConnection.grantAll))
         XCTAssertEqual(root["all_pre_power"] as? Int, Int(PunktfunkConnection.grantAllPrePower))
+        XCTAssertEqual(root["all_pre_manage"] as? Int, Int(PunktfunkConnection.grantAllPreManage))
         let levels: [String: PunktfunkConnection.AccessLevel] = [
             "full": .fullControl, "controller": .controllerOnly, "view": .viewOnly,
             "custom": .custom,

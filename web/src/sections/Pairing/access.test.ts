@@ -7,6 +7,7 @@ import {
 	GRANT_GAMEPAD,
 	GRANT_KEYBOARD,
 	GRANT_LAUNCH,
+	GRANT_MANAGE_GAMES,
 	GRANT_MIC,
 	GRANT_POINTER,
 	GRANT_POWER,
@@ -38,6 +39,7 @@ test("grant bits match core", () => {
 		MIC: GRANT_MIC,
 		LAUNCH: GRANT_LAUNCH,
 		POWER: GRANT_POWER,
+		MANAGE_GAMES: GRANT_MANAGE_GAMES,
 	}).toEqual(vectors.bits);
 	expect(GRANT_ALL).toBe(vectors.all);
 });

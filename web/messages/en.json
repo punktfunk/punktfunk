@@ -299,6 +299,8 @@
 	"access_grant_launch": "Launch games",
 	"access_grant_power": "Host power",
 	"access_grant_power_caption": "Sleep, restart or shut down the host. Keyboard access can already reach this via the desktop.",
+	"access_grant_manage_games": "Manage games",
+	"access_grant_manage_games_caption": "Pause a game's download or remove it from the host. Launch games already starts a download.",
 	"access_expires_label": "Access expires",
 	"access_expires_keep": "Keep current expiry",
 	"access_expires_forever": "Never",
