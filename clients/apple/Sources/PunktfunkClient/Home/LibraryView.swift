@@ -168,8 +168,47 @@ struct LibraryView: View {
         #endif
     }
 
-    var body: some View {
+    /// The shelf with its confirmations and the download poll, apart from `body` so the type
+    /// checker answers in time.
+    private var prompted: some View {
         content
+            .confirmationDialog(
+                endingGame.map { "End \($0.title)?" } ?? "",
+                isPresented: Binding(get: { endingGame != nil }, set: { if !$0 { endingGame = nil } }),
+                titleVisibility: .visible,
+                presenting: endingGame
+            ) { game in
+                Button("End Game", role: .destructive) { endGame(game) }
+            } message: { _ in
+                Text("Unsaved progress in the game is lost.")
+            }
+            .confirmationDialog(
+                removingGame.map { "Remove \($0.title)?" } ?? "",
+                isPresented: Binding(get: { removingGame != nil }, set: { if !$0 { removingGame = nil } }),
+                titleVisibility: .visible,
+                presenting: removingGame
+            ) { game in
+                Button("Remove Download", role: .destructive) { changeInstall(game, .remove) }
+            } message: { _ in
+                Text("Saves stay on the host.")
+            }
+            .alert(
+                endGameNotice ?? "",
+                isPresented: Binding(get: { endGameNotice != nil }, set: { if !$0 { endGameNotice = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            }
+            // Percentages move while a download runs and the shelf is up.
+            .task(id: downloads.values.contains(where: \.live)) {
+                while downloads.values.contains(where: \.live), !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(2))
+                    await refreshStatus()
+                }
+            }
+    }
+
+    var body: some View {
+        prompted
             // In the tab the host filter names the shelf, so the title names the place; a TV's
             // tab bar already does.
             .modifier(LibraryTitle(title: tvTab ? nil : inTab ? "Library" : "\(shelfTitle) — Library"))
@@ -209,32 +248,6 @@ struct LibraryView: View {
             #if os(iOS) || os(visionOS) || os(macOS)
             .modifier(TitleSearch(active: inTab, text: $search))
             #endif
-            .confirmationDialog(
-                endingGame.map { "End \($0.title)?" } ?? "",
-                isPresented: Binding(get: { endingGame != nil }, set: { if !$0 { endingGame = nil } }),
-                titleVisibility: .visible,
-                presenting: endingGame
-            ) { game in
-                Button("End Game", role: .destructive) { endGame(game) }
-            } message: { _ in
-                Text("Unsaved progress in the game is lost.")
-            }
-            .confirmationDialog(
-                removingGame.map { "Remove \($0.title)?" } ?? "",
-                isPresented: Binding(get: { removingGame != nil }, set: { if !$0 { removingGame = nil } }),
-                titleVisibility: .visible,
-                presenting: removingGame
-            ) { game in
-                Button("Remove Download", role: .destructive) { changeInstall(game, .remove) }
-            } message: { _ in
-                Text("Saves stay on the host.")
-            }
-            .alert(
-                endGameNotice ?? "",
-                isPresented: Binding(get: { endGameNotice != nil }, set: { if !$0 { endGameNotice = nil } })
-            ) {
-                Button("OK", role: .cancel) {}
-            }
             #if os(tvOS)
             // A TV's sheet is a narrow card; the details want the screen.
             .fullScreenCover(item: $detailGame, onDismiss: launchPendingTitle) { detailSheet($0) }
@@ -249,13 +262,6 @@ struct LibraryView: View {
             }
             .task(id: reloadToken) {
                 if keptForDetail { keptForDetail = false } else { await load() }
-            }
-            // Percentages move while a download runs and the shelf is up.
-            .task(id: downloads.values.contains(where: \.live)) {
-                while downloads.values.contains(where: \.live), !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(2))
-                    await refreshStatus()
-                }
             }
             .task(id: loading) {
                 spinnerDue = false
