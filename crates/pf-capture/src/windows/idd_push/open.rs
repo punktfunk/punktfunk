@@ -283,13 +283,17 @@ impl IddPushCapturer {
         );
         // The diagnostic posture, once per session: active probes and an ETW session alter the
         // very path a disturbance report describes, so every report needs this A/B label.
-        match super::diag_dir() {
-            Some(dir) => tracing::info!(
+        match (super::diag_dir(), super::flow_watch()) {
+            (Some(dir), _) => tracing::info!(
                 au_dump_dir = %dir.display(),
                 "IDD push: PUNKTFUNK_IDD_DIAG is ON — micro-probes, the DxgKrnl ETW session and \
                  the access-unit dump are running for this session"
             ),
-            None => tracing::info!(
+            (None, true) => tracing::info!(
+                "IDD push: PUNKTFUNK_IDD_FLOW is ON — the DxgKrnl ETW session is running and \
+                 prints a present-flow line every ten seconds"
+            ),
+            (None, false) => tracing::info!(
                 "IDD push: diagnostics off (set PUNKTFUNK_IDD_DIAG=1 for probes, DxgKrnl ETW and \
                  an access-unit dump)"
             ),
@@ -335,7 +339,9 @@ impl IddPushCapturer {
             max_hb_age_us: 0,
             cursor: CursorWitness::new(Instant::now()),
             probes: super::diag_dir().map(|_| super::probes::acquire()),
-            etw: super::diag_dir().and_then(|_| super::dxgkrnl_etw::acquire()),
+            etw: (super::diag_dir().is_some() || super::flow_watch())
+                .then(super::dxgkrnl_etw::acquire)
+                .flatten(),
             cursor_shared,
             cursor_poll,
             cursor_forward,
@@ -353,12 +359,13 @@ impl IddPushCapturer {
             // so a failed open can hand it back.
             _keepalive: Box::new(()),
         };
-        // Stamp both REALTIME GPU-priority opt-ins once per session. Stall
-        // WARNs repeat them only when they fire, so a quiet stalling log
-        // would otherwise omit the posture.
+        // Stamp both REALTIME GPU-priority opt-ins once per session, with the HAGS
+        // setting that decides who schedules them. Stall WARNs repeat the opt-ins only
+        // when they fire, so a quiet stalling log would otherwise omit the posture.
         tracing::info!(
             rt_gpu_driver = super::stall::rt_gpu_driver_posture(),
             rt_gpu_host = super::stall::rt_gpu_host_posture(),
+            hags = pf_win_display::hags_setting(),
             "GPU-priority posture for this capture session"
         );
         // The driver's blend needs this and session 0 cannot query it. No-op on SDR.

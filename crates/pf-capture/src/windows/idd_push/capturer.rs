@@ -167,6 +167,14 @@ impl IddPushCapturer {
                  above cover at most its first hole"
             );
         }
+        // The opt-in present-flow line rides fresh frames, so a still desktop prints none.
+        if let Some(flow) = self.etw.as_ref().and_then(|w| w.flow_line(now)) {
+            tracing::info!(
+                window_ms = super::dxgkrnl_etw::FLOW_EVERY.as_millis() as u64,
+                etw = %flow,
+                "IDD push: present flow"
+            );
+        }
         // A recovery episode closes only on the budgeted count of NEW source frames.
         if let Some((summary, outage)) = self.recovery.source_frame(now) {
             tracing::info!(

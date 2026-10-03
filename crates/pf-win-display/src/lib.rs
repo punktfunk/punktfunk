@@ -89,6 +89,37 @@ pub fn seats_addon_reserves_display_slots() -> bool {
     })
 }
 
+/// The machine's hardware-accelerated GPU scheduling setting: `HwSchMode` under
+/// `GraphicsDrivers` is 2 for on and 1 for off, and absent where the driver's default stands.
+/// It applies at boot, so this is the setting, not proof of the running state.
+#[cfg(target_os = "windows")]
+pub fn hags_setting() -> &'static str {
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD};
+
+    let mut value: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: both strings are NUL-terminated literals; `value`/`size` are live out-params
+    // sized for the DWORD the flags demand.
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            windows::core::w!(r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers"),
+            windows::core::w!("HwSchMode"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(std::ptr::addr_of_mut!(value).cast()),
+            Some(&mut size),
+        )
+    };
+    match (rc == ERROR_SUCCESS, value) {
+        (false, _) => "unset",
+        (true, 2) => "on",
+        (true, 1) => "off",
+        (true, _) => "unknown",
+    }
+}
+
 /// Returns both session ids when this process is outside the active console.
 /// That usually predicts inaccessible console display state. A seats host can
 /// intentionally own an active RDP desktop instead, so callers decide how to

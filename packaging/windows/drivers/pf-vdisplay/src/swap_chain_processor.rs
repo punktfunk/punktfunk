@@ -265,6 +265,8 @@ impl SwapChainProcessor {
 
         let mut logged_pending = false;
         let mut logged_frame = false;
+        // An acquire came back empty since the last frame: the next frame was waited for.
+        let mut pended = false;
         // The surface the encoder last read in place: ours until an acquire returns a frame.
         let mut last: Option<ID3D11Texture2D> = None;
         loop {
@@ -323,6 +325,7 @@ impl SwapChainProcessor {
                 // Nothing composed: heartbeat only, stamped before the wait — never inside the
                 // acquire window.
                 attached.note_drain();
+                pended = true;
                 if !logged_pending {
                     dbglog!(
                         "[pf-vd] swap-chain run_core: E_PENDING (target={target_id}) — swap-chain valid but DWM has composed NO frame yet"
@@ -365,6 +368,14 @@ impl SwapChainProcessor {
                 // The OS's display time for this frame — the provenance stamp the access unit
                 // this frame becomes carries to the host.
                 let display_qpc = buffer.MetaData.PresentDisplayQPCTime;
+                // How the frame arrived, for the cadence line: one clock read, no GPU work.
+                let frame = crate::encode::pool::Acquired {
+                    display_qpc,
+                    at_qpc: crate::encode::thread::qpc_now(),
+                    number: buffer.MetaData.PresentationFrameNumber,
+                    queued: !pended,
+                };
+                pended = false;
                 // DWM composes on the previous surface from here on.
                 last = None;
                 if !logged_frame {
@@ -405,7 +416,7 @@ impl SwapChainProcessor {
                 }
                 // Stamped only now: nothing may sit between acquire and Finished. The present
                 // stamp feeds the compose-cadence histogram both modes are compared on.
-                attached.note_frame(display_qpc);
+                attached.note_frame(&frame);
                 // The surface is the driver's until the next acquire returns a frame, so an
                 // encoder still reading it holds that acquire (bounded). Never Finished: DWM
                 // composes this head's next frame on it.
