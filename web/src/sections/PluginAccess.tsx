@@ -7,7 +7,7 @@ import {
 	RotateCcw,
 	Trash2,
 } from "lucide-react";
-import type { FC } from "react";
+import { type FC, useState } from "react";
 import { useGetEmulators } from "@/api/gen/emulators/emulators";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
 import {
@@ -71,77 +71,98 @@ export const PendingAccess: FC<{
 	});
 	const emulatorName = (id: string) =>
 		emulators.data?.find((e) => e.id === id)?.name ?? id;
+	// The host answers a folder, not a row: a yes on RetroArch's cores folder installs every
+	// core asked for there, so the rows on one folder show as one.
+	const rows = [
+		...new Map(access.pending.map((row) => [row.path, row])).values(),
+	];
+	const coresAt = (path: string) =>
+		access.pending.flatMap((row) =>
+			row.path === path && row.core ? [row.core] : [],
+		);
+	const [asked, setAsked] = useState<string>();
 	return (
 		<div className="mt-3 space-y-2 border-t pt-3">
-			{access.pending.map((row) => (
-				<div
-					key={row.path}
-					className={
-						row.write
-							? "rounded-md border border-amber-600/40 bg-amber-500/5 p-3"
-							: "rounded-md border p-3"
-					}
-				>
-					<div className="flex items-start gap-2">
-						{row.emulator || row.core ? (
-							<Download className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-						) : row.write ? (
-							<AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-500" />
-						) : (
-							<FolderLock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-						)}
-						<div className="min-w-0 flex-1">
-							{row.emulator || row.core ? (
-								<>
-									<div className="text-sm font-medium">
-										{row.core
-											? m.plugin_access_install_core({ name: row.core })
-											: m.plugin_access_install_emulator({
-													name: emulatorName(row.emulator ?? ""),
-												})}
-									</div>
-									<div className="break-all font-mono text-xs text-muted-foreground">
-										{row.path}
-									</div>
-								</>
+			{rows.map((row) => {
+				const cores = coresAt(row.path);
+				const install = !!row.emulator || cores.length > 0;
+				return (
+					<div
+						key={row.path}
+						className={
+							row.write
+								? "rounded-md border border-amber-600/40 bg-amber-500/5 p-3"
+								: "rounded-md border p-3"
+						}
+					>
+						<div className="flex items-start gap-2">
+							{install ? (
+								<Download className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+							) : row.write ? (
+								<AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-500" />
 							) : (
-								<>
-									<div className="break-all font-mono text-xs">{row.path}</div>
-									<Mode write={row.write} />
-								</>
+								<FolderLock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							)}
-							{row.reason && (
-								<p className="mt-1 text-xs text-muted-foreground">
-									{row.reason}
-								</p>
-							)}
+							<div className="min-w-0 flex-1">
+								{install ? (
+									<>
+										<div className="text-sm font-medium">
+											{cores.length > 0
+												? m.plugin_access_install_core({
+														name: cores.join(", "),
+													})
+												: m.plugin_access_install_emulator({
+														name: emulatorName(row.emulator ?? ""),
+													})}
+										</div>
+										<div className="break-all font-mono text-xs text-muted-foreground">
+											{row.path}
+										</div>
+									</>
+								) : (
+									<>
+										<div className="break-all font-mono text-xs">
+											{row.path}
+										</div>
+										<Mode write={row.write} />
+									</>
+								)}
+								{row.reason && (
+									<p className="mt-1 text-xs text-muted-foreground">
+										{row.reason}
+									</p>
+								)}
+							</div>
+						</div>
+						<div className="mt-2 flex flex-wrap justify-end gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={busy}
+								onClick={() => onDecide([row.path], "deny")}
+							>
+								{install
+									? m.plugin_access_not_now()
+									: m.plugin_access_dont_allow()}
+							</Button>
+							<Button
+								size="sm"
+								disabled={busy}
+								onClick={() => {
+									setAsked(row.path);
+									onDecide([row.path], "allow");
+								}}
+							>
+								{install
+									? busy && asked === row.path
+										? m.plugin_access_installing()
+										: m.plugin_access_install()
+									: m.plugin_access_allow()}
+							</Button>
 						</div>
 					</div>
-					<div className="mt-2 flex flex-wrap justify-end gap-2">
-						<Button
-							size="sm"
-							variant="outline"
-							disabled={busy}
-							onClick={() => onDecide([row.path], "deny")}
-						>
-							{row.emulator || row.core
-								? m.plugin_access_not_now()
-								: m.plugin_access_dont_allow()}
-						</Button>
-						<Button
-							size="sm"
-							disabled={busy}
-							onClick={() => onDecide([row.path], "allow")}
-						>
-							{row.emulator || row.core
-								? busy
-									? m.plugin_access_installing()
-									: m.plugin_access_install()
-								: m.plugin_access_allow()}
-						</Button>
-					</div>
-				</div>
-			))}
+				);
+			})}
 			{allowAll && (
 				<div className="flex justify-end">
 					<Button
