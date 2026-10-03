@@ -571,6 +571,7 @@ impl StreamState {
         // The delivered mode is the session's now: a rebuild or topology re-assert
         // reopens at it instead of forcing the display back to the client's ask.
         self.cur_mode = actual;
+        self.epoch = self.epoch.wrapping_add(1);
         self.adopt_built_bitrate(src_kbps);
         self.inflight.clear();
         self.watchdog.on_au();

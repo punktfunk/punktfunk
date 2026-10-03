@@ -102,6 +102,8 @@ pub struct Session {
     /// Receive-side anti-replay over the peer's authenticated sequence. `Some` exactly when
     /// `crypto` is — the plaintext probe path has no sequence to filter on.
     replay: Option<ReplayWindow>,
+    /// Client: the newest `punktfunk/2` epoch a delivered frame carried ([`Session::set_epoch`]).
+    newest_epoch: Option<u8>,
     transport: Box<dyn Transport>,
     packetizer: Packetizer,
     reassembler: Reassembler,
@@ -208,6 +210,7 @@ impl Session {
             coder,
             crypto,
             replay,
+            newest_epoch: None,
             transport,
             packetizer,
             reassembler,
@@ -1000,6 +1003,19 @@ impl Session {
         self.config.shard_payload
     }
 
+    /// Client: whether a frame of `epoch` predates the newest seen, wrapping (1–127 behind).
+    /// It was encoded before a mode switch, so its decoder is gone. `punktfunk/1` frames are
+    /// all epoch 0.
+    fn behind_epoch(&mut self, epoch: u8) -> bool {
+        let newest = *self.newest_epoch.get_or_insert(epoch);
+        let ahead = epoch.wrapping_sub(newest);
+        if ahead >= 128 {
+            return true;
+        }
+        self.newest_epoch = Some(epoch);
+        false
+    }
+
     /// Client: drain the transport until a whole access unit is recovered, or no more
     /// packets are pending ([`PunktfunkError::NoFrame`]).
     pub fn poll_frame(&mut self) -> Result<Frame> {
@@ -1029,7 +1045,9 @@ impl Session {
                 if self.recv_count == 0 {
                     // Idle wire: hand over an aged-out partial if one is waiting (it only gets staler).
                     if let Some(p) = self.reassembler.take_partial() {
-                        return Ok(stamp_received(p));
+                        if !self.behind_epoch(p.epoch) {
+                            return Ok(stamp_received(p));
+                        }
                     }
                     return Err(PunktfunkError::NoFrame);
                 }
@@ -1109,11 +1127,17 @@ impl Session {
                 if frame.complete {
                     StatsCounters::add(&self.stats.frames_completed, 1);
                 }
+                if self.behind_epoch(frame.epoch) {
+                    continue;
+                }
                 return Ok(stamp_received(frame));
             }
             // A no-complete push may still have aged a partial out; deliver it before
             // draining further (its successors are already arriving).
             if let Some(p) = self.reassembler.take_partial() {
+                if self.behind_epoch(p.epoch) {
+                    continue;
+                }
                 return Ok(stamp_received(p));
             }
         }
@@ -1607,6 +1631,21 @@ mod wire_equivalence_tests {
         let host = Session::new_v2(mk(Role::Host), host_media, Box::new(ht)).unwrap();
         let client = Session::new_v2(mk(Role::Client), media, Box::new(ct)).unwrap();
         (host, client)
+    }
+
+    /// A frame from before the newest epoch is dropped, across the u8 wrap; equal and newer pass.
+    #[test]
+    fn a_frame_behind_the_newest_epoch_is_dropped() {
+        let (_host, mut client) = v2_pair(0);
+        assert!(
+            !client.behind_epoch(250),
+            "the first epoch seen sets the mark"
+        );
+        assert!(!client.behind_epoch(250));
+        assert!(!client.behind_epoch(2), "2 is six past 250");
+        assert!(client.behind_epoch(250), "an encode from before the switch");
+        assert!(client.behind_epoch(1));
+        assert!(!client.behind_epoch(2));
     }
 
     /// A host clock puts session time on the wire: each frame reaches the client at the value

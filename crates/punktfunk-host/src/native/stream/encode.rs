@@ -481,6 +481,7 @@ impl StreamState {
             } else {
                 cap_ns
             },
+            epoch: self.epoch,
             flags,
             frame_index: self.au_seq,
             deadline,
@@ -838,6 +839,7 @@ impl StreamState {
                 data: au.data,
                 meta: AuMeta {
                     capture_ns: cap_ns,
+                    epoch: self.epoch,
                     flags,
                     frame_index: self.au_seq,
                     deadline,

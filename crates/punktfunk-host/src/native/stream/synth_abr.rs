@@ -494,6 +494,7 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                 data: test_frame(au_seq, len),
                 meta: AuMeta {
                     capture_ns: now_ns(),
+                    epoch: 0,
                     flags,
                     frame_index: au_seq,
                     deadline: due + interval,
