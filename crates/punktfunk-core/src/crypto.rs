@@ -418,6 +418,7 @@ impl SessionCrypto {
 
 /// Packets one `punktfunk/2` media key seals before the next takes over. RFC 9001 §6.6 sets
 /// 2^23 for AES-GCM confidentiality; ChaCha20-Poly1305 follows the same schedule.
+/// cbindgen:ignore
 pub const MEDIA_KEY_PACKETS: u64 = 1 << 23;
 
 /// `punktfunk/2` media AEAD.
