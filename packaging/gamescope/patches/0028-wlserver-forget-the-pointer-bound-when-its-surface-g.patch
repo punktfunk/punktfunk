@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 25 Sep 2026 02:08:49 +0000
-Subject: [PATCH] wlserver: forget the pointer bound when its surface
+Subject: [PATCH 28/33] wlserver: forget the pointer bound when its surface
  goes away
 
 The X window extent that bounds the pointer is cached against a raw
@@ -17,10 +17,10 @@ Forget the cached surface when it is destroyed. Stamp pfhdr23.
  2 files changed, 13 insertions(+), 1 deletion(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 577c70e4..ccf4bf22 100644
+index 2541e6b..f582609 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -203,7 +203,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -205,7 +205,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr20 — …and dmabuf capture buffers live in device memory, not system RAM
  #   +pfhdr21 — …and a packed RGB capture dmabuf takes a tiled modifier its consumer accepts
  #   +pfhdr22 — …and a planar capture dmabuf exports its chroma plane where the driver put it
@@ -31,11 +31,11 @@ index 577c70e4..ccf4bf22 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/wlserver.cpp b/src/wlserver.cpp
-index aec76688..a048b320 100644
+index b145169..867cc6a 100644
 --- a/src/wlserver.cpp
 +++ b/src/wlserver.cpp
-@@ -584,6 +584,8 @@ static void handle_wl_surface_commit( struct wl_listener *l, void *data )
- 	xwayland_surface_commit(surf->wlr);
+@@ -624,6 +624,8 @@ static void wlserver_xdg_surface_info_finish( struct wlserver_xdg_surface_info *
+ 	wl_list_remove( &info->destroy.link );
  }
  
 +static void wlserver_forget_cursor_extent( struct wlr_surface *pSurface );
@@ -43,7 +43,7 @@ index aec76688..a048b320 100644
  static void handle_wl_surface_destroy( struct wl_listener *l, void *data )
  {
  	wlserver_wl_surface_info *surf = wl_container_of( l, surf, destroy );
-@@ -642,6 +644,9 @@ static void handle_wl_surface_destroy( struct wl_listener *l, void *data )
+@@ -692,6 +694,9 @@ static void handle_wl_surface_destroy( struct wl_listener *l, void *data )
  		wl_resource_set_user_data( pSwapchain, nullptr );
  	}
  
@@ -53,7 +53,7 @@ index aec76688..a048b320 100644
  	wl_list_remove( &surf->commit.link );
  	wl_list_remove( &surf->destroy.link );
  
-@@ -2577,6 +2582,12 @@ void wlserver_set_cursor_extent( struct wlr_surface *pSurface, int nWidth, int n
+@@ -2839,6 +2844,12 @@ void wlserver_set_cursor_extent( struct wlr_surface *pSurface, int nWidth, int n
  		wlserver_clampcursor();
  }
  

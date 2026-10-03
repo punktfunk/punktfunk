@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Wed, 23 Sep 2026 23:33:57 +0200
-Subject: [PATCH] pipewire: export a planar capture's chroma plane where the
- driver put it
+Subject: [PATCH 26/33] pipewire: export a planar capture's chroma plane where
+ the driver put it
 
 An NV12 or P010 capture buffer is one LINEAR Vulkan image with two
 planes, exported as a single-plane dmabuf: plane 0's offset, and a
@@ -29,10 +29,10 @@ else.
  4 files changed, 71 insertions(+), 27 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 4df3bfe..577c70e 100644
+index 05b67df..2541e6b 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -202,7 +202,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -204,7 +204,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr19 — …and GAMESCOPE_SET_OUTPUT_MODE changes a headless output's mode at runtime
  #   +pfhdr20 — …and dmabuf capture buffers live in device memory, not system RAM
  #   +pfhdr21 — …and a packed RGB capture dmabuf takes a tiled modifier its consumer accepts
@@ -165,10 +165,10 @@ index 5ec3c1d..52ef316 100644
  
  	// The PipeWire buffer, or nullptr if it's been destroyed.
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index c5defd9..5e87eb9 100644
+index 388fb5b..d90462e 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -2480,27 +2480,29 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
+@@ -2537,27 +2537,29 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
  		g_device.vk.GetImageSubresourceLayout(g_device.device(), m_vkImage, &image_subresource, &image_layout);
  
  		m_unRowPitch = image_layout.rowPitch;

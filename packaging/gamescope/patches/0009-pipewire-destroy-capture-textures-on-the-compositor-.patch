@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: luxus <luxus@users.noreply.github.com>
 Date: Thu, 13 Aug 2026 23:15:48 +0200
-Subject: [PATCH] pipewire: destroy capture textures on the compositor thread
+Subject: [PATCH 09/33] pipewire: destroy capture textures on the compositor
+ thread
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -50,10 +51,10 @@ our HDR/cursor patches only make the paint path heavier.
  4 files changed, 39 insertions(+), 5 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index acfcaea..fe854af 100644
+index 23f4c00..4a9c25d 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -186,7 +186,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -188,7 +188,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr4 — …and `--pipewire-composite-external-overlay`
  #   +pfhdr5 — …and the PipeWire buffer use-after-free is fixed (no new capability)
  #   +pfhdr6 — …and GAMESCOPE_NO_FOCUS windows are never focus candidates (no new capability)
@@ -137,10 +138,10 @@ index b4d7e29..d0b510c 100644
  void push_pipewire_buffer(struct pipewire_buffer *buffer);
  void nudge_pipewire(void);
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 14596ae..932316f 100644
+index 65b5ef9..4e01613 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -9321,8 +9321,14 @@ steamcompmgr_main(int argc, char **argv)
+@@ -10843,8 +10843,14 @@ steamcompmgr_main(int argc, char **argv)
  
  #if HAVE_PIPEWIRE
  		// Drive on vblank, not the timer: under VRR the timer starves (page flips re-arm it).

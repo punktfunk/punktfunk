@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 18:00:00 +0200
-Subject: [PATCH] steamcompmgr: build capture LUTs from the live SDR-on-HDR
- state
+Subject: [PATCH 18/33] steamcompmgr: build capture LUTs from the live
+ SDR-on-HDR state
 
 paint_pipewire() composites a 10-bit or P010 capture with the screenshot
 LUT sets, which are built once at startup from static descriptions. Every
@@ -30,10 +30,10 @@ at the 500-nit default, which put HDR reference white at 66% grey.
  2 files changed, 28 insertions(+), 5 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index ced13ab0..1374066c 100644
+index cfe10d2..1e684dd 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -196,7 +196,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -198,7 +198,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr13 — …and a P010 capture format (BT.2020 PQ, 4:2:0)
  #   +pfhdr14 — …and the headless connector reports HDR10 under --hdr-debug-force-support
  #   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
@@ -44,10 +44,10 @@ index ced13ab0..1374066c 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 7479efe6..27d7aafe 100644
+index aa6d6e2..20f5e36 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -526,11 +526,31 @@ update_color_mgmt()
+@@ -657,11 +657,31 @@ update_color_mgmt()
  	g_ColorMgmt.current = g_ColorMgmt.pending;
  }
  
@@ -81,7 +81,7 @@ index 7479efe6..27d7aafe 100644
  }
  
  bool set_color_sdr_gamut_wideness( float flVal )
-@@ -2357,8 +2377,9 @@ static void paint_pipewire()
+@@ -2904,8 +2924,9 @@ static void paint_pipewire()
  	// Deliberately NOT conditional on the focused app being HDR, unlike bHDRScreenshot: the
  	// stream's colorimetry is fixed for the lifetime of the negotiation, so it must not follow
  	// what the app happens to render. g_ScreenshotColorMgmtLutsHDR is built for EVERY input EOTF
@@ -93,11 +93,11 @@ index 7479efe6..27d7aafe 100644
  	const uint32_t uStreamDrmFormat = s_pPipewireBuffer->texture->drmFormat();
  	const bool bHDRStream = uStreamDrmFormat == DRM_FORMAT_XRGB2101010 ||
  	                        uStreamDrmFormat == DRM_FORMAT_XBGR2101010 ||
-@@ -3034,6 +3055,7 @@ paint_all( global_focus_t *pFocus, bool async )
+@@ -3695,6 +3716,7 @@ paint_all( global_focus_t *pFocus, bool async )
  
  		if ( pScreenshotTexture )
  		{
 +			update_screenshot_color_mgmt();
  			bool bHDRScreenshot = path.extension() == ".avif" &&
- 								  frameInfo.layerCount > 0 &&
- 								  ColorspaceIsHDR( frameInfo.layers[0].colorspace ) &&
+ 								  frameInfo.layers.count() > 0 &&
+ 								  ColorspaceIsHDR( frameInfo.layers.get( 0 ).colorspace ) &&

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: unom <packages@unom.io>
 Date: Wed, 16 Sep 2026 00:51:43 +0200
-Subject: [PATCH] pipewire: pace the capture push to the consumer's
+Subject: [PATCH 14/33] pipewire: pace the capture push to the consumer's
  maxFramerate
 
 With adaptive sync a headless gamescope paints on every game commit, and paint_pipewire composites and pushes a frame each time. A consumer that encodes at its own rate throws the surplus away, so a game at 190 fps costs the box two extra 4K composites per wire frame for nothing.
@@ -15,10 +15,10 @@ Stamp pfhdr12 so a box upgrades to it. No new capability the host has to gate on
  2 files changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index da7d5b0..a37eadb 100644
+index efca81d..b597938 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -191,7 +191,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -193,7 +193,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr9 — …and the headless connector supports adaptive sync (paint on game commit)
  #   +pfhdr10 — …and the CLI framerate limit persists across paints without switching refresh
  #   +pfhdr11 — …and the Steam overlay repaints the capture on its own commits (no new capability)
@@ -29,10 +29,10 @@ index da7d5b0..a37eadb 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index fb2f1e6..2ce4eab 100644
+index f82bb51..19ff04f 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2477,6 +2477,24 @@ static void paint_pipewire()
+@@ -3050,6 +3050,24 @@ static void paint_pipewire()
  	     nCursorX == s_nLastCursorX && nCursorY == s_nLastCursorY )
  		return;
  
@@ -56,7 +56,4 @@ index fb2f1e6..2ce4eab 100644
 +
  	s_ulLastFocusCommitId = ulFocusCommitId;
  	s_ulLastOverrideCommitId = ulOverrideCommitId;
- 	s_ulLastExternalOverlayCommitId = ulExternalOverlayCommitId;
--- 
-2.54.0 (Apple Git-157)
-
+ 	s_ulLastUnderlayCommitId = ulUnderlayCommitId;

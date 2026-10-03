@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 2 Oct 2026 02:08:43 +0200
-Subject: [PATCH] pipewire: keep the planar capture's RGB intermediate in
+Subject: [PATCH 30/33] pipewire: keep the planar capture's RGB intermediate in
  device memory
 
 An NV12 or P010 capture composites into a pooled RGB texture and converts
@@ -21,10 +21,10 @@ memory. Stamp pfhdr25.
  2 files changed, 8 insertions(+), 5 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 52b9914..19a68ac 100644
+index 3396a99..7b67e4c 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -205,7 +205,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -207,7 +207,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr22 — …and a planar capture dmabuf exports its chroma plane where the driver put it
  #   +pfhdr23 — …and the composited cursor follows a shape change or a hide, and the pointer bound forgets a closed window
  #   +pfhdr24 — …and input back from an overlay takes the focused game out of iconic
@@ -35,10 +35,10 @@ index 52b9914..19a68ac 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index 5e87eb9..5e3b185 100644
+index d90462e..6955a17 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -3729,7 +3729,7 @@ void vulkan_garbage_collect( void )
+@@ -3827,7 +3827,7 @@ void vulkan_garbage_collect( void )
  	g_device.garbageCollect();
  }
  
@@ -47,7 +47,7 @@ index 5e87eb9..5e3b185 100644
  {
  	for (auto& pTexture : pool)
  	{
-@@ -3747,7 +3747,8 @@ static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_
+@@ -3845,7 +3845,8 @@ static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_
  			pTexture = new CVulkanTexture();
  
  			CVulkanTexture::createFlags textureFlags;
@@ -57,7 +57,7 @@ index 5e87eb9..5e3b185 100644
  			textureFlags.bTransferDst = true;
  			textureFlags.bStorage = true;
  			textureFlags.bSampled = true; // required for RGB-to-NV12 shader to sample this texture
-@@ -3776,7 +3777,7 @@ static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_
+@@ -3874,7 +3875,7 @@ static gamescope::Rc<CVulkanTexture> acquire_pooled_texture( auto& pool, uint32_
  
  gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace)
  {
@@ -66,7 +66,7 @@ index 5e87eb9..5e3b185 100644
  	if (!texture)
  		vk_log.errorf("Unable to acquire screenshot texture. Out of textures.");
  	return texture;
-@@ -3784,7 +3785,8 @@ gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width,
+@@ -3882,7 +3883,8 @@ gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width,
  
  gamescope::Rc<CVulkanTexture> vulkan_acquire_capture_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace)
  {
@@ -76,6 +76,3 @@ index 5e87eb9..5e3b185 100644
  	if (!texture)
  		vk_log.errorf("Unable to acquire capture texture. Out of textures.");
  	return texture;
--- 
-2.54.0 (Apple Git-157)
-

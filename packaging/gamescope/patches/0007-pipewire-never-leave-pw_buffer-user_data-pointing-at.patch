@@ -1,8 +1,8 @@
-From d3a1c36bf871aaaa4ad9c2baf7170bba69742189 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Mon, 10 Aug 2026 01:55:00 +0200
-Subject: [PATCH] pipewire: never leave pw_buffer->user_data pointing at a
- freed buffer
+Subject: [PATCH 07/33] pipewire: never leave pw_buffer->user_data pointing at
+ a freed buffer
 
 A gamescope session driving a PipeWire capture consumer dies as soon as the
 stream renegotiates:
@@ -57,10 +57,10 @@ nothing punktfunk-specific about it.
  1 file changed, 29 insertions(+), 4 deletions(-)
 
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
-index 76b3ea8..faecf04 100644
+index c84b19c..c683b3a 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
-@@ -51,8 +51,13 @@ static void destroy_buffer(struct pipewire_buffer *buffer) {
+@@ -85,8 +85,13 @@ static void destroy_buffer(struct pipewire_buffer *buffer) {
  	case SPA_DATA_DmaBuf:
  		break; // nothing to do
  	default:
@@ -76,7 +76,7 @@ index 76b3ea8..faecf04 100644
  
  	// If out_buffer == buffer, then set it to nullptr.
  	// We don't care about the result.
-@@ -179,6 +184,13 @@ static void request_buffer(struct pipewire_state *state)
+@@ -239,6 +244,13 @@ static void request_buffer(struct pipewire_state *state)
  	}
  
  	struct pipewire_buffer *buffer = (struct pipewire_buffer *) pw_buffer->user_data;
@@ -90,7 +90,7 @@ index 76b3ea8..faecf04 100644
  	buffer->copying = true;
  
  	// Past this exchange, the PipeWire thread shares the buffer with the
-@@ -464,6 +476,10 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
+@@ -535,6 +547,10 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
  
  	struct pipewire_buffer *buffer = new pipewire_buffer();
  	buffer->buffer = pw_buffer;
@@ -101,7 +101,7 @@ index 76b3ea8..faecf04 100644
  	buffer->video_info = state->video_info;
  	buffer->gamescope_info = state->gamescope_info;
  
-@@ -583,17 +599,26 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
+@@ -654,17 +670,26 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe
  		goto error;
  	}
  

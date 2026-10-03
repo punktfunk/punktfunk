@@ -1,7 +1,8 @@
-From d958d5451d0df3678cdccbb5d7306c15b504c877 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: enricobuehler <enrico.buehler@unom.io>
 Date: Sat, 15 Aug 2026 20:15:12 +0200
-Subject: [PATCH] wlserver: give the seat's stub keyboard the compiled keymap
+Subject: [PATCH 10/33] wlserver: give the seat's stub keyboard the compiled
+ keymap
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -26,14 +27,14 @@ which is how a remote client with a German keyboard ends up typing US characters
 Set the keymap on the stub too.
 ---
  src/meson.build  | 3 ++-
- src/wlserver.cpp | 8 ++++++++
- 2 files changed, 10 insertions(+), 1 deletion(-)
+ src/wlserver.cpp | 9 +++++++++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index fe854af..91bba6b 100644
+index 4a9c25d..a478ab0 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -187,7 +187,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -189,7 +189,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr5 — …and the PipeWire buffer use-after-free is fixed (no new capability)
  #   +pfhdr6 — …and GAMESCOPE_NO_FOCUS windows are never focus candidates (no new capability)
  #   +pfhdr7 — …and PipeWire teardown cannot SIGSEGV a lingering compositor (no new capability)
@@ -44,24 +45,22 @@ index fe854af..91bba6b 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/wlserver.cpp b/src/wlserver.cpp
-index 92f2807..3354da7 100644
+index 3d7d123..f495d4b 100644
 --- a/src/wlserver.cpp
 +++ b/src/wlserver.cpp
-@@ -2042,6 +2042,14 @@ bool wlserver_init( void ) {
- 	struct wlr_keyboard *keyboard = &wlserver.keyboard_group->keyboard;
- 	wlr_keyboard_set_repeat_info(keyboard, 25, 600);
- 	wlr_keyboard_set_keymap(keyboard, keymap);
-+	// The seat carries the STUB keyboard, not the group: wlserver_keyboardfocus() binds
-+	// wlserver.wlr.virtual_keyboard_device on every focus change, and the group only reaches the
-+	// seat from wlserver_handle_key/_modifiers — i.e. from a real libinput key event. Left with a
-+	// NULL keymap the stub makes wlroots advertise no keymap at all, so every client (Xwayland
-+	// included) keeps its own built-in "us" and XKB_DEFAULT_* is silently ignored. A headless
-+	// session has no libinput devices, so it never recovers: the very next focus change puts the
-+	// keymap-less stub back. Give the stub the keymap its own comment above says it exists for.
-+	wlr_keyboard_set_keymap(wlserver.wlr.virtual_keyboard_device, keymap);
- 	wlserver.keyboard_group_modifiers.notify = wlserver_handle_modifiers;
- 	wl_signal_add(&keyboard->events.modifiers, &wlserver.keyboard_group_modifiers);
- 	wlserver.keyboard_group_key.notify = wlserver_handle_key;
--- 
-2.50.1 (Apple Git-155)
-
+@@ -2146,6 +2146,15 @@ static void wlserver_update_keymap()
+ 		wlserver_set_keyboard_keymap( &wlserver.keyboard_group->keyboard, keymap );
+ 		for ( struct wlserver_keyboard *pKeyboard : s_Keyboards )
+ 			wlserver_set_keyboard_keymap( pKeyboard->wlr, keymap );
++		// The seat carries the STUB keyboard, not the group: wlserver_keyboardfocus() binds
++		// wlserver.wlr.virtual_keyboard_device on every focus change, and the group only reaches
++		// the seat from wlserver_handle_key/_modifiers — i.e. from a real libinput key event. Left
++		// with a NULL keymap the stub makes wlroots advertise no keymap at all, so every client
++		// (Xwayland included) keeps its own built-in "us" and the layout is silently ignored. A
++		// headless session has no libinput devices, so it never recovers: the very next focus
++		// change puts the keymap-less stub back. Give the stub the keymap it exists for.
++		if ( wlserver.wlr.virtual_keyboard_device )
++			wlserver_set_keyboard_keymap( wlserver.wlr.virtual_keyboard_device, keymap );
+ 	}
+ 	else
+ 	{

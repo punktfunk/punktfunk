@@ -84,6 +84,7 @@ log "Building punktfunk-gamescope (HDR 10-bit capture; ~5 min, best-effort)"
 # had preferred the system lib over gamescope's vendored submodule and linked it SHARED. The
 # durable fix is the force_fallback_for pin in build-punktfunk-gamescope.sh, next to wlroots;
 # the package has no reason to be here. Only add a name whose soname SteamOS itself ships.
+# bison and libexpat1-dev only build the bundled xkbcommon and wayland-scanner; neither is linked.
 if ! distrobox enter "$BOX" -- bash -lc '
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -101,7 +102,7 @@ sudo apt-get install -y -qq --no-install-recommends \
     libvulkan-dev libglm-dev libpixman-1-dev libeis-dev \
     libavif-dev libdecor-0-dev hwdata libluajit-5.1-dev \
     libpipewire-0.3-dev libspa-0.2-dev libsdl2-dev \
-    xwayland liblcms2-dev \
+    xwayland liblcms2-dev bison libexpat1-dev \
     libx11-xcb-dev libxkbcommon-x11-dev >/dev/null
 ' ; then
     warn "could not provision gamescope build deps in '$BOX' — sessions stay SDR (re-run update.sh to retry)"

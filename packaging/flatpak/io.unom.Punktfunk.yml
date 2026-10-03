@@ -272,7 +272,7 @@ modules:
       - type: git
         url: https://github.com/ValveSoftware/gamescope.git
         # KEEP IN SYNC with `_gsrev` in packaging/gamescope/PKGBUILD.
-        commit: 5fb8dce4a09d0a68d097b9faf9513782106bc843
+        commit: 6867f509874f9bc52e12d6f4c4596cdf0d5be6b4
       # Wrap pins as of that rev (`subprojects/*.wrap`). These are meson WRAPS, not gamescope
       # submodules, so nothing else populates them and they need explicit sources.
       #

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 13:17:37 +0000
-Subject: [PATCH] punktfunk: stamp the version banner with +pfhdrN
+Subject: [PATCH 05/33] punktfunk: stamp the version banner with +pfhdrN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -26,10 +26,10 @@ version floors answer the same questions.
  1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 662f752..12fd38a 100644
+index ae3ac16..2bdadcf 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -177,7 +177,15 @@ compiler_version = cc.version()
+@@ -179,7 +179,15 @@ compiler_version = cc.version()
  
  vcs_tag_cmd = ['git', 'describe', '--always', '--tags', '--dirty=+']
  vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 18:00:00 +0200
-Subject: [PATCH] color: extrapolate the inverse shaper past its range
+Subject: [PATCH 19/33] color: extrapolate the inverse shaper past its range
 
 calcColorTransform places the 3D LUT grid in shaper space and finds each
 grid point's source value with ApplyLut1D_Inverse_Linear, which clamps to
@@ -20,7 +20,7 @@ passthrough) never look past their end and do not change.
  1 file changed, 5 insertions(+)
 
 diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
-index 64430a5f..11c7bef4 100644
+index 64430a5..11c7bef 100644
 --- a/src/color_helpers.cpp
 +++ b/src/color_helpers.cpp
 @@ -476,6 +476,11 @@ inline float FindLutInv(const float * start,

@@ -250,6 +250,38 @@
       ]
     },
     {
+      "type": "library",
+      "name": "wayland",
+      "version": "1.24.0 (packaging/gamescope/subprojects/wayland.wrap)",
+      "description": "Linked static into punktfunk-gamescope on Debian 13 builds only (.deb, SteamOS box)",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "externalReferences": [{ "type": "vcs", "url": "https://gitlab.freedesktop.org/wayland/wayland" }]
+    },
+    {
+      "type": "library",
+      "name": "libdrm",
+      "version": "2.4.131 (packaging/gamescope/subprojects/libdrm.wrap)",
+      "description": "Linked static into punktfunk-gamescope on Debian 13 builds only (.deb, SteamOS box)",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "externalReferences": [{ "type": "vcs", "url": "https://gitlab.freedesktop.org/mesa/drm" }]
+    },
+    {
+      "type": "library",
+      "name": "libxkbcommon",
+      "version": "1.13.1 (packaging/gamescope/subprojects/libxkbcommon.wrap)",
+      "description": "Linked static into punktfunk-gamescope on Debian 13 builds only (.deb, SteamOS box)",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "externalReferences": [{ "type": "vcs", "url": "https://github.com/xkbcommon/libxkbcommon" }]
+    },
+    {
+      "type": "library",
+      "name": "pixman",
+      "version": "0.46.4 (packaging/gamescope/subprojects/pixman.wrap)",
+      "description": "Linked static into punktfunk-gamescope on Debian 13 builds only (.deb, SteamOS box)",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "externalReferences": [{ "type": "vcs", "url": "https://gitlab.freedesktop.org/pixman/pixman" }]
+    },
+    {
       "type": "application",
       "name": "Bun",
       "version": "1.4.2 (pinned in .gitea/workflows/windows-host.yml)",

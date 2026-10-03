@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 19:17:25 +0200
-Subject: [PATCH] punktfunk: never destroy the Vulkan device or output at exit
+Subject: [PATCH 06/33] punktfunk: never destroy the Vulkan device or output at
+ exit
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -49,10 +50,10 @@ Both are needed: pinning only the device relocated the fault into
  2 files changed, 35 insertions(+), 4 deletions(-)
 
 diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
-index 3f7ea90..0382a4b 100644
+index 54e4efc..79b75ac 100644
 --- a/src/rendervulkan.cpp
 +++ b/src/rendervulkan.cpp
-@@ -118,7 +118,37 @@ static VkResult vulkan_load_module()
+@@ -121,7 +121,37 @@ static VkResult vulkan_load_module()
  	return s_result;
  }
  
@@ -91,7 +92,7 @@ index 3f7ea90..0382a4b 100644
  
  uint32_t g_uCompositeDebug = 0u;
  gamescope::ConVar<uint32_t> cv_composite_debug{ "composite_debug", 0, "Debug composition flags" };
-@@ -1943,7 +1973,8 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
+@@ -2000,7 +2030,8 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
  									0, 0, nullptr, 0, nullptr, barriers.size(), barriers.data());
  }
  
@@ -102,10 +103,10 @@ index 3f7ea90..0382a4b 100644
  static bool allDMABUFsEqual( wlr_dmabuf_attributes *pDMA )
  {
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index c49b95f..ee98b38 100644
+index fa519db..b84f4fd 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -565,7 +565,7 @@ enum ShaderType {
+@@ -622,7 +622,7 @@ enum ShaderType {
  	SHADER_TYPE_COUNT
  };
  
@@ -114,9 +115,9 @@ index c49b95f..ee98b38 100644
  
  struct SamplerState
  {
-@@ -1010,4 +1010,4 @@ bool vulkan_has_drm_props();
+@@ -1071,4 +1071,4 @@ bool vulkan_has_drm_props();
  
- bool vulkan_has_drm_modifiers_for_features(VkFormat format, VkFormatFeatureFlags features);
+ bool vulkan_format_supports_features(VkFormat format, VkFormatFeatureFlags features);
  
 -extern CVulkanDevice g_device;
 +extern CVulkanDevice &g_device;
