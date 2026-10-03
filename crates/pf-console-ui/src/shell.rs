@@ -246,6 +246,8 @@ struct Launching {
     poll_gen: u64,
     /// The game is up and the host is waiting for its window.
     window_wait: bool,
+    /// The title's files, while the host fetches them before it opens the stream.
+    download: Option<pf_client_core::library::DownloadProgress>,
     /// Why the hold gave up, once it has. Latched: the hold holds the screen and says this
     /// instead of sliding away onto a desktop nobody asked for.
     failed: Option<String>,
@@ -747,14 +749,19 @@ impl Shell {
     pub(crate) fn session_streaming(&mut self) {
         self.connecting = None;
         let t = self.t();
+        let reads = self.library.status_gen();
         let Some(l) = &mut self.launching else {
             self.in_stream = true;
             return;
         };
         l.connected = true;
         // The host has no lease to report until the session that launched the title
-        // exists, so the "never listed it" clock only starts making sense here.
+        // exists, so the "never listed it" clock only starts making sense here — and a read
+        // taken before it, while the files downloaded, is not this session's answer.
         l.since = t;
+        l.base_gen = reads;
+        l.last_poll = t - LAUNCH_POLL_STALL;
+        l.download = None;
         self.in_stream = false;
     }
 
@@ -799,6 +806,7 @@ impl Shell {
             base_gen: reads,
             poll_gen: reads,
             window_wait: false,
+            download: None,
             failed: None,
         })
     }
@@ -819,21 +827,37 @@ impl Shell {
         let t = self.t();
         let reads = self.library.status_gen();
         let Some(l) = &self.launching else { return };
-        // Nothing to ask about yet: the lease is the SESSION's, and a title that was
-        // already up would otherwise read as "running" and reveal a stream that does
-        // not exist.
-        if !l.connected || l.failed.is_some() {
+        if l.failed.is_some() {
             return;
         }
-        let state = (reads > l.base_gen)
+        let fresh = reads > l.base_gen;
+        let download = fresh
+            .then(|| self.library.launch_download(&l.host.id))
+            .flatten();
+        // Before the dial lands the host may be fetching the title's files: the only thing to
+        // read is how far they are. The lease is the SESSION's, so a title that was already up
+        // would otherwise read as "running" and reveal a stream that does not exist.
+        if !l.connected {
+            if let Some(l) = &mut self.launching {
+                l.download = download.filter(|d| d.live());
+            }
+            self.poll_launch(t, reads);
+            return;
+        }
+        let state = fresh
             .then(|| self.library.launch_state(&l.host.id))
             .flatten();
         let elapsed = t - l.since;
         let window_wait = matches!(&state, Some((s, true)) if s == "running");
         let word = state.as_ref().map(|(s, _)| s.as_str());
         // A launch that produced no game ends with a sentence, not by sliding away: a bare
-        // desktop reads the same whether the host refused it or the game is merely slow.
-        if let Some(why) = launch_gave_up(&l.title, word, elapsed) {
+        // desktop reads the same whether the host refused it or the game is merely slow. A
+        // download that stopped is that sentence, at once.
+        let stopped = word
+            .is_none()
+            .then(|| download.and_then(|d| d.stopped(&l.title)))
+            .flatten();
+        if let Some(why) = stopped.or_else(|| launch_gave_up(&l.title, word, elapsed)) {
             if let Some(l) = &mut self.launching {
                 l.failed = Some(why);
             }
@@ -852,6 +876,15 @@ impl Shell {
             self.reveal_stream();
             return;
         }
+        self.poll_launch(t, reads);
+        if let Some(l) = &mut self.launching {
+            l.window_wait = window_wait;
+        }
+    }
+
+    /// Ask the host again once the last answer landed, or once it is overdue.
+    fn poll_launch(&mut self, t: f64, reads: u64) {
+        let Some(l) = &self.launching else { return };
         let waited = t - l.last_poll;
         if (reads != l.poll_gen && waited >= LAUNCH_POLL) || waited >= LAUNCH_POLL_STALL {
             let poll = ConsoleCmd::RefreshRunning {
@@ -864,9 +897,6 @@ impl Shell {
                 l.poll_gen = reads;
             }
             self.bus.send(poll);
-        }
-        if let Some(l) = &mut self.launching {
-            l.window_wait = window_wait;
         }
     }
 

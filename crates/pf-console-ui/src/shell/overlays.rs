@@ -495,8 +495,11 @@ impl Shell {
         .into_iter()
         .filter(|(text, _, _)| !text.is_empty())
         .collect();
-        // Under the title: the rows, then the spinner line, which sits 38 k below the last row.
-        let rest = (11.0 + rows.iter().map(|(_, size, _)| size + 7.0).sum::<f64>() + 38.0) * k;
+        // Under the title: the rows, then the spinner line 38 k below the last row, or the
+        // download's bar and two lines, 66 k.
+        let downloading = l.download.as_ref().filter(|_| !l.connected);
+        let tail = if downloading.is_some() { 66.0 } else { 38.0 };
+        let rest = (11.0 + rows.iter().map(|(_, size, _)| size + 7.0).sum::<f64>() + tail) * k;
         let lay = launch_layout(w, h, k, rest, |dw| {
             fonts.title_height(&l.title, W::SemiBold, 34.0 * k, fg(a), dw)
         });
@@ -589,10 +592,10 @@ impl Shell {
             fonts.leading(canvas, text, W::Regular, size * k, fg(alpha * a), dx, y, dw);
             y += (size + 7.0) * k;
         }
-        match l.failed.as_deref() {
+        match (l.failed.as_deref(), downloading) {
             // Where the spinner was, because the wait is what ended. Brighter than the status
             // line it replaces: this is the one thing on screen the player has to read.
-            Some(why) => {
+            (Some(why), _) => {
                 fonts.leading(
                     canvas,
                     why,
@@ -604,7 +607,56 @@ impl Shell {
                     dw,
                 );
             }
-            None => {
+            (None, Some(d)) => {
+                // A bar where the spinner was: the wait has a length now, and the player can
+                // see it move.
+                let bar = Rect::from_xywh(
+                    dx as f32,
+                    (y + 24.0 * k) as f32,
+                    dw.min(360.0 * k) as f32,
+                    (4.0 * k) as f32,
+                );
+                let r = (2.0 * k) as f32;
+                canvas.draw_rrect(RRect::new_rect_xy(bar, r, r), &fill(fg(0.14 * a)));
+                let (from, width) = match d.fraction() {
+                    Some(f) => (0.0, f as f32),
+                    // No total: a segment travels the track.
+                    None => (((t * 0.6).fract() * 0.75) as f32, 0.25),
+                };
+                let done = Rect::from_xywh(
+                    bar.left + bar.width() * from,
+                    bar.top,
+                    bar.width() * width,
+                    bar.height(),
+                );
+                canvas.draw_rrect(RRect::new_rect_xy(done, r, r), &fill(fg(0.85 * a)));
+                let line = if d.state == "downloading" {
+                    format!("Downloading \u{b7} {}", d.line())
+                } else {
+                    d.line()
+                };
+                fonts.leading(
+                    canvas,
+                    &line,
+                    W::Regular,
+                    12.5 * k,
+                    fg(0.7 * a),
+                    dx,
+                    y + 36.0 * k,
+                    dw,
+                );
+                fonts.leading(
+                    canvas,
+                    "Leaving won't stop the download.",
+                    W::Regular,
+                    11.5 * k,
+                    fg(0.4 * a),
+                    dx,
+                    y + 54.0 * k,
+                    dw,
+                );
+            }
+            (None, None) => {
                 crate::theme::spinner(canvas, dx + 8.0 * k, y + 30.0 * k, 8.0 * k, t);
                 fonts.leading(
                     canvas,

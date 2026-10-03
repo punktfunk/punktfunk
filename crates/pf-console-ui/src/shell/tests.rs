@@ -1949,11 +1949,13 @@ mod launch_hold {
             "platform, year, store — this mock has no year"
         );
 
-        // Nothing to ask the host until there is a session behind the launch.
+        // Before the dial lands the host may be fetching the title: the hold watches for that.
         s.sync();
         assert!(
-            bus.drain().is_empty(),
-            "no lease exists before the dial lands"
+            bus.drain()
+                .iter()
+                .any(|c| matches!(c, ConsoleCmd::RefreshRunning { .. })),
+            "the hold asks from the press"
         );
 
         s.session_streaming();
@@ -2083,6 +2085,60 @@ mod launch_hold {
         at(&mut s, 100.0 + LAUNCH_HOLD_MAX);
         s.sync();
         assert!(s.in_stream, "no window by the cap: show what is there");
+    }
+
+    fn downloading(id: &str, state: &str) -> Vec<pf_client_core::library::DownloadProgress> {
+        vec![pf_client_core::library::DownloadProgress {
+            app_id: id.into(),
+            state: state.into(),
+            done_bytes: 5,
+            total_bytes: Some(10),
+            error: Some("the server is down".into()),
+            ..Default::default()
+        }]
+    }
+
+    /// The host fetches a title's files before it opens the stream: the hold shows them coming,
+    /// with no cap, and nothing read meanwhile counts as this launch's answer.
+    #[test]
+    fn a_title_still_downloading_holds_with_its_progress() {
+        let (mut s, library, _bus) = on_shelf();
+        s.start_connect(intent("steam:570"));
+        library.set_downloads(&downloading("steam:570", "downloading"));
+        library.set_running(&running("steam:570", "launching"));
+        at(&mut s, 100.0 + LAUNCH_HOLD_MAX * 3.0);
+        s.sync();
+        let l = s.launching.as_ref().expect("still holding");
+        assert_eq!(l.download.as_ref().map(|d| d.done_bytes), Some(5));
+        assert!(l.failed.is_none(), "no cap runs while the files come");
+
+        library.set_downloads(&[]);
+        s.session_streaming();
+        assert!(s.launching.as_ref().is_some_and(|l| l.download.is_none()));
+        s.sync();
+        assert!(
+            s.holds_stream(),
+            "the pre-dial `launching` is not this session's"
+        );
+        library.set_running(&running("steam:570", "running"));
+        s.sync();
+        assert!(s.in_stream);
+    }
+
+    /// A download that stopped is why nothing started: the hold says so at once, rather than
+    /// waiting out the no-lease clock.
+    #[test]
+    fn a_download_that_stopped_is_the_holds_sentence() {
+        let (mut s, library, _bus) = on_shelf();
+        s.start_connect(intent("steam:570"));
+        s.session_streaming();
+        library.set_downloads(&downloading("steam:570", "failed"));
+        library.set_running(&[]);
+        s.sync();
+        assert_eq!(
+            s.launching.as_ref().and_then(|l| l.failed.as_deref()),
+            Some("Dota 2 didn't download \u{2014} the server is down")
+        );
     }
 
     #[test]

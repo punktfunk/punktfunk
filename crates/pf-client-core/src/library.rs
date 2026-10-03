@@ -343,6 +343,104 @@ pub struct RunningGame {
     pub endable: bool,
 }
 
+/// One title's download, from `GET /api/v1/status` `downloads[]`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct DownloadProgress {
+    #[serde(default)]
+    pub app_id: String,
+    /// `queued` | `downloading` | `paused` | `installing` | `done` | `failed` | `cancelled`.
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub done_bytes: u64,
+    #[serde(default)]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    pub rate_bps: Option<u64>,
+    #[serde(default)]
+    pub eta_s: Option<u64>,
+    /// The plugin's words: `File 2 of 3`, `Verifying`.
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// Why it failed, one sentence.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl DownloadProgress {
+    /// Making progress, or expected to: a launch waits on it.
+    pub fn live(&self) -> bool {
+        matches!(self.state.as_str(), "queued" | "downloading" | "installing")
+    }
+
+    /// 0–1 of the total, when the total is known.
+    pub fn fraction(&self) -> Option<f64> {
+        self.total_bytes
+            .filter(|t| *t > 0)
+            .map(|t| (self.done_bytes as f64 / t as f64).clamp(0.0, 1.0))
+    }
+
+    /// What a launch screen says under the title: `12.3 GB of 26 GB · 48 MB/s · about 4 min
+    /// left`, `Installing…`, `Waiting for its turn to download…`.
+    pub fn line(&self) -> String {
+        match self.state.as_str() {
+            "queued" => return "Waiting for its turn to download\u{2026}".into(),
+            "installing" => {
+                return self
+                    .phase
+                    .clone()
+                    .unwrap_or_else(|| "Installing\u{2026}".into())
+            }
+            _ => {}
+        }
+        let mut parts = vec![match self.total_bytes.filter(|t| *t > 0) {
+            Some(total) => format!("{} of {}", human_bytes(self.done_bytes), human_bytes(total)),
+            None => format!("{} so far", human_bytes(self.done_bytes)),
+        }];
+        if let Some(rate) = self.rate_bps.filter(|_| self.state == "downloading") {
+            parts.push(format!("{}/s", human_bytes(rate)));
+        }
+        if let Some(eta) = self.eta_s.filter(|_| self.state == "downloading") {
+            parts.push(match eta {
+                0..60 => "less than a minute left".into(),
+                60..3600 => format!("about {} min left", (eta + 30) / 60),
+                _ => format!("about {} h {} min left", eta / 3600, (eta % 3600) / 60),
+            });
+        }
+        parts.join(" \u{b7} ")
+    }
+
+    /// Why a launch that waited on it didn't start the title; `None` while it may still.
+    pub fn stopped(&self, title: &str) -> Option<String> {
+        Some(match self.state.as_str() {
+            "failed" => match self.error.as_deref() {
+                Some(why) => format!("{title} didn't download \u{2014} {why}"),
+                None => format!("{title} didn't download."),
+            },
+            "cancelled" => format!("{title}'s download was cancelled."),
+            "paused" => format!("{title}'s download was paused. Start it again to resume."),
+            _ => return None,
+        })
+    }
+}
+
+/// Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`.
+pub fn human_bytes(n: u64) -> String {
+    let n = n as f64;
+    let (value, unit) = if n >= 1e9 {
+        (n / 1e9, "GB")
+    } else if n >= 1e6 {
+        (n / 1e6, "MB")
+    } else {
+        (n / 1e3, "kB")
+    };
+    if value >= 100.0 || value.fract() < 0.05 {
+        format!("{value:.0} {unit}")
+    } else {
+        format!("{value:.1} {unit}")
+    }
+}
+
 impl RunningGame {
     /// True unless `state == "exited"`. `untracked` (host cannot follow the
     /// process), `grace` and `detached` (session gone, process still up) count as up.
@@ -427,6 +525,8 @@ pub fn end_game(
 struct HostStatus {
     #[serde(default)]
     games: Vec<RunningGame>,
+    #[serde(default)]
+    downloads: Vec<DownloadProgress>,
 }
 
 /// `GET {path}` on the host's mgmt API, decoded. Any miss (unreachable, an older host
@@ -462,7 +562,21 @@ pub fn fetch_running(
     identity: &(String, String),
     pin: Option<[u8; 32]>,
 ) -> Vec<RunningGame> {
-    get_json::<HostStatus>(addr, mgmt_port, identity, pin, "/api/v1/status").games
+    fetch_status(addr, mgmt_port, identity, pin).0
+}
+
+/// `GET /api/v1/status`: `games[]` and `downloads[]`, the latter kept apart because a launch
+/// the host declined over its download has no game row left to carry it. Best-effort, as
+/// [`fetch_running`].
+#[cfg(desktop)]
+pub fn fetch_status(
+    addr: &str,
+    mgmt_port: u16,
+    identity: &(String, String),
+    pin: Option<[u8; 32]>,
+) -> (Vec<RunningGame>, Vec<DownloadProgress>) {
+    let s = get_json::<HostStatus>(addr, mgmt_port, identity, pin, "/api/v1/status");
+    (s.games, s.downloads)
 }
 
 /// A process-wide list per host fingerprint, so every tile, shelf and menu reading it
@@ -933,6 +1047,47 @@ mod tests {
         let left = r#"{"app_id":"steam:1","state":"detached","endable":true}"#;
         assert!(!row(left).streamed_here(), "nobody streams it");
         assert!(row(left).is_up());
+    }
+
+    #[test]
+    fn a_download_reads_as_one_line_under_the_title() {
+        let d = |json: &str| -> DownloadProgress { serde_json::from_str(json).unwrap() };
+        let live = d(
+            r#"{"app_id":"a","state":"downloading","done_bytes":12300000000,
+            "total_bytes":26000000000,"rate_bps":48000000,"eta_s":240}"#,
+        );
+        assert!(live.live());
+        assert_eq!(
+            live.line(),
+            "12.3 GB of 26 GB \u{b7} 48 MB/s \u{b7} about 4 min left"
+        );
+        assert_eq!(live.fraction().map(|f| (f * 100.0).round()), Some(47.0));
+        let no_total = d(r#"{"state":"downloading","done_bytes":3100000000}"#);
+        assert_eq!(no_total.line(), "3.1 GB so far");
+        let slow = d(r#"{"state":"downloading","done_bytes":1,"total_bytes":9,"eta_s":5400}"#);
+        assert!(slow.line().ends_with("about 1 h 30 min left"));
+        let unpack = d(r#"{"state":"installing","phase":"Verifying"}"#);
+        assert_eq!(unpack.line(), "Verifying");
+        assert!(live.stopped("Quail").is_none());
+        let failed = d(r#"{"state":"failed","error":"the server is down"}"#);
+        assert_eq!(
+            failed.stopped("Quail").as_deref(),
+            Some("Quail didn't download \u{2014} the server is down")
+        );
+        assert!(!failed.live());
+        assert_eq!(human_bytes(512_000), "512 kB");
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn status_downloads_decode_beside_the_games_and_an_older_host_sends_none() {
+        let json = r#"{"games":[{"app_id":"custom:a","state":"launching"}],
+            "downloads":[{"app_id":"custom:a","state":"downloading","done_bytes":5,
+            "started_at":"x","title":"Quail"}]}"#;
+        let s: HostStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.downloads[0].done_bytes, 5);
+        let old: HostStatus = serde_json::from_str(r#"{"games":[]}"#).unwrap();
+        assert!(old.downloads.is_empty());
     }
 
     #[test]
