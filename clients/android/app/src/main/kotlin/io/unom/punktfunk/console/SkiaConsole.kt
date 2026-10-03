@@ -103,6 +103,8 @@ object SkiaConsole {
     private val main = Handler(Looper.getMainLooper())
     private val ioPool = Executors.newCachedThreadPool { r -> Thread(r, "pf-console-io").apply { isDaemon = true } }
     private val artPool = Executors.newFixedThreadPool(3) { r -> Thread(r, "pf-console-art").apply { isDaemon = true } }
+    /** One thread, so pad lists reach the console in the order they were asked for. */
+    private val padPool = Executors.newSingleThreadExecutor { r -> Thread(r, "pf-console-pads").apply { isDaemon = true } }
     private var eventThread: Thread? = null
     private val running = AtomicBoolean(false)
 
@@ -545,19 +547,27 @@ object SkiaConsole {
         }
     }
 
-    /** The connected controllers, for the chip + settings rows, plus pads with no `InputDevice`. */
+    /**
+     * The connected controllers, for the chip + settings rows, plus pads with no `InputDevice`.
+     * Built on [padPool]: each pad's battery and motor reads are binder calls into the input
+     * service, which can stall for seconds and must never hold the main thread.
+     */
     internal fun padsChanged(driving: InputDevice?, extras: List<ConsoleJson.ExtraPad> = emptyList()) {
-        if (handle == 0L) return
-        NativeBridge.nativeConsoleSetPads(
-            handle,
-            ConsoleJson.pads(
-                Gamepad.pads(),
-                driving ?: Gamepad.firstPad(),
-                extras,
-                appContext?.let(::deviceBodyVibrator),
-                ConsoleJson.otherInputs(),
-            ),
-        )
+        val h = handle
+        if (h == 0L) return
+        val app = appContext
+        padPool.execute {
+            NativeBridge.nativeConsoleSetPads(
+                h,
+                ConsoleJson.pads(
+                    Gamepad.pads(),
+                    driving ?: Gamepad.firstPad(),
+                    extras,
+                    app?.let(::deviceBodyVibrator),
+                    ConsoleJson.otherInputs(),
+                ),
+            )
+        }
     }
 
     /**
