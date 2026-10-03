@@ -1738,8 +1738,7 @@ fn palette_row_names_the_pick_and_opens_the_cards() {
         if matches!(**b, Screen::Palette(_))));
 }
 
-/// About lists the stream controls where the client binds chords, and a press opens the
-/// read-only screen. The browser page binds none and shows no row.
+/// About lists the stream controls on every platform, and a press opens the read-only screen.
 #[test]
 fn about_opens_the_stream_controls_where_the_client_has_them() {
     let mut settings = Settings::default();
@@ -1759,13 +1758,17 @@ fn about_opens_the_stream_controls_where_the_client_has_them() {
     };
     assert!(matches!(*b, Screen::Licenses(ref l) if l.title() == "Stream controls"));
 
-    let mut device = ctx.device.clone();
-    device.platform = crate::platform::Platform::Web;
-    let ctx = Ctx {
-        device: &device,
-        ..ctx
-    };
-    assert!(!s.row_ids(&ctx).contains(&RowId::StreamControls));
+    for platform in crate::platform::Platform::ALL {
+        let mut settings = Settings::default();
+        let mut ctx = Ctx::test(&mut settings, &library);
+        let mut device = ctx.device.clone();
+        device.platform = platform;
+        ctx.device = &device;
+        assert!(
+            s.row_ids(&ctx).contains(&RowId::StreamControls),
+            "{platform:?}"
+        );
+    }
 }
 
 /// The value names where a launch will land, not what the key holds: with no

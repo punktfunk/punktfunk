@@ -1484,9 +1484,15 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::PadHaptics | RowId::PadSpeaker => &[Desktop, Android, WebOS],
         // The clients whose rumble paths read the switch.
         RowId::PadRumble => &[Desktop, Android, Apple],
-        // The clients whose sessions bind chords the console can list. The browser page binds
-        // none; webOS opts in once its session's chords are confirmed.
-        RowId::StreamControls => &[Desktop, Android, Apple],
+        // Every client binds something mid-stream: keys, chords, or a remote's colour buttons.
+        RowId::StreamControls => &[
+            Desktop,
+            Android,
+            WebOS,
+            Platform::Web,
+            Apple,
+            Platform::Tizen,
+        ],
         // Every client ships third-party code. The browser build has no bundle to list.
         RowId::Licenses => &[Desktop, Android, WebOS, Apple],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the

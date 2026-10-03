@@ -98,14 +98,16 @@ impl LicensesScreen {
         }
     }
 
-    /// The stream controls this platform has, or `None` where the client binds none.
+    /// The stream controls this platform has. Every platform has a list today.
     pub(crate) fn controls(ctx: &Ctx) -> Option<LicensesScreen> {
         use crate::platform::Platform;
         let client = match ctx.device.platform {
             Platform::Desktop => Client::Desktop,
             Platform::Android => Client::Android,
             Platform::Apple => Client::Apple,
-            _ => return None,
+            Platform::WebOS => Client::WebOS,
+            Platform::Web => Client::Web,
+            Platform::Tizen => Client::Tizen,
         };
         Some(LicensesScreen {
             doc: Doc::Controls(client, !ctx.device.tv),
