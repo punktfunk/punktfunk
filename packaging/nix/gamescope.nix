@@ -53,14 +53,14 @@ let
   #
   # Bumping this: move the rev, then `nix-prefetch-git --url https://github.com/ValveSoftware/gamescope
   # --rev <new> --fetch-submodules` for the hash, and keep packaging/gamescope/README.md in step.
-  pfRev = "5fb8dce4a09d0a68d097b9faf9513782106bc843";
-  pfVersion = "3.16.25-11-g5fb8dce";
+  pfRev = "6867f509874f9bc52e12d6f4c4596cdf0d5be6b4";
+  pfVersion = "3.16.31";
   pfSrc = fetchFromGitHub {
     owner = "ValveSoftware";
     repo = "gamescope";
     rev = pfRev;
     fetchSubmodules = true;
-    hash = "sha256-pGBiO+7LSdIc0k9K+SQnv/Og2DYD/cjvOImxIl91L2A=";
+    hash = "sha256-mCCf/CfKBqxNvmRbaAJsOMrnnRutPr9nEePHmAq/PUM=";
   };
   # As of nixos-unstable (checked 2026-07-28) `gamescope` IS the buildable derivation — pname
   # "gamescope", version 3.16.25, carrying `src`/`patches`/`mesonFlags`. Revisions that wrap it

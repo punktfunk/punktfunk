@@ -85,6 +85,13 @@ install -Dm0755 "$REAPER" "$STAGE/usr/lib/punktfunk/gamescope/gamescopereaper"
 install -Dm0755 "$LAYER_SO" "$STAGE/usr/lib/punktfunk/libVkLayer_PUNKTFUNK_gamescope_wsi.so"
 install -Dm0644 "$LAYER_JSON" \
   "$STAGE/usr/lib/punktfunk/vulkan/implicit_layer.d/punktfunk_gamescope_wsi.json"
+# gamescope's notice as Debian's `copyright`, the bundled libraries' own beside it.
+DOC_SRC="$SRC_STAGE/usr/share/doc/punktfunk-gamescope"
+if [ -d "$DOC_SRC" ]; then
+  mkdir -p "$STAGE/usr/share/doc/$PKG"
+  cp -a "$DOC_SRC/." "$STAGE/usr/share/doc/$PKG/"
+  cp "$DOC_SRC/LICENSE" "$STAGE/usr/share/doc/$PKG/copyright"
+fi
 mkdir -p "$STAGE/DEBIAN"
 
 # Shared-library dependencies straight from the binary's own ELF NEEDED entries. That is what makes
@@ -92,10 +99,12 @@ mkdir -p "$STAGE/DEBIAN"
 # (wlroots, SDL, libliftoff, vulkan, xwayland's libs), and hand-listing them would rot.
 DEPS=""
 if command -v dpkg-shlibdeps >/dev/null 2>&1; then
-  # dpkg-shlibdeps insists on running from a package root with a debian/ dir.
+  # dpkg-shlibdeps insists on running from a package root with a debian/ dir. The layer counts too:
+  # it alone links the system libwayland-client.
   mkdir -p "$STAGE/debian"
   : > "$STAGE/debian/control"
-  ( cd "$STAGE" && dpkg-shlibdeps -O --ignore-missing-info usr/bin/punktfunk-gamescope 2>/dev/null ) \
+  ( cd "$STAGE" && dpkg-shlibdeps -O --ignore-missing-info usr/bin/punktfunk-gamescope \
+      usr/lib/punktfunk/libVkLayer_PUNKTFUNK_gamescope_wsi.so 2>/dev/null ) \
     > "$STAGE/.shlibdeps" || true
   DEPS="$(sed -n 's/^shlibs:Depends=//p' "$STAGE/.shlibdeps" | head -1)"
   rm -rf "$STAGE/debian" "$STAGE/.shlibdeps"

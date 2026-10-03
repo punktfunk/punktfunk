@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Sat, 8 Aug 2026 13:13:09 +0000
-Subject: [PATCH] headless: advertise the virtual display's mode and refresh
- rates
+Subject: [PATCH 03/33] headless: advertise the virtual display's mode and
+ refresh rates
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -166,10 +166,10 @@ index 8e45400..3168c88 100644
  
  			return nullptr;
 diff --git a/src/main.cpp b/src/main.cpp
-index 1eb35b3..2c4fb50 100644
+index 5e0bda2..6bd68af 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -92,6 +92,7 @@ const struct option *gamescope_options = (struct option[]){
+@@ -93,6 +93,7 @@ const struct option *gamescope_options = (struct option[]){
  	{ "prefer-output", required_argument, nullptr, 'O' },
  	{ "default-touch-mode", required_argument, nullptr, 0 },
  	{ "generate-drm-mode", required_argument, nullptr, 0 },
@@ -177,7 +177,7 @@ index 1eb35b3..2c4fb50 100644
  	{ "immediate-flips", no_argument, nullptr, 0 },
  	{ "framerate-limit", required_argument, nullptr, 0 },
  
-@@ -232,6 +233,7 @@ const char usage[] =
+@@ -236,6 +237,7 @@ const char usage[] =
  	"  -O, --prefer-output            list of connectors in order of preference (ex: DP-1,DP-2,DP-3,HDMI-A-1)\n"
  	"  --default-touch-mode           0: hover, 1: left, 2: right, 3: middle, 4: passthrough\n"
  	"  --generate-drm-mode            DRM mode generation algorithm (cvt, fixed)\n"
@@ -185,7 +185,7 @@ index 1eb35b3..2c4fb50 100644
  	"  --immediate-flips              Enable immediate flips, may result in tearing\n"
  	"\n"
  #if HAVE_OPENVR
-@@ -297,6 +299,10 @@ int g_nNestedHeight = 0;
+@@ -301,6 +303,10 @@ int g_nNestedHeight = 0;
  int g_nNestedRefresh = 0;
  int g_nNestedUnfocusedRefresh = 0;
  int g_nNestedDisplayIndex = 0;
@@ -196,8 +196,8 @@ index 1eb35b3..2c4fb50 100644
  
  uint32_t g_nOutputWidth = 0;
  uint32_t g_nOutputHeight = 0;
-@@ -447,6 +453,39 @@ static enum gamescope::GamescopeBackend parse_backend_name(const char *str)
- 	}
+@@ -454,6 +460,39 @@ static enum gamescope::GamescopeBackend auto_select_backend()
+ 		return gamescope::GamescopeBackend::DRM;
  }
  
 +// `--custom-refresh-rates 60,90,120` -> { 60, 90, 120 }. Anything unparseable is a hard error,
@@ -236,10 +236,10 @@ index 1eb35b3..2c4fb50 100644
  static int parse_integer(const char *str, const char *optionName)
  {
  	auto result = gamescope::Parse<int>(str);
-@@ -800,6 +839,8 @@ int main(int argc, char **argv)
- 					gamescope::cv_touch_click_mode = (gamescope::TouchClickMode) parse_integer( optarg, opt_name );
- 				} else if (strcmp(opt_name, "generate-drm-mode") == 0) {
+@@ -817,6 +856,8 @@ int main(int argc, char **argv)
  					g_eGamescopeModeGeneration = parse_gamescope_mode_generation( optarg );
+ 				} else if (strcmp(opt_name, "force-composition-rotation") == 0) {
+ 					g_bForceCompositionRotation = true;
 +				} else if (strcmp(opt_name, "custom-refresh-rates") == 0) {
 +					g_customRefreshRates = parse_refresh_rate_list( optarg );
  				} else if (strcmp(opt_name, "force-orientation") == 0) {

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 28 Jul 2026 13:53:41 +0200
-Subject: [PATCH] pipewire: offer 10-bit BT.2020 PQ capture formats (HDR
+Subject: [PATCH 01/33] pipewire: offer 10-bit BT.2020 PQ capture formats (HDR
  streams)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -227,10 +227,10 @@ index 76b3ea8..c84b19c 100644
  	std::vector<const struct spa_pod *> format_params = build_format_params(&builder);
  
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index ecb3808..83c751b 100644
+index 2ff296b..5bc6d0f 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2335,17 +2335,32 @@ static void paint_pipewire()
+@@ -2882,9 +2882,23 @@ static void paint_pipewire()
  	if ( !s_pPipewireBuffer || !s_pPipewireBuffer->texture )
  		return;
  
@@ -255,6 +255,7 @@ index ecb3808..83c751b 100644
  	frameInfo.allowVRR             = false;
  	frameInfo.bFadingOut           = false;
  
+@@ -2900,8 +2914,9 @@ static void paint_pipewire()
  	// Apply screenshot-style color management.
  	for ( uint32_t nInputEOTF = 0; nInputEOTF < EOTF_Count; nInputEOTF++ )
  	{

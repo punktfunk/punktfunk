@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 22:48:30 +0200
-Subject: [PATCH 22/22] pipewire: make the capture stream reliable and keep it
+Subject: [PATCH 22/33] pipewire: make the capture stream reliable and keep it
  cycling
 
 On an async link, which is what a consumer without RT_PROCESS gets, this
@@ -33,10 +33,10 @@ Stamp pfhdr18: nothing for a caller to gate on.
  2 files changed, 26 insertions(+), 2 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 7e2b07f..ce37037 100644
+index 9c107b7..bb2edfc 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -198,7 +198,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -200,7 +200,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr15 — …and the pointer reaches the whole window of a game whose swapchain is smaller
  #   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
  #   +pfhdr17 — …and a capture push never drops a buffer the PipeWire thread has not taken

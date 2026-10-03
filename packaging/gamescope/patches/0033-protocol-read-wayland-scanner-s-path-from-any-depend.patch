@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: punktfunk <packages@unom.io>
+Date: Sun, 4 Oct 2026 00:39:36 +0200
+Subject: [PATCH 33/33] protocol: read wayland-scanner's path from any
+ dependency type
+
+`get_variable(pkgconfig: 'wayland_scanner')` only answers for a pkg-config
+dependency. When wayland is built as a subproject, as wlroots allows through
+its `wayland` fallback, wayland-scanner is an internal dependency that sets
+the same variable, and the pkg-config-only lookup fails at configure time.
+The generic `get_variable('wayland_scanner')` reads both, as wlroots does.
+
+punktfunk: also stamps the version banner +pfhdr30 (rebase onto 3.16.31).
+---
+ protocol/meson.build | 2 +-
+ src/meson.build      | 5 ++++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/protocol/meson.build b/protocol/meson.build
+index cf8fbd1..5f19b61 100644
+--- a/protocol/meson.build
++++ b/protocol/meson.build
+@@ -1,7 +1,7 @@
+ fs = import('fs')
+ 
+ wayland_scanner_dep = dependency('wayland-scanner', native: true)
+-wayland_scanner_path = wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner')
++wayland_scanner_path = wayland_scanner_dep.get_variable('wayland_scanner')
+ wayland_scanner = find_program(wayland_scanner_path, native: true)
+ 
+ wayland_protos = dependency('wayland-protocols',
+diff --git a/src/meson.build b/src/meson.build
+index bf3f22c..0efd550 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -210,7 +210,10 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr25 — …and a planar capture composites through device memory, not system RAM
+ #   +pfhdr26 — …and the 10-bit capture formats are offered as SDR (BT.709) too
+ #   +pfhdr27 — …and --framerate-limit is the floor a refresh-cycle request for 0 falls back to
+-version_tag = vcs_tag + '+pfhdr27' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr28 — …and the WSI layer accepts its socket under a container alias
++#   +pfhdr29 — …and a focus re-apply keeps CEF's browser subwindow focused
++#   +pfhdr30 — …on upstream 3.16.31 (28 and 29 are upstream there); builds against a vendored wayland
++version_tag = vcs_tag + '+pfhdr30' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)

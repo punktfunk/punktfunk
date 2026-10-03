@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 18 Sep 2026 14:20:59 +0200
-Subject: [PATCH] pipewire: keep dmabuf capture buffers in device memory
+Subject: [PATCH 24/33] pipewire: keep dmabuf capture buffers in device memory
 
 stream_handle_add_buffer marks every capture texture bMappable, and a
 mappable texture is allocated HOST_VISIBLE | HOST_COHERENT | HOST_CACHED.
@@ -29,10 +29,10 @@ layout, not from the mapping.
  2 files changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/src/meson.build b/src/meson.build
-index 37a78aa4..9dd5090a 100644
+index ff79b78..b1c619c 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -200,7 +200,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -202,7 +202,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr17 — …and a capture push never drops a buffer the PipeWire thread has not taken
  #   +pfhdr18 — …and the capture stream is reliable and cycles while it waits for its consumer
  #   +pfhdr19 — …and GAMESCOPE_SET_OUTPUT_MODE changes a headless output's mode at runtime
@@ -43,7 +43,7 @@ index 37a78aa4..9dd5090a 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/pipewire.cpp b/src/pipewire.cpp
-index f5f2ac38..674faed1 100644
+index f5f2ac3..674faed 100644
 --- a/src/pipewire.cpp
 +++ b/src/pipewire.cpp
 @@ -655,7 +655,10 @@ static void stream_handle_add_buffer(void *user_data, struct pw_buffer *pw_buffe

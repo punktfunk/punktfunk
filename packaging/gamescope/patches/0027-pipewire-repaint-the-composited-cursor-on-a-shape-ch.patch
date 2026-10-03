@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 25 Sep 2026 02:08:49 +0000
-Subject: [PATCH] pipewire: repaint the composited cursor on a shape
+Subject: [PATCH 27/33] pipewire: repaint the composited cursor on a shape
  change or a hide
 
 `--pipewire-composite-cursor` repaints the capture when the pointer moves
@@ -22,10 +22,10 @@ paint.
  2 files changed, 13 insertions(+), 2 deletions(-)
 
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index f20edad8..2dfadff4 100644
+index 2d33aa0..0a3948c 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -1873,6 +1873,7 @@ bool MouseCursor::getTexture()
+@@ -2334,6 +2334,7 @@ bool MouseCursor::getTexture()
  		cursorBuffer.clear();
  
  	m_imageEmpty = bNoCursor;
@@ -33,7 +33,7 @@ index f20edad8..2dfadff4 100644
  
  	m_dirty = false;
  	updateCursorFeedback();
-@@ -2441,6 +2442,7 @@ static void paint_pipewire()
+@@ -3003,6 +3004,7 @@ static void paint_pipewire()
  	static bool s_bLastCursorDrawn = false;
  	static int s_nLastCursorX = 0;
  	static int s_nLastCursorY = 0;
@@ -41,7 +41,7 @@ index f20edad8..2dfadff4 100644
  
  	uint64_t ulFocusCommitId = window_last_done_commit_id( pFocus->focusWindow );
  	uint64_t ulOverrideCommitId = window_last_done_commit_id( pFocus->overrideWindow );
-@@ -2458,14 +2460,18 @@ static void paint_pipewire()
+@@ -3029,14 +3031,18 @@ static void paint_pipewire()
  	MouseCursor *pCursor = pGlobalFocus ? pGlobalFocus->cursor : nullptr;
  	bool bDrawCursor = false;
  	int nCursorX = 0, nCursorY = 0;
@@ -61,7 +61,7 @@ index f20edad8..2dfadff4 100644
  		}
  	}
  
-@@ -2496,7 +2502,8 @@ static void paint_pipewire()
+@@ -3069,7 +3075,8 @@ static void paint_pipewire()
  	     ulExternalOverlayCommitId == s_ulLastExternalOverlayCommitId &&
  	     ulOverlayCommitId == s_ulLastOverlayCommitId &&
  	     bDrawCursor == s_bLastCursorDrawn &&
@@ -71,7 +71,7 @@ index f20edad8..2dfadff4 100644
  		return;
  
  	// The consumer's `maxFramerate` is the rate it can use; with adaptive sync every game commit
-@@ -2524,6 +2531,7 @@ static void paint_pipewire()
+@@ -3099,6 +3106,7 @@ static void paint_pipewire()
  	s_bLastCursorDrawn = bDrawCursor;
  	s_nLastCursorX = nCursorX;
  	s_nLastCursorY = nCursorY;
@@ -80,10 +80,10 @@ index f20edad8..2dfadff4 100644
  	uint32_t uWidth = s_pPipewireBuffer->texture->width();
  	uint32_t uHeight = s_pPipewireBuffer->texture->height();
 diff --git a/src/steamcompmgr.hpp b/src/steamcompmgr.hpp
-index 6734c15a..5813a7fc 100644
+index c1d1ab0..b659b6c 100644
 --- a/src/steamcompmgr.hpp
 +++ b/src/steamcompmgr.hpp
-@@ -84,6 +84,8 @@ public:
+@@ -88,6 +88,8 @@ public:
  
  	bool isHidden() { return wlserver.bCursorHidden || m_imageEmpty; }
  	bool imageEmpty() const { return m_imageEmpty; }
@@ -92,9 +92,9 @@ index 6734c15a..5813a7fc 100644
  
  	void undirty() { getTexture(); }
  
-@@ -111,6 +113,7 @@ private:
- 	bool m_dirty;
+@@ -116,6 +118,7 @@ private:
  	uint64_t m_ulLastConnectorId = 0;
+ 	uint64_t m_ulImageSerial = 0;
  	bool m_imageEmpty;
 +	uint64_t m_ulImageGeneration = 0;
  

@@ -43,10 +43,7 @@ The patches here add the missing half, and nothing else. See
 | `0030-pipewire-keep-the-planar-capture-s-RGB-intermediate-.patch` | An NV12/P010 capture composites into a pooled RGB texture and converts from there. Allocate that capture pool in device memory; only the screenshot pool is read through a mapping. Upstream made every pooled texture mappable, which is system RAM on a discrete GPU: on an RTX 5070 Ti at 2560×1440 the planar capture moved 5.5 GB/s each way over PCIe and held the GPU at 85 % for a desktop | **Yes** — any discrete-GPU consumer of the NV12 capture pays it |
 | `0031-pipewire-offer-the-10-bit-capture-formats-as-SDR-too.patch` | Offer each 10-bit capture format (xBGR/xRGB 2:10:10:10, P010) a second time with BT.709 primaries and the sRGB-family transfer the SDR composite writes, after the PQ pod. `paint_pipewire` keys the PQ LUT set on the negotiated transfer function instead of the DRM format, and the P010 pass applies a 10-bit BT.709 matrix on the sRGB codes an SDR composite stores. Every YCbCr capture already composites through the 10-bit RGB intermediate, so a 10-bit SDR stream carries the composite's own precision | **Yes** — any consumer that wants 10-bit without PQ |
 | `0032-steamcompmgr-keep-framerate-limit-as-the-floor-under.patch` | A refresh-cycle request for 0 (Steam's "Framerate limit: Off", or the legacy `GAMESCOPE_FPS_LIMIT` atom at 0) falls back to the CLI `--framerate-limit` as a plain cap instead of clearing it. Steam's explicit values still win, and a request that only changes refresh (Steam's "Disable Frame Limiter") stays uncapped | **Yes** — on a headless output the limiter is the focused app's only pace; `0012` let Steam's default state remove it |
-| `0033-layer-recognize-Gamescope-sockets-through-container-.patch` | Upstream b385948, cherry-picked. The WSI layer accepts a `WAYLAND_DISPLAY` that names its own socket under another path, as pressure-vessel and flatpak bind it, or a socket that is not there. Before, any name but gamescope's own made it reject the game's swapchain with a "Hooking has failed" box | Already upstream |
-| `0034-layer-don-t-destroy-an-unowned-surface.patch` | Upstream f6b6b7d, cherry-picked: destroying a native Wayland app's `VkSurfaceKHR` no longer destroys the app's own `wl_surface`. Also stamps `+pfhdr28` | Already upstream |
-| `0035-steamcompmgr-re-apply-keyboard-focus-to-the-preserve.patch` | Upstream 0f8dc34, cherry-picked. A focus re-apply (Steam rewriting `STEAM_INPUT_FOCUS`) focuses the subwindow that holds focus, not its toplevel. Before, Steam's CEF browser subwindow lost focus, Chromium went inactive once the hidden cursor was parked in its 4 px input border, and Big Picture drew no focus highlight until the pointer moved | Already upstream |
-| `0036-steamcompmgr-reclaim-keyboard-focus-when-it-lands-on.patch` | Upstream 396794a, cherry-picked: the FocusOut handler tracks a preserved subwindow and takes focus back from None. Also stamps `+pfhdr29` | Already upstream |
+| `0033-protocol-read-wayland-scanner-s-path-from-any-depend.patch` | `protocol/meson.build` reads `wayland_scanner` with the generic `get_variable`, as wlroots does, so a wayland built as a subproject configures (the pkg-config-only lookup fails on its internal dependency). Also stamps `+pfhdr30` | **Yes** — any build that takes wlroots' `wayland` fallback hits it |
 
 ### Why the headless patch matters
 
@@ -152,10 +149,11 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr27` | …and `--framerate-limit` is the floor a refresh-cycle request for 0 falls back to; Steam's "Off" no longer leaves a headless session unpaced |
 | `+pfhdr28` | …and the WSI layer accepts its socket under a container alias and leaves a native Wayland app's surface alone (no new capability) |
 | `+pfhdr29` | …and a focus re-apply keeps Steam's CEF browser subwindow focused, so Big Picture shows its focus highlight without pointer motion (no new capability) |
+| `+pfhdr30` | …on upstream 3.16.31, which carries 28 and 29 itself (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is
-`3.16.25.pfhdr10-1`; its build checks the complete upstream version and capability level.
+`3.16.31.pfhdr30-1`; its build checks the complete upstream version and capability level.
 
 Bump it whenever a patch adds or changes something the host must know about before it spawns.
 
@@ -198,15 +196,20 @@ distro's `gamescope`.
 
 ## Building
 
-Pinned upstream: `5fb8dce4a09d0a68d097b9faf9513782106bc843` (`3.16.25-11-g5fb8dce`).
+Pinned upstream: `6867f509874f9bc52e12d6f4c4596cdf0d5be6b4` (`3.16.31`).
 All patches apply in filename order to that commit.
 
-The bump from `8c676c39` is deliberate: it brings upstream's `vulkan_get_rgb10_capture_format()`
-(`ff6b924`), which probes `linearTilingFeatures` for STORAGE+SAMPLED and falls back to
-`DRM_FORMAT_XBGR2101010` on devices that cannot do linear-tiled `A2R10G10B10` — i.e. every
-NVIDIA. That covers the paths that are upstream's rather than ours: the RGB intermediate
-`paint_pipewire()` acquires when the stream is YCbCr, and AVIF screenshots. Our own 10-bit RGB
-node is covered by patch `0001`, which offers `xBGR_210LE` first for the same reason.
+Upstream's `vulkan_get_rgb10_capture_format()` falls back to `DRM_FORMAT_XBGR2101010` on devices
+that cannot store linear `A2R10G10B10` — every NVIDIA. Our own 10-bit RGB node gets the same
+outcome from patch `0001`, which offers `xBGR_210LE` first.
+
+The vendored wlroots 0.20 needs wayland ≥ 1.24, libdrm ≥ 2.4.129, xkbcommon ≥ 1.8 and pixman ≥ 0.46.
+Where the system is older (Debian 13: the `.deb` and the SteamOS box), the script builds the pinned
+wraps in `subprojects/` and links them into the compositor statically; Arch and Fedora keep their
+own. The WSI layer builds in a second pass that never bundles: it loads into every game beside the
+game's own libwayland-client, and the script fails if the layer does not link the system one.
+Every library compiled in ships its notice under `share/doc/punktfunk-gamescope/`. Bump the wraps
+with the pin; each names its release tag beside the commit.
 
 Build into a staging directory on Linux. The system gamescope and file capabilities stay untouched:
 

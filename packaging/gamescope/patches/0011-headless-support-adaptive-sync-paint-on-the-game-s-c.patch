@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 1 Sep 2026 16:23:41 +0200
-Subject: [PATCH] =?UTF-8?q?headless:=20support=20adaptive=20sync=20?=
+Subject: [PATCH 11/33] =?UTF-8?q?headless:=20support=20adaptive=20sync=20?=
  =?UTF-8?q?=E2=80=94=20paint=20on=20the=20game's=20commit?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -94,10 +94,10 @@ index 3168c88..1de1540 100644
              return false;
          }
 diff --git a/src/backend.h b/src/backend.h
-index 880aa97..ef8a632 100644
+index bd57c42..b7a7bfb 100644
 --- a/src/backend.h
 +++ b/src/backend.h
-@@ -190,6 +190,12 @@ namespace gamescope
+@@ -187,6 +187,12 @@ namespace gamescope
  
          virtual bool SupportsVRR() const = 0;
  
@@ -111,10 +111,10 @@ index 880aa97..ef8a632 100644
          virtual std::span<const uint32_t> GetValidDynamicRefreshRates() const = 0;
  
 diff --git a/src/meson.build b/src/meson.build
-index 91bba6b..937a191 100644
+index a478ab0..22892af 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -188,7 +188,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -190,7 +190,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr6 — …and GAMESCOPE_NO_FOCUS windows are never focus candidates (no new capability)
  #   +pfhdr7 — …and PipeWire teardown cannot SIGSEGV a lingering compositor (no new capability)
  #   +pfhdr8 — …and the seat's keyboard carries the XKB_DEFAULT_* keymap (honours the box layout)
@@ -125,10 +125,10 @@ index 91bba6b..937a191 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 932316f..49f2d77 100644
+index 4e01613..edcb418 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -5965,6 +5965,12 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
+@@ -6916,6 +6916,12 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
  	{
  		bool bCloseEnough = std::abs( g_nSteamCompMgrTargetFPS - nRefreshHz ) < 2;
  

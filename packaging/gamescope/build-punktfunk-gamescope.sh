@@ -23,9 +23,8 @@
 # access unless the checkout already carries them — hence `--recurse-submodules` below.
 set -euo pipefail
 
-# The pinned upstream. Bump together with the patches (they are `git am`-able and rebase cheaply —
-# two files, mirroring code that already exists in-tree; see README.md).
-GAMESCOPE_REV="5fb8dce4a09d0a68d097b9faf9513782106bc843"
+# The pinned upstream, 3.16.31. Bump together with the patches and the wraps in subprojects/.
+GAMESCOPE_REV="6867f509874f9bc52e12d6f4c4596cdf0d5be6b4"
 GAMESCOPE_REPO="https://github.com/ValveSoftware/gamescope.git"
 
 REV="$GAMESCOPE_REV" PREFIX=/usr DESTDIR="" SRCDIR="" JOBS="" SETCAP=1 EXTRA_FALLBACK=""
@@ -88,6 +87,34 @@ grep -Fxq "$VERSION_TAG" "$SRCDIR/src/meson.build" || {
 }
 
 BUILD="$SRCDIR/build-punktfunk"
+LAYER_BUILD="$SRCDIR/build-punktfunk-layer"
+FALLBACKS="libliftoff,vkroots,wlroots,libdisplay-info${EXTRA_FALLBACK:+,$EXTRA_FALLBACK}"
+
+# The vendored wlroots 0.20 needs these floors. Debian 13 (the .deb and the SteamOS box) is below
+# all of them, so there the compositor links the pinned copies in subprojects/ statically; Arch and
+# Fedora meet them and keep their own. xkbcommon's data paths are pinned because a --prefix such as
+# $HOME/.local would otherwise point it at keymaps that are not there.
+BUNDLED=()
+for floor in wayland-server:1.24.0 libdrm:2.4.129 xkbcommon:1.8.0 pixman-1:0.46.0 wayland-protocols:1.47; do
+  pkg-config --atleast-version="${floor#*:}" "${floor%%:*}" 2>/dev/null || BUNDLED+=("${floor%%:*}")
+done
+BUNDLE_OPTS=()
+if [ "${#BUNDLED[@]}" -gt 0 ]; then
+  echo "==> below the wlroots floor (${BUNDLED[*]}): bundling wayland, libdrm, xkbcommon, pixman"
+  cp "$HERE"/subprojects/*.wrap "$SRCDIR/subprojects/"
+  FALLBACKS+=",wayland-server,wayland-client,libdrm,xkbcommon,pixman-1,wayland-protocols"
+  BUNDLE_OPTS=(
+    -Dwayland:default_library=static -Dwayland:tests=false -Dwayland:documentation=false
+    -Dwayland:dtd_validation=false
+    -Dlibdrm:default_library=static -Dlibdrm:auto_features=disabled -Dlibdrm:tests=false
+    -Dlibxkbcommon:default_library=static -Dlibxkbcommon:enable-tools=false
+    -Dlibxkbcommon:enable-x11=false -Dlibxkbcommon:enable-docs=false
+    -Dlibxkbcommon:enable-xkbregistry=false
+    -Dlibxkbcommon:xkb-config-root=/usr/share/X11/xkb -Dlibxkbcommon:x-locale-root=/usr/share/X11/locale
+    -Dpixman:default_library=static -Dpixman:tests=disabled -Dpixman:demos=disabled
+    -Dpixman:gtk=disabled -Dpixman:libpng=disabled -Dpixman:openmp=disabled
+  )
+fi
 echo "==> configuring"
 # We ship ONE binary out of this tree, so build only what leads to it:
 #   -Denable_tests=false        gamescope's own unit tests want Catch2 **v3**
@@ -95,14 +122,10 @@ echo "==> configuring"
 #                               test suite is not our job either way.
 #   -Denable_openvr_support     the VR integration pulls the openvr submodule + its build for a
 #                               code path a headless capture session never enters.
-#   -Denable_gamescope_wsi_layer ON, and installed under our own name below. This used to be off,
-#                               on the grounds that the distro's gamescope package already ships a
-#                               layer and that the layer is "version-independent of the compositor
-#                               binary". That second half is FALSE: the layer and the compositor
-#                               speak `gamescope_swapchain` to each other, and when they disagree
-#                               the compositor rejects the client's `swapchain_feedback` and every
-#                               Vulkan client dies on a black screen. A compositor we ship needs
-#                               the layer we built beside it.
+#   -Denable_gamescope_wsi_layer OFF here, ON in its own pass below. The layer and the compositor
+#                               speak `gamescope_swapchain`, so a compositor we ship needs the layer
+#                               from this tree. The layer loads into every game, so it must use the
+#                               system libwayland the game already has, never a bundled copy.
 #   -Dinput_emulation=enabled   gamescope's EIS server, the only way keyboard and mouse reach a
 #                               session the host spawns. `auto` drops it without libeis headers.
 #
@@ -141,15 +164,25 @@ export LDFLAGS="${LDFLAGS:-} -static-libstdc++ -static-libgcc"
 meson setup "$BUILD" "$SRCDIR" \
   --prefix="$PREFIX" \
   --buildtype=release \
-  -Dforce_fallback_for="libliftoff,vkroots,wlroots,libdisplay-info${EXTRA_FALLBACK:+,$EXTRA_FALLBACK}" \
+  -Dforce_fallback_for="$FALLBACKS" \
+  "${BUNDLE_OPTS[@]}" \
   -Dpipewire=enabled \
   -Dinput_emulation=enabled \
   -Denable_tests=false \
   -Denable_openvr_support=false \
-  -Denable_gamescope_wsi_layer=true
+  -Denable_gamescope_wsi_layer=false
+meson setup "$LAYER_BUILD" "$SRCDIR" \
+  --prefix="$PREFIX" \
+  --buildtype=release \
+  -Dforce_fallback_for=libliftoff,vkroots \
+  -Denable_gamescope=false \
+  -Denable_gamescope_wsi_layer=true \
+  -Denable_tests=false \
+  -Denable_openvr_support=false
 
 echo "==> building"
 ninja -C "$BUILD" ${JOBS:+-j "$JOBS"}
+ninja -C "$LAYER_BUILD" ${JOBS:+-j "$JOBS"}
 
 # Our own names only: `ninja install` would put gamescopectl/gamescopereaper/gamescopestream and the
 # WSI layer in the prefix, over the distro's gamescope. gamescope `execvp`s `gamescopereaper` for
@@ -198,8 +231,8 @@ install -Dm755 "$BIN" "$DEST"
 #
 # python3 rather than sed because meson is itself a Python program — it is guaranteed present on any
 # host that got this far — and a JSON edit belongs in a JSON parser.
-LAYER_SO=$(find "$BUILD" -type f -name 'libVkLayer_*gamescope_wsi*.so' | head -1)
-LAYER_SRC_JSON=$(find "$BUILD" -type f -name '*gamescope_wsi*.json' | head -1)
+LAYER_SO=$(find "$LAYER_BUILD" -type f -name 'libVkLayer_*gamescope_wsi*.so' | head -1)
+LAYER_SRC_JSON=$(find "$LAYER_BUILD" -type f -name '*gamescope_wsi*.json' | head -1)
 [ -n "$LAYER_SO" ] && [ -n "$LAYER_SRC_JSON" ] || {
   echo "the WSI layer did not build (.so=${LAYER_SO:-none} .json=${LAYER_SRC_JSON:-none}) — without" >&2
   echo "it no game in a punktfunk gamescope session can get an HDR10 swapchain" >&2
@@ -212,6 +245,29 @@ install -Dm755 "$LAYER_SO" "${DESTDIR}${LAYER_LIB_PATH}"
 install -d "$(dirname "$LAYER_DEST_JSON")"
 python3 "$(dirname "$0")/rewrite-wsi-layer-manifest.py" \
   "$LAYER_SRC_JSON" "$LAYER_DEST_JSON" "$LAYER_LIB_PATH"
+# A layer with its own libwayland-client would put a second copy in every game.
+if command -v objdump >/dev/null; then
+  objdump -p "$LAYER_SO" 2>/dev/null | grep -q 'NEEDED.*libwayland-client' || {
+    echo "the WSI layer does not link the system libwayland-client — it would load a second copy into every game" >&2
+    exit 1
+  }
+fi
+
+# Every library compiled into the binary ships its notice beside gamescope's own.
+DOC="${DESTDIR}${PREFIX}/share/doc/punktfunk-gamescope"
+install -Dm644 "$SRCDIR/LICENSE" "$DOC/LICENSE"
+for sub in "$SRCDIR"/subprojects/*/; do
+  name="$(basename "$sub")"
+  [ -f "$sub/meson.build" ] && [ "$name" != openvr ] || continue
+  lic="$(find "$sub" -maxdepth 1 -type f \( -iname 'COPYING*' -o -iname 'LICENSE*' -o -iname 'LICENCE*' \) | sort | head -1)"
+  if [ -n "$lic" ]; then
+    install -Dm644 "$lic" "$DOC/bundled/$name/$(basename "$lic")"
+  elif [ -f "$sub/xf86drm.h" ]; then
+    # libdrm carries its MIT notice only in its headers.
+    install -d "$DOC/bundled/$name"
+    sed -n '1,/\*\//p' "$sub/xf86drm.h" > "$DOC/bundled/$name/COPYING"
+  fi
+done
 
 if [ "$SETCAP" = 1 ] && command -v setcap >/dev/null; then
   # gamescope raises its own scheduling priority; without CAP_SYS_NICE it still runs, just noisier

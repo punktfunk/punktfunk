@@ -550,21 +550,10 @@ jobs:
   # and the client's real refresh rate instead of a hardcoded 60 Hz. Same reasoning as the RPM leg
   # in rpm.yml: without a package, a Debian/Ubuntu box has no route to it except compiling by hand.
   #
-  # ⚠ THIS IS ITS OWN JOB, ON DEBIAN 13, BECAUSE THE NOBLE BUILD COULD NEVER HAVE WORKED.
-  # It used to be a few best-effort steps inside build-publish-host (Ubuntu 24.04), where it failed
-  # every single time:
-  #     wlroots| Dependency wayland-server found: NO found 1.22.0 but need: '>=1.23.1'
-  # Our pin vendors wlroots 0.19.3, which floors wayland-server at 1.23.1; noble ships 1.22.0 and
-  # always will. v0.26.0 AND v0.27.0 both shipped with no gamescope .deb — while the release notes
-  # and docs-site told apt users to install it — because every rung of that path was a `::warning::`
-  # that returned 0, and the one hard gate ran last by design (so good artifacts still publish) and
-  # was simply never acted on. Moving it to trixie makes the build possible; making it a job of its
-  # own makes its failure visible instead of a footnote in someone else's log.
-  #
-  # Debian 13 is the OLDEST apt distro the tree configures on (wayland 1.23.1, libxcb-errors,
-  # libdisplay-info 0.2). The binary it produces needs GLIBC_2.38 and links no libstdc++, so what
-  # actually bounds it is wayland: Debian 13 and Ubuntu 26.04 YES, Ubuntu 24.04 NO — and 24.04
-  # could not run this binary however it was built, so nothing was lost by leaving noble.
+  # Its own job, on Debian 13: the oldest apt distro the tree builds on, so one .deb serves Debian 13
+  # and Ubuntu 26.04. Debian 13 is below wlroots 0.20's floors, so the build script links pinned
+  # wayland, libdrm, xkbcommon and pixman into the compositor; the WSI layer keeps the system
+  # libwayland-client. A failure here fails the job, never a `::warning::`.
   build-publish-gamescope:
     runs-on: ubuntu-24.04
     container:
@@ -592,9 +581,8 @@ jobs:
           path: gs-cache
           key: punktfunk-gamescope-trixie-${{ hashFiles('packaging/gamescope/**') }}
 
-      # NOT best-effort, unlike the noble version of this step. Every dependency now comes from the
-      # image (which asserts the wayland floor at build time), so a failure here is a real
-      # regression in the tree or the pin — exactly the thing the previous arrangement hid.
+      # NOT best-effort: every dependency comes from the image or a pinned wrap, so a failure here
+      # is a real regression in the tree or the pin.
       - name: Build the patched gamescope
         if: steps.gamescope.outputs.cache-hit != 'true'
         # `--extra-fallback libdisplay-info` is what makes ONE .deb serve both Debian 13 and
@@ -607,7 +595,7 @@ jobs:
         run: |
           # Baked into the image; a no-op once docker.yml republishes it (bootstrap lag).
           apt-get update
-          apt-get install -y --no-install-recommends libeis-dev
+          apt-get install -y --no-install-recommends libeis-dev bison libexpat1-dev
           bash packaging/gamescope/build-punktfunk-gamescope.sh \
             --destdir "$PWD/gs-stage" --prefix /usr --jobs "$(nproc)" \
             --extra-fallback libdisplay-info

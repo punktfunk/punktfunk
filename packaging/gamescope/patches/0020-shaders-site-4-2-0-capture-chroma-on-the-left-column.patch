@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Thu, 17 Sep 2026 20:00:00 +0200
-Subject: [PATCH] shaders: site 4:2:0 capture chroma on the left column
+Subject: [PATCH 20/33] shaders: site 4:2:0 capture chroma on the left column
 
 cs_rgb_to_nv12 and cs_rgb_to_p010 average each 2x2 luma block, which puts
 the chroma sample at the block centre (H.273 chroma location 1). H.264,
@@ -19,7 +19,7 @@ low-passes horizontally before the 2x decimation.
  2 files changed, 10 insertions(+), 2 deletions(-)
 
 diff --git a/src/shaders/cs_rgb_to_nv12.comp b/src/shaders/cs_rgb_to_nv12.comp
-index 18844248..a706aea3 100644
+index 1884424..a706aea 100644
 --- a/src/shaders/cs_rgb_to_nv12.comp
 +++ b/src/shaders/cs_rgb_to_nv12.comp
 @@ -63,7 +63,11 @@ void main() {
@@ -36,7 +36,7 @@ index 18844248..a706aea3 100644
      imageStore(dst_chroma, chroma_uv, vec4(uv, 0.0f, 1.0f));
  
 diff --git a/src/shaders/cs_rgb_to_p010.comp b/src/shaders/cs_rgb_to_p010.comp
-index ed6ea1c3..04cab51b 100644
+index ed6ea1c..04cab51 100644
 --- a/src/shaders/cs_rgb_to_p010.comp
 +++ b/src/shaders/cs_rgb_to_p010.comp
 @@ -70,7 +70,11 @@ void main() {

@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/xkbcommon/libxkbcommon.git
+# xkbcommon-1.13.1
+revision = 6f76d19db72b5d450e927b41e1e96cbe3252aba8
+depth = 1
+
+[provide]
+dependency_names = xkbcommon

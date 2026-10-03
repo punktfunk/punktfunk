@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Tue, 28 Jul 2026 15:41:45 +0200
-Subject: [PATCH] pipewire: optionally composite the cursor into the capture
- stream
+Subject: [PATCH 02/33] pipewire: optionally composite the cursor into the
+ capture stream
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -38,10 +38,10 @@ focus-appid branch hands back a plain focus_t, which carries no cursor.
  2 files changed, 64 insertions(+), 1 deletion(-)
 
 diff --git a/src/main.cpp b/src/main.cpp
-index 9fc54f0..1eb35b3 100644
+index 6a0fdb1..5e0bda2 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -141,6 +141,7 @@ const struct option *gamescope_options = (struct option[]){
+@@ -143,6 +143,7 @@ const struct option *gamescope_options = (struct option[]){
  
  	{ "disable-color-management", no_argument, nullptr, 0 },
  	{ "sdr-gamut-wideness", required_argument, nullptr, 0 },
@@ -49,7 +49,7 @@ index 9fc54f0..1eb35b3 100644
  	{ "hdr-enabled", no_argument, nullptr, 0 },
  	{ "hdr-sdr-content-nits", required_argument, nullptr, 0 },
  	{ "hdr-itm-enabled", no_argument, nullptr, 0 },
-@@ -205,6 +206,7 @@ const char usage[] =
+@@ -209,6 +210,7 @@ const char usage[] =
  	"  --force-windows-fullscreen     force windows inside of gamescope to be the size of the nested display (fullscreen)\n"
  	"  --cursor-scale-height          if specified, sets a base output height to linearly scale the cursor against.\n"
  	"  --virtual-connector-strategy   Specifies how we should make virtual connectors.\n"
@@ -58,13 +58,13 @@ index 9fc54f0..1eb35b3 100644
  	"                                 If this is not set, and there is a HDR client, it will be tonemapped SDR.\n"
  	"  --sdr-gamut-wideness           Set the 'wideness' of the gamut for SDR comment. 0 - 1.\n"
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 83c751b..a8a816f 100644
+index 5bc6d0f..b4b794a 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -2316,6 +2316,13 @@ static void update_touch_scaling( const struct FrameInfo_t *frameInfo )
- }
+@@ -2863,6 +2863,13 @@ static void carry_override_underlay( focus_t *pFocus, steamcompmgr_win_t *pPrevi
+ // Synthetic focus for the capture stream, connector fields never populated.
+ static global_focus_t s_PipewireFocus{};
  
- #if HAVE_PIPEWIRE
 +// Declared here rather than beside the other `cv_paint_*_plane` knobs, which sit BELOW
 +// paint_pipewire and so are not in scope for it.
 +gamescope::ConVar<bool> cv_pipewire_composite_cursor{ "pipewire_composite_cursor", false,
@@ -75,16 +75,19 @@ index 83c751b..a8a816f 100644
  static void paint_pipewire()
  {
  	static struct pipewire_buffer *s_pPipewireBuffer = nullptr;
-@@ -2402,16 +2409,48 @@ static void paint_pipewire()
- 	// If the commits are the same as they were last time, don't repaint and don't push a new buffer on the stream.
- 	static uint64_t s_ulLastFocusCommitId = 0;
+@@ -2964,6 +2971,9 @@ static void paint_pipewire()
  	static uint64_t s_ulLastOverrideCommitId = 0;
+ 	static uint64_t s_ulLastUnderlayCommitId = 0;
+ 	static uint64_t s_ulLastDecorationCommitId = 0;
 +	static bool s_bLastCursorDrawn = false;
 +	static int s_nLastCursorX = 0;
 +	static int s_nLastCursorY = 0;
  
  	uint64_t ulFocusCommitId = window_last_done_commit_id( pFocus->focusWindow );
  	uint64_t ulOverrideCommitId = window_last_done_commit_id( pFocus->overrideWindow );
+@@ -2977,16 +2987,45 @@ static void paint_pipewire()
+ 	for ( steamcompmgr_win_t *decoration : pFocus->decorationWindows )
+ 		ulDecorationCommitId = ulDecorationCommitId * 31 + window_last_done_commit_id( decoration );
  
 +	// With the cursor composited in, the pointer becomes part of what this stream shows — so its
 +	// state has to join the repaint test, or it would freeze on a static screen while the real
@@ -93,8 +96,8 @@ index 83c751b..a8a816f 100644
 +	// `ShouldDrawCursor()` reads, so both the test and the paint below see the same answer.
 +	//
 +	// The cursor comes from the GLOBAL focus, not `pFocus`: the pointer is one device with one
-+	// position whatever this stream is showing, and the focus-appid branch above hands back a
-+	// plain `focus_t`, which carries no cursor at all.
++	// position whatever this stream is showing, and the focus-appid branch above hands back the
++	// synthetic `s_PipewireFocus`, whose cursor is never populated.
 +	global_focus_t *pGlobalFocus = cv_pipewire_composite_cursor ? GetCurrentFocus() : nullptr;
 +	MouseCursor *pCursor = pGlobalFocus ? pGlobalFocus->cursor : nullptr;
 +	bool bDrawCursor = false;
@@ -111,21 +114,25 @@ index 83c751b..a8a816f 100644
 +	}
 +
  	if ( ulFocusCommitId == s_ulLastFocusCommitId &&
--	     ulOverrideCommitId == s_ulLastOverrideCommitId )
-+	     ulOverrideCommitId == s_ulLastOverrideCommitId &&
+ 	     ulOverrideCommitId == s_ulLastOverrideCommitId &&
+ 	     ulUnderlayCommitId == s_ulLastUnderlayCommitId &&
+-	     ulDecorationCommitId == s_ulLastDecorationCommitId )
++	     ulDecorationCommitId == s_ulLastDecorationCommitId &&
 +	     bDrawCursor == s_bLastCursorDrawn &&
 +	     nCursorX == s_nLastCursorX && nCursorY == s_nLastCursorY )
  		return;
  
  	s_ulLastFocusCommitId = ulFocusCommitId;
  	s_ulLastOverrideCommitId = ulOverrideCommitId;
+ 	s_ulLastUnderlayCommitId = ulUnderlayCommitId;
+ 	s_ulLastDecorationCommitId = ulDecorationCommitId;
 +	s_bLastCursorDrawn = bDrawCursor;
 +	s_nLastCursorX = nCursorX;
 +	s_nLastCursorY = nCursorY;
  
  	uint32_t uWidth = s_pPipewireBuffer->texture->width();
  	uint32_t uHeight = s_pPipewireBuffer->texture->height();
-@@ -2436,6 +2475,22 @@ static void paint_pipewire()
+@@ -3031,6 +3070,22 @@ static void paint_pipewire()
  				( cv_overlay_unmultiplied_alpha ? PaintWindowFlag::CoverageMode : 0 )  );
  	}
  
@@ -148,7 +155,7 @@ index 83c751b..a8a816f 100644
  	gamescope::Rc<CVulkanTexture> pRGBTexture = s_pPipewireBuffer->texture->isYcbcr()
  		? vulkan_acquire_capture_texture( uWidth, uHeight, false, vulkan_get_rgb10_capture_format() )
  		: gamescope::Rc<CVulkanTexture>{ s_pPipewireBuffer->texture };
-@@ -8404,6 +8459,12 @@ steamcompmgr_main(int argc, char **argv)
+@@ -9869,6 +9924,12 @@ steamcompmgr_main(int argc, char **argv)
  					g_FadeOutDuration = atoi(optarg);
  				} else if (strcmp(opt_name, "force-windows-fullscreen") == 0) {
  					bForceWindowsFullscreen = true;

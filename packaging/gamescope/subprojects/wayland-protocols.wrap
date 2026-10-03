@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://gitlab.freedesktop.org/wayland/wayland-protocols.git
+# 1.47
+revision = 88223018d1b578d0d8869866da66d9608e05f928
+depth = 1
+
+[provide]
+dependency_names = wayland-protocols

@@ -1,7 +1,7 @@
-From d095ba24469be8302b5bb6bb7b773b7ef54de6db Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Enrico=20B=C3=BChler?= <enrico.buehler@unom.io>
 Date: Fri, 18 Sep 2026 12:00:00 +0200
-Subject: [PATCH] headless: change the virtual display's mode at runtime
+Subject: [PATCH 23/33] headless: change the virtual display's mode at runtime
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -96,7 +96,7 @@ index 48af2e9..1466c97 100644
  
  	/////////////////////////
 diff --git a/src/backend.h b/src/backend.h
-index ef8a632..06e13c3 100644
+index b7a7bfb..99b9ec3 100644
 --- a/src/backend.h
 +++ b/src/backend.h
 @@ -331,6 +331,12 @@ namespace gamescope
@@ -113,10 +113,10 @@ index ef8a632..06e13c3 100644
          template <typename T>
          std::shared_ptr<BackendBlob> CreateBackendBlob( const T& thing )
 diff --git a/src/meson.build b/src/meson.build
-index ce37037..37a78aa 100644
+index bb2edfc..ff79b78 100644
 --- a/src/meson.build
 +++ b/src/meson.build
-@@ -199,7 +199,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+@@ -201,7 +201,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
  #   +pfhdr16 — …and capture maps SDR into BT.2020 colorimetrically at the live SDR-on-HDR nits
  #   +pfhdr17 — …and a capture push never drops a buffer the PipeWire thread has not taken
  #   +pfhdr18 — …and the capture stream is reliable and cycles while it waits for its consumer
@@ -127,10 +127,10 @@ index ce37037..37a78aa 100644
  gamescope_version_conf = configuration_data()
  gamescope_version_conf.set('VCS_TAG', version_tag)
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index e5bbccd..f20edad 100644
+index a947970..2d33aa0 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
-@@ -6563,6 +6563,51 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+@@ -7533,6 +7533,51 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
  		GetBackend()->DirtyState( true );
  		XDeleteProperty( ctx->dpy, ctx->root, ctx->atoms.gamescopeDisplayModeNudge );
  	}
@@ -181,8 +181,8 @@ index e5bbccd..f20edad 100644
 +	}
  	if ( ev->atom == ctx->atoms.gamescopeNewScalingFilter )
  	{
- 		GamescopeUpscaleFilter nScalingFilter = ( GamescopeUpscaleFilter ) get_prop( ctx, ctx->root, ctx->atoms.gamescopeNewScalingFilter, 0 );
-@@ -8107,6 +8152,9 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
+ 		uint32_t uScalingFilter = get_prop( ctx, ctx->root, ctx->atoms.gamescopeNewScalingFilter, 0 );
+@@ -9184,6 +9229,9 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
  	ctx->atoms.gamescopeDisplayIsExternal = XInternAtom( ctx->dpy, "GAMESCOPE_DISPLAY_IS_EXTERNAL", false );
  	ctx->atoms.gamescopeDisplayModeListExternal = XInternAtom( ctx->dpy, "GAMESCOPE_DISPLAY_MODE_LIST_EXTERNAL", false );
  
@@ -192,7 +192,7 @@ index e5bbccd..f20edad 100644
  	ctx->atoms.gamescopeCursorVisibleFeedback = XInternAtom( ctx->dpy, "GAMESCOPE_CURSOR_VISIBLE_FEEDBACK", false );
  
  	ctx->atoms.gamescopeSteamMaxHeight = XInternAtom( ctx->dpy, "GAMESCOPE_STEAM_MAX_HEIGHT", false );
-@@ -9004,6 +9052,14 @@ steamcompmgr_main(int argc, char **argv)
+@@ -10514,6 +10562,14 @@ steamcompmgr_main(int argc, char **argv)
  					XChangeProperty(server->ctx->dpy, server->ctx->root, server->ctx->atoms.gamescopeHDROutputFeedback, XA_CARDINAL, 32, PropModeReplace,
  						(unsigned char *)&hdr_value, 1 );
  
@@ -208,10 +208,10 @@ index e5bbccd..f20edad 100644
  
  					if (server->ctx.get() == root_ctx)
 diff --git a/src/xwayland_ctx.hpp b/src/xwayland_ctx.hpp
-index d6ce90f..3fe8f7c 100644
+index 35474dc..6a55c8f 100644
 --- a/src/xwayland_ctx.hpp
 +++ b/src/xwayland_ctx.hpp
-@@ -186,6 +186,9 @@ struct xwayland_ctx_t final : public gamescope::IWaitable
+@@ -193,6 +193,9 @@ struct xwayland_ctx_t final : public gamescope::IWaitable
  		Atom gamescopeDisplayIsExternal;
  		Atom gamescopeDisplayModeListExternal;
  
@@ -221,6 +221,3 @@ index d6ce90f..3fe8f7c 100644
  		Atom gamescopeCursorVisibleFeedback;
  
  		Atom gamescopeSteamMaxHeight;
--- 
-2.55.0
-
