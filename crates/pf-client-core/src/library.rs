@@ -434,10 +434,11 @@ pub fn human_bytes(n: u64) -> String {
     } else {
         (n / 1e3, "kB")
     };
-    if value >= 100.0 || value.fract() < 0.05 {
+    let rounded = (value * 10.0).round() / 10.0;
+    if value >= 100.0 || rounded.fract() == 0.0 {
         format!("{value:.0} {unit}")
     } else {
-        format!("{value:.1} {unit}")
+        format!("{rounded:.1} {unit}")
     }
 }
 

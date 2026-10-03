@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Row
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEnd
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.LibraryClient
@@ -137,6 +141,7 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
     var gaveUp by remember(hold) { mutableStateOf<String?>(null) }
     var ending by remember(hold) { mutableStateOf<String?>(null) }
     var windowWait by remember(hold) { mutableStateOf(false) }
+    var download by remember(hold) { mutableStateOf<Download?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(hold) {
@@ -155,17 +160,30 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
             return@LaunchedEffect
         }
         loader = art
-        val began = SystemClock.elapsedRealtime()
+        var began = SystemClock.elapsedRealtime()
         while (isActive) {
-            val games = withContext(Dispatchers.IO) {
-                LibraryClient.fetchRunning(
+            val status = withContext(Dispatchers.IO) {
+                LibraryClient.fetchStatus(
                     hold.address, hold.mgmtPort, id.certPem, id.privateKeyPem, hold.fpHex,
                 )
             }
-            val game = games.firstOrNull { it.appId == hold.game.id }
+            val game = status.games.firstOrNull { it.appId == hold.game.id }
             val state = game?.state
+            val dl = status.downloads.firstOrNull { it.appId == hold.game.id }
+            // The host fetches the title's files before it starts it: no cap while they come, and
+            // the clocks start over once they are in.
+            if (dl?.live == true) {
+                download = dl
+                began = SystemClock.elapsedRealtime()
+                delay(1_000)
+                continue
+            }
+            download = null
+            // A download that stopped is why nothing started: that, not the generic sentence.
+            val stopped = dl?.takeIf { state == null || state == "launching" }
+                ?.stopped(hold.game.title)
             val elapsed = (SystemClock.elapsedRealtime() - began) / 1000.0
-            val said = launchGaveUp(hold.game.title, state, elapsed)
+            val said = stopped ?: launchGaveUp(hold.game.title, state, elapsed)
             if (said != null) {
                 gaveUp = said
                 return@LaunchedEffect
@@ -326,7 +344,38 @@ fun LaunchHoldOverlay(hold: LaunchHold, onRetry: () -> Unit, onShow: () -> Unit)
                 )
             }
             val said = gaveUp
-            if (said == null) {
+            val dl = download
+            if (said == null && dl != null) {
+                // The wait has a length now: a bar where the spinner was. No Show stream — there
+                // is no stream until the files are in.
+                val fraction = dl.fraction
+                if (fraction != null) {
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        color = Color.White,
+                        trackColor = Color.White.copy(alpha = 0.15f),
+                        modifier = Modifier.padding(top = 24.dp).widthIn(max = 360.dp).fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        color = Color.White,
+                        trackColor = Color.White.copy(alpha = 0.15f),
+                        modifier = Modifier.padding(top = 24.dp).widthIn(max = 360.dp).fillMaxWidth(),
+                    )
+                }
+                Text(
+                    if (dl.state == "downloading") "Downloading · ${dl.line()}" else dl.line(),
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+                Text(
+                    "Leaving won't stop the download.",
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            } else if (said == null) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 22.dp),

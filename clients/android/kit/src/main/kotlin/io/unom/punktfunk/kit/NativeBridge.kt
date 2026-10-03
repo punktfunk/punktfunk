@@ -908,6 +908,9 @@ object NativeBridge {
     /** The host's `/status` games: `[{"app_id": "steam:570", "state": "running"}, …]`. */
     external fun nativeConsoleLibraryRunning(handle: Long, json: String)
 
+    /** The host's `/status` downloads, before the same read's [nativeConsoleLibraryRunning]. */
+    external fun nativeConsoleLibraryDownloads(handle: Long, json: String)
+
     /** 0 fresh, 1 waking, 2 offline — the cached shelf's staleness note. */
     external fun nativeConsoleLibraryStale(handle: Long, stale: Int)
 
