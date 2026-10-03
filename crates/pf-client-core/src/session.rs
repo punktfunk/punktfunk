@@ -792,7 +792,7 @@ fn spawn_plane_threads(
     // app-lifetime service. Audio runs on its own thread (one puller per plane).
     let audio_thread = spawn_audio(connector.clone(), stop.clone());
     // Own drain thread. The output device opens lazily once frames arrive — a
-    // session without a wired DualSense costs one idle 10 ms poll loop.
+    // session without a DualSense costs one idle 10 ms poll loop.
     let pad_audio_thread = settings
         .pad_audio_on
         .then(|| {

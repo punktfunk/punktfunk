@@ -207,7 +207,7 @@ specs! {
         "Hold Select alone for the host's guide button \u{2014} a tap still goes through",
         Controllers, true, Stream;
     PAD_HAPTICS: "pad_haptics", "Controller haptics",
-        "Play a DualSense's voice-coil haptics on the pad itself \u{2014} wired pads only",
+        "Play a DualSense's voice-coil haptics on the pad itself",
         Controllers, true, Device;
     PAD_SPEAKER: "pad_speaker", "Controller speaker",
         "Play the audio a game sends to the pad's own speaker on the pad, not here",

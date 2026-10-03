@@ -14,6 +14,8 @@
 #[cfg(feature = "quic")]
 pub mod mic;
 /// cbindgen:ignore
+pub mod pad_bt;
+/// cbindgen:ignore
 pub mod pad_mix;
 pub mod pcm;
 /// cbindgen:ignore

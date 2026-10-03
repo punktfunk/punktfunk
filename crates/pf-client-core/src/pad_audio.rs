@@ -1,21 +1,24 @@
-//! DualSense haptics and speaker (`0xD1`) on a wired pad's four-channel USB audio
-//! device. Bluetooth pads have no audio sibling.
+//! DualSense haptics and speaker (`0xD1`) on the pad in the player's hands: a wired pad's
+//! four-channel USB audio device, or a Bluetooth pad's HID link ([`bluetooth`]).
 //!
-//! [`spawn`] correlates the pad with its WASAPI or PipeWire endpoint, decodes both
-//! Opus streams with gap concealment, and interleaves speaker on 0/1 and voice coils
-//! on 2/3. Linux needs the card's four-channel profile, index-based `AUX0..AUX3`
-//! mapping, and exclusion of host-minted look-alike sinks; `ensure_pro_audio` moves
-//! the profile for the session and restores it on exit.
+//! [`spawn`] decodes both Opus streams with gap concealment and interleaves speaker on 0/1
+//! and voice coils on 2/3. A wired pad plays on its WASAPI or PipeWire endpoint. Linux
+//! needs the card's four-channel profile, index-based `AUX0..AUX3` mapping, and exclusion
+//! of host-minted look-alike sinks; `ensure_pro_audio` moves the profile for the session
+//! and restores it on exit.
 //!
 //! `pad_haptics` and `pad_speaker` gate capability advertisement. Speaker `"mix"`
 //! is not implemented and behaves as `"off"`.
 
+mod bluetooth;
+
 use punktfunk_core::audio::pad_mix::{plc_frames, HapticsLiveness, QuadMixer, PAD_CHANNELS};
 use punktfunk_core::audio::AudioGapTracker;
 use punktfunk_core::client::NativeClient;
+use punktfunk_core::input::MAX_PADS;
 use punktfunk_core::quic::{PAD_AUDIO_KIND_HAPTICS, PAD_AUDIO_KIND_SPEAKER};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// 4800 frames = 100 ms @ 48 kHz. Caps a wedged/absent output; live latency is the platform ring.
@@ -43,10 +46,10 @@ pub fn speaker_active(mode: &str) -> bool {
     }
 }
 
-/// Wired DualSense / DualSense Edge only: USB exposes the 4-ch audio device; Bluetooth does not.
-/// `wired` is `SDL_GetGamepadConnectionState`, else [`wired_audio_sibling`] when SDL says Unknown.
-pub(crate) fn is_tier_a_ds5(vid: u16, pid: u16, wired: bool) -> bool {
-    vid == 0x054C && matches!(pid, 0x0CE6 | 0x0DF2) && wired
+/// DualSense / DualSense Edge: wired through the 4-ch USB audio device, wireless through the
+/// HID link.
+pub(crate) fn is_tier_a_ds5(vid: u16, pid: u16) -> bool {
+    vid == 0x054C && matches!(pid, 0x0CE6 | 0x0DF2)
 }
 
 /// SDL `ConnectionState::Unknown` fallback: a DualSense sound card in the graph is the wired
@@ -72,19 +75,23 @@ pub(crate) fn wired_audio_sibling(hid_path: Option<&str>) -> bool {
 
 struct TierAPad {
     index: u8,
-    /// Windows correlation only; Linux matches the sink by signature.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    /// Windows correlation and the Bluetooth sink; Linux matches a USB sink by signature.
     hid_path: Option<String>,
+    bluetooth: bool,
 }
 
 /// Shared by the app-lifetime gamepad worker (write at slot open/close) and the per-session
 /// renderer (read at correlation). Process-wide because the two workers share no other path.
 static TIER_A_PADS: Mutex<Vec<TierAPad>> = Mutex::new(Vec::new());
 
-pub(crate) fn register_tier_a(index: u8, hid_path: Option<String>) {
+pub(crate) fn register_tier_a(index: u8, hid_path: Option<String>, bluetooth: bool) {
     let mut pads = TIER_A_PADS.lock().unwrap();
     pads.retain(|p| p.index != index);
-    pads.push(TierAPad { index, hid_path });
+    pads.push(TierAPad {
+        index,
+        hid_path,
+        bluetooth,
+    });
 }
 
 pub(crate) fn unregister_tier_a(index: u8) {
@@ -105,13 +112,39 @@ pub(crate) fn haptics_live(pad: u8) -> bool {
     HAPTICS.live(pad)
 }
 
-/// First registered pad's HID path — v1 renders one DualSense.
+/// The rumble SDL plays per wire pad: `deadline_ms << 16 | left << 8 | right`. A Bluetooth
+/// media report re-selects the coil source, so it carries these levels rather than stop them.
+static RUMBLE: [AtomicU64; MAX_PADS] = [const { AtomicU64::new(0) }; MAX_PADS];
+
+/// Mirror an SDL rumble on `pad`: the levels SDL sends (`>> 8`) until its duration runs out.
+pub(crate) fn note_rumble(pad: u8, low: u16, high: u16, ms: u32) {
+    if let Some(slot) = RUMBLE.get(pad as usize) {
+        let until = rumble_clock() + u64::from(ms);
+        let levels = u64::from(low >> 8) << 8 | u64::from(high >> 8);
+        slot.store(until << 16 | levels, Ordering::Relaxed);
+    }
+}
+
+/// `(left, right)` while a mirrored rumble still runs.
+fn rumble_now(pad: u8) -> Option<(u8, u8)> {
+    let v = RUMBLE.get(pad as usize)?.load(Ordering::Relaxed);
+    let (left, right) = ((v >> 8) as u8, v as u8);
+    (rumble_clock() < v >> 16 && (left, right) != (0, 0)).then_some((left, right))
+}
+
+fn rumble_clock() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// First registered USB pad's HID path — v1 renders one DualSense.
 #[cfg(windows)]
 fn first_tier_a_hid_path() -> Option<String> {
     TIER_A_PADS
         .lock()
         .unwrap()
-        .first()
+        .iter()
+        .find(|p| !p.bluetooth)
         .and_then(|p| p.hid_path.clone())
 }
 
@@ -1135,8 +1168,8 @@ struct KindStream {
     frame_samples: usize,
 }
 
-/// Pad-audio renderer: 0xD1 consumer. Opens the device on the first frame so a session without
-/// a wired DualSense is an idle 10 ms poll. Exits on the session stop flag or the plane closing.
+/// Pad-audio renderer: 0xD1 consumer. Opens the sink on the first frame so a session without
+/// a DualSense is an idle 10 ms poll. Exits on the session stop flag or the plane closing.
 pub(crate) fn spawn(
     connector: Arc<NativeClient>,
     stop: Arc<AtomicBool>,
@@ -1157,7 +1190,7 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
     let mut streams: [Option<KindStream>; 2] = [None, None];
     let mut mixer = QuadMixer::<f32>::new(MAX_BUFFER_FRAMES);
     let mut pcm = vec![0f32; 5760 * 2]; // max Opus frame (120 ms) × stereo
-    let mut out: Option<PadOut> = None;
+    let mut out: Option<Sink> = None;
     let mut active_pad: Option<u8> = None;
     let mut other_pad_logged = false;
     let mut open_fail_logged = false;
@@ -1231,17 +1264,20 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
                 Err(e) => tracing::debug!(error = %e, kind = f.kind, "pad-audio opus decode"),
             }
         }
-        // Open lazily; drop + re-correlate with backoff when the USB sink/endpoint vanishes.
-        if out.as_ref().is_some_and(PadOut::finished) {
+        // Open lazily; drop + re-correlate with backoff when the sink vanishes.
+        if out.as_ref().is_some_and(Sink::finished) {
             tracing::info!("pad-audio output ended (device gone?) — re-correlating");
             out = None;
             retry_at = Instant::now() + backoff;
             backoff = (backoff * 2).min(RETRY_MAX);
         }
         if out.is_none() && Instant::now() >= retry_at {
-            match PadOut::open() {
+            match Sink::open(f.pad) {
                 Ok(o) => {
-                    tracing::info!("pad-audio output opened on the DualSense audio device");
+                    tracing::info!(
+                        bluetooth = matches!(o, Sink::Bluetooth(_)),
+                        "pad-audio output opened on the DualSense"
+                    );
                     out = Some(o);
                     backoff = RETRY_MIN;
                     open_fail_logged = false;
@@ -1251,7 +1287,7 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
                         open_fail_logged = true;
                         tracing::warn!(
                             error = %format!("{e:#}"),
-                            "no DualSense audio device — pad audio parked (retrying with backoff)"
+                            "no DualSense audio output — pad audio parked (retrying with backoff)"
                         );
                     }
                     retry_at = Instant::now() + backoff;
@@ -1274,6 +1310,49 @@ fn run(connector: &NativeClient, stop: &AtomicBool, haptics: bool, speaker: bool
     #[cfg(target_os = "linux")]
     restore_profile();
     tracing::debug!("pad-audio pull thread exited");
+}
+
+/// Where the mixed four-channel stream plays: the pad's USB audio device or its Bluetooth link.
+enum Sink {
+    Usb(PadOut),
+    Bluetooth(bluetooth::BtOut),
+}
+
+impl Sink {
+    /// `pad` is the latched wire pad; its Bluetooth registration picks the HID link.
+    fn open(pad: u8) -> anyhow::Result<Sink> {
+        let bt_path = TIER_A_PADS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.index == pad && p.bluetooth)
+            .and_then(|p| p.hid_path.clone());
+        match bt_path {
+            Some(path) => bluetooth::BtOut::open(&path, pad).map(Sink::Bluetooth),
+            None => PadOut::open().map(Sink::Usb),
+        }
+    }
+
+    fn take_buffer(&self) -> Vec<f32> {
+        match self {
+            Sink::Usb(o) => o.take_buffer(),
+            Sink::Bluetooth(o) => o.take_buffer(),
+        }
+    }
+
+    fn push(&self, pcm: Vec<f32>) {
+        match self {
+            Sink::Usb(o) => o.push(pcm),
+            Sink::Bluetooth(o) => o.push(pcm),
+        }
+    }
+
+    fn finished(&self) -> bool {
+        match self {
+            Sink::Usb(o) => o.finished(),
+            Sink::Bluetooth(o) => o.finished(),
+        }
+    }
 }
 
 /// `finished()` is device-gone — the worker drops and re-correlates.
@@ -1733,13 +1812,23 @@ mod tests {
     }
 
     #[test]
-    fn tier_a_is_wired_ds5_or_edge_only() {
-        assert!(is_tier_a_ds5(0x054C, 0x0CE6, true));
-        assert!(is_tier_a_ds5(0x054C, 0x0DF2, true));
-        assert!(!is_tier_a_ds5(0x054C, 0x0CE6, false));
-        assert!(!is_tier_a_ds5(0x054C, 0x05C4, true));
-        assert!(!is_tier_a_ds5(0x045E, 0x0CE6, true));
-        assert!(!is_tier_a_ds5(0x28DE, 0x1205, true));
+    fn tier_a_is_ds5_or_edge_only() {
+        assert!(is_tier_a_ds5(0x054C, 0x0CE6));
+        assert!(is_tier_a_ds5(0x054C, 0x0DF2));
+        assert!(!is_tier_a_ds5(0x054C, 0x05C4));
+        assert!(!is_tier_a_ds5(0x045E, 0x0CE6));
+        assert!(!is_tier_a_ds5(0x28DE, 0x1205));
+    }
+
+    #[test]
+    fn rumble_mirror_runs_until_its_duration() {
+        note_rumble(3, 0x4000, 0x8000, 60_000);
+        assert_eq!(rumble_now(3), Some((0x40, 0x80)));
+        note_rumble(3, 0x4000, 0x8000, 0);
+        assert_eq!(rumble_now(3), None, "expired");
+        note_rumble(3, 0, 0, 60_000);
+        assert_eq!(rumble_now(3), None, "zero levels are no rumble");
+        assert_eq!(rumble_now(200), None, "out of range");
     }
 
     #[test]

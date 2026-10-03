@@ -351,9 +351,9 @@ pub struct Settings {
     /// plays no menu pulses. DualSense voice-coil haptics stay under `pad_haptics`.
     #[serde(default = "default_true")]
     pub pad_rumble: bool,
-    /// DualSense voice-coil haptics (0xD1 kind 0) on a wired pad's audio device.
+    /// DualSense voice-coil haptics (0xD1 kind 0) on the pad, over USB or Bluetooth.
     /// Gates `CLIENT_CAP_PAD_AUDIO`; wire rumble is suppressed while the stream is
-    /// live (see `gamepad.rs`). Default on: no-op without a capable host and a wired DS5.
+    /// live (see `gamepad.rs`). Default on: no-op without a capable host and a DS5.
     #[serde(default = "default_true")]
     pub pad_haptics: bool,
     /// DualSense speaker stream (0xD1 kind 1): `"pad"` (default), `"mix"` (renders

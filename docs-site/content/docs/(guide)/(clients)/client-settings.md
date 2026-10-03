@@ -89,12 +89,12 @@ Touch modes, mouse modes and the in-stream keys are explained on [Input](/docs/i
 |---|---|---|---|
 | **Forward controllers** | On | Off, this device's controllers aren't sent. Use it when a pad reaches the host another way, such as [USB passthrough](/docs/automation#recipe-full-controller-passthrough-virtualhere). On Linux and Windows, off also disables the [controller exit chord](/docs/input#leaving-with-a-controller). | All |
 | **Controller type** | Automatic | The virtual pad the host creates; Automatic matches each controller. An Xbox pad has no gyro: for motion, pick DualSense, DualShock 4 or Steam Deck. | All. **Steam Controller 2**: Linux, Windows, console. |
-| **Controller rumble** | On | Off, controllers don't vibrate from the stream or in the menus, whatever the game sends. A wired DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
+| **Controller rumble** | On | Off, controllers don't vibrate from the stream or in the menus, whatever the game sends. A DualSense's haptics follow **Controller haptics**; a Steam Controller 2 in passthrough follows Steam on the host. | Linux, Windows, Android, Apple |
 | **Use controller** | Automatic (all controllers) | Forward only the controller you pick. | Linux, Windows, Apple, console |
 | **Guide button** | Automatic | Where the guide and quick-access buttons go: **Send to host** or **This device**. Automatic keeps them on the device only in Steam Deck Gaming Mode. See [the guide button](/docs/input#the-guide-button-xbox--ps--steam-and-quick-access). | All |
 | **Hold Select for guide** | Automatic | Hold Select about ⅓ s to press the host's guide button. A Select tap then arrives a beat late. Automatic turns it on in Gaming Mode and on iPhone, iPad and Apple TV. | All |
-| **Controller haptics** | On | Plays a wired DualSense's voice-coil haptics. See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
-| **Controller speaker** | On (Android: off) | Plays the game's pad audio on a wired DualSense's speaker. | Linux, Windows, Android |
+| **Controller haptics** | On | Plays a DualSense's voice-coil haptics, over USB or Bluetooth (Android: USB). See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
+| **Controller speaker** | On (Android: off) | Plays the game's pad audio on a DualSense's speaker. | Linux, Windows, Android |
 | **Steam Controller 2 passthrough** | On (Apple: off) | Passes a Steam Controller 2 to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Android and Mac: USB, the Puck or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. | Android, Apple |
 | **DualSense over USB** | On | Drives a USB DualSense or DualShock 4 directly, for adaptive triggers, lightbar and gyro. | Android |
 | **Rumble on this phone**, **Gyro from this phone** | Off | The phone's own motor and gyro stand in for a clip-on pad's. | Android, iPhone |

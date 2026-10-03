@@ -75,7 +75,7 @@ pub fn controllers(b: &mut Build) {
             s.guide_gesture = at(GUIDE_GESTURES, i).to_string()
         }),
     );
-    // A wired DualSense's voice coils and speaker, streamed from the host.
+    // A DualSense's voice coils and speaker, streamed from the host.
     let (field, haptics) = Field::switch(
         &spec::PAD_HAPTICS,
         |s| s.pad_haptics,

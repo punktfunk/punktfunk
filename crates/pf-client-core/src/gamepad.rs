@@ -434,7 +434,7 @@ impl GamepadService {
         self.tap_button(wire::BTN_MISC1);
     }
 
-    /// Tier-A capability bits declared at slot open (wired DualSense/Edge only; others
+    /// Tier-A capability bits declared at slot open (DualSense/Edge only; others
     /// 0). Call before [`Self::attach`]. Default is nothing — an embedder that never
     /// calls this keeps the wire bytes unchanged.
     pub fn set_pad_audio_prefs(&self, haptics: bool, speaker: bool) {
@@ -1164,7 +1164,8 @@ impl Worker {
                 if !raw_sc2 {
                     Self::set_slot_sensors(&mut slot, true);
                 }
-                slot.audio_caps = self.pad_audio_caps_for(id, &slot.pad);
+                let (audio_caps, bluetooth) = self.pad_audio_caps_for(id, &slot.pad);
+                slot.audio_caps = audio_caps;
                 if let Some(path) = slot.pad.path() {
                     let (vid, pid) = (slot.pad.vendor_id(), slot.pad.product_id());
                     crate::sc2_capture::log_descriptor(&path, vid.unwrap_or(0), pid.unwrap_or(0));
@@ -1238,10 +1239,11 @@ impl Worker {
                             );
                         }
                     }
-                    crate::pad_audio::register_tier_a(index, slot.pad.path());
+                    crate::pad_audio::register_tier_a(index, slot.pad.path(), bluetooth);
                     tracing::info!(
                         index,
                         caps = slot.audio_caps,
+                        bluetooth,
                         "tier-A DualSense: pad-audio render caps declared"
                     );
                 }
@@ -1259,30 +1261,35 @@ impl Worker {
         }
     }
 
-    /// Settings prefs for a physical DualSense/Edge (VID:PID, never the declared kind) on
-    /// a wired connection; 0 otherwise. Wired from SDL; Unknown falls back to the 4-ch
-    /// audio sibling (Bluetooth exposes none).
-    fn pad_audio_caps_for(&self, id: u32, pad: &sdl3::gamepad::Gamepad) -> u8 {
+    /// Settings prefs for a physical DualSense/Edge (VID:PID, never the declared kind), and
+    /// whether it is on Bluetooth; 0 otherwise. The link is SDL's; Unknown counts as wired only
+    /// with a 4-ch audio sibling. Bluetooth audio needs a raw HID handle beside SDL's.
+    fn pad_audio_caps_for(&self, id: u32, pad: &sdl3::gamepad::Gamepad) -> (u8, bool) {
         if self.pad_audio_prefs == 0 {
-            return 0;
+            return (0, false);
         }
         let jid = sdl3::sys::joystick::SDL_JoystickID(id);
         let vid = self.subsystem.vendor_for_id(jid).unwrap_or(0);
         let pid = self.subsystem.product_for_id(jid).unwrap_or(0);
-        if !crate::pad_audio::is_tier_a_ds5(vid, pid, true) {
-            return 0;
+        if !crate::pad_audio::is_tier_a_ds5(vid, pid) {
+            return (0, false);
         }
         use sdl3::joystick::ConnectionState;
-        let wired = match pad.connection_state() {
-            Ok(ConnectionState::Wired) => true,
-            Ok(ConnectionState::Wireless) => false,
-            _ => crate::pad_audio::wired_audio_sibling(pad.path().as_deref()),
+        let path = pad.path();
+        let bluetooth = match pad.connection_state() {
+            Ok(ConnectionState::Wired) => false,
+            Ok(ConnectionState::Wireless) => true,
+            _ if crate::pad_audio::wired_audio_sibling(path.as_deref()) => false,
+            _ => return (0, false),
         };
-        if crate::pad_audio::is_tier_a_ds5(vid, pid, wired) {
-            self.pad_audio_prefs
-        } else {
-            0
+        if bluetooth && path.is_none_or(|p| crate::sc2_capture::Dev::open(&p).is_none()) {
+            tracing::info!(
+                id,
+                "bluetooth DualSense HID node did not open — pad audio off"
+            );
+            return (0, false);
         }
+        (self.pad_audio_prefs, bluetooth)
     }
 
     /// Flush held wire state and drop the SDL handle. Flush is wire-only, so unplug is safe.
@@ -1301,6 +1308,7 @@ impl Worker {
         if slot.audio_caps != 0 {
             crate::pad_audio::unregister_tier_a(slot.index);
             crate::pad_audio::clear_haptics_liveness(slot.index);
+            crate::pad_audio::note_rumble(slot.index, 0, 0, 0);
         }
         tracing::info!(
             id = slot.id,
@@ -2134,6 +2142,7 @@ impl Worker {
 
     /// Apply one engine command verbatim. `backstop_ms` is the SDL duration — a hardware
     /// net under a stalled worker; the engine emits explicit zeros at every policy stop.
+    /// A tier-A pad's level is mirrored so its Bluetooth media reports carry it.
     fn issue_rumble(slot: &mut Slot, low: u16, high: u16, backstop_ms: u32) {
         let dur_ms: u32 = if (low, high) == (0, 0) {
             100
@@ -2141,6 +2150,9 @@ impl Worker {
             // No local floor: actuator floors live in `ActuatorQuirks::min_pulse_ms`.
             backstop_ms
         };
+        if slot.audio_caps != 0 {
+            crate::pad_audio::note_rumble(slot.index, low, high, dur_ms);
+        }
         match slot.pad.set_rumble(low, high, dur_ms) {
             Err(e) => {
                 tracing::warn!(pad = slot.index, low, high, error = %e, "rumble: SDL set_rumble failed")
