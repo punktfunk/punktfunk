@@ -63,6 +63,13 @@ pub(crate) async fn run(
     sem: Arc<tokio::sync::Semaphore>,
     v2: bool,
 ) -> Result<Served> {
+    // `/pf2` is answered only where the host opts in, as the native `pkf2` ALPN is.
+    if v2 && !serving.host.opts.protocol2 {
+        return Err(refused(
+            punktfunk_core::reject::WIRE_VERSION_CLOSE_CODE,
+            "This host doesn't answer punktfunk/2 yet",
+        ));
+    }
     let Some(Admitted {
         link,
         tx,
@@ -559,7 +566,9 @@ mod tests {
         assert_eq!(label, "Safari on Mac");
 
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let park = crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, &sem);
+        let no_v2: Option<&mut punktfunk_core::quic::v2::io::V2Writer<wtransport::SendStream>> =
+            None;
+        let park = crate::native::park_knock(&admitted.link, no_v2, &np, &label, &fp_hex, &sem);
         let console = async {
             let pending = loop {
                 if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {
@@ -663,6 +672,57 @@ mod tests {
             Some("Safari on Mac")
         );
         assert!(admitted.knock.is_none(), "a paired device streams at once");
+    }
+
+    /// Without `PUNKTFUNK_PROTOCOL=2` a `/pf2` dial is refused with the wire code, as the
+    /// native endpoint answers `pkf1` alone; the page falls back to the `punktfunk/1` path.
+    #[tokio::test]
+    async fn a_pf2_dial_is_refused_where_the_host_has_not_opted_in() {
+        let np = store("pf2-off");
+        let mut s = serving(np);
+        Arc::get_mut(&mut s.host.opts).unwrap().protocol2 = false;
+        let identity = wtransport::Identity::self_signed(["localhost"]).unwrap();
+        let cert = identity.certificate_chain().as_slice()[0].hash();
+        let loopback: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server = wtransport::Endpoint::server(
+            wtransport::ServerConfig::builder()
+                .with_bind_address(loopback)
+                .with_identity(identity)
+                .build(),
+        )
+        .unwrap();
+        let url = format!(
+            "https://127.0.0.1:{}/pf2",
+            server.local_addr().unwrap().port()
+        );
+        let browser = async {
+            wtransport::Endpoint::client(
+                wtransport::ClientConfig::builder()
+                    .with_bind_address(loopback)
+                    .with_server_certificate_hashes([cert])
+                    .build(),
+            )
+            .unwrap()
+            .connect(url)
+            .await
+            .unwrap()
+        };
+        let host = async {
+            let conn = server.accept().await.await.unwrap().accept().await.unwrap();
+            let sem = Arc::new(tokio::sync::Semaphore::new(1));
+            // The dispatcher holds the connection for the `Refused` frame; so does this.
+            let keep = conn.clone();
+            (run(conn, Arc::new(s), sem, true).await, keep)
+        };
+        let (_browser, (ended, _keep)) = tokio::join!(browser, host);
+        let Err(err) = ended else {
+            panic!("refused before admission")
+        };
+        let refusal = err.downcast_ref::<Refusal>().expect("a typed refusal");
+        assert_eq!(
+            refusal.code,
+            punktfunk_core::reject::WIRE_VERSION_CLOSE_CODE
+        );
     }
 
     /// On `/pf2` a refusal still reaches the page on its own stream, as the `Refused` frame.
