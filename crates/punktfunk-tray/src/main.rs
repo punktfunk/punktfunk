@@ -1,8 +1,8 @@
 //! Per-user system-tray companion for the punktfunk host.
 //!
 //! Icon and menu: running / stopped / degraded / failed, plus open-console,
-//! start/stop/restart (UAC per action on Windows, `systemctl --user` on Linux),
-//! pairing, and exit.
+//! start/stop/restart (UAC per action on Windows; on Linux `systemctl --user` per
+//! unit for the host, web console and plugin runner), pairing, and exit.
 //!
 //! Process state is SCM / the systemd user unit first; a listener on the mgmt
 //! port cannot make a stopped service look running. Streaming detail is
@@ -31,7 +31,8 @@ pub struct Args {
     pub quit: bool,
     /// Autostart: exit silently when this user is not a host (Linux installs it for every user).
     pub autostart: bool,
-    /// Windows Start-menu link: start a stopped host once, behind one UAC prompt.
+    /// Start-menu launcher: start a stopped host once — behind one UAC prompt on
+    /// Windows, with its web console and plugin runner on Linux.
     pub start_host: bool,
     /// Loopback by default; the summary route rejects anything else.
     pub mgmt_addr: String,

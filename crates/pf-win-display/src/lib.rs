@@ -120,6 +120,40 @@ pub fn hags_setting() -> &'static str {
     }
 }
 
+/// The first Windows build with SDR wide colour on demand (`SET_WCG_STATE`) and the colour
+/// report that names it: Windows 11 24H2.
+pub const WCG_MIN_BUILD: u32 = 26100;
+
+/// The OS build number (`CurrentBuildNumber`), `0` when unreadable.
+#[cfg(target_os = "windows")]
+pub fn os_build() -> u32 {
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+
+    let mut buf = [0u16; 16];
+    let mut size = std::mem::size_of_val(&buf) as u32;
+    // SAFETY: both strings are NUL-terminated literals; `buf`/`size` are live out-params and
+    // `size` is the buffer's byte length, which the call never writes past.
+    let rc = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            windows::core::w!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion"),
+            windows::core::w!("CurrentBuildNumber"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return 0;
+    }
+    String::from_utf16_lossy(&buf)
+        .trim_end_matches('\0')
+        .parse()
+        .unwrap_or(0)
+}
+
 /// Returns both session ids when this process is outside the active console.
 /// That usually predicts inaccessible console display state. A seats host can
 /// intentionally own an active RDP desktop instead, so callers decide how to

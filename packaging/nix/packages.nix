@@ -205,6 +205,10 @@ in
           "$out/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop"
         substituteInPlace "$out/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop" \
           --replace-fail "/usr/bin/punktfunk-tray" "$out/bin/punktfunk-tray"
+        install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
+          "$out/share/applications/io.unom.Punktfunk.StartHost.desktop"
+        substituteInPlace "$out/share/applications/io.unom.Punktfunk.StartHost.desktop" \
+          --replace-fail "/usr/bin/punktfunk-tray" "$out/bin/punktfunk-tray"
         for sz in 22x22 48x48; do
           for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
             install -Dm0644 "$png" "$out/share/icons/hicolor/$sz/apps/$(basename "$png")"

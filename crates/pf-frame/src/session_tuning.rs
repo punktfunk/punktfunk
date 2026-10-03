@@ -81,23 +81,53 @@ mod imp {
     impl DisplayWakeRequest {
         /// `None` if the kernel refuses; the session still streams.
         pub fn new() -> Option<DisplayWakeRequest> {
-            let reason: Vec<u16> = "punktfunk streaming session\0".encode_utf16().collect();
-            let ctx = ReasonContext {
-                version: POWER_REQUEST_CONTEXT_VERSION,
-                flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
-                simple_reason: reason.as_ptr(),
-            };
-            // SAFETY: `ctx` (and the reason buffer it points into) outlives the call, which copies
-            // the string into the kernel object; the returned handle is owned here and released in
-            // Drop. PowerSetRequest takes the just-created handle + a plain enum value.
+            let h = power_request("punktfunk streaming session")?;
+            // SAFETY: `h` is the just-created, owned power-request handle; the type is a plain enum.
             unsafe {
-                let h = PowerCreateRequest(&ctx);
-                if h.is_null() || h as isize == INVALID_HANDLE_VALUE {
-                    return None;
-                }
                 PowerSetRequest(h, POWER_REQUEST_DISPLAY_REQUIRED);
                 PowerSetRequest(h, POWER_REQUEST_SYSTEM_REQUIRED);
-                Some(DisplayWakeRequest(h))
+            }
+            Some(DisplayWakeRequest(h))
+        }
+    }
+
+    /// A new power-request handle, or `None` if the kernel refuses. The caller owns it.
+    fn power_request(reason: &str) -> Option<Handle> {
+        let reason: Vec<u16> = reason.encode_utf16().chain([0]).collect();
+        let ctx = ReasonContext {
+            version: POWER_REQUEST_CONTEXT_VERSION,
+            flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+            simple_reason: reason.as_ptr(),
+        };
+        // SAFETY: `ctx` (and the reason buffer it points into) outlives the call, which copies
+        // the string into the kernel object.
+        let h = unsafe { PowerCreateRequest(&ctx) };
+        (!h.is_null() && h as isize != INVALID_HANDLE_VALUE).then_some(h)
+    }
+
+    /// RAII system availability only (`PowerRequestSystemRequired`): an idle timer can't
+    /// sleep the machine, while the display may still turn off.
+    pub struct SystemWakeRequest(Handle);
+
+    // SAFETY: as for `DisplayWakeRequest`: an opaque kernel handle, set at new, closed at drop.
+    unsafe impl Send for SystemWakeRequest {}
+
+    impl SystemWakeRequest {
+        /// `None` if the kernel refuses. `reason` shows in `powercfg /requests`.
+        pub fn new(reason: &str) -> Option<SystemWakeRequest> {
+            let h = power_request(reason)?;
+            // SAFETY: `h` is the just-created, owned power-request handle; the type is a plain enum.
+            unsafe { PowerSetRequest(h, POWER_REQUEST_SYSTEM_REQUIRED) };
+            Some(SystemWakeRequest(h))
+        }
+    }
+
+    impl Drop for SystemWakeRequest {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the owned, still-open handle from `new`, dropped exactly once.
+            unsafe {
+                PowerClearRequest(self.0, POWER_REQUEST_SYSTEM_REQUIRED);
+                CloseHandle(self.0);
             }
         }
     }
@@ -208,7 +238,7 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
-pub use imp::{on_hot_thread, DisplayWakeRequest};
+pub use imp::{on_hot_thread, DisplayWakeRequest, SystemWakeRequest};
 
 /// No-op on non-Windows (Linux uses `setpriority` nice + CUDA stream priority —
 /// see `native::boost_thread_priority` and `zerocopy::cuda`).

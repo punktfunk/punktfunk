@@ -587,10 +587,8 @@ pub unsafe extern "C" fn punktfunk_console_push(
                 json::<Vec<pf_client_core::library::RunningGame>>(text)
                     .map(|v| library.set_running(&v))
             }
-            PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS => {
-                json::<Vec<pf_client_core::library::DownloadProgress>>(text)
-                    .map(|v| library.set_downloads(&v))
-            }
+            PUNKTFUNK_CONSOLE_PUSH_LIBRARY_DOWNLOADS => json::<pf_console_ui::DownloadsPush>(text)
+                .map(|p| library.set_downloads(&p.downloads, p.grants)),
             PUNKTFUNK_CONSOLE_PUSH_LIBRARY_STALE => {
                 json::<u8>(text).map(|v| library.set_stale(bridge::stale_code(v)))
             }

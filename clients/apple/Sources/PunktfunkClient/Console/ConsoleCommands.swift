@@ -82,6 +82,12 @@ extension ConsoleModel {
                 addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
                 fp: a["fp_hex"] as? String ?? "", appID: a["app_id"] as? String ?? "",
                 title: a["title"] as? String ?? "")
+        case "Install":
+            guard let action = InstallAction(rawValue: a["action"] as? String ?? "") else { return }
+            changeInstall(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", appID: a["app_id"] as? String ?? "",
+                title: a["title"] as? String ?? "", action: action)
         case "HostAction":
             hostAction(
                 fp: a["fp_hex"] as? String ?? "", id: a["action_id"] as? String ?? "",
@@ -255,10 +261,7 @@ extension ConsoleModel {
             let running = status.games
             // A newer fetch owns the shelf by the time a slow host answers: not its titles.
             guard serial == self.fetchSerial else { return }
-            if let json = try? JSONEncoder().encode(status.downloads),
-               let text = String(data: json, encoding: .utf8) {
-                bridge.push(.libraryDownloads, text)
-            }
+            bridge.push(.libraryDownloads, ConsoleJSON.downloads(status.downloads, grants: status.grants))
             bridge.push(.libraryRunning, ConsoleJSON.runningGames(running))
             if refreshOnly { return }
             do {
@@ -410,6 +413,23 @@ extension ConsoleModel {
                 certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
             self?.notice(outcome.notice(title: title))
             self?.fetchLibrary(addr: addr, mgmt: mgmt, fp: fp, refreshOnly: true)
+        }
+    }
+
+    /// Start, resume, pause or remove a title's download, say how it went, then re-read the host:
+    /// the whole catalog after a removal (the tile turns to "not installed"), else `/status`.
+    private func changeInstall(
+        addr: String, mgmt: UInt16, fp: String, appID: String, title: String, action: InstallAction
+    ) {
+        guard let host = host(fp: fp, addr: addr, port: 0), let pin = host.pinnedSHA256,
+              let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
+        Task { [weak self] in
+            let outcome = await LibraryClient.changeInstall(
+                appID: appID, action: action, address: addr, port: mgmt,
+                certPEM: identity.certPEM, keyPEM: identity.keyPEM, hostFingerprint: pin)
+            self?.notice(outcome.notice(action, title: title))
+            let removed = outcome == .done && action == .remove
+            self?.fetchLibrary(addr: addr, mgmt: mgmt, fp: fp, refreshOnly: !removed)
         }
     }
 

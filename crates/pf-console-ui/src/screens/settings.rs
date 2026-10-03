@@ -1211,18 +1211,9 @@ impl SettingsScreen {
                     ListMsg::None => pulse,
                 };
             }
-            // The console draws the licences with the host's sections. webOS still opens
-            // its own screen: that host sends no sections yet.
+            // The console draws the licences with the host's sections.
             RowId::Licenses => {
                 return match msg {
-                    ListMsg::Activate
-                        if ctx.device.platform == crate::platform::Platform::WebOS =>
-                    {
-                        fx.cmds.push(crate::model::ConsoleCmd::OpenPlatformScreen {
-                            id: crate::platform::PlatformScreen::Licenses.id().to_string(),
-                        });
-                        pulse
-                    }
                     ListMsg::Activate => {
                         let screen = super::licenses::LicensesScreen::new(fx);
                         fx.push(Screen::Licenses(screen));
@@ -1900,7 +1891,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::Version => {
             return RowSpec {
                 label: "Version".into(),
-                value: Some(env!("CARGO_PKG_VERSION").into()),
+                value: Some(ctx.device.version.clone()),
                 ..RowSpec::default()
             };
         }

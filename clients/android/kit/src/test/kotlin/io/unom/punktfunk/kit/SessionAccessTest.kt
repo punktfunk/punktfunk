@@ -32,6 +32,7 @@ class SessionAccessTest {
             "MIC" to SessionAccess.MIC,
             "LAUNCH" to SessionAccess.LAUNCH,
             "POWER" to SessionAccess.POWER,
+            "MANAGE_GAMES" to SessionAccess.MANAGE_GAMES,
         )
         assertEquals(bits.keys().asSequence().toSet(), mine.keys)
         mine.forEach { (name, bit) -> assertEquals(name, bits.getInt(name), bit) }

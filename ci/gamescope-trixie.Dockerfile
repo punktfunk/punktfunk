@@ -60,7 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libluajit-5.1-dev libavif-dev libdecor-0-dev hwdata libglm-dev libbenchmark-dev \
     libvulkan-dev libxcb1-dev libxcb-composite0-dev libxcb-xfixes0-dev libxcb-res0-dev \
     libxcb-ewmh-dev libxcb-icccm4-dev libxcb-errors-dev libxcb-shape0-dev \
-    libpixman-1-dev libdisplay-info-dev libgbm-dev libegl-dev xwayland \
+    libpixman-1-dev libdisplay-info-dev libgbm-dev libegl-dev xwayland libeis-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Assert the ONE version that decides whether this image can do its job, so a future Debian base

@@ -197,6 +197,8 @@ struct Rows {
     /// Held while any row is live, so an idle timer doesn't suspend the host mid-download.
     #[cfg(target_os = "linux")]
     inhibit: Option<crate::sleep_inhibit::StreamHold>,
+    #[cfg(windows)]
+    inhibit: Option<pf_frame::session_tuning::SystemWakeRequest>,
 }
 
 impl Rows {
@@ -208,17 +210,24 @@ impl Rows {
         });
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     fn settle_inhibit(&mut self) {
         let live = self.by_app.values().any(|r| r.view.state.live());
         match (live, self.inhibit.is_some()) {
+            #[cfg(target_os = "linux")]
             (true, false) => self.inhibit = Some(crate::sleep_inhibit::hold()),
+            // Not `StreamHold`: on Windows that also pauses Instant Replay.
+            #[cfg(windows)]
+            (true, false) => {
+                self.inhibit =
+                    pf_frame::session_tuning::SystemWakeRequest::new("punktfunk downloading a game")
+            }
             (false, true) => self.inhibit = None,
             _ => {}
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     fn settle_inhibit(&mut self) {}
 }
 

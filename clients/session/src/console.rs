@@ -555,6 +555,14 @@ impl ServiceState {
                 app_id,
                 title,
             } => self.end_game(addr, mgmt, fp_hex, app_id, title),
+            ConsoleCmd::Install {
+                addr,
+                mgmt,
+                fp_hex,
+                app_id,
+                title,
+                action,
+            } => self.change_install(addr, mgmt, fp_hex, app_id, title, action),
             ConsoleCmd::Pair {
                 addr,
                 port,
@@ -589,11 +597,8 @@ impl ServiceState {
                     r.request();
                 }
             }
-            // A platform-native screen (webOS) — the desktop shell has no such row, so this
-            // never arrives here.
-            ConsoleCmd::OpenPlatformScreen { .. } => {}
-            // Grants and rumble tests from the controllers screen. Android-only for the same
-            // reason: the settings row that opens that screen is not on the desktop's list.
+            // Grants and rumble tests from the controllers screen, Android-only: the settings row
+            // that opens that screen is not on the desktop's list.
             ConsoleCmd::PadAction { .. } => {}
             // The Controllers tab offers no input test on the desktop.
             ConsoleCmd::PadTest { .. } => {}
@@ -682,10 +687,10 @@ impl ServiceState {
         std::thread::Builder::new()
             .name("punktfunk-running".into())
             .spawn(move || {
-                let (running, downloads) = library::fetch_status(&addr, mgmt, &identity, pin);
+                let status = library::fetch_status(&addr, mgmt, &identity, pin);
                 if shared.fetch_epoch() == epoch {
-                    shared.set_downloads(&downloads);
-                    shared.set_running(&running);
+                    shared.set_downloads(&status.downloads, status.grants);
+                    shared.set_running(&status.games);
                 }
             })
             .ok();
@@ -813,6 +818,40 @@ impl ServiceState {
                 let running = library::fetch_running(&addr, mgmt, &identity, pin);
                 if shared.fetch_epoch() == epoch {
                     shared.set_running(&running);
+                }
+            })
+            .ok();
+    }
+
+    fn change_install(
+        &self,
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        app_id: String,
+        title: String,
+        action: library::InstallAction,
+    ) {
+        let shared = self.library.clone();
+        let identity = self.identity.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        let console = self.console.clone();
+        let epoch = shared.fetch_epoch();
+        std::thread::Builder::new()
+            .name("punktfunk-install".into())
+            .spawn(move || {
+                let outcome = library::change_install(&addr, mgmt, &identity, pin, &app_id, action);
+                tracing::info!(app = %app_id, ?action, ?outcome, "title install");
+                console.set_notice(outcome.notice(action, &title));
+                let status = library::fetch_status(&addr, mgmt, &identity, pin);
+                if shared.fetch_epoch() == epoch {
+                    if outcome == library::InstallOutcome::Done
+                        && action == library::InstallAction::Remove
+                    {
+                        shared.set_installed(&app_id, false);
+                    }
+                    shared.set_downloads(&status.downloads, status.grants);
+                    shared.set_running(&status.games);
                 }
             })
             .ok();
@@ -1532,6 +1571,7 @@ fn to_model(games: &[library::GameEntry]) -> Vec<LibraryGame> {
             stats: g.stats,
             running: false,
             endable: false,
+            install: g.install.clone().map(Into::into),
         })
         .collect()
 }

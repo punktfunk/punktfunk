@@ -64,7 +64,10 @@ pub fn spec_for(req: &SetEncodeRequest, backend: u32) -> Result<OpenSpec, Fail> 
     let (hdr, chroma444) = (req.hdr == 1, req.chroma == 1);
     // 10-bit SDR (depth 10, HDR off) picks a BT.709 P010 input on AMF; `choose` ignores it elsewhere.
     let ten_bit = req.bit_depth >= 10;
-    let chosen = InputKind::choose(backend, hdr, ten_bit, chroma444);
+    let sdr_fp16 = req.flags & wire::SET_ENCODE_FLAG_SDR_FP16 != 0;
+    // `None`: this backend reads no FP16 SDR desktop, so it never opens on one.
+    let chosen =
+        InputKind::choose(backend, hdr, ten_bit, chroma444, sdr_fp16).ok_or((-4, "fp16"))?;
     // `PFVD_AMF_NV12` / `PFVD_QSV_NV12` (machine environment, read per open) skip the encoder's
     // own colour conversion and open on the YUV the driver converts: the A/B for an encoder
     // whose conversion looks or runs worse.
@@ -372,7 +375,7 @@ pub fn open_backend(
     // the backend's colour signalling follows it, not the (identical) P010 pixel label.
     let hdr = matches!(
         spec.kind,
-        InputKind::P010 | InputKind::Rgb10 | InputKind::Fp16
+        InputKind::P010 | InputKind::Rgb10 | InputKind::Fp16 | InputKind::Planar { hdr: true, .. }
     );
     let luid = Some(adapter.luid62());
     // NVENC, QSV and PyroWave are x86-64 only (see Cargo.toml); an ARM64 driver refuses their
@@ -419,6 +422,7 @@ pub fn open_backend(
                 bps,
                 chroma,
                 depth,
+                hdr,
                 adapter.vendor_id,
                 adapter.device_id,
             )

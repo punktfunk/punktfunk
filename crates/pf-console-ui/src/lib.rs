@@ -80,12 +80,14 @@ pub use blur::{set_style_override, Style as BackdropStyle};
 pub use console::{Console, ConsoleEntry, ConsoleHandles, InputSource, Insets, Viewport};
 pub use input::Key;
 pub use library::decode_poster_off_thread;
-pub use library::{DecodedPoster, LibraryGame, LibraryPhase, LibraryShared, Stale};
+pub use library::{
+    DecodedPoster, DownloadsPush, LibraryGame, LibraryPhase, LibraryShared, Stale, TitleFiles,
+};
 pub use model::{
     ConsoleBus, ConsoleCmd, ConsoleShared, HostAction, HostRow, LicenseSection, OtherDevice,
     PadTestState, PairPhase, PresetChip, SpeedPhase, SpeedStatus, WakeStatus,
 };
-pub use platform::{Platform, PlatformScreen};
+pub use platform::Platform;
 pub use ring::Ring;
 pub use screens::prompt::Prompt;
 pub use screens::EditField;
@@ -93,3 +95,6 @@ pub use shell::{ConsoleOptions, DeviceScreen, DEFAULT_GPU_CACHE_BYTES, MIN_GPU_C
 #[cfg(all(any(target_os = "linux", windows), feature = "vulkan-overlay"))]
 pub use skia_overlay::SkiaOverlay;
 pub use store::{SettingsStore, SnapshotStore};
+
+/// This kit's release: the About row's default and the licences' title.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");

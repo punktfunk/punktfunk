@@ -274,6 +274,8 @@ fn launch_gave_up(title: &str, state: Option<&str>, elapsed: f64) -> Option<Stri
 
 /// Poll interval for the launch hold, and the retry when an answer never lands.
 const LAUNCH_POLL: f64 = 1.0;
+/// Seconds between `/status` reads while a shelf tile shows a live download.
+const DOWNLOADS_POLL: f64 = 2.0;
 const LAUNCH_POLL_STALL: f64 = 5.0;
 /// The host lists nothing for the title: the launch did not resolve
 /// (no recipe, launcher missing). The host logs it and streams on; so do we.
@@ -287,6 +289,9 @@ const LAUNCH_HOLD_MAX: f64 = 120.0;
 pub struct ConsoleOptions {
     /// Hostname registered as the default pairing device name.
     pub device_name: String,
+    /// The About row's version, verbatim. `None` shows this kit's version: right where the
+    /// app ships from this workspace.
+    pub version: Option<String>,
     /// Steam Deck: Steam's keyboard types; this shell never draws one.
     pub deck: bool,
     /// A TV (Apple TV, Android TV): rows for a clipboard or a phone's sensors do nothing.
@@ -305,7 +310,7 @@ pub struct ConsoleOptions {
     /// Settings and preset catalog. `None` uses the desktop file store
     /// (`pf_client_core::trust`); every other host must supply one.
     pub store: Option<Arc<dyn SettingsStore>>,
-    /// Which settings rows exist and which platform-native screens may open.
+    /// Which settings rows exist.
     pub platform: Platform,
     /// Skia GPU resource-cache budget, bytes. Desktop default is
     /// [`DEFAULT_GPU_CACHE_BYTES`]; a memory-tight box may go down to
@@ -327,6 +332,7 @@ impl ConsoleOptions {
     pub fn desktop(device_name: String, deck: bool) -> ConsoleOptions {
         ConsoleOptions {
             device_name,
+            version: None,
             deck,
             tv: false,
             fallback_ui: false,
@@ -389,6 +395,8 @@ pub(crate) struct Shell {
     motion: Motion,
     console: ConsoleShared,
     library: LibraryShared,
+    /// When [`Shell::tick_downloads`] last asked the host.
+    downloads_polled: f64,
     bus: ConsoleBus,
     actions: VecDeque<OverlayAction>,
     settings: trust::Settings,
@@ -520,6 +528,7 @@ impl Shell {
             motion: Motion::None,
             console,
             library,
+            downloads_polled: f64::NEG_INFINITY,
             bus,
             actions: VecDeque::new(),
             mesh_palette: settings.ui_palette.clone(),
@@ -535,6 +544,7 @@ impl Shell {
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
                 name: opts.device_name,
+                version: opts.version.unwrap_or_else(|| crate::VERSION.into()),
             },
             hosts: Vec::new(),
             hosts_gen: u64::MAX,
@@ -975,7 +985,29 @@ impl Shell {
         self.sync_wake();
         self.home_shelf();
         self.tick_launch();
+        self.tick_downloads();
         self.settle_focus();
+    }
+
+    /// While the shelf on top shows a live download and no launch hold polls already, re-read
+    /// `/status` every [`DOWNLOADS_POLL`] so its tile's percentage moves.
+    fn tick_downloads(&mut self) {
+        let t = self.t();
+        if self.launching.is_some() || t - self.downloads_polled < DOWNLOADS_POLL {
+            return;
+        }
+        if !self.library.any_live_download() {
+            return;
+        }
+        let Some(lib) = self.stack.last().and_then(Screen::shelf) else {
+            return;
+        };
+        self.downloads_polled = t;
+        self.bus.send(ConsoleCmd::RefreshRunning {
+            addr: lib.host_addr().to_string(),
+            mgmt: lib.host_mgmt_port(),
+            fp_hex: lib.host_fp_hex().to_string(),
+        });
     }
 
     /// Settings writes palette/follow-OS into `self.settings`; recompile here so the
@@ -2260,6 +2292,7 @@ fn stand_in_games() -> Vec<crate::library::LibraryGame> {
         stats: None,
         running: i == 1,
         endable: false,
+        install: None,
     };
     let stores = ["steam", "lutris", "gog", "epic", "custom", "heroic"];
     let mut out: Vec<_> = (0..12)

@@ -108,7 +108,7 @@ pub struct SetEncodeRequest {
     pub wire_seq_base: u32,
     /// Ordered preference, 0-terminated. [`backend`] ids.
     pub backends: [u32; 4],
-    /// Reserved; send `0`.
+    /// `SET_ENCODE_FLAG_*` bits; unknown bits are ignored.
     pub flags: u32,
     /// Pads the prefix to its 8-byte alignment (Pod forbids implicit tail padding).
     pub _pad_tail: u32,
@@ -117,6 +117,11 @@ pub struct SetEncodeRequest {
     /// which is every backend's default; an old driver reads the prefix and ignores them.
     pub knobs: EncodeKnobs,
 }
+
+/// [`SetEncodeRequest::flags`]: the display composes FP16 scRGB under SDR wide colour, and the
+/// stream is BT.709 SDR. Sent only to a driver that declared wide colour, so an older one, which
+/// would read BGRA from an FP16 surface, never sees it.
+pub const SET_ENCODE_FLAG_SDR_FP16: u32 = 1;
 
 /// Bytes of [`SetEncodeRequest`] before [`SetEncodeRequest::knobs`]: what a host older than
 /// the knobs sends, and what a driver older than them reads.
@@ -364,8 +369,19 @@ pub enum EncodeInput {
     Rgb10,
     /// FP16 scRGB straight into the backend, which converts to BT.2020 PQ itself. AMF only.
     Fp16,
+    /// Shader FP16 scRGB→packed `R10G10B10A2`, sRGB curve on BT.709: SDR wide colour, the
+    /// desktop's own bits past 8. NVENC; it CSCs itself, at full chroma.
+    Rgb10Wcg,
+    /// Shader FP16 scRGB→P010 BT.709 studio range: SDR wide colour for AMF and QSV.
+    P010Wcg,
     /// Shareable Y + CbCr planes plus a fence, as PyroWave's own Vulkan device imports them.
-    Planar { hdr: bool, chroma444: bool },
+    /// `hdr` is BT.2020 PQ and `wcg` BT.709 from FP16; either writes 10-bit codes into 16-bit
+    /// planes.
+    Planar {
+        hdr: bool,
+        wcg: bool,
+        chroma444: bool,
+    },
 }
 
 impl EncodeInput {
@@ -377,19 +393,38 @@ impl EncodeInput {
     /// `hdr` is 10-bit SDR: NVENC still widens from `Bgra`, AMF and QSV take a BT.709 P010
     /// (`P010Sdr`). Media Foundation takes NV12 whatever was asked for — no vendor's MFT
     /// accepts P010, so an HDR request that reaches it encodes 8-bit rather than failing.
+    ///
+    /// `sdr_fp16` ([`SET_ENCODE_FLAG_SDR_FP16`]) means the surface is FP16 under an SDR
+    /// transfer: every input then converts from it, and `None` is a backend that cannot read
+    /// it (Media Foundation), which the open reports instead of refusing every frame.
     #[must_use]
-    pub const fn choose(backend: u32, hdr: bool, ten_bit: bool, chroma444: bool) -> Self {
-        match (backend, hdr, chroma444) {
-            (backend::PYROWAVE, _, _) => Self::Planar { hdr, chroma444 },
+    pub const fn choose(
+        backend: u32,
+        hdr: bool,
+        ten_bit: bool,
+        chroma444: bool,
+        sdr_fp16: bool,
+    ) -> Option<Self> {
+        let wcg = sdr_fp16 && !hdr;
+        Some(match (backend, hdr, chroma444) {
+            (backend::PYROWAVE, _, _) => Self::Planar {
+                hdr,
+                wcg,
+                chroma444,
+            },
+            (backend::MEDIA_FOUNDATION, _, _) if wcg => return None,
             (backend::MEDIA_FOUNDATION, _, _) => Self::Nv12,
+            (backend::NVENC, false, _) if wcg => Self::Rgb10Wcg,
+            (backend::AMF | backend::QSV, false, _) if wcg => Self::P010Wcg,
             (backend::NVENC, true, true) => Self::Rgb10,
             (backend::AMF, true, _) => Self::Fp16,
             (_, true, _) => Self::P010,
             (backend::NVENC, false, _) => Self::Bgra,
             (backend::AMF | backend::QSV, false, _) if ten_bit => Self::P010Sdr,
             (backend::AMF | backend::QSV, false, _) => Self::Bgra,
+            _ if wcg => return None,
             _ => Self::Nv12,
-        }
+        })
     }
 
     /// What `backend` opens with after it refused `self`. Only AMF's and QSV's RGB inputs
@@ -418,6 +453,7 @@ impl EncodeInput {
             self,
             Self::Bgra
                 | Self::Rgb10
+                | Self::Rgb10Wcg
                 | Self::Fp16
                 | Self::Planar {
                     chroma444: true,
@@ -816,24 +852,60 @@ mod tests {
                 (4, true, true, true),
                 Planar {
                     hdr: true,
+                    wcg: false,
                     chroma444: true,
                 },
             ),
         ];
         for ((backend, hdr, ten_bit, chroma444), want) in table {
-            let got = EncodeInput::choose(backend, hdr, ten_bit, chroma444);
+            let got = EncodeInput::choose(backend, hdr, ten_bit, chroma444, false);
             assert_eq!(
-                got, want,
+                got,
+                Some(want),
                 "backend {backend} hdr {hdr} 10bit {ten_bit} 444 {chroma444}"
             );
         }
         for backend in [1, 4] {
-            for hdr in [false, true] {
+            for (hdr, sdr_fp16) in [(false, false), (true, false), (false, true)] {
                 assert!(
-                    EncodeInput::choose(backend, hdr, hdr, true).full_chroma(),
-                    "backend {backend} hdr {hdr} asked 4:4:4 and got a subsampled input"
+                    EncodeInput::choose(backend, hdr, true, true, sdr_fp16)
+                        .is_some_and(EncodeInput::full_chroma),
+                    "backend {backend} hdr {hdr} fp16 {sdr_fp16} asked 4:4:4 and got a \
+                     subsampled input"
                 );
             }
+        }
+    }
+
+    /// An FP16 SDR desktop must reach every backend through a converter that reads FP16, never
+    /// a BGRA input the pool would refuse frame by frame, and HDR still wins over the flag.
+    #[test]
+    fn an_fp16_sdr_desktop_picks_an_fp16_input_or_none() {
+        use super::EncodeInput::{P010Wcg, Planar, Rgb10, Rgb10Wcg, P010};
+        let fp16 =
+            |backend, hdr, chroma444| EncodeInput::choose(backend, hdr, true, chroma444, true);
+        assert_eq!(fp16(1, false, false), Some(Rgb10Wcg));
+        assert_eq!(fp16(1, false, true), Some(Rgb10Wcg));
+        assert_eq!(fp16(2, false, false), Some(P010Wcg));
+        assert_eq!(fp16(3, false, false), Some(P010Wcg));
+        assert_eq!(
+            fp16(4, false, false),
+            Some(Planar {
+                hdr: false,
+                wcg: true,
+                chroma444: false
+            })
+        );
+        assert_eq!(
+            fp16(5, false, false),
+            None,
+            "Media Foundation reads no FP16"
+        );
+        assert_eq!(fp16(1, true, true), Some(Rgb10), "HDR wins over the flag");
+        assert_eq!(fp16(3, true, false), Some(P010));
+        for kind in [Rgb10Wcg, P010Wcg] {
+            assert!(!kind.composed(), "{kind:?} needs its converter");
+            assert_eq!(kind.fallback(2), None);
         }
     }
 

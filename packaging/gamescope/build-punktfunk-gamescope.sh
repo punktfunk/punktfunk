@@ -103,6 +103,8 @@ echo "==> configuring"
 #                               the compositor rejects the client's `swapchain_feedback` and every
 #                               Vulkan client dies on a black screen. A compositor we ship needs
 #                               the layer we built beside it.
+#   -Dinput_emulation=enabled   gamescope's EIS server, the only way keyboard and mouse reach a
+#                               session the host spawns. `auto` drops it without libeis headers.
 #
 # `force_fallback_for` includes **wlroots** on purpose, and it is load-bearing for a binary we
 # SHIP: gamescope vendors a wlroots submodule, but meson prefers a system one when the build host
@@ -141,6 +143,7 @@ meson setup "$BUILD" "$SRCDIR" \
   --buildtype=release \
   -Dforce_fallback_for="libliftoff,vkroots,wlroots,libdisplay-info${EXTRA_FALLBACK:+,$EXTRA_FALLBACK}" \
   -Dpipewire=enabled \
+  -Dinput_emulation=enabled \
   -Denable_tests=false \
   -Denable_openvr_support=false \
   -Denable_gamescope_wsi_layer=true

@@ -88,6 +88,40 @@ pub struct LibraryGame {
     /// Running, and this device launched it: the host lets it end the title. Same source.
     #[serde(default)]
     pub endable: bool,
+    /// A title a plugin installs. `None` is installed, as every other title is.
+    #[serde(default)]
+    pub install: Option<TitleFiles>,
+}
+
+/// What a shell that reads `/status` itself pushes: `{"downloads": [...], "grants": 255}`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct DownloadsPush {
+    #[serde(default)]
+    pub downloads: Vec<pf_client_core::library::DownloadProgress>,
+    #[serde(default)]
+    pub grants: Option<u32>,
+}
+
+/// A title's files on the host, its download, and the one row its menu offers for them.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TitleFiles {
+    #[serde(flatten)]
+    pub install: pf_client_core::library::TitleInstall,
+    /// From the last `/status` read. Host state, as [`LibraryGame::running`].
+    #[serde(skip)]
+    pub download: Option<pf_client_core::library::DownloadProgress>,
+    /// From the above and this device's grants.
+    #[serde(skip)]
+    pub action: Option<pf_client_core::library::InstallAction>,
+}
+
+impl From<pf_client_core::library::TitleInstall> for TitleFiles {
+    fn from(install: pf_client_core::library::TitleInstall) -> Self {
+        TitleFiles {
+            install,
+            ..Default::default()
+        }
+    }
 }
 
 impl LibraryGame {
@@ -177,8 +211,10 @@ struct Shared {
     /// `window` is still to come, by library id — the launch hold's answer. Replaced whole on
     /// every `/status` read.
     states: std::collections::HashMap<String, (String, bool)>,
-    /// Each launched title's download, while the host fetches its files before starting it.
+    /// Every download the host reported, by library id: the launch hold's and the tiles'.
     downloads: std::collections::HashMap<String, pf_client_core::library::DownloadProgress>,
+    /// This device's grants from the last `/status` read; `None` from a host without them.
+    grants: Option<u32>,
     /// Bumped on every `/status` read, changed or not: the launch hold paces its next poll
     /// on an answer landing, not on the answer being different.
     status_gen: u64,
@@ -238,6 +274,7 @@ impl Default for LibraryShared {
             fetch_epoch: 0,
             states: std::collections::HashMap::new(),
             downloads: std::collections::HashMap::new(),
+            grants: None,
             status_gen: 0,
         })))
     }
@@ -324,6 +361,7 @@ impl LibraryShared {
             LibraryPhase::Ready
         };
         s.games = games;
+        apply_downloads(&mut s);
         s.stale = stale;
         s.generation += 1;
     }
@@ -369,13 +407,39 @@ impl LibraryShared {
         self.0.lock().unwrap().states.get(id).cloned()
     }
 
-    /// The host's downloads from a `/status` read. Call before [`Self::set_running`] with the
-    /// same read: the launch hold reads both once `status_gen` moves.
-    pub fn set_downloads(&self, downloads: &[pf_client_core::library::DownloadProgress]) {
-        self.0.lock().unwrap().downloads = downloads
+    /// The host's downloads and this device's grants from a `/status` read. Call before
+    /// [`Self::set_running`] with the same read: the launch hold reads both once `status_gen`
+    /// moves. Bumps the generation only when a tile or a menu changes.
+    pub fn set_downloads(
+        &self,
+        downloads: &[pf_client_core::library::DownloadProgress],
+        grants: Option<u32>,
+    ) {
+        let mut s = self.0.lock().unwrap();
+        s.downloads = downloads
             .iter()
             .map(|d| (d.app_id.clone(), d.clone()))
             .collect();
+        s.grants = grants;
+        if apply_downloads(&mut s) {
+            s.generation += 1;
+        }
+    }
+
+    /// The host confirmed a title's files went or arrived, ahead of the next catalog read.
+    pub fn set_installed(&self, id: &str, installed: bool) {
+        let mut s = self.0.lock().unwrap();
+        let Some(files) = s
+            .games
+            .iter_mut()
+            .find(|g| g.id == id)
+            .and_then(|g| g.install.as_mut())
+        else {
+            return;
+        };
+        files.install.state = if installed { "installed" } else { "missing" }.into();
+        apply_downloads(&mut s);
+        s.generation += 1;
     }
 
     /// A launched title's download from the last `/status` read, if the host is fetching it.
@@ -384,6 +448,11 @@ impl LibraryShared {
         id: &str,
     ) -> Option<pf_client_core::library::DownloadProgress> {
         self.0.lock().unwrap().downloads.get(id).cloned()
+    }
+
+    /// A title on the shelf is downloading, queued or installing.
+    pub(crate) fn any_live_download(&self) -> bool {
+        self.0.lock().unwrap().downloads.values().any(|d| d.live())
     }
 
     /// How many `/status` reads have landed — see `status_gen`.
@@ -464,6 +533,29 @@ fn order(games: &mut [LibraryGame]) {
 /// them through this module.
 pub use pf_client_core::library::{initials, store_label, DESKTOP_ICON, DESKTOP_ID};
 
+/// Each installable title's download and menu row from the last `/status` read. True when
+/// one changed.
+fn apply_downloads(s: &mut Shared) -> bool {
+    let mut changed = false;
+    for g in &mut s.games {
+        let Some(files) = g.install.as_mut() else {
+            continue;
+        };
+        let download = s.downloads.get(&g.id).cloned();
+        let action = pf_client_core::library::InstallAction::for_title(
+            Some(&files.install),
+            download.as_ref(),
+            s.grants,
+        );
+        if files.download != download || files.action != action {
+            files.download = download;
+            files.action = action;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Every shelf leads with the host's own desktop, so Library is never a dead end for the
 /// desktop-only user and a plugin-less host is still one press from streaming. Model state
 /// only: the disk cache stores wire `GameEntry`s and never sees this.
@@ -481,6 +573,7 @@ fn desktop_tile() -> LibraryGame {
         stats: None,
         running: false,
         endable: false,
+        install: None,
     }
 }
 
@@ -551,6 +644,7 @@ mod tests {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         };
         let shared = LibraryShared::default();
         shared.set_games(vec![
@@ -590,6 +684,7 @@ mod tests {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         };
         let shared = LibraryShared::default();
         shared.set_games(vec![
@@ -665,6 +760,7 @@ mod tests {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         }]);
         assert_eq!(shared.status_gen(), 0);
         shared.set_running(&running(&["steam:Celeste"], "launching"));
@@ -711,6 +807,7 @@ mod tests {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         };
         let shared = LibraryShared::default();
         shared.set_games_cached(vec![g("Celeste"), g("Tunic")]);
@@ -761,6 +858,7 @@ mod tests {
                     stats: None,
                     running: false,
                     endable: false,
+                    install: None,
                 })
                 .collect(),
         );
@@ -771,6 +869,48 @@ mod tests {
             .map(|g| g.title.clone())
             .collect();
         assert_eq!(titles, ["Desktop", "Celeste", "Portal 2", "Tunic"]);
+    }
+
+    /// A status read lands each download on its tile and picks the menu row by the grants;
+    /// titles arriving after the read pick theirs up too. The JSON is what Kotlin and Swift
+    /// push.
+    #[test]
+    fn a_status_read_marks_installable_titles_by_their_download_and_the_grants() {
+        use pf_client_core::library::InstallAction;
+        use punktfunk_core::quic::{GRANT_ALL, GRANT_LAUNCH};
+        let shared = LibraryShared::default();
+        let games: Vec<LibraryGame> = serde_json::from_str(
+            r#"[{"id":"custom:a","title":"Quail","store":"custom","launcher":false,
+                "icon":"","platform":null,"running":false,
+                "install":{"state":"missing","size_bytes":26000000000}}]"#,
+        )
+        .unwrap();
+        let push = |json: &str| {
+            let p: DownloadsPush = serde_json::from_str(json).unwrap();
+            shared.set_downloads(&p.downloads, p.grants);
+        };
+        let quail = || {
+            shared
+                .snapshot()
+                .games
+                .into_iter()
+                .find(|g| g.id == "custom:a")
+        };
+        push(&format!(
+            r#"{{"downloads":[{{"app_id":"custom:a","state":"downloading","done_bytes":1}}],
+                "grants":{GRANT_ALL}}}"#
+        ));
+        shared.set_games(games);
+        let files = quail().unwrap().install.unwrap();
+        assert_eq!(files.download.unwrap().state, "downloading");
+        assert_eq!(files.action, Some(InstallAction::Pause));
+        let before = shared.snapshot().generation;
+        push(&format!(r#"{{"downloads":[],"grants":{GRANT_LAUNCH}}}"#));
+        assert!(shared.snapshot().generation > before);
+        assert_eq!(
+            quail().unwrap().install.unwrap().action,
+            Some(InstallAction::Install)
+        );
     }
 
     /// The tile is model state, so it leads whatever the catalog says — including a
@@ -799,6 +939,7 @@ mod tests {
             stats: None,
             running: true,
             endable: false,
+            install: None,
         }]);
         assert_eq!(shared.snapshot().games[0].id, DESKTOP_ID);
     }
@@ -833,6 +974,7 @@ mod tests {
                     stats: None,
                     running: false,
                     endable: false,
+                    install: None,
                 })
                 .collect(),
         );

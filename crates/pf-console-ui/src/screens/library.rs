@@ -2277,6 +2277,7 @@ mod tests {
                     stats: None,
                     running: false,
                     endable: false,
+                    install: None,
                 })
                 .collect(),
         );
@@ -2776,6 +2777,7 @@ mod tests {
                 stats: None,
                 running: false,
                 endable: false,
+                install: None,
             })
             .collect();
         s.recollate();
@@ -3101,6 +3103,7 @@ mod tests {
                 stats: None,
                 running: false,
                 endable: false,
+                install: None,
             })
             .collect()
     }
@@ -3365,6 +3368,7 @@ mod tests {
                     stats: None,
                     running: i == 1,
                     endable: false,
+                    install: None,
                 })
                 .collect();
             for (i, hours) in [(2, 2), (3, 30), (5, 80)] {

@@ -89,6 +89,9 @@ pub struct TargetInventory {
     pub primary: bool,
     /// HDR active on the target; `None` when inactive or the query failed.
     pub hdr: Option<bool>,
+    /// SDR wide colour (auto colour management) active: DWM composes FP16 under an SDR
+    /// transfer. `None` when inactive or the query failed.
+    pub wcg: Option<bool>,
     /// `SDRWhiteLevel` (1000 = 80 nits): where DWM puts SDR white on an HDR desktop. `None` when
     /// inactive or not reported.
     pub sdr_white_level: Option<u32>,
@@ -96,6 +99,34 @@ pub struct TargetInventory {
     /// and the scanline probe address. Zero when inactive.
     pub source_id: u32,
     pub source_adapter_luid: i64,
+}
+
+/// What a target composes in. `Wcg` is SDR under auto colour management: FP16 composition,
+/// display-referred (1.0 = the panel's white), no HDR transfer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorMode {
+    Sdr,
+    Wcg,
+    Hdr,
+}
+
+impl ColorMode {
+    /// From Windows 11 24H2's `activeColorMode` (0 SDR, 1 WCG, 2 HDR) when the OS answers it,
+    /// else the older advanced-colour bits: 2 = enabled, 4 = wide colour enforced, which is
+    /// how ACM on an SDR panel reports. `None` when neither query answered.
+    pub fn decode(active_mode: Option<i32>, v1_bits: Option<u32>) -> Option<Self> {
+        match active_mode {
+            Some(0) => return Some(Self::Sdr),
+            Some(1) => return Some(Self::Wcg),
+            Some(2) => return Some(Self::Hdr),
+            _ => {}
+        }
+        v1_bits.map(|b| match (b & 0x2 != 0, b & 0x4 != 0) {
+            (false, _) => Self::Sdr,
+            (true, true) => Self::Wcg,
+            (true, false) => Self::Hdr,
+        })
+    }
 }
 
 impl TargetInventory {
@@ -309,10 +340,36 @@ mod tests {
             refresh_mhz: 60_000,
             primary: active && x == 0 && y == 0,
             hdr: active.then_some(false),
+            wcg: active.then_some(false),
             sdr_white_level: None,
             source_id: key,
             source_adapter_luid: 0x1f,
         }
+    }
+
+    #[test]
+    fn colour_mode_prefers_the_24h2_answer_and_reads_acm_from_the_old_bits() {
+        use ColorMode::{Hdr, Sdr, Wcg};
+        assert_eq!(ColorMode::decode(Some(1), Some(0b0011)), Some(Wcg));
+        assert_eq!(ColorMode::decode(Some(0), Some(0b0011)), Some(Sdr));
+        assert_eq!(ColorMode::decode(Some(2), None), Some(Hdr));
+        assert_eq!(ColorMode::decode(None, Some(0b0011)), Some(Hdr));
+        assert_eq!(
+            ColorMode::decode(None, Some(0b0111)),
+            Some(Wcg),
+            "ACM on an SDR panel"
+        );
+        assert_eq!(
+            ColorMode::decode(None, Some(0b0001)),
+            Some(Sdr),
+            "supported only"
+        );
+        assert_eq!(
+            ColorMode::decode(Some(7), Some(0b0001)),
+            Some(Sdr),
+            "unknown mode"
+        );
+        assert_eq!(ColorMode::decode(None, None), None);
     }
 
     #[test]

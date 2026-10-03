@@ -252,6 +252,12 @@ pub trait Capturer: Send {
         None
     }
 
+    /// The display composes FP16 under an SDR transfer (Windows SDR wide colour), so an SDR
+    /// stream's encoder reads FP16. Default `false`.
+    fn composes_sdr_fp16(&self) -> bool {
+        false
+    }
+
     /// How many frames the encode loop may keep in flight before it blocks.
     /// `1` (default) is capture → submit → poll-blocks. `>1` overlaps convert
     /// of N+1 with encode of N when each frame has a fresh output texture.
@@ -542,6 +548,18 @@ pub fn capturer_supports_hdr() -> bool {
 }
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn capturer_supports_hdr() -> bool {
+    false
+}
+
+/// Whether a 10-bit SDR session's IDD-push capture carries the desktop's own bits past 8:
+/// Windows composes the virtual display in SDR wide colour (FP16) for it. Windows 11 24H2,
+/// until a session on this host finds wide colour refused.
+#[cfg(target_os = "windows")]
+pub fn capturer_delivers_sdr10() -> bool {
+    idd_push::wcg_available()
+}
+#[cfg(not(target_os = "windows"))]
+pub fn capturer_delivers_sdr10() -> bool {
     false
 }
 
