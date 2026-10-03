@@ -81,11 +81,11 @@ pub fn encode_v2(hdr: &PacketHeader, s: &V2Stamp) -> [u8; V2_HEADER_LEN] {
 
 /// One received v2 packet: its header in `punktfunk/1`'s slice-stream form, its epoch and its
 /// shard. `None` on a tag, stream or size this build does not accept. `pts_ref_us` is the
-/// newest capture time seen, which unwraps the 32-bit field.
+/// newest capture time seen, which unwraps the 32-bit field; the first packet seeds it.
 pub fn decode_v2<'a>(
     pkt: &'a [u8],
     clock_origin_ns: u64,
-    pts_ref_us: &mut i64,
+    pts_ref_us: &mut Option<i64>,
 ) -> Option<(PacketHeader, u8, &'a [u8])> {
     let h = pkt.get(..V2_HEADER_LEN)?;
     let (tag, body) = (h[0], &pkt[V2_HEADER_LEN..]);
@@ -114,8 +114,11 @@ pub fn decode_v2<'a>(
     if tag == V2_STREAM_PROBE {
         user_flags |= u32::from(FLAG_PROBE);
     }
-    let pts_us = *pts_ref_us + i64::from(u32_at(12).wrapping_sub(*pts_ref_us as u32) as i32);
-    *pts_ref_us = (*pts_ref_us).max(pts_us);
+    let pts_us = match *pts_ref_us {
+        Some(r) => r + i64::from(u32_at(12).wrapping_sub(r as u32) as i32),
+        None => i64::from(u32_at(12)),
+    };
+    *pts_ref_us = Some(pts_ref_us.map_or(pts_us, |r| r.max(pts_us)));
     let pts_ns = (clock_origin_ns as i64)
         .saturating_add(pts_us.saturating_mul(1000))
         .max(0) as u64;
@@ -193,7 +196,7 @@ mod tests {
             .unwrap();
             let mut rebuilt = vec![0u8; len.div_ceil(64).max(1) * 64];
             let mut closed = None;
-            let mut pts_ref = 0;
+            let mut pts_ref = None;
             for (i, (h, body)) in out.iter().enumerate() {
                 let mut pkt = encode_v2(h, &stamp(i as u64)).to_vec();
                 pkt.extend_from_slice(body);
@@ -228,7 +231,7 @@ mod tests {
         let mut pkt = encode_v2(&h, &stamp(0)).to_vec();
         pkt.extend_from_slice(&[0; 16]);
         assert_eq!(pkt[0], V2_STREAM_PROBE);
-        let mut r = 0;
+        let mut r = None;
         assert!(decode_v2(&pkt, 0, &mut r).unwrap().0.user_flags & u32::from(FLAG_PROBE) != 0);
         for tag in [0x02u8, 0x10, 0x40, 0xC0] {
             pkt[0] = tag;
@@ -245,7 +248,7 @@ mod tests {
         h.frame_bytes = 20;
         let mut pkt = encode_v2(&h, &stamp(0)).to_vec();
         pkt.extend_from_slice(&[0; 16]);
-        let mut r = 0;
+        let mut r = None;
         assert_eq!(decode_v2(&pkt, 0, &mut r).unwrap().0.frame_bytes, 20);
         pkt[28..30].copy_from_slice(&16u16.to_le_bytes());
         assert!(decode_v2(&pkt, 0, &mut r).is_none());
@@ -259,7 +262,7 @@ mod tests {
 
     #[test]
     fn capture_time_unwraps_across_the_32_bit_edge() {
-        let mut r = i64::from(u32::MAX) - 10;
+        let mut r = Some(i64::from(u32::MAX) - 10);
         let mut h = PacketHeader::read_from_bytes(&[0u8; HEADER_LEN]).unwrap();
         h.shard_bytes = 16;
         h.data_shards = 1;
@@ -272,7 +275,15 @@ mod tests {
         let mut pkt = encode_v2(&h, &origin0).to_vec();
         pkt.extend_from_slice(&[0; 16]);
         assert_eq!(decode_v2(&pkt, 0, &mut r).unwrap().0.pts_ns, h.pts_ns);
-        assert_eq!(r, i64::from(u32::MAX) + 5);
+        assert_eq!(r, Some(i64::from(u32::MAX) + 5));
+        // A first packet past 2^31 µs seeds the reference instead of unwrapping around 0,
+        // which read it as a time before the session began.
+        let mut first = None;
+        h.pts_ns = (i64::from(u32::MAX) / 2 + 5) as u64 * 1000;
+        let mut pkt = encode_v2(&h, &origin0).to_vec();
+        pkt.extend_from_slice(&[0; 16]);
+        assert_eq!(decode_v2(&pkt, 0, &mut first).unwrap().0.pts_ns, h.pts_ns);
+        assert_eq!(first, Some(i64::from(u32::MAX) / 2 + 5));
     }
 
     proptest! {

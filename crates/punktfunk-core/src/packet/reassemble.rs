@@ -205,10 +205,11 @@ fn reclaim_parity(
 #[derive(Clone, Copy, Debug)]
 enum RxFraming {
     V1,
-    /// `pts_ref_us` is the newest capture time seen, which unwraps the 32-bit field.
+    /// `pts_ref_us` is the newest capture time seen, which unwraps the 32-bit field; `None`
+    /// until the first packet seeds it.
     V2 {
         clock_origin_ns: u64,
-        pts_ref_us: i64,
+        pts_ref_us: Option<i64>,
     },
 }
 
@@ -263,7 +264,7 @@ impl Reassembler {
     pub fn set_v2(&mut self, clock_origin_ns: u64) {
         self.framing = RxFraming::V2 {
             clock_origin_ns,
-            pts_ref_us: 0,
+            pts_ref_us: None,
         };
     }
 
