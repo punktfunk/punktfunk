@@ -390,13 +390,17 @@ fn pad_driver() -> HostCheck {
 /// The Windows virtual-display driver answers, or the host has no video at all. A driver whose
 /// host process hangs still handshakes and streams audio, so nothing else reports it.
 fn vdisplay_driver() -> HostCheck {
+    vdisplay_driver_check(crate::vdisplay::driver_health())
+}
+
+fn vdisplay_driver_check(health: DriverHealth) -> HostCheck {
     let id = ids::VDISPLAY_DRIVER;
     let reinstall = || Remedy {
         text: "Reinstall the host — the installer bundles the matching driver.".to_string(),
         command: None,
         relogin_required: false,
     };
-    match crate::vdisplay::driver_health() {
+    match health {
         DriverHealth::Inapplicable => {
             HostCheck::inapplicable(id, "The virtual display driver is a Windows component.")
         }
@@ -405,6 +409,10 @@ fn vdisplay_driver() -> HostCheck {
             format!("The virtual display driver answers (protocol {protocol})."),
         )
         .with_param("protocol", protocol.to_string()),
+        DriverHealth::Installed => HostCheck::ok(
+            id,
+            "The virtual display driver is installed. It starts with the next stream.",
+        ),
         DriverHealth::Wedged => HostCheck::problem(
             id,
             CheckStatus::Fail,
@@ -967,6 +975,17 @@ mod tests {
         assert!(!leaf_is_ublue("linux/fedora"));
         assert!(!leaf_is_ublue("linux/fedora/fedora"));
         assert!(!leaf_is_ublue("linux/arch/steamos"));
+    }
+
+    /// Installed but idle until the first connect is healthy; no adapter at all is not.
+    #[test]
+    fn vdisplay_driver_installed_is_ok_absent_fails() {
+        let check = vdisplay_driver_check(DriverHealth::Installed);
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert!(check.remedy.is_none());
+        let check = vdisplay_driver_check(DriverHealth::Absent);
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert!(check.remedy.is_some());
     }
 
     #[test]

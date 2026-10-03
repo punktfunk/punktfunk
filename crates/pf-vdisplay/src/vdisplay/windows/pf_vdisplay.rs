@@ -21,9 +21,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use windows::core::{GUID, PCWSTR};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
-    SetupDiGetDeviceInterfaceDetailW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, HDEVINFO, SPINT_ACTIVE,
-    SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W,
+    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiEnumDeviceInterfaces,
+    SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW, SetupDiGetDeviceRegistryPropertyW,
+    DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, GUID_DEVCLASS_DISPLAY, HDEVINFO,
+    SETUP_DI_REGISTRY_PROPERTY, SPDRP_DRIVER, SPDRP_HARDWAREID, SPINT_ACTIVE,
+    SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
 };
 use windows::Win32::Foundation::{HANDLE, LUID};
 use windows::Win32::Storage::FileSystem::{
@@ -1022,7 +1024,8 @@ pub fn probe() -> Result<()> {
 }
 
 /// One bounded probe for the diagnostics row: no reload, no lock, nothing cached. A wedged
-/// host answers within [`PROBE_BUDGET`] the first time and at once after.
+/// host answers within [`PROBE_BUDGET`] the first time and at once after. No interface on an
+/// [`adapter_installed`] box reads `Installed`: the next connect starts or reloads it.
 pub fn health() -> crate::DriverHealth {
     use crate::DriverHealth;
     let probe = probe_device();
@@ -1038,11 +1041,68 @@ pub fn health() -> crate::DriverHealth {
         };
     }
     if probe.is_absent() {
-        return DriverHealth::Absent;
+        return if adapter_installed() {
+            DriverHealth::Installed
+        } else {
+            DriverHealth::Absent
+        };
     }
     DriverHealth::NotReady {
         detail: format!("{:#}", probe.into_error()),
     }
+}
+
+/// A present Display devnode with a `pf_vdisplay` hardware ID and a driver bound: installed,
+/// whether or not its control interface is up. A node without a driver (Code 28) is not.
+fn adapter_installed() -> bool {
+    // SAFETY: SetupAPI enumeration; the returned list is solely owned by the RAII wrapper.
+    let Ok(set) = (unsafe {
+        SetupDiGetClassDevsW(
+            Some(&GUID_DEVCLASS_DISPLAY),
+            PCWSTR::null(),
+            None,
+            DIGCF_PRESENT,
+        )
+    }) else {
+        return false;
+    };
+    let set = DevInfoList(set);
+    let prop = |did: &SP_DEVINFO_DATA, prop: SETUP_DI_REGISTRY_PROPERTY| {
+        let mut buf = [0u8; 1024];
+        let mut req = 0u32;
+        // SAFETY: live set and element; the buffer length travels with the slice.
+        unsafe {
+            SetupDiGetDeviceRegistryPropertyW(
+                set.0,
+                did,
+                prop,
+                None,
+                Some(&mut buf),
+                Some(&mut req),
+            )
+        }
+        .ok()?;
+        let units: Vec<u16> = buf[..(req as usize).min(buf.len())]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        Some(String::from_utf16_lossy(&units).to_ascii_lowercase())
+    };
+    (0..)
+        .map_while(|i| {
+            let mut did = SP_DEVINFO_DATA {
+                cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: live set; `did` is a valid, size-stamped out-param.
+            unsafe { SetupDiEnumDeviceInfo(set.0, i, &mut did) }
+                .ok()
+                .map(|()| did)
+        })
+        .any(|did| {
+            prop(&did, SPDRP_HARDWAREID).is_some_and(|ids| ids.contains("pf_vdisplay"))
+                && prop(&did, SPDRP_DRIVER).is_some()
+        })
 }
 
 pub fn is_available() -> bool {
