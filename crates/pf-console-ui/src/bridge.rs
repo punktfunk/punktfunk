@@ -79,6 +79,7 @@ impl CreateOptions {
         store.set_known_hosts(self.known_hosts);
         let opts = ConsoleOptions {
             device_name: self.device_name,
+            version: None,
             deck: self.system_keyboard,
             tv: self.tv,
             fallback_ui: self.fallback_ui,

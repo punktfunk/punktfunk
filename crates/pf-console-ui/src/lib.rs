@@ -88,6 +88,9 @@ pub use model::{
     PadTestState, PairPhase, PresetChip, SpeedPhase, SpeedStatus, WakeStatus,
 };
 pub use platform::{Platform, PlatformScreen};
+
+/// This kit's release, for an app that names it beside its own.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use ring::Ring;
 pub use screens::prompt::Prompt;
 pub use screens::EditField;
