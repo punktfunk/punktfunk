@@ -100,6 +100,9 @@ pub enum RowId {
     // so the typed struct stays shared; [`row_on`] keeps them off desktop.
     /// Slice-progressive decode plus DSCP. Android-only.
     LowLatency,
+    /// A dual-screen handheld's lower panel carries the companion panel or the picture;
+    /// off leaves a second screen to the system. Android-only.
+    SecondScreen,
     PhoneRumble,
     PhoneGyro,
     /// Raw BLE/USB capture instead of the OS pad.
@@ -185,6 +188,7 @@ pub fn advanced(id: RowId) -> bool {
 /// the Apple client reads the same keys from its own document.
 mod device_keys {
     pub const LOW_LATENCY: &str = "android.low_latency";
+    pub const SECOND_SCREEN: &str = "android.second_screen";
     pub const PHONE_RUMBLE: &str = "android.rumble_on_phone";
     pub const PHONE_GYRO: &str = "android.gyro_on_phone";
     pub const SC2: &str = "android.sc2_capture";
@@ -342,6 +346,7 @@ impl RowId {
     fn extra(self) -> Option<Extra> {
         Some(match self {
             RowId::LowLatency => Extra::Bool(device_keys::LOW_LATENCY, true),
+            RowId::SecondScreen => Extra::Bool(device_keys::SECOND_SCREEN, true),
             RowId::PhoneRumble => Extra::Bool(device_keys::PHONE_RUMBLE, false),
             RowId::PhoneGyro => Extra::Bool(device_keys::PHONE_GYRO, false),
             RowId::Sc2Passthrough => Extra::Bool(device_keys::SC2, true),
@@ -440,6 +445,7 @@ const TABS: [(&str, &[RowId]); 7] = [
             RowId::Refresh,
             RowId::Bitrate,
             RowId::VideoFit,
+            RowId::SecondScreen,
             RowId::Hdr,
             RowId::PresentPriority,
             RowId::SmoothBuffer,
@@ -1424,6 +1430,8 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::ReduceUiResolution => &[Android, WebOS],
         // A MediaCodec decoder flag; nothing else has the knob.
         RowId::LowLatency => &[Android],
+        // Only Android has a second screen to use (a handheld's lower panel, a half-open fold).
+        RowId::SecondScreen => &[Android],
         // The clients whose presenters place the picture through `video_fit`.
         RowId::VideoFit => &[Desktop, Android, Apple],
         // Offered wherever there is a second UI to fall back to: Android's touch home,
@@ -1508,9 +1516,9 @@ pub fn row_applies(id: RowId, ctx: &Ctx) -> bool {
         // ignores the value (`GamepadUi.kt`: the tv term alone satisfies the OR);
         // webOS obeys it — a Magic Remote with no pad is why its cursor UI exists.
         RowId::GamepadUiMode => ctx.device.fallback_ui && RowId::GamepadUi.extra_on(ctx.settings),
-        // The phone's own motor, gyro and SC2 dongle: only a handheld sends its screen
-        // (`ConsoleOptions::screen`), so a TV or a Mac never offers them.
-        RowId::PhoneRumble | RowId::PhoneGyro | RowId::Sc2Passthrough => {
+        // The phone's own motor, gyro and SC2 dongle, and its second screen: only a handheld
+        // sends its screen (`ConsoleOptions::screen`), so a TV or a Mac never offers them.
+        RowId::PhoneRumble | RowId::PhoneGyro | RowId::Sc2Passthrough | RowId::SecondScreen => {
             ctx.device.screen.is_some()
         }
         // A Mac window has no background session; Android and the other Apple devices do.
@@ -1658,6 +1666,7 @@ fn row_icon(id: RowId) -> &'static str {
         | RowId::Controllers => "gamepad-2",
         RowId::SystemButtons | RowId::GuideGesture => "house",
         RowId::PhoneGyro => "rotate-cw",
+        RowId::SecondScreen => "monitor",
         RowId::Touch | RowId::CursorGestures => "pointer",
         RowId::Mouse => "mouse",
         RowId::QuickActions => "ellipsis",
@@ -2109,6 +2118,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         ),
         RowId::AutoWake => (None, "Auto-wake on connect", on_off(s.auto_wake).into()),
         RowId::LowLatency => (None, "Low-latency mode", extra()),
+        RowId::SecondScreen => (None, "Second screen", extra()),
         RowId::PhoneRumble => (Some("This device"), "Rumble on this phone", extra()),
         RowId::PhoneGyro => (None, "Gyro from this phone", extra()),
         RowId::Sc2Passthrough => (None, "Steam Controller 2 passthrough", extra()),
@@ -2395,6 +2405,11 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
         RowId::LowLatency => {
             "Feeds the decoder slice by slice as frames arrive and marks the media sockets \
              for priority. Off if a decoder shows artefacts under it."
+        }
+        RowId::SecondScreen => {
+            "A smaller second screen — a dual-screen handheld's lower panel, a foldable half \
+             open — shows the companion panel, or the picture with Screens. Off leaves it to \
+             the system: for a phone on a TV."
         }
         RowId::PhoneRumble => {
             "Also play controller 1's rumble on this phone's own motor — for a clip-on pad \
@@ -2702,6 +2717,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         }),
         RowId::AutoWake => toggle(&mut s.auto_wake, delta, wrap),
         RowId::LowLatency
+        | RowId::SecondScreen
         | RowId::PhoneRumble
         | RowId::PhoneGyro
         | RowId::Sc2Passthrough
