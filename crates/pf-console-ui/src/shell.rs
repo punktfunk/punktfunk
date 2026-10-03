@@ -310,7 +310,7 @@ pub struct ConsoleOptions {
     /// Settings and preset catalog. `None` uses the desktop file store
     /// (`pf_client_core::trust`); every other host must supply one.
     pub store: Option<Arc<dyn SettingsStore>>,
-    /// Which settings rows exist and which platform-native screens may open.
+    /// Which settings rows exist.
     pub platform: Platform,
     /// Skia GPU resource-cache budget, bytes. Desktop default is
     /// [`DEFAULT_GPU_CACHE_BYTES`]; a memory-tight box may go down to

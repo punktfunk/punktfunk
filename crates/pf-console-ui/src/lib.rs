@@ -87,7 +87,7 @@ pub use model::{
     ConsoleBus, ConsoleCmd, ConsoleShared, HostAction, HostRow, LicenseSection, OtherDevice,
     PadTestState, PairPhase, PresetChip, SpeedPhase, SpeedStatus, WakeStatus,
 };
-pub use platform::{Platform, PlatformScreen};
+pub use platform::Platform;
 pub use ring::Ring;
 pub use screens::prompt::Prompt;
 pub use screens::EditField;

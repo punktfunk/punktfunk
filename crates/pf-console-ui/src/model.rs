@@ -501,12 +501,6 @@ pub enum ConsoleCmd {
         key: String,
         on: bool,
     },
-    /// Open a platform-owned overlay (`design/android-skia-console-port.md`).
-    /// `id` is [`crate::platform::PlatformScreen::id`]. The host draws it and holds
-    /// input; the console never sees the pixels. Desktop raises none.
-    OpenPlatformScreen {
-        id: String,
-    },
     /// Forget a saved host's identity and keep the record: its pin and paired flag clear, so
     /// the next connect asks for a PIN again. `key` as in [`Self::ForgetHost`].
     UnpairHost {
