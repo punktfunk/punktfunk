@@ -183,7 +183,8 @@ pub fn max_body(ty: u64) -> usize {
 
 /// Bidirectional, opened by the client first: handshake, config, state.
 pub const STREAM_CONTROL: u64 = 0x00;
-/// Client → host, unidirectional: input edges in order.
+/// Client → host, unidirectional: reserved for input edges. This release sends them on the
+/// control stream as [`MSG_INPUT_EVENT`].
 pub const STREAM_INPUT: u64 = 0x01;
 /// Bidirectional, one per transfer: clipboard formats and files.
 pub const STREAM_TRANSFER: u64 = 0x02;
