@@ -260,7 +260,7 @@ pub fn run(args: crate::Args) -> anyhow::Result<()> {
         args.mgmt_addr.clone(),
         args.mgmt_port,
         args.web_port,
-        Box::new(move |st, console_up| {
+        Box::new(move |st, console_up, _companions| {
             *app().status() = st;
             app().web_console.store(console_up, Ordering::SeqCst);
             let hwnd = HWND(app().hwnd.load(Ordering::SeqCst) as *mut _);

@@ -1,8 +1,8 @@
 //! Per-user system-tray companion for the punktfunk host.
 //!
 //! Icon and menu: running / stopped / degraded / failed, plus open-console,
-//! start/stop/restart (UAC per action on Windows, `systemctl --user` on Linux),
-//! pairing, and exit.
+//! start/stop/restart (UAC per action on Windows; on Linux `systemctl --user` per
+//! unit for the host, web console and plugin runner), pairing, and exit.
 //!
 //! Process state is SCM / the systemd user unit first; a listener on the mgmt
 //! port cannot make a stopped service look running. Streaming detail is

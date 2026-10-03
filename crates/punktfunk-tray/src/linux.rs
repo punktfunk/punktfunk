@@ -1,9 +1,10 @@
 //! Linux StatusNotifierItem tray (`ksni`/`zbus`), fed by the status poller.
 //!
-//! The host is the systemd **user** unit `punktfunk-host.service`. Start/stop/restart
-//! are `systemctl --user` — no polkit. KDE renders SNI natively; GNOME needs the
-//! AppIndicator extension or the icon is missing. `--autostart` then exits silently
-//! instead of failing every login.
+//! The host, its web console and its plugin runner are systemd **user** units
+//! (`status::UNITS`). Each gets a submenu with its state and start/stop/restart via
+//! `systemctl --user` — no polkit. "Start host" starts all three. KDE renders SNI
+//! natively; GNOME needs the AppIndicator extension or the icon is missing.
+//! `--autostart` then exits silently instead of failing every login.
 //!
 //! One instance per session (`flock` on `$XDG_RUNTIME_DIR/punktfunk-tray.lock`).
 //! Status model and poller: `status.rs`. Service-vs-machine restart wording:
@@ -14,9 +15,11 @@ use std::sync::{Arc, OnceLock};
 
 use crate::status::{self, Poller, TrayStatus};
 
-/// Poller writes `status` / `web_console` through `Handle::update`, which re-emits SNI props.
+/// The poller writes the state fields through `Handle::update`, which re-emits SNI props.
 struct HostTray {
     status: TrayStatus,
+    /// The units after the host in `status::UNITS`; empty until the first poll.
+    companions: Vec<TrayStatus>,
     web_port: u16,
     /// Loopback probe of the console. Labels the always-present "Open web console" row; never hides it.
     web_console: bool,
@@ -25,13 +28,18 @@ struct HostTray {
 }
 
 impl HostTray {
-    fn systemctl(&self, verb: &str) {
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", verb, status::UNIT_NAME])
-            .status();
-        if let Some(p) = self.poller.get() {
-            p.poke();
-        }
+    /// Off the D-Bus thread: a console start waits on web-init, a runner stop on its
+    /// finalizers. Polls again once systemd answers.
+    fn systemctl(&self, verb: &str, units: &[&str]) {
+        let mut cmd = std::process::Command::new("systemctl");
+        cmd.arg("--user").arg(verb).args(units);
+        let poller = self.poller.clone();
+        std::thread::spawn(move || {
+            let _ = cmd.status();
+            if let Some(p) = poller.get() {
+                p.poke();
+            }
+        });
     }
 
     /// Empty `path` is the dashboard.
@@ -96,7 +104,7 @@ impl ksni::Tray for HostTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
         let release = self.status.release_label();
-        vec![
+        let mut items = vec![
             StandardItem {
                 label: self.status.headline(),
                 enabled: false,
@@ -128,24 +136,18 @@ impl ksni::Tray for HostTray {
             StandardItem {
                 label: "Start host".into(),
                 visible: self.status.can_start(),
-                activate: Box::new(|t: &mut Self| t.systemctl("start")),
+                activate: Box::new(|t: &mut Self| {
+                    t.systemctl("start", &status::UNITS.map(|(unit, _)| unit))
+                }),
                 ..Default::default()
             }
             .into(),
-            StandardItem {
-                label: "Stop host".into(),
-                visible: self.status.is_running(),
-                activate: Box::new(|t: &mut Self| t.systemctl("stop")),
-                ..Default::default()
-            }
-            .into(),
-            StandardItem {
-                label: status::RESTART_LABEL.into(),
-                visible: self.status.can_restart(),
-                activate: Box::new(|t: &mut Self| t.systemctl("restart")),
-                ..Default::default()
-            }
-            .into(),
+        ];
+        let states = std::iter::once(&self.status).chain(&self.companions);
+        for ((unit, name), st) in status::UNITS.into_iter().zip(states) {
+            items.push(service_menu(name, unit, st));
+        }
+        items.extend([
             MenuItem::Separator,
             StandardItem {
                 label: "Exit tray".into(),
@@ -153,7 +155,8 @@ impl ksni::Tray for HostTray {
                 ..Default::default()
             }
             .into(),
-        ]
+        ]);
+        items
     }
 
     /// Stay registered across a watcher drop (plasmashell restart, GNOME reload).
@@ -161,6 +164,38 @@ impl ksni::Tray for HostTray {
     fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {
         true
     }
+}
+
+/// "<name> — <state>" with start / stop / restart for one unit; hidden when not installed.
+fn service_menu(name: &str, unit: &'static str, st: &TrayStatus) -> ksni::MenuItem<HostTray> {
+    use ksni::menu::*;
+    let action = move |label: &str, enabled: bool, verb: &'static str| -> MenuItem<HostTray> {
+        StandardItem {
+            label: label.into(),
+            enabled,
+            activate: Box::new(move |t: &mut HostTray| t.systemctl(verb, &[unit])),
+            ..Default::default()
+        }
+        .into()
+    };
+    let state = match st {
+        TrayStatus::NotInstalled => "not installed",
+        TrayStatus::Stopped => "stopped",
+        TrayStatus::Starting => "starting…",
+        TrayStatus::Running(_) | TrayStatus::Degraded => "running",
+        TrayStatus::Error(_) => "failed",
+    };
+    SubMenu {
+        label: format!("{name} — {state}"),
+        visible: *st != TrayStatus::NotInstalled,
+        submenu: vec![
+            action("Start", st.can_start(), "start"),
+            action("Stop", st.is_running(), "stop"),
+            action("Restart", st.can_restart(), "restart"),
+        ],
+        ..Default::default()
+    }
+    .into()
 }
 
 /// ARGB32 pixmap fallback (network byte order, SNI spec) when hicolor icons are missing.
@@ -225,6 +260,7 @@ pub fn run(args: crate::Args) -> anyhow::Result<()> {
     let poller_slot = Arc::new(OnceLock::new());
     let tray = HostTray {
         status: TrayStatus::Stopped, // placeholder until the first poll
+        companions: Vec::new(),
         web_port: args.web_port,
         web_console: false, // live-probed on the first poll
         poller: poller_slot.clone(),
@@ -250,9 +286,10 @@ pub fn run(args: crate::Args) -> anyhow::Result<()> {
         args.mgmt_addr.clone(),
         args.mgmt_port,
         args.web_port,
-        Box::new(move |st, console_up| {
+        Box::new(move |st, console_up, companions| {
             let updated = update_handle.update(|t: &mut HostTray| {
                 t.status = st;
+                t.companions = companions;
                 t.web_console = console_up;
             });
             if updated.is_none() {
