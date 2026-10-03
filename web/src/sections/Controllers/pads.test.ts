@@ -2,15 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PadFrame } from "@/api/gen/model/padFrame";
+import { PAD_ART } from "./padArt";
 import {
+	ART_BITS,
 	appendLog,
 	BIT,
 	BUTTON_NAMES,
-	familyOf,
 	LOG_MAX,
 	logText,
 	padEvents,
-	SHAPES,
 } from "./pads";
 
 const frame = (over: Partial<PadFrame> = {}): PadFrame => ({
@@ -120,9 +120,9 @@ describe("the log ring", () => {
 	});
 });
 
-describe("shapes", () => {
-	// Every kind the host can build folds onto a drawing; nothing falls through to a blank.
-	test("every emulated pad kind resolves to a shape", () => {
+describe("drawings", () => {
+	// Every kind the host can build has its own drawing; only Auto falls back.
+	test("every emulated pad kind has a drawing", () => {
 		const kinds = [
 			"xbox360",
 			"xboxone",
@@ -142,24 +142,34 @@ describe("shapes", () => {
 			"joyconpair",
 			"switch2pro",
 			"switch2gamecube",
-			"auto",
 		];
-		for (const k of kinds) expect(SHAPES[familyOf(k)]).toBeDefined();
-		expect(familyOf("dualshock4")).toBe("playstation");
-		expect(familyOf("steamdeck")).toBe("steam");
-		expect(familyOf("switchpro")).toBe("switch");
-		expect(familyOf("xboxelite")).toBe("xbox");
-		expect(familyOf("8bitdopro2")).toBe("switch");
-		expect(familyOf("joyconpair")).toBe("switch");
-		expect(familyOf("switch2pro")).toBe("switch");
-		expect(familyOf("8bitdoultimate2")).toBe("xbox");
+		for (const k of kinds) expect(PAD_ART[k]).toBeDefined();
+		expect(Object.keys(PAD_ART).sort()).toEqual([...kinds].sort());
 	});
 
-	test("each shape places two sticks and a full face cluster", () => {
-		for (const shape of Object.values(SHAPES)) {
-			expect(shape.sticks).toHaveLength(2);
-			for (const bit of [BIT.A, BIT.B, BIT.X, BIT.Y, BIT.GUIDE]) {
-				expect(shape.buttons.some((b) => b.bit === bit)).toBe(true);
+	// A misspelt id would draw a control that never lights.
+	test("every control lights from a wire bit or an axis", () => {
+		const axes = ["LT", "RT", "LS", "RS"];
+		for (const [kind, art] of Object.entries(PAD_ART)) {
+			const ids = art.parts.flatMap((p) => ("id" in p && p.id ? [p.id] : []));
+			for (const id of ids) {
+				expect(`${kind} ${id} ${id in ART_BITS || axes.includes(id)}`).toBe(
+					`${kind} ${id} true`,
+				);
+			}
+			for (const id of [
+				"A",
+				"B",
+				"X",
+				"Y",
+				"LB",
+				"RB",
+				"LT",
+				"RT",
+				"LS",
+				"RS",
+			]) {
+				expect(`${kind} ${ids.includes(id)}`).toBe(`${kind} true`);
 			}
 		}
 	});
