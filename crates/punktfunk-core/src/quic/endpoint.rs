@@ -135,6 +135,50 @@ fn server_from_der(
     addr: std::net::SocketAddr,
     idle: std::time::Duration,
 ) -> anyhow_result::Result<quinn::Endpoint> {
+    let server_config = server_config(cert_der, key_der, idle, &[QUIC_ALPN])?;
+    Ok(quinn::Endpoint::server(server_config, addr)?)
+}
+
+/// A host endpoint that answers `punktfunk/2` beside `punktfunk/1`, and a clone of its socket
+/// for [`MediaSender`](crate::transport::shared::MediaSender). TLS takes the first of the host's
+/// ALPNs the client offers, so `pkf2` wins wherever both ends speak it.
+pub fn server_shared(
+    addr: std::net::SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    idle: std::time::Duration,
+) -> anyhow_result::Result<(quinn::Endpoint, std::net::UdpSocket)> {
+    use rustls::pki_types::pem::PemObject;
+    let cert_der = rustls::pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes())
+        .map_err(|e| anyhow_result::Error::msg(format!("cert pem: {e}")))?;
+    let key_der = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
+        .map_err(|e| anyhow_result::Error::msg(format!("key pem: {e}")))?;
+    let server_config = server_config(
+        cert_der,
+        key_der,
+        idle,
+        &[super::v2::registry::ALPN, QUIC_ALPN],
+    )?;
+    let socket = std::net::UdpSocket::bind(addr)?;
+    crate::transport::grow_socket_buffers(&socket);
+    let media = socket.try_clone()?;
+    let runtime = quinn::default_runtime()
+        .ok_or_else(|| anyhow_result::Error::msg("no async runtime found".into()))?;
+    let ep = quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(server_config),
+        socket,
+        runtime,
+    )?;
+    Ok((ep, media))
+}
+
+fn server_config(
+    cert_der: rustls::pki_types::CertificateDer<'static>,
+    key_der: rustls::pki_types::PrivateKeyDer<'static>,
+    idle: std::time::Duration,
+    alpns: &[&[u8]],
+) -> anyhow_result::Result<quinn::ServerConfig> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     // Client auth is offered, not required: a missing cert still handshakes;
     // pairing decides at the app layer. Presented certs are fingerprinted after.
@@ -142,12 +186,12 @@ fn server_from_der(
         .with_client_cert_verifier(Arc::new(AcceptAnyClientCert))
         .with_single_cert(vec![cert_der], key_der)
         .map_err(|e| anyhow_result::Error::msg(format!("server config: {e}")))?;
-    rustls_cfg.alpn_protocols = vec![QUIC_ALPN.to_vec()];
+    rustls_cfg.alpn_protocols = alpns.iter().map(|a| a.to_vec()).collect();
     let quic_cfg = quinn::crypto::rustls::QuicServerConfig::try_from(rustls_cfg)
         .map_err(|e| anyhow_result::Error::msg(format!("quic server config: {e}")))?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_cfg));
     server_config.transport_config(stream_transport_idle(idle));
-    Ok(quinn::Endpoint::server(server_config, addr)?)
+    Ok(server_config)
 }
 
 /// Fresh self-signed PEM identity for a client to persist and present on connect.
@@ -201,33 +245,7 @@ pub fn client_pinned_with_identity(
 ) -> PinnedClient {
     let observed = Arc::new(Mutex::new(None));
     let ep = (|| {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let builder = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(crate::tls::PinVerify::with_observed(
-                pin,
-                observed.clone(),
-            )));
-        let mut rustls_cfg = match identity {
-            None => builder.with_no_client_auth(),
-            Some((cert_pem, key_pem)) => {
-                use rustls::pki_types::pem::PemObject;
-                let cert =
-                    rustls::pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes())
-                        .map_err(|e| anyhow_result::Error::msg(format!("client cert pem: {e}")))?;
-                let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-                    .map_err(|e| anyhow_result::Error::msg(format!("client key pem: {e}")))?;
-                builder
-                    .with_client_auth_cert(vec![cert], key)
-                    .map_err(|e| anyhow_result::Error::msg(format!("client auth: {e}")))?
-            }
-        };
-        rustls_cfg.alpn_protocols = vec![QUIC_ALPN.to_vec()];
-        let quic_cfg = quinn::crypto::rustls::QuicClientConfig::try_from(rustls_cfg)
-            .map_err(|e| anyhow_result::Error::msg(format!("quic client config: {e}")))?;
-        let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_cfg));
-        client_cfg.transport_config(stream_transport());
-
+        let client_cfg = client_config(pin, identity, &observed, &[QUIC_ALPN])?;
         // `Endpoint::client` hardcodes `EndpointConfig::default()` (1472-byte
         // `max_udp_payload_size`), which would cap the host's MTU search. Build by
         // hand so [`endpoint_config`] can advertise jumbo.
@@ -239,6 +257,80 @@ pub fn client_pinned_with_identity(
         Ok(ep)
     })();
     (ep, observed)
+}
+
+/// A client endpoint and the media it receives, on one shared socket
+/// ([`crate::transport::shared`]).
+pub type SharedClient = (
+    anyhow_result::Result<(quinn::Endpoint, crate::transport::shared::ClientMedia)>,
+    Arc<Mutex<Option<[u8; 32]>>>,
+);
+
+/// [`client_pinned_with_identity`] on one socket for QUIC and media, offering `alpns` in
+/// order. The endpoint never lets the host grease the QUIC fixed bit, which is what keeps a
+/// QUIC packet from reading as media. The media side is the session's transport once the host
+/// answers `pkf2`.
+pub fn client_shared(
+    pin: Option<[u8; 32]>,
+    identity: Option<(&str, &str)>,
+    alpns: &[&[u8]],
+) -> SharedClient {
+    let observed = Arc::new(Mutex::new(None));
+    let ep = (|| {
+        let client_cfg = client_config(pin, identity, &observed, alpns)?;
+        let (socket, media) =
+            crate::transport::shared::client_socket("0.0.0.0:0".parse().unwrap())?;
+        let runtime = quinn::default_runtime()
+            .ok_or_else(|| anyhow_result::Error::msg("no async runtime found".into()))?;
+        let mut cfg = endpoint_config();
+        cfg.grease_quic_bit(false);
+        let mut ep = quinn::Endpoint::new_with_abstract_socket(cfg, None, socket, runtime)?;
+        ep.set_default_client_config(client_cfg);
+        Ok((ep, media))
+    })();
+    (ep, observed)
+}
+
+fn client_config(
+    pin: Option<[u8; 32]>,
+    identity: Option<(&str, &str)>,
+    observed: &Arc<Mutex<Option<[u8; 32]>>>,
+    alpns: &[&[u8]],
+) -> anyhow_result::Result<quinn::ClientConfig> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let builder = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(crate::tls::PinVerify::with_observed(
+            pin,
+            observed.clone(),
+        )));
+    let mut rustls_cfg = match identity {
+        None => builder.with_no_client_auth(),
+        Some((cert_pem, key_pem)) => {
+            use rustls::pki_types::pem::PemObject;
+            let cert = rustls::pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes())
+                .map_err(|e| anyhow_result::Error::msg(format!("client cert pem: {e}")))?;
+            let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
+                .map_err(|e| anyhow_result::Error::msg(format!("client key pem: {e}")))?;
+            builder
+                .with_client_auth_cert(vec![cert], key)
+                .map_err(|e| anyhow_result::Error::msg(format!("client auth: {e}")))?
+        }
+    };
+    rustls_cfg.alpn_protocols = alpns.iter().map(|a| a.to_vec()).collect();
+    let quic_cfg = quinn::crypto::rustls::QuicClientConfig::try_from(rustls_cfg)
+        .map_err(|e| anyhow_result::Error::msg(format!("quic client config: {e}")))?;
+    let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_cfg));
+    client_cfg.transport_config(stream_transport());
+    Ok(client_cfg)
+}
+
+/// The ALPN a connection settled on, `None` before the handshake or without one.
+pub fn negotiated_alpn(conn: &quinn::Connection) -> Option<Vec<u8>> {
+    conn.handshake_data()?
+        .downcast::<quinn::crypto::rustls::HandshakeData>()
+        .ok()?
+        .protocol
 }
 
 /// Minimal error plumbing without pulling anyhow into punktfunk-core's public API.

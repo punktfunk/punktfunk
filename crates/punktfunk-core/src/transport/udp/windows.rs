@@ -195,3 +195,25 @@ pub(super) fn send_gso(t: &UdpTransport, packets: &[&[u8]]) -> std::io::Result<u
         }
     }
 }
+
+/// Block until `socket` has a datagram to read or `timeout` passes; `true` when readable.
+pub(crate) fn wait_readable(
+    socket: &std::net::UdpSocket,
+    timeout: std::time::Duration,
+) -> std::io::Result<bool> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{WSAPoll, POLLRDNORM, SOCKET_ERROR, WSAPOLLFD};
+    let mut pfd = WSAPOLLFD {
+        fd: socket.as_raw_socket() as usize,
+        events: POLLRDNORM,
+        revents: 0,
+    };
+    let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    // SAFETY: `pfd` is one initialised WSAPOLLFD that outlives the call, and its socket stays
+    // open for the call because `socket` is borrowed.
+    let n = unsafe { WSAPoll(&mut pfd, 1, ms) };
+    if n == SOCKET_ERROR {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(n > 0)
+}

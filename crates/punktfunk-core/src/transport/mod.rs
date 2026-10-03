@@ -15,6 +15,10 @@ mod loopback;
 mod qos;
 #[cfg(windows)]
 mod qos_windows;
+/// One socket for QUIC and `punktfunk/2` media.
+/// cbindgen:ignore
+#[cfg(feature = "quic")]
+pub mod shared;
 #[cfg(not(target_family = "wasm"))]
 pub mod sockstat;
 mod udp;
