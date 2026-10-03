@@ -554,7 +554,7 @@ pub(super) async fn negotiate(
     // A browser's video rides this connection's datagrams, which are smaller than a UDP payload
     // (QUIC and HTTP/3 framing come out of the same budget). Ask, falling back to the 1200 every
     // QUIC path guarantees; a shard that does not fit is dropped at send, and FEC cannot cover all.
-    if data_port.is_none() {
+    if conn.is_web() {
         let budget = conn.max_datagram_size().unwrap_or(1200);
         shard_payload = shard_payload.min(punktfunk_core::config::shard_payload_for_udp_budget(
             budget,
@@ -648,7 +648,7 @@ pub(super) async fn negotiate(
         // Clipboard only when operator policy and a platform backend both exist, and never to a
         // browser: its transfers ride quinn streams.
         host_caps: punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE
-            | if pf_clipboard::cap_advertised() && !conn.is_web() {
+            | if pf_clipboard::cap_advertised() && conn.as_quic().is_some() {
                 punktfunk_core::quic::HOST_CAP_CLIPBOARD
             } else {
                 0
@@ -761,6 +761,15 @@ pub(super) async fn negotiate(
                 _ => 0,
             },
     };
+    // `punktfunk/2`: the suite goes out in the `ServerHello` this `Welcome` becomes, and keys
+    // the media. v1's chosen cipher maps onto it one for one.
+    if let Some(v2) = conn.v2() {
+        v2.settle(if chacha {
+            punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
+        } else {
+            punktfunk_core::crypto::MediaSuite::Aes128Gcm
+        });
+    }
     io::write_msg(send, &welcome.encode()).await?;
     bringup.mark("welcome");
 

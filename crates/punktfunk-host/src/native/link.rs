@@ -6,16 +6,20 @@
 //! streams on it. Those call sites named `quinn::Connection`, which is what kept a browser to the
 //! video half.
 //!
-//! **An enum, not a trait.** Two carriers, both known at compile time, so no `dyn` — and, the
-//! reason that matters, `async fn` stays an ordinary `async fn`. A `dyn`-compatible trait would
+//! **An enum, not a trait.** Three variants, all known at compile time, so no `dyn` — and, the
+//! reason that matters, `async fn` stays an ordinary `async fn`. `punktfunk/2` is quinn with
+//! its datagrams kinded and its control stream translated at the edge. A `dyn`-compatible trait would
 //! box a future on `closed()`, which is on the per-session path.
 //!
 //! Most of this delegates rather than branches: WebTransport *is* QUIC, and `wtransport` hands
 //! out the `quinn::Connection` underneath, so path and lifecycle questions have one answer for
 //! both. Only the two genuinely carrier-shaped questions branch.
 
+use punktfunk_core::quic::v2::io::{V2Reader, V2Writer};
+use punktfunk_core::quic::v2::translate::{RxEdge, SessionFields, TxEdge};
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -23,12 +27,16 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// halves already implement tokio's traits — this exists so the session code can name one type.
 pub(crate) enum CtlSend {
     Quic(quinn::SendStream),
+    /// `punktfunk/2`: v1 messages in, v2 frames on the wire.
+    QuicV2(V2Writer<quinn::SendStream>),
     Web(wtransport::SendStream),
 }
 
 /// The control stream's read half. See [`CtlSend`].
 pub(crate) enum CtlRecv {
     Quic(quinn::RecvStream),
+    /// `punktfunk/2`: v2 frames on the wire, v1 messages out.
+    QuicV2(V2Reader<quinn::RecvStream>),
     Web(wtransport::RecvStream),
 }
 
@@ -40,18 +48,21 @@ impl AsyncWrite for CtlSend {
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
             CtlSend::Quic(s) => AsyncWrite::poll_write(Pin::new(s), cx, buf),
+            CtlSend::QuicV2(s) => Pin::new(s).poll_write(cx, buf),
             CtlSend::Web(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             CtlSend::Quic(s) => AsyncWrite::poll_flush(Pin::new(s), cx),
+            CtlSend::QuicV2(s) => Pin::new(s).poll_flush(cx),
             CtlSend::Web(s) => Pin::new(s).poll_flush(cx),
         }
     }
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             CtlSend::Quic(s) => AsyncWrite::poll_shutdown(Pin::new(s), cx),
+            CtlSend::QuicV2(s) => Pin::new(s).poll_shutdown(cx),
             CtlSend::Web(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
@@ -65,6 +76,7 @@ impl AsyncRead for CtlRecv {
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             CtlRecv::Quic(s) => AsyncRead::poll_read(Pin::new(s), cx, buf),
+            CtlRecv::QuicV2(s) => Pin::new(s).poll_read(cx, buf),
             CtlRecv::Web(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
@@ -77,11 +89,62 @@ pub(crate) enum Accepted {
     ProbeClose,
 }
 
-/// One client's control connection. Cheap to clone — both variants are handles.
+/// A `punktfunk/2` session's state beside its connection: who it is, its media clock, and the
+/// edges that translate its control stream.
+pub(crate) struct V2Link {
+    pub conn: quinn::Connection,
+    pub session_id: [u8; 16],
+    /// The host instant, Unix ns, that media capture time 0 stands for.
+    pub clock_origin_ns: u64,
+    pub rx: Arc<Mutex<RxEdge>>,
+    pub tx: Arc<Mutex<TxEdge>>,
+    /// A clone of the endpoint's socket: media leaves from the address the client dialed.
+    pub media_socket: Arc<std::net::UdpSocket>,
+    suite: Mutex<Option<punktfunk_core::crypto::MediaSuite>>,
+}
+
+impl V2Link {
+    pub(crate) fn new(conn: quinn::Connection, media_socket: Arc<std::net::UdpSocket>) -> V2Link {
+        let mut session_id = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut session_id);
+        V2Link {
+            conn,
+            session_id,
+            clock_origin_ns: punktfunk_core::quic::wall_clock_ns(),
+            rx: Arc::default(),
+            tx: Arc::default(),
+            media_socket,
+            suite: Mutex::new(None),
+        }
+    }
+
+    /// The media AEAD, fixed by the handshake before `Welcome` leaves: it goes out in the
+    /// `ServerHello` and keys the media.
+    pub(crate) fn settle(&self, suite: punktfunk_core::crypto::MediaSuite) {
+        *self.suite.lock().unwrap_or_else(|e| e.into_inner()) = Some(suite);
+        self.tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_session(SessionFields {
+                session_id: self.session_id,
+                clock_origin_ns: self.clock_origin_ns,
+                suite: Some(suite),
+            });
+    }
+
+    pub(crate) fn suite(&self) -> Option<punktfunk_core::crypto::MediaSuite> {
+        *self.suite.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// One client's control connection. Cheap to clone — every variant is a handle.
 #[derive(Clone)]
 pub(crate) enum SessionLink {
     /// The native plane: `punktfunk/1` over quinn.
     Quic(quinn::Connection),
+    /// The native plane on `punktfunk/2`: datagrams carry a kind, the control stream is
+    /// translated at its edge, and media rides the connection's own socket.
+    QuicV2(quinn::Connection, Arc<V2Link>),
     /// The browser plane: the same protocol over one WebTransport session, and the device
     /// fingerprint its key signature proved. `None` before admission and under `serve --open`.
     Web(wtransport::Connection, Option<[u8; 32]>),
@@ -91,7 +154,7 @@ impl SessionLink {
     /// The QUIC connection underneath, which both carriers have.
     fn quic(&self) -> &quinn::Connection {
         match self {
-            SessionLink::Quic(c) => c,
+            SessionLink::Quic(c) | SessionLink::QuicV2(c, _) => c,
             SessionLink::Web(c, _) => c.quic_connection(),
         }
     }
@@ -113,6 +176,15 @@ impl SessionLink {
                 Err(quinn::SendDatagramError::TooLarge) => DatagramSend::TooLarge,
                 Err(_) => DatagramSend::Unavailable,
             },
+            // Every datagram the host sends has a kind; one without is a bug, dropped here.
+            SessionLink::QuicV2(c, _) => match punktfunk_core::quic::v2::dgram::wrap(&payload) {
+                Some(w) => match c.send_datagram(w.into()) {
+                    Ok(()) => DatagramSend::Sent,
+                    Err(quinn::SendDatagramError::TooLarge) => DatagramSend::TooLarge,
+                    Err(_) => DatagramSend::Unavailable,
+                },
+                None => DatagramSend::TooLarge,
+            },
             // Not the quinn connection: a WebTransport datagram carries a session-id prefix, so
             // it has to go through the layer that writes one.
             SessionLink::Web(c, _) => match c.send_datagram(&payload) {
@@ -131,6 +203,18 @@ impl SessionLink {
                 .await
                 .map(|b| b.to_vec())
                 .map_err(LinkClosed::from),
+            // The payload is the datagram the session logic already reads. A kind it does not
+            // take from a client is skipped.
+            SessionLink::QuicV2(c, _) => loop {
+                let b = c.read_datagram().await.map_err(LinkClosed::from)?;
+                use punktfunk_core::quic::v2::dgram::{decode, Dgram};
+                match decode(&b) {
+                    Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) => {
+                        break Ok(p.to_vec())
+                    }
+                    _ => continue,
+                }
+            },
             SessionLink::Web(c, _) => c
                 .receive_datagram()
                 .await
@@ -144,6 +228,8 @@ impl SessionLink {
     pub(crate) fn max_datagram_size(&self) -> Option<usize> {
         match self {
             SessionLink::Quic(c) => c.max_datagram_size(),
+            // The kind byte comes out of the same budget.
+            SessionLink::QuicV2(c, _) => c.max_datagram_size().map(|n| n.saturating_sub(1)),
             SessionLink::Web(c, _) => c.max_datagram_size(),
         }
     }
@@ -188,7 +274,7 @@ impl SessionLink {
     /// ever returns the session's end.
     pub(crate) async fn closed(&self) -> LinkClosed {
         match self {
-            SessionLink::Quic(c) => LinkClosed::from(c.closed().await),
+            SessionLink::Quic(c) | SessionLink::QuicV2(c, _) => LinkClosed::from(c.closed().await),
             SessionLink::Web(c, _) => loop {
                 if let Err(e) = c.accept_uni().await {
                     break LinkClosed::from(e);
@@ -212,6 +298,29 @@ impl SessionLink {
                 }
                 Err(e) => Err(anyhow::Error::new(e).context("accept control stream")),
             },
+            // The client's first stream must say it is the control stream.
+            SessionLink::QuicV2(c, v2) => match c.accept_bi().await {
+                Ok((send, mut recv)) => {
+                    use punktfunk_core::quic::v2::{io, registry};
+                    let ty = io::read_stream_type(&mut recv)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("read control stream type: {e}"))?;
+                    anyhow::ensure!(
+                        ty == registry::STREAM_CONTROL,
+                        "first stream is type {ty}, not control"
+                    );
+                    Ok(Accepted::Stream(
+                        CtlSend::QuicV2(V2Writer::new(send, v2.tx.clone())),
+                        CtlRecv::QuicV2(V2Reader::new(recv, v2.rx.clone())),
+                    ))
+                }
+                Err(quinn::ConnectionError::ApplicationClosed(ref ac))
+                    if ac.error_code == quinn::VarInt::from_u32(0) =>
+                {
+                    Ok(Accepted::ProbeClose)
+                }
+                Err(e) => Err(anyhow::Error::new(e).context("accept control stream")),
+            },
             SessionLink::Web(c, _) => {
                 let (send, recv) = c
                     .accept_bi()
@@ -222,11 +331,20 @@ impl SessionLink {
         }
     }
 
-    /// The quinn connection, for clipboard, whose transfers are quinn streams.
+    /// The quinn connection, for clipboard, whose transfers are `punktfunk/1` streams. `None` on
+    /// `punktfunk/2` until its transfer streams carry them.
     pub(crate) fn as_quic(&self) -> Option<&quinn::Connection> {
         match self {
             SessionLink::Quic(c) => Some(c),
-            SessionLink::Web(..) => None,
+            SessionLink::QuicV2(..) | SessionLink::Web(..) => None,
+        }
+    }
+
+    /// The `punktfunk/2` state, on that wire.
+    pub(crate) fn v2(&self) -> Option<&Arc<V2Link>> {
+        match self {
+            SessionLink::QuicV2(_, v2) => Some(v2),
+            _ => None,
         }
     }
 
@@ -234,7 +352,9 @@ impl SessionLink {
     /// plane, the admitted device key's on the browser plane. `None` for an anonymous client.
     pub(crate) fn peer_fingerprint(&self) -> Option<[u8; 32]> {
         match self {
-            SessionLink::Quic(c) => punktfunk_core::quic::endpoint::peer_fingerprint(c),
+            SessionLink::Quic(c) | SessionLink::QuicV2(c, _) => {
+                punktfunk_core::quic::endpoint::peer_fingerprint(c)
+            }
             SessionLink::Web(_, fp) => *fp,
         }
     }
@@ -242,7 +362,7 @@ impl SessionLink {
     /// The plane events and session rows name this session by.
     pub(crate) fn plane(&self) -> crate::events::Plane {
         match self {
-            SessionLink::Quic(_) => crate::events::Plane::Native,
+            SessionLink::Quic(_) | SessionLink::QuicV2(..) => crate::events::Plane::Native,
             SessionLink::Web(..) => crate::events::Plane::Web,
         }
     }
