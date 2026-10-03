@@ -2,11 +2,10 @@
 #
 # gamescope + punktfunk's `pipewire-hdr` patches, installed as `punktfunk-gamescope`.
 #
-# Standalone on purpose (its own pkgbase, not part of ../arch/PKGBUILD): it is an OPTIONAL
-# companion — punktfunk works without it, just SDR on the gamescope backend — and it is a C++
-# meson build with a completely different dependency set from the Rust workspace. Installing it
-# does not touch the distro's own `gamescope`; the host resolves `PUNKTFUNK_GAMESCOPE_BIN` >
-# `punktfunk-gamescope` > `gamescope`, so the mere presence of this package is what enables HDR.
+# Standalone on purpose (its own pkgbase, not part of ../arch/PKGBUILD): a C++ meson build with a
+# completely different dependency set from the Rust workspace. punktfunk-host depends on it.
+# Installing it does not touch the distro's own `gamescope`; the host resolves
+# `PUNKTFUNK_GAMESCOPE_BIN` > `punktfunk-gamescope` > `gamescope`.
 #
 #   makepkg -si
 #

@@ -91,16 +91,17 @@ Attach streams that screen, so it stays on.
 ## HDR on gamescope
 
 A stock gamescope captures 8-bit SDR: it tone-maps HDR games down, correctly, before the host sees
-them. For a 10-bit HDR stream install `punktfunk-gamescope`, gamescope plus Punktfunk's capture
-patches. It installs under its own name; your Gaming Mode keeps the system gamescope.
+them. A 10-bit HDR stream needs `punktfunk-gamescope`, gamescope plus Punktfunk's capture
+patches. The host packages install it under its own name; your Gaming Mode keeps the system
+gamescope.
 
 | System | How to get it |
 |---|---|
 | Bazzite, Fedora Atomic | In the Punktfunk sysext: `punktfunk-sysext update`. |
-| Fedora, Nobara, other RPM systems | `sudo dnf install punktfunk-gamescope` from the Punktfunk repo. |
-| Debian 13, Ubuntu 26.04 | `sudo apt install punktfunk-gamescope` from the Punktfunk repo. |
+| Fedora, Nobara, other RPM systems | Installed with the host. On an older install: `sudo dnf install punktfunk-gamescope`. |
+| Debian 13, Ubuntu 26.04 | Installed with the host. On an older install: `sudo apt install punktfunk-gamescope`. |
 | Ubuntu 24.04 | Not available: its wayland is too old. Build from source or upgrade. |
-| Arch | `sudo pacman -S punktfunk-gamescope` |
+| Arch | Installed with the host. |
 | SteamOS | Built by the Steam Deck installer (`scripts/steamdeck/install.sh`, `update.sh`). |
 | NixOS | `services.punktfunk.host.gamescopeHdr` (on by default). |
 | Anything else | `bash packaging/gamescope/build-punktfunk-gamescope.sh` in the source tree. |

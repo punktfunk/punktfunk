@@ -165,13 +165,14 @@ package_punktfunk-host() {
   # punktfunk-icons: the brand mark the Omarchy webapp entry and the tray name. It lives in its
   # own package because the CLIENT needs the same file — two packages shipping one path is a
   # pacman file conflict the moment both land on one box (found exactly that way).
+  # punktfunk-gamescope: HDR, the real mode and the cursor in every gamescope session. A depend,
+  # not an optdepend: pacman has no weak deps, and apt/dnf pull it as a Recommends.
   depends=('pipewire' 'wireplumber' 'opus' 'libei'
-           'mesa' 'libglvnd' 'libxkbcommon' 'wayland' 'punktfunk-icons')
+           'mesa' 'libglvnd' 'libxkbcommon' 'wayland' 'punktfunk-icons' 'punktfunk-gamescope')
   optdepends=('rtkit: data-plane thread priority without a relogin (else the shipped LimitNICE drop-in applies from next login)'
               'pipewire-pulse: PulseAudio-API audio from games/apps (real `pulseaudio` also works)'
               'nvidia-utils: NVENC hardware encode + GPU EGL/CUDA zero-copy (REQUIRED to encode on NVIDIA)'
               'gamescope: per-session nested compositor backend (no desktop login needed) — needs >=3.16.22'
-              'punktfunk-gamescope: HDR (10-bit BT.2020 PQ) streaming on the gamescope backend — attempted by default when installed'
               'kwin: stream a KDE Plasma desktop (kwin VirtualDisplay backend)'
               'mutter: stream a GNOME desktop (Mutter RecordVirtual backend)'
               'sway: stream a wlroots desktop (Sway VirtualDisplay backend)'

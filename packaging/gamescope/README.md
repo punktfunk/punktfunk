@@ -275,16 +275,14 @@ must not be decided twice.
 | Channel | Built by | Notes |
 |---|---|---|
 | Bazzite / Fedora Atomic | `.gitea/workflows/rpm.yml` → `build-sysext.sh --gamescope` | Inside the matching Fedora container, per major — the binary is soname-coupled to its base exactly like the RPM |
-| Arch / SteamOS | `.gitea/workflows/arch.yml` → `makepkg` on `./PKGBUILD` | Its own pkgbase in the same pacman repo; `pacman -S punktfunk-gamescope` |
+| Arch / SteamOS | `.gitea/workflows/arch.yml` → `makepkg` on `./PKGBUILD` | Its own pkgbase in the same pacman repo; `punktfunk-host` depends on it |
 | NixOS | `packaging/nix/gamescope.nix` (an `overrideAttrs` on nixpkgs' gamescope) | The one path that does NOT call the script — nixpkgs already solves the submodules, and a nix closure names every library it links |
 | Anything else | the script, by hand | See *Building* above |
 
-Both CI builds are **cached on `packaging/gamescope/**`** and **best-effort**. Cached because this
-tree depends on nothing else in the repo, so a normal push restores a binary instead of spending
-ten minutes on someone else's C++; best-effort because punktfunk works without it (SDR on the
-gamescope backend, which is what every release before this one did) and a hiccup building gamescope
-must not cost the packages those workflows exist to publish. A failed build emits a `::warning::`
-and is never cached, so the next run retries.
+Both CI builds are **cached on `packaging/gamescope/**`**: this tree depends on nothing else in the
+repo, so a normal push restores a binary instead of spending ten minutes on someone else's C++. A
+failed build is never cached, so the next run retries. The Fedora build warns and lets the rest
+publish. The Arch build is required: `punktfunk-host` depends on it, so a failure stops the publish.
 
 Note what is NOT in that table: the `.deb`. Debian/Ubuntu boxes build it by hand for now.
 
