@@ -45,6 +45,8 @@ The patches here add the missing half, and nothing else. See
 | `0032-steamcompmgr-keep-framerate-limit-as-the-floor-under.patch` | A refresh-cycle request for 0 (Steam's "Framerate limit: Off", or the legacy `GAMESCOPE_FPS_LIMIT` atom at 0) falls back to the CLI `--framerate-limit` as a plain cap instead of clearing it. Steam's explicit values still win, and a request that only changes refresh (Steam's "Disable Frame Limiter") stays uncapped | **Yes** — on a headless output the limiter is the focused app's only pace; `0012` let Steam's default state remove it |
 | `0033-layer-recognize-Gamescope-sockets-through-container-.patch` | Upstream b385948, cherry-picked. The WSI layer accepts a `WAYLAND_DISPLAY` that names its own socket under another path, as pressure-vessel and flatpak bind it, or a socket that is not there. Before, any name but gamescope's own made it reject the game's swapchain with a "Hooking has failed" box | Already upstream |
 | `0034-layer-don-t-destroy-an-unowned-surface.patch` | Upstream f6b6b7d, cherry-picked: destroying a native Wayland app's `VkSurfaceKHR` no longer destroys the app's own `wl_surface`. Also stamps `+pfhdr28` | Already upstream |
+| `0035-steamcompmgr-re-apply-keyboard-focus-to-the-preserve.patch` | Upstream 0f8dc34, cherry-picked. A focus re-apply (Steam rewriting `STEAM_INPUT_FOCUS`) focuses the subwindow that holds focus, not its toplevel. Before, Steam's CEF browser subwindow lost focus, Chromium went inactive once the hidden cursor was parked in its 4 px input border, and Big Picture drew no focus highlight until the pointer moved | Already upstream |
+| `0036-steamcompmgr-reclaim-keyboard-focus-when-it-lands-on.patch` | Upstream 396794a, cherry-picked: the FocusOut handler tracks a preserved subwindow and takes focus back from None. Also stamps `+pfhdr29` | Already upstream |
 
 ### Why the headless patch matters
 
@@ -149,6 +151,7 @@ The number is a **monotonic patch-set revision**, so one probe answers every cap
 | `+pfhdr26` | …and the 10-bit capture formats are offered as BT.709 SDR too; a 10-bit SDR session takes P010 or packed 10-bit from this level instead of widening 8-bit |
 | `+pfhdr27` | …and `--framerate-limit` is the floor a refresh-cycle request for 0 falls back to; Steam's "Off" no longer leaves a headless session unpaced |
 | `+pfhdr28` | …and the WSI layer accepts its socket under a container alias and leaves a native Wayland app's surface alone (no new capability) |
+| `+pfhdr29` | …and a focus re-apply keeps Steam's CEF browser subwindow focused, so Big Picture shows its focus highlight without pointer motion (no new capability) |
 
 Require `+pfhdr10` for headless `--adaptive-sync` with a CLI cap: `+pfhdr9` clears that cap
 on the first paint unless Steam or a control command supplies an override. The Arch package is

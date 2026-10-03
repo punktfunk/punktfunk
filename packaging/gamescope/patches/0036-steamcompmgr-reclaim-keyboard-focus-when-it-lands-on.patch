@@ -1,0 +1,79 @@
+From 8103c25da5b48d27e2b014ab9839bbbe55522474 Mon Sep 17 00:00:00 2001
+From: Matthew Schwartz <matthew.schwartz@linux.dev>
+Date: Fri, 31 Jul 2026 00:57:25 -0700
+Subject: [PATCH 36/36] steamcompmgr: reclaim keyboard focus when it lands on
+ None
+
+A client can drop keyboard focus to None, and with RevertToNone any
+revert also lands there. The FocusOut handler only corrected focus when
+it moved to another tracked window, and its guard never matched while
+focus was preserved on a subwindow.
+
+Match the stored window directly, track focus moves within the same
+toplevel, and take focus back when it went to None.
+
+(cherry picked from commit 396794a313b125b74e53330e2118eeedcd3fd15f)
+
+punktfunk: also stamps the version banner +pfhdr29.
+---
+ src/meson.build      |  3 ++-
+ src/steamcompmgr.cpp | 14 ++++++++++----
+ 2 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 5c758f1..1ccbd55 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -209,7 +209,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr26 — …and the 10-bit capture formats are offered as SDR (BT.709) too
+ #   +pfhdr27 — …and --framerate-limit is the floor a refresh-cycle request for 0 falls back to
+ #   +pfhdr28 — …and the WSI layer accepts its socket under a container alias
+-version_tag = vcs_tag + '+pfhdr28' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr29 — …and a focus re-apply keeps CEF's browser subwindow focused
++version_tag = vcs_tag + '+pfhdr29' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 44865c9..19d3f2e 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -7857,8 +7857,9 @@ void xwayland_ctx_t::Dispatch()
+ 			{
+ 				steamcompmgr_win_t * w = find_win( ctx, ev.xfocus.window );
+ 
+-				// If focus escaped the current desired keyboard focus window, check where it went
+-				if ( w && w->xwayland().id == ctx->currentKeyboardFocusWindow )
++				// If focus escaped the current desired keyboard focus window, check where it went.
++				// The desired window may be a preserved subwindow, so also match it directly.
++				if ( w && ( ev.xfocus.window == ctx->currentKeyboardFocusWindow || w->xwayland().id == ctx->currentKeyboardFocusWindow ) )
+ 				{
+ 					Window newKeyboardFocus = None;
+ 					int nRevertMode = 0;
+@@ -7869,9 +7870,9 @@ void xwayland_ctx_t::Dispatch()
+ 
+ 					if ( kbw )
+ 					{
+-						if ( kbw->xwayland().id == ctx->currentKeyboardFocusWindow )
++						if ( kbw == find_win( ctx, ctx->currentKeyboardFocusWindow ) )
+ 						{
+-							// focus went to a child, this is fine, make note of it in case we need to fix it
++							// focus stayed within the same toplevel, keep track of it
+ 							ctx->currentKeyboardFocusWindow = newKeyboardFocus;
+ 						}
+ 						else
+@@ -7880,6 +7881,11 @@ void xwayland_ctx_t::Dispatch()
+ 							bSetFocus = true;
+ 						}
+ 					}
++					else if ( newKeyboardFocus == None )
++					{
++						// focus dropped to None, take it back
++						bSetFocus = true;
++					}
+ 				}
+ 
+ 				break;
+-- 
+2.54.0 (Apple Git-157)
+
