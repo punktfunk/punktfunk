@@ -84,6 +84,23 @@ describe("sseFrames", () => {
 			server.stop(true);
 		}
 	});
+
+	test("the signal ends a stream backing off from a gone host", async () => {
+		const server = Bun.serve({ port: 0, fetch: () => new Response("") });
+		const port = server.port as number;
+		server.stop(true);
+		const stop = new AbortController();
+		const warnings: string[] = [];
+		const gen = sseFrames(cfgFor(port), {
+			onWarning: (m) => {
+				warnings.push(m);
+				stop.abort();
+			},
+			signal: stop.signal,
+		});
+		expect((await gen.next()).done).toBe(true);
+		expect(warnings).toHaveLength(1);
+	});
 });
 
 describe("classifyFrame", () => {
