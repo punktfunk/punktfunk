@@ -717,9 +717,8 @@ async fn connect(
     let remote: std::net::SocketAddr = args.connect.parse().context("--connect host:port")?;
     let identity = load_or_create_identity()?;
     let identity = Some((identity.0.as_str(), identity.1.as_str()));
-    // `punktfunk/2` beside `punktfunk/1` on the shared socket, as the clients dial, unless
-    // `PUNKTFUNK_PROTOCOL=1` pins the probe to `punktfunk/1`.
-    let offer_v2 = std::env::var("PUNKTFUNK_PROTOCOL").map_or(true, |v| v.trim() != "1");
+    // `punktfunk/2` beside `punktfunk/1` on the shared socket, as the clients dial.
+    let offer_v2 = punktfunk_core::client::offer_v2_from_env();
     let (ep, observed, media) = if offer_v2 {
         let (r, observed) = endpoint::client_shared(
             args.pin,

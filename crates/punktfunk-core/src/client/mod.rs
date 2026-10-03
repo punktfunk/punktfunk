@@ -602,7 +602,7 @@ pub struct ConnectParams {
     pub frame_parts: bool,
     /// Offer `punktfunk/2` (ALPN `pkf2`) before `punktfunk/1`; the host picks. One that answers
     /// it carries media on the connection's own socket; one that does not runs `punktfunk/1`.
-    /// [`ConnectParams::new`] turns it on unless `PUNKTFUNK_PROTOCOL=1`.
+    /// [`ConnectParams::new`] sets it from [`offer_v2_from_env`].
     pub offer_v2: bool,
     /// Store-qualified library id to launch (`steam:570`).
     pub launch: Option<String>,
@@ -627,6 +627,22 @@ pub struct ConnectParams {
     pub cancel: Option<Arc<AtomicBool>>,
 }
 
+/// Whether a dial offers `punktfunk/2`. `PUNKTFUNK_PROTOCOL=1` pins `punktfunk/1`; unset or
+/// `2` offers both and the host picks. Any other value is logged and offers both.
+pub fn offer_v2_from_env() -> bool {
+    match std::env::var("PUNKTFUNK_PROTOCOL") {
+        Err(_) => true,
+        Ok(v) => match v.trim() {
+            "1" => false,
+            "2" => true,
+            other => {
+                tracing::warn!(value = other, "unknown PUNKTFUNK_PROTOCOL value");
+                true
+            }
+        },
+    }
+}
+
 impl ConnectParams {
     /// A plain dial to `host:port` at (up to) `mode`, giving up after `timeout`.
     pub fn new(host: impl Into<String>, port: u16, mode: Mode, timeout: Duration) -> Self {
@@ -648,7 +664,7 @@ impl ConnectParams {
             display_hdr: None,
             client_caps: 0,
             frame_parts: false,
-            offer_v2: std::env::var("PUNKTFUNK_PROTOCOL").map_or(true, |v| v.trim() != "1"),
+            offer_v2: offer_v2_from_env(),
             launch: None,
             name: None,
             pin: None,
