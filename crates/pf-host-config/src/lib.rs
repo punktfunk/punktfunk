@@ -266,10 +266,6 @@ pub struct HostConfig {
     pub compositor: Option<String>,
     /// `PUNKTFUNK_GAMEPAD` — virtual-pad backend preference, fed to `pick_gamepad`.
     pub gamepad: Option<String>,
-    /// `PUNKTFUNK_GAMESCOPE_STEAM` — force `--steam` on every bare headless gamescope
-    /// launch. Steam titles already pass it; this is for non-Steam. Managed
-    /// gamescope-session-plus/SteamOS sessions ignore it.
-    pub gamescope_steam: bool,
     /// `PUNKTFUNK_GAMESCOPE_GRAB_CURSOR` — `--force-grab-cursor` on a real game
     /// launch. Default OFF: relative mode breaks absolute-pointer titles and menus.
     pub gamescope_grab_cursor: bool,
@@ -399,7 +395,6 @@ impl HostConfig {
                 .filter(|s| !s.is_empty()),
             compositor: val("PUNKTFUNK_COMPOSITOR"),
             gamepad: val("PUNKTFUNK_GAMEPAD"),
-            gamescope_steam: row_bool("PUNKTFUNK_GAMESCOPE_STEAM"),
             gamescope_grab_cursor: row_bool("PUNKTFUNK_GAMESCOPE_GRAB_CURSOR"),
             gamescope_splash: row_bool("PUNKTFUNK_GAMESCOPE_SPLASH"),
             gamescope_isolate: row_bool("PUNKTFUNK_GAMESCOPE_ISOLATE"),

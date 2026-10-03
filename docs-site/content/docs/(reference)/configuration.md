@@ -67,7 +67,6 @@ restart*.
 | Adaptive sync (Linux) | `PUNKTFUNK_GAMESCOPE_VRR` | `on` · `off` | `on` | next session |
 | SDR brightness (Linux) | `PUNKTFUNK_GAMESCOPE_SDR_NITS` | 1–10000 nits | `203` | next session |
 | Extra refresh rates (Linux) | `PUNKTFUNK_GAMESCOPE_REFRESH_RATES` | comma list | — | next session |
-| Steam integration (Linux) | `PUNKTFUNK_GAMESCOPE_STEAM` | `on` · `off` | `off` | next session |
 | Startup splash (Linux) | `PUNKTFUNK_GAMESCOPE_SPLASH` | `on` · `off` | `on` | next session |
 | Per-session isolation (Linux) | `PUNKTFUNK_GAMESCOPE_ISOLATE` | `on` · `off` | `on` | next session |
 | Grab the cursor (Linux) | `PUNKTFUNK_GAMESCOPE_GRAB_CURSOR` | `on` · `off` | `off` | next session |

@@ -521,7 +521,6 @@ pub static SETTINGS: &[Setting] = &[
     row("gamescope_vrr", "PUNKTFUNK_GAMESCOPE_VRR", Kind::Bool, D::Bool(true), GameMode, NextSession, "Adaptive sync", "gamescope").advanced().only(LINUX),
     row("gamescope_sdr_nits", "PUNKTFUNK_GAMESCOPE_SDR_NITS", Kind::Int { min: 1, max: 10_000, unit: "nits" }, D::Int(203), GameMode, NextSession, "SDR brightness", "hdr").advanced().only(LINUX),
     row("gamescope_refresh_rates", "PUNKTFUNK_GAMESCOPE_REFRESH_RATES", Kind::List, D::List(&[]), GameMode, NextSession, "Extra refresh rates", "gamescope").advanced().only(LINUX),
-    row("gamescope_steam", "PUNKTFUNK_GAMESCOPE_STEAM", Kind::Bool, D::Bool(false), GameMode, NextSession, "Steam integration", "gamescope").advanced().only(LINUX),
     row("gamescope_splash", "PUNKTFUNK_GAMESCOPE_SPLASH", Kind::Bool, D::Bool(true), GameMode, NextSession, "Startup splash", "gamescope").advanced().only(LINUX),
     row("gamescope_isolate", "PUNKTFUNK_GAMESCOPE_ISOLATE", Kind::Bool, D::Bool(true), GameMode, NextSession, "Per-session isolation", "gamescope").advanced().only(LINUX),
     row("gamescope_grab_cursor", "PUNKTFUNK_GAMESCOPE_GRAB_CURSOR", Kind::Bool, D::Bool(false), GameMode, NextSession, "Grab the cursor", "gamescope").advanced().only(LINUX),
