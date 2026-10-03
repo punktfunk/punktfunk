@@ -1633,6 +1633,7 @@ from the config directory for a true factory reset."
                 mgmt_port: None,
                 mac: vec![],
                 os: String::new(),
+                wire: Vec::new(),
             };
             assert!(match_saved(&known, &advert).is_none());
             advert.fp_hex = "AA".into();

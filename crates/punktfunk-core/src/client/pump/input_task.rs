@@ -44,7 +44,7 @@ pub(super) struct MouseArgs {
 /// The final outbound gate for every ordinary input event — raw embedder sends
 /// and controller-mouse output share it, so validation, the invert toggle, the
 /// old-host `MouseScroll` conversion and the key lane each happen exactly once.
-fn send_input(conn: &quinn::Connection, out: &mut ScrollOutput, args: &MouseArgs, ev: InputEvent) {
+fn send_input(conn: &ClientConn, out: &mut ScrollOutput, args: &MouseArgs, ev: InputEvent) {
     let invert = args
         .client
         .scroll_invert
@@ -62,7 +62,7 @@ fn send_input(conn: &quinn::Connection, out: &mut ScrollOutput, args: &MouseArgs
             return;
         }
     }
-    let _ = conn.send_datagram(ev.encode().to_vec().into());
+    let _ = conn.send_datagram(ev.encode().to_vec());
 }
 
 /// The kinds whose loss sticks: a release the network drops holds the key.
@@ -77,18 +77,13 @@ fn granted(grants: &AtomicU32, ev: InputEvent) -> bool {
 }
 
 /// Send `ev` as a datagram when the live grants cover it.
-fn send_granted(conn: &quinn::Connection, grants: &AtomicU32, ev: InputEvent) {
+fn send_granted(conn: &ClientConn, grants: &AtomicU32, ev: InputEvent) {
     if granted(grants, ev) {
-        let _ = conn.send_datagram(ev.encode().to_vec().into());
+        let _ = conn.send_datagram(ev.encode().to_vec());
     }
 }
 
-fn send_all(
-    conn: &quinn::Connection,
-    out: &mut ScrollOutput,
-    args: &MouseArgs,
-    evs: Vec<InputEvent>,
-) {
+fn send_all(conn: &ClientConn, out: &mut ScrollOutput, args: &MouseArgs, evs: Vec<InputEvent>) {
     for ev in evs {
         send_input(conn, out, args, ev);
     }
@@ -98,7 +93,7 @@ fn send_all(
 /// releases what it held first. A full-mouse pad's host snapshot goes neutral; a touchpad-mode
 /// pad's loses only its touchpad click. No pointer grant clears every mode.
 fn sync_mouse(
-    conn: &quinn::Connection,
+    conn: &ClientConn,
     mouse: &mut PadMouse,
     args: &MouseArgs,
     out: &mut ScrollOutput,
@@ -162,7 +157,7 @@ fn sync_mouse(
 
 /// One seq-stamped snapshot per pad flagged in `dirty`; clears the flags.
 fn flush_dirty(
-    conn: &quinn::Connection,
+    conn: &ClientConn,
     grants: &AtomicU32,
     pads: &mut [Option<GamepadSnapshot>; MAX_PADS],
     seq: &mut [u8; MAX_PADS],
@@ -181,7 +176,7 @@ fn flush_dirty(
 }
 
 pub(super) async fn run(
-    conn: quinn::Connection,
+    conn: impl Into<ClientConn>,
     mut input_rx: tokio::sync::mpsc::UnboundedReceiver<InputEvent>,
     mut pad_touch_rx: tokio::sync::mpsc::UnboundedReceiver<Contact>,
     gamepad_snapshots: bool,
@@ -191,6 +186,7 @@ pub(super) async fn run(
     mouse_args: MouseArgs,
 ) {
     use std::sync::atomic::Ordering;
+    let conn: ClientConn = conn.into();
     // bit0 haptics, bit1 speaker. Fed by [`NativeClient::set_pad_audio_caps`] and
     // by arrival events that already carry the bits.
     let pad_audio_caps = &mouse_args.client.pad_audio_caps;

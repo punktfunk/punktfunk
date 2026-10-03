@@ -39,6 +39,7 @@ mod planes;
 mod probe;
 mod pump;
 mod recovery;
+mod resume;
 use crate::rumble;
 mod worker;
 
@@ -599,6 +600,10 @@ pub struct ConnectParams {
     pub client_caps: u8,
     /// AU prefixes as [`Frame`]s with `part = Some`. Only for a decoder that takes parts.
     pub frame_parts: bool,
+    /// Offer `punktfunk/2` (ALPN `pkf2`) before `punktfunk/1`; the host picks. One that answers
+    /// it carries media on the connection's own socket; one that does not runs `punktfunk/1`.
+    /// [`ConnectParams::new`] sets it from [`offer_v2_from_env`].
+    pub offer_v2: bool,
     /// Store-qualified library id to launch (`steam:570`).
     pub launch: Option<String>,
     /// [`crate::quic::Hello::name`], usually [`device_name`]. `None` knocks as "device abcd1234".
@@ -622,6 +627,22 @@ pub struct ConnectParams {
     pub cancel: Option<Arc<AtomicBool>>,
 }
 
+/// Whether a dial offers `punktfunk/2`. `PUNKTFUNK_PROTOCOL=1` pins `punktfunk/1`; unset or
+/// `2` offers both and the host picks. Any other value is logged and offers both.
+pub fn offer_v2_from_env() -> bool {
+    match std::env::var("PUNKTFUNK_PROTOCOL") {
+        Err(_) => true,
+        Ok(v) => match v.trim() {
+            "1" => false,
+            "2" => true,
+            other => {
+                tracing::warn!(value = other, "unknown PUNKTFUNK_PROTOCOL value");
+                true
+            }
+        },
+    }
+}
+
 impl ConnectParams {
     /// A plain dial to `host:port` at (up to) `mode`, giving up after `timeout`.
     pub fn new(host: impl Into<String>, port: u16, mode: Mode, timeout: Duration) -> Self {
@@ -643,6 +664,7 @@ impl ConnectParams {
             display_hdr: None,
             client_caps: 0,
             frame_parts: false,
+            offer_v2: offer_v2_from_env(),
             launch: None,
             name: None,
             pin: None,
@@ -1266,6 +1288,11 @@ impl NativeClient {
         *self.shared.delivery.lock().unwrap()
     }
 
+    /// The protocol this session runs: `2` when the host answered `punktfunk/2`, else `1`.
+    pub fn wire(&self) -> u8 {
+        self.shared.wire.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// What the host said about its end of the path, when the dial asked for it.
     pub fn host_facts(&self) -> Option<crate::quic::HostFacts> {
         *self.shared.host_facts.lock().unwrap()
@@ -1304,6 +1331,7 @@ impl NativeClient {
             .and_then(|s| s.local_addr().ok())
             .map(|a| a.ip())
             .filter(|ip| !ip.is_unspecified())
+            .or(*self.shared.local_ip.lock().unwrap())
     }
 
     /// Whether a burst is in flight — an embedder speed test or the startup capacity probe. Loss

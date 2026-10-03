@@ -9,12 +9,13 @@
 //! drains them with [`Session::poll_input`].
 
 use crate::config::{Config, Role};
-use crate::crypto::SessionCrypto;
+use crate::crypto::{MediaKeys, SessionCrypto};
 use crate::error::{PunktfunkError, Result};
 use crate::fec::{coder_for, ErasureCoder};
 use crate::input::InputEvent;
 use crate::packet::{
-    PacketHeader, Packetizer, Reassembler, ReassemblerLimits, StreamedAu, MAX_DATAGRAM_BYTES,
+    encode_v2, PacketHeader, Packetizer, Reassembler, ReassemblerLimits, StreamedAu, V2Stamp,
+    MAX_DATAGRAM_BYTES,
 };
 use crate::stats::{Stats, StatsCounters};
 use crate::transport::Transport;
@@ -42,6 +43,9 @@ pub struct Frame {
     pub frame_index: u32,
     pub pts_ns: u64,
     pub flags: u32,
+    /// Config generation the host stamped (`punktfunk/2`): the `StreamConfig` this frame
+    /// decodes under. Always 0 on `punktfunk/1`.
+    pub epoch: u8,
     /// `false` when the frame aged out of the loss window with shards missing and the
     /// session opted in ([`Session::set_deliver_partial_frames`]). Only chunk-aligned AUs
     /// ([`crate::packet::USER_FLAG_CHUNK_ALIGNED`]); missing ranges are zero-filled in place.
@@ -57,6 +61,32 @@ pub struct Frame {
     pub received_ns: u64,
 }
 
+/// What a `punktfunk/2` session takes beyond [`Config`] ([`Session::new_v2`]).
+#[derive(Clone, Debug)]
+pub struct MediaV2 {
+    /// The host instant, Unix ns, that capture time 0 stands for. Both ends learn it in the
+    /// handshake; the wire carries microseconds after it.
+    pub clock_origin_ns: u64,
+    /// Sealing keys from the connection's exporter. `None` on a carrier that already
+    /// encrypts (WebTransport); `Config::encrypt`, `key` and `salt` are never used.
+    pub keys: Option<MediaKeys>,
+    /// Host: the session clock video pts leave in. Its origin is `clock_origin_ns`. `None`
+    /// on a receiver, and on a sender whose pts are already wire time.
+    pub clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
+}
+
+/// Which header a session writes. `punktfunk/2` keeps the stamp it puts on every packet;
+/// its `seq` is filled per packet.
+#[derive(Clone, Debug)]
+enum Framing {
+    V1,
+    /// The stamp, and on the host the session clock its pts leave in.
+    V2(
+        V2Stamp,
+        Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
+    ),
+}
+
 /// One end of a stream. Built for a single [`Role`]; the other role's methods return
 /// [`PunktfunkError::InvalidArg`].
 ///
@@ -65,12 +95,15 @@ pub struct Frame {
 /// sealed datagram is not. Video also dedups per-frame in the reassembler.
 pub struct Session {
     config: Config,
+    framing: Framing,
     coder: Box<dyn ErasureCoder>,
     /// `Arc` so the second seal lane can share the cipher; uncontended otherwise.
     crypto: Option<std::sync::Arc<SessionCrypto>>,
     /// Receive-side anti-replay over the peer's authenticated sequence. `Some` exactly when
     /// `crypto` is — the plaintext probe path has no sequence to filter on.
     replay: Option<ReplayWindow>,
+    /// Client: the newest `punktfunk/2` epoch a delivered frame carried ([`Session::set_epoch`]).
+    newest_epoch: Option<u8>,
     transport: Box<dyn Transport>,
     packetizer: Packetizer,
     reassembler: Reassembler,
@@ -111,17 +144,35 @@ fn stamp_received(mut f: Frame) -> Frame {
     f
 }
 
-/// Write one packet's plaintext at its final wire offset: `seq(8) ‖ header ‖ body ‖
-/// TAG_LEN zeros` for a sealed wire (`seq` is `Some`), `header ‖ body` in the clear.
-/// [`Session::open_from_wire`] reads the sealed layout back.
-fn stage_wire(wire: &mut Vec<u8>, seq: Option<u64>, hdr: &PacketHeader, body: &[u8]) {
+/// Write one packet's plaintext at its final wire offset. `punktfunk/1`: `seq(8) ‖ header ‖
+/// body` sealed, `header ‖ body` clear. `punktfunk/2`: `header ‖ body` either way, the packet
+/// number inside the header. A sealed wire ends in TAG_LEN zeros for the tag.
+fn stage_wire(
+    wire: &mut Vec<u8>,
+    framing: &Framing,
+    seq: u64,
+    sealed: bool,
+    hdr: &PacketHeader,
+    body: &[u8],
+) {
     wire.clear();
-    if let Some(seq) = seq {
-        wire.extend_from_slice(&seq.to_be_bytes());
+    match framing {
+        Framing::V1 => {
+            if sealed {
+                wire.extend_from_slice(&seq.to_be_bytes());
+            }
+            wire.extend_from_slice(hdr.as_bytes());
+        }
+        Framing::V2(stamp, clock) => {
+            let pts_ns = clock
+                .as_ref()
+                .map_or(hdr.pts_ns, |c| c.video_to_wire(hdr.pts_ns));
+            let hdr = PacketHeader { pts_ns, ..*hdr };
+            wire.extend_from_slice(&encode_v2(&hdr, &V2Stamp { seq, ..*stamp }))
+        }
     }
-    wire.extend_from_slice(hdr.as_bytes());
     wire.extend_from_slice(body);
-    if seq.is_some() {
+    if sealed {
         wire.resize(wire.len() + crate::crypto::TAG_LEN, 0);
     }
 }
@@ -155,9 +206,11 @@ impl Session {
         let packetizer = Packetizer::new(&config);
         let reassembler = Reassembler::new(ReassemblerLimits::from_config(&config));
         Ok(Session {
+            framing: Framing::V1,
             coder,
             crypto,
             replay,
+            newest_epoch: None,
             transport,
             packetizer,
             reassembler,
@@ -184,6 +237,47 @@ impl Session {
             lane_scratch: Vec::new(),
             config,
         })
+    }
+
+    /// A `punktfunk/2` session: [`crate::packet::encode_v2`] headers both ways, sealed under
+    /// `media.keys` when it has them. `config.encrypt` must be off: v1's key and salt never apply.
+    pub fn new_v2(
+        config: Config,
+        media: MediaV2,
+        transport: Box<dyn Transport>,
+    ) -> Result<Session> {
+        if config.encrypt {
+            return Err(PunktfunkError::InvalidArg(
+                "punktfunk/2 media takes its keys from MediaV2",
+            ));
+        }
+        let mut s = Session::new(config, transport)?;
+        if let Some(keys) = &media.keys {
+            s.crypto = Some(std::sync::Arc::new(SessionCrypto::media(
+                keys,
+                s.config.role,
+            )));
+            s.replay = Some(ReplayWindow::new());
+        }
+        s.framing = Framing::V2(
+            V2Stamp {
+                seq: 0,
+                epoch: 0,
+                clock_origin_ns: media.clock_origin_ns,
+                max_data_per_block: s.config.fec.max_data_per_block,
+            },
+            media.clock,
+        );
+        s.reassembler.set_v2(media.clock_origin_ns);
+        Ok(s)
+    }
+
+    /// Host: stamp `epoch` on every packet from the next frame on, after the `StreamConfig`
+    /// that announces it. No effect on `punktfunk/1`, which has no epoch.
+    pub fn set_epoch(&mut self, epoch: u8) {
+        if let Framing::V2(stamp, _) = &mut self.framing {
+            stamp.epoch = epoch;
+        }
     }
 
     /// Drain receive-path stage timings since the last call (window semantics: the pump
@@ -323,13 +417,15 @@ impl Session {
 
     /// Bytes one AU of `frame_len` puts on the wire at the current geometry.
     pub fn frame_wire_len(&self, frame_len: usize) -> usize {
-        let crypto = if self.crypto.is_some() {
-            crate::packet::CRYPTO_OVERHEAD
-        } else {
-            0
+        let sealed = self.crypto.is_some();
+        let header = match self.framing {
+            Framing::V1 if sealed => crate::packet::HEADER_LEN + crate::packet::CRYPTO_OVERHEAD,
+            Framing::V1 => crate::packet::HEADER_LEN,
+            Framing::V2(..) if sealed => crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN,
+            Framing::V2(..) => crate::packet::V2_HEADER_LEN,
         };
         self.packetizer.geometry(frame_len).wire_packets()
-            * (self.packetizer.shard_payload() + crate::packet::HEADER_LEN + crypto)
+            * (self.packetizer.shard_payload() + header)
     }
 
     /// Host: [`seal_frame_at`](Self::seal_frame_at) that hands `sink` the frame in wire
@@ -383,6 +479,7 @@ impl Session {
         geo.check()?;
         let perf_armed = self.seal_perf.is_some();
         let fec_ns = std::sync::atomic::AtomicU64::new(0);
+        let framing = self.framing.clone();
         let Session {
             packetizer,
             coder,
@@ -451,7 +548,7 @@ impl Session {
             }
             let wire = &mut wires[used];
             used += 1;
-            stage_wire(wire, Some(*next_seq), hdr, body);
+            stage_wire(wire, &framing, *next_seq, true, hdr, body);
             *next_seq = next_seq.wrapping_add(1);
             bytes += wire.len() as u64;
             if is_data && used - chunk_start >= SEAL_CHUNK_SHARDS {
@@ -609,6 +706,7 @@ impl Session {
         let fec_ns = std::sync::atomic::AtomicU64::new(0);
         let mut seal_ns = 0u64;
         let two_lane = self.seal_two_lane;
+        let framing = self.framing.clone();
         let Session {
             packetizer,
             coder,
@@ -645,7 +743,7 @@ impl Session {
                 }
                 let wire = &mut wires[*used];
                 *used += 1;
-                stage_wire(wire, encrypting.then_some(*next_seq), hdr, body);
+                stage_wire(wire, &framing, *next_seq, encrypting, hdr, body);
                 *next_seq = next_seq.wrapping_add(1);
                 Ok(())
             };
@@ -833,6 +931,9 @@ impl Session {
                 "poll_input called on a client session",
             ));
         }
+        if matches!(self.framing, Framing::V2(..)) {
+            return Err(PunktfunkError::Unsupported("punktfunk/2 input rides QUIC"));
+        }
         while let Some(wire) = self.transport.recv()? {
             let pkt = match self.open_from_wire(&wire) {
                 Ok(p) => p,
@@ -902,6 +1003,19 @@ impl Session {
         self.config.shard_payload
     }
 
+    /// Client: whether a frame of `epoch` predates the newest seen, wrapping (1–128 behind).
+    /// It was encoded before a mode switch, so its decoder is gone. `punktfunk/1` frames are
+    /// all epoch 0.
+    fn behind_epoch(&mut self, epoch: u8) -> bool {
+        let newest = *self.newest_epoch.get_or_insert(epoch);
+        let ahead = epoch.wrapping_sub(newest);
+        if ahead >= 128 {
+            return true;
+        }
+        self.newest_epoch = Some(epoch);
+        false
+    }
+
     /// Client: drain the transport until a whole access unit is recovered, or no more
     /// packets are pending ([`PunktfunkError::NoFrame`]).
     pub fn poll_frame(&mut self) -> Result<Frame> {
@@ -931,7 +1045,10 @@ impl Session {
                 if self.recv_count == 0 {
                     // Idle wire: hand over an aged-out partial if one is waiting (it only gets staler).
                     if let Some(p) = self.reassembler.take_partial() {
-                        return Ok(stamp_received(p));
+                        if !self.behind_epoch(p.epoch) {
+                            return Ok(stamp_received(p));
+                        }
+                        StatsCounters::add(&self.stats.frames_dropped, 1);
                     }
                     return Err(PunktfunkError::NoFrame);
                 }
@@ -950,6 +1067,25 @@ impl Session {
             // decrypt accounting (exception path, not line rate).
             let t_dec = self.perf.is_some().then(std::time::Instant::now);
             let (pkt_range, seq) = match &self.crypto {
+                Some(c) if c.is_media() => {
+                    use crate::packet::V2_CLEAR_LEN;
+                    if len < crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN {
+                        continue;
+                    }
+                    let wire = &mut self.recv_scratch[i][..len];
+                    let low = u32::from_le_bytes(wire[1..V2_CLEAR_LEN].try_into().unwrap());
+                    let reference = self.replay.as_ref().map_or(0, |w| w.reference());
+                    let seq = crate::packet::expand_seq(reference, low);
+                    if !self.replay.as_ref().is_none_or(|w| w.plausible(seq)) {
+                        StatsCounters::add(&self.stats.packets_dropped, 1);
+                        continue;
+                    }
+                    let (aad, rest) = wire.split_at_mut(V2_CLEAR_LEN);
+                    match c.open_media(seq, aad, rest) {
+                        Ok(n) => (0..V2_CLEAR_LEN + n, Some(seq)),
+                        Err(_) => continue,
+                    }
+                }
                 Some(c) => {
                     // A sealed datagram is at least seq prefix + tag; anything shorter is noise.
                     if len < 8 + crate::crypto::TAG_LEN {
@@ -992,11 +1128,19 @@ impl Session {
                 if frame.complete {
                     StatsCounters::add(&self.stats.frames_completed, 1);
                 }
+                if self.behind_epoch(frame.epoch) {
+                    StatsCounters::add(&self.stats.frames_dropped, 1);
+                    continue;
+                }
                 return Ok(stamp_received(frame));
             }
             // A no-complete push may still have aged a partial out; deliver it before
             // draining further (its successors are already arriving).
             if let Some(p) = self.reassembler.take_partial() {
+                if self.behind_epoch(p.epoch) {
+                    StatsCounters::add(&self.stats.frames_dropped, 1);
+                    continue;
+                }
                 return Ok(stamp_received(p));
             }
         }
@@ -1038,6 +1182,9 @@ impl Session {
             return Err(PunktfunkError::InvalidArg(
                 "send_input called on a host session",
             ));
+        }
+        if matches!(self.framing, Framing::V2(..)) {
+            return Err(PunktfunkError::Unsupported("punktfunk/2 input rides QUIC"));
         }
         let pkt = event.encode();
         let mut wire = Vec::new(); // rare + per-event; no pool
@@ -1450,5 +1597,234 @@ mod wire_equivalence_tests {
             "oversized must be rejected"
         );
         assert_eq!(host.shard_payload(), 1216, "failed swaps must not stick");
+    }
+
+    fn v2_pair(drop_period: u32) -> (Session, Session) {
+        v2_pair_keyed(drop_period, None)
+    }
+
+    fn v2_pair_keyed(drop_period: u32, keys: Option<MediaKeys>) -> (Session, Session) {
+        v2_pair_with(drop_period, keys, None)
+    }
+
+    /// `clock` is the host's alone; the client reads wire time against its origin.
+    fn v2_pair_with(
+        drop_period: u32,
+        keys: Option<MediaKeys>,
+        clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
+    ) -> (Session, Session) {
+        let mk = |role: Role| {
+            let mut c = host_cfg(FecScheme::Gf16, 25, false);
+            c.role = role;
+            c.shard_payload = 512;
+            c
+        };
+        let media = MediaV2 {
+            clock_origin_ns: clock
+                .as_ref()
+                .map_or(1_700_000_000_000_000_000, |c| c.origin_ns()),
+            keys,
+            clock: None,
+        };
+        let (ht, ct) = loopback_pair(drop_period, 0);
+        let host_media = MediaV2 {
+            clock,
+            ..media.clone()
+        };
+        let host = Session::new_v2(mk(Role::Host), host_media, Box::new(ht)).unwrap();
+        let client = Session::new_v2(mk(Role::Client), media, Box::new(ct)).unwrap();
+        (host, client)
+    }
+
+    /// A frame from before the newest epoch is dropped, across the u8 wrap; equal and newer pass.
+    #[test]
+    fn a_frame_behind_the_newest_epoch_is_dropped() {
+        let (_host, mut client) = v2_pair(0);
+        assert!(
+            !client.behind_epoch(250),
+            "the first epoch seen sets the mark"
+        );
+        assert!(!client.behind_epoch(250));
+        assert!(!client.behind_epoch(2), "2 is six past 250");
+        assert!(client.behind_epoch(250), "an encode from before the switch");
+        assert!(client.behind_epoch(1));
+        assert!(!client.behind_epoch(2));
+    }
+
+    /// A host clock puts session time on the wire: each frame reaches the client at the value
+    /// its `HostTiming` names, near the capture time it left with.
+    #[test]
+    fn v2_frames_carry_the_host_session_clock() {
+        let clock = std::sync::Arc::new(crate::quic::v2::clock::SessionClock::new());
+        let (mut host, mut client) = v2_pair_with(0, None, Some(clock.clone()));
+        for len in [100, 8 * 512 + 1] {
+            let pts = crate::quic::wall_clock_ns();
+            host.submit_frame(&pattern(len), pts, 0).unwrap();
+            let f = client.poll_frame().unwrap();
+            assert_eq!(f.pts_ns, clock.video_to_wire(pts));
+            assert!(f.pts_ns.abs_diff(pts) < 50_000_000, "{} vs {pts}", f.pts_ns);
+        }
+    }
+
+    fn media_keys(suite: crate::crypto::MediaSuite) -> MediaKeys {
+        MediaKeys::derive(&[0x42; 32], suite)
+    }
+
+    /// Whole frames of every shape cross the `punktfunk/2` wire byte-identical, with their
+    /// capture time, flags and epoch, and probe filler stays out of the video index space.
+    #[test]
+    fn v2_frames_cross_the_wire_with_their_epoch() {
+        let (mut host, mut client) = v2_pair(0);
+        let origin = 1_700_000_000_000_000_000u64;
+        for (i, len) in [
+            0usize,
+            1,
+            511,
+            512,
+            513,
+            8 * 512,
+            8 * 512 + 1,
+            100 * 512 + 3,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            host.set_epoch(i as u8);
+            let src = pattern(len);
+            let pts = origin + (i as u64 + 1) * 16_666_000;
+            host.submit_frame(&src, pts, crate::packet::USER_FLAG_RECOVERY_ANCHOR)
+                .unwrap();
+            let f = client.poll_frame().unwrap();
+            assert_eq!((f.data.len(), f.epoch, f.pts_ns), (len, i as u8, pts));
+            assert_eq!(f.data, src);
+            assert!(f.flags & crate::packet::USER_FLAG_RECOVERY_ANCHOR != 0);
+        }
+        host.submit_probe_frame(&pattern(500), origin).unwrap();
+        let probe = client.poll_frame().unwrap();
+        assert!(probe.flags & crate::packet::FLAG_PROBE as u32 != 0);
+        assert!(matches!(
+            client.send_input(&InputEvent {
+                kind: crate::input::InputKind::KeyDown,
+                _pad: [0; 3],
+                code: 4,
+                x: 0,
+                y: 0,
+                flags: 0,
+            }),
+            Err(PunktfunkError::Unsupported(_))
+        ));
+    }
+
+    /// Parity repairs a dropped shard on the v2 wire, and v1's key never seals v2 media.
+    #[test]
+    fn v2_parity_repairs_loss() {
+        // Every 17th packet: at most one loss in any 8 + 2 block, always within parity.
+        let (mut host, mut client) = v2_pair(17);
+        let mut got = 0;
+        for i in 0..20u64 {
+            let src = pattern(20 * 512 + i as usize);
+            host.submit_frame(&src, 1_700_000_000_000_000_000 + i * 1_000_000, 0)
+                .unwrap();
+            if let Ok(f) = client.poll_frame() {
+                assert_eq!(f.data, src);
+                got += 1;
+            }
+        }
+        assert_eq!(got, 20);
+        assert!(client.stats().fec_recovered_shards > 0);
+        let (h, _) = loopback_pair(0, 0);
+        let sealed = host_cfg(FecScheme::Gf16, 25, true);
+        let media = MediaV2 {
+            clock_origin_ns: 0,
+            keys: None,
+            clock: None,
+        };
+        assert!(Session::new_v2(sealed, media, Box::new(h)).is_err());
+    }
+
+    /// A streamed frame in slice mode reassembles on the v2 wire whichever block lands first.
+    #[test]
+    fn v2_streamed_slices_reassemble() {
+        let (mut host, mut client) = v2_pair(0);
+        let src = pattern(40 * 512 + 9);
+        let mut au = host
+            .begin_streamed_frame_at(5, crate::packet::USER_FLAG_SLICE_STREAM, 3)
+            .unwrap();
+        let mut wires = Vec::new();
+        for chunk in src.chunks(17 * 512) {
+            wires.extend(host.seal_streamed_chunk(&mut au, chunk, true).unwrap());
+        }
+        wires.extend(host.seal_streamed_finish(au).unwrap());
+        wires.reverse();
+        let refs: Vec<&[u8]> = wires.iter().map(|w| w.as_slice()).collect();
+        host.send_sealed(&refs).unwrap();
+        let f = client.poll_frame().unwrap();
+        assert_eq!((f.frame_index, f.data.len()), (3, src.len()));
+        assert_eq!(f.data, src);
+    }
+
+    /// Sealed v2 media crosses under both suites, and every packet is 16 bytes longer than the
+    /// unsealed one: the tag, no sequence prefix.
+    #[test]
+    fn v2_sealed_frames_cross_under_both_suites() {
+        use crate::crypto::MediaSuite;
+        for suite in [MediaSuite::Aes128Gcm, MediaSuite::ChaCha20Poly1305] {
+            let (mut host, mut client) = v2_pair_keyed(0, Some(media_keys(suite)));
+            for i in 0..6usize {
+                let src = pattern(i * 3000 + 1);
+                host.submit_frame(&src, 1_700_000_000_000_000_000 + i as u64 * 1000, 0)
+                    .unwrap();
+                assert_eq!(
+                    client.poll_frame().unwrap().data,
+                    src,
+                    "{suite:?} frame {i}"
+                );
+            }
+            let wires = host.seal_frame(&pattern(100), 0, 0).unwrap();
+            assert_eq!(
+                wires[0].len(),
+                crate::packet::V2_HEADER_LEN + 512 + crate::crypto::TAG_LEN
+            );
+        }
+    }
+
+    /// A tampered clear prefix fails the tag, a replayed packet is dropped, and a frame that
+    /// straddles a key change opens on both sides of it.
+    #[test]
+    fn v2_sealed_wire_resists_tamper_and_replay_across_a_key_change() {
+        let (mut host, mut client) =
+            v2_pair_keyed(0, Some(media_keys(crate::crypto::MediaSuite::Aes128Gcm)));
+        host.next_seq = crate::crypto::MEDIA_KEY_PACKETS - 3;
+        let src = pattern(20 * 512);
+        let wires = host.seal_frame(&src, 1_700_000_000_000_000_000, 0).unwrap();
+        assert!(wires.len() > 6, "the frame must straddle the key change");
+        let mut tampered = wires[0].clone();
+        tampered[0] = crate::packet::V2_STREAM_PROBE;
+        let refs: Vec<&[u8]> = std::iter::once(tampered.as_slice())
+            .chain(wires.iter().map(|w| w.as_slice()))
+            .chain(std::iter::once(wires[1].as_slice()))
+            .collect();
+        host.send_sealed(&refs).unwrap();
+        let f = client.poll_frame().unwrap();
+        assert_eq!(f.data, src);
+        assert!(matches!(client.poll_frame(), Err(PunktfunkError::NoFrame)));
+        assert_eq!(client.stats().packets_received as usize, wires.len());
+        assert!(
+            client.stats().packets_dropped >= 1,
+            "the replayed packet is dropped"
+        );
+    }
+
+    /// A packet number far past the newest is dropped before any key is derived for it.
+    #[test]
+    fn v2_implausible_packet_numbers_are_dropped_unopened() {
+        let (mut host, mut client) =
+            v2_pair_keyed(0, Some(media_keys(crate::crypto::MediaSuite::Aes128Gcm)));
+        host.next_seq = 3 * crate::crypto::MEDIA_KEY_PACKETS;
+        host.submit_frame(&pattern(700), 1_700_000_000_000_000_000, 0)
+            .unwrap();
+        assert!(matches!(client.poll_frame(), Err(PunktfunkError::NoFrame)));
+        assert!(client.stats().packets_dropped >= 2);
+        assert_eq!(client.stats().packets_received, 0);
     }
 }

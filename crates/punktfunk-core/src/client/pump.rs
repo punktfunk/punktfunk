@@ -28,6 +28,74 @@ mod rx_gap;
 /// reason it carried (`None` from a host that does not name its limits).
 type AckQueue = std::collections::VecDeque<(u32, Option<crate::quic::AckReason>)>;
 
+/// The control stream's write half, whichever wire carries it.
+pub(super) type CtlSend = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
+/// The control stream's read half, whichever wire carries it.
+pub(super) type CtlRecv = io::MsgReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
+
+/// The client's connection. On `punktfunk/2` a datagram carries its kind; this adds and strips
+/// it, so every task keeps sending and reading the datagrams it always did. Everything else is
+/// the quinn connection underneath.
+#[derive(Clone)]
+pub(super) struct ClientConn {
+    conn: quinn::Connection,
+    v2: bool,
+}
+
+impl ClientConn {
+    pub(super) fn new(conn: quinn::Connection, v2: bool) -> ClientConn {
+        ClientConn { conn, v2 }
+    }
+
+    pub(super) fn is_v2(&self) -> bool {
+        self.v2
+    }
+
+    pub(super) fn send_datagram(
+        &self,
+        data: Vec<u8>,
+    ) -> std::result::Result<(), quinn::SendDatagramError> {
+        if !self.v2 {
+            return self.conn.send_datagram(data.into());
+        }
+        // Every datagram the client sends has a kind; one without is dropped here.
+        match crate::quic::v2::dgram::wrap(&data) {
+            Some(w) => self.conn.send_datagram(w.into()),
+            None => Ok(()),
+        }
+    }
+
+    /// The next datagram the session logic reads; a kind it takes nothing from is skipped.
+    pub(super) async fn read_datagram(
+        &self,
+    ) -> std::result::Result<Vec<u8>, quinn::ConnectionError> {
+        loop {
+            let b = self.conn.read_datagram().await?;
+            if !self.v2 {
+                return Ok(b.to_vec());
+            }
+            use crate::quic::v2::dgram::{decode, Dgram};
+            if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
+                return Ok(p.to_vec());
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for ClientConn {
+    type Target = quinn::Connection;
+    fn deref(&self) -> &quinn::Connection {
+        &self.conn
+    }
+}
+
+/// `punktfunk/1`: datagrams as they are.
+impl From<quinn::Connection> for ClientConn {
+    fn from(conn: quinn::Connection) -> ClientConn {
+        ClientConn::new(conn, false)
+    }
+}
+
 pub(super) async fn run_pump(args: WorkerArgs) {
     let hs = match handshake::connect_and_handshake(&args).await {
         Ok(hs) => hs,
@@ -139,6 +207,9 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Normalized scroll only toward HOST_CAP2_SCROLL; an older host gets each
     // event converted once at the outbound seam instead.
     let normalized_scroll = negotiated.host_caps2 & crate::quic::HOST_CAP2_SCROLL != 0;
+    shared
+        .wire
+        .store(if conn.is_v2() { 2 } else { 1 }, Ordering::Relaxed);
     let _ = ready_tx.send(Ok(negotiated));
 
     // Snapshots only toward GAMEPAD_STATE. Flags 8/9 only toward PAD_AUDIO — an
@@ -189,7 +260,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
                 continue;
             }
             let d = crate::quic::encode_mic_datagram(seq, pts_ns, &opus);
-            let _ = mic_conn.send_datagram(d.into());
+            let _ = mic_conn.send_datagram(d);
             stats.sent.fetch_add(1, Ordering::Relaxed);
         }
     });
@@ -198,7 +269,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     let rich_conn = conn.clone();
     tokio::spawn(async move {
         while let Some(d) = rich_input_rx.recv().await {
-            let _ = rich_conn.send_datagram(d.into());
+            let _ = rich_conn.send_datagram(d);
         }
     });
 
@@ -252,19 +323,25 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Bulk clip bytes only; metadata rides the control task. Always spawned: a
     // host without HOST_CAP_CLIPBOARD never opens a clip stream, and offers miss.
     tokio::spawn(crate::clipboard::run(
-        conn.clone(),
+        (*conn).clone(),
         clip_event_tx,
         clip_cmd_rx,
     ));
 
-    // Connection close: classify, then shutdown.
+    // Connection close: classify, then shutdown. A lost `punktfunk/2` session is kept for the
+    // next dial's resume.
     {
         let shared = shared.clone();
         let conn = conn.clone();
+        let (host, port) = (params.host.clone(), params.port);
         tokio::spawn(async move {
             let why = conn.closed().await;
             // Reason before `shutdown`: different threads observe the two; the flag must not win.
             let reason = crate::client::PunktfunkEndReason::from(&why);
+            let lost_v2 = *shared.v2_session.lock().unwrap_or_else(|e| e.into_inner());
+            if let (crate::client::PunktfunkEndReason::Lost, Some(id)) = (reason, lost_v2) {
+                crate::client::resume::note_lost(&host, port, id);
+            }
             // Mid-session typed close (access expiry, …) beside the coarse reason, same order.
             // The host's sentence lands before the code: a reader that sees the code must
             // not find the text still missing.

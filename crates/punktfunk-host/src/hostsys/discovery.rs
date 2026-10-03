@@ -11,6 +11,7 @@
 //! - `mgmt` — management API TCP port when served; omitted otherwise.
 //! - `mac` — wake-capable NIC MAC(s), comma-separated, routed NIC first; omitted when none.
 //! - `os` — OS identity chain (`linux/fedora/bazzite`; [`crate::osinfo`]).
+//! - `wire` — the punktfunk protocols this host answers, comma-separated (`1,2`).
 //! - `addr` — IPv4 this advert was registered for. The resolved A-set is a union polluted by
 //!   other per-interface responders; the picker uses this as a tie-break.
 //!
@@ -134,6 +135,7 @@ pub fn advertise_native(
     uniqueid: &str,
     mgmt_port: Option<u16>,
     os_chain: &str,
+    protocol2: bool,
 ) -> Result<Advert> {
     // `hostname` is the instance label clients read back; the A-record target must be a legal
     // DNS name, hence [`dns_label`].
@@ -154,6 +156,7 @@ pub fn advertise_native(
         .into(),
     );
     fixed.insert("id".into(), uniqueid.to_string());
+    fixed.insert("wire".into(), if protocol2 { "1,2" } else { "1" }.into());
     if let Some(mgmt) = mgmt_port {
         fixed.insert("mgmt".into(), mgmt.to_string());
     }

@@ -802,6 +802,7 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
         // QUIC idle timeout; flag overrides env; absent = core default (8 s).
         idle_timeout: native::idle_timeout_from_env(),
         mdns: discovery::mdns_enabled(),
+        protocol2: native::protocol2_from_env(),
     };
     let mut source = "synthetic".to_string();
     // What `--source synthetic-abr` encodes; ignored by the other sources.

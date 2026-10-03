@@ -59,6 +59,11 @@ Both run in one `punktfunk-host serve` process.
 plane, WebTransport for the browser client, is off unless `--webtransport` is passed. Port numbers:
 [Ports](/docs/ports).
 
+`punktfunk/2` is the native protocol's successor, a preview the host answers under
+`PUNKTFUNK_PROTOCOL=2` (ALPN `pkf2`, beside `pkf1`). Control and media share the QUIC port, media
+keys come from the TLS exporter, and timestamps run on a per-session clock. Native clients offer
+it on every dial; the browser plane serves it at `/pf2` under the same opt-in.
+
 ## Control plane and management API
 
 The management API (`crates/punktfunk-host/src/mgmt`) is axum over HTTPS on the host's identity

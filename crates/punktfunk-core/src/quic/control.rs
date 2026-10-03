@@ -175,7 +175,7 @@ pub enum AckReason {
 }
 
 impl AckReason {
-    fn to_wire(self) -> u8 {
+    pub(crate) fn to_wire(self) -> u8 {
         match self {
             AckReason::Granted => 0,
             AckReason::EncoderLimit => 1,
@@ -187,7 +187,7 @@ impl AckReason {
 
     /// `None` for a code this build does not know: the ack still stands, and
     /// the client falls back to reading a short one as an encoder limit.
-    fn from_wire(b: u8) -> Option<AckReason> {
+    pub(crate) fn from_wire(b: u8) -> Option<AckReason> {
         Some(match b {
             0 => AckReason::Granted,
             1 => AckReason::EncoderLimit,
@@ -1204,9 +1204,10 @@ pub const LAUNCH_MESSAGE_MAX: usize = 200;
 /// alarm it cannot justify. The host's own vocabulary maps onto this one — no
 /// second set of names to drift.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LaunchOutcomeKind {
     /// The host started the title for this session.
+    #[default]
     Spawned = 0,
     /// Not started: an earlier session's copy is verified up, and this session
     /// took that one over.

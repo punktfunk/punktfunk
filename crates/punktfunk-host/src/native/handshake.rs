@@ -427,12 +427,25 @@ pub(super) async fn negotiate(
     // registers in the live set only once its data plane is up, so a later client can steal it.
     let mut joined = None;
     {
-        use crate::vdisplay::admission::{admit, preempt_same_identity, Admission};
+        use crate::vdisplay::admission::{
+            admit, preempt_resumed, preempt_same_identity, Admission,
+        };
         let peer_fp = conn.peer_fingerprint();
 
-        // Own prior session (QUIC idle has not fired). Stop it and wait the release grace so
-        // this reconnect reuses the kept display. Runs before we register, so we never stop ourselves.
-        let own_zombies = preempt_same_identity(peer_fp);
+        // Own prior session (QUIC idle has not fired), and on `punktfunk/2` the exact session a
+        // `resume` names. Stop them and wait for their release, so this reconnect reuses the
+        // kept display. Runs before we register, so we never stop ourselves.
+        let mut own_zombies = preempt_same_identity(peer_fp);
+        if let Some(id) = conn.v2_session().and_then(|v2| {
+            let rx = v2.rx.lock().unwrap_or_else(|e| e.into_inner());
+            rx.client.as_ref().and_then(|c| c.resume)
+        }) {
+            for s in preempt_resumed(id, peer_fp) {
+                if !own_zombies.iter().any(|z| Arc::ptr_eq(z, &s)) {
+                    own_zombies.push(s);
+                }
+            }
+        }
         if !own_zombies.is_empty() {
             tracing::info!(
                     count = own_zombies.len(),
@@ -441,8 +454,7 @@ pub(super) async fn negotiate(
             for z in &own_zombies {
                 z.store(true, Ordering::SeqCst);
             }
-            // 1500 ms: same release grace as steal, so the zombie drops its display before we acquire.
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            wait_released(&own_zombies).await;
         }
 
         match admit(peer_fp) {
@@ -483,8 +495,7 @@ pub(super) async fn negotiate(
                 for v in &victims {
                     v.store(true, Ordering::SeqCst);
                 }
-                // 1500 ms release grace so victims drop their display before we acquire.
-                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                wait_released(&victims).await;
             }
             Admission::Reject(reason) => {
                 tracing::warn!("mode-conflict: REJECT — {reason}");
@@ -554,7 +565,7 @@ pub(super) async fn negotiate(
     // A browser's video rides this connection's datagrams, which are smaller than a UDP payload
     // (QUIC and HTTP/3 framing come out of the same budget). Ask, falling back to the 1200 every
     // QUIC path guarantees; a shard that does not fit is dropped at send, and FEC cannot cover all.
-    if data_port.is_none() {
+    if conn.is_web() {
         let budget = conn.max_datagram_size().unwrap_or(1200);
         shard_payload = shard_payload.min(punktfunk_core::config::shard_payload_for_udp_budget(
             budget,
@@ -648,7 +659,7 @@ pub(super) async fn negotiate(
         // Clipboard only when operator policy and a platform backend both exist, and never to a
         // browser: its transfers ride quinn streams.
         host_caps: punktfunk_core::quic::HOST_CAP_GAMEPAD_STATE
-            | if pf_clipboard::cap_advertised() && !conn.is_web() {
+            | if pf_clipboard::cap_advertised() && conn.as_quic().is_some() {
                 punktfunk_core::quic::HOST_CAP_CLIPBOARD
             } else {
                 0
@@ -761,6 +772,16 @@ pub(super) async fn negotiate(
                 _ => 0,
             },
     };
+    // `punktfunk/2`: the suite goes out in the `ServerHello` this `Welcome` becomes, and keys
+    // the media. v1's chosen cipher maps onto it one for one; a browser's media goes unsealed,
+    // inside WebTransport's own encryption.
+    if let Some(v2) = conn.v2_session() {
+        v2.settle((!conn.is_web()).then_some(if chacha {
+            punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
+        } else {
+            punktfunk_core::crypto::MediaSuite::Aes128Gcm
+        }));
+    }
     io::write_msg(send, &welcome.encode()).await?;
     bringup.mark("welcome");
 
@@ -868,6 +889,15 @@ pub(super) async fn negotiate(
         prep,
         joined,
     })
+}
+
+/// Waits until every stopped session has left the live set, its display lease dropped with it.
+/// Capped at the 1.5 s grace the host once always slept: a stuck teardown costs no more than that.
+async fn wait_released(stops: &[Arc<std::sync::atomic::AtomicBool>]) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+    while !crate::vdisplay::admission::all_gone(stops) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 /// Compositor for Welcome plus the gamescope route as a value; synthetic has neither.

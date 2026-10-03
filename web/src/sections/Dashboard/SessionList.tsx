@@ -110,6 +110,7 @@ const Row: FC<{
 			: undefined,
 		row.plane === "gamestream" ? "GameStream" : undefined,
 		row.plane === "web" ? m.sessions_plane_web() : undefined,
+		row.wire === 2 ? "punktfunk/2" : undefined,
 	].filter(Boolean);
 	return (
 		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:items-center">

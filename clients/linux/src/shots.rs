@@ -67,6 +67,7 @@ pub fn run_shot(ctx: &ShotCtx, scene: &str) {
             mgmt_port: None,
             mac: Vec::new(),
             os: "linux/arch/steamos".to_string(),
+            wire: Vec::new(),
         };
 
     // What the self-capture renders: the main window, its dialogs included.

@@ -16,12 +16,12 @@ default = []
 # Cert-fingerprint pinning shared across the clients (the one `PinVerify` in `tls.rs`). Light:
 # rustls + sha2 only, no QUIC runtime — so a lean consumer (the tray's loopback status poll) can
 # pin the host cert without pulling tokio/quinn. The heavier `quic` feature builds on top of it.
-tls = ["dep:rustls", "dep:sha2"]
+tls = ["dep:rustls"]
 # Control-plane QUIC (pairing, config, reverse audio). tokio is permitted ONLY here,
 # never on the per-frame hot path. Off by default so the core stays runtime-free.
 # The SPAKE2 pairing ceremony on its own, so a client that pairs over a transport quinn does
 # not speak (the browser, over WebTransport) can have it without the QUIC runtime.
-pake = ["dep:hmac", "dep:spake2", "dep:sha2"]
+pake = ["dep:spake2"]
 quic = ["tls", "pake", "dep:quinn", "dep:tokio", "dep:rcgen", "dep:opus"]
 # Blocking-HTTP clients that must speak the SAME pinned TLS as the QUIC plane: `tls::ureq_agent`
 # hands ureq a caller-built `rustls::ClientConfig` (which is how `PinVerify` gets installed —
@@ -77,13 +77,14 @@ rustls = { workspace = true, optional = true }
 rcgen = { workspace = true, optional = true }
 # `rustls-webpki-roots` (workspace entry) is the CA set for the non-pinned origins (cover-art CDNs).
 ureq = { workspace = true, optional = true, features = ["gzip"] }
-sha2 = { version = "0.11", optional = true }
+# `punktfunk/2` media keys expand with HMAC-SHA256 in every build (`crypto::MediaKeys`).
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"], optional = true }
-hmac = { version = "0.13", optional = true }
+hmac = "0.13"
 spake2 = { version = "0.4", optional = true }
 # `io-util` for the `AsyncRead`/`AsyncWrite` extension traits the control framing is generic
 # over (`quic::io`), so the same frames run on a quinn stream or a WebTransport one.
-tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "sync", "macros", "io-util"] }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "sync", "macros", "io-util", "time"] }
 # In-core Opus: `audio::plane` is the one audio-plane decoder, for the Rust clients and the C-ABI
 # `punktfunk_connection_next_audio_pcm` (Apple's AudioToolbox is stereo-only), and `audio::mic`
 # the Rust clients' mic uplink encoder. Only built with the connection API (quic). Same libopus

@@ -234,6 +234,7 @@ mod tests {
             mgmt_port: Some(47990),
             mac: vec![],
             os: String::new(),
+            wire: Vec::new(),
         }
     }
 

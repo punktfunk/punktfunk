@@ -116,6 +116,9 @@ pub struct DiscoveredHost {
     /// OS-identity chain from mDNS `os` (`windows` | `macos` | `linux[/<family>][/<id>]`),
     /// sanitized ([`sanitize_os`]). Empty if absent.
     pub os: String,
+    /// The punktfunk protocols the host answers, from mDNS `wire` (`1,2`). Empty from a host
+    /// that does not say, which answers `punktfunk/1`.
+    pub wire: Vec<u8>,
 }
 
 impl DiscoveredHost {
@@ -164,6 +167,11 @@ pub fn advert_from_txt<'a>(
             .map(String::from)
             .collect(),
         os: sanitize_os(val("os")),
+        wire: val("wire")
+            .split(',')
+            .filter_map(|w| w.trim().parse().ok())
+            .take(8)
+            .collect(),
     })
 }
 
@@ -275,6 +283,14 @@ mod tests {
             &[ip("192.168.1.9")],
             |k| txt.iter().find(|(key, _)| *key == k).map(|(_, v)| *v),
         )
+    }
+
+    /// `wire` lists the protocols a host answers; an older host says nothing, junk is skipped.
+    #[test]
+    fn an_advert_names_the_protocols_its_host_answers() {
+        assert_eq!(advert(&[("wire", "1,2")]).unwrap().wire, vec![1, 2]);
+        assert_eq!(advert(&[("wire", "1, x,2")]).unwrap().wire, vec![1, 2]);
+        assert!(advert(&[]).unwrap().wire.is_empty());
     }
 
     #[test]

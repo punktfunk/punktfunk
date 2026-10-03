@@ -13,10 +13,13 @@
 mod header;
 mod packetize;
 mod reassemble;
+/// cbindgen:ignore
+mod v2;
 
 pub use header::*;
 pub use packetize::*;
 pub use reassemble::*;
+pub use v2::*;
 
 #[cfg(test)]
 mod tests;

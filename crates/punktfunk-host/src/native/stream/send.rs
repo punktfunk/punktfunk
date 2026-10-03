@@ -12,6 +12,8 @@ use super::*;
 pub(super) struct AuMeta {
     pub(super) capture_ns: u64,
     pub(super) flags: u32,
+    /// [`super::state::StreamState::epoch`] when this AU was encoded.
+    pub(super) epoch: u8,
     /// Predicted at submit as `au_seq + inflight`; stamped on the wire so RFI stays 1:1 across rebuilds.
     pub(super) frame_index: u32,
     /// Next frame's due time. Past = send immediately (catch up).
@@ -422,6 +424,12 @@ pub(super) fn send_loop(
                     )
                 });
                 pacing.update(pace_rate, max_spread, profile);
+                // A new epoch takes effect at the AU that carries it, never mid-AU.
+                match &send_msg {
+                    SendMsg::Frame(f) => session.set_epoch(f.meta.epoch),
+                    SendMsg::Chunk(c) if c.first => session.set_epoch(c.meta.epoch),
+                    SendMsg::Chunk(_) => {}
+                }
                 let outcome = match send_msg {
                     SendMsg::Frame(FrameMsg { data, meta: m }) => paced_submit(
                         &mut session,
@@ -614,6 +622,7 @@ mod tests {
     fn a_send_window_files_each_au_under_its_own_stages() {
         let meta = AuMeta {
             capture_ns: 0,
+            epoch: 0,
             flags: 0,
             frame_index: 0,
             deadline: std::time::Instant::now(),

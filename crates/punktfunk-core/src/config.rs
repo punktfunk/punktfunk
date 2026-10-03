@@ -50,7 +50,7 @@ impl FecScheme {
 
 /// Size the host should produce on the virtual output.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mode {
     pub width: u32,
     pub height: u32,

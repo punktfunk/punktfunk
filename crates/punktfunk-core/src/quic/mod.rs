@@ -38,6 +38,10 @@ mod pairing;
 mod pen;
 mod wire;
 
+/// The `punktfunk/2` codecs (ALPN `pkf2`). Ungated like the v1 vocabulary: the browser speaks it too.
+/// cbindgen:ignore
+pub mod v2;
+
 /// quinn endpoint constructors: host identity ([`endpoint::server_with_identity`]),
 /// client pin / TOFU ([`endpoint::client_pinned`]).
 #[cfg(feature = "quic")]

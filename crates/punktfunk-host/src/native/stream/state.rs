@@ -123,6 +123,9 @@ pub(super) struct StreamState {
     pub(super) interval: std::time::Duration,
     pub(super) cur_node_id: u32,
     pub(super) cur_display_gen: Option<u64>,
+    /// The `punktfunk/2` stream epoch every AU from now on carries. It moves whenever the
+    /// pipeline or the mode under it changes, so a client drops what was encoded before.
+    pub(super) epoch: u8,
     /// The live output's metadata for a capture-only rebuild (`on_capture_lost`).
     #[cfg(target_os = "linux")]
     pub(super) lease: Option<crate::capture::OutputLease>,
@@ -244,6 +247,7 @@ impl StreamState {
     /// gamescope. The caller retires the old lease, re-arms the IDR clock, and re-reads
     /// `enc_src` as its path requires.
     pub(super) fn adopt_pipeline(&mut self, p: Pipeline) {
+        self.epoch = self.epoch.wrapping_add(1);
         // A ceiling was learned from the encoder this one replaces. It survives
         // a rebuild that opens on the same source; a different geometry or
         // format is a different encoder, whose limits are unknown again.
@@ -899,6 +903,7 @@ impl StreamState {
             client: client_label,
             client_name,
             plane: conn.plane(),
+            wire: conn.wire(),
             hdr: plan.hdr,
             ttff_ms: bringup.total_slot(),
             last_resize_ms: resize_ms.clone(),
@@ -990,6 +995,7 @@ impl StreamState {
             interval,
             cur_node_id,
             cur_display_gen,
+            epoch: 0,
             #[cfg(target_os = "linux")]
             lease,
             enc_src,

@@ -939,8 +939,8 @@ mod tests {
         tokio::spawn(
             super::super::control_task::ControlTask {
                 ctrl_rx: task_ctrl_rx,
-                ctrl_send,
-                ctrl_recv: io::MsgReader::new(ctrl_recv),
+                ctrl_send: Box::new(ctrl_send),
+                ctrl_recv: io::MsgReader::new(Box::new(ctrl_recv)),
                 clock_rtt_ns: None, // no connect handshake ⇒ no re-sync batches to interleave
                 shared: Arc::new(ClientShared::new(mode)),
                 bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
