@@ -592,7 +592,7 @@ async fn session(args: Args) -> Result<()> {
         let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(recv);
         (Box::new(send), io::MsgReader::new(recv))
     };
-    let (welcome, udp_port) = handshake(&mut send, &mut recv, &args).await?;
+    let (welcome, udp_port) = handshake(&mut send, &mut recv, &args, v2).await?;
     // `punktfunk/2`: media on the dialing socket, under keys from the connection's exporter.
     let media = match shared.filter(|_| v2) {
         Some(shared) => {
@@ -754,7 +754,13 @@ async fn connect(
 }
 
 /// Hello out and Welcome back, then `Start` naming the data-plane port this probe reserved.
-async fn handshake(send: &mut CtlTx, recv: &mut CtlRx, args: &Args) -> Result<(Welcome, u16)> {
+/// A `punktfunk/2` session names none: its media arrives on the connection's socket.
+async fn handshake(
+    send: &mut CtlTx,
+    recv: &mut CtlRx,
+    args: &Args,
+    v2: bool,
+) -> Result<(Welcome, u16)> {
     io::write_msg(
         send,
         &Hello {
@@ -894,9 +900,14 @@ async fn handshake(send: &mut CtlTx, recv: &mut CtlRx, args: &Args) -> Result<(W
     );
 
     // Reserve our data-plane port, then tell the host to start.
-    let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
-    let udp_port = probe.local_addr()?.port();
-    drop(probe);
+    let udp_port = if v2 {
+        0
+    } else {
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        let port = probe.local_addr()?.port();
+        drop(probe);
+        port
+    };
     let start = Start {
         client_udp_port: udp_port,
     };
