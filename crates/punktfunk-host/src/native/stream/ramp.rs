@@ -169,15 +169,9 @@ fn serve(
                     ..req
                 };
                 let result = match ProbeBurst::begin(req, true) {
-                    Some(mut burst) => {
-                        while !burst.expired() && !stop.load(Ordering::SeqCst) {
-                            burst.pump(&mut session);
-                            std::thread::sleep(
-                                burst.next_due().min(std::time::Duration::from_micros(200)),
-                            );
-                        }
+                    Some(burst) => {
                         served += 1;
-                        burst.finish()
+                        burst.run(&mut session, stop)
                     }
                     None => declined(),
                 };

@@ -307,6 +307,18 @@ impl ProbeBurst {
             .min(self.deadline.saturating_duration_since(now))
     }
 
+    /// Serve the whole burst on this thread, then report it. It pumps before it asks, so a
+    /// thread woken past the deadline still sends what the window owed.
+    pub(super) fn run(mut self, session: &mut Session, stop: &AtomicBool) -> ProbeResult {
+        loop {
+            self.pump(session);
+            if self.expired() || stop.load(Ordering::SeqCst) {
+                return self.finish();
+            }
+            std::thread::sleep(self.next_due().min(std::time::Duration::from_micros(200)));
+        }
+    }
+
     /// End the burst and report it. Both figures are what happened, so a burst cut short by
     /// `stop` or a teardown reports itself rather than the request.
     fn finish(self) -> ProbeResult {
@@ -419,13 +431,7 @@ fn service_probes(
 ) {
     while let Ok(req) = probe_rx.try_recv() {
         let result = match ProbeBurst::begin(req, probe_seq) {
-            Some(mut burst) => {
-                while !burst.expired() && !stop.load(Ordering::SeqCst) {
-                    burst.pump(session);
-                    std::thread::sleep(burst.next_due().min(std::time::Duration::from_micros(200)));
-                }
-                burst.finish()
-            }
+            Some(burst) => burst.run(session, stop),
             None => declined(),
         };
         let _ = probe_result_tx.send(result);
@@ -869,6 +875,26 @@ mod tests {
         service_burst(&mut host, &mut burst, &req_rx, &res_tx, false);
         assert!(burst.is_none(), "an old client arms nothing");
         assert_eq!(res_rx.try_recv().expect("a decline"), declined());
+    }
+
+    /// A thread that reaches its burst only after the deadline still sends the window, so
+    /// the client never reads a descheduled host as one that sent nothing.
+    #[test]
+    fn a_burst_run_late_still_sends_its_window() {
+        let (mut host, _client) = loopback_sessions();
+        let req = ProbeRequest {
+            target_kbps: 5_000,
+            duration_ms: 25,
+        };
+        let burst = ProbeBurst::begin(req, true).expect("a capable client arms a burst");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let r = burst.run(&mut host, &AtomicBool::new(false));
+        let budget = 25 * 5_000 / 8;
+        assert!(
+            r.bytes_sent * 100 >= budget * 90,
+            "sent {} of a {budget} byte window",
+            r.bytes_sent
+        );
     }
 
     /// Teardown mid-burst: the report is what went out, not what was asked for.
