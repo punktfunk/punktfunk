@@ -450,6 +450,8 @@ package_punktfunk-scripting() {
   # bubblewrap builds each plugin's sandbox; the runner starts no plugin without it. The runtime is
   # punktfunk-bun's private bun (it import()s the operator's .ts plugins), pinned to this build.
   depends=('bubblewrap' "punktfunk-bun=${pkgver}-${pkgrel}")
+  install=punktfunk-scripting.install
+  backup=('etc/apparmor.d/punktfunk-scripting')
   local R; R="$(_repo)"
 
   # Pre-built self-contained bundle (from build()) + a PATH-stable launcher (matches the .deb/.rpm).
@@ -461,6 +463,11 @@ package_punktfunk-scripting() {
   # systemd USER unit — installed but NOT auto-enabled (opt-in). Enable once you have automation:
   #   systemctl --user enable --now punktfunk-scripting
   install -Dm0644 "$R/scripts/punktfunk-scripting.service" "$pkgdir/usr/lib/systemd/user/punktfunk-scripting.service"
+  # Where AppArmor restricts unprivileged user namespaces, the generator trades the unit's namespace
+  # sandbox for this profile.
+  install -Dm0644 "$R/packaging/linux/apparmor/punktfunk-scripting" "$pkgdir/etc/apparmor.d/punktfunk-scripting"
+  install -Dm0755 "$R/packaging/linux/punktfunk-scripting-apparmor.generator" \
+    "$pkgdir/usr/lib/systemd/user-generators/punktfunk-scripting-apparmor"
   install -Dm0644 "$R/LICENSE-MIT"    "$pkgdir/usr/share/licenses/punktfunk-scripting/LICENSE-MIT"
   install -Dm0644 "$R/LICENSE-APACHE" "$pkgdir/usr/share/licenses/punktfunk-scripting/LICENSE-APACHE"
 }
