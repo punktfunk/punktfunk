@@ -1,4 +1,5 @@
-//! Off-thread sampler for the virtual target's live HDR flag and active resolution.
+//! Off-thread sampler for the virtual target's live HDR and wide-colour flags and active
+//! resolution.
 //!
 //! Samples the display actor's cached snapshot (`pf_win_display::display_events::snapshot`,
 //! immunity plan WP9) — no `QueryDisplayConfig` on this thread, so the session-global
@@ -16,6 +17,7 @@ use super::*;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct DisplayDescriptor {
     pub(super) hdr: bool,
+    pub(super) wcg: bool,
     pub(super) width: u32,
     pub(super) height: u32,
 }
@@ -46,10 +48,13 @@ impl DescriptorPoller {
                     let seen = pf_win_display::display_events::snapshot()
                         .target(ccd)
                         .filter(|t| t.active)
-                        .map(|t| (t.hdr, t.width, t.height));
-                    if let Some((hdr, width, height)) = seen {
+                        .map(|t| (t.hdr, t.wcg, t.width, t.height));
+                    if let Some((hdr, wcg, width, height)) = seen {
                         if let Some(hdr) = hdr {
                             last.hdr = hdr;
+                        }
+                        if let Some(wcg) = wcg {
+                            last.wcg = wcg;
                         }
                         if width != 0 && height != 0 {
                             last.width = width;

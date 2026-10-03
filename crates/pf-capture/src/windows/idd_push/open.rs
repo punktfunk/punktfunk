@@ -211,6 +211,16 @@ impl IddPushCapturer {
                  set; None ⇒ the CCD read itself failed"
             );
         }
+        // SDR wide colour: a 10-bit SDR session composes FP16 under an SDR transfer, so its
+        // 10 bits are the desktop's own. Every other SDR session turns it off and the driver
+        // reads BGRA; an HDR session only observes it.
+        let display_wcg = if want_hdr {
+            !display_hdr
+                && pf_win_display::win_display::color_mode(ccd)
+                    == Some(pf_win_display::win_display::ColorMode::Wcg)
+        } else {
+            Self::pin_wcg(ccd, target.target_id, ten_bit_sdr && super::wcg_available())
+        };
         // The duplication target for the AU and cursor sections, and the driver-death probe.
         let broker = ChannelBroker::open(target.wudf_pid)?;
 
@@ -276,6 +286,7 @@ impl IddPushCapturer {
             wudf_pid = target.wudf_pid,
             mode = format!("{w}x{h}"),
             display_hdr,
+            display_wcg,
             want_hdr,
             ten_bit_sdr,
             want_444,
@@ -314,7 +325,9 @@ impl IddPushCapturer {
             height: h,
             want_hdr,
             ten_bit_sdr,
+            want_wcg: ten_bit_sdr && display_wcg,
             display_hdr,
+            display_wcg,
             hdr_pin_warned: false,
             hdr_pin_failures: 0,
             want_444,
@@ -323,6 +336,7 @@ impl IddPushCapturer {
                 ccd,
                 DisplayDescriptor {
                     hdr: display_hdr,
+                    wcg: display_wcg,
                     width: w,
                     height: h,
                 },

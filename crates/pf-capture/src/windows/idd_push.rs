@@ -38,6 +38,18 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
+/// A session found SDR wide colour refused on this host's virtual display. Later handshakes
+/// then stop offering a 10-bit SDR source without the widening opt-in.
+static WCG_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// A 10-bit SDR session can compose in SDR wide colour: Windows 11 24H2, and no refusal on
+/// this host yet. Before the first session tries, the OS build alone answers.
+pub(crate) fn wcg_available() -> bool {
+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    !WCG_REFUSED.load(Ordering::Relaxed)
+        && *BUILD.get_or_init(pf_win_display::os_build) >= pf_win_display::WCG_MIN_BUILD
+}
+
 /// Map-only on the driver's section duplicate. No OWNER / `WRITE_DAC` / DELETE.
 const SECTION_MAP_RW: u32 = 0x0004 | 0x0002;
 /// Driver only `SetEvent`s; host keeps `SYNCHRONIZE` on its own handle.
@@ -277,11 +289,16 @@ pub struct IddPushCapturer {
     /// Handshake advertised `VIDEO_CAP_HDR` (not merely 10-bit). Pins composition
     /// so an SDR client never gets in-band PQ.
     want_hdr: bool,
-    /// 10-bit SDR: the driver expands BGRA 8→10 into [`PixelFormat::Rgb10a2Sdr`]. Display
-    /// colour is never touched — `want_hdr` stays false.
+    /// 10-bit SDR: composed in SDR wide colour where Windows allows it (`want_wcg`), else the
+    /// driver's encoder widens BGRA itself. `want_hdr` stays false either way.
     ten_bit_sdr: bool,
+    /// Wide colour took at open, so the session keeps it pinned on; off pins it off.
+    want_wcg: bool,
     /// Live `advanced_color_enabled`. A change re-opens the driver's encoder.
     display_hdr: bool,
+    /// Live SDR wide colour: the driver reads FP16 for an SDR stream. A change re-opens the
+    /// driver's encoder.
+    display_wcg: bool,
     /// One-shot: the display refused the negotiated depth (poller is ~4 Hz).
     hdr_pin_warned: bool,
     /// Failed pin attempts. Past [`Self::HDR_PIN_EAGER`] retry every

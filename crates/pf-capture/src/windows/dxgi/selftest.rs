@@ -28,7 +28,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R16_UNORM, DXGI_SAMPLE_DESC,
 };
 
-/// f64 analogue of the HLSL in `HDR_P010_COMMON`.
+/// f64 analogue of the HLSL in `CURVE_PQ2020` + `P010_COMMON`.
 /// One scRGB pixel in (linear Rec.709, 1.0 = 80 nits, HDR may exceed 1.0);
 /// out is 10-bit studio-range (Y, Cb, Cr) for a flat block.
 #[cfg(target_os = "windows")]

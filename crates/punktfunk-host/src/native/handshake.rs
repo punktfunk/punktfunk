@@ -929,14 +929,15 @@ async fn negotiate_video_format(
     // twin here: that latch is per-source and this gate already used this session's source.
     let capture_supports_hdr =
         crate::capture::capturer_supports_hdr_for(compositor, gamescope_route);
-    // No desktop delivers more than 8 bits of SDR, so SDR-10 there only widens: a colour pass
-    // per frame for no source detail, and the operator opts in (`sdr10_widen`). Our gamescope
-    // composites 10-bit SDR itself (`sdr10_source`) and needs no opt-in. Either way the backend
-    // must write the 10 bits. Linux non-PyroWave 4:4:4 is clamped to 8-bit below.
+    // An 8-bit desktop's SDR-10 only widens: a colour pass per frame for no source detail, and
+    // the operator opts in (`sdr10_widen`). Our gamescope composites 10-bit SDR itself, and
+    // Windows 11 24H2 composes the virtual display in SDR wide colour (`sdr10_source`); neither
+    // needs the opt-in. Either way the backend must write the 10 bits. Linux non-PyroWave 4:4:4
+    // is clamped to 8-bit below.
     let sdr10_widen = pf_host_config::row_bool("PUNKTFUNK_10BIT_SDR_WIDEN");
     let sdr10_source = crate::capture::capturer_delivers_sdr10_for(compositor, gamescope_route);
     let sdr10_chain_ok = (sdr10_widen || sdr10_source)
-        && codec_carries_sdr10(codec)
+        && codec_carries_sdr10(codec, sdr10_source)
         && crate::encode::backend_carries_sdr10(codec);
     let depth_reachable = (client_wants_hdr && capture_supports_hdr) || sdr10_chain_ok;
     // Probe may open a tiny encoder; spawn_blocking, short-circuited behind the cheap gates.
@@ -1073,14 +1074,14 @@ fn linux_chroma_under_hdr(
     crate::encode::ChromaFormat::Yuv420
 }
 
-/// Codecs that carry 10-bit SDR off the packed-RGB capture. PyroWave is in on Linux: its CSC
-/// shaders widen 8-bit RGB to 10-bit codes in the same pass that does the colour matrix.
-/// (Windows PyroWave stays out — its capture there hands NV12 SDR.)
-fn codec_carries_sdr10(codec: crate::encode::Codec) -> bool {
+/// Codecs that carry 10-bit SDR. PyroWave on Linux widens 8-bit RGB to 10-bit codes in the
+/// pass that does the colour matrix; on Windows it takes only a real 10-bit source (SDR wide
+/// colour), since its planes from an 8-bit desktop are 8-bit.
+fn codec_carries_sdr10(codec: crate::encode::Codec, real_source: bool) -> bool {
     matches!(
         codec,
         crate::encode::Codec::H265 | crate::encode::Codec::Av1
-    ) || (codec == crate::encode::Codec::PyroWave && cfg!(target_os = "linux"))
+    ) || (codec == crate::encode::Codec::PyroWave && (cfg!(target_os = "linux") || real_source))
 }
 
 /// Whether Hello carried a format at all. Decode maps an absent one to 48 kHz/16-bit, so
@@ -1215,17 +1216,21 @@ mod tests {
     }
 
     /// AV1 carries 10-bit SDR like HEVC; Linux PyroWave widens RGB→10-bit in its own CSC,
-    /// so it is in there too (Windows PyroWave's NV12 SDR capture keeps it out).
+    /// so it is in there too. Windows PyroWave needs a real 10-bit source: its planes from an
+    /// 8-bit desktop are 8-bit.
     #[test]
-    fn sdr10_codecs_cover_hevc_av1_and_linux_pyrowave() {
+    fn sdr10_codecs_cover_hevc_av1_and_pyrowave_where_it_has_the_bits() {
         use crate::encode::Codec;
-        assert!(codec_carries_sdr10(Codec::Av1));
-        assert!(codec_carries_sdr10(Codec::H265));
+        for real in [false, true] {
+            assert!(codec_carries_sdr10(Codec::Av1, real));
+            assert!(codec_carries_sdr10(Codec::H265, real));
+            assert!(!codec_carries_sdr10(Codec::H264, real));
+        }
         assert_eq!(
-            codec_carries_sdr10(Codec::PyroWave),
+            codec_carries_sdr10(Codec::PyroWave, false),
             cfg!(target_os = "linux")
         );
-        assert!(!codec_carries_sdr10(Codec::H264));
+        assert!(codec_carries_sdr10(Codec::PyroWave, true));
     }
 
     /// 1472-byte discovery ceiling minus QUIC header + AEAD. Same number `pcm`'s ladder test uses.

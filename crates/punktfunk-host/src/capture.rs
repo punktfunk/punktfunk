@@ -376,14 +376,20 @@ fn direct_capture_hdr(compositor: crate::vdisplay::Compositor) -> bool {
     }
 }
 
-/// Does the source composite 10-bit SDR itself? Only our gamescope from `+pfhdr26`, which
-/// offers its 10-bit formats under BT.709; that session needs no widening opt-in.
+/// Does the source composite 10-bit SDR itself? Our gamescope from `+pfhdr26`, which offers
+/// its 10-bit formats under BT.709, and Windows composing the virtual display in SDR wide
+/// colour (FP16). Such a session needs no widening opt-in.
 pub fn capturer_delivers_sdr10_for(
     compositor: Option<crate::vdisplay::Compositor>,
     gamescope_route: Option<&crate::vdisplay::GamescopeRoute>,
 ) -> bool {
-    compositor == Some(crate::vdisplay::Compositor::Gamescope)
-        && pf_vdisplay::gamescope_sdr10_capture(gamescope_route)
+    match compositor {
+        Some(crate::vdisplay::Compositor::Gamescope) => {
+            pf_vdisplay::gamescope_sdr10_capture(gamescope_route)
+        }
+        Some(crate::vdisplay::Compositor::Windows) => pf_capture::capturer_delivers_sdr10(),
+        _ => false,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -555,6 +561,7 @@ pub fn open_driver_encoder(
         bitrate_kbps: (bitrate_bps / 1000).min(u64::from(u32::MAX)) as u32,
         hdr,
         hdr_meta: capturer.hdr_meta().map(|m| client_hdr.unwrap_or(m)),
+        sdr_fp16: !hdr && capturer.composes_sdr_fp16(),
         wire_chunk_bytes: plan.wire_chunk.unwrap_or(0) as u32,
         backends: [backend, fallback, 0, 0],
         wire_seq_base,

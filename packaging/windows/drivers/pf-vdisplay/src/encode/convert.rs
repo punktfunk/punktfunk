@@ -202,24 +202,35 @@ pub type InputKind = EncodeInput;
 pub fn pixel_format(kind: InputKind) -> PixelFormat {
     match kind {
         InputKind::Bgra => PixelFormat::Bgra,
-        InputKind::Nv12 | InputKind::Planar { hdr: false, .. } => PixelFormat::Nv12,
-        // P010Sdr rides the same P010 label so the AMF submit check (`format == P010`) passes;
-        // the encoder's `hdr` flag, not the label, decides BT.709 vs BT.2020.
-        InputKind::P010 | InputKind::P010Sdr | InputKind::Planar { hdr: true, .. } => {
+        InputKind::Nv12
+        | InputKind::Planar {
+            hdr: false,
+            wcg: false,
+            ..
+        } => PixelFormat::Nv12,
+        // P010Sdr and P010Wcg ride the same P010 label so the AMF submit check
+        // (`format == P010`) passes; the encoder's `hdr` flag, not the label, decides BT.709 vs
+        // BT.2020.
+        InputKind::P010 | InputKind::P010Sdr | InputKind::P010Wcg | InputKind::Planar { .. } => {
             PixelFormat::P010
         }
         InputKind::Rgb10 => PixelFormat::Rgb10a2,
+        InputKind::Rgb10Wcg => PixelFormat::Rgb10a2Sdr,
         InputKind::Fp16 => PixelFormat::RgbaF16,
     }
 }
 
-/// The source the pass reads: FP16 under advanced colour, BGRA otherwise.
+/// The source the pass reads: FP16 under advanced colour (HDR or SDR wide colour), BGRA
+/// otherwise.
 pub fn source_format(kind: InputKind) -> dxgi::DXGI_FORMAT {
     match kind {
         InputKind::P010
         | InputKind::Rgb10
         | InputKind::Fp16
-        | InputKind::Planar { hdr: true, .. } => dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT,
+        | InputKind::Rgb10Wcg
+        | InputKind::P010Wcg
+        | InputKind::Planar { hdr: true, .. }
+        | InputKind::Planar { wcg: true, .. } => dxgi::DXGI_FORMAT_R16G16B16A16_FLOAT,
         _ => dxgi::DXGI_FORMAT_B8G8R8A8_UNORM,
     }
 }
@@ -323,8 +334,13 @@ impl Targets {
                     .collect::<Result<_, _>>()?;
                 Planes::P010Sdr { conv, out }
             }
-            InputKind::P010 => {
-                let conv = HdrP010Converter::new(dev, w, h).map_err(convert_err)?;
+            InputKind::P010 | InputKind::P010Wcg => {
+                let conv = if kind == InputKind::P010 {
+                    HdrP010Converter::new(dev, w, h)
+                } else {
+                    HdrP010Converter::new_sdr_fp16(dev, w, h)
+                }
+                .map_err(convert_err)?;
                 let mut out = Vec::with_capacity(slots);
                 for _ in 0..slots {
                     let t = make_tex62(dev, (w, h), dxgi::DXGI_FORMAT_P010, rt, 0)?;
@@ -336,8 +352,13 @@ impl Targets {
                 }
                 Planes::P010 { conv, out }
             }
-            InputKind::Rgb10 => {
-                let conv = HdrRgb10Converter::new(dev).map_err(convert_err)?;
+            InputKind::Rgb10 | InputKind::Rgb10Wcg => {
+                let conv = if kind == InputKind::Rgb10 {
+                    HdrRgb10Converter::new(dev)
+                } else {
+                    HdrRgb10Converter::new_sdr_fp16(dev)
+                }
+                .map_err(convert_err)?;
                 let mut out = Vec::with_capacity(slots);
                 for _ in 0..slots {
                     let t = make_tex62(dev, (w, h), dxgi::DXGI_FORMAT_R10G10B10A2_UNORM, rt, 0)?;
@@ -346,12 +367,16 @@ impl Targets {
                 }
                 Planes::Rgb10 { conv, out }
             }
-            InputKind::Planar { hdr, chroma444 } => {
-                let conv = BgraToYuvPlanes::new(dev, hdr, chroma444).map_err(convert_err)?;
+            InputKind::Planar {
+                hdr,
+                wcg,
+                chroma444,
+            } => {
+                let conv = BgraToYuvPlanes::new(dev, hdr, wcg, chroma444).map_err(convert_err)?;
                 let shared = (d3d::D3D11_RESOURCE_MISC_SHARED.0
                     | d3d::D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0)
                     as u32;
-                let (yf, cf) = if hdr {
+                let (yf, cf) = if hdr || wcg {
                     (dxgi::DXGI_FORMAT_R16_UNORM, dxgi::DXGI_FORMAT_R16G16_UNORM)
                 } else {
                     (dxgi::DXGI_FORMAT_R8_UNORM, dxgi::DXGI_FORMAT_R8G8_UNORM)

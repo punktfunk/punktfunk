@@ -99,11 +99,16 @@ The toggle sits with the other [video settings](/docs/client-settings#video).
 
 ## 10-bit SDR
 
-The client's **10-bit SDR** setting asks for a 10-bit stream without HDR. No desktop hands the
-host more than 8 bits of SDR, so the host could only widen each frame: smoother gradients after
-the encoder, one more colour pass on the GPU, no detail the desktop didn't have. The host streams
-8-bit SDR unless **Host → Settings → Video → Allow 10-bit SDR** (`PUNKTFUNK_10BIT_SDR_WIDEN`,
-advanced, off by default) is on.
+The client's **10-bit SDR** setting asks for a 10-bit stream without HDR.
+
+A Windows 11 24H2 (or later) host composes the virtual display in wide colour for that session,
+and Windows shows it as a 10-bit display. The stream then carries the desktop's own bits past 8,
+wherever a game or app renders them. Composing in wide colour costs some GPU time.
+
+Other desktops hand the host only 8 bits of SDR, so the host could only widen each frame:
+smoother gradients after the encoder, one more colour pass on the GPU, no detail the desktop
+didn't have. There the host streams 8-bit SDR unless **Host → Settings → Video → Allow 10-bit
+SDR** (`PUNKTFUNK_10BIT_SDR_WIDEN`, advanced, off by default) is on.
 
 ## HDR and 4:4:4
 

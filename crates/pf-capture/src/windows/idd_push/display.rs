@@ -15,9 +15,15 @@ impl IddPushCapturer {
     /// While backed off, re-pin every this-many-th sample (~4 s at 4 Hz).
     const HDR_PIN_RETRY_EVERY: u64 = 16;
 
-    /// The frame format the driver's encoder takes, from display HDR + session 4:4:4. The
-    /// stream loop rebuilds the encoder — a fresh `SET_ENCODE` — whenever this changes.
+    /// The frame format the driver's encoder takes, from display HDR or wide colour + session
+    /// 4:4:4. The stream loop rebuilds the encoder — a fresh `SET_ENCODE` — whenever this
+    /// changes.
     pub(super) fn out_format(&self) -> PixelFormat {
+        // SDR wide colour: the driver reads FP16 under an SDR transfer. Its own label, so a flip
+        // in or out of wide colour re-opens the encoder.
+        if self.display_wcg && !self.display_hdr {
+            return PixelFormat::RgbaF16;
+        }
         // PyroWave carries planar studio codes; the label follows the display's depth.
         if self.pyrowave {
             return if self.display_hdr {
@@ -41,15 +47,21 @@ impl IddPushCapturer {
         }
     }
 
-    /// Re-assert the session's NEGOTIATED colour depth on the display, settling like `open` does.
+    /// Re-assert the session's NEGOTIATED colour depth and wide colour on the display, settling
+    /// like `open` does, and record what it settled at — what the encoder must open for.
     ///
     /// A monitor that re-arrives mid-stream (`re_add`: REMOVE then ADD, for a mode outside the
     /// frozen advertised list) comes back with advanced colour OFF whatever the session
     /// negotiated. It carries the client's HDR volume in its EDID, so it still looks like an HDR
     /// display — but composition drops to BGRA while the encoder was opened for FP16, and the
-    /// driver's pool then refuses every frame with no way to recover. Returns the depth the
-    /// display actually settled at, which is what the caller must open the encoder for.
-    pub(super) fn pin_negotiated_depth(&self) -> bool {
+    /// driver's pool then refuses every frame with no way to recover.
+    pub(super) fn pin_negotiated_depth(&mut self) {
+        self.display_hdr = self.pin_hdr_depth();
+        self.display_wcg =
+            !self.display_hdr && Self::pin_wcg(self.ccd, self.target_id, self.want_wcg);
+    }
+
+    fn pin_hdr_depth(&self) -> bool {
         let want = self.want_hdr;
         let set = pf_win_display::win_display::set_advanced_color(self.ccd, want);
         let settle = Instant::now();
@@ -82,6 +94,54 @@ impl IddPushCapturer {
         got
     }
 
+    /// Turn SDR wide colour on or off and settle like the HDR pin (≤ 250 ms). Returns whether the
+    /// display composes wide colour now. A refused `want` latches [`super::WCG_REFUSED`]: this
+    /// session widens its 8-bit desktop, and later handshakes stop offering a 10-bit SDR source.
+    pub(super) fn pin_wcg(
+        ccd: pf_win_display::win_display::CcdTargetKey,
+        target_id: u32,
+        want: bool,
+    ) -> bool {
+        use pf_win_display::win_display::{color_mode, set_wcg, wcg_supported, ColorMode};
+        let is_wcg = || color_mode(ccd) == Some(ColorMode::Wcg);
+        if is_wcg() == want {
+            return want;
+        }
+        let set = set_wcg(ccd, want);
+        let settle = Instant::now();
+        while settle.elapsed() < Duration::from_millis(250) && is_wcg() != want {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let got = is_wcg();
+        if got == want {
+            tracing::info!(
+                target_id,
+                want_wcg = want,
+                settle_ms = settle.elapsed().as_millis() as u64,
+                "IDD push: SDR wide colour set on the virtual display"
+            );
+        } else if want {
+            super::WCG_REFUSED.store(true, Ordering::Relaxed);
+            tracing::warn!(
+                target_id,
+                set_wcg_returned = set,
+                supported = wcg_supported(ccd),
+                mode = ?color_mode(ccd),
+                "IDD push: Windows refused SDR wide colour on the virtual display — this 10-bit \
+                 SDR session widens its 8-bit desktop, and later sessions negotiate 8-bit unless \
+                 Allow 10-bit SDR is on"
+            );
+        } else {
+            tracing::error!(
+                target_id,
+                set_wcg_returned = set,
+                "IDD push: SDR wide colour could NOT be turned off on the virtual display — the \
+                 encoder reads the FP16 desktop it composes"
+            );
+        }
+        got
+    }
+
     /// Re-open the encoder when two consecutive poller samples agree on a new descriptor
     /// (~½ s), so a topology re-probe blip never costs a session rebuild.
     pub(super) fn poll_display_hdr(&mut self) {
@@ -98,29 +158,43 @@ impl IddPushCapturer {
         }
         // Re-assert negotiated depth instead of following a mid-session flip:
         // PyroWave plane formats are fixed; an SDR session must not promote to
-        // P010 PQ. HDR H.26x is not pinned — its encoder re-opens on a flip.
-        if (self.pyrowave || !self.want_hdr) && now.hdr != self.want_hdr {
+        // P010 PQ. HDR H.26x is not pinned — its encoder re-opens on a flip. An SDR session's
+        // wide colour is pinned to what it opened with, in either direction.
+        let hdr_off = (self.pyrowave || !self.want_hdr) && now.hdr != self.want_hdr;
+        let wcg_off = !self.want_hdr && !now.hdr && now.wcg != self.want_wcg;
+        if hdr_off || wcg_off {
             let want = self.want_hdr;
             if self.hdr_pin_failures < Self::HDR_PIN_EAGER
                 || self.desc_seq % Self::HDR_PIN_RETRY_EVERY == 0
             {
+                use pf_win_display::win_display::{
+                    color_mode, set_advanced_color, set_wcg, ColorMode,
+                };
                 // OBSERVE the flip; never assert it. Substituting the DESIRED state for the
                 // observed one breaks in both directions on a display that cannot be flipped:
                 // the encoder opens for a depth the driver does not compose, and every frame
                 // is wrong until the poller corrects it.
-                let requested = pf_win_display::win_display::set_advanced_color(self.ccd, want);
-                let observed = pf_win_display::win_display::advanced_color_enabled(self.ccd);
+                let requested = if hdr_off {
+                    set_advanced_color(self.ccd, want)
+                } else {
+                    set_wcg(self.ccd, self.want_wcg)
+                };
+                let observed = color_mode(self.ccd);
                 // A failed READ is not evidence of a failed flip — keep the poller's sample then.
-                now.hdr = observed.unwrap_or(now.hdr);
-                if now.hdr != want {
+                if let Some(mode) = observed {
+                    now.hdr = mode == ColorMode::Hdr;
+                    now.wcg = mode == ColorMode::Wcg;
+                }
+                if now.hdr != want || (!want && now.wcg != self.want_wcg) {
                     self.hdr_pin_failures = self.hdr_pin_failures.saturating_add(1);
                     if !self.hdr_pin_warned {
                         self.hdr_pin_warned = true;
                         tracing::error!(
                             target_id = self.target_id,
                             want_hdr = want,
-                            observed_hdr = ?observed,
-                            set_advanced_color_returned = requested,
+                            want_wcg = self.want_wcg,
+                            observed = ?observed,
+                            set_returned = requested,
                             pyrowave = self.pyrowave,
                             "IDD push: could not pin the display to the NEGOTIATED depth — following what \
                              it actually composes instead (a physical display forcing HDR, or a driver that \
@@ -138,6 +212,7 @@ impl IddPushCapturer {
         }
         let current = DisplayDescriptor {
             hdr: self.display_hdr,
+            wcg: self.display_wcg,
             width: self.width,
             height: self.height,
         };
@@ -158,11 +233,18 @@ impl IddPushCapturer {
         self.pending_desc = None;
         tracing::info!(
             target_id = self.target_id,
-            from = format!("{}x{} hdr={}", self.width, self.height, self.display_hdr),
-            to = format!("{}x{} hdr={}", now.width, now.height, now.hdr),
+            from = format!(
+                "{}x{} hdr={} wcg={}",
+                self.width, self.height, self.display_hdr, self.display_wcg
+            ),
+            to = format!(
+                "{}x{} hdr={} wcg={}",
+                now.width, now.height, now.hdr, now.wcg
+            ),
             "IDD push: display descriptor changed — the next frame re-opens the driver's encoder"
         );
         self.display_hdr = now.hdr;
+        self.display_wcg = now.wcg;
         self.width = now.width;
         self.height = now.height;
         self.refresh_sdr_white_scale();
