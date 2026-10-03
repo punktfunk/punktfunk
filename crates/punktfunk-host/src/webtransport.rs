@@ -363,8 +363,10 @@ async fn session(
         return mgmt::serve(connection, serving).await;
     }
 
+    // `/pf2` is `punktfunk/2`; every other path is the `punktfunk/1` browser session.
+    let v2 = path == "/pf2";
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), sem).await {
+    match session::run(connection.clone(), serving.clone(), sem, v2).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(crate::native::Served::ProbeClose | crate::native::Served::Management) => {}
         Err(e) => {
@@ -382,7 +384,7 @@ async fn session(
             while !said.is_char_boundary(cut) {
                 cut -= 1;
             }
-            refuse(&connection, code, &said[..cut]).await;
+            refuse(&connection, code, &said[..cut], v2).await;
             connection.close(wtransport::VarInt::from_u32(code), &said.as_bytes()[..cut]);
             tracing::warn!(%peer, code, error = %detail, "browser session ended with error");
         }
@@ -391,16 +393,21 @@ async fn session(
 }
 
 /// Say why on a fresh unidirectional stream, then give the browser a moment to read it. The
-/// close that follows carries no retransmit, so the wait is what makes the message arrive.
-pub(crate) async fn refuse(connection: &wtransport::Connection, code: u32, reason: &str) {
-    let msg = punktfunk_core::quic::Refused {
+/// close that follows carries no retransmit, so the wait is what makes the message arrive. On
+/// `/pf2` the stream carries the `Refused` frame alone.
+pub(crate) async fn refuse(connection: &wtransport::Connection, code: u32, reason: &str, v2: bool) {
+    let refused = punktfunk_core::quic::Refused {
         code,
         reason: reason.to_string(),
-    }
-    .encode();
+    };
     let sent = async {
         let mut uni = connection.open_uni().await?.await?;
-        punktfunk_core::quic::io::write_msg(&mut uni, &msg).await?;
+        if v2 {
+            use punktfunk_core::quic::v2::msg::V2Message;
+            tokio::io::AsyncWriteExt::write_all(&mut uni, &refused.encode_v2()).await?;
+        } else {
+            punktfunk_core::quic::io::write_msg(&mut uni, &refused.encode()).await?;
+        }
         uni.finish().await?;
         anyhow::Ok(())
     };

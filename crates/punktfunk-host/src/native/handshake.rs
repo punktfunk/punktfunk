@@ -436,7 +436,7 @@ pub(super) async fn negotiate(
         // `resume` names. Stop them and wait for their release, so this reconnect reuses the
         // kept display. Runs before we register, so we never stop ourselves.
         let mut own_zombies = preempt_same_identity(peer_fp);
-        if let Some(id) = conn.v2().and_then(|v2| {
+        if let Some(id) = conn.v2_session().and_then(|v2| {
             let rx = v2.rx.lock().unwrap_or_else(|e| e.into_inner());
             rx.client.as_ref().and_then(|c| c.resume)
         }) {
@@ -773,13 +773,14 @@ pub(super) async fn negotiate(
             },
     };
     // `punktfunk/2`: the suite goes out in the `ServerHello` this `Welcome` becomes, and keys
-    // the media. v1's chosen cipher maps onto it one for one.
-    if let Some(v2) = conn.v2() {
-        v2.settle(if chacha {
+    // the media. v1's chosen cipher maps onto it one for one; a browser's media goes unsealed,
+    // inside WebTransport's own encryption.
+    if let Some(v2) = conn.v2_session() {
+        v2.settle((!conn.is_web()).then_some(if chacha {
             punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
         } else {
             punktfunk_core::crypto::MediaSuite::Aes128Gcm
-        });
+        }));
     }
     io::write_msg(send, &welcome.encode()).await?;
     bringup.mark("welcome");

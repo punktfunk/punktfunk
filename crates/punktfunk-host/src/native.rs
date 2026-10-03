@@ -1864,7 +1864,7 @@ pub(crate) async fn run_admitted(
                 isolation: planes.isolation.clone(),
                 audio_sink: audio_sink.clone(),
             },
-            conn.v2().map(|v2| v2.session_id),
+            conn.v2_session().map(|v2| v2.session_id),
         )
     };
 
@@ -2621,7 +2621,13 @@ fn bind_data_plane(
     let data_sock = match (data_plane, data_sock) {
         (DataPlane::Web(plane), _) => {
             bringup.mark("punch_done");
-            return Ok((Box::new(plane), None, None));
+            // `/pf2`: v2 headers in session time, unsealed inside WebTransport's encryption.
+            let media = plane.v2().map(|v2| punktfunk_core::session::MediaV2 {
+                clock_origin_ns: v2.clock.origin_ns(),
+                keys: None,
+                clock: Some(v2.clock.clone()),
+            });
+            return Ok((Box::new(plane), None, media));
         }
         // Nothing to bind or punch: the connection's socket already reaches the client.
         (DataPlane::Shared(v2), _) => {
