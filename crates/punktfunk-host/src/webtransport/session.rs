@@ -72,7 +72,7 @@ pub(crate) async fn run(
     }
     let Some(Admitted {
         link,
-        tx,
+        mut tx,
         rx,
         first,
         knock,
@@ -90,7 +90,11 @@ pub(crate) async fn run(
                 .peer_fingerprint()
                 .context("a knock is keyed by its device")?;
             let pairing = &serving.plane.pairing;
-            crate::native::park_knock(&link, None, pairing, &label, &hex::encode(fp), &sem)
+            let v2_writer = match &mut tx {
+                CtlSend::WebV2(w) => Some(w),
+                _ => None,
+            };
+            crate::native::park_knock(&link, v2_writer, pairing, &label, &hex::encode(fp), &sem)
                 .await?
                 .map_err(rejected)?
         }

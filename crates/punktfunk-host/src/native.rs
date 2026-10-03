@@ -1146,9 +1146,9 @@ const PENDING_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 ///
 /// `Ok(Ok(_))` is an approval, with a slot taken like any fresh client's (waits if busy).
 /// `Ok(Err(reason))` is the refusal to send. `Err` means the client left before a decision.
-pub(crate) async fn park_knock(
+pub(crate) async fn park_knock<W: tokio::io::AsyncWrite + Unpin>(
     conn: &link::SessionLink,
-    mut v2: Option<&mut punktfunk_core::quic::v2::io::V2Writer<quinn::SendStream>>,
+    mut v2: Option<&mut punktfunk_core::quic::v2::io::V2Writer<W>>,
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
