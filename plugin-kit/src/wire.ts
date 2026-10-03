@@ -205,6 +205,19 @@ export const OnWindow = Schema.Struct({
 });
 export type OnWindow = typeof OnWindow.Type;
 
+/**
+ * Whether a title's files are on the host. Set it on every title the plugin can install or
+ * remove (`serveUi({ install })`); leave it off the rest, which then count as installed.
+ */
+export const Install = Schema.Struct({
+	state: Schema.Literals(["installed", "missing"]),
+	/** Download size while `missing`, size on disk once `installed`. */
+	size_bytes: Schema.optionalKey(Schema.Number),
+	/** The folder the files go into; the host shows its free space. One of the plugin's write grants. */
+	target: Schema.optionalKey(Schema.String),
+});
+export type Install = typeof Install.Type;
+
 export const ProviderEntry = Schema.Struct({
 	external_id: Schema.String,
 	title: Schema.String,
@@ -238,6 +251,7 @@ export const ProviderEntry = Schema.Struct({
 	ids: Schema.optionalKey(EntryIds),
 	on_window: Schema.optionalKey(OnWindow),
 	audio: Schema.optionalKey(Schema.NullOr(AudioPolicy)),
+	install: Schema.optionalKey(Install),
 	...GameMeta.fields,
 });
 export type ProviderEntry = typeof ProviderEntry.Type;

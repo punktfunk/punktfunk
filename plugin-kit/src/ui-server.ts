@@ -7,6 +7,7 @@ import { decodeHostEvent, type GameRef } from "@punktfunk/host/core";
 import { Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect";
 import { Etag, HttpPlatform, HttpRouter } from "effect/unstable/http";
 import type { ConfigService } from "./config.js";
+import { makeInstallHandler, type ServeUiInstall } from "./downloads.js";
 import { UiServeError } from "./errors.js";
 import {
 	HostClient,
@@ -329,6 +330,11 @@ export interface ServeUiOptions {
 	readonly holds?: ServeUiHolds;
 	readonly holdTimeoutMs?: number;
 	/**
+	 * Serve `POST /__install`: the host asks this plugin to install, pause, cancel or remove one
+	 * of its titles. Report progress with `downloadReporter`, and mark entries with `install`.
+	 */
+	readonly install?: ServeUiInstall;
+	/**
 	 * The plugin API: `HttpApiBuilder.layer(api)` + group handler layers + raw routes
 	 * (e.g. `sseRoute`), with plugin services already provided. `httpApiEnv` is provided
 	 * here — only `HttpRouter` may remain open.
@@ -370,6 +376,9 @@ export const serveUi = (
 			: undefined;
 		const serveGame = opts.game ? makeGameHandler(opts.game) : undefined;
 		const serveHold = opts.holds ? makeHoldHandler(opts.holds) : undefined;
+		const serveInstall = opts.install
+			? makeInstallHandler(opts.install)
+			: undefined;
 
 		const fetch = async (req: Request): Promise<Response | undefined> => {
 			const url = new URL(req.url);
@@ -389,6 +398,11 @@ export const serveUi = (
 			}
 			if (url.pathname === "/__hold") {
 				return serveHold?.(req) ?? new Response("not found", { status: 404 });
+			}
+			if (url.pathname === "/__install") {
+				return (
+					serveInstall?.(req) ?? new Response("not found", { status: 404 })
+				);
 			}
 			if (!url.pathname.startsWith(prefix)) return undefined; // → static SPA
 			return handler(req);
@@ -412,6 +426,7 @@ export const serveUi = (
 							page: opts.staticDir !== undefined,
 							config: opts.config !== undefined,
 							game: opts.game !== undefined,
+							install: opts.install !== undefined,
 						},
 						...(opts.holds
 							? {

@@ -58,10 +58,16 @@ export interface PluginUiOptions {
 	/**
 	 * Which console surfaces the plugin serves. `page`: a page the console opens and lists in the
 	 * nav (the host assumes one when this is absent). `config`: `GET/PUT /__config`, the settings
-	 * form. `game`: `GET/PUT /__game?entry=<id>`, a tab on each library entry's page. Sent only
-	 * when set, so an older host ignores them.
+	 * form. `game`: `GET/PUT /__game?entry=<id>`, a tab on each library entry's page. `install`:
+	 * `POST /__install`, the host's install, pause, cancel and remove for this plugin's titles.
+	 * Sent only when set, so an older host ignores them.
 	 */
-	surfaces?: { page?: boolean; config?: boolean; game?: boolean };
+	surfaces?: {
+		page?: boolean;
+		config?: boolean;
+		game?: boolean;
+		install?: boolean;
+	};
 	/**
 	 * Stages this plugin holds, like `"game.launching"`. The host POSTs the event to `/__hold` and
 	 * waits for a 2xx, up to `holdTimeoutMs` (default 30 000, at most 120 000). Needs `fetch` to
