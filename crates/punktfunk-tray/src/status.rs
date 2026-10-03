@@ -145,6 +145,7 @@ pub fn console_label(responding: bool) -> &'static str {
 
 /// The service restart. Clients' host-power "Restart host" reboots the machine
 /// (`design/host-actions.md`), so one phrase must not mean both.
+#[cfg(windows)]
 pub const RESTART_LABEL: &str = "Restart Punktfunk";
 
 /// Unreachable-summary window before Starting becomes Degraded. Re-armed while
@@ -175,14 +176,14 @@ struct Shared {
 }
 
 impl Poller {
-    /// `on_change(status, console_up)` from the poll thread. `console_up` is a
+    /// `on_change(status, console_up, companions)` from the poll thread. `console_up` is a
     /// loopback probe of `web_port`; it annotates "Open web console" rather than
-    /// hiding the entry.
+    /// hiding the entry. `companions` follow the host in `UNITS` order; Windows has none.
     pub fn spawn(
         mgmt_addr: String,
         mgmt_port: Option<u16>,
         web_port: u16,
-        on_change: Box<dyn Fn(TrayStatus, bool) + Send>,
+        on_change: Box<dyn Fn(TrayStatus, bool, Vec<TrayStatus>) + Send>,
     ) -> Poller {
         let shared = Arc::new(Shared {
             poked: Mutex::new(false),
@@ -208,7 +209,7 @@ fn poll_loop(
     mgmt_addr: &str,
     mgmt_port: Option<u16>,
     web_port: u16,
-    on_change: Box<dyn Fn(TrayStatus, bool) + Send>,
+    on_change: Box<dyn Fn(TrayStatus, bool, Vec<TrayStatus>) + Send>,
 ) {
     // Per tick, not once: a captured port misses a republished
     // `PUNKTFUNK_MGMT_BIND` after restart.
@@ -230,7 +231,7 @@ fn poll_loop(
     let mut mgmt_agent = agent(pin);
     // Unpinned: the console is a different server and may present a different cert.
     let console_agent = agent(None);
-    let mut last: Option<(TrayStatus, bool)> = None;
+    let mut last: Option<(TrayStatus, bool, Vec<TrayStatus>)> = None;
     // Grace timer for an unreachable summary while Running.
     let mut unreachable_since: Option<Instant> = None;
     // One miss is not down: a cold SSR can outrun the 2 s timeout.
@@ -243,7 +244,7 @@ fn poll_loop(
             pin = fresh;
             mgmt_agent = agent(pin);
         }
-        let svc = probe_service();
+        let (svc, companions) = probe_services();
         let summary = if svc == ServiceState::Running {
             let s = fetch_summary(&mgmt_agent, &summary_url());
             match s {
@@ -265,11 +266,18 @@ fn poll_loop(
             console_misses += 1;
             console_misses < 2
         };
-        if last.as_ref() != Some(&(status.clone(), console_up)) {
-            on_change(status.clone(), console_up);
-            last = Some((status, console_up));
+        // A companion serves no summary, so a running one maps to Degraded: running, no detail.
+        let companions = companions
+            .iter()
+            .map(|c| map_status(c, None, true))
+            .collect();
+        let snapshot = (status, console_up, companions);
+        if last.as_ref() != Some(&snapshot) {
+            let (status, console_up, companions) = snapshot.clone();
+            on_change(status, console_up, companions);
+            last = Some(snapshot);
         }
-        let cadence = match last.as_ref().map(|(s, _)| s) {
+        let cadence = match last.as_ref().map(|(s, _, _)| s) {
             Some(TrayStatus::Stopped) | Some(TrayStatus::NotInstalled) => Duration::from_secs(10),
             _ => Duration::from_secs(3),
         };
@@ -342,6 +350,12 @@ fn agent(pin: Option<[u8; 32]>) -> ureq::Agent {
 #[cfg(windows)]
 pub const SERVICE_NAME: &str = "PunktfunkHost";
 
+/// The host's state and its companions'. Windows has none: the service runs the console itself.
+#[cfg(windows)]
+fn probe_services() -> (ServiceState, Vec<ServiceState>) {
+    (probe_service(), Vec::new())
+}
+
 #[cfg(windows)]
 pub fn probe_service() -> ServiceState {
     use windows_service::service::{ServiceAccess, ServiceExitCode, ServiceState as Scm};
@@ -374,41 +388,64 @@ pub fn probe_service() -> ServiceState {
     }
 }
 
-/// Systemd user unit installed by the Linux packages (`scripts/punktfunk-host.service`).
+/// Systemd user units the Linux packages install (`scripts/punktfunk-*.service`), with their
+/// menu names: the host, then its companions.
 #[cfg(target_os = "linux")]
-pub const UNIT_NAME: &str = "punktfunk-host.service";
+pub const UNITS: [(&str, &str); 3] = [
+    ("punktfunk-host.service", "Host service"),
+    ("punktfunk-web.service", "Web console"),
+    ("punktfunk-scripting.service", "Plugin runner"),
+];
 
 #[cfg(target_os = "linux")]
-pub fn probe_service() -> ServiceState {
-    // `systemctl show` exits 0 for unknown units (`LoadState=not-found`); parse, do not use the exit code.
-    let Ok(out) = std::process::Command::new("systemctl")
+pub const UNIT_NAME: &str = UNITS[0].0;
+
+/// The host's state and its companions', from one `systemctl show` over [`UNITS`].
+#[cfg(target_os = "linux")]
+fn probe_services() -> (ServiceState, Vec<ServiceState>) {
+    let out = std::process::Command::new("systemctl")
         .args([
             "--user",
             "show",
-            UNIT_NAME,
             "--property=LoadState,ActiveState,SubState",
         ])
-        .output()
-    else {
-        return ServiceState::NotInstalled; // no systemctl → nothing to watch
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let prop = |key: &str| {
-        text.lines()
-            .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
-            .unwrap_or("")
-            .to_string()
-    };
-    if prop("LoadState") == "not-found" {
-        return ServiceState::NotInstalled;
-    }
-    match prop("ActiveState").as_str() {
-        "active" | "reloading" => ServiceState::Running,
-        "activating" => ServiceState::StartPending,
-        "deactivating" => ServiceState::StopPending,
-        "failed" => ServiceState::Failed(prop("SubState")),
-        _ => ServiceState::Stopped, // "inactive" and anything new
-    }
+        .args(UNITS.map(|(unit, _)| unit))
+        .output();
+    // No systemctl → nothing to watch.
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut states = parse_show(&text);
+    let host = states.remove(0);
+    (host, states)
+}
+
+/// One blank-line-separated block per unit, in argument order. `systemctl show` exits 0 for
+/// unknown units (`LoadState=not-found`), so the text decides, not the exit code.
+#[cfg(target_os = "linux")]
+fn parse_show(text: &str) -> Vec<ServiceState> {
+    let mut states: Vec<ServiceState> = text
+        .split("\n\n")
+        .map(|block| {
+            let prop = |key: &str| {
+                block
+                    .lines()
+                    .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+                    .unwrap_or("")
+            };
+            match (prop("LoadState"), prop("ActiveState")) {
+                // `systemctl --user mask` is how a user opts out of a unit.
+                ("" | "not-found" | "masked", _) => ServiceState::NotInstalled,
+                (_, "active" | "reloading") => ServiceState::Running,
+                (_, "activating") => ServiceState::StartPending,
+                (_, "deactivating") => ServiceState::StopPending,
+                (_, "failed") => ServiceState::Failed(prop("SubState").into()),
+                _ => ServiceState::Stopped, // "inactive" and anything new
+            }
+        })
+        .collect();
+    states.resize(UNITS.len(), ServiceState::NotInstalled);
+    states
 }
 
 #[cfg(test)]
@@ -521,6 +558,28 @@ mod tests {
         s.kept_displays = 2;
         assert_eq!(TrayStatus::Running(s).kept_displays(), 2);
         assert_eq!(TrayStatus::Degraded.kept_displays(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemctl_show_blocks_map_in_unit_order() {
+        use ServiceState as S;
+        let text = "LoadState=loaded\nActiveState=active\nSubState=running\n\n\
+                    ActiveState=inactive\nLoadState=masked\nSubState=dead\n\n\
+                    LoadState=loaded\nActiveState=failed\nSubState=exit-code\n";
+        assert_eq!(
+            parse_show(text),
+            [S::Running, S::NotInstalled, S::Failed("exit-code".into())]
+        );
+        // No systemctl, or a short answer: whatever is missing is not installed.
+        assert_eq!(
+            parse_show(""),
+            [S::NotInstalled, S::NotInstalled, S::NotInstalled]
+        );
+        assert_eq!(
+            parse_show("LoadState=loaded\nActiveState=activating\n"),
+            [S::StartPending, S::NotInstalled, S::NotInstalled]
+        );
     }
 
     #[test]

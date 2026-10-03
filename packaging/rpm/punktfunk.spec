@@ -424,6 +424,8 @@ install -Dm0644 packaging/linux/50-punktfunk-nice.conf \
 install -Dm0755 target/release/punktfunk-tray %{buildroot}%{_bindir}/punktfunk-tray
 install -Dm0644 packaging/linux/io.unom.Punktfunk.Tray.desktop \
                 %{buildroot}%{_sysconfdir}/xdg/autostart/io.unom.Punktfunk.Tray.desktop
+install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
+                %{buildroot}%{_datadir}/applications/io.unom.Punktfunk.StartHost.desktop
 for sz in 22x22 48x48; do
   for png in packaging/linux/icons/hicolor/$sz/apps/*.png; do
     install -Dm0644 "$png" %{buildroot}%{_datadir}/icons/hicolor/$sz/apps/"$(basename "$png")"
@@ -647,6 +649,7 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_userunitdir}/punktfunk-kde-session.service
 %{_datadir}/applications/io.unom.Punktfunk.Host.desktop
 %{_sysconfdir}/xdg/autostart/io.unom.Punktfunk.Tray.desktop
+%{_datadir}/applications/io.unom.Punktfunk.StartHost.desktop
 %{_datadir}/icons/hicolor/*/apps/punktfunk-tray*.png
 %dir /etc/gamescope-session-plus
 %dir /etc/gamescope-session-plus/sessions.d

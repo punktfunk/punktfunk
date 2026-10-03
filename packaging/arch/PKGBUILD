@@ -279,6 +279,8 @@ package_punktfunk-host() {
   install -Dm0755 "$T/punktfunk-tray" "$pkgdir/usr/bin/punktfunk-tray"
   install -Dm0644 "$R/packaging/linux/io.unom.Punktfunk.Tray.desktop" \
     "$pkgdir/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop"
+  install -Dm0644 "$R/packaging/linux/io.unom.Punktfunk.StartHost.desktop" \
+    "$pkgdir/usr/share/applications/io.unom.Punktfunk.StartHost.desktop"
   local sz png
   for sz in 22x22 48x48; do
     for png in "$R"/packaging/linux/icons/hicolor/$sz/apps/*.png; do
