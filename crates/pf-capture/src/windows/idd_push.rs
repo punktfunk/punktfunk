@@ -50,7 +50,7 @@ fn now_ns() -> u64 {
         .unwrap_or(0)
 }
 
-/// `PUNKTFUNK_IDD_DIAG` — the one gate for this capturer's diagnostics: the micro-probe engine,
+/// `PUNKTFUNK_IDD_DIAG` — the gate for this capturer's full diagnostics: the micro-probe engine,
 /// the DxgKrnl ETW session and the access-unit dump. All three are off in a normal session,
 /// because standing fence/scanline/DWM traffic and an ETW session alter the very path a
 /// disturbance report describes.
@@ -71,6 +71,17 @@ pub(super) fn diag_dir() -> Option<&'static std::path::Path> {
         }
     })
     .as_deref()
+}
+
+/// `PUNKTFUNK_IDD_FLOW` — the DxgKrnl ETW session alone, printing a present-flow line every ten
+/// seconds. For a field host: [`diag_dir`] also dumps every access unit to disk. Read once per
+/// process.
+pub(super) fn flow_watch() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("PUNKTFUNK_IDD_FLOW")
+            .is_ok_and(|v| !matches!(v.trim(), "" | "0" | "off" | "false"))
+    })
 }
 
 /// File mapping + mapped view. Drop unmaps, then [`OwnedHandle`] closes.
@@ -313,7 +324,8 @@ pub struct IddPushCapturer {
     /// Micro-probe singleton; `None` unless [`diag_dir`] is on. A missing window reads as
     /// never-stalled, so a report never invents a leg.
     probes: Option<Arc<probes::ProbeEngine>>,
-    /// DxgKrnl ETW; `None` unless [`diag_dir`] is on, or the session refused to start.
+    /// DxgKrnl ETW; `None` unless [`diag_dir`] or [`flow_watch`] is on, or the session refused
+    /// to start.
     etw: Option<Arc<dxgkrnl_etw::EtwWatch>>,
     /// `PowerRequestDisplayRequired` for this capturer's life: DWM composes nothing
     /// once the console goes dark. It only keeps a lit display on; the monitor create wakes one.

@@ -81,6 +81,13 @@ static RING: Mutex<VecDeque<(i64, u16, u32)>> = Mutex::new(VecDeque::new());
 
 const RING_CAP: usize = 16384;
 
+/// The span of one present-flow line, and the gap between two. Well inside [`RING_CAP`].
+pub(super) const FLOW_EVERY: Duration = Duration::from_secs(10);
+
+/// When the last flow line was taken. Process-wide like [`RING`]: the session sees every
+/// display, so concurrent capturers share one line.
+static FLOW_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
 fn qpc_now() -> i64 {
     let mut v = 0i64;
     // SAFETY: plain FFI; `v` is a valid local out-param.
@@ -132,9 +139,9 @@ pub(super) struct EtwWatch {
 }
 
 // SAFETY: both fields are kernel handle VALUES (u64 wrappers) owned by this watch.
-// window_report reads the static ring; Drop stops/closes. The singleton hands out only `Arc<EtwWatch>`.
+// Its methods read the statics; Drop stops/closes. The singleton hands out only `Arc<EtwWatch>`.
 unsafe impl Send for EtwWatch {}
-// SAFETY: as above — `&EtwWatch` exposes only `window_report` (static-ring reads).
+// SAFETY: as above — `&EtwWatch` exposes only `window_report` and `flow_line` (static reads).
 unsafe impl Sync for EtwWatch {}
 
 static WATCH: Mutex<Weak<EtwWatch>> = Mutex::new(Weak::new());
@@ -410,6 +417,27 @@ impl EtwWatch {
         };
         (summary, counts)
     }
+
+    /// The present-flow line, once per [`FLOW_EVERY`]: presents by process against frames
+    /// entering the display's queue over that span, with any DDI servicing inside it. A game
+    /// that presents more than the queue takes is losing frames below it.
+    pub(super) fn flow_line(&self, now: Instant) -> Option<String> {
+        let due = flow_due(&mut FLOW_AT.lock().unwrap_or_else(|e| e.into_inner()), now);
+        let from = now.checked_sub(FLOW_EVERY)?;
+        due.then(|| self.window_report(from, now, Duration::ZERO).0)
+    }
+}
+
+/// Whether a flow line is due at `now`, moving the anchor when one is. The first call only
+/// anchors: its window would reach back before the watch started and read as a dip.
+fn flow_due(last: &mut Option<Instant>, now: Instant) -> bool {
+    match *last {
+        Some(t) if now.saturating_duration_since(t) < FLOW_EVERY => false,
+        prev => {
+            *last = Some(now);
+            prev.is_some()
+        }
+    }
 }
 
 /// Witness-liveness lookback: history flags are true only when the stream produced
@@ -577,6 +605,17 @@ impl Drop for EtwWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`flow_due`]: the first call anchors, then one line per [`FLOW_EVERY`].
+    #[test]
+    fn flow_line_is_due_once_per_window_after_the_anchor() {
+        let (mut last, t0) = (None, Instant::now());
+        assert!(!flow_due(&mut last, t0));
+        assert!(!flow_due(&mut last, t0 + FLOW_EVERY / 2));
+        assert!(flow_due(&mut last, t0 + FLOW_EVERY));
+        assert!(!flow_due(&mut last, t0 + FLOW_EVERY + FLOW_EVERY / 2));
+        assert!(flow_due(&mut last, t0 + FLOW_EVERY * 2));
+    }
 
     /// [`count_window`]: counts from `[from, to]`; liveness ONLY from the lookback window
     /// ending at the hole's start. An event after the hole or older than the lookback must
