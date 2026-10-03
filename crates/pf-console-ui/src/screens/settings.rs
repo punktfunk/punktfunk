@@ -134,6 +134,8 @@ pub enum RowId {
     CursorGestures,
     /// Action row: jumps to the Controllers tab.
     Controllers,
+    /// Action row: the stream's keys, chords and gestures, read-only.
+    StreamControls,
     /// Action row: asks the host to open the platform licences screen.
     Licenses,
     /// Action row: the Games tab's sections, in [`super::library::CustomizeScreen`].
@@ -504,7 +506,10 @@ const TABS: [(&str, &[RowId]); 7] = [
         ],
     ),
     ("Presets", &[]),
-    ("About", &[RowId::Version, RowId::Licenses]),
+    (
+        "About",
+        &[RowId::Version, RowId::StreamControls, RowId::Licenses],
+    ),
 ];
 
 /// The Presets section — catalog-built, not [`TABS`] rows.
@@ -1194,6 +1199,18 @@ impl SettingsScreen {
                     ListMsg::None => pulse,
                 };
             }
+            RowId::StreamControls => {
+                return match msg {
+                    ListMsg::Activate => {
+                        if let Some(screen) = super::licenses::LicensesScreen::controls(ctx) {
+                            fx.push(Screen::Licenses(screen));
+                        }
+                        pulse
+                    }
+                    ListMsg::Adjust(_) => Some(MenuPulse::Boundary),
+                    ListMsg::None => pulse,
+                };
+            }
             // The console draws the licences with the host's sections. webOS still opens
             // its own screen: that host sends no sections yet.
             RowId::Licenses => {
@@ -1281,6 +1298,7 @@ impl SettingsScreen {
             }
             Some(
                 RowId::Controllers
+                | RowId::StreamControls
                 | RowId::Licenses
                 | RowId::LibrarySections
                 | RowId::Palette
@@ -1466,6 +1484,9 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
         RowId::PadHaptics | RowId::PadSpeaker => &[Desktop, Android, WebOS],
         // The clients whose rumble paths read the switch.
         RowId::PadRumble => &[Desktop, Android, Apple],
+        // The clients whose sessions bind chords the console can list. The browser page binds
+        // none; webOS opts in once its session's chords are confirmed.
+        RowId::StreamControls => &[Desktop, Android, Apple],
         // Every client ships third-party code. The browser build has no bundle to list.
         RowId::Licenses => &[Desktop, Android, WebOS, Apple],
         // DualSense capture — the pad reaches webOS over Bluetooth HID, not hidraw, so the
@@ -1695,6 +1716,7 @@ fn row_icon(id: RowId) -> &'static str {
         RowId::ReduceMotion => "eye",
         RowId::AutoWake => "power",
         RowId::Version | RowId::Licenses => "info",
+        RowId::StreamControls => "keyboard",
         RowId::ShowAdvanced | RowId::AdvancedChanged => "wrench",
         RowId::StatsSize => "chart-column",
         RowId::ExitHint => "log-out",
@@ -1839,6 +1861,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::Controllers => return RowSpec::action("Controllers", true),
         // The count is the tab's; `SettingsScreen::spec` writes it in.
         RowId::AdvancedChanged => return RowSpec::action("Advanced settings changed", true),
+        RowId::StreamControls => return RowSpec::action("Stream controls", true),
         RowId::Licenses => return RowSpec::action("Open-source licences", true),
         RowId::QuickActions => return RowSpec::action("Quick actions", true),
         // Opens the cards: the value names the pick, no ‹ › to step it.
@@ -2145,6 +2168,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         | RowId::NewPreset
         | RowId::Controllers
         | RowId::AdvancedChanged
+        | RowId::StreamControls
         | RowId::Licenses
         | RowId::QuickActions
         | RowId::LibrarySections
@@ -2491,6 +2515,9 @@ pub fn detail(id: RowId, ctx: &Ctx) -> &'static str {
             }
         },
         RowId::Controllers => "The controllers connected here, their grants and a rumble test.",
+        RowId::StreamControls => {
+            "The keys, controller chords and gestures that work while you stream."
+        }
         RowId::Licenses => "The open-source licences this app ships under.",
         RowId::LibrarySections => "Which sections the Games tab shows, and in what order.",
         RowId::Version => "This console's build.",
@@ -2797,6 +2824,7 @@ pub fn adjust(id: RowId, delta: i32, wrap: bool, ctx: &mut Ctx) -> bool {
         | RowId::NewPreset
         | RowId::Controllers
         | RowId::AdvancedChanged
+        | RowId::StreamControls
         | RowId::Licenses
         | RowId::QuickActions
         | RowId::LibrarySections

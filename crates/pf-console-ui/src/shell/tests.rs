@@ -867,6 +867,32 @@ fn the_licences_page_through_a_hosts_notices() {
     assert!(matches!(s.stack.last(), Some(Screen::Home(_))));
 }
 
+/// The stream controls draw without a host, and a pad leaves them with B.
+#[test]
+fn the_stream_controls_draw_and_a_pad_leaves_them() {
+    let fonts = crate::theme::build_fonts().unwrap();
+    let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+    let mut settings = pf_client_core::trust::Settings::default();
+    let lib = crate::library::LibraryShared::default();
+    let controls = crate::screens::licenses::LicensesScreen::controls(&crate::screens::Ctx::test(
+        &mut settings,
+        &lib,
+    ))
+    .expect("a desktop has controls");
+    let (mut s, _console, _library) = shell(vec![
+        Screen::Home(HomeScreen::new()),
+        Screen::Licenses(controls),
+    ]);
+    s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+    let Some(Screen::Licenses(l)) = s.stack.last() else {
+        panic!("the controls are on top");
+    };
+    assert!(!l.waiting() && l.title() == "Stream controls");
+    s.handle_menu(MenuEvent::Back);
+    finish_motion(&mut s);
+    assert!(matches!(s.stack.last(), Some(Screen::Home(_))));
+}
+
 /// The host's test mode follows the test screen: on while it is on top, drawn from the
 /// host's readings, and off again once a held B takes it away.
 #[test]
