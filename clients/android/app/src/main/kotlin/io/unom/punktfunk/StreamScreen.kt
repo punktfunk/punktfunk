@@ -113,6 +113,11 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     // The negotiated stream refresh, known from the handshake (0 = unknown / older native lib) —
     // drives the panel mode pin, the render-rate vote, and the presenter's latch grid.
     val streamHz = remember(handle) { NativeBridge.nativeVideoSize(handle)?.getOrNull(2) ?: 0 }
+    // The negotiated size, landscape — a stream of the panel's own size pins the panel to it.
+    val streamSize = remember(handle) {
+        NativeBridge.nativeVideoSize(handle)?.takeIf { it.size >= 2 && it[0] > 0 && it[1] > 0 }
+            ?.let { maxOf(it[0], it[1]) to minOf(it[0], it[1]) }
+    }
 
     // The session's access level (the per-client grants of design/per-client-access.md), the
     // courtesy mirror of what the host enforces: seeded from the Welcome's advert here, kept live
@@ -315,7 +320,7 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
     // Everything this stream does to the window — wake/Wi-Fi locks, the refresh pin, ALLM, the
     // cutout and soft-keyboard modes, the landscape lock — and the prior values it puts back.
     val streamWindow = remember(handle) {
-        StreamWindow(activity, context, composeView, lowLatencyMode, isTv, streamHz)
+        StreamWindow(activity, context, composeView, lowLatencyMode, isTv, streamHz, streamSize)
     }
 
 
@@ -626,7 +631,7 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
                                     // The refresh of the panel this view is on — from the mode TABLE
                                     // (streamPanelFps), because display.refreshRate reports a per-uid
                                     // override, not the panel. Fallback: the (possibly lying) live rate.
-                                    this@apply.display?.streamPanelFps(streamHz)?.takeIf { it > 0 }
+                                    this@apply.display?.streamPanelFps(streamHz, streamSize)?.takeIf { it > 0 }
                                         ?: (this@apply.display?.refreshRate ?: 0f).roundToInt(),
                                     // The SurfaceView's on-screen pixel size — the coordinate space the
                                     // ASurfaceControl layer composites in (the aspect-fitted video rect,
