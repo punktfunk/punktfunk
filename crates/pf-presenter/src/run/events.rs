@@ -76,8 +76,13 @@ impl Shell {
                 }
             }
             Event::MouseMotion {
-                x, y, xrel, yrel, ..
-            } => self.on_mouse_motion(stream, x, y, xrel, yrel),
+                which,
+                x,
+                y,
+                xrel,
+                yrel,
+                ..
+            } => self.on_mouse_motion(stream, which, x, y, xrel, yrel),
             Event::MouseButtonDown { mouse_btn, .. } => {
                 if let Some(cap) = capture_mut(stream) {
                     if !cap.captured() {
@@ -366,6 +371,7 @@ impl Shell {
     fn on_mouse_motion(
         &mut self,
         stream: &mut Option<StreamState>,
+        which: u32,
         x: f32,
         y: f32,
         xrel: f32,
@@ -382,9 +388,16 @@ impl Shell {
         let Some(cap) = st.capture.as_mut() else {
             return;
         };
-        if cap.desktop() {
-            // Desktop model: window position through the placement. Before the first
+        let warped = !cap.desktop() && cap.abs_ok() && warps_pointer(which);
+        if cap.desktop() || warped {
+            // Window position through the placement. Relative mode freezes SDL's own
+            // position, so a warp reads where the pointer really is. Before the first
             // decoded frame there is nothing to map onto — dropped, like touch.
+            let (x, y) = if warped {
+                pointer_in_window(&self.window)
+            } else {
+                (x, y)
+            };
             if let Some(video) = video {
                 let (lw, lh) = self.window.size();
                 let nx = x / lw.max(1) as f32;
@@ -910,6 +923,37 @@ pub(super) fn is_direct_touch(touch_id: u64) -> bool {
     unsafe { SDL_GetTouchDeviceType(SDL_TouchID(touch_id)) == SDL_TouchDeviceType::DIRECT }
 }
 
+/// Does this mouse move by compositor warps? Xwayland posts a warp with no relative part on
+/// its absolute `xwayland-pointer:N`; a real mouse arrives on `xwayland-relative-pointer:N`.
+/// gamescope warps for the Steam Frame's laser and touch-as-mouse, and SDL's relative mode
+/// turns those positions into deltas that drift off the spot.
+pub(super) fn warps_pointer(which: u32) -> bool {
+    use sdl3::sys::mouse::{SDL_GetMouseNameForID, SDL_MouseID};
+    // SAFETY: a query on an id SDL issued; the name is SDL's, read here and never kept, and
+    // a null name is checked before use.
+    let name = unsafe {
+        let name = SDL_GetMouseNameForID(SDL_MouseID(which));
+        if name.is_null() {
+            return false;
+        }
+        std::ffi::CStr::from_ptr(name).to_bytes()
+    };
+    is_warp_device(name)
+}
+
+fn is_warp_device(name: &[u8]) -> bool {
+    name.starts_with(b"xwayland-pointer:")
+}
+
+/// The real pointer in logical window coordinates: the global state asks the server.
+pub(super) fn pointer_in_window(window: &sdl3::video::Window) -> (f32, f32) {
+    let (mut gx, mut gy) = (0.0f32, 0.0f32);
+    // SAFETY: SDL writes two floats through pointers to live locals.
+    unsafe { sdl3::sys::mouse::SDL_GetGlobalMouseState(&mut gx, &mut gy) };
+    let (wx, wy) = window.position();
+    (gx - wx as f32, gy - wy as f32)
+}
+
 /// Route one SDL touchscreen finger into the session's [`Capture`]. SDL delivers
 /// window-normalized `x`/`y` (0..1); the dispatcher hands physical window pixels
 /// (trackpad ballistics) and the frame position under `fit` (pointer + passthrough).
@@ -1094,6 +1138,16 @@ pub(super) const FOLLOW_SLACK_PX: i32 = 2;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only Xwayland's absolute pointer carries warps; its relative and gesture siblings
+    /// and every real device keep the capture model's deltas.
+    #[test]
+    fn only_the_xwayland_absolute_pointer_is_placed() {
+        assert!(is_warp_device(b"xwayland-pointer:13"));
+        assert!(!is_warp_device(b"xwayland-relative-pointer:13"));
+        assert!(!is_warp_device(b"xwayland-pointer-gestures:13"));
+        assert!(!is_warp_device(b"Logitech USB Receiver"));
+    }
 
     /// Chords need all three modifiers and match by printed letter or by position; the
     /// fullscreen keys need none.
