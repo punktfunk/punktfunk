@@ -49,6 +49,8 @@ const NIN_KEYSELECT: u32 = NIN_SELECT | 0x1;
 const WMAPP_STATUS: u32 = WM_APP + 2;
 /// Notify-icon callback; `NOTIFYICON_VERSION_4` packing of the event in `lParam`.
 const WMAPP_NOTIFYCALLBACK: u32 = WM_APP + 1;
+/// A second `--start-host` launch hands its request to the session's running tray.
+const WMAPP_START_HOST: u32 = WM_APP + 3;
 
 // WM_COMMAND LOWORD(wParam).
 const IDM_HEADER: usize = 0x0100; // disabled status line
@@ -86,6 +88,8 @@ struct App {
     web_port: u16,
     /// Connect-toast edge: 0 = no status yet, 1 = idle, 2 = streaming. 0 skips a mid-session toast.
     streaming_seen: AtomicU8,
+    /// `--start-host`, spent on the first status reading.
+    start_host: AtomicBool,
 }
 
 impl App {
@@ -163,6 +167,14 @@ pub fn run(args: crate::Args) -> anyhow::Result<()> {
     }
 
     if another_instance_holds_the_session() {
+        if args.start_host {
+            // SAFETY: as in `quit_existing`; both calls fail harmlessly with no tray window.
+            unsafe {
+                if let Ok(hwnd) = FindWindowW(w!("PunktfunkTrayWindow"), PCWSTR::null()) {
+                    let _ = PostMessageW(Some(hwnd), WMAPP_START_HOST, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
         return Ok(());
     }
 
@@ -193,6 +205,7 @@ pub fn run(args: crate::Args) -> anyhow::Result<()> {
         web_console: AtomicBool::new(false),
         web_port: args.web_port,
         streaming_seen: AtomicU8::new(0),
+        start_host: AtomicBool::new(args.start_host),
     })
     .ok()
     .expect("run() is called once");
@@ -553,6 +566,14 @@ fn elevate_service(hwnd: HWND, verb: &str) -> bool {
     rc.0 as isize > 32
 }
 
+/// One UAC prompt to start the host, only while the service is down.
+fn start_host_if_down(hwnd: HWND) {
+    let down = app().status().can_start();
+    if down {
+        let _ = elevate_service(hwnd, "start");
+    }
+}
+
 /// Open the web console at `path` (`""` = dashboard).
 fn open_web_console(hwnd: HWND, path: &str) {
     // `127.0.0.1`, not `localhost`: the console binds IPv4 only (`PUNKTFUNK_UI_BIND`) and Windows
@@ -583,6 +604,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         WMAPP_STATUS => {
             update_icon(hwnd, false);
             notify_on_connect(hwnd);
+            if app.start_host.swap(false, Ordering::SeqCst) {
+                start_host_if_down(hwnd);
+            }
+            LRESULT(0)
+        }
+        WMAPP_START_HOST => {
+            start_host_if_down(hwnd);
             LRESULT(0)
         }
         WM_SETTINGCHANGE => {

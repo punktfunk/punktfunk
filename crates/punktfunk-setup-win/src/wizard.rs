@@ -497,6 +497,7 @@ impl DemoSeams {
                 local_app_data: format!("{tmp}\\localappdata"),
                 start_menu: format!("{tmp}\\startmenu"),
                 desktop: format!("{tmp}\\desktop"),
+                common_start_menu: format!("{tmp}\\commonstartmenu"),
                 temp: tmp,
             },
         }
