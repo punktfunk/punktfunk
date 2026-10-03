@@ -427,9 +427,11 @@ impl Transport for MediaSender {
         Ok(packets.len())
     }
 
-    /// Runs of equal-size packets leave as one offloaded send, each run no longer than the
-    /// platform's segment limit; the last packet of a run may be shorter.
+    /// Runs of equal-size packets leave as one offloaded send, each run within the platform's
+    /// segment limit and the IPv6+UDP payload bound; the last packet of a run may be shorter.
+    /// An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
+        const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
         if !self.gso.load(Ordering::Relaxed) || max <= 1 {
             return self.send_batch(packets);
@@ -439,9 +441,10 @@ impl Transport for MediaSender {
         let mut sent = 0;
         while sent < packets.len() {
             let size = packets[sent].len();
+            let cap = (GSO_MAX_PAYLOAD / size.max(1)).clamp(1, max);
             let mut end = sent + 1;
             while end < packets.len()
-                && end - sent < max
+                && end - sent < cap
                 && packets[end].len() <= size
                 && packets[end - 1].len() == size
             {
@@ -546,7 +549,8 @@ mod tests {
             }
         });
         let send = std::thread::spawn(move || {
-            for chunk in packets.chunks(16) {
+            // 64 × 1100 B passes the 64 KiB a single offloaded send may carry.
+            for chunk in packets.chunks(64) {
                 let refs: Vec<&[u8]> = chunk.iter().map(|p| p.as_slice()).collect();
                 let mut off = 0;
                 while off < refs.len() {
