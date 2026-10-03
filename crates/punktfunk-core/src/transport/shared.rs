@@ -514,6 +514,7 @@ mod tests {
             &cert,
             &key,
             Duration::from_secs(8),
+            &[crate::quic::v2::registry::ALPN, b"pkf1"],
         )
         .unwrap();
         let addr = server.local_addr().unwrap();

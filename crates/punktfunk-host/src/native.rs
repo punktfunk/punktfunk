@@ -126,6 +126,9 @@ pub struct Punktfunk1Options {
     pub idle_timeout: Option<std::time::Duration>,
     /// `_punktfunk._udp` advert. `--no-mdns` / `PUNKTFUNK_MDNS=0` skips it.
     pub mdns: bool,
+    /// Answer `punktfunk/2` to a client that offers it ([`protocol2_from_env`]). Off, the
+    /// endpoint lists only `pkf1`, and every client gets `punktfunk/1`.
+    pub protocol2: bool,
 }
 
 /// Bind the per-session data-plane UDP socket ([`Punktfunk1Options::data_port`]): the
@@ -262,6 +265,11 @@ pub(crate) struct NativeServe {
     pub webtransport_bind: Option<std::net::SocketAddr>,
 }
 
+/// `PUNKTFUNK_PROTOCOL=2`: answer `punktfunk/2`. Clients offer it already; the host picks.
+pub(crate) fn protocol2_from_env() -> bool {
+    pf_host_config::knob("PUNKTFUNK_PROTOCOL").is_some_and(|v| v.trim() == "2")
+}
+
 /// NVENC session cap (high-res split-encode holds two). Overflow waits in the accept queue.
 pub(crate) const DEFAULT_MAX_CONCURRENT: usize = 4;
 
@@ -299,6 +307,7 @@ pub(crate) fn native_serve_opts(cfg: &NativeServe) -> Punktfunk1Options {
         data_port: cfg.data_port,
         idle_timeout: idle_timeout_from_env(),
         mdns: cfg.mdns,
+        protocol2: protocol2_from_env(),
     }
 }
 
@@ -315,12 +324,21 @@ pub(crate) async fn serve(
 ) -> Result<()> {
     let fingerprint = endpoint::fingerprint_of_pem(&identity.cert_pem)
         .map_err(|e| anyhow!("cert fingerprint: {e}"))?;
-    // Answers `punktfunk/2` beside `punktfunk/1`; a v2 session's media leaves from this socket.
+    // A v2 session's media leaves from this socket; `pkf2` first wins wherever both ends speak it.
+    let alpns: &[&[u8]] = if opts.protocol2 {
+        &[
+            punktfunk_core::quic::v2::registry::ALPN,
+            endpoint::QUIC_ALPN,
+        ]
+    } else {
+        &[endpoint::QUIC_ALPN]
+    };
     let (ep, media_socket) = endpoint::server_shared(
         ([0, 0, 0, 0], opts.port).into(),
         &identity.cert_pem,
         &identity.key_pem,
         opts.idle_timeout.unwrap_or(endpoint::DEFAULT_IDLE_TIMEOUT),
+        alpns,
     )
     .map_err(|e| anyhow!("QUIC server endpoint: {e}"))?;
     let media_socket = Arc::new(media_socket);
@@ -1402,6 +1420,7 @@ impl SessionHost {
                 data_port: None,
                 idle_timeout: None,
                 mdns: false,
+                protocol2: protocol2_from_env(),
             }),
             audio_cap: Arc::new(std::sync::Mutex::new(None)),
             inj_tx: std::sync::mpsc::channel().0,
@@ -3390,6 +3409,7 @@ mod tests {
                 data_port: None,
                 idle_timeout: None,
                 mdns: false, // tests must not advertise on the LAN
+                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3557,6 +3577,7 @@ mod tests {
                 data_port: None,
                 idle_timeout: None,
                 mdns: false,
+                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3648,6 +3669,7 @@ mod tests {
                 data_port: None,
                 idle_timeout: None,
                 mdns: false,
+                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3734,6 +3756,21 @@ mod tests {
         punktfunk_core::client::NativeClient,
         std::thread::JoinHandle<anyhow::Result<()>>,
     ) {
+        synthetic_session_on(port, source, protocol2_from_env(), params)
+    }
+
+    /// [`synthetic_session`] with the host's `punktfunk/2` answer set by the test.
+    fn synthetic_session_on(
+        port: u16,
+        source: Punktfunk1Source,
+        protocol2: bool,
+        params: impl FnOnce(
+            punktfunk_core::client::ConnectParams,
+        ) -> punktfunk_core::client::ConnectParams,
+    ) -> (
+        punktfunk_core::client::NativeClient,
+        std::thread::JoinHandle<anyhow::Result<()>>,
+    ) {
         use punktfunk_core::client::{ConnectParams, NativeClient};
         let host = std::thread::spawn(move || {
             run_ephemeral(Punktfunk1Options {
@@ -3750,6 +3787,7 @@ mod tests {
                 data_port: None,
                 idle_timeout: None,
                 mdns: false,
+                protocol2,
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3815,6 +3853,33 @@ mod tests {
         host.join().unwrap().unwrap();
     }
 
+    /// A host that does not answer `punktfunk/2` gives a client offering it `punktfunk/1`, whose
+    /// QUIC rides the client's shared socket while video takes the punched data port.
+    #[test]
+    fn a_client_offering_punktfunk_2_falls_back_to_punktfunk_1() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let (client, host) = synthetic_session_on(19792, Punktfunk1Source::Synthetic, false, |p| {
+            punktfunk_core::client::ConnectParams {
+                offer_v2: true,
+                ..p
+            }
+        });
+        let mut got = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while got < 30 && std::time::Instant::now() < deadline {
+            if let Ok(f) = client.next_frame(std::time::Duration::from_millis(200)) {
+                let idx = u32::from_le_bytes(f.data[0..4].try_into().unwrap());
+                assert_eq!(f.data, test_frame(idx, f.data.len()), "frame {idx}");
+                got += 1;
+            }
+        }
+        assert_eq!(got, 30, "frames cross the v1 data plane");
+        assert_eq!(client.wire(), 1, "the host answered punktfunk/1");
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
     /// A client that offers `punktfunk/2` streams over it: the handshake crosses the translated
     /// control stream, the media arrives on the connection's own socket under exporter keys,
     /// and every frame is the host's byte for byte. Each frame's `HostTiming` names it by the
@@ -3824,7 +3889,7 @@ mod tests {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use punktfunk_core::quic::DeliveryAsk;
-        let (client, host) = synthetic_session(19791, Punktfunk1Source::Synthetic, |p| {
+        let (client, host) = synthetic_session_on(19791, Punktfunk1Source::Synthetic, true, |p| {
             punktfunk_core::client::ConnectParams {
                 offer_v2: true,
                 delivery: Some(DeliveryAsk {
@@ -4065,6 +4130,7 @@ mod tests {
                     data_port: None,
                     idle_timeout: None,
                     mdns: false,
+                    protocol2: protocol2_from_env(),
                 },
                 0,
                 np_host,
@@ -4182,6 +4248,7 @@ mod tests {
                 data_port: None,
                 idle_timeout: None,
                 mdns: false,
+                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -4331,6 +4398,7 @@ mod tests {
                     data_port: None,
                     idle_timeout: None,
                     mdns: false,
+                    protocol2: protocol2_from_env(),
                 },
                 0,
                 np,

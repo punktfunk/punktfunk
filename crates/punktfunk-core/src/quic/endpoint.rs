@@ -139,26 +139,22 @@ fn server_from_der(
     Ok(quinn::Endpoint::server(server_config, addr)?)
 }
 
-/// A host endpoint that answers `punktfunk/2` beside `punktfunk/1`, and a clone of its socket
-/// for [`MediaSender`](crate::transport::shared::MediaSender). TLS takes the first of the host's
-/// ALPNs the client offers, so `pkf2` wins wherever both ends speak it.
+/// A host endpoint answering `alpns`, and a clone of its socket for
+/// [`MediaSender`](crate::transport::shared::MediaSender). TLS takes the first of the host's
+/// ALPNs the client offers, so listing `pkf2` first picks it wherever both ends speak it.
 pub fn server_shared(
     addr: std::net::SocketAddr,
     cert_pem: &str,
     key_pem: &str,
     idle: std::time::Duration,
+    alpns: &[&[u8]],
 ) -> anyhow_result::Result<(quinn::Endpoint, std::net::UdpSocket)> {
     use rustls::pki_types::pem::PemObject;
     let cert_der = rustls::pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes())
         .map_err(|e| anyhow_result::Error::msg(format!("cert pem: {e}")))?;
     let key_der = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
         .map_err(|e| anyhow_result::Error::msg(format!("key pem: {e}")))?;
-    let server_config = server_config(
-        cert_der,
-        key_der,
-        idle,
-        &[super::v2::registry::ALPN, QUIC_ALPN],
-    )?;
+    let server_config = server_config(cert_der, key_der, idle, alpns)?;
     let socket = std::net::UdpSocket::bind(addr)?;
     crate::transport::grow_socket_buffers(&socket);
     let media = socket.try_clone()?;

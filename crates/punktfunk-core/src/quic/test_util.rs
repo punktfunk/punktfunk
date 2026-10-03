@@ -37,6 +37,7 @@ pub(crate) async fn connect_pair_v2() -> (
         &cert,
         &key,
         std::time::Duration::from_secs(8),
+        &[super::v2::registry::ALPN],
     )
     .unwrap();
     let addr = server.local_addr().unwrap();

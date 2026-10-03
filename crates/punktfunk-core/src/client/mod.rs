@@ -599,9 +599,9 @@ pub struct ConnectParams {
     pub client_caps: u8,
     /// AU prefixes as [`Frame`]s with `part = Some`. Only for a decoder that takes parts.
     pub frame_parts: bool,
-    /// Offer `punktfunk/2` (ALPN `pkf2`) before `punktfunk/1`. A host that answers it carries
-    /// media on the connection's own socket; one that does not runs `punktfunk/1` as before.
-    /// [`ConnectParams::new`] sets it from `PUNKTFUNK_PROTOCOL=2`.
+    /// Offer `punktfunk/2` (ALPN `pkf2`) before `punktfunk/1`; the host picks. One that answers
+    /// it carries media on the connection's own socket; one that does not runs `punktfunk/1`.
+    /// [`ConnectParams::new`] turns it on unless `PUNKTFUNK_PROTOCOL=1`.
     pub offer_v2: bool,
     /// Store-qualified library id to launch (`steam:570`).
     pub launch: Option<String>,
@@ -647,7 +647,7 @@ impl ConnectParams {
             display_hdr: None,
             client_caps: 0,
             frame_parts: false,
-            offer_v2: std::env::var("PUNKTFUNK_PROTOCOL").is_ok_and(|v| v == "2"),
+            offer_v2: std::env::var("PUNKTFUNK_PROTOCOL").map_or(true, |v| v.trim() != "1"),
             launch: None,
             name: None,
             pin: None,

@@ -694,8 +694,14 @@ mod tests {
         let router = Router::new().route("/api/v1/health", get(|| async { "ok" }));
         let (cert, key) = endpoint::generate_identity().unwrap();
         let loopback: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let (server, _media) =
-            endpoint::server_shared(loopback, &cert, &key, Duration::from_secs(8)).unwrap();
+        let (server, _media) = endpoint::server_shared(
+            loopback,
+            &cert,
+            &key,
+            Duration::from_secs(8),
+            &[registry::ALPN],
+        )
+        .unwrap();
         let bind = server.local_addr().unwrap();
         tokio::spawn(async move {
             let conn = server.accept().await.unwrap().await.unwrap();

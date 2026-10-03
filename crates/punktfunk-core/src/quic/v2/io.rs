@@ -288,6 +288,23 @@ mod tests {
     use crate::quic::v2::registry::{MSG_CURSOR_SHAPE, STREAM_CONTROL, STREAM_TRANSFER};
     use crate::quic::{PipelineGap, SetBitrate};
 
+    /// A frame type from a newer peer is skipped whole; the message after it still arrives.
+    #[tokio::test]
+    async fn a_reader_skips_a_frame_type_it_does_not_know() {
+        let (mut tx, rx) = tokio::io::duplex(4096);
+        let mut reader = V2Reader::new(rx, Default::default());
+        let mut unknown = Vec::new();
+        put_varint(&mut unknown, 0x3F00);
+        put_varint(&mut unknown, 300);
+        unknown.extend_from_slice(&[0xAB; 300]);
+        tx.write_all(&unknown).await.unwrap();
+        tx.write_all(&SetBitrate { bitrate_kbps: 7 }.encode_v2())
+            .await
+            .unwrap();
+        let msg = crate::quic::io::read_msg(&mut reader).await.unwrap();
+        assert_eq!(SetBitrate::decode(&msg).unwrap().bitrate_kbps, 7);
+    }
+
     #[tokio::test]
     async fn frames_survive_a_cancelled_read_mid_frame() {
         let (mut tx, rx) = tokio::io::duplex(64);
