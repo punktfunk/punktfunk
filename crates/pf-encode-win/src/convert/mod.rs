@@ -761,8 +761,8 @@ impl VideoConverter {
 
     /// FP16 scRGB (1.0 = 80 nits, BT.709 primaries) → P010 BT.2020 PQ studio range. `Err`
     /// when the driver does not report that conversion (`CheckVideoProcessorFormatConversion`).
-    /// Test-only: the UHD 750 reports no; the QSV gate probe asks other hardware.
-    #[cfg(test)]
+    /// Only the QSV gate probe uses it: the UHD 750 reports no, the probe asks other hardware.
+    #[cfg(all(test, feature = "qsv"))]
     pub(crate) fn new_hdr10(
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
