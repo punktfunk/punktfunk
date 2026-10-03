@@ -424,7 +424,7 @@ mod session_main {
 
     /// The window's starting size under Match-window: the persisted last size, so the
     /// first connect's mode already matches the glass; `None` (policy off / never
-    /// stored) = the 1280×720 default.
+    /// stored) = the presenter's default.
     pub(crate) fn window_size(settings: &trust::Settings) -> Option<(u32, u32)> {
         (settings.match_window && settings.last_window_w > 0 && settings.last_window_h > 0)
             .then_some((settings.last_window_w, settings.last_window_h))

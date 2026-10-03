@@ -95,8 +95,9 @@ pub struct SessionOpts {
     /// `None` is the Skia-free build (stats stay stdout-only). Init failure degrades to `None`
     /// with a warning rather than killing the session. Browse mode requires one.
     pub overlay: Option<Box<dyn Overlay>>,
-    /// Starting logical size; `None` = 1280×720. Match-window passes the persisted last size
-    /// so the first connect's mode already matches the glass.
+    /// Starting logical size; `None` = 1280×720, which a single stream without Match-window
+    /// then resizes to the stream. Match-window passes the persisted last size so the first
+    /// connect's mode already matches the glass.
     pub window_size: Option<(u32, u32)>,
     /// `Some` = stream mode follows the window: start params use physical pixels, a mid-session
     /// resize sends a debounced `Reconfigure`. The callback gets logical size at each resize-end
@@ -515,6 +516,7 @@ fn run_inner(opts: SessionOpts, mut mode: ModeCtl) -> Result<Outcome> {
                 force_software.clone(),
                 sh.presenter.vulkan_decode(),
             );
+            sh.size_to_stream(params.mode);
             Some(sh.start_stream(params, force_software))
         }
         ModeCtl::Browse(_) => None,

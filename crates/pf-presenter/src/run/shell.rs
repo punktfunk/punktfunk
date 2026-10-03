@@ -53,7 +53,8 @@ impl Shell {
             .map_err(|e| anyhow::anyhow!("register FrameWake event: {e}"))?;
         let window = {
             // Match-window: open at the persisted last size so the first connect's mode
-            // matches the glass. 1280×720 is the fallback.
+            // matches the glass. 1280×720 is the fallback; a single stream then takes its
+            // own size (`size_to_stream`).
             let (ww, wh) = opts.window_size.unwrap_or((1280, 720));
             let mut b = video.window(&opts.window_title, ww.max(320), wh.max(200));
             match opts.window_pos {
@@ -220,6 +221,72 @@ impl Shell {
         let inhibit = self.opts.inhibit_shortcuts;
         apply_capture(&mut self.window, &self.mouse, false, false, inhibit, 0);
     }
+
+    /// Resize the window to `mode` within the display's usable area, before the stream
+    /// starts. Match-window and fullscreen keep the size they own.
+    pub(super) fn size_to_stream(&mut self, mode: Mode) {
+        if self.fullscreen || self.opts.match_window.is_some() {
+            return;
+        }
+        let Ok(area) = self
+            .window
+            .get_display()
+            .and_then(|d| d.get_usable_bounds())
+        else {
+            return;
+        };
+        // Windows and X11 report the frame; Wayland reports none.
+        let frame = self.window.border_size().unwrap_or_default();
+        let (w, h, x, y) = stream_window_rect(
+            (mode.width, mode.height),
+            self.window.pixel_density(),
+            frame,
+            area,
+            self.opts.window_pos,
+        );
+        tracing::info!(w, h, "window sized to the stream");
+        if self.window.set_size(w, h).is_ok() {
+            use sdl3::video::WindowPos::Positioned;
+            self.window.set_position(Positioned(x), Positioned(y));
+        }
+    }
+}
+
+/// Window size and client-area origin for a `stream`-pixel picture: its size at `density`
+/// pixels per window unit, shrunk with the aspect kept until it and its `frame` (top, left,
+/// bottom, right) fit `area`. Centred in `area`, or `pos` pulled back inside it.
+fn stream_window_rect(
+    stream: (u32, u32),
+    density: f32,
+    frame: (u16, u16, u16, u16),
+    area: sdl3::rect::Rect,
+    pos: Option<(i32, i32)>,
+) -> (u32, u32, i32, i32) {
+    let [top, left, bottom, right] = [frame.0, frame.1, frame.2, frame.3].map(i32::from);
+    let (aw, ah) = (area.width() as i32, area.height() as i32);
+    let density = if density.is_finite() && density > 0.0 {
+        density
+    } else {
+        1.0
+    };
+    let (w, h) = (
+        stream.0.max(1) as f32 / density,
+        stream.1.max(1) as f32 / density,
+    );
+    let k = ((aw - left - right).max(1) as f32 / w)
+        .min((ah - top - bottom).max(1) as f32 / h)
+        .min(1.0);
+    let (w, h) = (
+        (w * k).round().max(1.0) as i32,
+        (h * k).round().max(1.0) as i32,
+    );
+    let (lo_x, hi_x) = (area.x() + left, area.x() + aw - right - w);
+    let (lo_y, hi_y) = (area.y() + top, area.y() + ah - bottom - h);
+    let (x, y) = match pos {
+        Some((x, y)) => (x.clamp(lo_x, hi_x.max(lo_x)), y.clamp(lo_y, hi_y.max(lo_y))),
+        None => ((lo_x + hi_x) / 2, (lo_y + hi_y) / 2),
+    };
+    (w as u32, h as u32, x, y)
 }
 
 impl Shell {
@@ -501,6 +568,35 @@ pub(super) const HINT_WITH_PAD: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_window_fits_the_usable_area() {
+        let area = sdl3::rect::Rect::new(0, 0, 1920, 1032);
+        // 1080p on a 1080p panel with a taskbar and a 31 px title bar: shrunk, aspect kept,
+        // the frame flush with the usable area's top and bottom.
+        assert_eq!(
+            stream_window_rect((1920, 1080), 1.0, (31, 1, 1, 1), area, None),
+            (1778, 1000, 71, 31)
+        );
+        // Room to spare: the stream's own size, centred.
+        let big = sdl3::rect::Rect::new(0, 0, 2560, 1400);
+        assert_eq!(
+            stream_window_rect((1920, 1080), 1.0, (0, 0, 0, 0), big, None),
+            (1920, 1080, 320, 160)
+        );
+        // Wayland at 200 %: window units are points.
+        assert_eq!(
+            stream_window_rect((1920, 1080), 2.0, (0, 0, 0, 0), big, None).0,
+            960
+        );
+        // A shell's spot that would spill off the right edge is pulled back inside.
+        let (w, _, x, y) =
+            stream_window_rect((1920, 1080), 1.0, (0, 0, 0, 0), big, Some((900, 50)));
+        assert_eq!((x + w as i32, y), (2560, 50));
+        // A bogus density or a zero mode never yields a zero window.
+        let (w, h, ..) = stream_window_rect((0, 0), f32::NAN, (0, 0, 0, 0), big, None);
+        assert!(w >= 1 && h >= 1);
+    }
 
     #[test]
     fn overlay_scale_follows_dpi_and_survives_a_bogus_display() {
