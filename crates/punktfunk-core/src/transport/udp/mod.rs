@@ -31,12 +31,15 @@ pub use windows::send_uso_all;
     unix,
     not(any(target_os = "linux", target_os = "android", target_family = "wasm"))
 ))]
+#[cfg(feature = "quic")]
 pub(crate) use apple::wait_readable;
 /// Block until `socket` is readable or `timeout` passes; `true` when readable. The shared
 /// socket's reader waits here, since quinn-udp keeps the socket non-blocking.
 #[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(feature = "quic")]
 pub(crate) use linux::wait_readable;
 #[cfg(target_os = "windows")]
+#[cfg(feature = "quic")]
 pub(crate) use windows::wait_readable;
 
 /// One past [`MAX_DATAGRAM_BYTES`]. `Config::validate` keeps a well-formed datagram

@@ -197,6 +197,7 @@ pub(super) fn send_gso(t: &UdpTransport, packets: &[&[u8]]) -> std::io::Result<u
 }
 
 /// Block until `socket` has a datagram to read or `timeout` passes; `true` when readable.
+#[cfg(feature = "quic")]
 pub(crate) fn wait_readable(
     socket: &std::net::UdpSocket,
     timeout: std::time::Duration,

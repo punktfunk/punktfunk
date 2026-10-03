@@ -267,6 +267,7 @@ pub(super) fn recv_batch(
 
 /// Block until `socket` has a datagram to read or `timeout` passes; `true` when readable. An
 /// interrupted wait reads as a timeout: the caller loops anyway.
+#[cfg(feature = "quic")]
 pub(crate) fn wait_readable(
     socket: &std::net::UdpSocket,
     timeout: std::time::Duration,
