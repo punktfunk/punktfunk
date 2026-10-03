@@ -6,7 +6,7 @@ use super::*;
 // One parameter per demuxed plane; a struct would only move the field list off the call site.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run(
-    conn: quinn::Connection,
+    conn: impl Into<ClientConn>,
     audio_tx: std::sync::mpsc::SyncSender<AudioPacket>,
     rumble_tx: std::sync::mpsc::SyncSender<RumbleUpdate>,
     rumble_feed: super::super::rumble::RumbleFeed,
@@ -27,6 +27,7 @@ pub(super) async fn run(
     let mut audio_red = crate::audio::AudioRedRecovery::new();
     // One seq space for every audio plane: a late or duplicate packet never reaches a decoder.
     let mut audio_seq = crate::audio::AudioSeqGate::new();
+    let conn: ClientConn = conn.into();
     while let Ok(d) = conn.read_datagram().await {
         match d.first() {
             Some(&crate::quic::AUDIO_MAGIC) => {

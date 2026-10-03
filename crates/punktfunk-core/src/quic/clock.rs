@@ -33,13 +33,14 @@ pub struct ClockSkew {
 /// clock. Each round is bounded so a silent host cannot wedge session start.
 /// Any other message the host sends meanwhile goes back on `recv` for the control task.
 ///
-/// Takes a quinn stream, so it needs the feature; the [`ClockProbe`]/[`ClockEcho`] codecs above
-/// do not, and a browser drives the same rounds over its own stream.
+/// Needs the feature for its runtime; the [`ClockProbe`]/[`ClockEcho`] codecs above do not, and a
+/// browser drives the same rounds over its own stream.
 #[cfg(feature = "quic")]
-pub async fn clock_sync(
-    send: &mut quinn::SendStream,
-    recv: &mut super::io::MsgReader<quinn::RecvStream>,
-) -> Option<ClockSkew> {
+pub async fn clock_sync<W, R>(send: &mut W, recv: &mut super::io::MsgReader<R>) -> Option<ClockSkew>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    R: tokio::io::AsyncRead + Unpin,
+{
     use super::io;
     use std::time::Duration;
     const ROUNDS: usize = 8;

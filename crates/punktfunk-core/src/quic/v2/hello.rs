@@ -367,8 +367,10 @@ impl V2Message for ServerHello {
         if w.audio_frame_us != 0 {
             w.audio_frame_us = w.audio_frame_us.max(1_000);
         }
+        // This wire sends no key; the zeroed slot keeps `Welcome`'s cipher and key consistent.
         if suite == Some(MediaSuite::ChaCha20Poly1305) {
             w.cipher = CIPHER_CHACHA20_POLY1305;
+            w.key_chacha = Some([0; 32]);
         }
         Ok(ServerHello {
             welcome: w,
@@ -642,6 +644,7 @@ mod tests {
             suite: Some(MediaSuite::ChaCha20Poly1305),
         };
         sh.welcome.cipher = CIPHER_CHACHA20_POLY1305;
+        sh.welcome.key_chacha = Some([0; 32]);
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),
             sh

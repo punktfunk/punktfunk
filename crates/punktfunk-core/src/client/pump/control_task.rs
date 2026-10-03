@@ -8,8 +8,8 @@ use super::*;
 
 pub(super) struct ControlTask {
     pub(super) ctrl_rx: tokio::sync::mpsc::Receiver<CtrlRequest>,
-    pub(super) ctrl_send: quinn::SendStream,
-    pub(super) ctrl_recv: io::MsgReader<quinn::RecvStream>,
+    pub(super) ctrl_send: CtlSend,
+    pub(super) ctrl_recv: CtlRecv,
     /// `None` = no connect-time skew handshake (old host); clock re-sync stays off.
     pub(super) clock_rtt_ns: Option<u64>,
     /// The cells this task writes as the host reports them: mode, probe, live bitrate, clock

@@ -127,7 +127,7 @@ pub fn server_with_identity_idle(
 
 /// `pkf1`. Both ends must set the same value; a host with ALPN set rejects a
 /// client that offers none.
-const QUIC_ALPN: &[u8] = b"pkf1";
+pub const QUIC_ALPN: &[u8] = b"pkf1";
 
 fn server_from_der(
     cert_der: rustls::pki_types::CertificateDer<'static>,
@@ -323,6 +323,26 @@ fn client_config(
     let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_cfg));
     client_cfg.transport_config(stream_transport());
     Ok(client_cfg)
+}
+
+/// The `punktfunk/2` media secrets of session `session_id` on `conn`, from its TLS exporter.
+/// Both ends call this with the same arguments and hold the same keys; none crosses the wire.
+pub fn media_keys(
+    conn: &quinn::Connection,
+    session_id: &[u8; 16],
+    suite: crate::crypto::MediaSuite,
+) -> Option<crate::crypto::MediaKeys> {
+    use zeroize::Zeroize;
+    let mut out = [0u8; 32];
+    conn.export_keying_material(
+        &mut out,
+        super::v2::registry::MEDIA_EXPORTER_LABEL,
+        session_id,
+    )
+    .ok()?;
+    let keys = crate::crypto::MediaKeys::derive(&out, suite);
+    out.zeroize();
+    Some(keys)
 }
 
 /// The ALPN a connection settled on, `None` before the handshake or without one.

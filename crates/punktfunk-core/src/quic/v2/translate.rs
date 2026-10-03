@@ -148,8 +148,11 @@ pub struct ClientExtra {
 /// A read edge: v2 frames in, v1 messages out.
 #[derive(Debug, Default)]
 pub struct RxEdge {
-    /// Set by the `ClientHello`; its entries return inside the `Start` that `Ready` becomes.
+    /// Host side: set by the `ClientHello`; its entries return inside the `Start` that `Ready`
+    /// becomes.
     pub client: Option<ClientExtra>,
+    /// Client side: set by the `ServerHello` that arrives as `Welcome`.
+    pub server: Option<SessionFields>,
 }
 
 impl RxEdge {
@@ -174,6 +177,15 @@ impl RxEdge {
                     entries.iter().map(|(t, v)| (*t, v.as_slice())).collect();
                 Start { client_udp_port: 0 }.encode_ext(&refs).ok()
             }
+            reg::MSG_SERVER_HELLO => {
+                let sh = ServerHello::from_body(body).ok()?;
+                self.server = Some(SessionFields {
+                    session_id: sh.session_id,
+                    clock_origin_ns: sh.clock_origin_ns,
+                    suite: sh.suite,
+                });
+                Some(sh.welcome.encode())
+            }
             _ => v1_from_frame(ty, body),
         }
     }
@@ -190,10 +202,24 @@ pub struct SessionFields {
 /// A write edge: v1 messages in, v2 frames out.
 #[derive(Debug, Default)]
 pub struct TxEdge {
+    /// Host side: what the `Welcome` goes out with.
     session: Option<SessionFields>,
+    /// Client side: what the `Hello` goes out with. Its first `Hello`-magic message is the
+    /// `Hello`, the next the `Start`.
+    client: Option<ClientExtra>,
+    hello_sent: bool,
 }
 
 impl TxEdge {
+    /// A client's edge: `Hello` leaves as a `ClientHello` carrying `extra`, and `Start` as
+    /// `Ready`, its entries already sent.
+    pub fn client(extra: ClientExtra) -> TxEdge {
+        TxEdge {
+            client: Some(extra),
+            ..TxEdge::default()
+        }
+    }
+
     /// The fields the next `Welcome` goes out with. Without them a `Welcome` is dropped: a
     /// `ServerHello` with no session id would be refused by the client anyway.
     pub fn set_session(&mut self, s: SessionFields) {
@@ -202,6 +228,20 @@ impl TxEdge {
 
     pub fn to_v2(&mut self, msg: &[u8]) -> Option<Vec<u8>> {
         if msg.len() >= 4 && &msg[..4] == MAGIC {
+            if let Some(extra) = &self.client {
+                if std::mem::replace(&mut self.hello_sent, true) {
+                    return Some(Ready {}.encode_v2());
+                }
+                return Some(
+                    ClientHello {
+                        hello: Hello::decode(msg).ok()?,
+                        start_ext: extra.start_ext.clone(),
+                        resume: extra.resume,
+                        suites: extra.suites.clone(),
+                    }
+                    .encode_v2(),
+                );
+            }
             let s = self.session?;
             let welcome = Welcome::decode(msg).ok()?;
             return Some(
@@ -486,5 +526,67 @@ mod tests {
         assert_eq!(ty, reg::MSG_SERVER_HELLO);
         let sh = ServerHello::from_body(body).unwrap();
         assert_eq!((sh.session_id, sh.clock_origin_ns), ([9; 16], 7));
+    }
+
+    /// A client's own edges carry its handshake through a host's edges and back.
+    #[test]
+    fn a_client_handshake_crosses_both_edges() {
+        let hello = Hello::decode(
+            &[
+                b"PKF1".as_slice(),
+                &2u32.to_le_bytes(),
+                &640u32.to_le_bytes(),
+                &480u32.to_le_bytes(),
+                &30u32.to_le_bytes(),
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let extra = ClientExtra {
+            start_ext: vec![(EXT_TAG_ABR, vec![EXT_ABR_ACK_REASON])],
+            resume: None,
+            suites: vec![MediaSuite::ChaCha20Poly1305],
+        };
+        let (mut client_tx, mut host_rx) = (TxEdge::client(extra.clone()), RxEdge::default());
+        let cross = |tx: &mut TxEdge, rx: &mut RxEdge, v1: &[u8]| {
+            let f = tx.to_v2(v1).unwrap();
+            let (ty, body, _) = split_frame(&f, reg::max_body).unwrap().unwrap();
+            rx.to_v1(ty, body).unwrap()
+        };
+        assert_eq!(
+            Hello::decode(&cross(&mut client_tx, &mut host_rx, &hello.encode())).unwrap(),
+            hello
+        );
+        assert_eq!(host_rx.client.as_ref(), Some(&extra));
+        let start = cross(
+            &mut client_tx,
+            &mut host_rx,
+            &Start { client_udp_port: 9 }.encode(),
+        );
+        assert_eq!(
+            ext_abr_features(&Start::decode_ext(&start).unwrap()),
+            EXT_ABR_ACK_REASON
+        );
+
+        let (mut host_tx, mut client_rx) = (TxEdge::default(), RxEdge::default());
+        let fields = SessionFields {
+            session_id: [4; 16],
+            clock_origin_ns: 99,
+            suite: Some(MediaSuite::ChaCha20Poly1305),
+        };
+        host_tx.set_session(fields);
+        let welcome = ServerHello::from_body(
+            &super::super::field::Fields::new()
+                .bytes(1, &[0; 16])
+                .into_body(),
+        )
+        .unwrap()
+        .welcome;
+        let back = cross(&mut host_tx, &mut client_rx, &welcome.encode());
+        assert_eq!(
+            Welcome::decode(&back).unwrap().cipher,
+            CIPHER_CHACHA20_POLY1305
+        );
+        assert_eq!(client_rx.server, Some(fields));
     }
 }
