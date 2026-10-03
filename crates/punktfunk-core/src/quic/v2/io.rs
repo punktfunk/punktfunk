@@ -266,7 +266,13 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for V2Writer<W> {
         }
         match this.poll_pending(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(std::mem::take(&mut this.consumed))),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Ready(Err(e)) => {
+                // A caller that writes on after the error starts a fresh message.
+                this.pending.clear();
+                this.sent = 0;
+                this.consumed = 0;
+                Poll::Ready(Err(e))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
