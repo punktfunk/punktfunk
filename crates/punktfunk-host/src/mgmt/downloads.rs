@@ -1,10 +1,12 @@
 //! `/downloads` and `/library/install/{id}`: titles a plugin installs on this host. The plugin
 //! moves the bytes and reports progress here; the operator installs, pauses, cancels and
-//! removes, and a paired device allowed to launch may install, since launching would anyway.
+//! removes. A paired device allowed to launch may install, since launching would anyway; one
+//! allowed to manage games may pause and remove.
 use super::auth::{AuthLane, OwnedId, PairedDevice, ProviderId};
 use super::shared::*;
 use crate::library::downloads::{self, Action, Download, DownloadReport, Refusal};
 use axum::Extension;
+use punktfunk_core::quic::{GRANT_LAUNCH, GRANT_MANAGE_GAMES};
 
 /// A plugin's downloads: every title it is downloading, paused or just finished.
 #[derive(Deserialize, ToSchema)]
@@ -100,7 +102,7 @@ pub(crate) async fn install_library_entry(
     let fp = device.as_ref().map(|e| e.0 .0.clone());
     let by = match lane {
         AuthLane::Admin => "console".to_string(),
-        AuthLane::Cert if launch_permitted(&st, fp.as_deref()) => fp
+        AuthLane::Cert if granted(&st, fp.as_deref(), GRANT_LAUNCH) => fp
             .as_deref()
             .map(|fp| fp.chars().take(12).collect())
             .unwrap_or_default(),
@@ -116,7 +118,8 @@ pub(crate) async fn install_library_entry(
 
 /// Pause a title's download
 ///
-/// The plugin stops and keeps what it has; installing again resumes.
+/// The plugin stops and keeps what it has; installing again resumes. The operator always may;
+/// a paired device may when it holds the manage-games grant.
 #[utoipa::path(
     post,
     path = "/library/install/{id}/pause",
@@ -125,13 +128,22 @@ pub(crate) async fn install_library_entry(
     params(("id" = String, Path, description = "The library entry id")),
     responses(
         (status = NO_CONTENT, description = "Paused"),
+        (status = FORBIDDEN, description = "This device may not manage games", body = ApiError),
         (status = NOT_FOUND, description = "No such title", body = ApiError),
         (status = CONFLICT, description = "Not downloading, or the plugin refused (its sentence)", body = ApiError),
         (status = BAD_GATEWAY, description = "The plugin didn't answer", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
-pub(crate) async fn pause_library_install(Path(id): Path<String>) -> Response {
+pub(crate) async fn pause_library_install(
+    State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<AuthLane>,
+    device: Option<Extension<PairedDevice>>,
+    Path(id): Path<String>,
+) -> Response {
+    if !manages(&st, lane, device.as_ref()) {
+        return manage_refused();
+    }
     act(id, Action::Pause, None).await
 }
 
@@ -159,7 +171,7 @@ pub(crate) async fn cancel_library_install(Path(id): Path<String>) -> Response {
 /// Remove a title's files
 ///
 /// The plugin deletes what it downloaded for the title; saves stay. Refused while the title
-/// runs or a launch waits for it.
+/// runs or a launch waits for it. A paired device needs the manage-games grant.
 #[utoipa::path(
     delete,
     path = "/library/install/{id}",
@@ -168,24 +180,49 @@ pub(crate) async fn cancel_library_install(Path(id): Path<String>) -> Response {
     params(("id" = String, Path, description = "The library entry id")),
     responses(
         (status = NO_CONTENT, description = "Removed"),
+        (status = FORBIDDEN, description = "This device may not manage games", body = ApiError),
         (status = NOT_FOUND, description = "No such title", body = ApiError),
         (status = CONFLICT, description = "Running, downloading, not installed, or the plugin refused (its sentence)", body = ApiError),
         (status = BAD_GATEWAY, description = "The plugin didn't answer", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
 )]
-pub(crate) async fn uninstall_library_entry(Path(id): Path<String>) -> Response {
+pub(crate) async fn uninstall_library_entry(
+    State(st): State<Arc<MgmtState>>,
+    Extension(lane): Extension<AuthLane>,
+    device: Option<Extension<PairedDevice>>,
+    Path(id): Path<String>,
+) -> Response {
+    if !manages(&st, lane, device.as_ref()) {
+        return manage_refused();
+    }
     act(id, Action::Uninstall, None).await
 }
 
-/// A paired device whose live mask carries the launch grant.
-fn launch_permitted(st: &MgmtState, fp: Option<&str>) -> bool {
+/// A paired device whose live mask carries `bit`.
+fn granted(st: &MgmtState, fp: Option<&str>, bit: u32) -> bool {
     fp.is_some_and(|fp| {
         st.native
             .as_ref()
             .and_then(|n| n.effective(fp, crate::clock::unix_secs()))
-            .is_some_and(|mask| mask & punktfunk_core::quic::GRANT_LAUNCH != 0)
+            .is_some_and(|mask| mask & bit != 0)
     })
+}
+
+/// The operator, or a paired device holding the manage-games grant.
+fn manages(st: &MgmtState, lane: AuthLane, device: Option<&Extension<PairedDevice>>) -> bool {
+    match lane {
+        AuthLane::Admin => true,
+        AuthLane::Cert => granted(st, device.map(|d| d.0 .0.as_str()), GRANT_MANAGE_GAMES),
+        _ => false,
+    }
+}
+
+fn manage_refused() -> Response {
+    api_error(
+        StatusCode::FORBIDDEN,
+        "This device isn't allowed to manage games on this host.",
+    )
 }
 
 fn conflict(message: &str) -> Response {

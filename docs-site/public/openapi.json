@@ -2792,7 +2792,7 @@
           "library"
         ],
         "summary": "Remove a title's files",
-        "description": "The plugin deletes what it downloaded for the title; saves stay. Refused while the title\nruns or a launch waits for it.",
+        "description": "The plugin deletes what it downloaded for the title; saves stay. Refused while the title\nruns or a launch waits for it. A paired device needs the manage-games grant.",
         "operationId": "uninstallLibraryEntry",
         "parameters": [
           {
@@ -2811,6 +2811,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This device may not manage games",
             "content": {
               "application/json": {
                 "schema": {
@@ -2924,7 +2934,7 @@
           "library"
         ],
         "summary": "Pause a title's download",
-        "description": "The plugin stops and keeps what it has; installing again resumes.",
+        "description": "The plugin stops and keeps what it has; installing again resumes. The operator always may;\na paired device may when it holds the manage-games grant.",
         "operationId": "pauseLibraryInstall",
         "parameters": [
           {
@@ -2943,6 +2953,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This device may not manage games",
             "content": {
               "application/json": {
                 "schema": {
@@ -12876,6 +12896,12 @@
               "$ref": "#/components/schemas/ActiveGame"
             },
             "description": "Launched titles: live sessions plus `state: \"grace\"` reconnect-window rows. Empty for a desktop-only stream."
+          },
+          "grants": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The calling device's live access grants (`GRANT_*` bits); 0 once expired. Absent for\nthe operator, who may do everything.",
+            "minimum": 0
           },
           "native_paired_clients": {
             "type": "integer",
