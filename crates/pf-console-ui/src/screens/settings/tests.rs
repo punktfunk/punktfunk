@@ -1958,3 +1958,33 @@ fn the_tv_pad_type_row_offers_only_what_it_creates() {
         assert!(!seen.iter().any(|v| v == gone), "{gone} offered on the TV");
     }
 }
+
+/// webOS answers `LoadLicenses` like every other client, so its row opens the console's screen.
+#[test]
+fn the_licences_row_opens_the_console_screen_on_webos() {
+    let mut settings = Settings::default();
+    let library = crate::library::LibraryShared::default();
+    let webos = crate::screens::Device {
+        platform: crate::platform::Platform::WebOS,
+        ..crate::screens::Device::test()
+    };
+    let mut ctx = Ctx {
+        device: &webos,
+        ..Ctx::test(&mut settings, &library)
+    };
+    let mut s = SettingsScreen::with_presets(Vec::new());
+    s.tab = TABS
+        .iter()
+        .position(|(name, _)| *name == "About")
+        .expect("the About section");
+    let ids = s.row_ids(&ctx);
+    s.list.cursor = ids
+        .iter()
+        .position(|r| *r == RowId::Licenses)
+        .expect("webOS lists the licences");
+    let mut fx = Outbox::default();
+    s.apply_row(ListMsg::Activate, None, &ids, &mut ctx, &mut fx);
+    assert!(matches!(fx.nav, Some(crate::screens::Nav::Push(ref b))
+        if matches!(**b, Screen::Licenses(_))));
+    assert_eq!(fx.cmds, vec![crate::model::ConsoleCmd::LoadLicenses]);
+}
