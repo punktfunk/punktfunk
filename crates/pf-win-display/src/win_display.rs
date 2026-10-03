@@ -42,7 +42,7 @@ use windows::Win32::Devices::Display::{
     SDC_APPLY, SDC_FORCE_MODE_ENUMERATION, SDC_SAVE_TO_DATABASE, SDC_TOPOLOGY_EXTEND,
     SDC_USE_SUPPLIED_DISPLAY_CONFIG,
 };
-use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, POINTL};
+use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID, POINTL};
 use windows::Win32::Graphics::Gdi::{
     ChangeDisplaySettingsExW, EnumDisplaySettingsW, CDS_RESET, CDS_TEST, CDS_UPDATEREGISTRY,
     DEVMODEW, DISP_CHANGE_FAILED, DISP_CHANGE_SUCCESSFUL, DM_BITSPERPEL, DM_DISPLAYFREQUENCY,
@@ -55,7 +55,7 @@ use crate::ccd_info;
 
 // The identity + inventory types live in the platform-neutral `snapshot` module (WP8) so the
 // cache rules test everywhere; re-exported here so every existing `win_display::` path still works.
-pub use crate::snapshot::{pack_luid_parts, CcdTargetKey, TargetInventory};
+pub use crate::snapshot::{pack_luid_parts, CcdTargetKey, ColorMode, TargetInventory};
 
 /// The key of the TARGET side of a CCD path.
 pub(crate) fn path_target_key(p: &DISPLAYCONFIG_PATH_INFO) -> CcdTargetKey {
@@ -490,10 +490,41 @@ pub fn set_advanced_color(key: CcdTargetKey, enable: bool) -> bool {
     rc == 0
 }
 
-/// `DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO` bits: 1 = advancedColorEnabled, 2 = wideColorEnforced.
-/// Advanced colour with wide colour enforced is SDR auto colour management, not HDR.
-fn hdr_active(bits: u32) -> bool {
-    bits & 0x2 != 0 && bits & 0x4 == 0
+/// What `(adapter, id)` composes in: the 24H2 report when the OS answers it, the older
+/// advanced-colour bits otherwise.
+fn color_mode_of(adapter: LUID, id: u32) -> Option<ColorMode> {
+    let info2 = ccd_info::advanced_color_info2(adapter, id);
+    ColorMode::decode(
+        info2.map(|i| i.active_color_mode),
+        ccd_info::advanced_color_bits(adapter, id),
+    )
+}
+
+/// The colour mode of the virtual-display target right now. `None` when the target is not in the
+/// active paths or no query answered.
+pub fn color_mode(key: CcdTargetKey) -> Option<ColorMode> {
+    let p = active_path(key)?;
+    color_mode_of(p.targetInfo.adapterId, p.targetInfo.id)
+}
+
+/// The target can compose SDR wide colour: Windows 11 24H2 reports `wideColorSupported`, which
+/// for our display means the driver declared `IDDCX_TARGET_CAPS_WIDE_COLOR_SPACE`.
+pub fn wcg_supported(key: CcdTargetKey) -> bool {
+    active_path(key)
+        .and_then(|p| ccd_info::advanced_color_info2(p.targetInfo.adapterId, p.targetInfo.id))
+        .is_some_and(|i| i.value & (1 << 6) != 0)
+}
+
+/// Turn SDR wide colour (auto colour management) on or off. True on a successful
+/// `DisplayConfigSetDeviceInfo`; before 24H2 the OS refuses the packet.
+pub fn set_wcg(key: CcdTargetKey, enable: bool) -> bool {
+    let Some(p) = active_path(key) else {
+        tracing::warn!(target = %key, "virtual-display wide colour: target not in active paths");
+        return false;
+    };
+    let rc = ccd_info::set_wcg_state(p.targetInfo.adapterId, p.targetInfo.id, enable);
+    tracing::debug!(target = %key, enable, rc, "virtual-display set wide-colour (WCG) state");
+    rc == 0
 }
 
 /// Read the virtual-display target's CURRENT advanced-color (HDR) state via the CCD API — i.e. whether HDR is
@@ -505,8 +536,7 @@ fn hdr_active(bits: u32) -> bool {
 /// the capture loop's poller keeps the last known value, since reading a blip as "HDR off" used to cost
 /// an HDR session TWO spurious ring recreates (false, then true again a poll later).
 pub fn advanced_color_enabled(key: CcdTargetKey) -> Option<bool> {
-    let p = active_path(key)?;
-    ccd_info::advanced_color_bits(p.targetInfo.adapterId, p.targetInfo.id).map(hdr_active)
+    color_mode(key).map(|m| m == ColorMode::Hdr)
 }
 
 /// Re-apply the current mode with `CDS_RESET` — a same-mode write is otherwise
@@ -929,7 +959,7 @@ pub fn target_inventory_checked() -> Result<Vec<TargetInventory>, CcdError> {
         // Inactive paths have INVALID modeInfoIdx — stay zeroed, do not index 0xffffffff.
         let (mut gdi_name, mut x, mut y, mut width, mut height) =
             (String::new(), 0i32, 0i32, 0u32, 0u32);
-        let (mut hdr, mut source_id, mut source_adapter_luid) = (None, 0u32, 0i64);
+        let (mut hdr, mut wcg, mut source_id, mut source_adapter_luid) = (None, None, 0u32, 0i64);
         let mut sdr_white_level = None;
         if is_active {
             source_id = p.sourceInfo.id;
@@ -937,7 +967,9 @@ pub fn target_inventory_checked() -> Result<Vec<TargetInventory>, CcdError> {
                 p.sourceInfo.adapterId.LowPart,
                 p.sourceInfo.adapterId.HighPart,
             );
-            hdr = ccd_info::advanced_color_bits(t.adapterId, t.id).map(hdr_active);
+            let mode = color_mode_of(t.adapterId, t.id);
+            hdr = mode.map(|m| m == ColorMode::Hdr);
+            wcg = mode.map(|m| m == ColorMode::Wcg);
             sdr_white_level = ccd_info::sdr_white_level(t.adapterId, t.id);
             if let Some(sm) = modes.get(mode_idxs(p).0 as usize).and_then(source_mode) {
                 x = sm.position.x;
@@ -971,6 +1003,7 @@ pub fn target_inventory_checked() -> Result<Vec<TargetInventory>, CcdError> {
             height,
             refresh_mhz,
             hdr,
+            wcg,
             sdr_white_level,
             source_id,
             source_adapter_luid,
@@ -1874,13 +1907,6 @@ fn restore_displays_ccd_inner(saved: &SavedConfig) -> bool {
 #[cfg(test)]
 mod live_tests {
     use super::*;
-
-    #[test]
-    fn auto_colour_management_is_not_hdr() {
-        assert!(hdr_active(0b0011), "enabled, not enforced: HDR");
-        assert!(!hdr_active(0b0111), "wide colour enforced: SDR under ACM");
-        assert!(!hdr_active(0b0001), "supported only");
-    }
 
     /// Path match is case-insensitive; unknown is not ours.
     #[test]

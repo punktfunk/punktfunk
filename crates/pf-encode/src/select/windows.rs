@@ -85,6 +85,11 @@ pub(crate) fn ingests_rgb_444() -> bool {
 
 /// [`crate::backend_carries_sdr10`] on Windows.
 pub(crate) fn sdr10(codec: Codec) -> bool {
+    // The driver's PyroWave writes 16-bit planes from the FP16 SDR wide-colour desktop; the
+    // handshake admits it only with that source.
+    if codec == Codec::PyroWave {
+        return true;
+    }
     // NVENC widens 8→10 from packed RGB for HEVC + AV1. AMF and QSV take a BT.709 P010 the
     // driver's video processor produces (`EncodeInput::P010Sdr`) for HEVC Main10 only — their
     // AV1 10-bit SDR is unbuilt. `can_encode_10bit` still gates on the real probe.

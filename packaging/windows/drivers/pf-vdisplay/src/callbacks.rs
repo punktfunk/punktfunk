@@ -480,7 +480,8 @@ pub unsafe extern "C" fn adapter_commit_modes2(
     STATUS_SUCCESS
 }
 
-/// Report `HIGH_COLOR_SPACE` so the OS enables the HDR10 wide-gamut/PQ target. Mandatory under FP16.
+/// Report `HIGH_COLOR_SPACE` for HDR10 and `WIDE_COLOR_SPACE` for SDR wide colour, the FP16 SDR
+/// desktop a 10-bit SDR session encodes. Mandatory under FP16.
 pub unsafe extern "C" fn query_target_info(
     _adapter: iddcx::IDDCX_ADAPTER,
     _p_in: *mut iddcx::IDARG_IN_QUERYTARGET_INFO,
@@ -489,7 +490,8 @@ pub unsafe extern "C" fn query_target_info(
     // SAFETY: p_out is the framework's (uninitialised) out buffer; zero then set the one field we report.
     unsafe {
         core::ptr::write(p_out, iddcx::IDARG_OUT_QUERYTARGET_INFO::default());
-        (*p_out).TargetCaps = iddcx::IDDCX_TARGET_CAPS::IDDCX_TARGET_CAPS_HIGH_COLOR_SPACE;
+        (*p_out).TargetCaps = iddcx::IDDCX_TARGET_CAPS::IDDCX_TARGET_CAPS_WIDE_COLOR_SPACE
+            | iddcx::IDDCX_TARGET_CAPS::IDDCX_TARGET_CAPS_HIGH_COLOR_SPACE;
     }
     STATUS_SUCCESS
 }

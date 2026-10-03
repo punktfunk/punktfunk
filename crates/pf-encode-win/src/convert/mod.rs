@@ -80,12 +80,10 @@ VOut main(uint vid : SV_VertexID) {
 }
 ";
 
-/// Shared scRGB FP16 → BT.2020 PQ math for the P010 luma and chroma passes.
-/// scRGB 1.0 = 80 nits. Identical to the R10 HDR path until RGB→Y + studio-range.
-const HDR_P010_COMMON: &str = r"
-Texture2D<float4> tx : register(t0);
-SamplerState sm : register(s0);
-// Rec.709 → Rec.2020 (linear). Same matrix as the R10 converter.
+/// scRGB FP16 → BT.2020 PQ, the HDR curve: `encode_scrgb` plus the matrix the CSC applies to
+/// its result. scRGB 1.0 = 80 nits; negative scRGB is wide-gamut colour, so the primaries
+/// convert first and `pq_oetf` clamps after.
+const CURVE_PQ2020: &str = r"
 static const float3x3 BT709_TO_BT2020 = {
     0.627403914, 0.329283038, 0.043313048,
     0.069097292, 0.919540405, 0.011362303,
@@ -101,28 +99,48 @@ float3 pq_oetf(float3 L) {
     float3 Lp = pow(saturate(L), m1);
     return pow((c1 + c2 * Lp) / (1.0 + c3 * Lp), m2);
 }
-// PQ BT.2020 RGB in [0,1] — the same pixels the R10 path stores before quantize.
-// Both P010 passes use this so they match HdrConverter and the Rust reference.
-float3 scrgb_to_pq2020(float2 uv) {
-    // Negative scRGB is wide-gamut colour: convert first, clamp after (pq_oetf saturates).
-    float3 nits = tx.Sample(sm, uv).rgb * 80.0;      // scRGB 1.0 = 80 nits
-    float3 lin2020 = mul(BT709_TO_BT2020, nits);
-    return pq_oetf(lin2020 / 10000.0);               // normalize to 10k nits, encode PQ -> [0,1]
+float3 encode_scrgb(float3 scrgb) {
+    return pq_oetf(mul(BT709_TO_BT2020, scrgb * 80.0) / 10000.0);
 }
-// BT.2020 non-constant-luminance, on the PQ-encoded (gamma) RGB. Kr/Kg/Kb per Rec.2020.
+// BT.2020 non-constant luminance.
 static const float KR = 0.2627;
 static const float KG = 0.6780;
 static const float KB = 0.0593;
+static const float CB_DIV = 1.8814;
+static const float CR_DIV = 1.4746;
+";
+
+/// scRGB FP16 → sRGB-coded BT.709, the SDR wide-colour curve. Display-referred: 1.0 is the
+/// panel's white. Colour outside BT.709 clips, since the stream is BT.709 SDR.
+const CURVE_SRGB709: &str = r"
+float3 encode_scrgb(float3 scrgb) {
+    float3 L = saturate(scrgb);
+    float3 lo = 12.92 * L;
+    float3 hi = 1.055 * pow(L, 1.0 / 2.4) - 0.055;
+    return L <= 0.0031308 ? lo : hi;
+}
+static const float KR = 0.2126;
+static const float KG = 0.7152;
+static const float KB = 0.0722;
+static const float CB_DIV = 1.8556;
+static const float CR_DIV = 1.5748;
+";
+
+/// The studio-range CSC the P010 and packed-10-bit passes share, behind a curve
+/// ([`CURVE_PQ2020`] or [`CURVE_SRGB709`]) that defines `encode_scrgb` and the matrix.
+const P010_COMMON: &str = r"
+Texture2D<float4> tx : register(t0);
+SamplerState sm : register(s0);
 // 10-bit studio (limited) range codes. Y'  -> [64, 940]; Cb/Cr -> [64, 960] (512 ± 448).
-float studio_y_code(float3 rgb_pq) {
-    float y = KR * rgb_pq.r + KG * rgb_pq.g + KB * rgb_pq.b;     // [0,1]
+float studio_y_code(float3 e) {
+    float y = KR * e.r + KG * e.g + KB * e.b;                    // [0,1]
     float code = 64.0 + 876.0 * y;                              // [64, 940]
     return clamp(code, 64.0, 940.0);
 }
-float2 studio_cbcr_code(float3 rgb_pq) {
-    float y = KR * rgb_pq.r + KG * rgb_pq.g + KB * rgb_pq.b;
-    float cb = (rgb_pq.b - y) / 1.8814;                          // ~[-0.5, 0.5]
-    float cr = (rgb_pq.r - y) / 1.4746;
+float2 studio_cbcr_code(float3 e) {
+    float y = KR * e.r + KG * e.g + KB * e.b;
+    float cb = (e.b - y) / CB_DIV;                               // ~[-0.5, 0.5]
+    float cr = (e.r - y) / CR_DIV;
     float cbc = 512.0 + 896.0 * cb;                             // [64, 960]
     float crc = 512.0 + 896.0 * cr;
     return float2(clamp(cbc, 64.0, 960.0), clamp(crc, 64.0, 960.0));
@@ -132,12 +150,17 @@ float2 studio_cbcr_code(float3 rgb_pq) {
 float code10_to_unorm(float code10) { return (round(code10) * 64.0) / 65535.0; }
 ";
 
+/// `pass` with its `#include_common` replaced by `curve` and the shared CSC. D3DCompile has no
+/// include handler here.
+fn with_curve(pass: &str, curve: &str, common: &str) -> String {
+    pass.replace("#include_common", &[curve, common].concat())
+}
+
 /// P010 luma: full-res Y′ into plane 0 (`R16_UNORM`).
 const HDR_P010_Y_PS: &str = r"
 #include_common
 float main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
-    float3 pq = scrgb_to_pq2020(uv);
-    float yc = studio_y_code(pq);
+    float yc = studio_y_code(encode_scrgb(tx.Sample(sm, uv).rgb));
     return code10_to_unorm(yc);
 }
 ";
@@ -161,17 +184,14 @@ float2 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float2 h = inv_src * 0.5;
     float3 scrgb = (left_taps(uv + float2(-h.x, -h.y), h.x)
                   + left_taps(uv + float2(-h.x,  h.y), h.x)) * 0.125;
-    float3 nits = scrgb * 80.0;
-    float3 lin2020 = mul(BT709_TO_BT2020, nits);
-    float3 pq = pq_oetf(lin2020 / 10000.0);
-    float2 cc = studio_cbcr_code(pq);
+    float2 cc = studio_cbcr_code(encode_scrgb(scrgb));
     return float2(code10_to_unorm(cc.x), code10_to_unorm(cc.y));
 }
 ";
 
-/// scRGB FP16 → `R10G10B10A2` (BT.2020 PQ, full-range RGB), one full-res pass.
-/// NVENC takes packed 10-bit RGB as `NV_ENC_BUFFER_FORMAT_ABGR10` and CSC to
-/// YUV 4:4:4 itself. Colour math is [`HDR_P010_COMMON`]'s `scrgb_to_pq2020`.
+/// scRGB FP16 → `R10G10B10A2` (BT.2020 PQ, or sRGB BT.709 for SDR wide colour; full-range
+/// RGB), one full-res pass. NVENC takes packed 10-bit RGB as `NV_ENC_BUFFER_FORMAT_ABGR10` and
+/// CSCs to YUV 4:4:4 itself. Colour math is the curve's `encode_scrgb`.
 ///
 /// DXGI `R10G10B10A2_UNORM` stores R in the low 10 bits, which NVENC names
 /// `ABGR10` (A2B10G10R10 from the MSB). Same as SDR `B8G8R8A8` vs `ARGB`.
@@ -182,12 +202,12 @@ pub struct HdrRgb10Converter {
     sampler: ID3D11SamplerState,
 }
 
-/// R10G10B10A2 pass: PQ BT.2020 RGB into the packed 10-bit target. `saturate` is
-/// implicit in the UNORM RT; `scrgb_to_pq2020` already clamps.
+/// R10G10B10A2 pass: the curve's coded RGB into the packed 10-bit target. Both curves
+/// clamp; the UNORM RT would anyway.
 const HDR_RGB10_PS: &str = r"
 #include_common
 float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
-    return float4(scrgb_to_pq2020(uv), 1.0);
+    return float4(encode_scrgb(tx.Sample(sm, uv).rgb), 1.0);
 }
 ";
 
@@ -205,10 +225,12 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
 impl HdrRgb10Converter {
     /// FP16 scRGB in, PQ-encoded BT.2020 RGB out.
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        Self::from_ps(
-            device,
-            HDR_RGB10_PS.replace("#include_common", HDR_P010_COMMON),
-        )
+        Self::from_ps(device, with_curve(HDR_RGB10_PS, CURVE_PQ2020, P010_COMMON))
+    }
+
+    /// SDR wide colour: FP16 scRGB in, sRGB-coded BT.709 RGB out at 10 bits.
+    pub fn new_sdr_fp16(device: &ID3D11Device) -> Result<Self> {
+        Self::from_ps(device, with_curve(HDR_RGB10_PS, CURVE_SRGB709, P010_COMMON))
     }
 
     /// 10-bit SDR pass: BGRA in, same sRGB out at 10-bit UNORM (see
@@ -334,14 +356,22 @@ impl HdrP010Converter {
     /// `w`/`h` are the source size baked into the immutable chroma constant buffer.
     /// Rebuild if they change — a session that re-opens at a new mode drops this converter.
     pub fn new(device: &ID3D11Device, w: u32, h: u32) -> Result<Self> {
+        Self::with(device, w, h, CURVE_PQ2020)
+    }
+
+    /// SDR wide colour: FP16 scRGB → P010 BT.709 studio range at 10 bits.
+    pub fn new_sdr_fp16(device: &ID3D11Device, w: u32, h: u32) -> Result<Self> {
+        Self::with(device, w, h, CURVE_SRGB709)
+    }
+
+    fn with(device: &ID3D11Device, w: u32, h: u32, curve: &str) -> Result<Self> {
         // SAFETY: every call is a `?`-checked D3D11 method on the live `device` borrow, over
         // fully-initialized stack descriptors and live `Option` out-params; `compile_shader` receives
         // `s!()` literals (its contract). Each created COM interface owns its own reference, and no
         // raw pointer outlives the call that produced it.
         unsafe {
-            // D3DCompile has no include handler here; substitute `#include_common`.
-            let y_src = HDR_P010_Y_PS.replace("#include_common", HDR_P010_COMMON);
-            let uv_src = HDR_P010_UV_PS.replace("#include_common", HDR_P010_COMMON);
+            let y_src = with_curve(HDR_P010_Y_PS, curve, P010_COMMON);
+            let uv_src = with_curve(HDR_P010_UV_PS, curve, P010_COMMON);
             let vsb = compile_shader(HDR_VS, s!("main"), s!("vs_5_0"))?;
             let yb = compile_shader(&y_src, s!("main"), s!("ps_5_0"))?;
             let uvb = compile_shader(&uv_src, s!("main"), s!("ps_5_0"))?;
@@ -526,56 +556,34 @@ float2 main(float4 pos : SV_POSITION) : SV_TARGET {
 }
 ";
 
-/// Shared HDR PyroWave math: scRGB FP16 → PQ BT.2020 → 10-bit studio codes
-/// packed into 16-bit UNORM. Same CSC as [`HDR_P010_COMMON`], over `Load`ed
-/// texels so the passes stay texel-exact like the SDR twins.
-const PYRO_HDR_COMMON: &str = r"
+/// Shared 10-bit PyroWave math from FP16: the curve's coded RGB → 10-bit studio codes packed
+/// into 16-bit UNORM. Same CSC as [`P010_COMMON`], over `Load`ed texels so the passes stay
+/// texel-exact like the SDR twins.
+const PYRO_FP16_COMMON: &str = r"
 Texture2D<float4> tx : register(t0);
-static const float3x3 BT709_TO_BT2020 = {
-    0.627403914, 0.329283038, 0.043313048,
-    0.069097292, 0.919540405, 0.011362303,
-    0.016391439, 0.088013308, 0.895595253
-};
-float3 pq_oetf(float3 L) {
-    const float m1 = 0.1593017578125;
-    const float m2 = 78.84375;
-    const float c1 = 0.8359375;
-    const float c2 = 18.8515625;
-    const float c3 = 18.6875;
-    float3 Lp = pow(saturate(L), m1);
-    return pow((c1 + c2 * Lp) / (1.0 + c3 * Lp), m2);
-}
-float3 scrgb_to_pq2020_rgb(float3 scrgb) {
-    // Negative scRGB is wide-gamut colour: convert first, pq_oetf clamps after.
-    return pq_oetf(mul(BT709_TO_BT2020, scrgb * 80.0) / 10000.0);
-}
-static const float KR = 0.2627;
-static const float KG = 0.6780;
-static const float KB = 0.0593;
-float y_unorm(float3 pq) {
-    float y = KR * pq.r + KG * pq.g + KB * pq.b;
+float y_unorm(float3 e) {
+    float y = KR * e.r + KG * e.g + KB * e.b;
     float code = clamp(round(64.0 + 876.0 * y), 64.0, 940.0);
     return (code * 64.0) / 65535.0;
 }
-float2 cbcr_unorm(float3 pq) {
-    float y = KR * pq.r + KG * pq.g + KB * pq.b;
-    float cbc = clamp(round(512.0 + 896.0 * (pq.b - y) / 1.8814), 64.0, 960.0);
-    float crc = clamp(round(512.0 + 896.0 * (pq.r - y) / 1.4746), 64.0, 960.0);
+float2 cbcr_unorm(float3 e) {
+    float y = KR * e.r + KG * e.g + KB * e.b;
+    float cbc = clamp(round(512.0 + 896.0 * (e.b - y) / CB_DIV), 64.0, 960.0);
+    float crc = clamp(round(512.0 + 896.0 * (e.r - y) / CR_DIV), 64.0, 960.0);
     return float2((cbc * 64.0) / 65535.0, (crc * 64.0) / 65535.0);
 }
 ";
 
-/// PyroWave HDR luma: full-res PQ Y′ studio codes into `R16_UNORM`.
+/// PyroWave 10-bit luma from FP16: full-res Y′ studio codes into `R16_UNORM`.
 const PYRO_HDR_Y_PS: &str = r"
 #include_common
 float main(float4 pos : SV_POSITION) : SV_TARGET {
-    float3 pq = scrgb_to_pq2020_rgb(tx.Load(int3(int2(pos.xy), 0)).rgb);
-    return y_unorm(pq);
+    return y_unorm(encode_scrgb(tx.Load(int3(int2(pos.xy), 0)).rgb));
 }
 ";
 
-/// PyroWave HDR 4:2:0 chroma: half-res, left-sited [1 2 1] like the SDR pass, averaged
-/// in scRGB-linear, then PQ + studio Cb/Cr.
+/// PyroWave 10-bit 4:2:0 chroma from FP16: half-res, left-sited [1 2 1] like the SDR pass,
+/// averaged in scRGB-linear, then the curve + studio Cb/Cr.
 const PYRO_HDR_UV_PS: &str = r"
 #include_common
 float2 main(float4 pos : SV_POSITION) : SV_TARGET {
@@ -587,24 +595,23 @@ float2 main(float4 pos : SV_POSITION) : SV_TARGET {
     float3 d = tx.Load(int3(p + int2(1,1), 0)).rgb;
     float3 e = tx.Load(int3(l,             0)).rgb;
     float3 f = tx.Load(int3(l + int2(0,1), 0)).rgb;
-    float3 pq = scrgb_to_pq2020_rgb((e + 2.0 * a + b + f + 2.0 * c + d) * 0.125);
-    return cbcr_unorm(pq);
+    return cbcr_unorm(encode_scrgb((e + 2.0 * a + b + f + 2.0 * c + d) * 0.125));
 }
 ";
 
-/// PyroWave HDR 4:4:4 chroma: full-res, per-pixel.
+/// PyroWave 10-bit 4:4:4 chroma from FP16: full-res, per-pixel.
 const PYRO_HDR_UV444_PS: &str = r"
 #include_common
 float2 main(float4 pos : SV_POSITION) : SV_TARGET {
-    float3 pq = scrgb_to_pq2020_rgb(tx.Load(int3(int2(pos.xy), 0)).rgb);
-    return cbcr_unorm(pq);
+    return cbcr_unorm(encode_scrgb(tx.Load(int3(int2(pos.xy), 0)).rgb));
 }
 ";
 
 /// BGRA/scRGB → separate Y and interleaved CbCr textures for the PyroWave
 /// wavelet encoder (`design/pyrowave-windows-host-zerocopy.md`,
-/// `design/pyrowave-444-hdr.md`). SDR writes BT.709-limited 8-bit planes;
-/// HDR writes P010-style 10-bit studio codes into 16-bit planes.
+/// `design/pyrowave-444-hdr.md`). SDR from BGRA writes BT.709-limited 8-bit planes;
+/// FP16 (HDR, or SDR wide colour as BT.709) writes P010-style 10-bit studio codes into
+/// 16-bit planes.
 ///
 /// Two textures, not one planar NV12: NVIDIA's D3D11→Vulkan import of a
 /// planar NV12 is unreliable at arbitrary sizes. Caller owns the textures
@@ -618,21 +625,19 @@ pub struct BgraToYuvPlanes {
 }
 
 impl BgraToYuvPlanes {
-    pub fn new(device: &ID3D11Device, hdr: bool, chroma444: bool) -> Result<Self> {
+    /// `hdr` reads FP16 into BT.2020 PQ, `wcg` reads FP16 into BT.709 (SDR wide colour);
+    /// neither reads 8-bit BGRA. `hdr` wins if both are set.
+    pub fn new(device: &ID3D11Device, hdr: bool, wcg: bool, chroma444: bool) -> Result<Self> {
         // SAFETY: as `HdrP010Converter::new` — `?`-checked D3D11 shader creation on the live
         // `device` borrow, with `s!()` literals into `compile_shader` and live out-params.
         unsafe {
-            let (y_src, uv_src) = match (hdr, chroma444) {
+            let curve = if hdr { CURVE_PQ2020 } else { CURVE_SRGB709 };
+            let fp16 = |pass| with_curve(pass, curve, PYRO_FP16_COMMON);
+            let (y_src, uv_src) = match (hdr || wcg, chroma444) {
                 (false, false) => (PYRO_Y_PS.to_string(), PYRO_UV_PS.to_string()),
                 (false, true) => (PYRO_Y_PS.to_string(), PYRO_UV444_PS.to_string()),
-                (true, false) => (
-                    PYRO_HDR_Y_PS.replace("#include_common", PYRO_HDR_COMMON),
-                    PYRO_HDR_UV_PS.replace("#include_common", PYRO_HDR_COMMON),
-                ),
-                (true, true) => (
-                    PYRO_HDR_Y_PS.replace("#include_common", PYRO_HDR_COMMON),
-                    PYRO_HDR_UV444_PS.replace("#include_common", PYRO_HDR_COMMON),
-                ),
+                (true, false) => (fp16(PYRO_HDR_Y_PS), fp16(PYRO_HDR_UV_PS)),
+                (true, true) => (fp16(PYRO_HDR_Y_PS), fp16(PYRO_HDR_UV444_PS)),
             };
             let vsb = compile_shader(HDR_VS, s!("main"), s!("vs_5_0"))?;
             let yb = compile_shader(&y_src, s!("main"), s!("ps_5_0"))?;

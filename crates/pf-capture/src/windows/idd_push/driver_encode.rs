@@ -26,6 +26,9 @@ pub struct DriverEncodeParams {
     pub bitrate_kbps: u32,
     pub hdr: bool,
     pub hdr_meta: Option<pf_frame::HdrMeta>,
+    /// The display composes FP16 for this SDR stream (SDR wide colour):
+    /// [`encode::SET_ENCODE_FLAG_SDR_FP16`].
+    pub sdr_fp16: bool,
     /// Slice-chunk target; `0` = whole access units.
     pub wire_chunk_bytes: u32,
     /// Ordered preference, 0-terminated: 1 NVENC, 2 AMF, 3 QSV, 4 PyroWave.
@@ -270,7 +273,11 @@ pub fn open_driver_encoder(
         wire_chunk_bytes: params.wire_chunk_bytes,
         wire_seq_base: params.wire_seq_base,
         backends: params.backends,
-        flags: 0,
+        flags: if params.sdr_fp16 {
+            encode::SET_ENCODE_FLAG_SDR_FP16
+        } else {
+            0
+        },
         _pad_tail: 0,
         // The host process carries `host.env`, so its environment is the knob source; the
         // driver reads these instead of WUDFHost's own (machine) environment.
@@ -317,6 +324,7 @@ pub fn open_driver_encoder(
         backend = backend_name(reply.backend_opened),
         ?caps,
         applied_kbps = reply.applied_bitrate_kbps,
+        sdr_fp16 = params.sdr_fp16,
         heap_bytes = heap,
         generation = header.generation,
         wire_seq_base = params.wire_seq_base,

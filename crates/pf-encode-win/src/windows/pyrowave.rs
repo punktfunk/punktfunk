@@ -68,9 +68,10 @@ pub struct PyroWaveEncoder {
     height: u32,
     /// 4:4:4 = full-res CbCr plane + `Chroma444` pyrowave objects.
     chroma444: bool,
-    /// Depth ≥10: capturer HDR CSC writes P010-style studio codes into 16-bit
-    /// UNORM planes; sequence header is BT.2020/PQ.
-    hdr16: bool,
+    /// Depth ≥10: the FP16 CSC writes P010-style studio codes into 16-bit UNORM planes.
+    ten_bit: bool,
+    /// The sequence header says BT.2020/PQ; otherwise BT.709. Implies `ten_bit`.
+    pq: bool,
     budget: FrameBudget,
     /// Boundary and streamed-AU cursor. Encode is synchronous, so an AU is complete before
     /// its first chunk leaves.
@@ -94,12 +95,15 @@ impl PyroWaveEncoder {
         bitrate_bps: u64,
         chroma: crate::ChromaFormat,
         bit_depth: u8,
+        // BT.2020 PQ; a 10-bit session without it is SDR wide colour, BT.709.
+        hdr: bool,
         // PCI ids of the selected render adapter; `(0, 0)` lets pyrowave pick.
         vendor_id: u32,
         device_id: u32,
     ) -> Result<Self> {
         let chroma444 = chroma.is_444();
-        let hdr16 = bit_depth >= 10;
+        let ten_bit = bit_depth >= 10;
+        let pq = hdr && ten_bit;
         if !chroma444 && (width % 2 != 0 || height % 2 != 0) {
             bail!("pyrowave 4:2:0 needs even dimensions (got {width}x{height})");
         }
@@ -175,7 +179,8 @@ impl PyroWaveEncoder {
                 mode = %format!("{width}x{height}@{fps}"),
                 budget_kib = budget.bytes / 1024,
                 chroma = if chroma444 { "4:4:4" } else { "4:2:0" },
-                hdr = hdr16,
+                ten_bit,
+                hdr = pq,
                 "PyroWave encoder open (Windows separate-plane zero-copy, intra-only wavelet)"
             );
 
@@ -189,7 +194,8 @@ impl PyroWaveEncoder {
                 width,
                 height,
                 chroma444,
-                hdr16,
+                ten_bit,
+                pq,
                 budget,
                 stream: AuStream::default(),
                 bitstream: Vec::new(),
@@ -386,7 +392,7 @@ impl PyroWaveEncoder {
         } else {
             (w / 2, h / 2)
         };
-        let (yf, cf) = if self.hdr16 {
+        let (yf, cf) = if self.ten_bit {
             (
                 pw::VkFormat_VK_FORMAT_R16_UNORM,
                 pw::VkFormat_VK_FORMAT_R16G16_UNORM,
@@ -506,7 +512,7 @@ impl PyroWaveEncoder {
             &mut self.bitstream,
             self.budget.bytes + BS_SLACK,
             wire_chunk,
-            self.hdr16,
+            self.pq,
         )?;
         let au = pyrowave_wire::build_au(&pkts, &self.bitstream, wire_chunk);
         if wire_chunk.is_some() {
@@ -806,6 +812,7 @@ mod tests {
                 crate::ChromaFormat::Yuv420
             },
             if hdr { 10 } else { 8 },
+            hdr,
             0,
             0,
         )

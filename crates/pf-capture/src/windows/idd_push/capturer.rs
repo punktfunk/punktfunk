@@ -305,6 +305,10 @@ impl Capturer for IddPushCapturer {
         self.display_hdr.then(pf_frame::hdr::generic_hdr10)
     }
 
+    fn composes_sdr_fp16(&self) -> bool {
+        self.display_wcg && !self.display_hdr
+    }
+
     fn capture_target_id(&self) -> Option<u32> {
         Some(self.target_id)
     }
@@ -327,7 +331,7 @@ impl Capturer for IddPushCapturer {
         // A mode outside the driver's frozen advertised list re-arrives the monitor, and a fresh
         // monitor composes SDR whatever the session negotiated. Re-assert before the encoder
         // re-opens, or it opens for FP16 against a BGRA surface the pool can only refuse.
-        self.display_hdr = self.pin_negotiated_depth();
+        self.pin_negotiated_depth();
         self.redeliver_cursor_channel();
         true
     }

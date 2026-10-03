@@ -30,8 +30,8 @@ unsafe trait Packet: Default {
 macro_rules! packet {
     ($t:ty, $ty:expr) => {
         const _: () = assert!(std::mem::offset_of!($t, header) == 0);
-        // SAFETY: every `windows` `DISPLAYCONFIG_*` packet is `#[repr(C)]` integer data that
-        // starts with `header: DISPLAYCONFIG_DEVICE_INFO_HEADER` (asserted above).
+        // SAFETY: every `DISPLAYCONFIG_*` packet here, `windows`' or our own, is `#[repr(C)]`
+        // integer data that starts with `header: DISPLAYCONFIG_DEVICE_INFO_HEADER` (asserted above).
         unsafe impl Packet for $t {
             const TYPE: DISPLAYCONFIG_DEVICE_INFO_TYPE = $ty;
             fn header(&mut self) -> &mut DISPLAYCONFIG_DEVICE_INFO_HEADER {
@@ -61,6 +61,31 @@ packet!(
     DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE,
     DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE
 );
+
+/// `DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2`, Windows 11 24H2 (info type 15). `windows` 0.62 has
+/// no binding; the layout is wingdi.h's.
+#[repr(C)]
+#[derive(Default)]
+pub(crate) struct AdvancedColorInfo2 {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    /// Bit 6 `wideColorSupported`, bit 7 `wideColorUserEnabled`.
+    pub value: u32,
+    color_encoding: i32,
+    pub bits_per_color_channel: u32,
+    /// `DISPLAYCONFIG_ADVANCED_COLOR_MODE`: 0 SDR, 1 WCG, 2 HDR.
+    pub active_color_mode: i32,
+}
+
+/// `DISPLAYCONFIG_SET_WCG_STATE`, Windows 11 24H2 (info type 17). Bit 0 is `enableWcg`.
+#[repr(C)]
+#[derive(Default)]
+struct SetWcgState {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    value: u32,
+}
+
+packet!(AdvancedColorInfo2, DISPLAYCONFIG_DEVICE_INFO_TYPE(15));
+packet!(SetWcgState, DISPLAYCONFIG_DEVICE_INFO_TYPE(17));
 
 /// A packet of type `T` addressed to `(adapter, id)`.
 fn packet<T: Packet>(adapter: LUID, id: u32) -> T {
@@ -117,6 +142,21 @@ pub(crate) fn advanced_color_bits(adapter: LUID, target_id: u32) -> Option<u32> 
     let info = get::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(adapter, target_id)?;
     // SAFETY: POD union — `value` overlays a same-sized bitfield.
     Some(unsafe { info.Anonymous.value })
+}
+
+/// The 24H2 colour report of a target; `None` before 24H2 or with no monitor.
+pub(crate) fn advanced_color_info2(adapter: LUID, target_id: u32) -> Option<AdvancedColorInfo2> {
+    get::<AdvancedColorInfo2>(adapter, target_id)
+}
+
+/// Turn SDR wide colour (auto colour management) on or off. The raw
+/// `DisplayConfigSetDeviceInfo` result: 0 is success.
+pub(crate) fn set_wcg_state(adapter: LUID, target_id: u32, enable: bool) -> i32 {
+    let mut s = packet::<SetWcgState>(adapter, target_id);
+    s.value = enable as u32;
+    // SAFETY: as `set_advanced_color_state` — the OS reads this packet's own size behind its
+    // header and retains nothing.
+    unsafe { DisplayConfigSetDeviceInfo((&s as *const SetWcgState).cast()) }
 }
 
 /// The target's SDR white level (1000 = 80 nits); `None` when unreported.
