@@ -233,6 +233,7 @@ mod tests {
         ("host_sort", "Sort on the Hosts header"),
         ("host_grouping", "Group on the Hosts header"),
         ("low_latency", "a MediaCodec decoder flag"),
+        ("second_screen", "an Android handheld's second screen"),
         ("audio_route", "webOS's own audio plane"),
         ("cursor_gestures", "a TV remote's missing second button"),
         ("rumble_on_phone", "a phone's own hardware"),

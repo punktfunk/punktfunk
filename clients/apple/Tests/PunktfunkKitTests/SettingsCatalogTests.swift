@@ -10,7 +10,7 @@ final class SettingsCatalogTests: XCTestCase {
     private static let absent: Set<String> = [
         "follow_os_theme", "reduce_motion", "reduce_ui_resolution", "low_latency", "decoder",
         "audio_route", "cursor_gestures", "forward_pad", "pad_haptics", "pad_speaker",
-        "ds_capture",
+        "ds_capture", "second_screen",
     ]
 
     /// Where a catalogue key sits in the document when it is not a key of its own.
