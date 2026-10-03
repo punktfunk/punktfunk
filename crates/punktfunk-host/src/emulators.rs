@@ -147,6 +147,8 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
                 index: 0,
                 evdev: (event != u32::MAX)
                     .then(|| PathBuf::from(format!("/dev/input/event{event}"))),
+                guid: None,
+                gamepad_name: None,
             },
         ));
     }
@@ -161,14 +163,22 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
 }
 
 /// Puts every emulator's own bindings back after a game: what `prepare` wrote for the
-/// session's pads is gone again, file by file. Nothing outstanding is a quiet no-op.
+/// session's pads is gone again, file by file. Forced: an emulator rewrites its config on
+/// exit, and that is no edit of the player's. Nothing outstanding is a quiet no-op.
 pub fn revert_players() {
     let Ok(h) = open() else { return };
     revert_with(&h);
 }
 
 fn revert_with(h: &Hermir) {
-    for (id, steps) in h.revert_all_players() {
+    let reverted = match h.revert_all(true) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "player bindings not reverted");
+            return;
+        }
+    };
+    for (id, steps) in reverted {
         for s in steps {
             tracing::info!(emulator = %id, target = %s.target.display(), outcome = ?s.outcome, note = s.note.as_deref().unwrap_or(""), "player bindings reverted");
         }
@@ -211,18 +221,19 @@ pub fn prepare(
             .map(|e| e.path())
             .collect(),
     };
-    let players = session_players();
-    Ok(emulator
+    let players = hermir::Patch {
+        players: Some(session_players()),
+        ..Default::default()
+    };
+    emulator
         .copies()?
         .iter()
         .map(|copy| {
-            let mut prepared = emulator.prepare(copy, platform, &firmware);
-            prepared
-                .steps
-                .extend(emulator.apply_players(copy, &players).steps);
-            (copy.exe.to_string(), prepared)
+            let mut prepared = emulator.prepare(copy, platform, &firmware)?;
+            prepared.steps.extend(emulator.apply(copy, &players)?.steps);
+            Ok((copy.exe.to_string(), prepared))
         })
-        .collect())
+        .collect()
 }
 
 /// A core name as the buildbot spells it: `snes9x`, `mupen64plus_next`.
