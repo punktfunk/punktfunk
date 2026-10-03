@@ -524,6 +524,7 @@ pub(crate) async fn serve(
                     %peer,
                     "closed before the control handshake (reachability probe)"
                 ),
+                Ok(Served::Management) => tracing::debug!(%peer, "management connection closed"),
                 Err(e) => {
                     // Typed setup-failed close so the client does not see a bare mid-frame drop.
                     // First-wins: a gate that already closed, or a peer close, makes this a no-op.
@@ -1161,6 +1162,7 @@ pub(crate) async fn park_knock(
 pub(crate) enum Served {
     Session,
     ProbeClose,
+    Management,
 }
 
 /// Handshake → input/audio → data plane. RAII teardown. A first-message PairRequest is
@@ -1206,6 +1208,15 @@ async fn serve_session(
     {
         // Clean close before any control stream: reachability probe ([`Served::ProbeClose`]).
         link::Accepted::ProbeClose => return Ok(Served::ProbeClose),
+        // Before the session slot: a management connection streams nothing.
+        link::Accepted::Management(send, recv) => {
+            let ip = conn
+                .local_ip()
+                .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED.into());
+            let local = std::net::SocketAddr::new(ip, opts.port);
+            crate::webtransport::mgmt::serve_quic(conn.quic().clone(), (send, recv), local).await?;
+            return Ok(Served::Management);
+        }
         link::Accepted::Stream(send, recv) => (send, recv),
     };
     let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, io::read_msg(&mut recv))

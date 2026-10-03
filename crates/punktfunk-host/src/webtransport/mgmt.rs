@@ -14,6 +14,9 @@
 //!
 //! Framing is four bytes of big-endian length, a JSON head, then the body until FIN, both ways
 //! ([`Head`], [`Reply`]). Nothing here parses HTTP, so there is no parser to smuggle past.
+//!
+//! A native `punktfunk/2` connection whose streams are typed management ([`serve_quic`]) gets the
+//! same router and the same authority, each request after its stream type.
 
 use super::Serving;
 use crate::gamestream::tls::{LocalAddr, PeerAddr, PeerCertFingerprint};
@@ -152,30 +155,104 @@ pub(crate) async fn tunnel(
             }
             Err(_) => continue,
         };
-        let permit = streams.clone().try_acquire_owned();
+        let permit = streams.clone().try_acquire_owned().ok();
+        tokio::spawn(answer(permit, rx, tx, router.clone(), peer, local));
+    }
+}
+
+/// A `punktfunk/2` connection opened for management: `first` is its first stream, its type
+/// already read. Every later stream must be typed management too; [`tunnel`]'s caps apply.
+pub(crate) async fn serve_quic(
+    conn: quinn::Connection,
+    first: (quinn::SendStream, quinn::RecvStream),
+    local: SocketAddr,
+) -> Result<()> {
+    let peer = conn.remote_address();
+    let refuse = |why: &[u8]| conn.close(quinn::VarInt::from_u32(REFUSED), why);
+    let Some(router) = ROUTER.get() else {
+        refuse(b"the management API is not up yet");
+        return Ok(());
+    };
+    let Some(_slot) = IpSlot::take(peer.ip()) else {
+        tracing::warn!(%peer, "management connection refused: too many from this address");
+        refuse(b"too many management tunnels from this address");
+        return Ok(());
+    };
+    tunnel_quic(conn, first, router.clone(), local).await
+}
+
+/// [`serve_quic`]'s streams, served like [`tunnel`]'s. The router is a parameter so a test hands
+/// in its own.
+pub(crate) async fn tunnel_quic(
+    conn: quinn::Connection,
+    first: (quinn::SendStream, quinn::RecvStream),
+    router: Router,
+    local: SocketAddr,
+) -> Result<()> {
+    use punktfunk_core::quic::v2::{io, registry};
+    let peer = conn.remote_address();
+    let streams = Arc::new(tokio::sync::Semaphore::new(MAX_STREAMS));
+    tracing::info!(%peer, "management connection open");
+    let mut next = Some((first, true));
+    loop {
+        let ((mut tx, mut rx), typed) = match next.take() {
+            Some(stream) => stream,
+            None => match tokio::time::timeout(IDLE, conn.accept_bi()).await {
+                Ok(Ok(stream)) => (stream, false),
+                Ok(Err(_)) => return Ok(()),
+                Err(_) if streams.available_permits() == MAX_STREAMS => {
+                    tracing::info!(%peer, "management connection idle, closing");
+                    conn.close(quinn::VarInt::from_u32(0), b"idle");
+                    return Ok(());
+                }
+                Err(_) => continue,
+            },
+        };
+        let permit = streams.clone().try_acquire_owned().ok();
         let router = router.clone();
         tokio::spawn(async move {
-            let response = match permit {
-                Ok(_held) => {
-                    let mut rx = rx;
-                    match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut rx)).await {
-                        Ok(Ok((head, body))) => dispatch(&router, peer, local, head, body).await,
-                        Ok(Err(refusal)) => refusal,
-                        Err(_) => api_error(
-                            StatusCode::REQUEST_TIMEOUT,
-                            "the request did not arrive whole in time",
-                        ),
-                    }
+            if !typed {
+                let ty = tokio::time::timeout(REQUEST_TIMEOUT, io::read_stream_type(&mut rx)).await;
+                if !matches!(ty, Ok(Ok(registry::STREAM_MANAGEMENT))) {
+                    let _ = rx.stop(quinn::VarInt::from_u32(0));
+                    let _ = tx.reset(quinn::VarInt::from_u32(0));
+                    return;
                 }
-                Err(_) => api_error(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "too many requests in flight on this tunnel",
-                ),
-            };
-            if let Err(e) = write_response(tx, response).await {
-                tracing::debug!(%peer, error = %e, "tunnel response not delivered");
             }
+            answer(permit, rx, tx, router, peer, local).await;
         });
+    }
+}
+
+/// One stream's request answered: refused without a `permit` (the in-flight cap), timed out,
+/// or dispatched.
+async fn answer<R, W>(
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    mut rx: R,
+    tx: W,
+    router: Router,
+    peer: SocketAddr,
+    local: SocketAddr,
+) where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let response = match permit {
+        Some(_held) => match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut rx)).await {
+            Ok(Ok((head, body))) => dispatch(&router, peer, local, head, body).await,
+            Ok(Err(refusal)) => refusal,
+            Err(_) => api_error(
+                StatusCode::REQUEST_TIMEOUT,
+                "the request did not arrive whole in time",
+            ),
+        },
+        None => api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many requests in flight on this tunnel",
+        ),
+    };
+    if let Err(e) = write_response(tx, response).await {
+        tracing::debug!(%peer, error = %e, "tunnel response not delivered");
     }
 }
 
@@ -605,6 +682,54 @@ mod tests {
         while let Ok(Some(n)) = rx.read(&mut buf).await {
             all.extend_from_slice(&buf[..n]);
         }
+        parse_reply(&all)
+    }
+
+    /// A native client on a `punktfunk/2` management connection: the first stream and a later
+    /// one are answered, and a stream of another type is stopped unanswered.
+    #[tokio::test]
+    async fn a_native_client_reaches_the_router_over_a_management_connection() {
+        use punktfunk_core::quic::endpoint;
+        use punktfunk_core::quic::v2::{io, registry};
+        let router = Router::new().route("/api/v1/health", get(|| async { "ok" }));
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let loopback: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let (server, _media) =
+            endpoint::server_shared(loopback, &cert, &key, Duration::from_secs(8)).unwrap();
+        let bind = server.local_addr().unwrap();
+        tokio::spawn(async move {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let (tx, mut rx) = conn.accept_bi().await.unwrap();
+            let ty = io::read_stream_type(&mut rx).await.unwrap();
+            assert_eq!(ty, registry::STREAM_MANAGEMENT);
+            let _ = tunnel_quic(conn, (tx, rx), router, bind).await;
+        });
+        let (client, _) = endpoint::client_shared(None, None, &[registry::ALPN]);
+        let (client, _media) = client.unwrap();
+        let conn = client.connect(bind, "punktfunk").unwrap().await.unwrap();
+        let call = |ty: u64| {
+            let conn = conn.clone();
+            async move {
+                let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+                io::write_stream_type(&mut tx, ty).await.unwrap();
+                tx.write_all(&frame(r#"{"m":"GET","p":"/api/v1/health"}"#, b""))
+                    .await
+                    .unwrap();
+                let _ = tx.finish();
+                rx.read_to_end(1 << 20).await.map(|all| parse_reply(&all))
+            }
+        };
+        for _ in 0..2 {
+            let (status, _, body) = call(registry::STREAM_MANAGEMENT).await.unwrap();
+            assert_eq!((status, body.as_slice()), (200, b"ok".as_slice()));
+        }
+        assert!(
+            call(registry::STREAM_TRANSFER).await.is_err(),
+            "a stream of another type is stopped"
+        );
+    }
+
+    fn parse_reply(all: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
         let len = u32::from_be_bytes(all[..4].try_into().unwrap()) as usize;
         let reply: serde_json::Value = serde_json::from_slice(&all[4..4 + len]).unwrap();
         let headers = reply["h"]

@@ -85,6 +85,9 @@ impl AsyncRead for CtlRecv {
 /// What accepting the control stream produced.
 pub(crate) enum Accepted {
     Stream(CtlSend, CtlRecv),
+    /// A `punktfunk/2` connection opened for management: its first stream is a request, and
+    /// no session follows.
+    Management(quinn::SendStream, quinn::RecvStream),
     /// A clean application close before any stream: a reachability probe, not a client.
     ProbeClose,
 }
@@ -152,7 +155,7 @@ pub(crate) enum SessionLink {
 
 impl SessionLink {
     /// The QUIC connection underneath, which both carriers have.
-    fn quic(&self) -> &quinn::Connection {
+    pub(crate) fn quic(&self) -> &quinn::Connection {
         match self {
             SessionLink::Quic(c) | SessionLink::QuicV2(c, _) => c,
             SessionLink::Web(c, _) => c.quic_connection(),
@@ -283,7 +286,8 @@ impl SessionLink {
         }
     }
 
-    /// The peer's first bidirectional stream — the control stream on both carriers.
+    /// The peer's first bidirectional stream — the control stream on both carriers, or on
+    /// `punktfunk/2` a management request.
     ///
     /// A clean close before any stream is a reachability probe, and is reported rather than
     /// failed. Anything else that is not a stream is the error it was.
@@ -298,13 +302,16 @@ impl SessionLink {
                 }
                 Err(e) => Err(anyhow::Error::new(e).context("accept control stream")),
             },
-            // The client's first stream must say it is the control stream.
+            // The client's first stream must say it is the control stream or a management one.
             SessionLink::QuicV2(c, v2) => match c.accept_bi().await {
                 Ok((send, mut recv)) => {
                     use punktfunk_core::quic::v2::{io, registry};
                     let ty = io::read_stream_type(&mut recv)
                         .await
                         .map_err(|e| anyhow::anyhow!("read control stream type: {e}"))?;
+                    if ty == registry::STREAM_MANAGEMENT {
+                        return Ok(Accepted::Management(send, recv));
+                    }
                     anyhow::ensure!(
                         ty == registry::STREAM_CONTROL,
                         "first stream is type {ty}, not control"
