@@ -297,6 +297,10 @@ yield* serveUi({
   is on disk. `target` must be a folder the plugin may write; the host shows its free space.
 - On a host that predates downloads, `reporter.supported()` turns `false`: keep fetching in a
   launch hold, as before.
+- A library source passes the four handlers to `defineLibraryPlugin({ install })`, each with
+  the config as its second argument, and reports from `downloads: (reporter, config) => …`,
+  which runs beside the sync. The host takes a row for any title the plugin lists, so a source
+  can also report downloads its launcher started.
 
 ## Folders you can't know in advance
 
