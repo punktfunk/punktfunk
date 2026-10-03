@@ -1,41 +1,13 @@
-//! The Shortcuts screen: a short note on the in-stream capture model plus a reference of the
-//! keyboard shortcuts — reached from the Shortcuts button on the host list. The Windows
-//! counterpart of the GTK client's Keyboard Shortcuts window; the bindings themselves live in
-//! the session window, so both clients document the same set.
+//! The Shortcuts screen: a short note on the in-stream capture model plus the keyboard,
+//! touch and controller controls — reached from the Shortcuts button on the host list. The
+//! Windows counterpart of the GTK client's Keyboard Shortcuts window; both read
+//! `pf_client_core::shortcuts`.
 
 use super::lucide;
 use super::style::*;
 use super::Screen;
+use pf_client_core::shortcuts;
 use windows_reactor::*;
-
-/// The in-stream keyboard shortcuts, in the GTK Shortcuts window's order: the chord, then what it
-/// does. Read-only — the keyboard bindings live in the session window (`pf-presenter`'s run
-/// loop), the controller chord in its gamepad service.
-const STREAM_SHORTCUTS: &[(&str, &str)] = &[
-    ("F11 / Alt+Enter", "Toggle fullscreen"),
-    (
-        "Ctrl+Alt+Shift+Q",
-        "Release captured input (click the stream to recapture)",
-    ),
-    ("Ctrl+Alt+Shift+D", "Disconnect"),
-    (
-        "Ctrl+Alt+Shift+S",
-        "Cycle the statistics overlay (off \u{00B7} compact \u{00B7} normal \u{00B7} detailed)",
-    ),
-    (
-        "Ctrl+Alt+Shift+V",
-        "Mute or unmute your microphone (only while the stream sends one)",
-    ),
-    ("Ctrl+Alt+Shift+O", "Open the quick actions dial"),
-    (
-        "Back+A",
-        "Controller: open the quick actions dial \u{2014} the left stick aims it",
-    ),
-    (
-        "LB+RB+Start+Back",
-        "Controller: release input / leave fullscreen \u{2014} hold to disconnect",
-    ),
-];
 
 /// A subtle key-cap chip for the shortcuts reference — the chord on a filled, bordered pill.
 fn key_chip(keys: &str) -> Element {
@@ -49,32 +21,37 @@ fn key_chip(keys: &str) -> Element {
         .into()
 }
 
-/// A read-only reference card listing the in-stream keyboard shortcuts. One grid, chord chip then
-/// action, so the actions line up across rows.
-fn shortcuts_reference() -> Element {
-    let mut children: Vec<Element> = Vec::new();
-    for (i, (keys, action)) in STREAM_SHORTCUTS.iter().enumerate() {
-        let row = i as i32;
-        children.push(key_chip(keys).grid_row(row).grid_column(0));
-        let action_cell: Element = text_block(*action)
-            .wrap()
-            .foreground(ThemeRef::SecondaryText)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into();
-        children.push(action_cell.grid_row(row).grid_column(1));
-    }
-    let table = grid(children)
-        .columns([GridLength::Auto, GridLength::Star(1.0)])
-        .rows(vec![GridLength::Auto; STREAM_SHORTCUTS.len()])
-        .column_spacing(12.0)
-        .row_spacing(6.0);
-    card(vstack((
-        text_block("In-stream keyboard shortcuts")
-            .semibold()
-            .margin(edges(0.0, 0.0, 0.0, 8.0)),
-        table,
-    )))
-    .into()
+/// A read-only reference card per group of the shared list: keyboard, touch, controller. One
+/// grid per card, chord chip then action, so the actions line up across rows.
+fn shortcuts_reference() -> Vec<Element> {
+    shortcuts::groups(shortcuts::Client::Desktop, true)
+        .into_iter()
+        .map(|g| {
+            let mut children: Vec<Element> = Vec::new();
+            for (i, item) in g.items.iter().enumerate() {
+                let row = i as i32;
+                children.push(key_chip(item.keys).grid_row(row).grid_column(0));
+                let action_cell: Element = text_block(item.text)
+                    .wrap()
+                    .foreground(ThemeRef::SecondaryText)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .into();
+                children.push(action_cell.grid_row(row).grid_column(1));
+            }
+            let table = grid(children)
+                .columns([GridLength::Auto, GridLength::Star(1.0)])
+                .rows(vec![GridLength::Auto; g.items.len()])
+                .column_spacing(12.0)
+                .row_spacing(6.0);
+            card(vstack((
+                text_block(g.title)
+                    .semibold()
+                    .margin(edges(0.0, 0.0, 0.0, 8.0)),
+                table,
+            )))
+            .into()
+        })
+        .collect()
 }
 
 /// The Shortcuts screen: a `page`-column with a Back button to the host list, an intro card on
@@ -104,9 +81,7 @@ pub(crate) fn help_page(set_screen: &AsyncSetState<Screen>) -> Element {
         .spacing(8.0),
     );
 
-    page(vec![
-        page_header("Shortcuts", back_btn),
-        intro.into(),
-        shortcuts_reference(),
-    ])
+    let mut children = vec![page_header("Shortcuts", back_btn), intro.into()];
+    children.extend(shortcuts_reference());
+    page(children)
 }
