@@ -63,6 +63,10 @@ pub struct PluginAccess {
     pub grants: Vec<Grant>,
     #[serde(default)]
     pub denied: Vec<String>,
+    /// A path the plugin asked for through a link → the granted path it resolves to. The
+    /// sandbox binds only the latter, so the runner recreates each link inside.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub links: BTreeMap<String, String>,
 }
 
 /// What an API read returns for one plugin: its entry plus its pending rows.
@@ -132,6 +136,7 @@ impl AccessEntry {
                     })
                     .collect(),
                 denied: Vec::new(),
+                links: BTreeMap::new(),
             },
             AccessEntry::V2(a) => a,
         }
@@ -248,6 +253,18 @@ fn home_path(p: &str, policy: &PathPolicy) -> PathBuf {
         Some(rest) if !policy.home.as_os_str().is_empty() => policy.home.join(rest),
         _ => PathBuf::from(p),
     }
+}
+
+/// `raw` → `canon` when the plugin reached `canon` through a link: a plain absolute spelling
+/// that differs from where it resolves. A Windows prefix is never plain; ACLs follow junctions.
+fn link_of(raw: &str, canon: &str) -> Option<(String, String)> {
+    let p = Path::new(raw);
+    let plain = p.is_absolute()
+        && p.components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+    let spelled: PathBuf = p.components().collect();
+    (plain && spelled != Path::new(canon))
+        .then(|| (spelled.to_string_lossy().into_owned(), canon.to_string()))
 }
 
 /// Is `canonical` inside a declared manifest root or an existing grant that allows `write`?
@@ -558,7 +575,8 @@ impl AccessStore {
 
     /// Record a batch of requests from `id`. A path already reachable, already pending, or
     /// sticky-denied is answered without a new row; anything the host would never grant is
-    /// `refused:<rule>` here rather than offered to the operator.
+    /// `refused:<rule>` here rather than offered to the operator. A granted path asked for
+    /// through a link records that link for the runner.
     pub fn request(
         &self,
         id: &str,
@@ -566,7 +584,7 @@ impl AccessStore {
         reason: Option<String>,
     ) -> io::Result<Mutation<Vec<RequestOutcome>>> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let access = self.load_access();
+        let mut access = self.load_access();
         let mut pending_all = self.load_pending();
         let declared: Vec<(PathBuf, bool)> = crate::plugins::manifest::for_provider(id)
             .map(|m| {
@@ -602,6 +620,30 @@ impl AccessStore {
         if changed {
             pending_all.insert(id.to_string(), pending);
             self.write_pending(&pending_all)?;
+        }
+        let links: Vec<(String, String)> = paths
+            .iter()
+            .zip(&outcomes)
+            .filter(|(_, o)| o.outcome == "granted")
+            .filter_map(|((raw, _), o)| link_of(raw, &o.path))
+            .filter(|(k, v)| entry.links.get(k) != Some(v))
+            .collect();
+        if !links.is_empty() {
+            let e = access.entry(id.to_string()).or_default();
+            for (raw, target) in links {
+                if e.links.len() < MAX_GRANTS || e.links.contains_key(&raw) {
+                    e.links.insert(raw, target);
+                }
+            }
+            // Only links into a grant still held: a manifest root binds at its own spelling.
+            e.links.retain(|_, target| {
+                e.grants
+                    .iter()
+                    .any(|g| within(Path::new(target), &home_path(&g.path, &self.policy)))
+            });
+            if e.links != entry.links {
+                self.write_access(&access)?;
+            }
         }
         Ok(Mutation {
             value: outcomes,
@@ -1552,6 +1594,7 @@ mod tests {
                     forms: Vec::new(),
                 }],
                 denied: Vec::new(),
+                links: BTreeMap::new(),
             },
         );
         s.write_access(&access).unwrap();
@@ -1564,6 +1607,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(m.value[0].outcome, "granted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_granted_path_asked_for_through_a_link_records_the_link() {
+        let f = fixture();
+        let games = f.dir("data/ssd/games");
+        let other = f.dir("data/other");
+        let s = f.store();
+        s.grant("demo", &games, false, "cli").unwrap();
+        let home_games = f.dir("home/Games");
+        std::os::unix::fs::symlink(&games, home_games.join("SteamLibrary")).unwrap();
+        std::os::unix::fs::symlink(&other, home_games.join("Other")).unwrap();
+        let raw = |p: &Path| p.to_str().unwrap().to_string();
+        let asked = [
+            (raw(&home_games.join("SteamLibrary")), false),
+            (raw(&games), false),
+            (raw(&home_games.join("Other")), false),
+        ];
+        let m = s.request("demo", &asked, None).unwrap();
+        let outcomes: Vec<&str> = m.value.iter().map(|o| o.outcome.as_str()).collect();
+        assert_eq!(outcomes, ["granted", "granted", "pending"]);
+        // Only the link into a grant; the canonical spelling needs none.
+        assert_eq!(
+            s.load_access()["demo"].links,
+            BTreeMap::from([(asked[0].0.clone(), raw(&games))])
+        );
     }
 
     #[test]
@@ -1777,6 +1847,7 @@ mod tests {
                     forms: Vec::new(),
                 }],
                 denied: vec![gone.into()],
+                links: BTreeMap::new(),
             },
         );
         f.store().write_access(&access).unwrap();
@@ -1883,6 +1954,7 @@ mod tests {
         let entry = PluginAccess {
             grants: (0..MAX_GRANTS).map(filler_grant).collect(),
             denied: vec![raw.clone()],
+            links: BTreeMap::new(),
         };
         let pending: Vec<PendingRequest> = (0..MAX_PENDING)
             .map(|i| PendingRequest {
@@ -1910,6 +1982,7 @@ mod tests {
         let entry = PluginAccess {
             grants: (0..MAX_GRANTS).map(filler_grant).collect(),
             denied: Vec::new(),
+            links: BTreeMap::new(),
         };
         // The pending row is written directly: requesting it now would hit the grant cap.
         let s = write_state(

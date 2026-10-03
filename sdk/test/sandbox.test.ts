@@ -240,6 +240,36 @@ describe("bwrapArgv", () => {
 		const all = [...binds(argv, "--bind"), ...binds(argv, "--ro-bind"), ...ro];
 		expect(all.filter(([, dest]) => dest.startsWith("/home/"))).toEqual([]);
 	});
+
+	test("recreates a link into a grant, last and never over anything placed", () => {
+		const target = "/mnt/ssd/games";
+		const grant = {
+			path: target,
+			write: false,
+			links: [
+				"/home/u/Games/SteamLibrary",
+				// The host's own link is already inside a declared read.
+				"/home/u/.local/share/Steam/lib",
+				// Above a bind, on a system dir, the home itself, not normalized, under a link.
+				"/home/u/.local",
+				"/usr/games",
+				"/home/u",
+				"/home/u/x/../y",
+				"/home/u/Games/SteamLibrary/steamapps",
+			].map((p) => ({ path: p, target })),
+		};
+		const argv = bwrapArgv(manifest(), paths, [grant]);
+		expect(binds(argv, "--symlink").filter(([t]) => t === target)).toEqual([
+			[target, "/home/u/Games/SteamLibrary"],
+		]);
+		expect(argv.slice(-3)).toEqual(["--symlink", target, "/home/u/Games/SteamLibrary"]);
+		const homeLink = { path: "/home", target: "var/home", real: "/var/home" };
+		expect(bwrapArgv(manifest(), { ...paths, homeLink }, [grant]).slice(-3)).toEqual([
+			"--symlink",
+			target,
+			"/var/home/u/Games/SteamLibrary",
+		]);
+	});
 });
 
 describe("homeLink", () => {
@@ -283,6 +313,22 @@ describe("grantedRoots", () => {
 				{ path: "/mnt/read", write: false },
 				{ path: "/mnt/write", write: true },
 			]);
+			const grants = [
+				{ path: "/mnt/read", write: false },
+				{ path: "/mnt/write", write: true },
+			];
+			write({
+				demo: {
+					grants,
+					links: { "/home/u/Games": "/mnt/read/games", "/x": "/mnt/readme", "/y": 5 },
+				},
+			});
+			expect(grantedRoots(dir, "demo")).toEqual([
+				{ ...grants[0], links: [{ path: "/home/u/Games", target: "/mnt/read/games" }] },
+				grants[1],
+			]);
+			write({ demo: { grants, links: "nonsense" } });
+			expect(grantedRoots(dir, "demo")).toEqual(grants);
 			fs.writeFileSync(path.join(dir, "plugin-run", "plugin-grants.json"), "{not json");
 			expect(grantedRoots(dir, "demo")).toEqual([]);
 			write({ demo: { grants: [{ path: "/mnt/x", write: "yes" }] } });
