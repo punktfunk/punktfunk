@@ -1137,13 +1137,17 @@ type AudioCapSlot = Arc<std::sync::Mutex<Option<Box<dyn crate::audio::AudioCaptu
 /// the path; approval streams with no reconnect. Under the pending TTL (10 min).
 const PENDING_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
+/// How often a parked `punktfunk/2` knock is told the host is still deciding.
+const PENDING_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Park an unpaired knock until the console decides. The caller holds no session slot while
-/// it waits.
+/// it waits. A `punktfunk/2` client hears `Pending` on `v2` meanwhile, every [`PENDING_EVERY`].
 ///
 /// `Ok(Ok(_))` is an approval, with a slot taken like any fresh client's (waits if busy).
 /// `Ok(Err(reason))` is the refusal to send. `Err` means the client left before a decision.
 pub(crate) async fn park_knock(
     conn: &link::SessionLink,
+    mut v2: Option<&mut punktfunk_core::quic::v2::io::V2Writer<quinn::SendStream>>,
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
@@ -1155,9 +1159,20 @@ pub(crate) async fn park_knock(
     // QUIC-validated source IP for the pending per-source cap. Knock generation makes
     // this connection the one an approval admits — siblings must not all start a session.
     let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()));
-    let decision = tokio::select! {
-        d = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT) => d,
-        _ = conn.closed() => anyhow::bail!("client disconnected before pairing approval"),
+    let wait = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT);
+    tokio::pin!(wait);
+    let mut pending = tokio::time::interval(PENDING_EVERY);
+    let decision = loop {
+        tokio::select! {
+            d = &mut wait => break d,
+            _ = conn.closed() => anyhow::bail!("client disconnected before pairing approval"),
+            _ = pending.tick() => {
+                if let Some(w) = v2.as_deref_mut() {
+                    use punktfunk_core::quic::v2::msg::{Pending, V2Message};
+                    let _ = w.write_v2(&Pending {}.encode_v2()).await;
+                }
+            }
+        }
     };
     let reason = match decision {
         PairingDecision::Approved => {
@@ -1220,7 +1235,7 @@ async fn serve_session(
 ) -> Result<Served> {
     let np: &NativePairing = np_arc;
     let peer = conn.remote_address();
-    let (send, mut recv) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
+    let (mut send, mut recv) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
         .await
         .map_err(|_| anyhow!("control stream timeout"))??
     {
@@ -1362,7 +1377,11 @@ async fn serve_session(
                 &fp_hex,
             );
             drop(permit);
-            permit = match park_knock(&conn, np, &label, &fp_hex, &sem).await? {
+            let v2 = match &mut send {
+                link::CtlSend::QuicV2(w) => Some(w),
+                _ => None,
+            };
+            permit = match park_knock(&conn, v2, np, &label, &fp_hex, &sem).await? {
                 Ok(permit) => permit,
                 Err(reason) => {
                     close_rejected(&conn, reason).await;

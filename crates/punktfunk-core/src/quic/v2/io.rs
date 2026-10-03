@@ -221,6 +221,13 @@ impl<W: AsyncWrite + Unpin> V2Writer<W> {
         self.sent = 0;
         Poll::Ready(Ok(()))
     }
+
+    /// A frame with no `punktfunk/1` form, such as `Pending`, written whole after any message
+    /// still half on the wire.
+    pub async fn write_v2(&mut self, frame: &[u8]) -> std::io::Result<()> {
+        std::future::poll_fn(|cx| self.poll_pending(cx)).await?;
+        self.inner.write_all(frame).await
+    }
 }
 
 impl<W: AsyncWrite + Unpin> AsyncWrite for V2Writer<W> {

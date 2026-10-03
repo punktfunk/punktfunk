@@ -156,11 +156,19 @@ pub struct RxEdge {
     pub server: Option<SessionFields>,
     /// Host side: a `PhaseReport`'s latch arrives in wire time and leaves in host time.
     pub clock: Option<std::sync::Arc<SessionClock>>,
+    /// Client side: a `Pending` arrived, so the host is still deciding on this device.
+    pub pending: bool,
 }
 
 impl RxEdge {
     pub fn to_v1(&mut self, ty: u64, body: &[u8]) -> Option<Vec<u8>> {
         match ty {
+            reg::MSG_PENDING => {
+                if !std::mem::replace(&mut self.pending, true) {
+                    tracing::info!("the host is waiting for this device to be approved");
+                }
+                None
+            }
             reg::MSG_PHASE_REPORT if self.clock.is_some() => {
                 let mut pr = PhaseReport::from_body(body).ok()?;
                 let clock = self.clock.as_ref()?;
@@ -556,6 +564,19 @@ mod tests {
     }
 
     /// A client's own edges carry its handshake through a host's edges and back.
+    /// `Pending` marks the client's edge and yields nothing: the handshake keeps waiting for
+    /// the `ServerHello` behind it.
+    #[test]
+    fn pending_is_noted_not_delivered() {
+        use crate::quic::v2::msg::Pending;
+        let f = Pending {}.encode_v2();
+        let (ty, body, _) = split_frame(&f, reg::max_body).unwrap().unwrap();
+        let mut rx = RxEdge::default();
+        assert_eq!(rx.to_v1(ty, body), None);
+        assert!(rx.pending);
+        assert_eq!(rx.to_v1(ty, body), None, "a repeat is quiet");
+    }
+
     /// A host's edges put its clock echoes in wire time and take a client's phase latch back
     /// to host time; a client's edges change neither.
     #[test]

@@ -82,7 +82,7 @@ pub(crate) async fn run(
                 .peer_fingerprint()
                 .context("a knock is keyed by its device")?;
             let pairing = &serving.plane.pairing;
-            crate::native::park_knock(&link, pairing, &label, &hex::encode(fp), &sem)
+            crate::native::park_knock(&link, None, pairing, &label, &hex::encode(fp), &sem)
                 .await?
                 .map_err(rejected)?
         }
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(label, "Safari on Mac");
 
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let park = crate::native::park_knock(&admitted.link, &np, &label, &fp_hex, &sem);
+        let park = crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, &sem);
         let console = async {
             let pending = loop {
                 if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {

@@ -229,6 +229,24 @@ impl V2Message for RequestKeyframe {
         Ok(RequestKeyframe)
     }
 }
+/// `host → client`, before `ServerHello`, repeating: the host is still deciding, such as a
+/// console approval of this device. `punktfunk/2` only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pending {}
+
+impl V2Message for Pending {
+    const TYPE: u64 = reg::MSG_PENDING;
+
+    fn fields(&self) -> Fields {
+        Fields::new()
+    }
+
+    fn from_body(body: &[u8]) -> Result<Self> {
+        let mut r = FieldReader::new(body);
+        while r.next_field()?.is_some() {}
+        Ok(Pending {})
+    }
+}
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
 v2_message!(ClipFetch = reg::MSG_CLIP_FETCH, { 1 => seq, 2 => file_index, 3 => mime },
