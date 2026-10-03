@@ -105,6 +105,7 @@ export const connect = async (options?: ConnectOptions): Promise<Punktfunk> => {
 	const listeners = new Set<Listener>();
 	let pump: AsyncGenerator<SseFrame> | undefined;
 	let closed = false;
+	const stop = new AbortController();
 
 	const warn = (m: string) => console.warn(`[punktfunk] ${m}`);
 	const dispatch = (pattern: string, ev: unknown) => {
@@ -120,7 +121,7 @@ export const connect = async (options?: ConnectOptions): Promise<Punktfunk> => {
 	};
 	const startPump = () => {
 		if (pump || closed) return;
-		pump = sseFrames(cfg, { onWarning: warn });
+		pump = sseFrames(cfg, { onWarning: warn, signal: stop.signal });
 		void (async () => {
 			try {
 				for await (const frame of pump) {
@@ -151,7 +152,7 @@ export const connect = async (options?: ConnectOptions): Promise<Punktfunk> => {
 		} as PunktfunkEvents,
 		close() {
 			closed = true;
-			pump?.return(undefined).catch(() => {});
+			stop.abort();
 			pump = undefined;
 		},
 	};

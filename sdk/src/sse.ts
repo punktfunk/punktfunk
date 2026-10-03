@@ -106,6 +106,8 @@ export interface EventStreamOptions {
 	kinds?: string[];
 	/** Called on transient trouble (reconnects, decode warnings). Default: console.warn. */
 	onWarning?: (message: string) => void;
+	/** Ends the stream, even mid-request or mid-backoff, where `return()` cannot reach it. */
+	signal?: AbortSignal;
 }
 
 /**
@@ -125,10 +127,23 @@ const BACKOFF_CAP_MS = 15_000;
 /** A connection that lived this long resets the backoff (it was healthy, not flapping). */
 const HEALTHY_MS = 30_000;
 
+/** Ends after `ms`, or at once when `signal` aborts. */
+const sleep = (ms: number, signal: AbortSignal) =>
+	new Promise<void>((resolve) => {
+		const done = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", done);
+			resolve();
+		};
+		const timer = setTimeout(done, ms);
+		signal.addEventListener("abort", done, { once: true });
+	});
+
 /**
  * The shared frame source: connect → parse → yield frames, forever — reconnecting with
- * `Last-Event-ID` on any hiccup. Ends only by consumer break/return (both surfaces cancel by
- * dropping the iterator, which aborts the in-flight request) or throws [`SseAuthError`].
+ * `Last-Event-ID` on any hiccup. Ends on `opts.signal`, on a consumer break/return, or throws
+ * [`SseAuthError`]. A `return()` waits for the next frame, so a caller that must stop while
+ * the host is gone passes `signal`.
  */
 export async function* sseFrames(
 	cfg: Connection,
@@ -138,8 +153,11 @@ export async function* sseFrames(
 	let lastId: number = opts.since ?? LIVE_ONLY_CURSOR;
 	let backoff = BACKOFF_INITIAL_MS;
 	const abort = new AbortController();
+	const stop = () => abort.abort();
+	if (opts.signal?.aborted) stop();
+	opts.signal?.addEventListener("abort", stop, { once: true });
 	try {
-		for (;;) {
+		while (!abort.signal.aborted) {
 			const url = new URL(`${cfg.url}/api/v1/events`);
 			if (opts.kinds && opts.kinds.length > 0)
 				url.searchParams.set("kinds", opts.kinds.join(","));
@@ -189,11 +207,12 @@ export async function* sseFrames(
 						e instanceof Error ? e.message : String(e)
 					})`,
 				);
-				await new Promise((r) => setTimeout(r, jittered));
+				await sleep(jittered, abort.signal);
 				backoff = Math.min(backoff * 2, BACKOFF_CAP_MS);
 			}
 		}
 	} finally {
+		opts.signal?.removeEventListener("abort", stop);
 		abort.abort(); // consumer went away — tear down any in-flight request
 	}
 }
