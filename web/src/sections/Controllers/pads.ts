@@ -1,5 +1,5 @@
 // The pad vocabulary the Controllers page draws and logs: wire bits, their evdev names,
-// and one geometry table per controller family.
+// and the drawings' control ids.
 //
 // Names come from the host's own `BUTTON_MAP` (pf-inject `linux/gamepad.rs`), so a line here
 // reads the way the same press reads in an evdev dump. A wire bit with no evdev counterpart
@@ -32,6 +32,31 @@ export const BIT = {
 	TOUCHPAD: 0x0010_0000,
 	MISC1: 0x0020_0000,
 } as const;
+
+/** A drawing's control id (`assets/pads/README.md`) → the wire bit that lights it. */
+export const ART_BITS: Record<string, number> = {
+	A: BIT.A,
+	B: BIT.B,
+	X: BIT.X,
+	Y: BIT.Y,
+	LB: BIT.LB,
+	RB: BIT.RB,
+	Back: BIT.BACK,
+	Start: BIT.START,
+	Guide: BIT.GUIDE,
+	LS: BIT.LS_CLICK,
+	RS: BIT.RS_CLICK,
+	Up: BIT.DPAD_UP,
+	Down: BIT.DPAD_DOWN,
+	Left: BIT.DPAD_LEFT,
+	Right: BIT.DPAD_RIGHT,
+	R4: BIT.PADDLE1,
+	L4: BIT.PADDLE2,
+	R5: BIT.PADDLE3,
+	L5: BIT.PADDLE4,
+	Touchpad: BIT.TOUCHPAD,
+	Misc: BIT.MISC1,
+};
 
 /** Wire bit → the name the host's virtual pad reports it under. Log order is this order. */
 export const BUTTON_NAMES: readonly (readonly [number, string])[] = [
@@ -173,168 +198,3 @@ export const logText = (log: readonly PadLogLine[]): string =>
 				`${new Date(l.ts_ms).toTimeString().slice(0, 8)} pad ${l.pad} ${l.text}`,
 		)
 		.join("\n");
-
-// ---------------------------------------------------------------------------
-// Geometry. One table per family; `PadDiagram` is the only thing that reads it.
-// ---------------------------------------------------------------------------
-
-export type PadFamily = "xbox" | "playstation" | "steam" | "switch";
-
-/** Every kind the host emulates, folded onto the four shapes it takes. */
-export function familyOf(device: string): PadFamily {
-	if (device.startsWith("dualsense") || device.startsWith("dualshock"))
-		return "playstation";
-	if (device.startsWith("steam")) return "steam";
-	// The 8BitDo Pro pads carry Nintendo labels.
-	if (
-		device === "switchpro" ||
-		device === "joyconpair" ||
-		device.startsWith("switch2") ||
-		device.startsWith("8bitdopro")
-	)
-		return "switch";
-	return "xbox";
-}
-
-interface Placed {
-	bit: number;
-	cx: number;
-	cy: number;
-	/** Short glyph inside the circle; empty for a button too small to letter. */
-	label: string;
-	r?: number;
-}
-
-interface Well {
-	/** The stick's click bit — what lights its ring. */
-	bit: number;
-	cx: number;
-	cy: number;
-}
-
-export interface PadShape {
-	/** Body outline in the shared 260×160 viewBox. */
-	body: string;
-	/** Left then right; every pad the host emulates has both. */
-	sticks: [Well, Well];
-	dpad: { cx: number; cy: number };
-	/** Face cluster plus the system row (Back/Start/Guide/Misc). */
-	buttons: Placed[];
-	/** Flat surfaces: a DualSense touchpad, the Deck's trackpads. */
-	plates: { x: number; y: number; w: number; h: number; bit?: number }[];
-}
-
-/** A face diamond around `(cx, cy)`, with each position's bit and glyph. */
-const diamond = (
-	cx: number,
-	cy: number,
-	[bottom, right, top, left]: [Placed, Placed, Placed, Placed],
-): Placed[] => [
-	{ ...bottom, cx, cy: cy + 15 },
-	{ ...right, cx: cx + 15, cy },
-	{ ...top, cx, cy: cy - 15 },
-	{ ...left, cx: cx - 15, cy },
-];
-
-const p = (bit: number, label: string): Placed => ({
-	bit,
-	cx: 0,
-	cy: 0,
-	label,
-});
-
-/** Grips-down body, the shape every family shares apart from its corners. */
-const BODY_WINGED =
-	"M42 34 h176 a26 26 0 0 1 26 26 v18 c0 30 -14 56 -32 56 c-14 0 -20 -14 -30 -22 h-104 c-10 8 -16 22 -30 22 c-18 0 -32 -26 -32 -56 v-18 a26 26 0 0 1 26 -26 z";
-const BODY_SLAB =
-	"M34 34 h192 a22 22 0 0 1 22 22 v58 a22 22 0 0 1 -22 22 h-192 a22 22 0 0 1 -22 -22 v-58 a22 22 0 0 1 22 -22 z";
-
-export const SHAPES: Record<PadFamily, PadShape> = {
-	xbox: {
-		body: BODY_WINGED,
-		sticks: [
-			{ bit: BIT.LS_CLICK, cx: 72, cy: 62 },
-			{ bit: BIT.RS_CLICK, cx: 158, cy: 98 },
-		],
-		dpad: { cx: 102, cy: 98 },
-		buttons: [
-			...diamond(196, 62, [
-				p(BIT.A, "A"),
-				p(BIT.B, "B"),
-				p(BIT.Y, "Y"),
-				p(BIT.X, "X"),
-			]),
-			{ bit: BIT.BACK, cx: 112, cy: 62, label: "", r: 5 },
-			{ bit: BIT.START, cx: 148, cy: 62, label: "", r: 5 },
-			{ bit: BIT.GUIDE, cx: 130, cy: 48, label: "G", r: 8 },
-		],
-		plates: [],
-	},
-	playstation: {
-		body: BODY_WINGED,
-		sticks: [
-			{ bit: BIT.LS_CLICK, cx: 100, cy: 102 },
-			{ bit: BIT.RS_CLICK, cx: 160, cy: 102 },
-		],
-		dpad: { cx: 64, cy: 62 },
-		buttons: [
-			...diamond(196, 62, [
-				p(BIT.A, "✕"),
-				p(BIT.B, "○"),
-				p(BIT.Y, "△"),
-				p(BIT.X, "□"),
-			]),
-			{ bit: BIT.BACK, cx: 92, cy: 44, label: "", r: 5 },
-			{ bit: BIT.START, cx: 168, cy: 44, label: "", r: 5 },
-			{ bit: BIT.GUIDE, cx: 130, cy: 112, label: "P", r: 8 },
-			{ bit: BIT.MISC1, cx: 130, cy: 44, label: "", r: 4 },
-		],
-		plates: [{ x: 104, y: 52, w: 52, h: 32, bit: BIT.TOUCHPAD }],
-	},
-	steam: {
-		body: BODY_SLAB,
-		sticks: [
-			{ bit: BIT.LS_CLICK, cx: 44, cy: 58 },
-			{ bit: BIT.RS_CLICK, cx: 216, cy: 58 },
-		],
-		dpad: { cx: 44, cy: 104 },
-		buttons: [
-			...diamond(216, 104, [
-				p(BIT.A, "A"),
-				p(BIT.B, "B"),
-				p(BIT.Y, "Y"),
-				p(BIT.X, "X"),
-			]),
-			{ bit: BIT.BACK, cx: 106, cy: 46, label: "", r: 5 },
-			{ bit: BIT.START, cx: 154, cy: 46, label: "", r: 5 },
-			{ bit: BIT.GUIDE, cx: 130, cy: 46, label: "S", r: 8 },
-			{ bit: BIT.MISC1, cx: 130, cy: 122, label: "", r: 5 },
-		],
-		plates: [
-			{ x: 78, y: 62, w: 42, h: 42 },
-			{ x: 140, y: 62, w: 42, h: 42 },
-		],
-	},
-	switch: {
-		body: BODY_WINGED,
-		sticks: [
-			{ bit: BIT.LS_CLICK, cx: 72, cy: 62 },
-			{ bit: BIT.RS_CLICK, cx: 158, cy: 98 },
-		],
-		dpad: { cx: 102, cy: 98 },
-		// Nintendo swaps the physical positions: A is right, B is bottom, X top, Y left.
-		buttons: [
-			...diamond(196, 62, [
-				p(BIT.A, "B"),
-				p(BIT.B, "A"),
-				p(BIT.Y, "X"),
-				p(BIT.X, "Y"),
-			]),
-			{ bit: BIT.BACK, cx: 108, cy: 56, label: "−", r: 6 },
-			{ bit: BIT.START, cx: 152, cy: 56, label: "+", r: 6 },
-			{ bit: BIT.GUIDE, cx: 148, cy: 78, label: "", r: 5 },
-			{ bit: BIT.MISC1, cx: 112, cy: 78, label: "", r: 5 },
-		],
-		plates: [],
-	},
-};

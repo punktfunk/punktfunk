@@ -1,195 +1,217 @@
 // One controller drawing, lit from one `PadFrame`.
 //
-// The only renderer: every family is a row in `SHAPES`, so a new controller shape is
-// coordinates, not another component. Triggers, shoulders, sticks and the D-pad are drawn
-// here because they sit in the same place on all four.
+// The art is `PAD_ART`, generated from the assets/pads masters the console draws too. Every
+// fill is the foreground mixed into the card, opaque, so a bumper hides the trigger behind it;
+// whatever is held turns primary.
 
-import type { FC } from "react";
+import { type FC, useId } from "react";
 import type { PadFrame } from "@/api/gen/model/padFrame";
-import { BIT, familyOf, SHAPES } from "./pads";
+import { PAD_ART, type PadPart } from "./padArt";
+import { ART_BITS } from "./pads";
 
-/** How far the dot travels from the well's centre at full deflection. */
-const STICK_TRAVEL = 11;
-const STICK_WELL = 15;
+const ACCENT = "var(--primary)";
+const ON_ACCENT = "var(--primary-foreground)";
+/** `share` of `color` mixed into the card: opaque, and it follows the theme. */
+const mix = (color: string, share: number) =>
+	`color-mix(in srgb, ${color} ${Math.round(share * 100)}%, var(--card))`;
+const fg = (share: number) => mix("currentColor", share);
+const ink = (on: boolean) => (on ? ON_ACCENT : fg(0.75));
+/** Hairlines stay one weight at any size. */
+const HAIR = { vectorEffect: "non-scaling-stroke" } as const;
+const GLOW = `drop-shadow(0 0 1.5px ${ACCENT})`;
+/** A cap's radius and its travel, as fractions of the well's. */
+const CAP = 0.72;
+const TRAVEL = 0.42;
 
-const lit = (buttons: number, bit: number) => (buttons & bit) !== 0;
+interface Reading {
+	held: (id: string) => boolean;
+	/** A trigger's pull, 0…1. */
+	pull: (id: string) => number;
+	/** A stick's deflection, −1…1 each, +y down. */
+	tilt: (id: string) => [number, number];
+}
 
-/** Lit face, dim otherwise. Fill and stroke both move, so a press reads at a glance. */
-const tone = (on: boolean) => ({
-	fill: on ? "var(--primary)" : "var(--muted)",
-	stroke: on ? "var(--primary)" : "var(--border)",
-});
-
-/** A trigger's 0–255 pull as a filled bar. */
-const Trigger: FC<{ x: number; value: number; label: string }> = ({
-	x,
-	value,
-	label,
-}) => (
-	<g>
-		<rect
-			x={x}
-			y={6}
-			width={56}
-			height={13}
-			rx={4}
-			fill="var(--muted)"
-			stroke="var(--border)"
-		/>
-		<rect
-			x={x}
-			y={6}
-			width={(56 * value) / 255}
-			height={13}
-			rx={4}
-			fill="var(--primary)"
-		/>
-		<text
-			x={x + 28}
-			y={16}
-			textAnchor="middle"
-			fontSize={8}
-			fill="var(--muted-foreground)"
-		>
-			{label} {value}
-		</text>
-	</g>
-);
-
-/** Four segments, each lit by its own wire bit. */
-const Dpad: FC<{ cx: number; cy: number; buttons: number }> = ({
-	cx,
-	cy,
-	buttons,
-}) => {
-	const arm = 8;
-	const seg = (bit: number, dx: number, dy: number, w: number, h: number) => (
-		<rect
-			key={bit}
-			x={cx + dx}
-			y={cy + dy}
-			width={w}
-			height={h}
-			rx={2}
-			{...tone(lit(buttons, bit))}
-		/>
-	);
-	return (
-		<g>
-			{seg(BIT.DPAD_UP, -4, -arm - 8, 8, arm)}
-			{seg(BIT.DPAD_DOWN, -4, 8, 8, arm)}
-			{seg(BIT.DPAD_LEFT, -arm - 8, -4, arm, 8)}
-			{seg(BIT.DPAD_RIGHT, 8, -4, arm, 8)}
-		</g>
-	);
-};
-
-/** A stick: its well, and a dot where the host has it. `+y = up` on the wire, so y inverts. */
-const Stick: FC<{
-	cx: number;
-	cy: number;
-	x: number;
-	y: number;
-	clicked: boolean;
-}> = ({ cx, cy, x, y, clicked }) => (
-	<g>
-		<circle
-			cx={cx}
-			cy={cy}
-			r={STICK_WELL}
-			fill="var(--muted)"
-			stroke={clicked ? "var(--primary)" : "var(--border)"}
-			strokeWidth={clicked ? 2 : 1}
-		/>
-		<circle
-			cx={cx + (x / 32767) * STICK_TRAVEL}
-			cy={cy - (y / 32767) * STICK_TRAVEL}
-			r={5}
-			fill="var(--primary)"
-		/>
-	</g>
-);
+const axis = (v: number) => Math.max(-1, Math.min(1, v / 32767));
 
 export const PadDiagram: FC<{ frame: PadFrame }> = ({ frame }) => {
-	const shape = SHAPES[familyOf(frame.device)];
-	const b = frame.buttons;
+	const uid = useId();
+	// Auto, or a kind newer than this console: the host's default build.
+	const art = PAD_ART[frame.device] ?? PAD_ART.xbox360;
+	if (!art) return null;
+	const reading: Reading = {
+		held: (id) => (frame.buttons & (ART_BITS[id] ?? 0)) !== 0,
+		pull: (id) =>
+			(id === "LT"
+				? frame.left_trigger
+				: id === "RT"
+					? frame.right_trigger
+					: 0) / 255,
+		// The wire's +y is up.
+		tilt: (id) =>
+			id === "LS"
+				? [axis(frame.ls_x), -axis(frame.ls_y)]
+				: id === "RS"
+					? [axis(frame.rs_x), -axis(frame.rs_y)]
+					: [0, 0],
+	};
 	return (
 		<svg
-			viewBox="0 0 260 160"
+			viewBox={`0 0 ${art.w} ${art.h}`}
 			role="img"
-			aria-label={`Pad ${frame.pad}`}
-			className="w-full max-w-sm"
+			aria-label={`Pad ${frame.pad}: ${art.name}`}
+			className="mx-auto w-full max-w-xl text-foreground"
+			strokeLinecap="round"
+			strokeLinejoin="round"
 		>
-			<path d={shape.body} fill="var(--card)" stroke="var(--border)" />
-			<Trigger x={34} value={frame.left_trigger} label="LT" />
-			<Trigger x={170} value={frame.right_trigger} label="RT" />
-			<rect
-				x={34}
-				y={22}
-				width={56}
-				height={9}
-				rx={3}
-				{...tone(lit(b, BIT.LB))}
-			/>
-			<rect
-				x={170}
-				y={22}
-				width={56}
-				height={9}
-				rx={3}
-				{...tone(lit(b, BIT.RB))}
-			/>
-			{shape.plates.map((pl) => (
-				<rect
-					key={`${pl.x},${pl.y}`}
-					x={pl.x}
-					y={pl.y}
-					width={pl.w}
-					height={pl.h}
-					rx={4}
-					{...tone(pl.bit !== undefined && lit(b, pl.bit))}
-				/>
-			))}
-			<Dpad cx={shape.dpad.cx} cy={shape.dpad.cy} buttons={b} />
-			<Stick
-				cx={shape.sticks[0].cx}
-				cy={shape.sticks[0].cy}
-				x={frame.ls_x}
-				y={frame.ls_y}
-				clicked={lit(b, shape.sticks[0].bit)}
-			/>
-			<Stick
-				cx={shape.sticks[1].cx}
-				cy={shape.sticks[1].cy}
-				x={frame.rs_x}
-				y={frame.rs_y}
-				clicked={lit(b, shape.sticks[1].bit)}
-			/>
-			{shape.buttons.map((btn) => (
-				<g key={btn.bit}>
-					<circle
-						cx={btn.cx}
-						cy={btn.cy}
-						r={btn.r ?? 9}
-						{...tone(lit(b, btn.bit))}
-					/>
-					{btn.label && (
-						<text
-							x={btn.cx}
-							y={btn.cy + 3}
-							textAnchor="middle"
-							fontSize={9}
-							fill={
-								lit(b, btn.bit)
-									? "var(--primary-foreground)"
-									: "var(--muted-foreground)"
-							}
-						>
-							{btn.label}
-						</text>
-					)}
-				</g>
+			<defs>
+				{/* The shell catches the light from above. */}
+				<linearGradient id={`${uid}-shell`} x1="0" y1="0" x2="0" y2="1">
+					<stop offset={0} style={{ stopColor: fg(0.11) }} />
+					<stop offset={1} style={{ stopColor: fg(0.04) }} />
+				</linearGradient>
+			</defs>
+			{art.parts.map((p, i) => (
+				<Part key={i} part={p} reading={reading} uid={uid} n={i} />
 			))}
 		</svg>
 	);
+};
+
+const Part: FC<{ part: PadPart; reading: Reading; uid: string; n: number }> = ({
+	part: p,
+	reading: r,
+	uid,
+	n,
+}) => {
+	switch (p.k) {
+		case "body":
+			return (
+				<path
+					d={p.d}
+					fill={`url(#${uid}-shell)`}
+					strokeWidth={1.5}
+					style={{ ...HAIR, stroke: fg(0.32) }}
+				/>
+			);
+		case "panel":
+			return <path d={p.d} style={{ fill: mix("#000", 0.25) }} />;
+		case "line":
+			return (
+				<path
+					d={p.d}
+					fill="none"
+					strokeWidth={1}
+					style={{ ...HAIR, stroke: fg(0.22) }}
+				/>
+			);
+		case "button": {
+			const on = r.held(p.id);
+			return (
+				<path
+					d={p.d}
+					strokeWidth={1}
+					style={{
+						...HAIR,
+						fill: on ? ACCENT : fg(0.14),
+						stroke: on ? ACCENT : fg(0.3),
+						filter: on ? GLOW : undefined,
+					}}
+				/>
+			);
+		}
+		case "trigger": {
+			// Fills from the tip as it is pulled.
+			const pull = Math.max(r.held(p.id) ? 1 : 0, r.pull(p.id));
+			return (
+				<>
+					<linearGradient id={`${uid}-${n}`} x1="0" y1="0" x2="0" y2="1">
+						<stop offset={pull} style={{ stopColor: ACCENT }} />
+						<stop offset={pull} style={{ stopColor: fg(0.14) }} />
+					</linearGradient>
+					<path
+						d={p.d}
+						fill={`url(#${uid}-${n})`}
+						strokeWidth={1}
+						style={{ ...HAIR, stroke: pull > 0 ? ACCENT : fg(0.3) }}
+					/>
+				</>
+			);
+		}
+		case "stick": {
+			const on = r.held(p.id);
+			const [x, y] = r.tilt(p.id);
+			const travel = p.r * (p.pad ? 0.8 : TRAVEL);
+			const cx = p.cx + x * travel;
+			const cy = p.cy + y * travel;
+			return (
+				<g>
+					<circle
+						cx={p.cx}
+						cy={p.cy}
+						r={p.r}
+						strokeWidth={1}
+						style={{
+							...HAIR,
+							fill: on && p.pad ? mix(ACCENT, 0.4) : mix("#000", 0.32),
+							stroke: fg(0.18),
+						}}
+					/>
+					{p.pad ? (
+						(x !== 0 || y !== 0) && (
+							<circle cx={cx} cy={cy} r={p.r * 0.16} style={{ fill: ACCENT }} />
+						)
+					) : (
+						<>
+							<circle
+								cx={cx}
+								cy={cy}
+								r={p.r * CAP}
+								strokeWidth={1}
+								style={{
+									...HAIR,
+									fill: on ? ACCENT : fg(0.24),
+									stroke: on ? ACCENT : fg(0.45),
+									filter: on ? GLOW : undefined,
+								}}
+							/>
+							{/* The cap's dish. */}
+							<circle
+								cx={cx}
+								cy={cy}
+								r={p.r * CAP * 0.58}
+								fill="none"
+								strokeWidth={1}
+								style={{ ...HAIR, stroke: on ? ON_ACCENT : fg(0.12) }}
+							/>
+						</>
+					)}
+				</g>
+			);
+		}
+		case "glyph":
+			return (
+				<path
+					d={p.d}
+					fill="none"
+					strokeWidth={p.w}
+					style={{ stroke: ink(r.held(p.on)) }}
+				/>
+			);
+		case "mark":
+			return <path d={p.d} style={{ fill: ink(r.held(p.on)) }} />;
+		case "label":
+			return (
+				<text
+					x={p.x}
+					y={p.y}
+					fontSize={p.size}
+					fontWeight={600}
+					textAnchor="middle"
+					dominantBaseline="central"
+					style={{ fill: ink(r.held(p.on)) }}
+				>
+					{p.text}
+				</text>
+			);
+	}
 };
