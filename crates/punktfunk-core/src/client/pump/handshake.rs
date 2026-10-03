@@ -98,6 +98,11 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         wire = if v2 { "punktfunk/2" } else { "punktfunk/1" },
         "connected"
     );
+    // The host streams as soon as it has `Start`, with no punch to wait for on `punktfunk/2`,
+    // so its address is whitelisted for media before the handshake. Later is the opening IDR.
+    if let Some(m) = media.as_ref().filter(|_| v2) {
+        m.stats().set_host(conn.remote_address());
+    }
     // Inner future so a failure can read `conn.close_reason()`: a typed application
     // close is `Rejected`, not the generic transport error the failed read produces.
     let handshake = async {
@@ -252,7 +257,6 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                     .ok_or(PunktfunkError::Unsupported("unsealed punktfunk/2 media"))?;
                 let keys = endpoint::media_keys(&conn, &server.session_id, suite)
                     .ok_or(PunktfunkError::Crypto)?;
-                media.stats().set_host(conn.remote_address());
                 if let Ok(sock) = media.try_clone_socket() {
                     *args.shared.data_sock.lock().unwrap() = Some(sock);
                 }
