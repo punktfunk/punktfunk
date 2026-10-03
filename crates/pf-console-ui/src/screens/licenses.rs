@@ -12,6 +12,7 @@ use crate::pointer::{Pointer, PointerKind};
 use crate::screens::{Ctx, Outbox};
 use crate::theme::{edge, fg, Fonts, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
+use pf_client_core::shortcuts::{self, Client};
 use skia_safe::{Canvas, Rect};
 
 const MIT: &str = include_str!("../../../../LICENSE-MIT");
@@ -22,6 +23,8 @@ const GEIST_OFL: &str = include_str!("../../assets/fonts/Geist-OFL.txt");
 enum Style {
     Title,
     Heading,
+    /// A control's keys, bold over the line that says what they do.
+    Keys,
     Body,
     /// A licence file's own text: smaller and quieter than the prose around it.
     Text,
@@ -33,6 +36,7 @@ impl Style {
         match self {
             Style::Title => (26.0, W::Bold, 1.0),
             Style::Heading => (18.0, W::SemiBold, 0.95),
+            Style::Keys => (16.0, W::SemiBold, 1.0),
             Style::Body => (14.0, W::Regular, 0.8),
             Style::Text => (12.0, W::Regular, 0.62),
         }
@@ -53,7 +57,17 @@ struct Line {
 const STEP_LINES: f64 = 3.0;
 const FLING_DECAY: f64 = 4.0;
 
+/// What the screen scrolls.
+#[derive(Clone, Copy, PartialEq)]
+enum Doc {
+    Licenses,
+    /// The stream's keys, chords and gestures for this client ([`pf_client_core::shortcuts`]).
+    Controls(Client, bool),
+}
+
+/// Scrolling read-only text: the licences, or the stream controls.
 pub(crate) struct LicensesScreen {
+    doc: Doc,
     /// The host's sections; `None` until they arrive.
     host: Option<Vec<LicenseSection>>,
     lines: Vec<Line>,
@@ -72,6 +86,7 @@ impl LicensesScreen {
     pub(crate) fn new(fx: &mut Outbox) -> LicensesScreen {
         fx.cmds.push(ConsoleCmd::LoadLicenses);
         LicensesScreen {
+            doc: Doc::Licenses,
             host: None,
             lines: Vec::new(),
             tops: Vec::new(),
@@ -83,12 +98,43 @@ impl LicensesScreen {
         }
     }
 
+    /// The stream controls this platform has. Every platform has a list today.
+    pub(crate) fn controls(ctx: &Ctx) -> Option<LicensesScreen> {
+        use crate::platform::Platform;
+        let client = match ctx.device.platform {
+            Platform::Desktop => Client::Desktop,
+            Platform::Android => Client::Android,
+            Platform::Apple => Client::Apple,
+            Platform::WebOS => Client::WebOS,
+            Platform::Web => Client::Web,
+            Platform::Tizen => Client::Tizen,
+        };
+        Some(LicensesScreen {
+            doc: Doc::Controls(client, !ctx.device.tv),
+            host: None,
+            lines: Vec::new(),
+            tops: Vec::new(),
+            laid: None,
+            scroll: 0.0,
+            velocity: 0.0,
+            view_h: 0.0,
+            step: 0.0,
+        })
+    }
+
+    pub(crate) fn title(&self) -> &'static str {
+        match self.doc {
+            Doc::Licenses => "Open-source licences",
+            Doc::Controls(..) => "Stream controls",
+        }
+    }
+
     pub(crate) fn set_host(&mut self, sections: Vec<LicenseSection>) {
         self.host = Some(sections);
     }
 
     pub(crate) fn waiting(&self) -> bool {
-        self.host.is_none()
+        self.doc == Doc::Licenses && self.host.is_none()
     }
 
     #[cfg(test)]
@@ -227,6 +273,12 @@ impl LicensesScreen {
     fn layout(&mut self, fonts: &Fonts, width: f32, k: f64) {
         let mut source: Vec<Line> = Vec::new();
         let mut push = |style: Style, text: &str| {
+            if text.is_empty() {
+                source.push(Line {
+                    text: String::new(),
+                    style,
+                });
+            }
             for l in text.lines() {
                 source.push(Line {
                     text: l.trim_end().to_string(),
@@ -234,6 +286,18 @@ impl LicensesScreen {
                 });
             }
         };
+        if let Doc::Controls(client, touch) = self.doc {
+            push(Style::Body, "Press these while a stream is running.");
+            for g in shortcuts::groups(client, touch) {
+                push(Style::Body, "");
+                push(Style::Heading, g.title);
+                for i in g.items {
+                    push(Style::Keys, i.keys);
+                    push(Style::Body, &format!("  {}", i.text));
+                }
+            }
+            return self.wrap_lines(source, fonts, width, k);
+        }
         push(Style::Title, &format!("Punktfunk {}", crate::VERSION));
         push(
             Style::Body,
@@ -267,6 +331,10 @@ impl LicensesScreen {
             }
         }
 
+        self.wrap_lines(source, fonts, width, k);
+    }
+
+    fn wrap_lines(&mut self, source: Vec<Line>, fonts: &Fonts, width: f32, k: f64) {
         self.lines.clear();
         self.tops.clear();
         let mut y = 0.0;

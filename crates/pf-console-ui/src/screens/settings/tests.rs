@@ -1523,7 +1523,7 @@ fn every_row_has_exactly_one_tab() {
             seen.push(*id);
         }
     }
-    assert_eq!(seen.len(), 67, "{seen:?}");
+    assert_eq!(seen.len(), 68, "{seen:?}");
     assert!(
         !seen.contains(&RowId::AdvancedChanged),
         "built per tab, never listed"
@@ -1736,6 +1736,39 @@ fn palette_row_names_the_pick_and_opens_the_cards() {
     s.apply_row(ListMsg::Activate, None, &ids, &mut ctx, &mut fx);
     assert!(matches!(fx.nav, Some(crate::screens::Nav::Push(ref b))
         if matches!(**b, Screen::Palette(_))));
+}
+
+/// About lists the stream controls on every platform, and a press opens the read-only screen.
+#[test]
+fn about_opens_the_stream_controls_where_the_client_has_them() {
+    let mut settings = Settings::default();
+    let library = crate::library::LibraryShared::default();
+    let mut ctx = Ctx::test(&mut settings, &library);
+    let mut s = SettingsScreen::with_presets(Vec::new());
+    s.tab = TABS.len() - 1;
+    let ids = s.row_ids(&ctx);
+    s.list.cursor = ids
+        .iter()
+        .position(|r| *r == RowId::StreamControls)
+        .expect("About lists the stream controls");
+    let mut fx = Outbox::default();
+    s.apply_row(ListMsg::Activate, None, &ids, &mut ctx, &mut fx);
+    let Some(crate::screens::Nav::Push(b)) = fx.nav else {
+        panic!("a press opens the screen");
+    };
+    assert!(matches!(*b, Screen::Licenses(ref l) if l.title() == "Stream controls"));
+
+    for platform in crate::platform::Platform::ALL {
+        let mut settings = Settings::default();
+        let mut ctx = Ctx::test(&mut settings, &library);
+        let mut device = ctx.device.clone();
+        device.platform = platform;
+        ctx.device = &device;
+        assert!(
+            s.row_ids(&ctx).contains(&RowId::StreamControls),
+            "{platform:?}"
+        );
+    }
 }
 
 /// The value names where a launch will land, not what the key holds: with no

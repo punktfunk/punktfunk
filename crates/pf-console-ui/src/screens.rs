@@ -588,7 +588,7 @@ impl Screen {
             Screen::Palette(_) => "Background".into(),
             Screen::Grants(_) => "Controller access".into(),
             Screen::Prompt(s) => s.title(),
-            Screen::Licenses(_) => "Open-source licences".into(),
+            Screen::Licenses(s) => s.title().into(),
             Screen::Search(s) => s.title(),
             Screen::PresetMenu(s) => s.title(),
             Screen::PresetName(s) => s.title(),
