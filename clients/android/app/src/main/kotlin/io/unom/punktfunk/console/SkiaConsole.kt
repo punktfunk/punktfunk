@@ -1154,10 +1154,12 @@ object SkiaConsole {
             // A newer fetch owns the shelf by the time a slow host answers: not its titles.
             val gen = fetchGen.get()
             ioPool.execute {
-                val games = LibraryClient.fetchRunning(addr, mgmt, id.certPem, id.privateKeyPem, fp)
+                val status = LibraryClient.fetchStatus(addr, mgmt, id.certPem, id.privateKeyPem, fp)
+                val games = status.games
                 main.post {
                     if (handle == 0L) return@post
                     if (gen == fetchGen.get()) {
+                        NativeBridge.nativeConsoleLibraryDownloads(handle, ConsoleJson.downloads(status.downloads))
                         NativeBridge.nativeConsoleLibraryRunning(handle, ConsoleJson.runningGames(games))
                     }
                     // The carousel behind the shelf shows the same fact from its own map; this

@@ -385,6 +385,8 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         (&Method::DELETE, "/api/v1/library/provider/{}"),
         // Provider liveness for its own titles — mapped through the catalog, no one else's session.
         (&Method::PUT, "/api/v1/library/provider/{}/running"),
+        // Download progress for its own titles, mapped through the catalog the same way.
+        (&Method::PUT, "/api/v1/library/provider/{}/downloads"),
         // An Art & Metadata source pushes its own result and reads its mode. Ordering, the
         // switches and picks are the operator's.
         (&Method::GET, "/api/v1/library/metadata"),
@@ -443,6 +445,11 @@ pub(crate) fn cert_may_access(method: &Method, path: &str) -> bool {
     }
     // The handler scopes it to games this device launched, and refuses an expired device.
     if method == Method::POST && path == "/api/v1/game/end" {
+        return true;
+    }
+    // Installing is what launching a missing title does anyway; the handler demands
+    // `GRANT_LAUNCH`. Pausing, cancelling and removing stay the operator's.
+    if method == Method::POST && path_matches("/api/v1/library/install/{}", path) {
         return true;
     }
     method == Method::GET

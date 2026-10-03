@@ -157,6 +157,7 @@ tell when the game quits.
 | A tab on each game's page | `serveUi({ title, game })`; see [below](#a-tab-on-each-games-page) |
 | Art or details for every game | `defineMetadataPlugin`; see [below](#a-source-of-art-and-details) |
 | Work before a game starts | `serveUi({ title, holds })`; see [below](#hold-a-launch) |
+| Titles that download before they play | `serveUi({ title, install })`; see [below](#install-a-title) |
 | Reacting to events only | `definePlugin({ name, main: async (pf) => … })` from `@punktfunk/host` |
 
 Keep Effect values inside the plugin: the runner bundles its own copy of Effect, so the default
@@ -259,6 +260,43 @@ yield* serveUi({
 - A library source holds through `defineLibraryPlugin({ holds, holdTimeoutMs })`; its handler
   also gets the plugin's config: `(game, cfg) => …`. It fires for every launch on the host, so
   check that `game.app` is one of yours.
+
+## Install a title
+
+A plugin can list titles that aren't on the host yet: a ROM on a server, a game in a store. Mark
+each with `install` in its entry, serve the host's install requests, and report progress. The host
+does the rest: speed and time left, the console's Downloads list, and every client's launch screen.
+A player who starts a title that isn't installed waits on that screen until the files are in, then
+the game starts.
+
+```ts
+const reporter = yield* downloadReporter("my-plugin");
+yield* serveUi({
+  title: "My library",
+  install: {
+    start: ({ externalId }) => startDownload(externalId, reporter),
+    pause: ({ externalId }) => pauseDownload(externalId),
+    cancel: ({ externalId }) => cancelDownload(externalId),
+    uninstall: ({ externalId }) => removeFiles(externalId),
+  },
+});
+// In each entry the plugin reconciles:
+//   install: { state: "missing", size_bytes: 26e9, target: "/mnt/games/my-plugin" }
+```
+
+- `start` answers once the download is under way, not when it ends. Start a paused one again from
+  where it stopped. Every handler may fail with `InstallRefused({ message })`: one sentence the
+  player or operator reads ("Not enough space in /mnt/games: it needs 26 GB and 8 GB is free.").
+- `reporter.set({ externalId, state, doneBytes, totalBytes, phase, error })` on every change. The
+  reporter keeps the host's rules for you: one send a second at most, and a restatement every 5 s
+  while a title is `queued`, `downloading` or `installing`. A title the host hears nothing about for
+  30 s counts as stalled, and a launch waiting on it gives up.
+- `pause` keeps the partial files, `cancel` discards them, `uninstall` removes what the plugin
+  downloaded and nothing else. Saves stay.
+- After a download finishes or files go, reconcile again so the entry's `install.state` says what
+  is on disk. `target` must be a folder the plugin may write; the host shows its free space.
+- On a host that predates downloads, `reporter.supported()` turns `false`: keep fetching in a
+  launch hold, as before.
 
 ## Folders you can't know in advance
 

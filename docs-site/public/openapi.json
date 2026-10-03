@@ -1375,6 +1375,41 @@
         }
       }
     },
+    "/api/v1/downloads": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List downloads",
+        "description": "Every title downloading, queued, paused, or finished in the last ten minutes, live ones\nfirst, with speed and time left while downloading.",
+        "operationId": "getDownloads",
+        "responses": {
+          "200": {
+            "description": "The downloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Download"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/emulators": {
       "get": {
         "tags": [
@@ -2670,6 +2705,285 @@
         }
       }
     },
+    "/api/v1/library/install/{id}": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Install a title",
+        "description": "Asks the plugin that lists the title to download it, or to resume a paused download. The\noperator always may; a paired device may when it holds the launch grant. Answers the\ndownload's row.",
+        "operationId": "installLibraryEntry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The plugin started or resumed the download",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Download"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This device may not launch titles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already installed, not a title a plugin installs, or the plugin refused (its sentence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The plugin didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Remove a title's files",
+        "description": "The plugin deletes what it downloaded for the title; saves stay. Refused while the title\nruns or a launch waits for it.",
+        "operationId": "uninstallLibraryEntry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Running, downloading, not installed, or the plugin refused (its sentence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The plugin didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/install/{id}/cancel": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Cancel a title's download",
+        "description": "The plugin stops and discards what it downloaded.",
+        "operationId": "cancelLibraryInstall",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancelled"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not downloading or paused, or the plugin refused (its sentence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The plugin didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/install/{id}/pause": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Pause a title's download",
+        "description": "The plugin stops and keeps what it has; installing again resumes.",
+        "operationId": "pauseLibraryInstall",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The library entry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Paused"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such title",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not downloading, or the plugin refused (its sentence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The plugin didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/library/metadata": {
       "get": {
         "tags": [
@@ -2921,7 +3235,7 @@
           "library"
         ],
         "summary": "One page of the library.",
-        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform` and `role` (`game`,\n`launcher`) narrow, and `id` names one title, for a caller that needs only that entry.\nLanes see what `GET /library` shows them.",
+        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them.",
         "operationId": "getLibraryPage",
         "parameters": [
           {
@@ -2984,6 +3298,15 @@
             "name": "id",
             "in": "query",
             "description": "Only the entry with this library id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "install",
+            "in": "query",
+            "description": "`installed` (on this host) or `missing` (not installed)",
             "required": false,
             "schema": {
               "type": "string"
@@ -3245,6 +3568,79 @@
           },
           "500": {
             "description": "Couldn't save the catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/provider/{provider}/downloads": {
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Report a provider's downloads",
+        "description": "The body restates every title the plugin is downloading, has paused, or just finished,\nkeyed by `external_id`. Send it on change at most once a second, and every 5 s while any\nrow is `queued`, `downloading` or `installing`: a row not restated for 30 s counts as\nstalled, and a launch waiting on it gives up.",
+        "operationId": "reportProviderDownloads",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "The provider id ([a-z0-9._-], `manual` reserved)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadsReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The report was applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadsAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid provider id or payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A plugin reported another plugin's titles",
             "content": {
               "application/json": {
                 "schema": {
@@ -7901,6 +8297,17 @@
                   "type": "string"
                 }
               },
+              "install": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Install",
+                    "description": "Whether the title's files are on this host. Set only by provider reconcile."
+                  }
+                ]
+              },
               "launch": {
                 "oneOf": [
                   {
@@ -8432,6 +8839,166 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ApiDisplayInfo"
+            }
+          }
+        }
+      },
+      "Download": {
+        "type": "object",
+        "description": "One title's download as the host serves it.",
+        "required": [
+          "app_id",
+          "title",
+          "state",
+          "done_bytes",
+          "started_at",
+          "updated_at"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "Library id, as `GET /library` lists it."
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked for it: `console`, a client's label. Absent when the plugin started it."
+          },
+          "done_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "eta_s": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds left at the last 30 s's pace, while downloading with a known total.",
+            "minimum": 0
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rate_bps": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes per second over the last 5 s, while downloading.",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "state": {
+            "$ref": "#/components/schemas/DownloadState"
+          },
+          "title": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "RFC 3339."
+          }
+        }
+      },
+      "DownloadReport": {
+        "type": "object",
+        "description": "One title in a plugin's report.",
+        "required": [
+          "external_id",
+          "state"
+        ],
+        "properties": {
+          "done_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, one sentence for the player."
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the plugin is doing, in its words: `File 2 of 3`, `Verifying`. At most 80 chars."
+          },
+          "state": {
+            "$ref": "#/components/schemas/DownloadState"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Absent while the size isn't known yet.",
+            "minimum": 0
+          }
+        }
+      },
+      "DownloadState": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "downloading",
+          "paused",
+          "installing",
+          "done",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "DownloadsAccepted": {
+        "type": "object",
+        "required": [
+          "matched",
+          "unknown"
+        ],
+        "properties": {
+          "matched": {
+            "type": "integer",
+            "description": "Rows naming one of the provider's titles.",
+            "minimum": 0
+          },
+          "unknown": {
+            "type": "integer",
+            "description": "Rows naming a title the provider doesn't list (the report raced a reconcile).",
+            "minimum": 0
+          }
+        }
+      },
+      "DownloadsReport": {
+        "type": "object",
+        "description": "A plugin's downloads: every title it is downloading, paused or just finished.",
+        "required": [
+          "downloads"
+        ],
+        "properties": {
+          "downloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DownloadReport"
             }
           }
         }
@@ -9082,6 +9649,35 @@
           },
           {
             "type": "object",
+            "description": "A title's download changed state, or its files were removed. Re-read `GET /api/v1/downloads`.",
+            "required": [
+              "app",
+              "title",
+              "state",
+              "kind"
+            ],
+            "properties": {
+              "app": {
+                "type": "string",
+                "description": "Library id, as `GET /library` lists it."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "downloads.changed"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "description": "The download's state, or `removed` after an uninstall."
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
             "required": [
               "id",
               "kind"
@@ -9268,6 +9864,17 @@
                 "propertyNames": {
                   "type": "string"
                 }
+              },
+              "install": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Install",
+                    "description": "Whether the title's files are on this host. Absent means they are."
+                  }
+                ]
               },
               "launch": {
                 "oneOf": [
@@ -10108,6 +10715,37 @@
           }
         }
       },
+      "Install": {
+        "type": "object",
+        "description": "Whether a title's files are on this host, as the plugin that lists it reports.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Free space under `target`, filled in by the host when it serves the entry.",
+            "minimum": 0
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Download size while `missing`, size on disk once `installed`.",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/InstallState"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The folder the files go into. Must lie under one of the plugin's write grants; the\noperator's lane only."
+          }
+        }
+      },
       "InstallRequest": {
         "type": "object",
         "description": "Catalog `{source, id}` or a raw `spec` the operator owns.",
@@ -10138,6 +10776,13 @@
             "description": "Raw spec (`@scope/name`, `@scope/name@1.2.3`, https tarball or git+https). Nothing reviewed\nit and nothing pins it."
           }
         }
+      },
+      "InstallState": {
+        "type": "string",
+        "enum": [
+          "missing",
+          "installed"
+        ]
       },
       "InstalledView": {
         "type": "object",
@@ -10425,6 +11070,11 @@
               "null"
             ],
             "description": "Hand back as `cursor` for the page after this one. Absent on the last page."
+          },
+          "not_installed": {
+            "type": "integer",
+            "description": "Titles not installed on this host among those matching every filter but `install`.\nAbsent when there are none.",
+            "minimum": 0
           },
           "platforms": {
             "type": "array",
@@ -11618,6 +12268,10 @@
               "null"
             ]
           },
+          "install": {
+            "type": "boolean",
+            "description": "Serves `POST /__install`: installs, pauses, cancels and removes its titles' files."
+          },
           "page": {
             "type": "boolean",
             "description": "Serves a page the console opens and lists in the nav. Absent means yes, as before the flag."
@@ -11641,7 +12295,8 @@
           "port",
           "page",
           "config",
-          "game"
+          "game",
+          "install"
         ],
         "properties": {
           "config": {
@@ -11657,6 +12312,10 @@
               "string",
               "null"
             ]
+          },
+          "install": {
+            "type": "boolean",
+            "description": "See [`PluginUi::install`]."
           },
           "page": {
             "type": "boolean",
@@ -11925,6 +12584,17 @@
                   "type": "string"
                 }
               },
+              "install": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Install",
+                    "description": "Whether the title's files are on this host, for a plugin that serves `/__install`.\nAbsent means they are."
+                  }
+                ]
+              },
               "launch": {
                 "oneOf": [
                   {
@@ -12192,6 +12862,13 @@
                 "description": "Windows display state: topology transactions and outstanding device leases. Absent off-Windows."
               }
             ]
+          },
+          "downloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Download"
+            },
+            "description": "Titles downloading, queued, paused, or finished in the last ten minutes. A launch hold\njoins its title's row by `app_id`. Absent when there are none."
           },
           "games": {
             "type": "array",

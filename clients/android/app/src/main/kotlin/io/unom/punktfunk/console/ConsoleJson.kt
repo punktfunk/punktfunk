@@ -10,6 +10,7 @@ import io.unom.punktfunk.StreamPreset
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
 import io.unom.punktfunk.kit.library.DEFAULT_MGMT_PORT
+import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.RunningGame
 import io.unom.punktfunk.kit.security.KnownHost
@@ -292,6 +293,21 @@ internal object ConsoleJson {
     fun stringArray(items: Collection<String>): String = JSONArray(items).toString()
 
     /** `/status` games as the console's `RunningGame` mirror; an entry without an id has no tile. */
+    fun downloads(downloads: List<Download>): String {
+        val out = JSONArray()
+        for (d in downloads) {
+            val o = JSONObject().put("app_id", d.appId).put("state", d.state)
+                .put("done_bytes", d.doneBytes)
+            d.totalBytes?.let { o.put("total_bytes", it) }
+            d.rateBps?.let { o.put("rate_bps", it) }
+            d.etaS?.let { o.put("eta_s", it) }
+            d.phase?.let { o.put("phase", it) }
+            d.error?.let { o.put("error", it) }
+            out.put(o)
+        }
+        return out.toString()
+    }
+
     fun runningGames(games: List<RunningGame>): String {
         val out = JSONArray()
         for (g in games) {

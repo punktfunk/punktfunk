@@ -249,11 +249,16 @@ extension ConsoleModel {
             if let cached {
                 bridge.push(.libraryCached, ConsoleJSON.libraryGames(cached.games))
             }
-            let running = await LibraryClient.running(
+            let status = await LibraryClient.status(
                 address: addr, port: mgmt, certPEM: identity.certPEM, keyPEM: identity.keyPEM,
                 hostFingerprint: host.pinnedSHA256)
+            let running = status.games
             // A newer fetch owns the shelf by the time a slow host answers: not its titles.
             guard serial == self.fetchSerial else { return }
+            if let json = try? JSONEncoder().encode(status.downloads),
+               let text = String(data: json, encoding: .utf8) {
+                bridge.push(.libraryDownloads, text)
+            }
             bridge.push(.libraryRunning, ConsoleJSON.runningGames(running))
             if refreshOnly { return }
             do {

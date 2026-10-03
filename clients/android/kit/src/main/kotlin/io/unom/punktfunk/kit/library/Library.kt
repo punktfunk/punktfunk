@@ -197,6 +197,81 @@ sealed class LibraryResult {
     val isTransient: Boolean get() = this is Error
 }
 
+/** `GET /api/v1/status`, the slice a client reads. */
+data class HostStatus(
+    val games: List<RunningGame> = emptyList(),
+    val downloads: List<Download> = emptyList(),
+)
+
+/**
+ * One title's download, from `GET /api/v1/status` `downloads[]`. Its words match the Rust console
+ * shell's (`pf_client_core::library::DownloadProgress`), so a report quotes one line either way.
+ */
+data class Download(
+    val appId: String,
+    /** `queued` | `downloading` | `paused` | `installing` | `done` | `failed` | `cancelled`. */
+    val state: String,
+    val doneBytes: Long = 0,
+    val totalBytes: Long? = null,
+    val rateBps: Long? = null,
+    val etaS: Long? = null,
+    val phase: String? = null,
+    val error: String? = null,
+) {
+    /** Making progress, or expected to: a launch waits on it. */
+    val live: Boolean get() = state == "queued" || state == "downloading" || state == "installing"
+
+    /** 0–1 of the total, when the total is known. */
+    val fraction: Float?
+        get() = totalBytes?.takeIf { it > 0 }?.let { (doneBytes.toFloat() / it).coerceIn(0f, 1f) }
+
+    /** `12.3 GB of 26 GB · 48 MB/s · about 4 min left`, `Installing…`. */
+    fun line(): String {
+        when (state) {
+            "queued" -> return "Waiting for its turn to download…"
+            "installing" -> return phase ?: "Installing…"
+        }
+        val total = totalBytes?.takeIf { it > 0 }
+        val parts = mutableListOf(
+            if (total != null) "${humanBytes(doneBytes)} of ${humanBytes(total)}"
+            else "${humanBytes(doneBytes)} so far",
+        )
+        if (state == "downloading") {
+            rateBps?.let { parts.add("${humanBytes(it)}/s") }
+            etaS?.let {
+                parts.add(
+                    when {
+                        it < 60 -> "less than a minute left"
+                        it < 3600 -> "about ${(it + 30) / 60} min left"
+                        else -> "about ${it / 3600} h ${(it % 3600) / 60} min left"
+                    },
+                )
+            }
+        }
+        return parts.joinToString(" · ")
+    }
+
+    /** Why a launch that waited on it didn't start the title; null while it may still. */
+    fun stopped(title: String): String? = when (state) {
+        "failed" -> error?.let { "$title didn't download — $it" } ?: "$title didn't download."
+        "cancelled" -> "$title's download was cancelled."
+        "paused" -> "$title's download was paused. Start it again to resume."
+        else -> null
+    }
+}
+
+/** Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`. */
+fun humanBytes(n: Long): String {
+    val (value, unit) = when {
+        n >= 1_000_000_000L -> n / 1e9 to "GB"
+        n >= 1_000_000L -> n / 1e6 to "MB"
+        else -> n / 1e3 to "kB"
+    }
+    val rounded = Math.round(value * 10) / 10.0
+    return if (value >= 100 || rounded % 1.0 == 0.0) "${Math.round(value)} $unit"
+    else "${String.format(java.util.Locale.ROOT, "%.1f", rounded)} $unit"
+}
+
 /**
  * One game the host currently has launched, from `GET /api/v1/status`.
  *
@@ -379,17 +454,30 @@ object LibraryClient {
         certPem: String,
         keyPem: String,
         fpHex: String,
-    ): List<RunningGame> {
-        if (fpHex.isBlank()) return emptyList()
+    ): List<RunningGame> = fetchStatus(address, mgmtPort, certPem, keyPem, fpHex).games
+
+    /**
+     * `GET /api/v1/status`: the launched titles and the host's downloads, kept apart because a
+     * launch the host declined over its download has no game row left to carry it. Best-effort,
+     * as [fetchRunning]. BLOCKING; call from IO.
+     */
+    fun fetchStatus(
+        address: String,
+        mgmtPort: Int = DEFAULT_MGMT_PORT,
+        certPem: String,
+        keyPem: String,
+        fpHex: String,
+    ): HostStatus {
+        if (fpHex.isBlank()) return HostStatus()
         return try {
             val client = mtlsHttpClient(certPem, keyPem, address, fpHex)
             val req = Request.Builder().url("${mgmtBase(address, mgmtPort)}/api/v1/status").build()
             client.newCall(req).execute().use { resp ->
-                if (resp.code != 200) return emptyList()
-                parseRunning(resp.body?.string().orEmpty())
+                if (resp.code != 200) return HostStatus()
+                parseStatus(resp.body?.string().orEmpty())
             }
         } catch (_: Exception) {
-            emptyList()
+            HostStatus()
         }
     }
 
@@ -489,6 +577,27 @@ object LibraryClient {
     }
 
     /** Just the `games[]` slice of `/status`; everything else on that payload is the console's. */
+    internal fun parseStatus(json: String): HostStatus {
+        val downloads = JSONObject(json).optJSONArray("downloads") ?: JSONArray()
+        val out = ArrayList<Download>(downloads.length())
+        for (i in 0 until downloads.length()) {
+            val o = downloads.optJSONObject(i) ?: continue
+            out.add(
+                Download(
+                    appId = o.optString("app_id"),
+                    state = o.optString("state"),
+                    doneBytes = o.optLong("done_bytes"),
+                    totalBytes = if (o.has("total_bytes")) o.optLong("total_bytes") else null,
+                    rateBps = if (o.has("rate_bps")) o.optLong("rate_bps") else null,
+                    etaS = if (o.has("eta_s")) o.optLong("eta_s") else null,
+                    phase = str(o, "phase"),
+                    error = str(o, "error"),
+                ),
+            )
+        }
+        return HostStatus(parseRunning(json), out)
+    }
+
     internal fun parseRunning(json: String): List<RunningGame> {
         val arr = JSONObject(json).optJSONArray("games") ?: return emptyList()
         val out = ArrayList<RunningGame>(arr.length())

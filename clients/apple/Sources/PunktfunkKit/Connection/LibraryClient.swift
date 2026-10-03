@@ -188,6 +188,99 @@ public enum LibraryError: LocalizedError {
 /// A deliberately partial mirror of the host's `ActiveGame`: only the fields a client can act on.
 /// The console's own view of this payload carries more (which session, which plane, the grace
 /// countdown), and none of that is a player's business from the library screen.
+/// One title's download, from `GET /api/v1/status` `downloads[]`. Its words match the Rust and
+/// Kotlin shells', so a report quotes one line whichever client it came from.
+public struct HostDownload: Codable, Hashable, Sendable {
+    public var appID: String
+    /// `queued` | `downloading` | `paused` | `installing` | `done` | `failed` | `cancelled`.
+    public var state: String
+    public var doneBytes: UInt64
+    public var totalBytes: UInt64?
+    public var rateBps: UInt64?
+    public var etaS: UInt64?
+    /// The plugin's words: `File 2 of 3`, `Verifying`.
+    public var phase: String?
+    public var error: String?
+
+    public init(
+        appID: String, state: String, doneBytes: UInt64 = 0, totalBytes: UInt64? = nil,
+        rateBps: UInt64? = nil, etaS: UInt64? = nil, phase: String? = nil, error: String? = nil
+    ) {
+        self.appID = appID
+        self.state = state
+        self.doneBytes = doneBytes
+        self.totalBytes = totalBytes
+        self.rateBps = rateBps
+        self.etaS = etaS
+        self.phase = phase
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case appID = "app_id"
+        case state
+        case doneBytes = "done_bytes"
+        case totalBytes = "total_bytes"
+        case rateBps = "rate_bps"
+        case etaS = "eta_s"
+        case phase, error
+    }
+
+    /// Making progress, or expected to: a launch waits on it.
+    public var live: Bool { state == "queued" || state == "downloading" || state == "installing" }
+
+    /// 0–1 of the total, when the total is known.
+    public var fraction: Double? {
+        guard let total = totalBytes, total > 0 else { return nil }
+        return min(1, Double(doneBytes) / Double(total))
+    }
+
+    /// `12.3 GB of 26 GB · 48 MB/s · about 4 min left`, `Installing…`.
+    public var line: String {
+        switch state {
+        case "queued": return "Waiting for its turn to download\u{2026}"
+        case "installing": return phase ?? "Installing\u{2026}"
+        default: break
+        }
+        var parts = [
+            totalBytes.flatMap { $0 > 0 ? $0 : nil }.map {
+                "\(HostDownload.bytes(doneBytes)) of \(HostDownload.bytes($0))"
+            } ?? "\(HostDownload.bytes(doneBytes)) so far",
+        ]
+        if state == "downloading" {
+            if let rate = rateBps { parts.append("\(HostDownload.bytes(rate))/s") }
+            if let eta = etaS {
+                parts.append(
+                    eta < 60 ? "less than a minute left"
+                        : eta < 3600 ? "about \((eta + 30) / 60) min left"
+                        : "about \(eta / 3600) h \((eta % 3600) / 60) min left")
+            }
+        }
+        return parts.joined(separator: " \u{b7} ")
+    }
+
+    /// Why a launch that waited on it didn't start the title; nil while it may still.
+    public func stopped(title: String) -> String? {
+        switch state {
+        case "failed": return error.map { "\(title) didn't download \u{2014} \($0)" } ?? "\(title) didn't download."
+        case "cancelled": return "\(title)'s download was cancelled."
+        case "paused": return "\(title)'s download was paused. Start it again to resume."
+        default: return nil
+        }
+    }
+
+    /// Decimal units, as stores count: `12.3 GB`, `48 MB`, `512 kB`.
+    public static func bytes(_ n: UInt64) -> String {
+        let v = Double(n)
+        let (value, unit) = v >= 1e9 ? (v / 1e9, "GB") : v >= 1e6 ? (v / 1e6, "MB") : (v / 1e3, "kB")
+        let rounded = (value * 10).rounded() / 10
+        if value >= 100 || rounded.truncatingRemainder(dividingBy: 1) == 0 {
+            return "\(Int(value.rounded())) \(unit)"
+        }
+        return String(format: "%.1f %@", rounded, unit)
+    }
+}
+
 public struct RunningGame: Codable, Hashable, Sendable {
     /// Store-qualified library id (`steam:570`) — the key that lines this up with a `GameEntry`.
     /// Absent for an operator-typed GameStream command, which has no catalog entry behind it.
@@ -421,14 +514,30 @@ public enum LibraryClient {
         keyPEM: String,
         hostFingerprint: Data?
     ) async -> [RunningGame] {
+        await status(
+            address: address, port: port, certPEM: certPEM, keyPEM: keyPEM,
+            hostFingerprint: hostFingerprint
+        ).games
+    }
+
+    /// `GET /api/v1/status`: the launched titles and the host's downloads, kept apart because a
+    /// launch the host declined over its download has no game row left to carry it. Best-effort,
+    /// as ``running(address:port:certPEM:keyPEM:hostFingerprint:)``.
+    public static func status(
+        address: String,
+        port: UInt16 = punktfunkDefaultMgmtPort,
+        certPEM: String,
+        keyPEM: String,
+        hostFingerprint: Data?
+    ) async -> (games: [RunningGame], downloads: [HostDownload]) {
         guard let identity = try? clientIdentity(certPEM: certPEM, keyPEM: keyPEM),
               let response = try? await send(
                   path: "/api/v1/status", address: address, port: port,
                   identity: identity, hostFingerprint: hostFingerprint),
               response.status == 200,
               let status = try? JSONDecoder().decode(HostStatus.self, from: response.body)
-        else { return [] }
-        return status.games ?? []
+        else { return ([], []) }
+        return (status.games ?? [], status.downloads ?? [])
     }
 
     /// Upload this client's recent log (`ClientLogRing`) to the host — `POST /api/v1/client-logs`,
@@ -556,8 +665,9 @@ public enum LibraryClient {
     /// Just the slice of `/status` this client reads. Everything else on that payload is the
     /// operator console's business, and decoding only what we use keeps an unrelated schema change
     /// on the host from breaking the library screen.
-    private struct HostStatus: Decodable {
+    struct HostStatus: Decodable {
         var games: [RunningGame]?
+        var downloads: [HostDownload]?
     }
 
     private struct HostActionList: Decodable {

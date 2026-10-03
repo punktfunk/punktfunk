@@ -34,6 +34,7 @@ public final class ConsoleBridge {
         case prompt = 16
         case licenses = 17
         case padTest = 18
+        case libraryDownloads = 19
     }
 
     /// A discrete menu event, as the shell numbers them.

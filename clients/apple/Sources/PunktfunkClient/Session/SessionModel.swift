@@ -155,6 +155,8 @@ final class SessionModel: ObservableObject {
     @Published var consoleHold = false
     /// The launched game is up and the host is waiting for its window.
     @Published private(set) var launchWindowWait = false
+    /// The launched title's files, while the host fetches them before it opens the stream.
+    @Published private(set) var launchDownload: HostDownload?
     private var launchWatch: Task<Void, Never>?
     /// Counts launches, so each hold is a view of its own — see `LaunchHoldTarget.seq`.
     private var launchSeq = 0
@@ -434,6 +436,7 @@ final class SessionModel: ObservableObject {
         launchHold = launchID.flatMap { LaunchedEntry.take($0, seq: launchSeq) }
             .flatMap { $0.entry.isLauncher ? nil : $0 }
         launchWindowWait = false
+        launchDownload = nil
         errorMessage = nil
         settings = effective
         statsVerbosity = StatsVerbosity(rawValue: effective.statsVerbosity) ?? .normal
@@ -1119,6 +1122,7 @@ final class SessionModel: ObservableObject {
         launchWatch = nil
         launchHold = nil
         launchWindowWait = false
+        launchDownload = nil
     }
 
     /// Poll the host once a second for the launched title's state, and reveal when it has
@@ -1140,16 +1144,31 @@ final class SessionModel: ObservableObject {
             revealStream()
             return
         }
-        let began = Date()
         launchWatch?.cancel()
         launchWatch = Task { [weak self] in
+            var began = Date()
             while !Task.isCancelled {
-                let games = await LibraryClient.running(
+                let status = await LibraryClient.status(
                     address: host.address, port: port,
                     certPEM: identity.certPEM, keyPEM: identity.keyPEM,
                     hostFingerprint: host.pinnedSHA256)
-                let game = games.first { $0.appID == hold.id }
+                let game = status.games.first { $0.appID == hold.id }
                 let state = game?.state
+                let download = status.downloads.first { $0.appID == hold.id }
+                // The host fetches the title's files before it starts it: no cap while they come,
+                // and the clocks start over once they are in.
+                if let download, download.live {
+                    if self?.launchDownload != download { self?.launchDownload = download }
+                    began = Date()
+                    try? await Task.sleep(nanoseconds: NSEC_PER_SEC)
+                    continue
+                }
+                if self?.launchDownload != nil { self?.launchDownload = nil }
+                // A download that stopped: nothing will start. The host's notice says why.
+                if download?.stopped(title: hold.title) != nil, state == nil || state == "launching" {
+                    self?.revealStream()
+                    return
+                }
                 let elapsed = Date().timeIntervalSince(began)
                 let windowWait = state == "running" && game?.awaitingWindow == true
                 let done: Bool

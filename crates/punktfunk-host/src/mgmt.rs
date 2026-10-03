@@ -33,6 +33,7 @@ mod cors;
 mod device_auth;
 mod diagnostics;
 mod display;
+mod downloads;
 mod emulators;
 mod events;
 mod gpu;
@@ -462,6 +463,12 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         ))
         .routes(routes!(library::set_library_art_pick))
         .routes(routes!(library::report_provider_running))
+        .routes(routes!(downloads::report_provider_downloads))
+        .routes(routes!(downloads::get_downloads))
+        .routes(routes!(downloads::install_library_entry))
+        .routes(routes!(downloads::uninstall_library_entry))
+        .routes(routes!(downloads::pause_library_install))
+        .routes(routes!(downloads::cancel_library_install))
         .routes(routes!(library::get_library_art))
         .routes(routes!(stats::stats_capture_start))
         .routes(routes!(stats::stats_capture_stop))

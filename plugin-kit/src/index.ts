@@ -11,6 +11,19 @@ export {
 export { type CacheStore, makeCacheStore } from "./cache-store.js";
 export { type CliCommand, runPluginCli } from "./cli.js";
 export { type ConfigService, makeConfigService } from "./config.js";
+export {
+	type DownloadReporter,
+	type DownloadRow,
+	type DownloadState,
+	downloadReporter,
+	type InstallAction,
+	type InstallAsk,
+	InstallRefused,
+	makeDownloadReporter,
+	makeInstallHandler,
+	NotMyTitle,
+	type ServeUiInstall,
+} from "./downloads.js";
 export * from "./errors.js";
 export {
 	HostClient,
@@ -79,3 +92,4 @@ export {
 	type StatusLine,
 	serveUi,
 } from "./ui-server.js";
+export { Install } from "./wire.js";

@@ -441,6 +441,15 @@ pub enum EventKind {
     /// A managed emulator was installed or removed. Re-read `GET /api/v1/emulators`.
     #[serde(rename = "emulators.changed")]
     EmulatorsChanged { id: String },
+    /// A title's download changed state, or its files were removed. Re-read `GET /api/v1/downloads`.
+    #[serde(rename = "downloads.changed")]
+    DownloadsChanged {
+        /// Library id, as `GET /library` lists it.
+        app: String,
+        title: String,
+        /// The download's state, or `removed` after an uninstall.
+        state: String,
+    },
     #[serde(rename = "plugins.changed")]
     PluginsChanged {
         /// Plugin that registered, restarted, deregistered, or lease-expired. Re-read `GET /api/v1/plugins`.
@@ -499,6 +508,7 @@ impl EventKind {
             EventKind::UpdateApplied { .. } => "update.applied",
             EventKind::PluginsChanged { .. } => "plugins.changed",
             EventKind::EmulatorsChanged { .. } => "emulators.changed",
+            EventKind::DownloadsChanged { .. } => "downloads.changed",
             EventKind::StoreChanged => "store.changed",
             EventKind::SettingsChanged { .. } => "settings.changed",
             EventKind::ActionInvoked { .. } => "action.invoked",

@@ -23,6 +23,7 @@ pub(crate) use utoipa::ToSchema;
 mod art;
 mod custom;
 mod detect;
+pub mod downloads;
 mod hidden;
 mod launch;
 mod metadata;
@@ -275,6 +276,9 @@ pub struct GameEntry {
     /// ([`PICK`]). Values the entry carried itself are absent. Not sent to paired clients.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub filled: BTreeMap<String, String>,
+    /// Whether the title's files are on this host. Absent means they are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<downloads::Install>,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -491,6 +495,7 @@ mod tests {
             stats: None,
             ids: BTreeMap::new(),
             filled: BTreeMap::new(),
+            install: None,
             meta: GameMeta::default(),
         }
     }

@@ -54,6 +54,9 @@ pub struct CustomEntry {
     /// Catalog ids a metadata source matches on. Set only by provider reconcile.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ids: BTreeMap<String, String>,
+    /// Whether the title's files are on this host. Set only by provider reconcile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<super::downloads::Install>,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -133,6 +136,10 @@ pub struct ProviderEntryInput {
     /// `<system>/<No-Intro name>`. Keys `[a-z0-9_]{1,16}`, at most eight; a bad pair is dropped.
     #[serde(default)]
     pub ids: BTreeMap<String, String>,
+    /// Whether the title's files are on this host, for a plugin that serves `/__install`.
+    /// Absent means they are.
+    #[serde(default)]
+    pub install: Option<super::downloads::Install>,
     #[serde(flatten)]
     pub meta: GameMeta,
 }
@@ -163,6 +170,7 @@ impl From<CustomEntry> for GameEntry {
             stats: None,
             ids: c.ids,
             filled: BTreeMap::new(),
+            install: c.install,
             meta: c.meta,
         }
     }
@@ -380,6 +388,7 @@ pub fn add_custom(input: CustomInput) -> Result<CustomEntry> {
         on_window: input.on_window.unwrap_or_default(),
         audio: audio_policy(input.audio),
         ids: BTreeMap::new(),
+        install: None,
         meta: input.meta,
     };
     catalog.entries.push(entry.clone());
@@ -695,6 +704,11 @@ fn reconcile_entries(
             on_window: input.on_window,
             audio: audio_policy(input.audio),
             ids: input.ids,
+            // The host fills free space when it serves the entry; a plugin's figure is dropped.
+            install: input.install.map(|i| super::downloads::Install {
+                free_bytes: None,
+                ..i
+            }),
             meta: input.meta,
         });
     }
@@ -846,6 +860,7 @@ mod tests {
             on_window: OnWindow::default(),
             audio: None,
             ids: BTreeMap::new(),
+            install: None,
             meta: GameMeta::default(),
         }
     }
@@ -863,6 +878,7 @@ mod tests {
             on_window: OnWindow::default(),
             audio: None,
             ids: BTreeMap::new(),
+            install: None,
             meta: GameMeta::default(),
         }
     }

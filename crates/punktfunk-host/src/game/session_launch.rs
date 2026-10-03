@@ -26,18 +26,28 @@ pub(crate) struct Prepared {
     pub stamp: Option<f64>,
     /// Undoes the prep steps in reverse on drop, panic-unwind included.
     pub prep: Option<crate::hooks::PrepGuard>,
+    /// This session won't start its title: its files never arrived. The caller drops the
+    /// target and tells the player this sentence; empty when the session left first.
+    pub declined: Option<String>,
+    /// The `launching` row a download wait published. Held for the session; [`games`] hides
+    /// it once the session lists the game itself.
+    ///
+    /// [`games`]: crate::session_status::games
+    pub waiting: Option<crate::session_status::WaitingRow>,
 }
 
 /// Before the display opens, so a nested gamescope that starts the game with it already
 /// knows whether this session spawns: reprieve this client's copy left from a dropped
-/// session, claim and name the launch record, run the prep steps (HDR toggle, sink switch),
-/// then hold `game.launching` when this session will spawn. Blocking: prep and holds run
-/// operator code.
+/// session, claim and name the launch record, wait for a title that isn't installed to
+/// download, run the prep steps (HDR toggle, sink switch), then hold `game.launching` when
+/// this session will spawn. `gone` reports the session ending during the wait. Blocking:
+/// prep and holds run operator code, and a download takes as long as it takes.
 pub(crate) fn prepare(
     target: Option<&LaunchTarget>,
     owner: &LaunchOwner,
     prep: &[crate::hooks::PrepCmd],
     prep_env: &[(String, String)],
+    gone: &dyn Fn() -> bool,
 ) -> Prepared {
     // Before prep and spawn: a later stamp would reject the process it is meant to find.
     let fresh_stamp = crate::gamelease::launch_clock();
@@ -49,6 +59,26 @@ pub(crate) fn prepare(
         claim
     });
     let stamp = claim.as_ref().map_or(fresh_stamp, |c| c.stamp());
+    // Before prep: an HDR toggle must not stay applied through a download.
+    let mut waiting = None;
+    if let Some(t) = target.filter(|_| claim.as_ref().is_some_and(|c| c.must_spawn())) {
+        match await_files(t, owner, gone) {
+            Ok(row) => waiting = row,
+            Err(sentence) => {
+                // A retry must start the title, not adopt a launch that never happened.
+                if let Some(c) = &claim {
+                    c.abandon();
+                }
+                return Prepared {
+                    claim: None,
+                    stamp,
+                    prep: None,
+                    declined: Some(sentence),
+                    waiting: None,
+                };
+            }
+        }
+    }
     let prep = (!prep.is_empty()).then(|| crate::hooks::run_prep(prep, prep_env));
     if let Some(t) = target.filter(|_| claim.as_ref().is_some_and(|c| c.must_spawn())) {
         crate::holds::launching(crate::events::GameRefPayload {
@@ -61,7 +91,68 @@ pub(crate) fn prepare(
             preset: owner.preset.clone(),
         });
     }
-    Prepared { claim, stamp, prep }
+    Prepared {
+        claim,
+        stamp,
+        prep,
+        declined: None,
+        waiting,
+    }
+}
+
+/// A title that isn't installed downloads now, through the plugin that lists it. `Ok` once
+/// its files are there, with the `launching` row clients saw meanwhile; `Ok(None)` when
+/// nothing needed fetching. `Err` is the player's sentence, empty when the session left.
+fn await_files(
+    t: &LaunchTarget,
+    owner: &LaunchOwner,
+    gone: &dyn Fn() -> bool,
+) -> Result<Option<crate::session_status::WaitingRow>, String> {
+    use crate::library::downloads::{self, Action, Refusal, Waited};
+    let Some(id) = t.game.id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(entry) = crate::library::entry_for_library_id(id) else {
+        return Ok(None);
+    };
+    let missing = entry.install.as_ref().is_some_and(|i| i.missing());
+    let (Some(provider), Some(external)) =
+        (entry.provider.as_deref(), entry.external_id.as_deref())
+    else {
+        return Ok(None);
+    };
+    if !missing && !downloads::pending(id) {
+        return Ok(None);
+    }
+    let title = &t.game.title;
+    if let Err(r) = downloads::call(provider, id, external, Action::Start) {
+        tracing::warn!(title = %title, refusal = ?r, "the title's download did not start");
+        return Err(match r {
+            Refusal::Said(why) => format!("Couldn't download {title} — {why}"),
+            _ => format!("Couldn't download {title} — the plugin that lists it didn't answer."),
+        });
+    }
+    downloads::begin(id, title, provider, external, Some(owner.client.clone()));
+    let row = crate::session_status::waiting_launch(crate::session_status::GameSnapshot {
+        session_id: None,
+        client: owner.client.clone(),
+        app_id: Some(id.to_string()),
+        title: title.clone(),
+        store: t.game.store.clone(),
+        plane: owner.plane,
+        state: "launching",
+        awaiting_window: false,
+        grace_remaining_s: None,
+        launched_by: owner.fingerprint.clone(),
+    });
+    tracing::info!(title = %title, "the launch waits for the title to download");
+    match downloads::wait(id, gone) {
+        Waited::Done => Ok(Some(row)),
+        w => {
+            tracing::info!(title = %title, outcome = ?w, "the launch ends without its title");
+            Err(w.sentence(title).unwrap_or_default())
+        }
+    }
 }
 
 /// Where a Linux launch lands.

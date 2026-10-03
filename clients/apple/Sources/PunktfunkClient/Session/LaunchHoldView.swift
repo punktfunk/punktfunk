@@ -26,6 +26,8 @@ struct LaunchHoldView: View {
     var connecting = false
     /// The game is up and the host is waiting for its window.
     var windowWait = false
+    /// The title's files, while the host fetches them before it opens the stream.
+    var download: HostDownload?
     /// The shelf tile's rect in global coordinates, when there is a tile to fly out of.
     var sourceRect: CGRect?
     /// Screenshot harness: canned art in place of the paired host's loader.
@@ -38,6 +40,7 @@ struct LaunchHoldView: View {
 
     init(
         entry: GameEntry, host: StoredHost?, connecting: Bool = false, windowWait: Bool = false,
+        download: HostDownload? = nil,
         sourceRect: CGRect? = nil, artOverride: (any LibraryArtSource)? = nil,
         onShow: @escaping () -> Void
     ) {
@@ -45,6 +48,7 @@ struct LaunchHoldView: View {
         self.host = host
         self.connecting = connecting
         self.windowWait = windowWait
+        self.download = download
         self.sourceRect = sourceRect
         self.artOverride = artOverride
         self.onShow = onShow
@@ -266,19 +270,43 @@ struct LaunchHoldView: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .padding(.top, 4)
             }
-            HStack(spacing: 9) {
-                ProgressView().controlSize(.small).tint(.white)
-                Text(
-                    connecting
-                        ? "Connecting…"
-                        : windowWait ? "Waiting for the game's window…" : "Starting the game…")
+            if let download {
+                // The wait has a length now: a bar where the spinner was. No Show stream — there
+                // is no stream until the files are in.
+                Group {
+                    if let fraction = download.fraction {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView(value: nil as Double?)
+                    }
+                }
+                .progressViewStyle(.linear)
+                .tint(.white)
+                .frame(maxWidth: 360)
+                .padding(.top, 26)
+                Text(download.state == "downloading" ? "Downloading \u{b7} \(download.line)" : download.line)
                     .font(.geist(13, .regular, relativeTo: .footnote))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.top, 10)
+                Text("Leaving won't stop the download.")
+                    .font(.geist(12, .regular, relativeTo: .caption))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.top, 4)
+            } else {
+                HStack(spacing: 9) {
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text(
+                        connecting
+                            ? "Connecting…"
+                            : windowWait ? "Waiting for the game's window…" : "Starting the game…")
+                        .font(.geist(13, .regular, relativeTo: .footnote))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(.top, 26)
+                Button("Show stream", action: onShow)
+                    .buttonStyle(.bordered)
+                    .padding(.top, 16)
             }
-            .padding(.top, 26)
-            Button("Show stream", action: onShow)
-                .buttonStyle(.bordered)
-                .padding(.top, 16)
         }
     }
 }

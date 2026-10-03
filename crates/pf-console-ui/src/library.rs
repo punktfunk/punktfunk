@@ -177,6 +177,8 @@ struct Shared {
     /// `window` is still to come, by library id — the launch hold's answer. Replaced whole on
     /// every `/status` read.
     states: std::collections::HashMap<String, (String, bool)>,
+    /// Each launched title's download, while the host fetches its files before starting it.
+    downloads: std::collections::HashMap<String, pf_client_core::library::DownloadProgress>,
     /// Bumped on every `/status` read, changed or not: the launch hold paces its next poll
     /// on an answer landing, not on the answer being different.
     status_gen: u64,
@@ -235,6 +237,7 @@ impl Default for LibraryShared {
             generation: 0,
             fetch_epoch: 0,
             states: std::collections::HashMap::new(),
+            downloads: std::collections::HashMap::new(),
             status_gen: 0,
         })))
     }
@@ -364,6 +367,23 @@ impl LibraryShared {
     /// yet, or the launch never resolved).
     pub(crate) fn launch_state(&self, id: &str) -> Option<(String, bool)> {
         self.0.lock().unwrap().states.get(id).cloned()
+    }
+
+    /// The host's downloads from a `/status` read. Call before [`Self::set_running`] with the
+    /// same read: the launch hold reads both once `status_gen` moves.
+    pub fn set_downloads(&self, downloads: &[pf_client_core::library::DownloadProgress]) {
+        self.0.lock().unwrap().downloads = downloads
+            .iter()
+            .map(|d| (d.app_id.clone(), d.clone()))
+            .collect();
+    }
+
+    /// A launched title's download from the last `/status` read, if the host is fetching it.
+    pub(crate) fn launch_download(
+        &self,
+        id: &str,
+    ) -> Option<pf_client_core::library::DownloadProgress> {
+        self.0.lock().unwrap().downloads.get(id).cloned()
     }
 
     /// How many `/status` reads have landed — see `status_gen`.

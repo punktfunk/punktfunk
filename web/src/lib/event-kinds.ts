@@ -32,6 +32,7 @@ const CONCRETE = {
 	"display.released": () => m.activity_display_released(),
 	"library.changed": () => m.activity_library_changed(),
 	"emulators.changed": () => m.activity_emulators_changed(),
+	"downloads.changed": () => m.activity_downloads_changed(),
 	"update.available": () => m.activity_update_available(),
 	"update.applied": () => m.activity_update_applied(),
 	"plugins.changed": () => m.activity_plugins_changed(),

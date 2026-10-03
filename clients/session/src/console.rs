@@ -682,8 +682,9 @@ impl ServiceState {
         std::thread::Builder::new()
             .name("punktfunk-running".into())
             .spawn(move || {
-                let running = library::fetch_running(&addr, mgmt, &identity, pin);
+                let (running, downloads) = library::fetch_status(&addr, mgmt, &identity, pin);
                 if shared.fetch_epoch() == epoch {
+                    shared.set_downloads(&downloads);
                     shared.set_running(&running);
                 }
             })

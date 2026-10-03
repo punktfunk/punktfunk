@@ -2,6 +2,7 @@ import Section from "@unom/ui/section";
 import type { FC, ReactNode } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { m } from "@/paraglide/messages";
+import { InstallPanel } from "../Install";
 import { EntryHeader, type EntryHeaderProps } from "./Header";
 import { InformationTab } from "./tabs/Information";
 import { LaunchTab } from "./tabs/Launch";
@@ -45,6 +46,7 @@ export const EntryView: FC<EntryViewProps> = ({
 					entry={tabProps.entry}
 					title={tabProps.draft.title}
 				/>
+				<InstallPanel entry={tabProps.entry} />
 				<Tabs value={active} onValueChange={onTab}>
 					<div className="-mx-1 overflow-x-auto px-1">
 						<TabsList>

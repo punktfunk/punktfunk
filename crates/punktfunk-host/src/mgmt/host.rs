@@ -127,6 +127,11 @@ pub(crate) struct RuntimeStatus {
     session_id: Option<u64>,
     /// Launched titles: live sessions plus `state: "grace"` reconnect-window rows. Empty for a desktop-only stream.
     games: Vec<ActiveGame>,
+    /// Titles downloading, queued, paused, or finished in the last ten minutes. A launch hold
+    /// joins its title's row by `app_id`. Absent when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false)]
+    downloads: Vec<crate::library::downloads::Download>,
     /// Windows audio-wiring verdict; absent off-Windows and before the first pass. Present while idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<AudioWiring>,
@@ -768,6 +773,7 @@ pub(crate) async fn get_status(
                 endable: ender.may_end(g.state, g.launched_by.as_deref()),
             })
             .collect(),
+        downloads: crate::library::downloads::snapshot(),
         audio: audio_wiring(),
     })
 }

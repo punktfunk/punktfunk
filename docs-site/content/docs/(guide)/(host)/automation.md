@@ -33,6 +33,7 @@ run in the streaming path. The one exception is a launch: a hook with `hold` set
 | `access.expired` | a streaming device's access runs out | device |
 | `display.created` / `display.released` | a virtual display is created / kept displays are released | backend and mode / count |
 | `library.changed` | the game library changes | `source`: `manual` or the provider id |
+| `downloads.changed` | a title's download starts, pauses or ends, or its files are removed | `app`, `title`, `state` (`queued`, `paused`, `done`, `failed`, `cancelled`, `removed`, …) |
 | `update.available` | a newer release is found, once per version | version, channel, install kind (`apt`, `windows-installer`, …) |
 | `update.applied` | the updated host first starts | `from`, `to` |
 | `action.invoked` | a [host power](/docs/host-power) action is accepted, or fails | `id` (`power.sleep`, `power.reboot`, `power.shutdown`, `host.restart`), device (absent for the console), `outcome` |

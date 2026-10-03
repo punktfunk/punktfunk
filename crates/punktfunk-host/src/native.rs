@@ -1904,9 +1904,28 @@ pub(crate) async fn run_admitted(
         claim: launch_claim,
         stamp: launch_stamp,
         prep: _prep,
+        declined,
+        waiting: _waiting,
     } = tokio::task::block_in_place(|| {
-        crate::session_launch::prepare(launch_target.as_ref(), &launch_owner, &prep_cmds, &prep_env)
+        crate::session_launch::prepare(
+            launch_target.as_ref(),
+            &launch_owner,
+            &prep_cmds,
+            &prep_env,
+            &|| stop.load(Ordering::Relaxed),
+        )
     });
+    // The title's files never arrived: stream without it, and say why.
+    let (launch_target, launch_for_dp) = match declined {
+        Some(sentence) => {
+            let _ = launch_outcome_tx.send(punktfunk_core::quic::LaunchOutcome::new(
+                punktfunk_core::quic::LaunchOutcomeKind::Refused,
+                &sentence,
+            ));
+            (None, None)
+        }
+        None => (launch_target, launch_for_dp),
+    };
     // Welcome/acks/HUD speak wire budget. Encoder opens get the derived video rate (`EncDerive`).
     // PyroWave: budget == encoder rate (bpp pin).
     let bitrate_kbps = welcome.bitrate_kbps;

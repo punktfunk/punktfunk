@@ -2186,6 +2186,20 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/library/metadata/{source}", true, false),
         ("DELETE", "/api/v1/library/metadata/{source}", true, false),
         ("PUT", "/api/v1/library/picks/{id}", false, false),
+        // A plugin reports its own downloads; the host maps them through the catalog.
+        (
+            "PUT",
+            "/api/v1/library/provider/{provider}/downloads",
+            true,
+            false,
+        ),
+        // Installing is what launching a missing title does; the handler demands the launch
+        // grant. Pausing, cancelling and removing are the operator's.
+        ("GET", "/api/v1/downloads", false, false),
+        ("POST", "/api/v1/library/install/{id}", false, true),
+        ("DELETE", "/api/v1/library/install/{id}", false, false),
+        ("POST", "/api/v1/library/install/{id}/pause", false, false),
+        ("POST", "/api/v1/library/install/{id}/cancel", false, false),
         // Provider liveness is plugin-lane like reconcile; the host maps through the catalog.
         // Never the cert lane — a streaming client has no titles of its own.
         (

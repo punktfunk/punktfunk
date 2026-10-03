@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Eye, EyeOff, Trash2 } from "lucide-react";
 import { type FC, useState } from "react";
+import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
 import { LauncherIcon } from "@/components/launcher-icon";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { m } from "@/paraglide/messages";
 import { isOperatorOwned, storeLabel } from "./helpers";
+import { InstallBadge } from "./Install";
 
 export interface GameCardProps {
 	game: OperatorGameEntry;
@@ -19,6 +21,8 @@ export interface GameCardProps {
 	hiding: boolean;
 	/** A source's display name by id (`useSourceNames`). */
 	nameOf?: (id: string) => string | undefined;
+	/** The title's download, while it has one. */
+	download?: Download;
 }
 
 /**
@@ -33,6 +37,7 @@ export const GameCard: FC<GameCardProps> = ({
 	onToggleHidden,
 	hiding,
 	nameOf,
+	download,
 }) => {
 	// Every store can be hidden: the titles most worth hiding are the ones the operator cannot
 	// edit. The host keys the setting by entry id and never needs to own the entry.
@@ -129,6 +134,12 @@ export const GameCard: FC<GameCardProps> = ({
 								{m.library_hidden_badge()}
 							</Badge>
 						)}
+					</div>
+					<div className="absolute bottom-2 left-2">
+						<InstallBadge
+							{...(game.install ? { install: game.install } : {})}
+							{...(download ? { download } : {})}
+						/>
 					</div>
 				</div>
 				<div

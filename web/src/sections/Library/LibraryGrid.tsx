@@ -6,6 +6,7 @@ import {
 import { toast } from "@unom/ui/toast";
 import { LayoutGrid, Rows3, Search, X } from "lucide-react";
 import { type FC, useEffect, useRef, useState } from "react";
+import { useDownloads } from "@/api/downloads";
 import {
 	getGetLibraryPageQueryKey,
 	getLibraryPage,
@@ -13,6 +14,7 @@ import {
 	useGetLibraryPage,
 	useSetLibraryEntryHidden,
 } from "@/api/gen/library/library";
+import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
 import type { PlatformCount } from "@/api/gen/model/platformCount";
 import { useDialogs } from "@/components/dialogs";
@@ -37,6 +39,7 @@ import { m } from "@/paraglide/messages";
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
 import { customId, refreshLibrary } from "./helpers";
+import { DownloadsList } from "./Install";
 import { useSourceNames } from "./Sources";
 
 /** Titles asked for at a time: a few rows of a wide grid, a screen and a half of the list. */
@@ -67,6 +70,8 @@ export const LibraryGridSection: FC<{
 	const [query, setQuery] = useState("");
 	const q = useDebounced(query.trim(), 250);
 	const [platform, setPlatform] = useState<string | null>(null);
+	const [install, setInstall] = useState<InstallFilter | null>(null);
+	const downloads = useDownloads();
 	const [view, setView] = useLocalPref<LibraryView>(
 		"pf-library-view",
 		"grid",
@@ -78,6 +83,7 @@ export const LibraryGridSection: FC<{
 		limit: PAGE,
 		...(q ? { q } : {}),
 		...(platform ? { platform } : {}),
+		...(install ? { install } : {}),
 		...(providerFilter ? { provider: providerFilter } : {}),
 	};
 	const games = useInfiniteQuery({
@@ -138,39 +144,54 @@ export const LibraryGridSection: FC<{
 	};
 
 	const first = games.data?.pages[0];
+	const byApp = new Map((downloads.data ?? []).map((d) => [d.app_id, d]));
 	return (
-		<LibraryGrid
-			games={{
-				data: games.data?.pages.flatMap((p) => p.items),
-				isLoading: games.isLoading,
-				error: games.error,
-				refetch: () => void games.refetch(),
-			}}
-			launchers={launchers.data?.items ?? []}
-			total={first?.total ?? 0}
-			platforms={first?.platforms ?? []}
-			hasMore={games.hasNextPage}
-			loadingMore={games.isFetchingNextPage}
-			onMore={() => void games.fetchNextPage()}
-			query={query}
-			onQuery={setQuery}
-			platform={platform}
-			onPlatform={setPlatform}
-			filtered={q !== "" || platform !== null || !!providerFilter}
-			source={source}
-			onSources={onSources}
-			view={view}
-			onView={setView}
-			onDelete={onDelete}
-			// The custom id whose delete is in flight (if any), so only that title's button disables.
-			deletingId={remove.isPending ? (remove.variables?.id ?? null) : null}
-			onToggleHidden={onToggleHidden}
-			// Keyed by ENTRY id, not custom id — hiding addresses any store's entry, not just ours.
-			hidingId={setHidden.isPending ? (setHidden.variables?.id ?? null) : null}
-			nameOf={nameOf}
-		/>
+		<>
+			<DownloadsList />
+			<LibraryGrid
+				games={{
+					data: games.data?.pages.flatMap((p) => p.items),
+					isLoading: games.isLoading,
+					error: games.error,
+					refetch: () => void games.refetch(),
+				}}
+				launchers={launchers.data?.items ?? []}
+				total={first?.total ?? 0}
+				platforms={first?.platforms ?? []}
+				hasMore={games.hasNextPage}
+				loadingMore={games.isFetchingNextPage}
+				onMore={() => void games.fetchNextPage()}
+				query={query}
+				onQuery={setQuery}
+				platform={platform}
+				onPlatform={setPlatform}
+				install={install}
+				onInstall={setInstall}
+				notInstalled={first?.not_installed ?? 0}
+				downloadOf={(id) => byApp.get(id)}
+				filtered={
+					q !== "" || platform !== null || install !== null || !!providerFilter
+				}
+				source={source}
+				onSources={onSources}
+				view={view}
+				onView={setView}
+				onDelete={onDelete}
+				// The custom id whose delete is in flight (if any), so only that title's button disables.
+				deletingId={remove.isPending ? (remove.variables?.id ?? null) : null}
+				onToggleHidden={onToggleHidden}
+				// Keyed by ENTRY id, not custom id — hiding addresses any store's entry, not just ours.
+				hidingId={
+					setHidden.isPending ? (setHidden.variables?.id ?? null) : null
+				}
+				nameOf={nameOf}
+			/>
+		</>
 	);
 };
+
+/** On this host, or not yet: the filter appears once any title isn't installed. */
+type InstallFilter = "installed" | "missing";
 
 export interface LibraryGridProps {
 	/** The titles loaded so far, every page in order. */
@@ -186,6 +207,12 @@ export interface LibraryGridProps {
 	onQuery: (q: string) => void;
 	platform: string | null;
 	onPlatform: (p: string | null) => void;
+	install?: InstallFilter | null;
+	onInstall?: (f: InstallFilter | null) => void;
+	/** Titles not installed under the other filters; the install filter shows when any are. */
+	notInstalled?: number;
+	/** A title's download, while it has one. */
+	downloadOf?: (id: string) => Download | undefined;
 	/** A search or filter is narrowing the list: an empty result is a miss, not a fresh host. */
 	filtered: boolean;
 	source?: { label: string; onClear: () => void };
@@ -241,6 +268,10 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 	onQuery,
 	platform,
 	onPlatform,
+	install = null,
+	onInstall,
+	notInstalled = 0,
+	downloadOf,
 	filtered,
 	source,
 	onSources,
@@ -253,14 +284,18 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 	nameOf,
 }) => {
 	const shown = games.data ?? [];
-	const props = (game: OperatorGameEntry) => ({
-		game,
-		onDelete: () => onDelete(game),
-		deleting: deletingId === customId(game),
-		onToggleHidden: () => onToggleHidden(game),
-		hiding: hidingId === game.id,
-		nameOf,
-	});
+	const props = (game: OperatorGameEntry) => {
+		const download = downloadOf?.(game.id);
+		return {
+			game,
+			onDelete: () => onDelete(game),
+			deleting: deletingId === customId(game),
+			onToggleHidden: () => onToggleHidden(game),
+			hiding: hidingId === game.id,
+			nameOf,
+			...(download ? { download } : {}),
+		};
+	};
 	const empty = !games.isLoading && shown.length === 0;
 	return (
 		<div className="flex flex-col gap-card">
@@ -295,6 +330,31 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 										})}
 									</SelectItem>
 								))}
+							</SelectContent>
+						</Select>
+					</div>
+				)}
+				{onInstall && (notInstalled > 0 || install !== null) && (
+					<div className="sm:w-48">
+						<Select
+							value={install ?? ALL}
+							onValueChange={(v) =>
+								onInstall(v === ALL ? null : (v as InstallFilter))
+							}
+						>
+							<SelectTrigger aria-label={m.library_install_filter_label()}>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value={ALL}>
+									{m.library_install_filter_all()}
+								</SelectItem>
+								<SelectItem value="installed">
+									{m.library_install_filter_installed()}
+								</SelectItem>
+								<SelectItem value="missing">
+									{m.library_install_filter_missing({ count: notInstalled })}
+								</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
