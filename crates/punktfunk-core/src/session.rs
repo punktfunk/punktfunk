@@ -1003,7 +1003,7 @@ impl Session {
         self.config.shard_payload
     }
 
-    /// Client: whether a frame of `epoch` predates the newest seen, wrapping (1–127 behind).
+    /// Client: whether a frame of `epoch` predates the newest seen, wrapping (1–128 behind).
     /// It was encoded before a mode switch, so its decoder is gone. `punktfunk/1` frames are
     /// all epoch 0.
     fn behind_epoch(&mut self, epoch: u8) -> bool {
@@ -1048,6 +1048,7 @@ impl Session {
                         if !self.behind_epoch(p.epoch) {
                             return Ok(stamp_received(p));
                         }
+                        StatsCounters::add(&self.stats.frames_dropped, 1);
                     }
                     return Err(PunktfunkError::NoFrame);
                 }
@@ -1128,6 +1129,7 @@ impl Session {
                     StatsCounters::add(&self.stats.frames_completed, 1);
                 }
                 if self.behind_epoch(frame.epoch) {
+                    StatsCounters::add(&self.stats.frames_dropped, 1);
                     continue;
                 }
                 return Ok(stamp_received(frame));
@@ -1136,6 +1138,7 @@ impl Session {
             // draining further (its successors are already arriving).
             if let Some(p) = self.reassembler.take_partial() {
                 if self.behind_epoch(p.epoch) {
+                    StatsCounters::add(&self.stats.frames_dropped, 1);
                     continue;
                 }
                 return Ok(stamp_received(p));
