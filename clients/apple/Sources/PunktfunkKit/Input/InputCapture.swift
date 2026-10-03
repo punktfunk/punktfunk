@@ -162,10 +162,10 @@ public final class InputCapture {
     /// (cross-client), so A ("audio in") is the mic's. Main queue.
     public var onToggleMicMute: (() -> Void)?
 
-    /// Fired on ⌃⌥⇧O (macOS) — open or close the quick-action ring, the desktop clients' own
-    /// chord for it ("O" for overlay; see `pf-presenter`'s key path). Same delivery rule as the
-    /// combos above: only WHILE FORWARDING, because that is when the Stream menu's identical key
-    /// equivalent cannot fire. Main queue.
+    /// Fired on ⌃⌥⇧O — open or close the quick-action ring, the desktop clients' own chord for it
+    /// ("O" for overlay; see `pf-presenter`'s key path). macOS fires it only WHILE FORWARDING, as
+    /// the Stream menu's identical equivalent covers the released state; the iPad, which has no
+    /// such menu item, fires it in both states. Main queue.
     public var onQuickActions: (() -> Void)?
 
     /// Fired on ⌃⌘F (macOS) — toggle the streaming window in/out of fullscreen. Detected in the
@@ -179,15 +179,17 @@ public final class InputCapture {
     /// control (0xA2/0xA3), option (0xA4/0xA5), shift (0xA0/0xA1). Used to sift the HID key stream.
     private static let chordModifierVKs: Set<UInt32> = [0xA2, 0xA3, 0xA4, 0xA5, 0xA0, 0xA1]
 
-    /// Whether Control AND Option AND Shift are all currently held (either side of each counts) —
-    /// the modifier precondition for the iPad ⌃⌥⇧ chords (Q releases capture, A mutes the mic).
-    private var hasChordModifiers: Bool {
-        let m = chordModifiersDown
-        return (m.contains(0xA2) || m.contains(0xA3)) // control
-            && (m.contains(0xA4) || m.contains(0xA5)) // option
-            && (m.contains(0xA0) || m.contains(0xA1)) // shift
-    }
+    private var hasChordModifiers: Bool { Self.holdsChordModifiers(chordModifiersDown) }
     #endif
+
+    /// Whether `held` (Windows VKs) has Control AND Option AND Shift, either side of each — the
+    /// modifier precondition for the iPad ⌃⌥⇧ chords (Q releases capture, A mutes the mic, O
+    /// toggles the quick-action ring).
+    static func holdsChordModifiers(_ held: Set<UInt32>) -> Bool {
+        (held.contains(0xA2) || held.contains(0xA3)) // control
+            && (held.contains(0xA4) || held.contains(0xA5)) // option
+            && (held.contains(0xA0) || held.contains(0xA1)) // shift
+    }
 
     /// Fired when a newer InputCapture takes the process-global GC handler slots (the
     /// singletons hold ONE handler each): the preempted owner must drop its capture
@@ -915,6 +917,13 @@ public final class InputCapture {
             if pressed, vk == 0x1B, !self.cmdKeysDown.isEmpty {
                 self.suppressedVK = 0x1B
                 self.onToggleCapture?()
+                return
+            }
+            // ⌃⌥⇧O toggles the quick-action ring in both capture states. The O is latched so the
+            // host never sees it; captured, the modifiers went down and their releases follow.
+            if pressed, vk == 0x4F, self.hasChordModifiers {
+                self.suppressedVK = 0x4F
+                self.onQuickActions?()
                 return
             }
             #endif

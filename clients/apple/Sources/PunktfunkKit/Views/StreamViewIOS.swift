@@ -532,6 +532,10 @@ public final class StreamViewController: StreamViewControllerBase {
         capture.onToggleMicMute = { [weak connection] in
             NotificationCenter.default.post(name: .punktfunkToggleMicMute, object: connection)
         }
+        // ⌃⌥⇧O toggles the quick-action ring, posted the way the Mac's chord is.
+        capture.onQuickActions = { [weak connection] in
+            NotificationCenter.default.post(name: .punktfunkToggleQuickActions, object: connection)
+        }
         capture.onPreempted = { [weak self] in
             self?.setCaptured(false)
         }

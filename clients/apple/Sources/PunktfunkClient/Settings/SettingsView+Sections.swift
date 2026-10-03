@@ -887,7 +887,7 @@ extension SettingsView {
         #if os(macOS)
         "⌃⌥⇧O, the Stream menu or Select + A on a controller opens it mid-stream. "
         #else
-        "A two-finger twist, or Select + A on a controller, opens it mid-stream. "
+        "A two-finger twist, ⌃⌥⇧O on a keyboard or Select + A on a controller opens it mid-stream. "
         #endif
     }
 

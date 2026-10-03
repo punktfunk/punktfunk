@@ -355,10 +355,9 @@ extension Notification.Name {
     /// never reach one. macOS only — the touch clients' fingers reach the ring either way.
     public static let punktfunkRingOpen = Notification.Name("io.unom.punktfunk.ring-open")
 
-    /// Posted by the app's Stream menu ("Quick Actions", ⌃⌥⇧O) and by InputCapture's monitor when the
-    /// same combo fires while input is CAPTURED (a captured stream view never sees the menu's key
-    /// equivalent). The session view toggles the quick-action ring. macOS only — the touch clients
-    /// open the same ring with the two-finger twist, tvOS with a short Back.
+    /// Posted by InputCapture on ⌃⌥⇧O (`object` is the session's connection): on macOS while input
+    /// is CAPTURED, where the Stream menu's key equivalent cannot fire, and on an iPad keyboard in
+    /// both states. The session view toggles the quick-action ring.
     public static let punktfunkToggleQuickActions = Notification.Name("io.unom.punktfunk.toggle-quick-actions")
 
     /// Posted by the app's Stream menu ("Toggle Fullscreen", ⌃⌘F) and by InputCapture's monitor

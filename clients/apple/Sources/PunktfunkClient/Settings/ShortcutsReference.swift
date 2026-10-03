@@ -78,6 +78,7 @@ enum ShortcutsCatalog {
             .init(keys: "⌃⌥⇧Q", text: "Release the pointer back to this device"),
             .init(keys: "⌃⌥⇧D", text: "Disconnect"),
             .init(keys: "⌃⌥⇧S", text: "Cycle the statistics overlay"),
+            .init(keys: "⌃⌥⇧O", text: "Open the quick actions dial"),
         ]
         if micAvailable {
             keyboard.append(.init(keys: "⌃⌥⇧A", text: "Mute or unmute the microphone"))

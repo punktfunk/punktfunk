@@ -39,11 +39,11 @@ host too until you capture again.
 | Disconnect | Ctrl+Alt+Shift+D | ⌃⌥⇧D | ⌃⌥⇧D | — |
 | Cycle the [stats overlay](/docs/stats) | Ctrl+Alt+Shift+S | ⌃⌥⇧S | ⌃⌥⇧S | — |
 | [Mute your microphone](#muting-your-microphone) | Ctrl+Alt+Shift+V | ⌃⌥⇧A | ⌃⌥⇧A | — |
-| Open the [quick-action dial](#the-quick-action-dial) | Ctrl+Alt+Shift+O | ⌃⌥⇧O | — | Ctrl+Alt+Shift+O |
+| Open the [quick-action dial](#the-quick-action-dial) | Ctrl+Alt+Shift+O | ⌃⌥⇧O | ⌃⌥⇧O | Ctrl+Alt+Shift+O |
 | Start or stop [clipboard sharing](/docs/clipboard) | — | ⌃⌥⇧C | ⌃⌥⇧C | — |
 | Fullscreen | F11 or Alt+Enter | ⌃⌘F | — | — |
 
-On an iPad only ⌃⌥⇧Q and ⌘⎋ always work while input is captured. If another shortcut doesn't
+On an iPad only ⌃⌥⇧Q, ⌃⌥⇧O and ⌘⎋ always work while input is captured. If another shortcut doesn't
 respond, release input first.
 
 To see the list without a stream: **Keyboard Shortcuts** in the Linux client's main menu,
@@ -208,7 +208,7 @@ presets. Pick its six buttons under **Quick actions** in settings, or edit the d
 | Linux, Windows | **Ctrl+Alt+Shift+O**, a two-finger twist on a touchscreen |
 | macOS | **⌃⌥⇧O**, **Stream → Quick Actions** |
 | Android | **Back**, a two-finger twist, **Ctrl+Alt+Shift+O** |
-| iPhone, iPad | A two-finger twist, the corner button; in **Touch passthrough**, two fingers pulled in from a side edge |
+| iPhone, iPad | A two-finger twist, the corner button, **⌃⌥⇧O** on a keyboard; in **Touch passthrough**, two fingers pulled in from a side edge |
 | Apple TV | A short press of the remote's **Back** |
 | Any client, with a controller | **Select + A** |
 
