@@ -253,6 +253,10 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 let keys = endpoint::media_keys(&conn, &server.session_id, suite)
                     .ok_or(PunktfunkError::Crypto)?;
                 media.stats().set_host(conn.remote_address());
+                if let Ok(sock) = media.try_clone_socket() {
+                    *args.shared.data_sock.lock().unwrap() = Some(sock);
+                }
+                *args.shared.local_ip.lock().unwrap() = conn.local_ip();
                 // v1's key and salt never apply: the media keys came from the exporter.
                 let mut cfg = welcome.session_config(Role::Client);
                 cfg.encrypt = false;

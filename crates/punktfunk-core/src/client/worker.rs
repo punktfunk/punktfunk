@@ -66,6 +66,9 @@ pub(crate) struct ClientShared {
     /// A clone of the data socket: the same socket as the pump's, so its receive drops and
     /// buffer grant can be read on demand without touching the pump.
     pub(crate) data_sock: Mutex<Option<std::net::UdpSocket>>,
+    /// The address the host's packets arrive at, where `data_sock` is unconnected
+    /// (`punktfunk/2`'s shared socket) and its own address names no interface.
+    pub(crate) local_ip: Mutex<Option<std::net::IpAddr>>,
     /// Live encoder target (kbps): the Welcome seed, then every `BitrateChanged` ack.
     pub(crate) live_bitrate_kbps: AtomicU32,
     /// [`crate::hud::RateCut`] code the pump publishes each window; `0` = no standing cut.
@@ -126,6 +129,7 @@ impl ClientShared {
             host_facts: Mutex::default(),
             delivery_ask: Mutex::default(),
             data_sock: Mutex::default(),
+            local_ip: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),
             rate_cut: AtomicU8::new(0),
             recent_rfis: Mutex::default(),

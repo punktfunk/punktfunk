@@ -1313,6 +1313,7 @@ impl NativeClient {
             .and_then(|s| s.local_addr().ok())
             .map(|a| a.ip())
             .filter(|ip| !ip.is_unspecified())
+            .or(*self.shared.local_ip.lock().unwrap())
     }
 
     /// Whether a burst is in flight — an embedder speed test or the startup capacity probe. Loss

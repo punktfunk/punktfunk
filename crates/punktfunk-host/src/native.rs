@@ -1512,10 +1512,13 @@ pub(crate) async fn run_admitted(
     .map_err(|_| anyhow!("handshake timed out after {HANDSHAKE_TIMEOUT:?}"))??;
     let (ctrl_send, ctrl_recv) = (send, recv);
     // The host's half of the path, for a client that asked; read while the data socket is
-    // still in hand.
+    // still in hand. `punktfunk/2` media leaves from the endpoint's socket instead.
     let host_facts = delivery_ask
         .filter(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_FACTS != 0)
-        .map(|_| crate::telemetry::net_health::host_facts(data_sock.as_ref()));
+        .map(|_| {
+            let sock = data_sock.as_ref().or(conn.v2().map(|v2| &*v2.media_socket));
+            crate::telemetry::net_health::host_facts(sock)
+        });
     // A diagnostic session: the stream thread serves probes and builds nothing.
     let probe_only =
         delivery_ask.is_some_and(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0);
@@ -2584,7 +2587,8 @@ fn bind_data_plane(
                 clock_origin_ns: v2.clock_origin_ns,
                 keys: Some(keys),
             };
-            return Ok((Box::new(sender), None, Some(media)));
+            let wire_sock = v2.media_socket.try_clone().ok();
+            return Ok((Box::new(sender), wire_sock, Some(media)));
         }
         (DataPlane::Udp, None) => anyhow::bail!("the native plane negotiated no data socket"),
         (DataPlane::Udp, Some(sock)) => sock,

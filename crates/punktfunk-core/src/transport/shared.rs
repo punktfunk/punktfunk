@@ -109,11 +109,18 @@ pub struct ClientMedia {
     /// One reader, the session's pump; the lock is never contended.
     rx: Mutex<Receiver<Vec<u8>>>,
     stats: Arc<SharedStats>,
+    socket: Arc<UdpSocket>,
 }
 
 impl ClientMedia {
     pub fn stats(&self) -> &Arc<SharedStats> {
         &self.stats
+    }
+
+    /// The shared socket, for its buffer and drop figures. Never read from it: the demux
+    /// thread owns its receive side.
+    pub fn try_clone_socket(&self) -> std::io::Result<UdpSocket> {
+        self.socket.try_clone()
     }
 }
 
@@ -142,7 +149,7 @@ pub fn client_socket(bind: SocketAddr) -> std::io::Result<(Arc<ClientSocket>, Cl
         .spawn(move || reader.run())?;
     Ok((
         Arc::new(ClientSocket {
-            socket,
+            socket: socket.clone(),
             state,
             quic,
             stats: stats.clone(),
@@ -150,6 +157,7 @@ pub fn client_socket(bind: SocketAddr) -> std::io::Result<(Arc<ClientSocket>, Cl
         ClientMedia {
             rx: Mutex::new(rx),
             stats,
+            socket,
         },
     ))
 }
