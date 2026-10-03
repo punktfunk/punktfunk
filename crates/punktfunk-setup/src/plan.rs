@@ -175,6 +175,19 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
         return plan;
     }
 
+    // Before the install: the Omarchy hand-off and the SteamOS build each end the run, and the
+    // SteamOS script moves this file into web.env. The console generates one only when absent.
+    if choices.components.host && choices.web_password.is_some() {
+        plan.push(
+            Phase::Password,
+            "Web console password",
+            vec![Step {
+                action: StepAction::WebPassword,
+                ends_run: false,
+            }],
+        );
+    }
+
     // A switch reinstalls what the box has; the unit probe already saw its console.
     let console_installed = match choices.switch_from {
         Some(from) => {
@@ -191,19 +204,6 @@ pub fn build(facts: &Facts, choices: &Choices) -> Plan {
         }
         None => install_phase(&mut plan, facts, choices, backend),
     };
-
-    // Before Omarchy, whose hand-off ends the run, and long before the console starts: the
-    // console's own first start generates a password only when the file is not there yet.
-    if choices.components.host && choices.web_password.is_some() {
-        plan.push(
-            Phase::Password,
-            "Web console password",
-            vec![Step {
-                action: StepAction::WebPassword,
-                ends_run: false,
-            }],
-        );
-    }
 
     // What the Omarchy hand-off does not do lands before it: it starts the host and ends the
     // run. Next to Sunshine the first bind must already be on the moved mgmt port.

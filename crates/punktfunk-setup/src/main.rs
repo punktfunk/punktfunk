@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use punktfunk_setup::choices::{parse_web_bind, Action, Choices, Pins};
 use punktfunk_setup::exec::{Executor, Opts};
-use punktfunk_setup::facts::{Facts, Family, Floor, DOCS};
+use punktfunk_setup::facts::{Facts, Floor, DOCS};
 use punktfunk_setup::plan;
 use punktfunk_setup::report;
 use punktfunk_setup::seam::{BasePaths, CommandRunner, Env, SystemRunner};
@@ -412,9 +412,11 @@ fn interactive_choices(
     // After the settings screen, not a row on it: the console password is the one thing
     // a fresh host install leaves the user needing, and a row is too easy to walk past.
     // A box that already has one keeps it — this never overwrites a password in use.
-    if host_install && !facts.web_password_present && facts.family != Family::Steamos {
-        choices.web_password =
-            tui.web_password(&format!("https://{ip}:47992"), report::PASSWORD_READ);
+    if host_install && !facts.web_password_present {
+        choices.web_password = tui.web_password(
+            &format!("https://{ip}:47992"),
+            report::password_read(facts.family),
+        );
     }
     // Right after it, for the same reason: the console is the whole product surface.
     // `--web-bind` pins it, and then there is nothing to ask.
