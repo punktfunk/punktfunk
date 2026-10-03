@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
 import type { GameCardProps } from "./GameCard";
 import { isOperatorOwned, storeLabel } from "./helpers";
+import { InstallBadge } from "./Install";
 
 /**
  * One title as a line: a small cover, its name, where it comes from, and the same two controls
@@ -19,6 +20,7 @@ export const GameRow: FC<GameCardProps> = ({
 	onToggleHidden,
 	hiding,
 	nameOf,
+	download,
 }) => {
 	const hidden = game.hidden === true;
 	const isCustom = isOperatorOwned(game);
@@ -79,6 +81,10 @@ export const GameRow: FC<GameCardProps> = ({
 						{hidden && (
 							<Badge variant="secondary">{m.library_hidden_badge()}</Badge>
 						)}
+						<InstallBadge
+							{...(game.install ? { install: game.install } : {})}
+							{...(download ? { download } : {})}
+						/>
 					</div>
 				</div>
 			</Link>
