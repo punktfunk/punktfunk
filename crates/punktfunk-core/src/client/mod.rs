@@ -39,6 +39,7 @@ mod planes;
 mod probe;
 mod pump;
 mod recovery;
+mod resume;
 use crate::rumble;
 mod worker;
 

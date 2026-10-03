@@ -69,6 +69,8 @@ pub(crate) struct ClientShared {
     /// The address the host's packets arrive at, where `data_sock` is unconnected
     /// (`punktfunk/2`'s shared socket) and its own address names no interface.
     pub(crate) local_ip: Mutex<Option<std::net::IpAddr>>,
+    /// The `punktfunk/2` session id the host issued, kept for a resume if the link is lost.
+    pub(crate) v2_session: Mutex<Option<[u8; 16]>>,
     /// Live encoder target (kbps): the Welcome seed, then every `BitrateChanged` ack.
     pub(crate) live_bitrate_kbps: AtomicU32,
     /// [`crate::hud::RateCut`] code the pump publishes each window; `0` = no standing cut.
@@ -130,6 +132,7 @@ impl ClientShared {
             delivery_ask: Mutex::default(),
             data_sock: Mutex::default(),
             local_ip: Mutex::default(),
+            v2_session: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),
             rate_cut: AtomicU8::new(0),
             recent_rfis: Mutex::default(),

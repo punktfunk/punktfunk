@@ -1844,6 +1844,7 @@ pub(crate) async fn run_admitted(
                 isolation: planes.isolation.clone(),
                 audio_sink: audio_sink.clone(),
             },
+            conn.v2().map(|v2| v2.session_id),
         )
     };
 
@@ -3850,6 +3851,67 @@ mod tests {
             "SetDelivery is answered"
         );
         drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// A device that dials again while its first session still streams gets in once that
+    /// session has released, not after a fixed grace: the old 1.5 s sleep is gone.
+    #[test]
+    fn a_reconnect_waits_for_the_release_not_a_timer() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::{ConnectParams, NativeClient};
+        let host = std::thread::spawn(|| {
+            run_ephemeral(Punktfunk1Options {
+                port: 19793,
+                source: Punktfunk1Source::Synthetic,
+                seconds: 0,
+                frames: 600,
+                max_sessions: 2,
+                max_concurrent: 2,
+                require_pairing: false,
+                allow_pairing: false,
+                pairing_pin: None,
+                paired_store: None,
+                data_port: None,
+                idle_timeout: None,
+                mdns: false,
+                protocol2: protocol2_from_env(),
+            })
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let (cert, key) = punktfunk_core::quic::endpoint::generate_identity().unwrap();
+        let dial = || {
+            NativeClient::connect(ConnectParams {
+                identity: Some((cert.clone(), key.clone())),
+                ..ConnectParams::new(
+                    "127.0.0.1",
+                    19793,
+                    punktfunk_core::Mode {
+                        width: 1280,
+                        height: 720,
+                        refresh_hz: 60,
+                    },
+                    std::time::Duration::from_secs(10),
+                )
+            })
+            .expect("client connects")
+        };
+        let first = dial();
+        assert!(first.next_frame(std::time::Duration::from_secs(5)).is_ok());
+        let started = std::time::Instant::now();
+        let second = dial();
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_millis(1400),
+            "the reconnect took {took:?}"
+        );
+        assert!(second.next_frame(std::time::Duration::from_secs(5)).is_ok());
+        assert!(
+            wait_for(|| first.end_reason() != punktfunk_core::client::PunktfunkEndReason::None),
+            "the first session was retired, not kept beside the second"
+        );
+        drop((first, second));
         host.join().unwrap().unwrap();
     }
 

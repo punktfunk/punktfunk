@@ -128,7 +128,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
             let extra = translate::ClientExtra {
                 start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
-                resume: None,
+                resume: crate::client::resume::take(&p.host, p.port),
                 suites: if wants_chacha {
                     vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
                 } else {
@@ -257,6 +257,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                     *args.shared.data_sock.lock().unwrap() = Some(sock);
                 }
                 *args.shared.local_ip.lock().unwrap() = conn.local_ip();
+                *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
                 // v1's key and salt never apply: the media keys came from the exporter.
                 let mut cfg = welcome.session_config(Role::Client);
                 cfg.encrypt = false;

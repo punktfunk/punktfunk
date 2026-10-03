@@ -7,7 +7,7 @@
 //! * `separate` — fresh display at the requested mode (Linux default).
 //! * `join` — admit onto the live display: its mode, compositor and route
 //!   (Welcome carries the real mode).
-//! * `steal` — signal victim stop flags, wait the release grace, then serve.
+//! * `steal` — signal victim stop flags, wait for their release ([`all_gone`]), then serve.
 //! * `reject` — handshake error naming the live mode and client.
 //!
 //! [`register`] exposes identity + mode + stop flag; the session drops
@@ -42,6 +42,8 @@ pub struct LiveSession {
     /// Client label interpolated into `reject` messages.
     pub label: String,
     pub display: LiveDisplay,
+    /// The `punktfunk/2` session id a reconnect presents to retire exactly this session.
+    pub resume_id: Option<[u8; 16]>,
 }
 
 #[derive(Debug)]
@@ -50,7 +52,7 @@ pub enum Admission {
     /// Admit at this live mode onto the owner's display; Welcome must carry the mode, not the
     /// request.
     Join((u32, u32, u32), LiveDisplay),
-    /// Victim stop flags; caller signals them and waits the release grace.
+    /// Victim stop flags; caller signals them and waits until [`all_gone`].
     Steal(Vec<Arc<AtomicBool>>),
     Reject(String),
 }
@@ -183,12 +185,41 @@ fn same_identity_stops(
 /// A new connection from an already-registered identity is a reconnect:
 /// the old session is a zombie whose QUIC idle timer has not fired
 /// (`max_idle_timeout`, seconds). The caller signals these flags and waits
-/// the release grace so this reconnect reuses the kept display instead of
+/// until [`all_gone`], so this reconnect reuses the kept display instead of
 /// landing on a second one. Anonymous (`None`) never matches. Call before
 /// [`admit`] and before this session [`register`]s, so only a *prior*
 /// session's flag is signaled.
 pub fn preempt_same_identity(req_identity: Option<[u8; 32]>) -> Vec<Arc<AtomicBool>> {
     same_identity_stops(req_identity, &table().lock().unwrap())
+}
+
+/// Stop flags of the session a `punktfunk/2` reconnect names by `resume_id`. Only the identity
+/// that owned it may retire it: the id is a bearer secret, and this keeps it one.
+pub fn preempt_resumed(
+    resume_id: [u8; 16],
+    req_identity: Option<[u8; 32]>,
+) -> Vec<Arc<AtomicBool>> {
+    resumed_stops(resume_id, req_identity, &table().lock().unwrap())
+}
+
+fn resumed_stops(
+    resume_id: [u8; 16],
+    req_identity: Option<[u8; 32]>,
+    live: &[LiveSession],
+) -> Vec<Arc<AtomicBool>> {
+    live.iter()
+        .filter(|s| s.resume_id == Some(resume_id) && s.identity == req_identity)
+        .map(|s| Arc::clone(&s.stop))
+        .collect()
+}
+
+/// Whether every session behind `stops` has left the live set. Its guard drops at the end of
+/// its teardown, so its display lease is released by then.
+pub fn all_gone(stops: &[Arc<AtomicBool>]) -> bool {
+    let live = table().lock().unwrap();
+    !live
+        .iter()
+        .any(|s| stops.iter().any(|x| Arc::ptr_eq(x, &s.stop)))
 }
 
 /// Register an admitted session; the guard removes it on drop. Call after
@@ -200,6 +231,7 @@ pub fn register(
     stop: Arc<AtomicBool>,
     label: String,
     display: LiveDisplay,
+    resume_id: Option<[u8; 16]>,
 ) -> LiveGuard {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     table().lock().unwrap().push(LiveSession {
@@ -209,6 +241,7 @@ pub fn register(
         stop,
         label,
         display,
+        resume_id,
     });
     LiveGuard { id }
 }
@@ -249,6 +282,7 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             label: "peer".into(),
             display: LiveDisplay::default(),
+            resume_id: None,
         }
     }
     fn fp(n: u8) -> Option<[u8; 32]> {
@@ -336,5 +370,39 @@ mod tests {
         // The joiner takes the owner's display, not only its mode.
         assert_eq!(display.compositor, Some(crate::Compositor::Gamescope));
         assert_eq!(display.route, Some(crate::GamescopeRoute::Spawn));
+    }
+
+    #[test]
+    fn a_resume_retires_only_its_own_identitys_session() {
+        let mut a = sess(Some(1), (1920, 1080, 60));
+        a.resume_id = Some([7; 16]);
+        let mut b = sess(None, (1280, 720, 60));
+        b.resume_id = Some([8; 16]);
+        let live = [a.clone(), b.clone()];
+        assert_eq!(resumed_stops([7; 16], a.identity, &live).len(), 1);
+        assert!(resumed_stops([7; 16], Some([9; 32]), &live).is_empty());
+        assert!(resumed_stops([7; 16], None, &live).is_empty());
+        assert_eq!(
+            resumed_stops([8; 16], None, &live).len(),
+            1,
+            "anonymous resumes anonymous"
+        );
+        assert!(resumed_stops([9; 16], a.identity, &live).is_empty());
+    }
+
+    #[test]
+    fn a_stopped_session_is_gone_once_its_guard_drops() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let guard = register(
+            Some([0xEE; 32]),
+            (640, 480, 30),
+            stop.clone(),
+            "gone".into(),
+            LiveDisplay::default(),
+            None,
+        );
+        assert!(!all_gone(std::slice::from_ref(&stop)));
+        drop(guard);
+        assert!(all_gone(&[stop]));
     }
 }

@@ -328,14 +328,20 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         clip_cmd_rx,
     ));
 
-    // Connection close: classify, then shutdown.
+    // Connection close: classify, then shutdown. A lost `punktfunk/2` session is kept for the
+    // next dial's resume.
     {
         let shared = shared.clone();
         let conn = conn.clone();
+        let (host, port) = (params.host.clone(), params.port);
         tokio::spawn(async move {
             let why = conn.closed().await;
             // Reason before `shutdown`: different threads observe the two; the flag must not win.
             let reason = crate::client::PunktfunkEndReason::from(&why);
+            let lost_v2 = *shared.v2_session.lock().unwrap_or_else(|e| e.into_inner());
+            if let (crate::client::PunktfunkEndReason::Lost, Some(id)) = (reason, lost_v2) {
+                crate::client::resume::note_lost(&host, port, id);
+            }
             // Mid-session typed close (access expiry, …) beside the coarse reason, same order.
             // The host's sentence lands before the code: a reader that sees the code must
             // not find the text still missing.

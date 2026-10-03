@@ -367,6 +367,7 @@ fn run(
                 isolation: None,
                 audio_sink: Default::default(),
             },
+            None,
         );
         tracing::info!(
             ?compositor,
