@@ -217,7 +217,7 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | `PUNKTFUNK_DSCP` | `1` · `0` | QoS marking on media packets. Default: on toward private-network clients, off toward internet addresses. `1` always, `0` never. |
 | `PUNKTFUNK_JUMBO` | `1` | Jumbo frames (about 9000-byte packets) on a wired LAN — see below. |
 | `PUNKTFUNK_WIRE_MTU` | on-wire MTU, e.g. `9000` or `1400` | Above 1500: jumbo frames at that size. Below 1500: smaller packets from the start, for a VPN or tunnel. Use the MTU your network adapter reports. |
-| `PUNKTFUNK_PROTOCOL` | `2` | Streams to clients that offer it over the new `punktfunk/2` protocol, with video on the QUIC port instead of a second UDP port. A preview; clients that don't offer it keep `punktfunk/1`. |
+| `PUNKTFUNK_PROTOCOL` | `2` | Streams to clients that offer it over the `punktfunk/2` protocol, with video on the QUIC port instead of a second UDP port. A preview; clients that don't offer it keep `punktfunk/1`. |
 
 Jumbo frames need every NIC and switch on the path set to MTU `9000` first. The host probes the path
 and switches mid-session only once the client confirms; a path that can't carry them stays at
