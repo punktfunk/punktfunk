@@ -38,8 +38,8 @@ and forces it off for an SDR session; Windows' own **Use HDR** switch doesn't ma
 
 The Linux route to HDR on KDE and GNOME, and in Game Mode everywhere.
 
-1. Install **`punktfunk-gamescope`**; stock gamescope captures 8-bit.
-   [HDR on gamescope](/docs/gamescope#hdr-on-gamescope) has the package for your distro.
+1. Have **`punktfunk-gamescope`**; stock gamescope captures 8-bit. The host packages install it;
+   [HDR on gamescope](/docs/gamescope#hdr-on-gamescope) covers every distro.
 2. Restart the host. It reads what the gamescope build can do once, at startup.
 3. Let the host start the gamescope session, which is the default. A session it attaches to
    instead streams SDR: turn off **Attach mode** under **Host → Settings → Game Mode**, or delete

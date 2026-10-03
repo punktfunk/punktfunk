@@ -123,6 +123,9 @@ Requires:       opus
 Requires:       libei
 # A compositor to drive. Bazzite ships gamescope; the others are user choice.
 Recommends:     gamescope
+# HDR, the real mode and the cursor in a gamescope session. Weak because a Fedora major whose
+# gamescope build failed publishes none; dnf skips a weak dep it can't find.
+Recommends:     punktfunk-gamescope
 Suggests:       kwin
 Suggests:       mutter
 # NVENC + GPU EGL come from the NVIDIA driver; on Bazzite the -nvidia image has it.
