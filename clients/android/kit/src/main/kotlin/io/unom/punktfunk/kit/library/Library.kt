@@ -2,6 +2,7 @@ package io.unom.punktfunk.kit.library
 
 import android.util.Log
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.SessionAccess
 import okhttp3.Cache
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -112,6 +113,8 @@ data class GameEntry(
     val genres: List<String> = emptyList(),
     /** Null until the host has launched the title once. */
     val stats: GameStats? = null,
+    /** A title a plugin installs. Null is installed, as every other title is. */
+    val install: TitleInstall? = null,
 ) {
     val isCustom: Boolean get() = store == "custom"
 
@@ -201,7 +204,123 @@ sealed class LibraryResult {
 data class HostStatus(
     val games: List<RunningGame> = emptyList(),
     val downloads: List<Download> = emptyList(),
+    /** This device's live grants; null from a host that predates the field. */
+    val grants: Int? = null,
 )
+
+/** A title's files on the host, from the library entry's `install`. */
+data class TitleInstall(
+    /** `installed` or `missing`; a word this build doesn't know reads as installed. */
+    val state: String,
+    /** The download size while missing, the size on disk once installed. */
+    val sizeBytes: Long? = null,
+    /** Free space where the download goes. */
+    val freeBytes: Long? = null,
+) {
+    val missing: Boolean get() = state == "missing"
+}
+
+/**
+ * What a title menu offers for a title's files; at most one applies. The rules and words are the
+ * Rust client's (`pf_client_core::library::InstallAction`).
+ */
+enum class InstallAction {
+    Install, Pause, Resume, Remove;
+
+    /** The menu row: `Install · 26 GB (212 GB free)`, `Remove download · 26 GB`. */
+    fun label(install: TitleInstall?): String {
+        val size = install?.sizeBytes?.let(::humanBytes)
+        return when (this) {
+            Install -> {
+                val free = install?.freeBytes?.let(::humanBytes)
+                when {
+                    size != null && free != null -> "Install · $size ($free free)"
+                    size != null -> "Install · $size"
+                    else -> "Install"
+                }
+            }
+            Pause -> "Pause download"
+            Resume -> "Resume download"
+            Remove -> if (size != null) "Remove download · $size" else "Remove download"
+        }
+    }
+
+    internal val verb: String get() = name.lowercase()
+
+    companion object {
+        /** The one row, if any. Null [grants] (an older host) allows starting a download only. */
+        fun forTitle(install: TitleInstall?, download: Download?, grants: Int?): InstallAction? {
+            if (install == null) return null
+            val launch = grants == null || grants and SessionAccess.LAUNCH != 0
+            val manage = grants != null && grants and SessionAccess.MANAGE_GAMES != 0
+            val action = when (download?.state) {
+                "queued", "downloading" -> Pause
+                "installing" -> return null
+                "paused" -> Resume
+                "done" -> Remove
+                else -> if (install.missing) Install else Remove
+            }
+            val allowed = if (action == Install || action == Resume) launch else manage
+            return action.takeIf { allowed }
+        }
+    }
+}
+
+/** A tile's mark for a title's files; an installed title has none. Same words as the Rust tiles. */
+data class TileBadge(
+    /** `download`, `pause` or `alert`. */
+    val icon: String,
+    /** `42 %`, `26 GB`, `Not installed`, `Queued`. */
+    val text: String,
+) {
+    companion object {
+        fun forTitle(install: TitleInstall?, download: Download?): TileBadge? {
+            val pct = { d: Download -> d.fraction?.let { "${(it * 100).toInt()} %" } ?: "Queued" }
+            return when {
+                download != null && download.live -> TileBadge("download", pct(download))
+                download?.state == "paused" -> TileBadge("pause", pct(download))
+                download?.state == "failed" -> TileBadge("alert", "Not installed")
+                install?.missing == true ->
+                    TileBadge("download", install.sizeBytes?.let(::humanBytes) ?: "Not installed")
+                else -> null
+            }
+        }
+    }
+}
+
+/** What asking the host to change a title's files came to. The Rust client's `InstallOutcome`. */
+sealed class InstallOutcome {
+    data object Done : InstallOutcome()
+
+    /** `403`/`404`/`409` with the host's own sentence. */
+    data class Refused(val message: String) : InstallOutcome()
+
+    /** A host without the route. */
+    data object Unsupported : InstallOutcome()
+    data class Failed(val why: String) : InstallOutcome()
+
+    /** The player-facing line. */
+    fun notice(action: InstallAction, title: String): String = when (this) {
+        Done -> when (action) {
+            InstallAction.Install, InstallAction.Resume -> "Downloading $title."
+            InstallAction.Pause -> "Paused $title's download."
+            InstallAction.Remove -> "Removed $title. Saves stay on the host."
+        }
+        is Refused -> message
+        Unsupported -> "This host needs an update to manage games from here."
+        is Failed -> "Couldn't ${action.verb} $title — $why"
+    }
+
+    companion object {
+        /** An answer: the host's sentence when it sent one, else the route is missing. */
+        fun fromReply(code: Int, message: String?): InstallOutcome = when {
+            code in 200..299 -> Done
+            !message.isNullOrBlank() -> Refused(message)
+            code == 401 || code == 404 || code == 405 -> Unsupported
+            else -> Failed("the host refused it ($code)")
+        }
+    }
+}
 
 /**
  * One title's download, from `GET /api/v1/status` `downloads[]`. Its words match the Rust console
@@ -508,6 +627,41 @@ object LibraryClient {
         }
     }
 
+    /**
+     * Start, resume, pause or remove a title's download (`/api/v1/library/install/{id}`).
+     * BLOCKING; call from IO.
+     */
+    fun changeInstall(
+        address: String,
+        mgmtPort: Int = DEFAULT_MGMT_PORT,
+        certPem: String,
+        keyPem: String,
+        fpHex: String,
+        appId: String,
+        action: InstallAction,
+    ): InstallOutcome {
+        if (fpHex.isBlank() || appId.isBlank()) return InstallOutcome.Failed("this host isn't paired")
+        return try {
+            val url = "${mgmtBase(address, mgmtPort)}/api/v1/library/install/" +
+                java.net.URLEncoder.encode(appId, "UTF-8").replace("+", "%20").replace("%3A", ":")
+            val empty = ByteArray(0).toRequestBody(null)
+            val req = when (action) {
+                InstallAction.Install, InstallAction.Resume -> Request.Builder().url(url).post(empty)
+                InstallAction.Pause -> Request.Builder().url("$url/pause").post(empty)
+                InstallAction.Remove -> Request.Builder().url(url).delete()
+            }.build()
+            mtlsHttpClient(certPem, keyPem, address, fpHex).newCall(req).execute().use { resp ->
+                val message = runCatching {
+                    str(JSONObject(resp.body?.string().orEmpty()), "message")
+                }.getOrNull()
+                InstallOutcome.fromReply(resp.code, message)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "install change failed", e)
+            InstallOutcome.Failed(e.message ?: "couldn't reach the host")
+        }
+    }
+
     /** A non-200 answer. 401 and 403 both mean "not paired", as on desktop and Apple. */
     internal fun refused(code: Int): LibraryResult =
         if (code == 401 || code == 403) {
@@ -576,9 +730,10 @@ object LibraryClient {
         return last
     }
 
-    /** Just the `games[]` slice of `/status`; everything else on that payload is the console's. */
+    /** The `games[]`, `downloads[]` and `grants` of `/status`; the rest is the console's. */
     internal fun parseStatus(json: String): HostStatus {
-        val downloads = JSONObject(json).optJSONArray("downloads") ?: JSONArray()
+        val root = JSONObject(json)
+        val downloads = root.optJSONArray("downloads") ?: JSONArray()
         val out = ArrayList<Download>(downloads.length())
         for (i in 0 until downloads.length()) {
             val o = downloads.optJSONObject(i) ?: continue
@@ -595,7 +750,8 @@ object LibraryClient {
                 ),
             )
         }
-        return HostStatus(parseRunning(json), out)
+        val grants = if (root.has("grants") && !root.isNull("grants")) root.optInt("grants") else null
+        return HostStatus(parseRunning(json), out, grants)
     }
 
     internal fun parseRunning(json: String): List<RunningGame> {
@@ -645,6 +801,13 @@ object LibraryClient {
                         (0 until g.length()).mapNotNull { g.optString(it).ifBlank { null } }
                     } ?: emptyList(),
                     stats = GameStats.from(o.optJSONObject("stats")),
+                    install = o.optJSONObject("install")?.let { i ->
+                        TitleInstall(
+                            state = i.optString("state"),
+                            sizeBytes = if (i.has("size_bytes")) i.optLong("size_bytes") else null,
+                            freeBytes = if (i.has("free_bytes")) i.optLong("free_bytes") else null,
+                        )
+                    },
                 ),
             )
         }

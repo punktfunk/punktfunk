@@ -42,6 +42,8 @@ import io.unom.punktfunk.kit.library.LibraryCache
 import io.unom.punktfunk.kit.link.StartScreen
 import io.unom.punktfunk.kit.link.host
 import io.unom.punktfunk.kit.library.GameEntry
+import io.unom.punktfunk.kit.library.InstallAction
+import io.unom.punktfunk.kit.library.InstallOutcome
 import io.unom.punktfunk.kit.library.LibraryClient
 import io.unom.punktfunk.kit.library.LibraryResult
 import io.unom.punktfunk.kit.library.RunningGame
@@ -839,6 +841,7 @@ object SkiaConsole {
                     c.optJSONObject("SpeedTest")?.let(::speedTest)
                     c.optJSONObject("HostAction")?.let(::hostAction)
                     c.optJSONObject("EndGame")?.let(::endGame)
+                    c.optJSONObject("Install")?.let(::changeInstall)
                     c.optJSONObject("SaveHost")?.let(::saveHost)
                     c.optJSONObject("UpdateHost")?.let(::updateHost)
                     c.optJSONObject("ForgetHost")?.let(::forgetHost)
@@ -1090,6 +1093,30 @@ object SkiaConsole {
         }
     }
 
+    /**
+     * Start, resume, pause or remove a title's download, say how it went, then re-read the host:
+     * the whole catalog after a removal (the title's tile turns to "not installed"), else `/status`.
+     */
+    private fun changeInstall(c: JSONObject) {
+        val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+        val appId = c.optString("app_id"); val title = c.optString("title")
+        val action = runCatching { InstallAction.valueOf(c.optString("action")) }.getOrNull() ?: return
+        val id = identity
+        if (id == null) {
+            notice(identities.blockedMessage())
+            return
+        }
+        ioPool.execute {
+            val outcome =
+                LibraryClient.changeInstall(addr, mgmt, id.certPem, id.privateKeyPem, fp, appId, action)
+            main.post {
+                notice(outcome.notice(action, title))
+                val removed = outcome == InstallOutcome.Done && action == InstallAction.Remove
+                fetchLibrary(c, refreshOnly = !removed)
+            }
+        }
+    }
+
     private fun pair(c: JSONObject) {
         val addr = c.optString("addr"); val port = c.optInt("port")
         val pin = c.optString("pin"); val name = c.optString("device_name")
@@ -1169,7 +1196,10 @@ object SkiaConsole {
                 main.post {
                     if (handle == 0L) return@post
                     if (gen == fetchGen.get()) {
-                        NativeBridge.nativeConsoleLibraryDownloads(handle, ConsoleJson.downloads(status.downloads))
+                        NativeBridge.nativeConsoleLibraryDownloads(
+                            handle,
+                            ConsoleJson.downloads(status.downloads, status.grants),
+                        )
                         NativeBridge.nativeConsoleLibraryRunning(handle, ConsoleJson.runningGames(games))
                     }
                     // The carousel behind the shelf shows the same fact from its own map; this

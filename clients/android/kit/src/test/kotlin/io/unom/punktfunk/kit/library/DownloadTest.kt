@@ -38,4 +38,47 @@ class DownloadTest {
         assertEquals("3.1 GB so far", Download("a", "downloading", doneBytes = 3_100_000_000).line())
         assertEquals("512 kB", humanBytes(512_000))
     }
+
+    /** The Rust client's rules: one row per title, only what the grants allow. */
+    @Test
+    fun aTitlesMenuOffersTheOneActionItsFilesAllow() {
+        val missing = TitleInstall("missing", sizeBytes = 26_000_000_000, freeBytes = 212_000_000_000)
+        val installed = missing.copy(state = "installed")
+        val all = 0xFF
+        val pick = InstallAction::forTitle
+        assertNull(pick(null, null, all))
+        assertEquals(InstallAction.Install, pick(missing, null, all))
+        assertEquals(InstallAction.Pause, pick(missing, Download("a", "downloading"), all))
+        assertNull(pick(missing, Download("a", "installing"), all))
+        assertEquals(InstallAction.Resume, pick(missing, Download("a", "paused"), all))
+        assertEquals(InstallAction.Remove, pick(installed, null, all))
+        assertEquals(InstallAction.Install, pick(missing, null, SessionAccessLaunch))
+        assertNull(pick(installed, null, SessionAccessLaunch))
+        assertNull(pick(installed, null, null))
+        assertEquals("Install · 26 GB (212 GB free)", InstallAction.Install.label(missing))
+        assertEquals("Remove download · 26 GB", InstallAction.Remove.label(installed))
+
+        assertEquals(TileBadge("download", "26 GB"), TileBadge.forTitle(missing, null))
+        assertNull(TileBadge.forTitle(installed, null))
+        assertEquals(
+            TileBadge("pause", "42 %"),
+            TileBadge.forTitle(missing, Download("a", "paused", doneBytes = 429, totalBytes = 1000)),
+        )
+        assertEquals(
+            "Quit Quail first.",
+            InstallOutcome.fromReply(409, "Quit Quail first.").notice(InstallAction.Remove, "Quail"),
+        )
+        assertEquals(
+            "This host needs an update to manage games from here.",
+            InstallOutcome.fromReply(404, null).notice(InstallAction.Pause, "Quail"),
+        )
+        assertEquals(
+            0xFF,
+            LibraryClient.parseStatus("""{"games":[],"grants":255}""").grants,
+        )
+    }
+
+    private companion object {
+        const val SessionAccessLaunch = io.unom.punktfunk.kit.SessionAccess.LAUNCH
+    }
 }
