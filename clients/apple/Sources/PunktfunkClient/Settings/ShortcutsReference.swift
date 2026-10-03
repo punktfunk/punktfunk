@@ -62,10 +62,13 @@ enum ShortcutsCatalog {
         #if os(macOS)
         var keyboard: [ShortcutItem] = [
             .init(keys: "Click", text: "Capture the mouse and keyboard for the stream"),
-            .init(keys: "⌃⌥⇧Q", text: "Release the mouse and keyboard back to this Mac"),
+            .init(keys: "⌃⌥⇧Q or ⌘⎋", text: "Release the mouse and keyboard back to this Mac"),
             .init(keys: "⌃⌥⇧D", text: "Disconnect"),
             .init(keys: "⌃⌥⇧S", text: "Cycle the statistics overlay"),
             .init(keys: "⌃⌥⇧O", text: "Open the quick actions dial"),
+            .init(keys: "⌃⌥⇧M", text: "Switch the mouse mode"),
+            .init(keys: "⌃⌥⇧C", text: "Start or stop clipboard sharing"),
+            .init(keys: "⌃⌘F", text: "Toggle fullscreen (after ⌘⎋, or with Capture system shortcuts off)"),
         ]
         if micAvailable {
             keyboard.append(.init(keys: "⌃⌥⇧A", text: "Mute or unmute the microphone"))
@@ -75,10 +78,11 @@ enum ShortcutsCatalog {
         // iPad with a hardware keyboard gets the same cross-client set as the Mac (StreamCommands
         // publishes it either way); a phone simply never sees a keyboard to press it on.
         var keyboard: [ShortcutItem] = [
-            .init(keys: "⌃⌥⇧Q", text: "Release the pointer back to this device"),
+            .init(keys: "⌃⌥⇧Q or ⌘⎋", text: "Release the pointer back to this device"),
             .init(keys: "⌃⌥⇧D", text: "Disconnect"),
             .init(keys: "⌃⌥⇧S", text: "Cycle the statistics overlay"),
             .init(keys: "⌃⌥⇧O", text: "Open the quick actions dial"),
+            .init(keys: "⌃⌥⇧C", text: "Start or stop clipboard sharing"),
         ]
         if micAvailable {
             keyboard.append(.init(keys: "⌃⌥⇧A", text: "Mute or unmute the microphone"))
@@ -87,6 +91,9 @@ enum ShortcutsCatalog {
         groups.append(.init(title: "Touch", items: [
             .init(keys: "Two-finger twist", text: "Open the quick actions dial"),
             .init(keys: "Three-finger tap", text: "Cycle the statistics overlay"),
+            .init(keys: "Three-finger swipe up", text: "Show the keyboard"),
+            .init(keys: "Three-finger swipe down", text: "Hide the keyboard"),
+            .init(keys: "Two fingers from a side edge", text: "Open the quick actions dial in Touch passthrough"),
         ]))
         #elseif os(tvOS)
         // The remote section leads on tvOS: it carries the ONLY exits. Menu/B is swallowed during
