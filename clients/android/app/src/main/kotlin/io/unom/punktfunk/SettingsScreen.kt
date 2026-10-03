@@ -135,6 +135,7 @@ fun SettingsScreen(
     if (scopeId != null && active == null) scopeId = null
 
     var showLicenses by remember { mutableStateOf(false) }
+    var showShortcuts by remember { mutableStateOf(false) }
     var showControllers by remember { mutableStateOf(false) }
     var showQuickActions by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditIntent?>(null) }
@@ -196,6 +197,10 @@ fun SettingsScreen(
     // Deep sub-screens replace the whole settings surface (they carry their own back).
     if (showLicenses) {
         LicensesScreen(onBack = { showLicenses = false })
+        return
+    }
+    if (showShortcuts) {
+        ShortcutsScreen(onBack = { showShortcuts = false })
         return
     }
     if (showControllers) {
@@ -287,6 +292,7 @@ fun SettingsScreen(
                         onOpenControllers = { showControllers = true },
                         onOpenQuickActions = { showQuickActions = true },
                         onOpenLicenses = { showLicenses = true },
+                        onOpenShortcuts = { showShortcuts = true },
                         onBack = back,
                     )
                 }
@@ -618,6 +624,7 @@ private fun CategoryDetail(
     onOpenControllers: () -> Unit,
     onOpenQuickActions: () -> Unit,
     onOpenLicenses: () -> Unit,
+    onOpenShortcuts: () -> Unit,
     onBack: (() -> Unit)?,
 ) {
     Column(
@@ -641,7 +648,7 @@ private fun CategoryDetail(
             SettingsCategory.Input -> InputSettings(settings, onChange, onOpenQuickActions)
             SettingsCategory.Audio -> AudioSettings(settings, onChange, onMicChange)
             SettingsCategory.Controllers -> ControllerSettings(settings, onChange, onOpenControllers)
-            SettingsCategory.About -> AboutSettings(context, onOpenLicenses)
+            SettingsCategory.About -> AboutSettings(context, onOpenShortcuts, onOpenLicenses)
         }
     }
 }
@@ -1337,7 +1344,11 @@ private fun ControllerSettings(s: Settings, update: (Settings) -> Unit, onOpenCo
 }
 
 @Composable
-private fun AboutSettings(context: android.content.Context, onOpenLicenses: () -> Unit) {
+private fun AboutSettings(
+    context: android.content.Context,
+    onOpenShortcuts: () -> Unit,
+    onOpenLicenses: () -> Unit,
+) {
     // The app's own version, read from the installed package (the WinUI/Apple About convention:
     // identity first, then the legal rows). Empty on a harness with no real package info.
     val version = remember {
@@ -1357,6 +1368,11 @@ private fun AboutSettings(context: android.content.Context, onOpenLicenses: () -
                 )
             }
         }
+        ClickableRow(
+            title = "Stream controls",
+            subtitle = "Keys, gestures and controller chords",
+            onClick = onOpenShortcuts,
+        )
         ClickableRow(
             title = "Open-source licenses",
             subtitle = "Third-party notices and credits",
