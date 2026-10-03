@@ -23,6 +23,16 @@ pub const V2_STREAM_VIDEO: u8 = 0;
 pub const V2_STREAM_PROBE: u8 = 1;
 /// `flags` bit 15: this block ends the frame and `pad` counts.
 pub const V2_LAST_BLOCK: u16 = 0x8000;
+// A user flag at bit 15 or above would read as the last-block bit.
+const _: () = assert!(
+    (USER_FLAG_RECOVERY_POINT
+        | USER_FLAG_RECOVERY_ANCHOR
+        | USER_FLAG_RECOVERY_CLOSE
+        | USER_FLAG_CHUNK_ALIGNED
+        | USER_FLAG_SLICE_STREAM
+        | USER_FLAG_REPEAT)
+        < V2_LAST_BLOCK as u32
+);
 
 /// What a sender stamps beyond the logical header.
 #[derive(Clone, Copy, Debug)]
