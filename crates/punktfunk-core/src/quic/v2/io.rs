@@ -101,7 +101,7 @@ pub async fn read_stream_type<R: AsyncRead + Unpin>(recv: &mut R) -> std::io::Re
 
 /// A control stream's read half on the v2 wire, read as `punktfunk/1`: each v2 frame becomes
 /// the `u16 ‖ message` bytes [`crate::quic::io::MsgReader`] expects, through `edge`. A frame
-/// with no v1 form is skipped.
+/// with no v1 form is skipped; a hello the edge cannot read fails the stream.
 pub struct V2Reader<R> {
     inner: R,
     edge: std::sync::Arc<std::sync::Mutex<RxEdge>>,
@@ -140,11 +140,13 @@ impl<R: AsyncRead + Unpin> AsyncRead for V2Reader<R> {
             let next = split_frame(&this.wire, max_body)
                 .map_err(|_| invalid("v2 frame over its type's bound"))?;
             if let Some((ty, body, n)) = next {
-                let msg = this
-                    .edge
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .to_v1(ty, body);
+                let (msg, bad_hello) = {
+                    let mut edge = this.edge.lock().unwrap_or_else(|e| e.into_inner());
+                    (edge.to_v1(ty, body), edge.bad_hello.take())
+                };
+                if let Some(why) = bad_hello {
+                    return Poll::Ready(Err(invalid(why)));
+                }
                 this.wire.drain(..n);
                 if let Some(m) = msg {
                     let len = u16::try_from(m.len()).map_err(|_| invalid("message over 64 KiB"))?;
@@ -310,6 +312,27 @@ mod tests {
             .unwrap();
         let msg = crate::quic::io::read_msg(&mut reader).await.unwrap();
         assert_eq!(SetBitrate::decode(&msg).unwrap().bitrate_kbps, 7);
+    }
+
+    /// A hello this build cannot read fails the stream at once; waiting for a readable one
+    /// would only run out the connect timeout.
+    #[tokio::test]
+    async fn an_unreadable_server_hello_fails_the_stream() {
+        use crate::quic::v2::field::Fields;
+        use crate::quic::v2::registry::MSG_SERVER_HELLO;
+        let (mut tx, rx) = tokio::io::duplex(4096);
+        let mut reader = V2Reader::new(rx, Default::default());
+        let body = Fields::new().bytes(1, &[0; 16]).u8(3, 9).into_body();
+        let mut frame = Vec::new();
+        put_varint(&mut frame, MSG_SERVER_HELLO);
+        put_varint(&mut frame, body.len() as u64);
+        frame.extend_from_slice(&body);
+        tx.write_all(&frame).await.unwrap();
+        let mut out = [0u8; 2];
+        let err = tokio::io::AsyncReadExt::read(&mut reader, &mut out)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[tokio::test]

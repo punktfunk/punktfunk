@@ -158,6 +158,8 @@ pub struct RxEdge {
     pub clock: Option<std::sync::Arc<SessionClock>>,
     /// Client side: a `Pending` arrived, so the host is still deciding on this device.
     pub pending: bool,
+    /// A hello this build cannot read; the reader fails the stream instead of waiting on.
+    pub bad_hello: Option<&'static str>,
 }
 
 impl RxEdge {
@@ -176,7 +178,10 @@ impl RxEdge {
                 Some(pr.encode())
             }
             reg::MSG_CLIENT_HELLO => {
-                let ch = ClientHello::from_body(body).ok()?;
+                let Ok(ch) = ClientHello::from_body(body) else {
+                    self.bad_hello = Some("unreadable ClientHello");
+                    return None;
+                };
                 self.client = Some(ClientExtra {
                     start_ext: ch.start_ext,
                     resume: ch.resume,
@@ -195,7 +200,10 @@ impl RxEdge {
                 Start { client_udp_port: 0 }.encode_ext(&refs).ok()
             }
             reg::MSG_SERVER_HELLO => {
-                let sh = ServerHello::from_body(body).ok()?;
+                let Ok(sh) = ServerHello::from_body(body) else {
+                    self.bad_hello = Some("unreadable ServerHello");
+                    return None;
+                };
                 self.server = Some(SessionFields {
                     session_id: sh.session_id,
                     clock_origin_ns: sh.clock_origin_ns,
