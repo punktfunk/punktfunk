@@ -628,11 +628,18 @@
 // Not a datagram; [`classify`] is untouched. Machine power only — never plugin actions.
 #define PUNKTFUNK_GRANT_POWER 64
 
+// Pause and remove a title's download on the mgmt cert lane (`design/plugin-downloads.md`).
+// Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
+#define PUNKTFUNK_GRANT_MANAGE_GAMES 128
+
 // An omitted Welcome or registry mask reads as this: every bit above.
-#define PUNKTFUNK_GRANT_ALL 127
+#define PUNKTFUNK_GRANT_ALL 255
 
 // Stored "Full control" before [`GRANT_POWER`]. [`normalize_legacy_full`] lifts it.
 #define PUNKTFUNK_GRANT_ALL_PRE_POWER 63
+
+// Stored "Full control" before [`GRANT_MANAGE_GAMES`]. [`normalize_legacy_full`] lifts it.
+#define PUNKTFUNK_GRANT_ALL_PRE_MANAGE 127
 
 // The management API rejects these; it never silently clears unknown bits
 // (that would grant less than the caller asked).

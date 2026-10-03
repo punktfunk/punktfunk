@@ -13,6 +13,7 @@ import io.unom.punktfunk.kit.library.DEFAULT_MGMT_PORT
 import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.RunningGame
+import io.unom.punktfunk.kit.library.TitleInstall
 import io.unom.punktfunk.kit.security.KnownHost
 import io.unom.punktfunk.deviceDetail
 import io.unom.punktfunk.matches
@@ -272,10 +273,16 @@ internal object ConsoleJson {
                     .put("year", g.releaseYear ?: JSONObject.NULL)
                     .put("genres", JSONArray(g.genres))
                     .put("stats", g.stats?.toJson() ?: JSONObject.NULL)
-                    .put("running", false),
+                    .put("running", false)
+                    .put("install", g.install?.let(::installJson) ?: JSONObject.NULL),
             )
         }
         return out.toString()
+    }
+
+    private fun installJson(i: TitleInstall): JSONObject = JSONObject().put("state", i.state).apply {
+        i.sizeBytes?.let { put("size_bytes", it) }
+        i.freeBytes?.let { put("free_bytes", it) }
     }
 
     /** `GameEntry::icon_token`'s re-validation: lowercase-first, ≤ 32 chars of [a-z0-9-]. */
@@ -292,8 +299,8 @@ internal object ConsoleJson {
 
     fun stringArray(items: Collection<String>): String = JSONArray(items).toString()
 
-    /** `/status` games as the console's `RunningGame` mirror; an entry without an id has no tile. */
-    fun downloads(downloads: List<Download>): String {
+    /** `/status` `downloads[]` and `grants`, as the console's `DownloadsPush`. */
+    fun downloads(downloads: List<Download>, grants: Int?): String {
         val out = JSONArray()
         for (d in downloads) {
             val o = JSONObject().put("app_id", d.appId).put("state", d.state)
@@ -305,9 +312,10 @@ internal object ConsoleJson {
             d.error?.let { o.put("error", it) }
             out.put(o)
         }
-        return out.toString()
+        return JSONObject().put("downloads", out).put("grants", grants ?: JSONObject.NULL).toString()
     }
 
+    /** `/status` games as the console's `RunningGame` mirror; an entry without an id has no tile. */
     fun runningGames(games: List<RunningGame>): String {
         val out = JSONArray()
         for (g in games) {

@@ -7,8 +7,8 @@
 //! An omitted mask is [`GRANT_ALL`].
 //!
 //! [`classify`] is the input-plane table: exhaustive [`InputKind`] →
-//! [`GrantClass`], no wildcard. Clipboard, mic, launch, and power are
-//! plane and route gates, not `0xC8` events.
+//! [`GrantClass`], no wildcard. Clipboard, mic, launch, power, and manage-games
+//! are plane and route gates, not `0xC8` events.
 //!
 //! Tests in this file pin the bit layout, presets, legacy-full read, and
 //! the classifier table.
@@ -32,18 +32,23 @@ pub const GRANT_LAUNCH: u32 = 0x20;
 /// `power.*` (sleep/reboot/shutdown) on the mgmt cert lane (`design/host-actions.md`).
 /// Not a datagram; [`classify`] is untouched. Machine power only — never plugin actions.
 pub const GRANT_POWER: u32 = 0x40;
+/// Pause and remove a title's download on the mgmt cert lane (`design/plugin-downloads.md`).
+/// Starting one is [`GRANT_LAUNCH`]: launching a missing title installs it anyway.
+pub const GRANT_MANAGE_GAMES: u32 = 0x80;
 
 /// An omitted Welcome or registry mask reads as this: every bit above.
-pub const GRANT_ALL: u32 = 0x7F;
+pub const GRANT_ALL: u32 = 0xFF;
 
 /// Stored "Full control" before [`GRANT_POWER`]. [`normalize_legacy_full`] lifts it.
 pub const GRANT_ALL_PRE_POWER: u32 = 0x3F;
+/// Stored "Full control" before [`GRANT_MANAGE_GAMES`]. [`normalize_legacy_full`] lifts it.
+pub const GRANT_ALL_PRE_MANAGE: u32 = 0x7F;
 
-/// Exact [`GRANT_ALL_PRE_POWER`] → [`GRANT_ALL`]. Other masks pass through.
-/// That stored Full already has `KEYBOARD`+`POINTER` (desktop power menu), so
-/// "everything except Power" is not an expressible stored mask.
+/// Exact [`GRANT_ALL_PRE_POWER`] or [`GRANT_ALL_PRE_MANAGE`] → [`GRANT_ALL`]. Other masks
+/// pass through. Those stored Fulls already have `KEYBOARD`+`POINTER` (the desktop's power
+/// menu, the store's own uninstall), so "everything except the new bit" is not expressible.
 pub fn normalize_legacy_full(mask: u32) -> u32 {
-    if mask == GRANT_ALL_PRE_POWER {
+    if mask == GRANT_ALL_PRE_POWER || mask == GRANT_ALL_PRE_MANAGE {
         GRANT_ALL
     } else {
         mask
@@ -61,8 +66,8 @@ pub const GRANT_PRESET_CONTROLLER_ONLY: u32 = GRANT_GAMEPAD;
 /// UI preset "View only" — the spectator sends nothing.
 pub const GRANT_PRESET_VIEW_ONLY: u32 = 0;
 
-/// [`classify`] covers `0xC8` events; Clipboard/Mic/Launch/Power name the
-/// plane and route gates so drop counters share this vocabulary.
+/// [`classify`] covers `0xC8` events; Clipboard/Mic/Launch/Power/ManageGames name
+/// the plane and route gates so drop counters share this vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrantClass {
     Gamepad,
@@ -73,13 +78,15 @@ pub enum GrantClass {
     Launch,
     /// `power.*` on the mgmt cert lane — never an input event.
     Power,
+    /// Download pause and removal on the mgmt cert lane — never an input event.
+    ManageGames,
 }
 
 impl GrantClass {
     /// Every class, in bit order. Tables indexed by [`GrantClass::bit`] size from this.
     ///
     /// cbindgen:ignore
-    pub const ALL: [GrantClass; 7] = [
+    pub const ALL: [GrantClass; 8] = [
         Self::Gamepad,
         Self::Pointer,
         Self::Keyboard,
@@ -87,6 +94,7 @@ impl GrantClass {
         Self::Mic,
         Self::Launch,
         Self::Power,
+        Self::ManageGames,
     ];
 
     pub fn bit(self) -> u32 {
@@ -98,6 +106,7 @@ impl GrantClass {
             Self::Mic => GRANT_MIC,
             Self::Launch => GRANT_LAUNCH,
             Self::Power => GRANT_POWER,
+            Self::ManageGames => GRANT_MANAGE_GAMES,
         }
     }
 }
@@ -141,6 +150,7 @@ mod tests {
             GRANT_MIC,
             GRANT_LAUNCH,
             GRANT_POWER,
+            GRANT_MANAGE_GAMES,
         ];
         let mut acc = 0u32;
         for b in bits {
@@ -169,6 +179,8 @@ mod tests {
     fn presets_match_the_design() {
         assert_eq!(GRANT_PRESET_FULL, GRANT_ALL);
         assert_eq!(GRANT_PRESET_FULL & GRANT_POWER, GRANT_POWER);
+        assert_eq!(GRANT_PRESET_FULL & GRANT_MANAGE_GAMES, GRANT_MANAGE_GAMES);
+        assert_eq!(GRANT_PRESET_CONTROLLER_ONLY & GRANT_MANAGE_GAMES, 0);
         assert_eq!(GRANT_PRESET_CONTROLLER_ONLY, GRANT_GAMEPAD);
         assert_eq!(GRANT_PRESET_CONTROLLER_ONLY & GRANT_LAUNCH, 0);
         assert_eq!(GRANT_PRESET_VIEW_ONLY, 0);
@@ -176,8 +188,13 @@ mod tests {
 
     #[test]
     fn legacy_full_reads_as_the_current_full() {
-        assert_eq!(GRANT_ALL_PRE_POWER, GRANT_ALL & !GRANT_POWER);
+        assert_eq!(
+            GRANT_ALL_PRE_POWER,
+            GRANT_ALL & !GRANT_POWER & !GRANT_MANAGE_GAMES
+        );
+        assert_eq!(GRANT_ALL_PRE_MANAGE, GRANT_ALL & !GRANT_MANAGE_GAMES);
         assert_eq!(normalize_legacy_full(GRANT_ALL_PRE_POWER), GRANT_ALL);
+        assert_eq!(normalize_legacy_full(GRANT_ALL_PRE_MANAGE), GRANT_ALL);
         assert_eq!(normalize_legacy_full(GRANT_ALL), GRANT_ALL);
         assert_eq!(normalize_legacy_full(GRANT_GAMEPAD), GRANT_GAMEPAD);
         assert_eq!(normalize_legacy_full(0), 0);
@@ -223,6 +240,7 @@ mod tests {
             ("MIC", GRANT_MIC),
             ("LAUNCH", GRANT_LAUNCH),
             ("POWER", GRANT_POWER),
+            ("MANAGE_GAMES", GRANT_MANAGE_GAMES),
         ];
         let masks = [
             0,
@@ -233,11 +251,14 @@ mod tests {
             GRANT_ALL & !GRANT_LAUNCH,
             GRANT_GAMEPAD | GRANT_CLIPBOARD,
             GRANT_POWER,
-            0x80,
-            0x80 | GRANT_GAMEPAD,
-            0x80 | GRANT_ALL,
-            0x80 | GRANT_ALL_PRE_POWER,
+            GRANT_ALL_PRE_MANAGE,
+            GRANT_ALL_PRE_MANAGE & !GRANT_KEYBOARD,
+            GRANT_MANAGE_GAMES | GRANT_GAMEPAD,
+            0x100,
+            0x100 | GRANT_GAMEPAD,
+            0x100 | GRANT_ALL,
             0x100 | GRANT_ALL_PRE_POWER,
+            0x100 | GRANT_ALL_PRE_MANAGE,
         ];
         let level = |mask: u32| match normalize_legacy_full(mask) & GRANT_ALL {
             GRANT_PRESET_FULL => "full",
@@ -255,7 +276,7 @@ mod tests {
         }
         out += &format!(
             "  }},\n  \"all\": {GRANT_ALL},\n  \"all_pre_power\": {GRANT_ALL_PRE_POWER},\n  \
-             \"masks\": [\n"
+             \"all_pre_manage\": {GRANT_ALL_PRE_MANAGE},\n  \"masks\": [\n"
         );
         for (i, &mask) in masks.iter().enumerate() {
             let comma = if i + 1 < masks.len() { "," } else { "" };
@@ -292,5 +313,6 @@ mod tests {
         assert_eq!(GrantClass::Mic.bit(), GRANT_MIC);
         assert_eq!(GrantClass::Launch.bit(), GRANT_LAUNCH);
         assert_eq!(GrantClass::Power.bit(), GRANT_POWER);
+        assert_eq!(GrantClass::ManageGames.bit(), GRANT_MANAGE_GAMES);
     }
 }

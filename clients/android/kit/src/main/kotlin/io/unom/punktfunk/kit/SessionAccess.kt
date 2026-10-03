@@ -32,18 +32,25 @@ object SessionAccess {
     /** Host power — the `power.*` host actions (`design/host-actions.md`); route-gated, never input. */
     const val POWER = 1 shl 6
 
+    /** Pause and remove a title's download (`design/plugin-downloads.md`); route-gated, never input. */
+    const val MANAGE_GAMES = 1 shl 7
+
     /** Every defined grant — full control, and what an old host's Welcome decodes to. */
-    const val ALL = GAMEPAD or POINTER or KEYBOARD or CLIPBOARD or MIC or LAUNCH or POWER
+    const val ALL = GAMEPAD or POINTER or KEYBOARD or CLIPBOARD or MIC or LAUNCH or POWER or MANAGE_GAMES
 
     /** `ALL` before POWER existed (hosts ≤ 0.32.x) — see [normalizeLegacyFull]. */
     private const val ALL_PRE_POWER = GAMEPAD or POINTER or KEYBOARD or CLIPBOARD or MIC or LAUNCH
 
+    /** `ALL` before MANAGE_GAMES existed — see [normalizeLegacyFull]. */
+    private const val ALL_PRE_MANAGE = ALL_PRE_POWER or POWER
+
     /**
-     * The legacy-full read rule (host-actions §4.3): exactly the pre-power full mask (an old
+     * The legacy-full read rule (host-actions §4.3): exactly an older full mask (an old
      * host's "Full control") reads as the current [ALL], so it labels "Full control", not
      * "Custom". Any other mask passes through.
      */
-    fun normalizeLegacyFull(grants: Int): Int = if (grants == ALL_PRE_POWER) ALL else grants
+    fun normalizeLegacyFull(grants: Int): Int =
+        if (grants == ALL_PRE_POWER || grants == ALL_PRE_MANAGE) ALL else grants
 
     /**
      * The preset name a mask displays as — §3.2's rule: three levels people actually reason

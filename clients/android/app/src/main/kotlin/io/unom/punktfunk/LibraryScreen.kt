@@ -32,6 +32,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
@@ -79,7 +82,12 @@ import coil.ImageLoader
 import io.unom.punktfunk.components.launcherIcon
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.link.DeepLinks
+import io.unom.punktfunk.kit.library.Download
 import io.unom.punktfunk.kit.library.GameEntry
+import io.unom.punktfunk.kit.library.HostStatus
+import io.unom.punktfunk.kit.library.InstallAction
+import io.unom.punktfunk.kit.library.InstallOutcome
+import io.unom.punktfunk.kit.library.TileBadge
 import io.unom.punktfunk.kit.library.LibraryClient
 import io.unom.punktfunk.kit.library.LibraryResult
 import io.unom.punktfunk.kit.library.LibraryCache
@@ -95,6 +103,7 @@ import kotlin.math.absoluteValue
 import kotlin.math.cos
 import kotlin.math.sign
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
@@ -137,6 +146,9 @@ private sealed class LibState {
         val identity: ClientIdentity,
         val running: Map<String, RunningGame> = emptyMap(),
         val stale: Stale = Stale.No,
+        /** `/status` downloads by library id, and this device's grants: host state, as [running]. */
+        val downloads: Map<String, Download> = emptyMap(),
+        val grants: Int? = null,
     ) : LibState() {
         /**
          * Display order: anything already running first, so getting back into it is the first
@@ -169,6 +181,20 @@ private sealed class LibState {
 
     data class Message(val text: String) : LibState() // unauthorized / empty / error
 }
+
+/** A `/status` read on the shelf: what is up, what downloads, and what this device may do. */
+private fun LibState.Ready.withStatus(status: HostStatus) = copy(
+    running = status.games
+        .filter { it.isUp }
+        // Two sessions can have the same title up (the host admits concurrent sessions); for a
+        // Resume badge either one is the same answer, and the endable one (sorted last, so it
+        // wins) carries End game.
+        .sortedBy { it.endable }
+        .mapNotNull { g -> g.appId?.let { it to g } }
+        .toMap(),
+    downloads = status.downloads.associateBy { it.appId },
+    grants = status.grants,
+)
 
 @Composable
 fun LibraryScreen(
@@ -326,6 +352,64 @@ fun LibraryScreen(
             Toast.makeText(context, outcome.notice(game.title), Toast.LENGTH_SHORT).show()
         }
     }
+    // A title's files: the action, the host's answer as a toast, then `/status` again. A removal
+    // turns the tile to "not installed" here; the next load reads the catalog again.
+    var removeAsk by remember { mutableStateOf<GameEntry?>(null) }
+    fun refreshStatus() {
+        val ready = state as? LibState.Ready ?: return
+        scope.launch {
+            val status = withContext(Dispatchers.IO) {
+                LibraryClient.fetchStatus(
+                    host.address, host.effectiveMgmtPort, ready.identity.certPem,
+                    ready.identity.privateKeyPem, host.fpHex,
+                )
+            }
+            (state as? LibState.Ready)?.let { state = it.withStatus(status) }
+        }
+    }
+    fun changeInstall(game: GameEntry, action: InstallAction) {
+        val ready = state as? LibState.Ready ?: return
+        scope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                LibraryClient.changeInstall(
+                    host.address, host.effectiveMgmtPort, ready.identity.certPem,
+                    ready.identity.privateKeyPem, host.fpHex, game.id, action,
+                )
+            }
+            if (outcome == InstallOutcome.Done && action == InstallAction.Remove) {
+                (state as? LibState.Ready)?.let { s ->
+                    state = s.copy(
+                        games = s.games.map { g ->
+                            if (g.id == game.id) g.copy(install = g.install?.copy(state = "missing")) else g
+                        },
+                    )
+                }
+            }
+            Toast.makeText(context, outcome.notice(action, game.title), Toast.LENGTH_SHORT).show()
+            refreshStatus()
+        }
+    }
+    // Percentages move while a download runs and the shelf is up.
+    val downloading = (state as? LibState.Ready)?.downloads?.values?.any { it.live } == true
+    LaunchedEffect(downloading) {
+        while (downloading) {
+            delay(2_000)
+            refreshStatus()
+        }
+    }
+    removeAsk?.let { game ->
+        PunktfunkDialog(
+            title = "Remove ${game.title}?",
+            onDismiss = { removeAsk = null },
+            actions = listOf(
+                DialogAction("Remove download", primary = true) {
+                    removeAsk = null
+                    changeInstall(game, InstallAction.Remove)
+                },
+                DialogAction("Cancel") { removeAsk = null },
+            ),
+        ) { PromptText("Saves stay on the host.") }
+    }
     endAsk?.let { game ->
         PunktfunkDialog(
             title = "End ${game.title}?",
@@ -349,6 +433,9 @@ fun LibraryScreen(
         onLaunch = { identity, game -> launch(identity, game) },
         onCopyLink = { game -> copyLink(game) },
         onEndGame = { game -> endAsk = game },
+        onFiles = { game, action ->
+            if (action == InstallAction.Remove) removeAsk = game else changeInstall(game, action)
+        },
         resumeAt = resumeAt,
     )
 }
@@ -409,8 +496,8 @@ private suspend fun loadLibrary(
             set(LibState.Ready(res.games, loader, identity))
             // Remembered AFTER it is on screen: the disk write is not on the path to a shelf.
             withContext(Dispatchers.IO) { cache.store(key, res.games) }
-            val running = withContext(Dispatchers.IO) {
-                LibraryClient.fetchRunning(
+            val status = withContext(Dispatchers.IO) {
+                LibraryClient.fetchStatus(
                     address = host.address,
                     mgmtPort = host.effectiveMgmtPort,
                     certPem = identity.certPem,
@@ -418,14 +505,7 @@ private suspend fun loadLibrary(
                     fpHex = host.fpHex,
                 )
             }
-                .filter { it.isUp }
-                // Two sessions can have the same title up (the host admits concurrent
-                // sessions); for a Resume badge either one is the same answer, and the endable
-                // one (sorted last, so it wins) carries End game.
-                .sortedBy { it.endable }
-                .mapNotNull { g -> g.appId?.let { it to g } }
-                .toMap()
-            set(LibState.Ready(res.games, loader, identity, running = running))
+            set(LibState.Ready(res.games, loader, identity).withStatus(status))
         }
         // The shelf stays if we have one; only the words change. The player can still pick a
         // title — the launch dials and wakes the host on its own.
@@ -478,6 +558,8 @@ private fun TouchLibrary(
     onCopyLink: (GameEntry) -> Unit,
     /** Ask to end a title this device launched; the caller confirms. */
     onEndGame: (GameEntry) -> Unit = {},
+    /** Install, pause, resume or remove a title's download; the caller confirms a removal. */
+    onFiles: (GameEntry, InstallAction) -> Unit = { _, _ -> },
     /** The title this shelf last launched — where the grid opens. Null on a first visit. */
     resumeAt: String? = null,
 ) {
@@ -548,6 +630,9 @@ private fun TouchLibrary(
                     onCopyLink = onCopyLink,
                     onEndGame = onEndGame,
                     running = state.running,
+                    downloads = state.downloads,
+                    grants = state.grants,
+                    onFiles = onFiles,
                     resumeAt = resumeAt,
                     modifier = Modifier.weight(1f),
                 )
@@ -591,6 +676,10 @@ internal fun TouchGrid(
      * unreachable one, and while a shelf is being served from cache.
      */
     running: Map<String, RunningGame> = emptyMap(),
+    /** `/status` downloads by library id, and this device's grants: a tile's badge and menu row. */
+    downloads: Map<String, Download> = emptyMap(),
+    grants: Int? = null,
+    onFiles: (GameEntry, InstallAction) -> Unit = { _, _ -> },
     /** The title this shelf last launched — where the grid opens. Null on a first visit. */
     resumeAt: String? = null,
     modifier: Modifier = Modifier,
@@ -632,6 +721,7 @@ internal fun TouchGrid(
                 TouchPoster(
                     it, loader, onLaunch, onCopyLink, running[it.id] != null,
                     endable = running[it.id]?.endable == true, onEndGame = onEndGame,
+                    download = downloads[it.id], grants = grants, onFiles = onFiles,
                 )
             }
         }
@@ -641,6 +731,7 @@ internal fun TouchGrid(
                 TouchPoster(
                     it, loader, onLaunch, onCopyLink, running[it.id] != null,
                     endable = running[it.id]?.endable == true, onEndGame = onEndGame,
+                    download = downloads[it.id], grants = grants, onFiles = onFiles,
                 )
             }
         }
@@ -696,8 +787,14 @@ private fun TouchPoster(
     /** Up, and this device launched it: the long press offers End game. */
     endable: Boolean = false,
     onEndGame: (GameEntry) -> Unit = {},
+    /** Its download, if the host reports one. */
+    download: Download? = null,
+    grants: Int? = null,
+    onFiles: (GameEntry, InstallAction) -> Unit = { _, _ -> },
 ) {
     var menu by remember { mutableStateOf(false) }
+    val files = InstallAction.forTitle(game.install, download, grants)
+    val badge = TileBadge.forTitle(game.install, download)
     val shape = MaterialTheme.shapes.medium
     Box {
         Column(
@@ -723,6 +820,10 @@ private fun TouchPoster(
                 if (running) {
                     Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.TopEnd) {
                         RunningBadge(compact = true)
+                    }
+                } else if (badge != null) {
+                    Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.TopEnd) {
+                        FilesBadge(badge)
                     }
                 }
                 Box(Modifier.fillMaxSize().padding(6.dp), contentAlignment = Alignment.TopStart) {
@@ -773,6 +874,15 @@ private fun TouchPoster(
                     onCopyLink(game)
                 },
             )
+            if (files != null) {
+                DropdownMenuItem(
+                    text = { Text(files.label(game.install)) },
+                    onClick = {
+                        menu = false
+                        onFiles(game, files)
+                    },
+                )
+            }
             if (endable) {
                 DropdownMenuItem(
                     text = { Text("End game") },
@@ -783,6 +893,36 @@ private fun TouchPoster(
                 )
             }
         }
+    }
+}
+
+/** A title's files on its tile: `42 %` downloading, paused, failed, or the size to download. */
+@Composable
+private fun FilesBadge(badge: TileBadge) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(PillShape)
+            .background(Color.Black.copy(alpha = 0.72f))
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+    ) {
+        Icon(
+            when (badge.icon) {
+                "pause" -> Icons.Filled.Pause
+                "alert" -> Icons.Filled.Warning
+                else -> Icons.Filled.Download
+            },
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(12.dp),
+        )
+        Text(
+            badge.text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            modifier = Modifier.padding(start = 4.dp),
+        )
     }
 }
 

@@ -500,6 +500,7 @@ fn down_from_a_card_lands_on_its_games_and_launches_there() {
         stats: None,
         running: false,
         endable: false,
+        install: None,
     }]);
     frame(&mut s);
     let below = |s: &Shell| matches!(s.stack.last(), Some(Screen::Home(h)) if h.shelf().is_some());
@@ -537,6 +538,7 @@ fn a_fetch_clears_the_previous_hosts_list() {
         stats: None,
         running: false,
         endable: false,
+        install: None,
     }]);
     s.sync();
     let snap = library.snapshot();
@@ -639,6 +641,7 @@ fn a_pinned_cards_library_launches_with_its_preset() {
         stats: None,
         running: false,
         endable: false,
+        install: None,
     }]);
     // Down past the Desktops band, which arrives focused and launches nothing.
     s.handle_menu(MenuEvent::Move(MenuDir::Down));
@@ -676,6 +679,7 @@ fn a_primary_tiles_library_leaves_the_preset_to_the_binding() {
         stats: None,
         running: false,
         endable: false,
+        install: None,
     }]);
     s.handle_menu(MenuEvent::Confirm);
     assert!(matches!(
@@ -1437,6 +1441,7 @@ fn mixed_library(library: &LibraryShared) {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         }
     };
     library.set_games(vec![
@@ -1881,6 +1886,7 @@ mod launch_hold {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         }
     }
 
@@ -2114,7 +2120,7 @@ mod launch_hold {
     fn a_title_still_downloading_holds_with_its_progress() {
         let (mut s, library, _bus) = on_shelf();
         s.start_connect(intent("steam:570"));
-        library.set_downloads(&downloading("steam:570", "downloading"));
+        library.set_downloads(&downloading("steam:570", "downloading"), None);
         library.set_running(&running("steam:570", "launching"));
         at(&mut s, 100.0 + LAUNCH_HOLD_MAX * 3.0);
         s.sync();
@@ -2122,7 +2128,7 @@ mod launch_hold {
         assert_eq!(l.download.as_ref().map(|d| d.done_bytes), Some(5));
         assert!(l.failed.is_none(), "no cap runs while the files come");
 
-        library.set_downloads(&[]);
+        library.set_downloads(&[], None);
         s.session_streaming();
         assert!(s.launching.as_ref().is_some_and(|l| l.download.is_none()));
         s.sync();
@@ -2142,7 +2148,7 @@ mod launch_hold {
         let (mut s, library, _bus) = on_shelf();
         s.start_connect(intent("steam:570"));
         s.session_streaming();
-        library.set_downloads(&downloading("steam:570", "failed"));
+        library.set_downloads(&downloading("steam:570", "failed"), None);
         library.set_running(&[]);
         s.sync();
         assert_eq!(
@@ -2564,6 +2570,7 @@ fn dump_phone_home() {
             stats: None,
             running: false,
             endable: false,
+            install: None,
         })
         .collect();
     library.set_games(games);

@@ -289,6 +289,8 @@
 	"access_grant_launch": "Spiele starten",
 	"access_grant_power": "Host-Energie",
 	"access_grant_power_caption": "Host schlafen legen, neu starten oder herunterfahren. Mit Tastaturzugriff geht das ohnehin über den Desktop.",
+	"access_grant_manage_games": "Spiele verwalten",
+	"access_grant_manage_games_caption": "Den Download eines Spiels pausieren oder es vom Host entfernen. Spiele starten lädt ohnehin herunter.",
 	"access_expires_label": "Zugriff läuft ab",
 	"access_expires_keep": "Aktuellen Ablauf beibehalten",
 	"access_expires_forever": "Nie",

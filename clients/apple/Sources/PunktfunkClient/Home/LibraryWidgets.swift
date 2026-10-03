@@ -54,6 +54,27 @@ struct RunningBadge: View {
     }
 }
 
+/// A title's files on its tile: `42 %` downloading, paused, failed, or the size to download.
+struct FilesBadge: View {
+    let badge: TileBadge
+
+    var body: some View {
+        Label {
+            Text(badge.text)
+        } icon: {
+            Image(systemName: badge.icon == "pause" ? "pause.fill"
+                : badge.icon == "alert" ? "exclamationmark.triangle.fill" : "arrow.down")
+        }
+        .labelStyle(.titleAndIcon)
+        .font(.geist(11, .semibold, relativeTo: .caption2))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(Color.black.opacity(0.72), in: Capsule())
+        .padding(6)
+    }
+}
+
 #if canImport(UIKit)
 private typealias PlatformImage = UIImage
 #elseif canImport(AppKit)

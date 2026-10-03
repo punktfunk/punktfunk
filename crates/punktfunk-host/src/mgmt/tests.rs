@@ -264,6 +264,78 @@ async fn host_actions_follow_the_power_grant() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Pause and remove need the manage-games bit on the cert lane; a stored pre-manage Full
+/// still carries it. `/status` tells each device its own grants and the operator none.
+#[tokio::test]
+async fn title_installs_follow_the_manage_grant() {
+    use punktfunk_core::quic::{GRANT_ALL, GRANT_ALL_PRE_MANAGE, GRANT_GAMEPAD, GRANT_LAUNCH};
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(
+                std::env::temp_dir().join(format!("pf-mgmt-installs-{}.json", std::process::id())),
+            ),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let access = |grants| {
+        Some(crate::native_pairing::Access {
+            grants,
+            expires_unix: None,
+            until_disconnect: false,
+        })
+    };
+    let guest_fp = "aaaa00000021";
+    let legacy_fp = "bbbb00000022";
+    np.add_with_access("guest", guest_fp, access(GRANT_GAMEPAD | GRANT_LAUNCH))
+        .unwrap();
+    np.add_with_access("legacy", legacy_fp, access(GRANT_ALL_PRE_MANAGE))
+        .unwrap();
+    let app = test_app_native(test_state(), np);
+
+    let pause = || {
+        axum::http::Request::post("/api/v1/library/install/custom:no-such/pause")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let remove = || {
+        axum::http::Request::delete("/api/v1/library/install/custom:no-such")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        send_cert(&app, pause(), guest_fp).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        send_cert(&app, remove(), guest_fp).await,
+        StatusCode::FORBIDDEN
+    );
+    // Past the grant: the title is unknown.
+    assert_eq!(
+        send_cert(&app, pause(), legacy_fp).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send_cert(&app, remove(), legacy_fp).await,
+        StatusCode::NOT_FOUND
+    );
+
+    let status = |fp: &str| {
+        let mut req = get_req("/api/v1/status");
+        req.extensions_mut()
+            .insert(PeerCertFingerprint(Some(fp.to_string())));
+        req
+    };
+    let (_, body) = send(&app, status(guest_fp)).await;
+    assert_eq!(body["grants"], GRANT_GAMEPAD | GRANT_LAUNCH);
+    let (_, body) = send(&app, status(legacy_fp)).await;
+    assert_eq!(body["grants"], GRANT_ALL);
+    let (_, body) = send(&app, get_req("/api/v1/status")).await;
+    assert!(body.get("grants").is_none(), "{body}");
+}
+
 /// `display.next` follows the caller's own live session, never the Host power grant, and a
 /// refusal ends nothing. Never invoked with a pass: `policy::prefs()` is the developer's own
 /// `display-settings.json`, so a pinned two-head box would really switch.
@@ -2194,11 +2266,11 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             false,
         ),
         // Installing is what launching a missing title does; the handler demands the launch
-        // grant. Pausing, cancelling and removing are the operator's.
+        // grant. Pause and remove demand the manage-games grant; cancel is the operator's.
         ("GET", "/api/v1/downloads", false, false),
         ("POST", "/api/v1/library/install/{id}", false, true),
-        ("DELETE", "/api/v1/library/install/{id}", false, false),
-        ("POST", "/api/v1/library/install/{id}/pause", false, false),
+        ("DELETE", "/api/v1/library/install/{id}", false, true),
+        ("POST", "/api/v1/library/install/{id}/pause", false, true),
         ("POST", "/api/v1/library/install/{id}/cancel", false, false),
         // Provider liveness is plugin-lane like reconcile; the host maps through the catalog.
         // Never the cert lane — a streaming client has no titles of its own.

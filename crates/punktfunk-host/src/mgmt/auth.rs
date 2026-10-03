@@ -448,8 +448,13 @@ pub(crate) fn cert_may_access(method: &Method, path: &str) -> bool {
         return true;
     }
     // Installing is what launching a missing title does anyway; the handler demands
-    // `GRANT_LAUNCH`. Pausing, cancelling and removing stay the operator's.
-    if method == Method::POST && path_matches("/api/v1/library/install/{}", path) {
+    // `GRANT_LAUNCH`. Pause and remove demand `GRANT_MANAGE_GAMES`; cancel stays the operator's.
+    if (method == Method::POST || method == Method::DELETE)
+        && path_matches("/api/v1/library/install/{}", path)
+    {
+        return true;
+    }
+    if method == Method::POST && path_matches("/api/v1/library/install/{}/pause", path) {
         return true;
     }
     method == Method::GET

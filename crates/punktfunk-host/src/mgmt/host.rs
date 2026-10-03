@@ -132,6 +132,11 @@ pub(crate) struct RuntimeStatus {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[schema(required = false)]
     downloads: Vec<crate::library::downloads::Download>,
+    /// The calling device's live access grants (`GRANT_*` bits); 0 once expired. Absent for
+    /// the operator, who may do everything.
+    #[schema(value_type = u32, required = false)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grants: Option<u32>,
     /// Windows audio-wiring verdict; absent off-Windows and before the first pass. Present while idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<AudioWiring>,
@@ -774,6 +779,12 @@ pub(crate) async fn get_status(
             })
             .collect(),
         downloads: crate::library::downloads::snapshot(),
+        grants: caller.map(|fp| {
+            st.native
+                .as_ref()
+                .and_then(|n| n.effective(fp, crate::clock::unix_secs()))
+                .unwrap_or(0)
+        }),
         audio: audio_wiring(),
     })
 }
