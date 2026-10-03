@@ -116,6 +116,8 @@ struct LibraryView: View {
     /// The title End Game is asking about, and what the host said when it refused.
     @State private var endingGame: GameEntry?
     @State private var endGameNotice: String?
+    /// The title Remove Download is asking about.
+    @State private var removingGame: GameEntry?
     /// The shelf went behind a full-screen details page with its catalog loaded (tvOS).
     @State private var keptForDetail = false
 
@@ -136,6 +138,9 @@ struct LibraryView: View {
     /// What the host has launched right now, keyed by library id — the `Resume` affordance. Empty
     /// on an older host, an unreachable one, or while the catalog is being served from cache.
     @State private var running: [String: RunningGame] = [:]
+    /// `/status` downloads by library id, and this device's grants: host state, as `running`.
+    @State private var downloads: [String: HostDownload] = [:]
+    @State private var grants: UInt32?
     /// When the catalog on screen was fetched, if it came from disk rather than from the host.
     /// Non-nil ⇒ these titles are a memory, not an observation, and the view says so.
     @State private var servedFromCacheAt: Date?
@@ -214,6 +219,16 @@ struct LibraryView: View {
             } message: { _ in
                 Text("Unsaved progress in the game is lost.")
             }
+            .confirmationDialog(
+                removingGame.map { "Remove \($0.title)?" } ?? "",
+                isPresented: Binding(get: { removingGame != nil }, set: { if !$0 { removingGame = nil } }),
+                titleVisibility: .visible,
+                presenting: removingGame
+            ) { game in
+                Button("Remove Download", role: .destructive) { changeInstall(game, .remove) }
+            } message: { _ in
+                Text("Saves stay on the host.")
+            }
             .alert(
                 endGameNotice ?? "",
                 isPresented: Binding(get: { endGameNotice != nil }, set: { if !$0 { endGameNotice = nil } })
@@ -234,6 +249,13 @@ struct LibraryView: View {
             }
             .task(id: reloadToken) {
                 if keptForDetail { keptForDetail = false } else { await load() }
+            }
+            // Percentages move while a download runs and the shelf is up.
+            .task(id: downloads.values.contains(where: \.live)) {
+                while downloads.values.contains(where: \.live), !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(2))
+                    await refreshStatus()
+                }
             }
             .task(id: loading) {
                 spinnerDue = false
@@ -679,7 +701,9 @@ struct LibraryView: View {
     private func card(_ game: GameEntry, caption: String?, frameID: String) -> GameCard {
         GameCard(
             game: game, artLoader: artLoader, selected: isKeyCursor(game),
-            isRunning: running[game.id] != nil, caption: caption, host: host, frameID: frameID)
+            isRunning: running[game.id] != nil,
+            badge: TileBadge.forTitle(game.install, download: downloads[game.id]),
+            caption: caption, host: host, frameID: frameID)
     }
 
     /// A title's own acts, one level below a host card's (design §2.5): Play / Resume leads,
@@ -703,9 +727,72 @@ struct LibraryView: View {
         if LinkClipboard.isAvailable {
             Button("Copy Link", systemImage: "link") { copyLink(game) }
         }
+        if let files = InstallAction.forTitle(
+            game.install, download: downloads[game.id], grants: grants)
+        {
+            Button(files.label(game.install), systemImage: Self.filesSymbol(files)) {
+                if files == .remove { removingGame = game } else { changeInstall(game, files) }
+            }
+        }
         if canEnd(game) {
             Button("End Game", systemImage: "xmark.circle", role: .destructive) { endingGame = game }
         }
+    }
+
+    private static func filesSymbol(_ action: InstallAction) -> String {
+        switch action {
+        case .install, .resume: return "arrow.down.circle"
+        case .pause: return "pause.circle"
+        case .remove: return "trash"
+        }
+    }
+
+    /// Ask the host to change `game`'s files. A refusal says why; a removal turns the tile to
+    /// "not installed" here, and `/status` is read again either way.
+    private func changeInstall(_ game: GameEntry, _ action: InstallAction) {
+        guard let identity = (try? ClientIdentityStore.shared.load())?.identity,
+              let pin = host.pinnedSHA256 else { return }
+        let current = host
+        Task {
+            let outcome = await LibraryClient.changeInstall(
+                appID: game.id, action: action, address: current.address,
+                port: current.effectiveMgmtPort, certPEM: identity.certPEM,
+                keyPEM: identity.keyPEM, hostFingerprint: pin)
+            if outcome == .done, action == .remove, let i = games.firstIndex(where: { $0.id == game.id }) {
+                games[i].install?.state = "missing"
+            }
+            if outcome != .done { endGameNotice = outcome.notice(action, title: game.title) }
+            await refreshStatus()
+        }
+    }
+
+    /// What the host runs and downloads, and what this device may do there.
+    private func refreshStatus() async {
+        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else { return }
+        let current = host
+        let status = await LibraryClient.status(
+            address: current.address, port: current.effectiveMgmtPort,
+            certPEM: identity.certPEM, keyPEM: identity.keyPEM,
+            hostFingerprint: current.pinnedSHA256)
+        applyStatus(status, for: current)
+    }
+
+    private func applyStatus(
+        _ status: (games: [RunningGame], downloads: [HostDownload], grants: UInt32?),
+        for current: StoredHost
+    ) {
+        running = Dictionary(
+            status.games.filter(\.isUp).compactMap { g in g.appID.map { ($0, g) } },
+            // Two sessions can have the same title up (the host admits concurrent sessions); for a
+            // Resume badge either one is the same answer, and the endable one carries End Game.
+            uniquingKeysWith: { first, other in other.endable == true ? other : first })
+        downloads = Dictionary(
+            status.downloads.map { ($0.appID, $0) }, uniquingKeysWith: { _, last in last })
+        grants = status.grants
+        // The host cards read the same fact from the store; hand it this answer rather than
+        // letting their TTL ask the host a second time for what we just fetched. It also carries
+        // the entries no badge can: a launch the host cannot track has no id to key on.
+        nowPlayingStore.adopt(status.games, for: current)
     }
 
     /// The host runs a launch of this device's of `game`, so it lets this device end it.
@@ -1010,21 +1097,13 @@ struct LibraryView: View {
 
         // What's up on the host right now — never fatal, and deliberately after the catalog so a
         // slow `/status` can't hold the titles back.
-        let live = await LibraryClient.running(
+        let status = await LibraryClient.status(
             address: current.address,
             port: current.effectiveMgmtPort,
             certPEM: identity.certPEM,
             keyPEM: identity.keyPEM,
             hostFingerprint: current.pinnedSHA256)
-        running = Dictionary(
-            live.filter(\.isUp).compactMap { g in g.appID.map { ($0, g) } },
-            // Two sessions can have the same title up (the host admits concurrent sessions); for a
-            // Resume badge either one is the same answer, and the endable one carries End Game.
-            uniquingKeysWith: { first, other in other.endable == true ? other : first })
-        // The host cards read the same fact from the store; hand it this answer rather than
-        // letting their TTL ask the host a second time for what we just fetched. It also carries
-        // the entries no badge can: a launch the host cannot track has no id to key on.
-        nowPlayingStore.adopt(live, for: current)
+        applyStatus(status, for: current)
         loading = false
     }
 
@@ -1179,6 +1258,8 @@ struct GameCard: View {
     /// second copy for a while now, but nothing ever told the player that — so choosing a game
     /// they were already playing looked identical to starting one, and read as a relaunch.
     var isRunning = false
+    /// The title's files when they aren't simply installed: downloading, paused, failed, missing.
+    var badge: TileBadge? = nil
     /// A line under the title for what the current sort or section is about.
     var caption: String? = nil
     /// The host the title is on, named under the title with its OS mark.
@@ -1283,7 +1364,7 @@ struct GameCard: View {
             }
             // Opposite corner from the store badge so the two never collide on a narrow tile.
             .overlay(alignment: .topTrailing) {
-                if isRunning { RunningBadge() }
+                if isRunning { RunningBadge() } else if let badge { FilesBadge(badge: badge) }
             }
     }
 }

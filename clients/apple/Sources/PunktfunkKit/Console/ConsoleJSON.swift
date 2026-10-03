@@ -329,8 +329,24 @@ public enum ConsoleJSON {
                         ]
                     } ?? NSNull(),
                     "running": false,
+                    "install": g.install.map { i -> [String: Any] in
+                        var o: [String: Any] = ["state": i.state]
+                        if let size = i.sizeBytes { o["size_bytes"] = size }
+                        if let free = i.freeBytes { o["free_bytes"] = free }
+                        return o
+                    } ?? NSNull(),
                 ]
             })
+    }
+
+    /// `/status` `downloads[]` and `grants`, as the console's `DownloadsPush`.
+    public static func downloads(_ downloads: [HostDownload], grants: UInt32?) -> String {
+        struct Push: Encodable {
+            var downloads: [HostDownload]
+            var grants: UInt32?
+        }
+        let json = try? JSONEncoder().encode(Push(downloads: downloads, grants: grants))
+        return json.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
     /// `GameEntry::icon_token`'s re-validation: lowercase-first, at most 32 of `[a-z0-9-]`.

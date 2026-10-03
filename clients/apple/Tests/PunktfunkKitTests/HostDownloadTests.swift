@@ -35,6 +35,42 @@ final class HostDownloadTests: XCTestCase {
         XCTAssertEqual(HostDownload.bytes(512_000), "512 kB")
     }
 
+    /// The Rust client's rules: one row per title, only what the grants allow.
+    func testATitlesMenuOffersTheOneActionItsFilesAllow() {
+        let missing = TitleInstall(state: "missing", sizeBytes: 26_000_000_000, freeBytes: 212_000_000_000)
+        var installed = missing
+        installed.state = "installed"
+        let all = PunktfunkConnection.grantAll
+        let launch = PunktfunkConnection.grantLaunch
+        XCTAssertNil(InstallAction.forTitle(nil, download: nil, grants: all))
+        XCTAssertEqual(InstallAction.forTitle(missing, download: nil, grants: all), .install)
+        XCTAssertEqual(
+            InstallAction.forTitle(missing, download: HostDownload(appID: "a", state: "downloading"), grants: all),
+            .pause)
+        XCTAssertEqual(
+            InstallAction.forTitle(missing, download: HostDownload(appID: "a", state: "paused"), grants: launch),
+            .resume)
+        XCTAssertEqual(InstallAction.forTitle(installed, download: nil, grants: all), .remove)
+        XCTAssertNil(InstallAction.forTitle(installed, download: nil, grants: launch))
+        XCTAssertNil(InstallAction.forTitle(installed, download: nil, grants: nil))
+        XCTAssertEqual(InstallAction.install.label(missing), "Install \u{b7} 26 GB (212 GB free)")
+        XCTAssertEqual(InstallAction.remove.label(installed), "Remove download \u{b7} 26 GB")
+
+        XCTAssertEqual(TileBadge.forTitle(missing, download: nil), TileBadge(icon: "download", text: "26 GB"))
+        XCTAssertNil(TileBadge.forTitle(installed, download: nil))
+        XCTAssertEqual(
+            TileBadge.forTitle(
+                missing,
+                download: HostDownload(appID: "a", state: "paused", doneBytes: 429, totalBytes: 1000)),
+            TileBadge(icon: "pause", text: "42 %"))
+        XCTAssertEqual(
+            InstallOutcome.from(status: 409, message: "Quit Quail first.").notice(.remove, title: "Quail"),
+            "Quit Quail first.")
+        XCTAssertEqual(
+            InstallOutcome.from(status: 404, message: nil).notice(.pause, title: "Quail"),
+            "This host needs an update to manage games from here.")
+    }
+
     func testTheConsoleBridgeNumbersDownloadsAsTheShellDoes() {
         XCTAssertEqual(
             ConsoleBridge.Push.libraryDownloads.rawValue,

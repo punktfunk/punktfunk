@@ -83,6 +83,20 @@ enum MgmtTransport {
             pinnedHostFingerprint: pinnedHostFingerprint, timeout: timeout)
     }
 
+    /// `DELETE https://host:port/path` — same transport, trust and retry rule as `get`.
+    static func delete(
+        host: String,
+        port: UInt16,
+        path: String,
+        identity: SecIdentity,
+        pinnedHostFingerprint: Data?,
+        timeout: TimeInterval = 15
+    ) async throws -> HTTPResponse {
+        try await request(
+            host: host, port: port, method: "DELETE", path: path, body: nil, contentType: nil,
+            identity: identity, pinnedHostFingerprint: pinnedHostFingerprint, timeout: timeout)
+    }
+
     private static func request(
         host: String,
         port: UInt16,
