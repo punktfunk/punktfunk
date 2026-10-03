@@ -289,7 +289,7 @@ const LAUNCH_HOLD_MAX: f64 = 120.0;
 pub struct ConsoleOptions {
     /// Hostname registered as the default pairing device name.
     pub device_name: String,
-    /// The About row's version, verbatim. `None` shows [`crate::VERSION`]: right where the
+    /// The About row's version, verbatim. `None` shows this kit's version: right where the
     /// app ships from this workspace.
     pub version: Option<String>,
     /// Steam Deck: Steam's keyboard types; this shell never draws one.
@@ -544,7 +544,7 @@ impl Shell {
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
                 name: opts.device_name,
-                version: opts.version,
+                version: opts.version.unwrap_or_else(|| crate::VERSION.into()),
             },
             hosts: Vec::new(),
             hosts_gen: u64::MAX,

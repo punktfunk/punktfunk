@@ -1862,13 +1862,7 @@ fn row_spec_base(id: RowId, ctx: &Ctx, presets: &[(String, String)]) -> RowSpec 
         RowId::Version => {
             return RowSpec {
                 label: "Version".into(),
-                value: Some(
-                    ctx.device
-                        .version
-                        .as_deref()
-                        .unwrap_or(crate::VERSION)
-                        .into(),
-                ),
+                value: Some(ctx.device.version.clone()),
                 ..RowSpec::default()
             };
         }
