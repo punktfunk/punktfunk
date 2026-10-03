@@ -331,12 +331,11 @@ impl SessionLink {
         }
     }
 
-    /// The quinn connection, for clipboard, whose transfers are `punktfunk/1` streams. `None` on
-    /// `punktfunk/2` until its transfer streams carry them.
+    /// The quinn connection, for clipboard transfers on either native wire. `None` on WebTransport.
     pub(crate) fn as_quic(&self) -> Option<&quinn::Connection> {
         match self {
-            SessionLink::Quic(c) => Some(c),
-            SessionLink::QuicV2(..) | SessionLink::Web(..) => None,
+            SessionLink::Quic(c) | SessionLink::QuicV2(c, _) => Some(c),
+            SessionLink::Web(..) => None,
         }
     }
 

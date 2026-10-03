@@ -125,16 +125,17 @@ pub async fn start(
 pub fn spawn_decline_loop(conn: quinn::Connection) {
     tokio::spawn(async move {
         use punktfunk_core::quic::{clipstream, ClipFetchHdr, CLIP_FETCH_UNAVAILABLE};
+        let v2 = clipstream::is_v2(&conn);
         while let Ok((mut send, mut recv)) = conn.accept_bi().await {
             tokio::spawn(async move {
-                match clipstream::read_stream_header(&mut recv).await {
+                match clipstream::read_stream_header(&mut recv, v2).await {
                     Ok(k) if k == clipstream::CLIP_STREAM_KIND_FETCH => {}
                     _ => {
                         let _ = send.reset(clipstream::cancelled_code());
                         return;
                     }
                 }
-                if clipstream::read_fetch(&mut recv).await.is_err() {
+                if clipstream::read_fetch(&mut recv, v2).await.is_err() {
                     return;
                 }
                 let _ = clipstream::write_fetch_hdr(
@@ -143,6 +144,7 @@ pub fn spawn_decline_loop(conn: quinn::Connection) {
                         status: CLIP_FETCH_UNAVAILABLE,
                         total_size: 0,
                     },
+                    v2,
                 )
                 .await;
             });

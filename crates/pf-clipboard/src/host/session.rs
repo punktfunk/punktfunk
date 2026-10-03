@@ -68,6 +68,7 @@ async fn run(
     let mut next_seq: u32 = 1;
     // Client offer seq, echoed on the outbound fetch when a host app pastes.
     let mut client_seq: u32 = 0;
+    let v2 = clipstream::is_v2(&conn);
 
     loop {
         tokio::select! {
@@ -134,6 +135,7 @@ async fn run(
                     Arc::clone(&backend),
                     Arc::clone(&host_seq),
                     clip_enabled.load(Ordering::SeqCst),
+                    v2,
                 ));
             }
         }
@@ -163,16 +165,17 @@ async fn serve_fetch(
     backend: Arc<HostClipboard>,
     host_seq: Arc<AtomicU32>,
     enabled: bool,
+    v2: bool,
 ) {
     let _ = send.set_priority(-1);
-    match clipstream::read_stream_header(&mut recv).await {
+    match clipstream::read_stream_header(&mut recv, v2).await {
         Ok(k) if k == clipstream::CLIP_STREAM_KIND_FETCH => {}
         _ => {
             let _ = send.reset(clipstream::cancelled_code());
             return;
         }
     }
-    let req = match clipstream::read_fetch(&mut recv).await {
+    let req = match clipstream::read_fetch(&mut recv, v2).await {
         Ok(r) => r,
         Err(_) => return,
     };
@@ -182,11 +185,11 @@ async fn serve_fetch(
         total_size: 0,
     };
     if !enabled {
-        let _ = clipstream::write_fetch_hdr(&mut send, &decline(CLIP_FETCH_UNAVAILABLE)).await;
+        let _ = clipstream::write_fetch_hdr(&mut send, &decline(CLIP_FETCH_UNAVAILABLE), v2).await;
         return;
     }
     if req.seq != host_seq.load(Ordering::SeqCst) {
-        let _ = clipstream::write_fetch_hdr(&mut send, &decline(CLIP_FETCH_STALE)).await;
+        let _ = clipstream::write_fetch_hdr(&mut send, &decline(CLIP_FETCH_STALE), v2).await;
         return;
     }
 
@@ -196,13 +199,17 @@ async fn serve_fetch(
                 status: CLIP_FETCH_OK,
                 total_size: data.len() as u64,
             };
-            if clipstream::write_fetch_hdr(&mut send, &hdr).await.is_ok() {
+            if clipstream::write_fetch_hdr(&mut send, &hdr, v2)
+                .await
+                .is_ok()
+            {
                 let _ = clipstream::write_data(&mut send, &data).await;
             }
         }
         // Clipboard moved or the read failed: decline UNAVAILABLE, not STALE (seq still matched).
         Err(_) => {
-            let _ = clipstream::write_fetch_hdr(&mut send, &decline(CLIP_FETCH_UNAVAILABLE)).await;
+            let _ =
+                clipstream::write_fetch_hdr(&mut send, &decline(CLIP_FETCH_UNAVAILABLE), v2).await;
         }
     }
 }
@@ -224,9 +231,10 @@ async fn fetch_into_pipe(
         file_index: CLIP_FILE_INDEX_NONE,
         mime,
     };
+    let v2 = clipstream::is_v2(&conn);
     let fetched = tokio::time::timeout(FETCH_TIMEOUT, async {
         let (send, mut recv) = clipstream::open_fetch(&conn, &req).await.ok()?;
-        let hdr = clipstream::read_fetch_hdr(&mut recv).await.ok()?;
+        let hdr = clipstream::read_fetch_hdr(&mut recv, v2).await.ok()?;
         if hdr.status != CLIP_FETCH_OK {
             return None;
         }

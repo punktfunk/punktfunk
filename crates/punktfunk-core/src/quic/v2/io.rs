@@ -75,6 +75,19 @@ pub async fn write_stream_type<W: AsyncWrite + Unpin>(
     send.write_all(&b).await
 }
 
+/// Exactly one frame, reading nothing past it: for a stream whose frame is followed by raw
+/// bytes, such as a clipboard transfer's header and its data. Not cancel-safe.
+pub async fn read_one_frame<R: AsyncRead + Unpin>(recv: &mut R) -> std::io::Result<(u64, Vec<u8>)> {
+    let ty = read_stream_type(recv).await?;
+    let len = read_stream_type(recv).await?;
+    if len > max_body(ty) as u64 {
+        return Err(invalid("v2 frame over its type's bound"));
+    }
+    let mut body = vec![0u8; len as usize];
+    recv.read_exact(&mut body).await?;
+    Ok((ty, body))
+}
+
 /// A stream's type, read before anything else on it. Not cancel-safe: read it once, at accept.
 pub async fn read_stream_type<R: AsyncRead + Unpin>(recv: &mut R) -> std::io::Result<u64> {
     let mut b = [0u8; 8];
