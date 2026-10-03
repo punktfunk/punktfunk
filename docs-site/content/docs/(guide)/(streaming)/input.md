@@ -47,8 +47,11 @@ On an iPad only ⌃⌥⇧Q, ⌃⌥⇧O and ⌘⎋ always work while input is cap
 respond, release input first.
 
 To see the list without a stream: **Keyboard Shortcuts** in the Linux client's main menu,
-**Shortcuts** on the Windows client's host list, or **About → Shortcuts** in the Apple apps'
-Settings. The macOS **Stream** menu lists them too.
+**Shortcuts** on the Windows client's host list, **Settings → About → Stream controls** on
+Android, or **About → Shortcuts** in the Apple apps' Settings. The macOS **Stream** menu lists
+them too. Each list covers the controller chords and touch gestures as well. With a pad alone,
+open the console's **Settings → About → Stream controls** (Linux, Windows, Steam Deck, Android
+and Apple).
 
 **macOS:** while input is captured, every other ⌘ chord goes to the host, ⌘Q included. Turn
 **Capture system shortcuts** off to keep them local. ⌘⎋ always stays with the Mac; press it,
