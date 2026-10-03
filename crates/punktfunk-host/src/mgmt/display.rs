@@ -96,6 +96,15 @@ fn workspace_placement_available() -> bool {
     })
 }
 
+/// Can a backend here start a device's screen at its own scale? Mutter only: KWin and
+/// Windows remember each device's scale themselves. Cached: see [`keep_monitors_available`].
+#[cfg(target_os = "linux")]
+fn scale_available() -> bool {
+    static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PRESENT
+        .get_or_init(|| crate::vdisplay::available().contains(&crate::vdisplay::Compositor::Mutter))
+}
+
 /// Whether a gamescope backend is usable on this host. Cached: see the call site.
 fn gamescope_present() -> bool {
     #[cfg(target_os = "linux")]
@@ -183,12 +192,14 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     // The cap is applied in the native handshake, before Welcome, so the client is told the
     // mode it actually gets rather than the one it asked for.
     client_enforced.push("max_mode".into());
-    // Linux only. Topology: the backend reads it at `create`, where `set_client_identity`
-    // has already named the device — the Windows CCD isolate is one topology for the whole
-    // managed group, so there is no per-device answer to give. Scale: Mutter mints a fresh
-    // EDID serial per session, so it is the backend that cannot remember one on its own.
+    // Linux only. The backend reads it at `create`, where `set_client_identity` has already
+    // named the device — the Windows CCD isolate is one topology for the whole managed group.
     if cfg!(target_os = "linux") {
         client_enforced.push("topology".into());
+    }
+    // Mutter mints a fresh EDID serial per session, so the host remembers the scale for it.
+    #[cfg(target_os = "linux")]
+    if scale_available() {
         client_enforced.push("scale".into());
     }
     // Overlays ride their own field, never `settings`. The console PUTs `settings`
