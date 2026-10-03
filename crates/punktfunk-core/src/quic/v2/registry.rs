@@ -11,6 +11,10 @@
 /// ALPN of this wire. `punktfunk/1` is `pkf1`.
 pub const ALPN: &[u8] = b"pkf2";
 
+/// TLS exporter label for the media secrets; the context is the session id. 32 bytes out
+/// feed [`crate::crypto::MediaKeys::derive`].
+pub const MEDIA_EXPORTER_LABEL: &[u8] = b"EXPORTER-punktfunk/2 media";
+
 /// Bound on the body of a frame whose type this build does not know. The reader skips it, but
 /// holds it first, so the bound is what one unknown frame can make the peer buffer.
 pub const UNKNOWN_MAX_BODY: usize = 64 * 1024;

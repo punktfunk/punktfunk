@@ -10,4 +10,6 @@
 
 pub mod features;
 pub mod field;
+pub mod hello;
+pub mod msg;
 pub mod registry;
