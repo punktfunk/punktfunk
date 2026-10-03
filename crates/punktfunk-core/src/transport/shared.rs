@@ -345,11 +345,7 @@ impl Transport for ClientMedia {
             // A packet longer than the slot reads as full, which the session drops as oversized.
             let len = pkt.len().min(out[n].len());
             out[n][..len].copy_from_slice(&pkt[..len]);
-            lens[n] = if pkt.len() > out[n].len() {
-                out[n].len()
-            } else {
-                len
-            };
+            lens[n] = len;
             n += 1;
         }
         Ok(n)
