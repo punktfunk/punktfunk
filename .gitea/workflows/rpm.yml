@@ -372,7 +372,7 @@ jobs:
           # The rest of the Arch package's makedepends that Fedora's older packaged gamescope does
           # not necessarily pull. Best-effort: unlike the static runtime, meson finds fallbacks or
           # does without, and a name that moves between Fedora releases should not fail the job.
-          dnf -y install wayland-protocols-devel glm-devel cmake libXcursor-devel || true
+          dnf -y install wayland-protocols-devel glm-devel cmake libXcursor-devel libei-devel || true
           if bash packaging/gamescope/build-punktfunk-gamescope.sh \
                --destdir "$PWD/gs-stage" --prefix /usr --jobs "$(nproc)"; then
             # The WHOLE staged tree, not just the binary: it also carries the Vulkan WSI layer built

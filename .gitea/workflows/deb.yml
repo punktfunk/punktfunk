@@ -605,6 +605,9 @@ jobs:
         # vendored copy drops the dependency entirely. Same reasoning the build script already
         # applies to wlroots: a binary we SHIP must not follow the build host's shared libraries.
         run: |
+          # Baked into the image; a no-op once docker.yml republishes it (bootstrap lag).
+          apt-get update
+          apt-get install -y --no-install-recommends libeis-dev
           bash packaging/gamescope/build-punktfunk-gamescope.sh \
             --destdir "$PWD/gs-stage" --prefix /usr --jobs "$(nproc)" \
             --extra-fallback libdisplay-info
