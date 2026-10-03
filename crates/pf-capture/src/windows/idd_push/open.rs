@@ -359,12 +359,13 @@ impl IddPushCapturer {
             // so a failed open can hand it back.
             _keepalive: Box::new(()),
         };
-        // Stamp both REALTIME GPU-priority opt-ins once per session. Stall
-        // WARNs repeat them only when they fire, so a quiet stalling log
-        // would otherwise omit the posture.
+        // Stamp both REALTIME GPU-priority opt-ins once per session, with the HAGS
+        // setting that decides who schedules them. Stall WARNs repeat the opt-ins only
+        // when they fire, so a quiet stalling log would otherwise omit the posture.
         tracing::info!(
             rt_gpu_driver = super::stall::rt_gpu_driver_posture(),
             rt_gpu_host = super::stall::rt_gpu_host_posture(),
+            hags = pf_win_display::hags_setting(),
             "GPU-priority posture for this capture session"
         );
         // The driver's blend needs this and session 0 cannot query it. No-op on SDR.
