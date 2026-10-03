@@ -98,6 +98,8 @@ pub mod overlay_actions;
 // sRGB mixes and WCAG contrast for every client theme, the console's included.
 pub mod rgb;
 pub mod ring;
+// The in-stream keys, chords and gestures, for each client's reference screen.
+pub mod shortcuts;
 // DualSense voice-coil + speaker on the pad's 4-ch device (0xD1 plane): correlation, per-session renderer, tier-A registry the gamepad worker feeds.
 #[cfg(desktop)]
 pub mod pad_audio;
