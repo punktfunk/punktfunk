@@ -334,6 +334,18 @@ impl FieldValue for [u8; 4] {
     }
 }
 
+/// One input edge for the input stream: the event's own encoding is the body.
+pub fn encode_input_event(ev: &crate::input::InputEvent) -> Vec<u8> {
+    super::field::frame(reg::MSG_INPUT_EVENT, &ev.encode())
+}
+
+/// The event an input-stream frame carries; `None` for another type or a bad event.
+pub fn decode_input_event(ty: u64, body: &[u8]) -> Option<crate::input::InputEvent> {
+    (ty == reg::MSG_INPUT_EVENT)
+        .then(|| crate::input::InputEvent::decode(body))
+        .flatten()
+}
+
 /// Decode a body of message type `M`, checking the frame type first.
 pub fn decode<M: V2Message>(ty: u64, body: &[u8]) -> Result<M> {
     if ty != M::TYPE {
@@ -560,6 +572,22 @@ mod tests {
         let many = (0..=CLIP_MAX_KINDS).fold(many, |f, _| f.bytes(2, &[0; 8]));
         assert!(ClipOffer::from_body(&many.into_body()).is_err());
         assert!(decode::<SetBitrate>(reg::MSG_LINK_REPORT, &[]).is_err());
+    }
+
+    #[test]
+    fn input_edges_carry_the_event_encoding() {
+        let ev = crate::input::InputEvent {
+            kind: crate::input::InputKind::KeyUp,
+            _pad: [0; 3],
+            code: 30,
+            x: 0,
+            y: 0,
+            flags: 2,
+        };
+        let wire = encode_input_event(&ev);
+        let (ty, body, _) = split_frame(&wire, reg::max_body).unwrap().unwrap();
+        assert_eq!(decode_input_event(ty, body), Some(ev));
+        assert_eq!(decode_input_event(reg::MSG_SET_BITRATE, body), None);
     }
 
     /// An unknown tag is skipped, an unknown ack reason reads as none, a repeat is refused.
