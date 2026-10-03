@@ -104,7 +104,7 @@ impl<'a> Drive<'a> {
             owed_since: None,
             ready_latch: false,
             timer: None,
-            report: Report::new(qpc_frequency()),
+            report: Report::new(qpc_frequency(), 1_000_000 / u64::from(fps.max(1))),
             applied_kbps: opened_kbps,
             state: au::ENCODER_OPEN,
             stop,
@@ -582,6 +582,8 @@ impl Drive<'_> {
                     );
                 }
             }
+            // Stamped before the release: that release is what ends a bypass hold.
+            self.report.note_encoded(submitted, qpc_now());
             self.inflight.pop_front();
             self.pool.release(slot);
             self.dropping_au = false;
@@ -655,8 +657,12 @@ impl Drive<'_> {
 /// optional: a cursor-only re-encode carries no present stamp, and a head whose stamp names the
 /// vblank the frame is *for* rather than the one it came from puts it in the future, which is not
 /// an age at all. `aged=0` means no measurement, not a zero one.
+///
+/// `enc_us` needs no present stamp: it is submit to the access unit's last chunk, the span a
+/// bypass pool holds its next acquire for. `over` counts the ones longer than a frame period.
 struct Report {
     hz: u64,
+    period_us: u64,
     since: u64,
     n: u64,
     aged: u64,
@@ -664,14 +670,19 @@ struct Report {
     max_us: u64,
     submits: u64,
     parks: u64,
+    enc_n: u64,
+    enc_sum_us: u64,
+    enc_max_us: u64,
+    enc_over: u64,
 }
 
 impl Report {
     const EVERY_MS: u64 = 10_000;
 
-    fn new(hz: u64) -> Self {
+    fn new(hz: u64, period_us: u64) -> Self {
         Self {
             hz,
+            period_us,
             since: 0,
             n: 0,
             aged: 0,
@@ -679,7 +690,20 @@ impl Report {
             max_us: 0,
             submits: 0,
             parks: 0,
+            enc_n: 0,
+            enc_sum_us: 0,
+            enc_max_us: 0,
+            enc_over: 0,
         }
+    }
+
+    /// One whole access unit, submitted at `submitted` and out at `now`.
+    fn note_encoded(&mut self, submitted: u64, now: u64) {
+        let us = now.saturating_sub(submitted) * 1_000_000 / self.hz;
+        self.enc_n += 1;
+        self.enc_sum_us += us;
+        self.enc_max_us = self.enc_max_us.max(us);
+        self.enc_over += u64::from(us > self.period_us);
     }
 
     /// One published chunk, stamped `qpc` at compose and `now` at publish.
@@ -699,15 +723,18 @@ impl Report {
             return;
         }
         dbglog!(
-            "[pf-vd] drive: win_ms={window_ms} published={} submits={} parks={} aged={} au_age_us mean={} max={}",
+            "[pf-vd] drive: win_ms={window_ms} published={} submits={} parks={} aged={} au_age_us mean={} max={} enc_us mean={} max={} over={}",
             self.n,
             self.submits,
             self.parks,
             self.aged,
             self.sum_us / self.aged.max(1),
-            self.max_us
+            self.max_us,
+            self.enc_sum_us / self.enc_n.max(1),
+            self.enc_max_us,
+            self.enc_over
         );
-        *self = Self::new(self.hz);
+        *self = Self::new(self.hz, self.period_us);
         self.since = now;
     }
 }
