@@ -2,7 +2,8 @@
 //!
 //! The next dial to that host presents the id as `resume`, and the host retires exactly that
 //! session instead of waiting out its release. Only a lost session is kept: one still live, or
-//! ended on purpose, must never be retired by a second dial such as a speed test.
+//! ended on purpose, must never be retired by a second dial such as a speed test. A dial takes
+//! the entry once its hello is out, so one that dies before then leaves it for the next.
 
 use std::sync::Mutex;
 
@@ -19,6 +20,14 @@ pub(crate) fn note_lost(host: &str, port: u16, session_id: [u8; 16]) {
         lost.remove(0);
     }
     lost.push((host.to_string(), port, session_id));
+}
+
+/// The lost session a dial to `host:port` would resume, left in place until [`take`].
+pub(crate) fn peek(host: &str, port: u16) -> Option<[u8; 16]> {
+    let lost = LOST.lock().unwrap_or_else(|e| e.into_inner());
+    lost.iter()
+        .find(|(h, p, _)| h == host && *p == port)
+        .map(|e| e.2)
 }
 
 /// The lost session a dial to `host:port` resumes, once.
@@ -41,11 +50,13 @@ mod tests {
             None,
             "another port is another host"
         );
+        assert_eq!(peek("resume-test.local", 9777), Some([2; 16]));
         assert_eq!(
             take("resume-test.local", 9777),
             Some([2; 16]),
             "the latest loss wins"
         );
+        assert_eq!(peek("resume-test.local", 9777), None, "taken once");
         assert_eq!(take("resume-test.local", 9777), None, "taken once");
     }
 }

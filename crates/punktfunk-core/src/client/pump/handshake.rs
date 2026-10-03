@@ -133,7 +133,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
             let extra = translate::ClientExtra {
                 start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
-                resume: crate::client::resume::take(&p.host, p.port),
+                resume: crate::client::resume::peek(&p.host, p.port),
                 suites: if wants_chacha {
                     vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
                 } else {
@@ -195,6 +195,10 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             .encode(),
         )
         .await?;
+        // The hello carried the resume id, so the entry is spent now, not by a dial that died.
+        if v2 {
+            crate::client::resume::take(&p.host, p.port);
+        }
         let welcome = Welcome::decode(&recv.read_msg().await?)?;
         if welcome.compositor != CompositorPref::Auto {
             tracing::info!(
