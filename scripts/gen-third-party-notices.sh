@@ -28,6 +28,8 @@ OUT="${1:-THIRD-PARTY-NOTICES.txt}"
 # vendored trees, preferring cargo-about here again would be reasonable.
 echo "==> gen-third-party-notices.py -> $OUT" >&2
 # The root file also names the seat keeper's crates: a separate workspace the host installer ships.
+# No host build fetches them, and the generator reads metadata offline.
+cargo fetch --locked --manifest-path crates/pf-seat-keeper/Cargo.toml >&2
 python3 scripts/gen-third-party-notices.py --out "$OUT" --manifest Cargo.toml \
     --manifest crates/pf-seat-keeper/Cargo.toml
 echo "==> wrote $OUT" >&2
