@@ -1,0 +1,3 @@
+• No green bar on the right edge with HEVC from an AMD host.
+• The network check reports fast links at their speed instead of about 77 Mbit/s.
+• Hydra's Big Picture tile shows Hydra's logo.

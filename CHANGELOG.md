@@ -14,6 +14,47 @@ short; the version-bump commit retitles it. Older sections stay as they are.
 
 ---
 
+## v0.43.1
+
+11 commits since v0.43.0. Wire stays 2, C ABI stays 43, driver protocol floor stays 9. gamescope
+moves to `+pfhdr31`. Windows hosts default to a virtual display at twice the stream rate and send
+mouse and keyboard through the virtual HID device.
+Deep dive: `git log v0.43.0..v0.43.1`
+
+### Versions
+
+| | v0.43.0 | v0.43.1 | Notes |
+|---|---|---|---|
+| Wire protocol | 2 | **2** | unchanged |
+| C ABI | 43 | **43** | unchanged; `include/` has no diff |
+| C headers | — | — | unchanged |
+| Rust edition / MSRV | 2024 / 1.85 | **2024 / 1.85** | unchanged |
+| Workspace crate dirs | 39 | **39** | unchanged |
+| Virtual-display driver protocol | 9 | **9** | unchanged; the driver encodes composed frames under a stream-rate credit and restamps presents toward the content's cadence |
+| Windows virtual-gamepad channel | 3 | **3** | unchanged |
+| Plugin index schema | 1 | **1** | unchanged |
+| Host event schema | 1 | **1** | unchanged |
+| `api/openapi.json` | 0.43.0 | **0.43.1** | version stamp only |
+| gamescope patch level (`+pfhdrN`) | 30 | **31** | patch 0034 aligns the NV12/P010 capture constants; `+pfhdr30` captures zeros on NVIDIA and Intel |
+| `@punktfunk/host` (SDK) | 0.3.3 | **0.3.3** | unchanged |
+| `@punktfunk/plugin-kit` | 0.11.0 | **0.11.0** | unchanged; the `launcher_ui` doc lists `hydra-big-picture` |
+
+### Breaking
+
+- None.
+
+### Knobs
+
+- Windows host: `PUNKTFUNK_VDISPLAY_HZ_MULT` unset is 2 for streams up to 500 Hz, else 1. `1`
+  restores the old display. The wire stays at the stream rate.
+- Windows host: mouse and keyboard go to the `pf_mouse` device as HID reports through a ring in its
+  shared section. A driver without the ring feature keeps SendInput. `PUNKTFUNK_HID_INPUT=0` keeps
+  every event on SendInput.
+- Plugins: `launcher_ui` takes `hydra-big-picture` on Linux and Windows hosts. An older host drops
+  that tile and keeps the games.
+
+---
+
 ## v0.43.0
 
 419 commits since v0.42.0. Wire stays 2. **C ABI 43**: `PunktfunkProbeResult` grew. Driver protocol
