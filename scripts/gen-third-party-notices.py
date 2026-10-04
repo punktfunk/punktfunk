@@ -109,6 +109,9 @@ VENDORED_TREES = [
     ("Playnite logo (vendored, assets/launcher-icons)",
      "assets/launcher-icons/LICENSES/playnite.txt",
      "https://github.com/JosefNemec/Playnite"),
+    ("Hydra Launcher logo (vendored, assets/launcher-icons)",
+     "assets/launcher-icons/LICENSES/hydra.txt",
+     "https://github.com/hydralauncher/hydra"),
 ]
 
 

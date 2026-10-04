@@ -28,6 +28,7 @@ static ICONS: EmbeddedPngs = EmbeddedPngs::new(
         ("epic", include_bytes!("../../assets/launchers/epic.png")),
         ("gog", include_bytes!("../../assets/launchers/gog.png")),
         ("xbox", include_bytes!("../../assets/launchers/xbox.png")),
+        ("hydra", include_bytes!("../../assets/launchers/hydra.png")),
     ],
 );
 

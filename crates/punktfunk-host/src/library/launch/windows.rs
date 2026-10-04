@@ -5,7 +5,8 @@
 use super::*;
 
 /// Each activation below was checked on a real install; an unverified one ships a dead tile.
-pub(super) const LAUNCHER_UI_STORES: &[&str] = &["playnite", "epic", "gog", "xbox"];
+pub(super) const LAUNCHER_UI_STORES: &[&str] =
+    &["playnite", "epic", "gog", "xbox", "hydra-big-picture"];
 
 /// The Xbox app's package identity and app id (its `AppxManifest.xml`). The publisher hash
 /// is read from AppRepository at launch, like the `xbox` kind.
@@ -40,6 +41,7 @@ pub(super) fn launcher_ui_installed(value: &str) -> bool {
         "epic" => epic_launcher_exe().is_some(),
         "gog" => galaxy_exe().is_some(),
         "xbox" => xbox_pfn(XBOX_APP_IDENTITY).is_some(),
+        "hydra-big-picture" => hydra_exe().is_some(),
         _ => false,
     }
 }
@@ -252,7 +254,8 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
         }
         // Launcher UIs (design D4). Playnite Fullscreen is spawned directly: `playnite://` opens
         // the desktop app, and the .NET app expects its install dir as workdir. The store
-        // clients forward to a running instance, so they are hand-offs.
+        // clients forward to a running instance, so they are hand-offs. Hydra opens Big
+        // Picture from argv only, a running instance included.
         "launcher_ui" => match spec.value.as_str() {
             "playnite" => playnite_fullscreen_exe().map(|exe| {
                 let dir = exe.parent().map(std::path::Path::to_path_buf);
@@ -265,6 +268,8 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
                     "explorer.exe \"shell:AppsFolder\\{pfn}!{XBOX_APP_ID}\""
                 ))
             }),
+            "hydra-big-picture" => hydra_exe()
+                .map(|exe| WinRecipe::handoff(format!("\"{}\" --big-picture", exe.display()))),
             _ => None,
         },
         // Operator command. `cmd.exe /c` blocks until it returns, so the pid is that command's life.
@@ -436,7 +441,7 @@ fn playnite_fullscreen_exe() -> Option<std::path::PathBuf> {
 /// - `%LOCALAPPDATA%` is SYSTEM's profile; enumerate users-base profiles instead.
 ///
 /// Portable installs leave only the `playnite://` handler
-/// ([`playnite_dir_from_uri_handler`]). Registry `InstallLocation` before
+/// ([`uri_handler_dir`]). Registry `InstallLocation` before
 /// conventional paths; each candidate is an `is_file` probe.
 fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ};
@@ -454,7 +459,7 @@ fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     playnite_dirs_from_uninstall(&hklm, UNINSTALL, &mut dirs);
     playnite_dirs_from_uninstall(&hklm, UNINSTALL_WOW, &mut dirs);
-    playnite_dir_from_uri_handler(&hklm, CLASSES_URI_COMMAND, &mut dirs);
+    uri_handler_dir(&hklm, CLASSES_URI_COMMAND, &mut dirs);
 
     let users = RegKey::predef(HKEY_USERS);
     for sid in users.enum_keys().flatten() {
@@ -464,11 +469,11 @@ fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
         // `_Classes` hives hold associations (`playnite://`), never uninstall keys.
         // Probe both spellings; a miss is one failed `open_subkey`.
         if sid.ends_with("_Classes") {
-            playnite_dir_from_uri_handler(&hive, URI_COMMAND, &mut dirs);
+            uri_handler_dir(&hive, URI_COMMAND, &mut dirs);
             continue;
         }
         playnite_dirs_from_uninstall(&hive, UNINSTALL, &mut dirs);
-        playnite_dir_from_uri_handler(&hive, CLASSES_URI_COMMAND, &mut dirs);
+        uri_handler_dir(&hive, CLASSES_URI_COMMAND, &mut dirs);
     }
 
     // Default per-user path, including profiles whose hive is not loaded.
@@ -476,6 +481,43 @@ fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
         push_unique(&mut dirs, profile.join(r"AppData\Local\Playnite"));
     }
     dirs
+}
+
+/// Hydra's exe. Hydra registers `hydralauncher://` for its user on every start, wherever it is
+/// installed; the per-user installer default covers a profile whose hive is not loaded.
+fn hydra_exe() -> Option<std::path::PathBuf> {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ};
+    use winreg::RegKey;
+
+    const URI_COMMAND: &str = r"hydralauncher\shell\open\command";
+    const CLASSES_URI_COMMAND: &str = r"Software\Classes\hydralauncher\shell\open\command";
+
+    let mut dirs = Vec::new();
+    uri_handler_dir(
+        &RegKey::predef(HKEY_LOCAL_MACHINE),
+        CLASSES_URI_COMMAND,
+        &mut dirs,
+    );
+    let users = RegKey::predef(HKEY_USERS);
+    for sid in users.enum_keys().flatten() {
+        if let Ok(hive) = users.open_subkey_with_flags(&sid, KEY_READ) {
+            let path = if sid.ends_with("_Classes") {
+                URI_COMMAND
+            } else {
+                CLASSES_URI_COMMAND
+            };
+            uri_handler_dir(&hive, path, &mut dirs);
+        }
+    }
+    for profile in windows_user_profiles() {
+        push_unique(
+            &mut dirs,
+            profile.join(r"AppData\Local\Programs\hydralauncher"),
+        );
+    }
+    dirs.into_iter()
+        .map(|dir| dir.join("Hydra.exe"))
+        .find(|p| p.is_file())
 }
 
 /// `InstallLocation` from Playnite-looking uninstall entries under `root\path`.
@@ -507,13 +549,9 @@ fn playnite_dirs_from_uninstall(
     }
 }
 
-/// Directory of the registered `playnite://` handler. Finds portable Playnite
-/// (no uninstall key, not under a profile). Same registration the launch path uses.
-fn playnite_dir_from_uri_handler(
-    root: &winreg::RegKey,
-    path: &str,
-    out: &mut Vec<std::path::PathBuf>,
-) {
+/// Directory of the shell-open command at `root\path`. Finds a portable install (no
+/// uninstall key, not under a profile). Same registration the launch path uses.
+fn uri_handler_dir(root: &winreg::RegKey, path: &str, out: &mut Vec<std::path::PathBuf>) {
     use winreg::enums::KEY_READ;
 
     let Ok(command) = root
@@ -749,7 +787,7 @@ mod tests {
     #[test]
     fn launcher_ui_knows_the_windows_launchers_and_probes_each() {
         // Vocabulary vs installed: separate so a missing launcher cannot 400 the library.
-        for v in ["playnite", "epic", "gog", "xbox"] {
+        for v in ["playnite", "epic", "gog", "xbox", "hydra-big-picture"] {
             assert!(known_launcher_ui(v), "{v}");
         }
         assert_eq!(
@@ -757,6 +795,10 @@ mod tests {
             playnite_fullscreen_exe().is_some()
         );
         assert_eq!(resolvable_launcher_ui("gog"), galaxy_exe().is_some());
+        assert_eq!(
+            resolvable_launcher_ui("hydra-big-picture"),
+            hydra_exe().is_some()
+        );
         assert!(!known_launcher_ui("heroic"));
         assert!(!known_launcher_ui("lutris"));
     }
@@ -781,6 +823,14 @@ mod tests {
         }
         if let Some(r) = ui("gog") {
             assert!(r.cmdline.ends_with("GalaxyClient.exe\""), "{}", r.cmdline);
+            assert!(!r.owns_game);
+        }
+        if let Some(r) = ui("hydra-big-picture") {
+            assert!(
+                r.cmdline.ends_with("Hydra.exe\" --big-picture"),
+                "{}",
+                r.cmdline
+            );
             assert!(!r.owns_game);
         }
     }

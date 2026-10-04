@@ -131,7 +131,7 @@ fi
 
 echo
 log "Remember: a NEW token also has to be added to each client's shipped-token list —"
-log "  clients/linux/src/ui_library.rs, clients/linux/data/resources.gresource.xml,"
+log "  clients/linux/src/library/poster.rs, clients/linux/data/resources.gresource.xml,"
 log "  clients/windows/src/app/launcher_icons.rs,"
 log "  clients/apple/.../PunktfunkKit/LauncherIcon.swift,"
 log "  crates/punktfunk-host/src/gamestream/apps.rs (tile_png)"
