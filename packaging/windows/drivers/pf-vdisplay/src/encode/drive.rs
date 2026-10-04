@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use pf_driver_proto::encode::FrameToken;
 use pf_driver_proto::encode::au::{self, AuHeader, AuSlot, HeapRing};
+use pf_driver_proto::encode::pace::{FrameCredit, Restamp};
 use pf_encode_win::{AuChunk, Encoder};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
@@ -73,6 +74,12 @@ fn stop_signalled(stop: HANDLE) -> bool {
     unsafe { WaitForSingleObject(stop, 0) == WAIT_OBJECT_0 }
 }
 
+/// The stream's frame rate and the refresh the monitor was created at, both in Hz.
+pub struct Rates {
+    pub fps: u32,
+    pub panel_hz: u32,
+}
+
 impl<'a> Drive<'a> {
     pub fn new(
         enc: Box<dyn Encoder>,
@@ -80,10 +87,12 @@ impl<'a> Drive<'a> {
         session: &'a EncodeSession,
         stop: HANDLE,
         live: &'a AtomicBool,
-        fps: u32,
+        rates: Rates,
         opened_kbps: u32,
     ) -> Self {
         let (heap_offset, heap_bytes) = session.section.heap();
+        let fps = rates.fps.max(1);
+        let qpc_hz = qpc_frequency();
         Self {
             enc,
             pool,
@@ -98,13 +107,17 @@ impl<'a> Drive<'a> {
             submit_failures: 0,
             want_republish: false,
             cursor_only: false,
-            qpc_hz: qpc_frequency(),
-            frame_interval: Duration::from_micros(1_000_000 / u64::from(fps.max(1))),
+            qpc_hz,
+            frame_interval: Duration::from_micros(1_000_000 / u64::from(fps)),
+            credit: FrameCredit::new(qpc_hz / u64::from(fps)),
+            // Only a panel faster than the stream stamps on a grid finer than the frames.
+            restamp: (rates.panel_hz > fps)
+                .then(|| Restamp::new(qpc_hz / u64::from(rates.panel_hz))),
             last_frame: None,
             owed_since: None,
             ready_latch: false,
             timer: None,
-            report: Report::new(qpc_frequency(), 1_000_000 / u64::from(fps.max(1))),
+            report: Report::new(qpc_hz, 1_000_000 / u64::from(fps)),
             applied_kbps: opened_kbps,
             state: au::ENCODER_OPEN,
             stop,
@@ -135,6 +148,20 @@ impl<'a> Drive<'a> {
     }
 }
 
+/// A submitted frame whose access unit is still owed.
+#[derive(Clone, Copy)]
+struct Owed {
+    slot: usize,
+    /// The compositor's present stamp; zero, or the submit time, for a re-encode.
+    qpc: u64,
+    seq: u64,
+    submitted: u64,
+    /// The present stamp the access unit carries.
+    qpc_pts: u64,
+    /// A composed frame rather than a re-encode: the only kind whose stamps show cadence.
+    composed: bool,
+}
+
 /// The steady state: pool slot → `submit` → `poll` → heap + slot table → `latest` + event.
 ///
 /// Idle desktop: nothing is re-encoded at cadence — a pool with no new frame means no AU. A
@@ -148,8 +175,8 @@ pub struct Drive<'a> {
     wire_seq: u32,
     /// Publish-token sequence, per session thread.
     publish_seq: u32,
-    /// `(slot, qpc, source_seq, qpc_submit)` of every frame whose AU is owed, in submit order.
-    inflight: VecDeque<(usize, u64, u64, u64)>,
+    /// Every frame whose AU is owed, in submit order.
+    inflight: VecDeque<Owed>,
     /// A partially drained AU must finish through `poll_chunk`.
     mid_au: bool,
     /// The AU in progress could not be placed; its remaining chunks are dropped too.
@@ -165,8 +192,12 @@ pub struct Drive<'a> {
     /// The frame last taken is a cursor-only re-encode.
     cursor_only: bool,
     qpc_hz: u64,
-    /// The display's frame period — the gap a cursor-only re-encode may fill.
+    /// The stream's frame period — the gap a cursor-only re-encode may fill.
     frame_interval: Duration,
+    /// Composed frames are encoded at the stream rate however fast the panel composes.
+    credit: FrameCredit,
+    /// Present stamps moved onto the content's cadence, when the panel ticks faster than that.
+    restamp: Option<Restamp>,
     /// When the last frame of any kind was taken; `None` before the first. A compose at
     /// refresh resets this every period, so the pointer rides the composed frames alone.
     last_frame: Option<Instant>,
@@ -232,8 +263,8 @@ impl Drive<'_> {
         // No flush on the way out: a stopped session has nowhere to send the last AUs. A
         // detached thread owns nothing in the pool any more — its successor reclaimed it.
         if self.live.load(Ordering::Acquire) {
-            for (slot, ..) in self.inflight.drain(..) {
-                self.pool.release(slot);
+            for owed in self.inflight.drain(..) {
+                self.pool.release(owed.slot);
             }
             self.pool.set_live(false);
         }
@@ -287,15 +318,20 @@ impl Drive<'_> {
         }
     }
 
-    /// The next frame to submit: a composed one, else the stash for a recovery ask nothing
-    /// composed for, else a cursor-only re-encode. The ask survives a turn that found the
-    /// stash slot busy — the AU owed on it is about to free it. Every frame taken stamps
-    /// `last_frame`: that is the clock the cursor-only cap runs on.
+    /// The next frame to submit: a composed one the stream-rate credit covers, else the stash for
+    /// a recovery ask nothing composed for, else a cursor-only re-encode. A composed frame the
+    /// credit does not cover waits for it, which also holds the other two back. The ask survives a
+    /// turn that found the stash slot busy — the AU owed on it is about to free it. Every frame
+    /// taken stamps `last_frame`: that is the clock the cursor-only cap runs on.
     fn take_next(&mut self) -> Option<(usize, u64, u64)> {
-        let mut next = self
-            .pool
-            .take_full()
-            .or_else(|| self.want_republish.then(|| self.pool.republish()).flatten());
+        let budget = self.credit.frames(qpc_now());
+        let (composed, shed) = self.pool.take_within(budget);
+        self.report.shed += shed;
+        if composed.is_some() {
+            self.credit.spend();
+        }
+        let mut next =
+            composed.or_else(|| self.want_republish.then(|| self.pool.republish()).flatten());
         self.cursor_only = next.is_none();
         if self.cursor_only {
             next = self.cursor_frame();
@@ -332,7 +368,12 @@ impl Drive<'_> {
             self.drop_slot(slot);
             return true;
         }
-        let pts = qpc_to_ns(if qpc == 0 { qpc_now() } else { qpc }, self.qpc_hz);
+        // A cursor-only re-encode is stamped now, off the panel's grid: it keeps its stamp.
+        let qpc_pts = match &mut self.restamp {
+            Some(r) if !self.cursor_only => r.apply(qpc),
+            _ => qpc,
+        };
+        let pts = qpc_to_ns(if qpc_pts == 0 { qpc_now() } else { qpc_pts }, self.qpc_hz);
         let frame = match self.pool.frame(slot, pts) {
             Ok(f) => f,
             Err(_) => {
@@ -362,7 +403,14 @@ impl Drive<'_> {
         }
         self.submit_failures = 0;
         self.report.submits += 1;
-        self.inflight.push_back((slot, qpc, seq, submitted));
+        self.inflight.push_back(Owed {
+            slot,
+            qpc,
+            seq,
+            submitted,
+            qpc_pts,
+            composed: !self.cursor_only && qpc != 0,
+        });
         true
     }
 
@@ -409,10 +457,10 @@ impl Drive<'_> {
                 self.set_state(au::ENCODER_WEDGED);
                 // A detached thread's slots were reclaimed by its successor; releasing one
                 // here would free a slot that successor is encoding.
-                if let Some((slot, ..)) = self.inflight.pop_front()
+                if let Some(owed) = self.inflight.pop_front()
                     && self.live.load(Ordering::Acquire)
                 {
-                    self.pool.release(slot);
+                    self.pool.release(owed.slot);
                 }
                 self.mid_au = false;
                 true
@@ -432,10 +480,12 @@ impl Drive<'_> {
         }
     }
 
-    /// When the loop must wake without a signal: what is left of the period since the last
-    /// frame when a cursor move is pending, or the re-entry cadence of a backend that owes an
-    /// AU and signals nothing. `None` = park on the handles alone.
+    /// When the loop must wake without a signal: the credit a waiting composed frame needs, what
+    /// is left of the period since the last frame when a cursor move is pending, or the re-entry
+    /// cadence of a backend that owes an AU and signals nothing. `None` = park on the handles alone.
     fn timer_due(&self) -> Option<Duration> {
+        let credit = (self.inflight.len() < MAX_INFLIGHT && self.pool.has_full())
+            .then(|| Duration::from_nanos(qpc_to_ns(self.credit.wait(), self.qpc_hz)));
         let cursor = self.pool.cursor_pending().then(|| {
             self.last_frame
                 .map(|t| self.frame_interval.saturating_sub(t.elapsed()))
@@ -443,10 +493,7 @@ impl Drive<'_> {
         });
         let poll = (!self.inflight.is_empty() && self.enc.ready_event().is_none())
             .then_some(NO_EVENT_POLL);
-        match (cursor, poll) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [credit, cursor, poll].into_iter().flatten().min()
     }
 
     /// Arm the timer for `due`. `false` if the OS refused one: the park then runs on its handles
@@ -548,7 +595,7 @@ impl Drive<'_> {
     /// One chunk of the oldest in-flight AU: published, or dropped with the rest of its AU. A
     /// detached thread returning from its wedge touches neither the pool nor the section.
     fn on_chunk(&mut self, chunk: AuChunk) {
-        let Some(&(slot, qpc, seq, submitted)) = self.inflight.front() else {
+        let Some(&owed) = self.inflight.front() else {
             return;
         };
         if !self.live.load(Ordering::Acquire) {
@@ -560,7 +607,7 @@ impl Drive<'_> {
             self.au_published = false;
         }
         if !self.dropping_au {
-            if self.publish(&chunk, qpc, seq, submitted) {
+            if self.publish(&chunk, &owed) {
                 self.au_published = true;
             } else {
                 self.dropping_au = true;
@@ -583,17 +630,21 @@ impl Drive<'_> {
                 }
             }
             // Stamped before the release: that release is what ends a bypass hold.
-            self.report.note_encoded(submitted, qpc_now());
+            self.report.note_encoded(owed.submitted, qpc_now());
+            if owed.composed {
+                self.report.note_stamps(owed.qpc, owed.qpc_pts);
+            }
             self.inflight.pop_front();
-            self.pool.release(slot);
+            self.pool.release(owed.slot);
             self.dropping_au = false;
         }
     }
 
     /// Heap bytes, slot record, `latest`, event — in that order. `false` when no placement
-    /// came free within [`SLOT_WAIT`]. The record carries the frame's present, submit and
-    /// publish QPC, which is how the host splits its age.
-    fn publish(&mut self, chunk: &AuChunk, qpc: u64, seq: u64, submitted: u64) -> bool {
+    /// came free within [`SLOT_WAIT`]. The record carries the frame's corrected present, submit
+    /// and publish QPC, which is how the host splits its age; the age line here stays on the
+    /// compositor's own stamp.
+    fn publish(&mut self, chunk: &AuChunk, owed: &Owed) -> bool {
         let section = &self.session.section;
         let len = chunk.data.len() as u32;
         let deadline = Instant::now() + SLOT_WAIT;
@@ -628,17 +679,17 @@ impl Drive<'_> {
                 offset,
                 len,
                 wire_seq: self.wire_seq,
-                source_seq: seq as u32,
-                qpc_pts: qpc,
+                source_seq: owed.seq as u32,
+                qpc_pts: owed.qpc_pts,
                 flags,
                 state: au::PUBLISHED,
-                qpc_submit: submitted,
+                qpc_submit: owed.submitted,
                 qpc_published: now,
             },
         );
         self.publish_seq = self.publish_seq.wrapping_add(1);
         section.store_u64(offset_of!(AuHeader, last_au_qpc), now);
-        self.report.note_publish(qpc, now);
+        self.report.note_publish(owed.qpc, now);
         section.publish_latest(FrameToken {
             generation: self.session.generation,
             seq: self.publish_seq,
@@ -660,6 +711,10 @@ impl Drive<'_> {
 ///
 /// `enc_us` needs no present stamp: it is submit to the access unit's last chunk, the span a
 /// bypass pool holds its next acquire for. `over` counts the ones longer than a frame period.
+/// `shed` counts composed frames left out to hold the stream rate on a faster panel.
+/// `gap_change_us` is how far each composed frame's gap moved from the one before it, on the
+/// compositor's stamps (`raw`) and on the stamps the access units carry (`pts`): near zero is an
+/// even cadence, a panel tick is jitter the stamps pass on.
 struct Report {
     hz: u64,
     period_us: u64,
@@ -670,10 +725,17 @@ struct Report {
     max_us: u64,
     submits: u64,
     parks: u64,
+    shed: u64,
     enc_n: u64,
     enc_sum_us: u64,
     enc_max_us: u64,
     enc_over: u64,
+    /// The last composed frame's `(raw, pts)` stamps, and the gaps that led to them.
+    stamps: Option<(u64, u64)>,
+    gaps: Option<(u64, u64)>,
+    gap_n: u64,
+    raw_change: u64,
+    pts_change: u64,
 }
 
 impl Report {
@@ -690,11 +752,31 @@ impl Report {
             max_us: 0,
             submits: 0,
             parks: 0,
+            shed: 0,
             enc_n: 0,
             enc_sum_us: 0,
             enc_max_us: 0,
             enc_over: 0,
+            stamps: None,
+            gaps: None,
+            gap_n: 0,
+            raw_change: 0,
+            pts_change: 0,
         }
+    }
+
+    /// One composed frame's compositor stamp and the stamp its access unit carries.
+    fn note_stamps(&mut self, raw: u64, pts: u64) {
+        let gaps = match self.stamps.replace((raw, pts)) {
+            Some((r, p)) if raw > r && pts > p => Some((raw - r, pts - p)),
+            _ => None,
+        };
+        if let (Some((rg, pg)), Some((last_rg, last_pg))) = (gaps, self.gaps) {
+            self.gap_n += 1;
+            self.raw_change += rg.abs_diff(last_rg);
+            self.pts_change += pg.abs_diff(last_pg);
+        }
+        self.gaps = gaps;
     }
 
     /// One whole access unit, submitted at `submitted` and out at `now`.
@@ -723,16 +805,19 @@ impl Report {
             return;
         }
         dbglog!(
-            "[pf-vd] drive: win_ms={window_ms} published={} submits={} parks={} aged={} au_age_us mean={} max={} enc_us mean={} max={} over={}",
+            "[pf-vd] drive: win_ms={window_ms} published={} submits={} parks={} shed={} aged={} au_age_us mean={} max={} enc_us mean={} max={} over={} gap_change_us raw={} pts={}",
             self.n,
             self.submits,
             self.parks,
+            self.shed,
             self.aged,
             self.sum_us / self.aged.max(1),
             self.max_us,
             self.enc_sum_us / self.enc_n.max(1),
             self.enc_max_us,
-            self.enc_over
+            self.enc_over,
+            self.raw_change * 1_000_000 / self.hz / self.gap_n.max(1),
+            self.pts_change * 1_000_000 / self.hz / self.gap_n.max(1)
         );
         *self = Self::new(self.hz, self.period_us);
         self.since = now;

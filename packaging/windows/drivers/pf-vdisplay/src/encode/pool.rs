@@ -430,13 +430,45 @@ impl Pool {
         }
     }
 
-    /// The oldest full slot, now the encoder's, remembered as the stash for [`Self::republish`].
-    pub fn take_full(&self) -> Option<(usize, u64, u64)> {
+    /// Whether a composed frame is queued.
+    pub fn has_full(&self) -> bool {
+        !lock(&self.state).full.is_empty()
+    }
+
+    /// The oldest full slot within `budget` frames, now the encoder's, remembered as the stash for
+    /// [`Self::republish`], plus how many queued frames were shed. Frames past the budget go
+    /// oldest first, so the encoder reads the newest. With no budget the slots wait for credit,
+    /// but a held bypass surface is shed: the drain worker must not wait on credit.
+    pub fn take_within(&self, budget: usize) -> (Option<(usize, u64, u64)>, u64) {
         let mut st = lock(&self.state);
-        let f = st.full.pop_front()?;
-        st.encoding.push(f.0);
-        st.stash = Some(f);
-        Some(f)
+        let mut shed = 0;
+        let mut handed_back = false;
+        if budget == 0 {
+            if st.full.iter().any(|f| f.0 == DIRECT) {
+                handed_back = unhold(&mut st);
+                shed = 1;
+            }
+        } else {
+            while st.full.len() > budget {
+                let (i, ..) = st.full.pop_front().expect("len > budget");
+                if i == DIRECT {
+                    handed_back |= st.held.take().is_some();
+                } else {
+                    st.free.push(i);
+                }
+                shed += 1;
+            }
+        }
+        let f = (budget > 0).then(|| st.full.pop_front()).flatten();
+        if let Some(f) = f {
+            st.encoding.push(f.0);
+            st.stash = Some(f);
+        }
+        drop(st);
+        if handed_back {
+            self.signal_release();
+        }
+        (f, shed)
     }
 
     /// The stash again, for a client that asked for a keyframe while the desktop composed

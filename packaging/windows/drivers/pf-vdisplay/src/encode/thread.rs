@@ -259,6 +259,12 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         },
     };
     let first = pool.first_frame(&monitor.seed());
+    // The requested mode leads the list: the refresh the host created this panel at.
+    let panel_hz = monitor
+        .modes()
+        .first()
+        .and_then(|m| m.refresh_rates.first().copied())
+        .unwrap_or(spec.fps);
     drop(monitor);
     dbglog!(
         "[pf-vd] encode: backend {} open {}x{} {:?} mode={} first_frame={} (target {})",
@@ -292,7 +298,11 @@ fn run(stop: HANDLE, ctx: ThreadCtx, live: Arc<AtomicBool>) {
         // The caller gave up waiting: nothing will install this session.
         return;
     }
-    Drive::new(enc, &pool, &ctx.session, stop, &live, spec.fps, opened_kbps).run();
+    let rates = super::drive::Rates {
+        fps: spec.fps,
+        panel_hz,
+    };
+    Drive::new(enc, &pool, &ctx.session, stop, &live, rates, opened_kbps).run();
     if live.load(Ordering::Acquire) {
         section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_CLOSED);
         // The encoder is closed, and D3D11 frees what it released only at a flush. The pooled

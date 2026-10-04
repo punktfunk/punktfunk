@@ -171,7 +171,7 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | `PUNKTFUNK_FEC_PCT` | `0`–`90` (percent) | Pins error correction and turns adaptive FEC off (normally 5–50 %, starting at 10 %). `0` disables it. On GameStream it sets the starting percent and floor instead. Leave it unset. |
 | `PUNKTFUNK_OH264_THREADS` | number (default `2`) | Software encoder threads. |
 | `PUNKTFUNK_OH264_GOP` | frames (default fps × 600) | Software encoder keyframe interval; `0` lets the encoder decide. |
-| `PUNKTFUNK_VDISPLAY_HZ_MULT` | `1`–`4` (default `1`) | Runs the virtual display at a multiple of the stream rate, so a frame waits less for the compositor's next paint. Costs GPU time. |
+| `PUNKTFUNK_VDISPLAY_HZ_MULT` | `1`–`4` (unset: `2` on Windows for streams up to 500 Hz, else `1`) | Runs the virtual display at a multiple of the stream rate, so a frame waits less for the compositor's next paint and a late frame never displaces the next one. The stream stays at its own rate. A game with V-Sync on renders at the display's rate unless something caps it. `1` turns it off. |
 | `PUNKTFUNK_NVENC_RAW` | `1` · `0` | NVIDIA on Linux: convert the captured buffer straight into NVENC's input, on by default. `0` uses the copy-and-blend path. |
 | `PUNKTFUNK_VULKAN_DIRECT_PLANES` | `1` · `0` | Vulkan Video on Linux: write the converted picture straight into the encoder where the driver allows, on by default. `0` keeps the extra copy. |
 

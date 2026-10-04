@@ -332,8 +332,8 @@ pub struct HostConfig {
     /// Row `pyrowave_bpp` — bits per pixel a PyroWave frame gets at 4:2:0 SDR.
     pub pyrowave_bpp: f64,
     /// `PUNKTFUNK_VDISPLAY_HZ_MULT` — virtual-display refresh as a multiple of the
-    /// session rate; the stream stays at the session rate. Default 1; 2 halves
-    /// worst-case age (~16 ms at 60 Hz) without extra wire frames. Clamped 1..=4.
+    /// session rate; the stream stays at the session rate. Clamped 1..=4; `0` (unset) is
+    /// [`Self::vdisplay_hz_mult_for`]'s automatic choice.
     pub vdisplay_hz_mult: u32,
     /// `PUNKTFUNK_GAMESCOPE_VRR=0` — opt out of adaptive sync. Default on: capable
     /// gamescope gets `--adaptive-sync` + `--framerate-limit` at the game rate so
@@ -420,8 +420,7 @@ impl HostConfig {
             on_disconnect_cmd: val("PUNKTFUNK_ON_DISCONNECT_CMD").filter(|s| !s.trim().is_empty()),
             vdisplay_hz_mult: val("PUNKTFUNK_VDISPLAY_HZ_MULT")
                 .and_then(|s| s.trim().parse::<u32>().ok())
-                .unwrap_or(1)
-                .clamp(1, 4),
+                .map_or(0, |m| m.clamp(1, 4)),
             gamescope_vrr: row_bool("PUNKTFUNK_GAMESCOPE_VRR"),
             ..Self::default()
         }
@@ -489,6 +488,22 @@ impl HostConfig {
             _ => session_hz,
         }
     }
+
+    /// The virtual display's refresh multiple for a `session_hz` session: the configured one,
+    /// or automatically 2 on Windows while the display stays at or under 1000 Hz, else 1.
+    /// DWM composes on the panel's fixed tick, so at 1x a frame that misses one tick
+    /// collides with the next and one of the two is never shown.
+    pub fn vdisplay_hz_mult_for(&self, session_hz: u32) -> u32 {
+        self.mult_for(session_hz, cfg!(windows))
+    }
+
+    fn mult_for(&self, session_hz: u32, windows: bool) -> u32 {
+        match self.vdisplay_hz_mult {
+            0 if windows && session_hz <= 500 => 2,
+            0 => 1,
+            set => set,
+        }
+    }
 }
 
 /// `PUNKTFUNK_ENCODER`, lower-cased. On Windows a software pin becomes `auto`: the driver
@@ -519,6 +534,25 @@ mod tests {
             max_fps,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn display_multiple_is_automatic_until_set() {
+        let auto = HostConfig::default();
+        assert_eq!(auto.mult_for(60, true), 2);
+        assert_eq!(auto.mult_for(500, true), 2);
+        assert_eq!(
+            auto.mult_for(540, true),
+            1,
+            "the panel stays at or under 1000 Hz"
+        );
+        assert_eq!(auto.mult_for(60, false), 1);
+        let set = HostConfig {
+            vdisplay_hz_mult: 3,
+            ..Default::default()
+        };
+        assert_eq!(set.mult_for(60, true), 3);
+        assert_eq!(set.mult_for(60, false), 3);
     }
 
     #[test]

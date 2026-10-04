@@ -20,6 +20,7 @@ use bytemuck::{Pod, Zeroable};
 pub mod au;
 pub mod backend;
 pub mod codec;
+pub mod pace;
 
 /// The publish cell of [`au::AuHeader::latest`]: `(generation << 40) | (seq << 8) | slot`,
 /// with `generation` 24-bit, `seq` 32-bit and `slot` 8-bit. `generation` is bumped on every
