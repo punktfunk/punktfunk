@@ -1105,6 +1105,7 @@ mod tests {
     /// mirror in the old shape that a client older than the rename reads.
     #[test]
     fn a_pre_rename_catalog_loads_and_saves_under_both_names() {
+        let _guard = crate::trust::store_health_lock();
         let dir = scratch_dir("presets-migrate");
         std::fs::write(
             dir.join(LEGACY_FILE),
@@ -1132,6 +1133,7 @@ mod tests {
     /// newest. A marked mirror defers to the new file, and stands in when that file is gone.
     #[test]
     fn the_legacy_file_wins_only_when_an_older_client_wrote_it() {
+        let _guard = crate::trust::store_health_lock();
         let dir = scratch_dir("presets-downgrade");
         let mut file = PresetsFile {
             version: 1,
