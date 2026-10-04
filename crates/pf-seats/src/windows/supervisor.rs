@@ -28,7 +28,9 @@ use std::time::{Duration, Instant};
 
 const SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 const QUALITY_TIMEOUT: Duration = Duration::from_secs(60);
-const QUALITY_RETRY_GAP: Duration = Duration::from_secs(2);
+/// Fresh sessions a failing gate gets. A session whose display misses its path never
+/// gets one; a fresh logon passes about 40% of the time on 9300.
+const QUALITY_SESSIONS: u32 = 5;
 const HOST_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -328,6 +330,7 @@ fn run_worker(
     seat: Seat,
 ) {
     let mut quality_done = false;
+    let mut gate_failures = 0_u32;
     let mut delay = Duration::from_secs(1);
     loop {
         if runtime.stop.load(Ordering::Acquire) {
@@ -353,16 +356,34 @@ fn run_worker(
         match result {
             Ok(()) => break,
             Err(error) => {
+                let stopping = runtime.stop.load(Ordering::Acquire);
+                if error.code == "quality_failed" {
+                    gate_failures += 1;
+                }
+                // A failed gate retries in a fresh session; the start waits for those.
+                let gate_retry = error.code == "quality_failed" && gate_failures < QUALITY_SESSIONS;
+                let retry = !stopping && (gate_retry || !permanent_failure(&error));
+                // The first answer reaches the caller; later failures have only this log.
+                let answered = runtime.status().initial.is_some();
+                if !stopping && (answered || gate_retry) {
+                    tracing::warn!(
+                        seat = %seat.id,
+                        code = %error.code,
+                        retry,
+                        "seat did not start: {}",
+                        error.message
+                    );
+                }
                 runtime.update(|snapshot| {
                     snapshot.status = RuntimeStatus::failed(error.to_string());
-                    if snapshot.initial.is_none() {
+                    if snapshot.initial.is_none() && !gate_retry {
                         snapshot.initial = Some(Err(error.clone()));
                     }
                     snapshot.session_id = None;
                     snapshot.keeper_pid = None;
                     snapshot.host_pid = None;
                 });
-                if runtime.stop.load(Ordering::Acquire) || permanent_failure(&error) {
+                if !retry {
                     break;
                 }
                 if !sleep_stoppable(&runtime.stop, delay) {
@@ -556,40 +577,24 @@ fn run_quality_gate(
     .map(OsString::from)
     .chain(std::iter::once(output.as_os_str().to_owned()))
     .collect::<Vec<_>>();
-    let deadline = Instant::now() + QUALITY_TIMEOUT;
     let result = (|| {
-        let mut attempt = 1_u32;
-        loop {
-            let quality =
-                process::spawn_in_session(session_id, host_path, &arguments, environment, workdir)?;
-            let left = deadline.saturating_duration_since(Instant::now());
-            let code = quality.wait(left, || {
-                runtime.stop.load(Ordering::Acquire) || keeper.exit_code().ok().flatten().is_some()
-            })?;
-            let Some(code) = code else {
-                quality.terminate();
-                return Err(backend_error(
-                    "quality_timeout",
-                    "same-session virtual-display quality gate did not finish within 60 seconds",
-                ));
-            };
-            if code == 0 {
-                break;
-            }
-            // A seat's display can attach before the session has a free path for it.
-            // Retrying in this session is cheaper than a logoff and a fresh logon.
-            let retry = deadline.saturating_duration_since(Instant::now()) > QUALITY_RETRY_GAP * 2;
-            if !retry || !sleep_stoppable(&runtime.stop, QUALITY_RETRY_GAP) {
-                return Err(backend_error(
-                    "quality_failed",
-                    format!(
-                        "same-session virtual-display quality gate exited with code {code} \
-                         on attempt {attempt}"
-                    ),
-                ));
-            }
-            tracing::warn!(seat = %seat.id, attempt, code, "seat quality gate failed, retrying");
-            attempt += 1;
+        let quality =
+            process::spawn_in_session(session_id, host_path, &arguments, environment, workdir)?;
+        let code = quality.wait(QUALITY_TIMEOUT, || {
+            runtime.stop.load(Ordering::Acquire) || keeper.exit_code().ok().flatten().is_some()
+        })?;
+        let Some(code) = code else {
+            quality.terminate();
+            return Err(backend_error(
+                "quality_timeout",
+                "same-session virtual-display quality gate did not finish within 60 seconds",
+            ));
+        };
+        if code != 0 {
+            return Err(backend_error(
+                "quality_failed",
+                format!("same-session virtual-display quality gate exited with code {code}"),
+            ));
         }
         let bytes = temp_root
             .read_current(&name, 16 * 1024 * 1024)
