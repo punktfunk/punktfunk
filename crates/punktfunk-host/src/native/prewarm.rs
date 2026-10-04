@@ -171,7 +171,7 @@ fn park_seat(
     }
     // The policy half of the route: `game_session` under this device's own overlay. A device
     // whose launches land in the box's session has nothing of its own to warm.
-    if !crate::vdisplay::wants_dedicated_game_session(true, Some(fp)) {
+    if !crate::vdisplay::wants_dedicated_game_session(true, Some(fp), false) {
         tracing::info!(seat = %id, "seat pre-warm skipped — this device's launches do not get a session of their own");
         return Ok(None);
     }

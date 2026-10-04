@@ -752,7 +752,7 @@ fn open_gs_virtual_source(
         // No per-session injector on this plane: input always takes the shared backend.
         crate::compositor_route::resolve_compositor(
             punktfunk_core::config::CompositorPref::Auto,
-            crate::vdisplay::wants_dedicated_game_session(has_launch, None),
+            crate::vdisplay::wants_dedicated_game_session(has_launch, None, false),
             false,
             revive,
         )?

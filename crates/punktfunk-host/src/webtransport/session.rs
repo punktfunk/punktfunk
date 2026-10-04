@@ -347,7 +347,7 @@ mod tests {
             },
             cert_hash: [0x11; 32],
             last_pairing: std::sync::Mutex::new(None),
-            host: crate::native::SessionHost::for_tests(pairing),
+            host: crate::native::SessionHost::for_tests(pairing, crate::native::test_profiles()),
         }
     }
 

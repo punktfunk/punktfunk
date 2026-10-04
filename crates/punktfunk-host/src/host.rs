@@ -215,7 +215,8 @@ pub fn serve(
     if let Err(e) = profiles.ensure_owner(&state.host.hostname) {
         tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
     }
-    let _ = state.profiles.set(Arc::new(profiles));
+    let profiles = Arc::new(profiles);
+    let _ = state.profiles.set(profiles.clone());
     tracing::info!(
         hostname = %state.host.hostname,
         uniqueid = %state.host.uniqueid,
@@ -326,6 +327,7 @@ pub fn serve(
                         native_opts,
                         native.mgmt_port,
                         np,
+                        profiles.clone(),
                         stats.clone(),
                         native_ident,
                         web,
@@ -353,6 +355,7 @@ pub fn serve(
                     native_opts,
                     native.mgmt_port,
                     np,
+                    profiles.clone(),
                     stats.clone(),
                     native_ident,
                     web,

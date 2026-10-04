@@ -168,8 +168,12 @@ pub fn run(opts: Punktfunk1Options) -> Result<()> {
     let stats = StatsRecorder::new(crate::stats_recorder::default_dir());
     // Standalone resolves identity itself; unified `serve` does it once for both planes.
     let ident = crate::identity::load_or_adopt(&np).context("native host identity")?;
+    let profiles = crate::profiles::Profiles::load_with(None, None);
+    if let Err(e) = profiles.ensure_owner(&crate::host::machine_hostname()) {
+        tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
+    }
     // No management API → advertise no `mgmt` port (0).
-    rt.block_on(serve(opts, 0, np, stats, ident, None))
+    rt.block_on(serve(opts, 0, np, Arc::new(profiles), stats, ident, None))
 }
 
 /// [`run`] with an in-memory identity. Tests must not mint `native-cert.pem` in the real
@@ -188,7 +192,18 @@ fn run_ephemeral(opts: Punktfunk1Options) -> Result<()> {
     )?);
     let stats = StatsRecorder::new(crate::stats_recorder::default_dir());
     let ident = crate::identity::ephemeral()?;
-    rt.block_on(serve(opts, 0, np, stats, ident, None))
+    rt.block_on(serve(opts, 0, np, test_profiles(), stats, ident, None))
+}
+
+/// A profile store in a temp file: tests never read or write the real `profiles.json`.
+#[cfg(test)]
+pub(crate) fn test_profiles() -> Arc<crate::profiles::Profiles> {
+    use std::sync::atomic::AtomicUsize;
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("pf-profiles-{}-{n}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    Arc::new(crate::profiles::Profiles::load_with(Some(path), None))
 }
 
 /// Native host config when unified `serve` runs it in-process.
@@ -248,6 +263,7 @@ pub(crate) async fn serve(
     opts: Punktfunk1Options,
     mgmt_port: u16,
     np: Arc<NativePairing>,
+    profiles: Arc<crate::profiles::Profiles>,
     stats: Arc<StatsRecorder>,
     // Caller-resolved so the planes cannot race the first-run mint.
     identity: crate::identity::NativeIdentity,
@@ -368,6 +384,7 @@ pub(crate) async fn serve(
             inj_tx: injector.sender(),
             mic_tx: mic_service.sender(),
             np: np.clone(),
+            profiles: profiles.clone(),
             stats: stats.clone(),
         };
         let (bind, sem) = (plane.bind, sem.clone());
@@ -414,6 +431,7 @@ pub(crate) async fn serve(
         let opts = opts.clone();
         let audio_cap = audio_cap.clone();
         let np = np.clone();
+        let profiles = profiles.clone();
         let last_pairing = last_pairing.clone();
         let stats = stats.clone();
         let inj_tx = injector.sender();
@@ -461,6 +479,7 @@ pub(crate) async fn serve(
                 mic_tx,
                 &fingerprint,
                 &np,
+                &profiles,
                 &last_pairing,
                 stats,
                 sem_session,
@@ -1157,6 +1176,7 @@ async fn serve_session(
     mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     host_fp: &[u8; 32],
     np_arc: &Arc<NativePairing>,
+    profiles: &Arc<crate::profiles::Profiles>,
     last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
     stats: Arc<StatsRecorder>,
     // The session slots. An unpaired knock releases its slot while parked, re-acquires on approval.
@@ -1248,6 +1268,7 @@ async fn serve_session(
         inj_tx,
         mic_tx,
         np: np_arc.clone(),
+        profiles: profiles.clone(),
         stats,
     };
     let data_plane = DataPlane::Shared(
@@ -1382,6 +1403,8 @@ pub(crate) struct SessionHost {
     pub(crate) inj_tx: std::sync::mpsc::Sender<InputEvent>,
     pub(crate) mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     pub(crate) np: Arc<NativePairing>,
+    /// Resolves each connect's profile before anything is built for it.
+    pub(crate) profiles: Arc<crate::profiles::Profiles>,
     pub(crate) stats: Arc<StatsRecorder>,
 }
 
@@ -1389,7 +1412,10 @@ impl SessionHost {
     /// A host with nothing behind it: every channel's receiver is dropped. For tests of the
     /// admission code, which never reach the pipeline.
     #[cfg(test)]
-    pub(crate) fn for_tests(np: Arc<NativePairing>) -> SessionHost {
+    pub(crate) fn for_tests(
+        np: Arc<NativePairing>,
+        profiles: Arc<crate::profiles::Profiles>,
+    ) -> SessionHost {
         SessionHost {
             opts: Arc::new(Punktfunk1Options {
                 port: 0,
@@ -1409,6 +1435,7 @@ impl SessionHost {
             inj_tx: std::sync::mpsc::channel().0,
             mic_tx: std::sync::mpsc::sync_channel(1).0,
             np,
+            profiles,
             stats: StatsRecorder::new(crate::stats_recorder::default_dir()),
         }
     }
@@ -1442,6 +1469,7 @@ pub(crate) async fn run_admitted(
         inj_tx,
         mic_tx,
         np,
+        profiles,
         stats,
     } = host;
     let (opts, np, stats) = (opts.as_ref(), np.as_ref(), stats.clone());
@@ -1458,6 +1486,21 @@ pub(crate) async fn run_admitted(
         at_unix: admit_unix,
         session: _session,
     } = admit(host, session_fp_hex.as_deref(), &conn, &first).await?;
+    // Before anything is built for it: an unknown profile closes with no display touched.
+    let resolved = match profiles.resolve(session_fp_hex.as_deref(), first.profile.as_deref()) {
+        Ok(r) => r,
+        Err(e) => {
+            use punktfunk_core::reject::RejectReason;
+            let reason = match e {
+                crate::profiles::ProfileError::Unknown
+                | crate::profiles::ProfileError::NotThisSeat => RejectReason::ProfileUnknown,
+                crate::profiles::ProfileError::SessionUnavailable => RejectReason::SeatUnavailable,
+            };
+            close_rejected(&conn, reason).await;
+            anyhow::bail!("profile refused: {e:?}");
+        }
+    };
+    tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
     // One relaxed load per event; the lifecycle task is the only writer after admission.
     let session_grants = Arc::new(AtomicU32::new(initial_grants));
     let expires_in_secs = remaining_secs_wire(deadline_unix, admit_unix);
@@ -1495,6 +1538,7 @@ pub(crate) async fn run_admitted(
         prep,
         joined,
         features,
+        resolved,
     } = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         handshake::negotiate(
@@ -1509,6 +1553,7 @@ pub(crate) async fn run_admitted(
             stop.clone(),
             initial_grants,
             expires_in_secs,
+            resolved,
         ),
     )
     .await
@@ -1918,7 +1963,10 @@ pub(crate) async fn run_admitted(
     // Linux `PUNKTFUNK_PIN_CLOCKS`: refcounted vendor clock floor while any session streams.
     #[cfg(target_os = "linux")]
     let _clock_pin = crate::gpuclocks::session_pin();
-    let launch_target = resolve_launch(hello.launch.as_deref(), &launch_outcome_tx).await?;
+    let launch_target = match resolve_launch(hello.launch.as_deref(), &launch_outcome_tx).await? {
+        Some(t) => Some(t),
+        None => home_launch(hello.launch.as_deref(), &resolved),
+    };
     #[cfg(target_os = "windows")]
     let launch_for_dp = launch_target.as_ref().and(hello.launch.clone());
     #[cfg(not(target_os = "windows"))]
@@ -2512,6 +2560,27 @@ async fn resolve_launch(
         }
     }
     Ok(found)
+}
+
+/// What a bare connect opens: Big Picture for a seat profile whose home is `bigpicture`. A
+/// connect that named a title, or the owner's, opens nothing more.
+fn home_launch(
+    asked: Option<&str>,
+    profile: &crate::profiles::Resolved,
+) -> Option<crate::library::LaunchTarget> {
+    if asked.is_some() || !opens_big_picture(profile) {
+        return None;
+    }
+    #[cfg(not(windows))]
+    return crate::library::big_picture_launch();
+    #[cfg(windows)]
+    None
+}
+
+/// A seat profile whose bare connect opens Big Picture in its own gamescope.
+pub(crate) fn opens_big_picture(profile: &crate::profiles::Resolved) -> bool {
+    matches!(profile.os_account, crate::profiles::OsAccount::Seat { .. })
+        && profile.home == crate::profiles::Home::Bigpicture
 }
 
 /// The launched title's prep steps and their environment: `PF_APP_ID` and `PF_STREAM_*`, so a
@@ -3975,6 +4044,7 @@ mod tests {
                 },
                 0,
                 np_host,
+                test_profiles(),
                 StatsRecorder::new(
                     std::env::temp_dir().join(format!("pf-approval-stats-{}", std::process::id())),
                 ),
@@ -4216,6 +4286,16 @@ mod tests {
         max_sessions: u32,
         np: Arc<NativePairing>,
     ) -> std::thread::JoinHandle<Result<()>> {
+        spawn_profile_host(port, max_sessions, np, test_profiles())
+    }
+
+    /// [`spawn_access_host`] over the given profile store.
+    fn spawn_profile_host(
+        port: u16,
+        max_sessions: u32,
+        np: Arc<NativePairing>,
+        profiles: Arc<crate::profiles::Profiles>,
+    ) -> std::thread::JoinHandle<Result<()>> {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -4239,6 +4319,7 @@ mod tests {
                 },
                 0,
                 np,
+                profiles,
                 StatsRecorder::new(
                     std::env::temp_dir()
                         .join(format!("pf-access-stats-{port}-{}", std::process::id())),
@@ -4625,6 +4706,72 @@ mod tests {
         .expect("controller-only session without a launch must be admitted");
         drop(client);
         let _ = std::fs::remove_file(&store);
+        host.join().unwrap().unwrap();
+    }
+
+    /// The asked profile is echoed, no ask lands on the owner, and an unknown id is refused
+    /// before anything is built for it.
+    #[test]
+    fn a_profile_is_resolved_in_the_handshake() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::{ConnectParams, NativeClient};
+        use punktfunk_core::quic::endpoint;
+
+        let store = access_store_path("profiles");
+        let _ = std::fs::remove_file(&store);
+        let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+        np.add_with_access("Couch", &fp_hex, None).unwrap();
+        let file =
+            std::env::temp_dir().join(format!("pf-handshake-profiles-{}.json", std::process::id()));
+        std::fs::write(
+            &file,
+            br#"{"version":1,"profiles":[
+                {"id":"4f1c3a9b0e27","display_name":"Enrico","os_account":{"kind":"operator"}},
+                {"id":"9a3f1c2b7e40","display_name":"Kid","os_account":{"kind":"seat"}}]}"#,
+        )
+        .unwrap();
+        let profiles = Arc::new(crate::profiles::Profiles::load_with(
+            Some(file.clone()),
+            None,
+        ));
+        let host = spawn_profile_host(19794, 3, np, profiles);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let dial = |profile: Option<&str>| {
+            NativeClient::connect(ConnectParams {
+                name: Some("Couch".into()),
+                identity: Some((cert.clone(), key.clone())),
+                profile: profile.map(Into::into),
+                ..ConnectParams::new(
+                    "127.0.0.1",
+                    19794,
+                    punktfunk_core::Mode {
+                        width: 1280,
+                        height: 720,
+                        refresh_hz: 60,
+                    },
+                    std::time::Duration::from_secs(10),
+                )
+            })
+        };
+
+        let kid = dial(Some("9a3f1c2b7e40")).expect("a known profile is admitted");
+        assert_eq!(kid.profile(), Some("9a3f1c2b7e40"));
+        drop(kid);
+        let owner = dial(None).expect("no ask is admitted");
+        assert_eq!(owner.profile(), Some("4f1c3a9b0e27"));
+        drop(owner);
+        match dial(Some("ffffffffffff")) {
+            Ok(_) => panic!("an unknown profile must be refused"),
+            Err(punktfunk_core::PunktfunkError::Rejected(r)) => {
+                assert_eq!(r, punktfunk_core::reject::RejectReason::ProfileUnknown)
+            }
+            Err(other) => panic!("expected a typed rejection, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&store);
+        let _ = std::fs::remove_file(&file);
         host.join().unwrap().unwrap();
     }
 
