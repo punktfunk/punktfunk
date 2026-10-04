@@ -13348,7 +13348,7 @@
           "wire": {
             "type": "integer",
             "format": "int32",
-            "description": "The punktfunk protocol the session speaks, `1` or `2`. Absent on the compat plane.",
+            "description": "The punktfunk protocol the session speaks. Absent on the compat plane.",
             "minimum": 0
           }
         }

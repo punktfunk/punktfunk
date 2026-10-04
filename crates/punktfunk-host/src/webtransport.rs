@@ -363,10 +363,19 @@ async fn session(
         return mgmt::serve(connection, serving).await;
     }
 
-    // `/pf2` is `punktfunk/2`; every other path is the `punktfunk/1` browser session.
-    let v2 = path == "/pf2";
+    // An older page dials `/stream` on `punktfunk/1`. It reads a refusal in that framing.
+    if path != "/pf2" {
+        let reason = punktfunk_core::reject::RejectReason::WireVersionMismatch;
+        refuse_older_page(&connection, reason.close_code(), OLDER_PAGE).await;
+        connection.close(
+            wtransport::VarInt::from_u32(reason.close_code()),
+            OLDER_PAGE.as_bytes(),
+        );
+        tracing::info!(path = %path, "punktfunk/1 browser refused — the page needs an update");
+        return Ok(());
+    }
     let peer = connection.remote_address();
-    match session::run(connection.clone(), serving.clone(), sem, v2).await {
+    match session::run(connection.clone(), serving.clone(), sem).await {
         Ok(crate::native::Served::Session) => tracing::info!(%peer, "browser session complete"),
         Ok(crate::native::Served::ProbeClose | crate::native::Served::Management) => {}
         Err(e) => {
@@ -384,7 +393,7 @@ async fn session(
             while !said.is_char_boundary(cut) {
                 cut -= 1;
             }
-            refuse(&connection, code, &said[..cut], v2).await;
+            refuse(&connection, code, &said[..cut]).await;
             connection.close(wtransport::VarInt::from_u32(code), &said.as_bytes()[..cut]);
             tracing::warn!(%peer, code, error = %detail, "browser session ended with error");
         }
@@ -392,22 +401,37 @@ async fn session(
     Ok(())
 }
 
+/// What a page that dials `punktfunk/1` is told.
+const OLDER_PAGE: &str =
+    "This page is older than the host. Reload it or update the app, then try again.";
+
 /// Say why on a fresh unidirectional stream, then give the browser a moment to read it. The
-/// close that follows carries no retransmit, so the wait is what makes the message arrive. On
-/// `/pf2` the stream carries the `Refused` frame alone.
-pub(crate) async fn refuse(connection: &wtransport::Connection, code: u32, reason: &str, v2: bool) {
+/// close that follows carries no retransmit, so the wait is what makes the message arrive. The
+/// stream carries the `Refused` frame alone.
+pub(crate) async fn refuse(connection: &wtransport::Connection, code: u32, reason: &str) {
+    use punktfunk_core::quic::v2::msg::V2Message;
     let refused = punktfunk_core::quic::Refused {
         code,
         reason: reason.to_string(),
     };
+    say_then_wait(connection, &refused.encode_v2()).await;
+}
+
+/// [`refuse`] in `punktfunk/1`'s framing, the only refusal a page from before `/pf2` reads.
+async fn refuse_older_page(connection: &wtransport::Connection, code: u32, reason: &str) {
+    let refused = punktfunk_core::quic::Refused {
+        code,
+        reason: reason.to_string(),
+    };
+    let mut framed = (refused.encode().len() as u16).to_le_bytes().to_vec();
+    framed.extend_from_slice(&refused.encode());
+    say_then_wait(connection, &framed).await;
+}
+
+async fn say_then_wait(connection: &wtransport::Connection, bytes: &[u8]) {
     let sent = async {
         let mut uni = connection.open_uni().await?.await?;
-        if v2 {
-            use punktfunk_core::quic::v2::msg::V2Message;
-            tokio::io::AsyncWriteExt::write_all(&mut uni, &refused.encode_v2()).await?;
-        } else {
-            punktfunk_core::quic::io::write_msg(&mut uni, &refused.encode()).await?;
-        }
+        tokio::io::AsyncWriteExt::write_all(&mut uni, bytes).await?;
         uni.finish().await?;
         anyhow::Ok(())
     };

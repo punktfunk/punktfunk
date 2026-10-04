@@ -393,7 +393,7 @@ pub(crate) struct SessionRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<u64>,
     plane: crate::events::Plane,
-    /// The punktfunk protocol the session speaks, `1` or `2`. Absent on the compat plane.
+    /// The punktfunk protocol the session speaks. Absent on the compat plane.
     // `value_type`: an `Option<u8>` alone generates as `never` in the SDK.
     #[schema(value_type = u32, required = false)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -669,7 +669,7 @@ pub(crate) async fn get_status(
             SessionRow {
                 id: Some(s.id),
                 plane: s.plane,
-                wire: (s.wire != 0).then_some(s.wire),
+                wire: native_plane.then_some(2),
                 client: if own { s.client.clone() } else { String::new() },
                 client_name: s.client_name.clone().filter(|_| own),
                 preset_name: s.preset_name.clone(),

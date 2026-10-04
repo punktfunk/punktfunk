@@ -4,7 +4,7 @@ description: Build a client for a platform without a Punktfunk app by linking th
 ---
 
 Link `punktfunk-ffi` into your own client and it speaks the whole protocol for you: the QUIC
-handshake, pairing, the encrypted UDP data plane, FEC and loss recovery, clock sync. You decode
+handshake, pairing, the encrypted media path, FEC and loss recovery, clock sync. You decode
 video, present it, play audio and read input. The contract is
 [`include/punktfunk_core.h`](https://git.unom.io/unom/punktfunk/src/branch/main/include/punktfunk_core.h):
 every symbol carries a doc comment, and this page is the map to it. A Rust client depends on

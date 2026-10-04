@@ -26,9 +26,7 @@ use punktfunk_core::quic::{
     ProbeResult, ProbeShaped, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate,
     Start, Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
 };
-use punktfunk_core::transport::UdpTransport;
 use punktfunk_core::Session;
-use rand::RngCore;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
@@ -115,72 +113,12 @@ pub struct Punktfunk1Options {
     pub pairing_pin: Option<String>,
     /// Tests: store path. `None` = the default config path.
     pub paired_store: Option<std::path::PathBuf>,
-    /// Fixed data-plane UDP port. `None`/`Some(0)`: an ephemeral port per session.
-    /// `Some(p)`: bind `p` (busy → ephemeral, [`bind_data_socket`]). Either way the
-    /// client's hole-punch picks the return path; a fixed port only gives a firewall or
-    /// a port proxy one number to open.
-    pub data_port: Option<u16>,
     /// Disconnect-detection latency. `None` = core default (8 s). From
     /// `PUNKTFUNK_IDLE_TIMEOUT_MS`; ≥1 s floor, keep-alive scales so a live session
     /// never false-closes.
     pub idle_timeout: Option<std::time::Duration>,
     /// `_punktfunk._udp` advert. `--no-mdns` / `PUNKTFUNK_MDNS=0` skips it.
     pub mdns: bool,
-    /// Answer `punktfunk/2` to a client that offers it ([`protocol2_from_env`]). Off, the
-    /// endpoint lists only `pkf1`, and every client gets `punktfunk/1`.
-    pub protocol2: bool,
-}
-
-/// Bind the per-session data-plane UDP socket ([`Punktfunk1Options::data_port`]): the
-/// fixed port when set and free, else an ephemeral one. Held from handshake through
-/// streaming — no drop-then-rebind window that could steal a fixed port. It never decides
-/// how video is addressed: every session waits for the client's hole-punch on whatever
-/// port this bound, because a fixed port fixes only the host's side of the path — the
-/// client's NAT, or a port proxy such as Porthole, still remaps the source to answer.
-///
-/// `local_ip` is the address the QUIC connection was received on. Bind it: the client's
-/// data socket is `connect`ed to the host IP it dialed, and its kernel drops any other
-/// source. A wildcard bind lets the routing table pick a different egress on a
-/// multi-homed host. `None` or a bind failure falls back to the wildcard.
-fn bind_data_socket(
-    data_port: Option<u16>,
-    local_ip: Option<std::net::IpAddr>,
-) -> std::io::Result<std::net::UdpSocket> {
-    // Dual-stack endpoints report IPv4-mapped v6; unmap so a v4 `connect` can bind.
-    let local_ip = local_ip.map(|ip| match ip {
-        std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, std::net::IpAddr::V4),
-        v4 => v4,
-    });
-    let wildcard = |ip: Option<std::net::IpAddr>| {
-        ip.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
-    };
-    if let Some(p) = data_port.filter(|p| *p != 0) {
-        match std::net::UdpSocket::bind((wildcard(local_ip), p)) {
-            Ok(sock) => return Ok(sock),
-            Err(e) => tracing::warn!(
-                data_port = p,
-                error = %e,
-                "fixed --data-port is busy (a concurrent session already holds it?) — \
-                 falling back to a random port + hole-punch for this session"
-            ),
-        }
-    }
-    match std::net::UdpSocket::bind((wildcard(local_ip), 0)) {
-        Ok(sock) => Ok(sock),
-        // The control connection arrived here; a bind failure means the adapter dropped.
-        // Wildcard still reaches a routable client.
-        Err(e) if local_ip.is_some() => {
-            tracing::warn!(
-                local_ip = ?local_ip,
-                error = %e,
-                "data plane did not bind to the control-connection address — falling back to the \
-                 wildcard; on a multi-homed host video may egress from a different interface than \
-                 the client dialed, which it silently drops"
-            );
-            Ok(std::net::UdpSocket::bind("0.0.0.0:0")?)
-        }
-        Err(e) => Err(e),
-    }
 }
 
 use crate::native_pairing::{NativePairing, PairingDecision};
@@ -256,18 +194,11 @@ pub(crate) struct NativeServe {
     pub require_pairing: bool,
     /// Management API TCP port, advertised over mDNS so a client browses the library on this IP.
     pub mgmt_port: u16,
-    /// [`Punktfunk1Options::data_port`]. `None` = ephemeral + hole-punch.
-    pub data_port: Option<u16>,
     /// Gates `_punktfunk._udp` and GameStream `_nvstream` together. See [`Punktfunk1Options::mdns`].
     pub mdns: bool,
     /// Where the browser plane listens, or `None` when it is off — which is the default
     /// (`--webtransport` / `PUNKTFUNK_WEBTRANSPORT`). See `crate::webtransport`.
     pub webtransport_bind: Option<std::net::SocketAddr>,
-}
-
-/// `PUNKTFUNK_PROTOCOL=2`: answer `punktfunk/2`. Clients offer it already; the host picks.
-pub(crate) fn protocol2_from_env() -> bool {
-    pf_host_config::knob("PUNKTFUNK_PROTOCOL").is_some_and(|v| v.trim() == "2")
 }
 
 /// NVENC session cap (high-res split-encode holds two). Overflow waits in the accept queue.
@@ -304,10 +235,8 @@ pub(crate) fn native_serve_opts(cfg: &NativeServe) -> Punktfunk1Options {
         allow_pairing: false,
         pairing_pin: None,
         paired_store: None,
-        data_port: cfg.data_port,
         idle_timeout: idle_timeout_from_env(),
         mdns: cfg.mdns,
-        protocol2: protocol2_from_env(),
     }
 }
 
@@ -324,15 +253,12 @@ pub(crate) async fn serve(
 ) -> Result<()> {
     let fingerprint = endpoint::fingerprint_of_pem(&identity.cert_pem)
         .map_err(|e| anyhow!("cert fingerprint: {e}"))?;
-    // A v2 session's media leaves from this socket; `pkf2` first wins wherever both ends speak it.
-    let alpns: &[&[u8]] = if opts.protocol2 {
-        &[
-            punktfunk_core::quic::v2::registry::ALPN,
-            endpoint::QUIC_ALPN,
-        ]
-    } else {
-        &[endpoint::QUIC_ALPN]
-    };
+    // Media leaves from this socket. `pkf1` stays listed for [`serve_pkf1`]: an older client
+    // still pairs there, and is told to update for anything else.
+    let alpns: &[&[u8]] = &[
+        punktfunk_core::quic::v2::registry::ALPN,
+        endpoint::QUIC_ALPN,
+    ];
     let (ep, media_socket) = endpoint::server_shared(
         ([0, 0, 0, 0], opts.port).into(),
         &identity.cert_pem,
@@ -346,7 +272,7 @@ pub(crate) async fn serve(
         port = opts.port,
         source = ?opts.source,
         fingerprint = %hex::encode(fingerprint),
-        "punktfunk/1 host listening (QUIC) — clients pin this fingerprint"
+        "punktfunk host listening (QUIC) — clients pin this fingerprint"
     );
 
     // Held for the host lifetime — dropping `_advert` unregisters. Best-effort: a
@@ -367,7 +293,6 @@ pub(crate) async fn serve(
             // 0 = standalone (no mgmt API) → do not advertise an `mgmt` port.
             (mgmt_port != 0).then_some(mgmt_port),
             &h.os_chain,
-            opts.protocol2,
         )
         .map_err(|e| tracing::warn!(error = %format!("{e:#}"), "native mDNS advertise failed (continuing)"))
         .ok(),
@@ -509,21 +434,21 @@ pub(crate) async fn serve(
                 done.notify_one();
             }
             let peer = conn.remote_address();
-            let v2 = endpoint::negotiated_alpn(&conn).as_deref()
-                == Some(punktfunk_core::quic::v2::registry::ALPN);
-            tracing::info!(%peer, wire = if v2 { "punktfunk/2" } else { "punktfunk/1" }, "client connected");
+            if endpoint::negotiated_alpn(&conn).as_deref()
+                != Some(punktfunk_core::quic::v2::registry::ALPN)
+            {
+                serve_pkf1(conn, media_socket, &fingerprint, &np, &last_pairing).await;
+                return;
+            }
+            tracing::info!(%peer, "client connected");
             // `serve_session` takes the slot once the peer has spoken: released while a knock is
             // parked, re-acquired on approval. A setup failure still needs a typed close.
             let sem_session = sem;
             let conn_err = conn.clone();
-            let link = if v2 {
-                link::SessionLink::QuicV2(
-                    conn.clone(),
-                    Arc::new(link::V2Link::new(conn, media_socket)),
-                )
-            } else {
-                link::SessionLink::Quic(conn)
-            };
+            let link = link::SessionLink::QuicV2(
+                conn.clone(),
+                Arc::new(link::V2Link::new(conn, media_socket)),
+            );
             match serve_session(
                 link,
                 &opts,
@@ -1235,7 +1160,6 @@ async fn serve_session(
     sem: Arc<tokio::sync::Semaphore>,
 ) -> Result<Served> {
     let np: &NativePairing = np_arc;
-    let peer = conn.remote_address();
     let (mut send, mut recv) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
         .await
         .map_err(|_| anyhow!("control stream timeout"))??
@@ -1257,70 +1181,7 @@ async fn serve_session(
         .await
         .map_err(|_| anyhow!("first message timeout"))??;
     if let Ok(req) = PairRequest::decode(&first) {
-        // Fingerprint-bound PIN window: only this device may consume (or burn) it.
-        let Some(client_fp) = conn.peer_fingerprint() else {
-            close_rejected(
-                &conn,
-                punktfunk_core::reject::RejectReason::IdentityRequired,
-            )
-            .await;
-            anyhow::bail!("pairing requires the client to present a certificate");
-        };
-        let client_fp_hex = hex::encode(client_fp);
-        // Charge the cooldown before consulting arming, on every outcome including rejections.
-        // Otherwise "is pairing armed?" is a free oracle. A spam of knocks can hold the
-        // cooldown against the real device.
-        let limited = {
-            let mut last = last_pairing.lock().unwrap();
-            let limited = last.is_some_and(|t| t.elapsed() < PAIRING_COOLDOWN);
-            if !limited {
-                *last = Some(std::time::Instant::now());
-            }
-            limited
-        };
-        if limited {
-            close_rejected(
-                &conn,
-                punktfunk_core::reject::RejectReason::PairingRateLimited,
-            )
-            .await;
-            anyhow::bail!("pairing rate-limited — retry shortly");
-        }
-        // Live PIN per attempt so a lapsed window no longer pairs; honor fingerprint binding
-        // and the address the knock came from.
-        let source = crate::native_pairing::classify_source(Some(peer.ip()));
-        let pin = match np.pin_for_attempt(&client_fp_hex, source) {
-            crate::native_pairing::PinAttempt::Pin(pin) => pin,
-            crate::native_pairing::PinAttempt::Disarmed => {
-                close_rejected(&conn, punktfunk_core::reject::RejectReason::PairingNotArmed).await;
-                anyhow::bail!(
-                    "pairing not armed (arm it in the console, or start with --allow-pairing)"
-                )
-            }
-            // Armed for a different device: reject without the ceremony so this does not burn the window.
-            crate::native_pairing::PinAttempt::BoundToOther => {
-                close_rejected(
-                    &conn,
-                    punktfunk_core::reject::RejectReason::PairingBoundToOtherDevice,
-                )
-                .await;
-                anyhow::bail!(
-                    "pairing is armed for a different device — this attempt does not consume the window"
-                )
-            }
-            // An open window is for the device in the operator's hands. This one is on the
-            // internet, so it reads as not armed and the window survives for its owner.
-            crate::native_pairing::PinAttempt::UnboundForWan => {
-                close_rejected(&conn, punktfunk_core::reject::RejectReason::PairingNotArmed).await;
-                anyhow::bail!(
-                    "a knock from {peer} needs a pairing window bound to its fingerprint \
-                     ({client_fp_hex}) — an open window does not answer the internet"
-                )
-            }
-        };
-        return pair_ceremony(&conn, send, recv, req, &client_fp, host_fp, np, &pin)
-            .await
-            .map(|()| Served::Session);
+        return serve_pairing(&conn, send, recv, req, host_fp, np, last_pairing).await;
     }
 
     // A slot only once the peer has spoken: one that stalls the handshake holds none, so it
@@ -1336,18 +1197,6 @@ async fn serve_session(
     if opts.require_pairing {
         // Hello name for the pending label; handshake re-decodes for the real session.
         let gate_hello = Hello::decode(&first).map_err(|e| anyhow!("Hello decode: {e:?}"))?;
-        if gate_hello.abi_version != punktfunk_core::WIRE_VERSION {
-            close_rejected(
-                &conn,
-                punktfunk_core::reject::RejectReason::WireVersionMismatch,
-            )
-            .await;
-            anyhow::bail!(
-                "wire version mismatch: client {} host {}",
-                gate_hello.abi_version,
-                punktfunk_core::WIRE_VERSION
-            );
-        }
         let fp = conn.peer_fingerprint();
         // `effective`, not `is_paired`: an expired record is listed but not authorized, so it
         // knocks like an unpaired device and re-approval is the re-grant.
@@ -1400,11 +1249,126 @@ async fn serve_session(
         np: np_arc.clone(),
         stats,
     };
-    let data_plane = match conn.v2() {
-        Some(v2) => DataPlane::Shared(v2.clone()),
-        None => DataPlane::Udp,
-    };
+    let data_plane = DataPlane::Shared(
+        conn.v2()
+            .context("the native plane admitted a link with no punktfunk/2 state")?
+            .clone(),
+    );
     run_admitted(conn, send, recv, first, &host, data_plane, permit).await
+}
+
+/// A `PairRequest`: the PIN gate, then the ceremony. Pairing is its own connection; no session
+/// follows on it.
+async fn serve_pairing<W, R>(
+    conn: &link::SessionLink,
+    send: W,
+    recv: R,
+    req: PairRequest,
+    host_fp: &[u8; 32],
+    np: &NativePairing,
+    last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
+) -> Result<Served>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let peer = conn.remote_address();
+    // Fingerprint-bound PIN window: only this device may consume (or burn) it.
+    let Some(client_fp) = conn.peer_fingerprint() else {
+        close_rejected(conn, punktfunk_core::reject::RejectReason::IdentityRequired).await;
+        anyhow::bail!("pairing requires the client to present a certificate");
+    };
+    let client_fp_hex = hex::encode(client_fp);
+    // Charge the cooldown before consulting arming, on every outcome including rejections.
+    // Otherwise "is pairing armed?" is a free oracle. A spam of knocks can hold the
+    // cooldown against the real device.
+    let limited = {
+        let mut last = last_pairing.lock().unwrap();
+        let limited = last.is_some_and(|t| t.elapsed() < PAIRING_COOLDOWN);
+        if !limited {
+            *last = Some(std::time::Instant::now());
+        }
+        limited
+    };
+    if limited {
+        close_rejected(
+            conn,
+            punktfunk_core::reject::RejectReason::PairingRateLimited,
+        )
+        .await;
+        anyhow::bail!("pairing rate-limited — retry shortly");
+    }
+    // Live PIN per attempt so a lapsed window no longer pairs; honor fingerprint binding
+    // and the address the knock came from.
+    let source = crate::native_pairing::classify_source(Some(peer.ip()));
+    let pin = match np.pin_for_attempt(&client_fp_hex, source) {
+        crate::native_pairing::PinAttempt::Pin(pin) => pin,
+        crate::native_pairing::PinAttempt::Disarmed => {
+            close_rejected(conn, punktfunk_core::reject::RejectReason::PairingNotArmed).await;
+            anyhow::bail!(
+                "pairing not armed (arm it in the console, or start with --allow-pairing)"
+            )
+        }
+        // Armed for a different device: reject without the ceremony so this does not burn the window.
+        crate::native_pairing::PinAttempt::BoundToOther => {
+            close_rejected(
+                conn,
+                punktfunk_core::reject::RejectReason::PairingBoundToOtherDevice,
+            )
+            .await;
+            anyhow::bail!(
+                "pairing is armed for a different device — this attempt does not consume the window"
+            )
+        }
+        // An open window is for the device in the operator's hands. This one is on the
+        // internet, so it reads as not armed and the window survives for its owner.
+        crate::native_pairing::PinAttempt::UnboundForWan => {
+            close_rejected(conn, punktfunk_core::reject::RejectReason::PairingNotArmed).await;
+            anyhow::bail!(
+                "a knock from {peer} needs a pairing window bound to its fingerprint \
+                 ({client_fp_hex}) — an open window does not answer the internet"
+            )
+        }
+    };
+    pair_ceremony(conn, send, recv, req, &client_fp, host_fp, np, &pin)
+        .await
+        .map(|()| Served::Session)
+}
+
+/// A `pkf1` dial. A client that pairs over `pkf1` still reaches the PIN ceremony, in that
+/// wire's framing; every other `pkf1` dial is closed with the wire-version code, which the
+/// client shows as "update both".
+async fn serve_pkf1(
+    conn: quinn::Connection,
+    media_socket: Arc<std::net::UdpSocket>,
+    host_fp: &[u8; 32],
+    np: &NativePairing,
+    last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
+) {
+    let peer = conn.remote_address();
+    let first = async {
+        let (send, mut recv) = conn.accept_bi().await?;
+        let first = io::read_msg(&mut recv).await?;
+        anyhow::Ok((send, recv, first))
+    };
+    if let Ok(Ok((send, recv, first))) = tokio::time::timeout(HANDSHAKE_TIMEOUT, first).await {
+        if let Ok(req) = PairRequest::decode(&first) {
+            let link = link::SessionLink::QuicV2(
+                conn.clone(),
+                Arc::new(link::V2Link::new(conn.clone(), media_socket)),
+            );
+            match serve_pairing(&link, send, recv, req, host_fp, np, last_pairing).await {
+                Ok(_) => tracing::info!(%peer, "pairing over punktfunk/1 complete"),
+                Err(e) => {
+                    tracing::warn!(%peer, error = %format!("{e:#}"), "pairing over punktfunk/1 failed")
+                }
+            }
+            return;
+        }
+    }
+    let reason = punktfunk_core::reject::RejectReason::WireVersionMismatch;
+    conn.close(reason.close_code().into(), reason.to_string().as_bytes());
+    tracing::info!(%peer, "punktfunk/1 client refused — it needs an update");
 }
 
 /// Everything a session needs from the plane that admitted it. One value, cloned per session,
@@ -1437,10 +1401,8 @@ impl SessionHost {
                 allow_pairing: false,
                 pairing_pin: None,
                 paired_store: None,
-                data_port: None,
                 idle_timeout: None,
                 mdns: false,
-                protocol2: protocol2_from_env(),
             }),
             audio_cap: Arc::new(std::sync::Mutex::new(None)),
             inj_tx: std::sync::mpsc::channel().0,
@@ -1451,16 +1413,11 @@ impl SessionHost {
     }
 }
 
-/// Where video goes.
-///
-/// `punktfunk/1` binds a UDP socket during the handshake and hole-punches to the client;
-/// `punktfunk/2` sends from the endpoint's own socket; a browser has no second socket, so its
-/// video rides the same WebTransport connection as everything else. The stream thread turns either into the `Box<dyn Transport>` that
-/// `Session` was always written against, which is why nothing below it knows the difference.
+/// Where video goes: the native endpoint's own socket, toward the connection's validated
+/// address, or a browser's WebTransport datagrams. The stream thread turns either into the
+/// `Box<dyn Transport>` that `Session` is written against.
 pub(crate) enum DataPlane {
-    Udp,
     Web(crate::webtransport::WebTransportPlane),
-    /// `punktfunk/2`: media on the connection's own socket, toward its validated address.
     Shared(Arc<link::V2Link>),
 }
 
@@ -1506,7 +1463,6 @@ pub(crate) async fn run_admitted(
 
     let source = opts.source;
     let frames = opts.frames;
-    let data_port = opts.data_port;
     // Hello in hand; send thread finishes this when the first video packet leaves.
     let bringup = crate::bringup::Trace::start("bringup", Arc::new(AtomicU32::new(0)));
     // Mid-stream resize counterpart; latest accepted Reconfigure wins.
@@ -1529,9 +1485,6 @@ pub(crate) async fn run_admitted(
     let handshake::Negotiated {
         hello,
         welcome,
-        udp_port,
-        data_sock,
-        start,
         client_label,
         preset: session_preset,
         abr_features,
@@ -1549,8 +1502,6 @@ pub(crate) async fn run_admitted(
             &first,
             source,
             frames,
-            // No UDP socket for a browser: its video rides the connection it is already on.
-            matches!(data_plane, DataPlane::Udp).then_some(data_port),
             &bringup,
             quit.clone(),
             stop.clone(),
@@ -1561,14 +1512,11 @@ pub(crate) async fn run_admitted(
     .await
     .map_err(|_| anyhow!("handshake timed out after {HANDSHAKE_TIMEOUT:?}"))??;
     let (ctrl_send, ctrl_recv) = (send, recv);
-    // The host's half of the path, for a client that asked; read while the data socket is
-    // still in hand. `punktfunk/2` media leaves from the endpoint's socket instead.
+    // The host's half of the path, for a client that asked: media leaves from the endpoint's
+    // socket.
     let host_facts = delivery_ask
         .filter(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_FACTS != 0)
-        .map(|_| {
-            let sock = data_sock.as_ref().or(conn.v2().map(|v2| &*v2.media_socket));
-            crate::telemetry::net_health::host_facts(sock)
-        });
+        .map(|_| crate::telemetry::net_health::host_facts(conn.v2().map(|v2| &*v2.media_socket)));
     // A diagnostic session: the stream thread serves probes and builds nothing.
     let probe_only =
         delivery_ask.is_some_and(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0);
@@ -1601,10 +1549,8 @@ pub(crate) async fn run_admitted(
     };
     // `Copy` so the control task's `async move` and SessionContext both keep it.
     let codec = crate::encode::codec_from_wire(welcome.codec);
-    let client_udp = std::net::SocketAddr::new(peer.ip(), start.client_udp_port);
     tracing::info!(
-        %client_udp,
-        udp_port,
+        %peer,
         mode = ?hello.mode,
         compositor = compositor.map(|c| c.id()).unwrap_or("none"),
         gamepad = welcome.gamepad.as_str(),
@@ -1628,7 +1574,7 @@ pub(crate) async fn run_admitted(
     // carries QUIC and HTTP/3 framing, so a grow it computed would not fit.
     let shard_reneg = (hello.max_shard_payload > 0
         && codec != crate::encode::Codec::PyroWave
-        && matches!(data_plane, DataPlane::Udp | DataPlane::Shared(_)))
+        && matches!(data_plane, DataPlane::Shared(_)))
     .then_some(wire_mtu::ShardReneg {
         client_ceiling: hello.max_shard_payload,
         change_tx: shard.change_tx,
@@ -1864,7 +1810,7 @@ pub(crate) async fn run_admitted(
                 isolation: planes.isolation.clone(),
                 audio_sink: audio_sink.clone(),
             },
-            conn.v2_session().map(|v2| v2.session_id),
+            Some(conn.v2_session().session_id),
         )
     };
 
@@ -2050,32 +1996,14 @@ pub(crate) async fn run_admitted(
     let inj_shared_tx_dp = inj_tx.clone();
     #[cfg(target_os = "linux")]
     let inj_session_tx_dp = planes.inj_session_tx.clone();
-    // Control-plane local IP for the source-address check (send loop is a blocking thread).
-    let control_local_ip = conn.local_ip();
     // Client address: what the registry groups sessions of one NAT or tunnel by.
     let peer_ip = conn.remote_address().ip();
     let plane = conn.plane();
-    let wire = conn.wire();
     let result: Result<()> = async {
         let stream_thread = tokio::task::spawn_blocking(move || -> Result<()> {
-            let (transport, wire_sock, media) = bind_data_plane(
-                data_plane,
-                data_sock,
-                client_udp,
-                udp_port,
-                control_local_ip,
-                &bringup_dp,
-            )?;
-            let session = match media {
-                // v1's key and salt never apply: the media keys came from the exporter.
-                Some(media) => {
-                    let mut cfg = cfg;
-                    cfg.encrypt = false;
-                    Session::new_v2(cfg, media, transport)
-                }
-                None => Session::new(cfg, transport),
-            }
-            .map_err(|e| anyhow!("host session: {e:?}"))?;
+            let (transport, wire_sock, media) = bind_data_plane(data_plane, &bringup_dp)?;
+            let session = Session::new_v2(cfg, media, transport)
+                .map_err(|e| anyhow!("host session: {e:?}"))?;
             let mut common = StreamCommon {
                 session,
                 mode,
@@ -2138,7 +2066,6 @@ pub(crate) async fn run_admitted(
                     bringup_delay: shape.bringup,
                     fit_pin: hello.bitrate_kbps == 0 && codec == crate::encode::Codec::PyroWave,
                     plane,
-                    wire,
                     peer: peer_ip,
                 }),
                 Punktfunk1Source::Virtual => {
@@ -2595,43 +2522,29 @@ fn launch_prep(
     (crate::library::prep_for(id), env)
 }
 
-/// The video transport, the data socket's clone for the egress probe, and what a
-/// `punktfunk/2` session's media adds.
 type BoundPlane = (
     Box<dyn punktfunk_core::transport::Transport>,
     Option<std::net::UdpSocket>,
-    Option<punktfunk_core::session::MediaV2>,
+    punktfunk_core::session::MediaV2,
 );
 
-/// The video transport, and the data socket's clone for the `wire egress` probe. A browser's
-/// video goes out on the connection it arrived on: nothing to bind or punch, and no second socket
-/// to check the source address of. A `punktfunk/2` session's media leaves from the endpoint's own
-/// socket toward the connection's validated address, keyed from its exporter. UDP waits for the
-/// client's punch and streams to its observed source — the port a NAT or a port proxy actually
-/// answers from. A fixed `--data-port` fixes only the host's side, so the client-reported port is
-/// the fallback for a punch that never arrives. The IP is the host-observed QUIC remote.
-fn bind_data_plane(
-    data_plane: DataPlane,
-    data_sock: Option<std::net::UdpSocket>,
-    client_udp: std::net::SocketAddr,
-    udp_port: u16,
-    control_local_ip: Option<std::net::IpAddr>,
-    bringup: &crate::bringup::Trace,
-) -> Result<BoundPlane> {
-    let data_sock = match (data_plane, data_sock) {
-        (DataPlane::Web(plane), _) => {
-            bringup.mark("punch_done");
-            // `/pf2`: v2 headers in session time, unsealed inside WebTransport's encryption.
-            let media = plane.v2().map(|v2| punktfunk_core::session::MediaV2 {
+/// The video transport, the media socket's clone for the `wire egress` probe, and the media
+/// framing. A browser's video rides its WebTransport datagrams, unsealed inside that
+/// encryption; a native session's leaves from the endpoint's socket toward the connection's
+/// validated address, keyed from its exporter.
+fn bind_data_plane(data_plane: DataPlane, bringup: &crate::bringup::Trace) -> Result<BoundPlane> {
+    bringup.mark("punch_done");
+    match data_plane {
+        DataPlane::Web(plane) => {
+            let v2 = plane.v2().clone();
+            let media = punktfunk_core::session::MediaV2 {
                 clock_origin_ns: v2.clock.origin_ns(),
                 keys: None,
                 clock: Some(v2.clock.clone()),
-            });
-            return Ok((Box::new(plane), None, media));
+            };
+            Ok((Box::new(plane), None, media))
         }
-        // Nothing to bind or punch: the connection's socket already reaches the client.
-        (DataPlane::Shared(v2), _) => {
-            bringup.mark("punch_done");
+        DataPlane::Shared(v2) => {
             let suite = v2
                 .suite()
                 .ok_or_else(|| anyhow!("punktfunk/2 session reached media with no suite"))?;
@@ -2647,71 +2560,9 @@ fn bind_data_plane(
                 keys: Some(keys),
                 clock: Some(v2.clock.clone()),
             };
-            let wire_sock = v2.media_socket.try_clone().ok();
-            return Ok((Box::new(sender), wire_sock, Some(media)));
-        }
-        (DataPlane::Udp, None) => anyhow::bail!("the native plane negotiated no data socket"),
-        (DataPlane::Udp, Some(sock)) => sock,
-    };
-    let bound = UdpTransport::from_socket_punch(
-        data_sock,
-        &client_udp.to_string(),
-        client_udp.ip(),
-        std::time::Duration::from_millis(2500),
-    );
-    let (transport, punched) = match bound {
-        Ok(v) => v,
-        Err(e) => {
-            // Surface here: a teardown stall would otherwise swallow a bind error.
-            tracing::error!(error = %e, %client_udp, udp_port, "data-plane socket setup failed");
-            return Err(anyhow::Error::new(e)).context("bind data plane");
-        }
-    };
-    bringup.mark("punch_done");
-    // Post-`connect` `local_addr` is the source stamped on every video datagram.
-    let local = transport.local_addr().ok();
-    tracing::info!(
-        %client_udp,
-        udp_port,
-        punched,
-        local = ?local,
-        "data plane bound (punched=true → the client's observed source; false → no \
-         punch seen, the reported address)"
-    );
-    // Wrong egress: the client's connected socket drops every datagram before userspace.
-    if let (Some(l), Some(c)) = (local.map(|a| a.ip()), control_local_ip) {
-        let c = match c {
-            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(c, std::net::IpAddr::V4),
-            v4 => v4,
-        };
-        if !l.is_unspecified() && l != c {
-            tracing::warn!(
-                video_source_ip = %l,
-                control_local_ip = %c,
-                "the video data plane egresses from a DIFFERENT host address than the one \
-                 this client connected to — its data socket is connected to the address it \
-                 dialed, so its kernel drops every video datagram before userspace: black \
-                 screen, zero reported loss, healthy control plane. Usual cause is two \
-                 live paths to the client (Ethernet and Wi-Fi both up on the same LAN, or \
-                 a VPN/overlay adapter claiming the route)"
-            );
+            Ok((Box::new(sender), v2.media_socket.try_clone().ok(), media))
         }
     }
-    // No punch: inbound UDP to this port looks blocked, fixed or not, and video now goes
-    // to an address the client only claimed.
-    if !punched {
-        tracing::warn!(
-            %client_udp,
-            udp_port,
-            "no hole-punch reached this host's data port — inbound UDP to it looks \
-             BLOCKED, so video is being sent to the address the client reported without \
-             any confirmed return path. If the picture stays black while the session is \
-             otherwise healthy, this line is the reason: allow inbound UDP for the host \
-             executable (any port), or pin --data-port and open that one"
-        );
-    }
-    let wire_sock = transport.try_clone_socket().ok();
-    Ok((Box::new(transport), wire_sock, None))
 }
 
 /// Every exit: stop audio, close the connection, join the side threads. The close ends the
@@ -3270,68 +3121,6 @@ mod tests {
     }
 
     #[test]
-    fn data_socket_defaults_to_an_ephemeral_port() {
-        // No fixed port (and 0) → some ephemeral port, never 0.
-        for req in [None, Some(0)] {
-            let sock = bind_data_socket(req, None).expect("bind random data socket");
-            assert_ne!(sock.local_addr().unwrap().port(), 0);
-        }
-    }
-
-    #[test]
-    fn data_socket_fixed_binds_it_then_falls_back_when_busy() {
-        // Reserve-then-rebind like the host. A race here is flaky, not wrong.
-        let free = std::net::UdpSocket::bind("0.0.0.0:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-
-        // Free fixed port binds exactly it.
-        let held = bind_data_socket(Some(free), None).expect("bind fixed data socket");
-        assert_eq!(held.local_addr().unwrap().port(), free);
-
-        // Busy fixed port falls back to ephemeral, not fail.
-        let fallback = bind_data_socket(Some(free), None).expect("busy fixed port falls back");
-        assert_ne!(
-            fallback.local_addr().unwrap().port(),
-            free,
-            "the fallback must not reuse the busy fixed port"
-        );
-    }
-
-    /// Video must egress from the address the control connection arrived on. The client's
-    /// data socket is connected to the host IP it dialed; any other source is dropped before
-    /// userspace. A wildcard bind lets the routing table pick a different interface.
-    #[test]
-    fn data_socket_binds_the_address_the_control_plane_arrived_on() {
-        let loopback = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
-        let sock = bind_data_socket(None, Some(loopback)).expect("bind pinned data socket");
-        assert_eq!(sock.local_addr().unwrap().ip(), loopback);
-
-        // Dual-stack reports IPv4-mapped v6; unmap or the socket binds v6 and cannot `connect` v4.
-        let mapped = std::net::IpAddr::V6(std::net::Ipv4Addr::LOCALHOST.to_ipv6_mapped());
-        let sock = bind_data_socket(None, Some(mapped)).expect("bind mapped data socket");
-        assert_eq!(sock.local_addr().unwrap().ip(), loopback);
-
-        // No reported local address keeps the wildcard.
-        let sock = bind_data_socket(None, None).expect("bind wildcard data socket");
-        assert!(sock.local_addr().unwrap().ip().is_unspecified());
-    }
-
-    /// A pinned address that this host cannot own still has to yield a socket. 192.0.2.1
-    /// is TEST-NET-1, so the bind miss is the live fallback, not a mock.
-    #[test]
-    fn data_socket_falls_back_to_wildcard_when_the_control_address_cannot_bind() {
-        let unroutable = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1));
-        let sock = bind_data_socket(None, Some(unroutable))
-            .expect("wildcard fallback after a pinned bind miss");
-        assert!(sock.local_addr().unwrap().ip().is_unspecified());
-    }
-
-    /// Pin every button bit and axis id. Native and GameStream share `core::input::gamepad`;
-    /// renumbering a bit silently breaks shipped clients.
-    #[test]
     fn gamepad_wire_bits_are_pinned() {
         use punktfunk_core::input::gamepad as pf;
         // buttonFlags — low 16 bits, named from core.
@@ -3435,10 +3224,8 @@ mod tests {
                 allow_pairing: false,
                 pairing_pin: None,
                 paired_store: None,
-                data_port: None,
                 idle_timeout: None,
                 mdns: false, // tests must not advertise on the LAN
-                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3603,10 +3390,8 @@ mod tests {
                 allow_pairing: false,
                 pairing_pin: None,
                 paired_store: None,
-                data_port: None,
                 idle_timeout: None,
                 mdns: false,
-                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3695,10 +3480,8 @@ mod tests {
                 allow_pairing: false,
                 pairing_pin: None,
                 paired_store: None,
-                data_port: None,
                 idle_timeout: None,
                 mdns: false,
-                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3785,21 +3568,6 @@ mod tests {
         punktfunk_core::client::NativeClient,
         std::thread::JoinHandle<anyhow::Result<()>>,
     ) {
-        synthetic_session_on(port, source, protocol2_from_env(), params)
-    }
-
-    /// [`synthetic_session`] with the host's `punktfunk/2` answer set by the test.
-    fn synthetic_session_on(
-        port: u16,
-        source: Punktfunk1Source,
-        protocol2: bool,
-        params: impl FnOnce(
-            punktfunk_core::client::ConnectParams,
-        ) -> punktfunk_core::client::ConnectParams,
-    ) -> (
-        punktfunk_core::client::NativeClient,
-        std::thread::JoinHandle<anyhow::Result<()>>,
-    ) {
         use punktfunk_core::client::{ConnectParams, NativeClient};
         let host = std::thread::spawn(move || {
             run_ephemeral(Punktfunk1Options {
@@ -3813,10 +3581,8 @@ mod tests {
                 allow_pairing: false,
                 pairing_pin: None,
                 paired_store: None,
-                data_port: None,
                 idle_timeout: None,
                 mdns: false,
-                protocol2,
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3901,10 +3667,8 @@ mod tests {
                 allow_pairing: false,
                 pairing_pin: None,
                 paired_store: None,
-                data_port: None,
                 idle_timeout: None,
                 mdns: false,
-                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -3943,33 +3707,6 @@ mod tests {
         host.join().unwrap().unwrap();
     }
 
-    /// A host that does not answer `punktfunk/2` gives a client offering it `punktfunk/1`, whose
-    /// QUIC rides the client's shared socket while video takes the punched data port.
-    #[test]
-    fn a_client_offering_punktfunk_2_falls_back_to_punktfunk_1() {
-        let _registry = crate::session_status::tests::registry_lock();
-        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let (client, host) = synthetic_session_on(19792, Punktfunk1Source::Synthetic, false, |p| {
-            punktfunk_core::client::ConnectParams {
-                offer_v2: true,
-                ..p
-            }
-        });
-        let mut got = 0;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while got < 30 && std::time::Instant::now() < deadline {
-            if let Ok(f) = client.next_frame(std::time::Duration::from_millis(200)) {
-                let idx = u32::from_le_bytes(f.data[0..4].try_into().unwrap());
-                assert_eq!(f.data, test_frame(idx, f.data.len()), "frame {idx}");
-                got += 1;
-            }
-        }
-        assert_eq!(got, 30, "frames cross the v1 data plane");
-        assert_eq!(client.wire(), 1, "the host answered punktfunk/1");
-        drop(client);
-        host.join().unwrap().unwrap();
-    }
-
     /// A client that offers `punktfunk/2` streams over it: the handshake crosses the translated
     /// control stream, the media arrives on the connection's own socket under exporter keys,
     /// and every frame is the host's byte for byte. Each frame's `HostTiming` names it by the
@@ -3979,7 +3716,7 @@ mod tests {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use punktfunk_core::quic::DeliveryAsk;
-        let (client, host) = synthetic_session_on(19791, Punktfunk1Source::Synthetic, true, |p| {
+        let (client, host) = synthetic_session(19791, Punktfunk1Source::Synthetic, |p| {
             punktfunk_core::client::ConnectParams {
                 offer_v2: true,
                 delivery: Some(DeliveryAsk {
@@ -4217,10 +3954,8 @@ mod tests {
                     allow_pairing: false,
                     pairing_pin: None,
                     paired_store: None,
-                    data_port: None,
                     idle_timeout: None,
                     mdns: false,
-                    protocol2: protocol2_from_env(),
                 },
                 0,
                 np_host,
@@ -4335,10 +4070,8 @@ mod tests {
                 allow_pairing: false,
                 pairing_pin: Some("4321".into()),
                 paired_store: Some(test_paired_path()),
-                data_port: None,
                 idle_timeout: None,
                 mdns: false,
-                protocol2: protocol2_from_env(),
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -4485,10 +4218,8 @@ mod tests {
                     allow_pairing: false,
                     pairing_pin: None,
                     paired_store: None,
-                    data_port: None,
                     idle_timeout: None,
                     mdns: false,
-                    protocol2: protocol2_from_env(),
                 },
                 0,
                 np,
@@ -4507,26 +4238,34 @@ mod tests {
         std::env::temp_dir().join(format!("pf-access-{tag}-{}.json", std::process::id()))
     }
 
-    /// Hello → Welcome → Start, returning streams so a test can read `AccessUpdate`s and the
-    /// exact close code. The `UdpSocket` keeps the advertised video port bound.
+    /// `ClientHello` → `ServerHello` → `Ready` through the client's translation edges, returning
+    /// streams so a test can read `AccessUpdate`s and the exact close code. The media handle
+    /// keeps the client's socket open.
     async fn raw_session(
         port: u16,
         identity: (&str, &str),
     ) -> (
         quinn::Connection,
-        quinn::SendStream,
-        quinn::RecvStream,
+        punktfunk_core::quic::v2::io::V2Writer<quinn::SendStream>,
+        punktfunk_core::quic::v2::io::V2Reader<quinn::RecvStream>,
         Welcome,
-        std::net::UdpSocket,
+        punktfunk_core::transport::shared::ClientMedia,
     ) {
-        let (ep, _observed) = endpoint::client_pinned_with_identity(None, Some(identity));
-        let ep = ep.expect("client endpoint");
+        use punktfunk_core::quic::v2::{io as v2io, registry, translate};
+        let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN]);
+        let (ep, media) = ep.expect("client endpoint");
         let conn = ep
             .connect(format!("127.0.0.1:{port}").parse().unwrap(), "punktfunk")
             .expect("connect")
             .await
             .expect("QUIC handshake");
-        let (mut send, mut recv) = conn.open_bi().await.expect("control stream");
+        let (mut send, recv) = conn.open_bi().await.expect("control stream");
+        v2io::write_stream_type(&mut send, registry::STREAM_CONTROL)
+            .await
+            .expect("stream type");
+        let edge = translate::TxEdge::client(translate::ClientExtra::default());
+        let mut send = v2io::V2Writer::new(send, Arc::new(std::sync::Mutex::new(edge)));
+        let mut recv = v2io::V2Reader::new(recv, Default::default());
         let hello = Hello {
             abi_version: punktfunk_core::WIRE_VERSION,
             mode: punktfunk_core::Mode {
@@ -4546,8 +4285,6 @@ mod tests {
             display_hdr: None,
             client_caps: 0,
             max_shard_payload: 0,
-            // This fixture is about grants, not audio. Defaults keep Hello byte-identical
-            // to a client that omits hi-res fields.
             audio_rate_hz: punktfunk_core::audio::SAMPLE_RATE_HZ,
             audio_bits: punktfunk_core::audio::pcm::BITS_16,
             audio_layout: 0,
@@ -4558,14 +4295,10 @@ mod tests {
             .expect("Hello");
         let welcome = Welcome::decode(&io::read_msg(&mut recv).await.expect("Welcome read"))
             .expect("Welcome decode");
-        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let start = Start {
-            client_udp_port: udp.local_addr().unwrap().port(),
-        };
-        io::write_msg(&mut send, &start.encode())
+        io::write_msg(&mut send, &Start { client_udp_port: 0 }.encode())
             .await
             .expect("Start");
-        (conn, send, recv, welcome, udp)
+        (conn, send, recv, welcome, media)
     }
 
     /// Application close code. Panics on a transport-level end — these tests expect a host close.
@@ -4608,7 +4341,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let (conn, _send, _recv, welcome, _udp) =
+            let (conn, _send, _recv, welcome, _media) =
                 raw_session(19782, (cert.as_str(), key.as_str())).await;
             assert_eq!(welcome.grants, GRANT_ALL, "the Welcome advertises the mask");
             assert!(
@@ -4654,7 +4387,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let (conn, _send, mut recv, welcome, _udp) =
+            let (conn, _send, mut recv, welcome, _media) =
                 raw_session(19783, (cert.as_str(), key.as_str())).await;
             assert_eq!(welcome.grants, GRANT_ALL);
             assert_eq!(welcome.expires_in_secs, 0, "permanent access advertises 0");

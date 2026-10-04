@@ -94,7 +94,7 @@ finish-args:
   #     --socket=pulseaudio stays as a fallback for any pulse-only path. ---
   - --filesystem=xdg-run/pipewire-0
   - --socket=pulseaudio
-  # --- network: QUIC control + UDP data plane + mDNS discovery (_punktfunk._udp) ---
+  # --- network: QUIC control and media + mDNS discovery (_punktfunk._udp) ---
   - --share=network
   # --- persistent client identity / pairing store (shared with punktfunk-probe) ---
   - --filesystem=~/.config/punktfunk:create   # client-{cert,key}.pem, known-hosts, settings

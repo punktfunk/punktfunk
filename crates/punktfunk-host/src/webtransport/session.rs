@@ -61,22 +61,14 @@ pub(crate) async fn run(
     conn: Connection,
     serving: Arc<Serving>,
     sem: Arc<tokio::sync::Semaphore>,
-    v2: bool,
 ) -> Result<Served> {
-    // `/pf2` is answered only where the host opts in, as the native `pkf2` ALPN is.
-    if v2 && !serving.host.opts.protocol2 {
-        return Err(refused(
-            punktfunk_core::reject::WIRE_VERSION_CLOSE_CODE,
-            "This host doesn't answer punktfunk/2 yet",
-        ));
-    }
     let Some(Admitted {
         link,
         mut tx,
         rx,
         first,
         knock,
-    }) = admit_session(&conn, &serving, v2).await?
+    }) = admit_session(&conn, &serving).await?
     else {
         return Ok(Served::Session);
     };
@@ -99,7 +91,7 @@ pub(crate) async fn run(
                 .map_err(rejected)?
         }
     };
-    let plane = WebTransportPlane::new(conn, link.v2_session().cloned());
+    let plane = WebTransportPlane::new(conn, link.v2_session().clone());
     crate::native::run_admitted(
         link,
         tx,
@@ -129,38 +121,28 @@ struct Admitted {
 /// see a native client. A device the host does not admit, never paired or expired, comes back as
 /// a knock. `None` once a `PairRequest` has run: pairing is its own connection, as on the native
 /// plane, so a browser reconnects to stream.
-async fn admit_session(conn: &Connection, serving: &Serving, v2: bool) -> Result<Option<Admitted>> {
+async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Admitted>> {
     const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     let (tx, mut rx) = tokio::time::timeout(HANDSHAKE_TIMEOUT, conn.accept_bi())
         .await
         .context("control stream: handshake timeout")?
         .context("accept control stream")?;
-    // `/pf2`: the stream says it is control, then every message crosses the translation
-    // edges, so admission below reads and writes `punktfunk/1` as it always has.
-    let session = if v2 {
-        use punktfunk_core::quic::v2::{io as v2io, registry};
-        let ty = tokio::time::timeout(HANDSHAKE_TIMEOUT, v2io::read_stream_type(&mut rx))
-            .await
-            .context("stream type: handshake timeout")?
-            .context("read the stream type")?;
-        anyhow::ensure!(
-            ty == registry::STREAM_CONTROL,
-            "first stream is type {ty}, not control"
-        );
-        Some(Arc::new(V2Session::new()))
-    } else {
-        None
-    };
-    let (mut tx, mut rx) = match &session {
-        Some(s) => {
-            use punktfunk_core::quic::v2::io::{V2Reader, V2Writer};
-            (
-                CtlSend::WebV2(V2Writer::new(tx, s.tx.clone())),
-                CtlRecv::WebV2(V2Reader::new(rx, s.rx.clone())),
-            )
-        }
-        None => (CtlSend::Web(tx), CtlRecv::Web(rx)),
-    };
+    // The stream says it is control, then every message crosses the translation edges, so
+    // admission below reads and writes the session's messages as the native plane does.
+    use punktfunk_core::quic::v2::io::{self as v2io, V2Reader, V2Writer};
+    let ty = tokio::time::timeout(HANDSHAKE_TIMEOUT, v2io::read_stream_type(&mut rx))
+        .await
+        .context("stream type: handshake timeout")?
+        .context("read the stream type")?;
+    anyhow::ensure!(
+        ty == punktfunk_core::quic::v2::registry::STREAM_CONTROL,
+        "first stream is type {ty}, not control"
+    );
+    let session = Arc::new(V2Session::new());
+    let (mut tx, mut rx) = (
+        CtlSend::WebV2(V2Writer::new(tx, session.tx.clone())),
+        CtlRecv::WebV2(V2Reader::new(rx, session.rx.clone())),
+    );
     let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_msg(&mut rx))
         .await
         .context("first message: handshake timeout")?
@@ -220,13 +202,9 @@ async fn admit_session(conn: &Connection, serving: &Serving, v2: bool) -> Result
     }))
 }
 
-/// The console label for an unpaired browser, from its `Hello`. A client on another wire version
-/// is refused here, before anyone is asked to approve a session it could not run.
+/// The console label for an unpaired browser, from its `Hello`.
 fn knock_label(first: &[u8], fp_hex: &str) -> Result<String> {
     let hello = Hello::decode(first).map_err(|e| anyhow::anyhow!("Hello decode: {e:?}"))?;
-    if hello.abi_version != punktfunk_core::WIRE_VERSION {
-        return Err(rejected(RejectReason::WireVersionMismatch));
-    }
     let name = hello.name.as_deref().unwrap_or("");
     Ok(crate::native_pairing::sanitize_device_name(name, fp_hex))
 }
@@ -326,7 +304,7 @@ async fn pair(
         }
     };
     crate::native::pair_ceremony(
-        &crate::native::link::SessionLink::Web(conn.clone(), None, None),
+        &crate::native::link::SessionLink::Web(conn.clone(), None, Arc::new(V2Session::new())),
         tx,
         rx,
         req,
@@ -464,23 +442,13 @@ mod tests {
         }
     }
 
-    /// One browser dial over loopback WebTransport, up to admission. The browser's end is
-    /// returned too: dropping it would close the session under the test.
+    /// One browser dial over loopback WebTransport, up to admission. The browser's control
+    /// stream crosses the client's translation edges, as the client pump's does. The browser's
+    /// end is returned too: dropping it would close the session under the test.
     async fn admit_over_loopback(
         s: &Serving,
         key: &KeyPair,
         first: &[u8],
-    ) -> (wtransport::Connection, Admitted) {
-        admit_over_loopback_on(s, key, first, false).await
-    }
-
-    /// [`admit_over_loopback`]; on `/pf2` (`v2`) the browser's control stream crosses the
-    /// client's translation edges, as the client pump's does.
-    async fn admit_over_loopback_on(
-        s: &Serving,
-        key: &KeyPair,
-        first: &[u8],
-        v2: bool,
     ) -> (wtransport::Connection, Admitted) {
         let identity = wtransport::Identity::self_signed(["localhost"]).unwrap();
         let cert = identity.certificate_chain().as_slice()[0].hash();
@@ -504,23 +472,14 @@ mod tests {
             .connect(url)
             .await
             .unwrap();
-            let (tx, rx) = conn.open_bi().await.unwrap().await.unwrap();
-            type W = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
-            type R = Box<dyn tokio::io::AsyncRead + Send + Unpin>;
-            let (mut tx, mut rx): (W, R) = if v2 {
-                use punktfunk_core::quic::v2::{io, registry, translate};
-                let mut tx = tx;
-                io::write_stream_type(&mut tx, registry::STREAM_CONTROL)
-                    .await
-                    .unwrap();
-                let edge = translate::TxEdge::client(translate::ClientExtra::default());
-                (
-                    Box::new(io::V2Writer::new(tx, Arc::new(std::sync::Mutex::new(edge)))),
-                    Box::new(io::V2Reader::new(rx, Default::default())),
-                )
-            } else {
-                (Box::new(tx), Box::new(rx))
-            };
+            let (mut tx, rx) = conn.open_bi().await.unwrap().await.unwrap();
+            use punktfunk_core::quic::v2::{io, registry, translate};
+            io::write_stream_type(&mut tx, registry::STREAM_CONTROL)
+                .await
+                .unwrap();
+            let edge = translate::TxEdge::client(translate::ClientExtra::default());
+            let mut tx = io::V2Writer::new(tx, Arc::new(std::sync::Mutex::new(edge)));
+            let mut rx = io::V2Reader::new(rx, Default::default());
             write_msg(&mut tx, first).await.unwrap();
             let nonce = AuthChallenge::decode(&read_msg(&mut rx).await.unwrap())
                 .unwrap()
@@ -531,7 +490,7 @@ mod tests {
         };
         let host = async {
             let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-            admit_session(&conn, s, v2)
+            admit_session(&conn, s)
                 .await
                 .unwrap()
                 .expect("a session, not a pairing")
@@ -550,7 +509,8 @@ mod tests {
         np.add("Enrico's browser", &hex::encode(fp)).unwrap();
 
         // A paired device's first message is not read here: the session decodes its `Hello`.
-        let (_browser, admitted) = admit_over_loopback(&s, &key, b"hello").await;
+        let first = hello("Safari on Mac", None).encode();
+        let (_browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         assert!(admitted.link.is_web());
         assert_eq!(admitted.link.peer_fingerprint(), Some(fp));
         assert!(admitted.knock.is_none(), "a paired device streams at once");
@@ -595,51 +555,6 @@ mod tests {
         );
     }
 
-    /// A browser reads why the host refused it: WebKit shows a page nothing of a close reason, so
-    /// the typed refusal rides a stream. Here the device may not launch titles, and asks to.
-    #[tokio::test]
-    async fn a_browser_reads_why_its_launch_was_refused() {
-        use punktfunk_core::quic::{Refused, GRANT_ALL, GRANT_LAUNCH};
-        let np = store("refused");
-        let s = serving(np.clone());
-        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let no_launch = crate::native_pairing::Access {
-            grants: GRANT_ALL & !GRANT_LAUNCH,
-            expires_unix: None,
-            until_disconnect: false,
-        };
-        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
-        np.add_with_access("Enrico's browser", &fp_hex, Some(no_launch))
-            .unwrap();
-
-        let first = hello("Safari on Mac", Some("steam:570")).encode();
-        let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
-        let Admitted {
-            link,
-            tx,
-            rx,
-            first,
-            ..
-        } = admitted;
-        let SessionLink::Web(host, ..) = &link else {
-            unreachable!("a browser's link")
-        };
-        let plane = DataPlane::Web(WebTransportPlane::new(host.clone(), None));
-        let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let permit = sem.try_acquire_owned().unwrap();
-        let session =
-            crate::native::run_admitted(link.clone(), tx, rx, first, &s.host, plane, permit);
-        let read = async {
-            let mut uni = browser.accept_uni().await.unwrap();
-            Refused::decode(&read_msg(&mut uni).await.unwrap()).unwrap()
-        };
-        let (ended, said) = tokio::join!(session, read);
-        assert!(ended.is_err(), "the session is refused");
-        let why = RejectReason::LaunchNotPermitted;
-        assert_eq!(said.code, why.close_code());
-        assert_eq!(said.reason, why.to_string());
-    }
-
     /// A browser's close code reaches the session: `QUIT_CLOSE_CODE` is how a player ends the
     /// title rather than leaving it running.
     #[tokio::test]
@@ -648,7 +563,8 @@ mod tests {
         let s = serving(store("closed"));
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         s.plane.pairing.add("Enrico's browser", &fp_hex).unwrap();
-        let (browser, admitted) = admit_over_loopback(&s, &key, b"hello").await;
+        let first = hello("Safari on Mac", None).encode();
+        let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         let quit = punktfunk_core::quic::QUIT_CLOSE_CODE;
         browser.close(wtransport::VarInt::from_u32(quit), b"");
         let closed =
@@ -658,80 +574,11 @@ mod tests {
         assert!(closed.closed_with(quit), "{closed}");
     }
 
-    /// A browser on `/pf2` is admitted through the translation edges: the host reads the same
-    /// `Hello` it would on `punktfunk/1`, and the link speaks `punktfunk/2`.
+    /// A browser reads why the host refused it: WebKit shows a page nothing of a close reason, so
+    /// the typed refusal rides its own stream, as the `Refused` frame. Here the device may not
+    /// launch titles, and asks to.
     #[tokio::test]
-    async fn a_browser_on_pf2_is_admitted_through_the_edges() {
-        let np = store("pf2-keyed");
-        let s = serving(np.clone());
-        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
-        np.add("Enrico's browser", &fp_hex).unwrap();
-        let first = hello("Safari on Mac", None).encode();
-        let (_browser, admitted) = admit_over_loopback_on(&s, &key, &first, true).await;
-        assert_eq!(admitted.link.wire(), 2);
-        assert!(admitted.link.v2_session().is_some());
-        assert_eq!(
-            Hello::decode(&admitted.first).unwrap().name.as_deref(),
-            Some("Safari on Mac")
-        );
-        assert!(admitted.knock.is_none(), "a paired device streams at once");
-    }
-
-    /// Without `PUNKTFUNK_PROTOCOL=2` a `/pf2` dial is refused with the wire code, as the
-    /// native endpoint answers `pkf1` alone; the page falls back to the `punktfunk/1` path.
-    #[tokio::test]
-    async fn a_pf2_dial_is_refused_where_the_host_has_not_opted_in() {
-        let np = store("pf2-off");
-        let mut s = serving(np);
-        Arc::get_mut(&mut s.host.opts).unwrap().protocol2 = false;
-        let identity = wtransport::Identity::self_signed(["localhost"]).unwrap();
-        let cert = identity.certificate_chain().as_slice()[0].hash();
-        let loopback: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let server = wtransport::Endpoint::server(
-            wtransport::ServerConfig::builder()
-                .with_bind_address(loopback)
-                .with_identity(identity)
-                .build(),
-        )
-        .unwrap();
-        let url = format!(
-            "https://127.0.0.1:{}/pf2",
-            server.local_addr().unwrap().port()
-        );
-        let browser = async {
-            wtransport::Endpoint::client(
-                wtransport::ClientConfig::builder()
-                    .with_bind_address(loopback)
-                    .with_server_certificate_hashes([cert])
-                    .build(),
-            )
-            .unwrap()
-            .connect(url)
-            .await
-            .unwrap()
-        };
-        let host = async {
-            let conn = server.accept().await.await.unwrap().accept().await.unwrap();
-            let sem = Arc::new(tokio::sync::Semaphore::new(1));
-            // The dispatcher holds the connection for the `Refused` frame; so does this.
-            let keep = conn.clone();
-            (run(conn, Arc::new(s), sem, true).await, keep)
-        };
-        let (_browser, (ended, _keep)) = tokio::join!(browser, host);
-        let Err(err) = ended else {
-            panic!("refused before admission")
-        };
-        let refusal = err.downcast_ref::<Refusal>().expect("a typed refusal");
-        assert_eq!(
-            refusal.code,
-            punktfunk_core::reject::WIRE_VERSION_CLOSE_CODE
-        );
-    }
-
-    /// On `/pf2` a refusal still reaches the page on its own stream, as the `Refused` frame.
-    #[tokio::test]
-    async fn a_browser_on_pf2_reads_why_its_launch_was_refused() {
+    async fn a_browser_reads_why_its_launch_was_refused() {
         use punktfunk_core::quic::v2::msg::V2Message;
         use punktfunk_core::quic::{Refused, GRANT_ALL, GRANT_LAUNCH};
         let np = store("pf2-refused");
@@ -746,7 +593,7 @@ mod tests {
         np.add_with_access("Enrico's browser", &fp_hex, Some(no_launch))
             .unwrap();
         let first = hello("Safari on Mac", Some("steam:570")).encode();
-        let (browser, admitted) = admit_over_loopback_on(&s, &key, &first, true).await;
+        let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         let Admitted {
             link,
             tx,
@@ -759,7 +606,7 @@ mod tests {
         };
         let plane = DataPlane::Web(WebTransportPlane::new(
             host.clone(),
-            link.v2_session().cloned(),
+            link.v2_session().clone(),
         ));
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
         let permit = sem.try_acquire_owned().unwrap();

@@ -903,7 +903,6 @@ impl StreamState {
             client: client_label,
             client_name,
             plane: conn.plane(),
-            wire: conn.wire(),
             hdr: plan.hdr,
             ttff_ms: bringup.total_slot(),
             last_resize_ms: resize_ms.clone(),

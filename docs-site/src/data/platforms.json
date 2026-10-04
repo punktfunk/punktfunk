@@ -18,7 +18,7 @@
     "native": {
       "port": 9777,
       "proto": "udp",
-      "what": "punktfunk/1 QUIC control port",
+      "what": "QUIC: control, video and audio",
       "env": "PUNKTFUNK_NATIVE_PORT"
     },
     "browser": {
@@ -26,12 +26,6 @@
       "proto": "udp",
       "what": "browser streaming (preview, off until switched on)",
       "env": "PUNKTFUNK_WEBTRANSPORT_PORT"
-    },
-    "data": {
-      "port": null,
-      "proto": "udp",
-      "what": "per-session video data plane — ephemeral port the client hole-punches; nothing fixed to open",
-      "env": "PUNKTFUNK_DATA_PORT"
     },
     "mdns": {
       "port": 5353,

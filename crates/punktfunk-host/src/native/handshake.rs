@@ -306,10 +306,6 @@ fn codec_miss_note(miss: punktfunk_core::quic::CodecMiss, preferred: &str, picke
 pub(super) struct Negotiated {
     pub(super) hello: Hello,
     pub(super) welcome: Welcome,
-    /// The data socket's port; `0` for a browser.
-    pub(super) udp_port: u16,
-    pub(super) data_sock: Option<std::net::UdpSocket>,
-    pub(super) start: Start,
     /// What the client calls itself (`EXT_TAG_CLIENT` on `Start`); `None` from one that sent no
     /// block. Log only: two dialers from one device are told apart by that line.
     pub(super) client_label: Option<String>,
@@ -339,9 +335,6 @@ pub(super) async fn negotiate(
     first: &[u8],
     source: Punktfunk1Source,
     frames: u32,
-    // `Some(port request)` binds a UDP data socket; `None` is a browser, whose video rides the
-    // connection it is already on and which is told `udp_port: 0`.
-    data_port: Option<Option<u16>>,
     // `welcome` / `start` stamps; Welcome-time display prep threads this into pipeline-build.
     bringup: &Arc<crate::bringup::Trace>,
     // Created before the handshake so Welcome-time display prep sees a vanished client
@@ -353,18 +346,6 @@ pub(super) async fn negotiate(
     expires_in_secs: u32,
 ) -> Result<Negotiated> {
     let mut hello = Hello::decode(first).map_err(|e| anyhow!("Hello decode: {e:?}"))?;
-    if hello.abi_version != punktfunk_core::WIRE_VERSION {
-        close_rejected(
-            conn,
-            punktfunk_core::reject::RejectReason::WireVersionMismatch,
-        )
-        .await;
-        anyhow::bail!(
-            "wire version mismatch: client {} host {}",
-            hello.abi_version,
-            punktfunk_core::WIRE_VERSION
-        );
-    }
     // Pairing ran before this future: a client here is paired, or the host is `--open`.
 
     // GPU-probed host codecs ∩ client advertised, honoring preference. A software host is
@@ -436,10 +417,15 @@ pub(super) async fn negotiate(
         // `resume` names. Stop them and wait for their release, so this reconnect reuses the
         // kept display. Runs before we register, so we never stop ourselves.
         let mut own_zombies = preempt_same_identity(peer_fp);
-        if let Some(id) = conn.v2_session().and_then(|v2| {
-            let rx = v2.rx.lock().unwrap_or_else(|e| e.into_inner());
+        let resume = {
+            let rx = conn
+                .v2_session()
+                .rx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             rx.client.as_ref().and_then(|c| c.resume)
-        }) {
+        };
+        if let Some(id) = resume {
             for s in preempt_resumed(id, peer_fp) {
                 if !own_zombies.iter().any(|z| Arc::ptr_eq(z, &s)) {
                     own_zombies.push(s);
@@ -546,19 +532,6 @@ pub(super) async fn negotiate(
         "encoder bitrate"
     );
 
-    // Hold the socket through streaming — no bind→read→drop→rebind race on a fixed port.
-    // Bound to this connection's local IP, not wildcard: the client accepts video only from
-    // the host IP it dialed.
-    let (data_sock, udp_port) = match data_port {
-        Some(port) => {
-            let sock = bind_data_socket(port, conn.local_ip())?;
-            let udp_port = sock.local_addr()?.port();
-            (Some(sock), udp_port)
-        }
-        // A browser: nothing to bind, nothing to punch, no second port to name.
-        None => (None, 0),
-    };
-
     // Before Welcome: a path a previous session proved jumbo is given a bounded moment to
     // re-prove itself on this connection (`negotiated_shard_payload` awaits that).
     let mut shard_payload = wire_mtu::negotiated_shard_payload(conn, hello.max_shard_payload).await;
@@ -573,21 +546,10 @@ pub(super) async fn negotiate(
         ));
     }
 
-    let mut key = [0u8; 16];
-    rand::rng().fill_bytes(&mut key);
-    // Fresh salt with the fresh key. GCM needs only one unique; a constant salt would make
-    // key-reuse catastrophic. Negotiated in Welcome.
-    let mut salt = [0u8; 4];
-    rand::rng().fill_bytes(&mut salt);
     // ChaCha20 when the client asked (`VIDEO_CAP_CHACHA20`, soft-AES armv7) and the operator
-    // kill-switch allows. The 16-byte `key` stays independently random so nothing sees zeros.
+    // kill-switch allows. Both ends derive the key from the connection's exporter.
     let client_wants_chacha = hello.video_caps & punktfunk_core::quic::VIDEO_CAP_CHACHA20 != 0;
     let chacha = client_wants_chacha && pf_host_config::config().chacha20;
-    let key_chacha = chacha.then(|| {
-        let mut k = [0u8; 32];
-        rand::rng().fill_bytes(&mut k);
-        k
-    });
     tracing::info!(
         cipher = if chacha {
             "chacha20-poly1305"
@@ -614,7 +576,7 @@ pub(super) async fn negotiate(
 
     let welcome = Welcome {
         abi_version: punktfunk_core::WIRE_VERSION,
-        udp_port,
+        udp_port: 0,
         mode: hello.mode,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
@@ -627,9 +589,10 @@ pub(super) async fn negotiate(
         // not fragment). Order: jumbo re-proof, `PUNKTFUNK_WIRE_MTU`, a prior session's
         // learned path budget, then this family default. See `wire_mtu.rs`.
         shard_payload: shard_payload as u16,
-        encrypt: true,
-        key,
-        salt,
+        // The media keys come from the connection's exporter, never from this message.
+        encrypt: false,
+        key: [0; 16],
+        salt: [0; 4],
         frames: match source {
             Punktfunk1Source::Synthetic => frames,
             // Unbounded; the client streams until we close.
@@ -724,7 +687,7 @@ pub(super) async fn negotiate(
         } else {
             punktfunk_core::quic::CIPHER_AES_128_GCM
         },
-        key_chacha,
+        key_chacha: None,
         // Resolved plane. Opus 48 kHz / 16-bit makes `Welcome::encode` omit the four fields
         // so the Welcome stays byte-identical to the pre-hi-res form. Client opens from these,
         // never from what it asked. `audio_frame_us` is `0` on Opus (fixed 5 ms).
@@ -772,16 +735,14 @@ pub(super) async fn negotiate(
                 _ => 0,
             },
     };
-    // `punktfunk/2`: the suite goes out in the `ServerHello` this `Welcome` becomes, and keys
-    // the media. v1's chosen cipher maps onto it one for one; a browser's media goes unsealed,
-    // inside WebTransport's own encryption.
-    if let Some(v2) = conn.v2_session() {
-        v2.settle((!conn.is_web()).then_some(if chacha {
+    // The suite goes out in the `ServerHello` this `Welcome` becomes, and keys the media. A
+    // browser's media goes unsealed, inside WebTransport's own encryption.
+    conn.v2_session()
+        .settle((!conn.is_web()).then_some(if chacha {
             punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
         } else {
             punktfunk_core::crypto::MediaSuite::Aes128Gcm
         }));
-    }
     io::write_msg(send, &welcome.encode()).await?;
     bringup.mark("welcome");
 
@@ -855,7 +816,7 @@ pub(super) async fn negotiate(
     };
 
     let start_msg = io::read_msg(recv).await?;
-    let start = Start::decode(&start_msg).map_err(|e| anyhow!("Start decode: {e:?}"))?;
+    Start::decode(&start_msg).map_err(|e| anyhow!("Start decode: {e:?}"))?;
     // The block the client appended, decoded once. A bad block fails the handshake
     // (`decode_ext`'s rule), an unknown tag is skipped, and absence says nothing.
     let start_ext =
@@ -877,9 +838,6 @@ pub(super) async fn negotiate(
     Ok(Negotiated {
         hello,
         welcome,
-        udp_port,
-        data_sock,
-        start,
         client_label,
         preset,
         abr_features,
