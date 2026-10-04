@@ -156,6 +156,11 @@ mod ctl;
 mod native;
 #[forbid(unsafe_code)]
 mod native_pairing;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the handshake and the management routes read it")
+)]
+mod profiles;
 // Live per-session pad tap the console's Controllers page streams.
 mod emulators;
 mod pad_feed;

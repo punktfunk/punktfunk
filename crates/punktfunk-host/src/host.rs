@@ -89,6 +89,8 @@ pub struct AppState {
     /// Per-client access grants, keyed by certificate fingerprint hex. Same registry as the
     /// native trust store. Set once by [`serve`]; if unset, every paired peer is ungoverned.
     pub access: std::sync::OnceLock<Arc<crate::native_pairing::NativePairing>>,
+    /// The people on this box. Set once by [`serve`] with the owner ensured.
+    pub profiles: std::sync::OnceLock<Arc<crate::profiles::Profiles>>,
     #[cfg(feature = "gamestream")]
     pub gs: crate::gamestream::GsState,
 }
@@ -117,6 +119,7 @@ impl AppState {
             audio_cap: std::sync::Arc::new(std::sync::Mutex::new(None)),
             stats,
             access: std::sync::OnceLock::new(),
+            profiles: std::sync::OnceLock::new(),
             #[cfg(feature = "gamestream")]
             gs,
         }
@@ -208,6 +211,11 @@ pub fn serve(
     // Hand GameStream the grants registry so nvhttp launch and ENet resolve a Moonlight
     // fingerprint against the same mask the native plane enforces.
     let _ = state.access.set(np.clone());
+    let profiles = crate::profiles::Profiles::load_with(None, None);
+    if let Err(e) = profiles.ensure_owner(&state.host.hostname) {
+        tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
+    }
+    let _ = state.profiles.set(Arc::new(profiles));
     tracing::info!(
         hostname = %state.host.hostname,
         uniqueid = %state.host.uniqueid,
