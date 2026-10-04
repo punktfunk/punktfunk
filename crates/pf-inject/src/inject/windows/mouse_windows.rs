@@ -1,13 +1,14 @@
-//! Resident virtual HID mouse via the UMDF minidriver (`packaging/windows/drivers/pf-mouse`).
+//! Resident virtual HID mouse + keyboard via the UMDF minidriver
+//! (`packaging/windows/drivers/pf-mouse`).
 //!
-//! With no pointing device, win32k reports `SM_MOUSEPRESENT` = 0 and DWM never composites
-//! a cursor into the pf-vdisplay frame — `SendInput` still moves an invisible pointer.
-//! One `pf_mouse_<index>` HID devnode for the host process lifetime makes Windows draw it.
-//! Sessions still inject via [`super::sendinput`]; `punktfunk-host vmouse-spike` drives
-//! the report path here.
+//! With no pointing device, win32k reports `SM_MOUSEPRESENT` = 0 and DWM never composites a
+//! cursor into the pf-vdisplay frame. One `pf_mouse_<index>` devnode for the host process
+//! lifetime makes Windows draw it. The console host also sends its mouse and keyboard input
+//! through it ([`with_hid`]): a HID report reaches raw input with a device handle and no
+//! injected flag, which kernel anti-cheat requires. `SendInput` stays the fallback.
 //!
 //! Transport is the sealed pad channel ([`PadChannel`], `design/gamepad-channel-sealing.md`):
-//! unnamed 64-B `MouseShm` duplicated into WUDFHost, bootstrapped via
+//! the unnamed `MouseShm` duplicated into WUDFHost, bootstrapped via
 //! `Global\pfmouse-boot-<index>` ([`mouse_index_for_slot`] — one host per seat, one index each).
 //! [`ensure_resident`] never drops the devnode; it dies with the host service.
 
@@ -15,18 +16,42 @@ use super::gamepad_raii::{
     create_swdevice, DriverAttach, PadChannel, ProofTransport, SwDevice, SwDeviceProfile,
     TRUST_MAILBOX_ENV,
 };
-use anyhow::Result;
-use pf_driver_proto::mouse::{input_report, mouse_boot_name, MouseShm, MOUSE_MAGIC};
+use anyhow::{Context, Result};
+use pf_driver_proto::mouse::{
+    abs_report, keyboard_report, mouse_boot_name, relative_report, ring_slot_off, MouseShm,
+    DOORBELL_REPORT_ID, DOORBELL_USAGE_PAGE, KEYBOARD_BITMAP_LEN, MOUSE_FEATURE_RING, MOUSE_MAGIC,
+    MOUSE_RING_LEN,
+};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
+use windows::core::{HSTRING, PCWSTR};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING,
+};
 
 const SHM_SIZE: usize = core::mem::size_of::<MouseShm>();
-const OFF_IN_SEQ: usize = core::mem::offset_of!(MouseShm, in_seq);
-const OFF_REPORT: usize = core::mem::offset_of!(MouseShm, report);
 const OFF_DRIVER_PROTO: usize = core::mem::offset_of!(MouseShm, driver_proto);
 const OFF_DRIVER_HEARTBEAT: usize = core::mem::offset_of!(MouseShm, driver_heartbeat);
 const OFF_PAD_INDEX: usize = core::mem::offset_of!(MouseShm, pad_index);
 const OFF_MAGIC: usize = core::mem::offset_of!(MouseShm, magic);
+const OFF_FEATURES: usize = core::mem::offset_of!(MouseShm, driver_features);
+const OFF_RING_HEAD: usize = core::mem::offset_of!(MouseShm, ring_head);
+const OFF_RING_TAIL: usize = core::mem::offset_of!(MouseShm, ring_tail);
+const OFF_WHEEL_COUNTS: usize = core::mem::offset_of!(MouseShm, wheel_counts);
+const OFF_PAN_COUNTS: usize = core::mem::offset_of!(MouseShm, pan_counts);
+
+const GENERIC_WRITE: u32 = 0x4000_0000;
+/// The driver's timer stamps the heartbeat every 8–16 ms; a second without one means it
+/// stopped taking reports.
+const DRIVER_STALE: Duration = Duration::from_secs(1);
+/// Between doorbell lookups while hidclass has not published the collection yet.
+const DOORBELL_RETRY: Duration = Duration::from_secs(1);
+/// `PUNKTFUNK_HID_INPUT=0` keeps every event on `SendInput`.
+const HID_INPUT_ENV: &str = "PUNKTFUNK_HID_INPUT";
 
 /// The reserved display connector a seat host owns; unset on the console.
 /// `docs-site/content/docs/developers/multi-seat-contract.md` is the contract of record.
@@ -47,14 +72,35 @@ fn mouse_index_for_slot(raw: Option<&std::ffi::OsStr>) -> u8 {
         .unwrap_or(0)
 }
 
-/// Process-lifetime `pf_mouse_<index>` plus sealed `MouseShm`. Dropping it removes the pointer.
+/// Process-lifetime `pf_mouse_<index>` plus sealed `MouseShm`. Dropping it removes the device.
 pub struct VirtualMouse {
     /// `None` if `SwDeviceCreate` failed; injection then uses an out-of-band devnode.
     _sw: Option<SwDevice>,
     channel: PadChannel,
     attach: DriverAttach,
-    seq: u32,
+    /// The devnode the doorbell collection hangs off. `None` on the out-of-band path.
+    instance_id: Option<String>,
+    /// Console host with HID input allowed: a seat's HID input would land in the console session.
+    route_input: bool,
+    /// Write handle on the doorbell collection; `None` until hidclass publishes it.
+    doorbell: Option<OwnedHandle>,
+    doorbell_next_try: Instant,
+    /// Heartbeat last seen, and when it last moved.
+    beat: (u32, Instant),
+    /// Whether the last [`Self::ready`] said yes, to log each change once.
+    was_ready: bool,
+    full_warned: bool,
+    /// What the device reports held, in HID button order (primary, secondary, middle, X1, X2).
+    buttons: u8,
+    keys: [u8; KEYBOARD_BITMAP_LEN],
+    /// Wheel and pan motion below one count, in 1/120 counts.
+    wheel_rem: [i64; 2],
 }
+
+// SAFETY: the non-`Send` parts are the mapped section views and the `HSWDEVICE`. Both are
+// process-wide, not thread-affine, and every access goes through `RESIDENT`'s mutex or the one
+// thread that owns a spike's instance.
+unsafe impl Send for VirtualMouse {}
 
 impl VirtualMouse {
     /// Unnamed DATA + `Global\pfmouse-boot-<index>` for this host's [`mouse_index_for_slot`].
@@ -106,27 +152,183 @@ impl VirtualMouse {
                 "pf_mouse.inf",
                 "C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Local\\Temp\\pfmouse-driver.log",
                 boot_name,
-                instance_id,
+                instance_id.clone(),
             ),
-            seq: 0,
+            instance_id,
+            route_input: index == 0 && std::env::var_os(HID_INPUT_ENV).is_none_or(|v| v != "0"),
+            doorbell: None,
+            doorbell_next_try: Instant::now(),
+            beat: (0, Instant::now()),
+            was_ready: false,
+            full_warned: false,
+            buttons: 0,
+            keys: [0; KEYBOARD_BITMAP_LEN],
+            wheel_rem: [0; 2],
         })
-    }
-
-    /// Publish a 5-bit-button / 15-bit-abs / wheel report; bump `in_seq` (never 0).
-    pub fn send_report(&mut self, buttons: u8, x: u16, y: u16, wheel: i8, pan: i8) {
-        let r = input_report(buttons, x, y, wheel, pan);
-        self.seq = self.seq.wrapping_add(1).max(1); // never publish seq 0 (= "nothing yet")
-                                                    // The report before the seq (Release): the driver's Acquire load of `in_seq` observes
-                                                    // the matching report.
-        let shm = self.channel.data();
-        shm.write_bytes(OFF_REPORT, &r);
-        shm.store_u32(OFF_IN_SEQ, self.seq, Ordering::Release);
     }
 
     /// Pump sealed-channel delivery and feed the attach watcher (8 ms timer stamps `driver_proto`).
     pub fn service(&mut self) {
         self.channel.pump();
         self.attach.observe(self.driver_proto());
+    }
+
+    /// The driver drains the ring and ticked within [`DRIVER_STALE`].
+    fn ready(&mut self) -> bool {
+        let shm = self.channel.data();
+        let ring = shm.load_u32(OFF_FEATURES, Ordering::Acquire) & MOUSE_FEATURE_RING != 0;
+        let hb = shm.load_u32(OFF_DRIVER_HEARTBEAT, Ordering::Relaxed);
+        if hb != self.beat.0 {
+            self.beat = (hb, Instant::now());
+        }
+        let ready = ring && self.beat.1.elapsed() < DRIVER_STALE;
+        if ready != self.was_ready {
+            self.was_ready = ready;
+            if ready {
+                tracing::info!("input: mouse and keyboard go through the virtual HID device");
+            } else {
+                tracing::warn!(
+                    driver_ring = ring,
+                    "input: virtual HID device not taking reports — using SendInput"
+                );
+            }
+        }
+        ready
+    }
+
+    /// Queue one report, ringing the doorbell when the driver may have stopped draining.
+    fn push(&mut self, report: &[u8]) {
+        let shm = self.channel.data();
+        let head = shm.load_u32(OFF_RING_HEAD, Ordering::Relaxed);
+        let tail = shm.load_u32(OFF_RING_TAIL, Ordering::SeqCst);
+        if head.wrapping_sub(tail) as usize >= MOUSE_RING_LEN {
+            if !std::mem::replace(&mut self.full_warned, true) {
+                tracing::warn!("virtual HID ring full — the driver stopped taking reports");
+            }
+            return;
+        }
+        self.full_warned = false;
+        shm.write_bytes(ring_slot_off(head), report);
+        shm.store_u32(OFF_RING_HEAD, head.wrapping_add(1), Ordering::SeqCst);
+        // SeqCst against the driver's tail store and head load: its drain either sees this
+        // report or stopped where this load sees it.
+        if shm.load_u32(OFF_RING_TAIL, Ordering::SeqCst) == head {
+            self.ring_doorbell();
+        }
+    }
+
+    /// Make the driver drain now. Without a doorbell its timer drains within a tick.
+    fn ring_doorbell(&mut self) {
+        if self.doorbell.is_none() && Instant::now() >= self.doorbell_next_try {
+            self.doorbell_next_try = Instant::now() + DOORBELL_RETRY;
+            self.doorbell = self.open_doorbell();
+        }
+        let Some(h) = &self.doorbell else {
+            return;
+        };
+        let mut written = 0u32;
+        // SAFETY: `h` is a live write handle owned by `self`; the buffer and `written` outlive
+        // this synchronous call.
+        let r = unsafe {
+            WriteFile(
+                HANDLE(h.as_raw_handle()),
+                Some(&[DOORBELL_REPORT_ID, 0]),
+                Some(&mut written),
+                None,
+            )
+        };
+        if let Err(e) = r {
+            tracing::debug!(error = %e, "virtual HID doorbell write failed — reopening");
+            self.doorbell = None;
+        }
+    }
+
+    fn open_doorbell(&self) -> Option<OwnedHandle> {
+        let path = crate::channel_proof::hid_collection_path(
+            self.instance_id.as_deref()?,
+            DOORBELL_USAGE_PAGE,
+            1,
+        )?;
+        open_for_write(&path)
+            .inspect_err(
+                |e| tracing::debug!(error = %format!("{e:#}"), "virtual HID doorbell open"),
+            )
+            .ok()
+    }
+
+    /// Relative pointer motion, split into reports of at most ±32767.
+    pub fn move_by(&mut self, mut dx: i32, mut dy: i32) {
+        const MAX: i32 = i16::MAX as i32;
+        while dx != 0 || dy != 0 {
+            let (sx, sy) = (dx.clamp(-MAX, MAX), dy.clamp(-MAX, MAX));
+            self.push(&relative_report(self.buttons, sx as i16, sy as i16, 0, 0));
+            (dx, dy) = (dx - sx, dy - sy);
+        }
+    }
+
+    /// Absolute pointer position on the primary monitor, `0..=32767` per axis.
+    pub fn move_to(&mut self, x: u16, y: u16) {
+        self.push(&abs_report(x, y));
+    }
+
+    /// Button `bit` (HID order: primary, secondary, middle, X1, X2) down or up. Buttons travel
+    /// the relative collection whichever collection moved the pointer.
+    pub fn button(&mut self, bit: u8, down: bool) {
+        let held = if down {
+            self.buttons | 1 << bit
+        } else {
+            self.buttons & !(1 << bit)
+        };
+        if held != self.buttons {
+            self.buttons = held;
+            self.push(&relative_report(held, 0, 0, 0, 0));
+        }
+    }
+
+    /// Wheel motion in 1/120 notches, scaled to the counts per notch Windows set up.
+    pub fn scroll(&mut self, horizontal: bool, v120: i32) {
+        let off = if horizontal {
+            OFF_PAN_COUNTS
+        } else {
+            OFF_WHEEL_COUNTS
+        };
+        let per_notch = i64::from(self.channel.data().load_u32(off, Ordering::Relaxed).max(1));
+        let axis = usize::from(horizontal);
+        let total = self.wheel_rem[axis] + i64::from(v120) * per_notch;
+        let mut counts = total / 120;
+        self.wheel_rem[axis] = total - counts * 120;
+        while counts != 0 {
+            let c = counts.clamp(-i64::from(i16::MAX), i64::from(i16::MAX));
+            let (wheel, pan) = if horizontal { (0, c) } else { (c, 0) };
+            self.push(&relative_report(
+                self.buttons,
+                0,
+                0,
+                wheel as i16,
+                pan as i16,
+            ));
+            counts -= c;
+        }
+    }
+
+    /// Key `usage` (keyboard page) down or up. A repeated down changes nothing: Windows
+    /// repeats a held HID key itself.
+    pub fn key(&mut self, usage: u8, down: bool) {
+        let Some(byte) = self.keys.get_mut(usize::from(usage / 8)) else {
+            return;
+        };
+        let bit = 1 << (usage % 8);
+        let held = if down { *byte | bit } else { *byte & !bit };
+        if held != *byte {
+            *byte = held;
+            let report = keyboard_report(&self.keys);
+            self.push(&report);
+        }
+    }
+
+    /// Whether the doorbell collection is open, so reports leave without waiting for a tick.
+    pub fn doorbell_open(&self) -> bool {
+        self.doorbell.is_some()
     }
 
     fn driver_proto(&self) -> u32 {
@@ -140,6 +342,38 @@ impl VirtualMouse {
             .data()
             .load_u32(OFF_DRIVER_HEARTBEAT, Ordering::Relaxed)
     }
+}
+
+/// `CreateFileW` for writing, as a HID vendor collection allows.
+fn open_for_write(path: &str) -> Result<OwnedHandle> {
+    let wide = HSTRING::from(path);
+    // SAFETY: `wide` is a valid NUL-terminated UTF-16 path for the duration of the call; the
+    // returned handle is owned solely by the `OwnedHandle` built from it.
+    let h = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            None,
+        )
+        .with_context(|| format!("open {path} for write"))?
+    };
+    // SAFETY: `h` is the fresh handle just opened, moved into a single owner that closes it.
+    Ok(unsafe { OwnedHandle::from_raw_handle(h.0 as _) })
+}
+
+/// The resident device, once the keeper opened it.
+static RESIDENT: Mutex<Option<VirtualMouse>> = Mutex::new(None);
+
+/// Run `f` on the resident device when it carries this host's input: the console host,
+/// [`HID_INPUT_ENV`] not `0`, and a driver taking reports. `None` = use `SendInput`.
+pub(crate) fn with_hid<R>(f: impl FnOnce(&mut VirtualMouse) -> R) -> Option<R> {
+    let mut resident = RESIDENT.lock().unwrap_or_else(PoisonError::into_inner);
+    let m = resident.as_mut()?;
+    (m.route_input && m.ready()).then(|| f(m))
 }
 
 /// Ensure the one process-wide virtual mouse exists. Called from
@@ -167,19 +401,26 @@ pub(crate) fn ensure_resident() {
     });
 }
 
-/// Open-with-retry, then hold + pump every 250 ms. Open fails on a mailbox squat (another
-/// host); a missing driver is not an open failure (`DriverAttach` diagnoses via the pump).
-/// The device only exists: it never reports motion of its own.
+/// Open-with-retry, then publish the device to [`RESIDENT`] and pump it every 250 ms. Open
+/// fails on a mailbox squat (another host); a missing driver is not an open failure
+/// (`DriverAttach` diagnoses via the pump).
 fn keeper_thread() {
     loop {
         match VirtualMouse::open() {
-            Ok(mut m) => {
+            Ok(m) => {
                 tracing::info!(
                     "resident virtual HID mouse created (pf_mouse — keeps SM_MOUSEPRESENT true \
                      so DWM composites the cursor on headless hosts)"
                 );
+                *RESIDENT.lock().unwrap_or_else(PoisonError::into_inner) = Some(m);
                 loop {
-                    m.service();
+                    if let Some(m) = RESIDENT
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .as_mut()
+                    {
+                        m.service();
+                    }
                     std::thread::sleep(Duration::from_millis(250));
                 }
             }
@@ -195,52 +436,71 @@ fn keeper_thread() {
     }
 }
 
-/// `vmouse-spike`: drive the real cursor through HID reports. Stop the host
-/// service first (it owns the mailbox). Expect `pf_mouse` + HID child,
-/// `SM_MOUSEPRESENT` = 1 with no physical mouse, and a mid-screen sweep.
-pub fn spike_hold(secs: u64) -> Result<()> {
+/// Open a stand-alone device for the devtests and wait up to 10 s for its driver to take
+/// reports. Stop the host service first: it owns the mailbox.
+pub fn open_for_spike() -> Result<VirtualMouse> {
     let mut m = VirtualMouse::open()?;
-    println!("virtual HID mouse devnode up (5046:4D4F) — waiting for the driver to attach…");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while m.driver_proto() == 0 && std::time::Instant::now() < deadline {
+    println!("virtual HID devnode up (5046:4D4F) — waiting for the driver to take reports…");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !m.ready() && Instant::now() < deadline {
         m.service();
         std::thread::sleep(Duration::from_millis(50));
     }
     if m.driver_proto() == 0 {
-        println!(
-            "driver never attached (10s). Install it: punktfunk-host.exe driver install --gamepad \
-             --dir <stage>  (pf_mouse.inf ships with the gamepad drivers); see the WARN above."
-        );
-    } else {
-        println!(
-            "driver attached (proto {}). Sweeping the cursor for {secs}s — watch the glass: the \
-             pointer should glide left↔right across mid-screen; wheel ticks every second.",
-            m.driver_proto()
+        anyhow::bail!(
+            "the pf_mouse driver never attached. Install it: punktfunk-host.exe driver install \
+             --gamepad --dir <stage>"
         );
     }
-    let t0 = std::time::Instant::now();
-    let mut i: u64 = 0;
+    if !m.ready() {
+        anyhow::bail!("the installed pf_mouse driver predates the report ring — reinstall it");
+    }
+    Ok(m)
+}
+
+/// `vmouse-spike`: drive the real cursor through HID reports for `secs`. The sweep glides
+/// the pointer left↔right at mid-screen with a wheel notch every second. `relative` instead
+/// counts down 5 s to focus a game, then yaws the view and clicks every 2 s.
+pub fn spike_hold(secs: u64, relative: bool) -> Result<()> {
+    let mut m = open_for_spike()?;
+    if relative {
+        println!("Focus the game now: relative motion starts in 5 s.");
+        for left in (1..=5).rev() {
+            println!("  {left}…");
+            m.service();
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        println!(
+            "Relative reports for {secs}s: the view should yaw left↔right, firing every 2 s. \
+             A still view means the game ignores this device."
+        );
+    } else {
+        println!("Sweeping the cursor for {secs}s — it should glide left↔right across mid-screen.");
+    }
+    let t0 = Instant::now();
     let beat_before = m.driver_heartbeat();
+    let mut i: u64 = 0;
     while t0.elapsed() < Duration::from_secs(secs) {
-        // Triangle-wave X over the middle 3/4, fixed mid Y; one wheel tick per second.
-        let phase = (i % 240) as i32; // 240 steps × 16 ms ≈ 4 s per round trip
-        let tri = if phase < 120 { phase } else { 240 - phase };
-        let x = 4096 + (tri as u32 * (24576 / 120)) as u16;
-        let wheel: i8 = if i % 60 == 0 { 1 } else { 0 };
-        m.send_report(0, x, 0x4000, wheel, 0);
+        let phase = (i % 240) as u16; // 240 steps × 16 ms ≈ 4 s per round trip
+        if relative {
+            m.move_by(if phase < 120 { 6 } else { -6 }, 0);
+            m.button(0, (60..66).contains(&(phase % 120)));
+        } else {
+            let tri = if phase < 120 { phase } else { 240 - phase };
+            m.move_to(4096 + tri * (24576 / 120), 0x4000);
+            if i % 60 == 0 {
+                m.scroll(false, 120);
+            }
+        }
         m.service();
         i += 1;
         std::thread::sleep(Duration::from_millis(16));
     }
-    let beat = m.driver_heartbeat();
+    m.button(0, false); // never leave the button down
+    let ticks = m.driver_heartbeat().wrapping_sub(beat_before);
     println!(
-        "vmouse-spike: done (driver heartbeat advanced {} ticks — {}). Devnode removed on exit.",
-        beat.wrapping_sub(beat_before),
-        if beat != beat_before {
-            "driver alive"
-        } else {
-            "driver NOT ticking"
-        }
+        "vmouse-spike: done (driver timer ≈{:.0} Hz). Devnode removed on exit.",
+        f64::from(ticks) / t0.elapsed().as_secs_f64()
     );
     Ok(())
 }

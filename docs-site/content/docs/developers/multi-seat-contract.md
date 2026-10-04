@@ -83,7 +83,8 @@ session by design, and display activation fails while its session is inactive.
   or recording device.
 - **Its virtual mouse is its own.** The resident HID mouse that makes Windows draw a cursor into
   the stream is `pf_mouse_<slot>`, with mailbox `Global\pfmouse-boot-<slot>`. The console host uses
-  index `0`.
+  index `0`. Only the console host sends input through it: HID input reaches the console session, so
+  a seat host injects with `SendInput`.
 - **Gamepad indices are shared.** The box has 16 pad indices; each host takes the lowest one that
   no other host's pad holds.
 - **No status tray.** A seat host doesn't start or supervise one; the supervisor is the control
