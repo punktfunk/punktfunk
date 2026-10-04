@@ -1,0 +1,6 @@
+• Spanned layout: one picture across both screens of a dual-screen handheld.
+• The companion panel has a keyboard page and live graphs.
+• A network check says what your link does and offers paced delivery.
+• Games your host does not have yet install when you start them.
+• Controller rumble can be turned off.
+• Returning from a quick app switch no longer flashes black.

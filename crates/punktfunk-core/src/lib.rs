@@ -78,14 +78,14 @@ pub use stats::Stats;
 /// symbols and leave every existing function's signature and behaviour alone.
 /// New connect options append to `PunktfunkConnectOpts` behind `struct_size`;
 /// do not mint another `connect_ex*` or grow `PunktfunkAudioPcm` / `PunktfunkStats`
-/// (no size guard, allocated by value). v27 is the exception: `PunktfunkHidOutput`
-/// grew 19 → 85 bytes and the version check is the overrun guard — a second pull
-/// symbol would fork the hidout drain forever.
+/// (no size guard, allocated by value). Growing a struct the library writes whole into
+/// the caller's buffer is a bump: the version check is the overrun guard
+/// (`PunktfunkHidOutput` at 27, `PunktfunkProbeResult` at 43).
 ///
 /// Not [`WIRE_VERSION`]. The C surface can grow without a wire byte changing.
 /// Pin the integer in `punktfunk-ffi` (`abi_version_is_pinned`). Per-bump notes live
 /// in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 42;
+pub const ABI_VERSION: u32 = 43;
 
 /// punktfunk/1 wire version. `Hello`/`Welcome` carry it; hosts equality-check it.
 ///
