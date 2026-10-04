@@ -343,6 +343,9 @@ pub const PUNKTFUNK_PEN_TOOL_ERASER: u8 = 1;
 pub const PUNKTFUNK_PEN_BATCH_MAX: u32 = 8;
 /// [`PunktfunkPenSample::tilt_deg`] sentinel: no tilt reading.
 pub const PUNKTFUNK_PEN_TILT_UNKNOWN: u8 = 0xFF;
+/// Longest profile id, in bytes, that [`PunktfunkConnectOpts::profile_id`] sends and
+/// [`punktfunk_connection_profile`] writes (before the NUL).
+pub const PUNKTFUNK_PROFILE_ID_MAX: usize = 64;
 /// [`PunktfunkPenSample::azimuth_deg`] / `roll_deg` sentinel: no reading.
 pub const PUNKTFUNK_PEN_ANGLE_UNKNOWN: u16 = 0xFFFF;
 /// [`PunktfunkPenSample::distance`] sentinel: no hover-distance reading.

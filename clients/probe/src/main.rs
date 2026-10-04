@@ -834,6 +834,7 @@ async fn handshake(
         resume: extra.resume,
         suites: extra.suites,
         features: Default::default(),
+        profile: None,
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.

@@ -31,21 +31,19 @@ static PunktfunkConfig make_config(uint32_t role, uint32_t drop_period) {
 int main(void) {
     printf("punktfunk C ABI harness (abi_version=%u)\n", punktfunk_abi_version());
 
-    /* PunktfunkConnectOpts (v41): the C compiler must agree with Rust's const-asserted layout —
-     * 120 bytes on 64-bit / 84 on 32-bit, NO tail padding (the growth contract: an appended field
-     * may never land in bytes an older caller's sizeof already covered, and C leaves padding
-     * unspecified, which is what `reserved0` exists to prevent), with `video_fit` in the byte a
-     * v35-v40 caller zeroed as `reserved0` — and the size-prefix guard must reject an undersized
-     * struct as a status, not a read. The declaration sits behind the header's quic guard; the
-     * staticlib this harness links always carries quic (see the -lopus/Security link line), so
-     * the check only needs the define. */
+    /* PunktfunkConnectOpts: the C compiler agrees with Rust's const-asserted layout, 136 bytes on
+     * 64-bit and 96 on 32-bit with no tail padding, so an appended field never lands in bytes an
+     * older caller's sizeof covered. The size-prefix guard rejects an undersized struct as a
+     * status, not a read. The staticlib this links always carries quic. */
 #ifdef PUNKTFUNK_FEATURE_QUIC
-    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 128u : 92u)
+    if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 136u : 96u)
         || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
-        || offsetof(PunktfunkConnectOpts, delivery_profile) != (sizeof(void *) == 8 ? 120u : 84u)) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_profile at %zu\n",
+        || offsetof(PunktfunkConnectOpts, delivery_profile) != (sizeof(void *) == 8 ? 120u : 84u)
+        || offsetof(PunktfunkConnectOpts, profile_id) != (sizeof(void *) == 8 ? 128u : 92u)) {
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_profile at %zu, profile_id at %zu\n",
                 sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
-                offsetof(PunktfunkConnectOpts, delivery_profile));
+                offsetof(PunktfunkConnectOpts, delivery_profile),
+                offsetof(PunktfunkConnectOpts, profile_id));
         return 1;
     }
     {

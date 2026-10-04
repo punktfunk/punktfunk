@@ -352,6 +352,16 @@ mod abi_version_tests {
         assert_eq!(super::punktfunk_abi_version(), 44);
     }
 
+    /// The C cap and the wire's are one number.
+    #[cfg(feature = "quic")]
+    #[test]
+    fn profile_id_max_is_the_wire_bound() {
+        assert_eq!(
+            super::PUNKTFUNK_PROFILE_ID_MAX,
+            punktfunk_core::quic::v2::msg::PROFILE_ID_MAX
+        );
+    }
+
     /// The library writes this whole into the caller's buffer; growing it bumps the ABI.
     #[cfg(all(feature = "quic", target_pointer_width = "64"))]
     #[test]

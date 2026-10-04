@@ -189,7 +189,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Normalized scroll only toward HOST_CAP2_SCROLL; an older host gets each
     // event converted once at the outbound seam instead.
     let normalized_scroll = negotiated.host_caps2 & crate::quic::HOST_CAP2_SCROLL != 0;
-    let _ = ready_tx.send(Ok(negotiated));
+    let _ = ready_tx.send(Ok(negotiated.clone()));
 
     // Snapshots only toward GAMEPAD_STATE. Flags 8/9 only toward PAD_AUDIO — an
     // older host reads the whole flags word as the pad index.

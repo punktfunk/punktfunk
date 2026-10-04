@@ -12,7 +12,7 @@
 
 use super::features::FeatureSet;
 use super::field::*;
-use super::msg::{FieldValue, V2Message};
+use super::msg::{FieldValue, V2Message, PROFILE_ID_MAX};
 use super::registry as reg;
 use crate::config::{CompositorPref, FecConfig, FecScheme, GamepadPref, Mode};
 use crate::crypto::MediaSuite;
@@ -55,6 +55,8 @@ pub struct ClientHello {
     pub suites: Vec<MediaSuite>,
     /// Bits from 32 up ([`FeatureSet::native`]); `hello`'s capability bytes fill 0–31.
     pub features: FeatureSet,
+    /// The profile this device asks to play as. `None` asks nothing.
+    pub profile: Option<String>,
 }
 
 impl ClientHello {
@@ -117,7 +119,12 @@ impl V2Message for ClientHello {
                 f = f.bytes(v2, v);
             }
         }
-        f
+        // An id is never truncated: a cut one would name another profile or none.
+        let profile = self
+            .profile
+            .as_deref()
+            .filter(|p| p.len() <= PROFILE_ID_MAX);
+        f.when(profile.is_some(), |f| f.str(23, profile.unwrap_or("")))
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -142,6 +149,7 @@ impl V2Message for ClientHello {
         };
         let (mut resume, mut suites, mut start_ext) = (None, Vec::new(), Vec::new());
         let mut features = FeatureSet::default();
+        let mut profile = None;
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -176,6 +184,7 @@ impl V2Message for ClientHello {
                 16 => h.audio_bits = u8_of(v)?,
                 17 => h.audio_layout = u8_of(v)?,
                 18 => h.video_fit = u8_of(v)?,
+                23 => profile = label(v, PROFILE_ID_MAX),
                 _ => {
                     if let Some((v1, _)) = START_EXT.iter().find(|(_, v2)| *v2 == tag) {
                         start_ext.push((*v1, v.to_vec()));
@@ -197,6 +206,7 @@ impl V2Message for ClientHello {
             resume,
             suites,
             features,
+            profile,
         })
     }
 }
@@ -212,7 +222,7 @@ fn label(v: &[u8], max: usize) -> Option<String> {
 }
 
 /// `host → client`: the session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerHello {
     pub welcome: Welcome,
     /// Names this session for a reconnect ([`ClientHello::resume`]) and binds the media keys.
@@ -223,6 +233,8 @@ pub struct ServerHello {
     pub suite: Option<MediaSuite>,
     /// Native bits in force: the ones both ends set ([`ClientHello::features`]).
     pub features: FeatureSet,
+    /// The profile this session resolved to. `None` from a host without profiles.
+    pub profile: Option<String>,
 }
 
 impl V2Message for ServerHello {
@@ -263,6 +275,9 @@ impl V2Message for ServerHello {
             .u8(24, w.audio_bits)
             .u16(25, w.audio_frame_us)
             .u8(26, w.audio_layout)
+            .when(self.profile.is_some(), |f| {
+                f.str(27, self.profile.as_deref().unwrap_or(""))
+            })
     }
 
     fn from_body(body: &[u8]) -> Result<Self> {
@@ -296,6 +311,7 @@ impl V2Message for ServerHello {
         };
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
         let mut features = FeatureSet::default();
+        let mut profile = None;
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -349,6 +365,7 @@ impl V2Message for ServerHello {
                 24 => w.audio_bits = u8_of(v)?,
                 25 => w.audio_frame_us = u16_of(v)?,
                 26 => w.audio_layout = u8_of(v)?,
+                27 => profile = label(v, PROFILE_ID_MAX),
                 _ => {}
             }
         }
@@ -375,6 +392,7 @@ impl V2Message for ServerHello {
             clock_origin_ns,
             suite,
             features,
+            profile,
         })
     }
 }
@@ -551,12 +569,12 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![], features: FeatureSet::default() };
+            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![], features: FeatureSet::default(), profile: None };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
 
-            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default() };
+            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default(), profile: None };
             let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
             let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -568,6 +586,32 @@ mod tests {
             let _ = ClientHello::from_body(&body);
             let _ = ServerHello::from_body(&body);
         }
+    }
+
+    /// The ask rides `ClientHello` tag 23 with the `PROFILES` bit, the echo `ServerHello` tag 27.
+    /// An id over [`PROFILE_ID_MAX`] is never sent, and one that arrives is no ask.
+    #[test]
+    fn a_profile_rides_client_hello_and_echoes() {
+        let mut ch = ClientHello::from_body(&Fields::new().into_body()).unwrap();
+        ch.profile = Some("9a3f1c2b7e40".into());
+        ch.features = FeatureSet::default().with(reg::FEATURE_PROFILES);
+        let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
+        assert_eq!(back.profile.as_deref(), Some("9a3f1c2b7e40"));
+        assert!(back.features.has(reg::FEATURE_PROFILES));
+
+        ch.profile = Some("9".repeat(PROFILE_ID_MAX + 1));
+        let body = ch.fields().into_body();
+        assert_eq!(ClientHello::from_body(&body).unwrap().profile, None);
+        let oversized = Fields::new()
+            .str(23, &"9".repeat(PROFILE_ID_MAX + 1))
+            .into_body();
+        assert_eq!(ClientHello::from_body(&oversized).unwrap().profile, None);
+
+        let mut sh = ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body()).unwrap();
+        assert_eq!(sh.profile, None);
+        sh.profile = Some("9a3f1c2b7e40".into());
+        let back = ServerHello::from_body(&sh.fields().into_body()).unwrap();
+        assert_eq!(back.profile.as_deref(), Some("9a3f1c2b7e40"));
     }
 
     #[test]
@@ -614,6 +658,7 @@ mod tests {
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
+            profile: None,
         };
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);
@@ -630,6 +675,7 @@ mod tests {
             clock_origin_ns: 1_700_000_000_000_000_000,
             suite: Some(MediaSuite::ChaCha20Poly1305),
             features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
+            profile: None,
         };
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),

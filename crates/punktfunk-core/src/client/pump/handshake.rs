@@ -208,7 +208,10 @@ async fn dial(
             } else {
                 vec![MediaSuite::Aes128Gcm]
             },
-            features: FeatureSet::default().with(registry::FEATURE_STREAM_CONFIG),
+            features: FeatureSet::default()
+                .with(registry::FEATURE_STREAM_CONFIG)
+                .with(registry::FEATURE_PROFILES),
+            profile: p.profile.clone(),
         };
         v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
@@ -318,6 +321,7 @@ async fn dial(
                 mgmt_port: welcome.mgmt_port,
                 grants: welcome.grants,
                 expires_in_secs: welcome.expires_in_secs,
+                profile: server.profile.clone(),
             },
             welcome.host_caps,
         ))))

@@ -4309,6 +4309,7 @@ mod tests {
             resume: None,
             suites: Vec::new(),
             features: Default::default(),
+            profile: None,
         };
         v2io::send(&mut send, &hello).await.expect("ClientHello");
         let welcome = loop {

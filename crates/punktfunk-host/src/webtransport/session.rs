@@ -448,6 +448,7 @@ mod tests {
             resume: None,
             suites: Vec::new(),
             features: Default::default(),
+            profile: None,
         }
         .encode_v2()
     }

@@ -233,6 +233,9 @@ pub const FEATURE_V1_HOST_CAPS2: u32 = 24;
 /// Both ends: the host sends a `StreamConfig` for every epoch, and the client moves its mode
 /// at that epoch's first frame. `Reconfigured` then only says a switch was accepted.
 pub const FEATURE_STREAM_CONFIG: u32 = 32;
+/// Both ends: the client reads `ServerHello`'s profile echo and follows a `Redirect`, and the
+/// host resolves `ClientHello`'s profile. A host redirects only a client that sets it.
+pub const FEATURE_PROFILES: u32 = 33;
 
 #[cfg(test)]
 mod tests {
@@ -265,6 +268,7 @@ mod tests {
         ("FEATURE_V1_HOST_CAPS", FEATURE_V1_HOST_CAPS),
         ("FEATURE_V1_HOST_CAPS2", FEATURE_V1_HOST_CAPS2),
         ("FEATURE_STREAM_CONFIG", FEATURE_STREAM_CONFIG),
+        ("FEATURE_PROFILES", FEATURE_PROFILES),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.
@@ -322,6 +326,19 @@ mod tests {
         (
             "HOST_POWER_CLOSE_CODE",
             crate::reject::HOST_POWER_CLOSE_CODE,
+        ),
+        (
+            "PROFILE_UNKNOWN_CLOSE_CODE",
+            crate::reject::PROFILE_UNKNOWN_CLOSE_CODE,
+        ),
+        ("NO_SEAT_CLOSE_CODE", crate::reject::NO_SEAT_CLOSE_CODE),
+        (
+            "SEAT_OCCUPIED_CLOSE_CODE",
+            crate::reject::SEAT_OCCUPIED_CLOSE_CODE,
+        ),
+        (
+            "SEAT_UNAVAILABLE_CLOSE_CODE",
+            crate::reject::SEAT_UNAVAILABLE_CLOSE_CODE,
         ),
         ("CLIP_CANCELLED_CODE", 0x70),
         ("STOP_UNKNOWN_STREAM", STOP_UNKNOWN_STREAM),

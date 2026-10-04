@@ -754,6 +754,7 @@ pub(super) async fn negotiate(
         clock_origin_ns: session.clock.origin_ns(),
         suite,
         features,
+        profile: None,
     };
     punktfunk_core::quic::v2::io::send(send, &server_hello).await?;
     bringup.mark("welcome");

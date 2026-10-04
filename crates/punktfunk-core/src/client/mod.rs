@@ -278,6 +278,8 @@ pub struct NativeClient {
     pub host_caps2: u8,
     /// `0` when the host did not advertise a management port.
     pub mgmt_port: u16,
+    /// The profile the host resolved this session to; `None` from a host without profiles.
+    profile: Option<String>,
     /// `displayed + clock_offset − pts` (ns). `0` = nothing presented yet. Presenter writes;
     /// audio reads to land with the picture ([`crate::audio::AvSync`]). Lives next to
     /// `clock_offset` because neither plane owns the other.
@@ -616,6 +618,9 @@ pub struct ConnectParams {
     /// ([`crate::quic::EXT_TAG_DELIVERY`]); `None` asks nothing. A host that reads it answers
     /// in [`NativeClient::delivery`].
     pub delivery: Option<crate::quic::DeliveryAsk>,
+    /// The profile to play as: a host profile id. `None` lets the host choose
+    /// ([`NativeClient::profile`] says which it did).
+    pub profile: Option<String>,
     /// Handshake budget. The dial re-dials inside it, so a waking host is not a failure.
     pub timeout: Duration,
     /// Abort while blocked: a request-access knock parks ~185 s. Never alias the session's
@@ -650,6 +655,7 @@ impl ConnectParams {
             identity: None,
             preset: None,
             delivery: None,
+            profile: None,
             timeout,
             cancel: None,
         }
@@ -797,6 +803,7 @@ impl NativeClient {
             host_caps: negotiated.host_caps,
             host_caps2: negotiated.host_caps2,
             mgmt_port: negotiated.mgmt_port,
+            profile: negotiated.profile.clone(),
             worker: Some(worker),
             video_e2e_ns: Arc::new(AtomicU64::new(0)),
             audio_av_offset_ms: Arc::new(AtomicI64::new(0)),
@@ -1540,6 +1547,12 @@ impl NativeClient {
     /// hosts need no mDNS.
     pub fn mgmt_port(&self) -> u16 {
         self.mgmt_port
+    }
+
+    /// The profile the host resolved this session to: the one asked for, or the host's choice
+    /// when none was. `None` from a host without profiles.
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
     }
 
     /// Live grants ([`crate::quic::GRANT_GAMEPAD`] family). Welcome seed, latest
