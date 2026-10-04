@@ -16,8 +16,8 @@ field and every client resolves against the set it ships.
 | `xbox` | Xbox | punktfunk-plugin-xbox | Font Awesome Free brands (CC BY 4.0) |
 | `hydra` | Hydra Launcher | punktfunk-plugin-hydra | hydralauncher/hydra (MIT) |
 
-The Epic, GOG and Xbox tiles need a Windows host that knows their `launcher_ui` values; an
-older host drops the tile and still syncs the games.
+The Epic, GOG, Xbox and Windows Hydra Big Picture tiles need a Windows host that knows their
+`launcher_ui` values; an older host drops the tile and still syncs the games.
 
 `steam` is the same mark as `assets/os-icons/steam.svg`, generated from that file rather than
 re-sourced, so the SteamOS host badge and the Steam launcher tile can never drift apart.
