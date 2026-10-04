@@ -28,8 +28,8 @@ use accounts::AccountManager;
 use credentials::CredentialStore;
 use std::path::{Path, PathBuf};
 use supervisor::Supervisor;
-use util::port_open;
 use util::{backend_error, io_error, require_local_system, WinResult};
+use util::{port_open, udp_port_owners};
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::{
     IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64, OSVERSIONINFOW,
@@ -315,7 +315,11 @@ impl WindowsBackend {
             seat,
         ));
         for (kind, port) in [("native", seat.native_port), ("management", seat.mgmt_port)] {
-            let open = port_open(port);
+            let open = if kind == "native" {
+                !udp_port_owners(port).is_empty()
+            } else {
+                port_open(port)
+            };
             let expected = snapshot.status.state == RuntimeState::Running;
             diagnostics.push(seat_diagnostic(
                 if open == expected {

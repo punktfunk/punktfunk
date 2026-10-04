@@ -29,6 +29,7 @@ winreg = "0.56"
 windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_NetManagement",
     "Win32_Security",
     "Win32_Security_Authentication_Identity",

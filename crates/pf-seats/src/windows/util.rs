@@ -158,10 +158,8 @@ pub(super) fn require_elevated_admin() -> WinResult<()> {
     }
 }
 
-/// Whether something accepts a loopback connection on `port`.
-///
-/// The supervisor's readiness wait and the doctor both ask this; a seat host
-/// is ready once both of its assigned ports answer.
+/// Whether something accepts a loopback TCP connection on `port`: the seat's
+/// management port. The native port is QUIC; [`udp_port_owners`] answers for it.
 pub(super) fn port_open(port: u16) -> bool {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
     TcpStream::connect_timeout(
@@ -169,6 +167,88 @@ pub(super) fn port_open(port: u16) -> bool {
         std::time::Duration::from_millis(100),
     )
     .is_ok()
+}
+
+/// The pids holding a UDP endpoint on `port`, IPv4 and IPv6. Empty when the
+/// tables can't be read.
+pub(super) fn udp_port_owners(port: u16) -> Vec<u32> {
+    use windows::Win32::NetworkManagement::IpHelper::{
+        MIB_UDP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID,
+    };
+    // `ADDRESS_FAMILY` values; the WinSock feature isn't pulled in for two numbers.
+    const AF_INET: u32 = 2;
+    const AF_INET6: u32 = 23;
+    let v4 = udp_rows::<MIB_UDPROW_OWNER_PID>(AF_INET)
+        .into_iter()
+        .map(|r| (r.dwLocalPort, r.dwOwningPid));
+    let v6 = udp_rows::<MIB_UDP6ROW_OWNER_PID>(AF_INET6)
+        .into_iter()
+        .map(|r| (r.dwLocalPort, r.dwOwningPid));
+    // The port sits in the low 16 bits, in network byte order.
+    v4.chain(v6)
+        .filter(|(local, _)| u16::from_be(*local as u16) == port)
+        .map(|(_, pid)| pid)
+        .collect()
+}
+
+/// One `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` snapshot for `family`.
+fn udp_rows<Row: Copy>(family: u32) -> Vec<Row> {
+    use windows::Win32::NetworkManagement::IpHelper::{GetExtendedUdpTable, UDP_TABLE_OWNER_PID};
+    const NO_ERROR: u32 = 0;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    let mut size = 0_u32;
+    // The table grows between the sizing call and the read; three tries is plenty.
+    for _ in 0..3 {
+        // u64 words: the table's `u32` count and rows need 4-byte alignment.
+        let mut buffer = vec![0_u64; (size as usize).div_ceil(8).max(1)];
+        // SAFETY: `buffer` holds at least `size` writable bytes and outlives the call;
+        // `size` is a live in/out parameter.
+        let rc = unsafe {
+            GetExtendedUdpTable(
+                Some(buffer.as_mut_ptr().cast()),
+                &mut size,
+                false,
+                family,
+                UDP_TABLE_OWNER_PID,
+                0,
+            )
+        };
+        if rc == ERROR_INSUFFICIENT_BUFFER {
+            continue;
+        }
+        if rc != NO_ERROR {
+            return Vec::new();
+        }
+        let bytes = buffer.len() * 8;
+        let base = buffer.as_ptr().cast::<u8>();
+        // SAFETY: the table starts with its `u32` row count.
+        let count = unsafe { base.cast::<u32>().read() } as usize;
+        let first = std::mem::size_of::<u32>();
+        let fits = count
+            .checked_mul(std::mem::size_of::<Row>())
+            .and_then(|rows| rows.checked_add(first))
+            .is_some_and(|end| end <= bytes);
+        if !fits {
+            return Vec::new();
+        }
+        // SAFETY: `count` rows of `Row` follow the count inside `buffer` (checked
+        // above), and every row field is a `u32`, so offset 4 is aligned for it.
+        let rows = unsafe { std::slice::from_raw_parts(base.add(first).cast::<Row>(), count) };
+        return rows.to_vec();
+    }
+    Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_bound_udp_port_names_this_process() {
+        for addr in ["127.0.0.1:0", "[::1]:0"] {
+            let socket = std::net::UdpSocket::bind(addr).unwrap();
+            let port = socket.local_addr().unwrap().port();
+            assert!(super::udp_port_owners(port).contains(&std::process::id()));
+        }
+    }
 }
 
 #[cfg(test)]

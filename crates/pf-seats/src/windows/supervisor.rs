@@ -15,7 +15,7 @@ use crate::persistence::SecretRoot;
 use crate::windows::accounts::AccountManager;
 use crate::windows::process::{self, ChildProcess, Job};
 use crate::windows::rdp;
-use crate::windows::util::{backend_error, io_error, port_open, WinResult};
+use crate::windows::util::{backend_error, io_error, port_open, udp_port_owners, WinResult};
 use crate::windows::wts;
 use rand::RngCore as _;
 use std::collections::HashMap;
@@ -633,13 +633,14 @@ fn wait_host_ready(
                 format!("punktfunk-host exited with code {code} before readiness"),
             ));
         }
-        if port_open(seat.native_port) && port_open(seat.mgmt_port) {
+        // Native is QUIC: ready once this host holds the UDP port, not when TCP answers.
+        if udp_port_owners(seat.native_port).contains(&host.pid()) && port_open(seat.mgmt_port) {
             return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(backend_error(
                 "host_ready_timeout",
-                "punktfunk-host did not open both assigned loopback ports within 30 seconds",
+                "punktfunk-host did not open both assigned ports within 30 seconds",
             ));
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -647,13 +648,19 @@ fn wait_host_ready(
 }
 
 fn ensure_ports_free(seat: &Seat) -> WinResult<()> {
-    for port in [seat.native_port, seat.mgmt_port] {
-        if port_open(port) {
-            return Err(backend_error(
-                "port_in_use",
-                format!("assigned loopback port {port} already accepts connections"),
-            ));
-        }
+    let native = seat.native_port;
+    if let Some(pid) = udp_port_owners(native).first() {
+        return Err(backend_error(
+            "port_in_use",
+            format!("assigned native port {native} is already held by process {pid}"),
+        ));
+    }
+    let mgmt = seat.mgmt_port;
+    if port_open(mgmt) {
+        return Err(backend_error(
+            "port_in_use",
+            format!("assigned management port {mgmt} already accepts connections"),
+        ));
     }
     Ok(())
 }
