@@ -164,11 +164,11 @@ fn baselayer_has(display: &str, appid: u32) -> bool {
     root_cardinals(display, b"GAMESCOPECTRL_BASELAYER_APPID").is_some_and(|v| v.contains(&appid))
 }
 
-/// Managed/SteamOS is single-session and logs to journald, so this is unscoped.
-pub(super) fn poll_managed_node(timeout: Duration) -> Option<u32> {
+/// Managed/SteamOS logs to journald, so the unit's cgroup is the address.
+pub(super) fn poll_managed_node(timeout: Duration, unit: &str) -> Option<u32> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(id) = find_gamescope_node() {
+        if let Some(id) = find_gamescope_node(Scope::Unit(unit)) {
             return Some(id);
         }
         if Instant::now() >= deadline {
@@ -205,13 +205,14 @@ pub(super) fn wait_for_node(
                     "gamescope: the spawned process exited before publishing a PipeWire node — \
                      not waiting out the rest of the budget"
                 );
-                return node_from_log(log).or_else(|| find_gamescope_node_scoped(Some(child_pid)));
+                return node_from_log(log)
+                    .or_else(|| find_gamescope_node(Scope::Spawned(child_pid)));
             }
             // ECHILD: the child was reaped elsewhere. Do not invent a death.
             Err(_) => {}
         }
         if Instant::now() >= deadline {
-            return find_gamescope_node_scoped(Some(child_pid));
+            return find_gamescope_node(Scope::Spawned(child_pid));
         }
         std::thread::sleep(Duration::from_millis(300));
     }
@@ -286,13 +287,46 @@ fn dump_has_node(success: bool, stdout: &[u8], node_id: u32) -> bool {
         .unwrap_or(true)
 }
 
-/// `node.name=gamescope` is on the adapter and the inner stream; only `Video/Source` is capturable.
-/// Bare name match is the fallback for older gamescope that omits `media.class`.
-pub(super) fn find_gamescope_node() -> Option<u32> {
-    find_gamescope_node_scoped(None)
+/// Which gamescope a lookup means. A seat's own spawn sits in this host's process tree, so only
+/// [`Scope::Spawned`] can match it.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Scope<'a> {
+    /// The gamescope this host spawned as `pid`, or a descendant of it.
+    Spawned(u32),
+    /// The gamescope inside this systemd user unit: a session the host launched.
+    Unit(&'a str),
+    /// The box's own session, attached to: outside this host's tree, a Game Mode unit first.
+    Box,
 }
 
-fn find_gamescope_node_scoped(scope: Option<u32>) -> Option<u32> {
+impl Scope<'_> {
+    /// Higher wins, `None` excludes. A node or socket without an owner pid ranks last.
+    pub(super) fn rank(self, pid: Option<u32>) -> Option<u8> {
+        let Some(pid) = pid else {
+            return Some(0);
+        };
+        let cgroup = || std::fs::read_to_string(format!("/proc/{pid}/cgroup")).unwrap_or_default();
+        match self {
+            Scope::Spawned(root) => descends_from(pid, root).then_some(2),
+            Scope::Unit(unit) => cgroup_names_unit(&cgroup(), unit).then_some(2),
+            Scope::Box if descends_from(pid, std::process::id()) => None,
+            Scope::Box => Some(if in_game_mode_unit(&cgroup()) { 2 } else { 1 }),
+        }
+    }
+}
+
+/// Game Mode's own units: ours, SteamOS's and gamescope-session-plus's.
+fn in_game_mode_unit(cgroup: &str) -> bool {
+    cgroup_names_unit(cgroup, SESSION_UNIT)
+        || cgroup_names_unit(cgroup, STEAMOS_SESSION_UNIT)
+        || cgroup
+            .split(['/', '\n'])
+            .any(|seg| seg.starts_with("gamescope-session-plus@") && seg.ends_with(".service"))
+}
+
+/// `node.name=gamescope` is on the adapter and the inner stream; only `Video/Source` is capturable.
+/// Bare name match is the fallback for older gamescope that omits `media.class`.
+pub(super) fn find_gamescope_node(scope: Scope<'_>) -> Option<u32> {
     let out = crate::proc::output_within(&mut Command::new("pw-dump"), PW_DUMP_BUDGET).ok()?;
     let dump: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     let nodes = dump.as_array()?;
@@ -322,46 +356,40 @@ fn find_gamescope_node_scoped(scope: Option<u32>) -> Option<u32> {
             });
         Some((id, name, class, pid))
     };
-    // Absent `application.process.id` stays in-scope; the per-instance log is the primary address.
-    let in_scope = |pid: Option<u32>| -> bool {
-        match scope {
-            None => true,
-            Some(root) => pid.map(|p| descends_from(p, root)).unwrap_or(true),
-        }
+    let best = |pick: &dyn Fn(&str, &str) -> bool| -> Option<u32> {
+        nodes
+            .iter()
+            .filter_map(node_props)
+            .filter(|(_, name, class, _)| pick(name, class))
+            .filter_map(|(id, _, _, pid)| Some((scope.rank(pid)?, id)))
+            // First of the best rank: `max_by_key` keeps the last of equals.
+            .fold(None, |acc: Option<(u8, u32)>, (r, id)| match acc {
+                Some((best, _)) if best >= r => acc,
+                _ => Some((r, id)),
+            })
+            .map(|(_, id)| id)
     };
-    for obj in nodes {
-        if let Some((id, name, class, pid)) = node_props(obj) {
-            if class == "Video/Source"
-                && (name == "gamescope" || name.contains("gamescope"))
-                && in_scope(pid)
-            {
-                return Some(id);
-            }
-        }
+    if let Some(id) = best(&|name, class| class == "Video/Source" && name.contains("gamescope")) {
+        return Some(id);
     }
-    for obj in nodes {
-        if let Some((id, name, _, pid)) = node_props(obj) {
-            if name == "gamescope" && in_scope(pid) {
-                tracing::warn!(
-                    node_id = id,
-                    "gamescope node has no media.class=Video/Source tag — capturing it anyway"
-                );
-                return Some(id);
-            }
-        }
-    }
-    None
+    let id = best(&|name, _| name == "gamescope")?;
+    tracing::warn!(
+        node_id = id,
+        "gamescope node has no media.class=Video/Source tag — capturing it anyway"
+    );
+    Some(id)
 }
 
-/// Live EIS socket name under `XDG_RUNTIME_DIR` (`gamescope-<display>-ei`).
-/// Stale sockets linger, so only a successful `connect()` counts; newest mtime wins.
+/// Live EIS socket name under `XDG_RUNTIME_DIR` (`gamescope-<display>-ei`) of the gamescope in
+/// `scope`. Stale sockets linger, so only a successful `connect()` counts; then the best
+/// [`Scope::rank`] of the listener's pid, then the newest mtime.
 /// Returns the bare name — the injector resolves it the same way libei resolves `LIBEI_SOCKET`.
-pub(super) fn find_gamescope_eis_socket() -> Option<String> {
+pub(super) fn find_gamescope_eis_socket(scope: Scope<'_>) -> Option<String> {
     // `set_var` of `XDG_RUNTIME_DIR` races glibc getenv (UB; see crate `lib.rs`). The lock is
     // not reentrant — take the read here, not in a caller. `point_injector_at_eis` holds nothing;
     // `ei_socket_file()` takes and releases the same lock separately.
     let runtime = crate::with_env_lock(|| std::env::var("XDG_RUNTIME_DIR").ok())?;
-    let mut live: Vec<(std::time::SystemTime, String)> = Vec::new();
+    let mut live: Vec<(u8, std::time::SystemTime, String)> = Vec::new();
     for entry in std::fs::read_dir(&runtime).ok()?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         // The EIS socket itself, not its `.lock` sidecar or the bare Wayland socket.
@@ -369,17 +397,44 @@ pub(super) fn find_gamescope_eis_socket() -> Option<String> {
             continue;
         }
         // Connectable == a live listener; a dead session's socket refuses.
-        if std::os::unix::net::UnixStream::connect(entry.path()).is_err() {
+        let Ok(stream) = std::os::unix::net::UnixStream::connect(entry.path()) else {
             continue;
-        }
+        };
+        let Some(rank) = scope.rank(listener_pid(&stream)) else {
+            continue;
+        };
         let mtime = entry
             .metadata()
             .and_then(|m| m.modified())
             .unwrap_or(std::time::UNIX_EPOCH);
-        live.push((mtime, name));
+        live.push((rank, mtime, name));
     }
-    live.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
-    live.into_iter().next().map(|(_, n)| n)
+    live.into_iter()
+        .max_by_key(|(rank, mtime, _)| (*rank, *mtime))
+        .map(|(_, _, n)| n)
+}
+
+/// The pid that called `listen()` on the socket `stream` reached: the gamescope serving it.
+fn listener_pid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: the fd is open for the borrow of `stream`; `cred` and `len` are live out-pointers
+    // and `len` holds `cred`'s exact size.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (rc == 0 && cred.pid > 0).then_some(cred.pid as u32)
 }
 
 /// No version warning — that belongs on the create path.
@@ -841,9 +896,54 @@ mod live_probe {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_patch_level, parse_version, prepend_path_dir, steam_appid_from_launch, MIN_GAMESCOPE,
-        MIN_GAMESCOPE_OVERLAY,
+        in_game_mode_unit, listener_pid, parse_patch_level, parse_version, prepend_path_dir,
+        steam_appid_from_launch, Scope, MIN_GAMESCOPE, MIN_GAMESCOPE_OVERLAY,
     };
+
+    const SLICE: &str = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/";
+
+    #[test]
+    fn game_mode_units_are_ours_steamos_and_session_plus() {
+        assert!(in_game_mode_unit(&format!(
+            "{SLICE}punktfunk-gamescope.service"
+        )));
+        assert!(in_game_mode_unit(&format!(
+            "{SLICE}gamescope-session.service"
+        )));
+        assert!(in_game_mode_unit(&format!(
+            "{SLICE}gamescope-session-plus@steam.service"
+        )));
+        // A seat's gamescope runs in the host's own unit.
+        assert!(!in_game_mode_unit(&format!(
+            "{SLICE}punktfunk-host.service"
+        )));
+        assert!(!in_game_mode_unit(&format!(
+            "{SLICE}app-gnome-gamescope-4242.scope"
+        )));
+    }
+
+    #[test]
+    fn the_box_scope_never_admits_this_hosts_own_tree() {
+        let me = std::process::id();
+        assert_eq!(Scope::Box.rank(Some(me)), None);
+        assert_eq!(Scope::Spawned(me).rank(Some(me)), Some(2));
+        assert_eq!(Scope::Unit("no-such-unit-here").rank(Some(me)), None);
+        // An owner pid nobody reported ranks below every matched one.
+        assert_eq!(Scope::Box.rank(None), Some(0));
+        assert_eq!(Scope::Unit("no-such-unit-here").rank(None), Some(0));
+    }
+
+    #[test]
+    fn a_socket_names_the_pid_that_listens() {
+        let dir = std::env::temp_dir().join(format!("pf-peercred-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("gamescope-0-ei");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        assert_eq!(listener_pid(&stream), Some(std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn patch_level_parses_the_marker_and_nothing_else() {
