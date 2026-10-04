@@ -1305,8 +1305,7 @@ impl NativeClient {
 
     /// A diagnostic session: the dial asked for probes only, so no video ever comes.
     pub fn probe_only(&self) -> bool {
-        self.delivery_ask()
-            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
+        self.shared.probe_only()
     }
 
     /// Packets the OS dropped at this session's receive buffer so far; `None` where the

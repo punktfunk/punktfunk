@@ -263,6 +263,7 @@ impl Client {
                 probe: cfg.probe,
                 probe_target_kbps: cfg.probe_target_kbps,
                 ramp: cfg.ramp,
+                probe_only: false,
                 reads_delivery: cfg.reads_delivery,
                 pin_kbps: cfg.pin_kbps,
             },
