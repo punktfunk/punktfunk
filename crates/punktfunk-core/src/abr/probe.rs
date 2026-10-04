@@ -639,20 +639,26 @@ pub(crate) struct CapacityProbe {
 
 impl CapacityProbe {
     /// `target_kbps` of `None` sizes the burst from the stream cap, and caps
-    /// the ramp at what the stream can use. `armed` is `PUNKTFUNK_ABR_PROBE`
-    /// plus the session being Automatic at all; `ramp` is the host's
+    /// the ramp at what the stream can use — or, `probe_only`, at the link's
+    /// wall. `armed` is `PUNKTFUNK_ABR_PROBE` plus the session being
+    /// Automatic at all; `ramp` is the host's
     /// [`HOST_CAP2_RAMP`](crate::quic::HOST_CAP2_RAMP).
     pub(crate) fn new(
         armed: bool,
         ramp: bool,
         target_kbps: Option<u32>,
         stream_cap_kbps: u32,
+        probe_only: bool,
         now: Instant,
     ) -> Self {
+        let ramp_max = if probe_only {
+            target_kbps.map_or(LINK_RAMP_MAX_KBPS, |k| k.min(LINK_RAMP_MAX_KBPS))
+        } else {
+            ramp_max_kbps(stream_cap_kbps, target_kbps)
+        };
         CapacityProbe {
             target_kbps: target_kbps.unwrap_or_else(|| probe_target_kbps(stream_cap_kbps)),
-            ramp: (armed && ramp)
-                .then(|| Ramp::new(ramp_max_kbps(stream_cap_kbps, target_kbps), now)),
+            ramp: (armed && ramp).then(|| Ramp::new(ramp_max, now)),
             // The ramp replaces the burst; it never runs beside video.
             fire_at: (armed && !ramp).then(|| now + PROBE_DELAY),
             result_by: None,
@@ -943,6 +949,9 @@ fn ramp_max_kbps(stream_cap_kbps: u32, env_kbps: Option<u32>) -> u32 {
     env_kbps.map_or(by_stream, |k| k.min(by_stream))
 }
 
+/// A probe-only session's ramp ceiling: the host's own clamp on a probe.
+const LINK_RAMP_MAX_KBPS: u32 = 10_000_000;
+
 /// How far past its pin a pinned ramp climbs. The host paces a pinned
 /// stream at the rate the ramp proved, so the proof has to reach the link's
 /// rate, not the stream's: 8× takes a 1440p120 PyroWave pin to 10 GbE in
@@ -1006,7 +1015,7 @@ mod tests {
         fn new(stream_cap_kbps: u32, env_kbps: Option<u32>) -> Self {
             let now = Instant::now();
             Rig {
-                p: CapacityProbe::new(true, true, env_kbps, stream_cap_kbps, now),
+                p: CapacityProbe::new(true, true, env_kbps, stream_cap_kbps, false, now),
                 now,
                 asked: Vec::new(),
                 pending: None,
@@ -1115,6 +1124,23 @@ mod tests {
             *rig.asked.last().expect("steps"),
             ramp_max_kbps(cap, None),
             "the last step is the one that proves the cap"
+        );
+    }
+
+    /// A speed test's 720p60 connect has no stream to stop at: on 2.5 GbE
+    /// the ramp climbs to the link's wall, not to the ~79 Mbps 720p60 uses.
+    #[test]
+    fn a_probe_only_ramp_climbs_to_the_link() {
+        let cap = super::super::stream_ceiling_kbps(1280, 720, 60, CODEC_H264, 8, CHROMA_IDC_420);
+        let mut rig = Rig::new(cap, None);
+        rig.p = CapacityProbe::new(true, true, None, cap, true, rig.now);
+        let end = rig.run(2_500_000, u32::MAX);
+        let Ramped::Wall { delivered_kbps } = end else {
+            panic!("2.5 GbE is a wall to a speed test: {end:?}");
+        };
+        assert!(
+            (2_000_000..=3_000_000).contains(&delivered_kbps),
+            "the wall read {delivered_kbps} kbps"
         );
     }
 
@@ -1479,7 +1505,7 @@ mod tests {
     fn a_burst_the_link_refused_reports_the_wall_it_found() {
         let refused = |delivered_packets: u64, wire_packets_sent: u32, send_dropped: u32| {
             let now = Instant::now();
-            let mut p = CapacityProbe::new(true, false, Some(400_000), 100_000, now);
+            let mut p = CapacityProbe::new(true, false, Some(400_000), 100_000, false, now);
             assert!(p.poll(now + PROBE_DELAY, 1, 1).is_some(), "the burst fires");
             let r = ProbeReport {
                 delivered_bytes: delivered_packets * 1_448,
@@ -1579,7 +1605,7 @@ mod tests {
     #[test]
     fn a_finished_burst_is_measured_exactly_once() {
         let now = Instant::now();
-        let mut p = CapacityProbe::new(true, false, Some(400_000), 100_000, now);
+        let mut p = CapacityProbe::new(true, false, Some(400_000), 100_000, false, now);
         assert_eq!(p.poll(now + PROBE_DELAY, 1, 1), Some((400_000, PROBE_MS)));
         // 1 MB over 800 ms is 10 Mbps; the ceiling keeps 70 % of it.
         assert_eq!(
@@ -1601,7 +1627,7 @@ mod tests {
     #[test]
     fn an_old_host_still_gets_the_legacy_burst() {
         let now = Instant::now();
-        let mut p = CapacityProbe::new(true, false, None, 100_000, now);
+        let mut p = CapacityProbe::new(true, false, None, 100_000, false, now);
         assert!(
             p.poll(now, 0, 0).is_none(),
             "nothing goes out during bring-up"
@@ -1625,7 +1651,7 @@ mod tests {
     #[test]
     fn a_disabled_probe_neither_ramps_nor_bursts() {
         let now = Instant::now();
-        let mut p = CapacityProbe::new(false, true, None, 100_000, now);
+        let mut p = CapacityProbe::new(false, true, None, 100_000, false, now);
         assert!(p.poll(now, 0, 0).is_none());
         assert!(p.poll(now + PROBE_DELAY, 1, 1).is_none());
         assert_eq!(p.take_ramped(now), None);
@@ -1637,7 +1663,7 @@ mod tests {
     #[test]
     fn a_dropped_burst_is_no_evidence() {
         let now = Instant::now();
-        let mut p = CapacityProbe::new(true, false, None, 100_000, now);
+        let mut p = CapacityProbe::new(true, false, None, 100_000, false, now);
         assert!(!p.take_no_evidence());
         assert!(
             p.poll(now + PROBE_DELAY, 1, 1).is_some(),
@@ -1652,7 +1678,7 @@ mod tests {
     #[test]
     fn a_probe_nobody_asked_for_teaches_nothing() {
         let now = Instant::now();
-        let mut p = CapacityProbe::new(false, false, None, 100_000, now);
+        let mut p = CapacityProbe::new(false, false, None, 100_000, false, now);
         assert_eq!(p.on_result(report(9_000_000, 800), now), Measured::NotOurs);
     }
 

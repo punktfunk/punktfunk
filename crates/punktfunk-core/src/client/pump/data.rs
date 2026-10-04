@@ -243,6 +243,7 @@ impl DataPump {
                 probe: std::env::var("PUNKTFUNK_ABR_PROBE").map_or(true, |v| v != "0"),
                 probe_target_kbps: env_u32("PUNKTFUNK_ABR_PROBE_KBPS"),
                 ramp: self.serves_ramp,
+                probe_only: self.shared.probe_only(),
                 reads_delivery: self.reads_delivery,
                 pin_kbps,
             },

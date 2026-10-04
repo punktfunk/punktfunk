@@ -80,6 +80,9 @@ pub struct DriverConfig {
     /// ([`HOST_CAP2_RAMP`](crate::quic::HOST_CAP2_RAMP)): measure the link
     /// before the first frame instead of bursting beside it.
     pub ramp: bool,
+    /// A diagnostic session ([`EXT_DELIVERY_PROBE_ONLY`](crate::quic::EXT_DELIVERY_PROBE_ONLY)):
+    /// no stream spends the rate, so the ramp climbs to the link's wall, not the stream cap.
+    pub probe_only: bool,
     /// PyroWave Automatic: the pin the Welcome resolved, kbps. `Some` runs
     /// the bring-up ramp as a fit check on that pin — a measured wall lowers
     /// it once, every other outcome leaves it. The controller stays off
@@ -247,6 +250,7 @@ impl Driver {
                     cfg.ramp,
                     cfg.probe_target_kbps,
                     cfg.stream_cap_kbps,
+                    cfg.probe_only,
                     now,
                 ),
             },
@@ -705,6 +709,7 @@ mod tests {
                 probe: true,
                 probe_target_kbps: None,
                 ramp: true,
+                probe_only: false,
                 reads_delivery: true,
                 pin_kbps: None,
             },
@@ -863,6 +868,7 @@ mod tests {
                 probe: true,
                 probe_target_kbps: Some(400_000),
                 ramp: false,
+                probe_only: false,
                 reads_delivery: true,
                 pin_kbps: None,
             },

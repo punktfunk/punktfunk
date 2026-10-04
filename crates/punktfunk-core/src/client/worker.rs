@@ -150,6 +150,14 @@ impl ClientShared {
             end_reject_said: std::sync::OnceLock::new(),
         }
     }
+
+    /// A diagnostic session: the dial asked for probes only, so no video ever comes.
+    pub(crate) fn probe_only(&self) -> bool {
+        self.delivery_ask
+            .lock()
+            .unwrap()
+            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
+    }
 }
 
 pub(crate) struct WorkerArgs {

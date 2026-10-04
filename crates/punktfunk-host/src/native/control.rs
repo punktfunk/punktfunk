@@ -1071,6 +1071,7 @@ mod tests {
                     probe: false,
                     probe_target_kbps: None,
                     ramp: false,
+                    probe_only: false,
                     pin_kbps: None,
                 },
                 base,
