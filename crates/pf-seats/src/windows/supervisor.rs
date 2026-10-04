@@ -2,7 +2,7 @@
 //!
 //! Each runtime has its own stop flag, condition variable, child snapshot, and
 //! worker; there is no process-global seat singleton. Start blocks until the
-//! keeper creates one exact active WTS session, the same-session HDR quality
+//! keeper creates one exact active WTS session, the same-session SDR quality
 //! gate succeeds, and both host ports accept connections. Host crashes restart
 //! with capped exponential delay while the keeper lives. Keeper loss ends the
 //! host, closes the keeper's job, logs off only the recorded session, and
@@ -536,7 +536,6 @@ fn run_quality_gate(
         "spike",
         "--source",
         "virtual",
-        "--hdr",
         "--width",
         "1280",
         "--height",
@@ -566,13 +565,13 @@ fn run_quality_gate(
             quality.terminate();
             return Err(backend_error(
                 "quality_timeout",
-                "same-session virtual HDR quality gate did not finish within 60 seconds",
+                "same-session virtual-display quality gate did not finish within 60 seconds",
             ));
         };
         if code != 0 {
             return Err(backend_error(
                 "quality_failed",
-                format!("same-session virtual HDR quality gate exited with code {code}"),
+                format!("same-session virtual-display quality gate exited with code {code}"),
             ));
         }
         let bytes = temp_root
@@ -582,7 +581,7 @@ fn run_quality_gate(
         if bytes.is_empty() {
             return Err(backend_error(
                 "quality_empty",
-                "same-session virtual HDR quality gate produced no output",
+                "same-session virtual-display quality gate produced no output",
             ));
         }
         Ok(())
