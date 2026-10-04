@@ -1,44 +1,9 @@
-//! Windows batched UDP send: `WSASendMsg` UDP Send Offload (USO). The platform body of
-//! [`super::UdpTransport`]'s `send_gso` override, plus the standalone [`send_uso_all`].
+//! Windows UDP Send Offload (`WSASendMsg` USO) for [`send_uso_all`], and the readable wait.
 
 // `deny(unsafe_code)` carve-out (lib.rs): WSASendMsg USO on caller-owned buffers. Proofs at each site.
 #![allow(unsafe_code)]
 
-use super::{is_transient_io, Segmented, UdpTransport};
-use crate::transport::Transport;
-
-/// Drain the socket into the caller's buffers, one `recv` per datagram. Winsock has no
-/// `recvmmsg`, but this still spares the trait default's 9 KB allocation and copy per
-/// datagram — 20k of them a second at 200 Mbps. Stops at the first empty read.
-#[cfg(target_os = "windows")]
-pub(super) fn recv_batch(
-    t: &UdpTransport,
-    out: &mut [Vec<u8>],
-    lens: &mut [usize],
-) -> std::io::Result<usize> {
-    // WSAEMSGSIZE: the datagram outgrew the buffer and was truncated — larger than any
-    // valid packet, so drop it like the scalar path does.
-    const WSAEMSGSIZE: i32 = 10040;
-    let n_bufs = out.len().min(lens.len());
-    let mut got = 0usize;
-    while got < n_bufs {
-        match t.socket.recv(&mut out[got]) {
-            Ok(n) if n >= out[got].len() => continue,
-            Ok(n) => {
-                lens[got] = n;
-                got += 1;
-            }
-            Err(e) if e.raw_os_error() == Some(WSAEMSGSIZE) => continue,
-            Err(e) if is_transient_io(&e) => break, // drained or stale ICMP
-            Err(e) if got > 0 => {
-                let _ = e; // keep what we have; the next empty poll surfaces it
-                break;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(got)
-}
+use super::Segmented;
 
 /// Process-wide UDP Send Offload. On by default; `PUNKTFUNK_GSO=0` kills it.
 /// Support latches from the first send error, not a `setsockopt` probe — the
@@ -153,7 +118,7 @@ fn send_one_uso(socket: &std::net::UdpSocket, buf: &[u8], seg_size: u16) -> std:
     Ok(())
 }
 
-/// USO batch for a caller-owned connected socket (GameStream video), not [`UdpTransport`].
+/// USO batch for a caller-owned connected socket (GameStream video).
 /// Uniform batches only ([`super::uniform_segment`]), ≤512 segments per `WSASendMsg`.
 /// Returns packets sent that way (`Ok(0)` if USO is off or sizes mix). An unsupported
 /// error latches USO off process-wide; a full buffer returns the count so far.
@@ -171,27 +136,6 @@ pub fn send_uso_all(socket: &std::net::UdpSocket, packets: &[&[u8]]) -> std::io:
         Segmented::Unsupported(n) => {
             uso::disable();
             Ok(n)
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub(super) fn send_gso(t: &UdpTransport, packets: &[&[u8]]) -> std::io::Result<usize> {
-    if packets.is_empty() {
-        return Ok(0);
-    }
-    if !uso::active() {
-        return t.send_batch(packets);
-    }
-    let Some(seg) = super::uniform_segment(packets) else {
-        return t.send_batch(packets);
-    };
-    let send_one = |buf: &[u8], seg| send_one_uso(&t.socket, buf, seg);
-    match super::send_segmented(packets, seg, USO_MAX_SEGMENTS, send_one, uso_unsupported)? {
-        Segmented::Sent(n) => Ok(n),
-        Segmented::Unsupported(n) => {
-            uso::disable();
-            Ok(n + t.send_batch(&packets[n..])?)
         }
     }
 }

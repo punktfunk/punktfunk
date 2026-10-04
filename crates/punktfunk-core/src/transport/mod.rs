@@ -25,11 +25,9 @@ mod udp;
 
 pub use loopback::{loopback_pair, LoopbackTransport};
 pub use qos::{grow_socket_buffers, set_dscp_default, set_media_qos, MediaClass, QosFlow};
-/// Windows-only USO batch send for a caller that owns its connected socket
-/// (GameStream video) rather than going through [`UdpTransport`].
+/// Windows-only USO batch send for a caller that owns its connected socket (GameStream video).
 #[cfg(target_os = "windows")]
 pub use udp::send_uso_all;
-pub use udp::UdpTransport;
 
 /// A datagram transport. `recv` is non-blocking: `Ok(None)` means no packet
 /// is available, so the decode/present thread never blocks here.
@@ -41,9 +39,8 @@ pub trait Transport: Send + Sync {
 
     /// Send a frame's packets in as few syscalls as possible; returns how many
     /// the kernel accepted. The caller counts `packets.len() - sent` as send-buffer
-    /// drops. [`UdpTransport`](super::UdpTransport) uses `sendmmsg`; the default is
-    /// a scalar `send` loop (loopback and non-Linux). A full send buffer stops
-    /// early — same lossy contract as `send`.
+    /// drops. The shared socket batches through quinn-udp; the default is a scalar
+    /// `send` loop. A full send buffer stops early — same lossy contract as `send`.
     fn send_batch(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         let mut sent = 0;
         for p in packets {
@@ -55,24 +52,20 @@ pub trait Transport: Send + Sync {
     }
 
     /// Send equal-size packets via UDP GSO where available: one `sendmsg`, kernel
-    /// splits into `gso_size` datagrams. [`UdpTransport`](super::UdpTransport)
-    /// implements it on Linux (opt-in `PUNKTFUNK_GSO=1`, auto-fallback; see the
-    /// `gso` module). Default is [`send_batch`](Self::send_batch). Same short-count
-    /// contract as `send_batch`.
+    /// splits into `gso_size` datagrams. Default is [`send_batch`](Self::send_batch).
+    /// Same short-count contract as `send_batch`.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         self.send_batch(packets)
     }
 
-    /// Ask for GSO on this transport regardless of `PUNKTFUNK_GSO`. A path
-    /// that refused GSO stays on `sendmmsg`. Default: nothing to switch.
+    /// Turn GSO on or off for [`send_gso`](Self::send_gso). Default: nothing to switch.
     fn set_gso(&self, _on: bool) {}
 
     fn recv(&self) -> std::io::Result<Option<Vec<u8>>>;
 
     /// Receive up to `out.len()` datagrams into caller-owned `out[i]` buffers,
     /// writing each length into `lens[i]`. `0` = none available (non-blocking).
-    /// [`UdpTransport`](super::UdpTransport) uses `recvmmsg`; the default is one
-    /// scalar [`recv`](Self::recv) into `out[0]`.
+    /// The default is one scalar [`recv`](Self::recv) into `out[0]`.
     fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> std::io::Result<usize> {
         if out.is_empty() {
             return Ok(0);

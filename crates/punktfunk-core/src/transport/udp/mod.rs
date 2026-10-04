@@ -1,56 +1,50 @@
-//! Connected UDP datagram transport. Native sockets, no async runtime.
-//!
-//! [`UdpTransport`] implements [`Transport`]: send/recv never block; a full kernel
-//! buffer or a connected-UDP ICMP blip is a lossy drop, never a teardown. Linux and
-//! Android batch with `sendmmsg`/`recvmmsg` (Linux also UDP GSO); Windows uses USO;
-//! Apple/BSD drain into reused buffers. Other targets keep the trait's scalar loop.
-//!
-//! Pin GSO with `PUNKTFUNK_GSO`; DSCP with `PUNKTFUNK_DSCP`. Platform bodies live in
-//! `linux` / `windows` / `apple`.
+//! What the media path still needs from raw UDP: [`wait_readable`] for the shared socket's
+//! reader, which quinn-udp keeps non-blocking, and Windows USO for GameStream video
+//! ([`send_uso_all`]). The shared socket batches through quinn-udp itself.
 
-use super::Transport;
-use crate::packet::MAX_DATAGRAM_BYTES;
-use std::net::UdpSocket;
-
-// Emscripten is `unix` too, but has no `recvmsg_x` and no `libc::sockaddr_nl` — it takes the
-// trait's scalar `recv_batch` instead.
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android", target_family = "wasm"))
-))]
-mod apple;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::send_uso_all;
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android", target_family = "wasm"))
-))]
-#[cfg(feature = "quic")]
-pub(crate) use apple::wait_readable;
-/// Block until `socket` is readable or `timeout` passes; `true` when readable. The shared
-/// socket's reader waits here, since quinn-udp keeps the socket non-blocking.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-#[cfg(feature = "quic")]
-pub(crate) use linux::wait_readable;
 #[cfg(target_os = "windows")]
 #[cfg(feature = "quic")]
 pub(crate) use windows::wait_readable;
 
-/// One past [`MAX_DATAGRAM_BYTES`]. `Config::validate` keeps a well-formed datagram
-/// (header + shard + crypto) inside that bound; a full read is oversized, not truncated.
-const RECV_BUF: usize = MAX_DATAGRAM_BYTES + 1;
+/// Block until `socket` has a datagram to read or `timeout` passes; `true` when readable. An
+/// interrupted wait reads as a timeout: the caller loops anyway.
+#[cfg(all(unix, not(target_family = "wasm"), feature = "quic"))]
+#[allow(unsafe_code)]
+pub(crate) fn wait_readable(
+    socket: &std::net::UdpSocket,
+    timeout: std::time::Duration,
+) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    let mut pfd = libc::pollfd {
+        fd: socket.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ms = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
+    // SAFETY: `pfd` is one initialised pollfd that outlives the call, and its fd stays open
+    // for the call because `socket` is borrowed.
+    let n = unsafe { libc::poll(&mut pfd, 1, ms) };
+    if n < 0 {
+        let e = std::io::Error::last_os_error();
+        return if e.kind() == std::io::ErrorKind::Interrupted {
+            Ok(false)
+        } else {
+            Err(e)
+        };
+    }
+    Ok(n > 0)
+}
 
-/// Lossy drop, not a stream teardown. `WouldBlock` is a full kernel buffer.
-/// Connected-UDP `ConnectionRefused`/`ConnectionReset` are stale ICMP — a gone
-/// peer is the QUIC control plane's timeout, not this socket. `ENOBUFS`,
+/// Lossy drop, not a failed send. `WouldBlock` is a full kernel buffer.
+/// Connected-UDP `ConnectionRefused`/`ConnectionReset` are stale ICMP. `ENOBUFS`,
 /// `WSAENOBUFS` (10055), and the `ENET*`/`EHOST*` family have no stable
 /// `ErrorKind` (Rust maps them to `Uncategorized`), so they are matched as
 /// raw errno below — same contract as `WouldBlock`.
+#[cfg(any(target_os = "windows", test))]
 fn is_transient_io(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::{ConnectionRefused, ConnectionReset, WouldBlock};
     if matches!(e.kind(), WouldBlock | ConnectionRefused | ConnectionReset) {
@@ -88,7 +82,7 @@ fn is_transient_io(e: &std::io::Error) -> bool {
 
 /// The segment size of an offload batch: every packet `seg` bytes but the last, which may
 /// be shorter. `None` for an empty or mixed batch, which goes out as plain datagrams.
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "windows", test))]
 fn uniform_segment(packets: &[&[u8]]) -> Option<usize> {
     let (last, rest) = packets.split_last()?;
     let seg = packets[0].len();
@@ -96,7 +90,7 @@ fn uniform_segment(packets: &[&[u8]]) -> Option<usize> {
 }
 
 /// How a [`send_segmented`] run ended.
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, PartialEq, Eq)]
 enum Segmented {
     /// Packets sent. A transient error ends the run early; the caller owns the rest.
@@ -108,7 +102,7 @@ enum Segmented {
 /// Coalesce a [`uniform_segment`] batch into `max_seg`-segment buffers and hand each to
 /// `send_one` (GSO or USO) with the segment size. `unsupported` names the errors that
 /// mean this path cannot offload; the caller latches that and picks the fallback.
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "windows", test))]
 fn send_segmented(
     packets: &[&[u8]],
     seg: usize,
@@ -133,116 +127,9 @@ fn send_segmented(
     Ok(Segmented::Sent(sent))
 }
 
-pub struct UdpTransport {
-    /// qWAVE flow guard (Windows, opt-in DSCP): declared before `socket` so drop order removes
-    /// the flow membership before the socket closes. Always `None` off-Windows.
-    _qos_flow: Option<super::qos::QosFlow>,
-    socket: UdpSocket,
-    /// GSO asked for by the session (Linux), beside the process-wide env gate.
-    gso: std::sync::atomic::AtomicBool,
-}
-
-impl UdpTransport {
-    pub fn connect(local: &str, peer: &str) -> std::io::Result<Self> {
-        Self::from_socket(UdpSocket::bind(local)?, peer)
-    }
-
-    /// Adopt an already-bound socket.
-    pub fn from_socket(socket: UdpSocket, peer: &str) -> std::io::Result<Self> {
-        socket.connect(peer)?;
-        super::qos::grow_socket_buffers(&socket);
-        // Video class (opt-in via PUNKTFUNK_DSCP). After `connect`: Windows qWAVE
-        // requires a connected socket.
-        let qos_flow = super::qos::set_media_qos(&socket, super::qos::MediaClass::Video);
-        socket.set_nonblocking(true)?;
-        Ok(UdpTransport {
-            _qos_flow: qos_flow,
-            socket,
-            gso: std::sync::atomic::AtomicBool::new(false),
-        })
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn gso_wanted(&self) -> bool {
-        self.gso.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// A clone of the socket while [`Session`](crate::Session) owns the transport.
-    pub fn try_clone_socket(&self) -> std::io::Result<UdpSocket> {
-        self.socket.try_clone()
-    }
-
-    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
-        self.socket.local_addr()
-    }
-}
-
-impl Transport for UdpTransport {
-    fn send(&self, packet: &[u8]) -> std::io::Result<bool> {
-        match self.socket.send(packet) {
-            Ok(_) => Ok(true),
-            // Lossy drop (full tx queue / stale ICMP / path blip); `Ok(false)` is counted.
-            Err(e) if is_transient_io(&e) => Ok(false),
-            Err(e) => Err(e),
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn send_batch(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
-        linux::send_batch(self, packets)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
-        linux::send_gso(self, packets)
-    }
-
-    fn set_gso(&self, on: bool) {
-        self.gso.store(on, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[cfg(target_os = "windows")]
-    fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
-        windows::send_gso(self, packets)
-    }
-
-    fn recv(&self) -> std::io::Result<Option<Vec<u8>>> {
-        let mut buf = vec![0u8; RECV_BUF];
-        match self.socket.recv(&mut buf) {
-            // Full buffer = larger than any valid packet; drop rather than truncate.
-            Ok(n) if n >= RECV_BUF => Ok(None),
-            Ok(n) => {
-                buf.truncate(n);
-                Ok(Some(buf))
-            }
-            Err(e) if is_transient_io(&e) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> std::io::Result<usize> {
-        linux::recv_batch(self, out, lens)
-    }
-
-    #[cfg(all(
-        unix,
-        not(any(target_os = "linux", target_os = "android", target_family = "wasm"))
-    ))]
-    fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> std::io::Result<usize> {
-        apple::recv_batch(self, out, lens)
-    }
-
-    #[cfg(target_os = "windows")]
-    fn recv_batch(&self, out: &mut [Vec<u8>], lens: &mut [usize]) -> std::io::Result<usize> {
-        windows::recv_batch(self, out, lens)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::Transport;
 
     #[test]
     fn transient_io_covers_connected_udp_blips() {
@@ -351,90 +238,5 @@ mod tests {
                 "WSAEACCES must stay fatal"
             );
         }
-    }
-
-    /// 100 × 200 B = 20 KB, under the loopback socket buffer, so every packet must arrive.
-    #[test]
-    fn send_batch_delivers_over_loopback() {
-        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        rx.set_read_timeout(Some(std::time::Duration::from_millis(500)))
-            .unwrap();
-        let rx_addr = rx.local_addr().unwrap().to_string();
-        let tx = UdpTransport::connect("127.0.0.1:0", &rx_addr).unwrap();
-
-        const N: u32 = 100;
-        let payloads: Vec<Vec<u8>> = (0..N)
-            .map(|i| {
-                let mut v = vec![0u8; 200];
-                v[0..4].copy_from_slice(&i.to_le_bytes());
-                v
-            })
-            .collect();
-        let refs: Vec<&[u8]> = payloads.iter().map(|p| p.as_slice()).collect();
-        let sent = tx.send_batch(&refs).unwrap();
-        assert_eq!(
-            sent, N as usize,
-            "send_batch should hand all packets to the kernel"
-        );
-
-        let mut seen = std::collections::HashSet::new();
-        let mut buf = [0u8; 2048];
-        while seen.len() < N as usize {
-            match rx.recv(&mut buf) {
-                Ok(n) => {
-                    assert_eq!(
-                        n, 200,
-                        "datagram boundaries preserved (one packet per recv)"
-                    );
-                    seen.insert(u32::from_le_bytes(buf[0..4].try_into().unwrap()));
-                }
-                Err(_) => break, // timeout: let the assert report the shortfall
-            }
-        }
-        assert_eq!(
-            seen.len(),
-            N as usize,
-            "every batched packet should arrive over loopback"
-        );
-    }
-
-    #[test]
-    fn recv_batch_drains_over_loopback() {
-        // Transport under test is the receiver; a raw socket sends so the connected filter accepts it.
-        let tx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let tx_addr = tx.local_addr().unwrap().to_string();
-        let rx = UdpTransport::connect("127.0.0.1:0", &tx_addr).unwrap();
-        let rx_addr = rx.local_addr().unwrap();
-
-        const N: u32 = 50;
-        for i in 0..N {
-            let mut p = vec![0u8; 300];
-            p[0..4].copy_from_slice(&i.to_le_bytes());
-            tx.send_to(&p, rx_addr).unwrap();
-        }
-
-        let mut bufs: Vec<Vec<u8>> = (0..16).map(|_| vec![0u8; RECV_BUF]).collect();
-        let mut lens = vec![0usize; 16];
-        let mut seen = std::collections::HashSet::new();
-        // A few drains absorb scheduling jitter; stop once all N are in or we go dry.
-        for _ in 0..50 {
-            let n = rx.recv_batch(&mut bufs, &mut lens).unwrap();
-            if n == 0 {
-                if seen.len() == N as usize {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                continue;
-            }
-            for i in 0..n {
-                assert_eq!(lens[i], 300, "recvmmsg reports the datagram length");
-                seen.insert(u32::from_le_bytes(bufs[i][0..4].try_into().unwrap()));
-            }
-        }
-        assert_eq!(
-            seen.len(),
-            N as usize,
-            "every datagram should be drained via recv_batch"
-        );
     }
 }
