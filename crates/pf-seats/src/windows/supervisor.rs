@@ -4,8 +4,9 @@
 //! worker; there is no process-global seat singleton. Start blocks until the
 //! keeper creates one exact active WTS session, the same-session HDR quality
 //! gate succeeds, and both host ports accept connections. Host crashes restart
-//! with capped exponential delay while the keeper lives. Keeper loss closes the
-//! whole job, logs off only the recorded session, and retries without spinning.
+//! with capped exponential delay while the keeper lives. Keeper loss ends the
+//! host, closes the keeper's job, logs off only the recorded session, and
+//! retries without spinning.
 //! Explicit stop is idempotent and waits for that teardown to finish.
 
 use crate::bootstrap::RdpBootstrap;
@@ -440,7 +441,6 @@ fn run_cycle(
         if !*quality_done {
             run_quality_gate(
                 runtime,
-                &job,
                 &keeper,
                 session.id,
                 host_path,
@@ -452,7 +452,7 @@ fn run_cycle(
             *quality_done = true;
         }
 
-        let mut host = spawn_host(&job, session.id, host_path, workdir, &environment)?;
+        let mut host = spawn_host(session.id, host_path, workdir, &environment)?;
         runtime.update(|snapshot| snapshot.host_pid = Some(host.pid()));
         wait_host_ready(runtime, &keeper, &host, seat)?;
         runtime.update(|snapshot| {
@@ -494,7 +494,7 @@ fn run_cycle(
                     break;
                 }
                 host_delay = host_delay.saturating_mul(2).min(MAX_RESTART_DELAY);
-                host = spawn_host(&job, session.id, host_path, workdir, &environment)?;
+                host = spawn_host(session.id, host_path, workdir, &environment)?;
                 runtime.update(|snapshot| snapshot.host_pid = Some(host.pid()));
                 wait_host_ready(runtime, &keeper, &host, seat)?;
                 runtime.update(|snapshot| snapshot.status = RuntimeStatus::running());
@@ -511,11 +511,10 @@ fn run_cycle(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "the gate binds one process to one exact seat session and job"
+    reason = "the gate binds one process to one exact seat session"
 )]
 fn run_quality_gate(
     runtime: &Runtime,
-    job: &Job,
     keeper: &ChildProcess,
     session_id: u32,
     host_path: &Path,
@@ -558,14 +557,8 @@ fn run_quality_gate(
     .chain(std::iter::once(output.as_os_str().to_owned()))
     .collect::<Vec<_>>();
     let result = (|| {
-        let quality = process::spawn_in_session(
-            job,
-            session_id,
-            host_path,
-            &arguments,
-            environment,
-            workdir,
-        )?;
+        let quality =
+            process::spawn_in_session(session_id, host_path, &arguments, environment, workdir)?;
         let code = quality.wait(QUALITY_TIMEOUT, || {
             runtime.stop.load(Ordering::Acquire) || keeper.exit_code().ok().flatten().is_some()
         })?;
@@ -601,14 +594,12 @@ fn run_quality_gate(
 }
 
 fn spawn_host(
-    job: &Job,
     session_id: u32,
     host_path: &Path,
     workdir: &Path,
     environment: &[u16],
 ) -> WinResult<ChildProcess> {
     process::spawn_in_session(
-        job,
         session_id,
         host_path,
         &[OsString::from("serve")],

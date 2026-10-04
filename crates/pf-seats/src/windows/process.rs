@@ -1,8 +1,9 @@
 //! Suspended launch and per-seat job containment.
 //!
-//! Every seat cycle owns one unnamed `KILL_ON_JOB_CLOSE` job. Keeper, quality,
-//! and persistent host processes start suspended, enter that job, and only then
-//! resume; assignment failure terminates the still-suspended process. The RDP
+//! Every seat cycle owns one unnamed `KILL_ON_JOB_CLOSE` job for its keeper,
+//! which starts suspended, enters the job and only then resumes. The quality gate
+//! and host run in the seat's session, which a session-0 job cannot hold, so they
+//! end when their [`ChildProcess`] drops and when the cycle logs the session off. The RDP
 //! bootstrap travels through one inherited anonymous stdin pipe, never argv or
 //! environment. Session children use a duplicated LocalSystem primary token
 //! retargeted with `TokenSessionId` and the `winsta0\default` desktop. Host
@@ -78,6 +79,16 @@ impl Job {
 pub(super) struct ChildProcess {
     process: OwnedHandle,
     pid: u32,
+    /// Outside any job: dropping the handle terminates the process.
+    kill_on_drop: bool,
+}
+
+impl Drop for ChildProcess {
+    fn drop(&mut self) {
+        if self.kill_on_drop {
+            self.terminate();
+        }
+    }
 }
 
 impl ChildProcess {
@@ -259,11 +270,13 @@ fn finish_keeper_spawn(
     Ok(ChildProcess {
         process,
         pid: info.dwProcessId,
+        kill_on_drop: false,
     })
 }
 
+/// Start `executable` in session `session_id` as LocalSystem. It runs outside the cycle's job,
+/// which lives in session 0; the returned handle terminates it on drop.
 pub(super) fn spawn_in_session(
-    job: &Job,
     session_id: u32,
     executable: &Path,
     arguments: &[OsString],
@@ -302,21 +315,14 @@ pub(super) fn spawn_in_session(
         )
     }
     .map_err(|error| io_error("process_spawn", "CreateProcessAsUserW failed", error))?;
-    finish_suspended_spawn(job, info)
+    finish_suspended_spawn(info)
 }
 
-fn finish_suspended_spawn(job: &Job, info: PROCESS_INFORMATION) -> WinResult<ChildProcess> {
+fn finish_suspended_spawn(info: PROCESS_INFORMATION) -> WinResult<ChildProcess> {
     // SAFETY: successful process creation returned two distinct owned handles; transfer each once.
     let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess.0) };
     // SAFETY: this is the distinct initial-thread handle and is transferred once.
     let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread.0) };
-    // SAFETY: job and suspended process handles are live; assignment completes before resume.
-    let assigned = unsafe { AssignProcessToJobObject(job.raw(), HANDLE(process.as_raw_handle())) };
-    if let Err(error) = assigned {
-        // SAFETY: process is still suspended and its handle remains live.
-        let _ = unsafe { TerminateProcess(HANDLE(process.as_raw_handle()), 1) };
-        return Err(io_error("job_assign", "assign child to seat job", error));
-    }
     // SAFETY: the initial thread is live and suspended exactly once by CREATE_SUSPENDED.
     if unsafe { ResumeThread(HANDLE(thread.as_raw_handle())) } == u32::MAX {
         // SAFETY: process handle remains live and the process must not escape suspended.
@@ -331,6 +337,7 @@ fn finish_suspended_spawn(job: &Job, info: PROCESS_INFORMATION) -> WinResult<Chi
     Ok(ChildProcess {
         process,
         pid: info.dwProcessId,
+        kill_on_drop: true,
     })
 }
 

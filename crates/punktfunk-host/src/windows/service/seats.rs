@@ -54,10 +54,17 @@ impl SeatsSlot {
     }
 }
 
-/// Autostart seats first, then the pipe until the slot stops.
+/// Autostart seats first, then the pipe until the slot stops. A seat that did not start is
+/// logged here: the ledger records why, and nothing else reports it.
 fn serve(service: Arc<SeatService<WindowsBackend>>, stop: &AtomicBool) {
     if let Err(error) = service.reconcile_startup() {
         tracing::warn!(code = ?error.code, "seat autostart: {}", error.message);
+    }
+    for seat in service.ledger().seats {
+        if seat.runtime.state == pf_seats::RuntimeState::Failed {
+            let why = seat.runtime.detail.as_deref().unwrap_or("no detail");
+            tracing::warn!(seat = %seat.id, name = %seat.name, "seat did not start: {why}");
+        }
     }
     if stop.load(Ordering::SeqCst) {
         return;
