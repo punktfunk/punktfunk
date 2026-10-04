@@ -724,6 +724,10 @@ pub mod gamepad;
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/gamepad_raii.rs"]
 mod gamepad_raii;
+/// `vmouse-spike --selftest`: checks the device's input reads as hardware.
+#[cfg(target_os = "windows")]
+#[path = "inject/windows/hid_selftest.rs"]
+pub mod hid_selftest;
 /// HORIPAD for Steam codec. Not cfg-gated, like [`eightbitdo_proto`].
 #[path = "inject/proto/hori_proto.rs"]
 pub mod hori_proto;
@@ -735,9 +739,9 @@ pub mod hori_steam;
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/hori_windows.rs"]
 pub mod hori_windows;
-/// Resident virtual HID mouse via pf-mouse UMDF. Keeps `SM_MOUSEPRESENT` true on headless
-/// hosts so DWM composites a cursor into the IDD frame — `SendInput` alone moves an
-/// invisible pointer with no physical mouse.
+/// Resident virtual HID mouse + keyboard via pf-mouse UMDF. Keeps `SM_MOUSEPRESENT` true on
+/// headless hosts so DWM composites a cursor into the IDD frame, and carries the console
+/// host's mouse and keyboard input as hardware reports.
 #[cfg(target_os = "windows")]
 #[path = "inject/windows/mouse_windows.rs"]
 pub mod mouse_windows;

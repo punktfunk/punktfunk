@@ -17,7 +17,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetSystemMetrics, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 /// `(x, y, w, h)` in desktop pixels (`source_desktop_rect` order).
@@ -130,6 +131,27 @@ fn px_to_abs((vx, vy, vw, vh): Rect, (px, py): (i32, i32)) -> (i32, i32) {
     (axis(px - vx, vw), axis(py - vy, vh))
 }
 
+/// Desktop pixel as the absolute HID collection's `0..=32767`, or `None` off the primary
+/// monitor: mouhid maps an absolute HID pointer onto the primary monitor only.
+pub(crate) fn primary_hid_abs(px: (i32, i32)) -> Option<(u16, u16)> {
+    // SAFETY: as `virtual_desktop_rect` — by-value metric indices, no pointers.
+    let size = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    px_to_hid_abs(size, px)
+}
+
+/// Aims at the pixel's centre. win32k lands on `L * w / 32768` (floor), give or take mouhid's
+/// rescale to 0..65535; the centre absorbs both up to 16K-wide monitors.
+fn px_to_hid_abs((w, h): (i32, i32), (px, py): (i32, i32)) -> Option<(u16, u16)> {
+    let axis = |p: i32, n: i32| {
+        if !(0..n).contains(&p) {
+            return None;
+        }
+        let (p, n) = (i64::from(p), i64::from(n));
+        Some(((2 * p + 1) * 32768 / (2 * n)).min(32767) as u16)
+    };
+    Some((axis(px, w)?, axis(py, h)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +199,18 @@ mod tests {
             let (_, ay) = px_to_abs(v, (0, h - 1));
             assert_eq!((i64::from(ay) * i64::from(h) / 65536) as i32, h - 1);
         }
+        // The absolute HID collection lands on every pixel of the primary monitor, under
+        // win32k's floor and under mouhid's rescale to 0..65535 first.
+        for w in [7, 1366, 1920, 3440, 3840, 7680, 15360] {
+            for px in 0..w {
+                let (l, _) = px_to_hid_abs((w, 1), (px, 0)).unwrap();
+                let (l, w64) = (i64::from(l), i64::from(w));
+                assert_eq!(l * w64 / 32768, i64::from(px), "{w}: {px}");
+                assert_eq!(l * 65535 / 32767 * w64 / 65536, i64::from(px), "{w}: {px}");
+            }
+        }
+        assert_eq!(px_to_hid_abs((1920, 1080), (1920, 0)), None);
+        assert_eq!(px_to_hid_abs((1920, 1080), (-1, 0)), None);
         // Negative-origin desktops still normalize from 0.
         let v = (-2560, 0, 4480, 1440);
         assert_eq!(px_to_abs(v, (-2560, 0)), (0, 0));

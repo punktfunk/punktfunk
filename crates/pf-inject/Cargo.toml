@@ -76,8 +76,12 @@ windows = { version = "0.62", features = [
     # The xinputhid service probe: a filter service PnP cannot resolve kills the devnode.
     "Win32_System_Registry",
     "Win32_System_IO",
+    # The HID selftest's hidden window and low-level hooks.
+    "Win32_System_LibraryLoader",
     "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
+    # Raw input, for the HID selftest's recorder.
+    "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
     # Synthetic pointer devices (PT_PEN / PT_TOUCH) — the pen/touch injectors. The device
     # create/destroy + POINTER_TYPE_INFO live under Controls in this metadata layout;

@@ -38,8 +38,9 @@ comes back.
    desktop clients).
 2. `punktfunk-core` encodes them as input events and sends them as QUIC datagrams.
 3. The host hands them to `pf-inject`. On Linux that is libei, KWin fake input or the wlroots
-   virtual pointer and keyboard, plus virtual pads over uhid or USB/IP. On Windows it is `SendInput`
-   plus the UMDF gamepad and mouse drivers.
+   virtual pointer and keyboard, plus virtual pads over uhid or USB/IP. On Windows mouse and keyboard
+   leave as reports from the UMDF HID mouse driver, with `SendInput` for text and as the fallback,
+   plus the UMDF gamepad drivers.
 4. Rumble, lights and other HID output go back to the client on the same session.
 
 ## Two protocols

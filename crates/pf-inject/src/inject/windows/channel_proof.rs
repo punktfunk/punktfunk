@@ -252,6 +252,37 @@ fn ask_hid_path(path: &str, expect_pad_index: u32) -> Result<u32> {
         .map_err(|why| anyhow!("{why}"))
 }
 
+/// Device path of `instance_id`'s HID collection with this top-level usage. `None` until
+/// hidclass has published it.
+pub(super) fn hid_collection_path(
+    instance_id: &str,
+    usage_page: u16,
+    usage: u16,
+) -> Option<String> {
+    for child in child_device_ids(instance_id).ok()? {
+        for path in interface_paths(&GUID_DEVINTERFACE_HID, &child).unwrap_or_default() {
+            let Ok(handle) = open_device(&path) else {
+                continue;
+            };
+            let mut pp = PHIDP_PREPARSED_DATA::default();
+            // SAFETY: `handle` is the live HID interface handle; `pp` receives an owned
+            // preparsed-data handle.
+            if !unsafe { HidD_GetPreparsedData(HANDLE(handle.as_raw_handle()), &mut pp) } {
+                continue;
+            }
+            let mut caps = HIDP_CAPS::default();
+            // SAFETY: `pp` is the handle just obtained (freed below); `caps` is a valid out-param.
+            let st = unsafe { HidP_GetCaps(pp, &mut caps) };
+            // SAFETY: `pp` came from `HidD_GetPreparsedData` and is not used after this.
+            let _ = unsafe { HidD_FreePreparsedData(pp) };
+            if st.0 >= 0 && (caps.UsagePage, caps.Usage) == (usage_page, usage) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 /// VID/PID the driver reports on `instance_id`'s HID collection (`HidD_GetAttributes`): what SDL,
 /// Steam and Windows read. `None` until hidclass has published the collection.
 pub(super) fn hid_vid_pid(instance_id: &str) -> Option<(u16, u16)> {
