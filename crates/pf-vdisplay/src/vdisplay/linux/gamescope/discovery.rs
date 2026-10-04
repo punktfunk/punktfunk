@@ -324,55 +324,82 @@ fn in_game_mode_unit(cgroup: &str) -> bool {
             .any(|seg| seg.starts_with("gamescope-session-plus@") && seg.ends_with(".service"))
 }
 
+/// One PipeWire node from `pw-dump`, with the pid of the process that owns it.
+#[derive(Debug, PartialEq, Eq)]
+struct DumpNode {
+    id: u32,
+    name: String,
+    class: String,
+    pid: Option<u32>,
+}
+
+/// gamescope's nodes carry no pid of their own: it sits on the node's client (`client.id`),
+/// where `pipewire.sec.pid` is the kernel's socket peer and wins over the self-reported one.
+fn dump_nodes(objs: &[serde_json::Value]) -> Vec<DumpNode> {
+    let props = |o: &serde_json::Value| o.get("info").and_then(|i| i.get("props")).cloned();
+    let typed = |o: &serde_json::Value, t: &str| o.get("type").and_then(|v| v.as_str()) == Some(t);
+    // PipeWire writes ids and pids as a string or an int, depending on version.
+    let num = |p: &serde_json::Value, key: &str| -> Option<u32> {
+        let v = p.get(key)?;
+        let n = v.as_u64().or_else(|| v.as_str()?.parse().ok())?;
+        u32::try_from(n).ok().filter(|n| *n > 0)
+    };
+    let text = |p: &serde_json::Value, key: &str| -> String {
+        p.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let client_pid = |client: u32| -> Option<u32> {
+        let o = objs.iter().find(|o| {
+            typed(o, "PipeWire:Interface:Client")
+                && o.get("id").and_then(|i| i.as_u64()) == Some(u64::from(client))
+        })?;
+        let p = props(o)?;
+        num(&p, "pipewire.sec.pid").or_else(|| num(&p, "application.process.id"))
+    };
+    objs.iter()
+        .filter(|o| typed(o, "PipeWire:Interface:Node"))
+        .filter_map(|o| {
+            let id = u32::try_from(o.get("id")?.as_u64()?).ok()?;
+            let p = props(o).unwrap_or_default();
+            let pid = num(&p, "application.process.id")
+                .or_else(|| num(&p, "client.id").and_then(client_pid));
+            Some(DumpNode {
+                id,
+                name: text(&p, "node.name"),
+                class: text(&p, "media.class"),
+                pid,
+            })
+        })
+        .collect()
+}
+
 /// `node.name=gamescope` is on the adapter and the inner stream; only `Video/Source` is capturable.
 /// Bare name match is the fallback for older gamescope that omits `media.class`.
 pub(super) fn find_gamescope_node(scope: Scope<'_>) -> Option<u32> {
     let out = crate::proc::output_within(&mut Command::new("pw-dump"), PW_DUMP_BUDGET).ok()?;
     let dump: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let nodes = dump.as_array()?;
-    let node_props = |obj: &serde_json::Value| -> Option<(u32, String, String, Option<u32>)> {
-        if obj.get("type").and_then(|t| t.as_str()) != Some("PipeWire:Interface:Node") {
-            return None;
-        }
-        let id = obj.get("id").and_then(|i| i.as_u64())? as u32;
-        let props = obj.get("info").and_then(|i| i.get("props"));
-        let name = props
-            .and_then(|p| p.get("node.name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("")
-            .to_string();
-        let class = props
-            .and_then(|p| p.get("media.class"))
-            .and_then(|n| n.as_str())
-            .unwrap_or("")
-            .to_string();
-        // PipeWire records the owning pid as a string or an int, depending on version.
-        let pid = props
-            .and_then(|p| p.get("application.process.id"))
-            .and_then(|v| {
-                v.as_u64()
-                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-                    .map(|n| n as u32)
-            });
-        Some((id, name, class, pid))
-    };
-    let best = |pick: &dyn Fn(&str, &str) -> bool| -> Option<u32> {
+    best_node(&dump_nodes(dump.as_array()?), scope)
+}
+
+/// The capturable gamescope node `scope` ranks highest; the first listed wins a tie.
+fn best_node(nodes: &[DumpNode], scope: Scope<'_>) -> Option<u32> {
+    let best = |pick: &dyn Fn(&DumpNode) -> bool| -> Option<u32> {
         nodes
             .iter()
-            .filter_map(node_props)
-            .filter(|(_, name, class, _)| pick(name, class))
-            .filter_map(|(id, _, _, pid)| Some((scope.rank(pid)?, id)))
-            // First of the best rank: `max_by_key` keeps the last of equals.
+            .filter(|n| pick(n))
+            .filter_map(|n| Some((scope.rank(n.pid)?, n.id)))
             .fold(None, |acc: Option<(u8, u32)>, (r, id)| match acc {
                 Some((best, _)) if best >= r => acc,
                 _ => Some((r, id)),
             })
             .map(|(_, id)| id)
     };
-    if let Some(id) = best(&|name, class| class == "Video/Source" && name.contains("gamescope")) {
+    if let Some(id) = best(&|n| n.class == "Video/Source" && n.name.contains("gamescope")) {
         return Some(id);
     }
-    let id = best(&|name, _| name == "gamescope")?;
+    let id = best(&|n| n.name == "gamescope")?;
     tracing::warn!(
         node_id = id,
         "gamescope node has no media.class=Video/Source tag — capturing it anyway"
@@ -896,8 +923,8 @@ mod live_probe {
 #[cfg(test)]
 mod tests {
     use super::{
-        in_game_mode_unit, listener_pid, parse_patch_level, parse_version, prepend_path_dir,
-        steam_appid_from_launch, Scope, MIN_GAMESCOPE, MIN_GAMESCOPE_OVERLAY,
+        best_node, dump_nodes, in_game_mode_unit, listener_pid, parse_patch_level, parse_version,
+        prepend_path_dir, steam_appid_from_launch, Scope, MIN_GAMESCOPE, MIN_GAMESCOPE_OVERLAY,
     };
 
     const SLICE: &str = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/";
@@ -931,6 +958,43 @@ mod tests {
         // An owner pid nobody reported ranks below every matched one.
         assert_eq!(Scope::Box.rank(None), Some(0));
         assert_eq!(Scope::Unit("no-such-unit-here").rank(None), Some(0));
+    }
+
+    /// A seat's node listed first, the box's second; only the clients carry pids.
+    fn seat_then_box(seat_pid: u32, box_pid: u32) -> Vec<serde_json::Value> {
+        let node = |id: u32, client: u32| {
+            serde_json::json!({"id": id, "type": "PipeWire:Interface:Node", "info": {"props": {
+                "node.name": "gamescope", "media.class": "Video/Source", "client.id": client}}})
+        };
+        let client = |id: u32, pid: u32| {
+            serde_json::json!({"id": id, "type": "PipeWire:Interface:Client", "info": {"props": {
+                "pipewire.sec.pid": pid, "application.process.id": "1"}}})
+        };
+        vec![
+            node(78, 40),
+            node(91, 41),
+            client(40, seat_pid),
+            client(41, box_pid),
+        ]
+    }
+
+    #[test]
+    fn a_node_takes_its_pid_from_its_client() {
+        let nodes = dump_nodes(&seat_then_box(4242, 777));
+        assert_eq!(nodes.len(), 2);
+        assert_eq!((nodes[0].id, nodes[0].pid), (78, Some(4242)));
+        assert_eq!((nodes[1].id, nodes[1].pid), (91, Some(777)));
+    }
+
+    #[test]
+    fn game_mode_skips_a_seat_node_listed_first() {
+        // pid 1 is outside this test's tree; the seat's gamescope is inside it.
+        let nodes = dump_nodes(&seat_then_box(std::process::id(), 1));
+        assert_eq!(best_node(&nodes, Scope::Box), Some(91));
+        assert_eq!(
+            best_node(&nodes, Scope::Spawned(std::process::id())),
+            Some(78)
+        );
     }
 
     #[test]
