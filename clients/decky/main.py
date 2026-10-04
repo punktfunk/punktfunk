@@ -393,8 +393,8 @@ def _native_client() -> str | None:
     return None
 
 
-# The one architecture the flatpak client is built for.
-_FLATPAK_ARCH = "x86_64"
+# The client flatpak ships x86_64 and aarch64; flatpak names arches the way uname does.
+_FLATPAK_ARCH = os.uname().machine
 
 
 def _flatpak_ref() -> dict | None:
