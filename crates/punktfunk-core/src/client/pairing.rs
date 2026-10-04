@@ -38,10 +38,17 @@ impl NativeClient {
             // Never close here; the caller does, then flushes, so an early
             // return still lets the host see CONNECTION_CLOSE.
             let exchange = |conn: quinn::Connection, host_fp: [u8; 32]| async move {
-                let (mut send, mut recv) = conn
+                use crate::quic::v2::{io as v2io, registry, translate};
+                let (mut send, recv) = conn
                     .open_bi()
                     .await
                     .map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
+                // The control stream, its messages translated at its edge.
+                v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
+                let edge = translate::TxEdge::client(translate::ClientExtra::default());
+                let mut send =
+                    v2io::V2Writer::new(send, std::sync::Arc::new(std::sync::Mutex::new(edge)));
+                let mut recv = v2io::V2Reader::new(recv, Default::default());
                 // SPAKE2 as A; bind our fingerprint and the TOFU-observed host cert.
                 let (pake, spake_a) = pake::start(true, &pin, &client_fp, &host_fp);
                 // No `device_key`: this client's identity is its certificate, which the
@@ -79,7 +86,12 @@ impl NativeClient {
                     .connect(remote, "punktfunk")
                     .map_err(|_| PunktfunkError::InvalidArg("connect"))?
                     .await
-                    .map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
+                    .map_err(|e| match endpoint::refused_alpn(&e) {
+                        true => PunktfunkError::Rejected(
+                            crate::reject::RejectReason::WireVersionMismatch,
+                        ),
+                        false => PunktfunkError::Io(std::io::Error::other(e.to_string())),
+                    })?;
                 let host_fp = observed.lock().unwrap().ok_or(PunktfunkError::Crypto)?;
                 let outcome = match exchange(conn.clone(), host_fp).await {
                     // Prefer a typed host close (not armed / wrong device / rate-limit)

@@ -29,7 +29,7 @@ pub use qos::{grow_socket_buffers, set_dscp_default, set_media_qos, MediaClass, 
 /// (GameStream video) rather than going through [`UdpTransport`].
 #[cfg(target_os = "windows")]
 pub use udp::send_uso_all;
-pub use udp::{spawn_data_punch, UdpTransport, PUNCH_MAGIC};
+pub use udp::UdpTransport;
 
 /// A datagram transport. `recv` is non-blocking: `Ok(None)` means no packet
 /// is available, so the decode/present thread never blocks here.

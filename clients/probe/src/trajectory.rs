@@ -292,7 +292,6 @@ pub fn run(
         pinned = rate_pinned(bitrate_kbps, client.codec),
         codec = client.codec,
         mode = ?client.mode(),
-        wire = client.wire(),
         "trajectory session open"
     );
 

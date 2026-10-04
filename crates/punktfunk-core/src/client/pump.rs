@@ -13,7 +13,6 @@ use crate::quic::{
     ResyncGuard, ResyncStep, SetBitrate, Start, Welcome,
 };
 use crate::session::Session;
-use crate::transport::UdpTransport;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -28,36 +27,28 @@ mod rx_gap;
 /// reason it carried (`None` from a host that does not name its limits).
 type AckQueue = std::collections::VecDeque<(u32, Option<crate::quic::AckReason>)>;
 
-/// The control stream's write half, whichever wire carries it.
+/// The control stream's write half: session messages in, translated at its edge.
 pub(super) type CtlSend = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
-/// The control stream's read half, whichever wire carries it.
+/// The control stream's read half.
 pub(super) type CtlRecv = io::MsgReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
 
-/// The client's connection. On `punktfunk/2` a datagram carries its kind; this adds and strips
-/// it, so every task keeps sending and reading the datagrams it always did. Everything else is
-/// the quinn connection underneath.
+/// The client's connection. A datagram carries its kind; this adds and strips it, so every
+/// task keeps sending and reading the datagrams it always did. Everything else is the quinn
+/// connection underneath.
 #[derive(Clone)]
 pub(super) struct ClientConn {
     conn: quinn::Connection,
-    v2: bool,
 }
 
 impl ClientConn {
-    pub(super) fn new(conn: quinn::Connection, v2: bool) -> ClientConn {
-        ClientConn { conn, v2 }
-    }
-
-    pub(super) fn is_v2(&self) -> bool {
-        self.v2
+    pub(super) fn new(conn: quinn::Connection) -> ClientConn {
+        ClientConn { conn }
     }
 
     pub(super) fn send_datagram(
         &self,
         data: Vec<u8>,
     ) -> std::result::Result<(), quinn::SendDatagramError> {
-        if !self.v2 {
-            return self.conn.send_datagram(data.into());
-        }
         // Every datagram the client sends has a kind; one without is dropped here.
         match crate::quic::v2::dgram::wrap(&data) {
             Some(w) => self.conn.send_datagram(w.into()),
@@ -71,9 +62,6 @@ impl ClientConn {
     ) -> std::result::Result<Vec<u8>, quinn::ConnectionError> {
         loop {
             let b = self.conn.read_datagram().await?;
-            if !self.v2 {
-                return Ok(b.to_vec());
-            }
             use crate::quic::v2::dgram::{decode, Dgram};
             if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
                 return Ok(p.to_vec());
@@ -86,13 +74,6 @@ impl std::ops::Deref for ClientConn {
     type Target = quinn::Connection;
     fn deref(&self) -> &quinn::Connection {
         &self.conn
-    }
-}
-
-/// `punktfunk/1`: datagrams as they are.
-impl From<quinn::Connection> for ClientConn {
-    fn from(conn: quinn::Connection) -> ClientConn {
-        ClientConn::new(conn, false)
     }
 }
 
@@ -207,9 +188,6 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Normalized scroll only toward HOST_CAP2_SCROLL; an older host gets each
     // event converted once at the outbound seam instead.
     let normalized_scroll = negotiated.host_caps2 & crate::quic::HOST_CAP2_SCROLL != 0;
-    shared
-        .wire
-        .store(if conn.is_v2() { 2 } else { 1 }, Ordering::Relaxed);
     let _ = ready_tx.send(Ok(negotiated));
 
     // Snapshots only toward GAMEPAD_STATE. Flags 8/9 only toward PAD_AUDIO — an

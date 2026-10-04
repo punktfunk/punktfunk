@@ -1264,11 +1264,6 @@
 #define PUNKTFUNK_PEN_TOUCH_TIMEOUT_MS 200
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
-// Other stream kinds mux under [`STREAM_MAGIC`] with a different byte.
-#define PUNKTFUNK_CLIP_STREAM_KIND_FETCH 1
-#endif
-
-#if defined(PUNKTFUNK_FEATURE_QUIC)
 // Stream-reset / stop code for a cancelled fetch. Distinct from connection close
 // codes (`0x51`/`0x52` quit/exit, `0x42` reject, `0x60`–`0x67` pairing) so a
 // captured code is unambiguous even though QUIC already namespaces them.

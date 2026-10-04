@@ -42,7 +42,7 @@ mod wire;
 /// cbindgen:ignore
 pub mod v2;
 
-/// quinn endpoint constructors: host identity ([`endpoint::server_with_identity`]),
+/// quinn endpoint constructors: the host's shared socket ([`endpoint::server_shared`]),
 /// client pin / TOFU ([`endpoint::client_pinned`]).
 #[cfg(feature = "quic")]
 pub mod endpoint;

@@ -28,8 +28,6 @@ pub(crate) struct ClientShared {
     /// [`NativeClient::disconnect_quit`] → [`crate::quic::QUIT_CLOSE_CODE`] (skip keep-alive
     /// linger). A plain drop leaves this false → close code 0.
     pub(crate) quit: AtomicBool,
-    /// The wire the host answered: `1` or `2`. Set before the embedder can read it.
-    pub(crate) wire: AtomicU8,
     /// Welcome mode, then every accepted switch the control task applies.
     pub(crate) mode: Mutex<Mode>,
     pub(crate) probe: Mutex<ProbeState>,
@@ -114,7 +112,6 @@ impl ClientShared {
             shutdown: Arc::new(AtomicBool::new(false)),
             end_reason: AtomicU8::new(PunktfunkEndReason::None as u8),
             quit: AtomicBool::new(false),
-            wire: AtomicU8::new(1),
             mode: Mutex::new(mode),
             probe: Mutex::default(),
             frames_dropped: AtomicU64::new(0),

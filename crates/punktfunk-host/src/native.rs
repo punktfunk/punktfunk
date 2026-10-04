@@ -3707,9 +3707,9 @@ mod tests {
         host.join().unwrap().unwrap();
     }
 
-    /// A client that offers `punktfunk/2` streams over it: the handshake crosses the translated
-    /// control stream, the media arrives on the connection's own socket under exporter keys,
-    /// and every frame is the host's byte for byte. Each frame's `HostTiming` names it by the
+    /// A client streams over `punktfunk/2`: the handshake crosses the translated control stream,
+    /// the media arrives on the connection's own socket under exporter keys, and every frame is
+    /// the host's byte for byte. Each frame's `HostTiming` names it by the
     /// session-clock pts it arrived with. Control round trips keep working.
     #[test]
     fn a_punktfunk_2_session_streams_end_to_end() {
@@ -3718,7 +3718,6 @@ mod tests {
         use punktfunk_core::quic::DeliveryAsk;
         let (client, host) = synthetic_session(19791, Punktfunk1Source::Synthetic, |p| {
             punktfunk_core::client::ConnectParams {
-                offer_v2: true,
                 delivery: Some(DeliveryAsk {
                     profile: 1,
                     flags: 0,
@@ -3738,7 +3737,6 @@ mod tests {
             }
         }
         assert_eq!(got, 60, "frames cross the v2 media path");
-        assert_eq!(client.wire(), 2, "the host answered punktfunk/2");
         let mut named = 0;
         while let Ok(t) = client.next_host_timing(std::time::Duration::from_millis(50)) {
             named += usize::from(pts.contains(&t.pts_ns));
@@ -4309,6 +4307,93 @@ mod tests {
             }
             other => panic!("expected an application close, got {other:?}"),
         }
+    }
+
+    /// A client from before `punktfunk/2` still pairs by PIN over `pkf1`, and is closed with the
+    /// wire-version code when it dials anything else there.
+    #[test]
+    fn a_pkf1_client_pairs_and_is_told_to_update() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::quic::{endpoint, pake, PairChallenge, PairProof, PairResult};
+
+        let store = access_store_path("pkf1-pair");
+        let _ = std::fs::remove_file(&store);
+        let host = std::thread::spawn({
+            let store = store.clone();
+            move || {
+                run_ephemeral(Punktfunk1Options {
+                    port: 19784,
+                    source: Punktfunk1Source::Synthetic,
+                    seconds: 0,
+                    frames: 25,
+                    max_sessions: 2,
+                    max_concurrent: 1,
+                    require_pairing: true,
+                    allow_pairing: false,
+                    pairing_pin: Some("2468".into()),
+                    paired_store: Some(store),
+                    idle_timeout: None,
+                    mdns: false,
+                })
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let client_fp = endpoint::fingerprint_of_pem(&cert).unwrap();
+        let addr: std::net::SocketAddr = "127.0.0.1:19784".parse().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (ep, observed) = endpoint::client_pinned_offering(
+                None,
+                Some((cert.as_str(), key.as_str())),
+                &[endpoint::QUIC_ALPN],
+            );
+            let ep = ep.expect("client endpoint");
+
+            // The PIN ceremony in `punktfunk/1`'s framing, as such a client runs it.
+            let conn = ep.connect(addr, "punktfunk").unwrap().await.unwrap();
+            let host_fp = observed.lock().unwrap().expect("the host's certificate");
+            let (mut send, mut recv) = conn.open_bi().await.unwrap();
+            let (spake, spake_a) = pake::start(true, "2468", &client_fp, &host_fp);
+            let req = PairRequest {
+                name: "older client".into(),
+                spake_a,
+                device_key: Vec::new(),
+            };
+            io::write_msg(&mut send, &req.encode()).await.unwrap();
+            let challenge = PairChallenge::decode(&io::read_msg(&mut recv).await.unwrap()).unwrap();
+            let confirms = spake.finish(&challenge.spake_b).unwrap();
+            assert!(pake::verify(&confirms.host, &challenge.confirm));
+            let proof = PairProof {
+                confirm: confirms.client,
+            };
+            io::write_msg(&mut send, &proof.encode()).await.unwrap();
+            let result = PairResult::decode(&io::read_msg(&mut recv).await.unwrap()).unwrap();
+            assert!(result.ok, "the pairing completes");
+            conn.close(0u32.into(), b"pair done");
+
+            // Its session dial is told to update.
+            let conn = ep.connect(addr, "punktfunk").unwrap().await.unwrap();
+            let (mut send, _recv) = conn.open_bi().await.unwrap();
+            io::write_msg(&mut send, &RequestKeyframe.encode())
+                .await
+                .unwrap();
+            let code =
+                tokio::time::timeout(std::time::Duration::from_secs(5), closed_app_code(&conn))
+                    .await
+                    .expect("the host closes the dial");
+            assert_eq!(code, punktfunk_core::reject::WIRE_VERSION_CLOSE_CODE);
+        });
+        assert!(
+            std::fs::read_to_string(&store).is_ok_and(|s| s.contains("older client")),
+            "the paired device is stored"
+        );
+        let _ = std::fs::remove_file(&store);
+        host.join().unwrap().unwrap();
     }
 
     /// Short expiry: Welcome advertises grants + remaining; deadline closes typed (`0x69`).
