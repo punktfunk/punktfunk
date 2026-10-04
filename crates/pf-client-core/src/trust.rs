@@ -221,6 +221,14 @@ pub mod store_health {
     }
 }
 
+/// `store_health` is process-global: one test's successful write clears another's
+/// recorded failure. Every test that writes through [`write_atomic`] holds this.
+#[cfg(test)]
+pub(crate) fn store_health_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,13 +314,6 @@ mod tests {
             .collect();
         assert_eq!(left, vec![std::ffi::OsString::from("store.json")]);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// `store_health` is process-global: one test's successful write would clear
-    /// another's recorded failure. Nothing else in this crate's tests hits `write_atomic`.
-    fn store_health_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Two writers must not share one scratch file. Same-process: proves the name

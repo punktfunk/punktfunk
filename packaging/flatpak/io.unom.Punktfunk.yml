@@ -273,19 +273,16 @@ modules:
         url: https://github.com/ValveSoftware/gamescope.git
         # KEEP IN SYNC with `_gsrev` in packaging/gamescope/PKGBUILD.
         commit: 6867f509874f9bc52e12d6f4c4596cdf0d5be6b4
-      # Wrap pins as of that rev (`subprojects/*.wrap`). These are meson WRAPS, not gamescope
-      # submodules, so nothing else populates them and they need explicit sources.
-      #
-      # vkroots is deliberately NOT listed here. It is a real gamescope SUBMODULE, and
-      # flatpak-builder clones git sources with submodules by default — so it is already
-      # checked out at exactly the rev above (`git ls-tree <rev> subprojects/vkroots`), which
-      # leaves `subprojects/vkroots/.git` as a gitlink FILE. Declaring it again with
-      # `dest: subprojects/vkroots` made the extractor copy the bare mirror onto that path and
-      # die before any build command ran:
-      #   cp: cannot overwrite non-directory '.../subprojects/vkroots/.git' with directory
-      # Re-adding it re-breaks the whole flatpak. If the submodule ever needs to be pinned away
-      # from the gamescope rev, set `disable-submodules: true` on the source above and then
-      # declare ALL THREE subprojects explicitly — not one of them alone.
+        # The layer needs only vkroots, pinned below. CI's --disable-updates never mirrors a
+        # submodule pin that is new to a warm cache, and wlroots is one the layer never builds.
+        disable-submodules: true
+      # vkroots: the submodule commit at that rev (`git ls-tree <rev> subprojects/vkroots`).
+      # Bump it with the gamescope commit.
+      - type: git
+        url: https://github.com/Joshua-Ashton/vkroots
+        commit: 5106d8a0df95de66cc58dc1ea37e69c99afc9540
+        dest: subprojects/vkroots
+      # Wrap pins as of that rev (`subprojects/*.wrap`): meson wraps, not submodules.
       - type: git
         url: https://github.com/g-truc/glm.git
         commit: 0af55ccecd98d4e5a8d1fad7de25ba429d60e863
