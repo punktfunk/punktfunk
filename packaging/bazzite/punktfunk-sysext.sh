@@ -255,8 +255,9 @@ post_merge() {
   fi
   # A host.env that turns Attach mode on serves every client a mirror of this box's screen at its
   # own resolution. The file outlives the template it was copied from, so check it on every merge.
+  # The console updater has no SUDO_USER; getent then exits 2, which set -e must not see.
   local _pf_env
-  _pf_env="$(getent passwd "${_pf_user:-}" 2>/dev/null | cut -d: -f6)/.config/punktfunk/host.env"
+  _pf_env="$(getent passwd "${_pf_user:-}" 2>/dev/null | cut -d: -f6 || :)/.config/punktfunk/host.env"
   if [ -n "$_pf_user" ] && [ -f "$_pf_env" ] && host_env_pins_attach "$_pf_env"; then
     echo "!! $_pf_env turns Attach mode on: every client gets a mirror of this box's screen at its"
     echo "!! own resolution instead of a display of its own. Delete the PUNKTFUNK_GAMESCOPE_ATTACH"
