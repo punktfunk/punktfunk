@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: punktfunk <packages@unom.io>
+Date: Sun, 4 Oct 2026 22:55:25 +0200
+Subject: [PATCH 34/34] rendervulkan: align uploaded constants to any device's
+ uniform offset
+
+uploadBufferData aligned each block to 16 bytes, but a dispatch binds its
+constants as a uniform buffer at that offset, and NVIDIA and Intel need 64.
+With eight composite layers BlitPushData_t is 584 bytes, so the constants a
+second pass uploads after a blit land at an offset 16 past a 64-byte boundary.
+The RGB-to-NV12 and RGB-to-P010 capture passes then read a zero extent and
+store nothing: every planar PipeWire frame is zeros, a green picture.
+
+Align to 256, the largest minUniformBufferOffsetAlignment Vulkan allows.
+
+punktfunk: also stamps the version banner +pfhdr31.
+---
+ src/meson.build      | 3 ++-
+ src/rendervulkan.hpp | 4 +++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/meson.build b/src/meson.build
+index 0efd550..8757ec0 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -213,7 +213,8 @@ vcs_tag = run_command(vcs_tag_cmd, check: false).stdout().strip()
+ #   +pfhdr28 — …and the WSI layer accepts its socket under a container alias
+ #   +pfhdr29 — …and a focus re-apply keeps CEF's browser subwindow focused
+ #   +pfhdr30 — …on upstream 3.16.31 (28 and 29 are upstream there); builds against a vendored wayland
+-version_tag = vcs_tag + '+pfhdr30' + ' (' + compiler_name + ' ' + compiler_version + ')'
++#   +pfhdr31 — …and each uploaded constant block meets the device's uniform offset alignment
++version_tag = vcs_tag + '+pfhdr31' + ' (' + compiler_name + ' ' + compiler_version + ')'
+ 
+ gamescope_version_conf = configuration_data()
+ gamescope_version_conf.set('VCS_TAG', version_tag)
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index 82cdc9d..e6478da 100644
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -885,7 +885,9 @@ public:
+ 	{
+ 		assert(size <= upload_buffer_size);
+ 
+-		m_uploadBufferOffset = align(m_uploadBufferOffset, 16);
++		// A constant block is bound as a uniform buffer at its offset. 256 is the largest
++		// minUniformBufferOffsetAlignment Vulkan allows, so the offset suits any device.
++		m_uploadBufferOffset = align(m_uploadBufferOffset, 256);
+ 		if (m_uploadBufferOffset + size > upload_buffer_size)
+ 		{
+ 			fprintf(stderr, "Exceeded uploadBufferData\n");
+-- 
+2.54.0 (Apple Git-157)
+
