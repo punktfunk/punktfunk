@@ -129,6 +129,10 @@ pub(super) struct StreamState {
     /// The live output's metadata for a capture-only rebuild (`on_capture_lost`).
     #[cfg(target_os = "linux")]
     pub(super) lease: Option<crate::capture::OutputLease>,
+    /// Source stamps moved off a display faster than the stream onto the content's cadence.
+    /// `None` at 1x. The Windows driver corrects its own stamps.
+    #[cfg(target_os = "linux")]
+    pub(super) restamp: Option<super::encode::SourceStamps>,
     /// Source can change format/size with no client Reconfigure; in-place encoder reset cannot follow.
     pub(super) enc_src: (pf_frame::PixelFormat, u32, u32),
     /// The mode a rebuild reopens at: the client's latest ask, or the source's delivered size.
@@ -276,6 +280,7 @@ impl StreamState {
         {
             publish_gamescope_xwayland(&self.gamescope_xwayland, p.lease.as_ref());
             self.lease = p.lease;
+            self.restamp = p.panel_tick_ns.map(super::encode::SourceStamps::new);
         }
         self.inflight.clear();
         self.watchdog.on_au();
@@ -612,6 +617,8 @@ impl StreamState {
             reframe,
             #[cfg(target_os = "linux")]
             lease,
+            #[cfg(target_os = "linux")]
+            panel_tick_ns,
         } = pipe;
         *frame_map.lock().unwrap_or_else(|e| e.into_inner()) = reframe;
         #[cfg(target_os = "linux")]
@@ -998,6 +1005,8 @@ impl StreamState {
             epoch: 0,
             #[cfg(target_os = "linux")]
             lease,
+            #[cfg(target_os = "linux")]
+            restamp: panel_tick_ns.map(super::encode::SourceStamps::new),
             enc_src,
             cur_mode: mode,
             bitrate_kbps,
