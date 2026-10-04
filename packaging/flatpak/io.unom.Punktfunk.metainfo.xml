@@ -84,6 +84,12 @@
   </branding>
 
   <releases>
+    <release version="0.43.1" date="2026-10-04">
+      <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.43.1</url>
+      <description>
+        <p>gamescope sessions on NVIDIA and Intel show a picture again, Windows hosts keep every frame of a capped game, and the network check reports fast links at their speed.</p>
+      </description>
+    </release>
     <release version="0.43.0" date="2026-10-04">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.43.0</url>
       <description>
