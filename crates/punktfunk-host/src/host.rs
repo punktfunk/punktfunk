@@ -215,6 +215,15 @@ pub fn serve(
     if let Err(e) = profiles.ensure_owner(&state.host.hostname) {
         tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
     }
+    #[cfg(target_os = "linux")]
+    {
+        let paired: Vec<(String, String)> = np
+            .list()
+            .into_iter()
+            .map(|c| (c.name, c.fingerprint))
+            .collect();
+        profiles.migrate_device_seats(&pf_paths::seats_dir(), &paired);
+    }
     let profiles = Arc::new(profiles);
     let _ = state.profiles.set(profiles.clone());
     tracing::info!(

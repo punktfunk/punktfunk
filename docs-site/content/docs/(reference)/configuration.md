@@ -108,9 +108,9 @@ The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc
 | **Lossless audio** | Serves uncompressed audio (1.4–8.5 Mbps in stereo) to a client that asks, when it fits a quarter of the video bitrate. The desktop clients read the same variable to ask — see [Client-side](#client-side-native-clients). |
 | **Voice chat** | **On the host** keeps voice-chat apps on the host's output, so friends who stream in don't hear themselves. Recognised: Discord, Vesktop, WebCord, ArmCord, Legcord, TeamSpeak, Mumble; **Voice chat apps** adds name fragments such as `firefox`. See [Friends over the internet](/docs/friends-over-the-internet#voice-chat-while-they-play). |
 | **Audio redundancy** | `auto` sends audio twice only to clients that support it, and only while the link loses packets. |
-| **Steam per seat** | Each paired device's Steam launch runs under its own home in `~/.local/share/punktfunk/seats/`, so two devices play at once and the desktop Steam keeps running. Each seat signs in to Steam once, and one Steam account plays on one seat at a time. Needs a native Steam; the seat reuses your library folders. |
-| **Pads per seat** | Each seat's Steam sees only its own device's controllers. Needs **Steam per seat** and `bwrap`. The box's own Steam still sees every pad. |
-| **Seats kept warm** | How many seats keep Big Picture running before their device connects, so a launch skips Steam's cold start. Only seats that launched a Steam title in the last 14 days. |
+| **Steam per seat** | Each profile's Steam launch runs under its own home in `~/.local/share/punktfunk/seats/`, so two people play at once and the desktop Steam keeps running. Each profile signs in to Steam once, and one Steam account plays on one seat at a time. The owner profile uses the box's own Steam. Needs a native Steam; the seat reuses your library folders. |
+| **Pads per seat** | Each seat's Steam sees only the controllers of the device playing on it. Needs **Steam per seat** and `bwrap`. The box's own Steam still sees every pad. |
+| **Seats kept warm** | How many profiles keep Big Picture running before anyone picks them, so a launch skips Steam's cold start. Only profiles that launched a Steam title in the last 14 days. |
 | **Disconnect timeout** | How long before a vanished client counts as gone and a kept display starts its linger. A deliberate quit is instant. |
 
 ## Session anchors

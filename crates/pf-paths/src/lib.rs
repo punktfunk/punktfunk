@@ -75,17 +75,17 @@ pub fn seats_dir() -> PathBuf {
     data_dir().join("seats")
 }
 
-/// `$XDG_DATA_HOME/punktfunk/seats/<id>` — the `HOME` a seat's nested Steam runs
-/// under (`design/gamescope-multiuser.md` D1). `id` is `pf-vdisplay`'s
-/// `SessionIsolation`. Path only; the caller creates it 0700
+/// `$XDG_DATA_HOME/punktfunk/seats/<id>` — the `HOME` a seat profile's nested Steam runs
+/// under. `id` is the profile id. Path only; the caller creates it 0700
 /// ([`create_private_dir`]).
 #[cfg(target_os = "linux")]
 pub fn seat_home(id: &str) -> PathBuf {
     seats_dir().join(id)
 }
 
-/// `…/seats/<id>.json` — what pre-warming that seat needs, beside its home rather than inside
-/// it: the home is a `HOME` Steam owns, and a file of ours in it is one Steam may clean up.
+/// `…/seats/<id>.json` — what pre-warming that profile's seat needs, beside its home rather
+/// than inside it: the home is a `HOME` Steam owns, and a file of ours in it is one Steam may
+/// clean up.
 #[cfg(target_os = "linux")]
 pub fn seat_record(id: &str) -> PathBuf {
     seats_dir().join(format!("{id}.json"))

@@ -1786,7 +1786,7 @@ pub(crate) async fn run_admitted(
         joined.as_ref().map(|(d, _)| d),
         compositor,
         gamescope_route.as_ref(),
-        session_fp_hex.as_deref(),
+        &resolved,
         &inj_tx,
         mic_tx,
     );
@@ -2379,6 +2379,9 @@ struct SessionPlanes {
     _mic_default: Option<crate::audio::DefaultMicClaim>,
     #[cfg(target_os = "linux")]
     _injector: Option<crate::inject::InjectorService>,
+    /// This session's hold on its isolation id.
+    #[cfg(target_os = "linux")]
+    _seat: Option<SeatClaim>,
 }
 
 impl SessionPlanes {
@@ -2387,12 +2390,13 @@ impl SessionPlanes {
         joined: Option<&crate::vdisplay::admission::LiveDisplay>,
         compositor: Option<crate::vdisplay::Compositor>,
         route: Option<&crate::vdisplay::GamescopeRoute>,
-        fp_hex: Option<&str>,
+        profile: &crate::profiles::Resolved,
         inj_tx: &std::sync::mpsc::Sender<InputEvent>,
         mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     ) -> SessionPlanes {
         #[cfg(target_os = "linux")]
         {
+            let mut seat = None;
             let isolation = match joined {
                 // A joiner uses the owner's planes: its input relay and sink. A second mic source
                 // of the same name would split the owner's, so its mic stays on the shared one.
@@ -2406,16 +2410,19 @@ impl SessionPlanes {
                 None => compositor
                     .filter(|c| crate::compositor_route::session_is_isolated(*c, route))
                     .map(|_| {
-                        // `--open` has no fingerprint; a per-accept sequence isolates at the cost
-                        // of keep-alive.
-                        static ANON_SEQ: AtomicU64 = AtomicU64::new(0);
-                        let paired = fp_hex.map(seat_id);
-                        let id = paired.clone().unwrap_or_else(|| {
-                            format!("anon{}", ANON_SEQ.fetch_add(1, Ordering::Relaxed))
-                        });
-                        let iso = session_isolation(&id, paired.is_some());
-                        tracing::info!(%id, sink = iso.sink.as_deref().unwrap_or("-"),
+                        // The profile is the seat: its first session takes the seat's id and
+                        // home, a concurrent second one `<seat>-2` and the box's Steam.
+                        let base = seat_id(&profile.id);
+                        let claim = SeatClaim::take(&base);
+                        let is_seat =
+                            matches!(profile.os_account, crate::profiles::OsAccount::Seat { .. });
+                        let home =
+                            (is_seat && claim.is_first(&base)).then_some(profile.id.as_str());
+                        let iso = session_isolation(&claim.0, home);
+                        tracing::info!(id = %claim.0, profile = %profile.id,
+                            sink = iso.sink.as_deref().unwrap_or("-"),
                             "isolated gamescope session — per-session input/audio/mic planes");
+                        seat = Some(claim);
                         iso
                     }),
             };
@@ -2443,11 +2450,12 @@ impl SessionPlanes {
                 _mic: mic,
                 _mic_default: mic_default,
                 _injector: injector,
+                _seat: seat,
             }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (joined, compositor, route, fp_hex);
+            let _ = (joined, compositor, route, profile);
             SessionPlanes {
                 isolation: None,
                 seat_dev: None,
@@ -2748,37 +2756,68 @@ fn delivered_mode(
     }
 }
 
-/// This session's Steam home, or `None` for the box's own.
-///
-/// A seat is a fingerprint: an `anon<seq>` id is minted per accept, so a Steam signed in under
-/// one would never be found again.
+/// A seat profile's Steam home while **Steam per seat** is on, or `None` for the box's own.
 #[cfg(target_os = "linux")]
-fn seat_home_for(paired: Option<&str>, on: bool) -> Option<std::path::PathBuf> {
-    paired.filter(|_| on).map(pf_paths::seat_home)
+fn seat_home_for(profile: Option<&str>, on: bool) -> Option<std::path::PathBuf> {
+    profile.filter(|_| on).map(pf_paths::seat_home)
 }
 
-/// The seat a device streams on: the head of its fingerprint. Short enough for a socket name,
-/// wide enough that two paired devices do not collide. One function, because the pre-warm has to
-/// name the same seat this session does or the registry hands its parked display to nobody.
+/// The seat a profile streams on: the head of its id. Short enough for a socket name. One
+/// function, because the pre-warm has to name the same seat a connect does or the registry
+/// hands its parked display to nobody.
 #[cfg(target_os = "linux")]
-fn seat_id(fp_hex: &str) -> String {
-    fp_hex[..fp_hex.len().min(8)].to_string()
+fn seat_id(profile_id: &str) -> String {
+    profile_id[..profile_id.len().min(8)].to_string()
 }
 
-/// The isolated planes `id` streams on. `paired` says the id is a seat rather than an
-/// `anon<seq>`, which is what earns a Steam home.
+/// Isolation ids of the sessions streaming now. A second session on one profile is
+/// `<seat>-2`: planes of its own, and no claim on the seat's home or its parked display.
+#[cfg(target_os = "linux")]
+static LIVE_SEATS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// An isolation id held for one session; dropping it frees the id.
+#[cfg(target_os = "linux")]
+struct SeatClaim(String);
+
+#[cfg(target_os = "linux")]
+impl SeatClaim {
+    /// `base`, or the first `base-<n>` no live session holds.
+    fn take(base: &str) -> SeatClaim {
+        let mut live = LIVE_SEATS.lock().unwrap_or_else(|e| e.into_inner());
+        let id = std::iter::once(base.to_string())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|id| !live.contains(id))
+            .unwrap_or_else(|| base.to_string());
+        live.push(id.clone());
+        SeatClaim(id)
+    }
+
+    fn is_first(&self, base: &str) -> bool {
+        self.0 == base
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for SeatClaim {
+    fn drop(&mut self) {
+        let mut live = LIVE_SEATS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(at) = live.iter().position(|id| id == &self.0) {
+            live.swap_remove(at);
+        }
+    }
+}
+
+/// The isolated planes `id` streams on. `home` is the seat profile whose Steam home it runs
+/// under; `None` keeps the box's own.
 ///
 /// The registry's reuse key is `id` plus that home, so [`prewarm`] builds this value for a seat
 /// before its client connects and the connect lands on the display already standing.
 #[cfg(target_os = "linux")]
-fn session_isolation(id: &str, paired: bool) -> crate::vdisplay::SessionIsolation {
+fn session_isolation(id: &str, home: Option<&str>) -> crate::vdisplay::SessionIsolation {
     // Monitor-mode has no per-session sink — audio stays shared; input/mic still isolate.
     let sink =
         crate::audio::per_session_sink_possible().then(|| format!("punktfunk-speaker-iso-{id}"));
-    let steam_home = seat_home_for(
-        paired.then_some(id),
-        pf_host_config::config().steam_seat_home,
-    );
+    let steam_home = seat_home_for(home, pf_host_config::config().steam_seat_home);
     crate::vdisplay::SessionIsolation::new(
         id.to_string(),
         sink,
@@ -2795,11 +2834,43 @@ mod tests {
     /// The knob is the only way in, and an unpaired session never gets a seat home.
     #[cfg(target_os = "linux")]
     #[test]
-    fn only_a_paired_client_with_the_knob_on_gets_a_seat_home() {
-        let seat = seat_home_for(Some("cafe0123"), true).expect("a paired seat has a home");
-        assert!(seat.ends_with("seats/cafe0123"), "{}", seat.display());
-        assert_eq!(seat_home_for(Some("cafe0123"), false), None, "knob off");
-        assert_eq!(seat_home_for(None, true), None, "anon<seq> has no identity");
+    fn only_a_seat_profile_with_the_knob_on_gets_a_seat_home() {
+        let seat = seat_home_for(Some("9a3f1c2b7e40"), true).expect("a seat profile has a home");
+        assert!(seat.ends_with("seats/9a3f1c2b7e40"), "{}", seat.display());
+        assert_eq!(seat_home_for(Some("9a3f1c2b7e40"), false), None, "knob off");
+        assert_eq!(
+            seat_home_for(None, true),
+            None,
+            "the owner keeps the box's Steam"
+        );
+    }
+
+    /// Two sessions on one profile at once: `<seat>` then `<seat>-2`, each with its own sink,
+    /// and the id frees when its session ends.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_session_on_a_profile_gets_planes_of_its_own() {
+        let base = seat_id("5e1f00d1e2a7");
+        assert_eq!(base, "5e1f00d1");
+        let first = SeatClaim::take(&base);
+        let second = SeatClaim::take(&base);
+        assert_eq!(
+            (first.0.as_str(), second.0.as_str()),
+            ("5e1f00d1", "5e1f00d1-2")
+        );
+        assert!(first.is_first(&base) && !second.is_first(&base));
+        let (a, b) = (
+            session_isolation(&first.0, Some("5e1f00d1e2a7")),
+            session_isolation(&second.0, None),
+        );
+        assert_ne!(a.ei_relay, b.ei_relay);
+        assert_ne!(a.mic_source, b.mic_source);
+        if a.sink.is_some() {
+            assert_ne!(a.sink, b.sink);
+        }
+        drop(first);
+        let again = SeatClaim::take(&base);
+        assert_eq!(again.0, "5e1f00d1", "a freed id is taken again");
     }
 
     /// Adaptive FEC is offered only to a source that can keep encoder and packetizer

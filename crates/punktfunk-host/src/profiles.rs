@@ -307,6 +307,97 @@ impl Profiles {
         })
     }
 
+    /// Turns each device seat under `seats` (`seats/<8 hex>` holding a Steam) into a seat
+    /// profile: named after the paired device whose fingerprint starts with those digits, with
+    /// that device as `legacy_device`, its home and record renamed to the profile id. A
+    /// directory whose device is gone becomes `Seat <8 hex>`. `paired` is `(name, fingerprint)`.
+    pub fn migrate_device_seats(&self, seats: &Path, paired: &[(String, String)]) {
+        let Ok(dir) = std::fs::read_dir(seats) else {
+            return;
+        };
+        let mut found: Vec<String> = dir
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter(|n| n.len() == 8 && n.bytes().all(|b| b.is_ascii_hexdigit()))
+            .filter(|n| seats.join(n).join(".local/share/Steam/steam.sh").exists())
+            .collect();
+        found.sort();
+        for hex in found {
+            let device = paired.iter().find(|(_, fp)| {
+                fp.to_ascii_lowercase()
+                    .starts_with(&hex.to_ascii_lowercase())
+            });
+            let name = device
+                .and_then(|(n, _)| clean_name(n))
+                .unwrap_or_else(|| format!("Seat {hex}"));
+            let legacy = device.map(|(_, fp)| fp.to_ascii_lowercase());
+            match self.migrate_one(seats, &hex, &name, legacy) {
+                Ok(id) => {
+                    tracing::info!(seat = %hex, profile = %id, %name, "device seat moved to a profile")
+                }
+                Err(e) => {
+                    tracing::warn!(seat = %hex, error = %format!("{e:#}"), "device seat not migrated")
+                }
+            }
+        }
+    }
+
+    fn migrate_one(
+        &self,
+        seats: &Path,
+        hex: &str,
+        name: &str,
+        legacy: Option<String>,
+    ) -> Result<ProfileId> {
+        let mut id = String::new();
+        self.mutate(|file| {
+            if file.profiles.len() >= PROFILES_MAX {
+                bail!("the box already has {PROFILES_MAX} profiles");
+            }
+            let now = now_unix();
+            let display_name = unique_name(&file.profiles, name);
+            id = new_id(&display_name);
+            file.profiles.push(Profile {
+                id: id.clone(),
+                display_name,
+                accent: None,
+                avatar: None,
+                os_account: OsAccount::Seat {
+                    seat: None,
+                    tier: SeatTier::Light,
+                },
+                home: Home::Bigpicture,
+                legacy_device: legacy,
+                assigned_fingerprints: Vec::new(),
+                passcode: None,
+                require_passcode_even_when_assigned: false,
+                allow_shared_view: false,
+                tvos_user_ids: Vec::new(),
+                library_scope: LibraryScope::All,
+                custom_entries: Vec::new(),
+                session_defaults: SessionDefaults::default(),
+                created_unix: now,
+                updated_unix: now,
+            });
+            Ok(())
+        })?;
+        let moved = std::fs::rename(seats.join(hex), seats.join(&id));
+        if let Err(e) = moved {
+            // A profile whose home stayed behind would find no Steam; take it back.
+            let _ = self.mutate(|file| {
+                file.profiles.retain(|p| p.id != id);
+                Ok(())
+            });
+            return Err(e).context("rename the seat home");
+        }
+        let record = seats.join(format!("{hex}.json"));
+        if record.exists() {
+            std::fs::rename(&record, seats.join(format!("{id}.json")))
+                .context("rename the seat record")?;
+        }
+        Ok(id)
+    }
+
     /// The profile a connect from `fp` asking for `asked` lands in (`profiles-and-seats.md`
     /// §6.2). `asked` is read before trust: it is only ever compared against stored ids.
     pub fn resolve(&self, fp: Option<&str>, asked: Option<&str>) -> Result<Resolved, ProfileError> {

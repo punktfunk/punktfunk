@@ -317,3 +317,52 @@ fn names_are_trimmed_capped_and_unique() {
     let taken = [profile("a", "Enrico", OsAccount::Operator)];
     assert_eq!(unique_name(&taken, "enrico"), "enrico 2");
 }
+
+#[test]
+fn a_device_seat_becomes_a_profile_its_device_lands_in() {
+    let root = temp_dir("migrate");
+    let seats = root.join("seats");
+    let steam = |hex: &str| {
+        let dir = seats.join(hex).join(".local/share/Steam");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("steam.sh"), b"#!/bin/sh").unwrap();
+    };
+    steam("ab12cd34");
+    steam("deadbeef");
+    std::fs::create_dir_all(seats.join("0badf00d")).unwrap(); // no Steam: not a seat
+    std::fs::write(seats.join("ab12cd34.json"), b"{}").unwrap();
+    let fp = format!("ab12cd34{}", "0".repeat(56));
+    let p = Profiles::load_with(Some(root.join("profiles.json")), None);
+    p.ensure_owner("box").unwrap();
+    p.migrate_device_seats(&seats, &[("Enrico's iPad".into(), fp.clone())]);
+
+    let ipad = p
+        .list()
+        .into_iter()
+        .find(|x| x.display_name == "Enrico's iPad")
+        .expect("the device's seat is a profile");
+    assert_eq!(ipad.legacy_device.as_deref(), Some(fp.as_str()));
+    assert_eq!(ipad.home, Home::Bigpicture);
+    assert!(seats
+        .join(&ipad.id)
+        .join(".local/share/Steam/steam.sh")
+        .exists());
+    assert!(seats.join(format!("{}.json", ipad.id)).exists());
+    assert!(!seats.join("ab12cd34").exists());
+    assert!(p
+        .list()
+        .iter()
+        .any(|x| x.display_name == "Seat deadbeef" && x.legacy_device.is_none()));
+    assert!(
+        seats.join("0badf00d").exists(),
+        "a directory with no Steam stays"
+    );
+
+    let r = p.resolve(Some(&fp.to_ascii_uppercase()), None).unwrap();
+    assert_eq!((r.id, r.via), (ipad.id, ResolveVia::LegacyDevice));
+
+    // A second start finds nothing left to move.
+    let before = p.list().len();
+    p.migrate_device_seats(&seats, &[("Enrico's iPad".into(), fp)]);
+    assert_eq!(p.list().len(), before);
+}
