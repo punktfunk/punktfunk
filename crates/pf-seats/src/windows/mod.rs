@@ -58,6 +58,20 @@ pub fn seats_enabled() -> bool {
         .is_ok()
 }
 
+/// Whether this is a Windows Server edition (`ProductType` other than `WinNT`), which
+/// allows concurrent RDP sessions without a session provider. `None` when unreadable.
+fn server_edition() -> Option<bool> {
+    let product: String = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            r"SYSTEM\CurrentControlSet\Control\ProductOptions",
+            KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+        )
+        .ok()?
+        .get_value("ProductType")
+        .ok()?;
+    Some(!product.eq_ignore_ascii_case("WinNT"))
+}
+
 fn termservice_running() -> WinResult<bool> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
         .map_err(|error| io_error("termservice", "open Service Control Manager", error))?;
@@ -215,10 +229,21 @@ impl WindowsBackend {
             }
             Err(error) => diagnostics.push(Diagnostic::error("termservice", error.to_string())),
         }
-        diagnostics.push(Diagnostic::error(
-            "session_provider",
-            "no session provider is built yet, so this host cannot mint a seat session",
-        ));
+        diagnostics.push(match server_edition() {
+            Some(true) => Diagnostic::info(
+                "session_provider",
+                "Windows Server runs concurrent seat sessions itself",
+            ),
+            Some(false) => Diagnostic::error(
+                "session_provider",
+                "this Windows edition runs one session at a time and no session provider is \
+                 built yet, so it can't mint a seat session",
+            ),
+            None => Diagnostic::error(
+                "session_provider",
+                "the Windows edition can't be read, so seat sessions can't be confirmed",
+            ),
+        });
         for seat in &ledger.seats {
             self.doctor_seat(seat, &mut diagnostics);
         }
