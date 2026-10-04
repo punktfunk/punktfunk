@@ -274,9 +274,11 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
     PERMANENT.iter().any(|p| lower.contains(p))
 }
 
-/// Session mode with refresh × `PUNKTFUNK_VDISPLAY_HZ_MULT`. Wire rate is still [`pacing_hz`].
-/// gamescope paints on the game's commit, so the multiplier would only raise its frame
-/// limit: ignored there.
+/// Session mode with refresh × the display multiple ([`HostConfig::vdisplay_hz_mult_for`]).
+/// Wire rate is still [`pacing_hz`]. gamescope paints on the game's commit, so the multiplier
+/// would only raise its frame limit: ignored there.
+///
+/// [`HostConfig::vdisplay_hz_mult_for`]: pf_host_config::HostConfig::vdisplay_hz_mult_for
 pub(super) fn display_mode_for(
     session: punktfunk_core::Mode,
     gamescope: bool,
@@ -284,7 +286,7 @@ pub(super) fn display_mode_for(
     let mult = if gamescope {
         1
     } else {
-        pf_host_config::config().vdisplay_hz_mult.max(1)
+        pf_host_config::config().vdisplay_hz_mult_for(session.refresh_hz)
     };
     punktfunk_core::Mode {
         refresh_hz: session.refresh_hz.saturating_mul(mult).min(0xffff),
@@ -623,7 +625,7 @@ mod tests {
         assert_eq!((display.width, display.height), (2560, 1440));
         assert_eq!(
             display.refresh_hz,
-            session.refresh_hz * pf_host_config::config().vdisplay_hz_mult.max(1)
+            session.refresh_hz * pf_host_config::config().vdisplay_hz_mult_for(60)
         );
         assert_eq!(
             display_mode_for(session, true).refresh_hz,
