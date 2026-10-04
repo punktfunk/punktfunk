@@ -513,6 +513,7 @@ mod tests {
                 session_id: [0; 16],
                 clock_origin_ns: 0,
                 suite: None,
+                features: Default::default(),
             };
             ServerHello::from_body(&sh.fields().into_body())
                 .unwrap()

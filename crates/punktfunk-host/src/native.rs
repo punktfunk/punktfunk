@@ -1492,6 +1492,7 @@ pub(crate) async fn run_admitted(
         gamescope_route,
         prep,
         joined,
+        features,
     } = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         handshake::negotiate(
@@ -1658,6 +1659,21 @@ pub(crate) async fn run_admitted(
         clock: conn.v2_session().clock.clone(),
         input_tx: input_tx.clone(),
         initial_mode: hello.mode,
+        stream_config: features
+            .has(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG)
+            .then_some(v2msg::StreamConfig {
+                epoch: 0,
+                mode: welcome.mode,
+                codec: welcome.codec,
+                bit_depth: welcome.bit_depth,
+                color: [
+                    welcome.color.primaries,
+                    welcome.color.transfer,
+                    welcome.color.matrix,
+                    welcome.color.full_range,
+                ],
+                chroma_format: welcome.chroma_format,
+            }),
         codec,
         live_reconfig_ok,
         adaptive_fec,
@@ -2051,8 +2067,7 @@ pub(crate) async fn run_admitted(
                     &mut common.session,
                     frames,
                     &common.stop,
-                    &common.ends.probe_rx,
-                    &common.ends.probe_result_tx,
+                    &common.ends,
                     &common.shared.fec_target,
                     common.timing_conn.as_ref(),
                     probe_seq,
@@ -4291,6 +4306,7 @@ mod tests {
             start_ext: Vec::new(),
             resume: None,
             suites: Vec::new(),
+            features: Default::default(),
         };
         v2io::send(&mut send, &hello).await.expect("ClientHello");
         let welcome = loop {

@@ -53,6 +53,8 @@ pub struct ClientHello {
     pub resume: Option<[u8; 16]>,
     /// Media AEADs the client takes, most wanted first. Empty on a carrier that encrypts.
     pub suites: Vec<MediaSuite>,
+    /// Bits from 32 up ([`FeatureSet::native`]); `hello`'s capability bytes fill 0–31.
+    pub features: FeatureSet,
 }
 
 impl ClientHello {
@@ -70,7 +72,9 @@ impl V2Message for ClientHello {
 
     fn fields(&self) -> Fields {
         let h = &self.hello;
-        let features = FeatureSet::client(h.video_caps, h.client_caps).encode();
+        let features = FeatureSet::client(h.video_caps, h.client_caps)
+            .union(self.features.native())
+            .encode();
         let suites: Vec<u8> = self.suites.iter().map(|&s| suite_id(s)).collect();
         let mut f = Fields::new()
             .when(self.resume.is_some(), |f| {
@@ -137,6 +141,7 @@ impl V2Message for ClientHello {
             video_fit: 0,
         };
         let (mut resume, mut suites, mut start_ext) = (None, Vec::new(), Vec::new());
+        let mut features = FeatureSet::default();
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -157,6 +162,7 @@ impl V2Message for ClientHello {
                 9 => {
                     let f = FeatureSet::decode(v);
                     (h.video_caps, h.client_caps) = (f.video_caps(), f.client_caps());
+                    features = f.native();
                 }
                 10 => h.audio_channels = u8_of(v)?,
                 11 => h.video_codecs = u8_of(v)?,
@@ -190,6 +196,7 @@ impl V2Message for ClientHello {
             start_ext,
             resume,
             suites,
+            features,
         })
     }
 }
@@ -214,6 +221,8 @@ pub struct ServerHello {
     pub clock_origin_ns: u64,
     /// The media AEAD; `None` on a carrier that already encrypts.
     pub suite: Option<MediaSuite>,
+    /// Native bits in force: the ones both ends set ([`ClientHello::features`]).
+    pub features: FeatureSet,
 }
 
 impl V2Message for ServerHello {
@@ -221,7 +230,9 @@ impl V2Message for ServerHello {
 
     fn fields(&self) -> Fields {
         let w = &self.welcome;
-        let features = FeatureSet::host(w.host_caps, w.host_caps2).encode();
+        let features = FeatureSet::host(w.host_caps, w.host_caps2)
+            .union(self.features.native())
+            .encode();
         let c = w.color;
         let mut f = Fields::new()
             .bytes(1, &self.session_id)
@@ -284,6 +295,7 @@ impl V2Message for ServerHello {
             audio_layout: 0,
         };
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
+        let mut features = FeatureSet::default();
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -299,6 +311,7 @@ impl V2Message for ServerHello {
                 4 => {
                     let f = FeatureSet::decode(v);
                     (w.host_caps, w.host_caps2) = (f.host_caps(), f.host_caps2());
+                    features = f.native();
                 }
                 5 => w.mode = Mode::get(v)?,
                 6 => {
@@ -361,6 +374,7 @@ impl V2Message for ServerHello {
             session_id: session_id.ok_or_else(bad)?,
             clock_origin_ns,
             suite,
+            features,
         })
     }
 }
@@ -537,12 +551,12 @@ mod tests {
         /// changes nothing.
         #[test]
         fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![] };
+            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![], features: FeatureSet::default() };
             let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
             let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
 
-            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None };
+            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default() };
             let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
             let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
             prop_assert_eq!(twice, once);
@@ -599,6 +613,7 @@ mod tests {
             ],
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
+            features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
         };
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);
@@ -614,6 +629,7 @@ mod tests {
             session_id: [9; 16],
             clock_origin_ns: 1_700_000_000_000_000_000,
             suite: Some(MediaSuite::ChaCha20Poly1305),
+            features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
         };
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),

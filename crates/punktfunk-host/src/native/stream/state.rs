@@ -221,7 +221,8 @@ pub(super) struct StreamState {
     pub(super) rfi: std::sync::mpsc::Receiver<(u32, u32)>,
     pub(super) bitrate_rx: std::sync::mpsc::Receiver<u32>,
     pub(super) session_rx: std::sync::mpsc::Receiver<SessionSwitch>,
-    pub(super) reconfig_result_tx: tokio::sync::mpsc::UnboundedSender<Reconfigured>,
+    pub(super) reconfig_result_tx:
+        tokio::sync::mpsc::UnboundedSender<crate::native::wiring::Delivered>,
     pub(super) retarget_tx: tokio::sync::mpsc::UnboundedSender<(u32, AckReason)>,
     pub(super) gap_tx: tokio::sync::mpsc::UnboundedSender<u32>,
 }
@@ -338,19 +339,26 @@ impl StreamState {
         delivered_mode(self.frame.width, self.frame.height, self.interval)
     }
 
-    /// Publish the delivered mode to `/status` and correct the client when it differs from `asked`.
+    /// Publish the delivered mode to `/status` and to the client, correcting it when it
+    /// differs from `asked`.
     pub(super) fn publish_delivered_mode(&self, asked: punktfunk_core::Mode) {
         let actual = self.delivered_mode();
         self.live_mode.store(
             pack_mode(actual.width, actual.height, actual.refresh_hz),
             Ordering::Relaxed,
         );
-        if actual != asked {
-            let _ = self.reconfig_result_tx.send(Reconfigured {
-                accepted: true,
-                mode: actual,
+        self.tell_delivered(actual, actual != asked);
+    }
+
+    /// Tell the control task what the current epoch delivers.
+    pub(super) fn tell_delivered(&self, mode: punktfunk_core::Mode, corrects: bool) {
+        let _ = self
+            .reconfig_result_tx
+            .send(crate::native::wiring::Delivered {
+                mode,
+                epoch: self.epoch,
+                corrects,
             });
-        }
     }
 
     /// Bring the session up: display, pipeline, library launch, game lease, send thread.
@@ -628,9 +636,10 @@ impl StreamState {
         if adopted_at_bringup {
             let actual = delivered_mode(frame.width, frame.height, interval);
             if actual != mode {
-                let _ = reconfig_result_tx.send(Reconfigured {
-                    accepted: true,
+                let _ = reconfig_result_tx.send(crate::native::wiring::Delivered {
                     mode: actual,
+                    epoch: 0,
+                    corrects: true,
                 });
             }
         }

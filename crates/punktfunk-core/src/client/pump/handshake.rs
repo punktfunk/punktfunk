@@ -101,6 +101,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
         // The delivery ask rides only when the dial made one; a host that reads it answers.
         let delivery: Vec<u8> = p.delivery.map(|d| d.encode().to_vec()).unwrap_or_default();
+        use crate::quic::v2::features::FeatureSet;
         use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
         use crate::quic::v2::{io as v2io, msg::V2Message, registry};
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
@@ -155,6 +156,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             } else {
                 vec![MediaSuite::Aes128Gcm]
             },
+            features: FeatureSet::default().with(registry::FEATURE_STREAM_CONFIG),
         };
         v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
@@ -213,6 +215,8 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         }
         *args.shared.local_ip.lock().unwrap() = conn.local_ip();
         *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
+        args.shared.anchor.lock().unwrap().on =
+            server.features.has(registry::FEATURE_STREAM_CONFIG);
         let cfg = welcome.session_config(Role::Client);
         let media_v2 = crate::session::MediaV2 {
             clock_origin_ns: server.clock_origin_ns,

@@ -447,6 +447,7 @@ mod tests {
             start_ext: Vec::new(),
             resume: None,
             suites: Vec::new(),
+            features: Default::default(),
         }
         .encode_v2()
     }

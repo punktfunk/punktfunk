@@ -16,6 +16,7 @@ use crate::session::Session;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub(crate) mod anchor;
 mod control_task;
 mod data;
 mod datagram_task;

@@ -323,6 +323,8 @@ pub(super) struct Negotiated {
     /// Admitted by `mode_conflict: join`: the owner's display, which this session shares, and
     /// the size this client asked for.
     pub(super) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
+    /// Native feature bits in force ([`ServerHello::features`]).
+    pub(super) features: punktfunk_core::quic::v2::features::FeatureSet,
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -721,11 +723,16 @@ pub(super) async fn negotiate(
     });
     let session = conn.v2_session();
     session.settle(suite);
+    let features = first.features.intersect(
+        punktfunk_core::quic::v2::features::FeatureSet::default()
+            .with(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG),
+    );
     let server_hello = ServerHello {
         welcome,
         session_id: session.session_id,
         clock_origin_ns: session.clock.origin_ns(),
         suite,
+        features,
     };
     punktfunk_core::quic::v2::io::send(send, &server_hello).await?;
     bringup.mark("welcome");
@@ -834,6 +841,7 @@ pub(super) async fn negotiate(
         gamescope_route,
         prep,
         joined,
+        features,
     })
 }
 

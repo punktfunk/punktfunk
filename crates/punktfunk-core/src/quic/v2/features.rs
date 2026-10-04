@@ -27,6 +27,15 @@ impl FeatureSet {
         FeatureSet(self.0 & other.0)
     }
 
+    pub fn union(self, other: FeatureSet) -> FeatureSet {
+        FeatureSet(self.0 | other.0)
+    }
+
+    /// The bits from 32 up: what only this wire can say.
+    pub fn native(self) -> FeatureSet {
+        FeatureSet(self.0 & !0xFFFF_FFFF)
+    }
+
     pub fn encode(self) -> Vec<u8> {
         let b = self.0.to_le_bytes();
         let used = b.iter().rposition(|&x| x != 0).map_or(0, |i| i + 1);

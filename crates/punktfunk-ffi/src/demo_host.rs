@@ -305,6 +305,7 @@ async fn serve(
         session_id,
         clock_origin_ns: clock.origin_ns(),
         suite: Some(suite),
+        features: Default::default(),
     };
     v2io::send(&mut send, &server).await?;
     let (ty, body) = recv.read_frame().await?;

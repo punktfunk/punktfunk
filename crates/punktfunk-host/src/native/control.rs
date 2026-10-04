@@ -215,6 +215,9 @@ pub(super) struct Task {
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
     pub(super) initial_mode: punktfunk_core::Mode,
+    /// The last `StreamConfig` the client holds, epoch 0 from the `ServerHello`. `None`: the
+    /// client takes no configs and is corrected with a second `Reconfigured`.
+    pub(super) stream_config: Option<v2msg::StreamConfig>,
     pub(super) codec: crate::encode::Codec,
     pub(super) live_reconfig_ok: bool,
     pub(super) adaptive_fec: bool,
@@ -277,6 +280,34 @@ pub(super) struct Task {
     pub(super) stats: Arc<crate::stats_recorder::StatsRecorder>,
 }
 
+/// What the client hears about a delivered mode.
+#[derive(Debug, PartialEq)]
+enum Tell {
+    /// The epoch's config, to a client that takes them.
+    Config(v2msg::StreamConfig),
+    /// A second `Reconfigured`, to a client that does not.
+    Correct(Reconfigured),
+}
+
+/// A config for an epoch or mode the client does not hold yet, else a correction when the
+/// client was told something else. `stream_config` is what the client holds.
+fn tell(
+    stream_config: &mut Option<v2msg::StreamConfig>,
+    d: &super::wiring::Delivered,
+) -> Option<Tell> {
+    match stream_config {
+        Some(cfg) if (cfg.epoch, cfg.mode) != (d.epoch, d.mode) => {
+            (cfg.epoch, cfg.mode) = (d.epoch, d.mode);
+            Some(Tell::Config(*cfg))
+        }
+        Some(_) => None,
+        None => d.corrects.then_some(Tell::Correct(Reconfigured {
+            accepted: true,
+            mode: d.mode,
+        })),
+    }
+}
+
 /// Ends when the control stream closes or a data-plane channel drops.
 pub(super) async fn run(task: Task) {
     let Task {
@@ -285,6 +316,7 @@ pub(super) async fn run(task: Task) {
         clock,
         input_tx,
         initial_mode,
+        mut stream_config,
         codec,
         live_reconfig_ok,
         adaptive_fec,
@@ -877,13 +909,16 @@ pub(super) async fn run(task: Task) {
             _ = link_tick.tick() => {
                 emit_link(&mut link, &counters, &fec_target, &live_bitrate, &stats, peer);
             }
-            correction = reconfig_result_rx.recv() => {
-                // Mode actually live after a failed rebuild or a refresh the
-                // backend honored differently. Keep `active` truthful for
-                // later rejection echoes.
-                let Some(ack) = correction else { break };
-                active = ack.mode;
-                if v2io::send(&mut ctrl_send, &ack).await.is_err() {
+            delivered = reconfig_result_rx.recv() => {
+                // Keep `active` truthful for later rejection echoes.
+                let Some(d) = delivered else { break };
+                active = d.mode;
+                let sent = match tell(&mut stream_config, &d) {
+                    Some(Tell::Config(cfg)) => v2io::send(&mut ctrl_send, &cfg).await,
+                    Some(Tell::Correct(ack)) => v2io::send(&mut ctrl_send, &ack).await,
+                    None => Ok(()),
+                };
+                if sent.is_err() {
                     break;
                 }
             }
@@ -1019,6 +1054,44 @@ mod tests {
         CLIP_REASON_NOT_PERMITTED, CLIP_REASON_NO_FILES, CLIP_REASON_OK,
         CLIP_REASON_POLICY_DISABLED, GRANT_ALL, GRANT_CLIPBOARD,
     };
+
+    /// A client that takes configs hears each new epoch once; one that does not hears only
+    /// the corrections.
+    #[test]
+    fn a_delivered_mode_is_a_config_or_a_correction() {
+        use super::super::wiring::Delivered;
+        let mode = |width| punktfunk_core::Mode {
+            width,
+            height: 720,
+            refresh_hz: 60,
+        };
+        let d = |epoch, width, corrects| Delivered {
+            mode: mode(width),
+            epoch,
+            corrects,
+        };
+        let mut held = Some(v2msg::StreamConfig {
+            epoch: 0,
+            mode: mode(1280),
+            ..Default::default()
+        });
+        assert_eq!(tell(&mut held, &d(0, 1280, true)), None, "a failed rebuild");
+        let Some(Tell::Config(cfg)) = tell(&mut held, &d(1, 1920, false)) else {
+            panic!("a new epoch is configured")
+        };
+        assert_eq!((cfg.epoch, cfg.mode.width), (1, 1920));
+        assert_eq!(tell(&mut held, &d(1, 1920, true)), None, "already held");
+
+        let mut none = None;
+        assert_eq!(tell(&mut none, &d(1, 1920, false)), None);
+        assert_eq!(
+            tell(&mut none, &d(2, 800, true)),
+            Some(Tell::Correct(Reconfigured {
+                accepted: true,
+                mode: mode(800)
+            }))
+        );
+    }
 
     const ON: ClipControl = ClipControl {
         enabled: true,

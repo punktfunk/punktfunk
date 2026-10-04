@@ -833,6 +833,7 @@ async fn handshake(
         start_ext: extra.start_ext,
         resume: extra.resume,
         suites: extra.suites,
+        features: Default::default(),
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.

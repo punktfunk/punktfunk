@@ -84,6 +84,8 @@ struct PumpLoop {
     unconsumed_aus: u64,
     seen_clock_gen: u32,
     seen_mode_gen: u32,
+    /// Epoch of the last frame handed on; a new one may move the mode ([`super::anchor`]).
+    last_epoch: Option<u8>,
     /// `PUNKTFUNK_PERF`: recv/decrypt/reassemble split plus AU inter-arrival
     /// jitter. Jump-to-live only fires after the stream is already behind.
     perf: Option<PerfWindow>,
@@ -184,6 +186,7 @@ impl DataPump {
             unconsumed_aus: 0,
             seen_clock_gen: self.clock_gen.load(Ordering::Relaxed),
             seen_mode_gen: self.mode_gen.load(Ordering::Relaxed),
+            last_epoch: None,
             perf: std::env::var("PUNKTFUNK_PERF")
                 .is_ok_and(|v| v != "0")
                 .then(PerfWindow::default),
@@ -610,6 +613,13 @@ impl DataPump {
     ) {
         if frame.flags & FLAG_PROBE as u32 != 0 {
             return; // speed-test filler, not video — measured via the counters above
+        }
+        if lp.last_epoch != Some(frame.epoch) {
+            lp.last_epoch = Some(frame.epoch);
+            let delivered = self.shared.anchor.lock().unwrap().frame(frame.epoch);
+            if let Some(mode) = delivered {
+                super::anchor::apply(&self.shared.mode, &self.mode_gen, mode);
+            }
         }
         // The decoder's RFI for this gap reads what the skipped frame lacks now.
         if let Some(first) =

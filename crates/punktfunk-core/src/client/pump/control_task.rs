@@ -71,6 +71,7 @@ impl ControlTask {
             launch_outcome,
             delivery,
             host_facts,
+            anchor,
             ..
         } = &*shared;
         // Mid-stream clock re-sync ([`ClockResync`]): a batch every
@@ -149,12 +150,20 @@ impl ControlTask {
                 frame = ctrl_recv.read_frame() => {
                     let Ok((ty, body)) = frame else { break }; // stream closed
                     if let Ok(ack) = decode::<Reconfigured>(ty, &body) {
-                        if ack.accepted {
+                        // An anchored host says what it delivers in a `StreamConfig` instead.
+                        if ack.accepted && !anchor.lock().unwrap().on {
                             *mode_slot.lock().unwrap() = ack.mode;
                             mode_gen.fetch_add(1, Ordering::Relaxed);
+                        }
+                        if ack.accepted {
                             tracing::info!(mode = ?ack.mode, "host accepted mode switch");
                         } else {
                             tracing::warn!(active = ?ack.mode, "host rejected mode switch");
+                        }
+                    } else if let Ok(cfg) = decode::<v2msg::StreamConfig>(ty, &body) {
+                        let delivered = anchor.lock().unwrap().config(cfg);
+                        if let Some(mode) = delivered {
+                            super::anchor::apply(mode_slot, &mode_gen, mode);
                         }
                     } else if let Ok(result) = decode::<ProbeResult>(ty, &body) {
                         let mut p = probe.lock().unwrap();
