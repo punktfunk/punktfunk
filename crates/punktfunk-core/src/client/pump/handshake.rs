@@ -217,15 +217,13 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         }
         *args.shared.local_ip.lock().unwrap() = conn.local_ip();
         *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
-        // The media keys came from the exporter, never from `Welcome`.
-        let mut cfg = welcome.session_config(Role::Client);
-        cfg.encrypt = false;
+        let cfg = welcome.session_config(Role::Client);
         let media_v2 = crate::session::MediaV2 {
             clock_origin_ns: server.clock_origin_ns,
             keys: Some(keys),
             clock: None,
         };
-        let mut session = Session::new_v2(cfg, media_v2, Box::new(media))?;
+        let mut session = Session::new(cfg, media_v2, Box::new(media))?;
         // PyroWave: aged-out lossy frames as blocks-with-holes. All-intra renders
         // localized blur, better than a freeze.
         if welcome.codec == crate::quic::CODEC_PYROWAVE {

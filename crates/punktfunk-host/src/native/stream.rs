@@ -758,9 +758,18 @@ mod tests {
         use punktfunk_core::config::{Config, Role};
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         (
-            Session::new(Config::p1_defaults(Role::Host), Box::new(host_tp)).expect("host session"),
-            Session::new(Config::p1_defaults(Role::Client), Box::new(client_tp))
-                .expect("client session"),
+            Session::new(
+                Config::defaults(Role::Host),
+                punktfunk_core::session::MediaV2::default(),
+                Box::new(host_tp),
+            )
+            .expect("host session"),
+            Session::new(
+                Config::defaults(Role::Client),
+                punktfunk_core::session::MediaV2::default(),
+                Box::new(client_tp),
+            )
+            .expect("client session"),
         )
     }
 

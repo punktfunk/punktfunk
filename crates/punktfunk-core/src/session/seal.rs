@@ -109,9 +109,9 @@ pub(super) fn hand_chunk(
     Ok(())
 }
 
-/// Buffer `i` is packet `seq_base + i`, sealed in place. `punktfunk/1`: `seq(8) ‖ plaintext ‖
-/// tag scratch`, sealing `[8..]`. `punktfunk/2`: the header's clear prefix is the associated
-/// data and the rest is sealed. Same layout and nonce order as the fused single-lane path.
+/// Buffer `i` is packet `seq_base + i`, sealed in place: the header's clear prefix is the
+/// associated data and the rest is sealed. Same layout and nonce order as the fused
+/// single-lane path.
 pub(super) fn seal_wire_slice(
     c: &SessionCrypto,
     wires: &mut [Vec<u8>],
@@ -119,12 +119,8 @@ pub(super) fn seal_wire_slice(
 ) -> Result<()> {
     for (i, wire) in wires.iter_mut().enumerate() {
         let seq = seq_base.wrapping_add(i as u64);
-        if c.is_media() {
-            let (aad, rest) = wire.split_at_mut(crate::packet::V2_CLEAR_LEN);
-            c.seal_media(seq, aad, rest)?;
-        } else {
-            c.seal_in_place(seq, &mut wire[8..])?;
-        }
+        let (aad, rest) = wire.split_at_mut(crate::packet::V2_CLEAR_LEN);
+        c.seal_media(seq, aad, rest)?;
     }
     Ok(())
 }

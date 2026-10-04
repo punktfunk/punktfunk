@@ -24,7 +24,7 @@ with cbindgen; the header is checked in, and CI fails when it is stale.
 
 Compile your code with `-DPUNKTFUNK_FEATURE_QUIC`. The whole client API (`punktfunk_connect*`,
 `punktfunk_connection_*`, `punktfunk_pair`, `punktfunk_probe`) sits behind that define. Without it
-the header declares only the raw transport (`punktfunk_session_*`), which the host and tests use.
+the header declares only the raw loopback session (`punktfunk_session_*`), which the tests use.
 
 ```sh
 cc -std=c11 -DPUNKTFUNK_FEATURE_QUIC -I include -c myclient.c

@@ -360,7 +360,7 @@
 // Not [`WIRE_VERSION`]. The C surface can grow without a wire byte changing.
 // Pin the integer in `punktfunk-ffi` (`abi_version_is_pinned`). Per-bump notes live
 // in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 43
+#define PUNKTFUNK_ABI_VERSION 44
 
 // punktfunk/1 wire version. `Hello`/`Welcome` carry it; hosts equality-check it.
 //
@@ -1621,17 +1621,11 @@ typedef struct {
     uint32_t struct_size;
     // 0 = host, 1 = client.
     uint32_t role;
-    // 1 = P1 (GameStream-compatible), 2 = P2 (`punktfunk/1`).
-    uint32_t phase;
     // 0 = GF(2⁸), 1 = GF(2¹⁶).
     uint32_t fec_scheme;
     uint32_t fec_percent;
     uint32_t max_data_per_block;
     uint32_t shard_payload;
-    // Non-zero enables AES-128-GCM.
-    uint32_t encrypt;
-    uint8_t key[16];
-    uint8_t salt[4];
     // Test hook for the loopback transport; 0 in production.
     uint32_t loopback_drop_period;
     // Largest encoded access unit the receiver accepts (reassembler memory bound).
@@ -1650,20 +1644,6 @@ typedef struct {
     // clock as `pts_ns`). A stamp at poll return includes pre-decode queue wait.
     uint64_t received_ns;
 } PunktfunkFrame;
-
-// `#[repr(C)]` as `PunktfunkInputEvent`.
-typedef struct {
-    PunktfunkInputKind kind;
-    uint8_t _pad[3];
-    // keycode / button id / axis id, depending on `kind`.
-    uint32_t code;
-    // x / dx / abs-x / axis-value / scroll-delta, depending on `kind`.
-    int32_t x;
-    // y / dy / abs-y, depending on `kind`.
-    int32_t y;
-    // modifier bitmask or gamepad index.
-    uint32_t flags;
-} PunktfunkInputEvent;
 
 // Session counters.
 typedef struct {
@@ -1882,6 +1862,20 @@ typedef struct {
     uint32_t host_us;
 } PunktfunkHostTiming;
 #endif
+
+// `#[repr(C)]` as `PunktfunkInputEvent`.
+typedef struct {
+    PunktfunkInputKind kind;
+    uint8_t _pad[3];
+    // keycode / button id / axis id, depending on `kind`.
+    uint32_t code;
+    // x / dx / abs-x / axis-value / scroll-delta, depending on `kind`.
+    int32_t x;
+    // y / dy / abs-y, depending on `kind`.
+    int32_t y;
+    // modifier bitmask or gamepad index.
+    uint32_t flags;
+} PunktfunkInputEvent;
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // One rich client→host input for the host virtual DualSense
@@ -2205,16 +2199,8 @@ PunktfunkStatus punktfunk_wake_on_lan(const uint8_t *macs,
                                       uintptr_t mac_count,
                                       const char *last_known_ip);
 
-// Create a session over UDP (`local`/`peer` are `host:port` strings). NULL on error.
-//
-// # Safety
-// `cfg`, `local`, `peer` are valid pointers; the strings are NUL-terminated.
-PunktfunkSession *punktfunk_session_new(const PunktfunkConfig *cfg,
-                                        const char *local,
-                                        const char *peer);
-
 // Connected host+client pair on in-process loopback. Test/dev only: full FEC
-// + framing without a network.
+// + framing without a network, unsealed.
 //
 // # Safety
 // All four pointers are valid; the two out-params receive owned handles.
@@ -2226,7 +2212,7 @@ PunktfunkStatus punktfunk_test_loopback_pair(const PunktfunkConfig *host_cfg,
 // Free a session handle. NULL is a no-op.
 //
 // # Safety
-// `s` is a handle from `punktfunk_session_new` / `punktfunk_test_loopback_pair`, freed once.
+// `s` is a handle from `punktfunk_test_loopback_pair`, freed once.
 void punktfunk_session_free(PunktfunkSession *s);
 
 // Host: FEC-protect, packetize, seal, and send one encoded access unit.
@@ -2246,29 +2232,6 @@ PunktfunkStatus punktfunk_host_submit_frame(PunktfunkSession *s,
 // # Safety
 // `s` is a valid client handle; `out` points to a writable `PunktfunkFrame`.
 PunktfunkStatus punktfunk_client_poll_frame(PunktfunkSession *s, PunktfunkFrame *out);
-
-// Client: serialize and send one input event to the host.
-// `InvalidArg` if `ev->kind` is not a recognized event kind.
-//
-// # Safety
-// `s` is a valid client handle; `ev` points to a readable `InputEvent`-sized allocation.
-PunktfunkStatus punktfunk_send_input(PunktfunkSession *s, const PunktfunkInputEvent *ev);
-
-// Register the host-side input callback (NULL fn pointer clears). Fires from
-// [`punktfunk_host_poll_input`] on the calling thread.
-//
-// # Safety
-// `s` is a valid host handle; `user` is passed back verbatim to `cb`.
-PunktfunkStatus punktfunk_set_input_callback(PunktfunkSession *s,
-                                             void (*cb)(const PunktfunkInputEvent *event, void *user),
-                                             void *user);
-
-// Host: drain pending input events, invoking the registered callback for each.
-// Returns the count dispatched (≥ 0), or a negative [`PunktfunkStatus`] on error.
-//
-// # Safety
-// `s` is a valid host handle. The callback must not free `s`: the drain uses it again.
-int32_t punktfunk_host_poll_input(PunktfunkSession *s);
 
 // Copy session counters into `*out`.
 //

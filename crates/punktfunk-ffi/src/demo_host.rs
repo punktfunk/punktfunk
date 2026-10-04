@@ -359,7 +359,7 @@ async fn serve(
         keys: Some(keys),
         clock: Some(clock.clone()),
     };
-    let open: OpenSession = Box::new(move || Session::new_v2(config, media, Box::new(sender)));
+    let open: OpenSession = Box::new(move || Session::new(config, media, Box::new(sender)));
     let video = tokio::task::spawn_blocking(move || send_video(open, video_rx));
     let dgrams = Dgrams { conn, clock };
     tokio::select! {

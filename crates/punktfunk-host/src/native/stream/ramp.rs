@@ -203,7 +203,12 @@ mod tests {
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         (
             client_tp,
-            Session::new(Config::p1_defaults(Role::Host), Box::new(host_tp)).expect("host session"),
+            Session::new(
+                Config::defaults(Role::Host),
+                punktfunk_core::session::MediaV2::default(),
+                Box::new(host_tp),
+            )
+            .expect("host session"),
         )
     }
 

@@ -777,7 +777,6 @@ mod tests {
     fn loopback_config(role: crate::config::Role) -> crate::config::Config {
         crate::config::Config {
             role,
-            phase: crate::config::ProtocolPhase::P2Punktfunk,
             fec: crate::config::FecConfig {
                 scheme: crate::config::FecScheme::Gf16,
                 fec_percent: 25,
@@ -785,20 +784,27 @@ mod tests {
             },
             shard_payload: 1024,
             max_frame_bytes: 1 << 20,
-            encrypt: false,
-            key: crate::crypto::SessionKey::Aes128Gcm([7u8; 16]),
-            salt: [1, 2, 3, 4],
             loopback_drop_period: 0,
         }
     }
 
-    /// Idle client-role loopback. The pump under test is its report tick,
-    /// not frames.
-    fn idle_client_session() -> (crate::transport::LoopbackTransport, Session) {
+    /// Unsealed media whose capture times count from `origin`.
+    fn loopback_media(origin: u64) -> crate::session::MediaV2 {
+        crate::session::MediaV2 {
+            clock_origin_ns: origin,
+            keys: None,
+            clock: None,
+        }
+    }
+
+    /// Idle client-role loopback, capture times from `origin`. The pump under test is its
+    /// report tick, not frames.
+    fn idle_client_session(origin: u64) -> (crate::transport::LoopbackTransport, Session) {
         let (host_tp, client_tp) = crate::transport::loopback_pair(0, 0);
         let cfg = loopback_config(crate::config::Role::Client);
+        let session = Session::new(cfg, loopback_media(origin), Box::new(client_tp)).unwrap();
         // Keep the host end so the link stays whole for the pump's run.
-        (host_tp, Session::new(cfg, Box::new(client_tp)).unwrap())
+        (host_tp, session)
     }
 
     /// A pump on an idle loopback with an explicit rate, so no controller or probe runs.
@@ -864,24 +870,28 @@ mod tests {
             (crate::quic::CODEC_HEVC, Some((1, 1))),
             (crate::quic::CODEC_PYROWAVE, None),
         ] {
-            let (host_tp, session) = idle_client_session();
+            let origin = crate::quic::wall_clock_ns();
+            let (host_tp, session) = idle_client_session(origin);
             let shared = Arc::new(ClientShared::new(mode));
             let _ = shared.frames.pop(Duration::ZERO); // a decoder is attached
             let (pump, mut ctrl_rx) = test_pump(session, shared.clone(), codec);
             let pump_thread = std::thread::spawn(move || pump.run());
 
-            let mut pk =
-                crate::packet::Packetizer::new(&loopback_config(crate::config::Role::Host));
-            let coder = crate::fec::coder_for(crate::config::FecScheme::Gf16);
+            // The host's packets, sealed by a host session and sent here by hand.
+            let (spare, _) = crate::transport::loopback_pair(0, 0);
+            let mut host = Session::new(
+                loopback_config(crate::config::Role::Host),
+                loopback_media(origin),
+                Box::new(spare),
+            )
+            .unwrap();
             // 8 data shards, 2 parity: three lost at the head cannot be rebuilt.
             let frame = vec![7u8; 8 * 1024];
             let pts = crate::quic::wall_clock_ns();
-            for p in pk.packetize(&frame, pts, 0, coder.as_ref()).unwrap() {
+            for p in host.seal_frame(&frame, pts, 0).unwrap() {
                 host_tp.send(&p).unwrap();
             }
-            let lossy = pk
-                .packetize(&frame, pts + 10_000_000, 0, coder.as_ref())
-                .unwrap();
+            let lossy = host.seal_frame(&frame, pts + 10_000_000, 0).unwrap();
             assert_eq!(lossy.len(), 10);
             for p in &lossy[3..] {
                 host_tp.send(p).unwrap();
@@ -959,7 +969,7 @@ mod tests {
         // Explicit bitrate (not Automatic): keep the controller and the
         // startup probe out. The probe would discard a window of its own.
         let pump_shared = Arc::new(ClientShared::new(mode));
-        let (_host_tp, session) = idle_client_session();
+        let (_host_tp, session) = idle_client_session(crate::quic::wall_clock_ns());
         let (mut pump, mut pump_ctrl_rx) =
             test_pump(session, pump_shared.clone(), crate::quic::CODEC_HEVC);
         pump.pipeline_gap = pipeline_gap.clone();

@@ -67,7 +67,7 @@ pub mod transport;
 pub mod video_fit;
 pub mod wol;
 
-pub use config::{CompositorPref, Config, FecConfig, FecScheme, Mode, ProtocolPhase, Role};
+pub use config::{CompositorPref, Config, FecConfig, FecScheme, Mode, Role};
 pub use error::{PunktfunkError, PunktfunkStatus, Result};
 pub use session::{Frame, Session};
 pub use stats::Stats;
@@ -85,7 +85,7 @@ pub use stats::Stats;
 /// Not [`WIRE_VERSION`]. The C surface can grow without a wire byte changing.
 /// Pin the integer in `punktfunk-ffi` (`abi_version_is_pinned`). Per-bump notes live
 /// in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 43;
+pub const ABI_VERSION: u32 = 44;
 
 /// punktfunk/1 wire version. `Hello`/`Welcome` carry it; hosts equality-check it.
 ///

@@ -2002,7 +2002,7 @@ pub(crate) async fn run_admitted(
     let result: Result<()> = async {
         let stream_thread = tokio::task::spawn_blocking(move || -> Result<()> {
             let (transport, wire_sock, media) = bind_data_plane(data_plane, &bringup_dp)?;
-            let session = Session::new_v2(cfg, media, transport)
+            let session = Session::new(cfg, media, transport)
                 .map_err(|e| anyhow!("host session: {e:?}"))?;
             let mut common = StreamCommon {
                 session,

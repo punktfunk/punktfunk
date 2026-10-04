@@ -18,10 +18,7 @@
 //! first contact — the client does not know the host yet — and carries no block.
 
 use super::*;
-use crate::config::{
-    CompositorPref, Config, FecConfig, FecScheme, GamepadPref, Mode, ProtocolPhase, Role,
-};
-use crate::crypto::SessionKey;
+use crate::config::{CompositorPref, Config, FecConfig, FecScheme, GamepadPref, Mode, Role};
 use crate::error::{PunktfunkError, Result};
 
 /// `client → host`: open the session. The host creates its virtual output at exactly `mode`.
@@ -971,20 +968,12 @@ impl Welcome {
 
     /// Build the data-plane [`Config`] this offer describes (for `role`).
     pub fn session_config(&self, role: Role) -> Config {
-        let mut c = Config::p1_defaults(role);
-        c.phase = ProtocolPhase::P1GameStream; // P1GameStream until the P2 packet rev lands
+        let mut c = Config::defaults(role);
         c.fec = self.fec;
         c.shard_payload = self.shard_payload as usize;
-        c.encrypt = self.encrypt;
-        // ChaCha key when cipher==1 (decode guarantees Some); AES key otherwise.
-        c.key = match (self.cipher, self.key_chacha) {
-            (CIPHER_CHACHA20_POLY1305, Some(k)) => SessionKey::ChaCha20Poly1305(k),
-            _ => SessionKey::Aes128Gcm(self.key),
-        };
-        c.salt = self.salt;
         // Client reassembler ceiling from the negotiated rate: 4× average frame at
         // bitrate_kbps (IDR headroom), floor 8 MiB, cap 64 MiB. Host never reassembles
-        // video. bitrate 0 (pre-negotiation) keeps the 64 MiB p1_defaults bound.
+        // video. bitrate 0 (pre-negotiation) keeps the 64 MiB default bound.
         if role == Role::Client && self.bitrate_kbps > 0 {
             let per_frame = (self.bitrate_kbps as usize).saturating_mul(125)
                 / self.mode.refresh_hz.max(1) as usize;
@@ -1150,7 +1139,6 @@ mod tests {
 
     #[test]
     fn welcome_cipher_negotiation_wire_and_back_compat() {
-        use crate::crypto::SessionKey;
         let base = Welcome {
             abi_version: 2,
             udp_port: 7000,
@@ -1217,12 +1205,12 @@ mod tests {
         bad[68] = 2;
         assert!(Welcome::decode(&bad).is_err());
 
-        let aes_cfg = base.session_config(Role::Client);
-        assert_eq!(aes_cfg.key, SessionKey::Aes128Gcm([7u8; 16]));
-        aes_cfg.validate().expect("AES config validates");
-        let cha_cfg = cha.session_config(Role::Client);
-        assert_eq!(cha_cfg.key, SessionKey::ChaCha20Poly1305(k32));
-        cha_cfg.validate().expect("ChaCha config validates");
+        base.session_config(Role::Client)
+            .validate()
+            .expect("AES config validates");
+        cha.session_config(Role::Client)
+            .validate()
+            .expect("ChaCha config validates");
 
         // mgmt_port after cipher: without a cipher placeholder the port's low byte lands at
         // 68. 47991 is 0xBB57 → byte 68 = 0x57, an unknown id; shipped clients fail-close.

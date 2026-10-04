@@ -178,7 +178,7 @@ mod tests {
     }
 
     fn config(max_data: u16) -> Config {
-        let mut c = Config::p1_defaults(Role::Host);
+        let mut c = Config::defaults(Role::Host);
         c.fec = FecConfig {
             scheme: FecScheme::Gf16,
             fec_percent: 25,
@@ -319,8 +319,7 @@ mod tests {
                 max_total_shards: 12,
                 max_frame_bytes: 4096,
             };
-            let mut r = Reassembler::new(lim);
-            r.set_v2(0);
+            let mut r = Reassembler::new(lim, 0);
             let coder = coder_for(FecScheme::Gf16);
             let stats = crate::stats::StatsCounters::default();
             for ((tag, frame, flags, block, base), (shard, k, m, pad), body) in pkts {

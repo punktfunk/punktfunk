@@ -361,7 +361,7 @@ know is not offered, and the session goes ahead without it — see
 | Contract | Current | Rule |
 |---|---|---|
 | Native protocol | **`punktfunk/2`** | Client and host must both speak it. A host refuses an older client with "update both". |
-| C ABI version | **37** | Between an app and the core library it ships with. |
+| C ABI version | **44** | Between an app and the core library it ships with. |
 | Windows display-driver protocol | **9** | Host and driver must match; the installer updates both. |
 | Windows virtual-gamepad channel | **3** | Host and pad driver must match; same installer. |
 

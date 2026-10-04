@@ -1675,12 +1675,8 @@ fn data_plane(
     // is then only valid same-host, as before).
     let clock_offset = clock_offset_ns.unwrap_or(0);
     let skew_corrected = clock_offset_ns.is_some();
-    let cfg = punktfunk_core::config::Config {
-        encrypt: false,
-        ..cfg
-    };
-    let mut session = Session::new_v2(cfg, media, Box::new(shared))
-        .map_err(|e| anyhow!("client session: {e:?}"))?;
+    let mut session =
+        Session::new(cfg, media, Box::new(shared)).map_err(|e| anyhow!("client session: {e:?}"))?;
     let mut sink = match &out_path {
         Some(p) => Some(std::io::BufWriter::new(
             std::fs::File::create(p).with_context(|| format!("create {p}"))?,
