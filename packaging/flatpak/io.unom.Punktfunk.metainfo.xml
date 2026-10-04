@@ -84,6 +84,12 @@
   </branding>
 
   <releases>
+    <release version="0.43.0" date="2026-10-04">
+      <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.43.0</url>
+      <description>
+        <p>Hosts install games when you start them, a network check says what your link does and offers paced delivery, and controller rumble can be turned off.</p>
+      </description>
+    </release>
     <release version="0.42.0" date="2026-10-01">
       <url type="details">https://git.unom.io/unom/punktfunk/releases/tag/v0.42.0</url>
       <description>

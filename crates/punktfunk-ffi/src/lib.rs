@@ -348,8 +348,15 @@ mod abi_version_tests {
     #[test]
     fn abi_version_is_pinned() {
         // Current ABI. A bump must update this pin.
-        assert_eq!(punktfunk_core::ABI_VERSION, 42);
-        assert_eq!(super::punktfunk_abi_version(), 42);
+        assert_eq!(punktfunk_core::ABI_VERSION, 43);
+        assert_eq!(super::punktfunk_abi_version(), 43);
+    }
+
+    /// The library writes this whole into the caller's buffer; growing it bumps the ABI.
+    #[cfg(all(feature = "quic", target_pointer_width = "64"))]
+    #[test]
+    fn probe_result_size_is_pinned() {
+        assert_eq!(std::mem::size_of::<super::PunktfunkProbeResult>(), 72);
     }
 
     #[test]
