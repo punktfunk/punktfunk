@@ -5,7 +5,8 @@
 use super::*;
 
 #[cfg(target_os = "linux")]
-pub(super) const LAUNCHER_UI_STORES: &[&str] = &["heroic", "heroic-console", "lutris"];
+pub(super) const LAUNCHER_UI_STORES: &[&str] =
+    &["heroic", "heroic-console", "lutris", "hydra-big-picture"];
 #[cfg(not(target_os = "linux"))]
 pub(super) const LAUNCHER_UI_STORES: &[&str] = &[];
 
@@ -29,11 +30,15 @@ pub(super) fn launch_target(
 
 /// Can this box open a known `launcher_ui` value now? Both Heroic tiles share
 /// `heroic_launch_prefix`. Plugin `detect` is only `~/.config/heroic`, which can survive
-/// uninstall — so probe the binary.
+/// uninstall — so probe the binary. Hydra needs a desktop entry that handles its link.
 pub(super) fn launcher_ui_installed(value: &str) -> bool {
     #[cfg(target_os = "linux")]
     if matches!(value, "heroic" | "heroic-console") {
         return heroic_launch_prefix().is_some();
+    }
+    #[cfg(target_os = "linux")]
+    if value == "hydra-big-picture" {
+        return hydra_big_picture().is_some();
     }
     let _ = value;
     true
@@ -85,6 +90,7 @@ fn command_for(spec: &LaunchSpec) -> Option<String> {
             }
             // Bare `lutris` opens the window; a `lutris:rungameid/…` URI would launch a game.
             "lutris" => Some("lutris".into()),
+            "hydra-big-picture" => hydra_big_picture(),
             _ => None,
         },
         // The plugin sends an id; the command is whatever the installed entry says (`desktop.rs`),
@@ -125,6 +131,14 @@ pub(crate) fn heroic_command(value: &str) -> Option<String> {
     Some(format!(
         "{prefix} --no-gui 'heroic://launch?appName={app}&runner={runner}'"
     ))
+}
+
+/// Hydra opens Big Picture from argv only, a running instance included. Every Linux build's entry
+/// handles `hydralauncher://`, so this finds a deb, rpm, snap or integrated AppImage alike.
+#[cfg(target_os = "linux")]
+fn hydra_big_picture() -> Option<String> {
+    super::desktop::mime_handler_command("x-scheme-handler/hydralauncher")
+        .map(|cmd| format!("{cmd} --big-picture"))
 }
 
 #[cfg(target_os = "linux")]
@@ -313,6 +327,13 @@ mod tests {
             resolvable_launcher_ui("heroic-console"),
             heroic_launch_prefix().is_some()
         );
+        assert_eq!(
+            resolvable_launcher_ui("hydra-big-picture"),
+            hydra_big_picture().is_some()
+        );
+        if let Some(cmd) = hydra_big_picture() {
+            assert!(cmd.ends_with(" --big-picture"), "{cmd}");
+        }
     }
 
     #[cfg(not(target_os = "linux"))]

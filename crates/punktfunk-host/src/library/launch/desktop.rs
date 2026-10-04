@@ -34,6 +34,35 @@ pub fn desktop_command(id: &str) -> Option<(String, Option<PathBuf>)> {
     parse_entry(&text)
 }
 
+/// `Exec=` of the first entry, in XDG order, that handles `mime` (`x-scheme-handler/<scheme>`).
+/// Finds an app by the link it registers, wherever it is installed: an integrated AppImage's
+/// entry has no fixed id. Two installs resolve by XDG order, not by mimeapps.list's default.
+#[cfg(target_os = "linux")]
+pub fn mime_handler_command(mime: &str) -> Option<String> {
+    applications_dirs().into_iter().find_map(|dir| {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "desktop"))
+            .collect();
+        files.sort();
+        files.into_iter().find_map(|p| {
+            let text = std::fs::read_to_string(&p).ok()?;
+            handles_mime(&text, mime)
+                .then(|| parse_entry(&text))
+                .flatten()
+                .map(|(cmd, _)| cmd)
+        })
+    })
+}
+
+/// Does the entry list `mime` in its `MimeType=`?
+#[cfg(target_os = "linux")]
+fn handles_mime(text: &str, mime: &str) -> bool {
+    entry_keys(text).any(|(k, v)| k == "MimeType" && v.split(';').any(|m| m.trim() == mime))
+}
+
 /// Where an id's file may sit below an `applications` dir. XDG joins a subdirectory into the id
 /// with `-` (`kde-foo` is `kde/foo.desktop`), so each `-` is also tried as that one separator.
 fn id_files(stem: &str) -> Vec<PathBuf> {
@@ -47,28 +76,32 @@ fn id_files(stem: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Parse the `[Desktop Entry]` group: its `Exec` and `Path`. `None` for an entry that is hidden,
-/// is not an application, or has no `Exec` — the same entries a menu would not show.
-fn parse_entry(text: &str) -> Option<(String, Option<PathBuf>)> {
+/// The trimmed `key=value` pairs of the `[Desktop Entry]` group; other groups and comments skipped.
+fn entry_keys(text: &str) -> impl Iterator<Item = (&str, &str)> {
     let mut in_group = false;
-    let (mut exec, mut cwd, mut hidden, mut kind) = (None, None, false, None);
-    for line in text.lines() {
+    text.lines().filter_map(move |line| {
         let line = line.trim();
         if line.starts_with('[') {
             in_group = line == "[Desktop Entry]";
-            continue;
+            return None;
         }
         if !in_group || line.starts_with('#') {
-            continue;
+            return None;
         }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        match key.trim() {
-            "Exec" if exec.is_none() => exec = Some(value.trim().to_string()),
-            "Path" if cwd.is_none() => cwd = Some(PathBuf::from(value.trim())),
-            "Type" if kind.is_none() => kind = Some(value.trim().to_string()),
-            "Hidden" | "NoDisplay" => hidden |= value.trim().eq_ignore_ascii_case("true"),
+        line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+    })
+}
+
+/// Parse the `[Desktop Entry]` group: its `Exec` and `Path`. `None` for an entry that is hidden,
+/// is not an application, or has no `Exec` — the same entries a menu would not show.
+fn parse_entry(text: &str) -> Option<(String, Option<PathBuf>)> {
+    let (mut exec, mut cwd, mut hidden, mut kind) = (None, None, false, None);
+    for (key, value) in entry_keys(text) {
+        match key {
+            "Exec" if exec.is_none() => exec = Some(value.to_string()),
+            "Path" if cwd.is_none() => cwd = Some(PathBuf::from(value)),
+            "Type" if kind.is_none() => kind = Some(value.to_string()),
+            "Hidden" | "NoDisplay" => hidden |= value.eq_ignore_ascii_case("true"),
             _ => {}
         }
     }
@@ -96,7 +129,7 @@ fn strip_field_codes(exec: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `$XDG_DATA_HOME`, `$XDG_DATA_DIRS`, and the Flatpak exports, each `+ /applications`.
+/// `$XDG_DATA_HOME`, `$XDG_DATA_DIRS`, and the Flatpak and snap exports, each `+ /applications`.
 fn applications_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -118,6 +151,7 @@ fn applications_dirs() -> Vec<PathBuf> {
     }
     dirs.push(PathBuf::from("/var/lib/flatpak/exports/share"));
     dirs.extend(home.map(|h| h.join(".local/share/flatpak/exports/share")));
+    dirs.push(PathBuf::from("/var/lib/snapd/desktop"));
     dirs.into_iter().map(|d| d.join("applications")).collect()
 }
 
@@ -159,6 +193,18 @@ mod desktop_tests {
         assert_eq!(cmd, "/usr/bin/vlc --started-from-file");
         assert_eq!(cwd, Some(PathBuf::from("/opt/vlc")));
         assert_eq!(strip_field_codes("prog %% %f x"), "prog % x");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_scheme_handler_is_read_from_the_entry_group_only() {
+        let handles = |text: &str| handles_mime(text, "x-scheme-handler/hydralauncher");
+        assert!(handles(
+            "[Desktop Entry]\nType=Application\nExec=/opt/Hydra/hydralauncher %U\nMimeType=x-scheme-handler/hydralauncher;\n"
+        ));
+        assert!(!handles(
+            "[Desktop Entry]\nMimeType=x-scheme-handler/hydralauncherx;\n[Desktop Action a]\nMimeType=x-scheme-handler/hydralauncher;\n"
+        ));
     }
 
     #[test]
