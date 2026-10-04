@@ -112,7 +112,6 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
 
         let hello = ClientHello {
             hello: Hello {
-                abi_version: crate::WIRE_VERSION,
                 mode: p.mode,
                 compositor: p.compositor,
                 gamepad: p.gamepad,

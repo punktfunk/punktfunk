@@ -722,7 +722,6 @@ async fn handshake(
 ) -> Result<ServerHello> {
     let hello = ClientHello {
         hello: Hello {
-            abi_version: punktfunk_core::WIRE_VERSION,
             mode: args.mode,
             compositor: args.compositor,
             gamepad: args.gamepad,
@@ -854,7 +853,6 @@ async fn handshake(
     tracing::info!(
         mode = ?welcome.mode,
         fec = ?welcome.fec,
-        encrypt = welcome.encrypt,
         frames = welcome.frames,
         compositor = welcome.compositor.as_str(),
         gamepad = welcome.gamepad.as_str(),
@@ -864,11 +862,7 @@ async fn handshake(
         chroma_444 = welcome.chroma_format == punktfunk_core::quic::CHROMA_IDC_444,
         chroma_format_idc = welcome.chroma_format,
         codec = codec_ext(welcome.codec),
-        cipher = if welcome.cipher == punktfunk_core::quic::CIPHER_CHACHA20_POLY1305 {
-            "chacha20-poly1305"
-        } else {
-            "aes-128-gcm"
-        },
+        suite = ?server.suite,
         "session offer"
     );
 

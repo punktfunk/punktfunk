@@ -46,10 +46,8 @@ fn suite_of(id: u8) -> Option<MediaSuite> {
 /// `client → host`, first frame of the control stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientHello {
-    /// Everything `punktfunk/1`'s `Hello` said. `abi_version` is not on this wire and decodes
-    /// as [`crate::WIRE_VERSION`].
     pub hello: Hello,
-    /// `Start` extension entries by their v1 tags, values as v1 encodes them.
+    /// The entries a client adds ([`EXT_TAG_CLIENT`] and after), by tag.
     pub start_ext: Vec<(u16, Vec<u8>)>,
     /// The session this client held, to take back after a drop.
     pub resume: Option<[u8; 16]>,
@@ -120,7 +118,6 @@ impl V2Message for ClientHello {
 
     fn from_body(body: &[u8]) -> Result<Self> {
         let mut h = Hello {
-            abi_version: crate::WIRE_VERSION,
             mode: Mode::default(),
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
@@ -207,8 +204,7 @@ fn label(v: &[u8], max: usize) -> Option<String> {
         .flatten()
 }
 
-/// `host → client`: the session. Its [`Welcome`] carries no data port, key or salt on this
-/// wire; those fields decode as zero.
+/// `host → client`: the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerHello {
     pub welcome: Welcome,
@@ -260,8 +256,6 @@ impl V2Message for ServerHello {
 
     fn from_body(body: &[u8]) -> Result<Self> {
         let mut w = Welcome {
-            abi_version: crate::WIRE_VERSION,
-            udp_port: 0,
             mode: Mode::default(),
             fec: FecConfig {
                 scheme: FecScheme::Gf16,
@@ -269,9 +263,6 @@ impl V2Message for ServerHello {
                 max_data_per_block: 0,
             },
             shard_payload: 0,
-            encrypt: false,
-            key: [0; 16],
-            salt: [0; 4],
             frames: 0,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
@@ -282,11 +273,9 @@ impl V2Message for ServerHello {
             audio_channels: 2,
             codec: CODEC_HEVC,
             host_caps: 0,
-            cipher: CIPHER_AES_128_GCM,
             mgmt_port: 0,
             grants: GRANT_ALL,
             expires_in_secs: 0,
-            key_chacha: None,
             audio_codec: AUDIO_CODEC_OPUS,
             audio_rate_hz: crate::audio::SAMPLE_RATE_HZ,
             audio_bits: crate::audio::pcm::BITS_16,
@@ -367,11 +356,6 @@ impl V2Message for ServerHello {
         if w.audio_frame_us != 0 {
             w.audio_frame_us = w.audio_frame_us.max(1_000);
         }
-        // This wire sends no key; the zeroed slot keeps `Welcome`'s cipher and key consistent.
-        if suite == Some(MediaSuite::ChaCha20Poly1305) {
-            w.cipher = CIPHER_CHACHA20_POLY1305;
-            w.key_chacha = Some([0; 32]);
-        }
         Ok(ServerHello {
             welcome: w,
             session_id: session_id.ok_or_else(bad)?,
@@ -433,7 +417,6 @@ mod tests {
             ),
         )
             .prop_map(|(a, b, c)| Hello {
-                abi_version: crate::WIRE_VERSION,
                 mode: Mode {
                     width: a.0,
                     height: a.1,
@@ -508,8 +491,6 @@ mod tests {
                     (d.2, d.3, d.4) = (crate::audio::SAMPLE_RATE_HZ, crate::audio::pcm::BITS_16, 0);
                 }
                 Welcome {
-                    abi_version: crate::WIRE_VERSION,
-                    udp_port: 0,
                     mode: Mode {
                         width: a.0,
                         height: a.1,
@@ -521,9 +502,6 @@ mod tests {
                         max_data_per_block: a.4,
                     },
                     shard_payload: a.5,
-                    encrypt: false,
-                    key: [0; 16],
-                    salt: [0; 4],
                     frames: b.0,
                     compositor: CompositorPref::from_u8(b.1),
                     gamepad: GamepadPref::from_u8(b.2),
@@ -539,11 +517,9 @@ mod tests {
                     audio_channels: c.1,
                     codec: c.2,
                     host_caps: c.3,
-                    cipher: CIPHER_AES_128_GCM,
                     mgmt_port: c.4,
                     grants: c.5,
                     expires_in_secs: d.0,
-                    key_chacha: None,
                     audio_codec: d.1,
                     audio_rate_hz: d.2,
                     audio_bits: d.3,
@@ -585,7 +561,6 @@ mod tests {
         let preset = SessionPreset::new("p1", "Couch").unwrap().encode();
         let ch = ClientHello {
             hello: Hello {
-                abi_version: crate::WIRE_VERSION,
                 mode: Mode {
                     width: 1920,
                     height: 1080,
@@ -632,7 +607,7 @@ mod tests {
         assert_eq!(SessionPreset::from_ext(&entries).unwrap().name, "Couch");
         assert_eq!(DeliveryAsk::from_ext(&entries).unwrap().profile, 2);
 
-        let mut sh = ServerHello {
+        let sh = ServerHello {
             welcome: ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body())
                 .unwrap()
                 .welcome,
@@ -640,8 +615,6 @@ mod tests {
             clock_origin_ns: 1_700_000_000_000_000_000,
             suite: Some(MediaSuite::ChaCha20Poly1305),
         };
-        sh.welcome.cipher = CIPHER_CHACHA20_POLY1305;
-        sh.welcome.key_chacha = Some([0; 32]);
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),
             sh

@@ -8,7 +8,6 @@ use crate::config::{CompositorPref, Config, FecConfig, GamepadPref, Mode, Role};
 /// `client → host`: open the session. The host creates its virtual output at exactly `mode`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hello {
-    pub abi_version: u32,
     pub mode: Mode,
     /// Preferred compositor (`Auto` = host decides). Honored only if that backend is available;
     /// the resolved choice is [`Welcome::compositor`]. Omitted by older clients → `Auto`.
@@ -19,20 +18,17 @@ pub struct Hello {
     /// Requested encoder bitrate, kbps. `0` = host default. Clamped and echoed in
     /// [`Welcome::bitrate_kbps`]. Omitted by older clients → `0`.
     pub bitrate_kbps: u32,
-    /// Device label for pairing approval, `len u8 || UTF-8` (≤ [`HELLO_NAME_MAX`]).
-    /// Omitted by older clients → `None` (host uses a fingerprint-derived label).
+    /// Device label for pairing approval, UTF-8, at most [`HELLO_NAME_MAX`] bytes.
+    /// Omitted → `None` (host uses a fingerprint-derived label).
     pub name: Option<String>,
     /// Store-qualified library id (`steam:570`) the host resolves against its own library.
-    /// `None` = default session. After `name` as `len u8 || UTF-8` (≤ [`HELLO_LAUNCH_MAX`]);
-    /// a zero-length name placeholder precedes it when `name` is absent. Omitted → `None`.
+    /// `None` = default session. At most [`HELLO_LAUNCH_MAX`] bytes. Omitted → `None`.
     pub launch: Option<String>,
     /// [`VIDEO_CAP_10BIT`] / [`VIDEO_CAP_HDR`]. Host enables 10-bit/HDR only when the bit is
-    /// set, so `0` (older clients) stays 8-bit BT.709. After `launch`; forces name/launch
-    /// placeholders. Omitted → `0`.
+    /// set, so `0` stays 8-bit BT.709. Omitted → `0`.
     pub video_caps: u8,
     /// Requested channels: `2` / `6` / `8`. Host echoes the capture count in
-    /// [`Welcome::audio_channels`]. Non-stereo forces name/launch/video_caps placeholders.
-    /// Omitted or `2` → stereo, so the stereo Hello stays byte-identical.
+    /// [`Welcome::audio_channels`]. Omitted → stereo.
     pub audio_channels: u8,
     /// Decode bitfield: [`CODEC_H264`] / [`CODEC_HEVC`] / [`CODEC_AV1`]. Host reports the pick
     /// in [`Welcome::codec`]. A GPU-less host needs [`CODEC_H264`]. Omitted → `0`, which
@@ -43,16 +39,13 @@ pub struct Hello {
     pub preferred_codec: u8,
     /// Client-panel ST.2086 volume ([`HdrMeta`]) when [`VIDEO_CAP_HDR`] is set. Copied into
     /// the virtual-display EDID so the host tone-maps to this panel, and echoed as `0xCE`.
-    /// Fixed [`super::datagram::HDR_META_BODY_LEN`]-byte body, no placeholder — presence is
-    /// remaining length after `preferred_codec`. Omitted / no HDR display → `None`.
+    /// Omitted / no HDR display → `None`.
     pub display_hdr: Option<HdrMeta>,
-    /// Non-video bits ([`CLIENT_CAP_CURSOR`]). After `display_hdr`; that block has no
-    /// placeholder, so remaining length < `HDR_META_BODY_LEN` means no HDR and these bytes
-    /// *are* the post-HDR tail. Budget: 1+2+4+1+1+1 = 10 of 27. Omitted / zero → `0`.
+    /// Non-video bits ([`CLIENT_CAP_CURSOR`]). Omitted → `0`.
     pub client_caps: u8,
     /// Largest sealed video-shard payload this client accepts. Non-zero ⇒ mid-session
-    /// `shard_payload` changes are safe, and the value is the jumbo ceiling. `0` = legacy:
-    /// host must not change sealed geometry mid-session. 2 LE bytes after `client_caps`.
+    /// `shard_payload` changes are safe, and the value is the jumbo ceiling. `0`: the host
+    /// must not change sealed geometry mid-session.
     pub max_shard_payload: u16,
     /// Requested capture rate (`48_000`, `96_000`, or the 44.1 kHz family). A request, never
     /// a fact — the client opens its device from [`Welcome::audio_rate_hz`]. Requires
@@ -66,7 +59,7 @@ pub struct Hello {
     pub audio_bits: u8,
     /// Requested surround coupling, an [`AudioLayout`](crate::audio::AudioLayout) wire id.
     /// Host answers in [`Welcome::audio_layout`] with what it encodes. `0`/absence is the legacy
-    /// coupling, so a stereo or legacy Hello never carries this byte unless `video_fit` forces it.
+    /// coupling.
     pub audio_layout: u8,
     /// How this client fills its view when the frame's shape differs
     /// ([`VideoFit::wire`](crate::video_fit::VideoFit::wire)). A host that sizes the frame for
@@ -87,11 +80,6 @@ pub const HELLO_NAME_MAX: usize = 64;
 
 /// Longest [`Hello::launch`] id (UTF-8 bytes). Ids are short; 128 bounds the length prefix.
 pub const HELLO_LAUNCH_MAX: usize = 128;
-
-/// [`Welcome::cipher`]: AES-128-GCM. Default; the only id pre-cipher builds know.
-pub const CIPHER_AES_128_GCM: u8 = 0;
-/// [`Welcome::cipher`]: ChaCha20-Poly1305 (RFC 8439), via [`VIDEO_CAP_CHACHA20`].
-pub const CIPHER_CHACHA20_POLY1305: u8 = 1;
 
 /// [`Welcome::audio_codec`]: Opus on `0xC9` (48 kHz). `0` so absence and older hosts both
 /// read as Opus; a declined hi-res session resolves here — silence is the unacceptable outcome.
@@ -275,14 +263,9 @@ pub fn ext_abr_features(entries: &[(u16, &[u8])]) -> u8 {
 /// `host → client`: the complete session offer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Welcome {
-    pub abi_version: u32,
-    pub udp_port: u16,
     pub mode: Mode,
     pub fec: FecConfig,
     pub shard_payload: u16,
-    pub encrypt: bool,
-    pub key: [u8; 16],
-    pub salt: [u8; 4],
     /// Seed/testing: frames the host will send (`0` = unbounded).
     pub frames: u32,
     /// Resolved compositor. [`Hello::compositor`] if available, else auto-detect.
@@ -310,13 +293,8 @@ pub struct Welcome {
     /// Host input bits ([`HOST_CAP_GAMEPAD_STATE`]): snapshots vs legacy per-transition
     /// events. Omit → `0`.
     pub host_caps: u8,
-    /// Session AEAD: [`CIPHER_AES_128_GCM`] or [`CIPHER_CHACHA20_POLY1305`]. Emitted only when
-    /// non-zero, so AES Welcome stays byte-identical. Decode is fail-closed: unknown id is
-    /// `Err`, never a silent AES fallback (that session would not decrypt).
-    pub cipher: u8,
-    /// Management-API port (game library). Distinct from `udp_port` and the QUIC control port.
-    /// `0` = not advertised (older host; client uses 47990). After the cipher block (69, or 101
-    /// with ChaCha); emitting it forces the `cipher` placeholder — see [`Welcome::encode`].
+    /// Management-API port (game library). Distinct from the QUIC port.
+    /// `0` = not advertised; the client uses 47990.
     pub mgmt_port: u16,
     /// [`GRANT_GAMEPAD`](super::GRANT_GAMEPAD)-family mask. The client uses this to skip
     /// capture that cannot land. Omit → [`GRANT_ALL`](super::GRANT_ALL).
@@ -324,14 +302,8 @@ pub struct Welcome {
     /// Seconds until access expires, measured when this Welcome is built. `0` = permanent
     /// (also older-host omit). Mid-session changes: [`AccessUpdate`](super::AccessUpdate).
     pub expires_in_secs: u32,
-    /// 32-byte ChaCha20-Poly1305 key, present iff `cipher == 1`, at 69..101. The 16-byte `key`
-    /// keeps its offset and stays independently random. Decode rejects `cipher == 1` with
-    /// fewer than 32 key bytes.
-    pub key_chacha: Option<[u8; 32]>,
     /// Audio plane: [`AUDIO_CODEC_OPUS`] (`0xC9`/`0xD2`) or [`AUDIO_CODEC_PCM`] (`0xD3`).
-    /// Never both, never switched mid-session. Non-Opus forces the four audio fields and every
-    /// earlier placeholder so Opus Welcome stays 68 bytes; a slip onto offset 68 is `cipher`.
-    /// Offset 79 (AES) / 111 (ChaCha). Omit → Opus.
+    /// Never both, never switched mid-session. Omit → Opus.
     pub audio_codec: u8,
     /// Resolved capture rate — open the client device from this, never from Hello.
     /// WASAPI `AUTOCONVERTPCM` accepts 96 kHz against a 48 kHz engine and returns interpolated
@@ -347,12 +319,11 @@ pub struct Welcome {
     /// path MTU (this plane is never fragmented; 96 kHz/24-bit at 1472 B only fits 2 ms).
     pub audio_frame_us: u16,
     /// Second host-capability byte ([`HOST_CAP2_REPEAT_MARK`](super::HOST_CAP2_REPEAT_MARK),
-    /// [`HOST_CAP2_TOUCH`](super::HOST_CAP2_TOUCH)). Nonzero forces the audio-block placeholders.
-    /// Offset 87 (AES) / 119 (ChaCha). Omit → `0`.
+    /// [`HOST_CAP2_TOUCH`](super::HOST_CAP2_TOUCH)). Omit → `0`.
     pub host_caps2: u8,
     /// The surround coupling the host encodes, an [`AudioLayout`](crate::audio::AudioLayout)
     /// wire id: what [`Hello::audio_layout`] asked for when the host knows it, else `0`. Build
-    /// the decoder from THIS. Last field: offset 88 (AES) / 120 (ChaCha). Omit → `0`, legacy.
+    /// the decoder from THIS. Omit → `0`, legacy.
     pub audio_layout: u8,
 }
 

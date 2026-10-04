@@ -42,9 +42,8 @@ pub const VIDEO_CAP_PROBE_SEQ: u8 = 0x10;
 /// to clients that set this bit; others get a whole-AU seal.
 pub const VIDEO_CAP_STREAMED_AU: u8 = 0x20;
 /// [`Hello::video_caps`]: client can open ChaCha20-Poly1305 session datagrams and wants
-/// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows,
-/// answering [`Welcome::cipher`] `= 1` plus [`Welcome::key_chacha`]. Other clients keep
-/// the AES-128-GCM Welcome byte-identical.
+/// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows, and
+/// says so in the `ServerHello` suite.
 pub const VIDEO_CAP_CHACHA20: u8 = 0x40;
 /// [`Hello::video_caps`]: the decoder accepts multi-slice AUs. The embedder sets this from
 /// the decode stack — some mobile/TV SoCs wedge on multi-slice HEVC — not from a host
@@ -477,8 +476,6 @@ mod tests {
     fn host_cap_clipboard_bit_is_distinct_and_survives_server_hello() {
         assert_ne!(HOST_CAP_CLIPBOARD, HOST_CAP_GAMEPAD_STATE);
         let mut w = Welcome {
-            abi_version: 1,
-            udp_port: 1,
             mode: Mode {
                 width: 1920,
                 height: 1080,
@@ -490,9 +487,6 @@ mod tests {
                 max_data_per_block: 1024,
             },
             shard_payload: 1024,
-            encrypt: false,
-            key: [0; 16],
-            salt: [0; 4],
             frames: 0,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
@@ -506,8 +500,6 @@ mod tests {
             mgmt_port: 0,
             grants: GRANT_ALL,
             expires_in_secs: 0,
-            cipher: 0,
-            key_chacha: None,
             audio_codec: AUDIO_CODEC_OPUS,
             audio_rate_hz: SAMPLE_RATE_HZ,
             audio_bits: BITS_16,

@@ -420,7 +420,6 @@ mod tests {
     fn hello(name: &str, launch: Option<&str>) -> Vec<u8> {
         use punktfunk_core::config::{CompositorPref, GamepadPref};
         let hello = Hello {
-            abi_version: punktfunk_core::WIRE_VERSION,
             mode: punktfunk_core::Mode {
                 width: 1280,
                 height: 720,

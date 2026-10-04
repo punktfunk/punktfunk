@@ -357,17 +357,9 @@
 // the caller's buffer is a bump: the version check is the overrun guard
 // (`PunktfunkHidOutput` at 27, `PunktfunkProbeResult` at 43).
 //
-// Not [`WIRE_VERSION`]. The C surface can grow without a wire byte changing.
-// Pin the integer in `punktfunk-ffi` (`abi_version_is_pinned`). Per-bump notes live
-// in `CHANGELOG.md`.
+// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
+// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
 #define PUNKTFUNK_ABI_VERSION 44
-
-// punktfunk/1 wire version. `Hello`/`Welcome` carry it; hosts equality-check it.
-//
-// Separate from [`ABI_VERSION`]: the C surface can grow without a wire byte changing.
-// Bump only when the handshake or a plane changes incompatibly. Riding a C-only bump
-// onto the wire locks new clients out of every deployed host.
-#define PUNKTFUNK_WIRE_VERSION 2
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -687,9 +679,8 @@
 #define PUNKTFUNK_VIDEO_CAP_STREAMED_AU 32
 
 // [`Hello::video_caps`]: client can open ChaCha20-Poly1305 session datagrams and wants
-// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows,
-// answering [`Welcome::cipher`] `= 1` plus [`Welcome::key_chacha`]. Other clients keep
-// the AES-128-GCM Welcome byte-identical.
+// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows, and
+// says so in the `ServerHello` suite.
 #define PUNKTFUNK_VIDEO_CAP_CHACHA20 64
 
 // [`Hello::video_caps`]: the decoder accepts multi-slice AUs. The embedder sets this from
@@ -1048,12 +1039,6 @@
 
 // Longest [`Hello::launch`] id (UTF-8 bytes). Ids are short; 128 bounds the length prefix.
 #define PUNKTFUNK_HELLO_LAUNCH_MAX 128
-
-// [`Welcome::cipher`]: AES-128-GCM. Default; the only id pre-cipher builds know.
-#define PUNKTFUNK_CIPHER_AES_128_GCM 0
-
-// [`Welcome::cipher`]: ChaCha20-Poly1305 (RFC 8439), via [`VIDEO_CAP_CHACHA20`].
-#define PUNKTFUNK_CIPHER_CHACHA20_POLY1305 1
 
 // [`Welcome::audio_codec`]: Opus on `0xC9` (48 kHz). `0` so absence and older hosts both
 // read as Opus; a declined hi-res session resolves here — silence is the unacceptable outcome.

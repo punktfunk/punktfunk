@@ -567,8 +567,6 @@ pub(super) async fn negotiate(
     };
 
     let welcome = Welcome {
-        abi_version: punktfunk_core::WIRE_VERSION,
-        udp_port: 0,
         mode: hello.mode,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
@@ -581,10 +579,6 @@ pub(super) async fn negotiate(
         // not fragment). Order: jumbo re-proof, `PUNKTFUNK_WIRE_MTU`, a prior session's
         // learned path budget, then this family default. See `wire_mtu.rs`.
         shard_payload: shard_payload as u16,
-        // The media keys come from the connection's exporter, never from this message.
-        encrypt: false,
-        key: [0; 16],
-        salt: [0; 4],
         frames: match source {
             Punktfunk1Source::Synthetic => frames,
             // Unbounded; the client streams until we close.
@@ -672,22 +666,13 @@ pub(super) async fn negotiate(
         // Mask and remaining lifetime from admission. Full-control permanent is `GRANT_ALL, 0`.
         grants,
         expires_in_secs,
-        // Cipher 0 keeps Welcome byte-identical to the pre-cipher form, unless a mgmt port
-        // forces the placeholder (`Welcome::encode`). Data plane reads `welcome.session_config`.
-        cipher: if chacha {
-            punktfunk_core::quic::CIPHER_CHACHA20_POLY1305
-        } else {
-            punktfunk_core::quic::CIPHER_AES_128_GCM
-        },
-        key_chacha: None,
-        // Resolved plane. Opus 48 kHz / 16-bit makes `Welcome::encode` omit the four fields
-        // so the Welcome stays byte-identical to the pre-hi-res form. Client opens from these,
-        // never from what it asked. `audio_frame_us` is `0` on Opus (fixed 5 ms).
+        // Resolved plane. Client opens from these, never from what it asked.
+        // `audio_frame_us` is `0` on Opus (fixed 5 ms).
         audio_codec: audio_plane.codec,
         audio_rate_hz: audio_plane.rate_hz,
         audio_bits: audio_plane.bits,
         audio_frame_us: audio_plane.frame_us,
-        // The coupling the encoder runs; a legacy answer keeps the Welcome byte-identical.
+        // The coupling the encoder runs.
         audio_layout: audio_plane.layout.wire(),
         // Idle-keepalive re-encodes are marked `USER_FLAG_REPEAT` so client ABR treats an
         // unflagged AU as new content.

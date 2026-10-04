@@ -4264,7 +4264,6 @@ mod tests {
             .expect("stream type");
         let mut recv = v2io::FrameReader::new(recv);
         let hello = Hello {
-            abi_version: punktfunk_core::WIRE_VERSION,
             mode: punktfunk_core::Mode {
                 width: 1280,
                 height: 720,

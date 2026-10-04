@@ -269,8 +269,6 @@ async fn serve(
         kbps => kbps.clamp(2_000, 40_000),
     };
     let welcome = Welcome {
-        abi_version: punktfunk_core::WIRE_VERSION,
-        udp_port: 0,
         mode,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
@@ -281,10 +279,6 @@ async fn serve(
             0 => 1408,
             max => max.min(1408),
         },
-        // The media keys come from the connection's exporter.
-        encrypt: false,
-        key: [0; 16],
-        salt: [0; 4],
         frames: 0,
         compositor: CompositorPref::Auto,
         gamepad: hello.gamepad,
@@ -295,11 +289,9 @@ async fn serve(
         audio_channels: 2,
         codec,
         host_caps: quic::HOST_CAP_GAMEPAD_STATE,
-        cipher: quic::CIPHER_AES_128_GCM,
         mgmt_port: 0,
         grants: quic::GRANT_ALL,
         expires_in_secs: 0,
-        key_chacha: None,
         audio_codec: quic::AUDIO_CODEC_OPUS,
         audio_rate_hz: SAMPLE_RATE_HZ,
         audio_bits: punktfunk_core::audio::pcm::BITS_16,
