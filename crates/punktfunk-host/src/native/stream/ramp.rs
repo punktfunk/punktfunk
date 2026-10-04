@@ -197,6 +197,7 @@ fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use punktfunk_core::quic::ProbeRequest;
 
     fn loopback_host() -> (punktfunk_core::transport::LoopbackTransport, Session) {
         use punktfunk_core::config::{Config, Role};

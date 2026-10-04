@@ -423,9 +423,11 @@ async fn refuse_older_page(connection: &wtransport::Connection, code: u32, reaso
         code,
         reason: reason.to_string(),
     };
-    let mut framed = (refused.encode().len() as u16).to_le_bytes().to_vec();
-    framed.extend_from_slice(&refused.encode());
-    say_then_wait(connection, &framed).await;
+    say_then_wait(
+        connection,
+        &punktfunk_core::quic::pkf1::frame(&refused.encode_pkf1()),
+    )
+    .await;
 }
 
 async fn say_then_wait(connection: &wtransport::Connection, bytes: &[u8]) {

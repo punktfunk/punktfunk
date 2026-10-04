@@ -10,7 +10,7 @@
 //! ([`crate::link_health`]) is counted and emitted here too.
 //!
 //! `select!` drops the inbound read future whenever a sibling fires, so framing
-//! uses [`io::MsgReader`]. Optional channels whose sender can drop mid-session
+//! uses a [`FrameReader`](punktfunk_core::quic::v2::io::FrameReader). Optional channels whose sender can drop mid-session
 //! (`clip_offer_rx`, `shard_change_rx`, `access_rx`) must disable their branch
 //! on `None` or a closed mpsc busy-spins.
 //!
@@ -20,6 +20,7 @@
 use super::*;
 use pf_clipboard::ClipCoordCmd;
 use punktfunk_core::abr::governor::{ShareWindow, NO_SHARE_KBPS};
+use punktfunk_core::quic::v2::{io as v2io, msg as v2msg};
 use punktfunk_core::quic::{AckReason, ClipControl, ClipOffer, ClipState};
 
 /// The ack this client can read. The reason byte goes only to a client that
@@ -206,7 +207,10 @@ impl PyroWavePin {
 /// bare `u32`, so a positional swap would compile and fail at runtime.
 pub(super) struct Task {
     pub(super) ctrl_send: super::link::CtlSend,
-    pub(super) ctrl_recv: super::link::CtlRecv,
+    pub(super) ctrl_recv: super::link::CtlReader,
+    /// The session's media clock: clock echoes leave in its time, and a phase report's latch
+    /// arrives in it.
+    pub(super) clock: std::sync::Arc<punktfunk_core::quic::v2::clock::SessionClock>,
     /// The input thread's queue, shared with the datagram loop: a key edge off the
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
@@ -277,7 +281,8 @@ pub(super) struct Task {
 pub(super) async fn run(task: Task) {
     let Task {
         mut ctrl_send,
-        ctrl_recv,
+        mut ctrl_recv,
+        clock,
         input_tx,
         initial_mode,
         codec,
@@ -392,28 +397,24 @@ pub(super) async fn run(task: Task) {
     // asked. The answer is also how the client learns this host reads delivery at all.
     if let Some(ask) = delivery_ask {
         let ack = apply_delivery(&delivery, ask.profile);
-        if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+        if v2io::send(&mut ctrl_send, &ack).await.is_err() {
             return;
         }
         if let Some(facts) = host_facts {
-            if io::write_msg(&mut ctrl_send, &facts.encode())
-                .await
-                .is_err()
-            {
+            if v2io::send(&mut ctrl_send, &facts).await.is_err() {
                 return;
             }
         }
     }
-    // `select!` drops this future whenever a sibling fires. `io::read_msg`
-    // would lose a partial frame and misalign the rest of the session.
-    let mut ctrl_reader = io::MsgReader::new(ctrl_recv);
     loop {
         tokio::select! {
-            msg = ctrl_reader.read_msg() => {
-                let Ok(msg) = msg else { break };
-                if let Ok(edge) = punktfunk_core::quic::InputEdge::decode(&msg) {
-                    offer_edge(edge.0, &session_grants, &input_tx, &counters, &mut denied).await;
-                } else if let Ok(req) = Reconfigure::decode(&msg) {
+            // `select!` drops this future whenever a sibling fires; the reader keeps a partial
+            // frame for the next call.
+            frame = ctrl_recv.read_frame() => {
+                let Ok((ty, body)) = frame else { break };
+                if let Some(ev) = v2msg::decode_input_event(ty, &body) {
+                    offer_edge(ev, &session_grants, &input_tx, &counters, &mut denied).await;
+                } else if let Ok(req) = v2msg::decode::<Reconfigure>(ty, &body) {
                     let now = std::time::Instant::now();
                     // Same bound as the handshake: `> 0` alone acked a mode that cannot land.
                     let valid = crate::encode::validate_refresh(req.mode.refresh_hz).is_ok()
@@ -446,13 +447,13 @@ pub(super) async fn run(task: Task) {
                         tracing::info!(mode = ?req.mode, "mode switch accepted");
                     }
                     let ack = Reconfigured { accepted: ok, mode: active };
-                    if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                         break;
                     }
                     if ok && reconfig_tx.send(req.mode).is_err() {
                         break;
                     }
-                } else if RequestKeyframe::decode(&msg).is_ok() {
+                } else if v2msg::decode::<RequestKeyframe>(ty, &body).is_ok() {
                     // Encode loop coalesces: a wedge fires several requests
                     // before the IDR lands.
                     tracing::debug!("client requested keyframe (decode recovery)");
@@ -460,7 +461,7 @@ pub(super) async fn run(task: Task) {
                     if keyframe_tx.send(()).is_err() {
                         break;
                     }
-                } else if let Ok(req) = RfiRequest::decode(&msg) {
+                } else if let Ok(req) = v2msg::decode::<RfiRequest>(ty, &body) {
                     // Encode loop falls back to a coalesced IDR when the range
                     // is too old or the encoder has no RFI.
                     tracing::debug!(
@@ -473,7 +474,7 @@ pub(super) async fn run(task: Task) {
                     if rfi_tx.send((req.first_frame, req.last_frame)).is_err() {
                         break;
                     }
-                } else if let Ok(rep) = punktfunk_core::quic::DeliveryReport::decode(&msg) {
+                } else if let Ok(rep) = v2msg::decode::<punktfunk_core::quic::DeliveryReport>(ty, &body) {
                     // Unconditional: stall diagnosis needs `loss_ppm = 0` even
                     // when FEC is pinned or adaptive FEC is off. Saturate into
                     // the u32 bridge; the value only matters near zero.
@@ -500,28 +501,28 @@ pub(super) async fn run(task: Task) {
                             break;
                         }
                         let ack = bitrate_ack(share, AckReason::Governor, ack_reason);
-                        if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                        if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                             break;
                         }
                         if !binds && ack_reason {
                             let release = bitrate_ack(NO_SHARE_KBPS, AckReason::Governor, true);
-                            if io::write_msg(&mut ctrl_send, &release.encode()).await.is_err() {
+                            if v2io::send(&mut ctrl_send, &release).await.is_err() {
                                 break;
                             }
                         }
                     }
-                } else if let Ok(req) = punktfunk_core::quic::SetDelivery::decode(&msg) {
+                } else if let Ok(req) = v2msg::decode::<punktfunk_core::quic::SetDelivery>(ty, &body) {
                     let ack = apply_delivery(&delivery, req.profile);
-                    if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                         break;
                     }
-                } else if let Ok(rep) = LinkReport::decode(&msg) {
+                } else if let Ok(rep) = v2msg::decode::<LinkReport>(ty, &body) {
                     link_kbps.store(rep.proven_kbps, Ordering::Relaxed);
                     tracing::info!(
                         proven_kbps = rep.proven_kbps,
                         "client's ramp proved the link rate"
                     );
-                } else if let Ok(rep) = LossReport::decode(&msg) {
+                } else if let Ok(rep) = v2msg::decode::<LossReport>(ty, &body) {
                     let unrecovered_run = unrecovered.report(std::time::Instant::now());
                     link.note_loss(rep.loss_ppm, unrecovered_run);
                     link.sample_bands(
@@ -562,7 +563,7 @@ pub(super) async fn run(task: Task) {
                             );
                         }
                     }
-                } else if let Ok(req) = SetBitrate::decode(&msg) {
+                } else if let Ok(req) = v2msg::decode::<SetBitrate>(ty, &body) {
                     link.note_bitrate_ask(
                         req.bitrate_kbps,
                         live_bitrate.load(Ordering::Relaxed),
@@ -638,13 +639,13 @@ pub(super) async fn run(task: Task) {
                         "mid-stream bitrate change requested"
                     );
                     let ack = bitrate_ack(resolved, why, ack_reason);
-                    if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                         break;
                     }
                     if bitrate_tx.send(resolved).is_err() {
                         break;
                     }
-                } else if let Ok(ack) = punktfunk_core::quic::ShardPayloadAck::decode(&msg) {
+                } else if let Ok(ack) = v2msg::decode::<punktfunk_core::quic::ShardPayloadAck>(ty, &body) {
                     // Grow gate: packetizer may exceed the old size only after
                     // this ack. A dropped send means the watcher already ended.
                     tracing::info!(
@@ -652,10 +653,7 @@ pub(super) async fn run(task: Task) {
                         "client acked shard-payload change"
                     );
                     let _ = shard_ack_tx.send(ack.shard_payload);
-                } else if let Ok(req) = ProbeRequest::decode(&msg)
-                    .map(ProbeShaped::from)
-                    .or_else(|_| ProbeShaped::decode(&msg))
-                {
+                } else if let Ok(req) = v2msg::decode::<ProbeShaped>(ty, &body) {
                     let open = ramp_open.load(Ordering::SeqCst);
                     if !probe_only
                         && !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open)
@@ -666,7 +664,7 @@ pub(super) async fn run(task: Task) {
                         );
                         // The client holds its reports until a probe is answered.
                         let declined = super::stream::declined();
-                        if io::write_msg(&mut ctrl_send, &declined.encode()).await.is_err() {
+                        if v2io::send(&mut ctrl_send, &declined).await.is_err() {
                             break;
                         }
                         continue;
@@ -679,21 +677,23 @@ pub(super) async fn run(task: Task) {
                     if probe_tx.send(req).is_err() {
                         break;
                     }
-                } else if let Ok(probe) = ClockProbe::decode(&msg) {
-                    // t2/t3 are in the AU pts_ns clock. Inline; no data-plane hop.
-                    let t2_ns = now_ns();
+                } else if let Ok(probe) = v2msg::decode::<ClockProbe>(ty, &body) {
+                    // t2/t3 in the session clock video pts leave in. Inline; no data-plane hop.
+                    let t2_ns = clock.to_wire(now_ns());
                     let echo = ClockEcho {
                         t1_ns: probe.t1_ns,
                         t2_ns,
-                        t3_ns: now_ns(),
+                        t3_ns: clock.to_wire(now_ns()),
                     };
-                    if io::write_msg(&mut ctrl_send, &echo.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &echo).await.is_err() {
                         break;
                     }
-                } else if let Ok(pr) = punktfunk_core::quic::PhaseReport::decode(&msg) {
-                    // Inert when `PUNKTFUNK_PHASE_LOCK=0` (stored, never drained).
+                } else if let Ok(mut pr) = v2msg::decode::<punktfunk_core::quic::PhaseReport>(ty, &body) {
+                    // The latch arrives in wire time. Inert when `PUNKTFUNK_PHASE_LOCK=0`
+                    // (stored, never drained).
+                    pr.next_latch_host_ns = clock.to_host(pr.next_latch_host_ns);
                     phase_ctl.store(pr);
-                } else if let Ok(m) = punktfunk_core::quic::CursorRenderMode::decode(&msg) {
+                } else if let Ok(m) = v2msg::decode::<punktfunk_core::quic::CursorRenderMode>(ty, &body) {
                     // Data-plane edge-detects per tick (forward+exclude vs
                     // composite). Inert without the cursor cap.
                     cursor_client_draws.store(m.client_draws, Ordering::Relaxed);
@@ -701,7 +701,7 @@ pub(super) async fn run(task: Task) {
                         client_draws = m.client_draws,
                         "cursor render mode set by client"
                     );
-                } else if let Ok(ctl) = ClipControl::decode(&msg) {
+                } else if let Ok(ctl) = v2msg::decode::<ClipControl>(ty, &body) {
                     let granted = session_grants.load(Ordering::Relaxed)
                         & punktfunk_core::quic::GRANT_CLIPBOARD
                         != 0;
@@ -722,10 +722,10 @@ pub(super) async fn run(task: Task) {
                         policy: resolved_policy,
                         reason,
                     };
-                    if io::write_msg(&mut ctrl_send, &state.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &state).await.is_err() {
                         break;
                     }
-                } else if let Ok(offer) = ClipOffer::decode(&msg) {
+                } else if let Ok(offer) = v2msg::decode::<ClipOffer>(ty, &body) {
                     // WRITE half of CLIPBOARD: installs a client selection on
                     // the host clipboard.
                     if clip_offer_permitted(
@@ -746,12 +746,12 @@ pub(super) async fn run(task: Task) {
                         denied.note(GrantClass::Clipboard);
                     }
                 } else {
-                    tracing::warn!("unknown control message — ignoring");
+                    tracing::debug!(ty, "control frame of a type this host does not read");
                 }
             }
             result = probe_result_rx.recv() => {
                 let Some(result) = result else { break };
-                if io::write_msg(&mut ctrl_send, &result.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &result).await.is_err() {
                     break;
                 }
             }
@@ -760,7 +760,7 @@ pub(super) async fn run(task: Task) {
                 // disable this branch or a closed mpsc busy-spins `select!`.
                 let Some(n) = n else { shard_change_closed = true; continue };
                 let msg = punktfunk_core::quic::ShardPayloadChanged { shard_payload: n };
-                if io::write_msg(&mut ctrl_send, &msg.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &msg).await.is_err() {
                     break;
                 }
             }
@@ -772,7 +772,7 @@ pub(super) async fn run(task: Task) {
                 // ≤ ~58 KiB fits the u16 frame (`cursor_fwd` downscales).
                 let shape = cursor_shape_rx.borrow_and_update().clone();
                 let Some(shape) = shape else { continue };
-                if io::write_msg(&mut ctrl_send, &shape.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &shape).await.is_err() {
                     break;
                 }
             }
@@ -784,7 +784,7 @@ pub(super) async fn run(task: Task) {
                     said = %outcome.message,
                     "told the client how its launch turned out"
                 );
-                if io::write_msg(&mut ctrl_send, &outcome.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &outcome).await.is_err() {
                     break;
                 }
             }
@@ -792,7 +792,7 @@ pub(super) async fn run(task: Task) {
                 // `None` = every sender gone. Disable the arm; a closed mpsc is
                 // perpetually ready and would spin `select!`.
                 let Some(state) = state else { audio_closed = true; continue };
-                if io::write_msg(&mut ctrl_send, &state.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &state).await.is_err() {
                     break;
                 }
             }
@@ -800,7 +800,7 @@ pub(super) async fn run(task: Task) {
                 // Same closed-mpsc rule as the audio arm above. The input thread is
                 // the only sender, and it ends with the session.
                 let Some(slots) = slots else { pad_slots_closed = true; continue };
-                if io::write_msg(&mut ctrl_send, &slots.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &slots).await.is_err() {
                     break;
                 }
             }
@@ -815,7 +815,7 @@ pub(super) async fn run(task: Task) {
                         if u.grants & punktfunk_core::quic::GRANT_CLIPBOARD == 0 {
                             let _ = clip_cmd_tx.send(ClipCoordCmd::SetEnabled(false));
                         }
-                        if io::write_msg(&mut ctrl_send, &u.encode()).await.is_err() {
+                        if v2io::send(&mut ctrl_send, &u).await.is_err() {
                             break;
                         }
                     }
@@ -828,7 +828,7 @@ pub(super) async fn run(task: Task) {
                 match offer {
                     Some(offer) => {
                         if clip_enabled.load(Ordering::SeqCst)
-                            && io::write_msg(&mut ctrl_send, &offer.encode()).await.is_err()
+                            && v2io::send(&mut ctrl_send, &offer).await.is_err()
                         {
                             break;
                         }
@@ -853,7 +853,7 @@ pub(super) async fn run(task: Task) {
                     "encoder re-targeted by a pipeline rebuild — telling the client"
                 );
                 let ack = bitrate_ack(kbps, why, ack_reason);
-                if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                     break;
                 }
             }
@@ -867,7 +867,7 @@ pub(super) async fn run(task: Task) {
                     gap_ms,
                     "pipeline rebuilt in place — telling the client the stream had a gap"
                 );
-                if io::write_msg(&mut ctrl_send, &PipelineGap { gap_ms }.encode())
+                if v2io::send(&mut ctrl_send, &PipelineGap { gap_ms })
                     .await
                     .is_err()
                 {
@@ -883,7 +883,7 @@ pub(super) async fn run(task: Task) {
                 // later rejection echoes.
                 let Some(ack) = correction else { break };
                 active = ack.mode;
-                if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                     break;
                 }
             }
@@ -1013,6 +1013,7 @@ const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use punktfunk_core::quic::ProbeRequest;
     use punktfunk_core::quic::{
         CLIP_FLAG_FILES, CLIP_POLICY_FILES, CLIP_POLICY_TEXT, CLIP_REASON_BACKEND_UNAVAILABLE,
         CLIP_REASON_NOT_PERMITTED, CLIP_REASON_NO_FILES, CLIP_REASON_OK,
@@ -1218,11 +1219,14 @@ mod tests {
         }
     }
 
-    /// Old client → new host: a client whose `Start` carried no `EXT_TAG_ABR`
-    /// gets the ack it has always got — nine bytes, whatever the host knows
-    /// about the refusal.
+    /// A client whose `ClientHello` carried no `EXT_TAG_ABR` gets an ack without a reason,
+    /// whatever the host knows about the refusal: a 0.43 client rejects any other ack.
     #[test]
-    fn a_client_that_did_not_ask_still_gets_a_nine_byte_ack() {
+    fn a_client_that_did_not_ask_gets_no_reason() {
+        use punktfunk_core::quic::v2::msg::{decode, V2Message};
+        let trip = |m: &BitrateChanged| {
+            decode::<BitrateChanged>(BitrateChanged::TYPE, &m.fields().into_body()).unwrap()
+        };
         for why in [
             AckReason::Granted,
             AckReason::EncoderLimit,
@@ -1230,11 +1234,9 @@ mod tests {
             AckReason::Pinned,
         ] {
             let old = bitrate_ack(41_852, why, false);
-            assert_eq!(old.reason, None);
-            assert_eq!(old.encode().len(), 9);
+            assert_eq!(trip(&old).reason, None);
             let new = bitrate_ack(41_852, why, true);
-            assert_eq!(new.reason, Some(why));
-            assert_eq!(new.encode().len(), 10);
+            assert_eq!(trip(&new).reason, Some(why));
             assert_eq!(new.bitrate_kbps, old.bitrate_kbps);
         }
     }

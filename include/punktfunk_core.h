@@ -777,10 +777,8 @@
 // host-global wiring, so any live session that asked wins until it ends.
 #define PUNKTFUNK_CLIENT_CAP_KEEP_HOST_AUDIO 32
 
-// [`Hello::client_caps`]: the client parses the tagged extension block after Welcome's
-// frozen positional layout ([`EXT_TAG_PADDING`](super::EXT_TAG_PADDING)). The host
-// appends a block only toward this bit, so a client that leaves it clear still gets the
-// Welcome byte-identical to today's. `0x80` is the last free `client_caps` bit.
+// [`Hello::client_caps`]: every client sets it; it gates nothing on `punktfunk/2`.
+// `0x80` is the last free `client_caps` bit.
 #define PUNKTFUNK_CLIENT_CAP_EXT 64
 
 // [`Welcome::host_caps`]: the session is on the lossless audio plane
@@ -807,9 +805,8 @@
 // contacts vanish with no error (`design/touch-client-overlay.md`).
 #define PUNKTFUNK_HOST_CAP2_TOUCH 2
 
-// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host parses the tagged
-// extension block after `Start`'s 6 bytes. The client appends one only after seeing this
-// bit — Hello is first contact, with no host capability known yet, and stays frozen.
+// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads the
+// `ClientHello` entries. Every host sets it; a 0.43 client sends them only toward it.
 #define PUNKTFUNK_HOST_CAP2_EXT 4
 
 // [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host serves
@@ -883,64 +880,6 @@
 // [`HostFacts::forced_profile`] when nothing is pinned.
 #define PUNKTFUNK_FORCED_PROFILE_NONE 255
 
-#define PUNKTFUNK_MSG_RECONFIGURE 1
-
-#define PUNKTFUNK_MSG_RECONFIGURED 2
-
-#define PUNKTFUNK_MSG_REQUEST_KEYFRAME 3
-
-#define PUNKTFUNK_MSG_LOSS_REPORT 4
-
-#define PUNKTFUNK_MSG_SET_BITRATE 5
-
-#define PUNKTFUNK_MSG_BITRATE_CHANGED 6
-
-#define PUNKTFUNK_MSG_RFI_REQUEST 7
-
-#define PUNKTFUNK_MSG_SHARD_PAYLOAD_CHANGED 8
-
-#define PUNKTFUNK_MSG_SHARD_PAYLOAD_ACK 9
-
-// [`PipelineGap`]. 0x0A stays in the 0x01–0x09 video/rate-control block
-// (same ABR consumer). Not 0x30: it carries a duration, no clock domain.
-#define PUNKTFUNK_MSG_PIPELINE_GAP 10
-
-#define PUNKTFUNK_MSG_DELIVERY_REPORT 11
-
-#define PUNKTFUNK_MSG_LINK_REPORT 12
-
-#define PUNKTFUNK_MSG_SET_DELIVERY 13
-
-#define PUNKTFUNK_MSG_DELIVERY_CHANGED 14
-
-#define PUNKTFUNK_MSG_HOST_FACTS 15
-
-#define PUNKTFUNK_MSG_PROBE_REQUEST 32
-
-#define PUNKTFUNK_MSG_PROBE_RESULT 33
-
-#define PUNKTFUNK_MSG_PROBE_SHAPED 34
-
-#define PUNKTFUNK_MSG_CLOCK_PROBE 48
-
-#define PUNKTFUNK_MSG_CLOCK_ECHO 49
-
-#define PUNKTFUNK_MSG_PHASE_REPORT 50
-
-// Idempotent enable/disable. Opt-in is here, not just in UI.
-#define PUNKTFUNK_MSG_CLIP_CONTROL 64
-
-#define PUNKTFUNK_MSG_CLIP_STATE 65
-
-// Format list only — no clipboard bytes.
-#define PUNKTFUNK_MSG_CLIP_OFFER 66
-
-// Fetch stream only — never the control stream.
-#define PUNKTFUNK_MSG_CLIP_FETCH 67
-
-// Fetch stream only — header that precedes the data chunks.
-#define PUNKTFUNK_MSG_CLIP_FETCH_HDR 68
-
 // Absent ⇒ files are filtered from offers in both directions.
 #define PUNKTFUNK_CLIP_FLAG_FILES 1
 
@@ -986,33 +925,13 @@
 // Not a file fetch (a whole non-file format, or the file manifest).
 #define PUNKTFUNK_CLIP_FILE_INDEX_NONE UINT32_MAX
 
-#define PUNKTFUNK_MSG_CURSOR_SHAPE 80
-
-#define PUNKTFUNK_MSG_CURSOR_RENDER 81
-
-// Per-side pixel cap. Control frames are `u16`-length-prefixed (65535).
-// 128×128 RGBA is 65536 B before the 17-byte header; 120² (57.6 KiB +
-// header) fits. Host downscales anything larger.
+// Per-side pixel cap. A 0.43 client re-frames a shape behind a `u16` length,
+// so 120² RGBA (57.6 KiB) is the largest it takes. Host downscales anything larger.
 #define PUNKTFUNK_CURSOR_SHAPE_MAX_SIDE 120
-
-// [`AccessUpdate`]. 0x58: 0x50–0x51 are cursor; 0x40–0x44 are clipboard.
-#define PUNKTFUNK_MSG_ACCESS_UPDATE 88
-
-// [`AudioState`]. 0x59: next after [`MSG_ACCESS_UPDATE`].
-#define PUNKTFUNK_MSG_AUDIO_STATE 89
-
-// [`PadSlots`]. 0x5B: 0x5A is the launch outcome.
-#define PUNKTFUNK_MSG_PAD_SLOTS 91
-
-// [`LaunchOutcome`]. 0x5A: next after [`MSG_AUDIO_STATE`].
-#define PUNKTFUNK_MSG_LAUNCH_OUTCOME 90
 
 // Longest [`LaunchOutcome::message`] in UTF-8 bytes. One sentence plus a cause;
 // a host cannot make the client hold more than this.
 #define PUNKTFUNK_LAUNCH_MESSAGE_MAX 200
-
-// [`InputEdge`]. 0x5C: 0x58–0x5B are access, audio, launch and pad slots.
-#define PUNKTFUNK_MSG_INPUT_EDGE 92
 
 #define PUNKTFUNK_AUDIO_MAGIC 201
 
@@ -1149,13 +1068,7 @@
 // `2` because [`AUDIO_CODEC_FLAC_RESERVED`] holds `1`.
 #define PUNKTFUNK_AUDIO_CODEC_PCM 2
 
-// Extension tag `1`: no-op filler. Carries nothing, so a peer skips it like any tag it
-// does not know. Tag `0` is reserved. Every tag is allocated here with a doc line, as
-// `quic/caps.rs` does for bits, and an id is never reused for a second meaning: a peer
-// that skips an unknown id cannot tell two meanings apart.
-#define PUNKTFUNK_EXT_TAG_PADDING 1
-
-// Extension tag `2` on `Start`: what the client calls itself, UTF-8, no NUL — its build and
+// Entry `2` in `ClientHello`: what the client calls itself, UTF-8, no NUL — its build and
 // the shell that dialled (`"android 0.38.0 console/library"`). A label for the host's log, never
 // a fact it acts on: two sessions from one device are told apart here instead of by capture.
 // Bounded by [`EXT_CLIENT_MAX`]; a longer value is truncated on a char boundary by
@@ -1165,7 +1078,7 @@
 // Longest [`EXT_TAG_CLIENT`] value in UTF-8 bytes. A log field, so short.
 #define PUNKTFUNK_EXT_CLIENT_MAX 96
 
-// Extension tag `3` on `Start`: one byte of ABR protocol features the client understands,
+// Entry `3` in `ClientHello`: one byte of ABR protocol features the client understands,
 // as a bitfield ([`EXT_ABR_ACK_REASON`] is bit 0). A later feature takes another bit here
 // rather than a tag of its own, so the host reads one byte and answers what it recognises.
 // An absent tag, an empty value or a zero byte is a client that understands none of them —
@@ -1178,13 +1091,13 @@
 // Core sets it for every embedder that links the controller reading it, not the embedder.
 #define PUNKTFUNK_EXT_ABR_ACK_REASON 1
 
-// Extension tag `4` on `Start`: the settings preset this session was dialled with, as
+// Entry `4` in `ClientHello`: the settings preset this session was dialled with, as
 // [`SessionPreset::encode`] writes it. The id is the client's own and stable across a rename;
 // the name is for people. The host shows it and hands it to hooks and plugins; it changes
 // nothing about the stream. Absent when the client streams with its plain settings.
 #define EXT_TAG_PRESET 4
 
-// Extension tag `5` on `Start`: `[profile, flags]` — the delivery profile this client
+// Entry `5` in `ClientHello`: `[profile, flags]` — the delivery profile this client
 // asks the host to stream under (`0` burst, `1` capped, `2` smooth) and what it wants
 // besides ([`EXT_DELIVERY_FACTS`], [`EXT_DELIVERY_PROBE_ONLY`]). A host that reads the tag
 // answers it with [`DeliveryChanged`](super::control::DeliveryChanged), and that answer is
@@ -1205,14 +1118,6 @@
 // Longest [`SessionPreset::name`] in UTF-8 bytes.
 #define PRESET_NAME_MAX 64
 
-// Largest extension block on the wire, its `ext_len` header included. The block is read
-// before the peer is trusted, so this bounds what one message makes the other side hold.
-#define PUNKTFUNK_EXT_MAX_BYTES 4096
-
-// Most entries in one block. Tags are unique, so this only bounds a flood of zero-length
-// entries inside [`EXT_MAX_BYTES`].
-#define PUNKTFUNK_EXT_MAX_ENTRIES 64
-
 #define PUNKTFUNK_MSG_PAIR_REQUEST 16
 
 #define PUNKTFUNK_MSG_PAIR_CHALLENGE 17
@@ -1220,10 +1125,6 @@
 #define PUNKTFUNK_MSG_PAIR_PROOF 18
 
 #define PUNKTFUNK_MSG_PAIR_RESULT 19
-
-#define PUNKTFUNK_MSG_AUTH_CHALLENGE 20
-
-#define PUNKTFUNK_MSG_AUTH_RESPONSE 21
 
 // `host → client`, browser plane: why the host is about to close. The native plane says this
 // with the QUIC close code and reason; a browser cannot read those in every engine (WebKit

@@ -16,11 +16,12 @@ use punktfunk_core::error::{PunktfunkError, Result};
 use punktfunk_core::input::{GamepadSnapshot, InputEvent, InputKind, INPUT_MAGIC};
 use punktfunk_core::packet::{FLAG_PIC, FLAG_SOF};
 use punktfunk_core::quic::v2::clock::SessionClock;
-use punktfunk_core::quic::v2::translate::{RxEdge, SessionFields, TxEdge};
+use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+use punktfunk_core::quic::v2::msg::decode;
 use punktfunk_core::quic::v2::{dgram, io as v2io, registry};
 use punktfunk_core::quic::{
-    self, endpoint, io, wall_clock_ns, ClockEcho, ClockProbe, Hello, Reconfigure, Reconfigured,
-    RequestKeyframe, RfiRequest, Start, Welcome,
+    self, endpoint, wall_clock_ns, ClockEcho, ClockProbe, Reconfigure, Reconfigured,
+    RequestKeyframe, RfiRequest, Welcome,
 };
 use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::shared::MediaSender;
@@ -61,8 +62,8 @@ pub struct DemoSession {
 type VideoQueue = mpsc::SyncSender<(Vec<u8>, bool)>;
 
 /// The control stream's halves, `punktfunk/2`'s behind the translation edges.
-type CtlSend = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
-type CtlRecv = io::MsgReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
+type CtlSend = quinn::SendStream;
+type CtlRecv = v2io::FrameReader<quinn::RecvStream>;
 
 /// State one session owns, tagged with its connection's `stable_id` so a superseded session's
 /// teardown cannot clear its successor.
@@ -237,41 +238,23 @@ async fn serve(
 ) -> Result<()> {
     let id = conn.stable_id();
     // A reachability probe closes before opening a stream; that ends here.
-    let (send, mut recv) = conn.accept_bi().await.map_err(|_| PunktfunkError::Closed)?;
+    let (mut send, mut recv) = conn.accept_bi().await.map_err(|_| PunktfunkError::Closed)?;
     let clock = Arc::new(SessionClock::new());
-    let rx_edge = Arc::new(Mutex::new(RxEdge {
-        clock: Some(clock.clone()),
-        ..RxEdge::default()
-    }));
-    let tx_edge = Arc::new(Mutex::new(TxEdge::host(clock.clone())));
     if v2io::read_stream_type(&mut recv).await? != registry::STREAM_CONTROL {
         return Err(PunktfunkError::InvalidArg("first stream is not control"));
     }
-    let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
-        Box::new(v2io::V2Reader::new(recv, rx_edge.clone()));
-    let mut send: CtlSend = Box::new(v2io::V2Writer::new(send, tx_edge.clone()));
-    let mut recv: CtlRecv = io::MsgReader::new(recv);
-    let hello = Hello::decode(&recv.read_msg().await?)?;
+    let mut recv: CtlRecv = v2io::FrameReader::new(recv);
+    let (ty, body) = recv.read_frame().await?;
+    let client = decode::<ClientHello>(ty, &body)?;
+    let hello = &client.hello;
     // AES-GCM unless the client offers only ChaCha20-Poly1305.
-    let suite = {
-        let rx = rx_edge.lock().unwrap();
-        let offered = rx
-            .client
-            .as_ref()
-            .map(|c| c.suites.clone())
-            .unwrap_or_default();
-        match offered.first() {
-            Some(&only) if !offered.contains(&MediaSuite::Aes128Gcm) => only,
-            _ => MediaSuite::Aes128Gcm,
-        }
+    let offered = &client.suites;
+    let suite = match offered.first() {
+        Some(&only) if !offered.contains(&MediaSuite::Aes128Gcm) => only,
+        _ => MediaSuite::Aes128Gcm,
     };
     let mut session_id = [0u8; 16];
     rand::rng().fill_bytes(&mut session_id);
-    tx_edge.lock().unwrap().set_session(SessionFields {
-        session_id,
-        clock_origin_ns: clock.origin_ns(),
-        suite: Some(suite),
-    });
     let Some(codec) = quic::resolve_codec(hello.video_codecs, codecs, hello.preferred_codec) else {
         conn.close(0u32.into(), b"no shared codec");
         return Err(PunktfunkError::Unsupported("no codec the demo can encode"));
@@ -324,8 +307,16 @@ async fn serve(
         host_caps2: 0,
         audio_layout: 0,
     };
-    io::write_msg(&mut send, &welcome.encode()).await?;
-    Start::decode(&recv.read_msg().await?)?;
+    let config = welcome.session_config(Role::Host);
+    let server = ServerHello {
+        welcome,
+        session_id,
+        clock_origin_ns: clock.origin_ns(),
+        suite: Some(suite),
+    };
+    v2io::send(&mut send, &server).await?;
+    let (ty, body) = recv.read_frame().await?;
+    decode::<Ready>(ty, &body)?;
 
     let (video_tx, video_rx) = mpsc::sync_channel(VIDEO_QUEUE);
     let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -351,7 +342,6 @@ async fn serve(
         "demo session started"
     );
 
-    let config = welcome.session_config(Role::Host);
     let keys = endpoint::media_keys(conn, &session_id, suite).ok_or(PunktfunkError::Crypto)?;
     let sender = MediaSender::new(media_socket, conn.clone())?;
     let media = MediaV2 {
@@ -361,9 +351,12 @@ async fn serve(
     };
     let open: OpenSession = Box::new(move || Session::new(config, media, Box::new(sender)));
     let video = tokio::task::spawn_blocking(move || send_video(open, video_rx));
-    let dgrams = Dgrams { conn, clock };
+    let dgrams = Dgrams {
+        conn,
+        clock: clock.clone(),
+    };
     tokio::select! {
-        r = control_loop(send, recv, shared, id) => r,
+        r = control_loop(send, recv, &clock, shared, id) => r,
         () = input_loop(&dgrams, shared) => Ok(()),
         r = audio_loop(&dgrams, shared) => r,
         r = video => r.map_err(|_| PunktfunkError::Closed)?,
@@ -418,22 +411,26 @@ fn send_video(open: OpenSession, rx: mpsc::Receiver<(Vec<u8>, bool)>) -> Result<
 async fn control_loop(
     mut send: CtlSend,
     mut recv: CtlRecv,
+    clock: &SessionClock,
     shared: &Shared,
     id: usize,
 ) -> Result<()> {
     loop {
-        let msg = recv.read_msg().await?;
-        if let Ok(probe) = ClockProbe::decode(&msg) {
-            let t2_ns = wall_clock_ns();
+        let (ty, body) = recv.read_frame().await?;
+        if let Ok(probe) = decode::<ClockProbe>(ty, &body) {
+            // In the session clock media leaves in.
+            let t2_ns = clock.to_wire(wall_clock_ns());
             let echo = ClockEcho {
                 t1_ns: probe.t1_ns,
                 t2_ns,
-                t3_ns: wall_clock_ns(),
+                t3_ns: clock.to_wire(wall_clock_ns()),
             };
-            io::write_msg(&mut send, &echo.encode()).await?;
-        } else if RequestKeyframe::decode(&msg).is_ok() || RfiRequest::decode(&msg).is_ok() {
+            v2io::send(&mut send, &echo).await?;
+        } else if decode::<RequestKeyframe>(ty, &body).is_ok()
+            || decode::<RfiRequest>(ty, &body).is_ok()
+        {
             shared.keyframe.store(true, Ordering::SeqCst);
-        } else if let Ok(asked) = Reconfigure::decode(&msg) {
+        } else if let Ok(asked) = decode::<Reconfigure>(ty, &body) {
             let mode = demo_mode(asked.mode);
             if let Some((owner, s)) = shared.session.lock().unwrap().as_mut() {
                 if *owner == id {
@@ -446,7 +443,7 @@ async fn control_loop(
                 accepted: true,
                 mode,
             };
-            io::write_msg(&mut send, &answer.encode()).await?;
+            v2io::send(&mut send, &answer).await?;
         }
         // Everything else (loss reports, bitrate asks, speed tests) has no demo answer.
     }

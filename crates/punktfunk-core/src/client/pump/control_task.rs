@@ -5,6 +5,8 @@
 
 use super::super::*;
 use super::*;
+use crate::quic::v2::msg::{self as v2msg, V2Message};
+use crate::quic::v2::{io as v2io, msg::decode};
 
 pub(super) struct ControlTask {
     pub(super) ctrl_rx: tokio::sync::mpsc::Receiver<CtrlRequest>,
@@ -92,44 +94,46 @@ impl ControlTask {
             tokio::select! {
                 req = ctrl_rx.recv() => {
                     let Some(req) = req else { break }; // client dropped
-                    let bytes = match req {
-                        CtrlRequest::Mode(m) => Reconfigure { mode: m }.encode(),
-                        CtrlRequest::Probe(p) => p.encode(),
-                        CtrlRequest::ProbeShaped(p) => p.encode(),
-                        CtrlRequest::SetDelivery(profile) => crate::quic::SetDelivery { profile }.encode(),
+                    let frame = match req {
+                        CtrlRequest::Mode(m) => Reconfigure { mode: m }.encode_v2(),
+                        CtrlRequest::Probe(p) => crate::quic::ProbeShaped::from(p).encode_v2(),
+                        CtrlRequest::ProbeShaped(p) => p.encode_v2(),
+                        CtrlRequest::SetDelivery(profile) => {
+                            crate::quic::SetDelivery { profile }.encode_v2()
+                        }
                         CtrlRequest::Keyframe => {
                             recovery_kf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            RequestKeyframe.encode()
+                            RequestKeyframe.encode_v2()
                         }
                         CtrlRequest::Rfi(r) => {
                             recent_rfis.lock().unwrap().note(std::time::Instant::now());
-                            r.encode()
+                            r.encode_v2()
                         }
-                        CtrlRequest::Loss(r) => r.encode(),
-                        CtrlRequest::Delivery(r) => r.encode(),
-                        CtrlRequest::LinkRate(k) => LinkReport { proven_kbps: k }.encode(),
-                        CtrlRequest::SetBitrate(k) => SetBitrate { bitrate_kbps: k }.encode(),
+                        CtrlRequest::Loss(r) => r.encode_v2(),
+                        CtrlRequest::Delivery(r) => r.encode_v2(),
+                        CtrlRequest::LinkRate(k) => LinkReport { proven_kbps: k }.encode_v2(),
+                        CtrlRequest::SetBitrate(k) => SetBitrate { bitrate_kbps: k }.encode_v2(),
                         CtrlRequest::ClockResync => {
                             if clock_rtt_ns.is_none() {
                                 continue; // no connect-time handshake — host can't answer
                             }
                             staged_round = None; // a new batch abandons any staged round
-                            resync.begin(wall_clock_ns()).encode()
+                            resync.begin(wall_clock_ns()).encode_v2()
                         }
-                        CtrlRequest::ClipControl(c) => c.encode(),
-                        CtrlRequest::ClipOffer(o) => o.encode(),
-                        CtrlRequest::CursorRender(m) => m.encode(),
-                        CtrlRequest::Phase(p) => p.encode(),
-                        CtrlRequest::InputEdge(ev) => crate::quic::InputEdge(ev).encode(),
+                        CtrlRequest::ClipControl(c) => c.encode_v2(),
+                        CtrlRequest::ClipOffer(o) => o.encode_v2(),
+                        CtrlRequest::CursorRender(m) => m.encode_v2(),
+                        CtrlRequest::Phase(p) => p.encode_v2(),
+                        CtrlRequest::InputEdge(ev) => v2msg::encode_input_event(&ev),
                     };
-                    if io::write_msg(&mut ctrl_send, &bytes).await.is_err() {
+                    if v2io::write_frame(&mut ctrl_send, &frame).await.is_err() {
                         break;
                     }
                 }
                 _ = resync_tick.tick(), if clock_rtt_ns.is_some() => {
                     staged_round = None; // a new batch abandons any staged round
                     let probe = resync.begin(wall_clock_ns());
-                    if io::write_msg(&mut ctrl_send, &probe.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &probe).await.is_err() {
                         break;
                     }
                 }
@@ -138,13 +142,13 @@ impl ControlTask {
                     staged_round = None;
                     // Stamp at send so inter-round spacing is not in the RTT.
                     let probe = resync.next_probe(wall_clock_ns());
-                    if io::write_msg(&mut ctrl_send, &probe.encode()).await.is_err() {
+                    if v2io::send(&mut ctrl_send, &probe).await.is_err() {
                         break;
                     }
                 }
-                msg = ctrl_recv.read_msg() => {
-                    let Ok(msg) = msg else { break }; // stream closed
-                    if let Ok(ack) = Reconfigured::decode(&msg) {
+                frame = ctrl_recv.read_frame() => {
+                    let Ok((ty, body)) = frame else { break }; // stream closed
+                    if let Ok(ack) = decode::<Reconfigured>(ty, &body) {
                         if ack.accepted {
                             *mode_slot.lock().unwrap() = ack.mode;
                             mode_gen.fetch_add(1, Ordering::Relaxed);
@@ -152,7 +156,7 @@ impl ControlTask {
                         } else {
                             tracing::warn!(active = ?ack.mode, "host rejected mode switch");
                         }
-                    } else if let Ok(result) = ProbeResult::decode(&msg) {
+                    } else if let Ok(result) = decode::<ProbeResult>(ty, &body) {
                         let mut p = probe.lock().unwrap();
                         // Freeze delivered figures now. Counters are probe-scoped
                         // (FLAG_PROBE), so video around the burst does not inflate
@@ -190,16 +194,16 @@ impl ControlTask {
                             client_interval_ms = p.client_interval_ms,
                             "speed-test probe result"
                         );
-                    } else if let Ok(ack) = crate::quic::DeliveryChanged::decode(&msg) {
+                    } else if let Ok(ack) = decode::<crate::quic::DeliveryChanged>(ty, &body) {
                         *delivery.lock().unwrap() = Some(ack);
                         tracing::info!(
                             profile = ack.profile,
                             forced = ack.forced,
                             "host set the delivery profile"
                         );
-                    } else if let Ok(facts) = crate::quic::HostFacts::decode(&msg) {
+                    } else if let Ok(facts) = decode::<crate::quic::HostFacts>(ty, &body) {
                         *host_facts.lock().unwrap() = Some(facts);
-                    } else if let Ok(ack) = BitrateChanged::decode(&msg) {
+                    } else if let Ok(ack) = decode::<BitrateChanged>(ty, &body) {
                         // Host clamp is authoritative. Park it for the pump
                         // controller; any ack also means this host renegotiates.
                         tracing::info!(
@@ -215,7 +219,7 @@ impl ControlTask {
                             .lock()
                             .unwrap()
                             .push_back((ack.bitrate_kbps, ack.reason));
-                    } else if let Ok(gap) = crate::quic::PipelineGap::decode(&msg) {
+                    } else if let Ok(gap) = decode::<crate::quic::PipelineGap>(ty, &body) {
                         // Host rebuilt capture+encoder; park for the pump to discard
                         // the in-flight report window (not congestion). Latest-wins.
                         // Floor at 1: 0 means nothing pending, so a rounded-down
@@ -226,7 +230,7 @@ impl ControlTask {
                              window in flight"
                         );
                         pipeline_gap.store(gap.gap_ms.max(1), Ordering::Relaxed);
-                    } else if let Ok(echo) = ClockEcho::decode(&msg) {
+                    } else if let Ok(echo) = decode::<ClockEcho>(ty, &body) {
                         match resync.on_echo(&echo, wall_clock_ns()) {
                             ResyncStep::MoreRounds => {
                                 staged_round = Some(
@@ -269,7 +273,7 @@ impl ControlTask {
                             }
                             ResyncStep::Idle => {}
                         }
-                    } else if let Ok(state) = ClipState::decode(&msg) {
+                    } else if let Ok(state) = decode::<ClipState>(ty, &body) {
                         // Host ack/policy for the toggle UI. try_send: lagging
                         // embedder drops newest; a stale toggle heals on the next.
                         let _ = clip_event_tx.try_send(ClipEventCore::State {
@@ -277,13 +281,13 @@ impl ControlTask {
                             policy: state.policy,
                             reason: state.reason,
                         });
-                    } else if let Ok(offer) = ClipOffer::decode(&msg) {
+                    } else if let Ok(offer) = decode::<ClipOffer>(ty, &body) {
                         // Host copied: surface the lazy format list; fetch only on paste.
                         let _ = clip_event_tx.try_send(ClipEventCore::RemoteOffer {
                             seq: offer.seq,
                             kinds: offer.kinds,
                         });
-                    } else if let Ok(chg) = crate::quic::ShardPayloadChanged::decode(&msg) {
+                    } else if let Ok(chg) = decode::<crate::quic::ShardPayloadChanged>(ty, &body) {
                         // Mid-session shard re-key (design/shard-payload-reneg.md).
                         // Per-frame pinning: nothing to re-key on receive; ack is
                         // telemetry on shrink and the GATE on grow. Silence (no ack)
@@ -300,7 +304,7 @@ impl ControlTask {
                             let ack = crate::quic::ShardPayloadAck {
                                 shard_payload: chg.shard_payload,
                             };
-                            if io::write_msg(&mut ctrl_send, &ack.encode()).await.is_err() {
+                            if v2io::send(&mut ctrl_send, &ack).await.is_err() {
                                 break;
                             }
                         } else {
@@ -309,7 +313,7 @@ impl ControlTask {
                                 "out-of-bounds shard-payload change — ignoring (no ack)"
                             );
                         }
-                    } else if let Ok(upd) = crate::quic::AccessUpdate::decode(&msg) {
+                    } else if let Ok(upd) = decode::<crate::quic::AccessUpdate>(ty, &body) {
                         // Console edit or T−5m/T−1m expiry. Fold into live slots
                         // FIRST, then wake the embedder so a reader never sees the
                         // pre-update mask. Host still enforces; this is courtesy.
@@ -327,7 +331,7 @@ impl ControlTask {
                             Ordering::Relaxed,
                         );
                         let _ = access_tx.try_send(upd);
-                    } else if let Ok(st) = crate::quic::AudioState::decode(&msg) {
+                    } else if let Ok(st) = decode::<crate::quic::AudioState>(ty, &body) {
                         // The operator muted this session from the console: the host stopped
                         // encoding, so the silence is not a broken link. Own bit — the
                         // player's local mute is theirs, and neither clears the other.
@@ -337,28 +341,24 @@ impl ControlTask {
                             crate::client::AUDIO_MUTE_HOST,
                             st.muted,
                         );
-                    } else if let Ok(p) = crate::quic::PadSlots::decode(&msg) {
+                    } else if let Ok(p) = decode::<crate::quic::PadSlots>(ty, &body) {
                         // Which players this session's pads are. The host decides it —
                         // wire indices are per client, the OS slots are host-wide.
                         tracing::info!(slots = p.slots, "host assigned this session's pad slots");
                         pad_slots.store(p.slots, Ordering::Relaxed);
-                    } else if let Ok(o) = crate::quic::LaunchOutcome::decode(&msg) {
+                    } else if let Ok(o) = decode::<crate::quic::LaunchOutcome>(ty, &body) {
                         tracing::info!(
                             kind = o.kind.as_str(),
                             message = %o.message,
                             "host reported this session's launch"
                         );
                         *launch_outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(o);
-                    } else if let Ok(shape) = crate::quic::CursorShape::decode(&msg) {
+                    } else if let Ok(shape) = decode::<crate::quic::CursorShape>(ty, &body) {
                         // Pointer bitmap changed. Overflow evicts the oldest: the state
                         // names this one, and the host sends it only once.
                         cursor_shape_tx.send(shape);
                     } else {
-                        tracing::warn!(
-                            tag = ?msg.first(),
-                            len = msg.len(),
-                            "unknown control message — ignoring"
-                        );
+                        tracing::debug!(ty, "control frame of a type this client does not read");
                     }
                 }
             }

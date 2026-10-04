@@ -6,16 +6,13 @@
 //!
 //! **An enum, not a trait.** Both variants are known at compile time, so no `dyn`, and `async fn`
 //! stays an ordinary `async fn`: a `dyn`-compatible trait would box a future on `closed()`, which
-//! is on the per-session path. Datagrams carry a kind and the control stream is translated at
-//! its edge on both.
+//! is on the per-session path. Datagrams carry a kind on both.
 //!
 //! Most of this delegates rather than branches: WebTransport *is* QUIC, and `wtransport` hands
 //! out the `quinn::Connection` underneath, so path and lifecycle questions have one answer for
 //! both. Only the two genuinely carrier-shaped questions branch.
 
 use punktfunk_core::quic::v2::clock::SessionClock;
-use punktfunk_core::quic::v2::io::{V2Reader, V2Writer};
-use punktfunk_core::quic::v2::translate::{RxEdge, SessionFields, TxEdge};
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -25,15 +22,18 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// The control stream's write half, whichever carrier. Delegates every poll, because both
 /// halves already implement tokio's traits — this exists so the session code can name one type.
 pub(crate) enum CtlSend {
-    QuicV2(V2Writer<quinn::SendStream>),
-    WebV2(V2Writer<wtransport::SendStream>),
+    Quic(quinn::SendStream),
+    Web(wtransport::SendStream),
 }
 
 /// The control stream's read half. See [`CtlSend`].
 pub(crate) enum CtlRecv {
-    QuicV2(V2Reader<quinn::RecvStream>),
-    WebV2(V2Reader<wtransport::RecvStream>),
+    Quic(quinn::RecvStream),
+    Web(wtransport::RecvStream),
 }
+
+/// The control stream's frames, read cancel-safe under `select!`.
+pub(crate) type CtlReader = punktfunk_core::quic::v2::io::FrameReader<CtlRecv>;
 
 impl AsyncWrite for CtlSend {
     fn poll_write(
@@ -42,20 +42,20 @@ impl AsyncWrite for CtlSend {
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
-            CtlSend::QuicV2(s) => Pin::new(s).poll_write(cx, buf),
-            CtlSend::WebV2(s) => Pin::new(s).poll_write(cx, buf),
+            CtlSend::Quic(s) => AsyncWrite::poll_write(Pin::new(s), cx, buf),
+            CtlSend::Web(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            CtlSend::QuicV2(s) => Pin::new(s).poll_flush(cx),
-            CtlSend::WebV2(s) => Pin::new(s).poll_flush(cx),
+            CtlSend::Quic(s) => AsyncWrite::poll_flush(Pin::new(s), cx),
+            CtlSend::Web(s) => Pin::new(s).poll_flush(cx),
         }
     }
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            CtlSend::QuicV2(s) => Pin::new(s).poll_shutdown(cx),
-            CtlSend::WebV2(s) => Pin::new(s).poll_shutdown(cx),
+            CtlSend::Quic(s) => AsyncWrite::poll_shutdown(Pin::new(s), cx),
+            CtlSend::Web(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 }
@@ -67,8 +67,8 @@ impl AsyncRead for CtlRecv {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
-            CtlRecv::QuicV2(s) => Pin::new(s).poll_read(cx, buf),
-            CtlRecv::WebV2(s) => Pin::new(s).poll_read(cx, buf),
+            CtlRecv::Quic(s) => AsyncRead::poll_read(Pin::new(s), cx, buf),
+            CtlRecv::Web(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -83,15 +83,12 @@ pub(crate) enum Accepted {
     ProbeClose,
 }
 
-/// A `punktfunk/2` session's state on either carrier: who it is, its media clock, and the
-/// edges that translate its control stream.
+/// A session's state on either carrier: who it is, and its media clock.
 pub(crate) struct V2Session {
     pub session_id: [u8; 16],
     /// The session's media clock. Every host stamp it sends leaves in its time: video pts,
     /// audio and timing datagrams, and clock echoes.
     pub clock: Arc<SessionClock>,
-    pub rx: Arc<Mutex<RxEdge>>,
-    pub tx: Arc<Mutex<TxEdge>>,
     suite: Mutex<Option<punktfunk_core::crypto::MediaSuite>>,
 }
 
@@ -99,31 +96,17 @@ impl V2Session {
     pub(crate) fn new() -> V2Session {
         let mut session_id = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rng(), &mut session_id);
-        let clock = Arc::new(SessionClock::new());
         V2Session {
             session_id,
-            rx: Arc::new(Mutex::new(RxEdge {
-                clock: Some(clock.clone()),
-                ..RxEdge::default()
-            })),
-            tx: Arc::new(Mutex::new(TxEdge::host(clock.clone()))),
-            clock,
+            clock: Arc::new(SessionClock::new()),
             suite: Mutex::new(None),
         }
     }
 
-    /// The media AEAD, fixed by the handshake before `Welcome` leaves: it goes out in the
-    /// `ServerHello` and keys the media. `None` on a carrier that already encrypts.
+    /// The media AEAD, fixed by the handshake before the `ServerHello` that names it. `None` on
+    /// a carrier that already encrypts.
     pub(crate) fn settle(&self, suite: Option<punktfunk_core::crypto::MediaSuite>) {
         *self.suite.lock().unwrap_or_else(|e| e.into_inner()) = suite;
-        self.tx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .set_session(SessionFields {
-                session_id: self.session_id,
-                clock_origin_ns: self.clock.origin_ns(),
-                suite,
-            });
     }
 
     pub(crate) fn suite(&self) -> Option<punktfunk_core::crypto::MediaSuite> {
@@ -177,8 +160,7 @@ impl std::ops::Deref for V2Link {
 /// One client's control connection. Cheap to clone — every variant is a handle.
 #[derive(Clone)]
 pub(crate) enum SessionLink {
-    /// The native plane: datagrams carry a kind, the control stream is translated at its edge,
-    /// and media rides the connection's own socket.
+    /// The native plane: datagrams carry a kind, and media rides the connection's own socket.
     QuicV2(quinn::Connection, Arc<V2Link>),
     /// The browser plane: the same protocol over one WebTransport session, and the device
     /// fingerprint its key signature proved (`None` before admission and under `serve --open`).
@@ -318,7 +300,7 @@ impl SessionLink {
     pub(crate) async fn accept_bi(&self) -> anyhow::Result<Accepted> {
         match self {
             // The client's first stream must say it is the control stream or a management one.
-            SessionLink::QuicV2(c, v2) => match c.accept_bi().await {
+            SessionLink::QuicV2(c, _) => match c.accept_bi().await {
                 Ok((send, mut recv)) => {
                     use punktfunk_core::quic::v2::{io, registry};
                     let ty = io::read_stream_type(&mut recv)
@@ -331,10 +313,7 @@ impl SessionLink {
                         ty == registry::STREAM_CONTROL,
                         "first stream is type {ty}, not control"
                     );
-                    Ok(Accepted::Stream(
-                        CtlSend::QuicV2(V2Writer::new(send, v2.tx.clone())),
-                        CtlRecv::QuicV2(V2Reader::new(recv, v2.rx.clone())),
-                    ))
+                    Ok(Accepted::Stream(CtlSend::Quic(send), CtlRecv::Quic(recv)))
                 }
                 Err(quinn::ConnectionError::ApplicationClosed(ref ac))
                     if ac.error_code == quinn::VarInt::from_u32(0) =>

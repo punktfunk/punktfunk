@@ -20,11 +20,13 @@ use punktfunk_core::abr::budget::{
 use punktfunk_core::config::{CompositorPref, FecConfig, FecScheme, GamepadPref, Role};
 use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::packet::{FLAG_PIC, FLAG_PROBE, FLAG_SOF};
+use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+use punktfunk_core::quic::v2::msg as v2msg;
 use punktfunk_core::quic::{
-    classify, endpoint, io, AccessUpdate, AckReason, BitrateChanged, ClockEcho, ClockProbe,
-    ColorInfo, GrantClass, Hello, LinkReport, LossReport, PairRequest, PipelineGap, ProbeRequest,
-    ProbeResult, ProbeShaped, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate,
-    Start, Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
+    classify, endpoint, pkf1, AccessUpdate, AckReason, BitrateChanged, ClockEcho, ClockProbe,
+    ColorInfo, GrantClass, Hello, LinkReport, LossReport, PairRequest, PipelineGap, ProbeResult,
+    ProbeShaped, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate, Welcome,
+    GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
 };
 use punktfunk_core::Session;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -45,7 +47,7 @@ pub(crate) mod gamepad;
 use gamepad::{resolve_gamepad, resolve_pad_kind, route_decision};
 
 mod pairing;
-pub(crate) use pairing::pair_ceremony;
+pub(crate) use pairing::{pair_ceremony, PairWire};
 
 mod audio;
 use audio::audio_thread;
@@ -1071,9 +1073,9 @@ const PENDING_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 ///
 /// `Ok(Ok(_))` is an approval, with a slot taken like any fresh client's (waits if busy).
 /// `Ok(Err(reason))` is the refusal to send. `Err` means the client left before a decision.
-pub(crate) async fn park_knock<W: tokio::io::AsyncWrite + Unpin>(
+pub(crate) async fn park_knock(
     conn: &link::SessionLink,
-    mut v2: Option<&mut punktfunk_core::quic::v2::io::V2Writer<W>>,
+    mut send: Option<&mut link::CtlSend>,
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
@@ -1093,9 +1095,8 @@ pub(crate) async fn park_knock<W: tokio::io::AsyncWrite + Unpin>(
             d = &mut wait => break d,
             _ = conn.closed() => anyhow::bail!("client disconnected before pairing approval"),
             _ = pending.tick() => {
-                if let Some(w) = v2.as_deref_mut() {
-                    use punktfunk_core::quic::v2::msg::{Pending, V2Message};
-                    let _ = w.write_v2(&Pending {}.encode_v2()).await;
+                if let Some(w) = send.as_deref_mut() {
+                    let _ = punktfunk_core::quic::v2::io::send(w, &v2msg::Pending {}).await;
                 }
             }
         }
@@ -1175,14 +1176,17 @@ async fn serve_session(
             crate::webtransport::mgmt::serve_quic(conn.quic().clone(), (send, recv), local).await?;
             return Ok(Served::Management);
         }
-        link::Accepted::Stream(send, recv) => (send, recv),
+        link::Accepted::Stream(send, recv) => (send, link::CtlReader::new(recv)),
     };
-    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, io::read_msg(&mut recv))
+    let (ty, body) = tokio::time::timeout(HANDSHAKE_TIMEOUT, recv.read_frame())
         .await
         .map_err(|_| anyhow!("first message timeout"))??;
-    if let Ok(req) = PairRequest::decode(&first) {
-        return serve_pairing(&conn, send, recv, req, host_fp, np, last_pairing).await;
+    if let Ok(req) = v2msg::decode::<PairRequest>(ty, &body) {
+        let wire = pairing::PairWire::V2 { send, recv };
+        return serve_pairing(&conn, wire, req, host_fp, np, last_pairing).await;
     }
+    let first = v2msg::decode::<ClientHello>(ty, &body)
+        .map_err(|e| anyhow!("ClientHello decode: {e:?}"))?;
 
     // A slot only once the peer has spoken: one that stalls the handshake holds none, so it
     // cannot queue paired clients behind it. A full host still accepts, so the waiter sees a
@@ -1195,8 +1199,7 @@ async fn serve_session(
     // Pairing gate outside the handshake future: approval wait must not be bound by
     // HANDSHAKE_TIMEOUT, and the NVENC permit is released while parked.
     if opts.require_pairing {
-        // Hello name for the pending label; handshake re-decodes for the real session.
-        let gate_hello = Hello::decode(&first).map_err(|e| anyhow!("Hello decode: {e:?}"))?;
+        let gate_hello = &first.hello;
         let fp = conn.peer_fingerprint();
         // `effective`, not `is_paired`: an expired record is listed but not authorized, so it
         // knocks like an unpaired device and re-approval is the re-grant.
@@ -1227,11 +1230,7 @@ async fn serve_session(
                 &fp_hex,
             );
             drop(permit);
-            let v2 = match &mut send {
-                link::CtlSend::QuicV2(w) => Some(w),
-                _ => None,
-            };
-            permit = match park_knock(&conn, v2, np, &label, &fp_hex, &sem).await? {
+            permit = match park_knock(&conn, Some(&mut send), np, &label, &fp_hex, &sem).await? {
                 Ok(permit) => permit,
                 Err(reason) => {
                     close_rejected(&conn, reason).await;
@@ -1261,8 +1260,7 @@ async fn serve_session(
 /// follows on it.
 async fn serve_pairing<W, R>(
     conn: &link::SessionLink,
-    send: W,
-    recv: R,
+    wire: pairing::PairWire<W, R>,
     req: PairRequest,
     host_fp: &[u8; 32],
     np: &NativePairing,
@@ -1330,7 +1328,7 @@ where
             )
         }
     };
-    pair_ceremony(conn, send, recv, req, &client_fp, host_fp, np, &pin)
+    pair_ceremony(conn, wire, req, &client_fp, host_fp, np, &pin)
         .await
         .map(|()| Served::Session)
 }
@@ -1348,16 +1346,17 @@ async fn serve_pkf1(
     let peer = conn.remote_address();
     let first = async {
         let (send, mut recv) = conn.accept_bi().await?;
-        let first = io::read_msg(&mut recv).await?;
+        let first = pkf1::read(&mut recv).await?;
         anyhow::Ok((send, recv, first))
     };
     if let Ok(Ok((send, recv, first))) = tokio::time::timeout(HANDSHAKE_TIMEOUT, first).await {
-        if let Ok(req) = PairRequest::decode(&first) {
+        if let Ok(req) = PairRequest::decode_pkf1(&first) {
             let link = link::SessionLink::QuicV2(
                 conn.clone(),
                 Arc::new(link::V2Link::new(conn.clone(), media_socket)),
             );
-            match serve_pairing(&link, send, recv, req, host_fp, np, last_pairing).await {
+            let wire = pairing::PairWire::Pkf1 { send, recv };
+            match serve_pairing(&link, wire, req, host_fp, np, last_pairing).await {
                 Ok(_) => tracing::info!(%peer, "pairing over punktfunk/1 complete"),
                 Err(e) => {
                     tracing::warn!(%peer, error = %format!("{e:#}"), "pairing over punktfunk/1 failed")
@@ -1428,8 +1427,8 @@ pub(crate) enum DataPlane {
 pub(crate) async fn run_admitted(
     conn: link::SessionLink,
     send: link::CtlSend,
-    recv: link::CtlRecv,
-    first: Vec<u8>,
+    recv: link::CtlReader,
+    first: ClientHello,
     host: &SessionHost,
     data_plane: DataPlane,
     permit: tokio::sync::OwnedSemaphorePermit,
@@ -1656,6 +1655,7 @@ pub(crate) async fn run_admitted(
     tokio::spawn(control::run(control::Task {
         ctrl_send,
         ctrl_recv,
+        clock: conn.v2_session().clock.clone(),
         input_tx: input_tx.clone(),
         initial_mode: hello.mode,
         codec,
@@ -2173,7 +2173,7 @@ async fn admit(
     host: &SessionHost,
     fp_hex: Option<&str>,
     conn: &link::SessionLink,
-    first: &[u8],
+    first: &ClientHello,
 ) -> Result<Admission> {
     let at_unix = crate::clock::unix_secs();
     let (grants, deadline_unix, watch) = match fp_hex {
@@ -2196,7 +2196,7 @@ async fn admit(
         None => (GRANT_ALL, None, None),
     };
     let session = fp_hex.map(|fp_hex| host.np.session_started(fp_hex));
-    if grants & GRANT_LAUNCH == 0 && Hello::decode(first).is_ok_and(|h| h.launch.is_some()) {
+    if grants & GRANT_LAUNCH == 0 && first.hello.launch.is_some() {
         close_rejected(
             conn,
             punktfunk_core::reject::RejectReason::LaunchNotPermitted,
@@ -2704,6 +2704,7 @@ fn session_isolation(id: &str, paired: bool) -> crate::vdisplay::SessionIsolatio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use punktfunk_core::quic::v2::msg::V2Message;
 
     /// The knob is the only way in, and an unpaired session never gets a seat home.
     #[cfg(target_os = "linux")]
@@ -4236,20 +4237,20 @@ mod tests {
         std::env::temp_dir().join(format!("pf-access-{tag}-{}.json", std::process::id()))
     }
 
-    /// `ClientHello` → `ServerHello` → `Ready` through the client's translation edges, returning
-    /// streams so a test can read `AccessUpdate`s and the exact close code. The media handle
-    /// keeps the client's socket open.
+    /// `ClientHello` → `ServerHello` → `Ready`, returning streams so a test can read
+    /// `AccessUpdate`s and the exact close code. The media handle keeps the client's socket open.
     async fn raw_session(
         port: u16,
         identity: (&str, &str),
     ) -> (
         quinn::Connection,
-        punktfunk_core::quic::v2::io::V2Writer<quinn::SendStream>,
-        punktfunk_core::quic::v2::io::V2Reader<quinn::RecvStream>,
+        quinn::SendStream,
+        punktfunk_core::quic::v2::io::FrameReader<quinn::RecvStream>,
         Welcome,
         punktfunk_core::transport::shared::ClientMedia,
     ) {
-        use punktfunk_core::quic::v2::{io as v2io, registry, translate};
+        use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+        use punktfunk_core::quic::v2::{io as v2io, msg, registry};
         let (ep, _observed) = endpoint::client_shared(None, Some(identity), &[registry::ALPN]);
         let (ep, media) = ep.expect("client endpoint");
         let conn = ep
@@ -4261,9 +4262,7 @@ mod tests {
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL)
             .await
             .expect("stream type");
-        let edge = translate::TxEdge::client(translate::ClientExtra::default());
-        let mut send = v2io::V2Writer::new(send, Arc::new(std::sync::Mutex::new(edge)));
-        let mut recv = v2io::V2Reader::new(recv, Default::default());
+        let mut recv = v2io::FrameReader::new(recv);
         let hello = Hello {
             abi_version: punktfunk_core::WIRE_VERSION,
             mode: punktfunk_core::Mode {
@@ -4288,14 +4287,22 @@ mod tests {
             audio_layout: 0,
             video_fit: 0,
         };
-        io::write_msg(&mut send, &hello.encode())
-            .await
-            .expect("Hello");
-        let welcome = Welcome::decode(&io::read_msg(&mut recv).await.expect("Welcome read"))
-            .expect("Welcome decode");
-        io::write_msg(&mut send, &Start { client_udp_port: 0 }.encode())
-            .await
-            .expect("Start");
+        let hello = ClientHello {
+            hello,
+            start_ext: Vec::new(),
+            resume: None,
+            suites: Vec::new(),
+        };
+        v2io::send(&mut send, &hello).await.expect("ClientHello");
+        let welcome = loop {
+            let (ty, body) = recv.read_frame().await.expect("ServerHello read");
+            if ty != msg::Pending::TYPE {
+                break msg::decode::<ServerHello>(ty, &body)
+                    .expect("ServerHello")
+                    .welcome;
+            }
+        };
+        v2io::send(&mut send, &Ready {}).await.expect("Ready");
         (conn, send, recv, welcome, media)
     }
 
@@ -4364,22 +4371,23 @@ mod tests {
                 spake_a,
                 device_key: Vec::new(),
             };
-            io::write_msg(&mut send, &req.encode()).await.unwrap();
-            let challenge = PairChallenge::decode(&io::read_msg(&mut recv).await.unwrap()).unwrap();
+            pkf1::write(&mut send, &req.encode_pkf1()).await.unwrap();
+            let challenge =
+                PairChallenge::decode_pkf1(&pkf1::read(&mut recv).await.unwrap()).unwrap();
             let confirms = spake.finish(&challenge.spake_b).unwrap();
             assert!(pake::verify(&confirms.host, &challenge.confirm));
             let proof = PairProof {
                 confirm: confirms.client,
             };
-            io::write_msg(&mut send, &proof.encode()).await.unwrap();
-            let result = PairResult::decode(&io::read_msg(&mut recv).await.unwrap()).unwrap();
+            pkf1::write(&mut send, &proof.encode_pkf1()).await.unwrap();
+            let result = PairResult::decode_pkf1(&pkf1::read(&mut recv).await.unwrap()).unwrap();
             assert!(result.ok, "the pairing completes");
             conn.close(0u32.into(), b"pair done");
 
-            // Its session dial is told to update.
+            // Its session dial is told to update. A v1 Hello opens with `PKF1`.
             let conn = ep.connect(addr, "punktfunk").unwrap().await.unwrap();
             let (mut send, _recv) = conn.open_bi().await.unwrap();
-            io::write_msg(&mut send, &RequestKeyframe.encode())
+            pkf1::write(&mut send, b"PKF1\x01\x00\x00\x00")
                 .await
                 .unwrap();
             let code =
@@ -4492,12 +4500,13 @@ mod tests {
             .expect("the fingerprint is paired");
 
             // Update 1: the edit itself (new mask + remaining).
-            let msg =
-                tokio::time::timeout(std::time::Duration::from_secs(5), io::read_msg(&mut recv))
+            let (ty, body) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), recv.read_frame())
                     .await
                     .expect("edit AccessUpdate owed")
                     .expect("control stream open");
-            let u = AccessUpdate::decode(&msg).expect("an AccessUpdate");
+            let u = punktfunk_core::quic::v2::msg::decode::<AccessUpdate>(ty, &body)
+                .expect("an AccessUpdate");
             assert_eq!(u.grants, punktfunk_core::quic::GRANT_PRESET_CONTROLLER_ONLY);
             assert!(
                 (55..=62).contains(&u.remaining_secs),
@@ -4506,12 +4515,13 @@ mod tests {
             );
 
             // Update 2: T−1 m warning, fired as the threshold is crossed live.
-            let msg =
-                tokio::time::timeout(std::time::Duration::from_secs(10), io::read_msg(&mut recv))
+            let (ty, body) =
+                tokio::time::timeout(std::time::Duration::from_secs(10), recv.read_frame())
                     .await
                     .expect("T-1m warning owed")
                     .expect("control stream open");
-            let u = AccessUpdate::decode(&msg).expect("an AccessUpdate");
+            let u = punktfunk_core::quic::v2::msg::decode::<AccessUpdate>(ty, &body)
+                .expect("an AccessUpdate");
             assert!(
                 u.remaining_secs <= 60,
                 "the warning carries the crossed threshold, got {}",

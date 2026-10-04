@@ -3,7 +3,7 @@
 use super::worker::reject_from_close;
 use super::{dial_addr, NativeClient};
 use crate::error::{PunktfunkError, Result};
-use crate::quic::{endpoint, io};
+use crate::quic::endpoint;
 use std::time::Duration;
 
 impl NativeClient {
@@ -38,17 +38,13 @@ impl NativeClient {
             // Never close here; the caller does, then flushes, so an early
             // return still lets the host see CONNECTION_CLOSE.
             let exchange = |conn: quinn::Connection, host_fp: [u8; 32]| async move {
-                use crate::quic::v2::{io as v2io, registry, translate};
+                use crate::quic::v2::{io as v2io, msg::decode, registry};
                 let (mut send, recv) = conn
                     .open_bi()
                     .await
                     .map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
-                // The control stream, its messages translated at its edge.
                 v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-                let edge = translate::TxEdge::client(translate::ClientExtra::default());
-                let mut send =
-                    v2io::V2Writer::new(send, std::sync::Arc::new(std::sync::Mutex::new(edge)));
-                let mut recv = v2io::V2Reader::new(recv, Default::default());
+                let mut recv = v2io::FrameReader::new(recv);
                 // SPAKE2 as A; bind our fingerprint and the TOFU-observed host cert.
                 let (pake, spake_a) = pake::start(true, &pin, &client_fp, &host_fp);
                 // No `device_key`: this client's identity is its certificate, which the
@@ -58,22 +54,20 @@ impl NativeClient {
                     spake_a,
                     device_key: Vec::new(),
                 };
-                io::write_msg(&mut send, &req.encode()).await?;
-                let challenge = PairChallenge::decode(&io::read_msg(&mut recv).await?)?;
+                v2io::send(&mut send, &req).await?;
+                let (ty, body) = recv.read_frame().await?;
+                let challenge = decode::<PairChallenge>(ty, &body)?;
                 let confirms = pake.finish(&challenge.spake_b)?;
                 // Host confirm = same key (PIN + certs). Pin only after this.
                 if !pake::verify(&confirms.host, &challenge.confirm) {
                     return Err(PunktfunkError::Crypto); // wrong PIN or MITM
                 }
-                io::write_msg(
-                    &mut send,
-                    &PairProof {
-                        confirm: confirms.client,
-                    }
-                    .encode(),
-                )
-                .await?;
-                let result = PairResult::decode(&io::read_msg(&mut recv).await?)?;
+                let proof = PairProof {
+                    confirm: confirms.client,
+                };
+                v2io::send(&mut send, &proof).await?;
+                let (ty, body) = recv.read_frame().await?;
+                let result = decode::<PairResult>(ty, &body)?;
                 if result.ok {
                     Ok(host_fp)
                 } else {

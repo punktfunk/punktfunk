@@ -101,33 +101,17 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
         // The delivery ask rides only when the dial made one; a host that reads it answers.
         let delivery: Vec<u8> = p.delivery.map(|d| d.encode().to_vec()).unwrap_or_default();
-        // The `ClientHello` carries the `Start` entries: every host reads them.
-        use crate::quic::v2::{io as v2io, registry, translate};
+        use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
+        use crate::quic::v2::{io as v2io, msg::V2Message, registry};
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-        let entries =
-            crate::quic::start_ext(crate::quic::HOST_CAP2_EXT, &label, &abr, &preset, &delivery);
+        let entries = crate::quic::start_ext(&label, &abr, &preset, &delivery);
         let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
-        let extra = translate::ClientExtra {
-            start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
-            resume: crate::client::resume::peek(&p.host, p.port),
-            suites: if wants_chacha {
-                vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
-            } else {
-                vec![MediaSuite::Aes128Gcm]
-            },
-        };
-        let rx_edge = Arc::new(Mutex::new(translate::RxEdge::default()));
-        let tx_edge = Arc::new(Mutex::new(translate::TxEdge::client(extra)));
-        let mut send: CtlSend = Box::new(v2io::V2Writer::new(send, tx_edge));
-        let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
-            Box::new(v2io::V2Reader::new(recv, rx_edge.clone()));
         // Resumable reader: `select!` and the clock-sync timeout can both interrupt a
         // read; a lost partial frame would misalign the stream for the session.
-        let mut recv = io::MsgReader::new(recv);
+        let mut recv = CtlRecv::new(recv);
 
-        io::write_msg(
-            &mut send,
-            &Hello {
+        let hello = ClientHello {
+            hello: Hello {
                 abi_version: crate::WIRE_VERSION,
                 mode: p.mode,
                 compositor: p.compositor,
@@ -163,13 +147,32 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 audio_layout: p.audio_layout.wire(),
                 // How this client fills its view; a host framing for another device reframes to it.
                 video_fit: p.video_fit.wire(),
-            }
-            .encode(),
-        )
-        .await?;
+            },
+            // The `Start` entries: every host reads them.
+            start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
+            resume: crate::client::resume::peek(&p.host, p.port),
+            suites: if wants_chacha {
+                vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
+            } else {
+                vec![MediaSuite::Aes128Gcm]
+            },
+        };
+        v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
         crate::client::resume::take(&p.host, p.port);
-        let welcome = Welcome::decode(&recv.read_msg().await?)?;
+        // `Pending` repeats while the host asks its console about this device.
+        let mut waiting = false;
+        let server = loop {
+            let (ty, body) = recv.read_frame().await?;
+            match ty {
+                ServerHello::TYPE => break ServerHello::from_body(&body)?,
+                registry::MSG_PENDING if !std::mem::replace(&mut waiting, true) => {
+                    tracing::info!("the host is waiting for this device to be approved");
+                }
+                _ => {}
+            }
+        };
+        let welcome = server.welcome;
         if welcome.compositor != CompositorPref::Auto {
             tracing::info!(
                 compositor = welcome.compositor.as_str(),
@@ -183,8 +186,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             );
         }
 
-        // `Start` leaves as `Ready`; its entries already rode the `ClientHello`.
-        io::write_msg(&mut send, &Start { client_udp_port: 0 }.encode()).await?;
+        v2io::send(&mut send, &Ready {}).await?;
 
         // Skew handshake before the control task takes the stream. 0 ⇒ old host did
         // not answer (shared-clock). Embedder present times are in the host capture clock.
@@ -202,11 +204,6 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 None => (0, None),
             };
 
-        let server = rx_edge
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .server
-            .ok_or(PunktfunkError::InvalidArg("the host sent no session"))?;
         let suite = server
             .suite
             .ok_or(PunktfunkError::Unsupported("unsealed native media"))?;

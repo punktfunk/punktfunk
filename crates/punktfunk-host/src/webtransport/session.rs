@@ -14,11 +14,13 @@
 //! thing this file must never grow back into.
 
 use super::{Serving, WebTransportPlane};
-use crate::native::link::{CtlRecv, CtlSend, SessionLink, V2Session};
+use crate::native::link::{CtlReader, CtlRecv, CtlSend, SessionLink, V2Session};
 use crate::native::{DataPlane, Served};
 use anyhow::{Context, Result};
-use punktfunk_core::quic::io::{read_msg, write_msg};
-use punktfunk_core::quic::{auth_signed_message, AuthChallenge, AuthResponse, Hello, PairRequest};
+use punktfunk_core::quic::v2::hello::ClientHello;
+use punktfunk_core::quic::v2::io as v2io;
+use punktfunk_core::quic::v2::msg::decode;
+use punktfunk_core::quic::{auth_signed_message, AuthChallenge, AuthResponse, PairRequest};
 use punktfunk_core::reject::RejectReason;
 use rand::RngCore;
 use std::sync::Arc;
@@ -82,13 +84,16 @@ pub(crate) async fn run(
                 .peer_fingerprint()
                 .context("a knock is keyed by its device")?;
             let pairing = &serving.plane.pairing;
-            let v2_writer = match &mut tx {
-                CtlSend::WebV2(w) => Some(w),
-                _ => None,
-            };
-            crate::native::park_knock(&link, v2_writer, pairing, &label, &hex::encode(fp), &sem)
-                .await?
-                .map_err(rejected)?
+            crate::native::park_knock(
+                &link,
+                Some(&mut tx),
+                pairing,
+                &label,
+                &hex::encode(fp),
+                &sem,
+            )
+            .await?
+            .map_err(rejected)?
         }
     };
     let plane = WebTransportPlane::new(conn, link.v2_session().clone());
@@ -108,8 +113,8 @@ pub(crate) async fn run(
 struct Admitted {
     link: SessionLink,
     tx: CtlSend,
-    rx: CtlRecv,
-    first: Vec<u8>,
+    rx: CtlReader,
+    first: ClientHello,
     /// The name it asks for access under, when the host does not admit this device yet.
     knock: Option<String>,
 }
@@ -127,9 +132,7 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
         .await
         .context("control stream: handshake timeout")?
         .context("accept control stream")?;
-    // The stream says it is control, then every message crosses the translation edges, so
-    // admission below reads and writes the session's messages as the native plane does.
-    use punktfunk_core::quic::v2::io::{self as v2io, V2Reader, V2Writer};
+    // The stream says it is control, then carries frames as the native plane's does.
     let ty = tokio::time::timeout(HANDSHAKE_TIMEOUT, v2io::read_stream_type(&mut rx))
         .await
         .context("stream type: handshake timeout")?
@@ -139,19 +142,18 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
         "first stream is type {ty}, not control"
     );
     let session = Arc::new(V2Session::new());
-    let (mut tx, mut rx) = (
-        CtlSend::WebV2(V2Writer::new(tx, session.tx.clone())),
-        CtlRecv::WebV2(V2Reader::new(rx, session.rx.clone())),
-    );
-    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_msg(&mut rx))
+    let (mut tx, mut rx) = (CtlSend::Web(tx), CtlReader::new(CtlRecv::Web(rx)));
+    let (ty, body) = tokio::time::timeout(HANDSHAKE_TIMEOUT, rx.read_frame())
         .await
         .context("first message: handshake timeout")?
         .context("read the first message")?;
 
-    if let Ok(req) = PairRequest::decode(&first) {
+    if let Ok(req) = decode::<PairRequest>(ty, &body) {
         pair(conn, tx, rx, req, serving).await?;
         return Ok(None);
     }
+    let first = decode::<ClientHello>(ty, &body)
+        .map_err(|e| anyhow::anyhow!("ClientHello decode: {e:?}"))?;
 
     // Nothing is offered until the device answers. The nonce is fresh per connection, so a
     // captured response does not open a second one. Off (`serve --open`), the browser is as
@@ -162,16 +164,16 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
         // Bounded too: the write waits on the peer's stream credit.
         tokio::time::timeout(
             HANDSHAKE_TIMEOUT,
-            write_msg(&mut tx, &AuthChallenge { nonce }.encode()),
+            v2io::send(&mut tx, &AuthChallenge { nonce }),
         )
         .await
         .context("AuthChallenge: handshake timeout")?
         .context("write AuthChallenge")?;
-        let answer = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_msg(&mut rx))
+        let (ty, body) = tokio::time::timeout(HANDSHAKE_TIMEOUT, rx.read_frame())
             .await
             .context("AuthResponse: handshake timeout")?
             .context("read AuthResponse")?;
-        let auth = AuthResponse::decode(&answer).map_err(|_| {
+        let auth = decode::<AuthResponse>(ty, &body).map_err(|_| {
             refused(
                 punktfunk_core::reject::PAIR_NO_IDENTITY_CLOSE_CODE,
                 "this host requires pairing — no device signature",
@@ -187,7 +189,7 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
                 tracing::info!(fingerprint = %fp_hex, "browser authenticated");
                 None
             }
-            None => Some(knock_label(&first, &fp_hex)?),
+            None => Some(knock_label(&first, &fp_hex)),
         };
         (Some(fp), knock)
     } else {
@@ -202,11 +204,10 @@ async fn admit_session(conn: &Connection, serving: &Serving) -> Result<Option<Ad
     }))
 }
 
-/// The console label for an unpaired browser, from its `Hello`.
-fn knock_label(first: &[u8], fp_hex: &str) -> Result<String> {
-    let hello = Hello::decode(first).map_err(|e| anyhow::anyhow!("Hello decode: {e:?}"))?;
-    let name = hello.name.as_deref().unwrap_or("");
-    Ok(crate::native_pairing::sanitize_device_name(name, fp_hex))
+/// The console label for an unpaired browser, from its `ClientHello`.
+fn knock_label(first: &ClientHello, fp_hex: &str) -> String {
+    let name = first.hello.name.as_deref().unwrap_or("");
+    crate::native_pairing::sanitize_device_name(name, fp_hex)
 }
 
 /// Does the device hold the key it names, signed over this nonce on this channel? Returns the
@@ -253,7 +254,7 @@ pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
 async fn pair(
     conn: &Connection,
     tx: CtlSend,
-    rx: CtlRecv,
+    rx: CtlReader,
     req: PairRequest,
     serving: &Serving,
 ) -> Result<()> {
@@ -305,8 +306,7 @@ async fn pair(
     };
     crate::native::pair_ceremony(
         &crate::native::link::SessionLink::Web(conn.clone(), None, Arc::new(V2Session::new())),
-        tx,
-        rx,
+        crate::native::PairWire::V2 { send: tx, recv: rx },
         req,
         &client_fp,
         &serving.cert_hash,
@@ -320,6 +320,9 @@ async fn pair(
 mod tests {
     use super::*;
     use punktfunk_core::quic::auth_signed_message;
+    use punktfunk_core::quic::v2::hello::ClientHello;
+    use punktfunk_core::quic::v2::msg::V2Message;
+    use punktfunk_core::quic::Hello;
     use rcgen::{
         KeyPair, PublicKeyData as _, SigningKey as _, PKCS_ECDSA_P256_SHA256,
         PKCS_ECDSA_P384_SHA384,
@@ -413,10 +416,10 @@ mod tests {
         assert!(verify(&bent, &nonce, &s).is_err());
     }
 
-    /// The `Hello` a browser opens a session with.
-    fn hello(name: &str, launch: Option<&str>) -> Hello {
+    /// The `ClientHello` frame a browser opens a session with.
+    fn hello(name: &str, launch: Option<&str>) -> Vec<u8> {
         use punktfunk_core::config::{CompositorPref, GamepadPref};
-        Hello {
+        let hello = Hello {
             abi_version: punktfunk_core::WIRE_VERSION,
             mode: punktfunk_core::Mode {
                 width: 1280,
@@ -439,12 +442,19 @@ mod tests {
             audio_bits: punktfunk_core::audio::pcm::BITS_16,
             audio_layout: 0,
             video_fit: 0,
+        };
+        ClientHello {
+            hello,
+            start_ext: Vec::new(),
+            resume: None,
+            suites: Vec::new(),
         }
+        .encode_v2()
     }
 
-    /// One browser dial over loopback WebTransport, up to admission. The browser's control
-    /// stream crosses the client's translation edges, as the client pump's does. The browser's
-    /// end is returned too: dropping it would close the session under the test.
+    /// One browser dial over loopback WebTransport, up to admission; `first` is the browser's
+    /// first control frame. The browser's end is returned too: dropping it would close the
+    /// session under the test.
     async fn admit_over_loopback(
         s: &Serving,
         key: &KeyPair,
@@ -473,19 +483,17 @@ mod tests {
             .await
             .unwrap();
             let (mut tx, rx) = conn.open_bi().await.unwrap().await.unwrap();
-            use punktfunk_core::quic::v2::{io, registry, translate};
+            use punktfunk_core::quic::v2::{io, msg, registry};
             io::write_stream_type(&mut tx, registry::STREAM_CONTROL)
                 .await
                 .unwrap();
-            let edge = translate::TxEdge::client(translate::ClientExtra::default());
-            let mut tx = io::V2Writer::new(tx, Arc::new(std::sync::Mutex::new(edge)));
-            let mut rx = io::V2Reader::new(rx, Default::default());
-            write_msg(&mut tx, first).await.unwrap();
-            let nonce = AuthChallenge::decode(&read_msg(&mut rx).await.unwrap())
-                .unwrap()
-                .nonce;
-            let answer = respond(key, &s.cert_hash, &nonce).encode();
-            write_msg(&mut tx, &answer).await.unwrap();
+            let mut rx = io::FrameReader::new(rx);
+            tx.write_all(first).await.unwrap();
+            let (ty, body) = rx.read_frame().await.unwrap();
+            let nonce = msg::decode::<AuthChallenge>(ty, &body).unwrap().nonce;
+            io::send(&mut tx, &respond(key, &s.cert_hash, &nonce))
+                .await
+                .unwrap();
             conn
         };
         let host = async {
@@ -508,8 +516,7 @@ mod tests {
         let fp = sha256(&key.subject_public_key_info());
         np.add("Enrico's browser", &hex::encode(fp)).unwrap();
 
-        // A paired device's first message is not read here: the session decodes its `Hello`.
-        let first = hello("Safari on Mac", None).encode();
+        let first = hello("Safari on Mac", None);
         let (_browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         assert!(admitted.link.is_web());
         assert_eq!(admitted.link.peer_fingerprint(), Some(fp));
@@ -524,15 +531,13 @@ mod tests {
         let s = serving(np.clone());
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
-        let first = hello("Safari on Mac", None).encode();
+        let first = hello("Safari on Mac", None);
         let (_browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         let label = admitted.knock.expect("an unpaired device knocks");
         assert_eq!(label, "Safari on Mac");
 
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let no_v2: Option<&mut punktfunk_core::quic::v2::io::V2Writer<wtransport::SendStream>> =
-            None;
-        let park = crate::native::park_knock(&admitted.link, no_v2, &np, &label, &fp_hex, &sem);
+        let park = crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, &sem);
         let console = async {
             let pending = loop {
                 if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {
@@ -563,7 +568,7 @@ mod tests {
         let s = serving(store("closed"));
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         s.plane.pairing.add("Enrico's browser", &fp_hex).unwrap();
-        let first = hello("Safari on Mac", None).encode();
+        let first = hello("Safari on Mac", None);
         let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         let quit = punktfunk_core::quic::QUIT_CLOSE_CODE;
         browser.close(wtransport::VarInt::from_u32(quit), b"");
@@ -592,7 +597,7 @@ mod tests {
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         np.add_with_access("Enrico's browser", &fp_hex, Some(no_launch))
             .unwrap();
-        let first = hello("Safari on Mac", Some("steam:570")).encode();
+        let first = hello("Safari on Mac", Some("steam:570"));
         let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
         let Admitted {
             link,

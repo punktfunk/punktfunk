@@ -8,9 +8,9 @@ use super::*;
 use crate::config::Role;
 use crate::packet::FLAG_PROBE;
 use crate::quic::{
-    io, wall_clock_ns, BitrateChanged, ClipState, ClockEcho, ClockResync, DeliveryReport, Hello,
+    wall_clock_ns, BitrateChanged, ClipState, ClockEcho, ClockResync, DeliveryReport, Hello,
     LinkReport, LossReport, ProbeResult, Reconfigure, Reconfigured, RequestKeyframe, ResyncAdmit,
-    ResyncGuard, ResyncStep, SetBitrate, Start, Welcome,
+    ResyncGuard, ResyncStep, SetBitrate,
 };
 use crate::session::Session;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -27,10 +27,10 @@ mod rx_gap;
 /// reason it carried (`None` from a host that does not name its limits).
 type AckQueue = std::collections::VecDeque<(u32, Option<crate::quic::AckReason>)>;
 
-/// The control stream's write half: session messages in, translated at its edge.
-pub(super) type CtlSend = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
-/// The control stream's read half.
-pub(super) type CtlRecv = io::MsgReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
+/// The control stream's write half.
+pub(super) type CtlSend = quinn::SendStream;
+/// The control stream's frames, read cancel-safe under `select!`.
+pub(super) type CtlRecv = crate::quic::v2::io::FrameReader<quinn::RecvStream>;
 
 /// The client's connection. A datagram carries its kind; this adds and strips it, so every
 /// task keeps sending and reading the datagrams it always did. Everything else is the quinn

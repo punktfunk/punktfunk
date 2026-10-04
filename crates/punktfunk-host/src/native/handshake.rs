@@ -325,14 +325,14 @@ pub(super) struct Negotiated {
     pub(super) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
 }
 
-/// Hello → Welcome → Start. Borrows the control streams; the caller keeps them for mid-stream
-/// renegotiation. `first` is the already-read first control message.
+/// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
+/// for mid-stream renegotiation. `first` is the already-read `ClientHello`.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn negotiate(
     conn: &super::link::SessionLink,
     send: &mut super::link::CtlSend,
-    recv: &mut super::link::CtlRecv,
-    first: &[u8],
+    recv: &mut super::link::CtlReader,
+    first: &ClientHello,
     source: Punktfunk1Source,
     frames: u32,
     // `welcome` / `start` stamps; Welcome-time display prep threads this into pipeline-build.
@@ -345,7 +345,7 @@ pub(super) async fn negotiate(
     grants: u32,
     expires_in_secs: u32,
 ) -> Result<Negotiated> {
-    let mut hello = Hello::decode(first).map_err(|e| anyhow!("Hello decode: {e:?}"))?;
+    let mut hello = first.hello.clone();
     // Pairing ran before this future: a client here is paired, or the host is `--open`.
 
     // GPU-probed host codecs ∩ client advertised, honoring preference. A software host is
@@ -417,15 +417,7 @@ pub(super) async fn negotiate(
         // `resume` names. Stop them and wait for their release, so this reconnect reuses the
         // kept display. Runs before we register, so we never stop ourselves.
         let mut own_zombies = preempt_same_identity(peer_fp);
-        let resume = {
-            let rx = conn
-                .v2_session()
-                .rx
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            rx.client.as_ref().and_then(|c| c.resume)
-        };
-        if let Some(id) = resume {
+        if let Some(id) = first.resume {
             for s in preempt_resumed(id, peer_fp) {
                 if !own_zombies.iter().any(|z| Arc::ptr_eq(z, &s)) {
                     own_zombies.push(s);
@@ -735,15 +727,22 @@ pub(super) async fn negotiate(
                 _ => 0,
             },
     };
-    // The suite goes out in the `ServerHello` this `Welcome` becomes, and keys the media. A
-    // browser's media goes unsealed, inside WebTransport's own encryption.
-    conn.v2_session()
-        .settle((!conn.is_web()).then_some(if chacha {
-            punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
-        } else {
-            punktfunk_core::crypto::MediaSuite::Aes128Gcm
-        }));
-    io::write_msg(send, &welcome.encode()).await?;
+    // The suite goes out in the `ServerHello` and keys the media. A browser's media goes
+    // unsealed, inside WebTransport's own encryption.
+    let suite = (!conn.is_web()).then_some(if chacha {
+        punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305
+    } else {
+        punktfunk_core::crypto::MediaSuite::Aes128Gcm
+    });
+    let session = conn.v2_session();
+    session.settle(suite);
+    let server_hello = ServerHello {
+        welcome,
+        session_id: session.session_id,
+        clock_origin_ns: session.clock.origin_ns(),
+        suite,
+    };
+    punktfunk_core::quic::v2::io::send(send, &server_hello).await?;
     bringup.mark("welcome");
 
     // Display prep now: mode is final in Welcome; nothing in create→encoder needs Start or
@@ -815,12 +814,16 @@ pub(super) async fn negotiate(
         _ => None,
     };
 
-    let start_msg = io::read_msg(recv).await?;
-    Start::decode(&start_msg).map_err(|e| anyhow!("Start decode: {e:?}"))?;
-    // The block the client appended, decoded once. A bad block fails the handshake
-    // (`decode_ext`'s rule), an unknown tag is skipped, and absence says nothing.
-    let start_ext =
-        Start::decode_ext(&start_msg).map_err(|e| anyhow!("Start extensions: {e:?}"))?;
+    let (ty, body) = recv.read_frame().await?;
+    punktfunk_core::quic::v2::msg::decode::<Ready>(ty, &body)
+        .map_err(|e| anyhow!("Ready decode: {e:?}"))?;
+    // The entries the `ClientHello` carried. An unknown tag is skipped, and absence says
+    // nothing.
+    let start_ext: Vec<(u16, &[u8])> = first
+        .start_ext
+        .iter()
+        .map(|(tag, v)| (*tag, v.as_slice()))
+        .collect();
     // What the client calls itself, when it sent one. A label for the log.
     let client_label = start_ext
         .iter()

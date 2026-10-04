@@ -180,7 +180,7 @@ impl V2Message for ClientHello {
                 }
             }
         }
-        // The folding `Hello::decode` applies.
+        // Fold what this build cannot honour onto its default.
         h.audio_channels = crate::audio::normalize_channels(h.audio_channels);
         if h.audio_rate_hz == 0 {
             h.audio_rate_hz = crate::audio::SAMPLE_RATE_HZ;
@@ -350,7 +350,7 @@ impl V2Message for ServerHello {
                 _ => {}
             }
         }
-        // The folding `Welcome::decode` applies.
+        // Fold what this build cannot honour onto its default.
         if w.chroma_format != CHROMA_IDC_444 {
             w.chroma_format = CHROMA_IDC_420;
         }
@@ -557,18 +557,19 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(512))]
 
-        /// A `Hello` and a `Welcome` reach the far side with the same values over either wire.
+        /// One trip folds a `Hello` or `Welcome` to what the far side acts on; a second trip
+        /// changes nothing.
         #[test]
-        fn v1_and_v2_decode_alike(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h.clone(), start_ext: vec![], resume: None, suites: vec![] };
-            let via_v2 = ClientHello::from_body(&ch.fields().into_body()).unwrap().hello;
-            let via_v1 = Hello::decode(&h.encode()).unwrap();
-            prop_assert_eq!(via_v2, via_v1);
+        fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
+            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![] };
+            let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
+            let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
+            prop_assert_eq!(twice, once);
 
             let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None };
-            let via_v2 = ServerHello::from_body(&sh.fields().into_body()).unwrap().welcome;
-            let via_v1 = Welcome::decode(&w.encode()).unwrap();
-            prop_assert_eq!(via_v2, via_v1);
+            let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
+            let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
+            prop_assert_eq!(twice, once);
         }
 
         /// Hostile bytes never panic either hello decoder.
@@ -583,34 +584,30 @@ mod tests {
     fn start_extensions_and_session_fields_ride_along() {
         let preset = SessionPreset::new("p1", "Couch").unwrap().encode();
         let ch = ClientHello {
-            hello: Hello::decode(
-                &Hello {
-                    abi_version: crate::WIRE_VERSION,
-                    mode: Mode {
-                        width: 1920,
-                        height: 1080,
-                        refresh_hz: 60,
-                    },
-                    compositor: CompositorPref::Auto,
-                    gamepad: GamepadPref::Auto,
-                    bitrate_kbps: 0,
-                    name: Some("Deck".into()),
-                    launch: None,
-                    video_caps: VIDEO_CAP_CHACHA20,
-                    audio_channels: 2,
-                    video_codecs: CODEC_HEVC,
-                    preferred_codec: 0,
-                    display_hdr: None,
-                    client_caps: CLIENT_CAP_EXT,
-                    max_shard_payload: 1408,
-                    audio_rate_hz: 0,
-                    audio_bits: 0,
-                    audio_layout: 0,
-                    video_fit: 0,
-                }
-                .encode(),
-            )
-            .unwrap(),
+            hello: Hello {
+                abi_version: crate::WIRE_VERSION,
+                mode: Mode {
+                    width: 1920,
+                    height: 1080,
+                    refresh_hz: 60,
+                },
+                compositor: CompositorPref::Auto,
+                gamepad: GamepadPref::Auto,
+                bitrate_kbps: 0,
+                name: Some("Deck".into()),
+                launch: None,
+                video_caps: VIDEO_CAP_CHACHA20,
+                audio_channels: 2,
+                video_codecs: CODEC_HEVC,
+                preferred_codec: 0,
+                display_hdr: None,
+                client_caps: CLIENT_CAP_EXT,
+                max_shard_payload: 1408,
+                audio_rate_hz: crate::audio::SAMPLE_RATE_HZ,
+                audio_bits: crate::audio::pcm::BITS_16,
+                audio_layout: 0,
+                video_fit: 0,
+            },
             start_ext: vec![
                 (EXT_TAG_CLIENT, b"android 0.43".to_vec()),
                 (EXT_TAG_ABR, vec![EXT_ABR_ACK_REASON]),

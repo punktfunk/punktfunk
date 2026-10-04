@@ -1,7 +1,7 @@
 //! The control plane's message vocabulary, and the quinn transport that carries it.
 //!
 //! **The messages are not behind the `quic` feature; the transport is.** A browser speaks the
-//! same protocol over WebTransport, where quinn cannot go, so only [`endpoint`], [`io`],
+//! same protocol over WebTransport, where quinn cannot go, so only [`endpoint`], [`pkf1`],
 //! [`clipstream`] and [`pake`] need a feature.
 //!
 //! The structs here are the session's semantic model; [`v2`] encodes them for the wire (ALPN
@@ -10,12 +10,7 @@
 //! its TLS exporter. The host presents a long-lived self-signed cert; the client pins its
 //! SHA-256 fingerprint (no pin = TOFU).
 
-/// Protocol magic + version; first bytes of Hello/Welcome/Start.
-pub const MAGIC: &[u8; 4] = b"PKF1";
-
-/// Magic for typed post-handshake / pairing messages. Distinct from [`MAGIC`] so a
-/// `Hello` (abi_version where a type byte would sit) cannot parse as control, and
-/// vice versa.
+/// First bytes of a [`pkf1`] pairing message or refusal.
 pub const CTL_MAGIC: &[u8; 4] = b"PKFc";
 
 mod access;
@@ -37,11 +32,12 @@ pub mod v2;
 #[cfg(feature = "quic")]
 pub mod endpoint;
 
+/// The PIN ceremony and refusal an older client still speaks over `pkf1`.
 #[cfg(feature = "quic")]
-pub mod io;
+pub mod pkf1;
 
-/// Per-transfer clipboard fetch streams (`PKFs` + kind, then request/response).
-/// Transport only; wire codecs in [`control`], state per side.
+/// Per-transfer clipboard fetch streams: a transfer stream, a request frame, then raw bytes.
+/// Transport only; state per side.
 #[cfg(feature = "quic")]
 pub mod clipstream;
 

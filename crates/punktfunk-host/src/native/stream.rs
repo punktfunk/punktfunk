@@ -752,6 +752,7 @@ pub(super) fn virtual_stream(ctx: SessionContext, prepared: Option<PreparedDispl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use punktfunk_core::quic::ProbeRequest;
 
     /// A host session onto an in-process link, and the client that reads it back.
     fn loopback_sessions() -> (Session, Session) {
