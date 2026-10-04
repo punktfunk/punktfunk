@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 const SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 const QUALITY_TIMEOUT: Duration = Duration::from_secs(60);
+const QUALITY_RETRY_GAP: Duration = Duration::from_secs(2);
 const HOST_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -555,24 +556,40 @@ fn run_quality_gate(
     .map(OsString::from)
     .chain(std::iter::once(output.as_os_str().to_owned()))
     .collect::<Vec<_>>();
+    let deadline = Instant::now() + QUALITY_TIMEOUT;
     let result = (|| {
-        let quality =
-            process::spawn_in_session(session_id, host_path, &arguments, environment, workdir)?;
-        let code = quality.wait(QUALITY_TIMEOUT, || {
-            runtime.stop.load(Ordering::Acquire) || keeper.exit_code().ok().flatten().is_some()
-        })?;
-        let Some(code) = code else {
-            quality.terminate();
-            return Err(backend_error(
-                "quality_timeout",
-                "same-session virtual-display quality gate did not finish within 60 seconds",
-            ));
-        };
-        if code != 0 {
-            return Err(backend_error(
-                "quality_failed",
-                format!("same-session virtual-display quality gate exited with code {code}"),
-            ));
+        let mut attempt = 1_u32;
+        loop {
+            let quality =
+                process::spawn_in_session(session_id, host_path, &arguments, environment, workdir)?;
+            let left = deadline.saturating_duration_since(Instant::now());
+            let code = quality.wait(left, || {
+                runtime.stop.load(Ordering::Acquire) || keeper.exit_code().ok().flatten().is_some()
+            })?;
+            let Some(code) = code else {
+                quality.terminate();
+                return Err(backend_error(
+                    "quality_timeout",
+                    "same-session virtual-display quality gate did not finish within 60 seconds",
+                ));
+            };
+            if code == 0 {
+                break;
+            }
+            // A seat's display can attach before the session has a free path for it.
+            // Retrying in this session is cheaper than a logoff and a fresh logon.
+            let retry = deadline.saturating_duration_since(Instant::now()) > QUALITY_RETRY_GAP * 2;
+            if !retry || !sleep_stoppable(&runtime.stop, QUALITY_RETRY_GAP) {
+                return Err(backend_error(
+                    "quality_failed",
+                    format!(
+                        "same-session virtual-display quality gate exited with code {code} \
+                         on attempt {attempt}"
+                    ),
+                ));
+            }
+            tracing::warn!(seat = %seat.id, attempt, code, "seat quality gate failed, retrying");
+            attempt += 1;
         }
         let bytes = temp_root
             .read_current(&name, 16 * 1024 * 1024)
