@@ -15,7 +15,7 @@ import SwiftUI
 /// Checked against rather than interpolated: `Image(named:)` is a name lookup, and the set is the
 /// only thing that decides which names it can ever see.
 private let launcherIconTokensShipped: Set<String> = [
-    "steam", "lutris", "heroic", "playnite", "epic", "gog", "xbox",
+    "steam", "lutris", "heroic", "playnite", "epic", "gog", "xbox", "hydra",
 ]
 
 /// Tokens that are not brands: a UI mark the other shells take from Lucide, which here is the
