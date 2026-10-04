@@ -1,7 +1,7 @@
 //! What this host reads of the seat contract, in one place.
 //!
-//! The multi-seat add-on (`unom/punktfunk-seats`) supervises one ordinary host
-//! per Windows session and marks each with `PUNKTFUNK_SEAT_SESSION=1` plus a
+//! The seat supervisor (`pf-seats`, inside the Windows service) runs one ordinary
+//! host per Windows session and marks each with `PUNKTFUNK_SEAT_SESSION=1` plus a
 //! `PUNKTFUNK_SEAT_ID`. The host never learns how those sessions come to exist.
 //! An unset marker is the console host, which behaves exactly as before.
 //!
@@ -9,7 +9,7 @@
 //! at each use: it reaches a device-parameter marker and log lines.
 //! `docs-site/content/docs/developers/multi-seat-contract.md` is the contract of record.
 
-/// Whether an add-on-managed seat owns this host rather than the console.
+/// Whether a supervisor-managed seat owns this host rather than the console.
 pub fn is_seat_host() -> bool {
     std::env::var("PUNKTFUNK_SEAT_SESSION").as_deref() == Ok("1")
 }

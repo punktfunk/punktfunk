@@ -3,7 +3,7 @@
   Report whether a multi-seat host can actually give its seats a pf-vdisplay display.
 
 .DESCRIPTION
-  The seats add-on needs `pf_vdisplay_seats.inf` to win the hardware id `RdpIdd_IndirectDisplay`,
+  A seat needs `pf_vdisplay_seats.inf` to win the hardware id `RdpIdd_IndirectDisplay`,
   and losing it is SILENT: the seat session still starts, on Microsoft's own remote display adapter,
   and only the missing stream says otherwise. So this asserts the thing that matters - WHICH driver
   bound each seat devnode - rather than that a session came up.

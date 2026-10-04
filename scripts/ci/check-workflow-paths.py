@@ -28,7 +28,7 @@ LINUX_HOST_AND_CLIENT = [
 LINUX_HOST_FEATURES = "punktfunk-host/nvenc,punktfunk-host/vulkan-encode"
 
 # (workflow, manifest, target triple, packages, --features). Packages None = every member.
-# One row per workflow: the arch with the widest feature set.
+# One row per workflow and workspace: the arch with the widest feature set.
 BUILDS = [
     ("windows-host", "Cargo.toml", "x86_64-pc-windows-msvc",
      ["punktfunk-host", "punktfunk-tray", "display-disturb"],
@@ -37,6 +37,7 @@ BUILDS = [
      ["punktfunk-client-windows", "punktfunk-client-session", "punktfunk-cli"], None),
     ("windows-drivers", "packaging/windows/drivers/Cargo.toml", "x86_64-pc-windows-msvc",
      None, None),
+    ("windows-host", "crates/pf-seat-keeper/Cargo.toml", "x86_64-pc-windows-msvc", None, None),
     ("setup-windows", "Cargo.toml", "x86_64-pc-windows-msvc",
      ["punktfunk-setup", "punktfunk-setup-win"], None),
     ("macos-host", "Cargo.toml", "aarch64-apple-darwin",

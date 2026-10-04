@@ -1,0 +1,53 @@
+# The Windows seat supervisor, run inside the punktfunk service behind a SYSTEM-only pipe
+# (design/multi-seat-product.md). The core builds and tests on every platform; the Windows
+# half adds accounts, credentials and job-contained seat hosts. The RDP keeper links IronRDP
+# and builds apart, in crates/pf-seat-keeper.
+[package]
+name = "pf-seats"
+description = "Windows multi-seat supervisor: seat ledger, accounts, RDP keepers, seat hosts"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+aws-lc-rs = { workspace = true }
+hex = "0.4"
+pf-paths = { path = "../pf-paths" }
+rand = "0.9"
+rustls = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+zeroize = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+winreg = "0.56"
+windows = { version = "0.62", features = [
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Security",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Environment",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

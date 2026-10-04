@@ -3486,6 +3486,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pf-seats"
+version = "0.42.0"
+dependencies = [
+ "aws-lc-rs",
+ "hex",
+ "pf-paths",
+ "rand 0.9.5",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "windows-service",
+ "winreg 0.56.0",
+ "zeroize",
+]
+
+[[package]]
 name = "pf-update"
 version = "0.42.0"
 dependencies = [
@@ -4030,6 +4051,7 @@ dependencies = [
  "pf-inject",
  "pf-paths",
  "pf-paths-win",
+ "pf-seats",
  "pf-update-check",
  "pf-vdisplay",
  "pf-win-display",

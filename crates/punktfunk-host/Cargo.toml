@@ -244,6 +244,8 @@ ashpd = { version = "0.13", features = ["screencast", "remote_desktop", "setting
 # Verified unused before removal: zero `use`/path references across src/ + build.rs.
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# The seat supervisor the service runs beside the console host (windows/service/seats.rs).
+pf-seats = { path = "../pf-seats" }
 # Windows host backends. `windows` covers the Win32/CCD APIs the SudoVDA virtual-display backend
 # drives (SetupAPI device enumeration, DeviceIoControl IOCTLs, QueryDisplayConfig name resolution);
 # capture/encode/input/audio backends extend the feature set as they land.

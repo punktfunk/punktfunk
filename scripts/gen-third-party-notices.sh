@@ -27,7 +27,9 @@ OUT="${1:-THIRD-PARTY-NOTICES.txt}"
 # different question from what this file must contain. If about.hbs ever learns to emit the
 # vendored trees, preferring cargo-about here again would be reasonable.
 echo "==> gen-third-party-notices.py -> $OUT" >&2
-python3 scripts/gen-third-party-notices.py --out "$OUT"
+# The root file also names the seat keeper's crates: a separate workspace the host installer ships.
+python3 scripts/gen-third-party-notices.py --out "$OUT" --manifest Cargo.toml \
+    --manifest crates/pf-seat-keeper/Cargo.toml
 echo "==> wrote $OUT" >&2
 
 # Regenerate the per-client in-tree copies. EVERY client has one now, because every client SHOWS

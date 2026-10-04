@@ -1,24 +1,29 @@
 ---
 title: Multi-seat contract
-description: What the Windows host promises the opt-in punktfunk-seats supervisor — seat variables, the connector reservation and per-seat behaviour.
+description: How the Windows host runs seats — the supervisor in the service, its pipe, the seat keeper, the variables a seat host starts with and the connector reservation.
 ---
 
-The rules between the host and [`punktfunk-seats`](https://git.unom.io/unom/punktfunk-seats), the
-opt-in Windows supervisor that runs one host per seat so several people can play on one box. A
-normal install has one host on the console session, and none of this applies to it.
+The rules between the host and its seat supervisor, which runs one host per seat so several people
+can play on one Windows Server box. A normal install has one host on the console session, and none
+of this applies to it. Seats need Windows Server and a CAL per seat; see
+[Windows host → Good to know](/docs/windows-host#good-to-know).
 
-The supervisor owns the seat accounts, the Windows sessions, RDP and its own configuration. The host
-never learns any of it, so the add-on installs, updates and uninstalls on its own.
+## The supervisor
 
-**Contract version: 1.** There is no runtime handshake: the supervisor and the host ship versioned
-together, and a mismatch shows up as a marker or variable below not being honoured.
+The `PunktfunkHost` service runs the supervisor beside the console host, as LocalSystem in session
+0. It owns the seat accounts, the Windows sessions, RDP and the seat ledger in
+`%ProgramData%\punktfunk\seats\`. Seat hosts run in jobs of its own, so a console logon or a console
+host restart leaves them running; stopping the service logs every seat account off.
 
-## What Windows requires
-
-- **Windows Server** plus a **Remote Desktop Services CAL for every seat**. Per-Device CALs fit
-  fixed seats: a seat is a place, not a person.
-- **A client edition (Windows 10 or 11) serves one session at a time.** A single seat works there;
-  concurrent seats don't.
+- **The pipe.** `\\.\pipe\punktfunk-seats` admits SYSTEM and Administrators only and refuses
+  remote clients. Each connection carries one request: a four-byte big-endian length, then JSON,
+  64 KiB at most. Commands are `list`, `create`, `start`, `stop`, `delete` and `doctor`.
+- **The keeper.** `punktfunk-seat-keeper.exe`, beside `punktfunk-host.exe`, holds one seat's
+  loopback RDP session open. The supervisor hands it the seat's credentials on stdin, never on the
+  command line. Run `punktfunk-seat-keeper trust` from an elevated prompt once, before the first
+  seat: it records the RDP certificate the keeper will accept.
+- **Seats on and off.** Without the reservation marker below the ledger is still listed, and
+  every start answers `seats_off`.
 
 ## The reservation marker
 
@@ -34,8 +39,8 @@ connectors:
 | Console host | 0–15 | 0–11 (0 serves clients without an identity) |
 | Seat host | refuses every virtual-display session | exactly one of 12–15, from `PUNKTFUNK_SEAT_DISPLAY_SLOT` |
 
-- Only the elevated seats installer or service writes the key. It lives under `HKLM` so a seat host,
-  an ordinary process, can't reserve connectors from its own environment.
+- Only an elevated operator writes the key. It lives under `HKLM` so a seat host, an ordinary
+  process, can't reserve connectors from its own environment.
 - When the driver places a monitor outside the host's range, the host removes it and refuses the
   session.
 
@@ -111,7 +116,7 @@ Remote Desktop included, so the build produces two packages from the same `.inx`
 | Package | Claims | Installed by |
 |---|---|---|
 | `pf_vdisplay.{inf,cat}` | the console display device, `Root\pf_vdisplay` | every punktfunk install |
-| `pf_vdisplay_seats.{inf,cat}` | `RdpIdd_IndirectDisplay` only | the seats add-on, on an explicit choice |
+| `pf_vdisplay_seats.{inf,cat}` | `RdpIdd_IndirectDisplay` only | an operator, on an explicit choice |
 
 A machine without the seats package never claims the id.
 
