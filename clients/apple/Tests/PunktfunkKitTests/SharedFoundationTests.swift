@@ -18,7 +18,7 @@ final class SharedFoundationTests: XCTestCase {
     // MARK: - StoredHost JSON codec
 
     func testStoredHostRoundTrips() throws {
-        let host = StoredHost(
+        var host = StoredHost(
             id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
             name: "Tower", address: "192.168.1.173", port: 9777,
             pinnedSHA256: Data([0xDE, 0xAD, 0xBE, 0xEF]),
@@ -27,11 +27,13 @@ final class SharedFoundationTests: XCTestCase {
             presetID: "a1b2c3d4e5f6", pinnedPresetIDs: ["0f0f0f0f0f0f"],
             addedAt: Date(timeIntervalSince1970: 1_600_000_000),
             osChain: "linux/fedora/bazzite", previousAddresses: ["100.64.0.7"])
+        host.delivery = 2
 
         let data = try JSONEncoder().encode(host)
         let decoded = try JSONDecoder().decode(StoredHost.self, from: data)
         XCTAssertEqual(decoded, host)
         XCTAssertEqual(decoded.osChain, "linux/fedora/bazzite")
+        XCTAssertEqual(decoded.delivery, 2)
     }
 
     /// Older saved hosts predate `mgmtPort`/`macAddresses` — and now `presetID`/
@@ -55,6 +57,7 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertNil(decoded.addedAt)
         XCTAssertNil(decoded.osChain)
         XCTAssertNil(decoded.previousAddresses)
+        XCTAssertNil(decoded.delivery)
         // Resolvers fall back cleanly.
         XCTAssertEqual(decoded.effectiveMgmtPort, punktfunkDefaultMgmtPort)
         XCTAssertEqual(decoded.wakeMacs, [])

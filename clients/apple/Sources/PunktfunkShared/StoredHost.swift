@@ -89,7 +89,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, address, port, pinnedSHA256, lastConnected, mgmtPort, macAddresses
+        case id, name, address, port, pinnedSHA256, lastConnected, mgmtPort, macAddresses, delivery
         case clipboardSync, presetID, pinnedPresetIDs, addedAt, osChain, previousAddresses
         /// Pre-rename keys (design/preset-rename.md): read when the new key is absent, and
         /// written beside it so an older build keeps the bindings.
@@ -106,6 +106,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         lastConnected = try c.decodeIfPresent(Date.self, forKey: .lastConnected)
         mgmtPort = try c.decodeIfPresent(UInt16.self, forKey: .mgmtPort)
         macAddresses = try c.decodeIfPresent([String].self, forKey: .macAddresses)
+        delivery = try c.decodeIfPresent(Int.self, forKey: .delivery)
         clipboardSync = try c.decodeIfPresent(Bool.self, forKey: .clipboardSync)
         presetID = try c.decodeIfPresent(String.self, forKey: .presetID)
             ?? c.decodeIfPresent(String.self, forKey: .profileID)
@@ -126,6 +127,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(lastConnected, forKey: .lastConnected)
         try c.encodeIfPresent(mgmtPort, forKey: .mgmtPort)
         try c.encodeIfPresent(macAddresses, forKey: .macAddresses)
+        try c.encodeIfPresent(delivery, forKey: .delivery)
         try c.encodeIfPresent(clipboardSync, forKey: .clipboardSync)
         try c.encodeIfPresent(presetID, forKey: .presetID)
         try c.encodeIfPresent(pinnedPresetIDs, forKey: .pinnedPresetIDs)
