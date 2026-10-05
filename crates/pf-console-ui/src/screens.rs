@@ -19,6 +19,7 @@ pub(crate) mod palette;
 pub(crate) mod pin_hosts;
 pub(crate) mod players;
 pub(crate) mod preset;
+pub(crate) mod profiles;
 pub(crate) mod prompt;
 pub(crate) mod ring_editor;
 pub(crate) mod search;
@@ -63,6 +64,8 @@ pub struct Device {
     /// This device decodes AV1 in hardware ([`crate::shell::ConsoleOptions::av1_ok`]).
     /// False marks the codec row's AV1 value unsupported: the Hello never asks for it.
     pub av1_ok: bool,
+    /// The host answers profile fetches ([`crate::shell::ConsoleOptions::profiles`]).
+    pub profiles: bool,
     /// Name the host stores this client under when pairing.
     pub name: String,
     /// The About row's version ([`crate::shell::ConsoleOptions::version`]).
@@ -96,6 +99,7 @@ impl Device {
             fallback_ui: false,
             pyrowave_ok: true,
             av1_ok: true,
+            profiles: true,
             name: "test".into(),
             version: crate::VERSION.into(),
         }
@@ -155,6 +159,7 @@ impl EditField {
 }
 
 /// Session the shell turns into `OverlayAction::Launch` plus the connecting overlay.
+#[derive(Clone, Debug)]
 pub(crate) struct ConnectIntent {
     pub addr: String,
     pub port: u16,
@@ -167,6 +172,32 @@ pub(crate) struct ConnectIntent {
     pub request_access: bool,
     /// One-off preset for this launch; `None` keeps the host's default binding.
     pub preset: Option<String>,
+    /// The profile id to play as: the host card's pick. `None` names none.
+    pub profile: Option<String>,
+    /// Check the box's profiles before the dial (§10.1). `None` dials as it stands.
+    pub ask: Option<ProfileAsk>,
+}
+
+/// What the profile check before a dial needs: the card's host and its saved pick.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ProfileAsk {
+    /// [`HostRow::host_key`]: where a pick is saved.
+    pub key: String,
+    pub name: String,
+    pub mgmt: u16,
+    pub saved: Option<pf_client_core::profiles::ProfilePick>,
+}
+
+impl ProfileAsk {
+    /// A paired, pinned card's check; the rest have no profiles to ask about.
+    pub(crate) fn of(h: &HostRow) -> Option<ProfileAsk> {
+        (h.paired && !h.fp_hex.is_empty()).then(|| ProfileAsk {
+            key: h.host_key().to_string(),
+            name: h.name.clone(),
+            mgmt: h.mgmt_port,
+            saved: h.profile.clone(),
+        })
+    }
 }
 
 impl ConnectIntent {
@@ -190,6 +221,8 @@ impl ConnectIntent {
             },
             request_access: false,
             preset: h.pin.as_ref().map(|p| p.id.clone()),
+            profile: h.profile.as_ref().map(|p| p.id.clone()),
+            ask: ProfileAsk::of(h),
         }
     }
 
@@ -314,6 +347,8 @@ pub(crate) enum Screen {
     PresetEdit(preset::PresetEdit),
     /// The live controller test. Raised by the Controllers tab's Test card.
     InputTest(input_test::InputTestScreen),
+    /// Who plays on a host. Raised by Switch profile, and by a connect that needs a pick.
+    Profiles(profiles::ProfilesScreen),
 }
 
 impl Screen {
@@ -354,6 +389,7 @@ impl Screen {
             Screen::PresetName(s) => s.menu(ev, ctx, fx),
             Screen::PresetEdit(s) => s.menu(ev, ctx, fx),
             Screen::InputTest(s) => s.menu(ev, ctx, fx),
+            Screen::Profiles(s) => s.menu(ev, ctx, fx),
         }
     }
 
@@ -378,6 +414,7 @@ impl Screen {
             Screen::CardMenu(s) => s.press(),
             Screen::Customize(s) => s.list.dip(),
             Screen::Palette(s) => s.press(),
+            Screen::Profiles(s) => s.press(),
             Screen::Grants(s) => s.list.dip(),
             Screen::Prompt(s) => s.list.dip(),
             Screen::Search(s) => s.list.dip(),
@@ -409,6 +446,7 @@ impl Screen {
             Screen::CardMenu(s) => s.list.pan(p),
             Screen::Customize(s) => s.list.pan(p),
             Screen::Palette(s) => s.pan(p),
+            Screen::Profiles(s) => s.pan(p),
             Screen::Grants(s) => s.list.pan(p),
             Screen::Prompt(s) => s.list.pan(p),
             Screen::Licenses(s) => s.pan(p),
@@ -442,6 +480,7 @@ impl Screen {
             Screen::CardMenu(s) => s.pointer(p, ctx, fx),
             Screen::Customize(s) => s.pointer(p, ctx, fx),
             Screen::Palette(s) => s.pointer(p, ctx, fx),
+            Screen::Profiles(s) => s.pointer(p, ctx, fx),
             Screen::Grants(s) => s.pointer(p, ctx, fx),
             Screen::Prompt(s) => s.pointer(p, ctx, fx),
             Screen::Licenses(s) => s.pointer(p, ctx, fx),
@@ -594,6 +633,7 @@ impl Screen {
             Screen::PresetName(s) => s.title(),
             Screen::PresetEdit(s) => s.title(),
             Screen::InputTest(_) => "Controller test".into(),
+            Screen::Profiles(s) => s.title(),
         }
     }
 
@@ -605,6 +645,7 @@ impl Screen {
             Screen::Library(s) => s.announcement(ctx),
             Screen::Customize(s) => s.announcement(ctx),
             Screen::Palette(s) => s.announcement(ctx),
+            Screen::Profiles(s) => s.announcement(),
             Screen::Grants(s) => s.announcement(),
             Screen::Prompt(s) => s.announcement(),
             Screen::Settings(s) => s.announcement(ctx),
@@ -636,6 +677,7 @@ impl Screen {
             Screen::PresetName(s) => s.hints(ctx),
             Screen::PresetEdit(s) => s.hints(ctx),
             Screen::InputTest(s) => s.hints(ctx),
+            Screen::Profiles(s) => s.hints(ctx),
         }
     }
 
@@ -675,6 +717,7 @@ impl Screen {
             Screen::PresetName(s) => s.render(canvas, rect, k, dt, fonts, ctx),
             Screen::PresetEdit(s) => s.render(canvas, rect, k, dt, fonts, ctx),
             Screen::InputTest(s) => s.render(canvas, rect, k, dt, fonts, ctx),
+            Screen::Profiles(s) => s.render(canvas, rect, k, dt, fonts, ctx),
         }
     }
 }

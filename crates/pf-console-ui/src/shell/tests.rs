@@ -155,12 +155,14 @@ fn hosts() -> Vec<HostRow> {
 /// `ConsoleOptions::desktop` leaves `store` unset, and the shell then resolves it to the file
 /// store — the developer's real settings on the desktop, and a bail off it. Every test gets its
 /// own in-memory store instead: same screens, and no shell racing another test's whole-file save.
+/// No profile check: a connect dials at once unless a test turns [`ConsoleOptions::profiles`] on.
 fn test_options() -> ConsoleOptions {
     let mut opts = ConsoleOptions::desktop("deck".into(), false);
     opts.store = Some(std::sync::Arc::new(crate::store::SnapshotStore::new(
         pf_client_core::trust::Settings::default(),
         Vec::new(),
     )));
+    opts.profiles = false;
     opts
 }
 
@@ -1936,6 +1938,8 @@ mod launch_hold {
             title: "Deck".into(),
             request_access: false,
             preset: None,
+            profile: None,
+            ask: None,
         }
     }
 
@@ -2888,4 +2892,201 @@ fn an_explainer_reaches_the_shells_tray_in() {
     ));
     assert_eq!(pin.foot(&ctx), None);
     assert_eq!(pin.pinned(1.0, &ctx), (0.0, 0.0));
+}
+
+/// The profile check before a dial (`profiles-and-seats.md` §10.1), through the shell.
+mod profile_gate {
+    use super::*;
+    use crate::model::ProfilesAnswer;
+    use pf_client_core::profiles::{ListedProfile, ProfilePick};
+
+    fn listed(ids: &[(&str, &str)]) -> ProfilesAnswer {
+        ProfilesAnswer::Listed(
+            ids.iter()
+                .map(|(id, name)| ListedProfile {
+                    id: (*id).into(),
+                    display_name: (*name).into(),
+                    ..Default::default()
+                })
+                .collect(),
+        )
+    }
+
+    fn pick(id: &str, name: &str) -> Option<ProfilePick> {
+        Some(ProfilePick {
+            id: id.into(),
+            display_name: name.into(),
+        })
+    }
+
+    /// A shell that checks profiles, over `hosts()` with the first card's pick set to `saved`.
+    fn asking(saved: Option<ProfilePick>) -> (Shell, ConsoleShared, ConsoleBus, HostRow) {
+        fake_home();
+        let console = ConsoleShared::default();
+        let mut rows = hosts();
+        rows[0].profile = saved;
+        console.set_hosts(rows.clone());
+        let bus = ConsoleBus::default();
+        let mut opts = test_options();
+        opts.profiles = true;
+        let mut s = Shell::new(
+            console.clone(),
+            LibraryShared::default(),
+            bus.clone(),
+            opts,
+            vec![Screen::Home(HomeScreen::new())],
+        )
+        .unwrap();
+        s.fake_clock = Some((10.0, 0.0));
+        s.sync();
+        (s, console, bus, rows[0].clone())
+    }
+
+    fn launched_as(s: &mut Shell) -> Option<Option<String>> {
+        match s.take_action() {
+            Some(OverlayAction::Launch { profile, .. }) => Some(profile),
+            _ => None,
+        }
+    }
+
+    /// The connect waits for the list, asks once, and holds input meanwhile.
+    #[test]
+    fn a_connect_asks_for_the_list_before_it_dials() {
+        let (mut s, _console, bus, row) = asking(None);
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        assert!(s.take_action().is_none(), "nothing dials before the answer");
+        assert!(bus.drain().iter().any(|c| matches!(
+            c,
+            ConsoleCmd::FetchProfiles { fp_hex, .. } if fp_hex == "aa11"
+        )));
+        assert!(s.handle_menu(MenuEvent::Move(MenuDir::Right)).is_none());
+        assert!(!s.at_root());
+        // Back drops it; nothing was dialed, so nothing is cancelled.
+        s.handle_menu(MenuEvent::Back);
+        assert!(s.asking.is_none() && s.take_action().is_none());
+    }
+
+    /// Two profiles and no saved pick: the picker, whose pick dials as it and is saved.
+    #[test]
+    fn two_profiles_and_no_pick_raise_the_picker() {
+        let (mut s, console, bus, row) = asking(None);
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", listed(&[("own", "Ben"), ("kid", "Kid")]));
+        s.sync();
+        assert!(matches!(s.stack.last(), Some(Screen::Profiles(_))));
+        assert!(s.take_action().is_none());
+        finish_motion(&mut s);
+        // Focus moves over the drawn grid.
+        let fonts = crate::theme::build_fonts().unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+        s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+        bus.drain();
+        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        s.handle_menu(MenuEvent::Confirm);
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+        assert!(bus.drain().contains(&ConsoleCmd::SetProfile {
+            key: "aa11".into(),
+            profile: pick("kid", "Kid"),
+        }));
+    }
+
+    /// A saved pick still listed dials as it; a single profile dials as that one.
+    #[test]
+    fn a_listed_pick_or_a_lone_profile_dials_at_once() {
+        let (mut s, console, _bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", listed(&[("own", "Ben"), ("kid", "Kid")]));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+
+        let (mut s, console, _bus, row) = asking(None);
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", listed(&[("own", "Ben")]));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("own".into())));
+    }
+
+    /// A gone pick raises the picker with its line; a box without profiles sends none.
+    #[test]
+    fn a_gone_pick_asks_again_and_no_profiles_sends_none() {
+        let (mut s, console, _bus, row) = asking(pick("theo", "Theo"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", listed(&[("own", "Ben"), ("kid", "Kid")]));
+        s.sync();
+        assert!(matches!(s.stack.last(), Some(Screen::Profiles(_))));
+
+        let (mut s, console, _bus, row) = asking(pick("theo", "Theo"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", ProfilesAnswer::NoProfiles);
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(None));
+    }
+
+    /// The legacy seat is preselected and saved without a picker.
+    #[test]
+    fn a_legacy_seat_is_picked_and_saved() {
+        let (mut s, console, bus, row) = asking(None);
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        let ProfilesAnswer::Listed(mut l) = listed(&[("own", "Ben"), ("kid", "Kid")]) else {
+            unreachable!()
+        };
+        l[1].legacy_seat = true;
+        console.set_profiles("aa11", ProfilesAnswer::Listed(l));
+        bus.drain();
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+        assert!(bus.drain().contains(&ConsoleCmd::SetProfile {
+            key: "aa11".into(),
+            profile: pick("kid", "Kid"),
+        }));
+    }
+
+    /// No answer in time, or a failed one, dials with the card's pick: never a dead end.
+    #[test]
+    fn a_silent_or_failed_host_dials_with_the_cards_pick() {
+        let (mut s, _console, _bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        s.fake_clock = Some((10.0 + ASKING_CARD_AFTER, 0.0));
+        s.sync();
+        assert!(s.connecting.is_some(), "a slow list puts the card up");
+        s.fake_clock = Some((10.0 + PROFILES_WAIT, 0.0));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+
+        let (mut s, console, _bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles(
+            "aa11",
+            ProfilesAnswer::Failed("couldn't reach the host".into()),
+        );
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+    }
+
+    /// A host that can't answer never gets asked: the connect dials as before.
+    #[test]
+    fn a_host_without_profile_support_dials_at_once() {
+        let (mut s, _console, bus, row) = asking(pick("kid", "Kid"));
+        s.device.profiles = false;
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+        assert!(!bus
+            .drain()
+            .iter()
+            .any(|c| matches!(c, ConsoleCmd::FetchProfiles { .. })));
+    }
+
+    /// Switch profile's list arrives through the shell, keyed on the host.
+    #[test]
+    fn the_switch_screen_takes_its_hosts_answer() {
+        let (mut s, console, _bus, row) = asking(pick("kid", "Kid"));
+        let screen = crate::screens::profiles::ProfilesScreen::switch(&row).unwrap();
+        s.push_screen(Screen::Profiles(screen));
+        console.set_profiles("bb22", listed(&[("x", "Other")]));
+        s.sync();
+        assert!(matches!(s.stack.last(), Some(Screen::Profiles(p)) if p.waiting()));
+        console.set_profiles("aa11", listed(&[("own", "Ben"), ("kid", "Kid")]));
+        s.sync();
+        assert!(matches!(s.stack.last(), Some(Screen::Profiles(p)) if !p.waiting()));
+    }
 }

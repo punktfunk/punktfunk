@@ -102,6 +102,8 @@ punktfunk pair <host>[:port] --pin -          # pair this device; PIN on stdin
 punktfunk hosts list --probe                  # saved hosts, each checked live
 punktfunk library <host-ref> --json           # the host's games
 punktfunk launch <host-ref> --game <id>       # stream, waking the host first
+punktfunk profiles <host-ref>                 # who plays on the host; --pick saves one
+punktfunk launch <host-ref> --as <profile>    # stream as that profile, this time only
 punktfunk end-game <host-ref> --game <id>     # close a game this device launched
 punktfunk open 'punktfunk://connect/<host-ref>'
 punktfunk speed-test <host-ref>               # what the link carries, loss at a rate it holds

@@ -3,7 +3,7 @@
 //! the power-user CLI build).
 //!
 //! One stream session per invocation: `--connect host[:port]` (+ `--fp HEX`,
-//! `--launch id`, `--fullscreen`), exits when the session ends. Reads the same identity
+//! `--launch id`, `--as profile`, `--fullscreen`), exits when the session ends. Reads the same identity
 //! / known-hosts / settings stores as the desktop shell on each OS — the GTK client
 //! (`punktfunk-client`) on Linux, the WinUI client on Windows — so pairing on either side
 //! makes the other connect silently. `--pair - --connect host` runs the ceremony here,
@@ -259,6 +259,29 @@ mod session_main {
     /// `punktfunk://…&preset=` link both land here. Absent = honor the host's binding;
     /// `--preset ""` (or a bare `--preset`) forces the global defaults, which is how "Connect
     /// with ▸ Default settings" reaches a bound host. `--profile` is the pre-rename spelling.
+    /// `--as` takes a profile id or name; the wire takes the id, so a name is looked up in the
+    /// host's list. A minted id (12 hex) is sent as is, and so is anything the host can't list.
+    fn as_profile(
+        addr: &str,
+        host: Option<&trust::KnownHost>,
+        identity: &(String, String),
+        pin: [u8; 32],
+        wanted: String,
+    ) -> String {
+        if wanted.len() == 12 && wanted.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return wanted;
+        }
+        let mgmt = host.map_or(pf_client_core::library::DEFAULT_MGMT_PORT, |h| {
+            h.effective_mgmt_port()
+        });
+        match pf_client_core::profiles::fetch_enumerate(addr, mgmt, identity, Some(pin)) {
+            Ok(Some(listed)) => {
+                pf_client_core::profiles::find(&listed, &wanted).map_or(wanted, |p| p.id.clone())
+            }
+            _ => wanted,
+        }
+    }
+
     fn preset_arg() -> Option<String> {
         ["--preset", "--profile"]
             .into_iter()
@@ -405,6 +428,8 @@ mod session_main {
                 port,
                 pin,
                 launch,
+                // The caller sets it on the params: only a launch knows its profile.
+                profile: None,
                 connect_timeout: connect_timeout(),
             },
             Probes {
@@ -884,7 +909,7 @@ mod session_main {
         }
         let Some(target) = arg_value("--connect") else {
             eprintln!(
-                "usage: punktfunk-session --connect host[:port] [--fp HEX] [--launch id] [--preset REF] [--fullscreen]\n\
+                "usage: punktfunk-session --connect host[:port] [--fp HEX] [--launch id] [--preset REF] [--as PROFILE] [--fullscreen]\n\
                  \x20      punktfunk-session --browse [host[:port]] [--mgmt PORT] [--fullscreen] [--json-status] [--until-no-controller]\n\
                  \x20      punktfunk-session --pair - --connect host[:port] [--name LABEL]\n\
                  \n\
@@ -1026,9 +1051,11 @@ mod session_main {
             until_no_pads: false,
         };
 
+        let profile =
+            arg_value("--as").map(|wanted| as_profile(&addr, known_host, &identity, pin, wanted));
         let outcome =
             pf_presenter::run_session(opts, move |gamepad, native, hdr, force_software, vulkan| {
-                match resolved {
+                let mut params = match resolved {
                     Some(spec) => params_from_spec(
                         spec,
                         addr,
@@ -1058,7 +1085,9 @@ mod session_main {
                         force_software,
                         vulkan,
                     ),
-                }
+                };
+                params.profile = profile;
+                params
             });
 
         match outcome {

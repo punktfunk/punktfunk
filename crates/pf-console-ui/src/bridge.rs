@@ -42,6 +42,10 @@ pub struct CreateOptions {
     /// Whether this device decodes PyroWave. A host that probes it in Rust overwrites it.
     #[serde(default)]
     pub pyrowave_ok: bool,
+    /// The host answers `FetchProfiles`. Absent means it doesn't, and a connect sends the
+    /// card's saved pick unchecked.
+    #[serde(default)]
+    pub profiles: bool,
     /// The settings snapshot the shell starts from.
     pub settings: Settings,
     /// The preset catalog as `[{id, name, overrides}, …]`.
@@ -92,6 +96,7 @@ impl CreateOptions {
                 full,
                 safe: self.safe_area.unwrap_or(full),
             }),
+            profiles: self.profiles,
         };
         (opts, self.entry.into_entry(), store)
     }
@@ -415,7 +420,7 @@ mod tests {
         let o: CreateOptions =
             serde_json::from_str(r#"{"device_name": "TV", "gpu_cache_bytes": 0, "settings": {}}"#)
                 .unwrap();
-        assert!(o.av1_ok && !o.fallback_ui && !o.pyrowave_ok);
+        assert!(o.av1_ok && !o.fallback_ui && !o.pyrowave_ok && !o.profiles);
         let (opts, entry, _) = o.into_console(Platform::Android);
         assert!(matches!(entry, ConsoleEntry::Home));
         assert_eq!(opts.gpu_cache_bytes, 16 << 20);

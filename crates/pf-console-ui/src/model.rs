@@ -79,6 +79,10 @@ pub struct HostRow {
     /// outranks `bound_preset` at launch, which the host resolves.
     #[serde(default)]
     pub game_presets: BTreeMap<String, String>,
+    /// The profile this device plays as on this host (`KnownHost::profile`), shown on the
+    /// card and named in every launch. `None`: no pick yet, or a box without profiles.
+    #[serde(default)]
+    pub profile: Option<pf_client_core::profiles::ProfilePick>,
 }
 
 #[cfg(test)]
@@ -258,6 +262,18 @@ struct ConsoleState {
     pad_test: Option<PadTestState>,
     /// Keyboards, mice and the like: listed on the Controllers tab, never sent as a pad.
     other_devices: Vec<OtherDevice>,
+    /// Answers to [`ConsoleCmd::FetchProfiles`] by fingerprint, each taken once.
+    profiles: BTreeMap<String, ProfilesAnswer>,
+}
+
+/// What a host answered [`ConsoleCmd::FetchProfiles`] with.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub enum ProfilesAnswer {
+    Listed(Vec<pf_client_core::profiles::ListedProfile>),
+    /// The box has no profiles: a 404, or a host too old to ask.
+    NoProfiles,
+    /// The host didn't answer; the phrase says why.
+    Failed(String),
 }
 
 /// One reading of the controller under test. `held` names buttons by Xbox position: `A` `B`
@@ -388,6 +404,16 @@ impl ConsoleShared {
         self.0.lock().unwrap().speed.clone()
     }
 
+    /// The answer for the host pinned as `fp_hex`. A newer one replaces an untaken older one.
+    pub fn set_profiles(&self, fp_hex: &str, answer: ProfilesAnswer) {
+        let mut s = self.0.lock().unwrap();
+        s.profiles.insert(fp_hex.to_string(), answer);
+    }
+
+    pub(crate) fn take_profiles(&self, fp_hex: &str) -> Option<ProfilesAnswer> {
+        self.0.lock().unwrap().profiles.remove(fp_hex)
+    }
+
     /// One-shot toast. A newer notice replaces an unshown older one.
     pub fn set_notice(&self, text: String) {
         self.0.lock().unwrap().notice = Some(text);
@@ -484,6 +510,21 @@ pub enum ConsoleCmd {
         key: String,
         preset_id: String,
         pin: bool,
+    },
+    /// List the profiles on this paired host (`GET /api/v1/profiles/enumerate`). The answer
+    /// arrives as [`ConsoleShared::set_profiles`]. Only a host whose options say
+    /// [`crate::ConsoleOptions::profiles`] receives one.
+    FetchProfiles {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+    },
+    /// Save the profile this device plays as on a saved host (`KnownHost::profile`).
+    /// `None` clears it. `key` as in [`Self::SetPin`]. Idempotent.
+    SetProfile {
+        key: String,
+        #[serde(default)]
+        profile: Option<pf_client_core::profiles::ProfilePick>,
     },
     /// Bind or clear a preset. `game` names a library title
     /// (`KnownHost::game_presets`); `None` binds the host's own default

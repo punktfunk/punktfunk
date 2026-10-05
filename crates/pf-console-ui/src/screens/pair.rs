@@ -227,6 +227,8 @@ impl PairScreen {
                             title: self.host_name.clone(),
                             request_access: true,
                             preset: None,
+                            profile: None,
+                            ask: None,
                         });
                         fx.pop();
                     }

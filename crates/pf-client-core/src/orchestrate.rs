@@ -97,6 +97,9 @@ pub fn trust_route(
 pub struct ConnectPlan {
     pub host: HostTarget,
     pub launch: Option<String>,
+    /// The profile id the session names. From the saved pick; a shell that ran the picker
+    /// or took a link's `as=` sets the answer here.
+    pub profile: Option<String>,
     pub preset: Option<StreamPreset>,
     /// One-off override handed to the session: `Some(id)` picks that preset,
     /// `Some("")` forces the defaults, `None` lets the session resolve the host binding.
@@ -194,6 +197,7 @@ impl ConnectPlan {
         ConnectPlan {
             host: HostTarget::from(host),
             launch: launch.map(str::to_string),
+            profile: host.profile.as_ref().map(|p| p.id.clone()),
             preset,
             preset_override: one_off_preset.map(str::to_string),
             wake: settings.auto_wake && !host.mac.is_empty(),
@@ -228,6 +232,10 @@ impl ConnectPlan {
             args.push("--launch".into());
             args.push(launch.clone());
         }
+        if let Some(profile) = &self.profile {
+            args.push("--as".into());
+            args.push(profile.clone());
+        }
         // Only a one-off rides the flag. Without it the session resolves the host binding
         // through the same helper this plan used.
         if let Some(preset) = &self.preset_override {
@@ -258,6 +266,7 @@ impl ConnectPlan {
                 port: self.host.port,
                 pin,
                 launch: self.launch.clone(),
+                profile: self.profile.clone(),
                 connect_timeout: Duration::from_secs(
                     self.connect_timeout_secs
                         .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS),
@@ -393,6 +402,10 @@ pub fn plan_from_link(
                 // Address-only record has no label. The link's claimed name is fine for
                 // a window title; it names nothing that is trusted.
                 plan.host.name = link.name.clone().unwrap_or_else(|| plan.host.addr.clone());
+            }
+            // As typed: an id or a name. The front-end resolves a name against the box's list.
+            if let Some(profile) = &link.as_profile {
+                plan.profile = Some(profile.clone());
             }
             Ok(if confirm {
                 PlanOutcome::ConfirmConnect(Box::new(plan))
@@ -1113,6 +1126,7 @@ mod tests {
         let mut plan = ConnectPlan {
             host: HostTarget::from(&h),
             launch: Some("steam:570".into()),
+            profile: Some("9a3f1c2b7e40".into()),
             preset: None,
             preset_override: None,
             settings: Settings {
@@ -1132,7 +1146,9 @@ mod tests {
                 "--fp",
                 &"a".repeat(64),
                 "--launch",
-                "steam:570"
+                "steam:570",
+                "--as",
+                "9a3f1c2b7e40"
             ]
         );
 
@@ -1482,6 +1498,7 @@ mod tests {
         let plan = ConnectPlan {
             host: HostTarget::from(&h),
             launch: Some("steam:570".into()),
+            profile: Some("9a3f1c2b7e40".into()),
             preset: None,
             preset_override: None,
             settings: Settings {

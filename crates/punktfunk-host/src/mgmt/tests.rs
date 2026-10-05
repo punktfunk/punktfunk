@@ -5728,3 +5728,55 @@ async fn a_knock_shows_the_profile_it_named() {
     assert_eq!(b[0]["profile"]["display_name"], owner_name.as_str());
     assert!(b[1].get("profile").is_none(), "{b}");
 }
+
+/// Enumerate marks the profile the asking device's old seat became, and only for that device.
+#[tokio::test]
+async fn enumerate_marks_the_devices_old_seat() {
+    let path = std::env::temp_dir().join(format!("pf-mgmt-legacy-{}.json", std::process::id()));
+    std::fs::write(
+        &path,
+        r#"{"version":1,"profiles":[
+          {"id":"4f1c3a9b0e27","display_name":"Enrico","os_account":{"kind":"operator"},"home":"desktop","created_unix":1,"updated_unix":1},
+          {"id":"9a3f1c2b7e40","display_name":"Kid","os_account":{"kind":"seat"},"home":"bigpicture","legacy_device":"deadbeefcafe","created_unix":1,"updated_unix":1}
+        ]}"#,
+    )
+    .unwrap();
+    let state = test_state();
+    let _ = state
+        .profiles
+        .set(Arc::new(crate::profiles::Profiles::load_with(
+            Some(path),
+            None,
+        )));
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(
+                std::env::temp_dir().join(format!("pf-mgmt-legacy-np-{}.json", std::process::id())),
+            ),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    np.add("couch", "deadbeefcafe").unwrap();
+    np.add("phone", "0123456789ab").unwrap();
+    let app = test_app_native(state, np);
+    let list = |fp: &'static str| {
+        let app = app.clone();
+        async move {
+            let mut req = get_req("/api/v1/profiles/enumerate");
+            req.extensions_mut()
+                .insert(PeerCertFingerprint(Some(fp.to_string())));
+            let resp = app.oneshot(req).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        }
+    };
+    let couch = list("deadbeefcafe").await;
+    assert_eq!(couch[1]["legacy_seat"], true, "{couch}");
+    assert!(couch[0].get("legacy_seat").is_none(), "{couch}");
+    let phone = list("0123456789ab").await;
+    assert!(phone[1].get("legacy_seat").is_none(), "{phone}");
+}

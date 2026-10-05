@@ -27,6 +27,7 @@ mod cli {
         WAKE_TIMEOUT_SECS,
     };
     use pf_client_core::presets::PresetsFile;
+    use pf_client_core::profiles::{self, ListedProfile};
     use pf_client_core::trust::{self, KnownHost, KnownHosts, Settings};
     use pf_client_core::{library, start, wol};
     use std::time::Duration;
@@ -58,8 +59,9 @@ punktfunk — the Punktfunk client, headless
   punktfunk wake <host-ref> [--wait]
   punktfunk library [<host-ref>] [--json]
   punktfunk end-game [<host-ref>] --game ID
-  punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--request-access]
-                                [--exec] [--fullscreen]
+  punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--as PROFILE]
+                                [--request-access] [--exec] [--fullscreen]
+  punktfunk profiles <host-ref> [--json] [--pick PROFILE | --clear]
   punktfunk open <punktfunk://…> [--yes]
   punktfunk reachable <host-ref>
   punktfunk speed-test <host-ref>
@@ -187,8 +189,8 @@ device's access expired, 2 when the host couldn't be asked or is too old,
             }
             "launch" => {
                 "\
-punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--request-access]
-                              [--exec] [--fullscreen]
+punktfunk launch [<host-ref>] [--game ID] [--preset REF] [--as PROFILE]
+                              [--request-access] [--exec] [--fullscreen]
 
 Start a stream — waking the host first if it is asleep and its MAC is known.
 The stream runs in the punktfunk-session renderer; this command supervises it
@@ -198,6 +200,9 @@ host (`punktfunk default-host`), and exits 5 when there is none.
   --game ID      ask the host to launch this library title into the stream
   --preset REF   use a preset (id or name) for this connect only;
                  without it the host's own binding applies
+  --as PROFILE   play as this profile (id or name) for this connect only;
+                 without it the profile saved for this host applies
+                 (`punktfunk profiles`), else the host's default
   --fullscreen   start the stream window fullscreen
   --exec         become the session process instead of supervising it — the
                  gamescope-wrapper mode, where the launched process must BE
@@ -215,6 +220,21 @@ host (`punktfunk default-host`), and exits 5 when there is none.
 
 Exit 0 when the stream ends cleanly, 2 connect failed, 3 the host no longer
 trusts this device (re-pair), 4 the renderer could not start."
+            }
+            "profiles" => {
+                "\
+punktfunk profiles <host-ref> [--json] [--pick PROFILE | --clear]
+
+Who plays on the host: id TAB name TAB a note (`Steam sign-in once`, `In use
+by Ben's Apple TV`), with `*` on the profile this device plays as there.
+--json emits {\"profiles\":[…],\"picked\":id|null}.
+
+  --pick PROFILE  play as this profile (id or name) from now on; prints it
+  --clear         forget the pick; the host's default applies again
+
+Exit 5 when the host has no such profile, or no profiles at all; 6 when it
+isn't paired. Without a <host-ref> and without --pick, `punktfunk profiles`
+lists settings presets, as it did before presets were renamed."
             }
             "open" => {
                 "\
@@ -260,14 +280,15 @@ NOT apply the result: which layer a bitrate belongs in (a bound preset, the
 global default) is a decision the GUI makes with the user, and a CLI silently
 rewriting settings would be exactly the surprise that rule exists to prevent."
             }
-            "presets" | "profiles" => {
+            "presets" => {
                 "\
 punktfunk presets list [--json] — the stream presets on this device
 
 One line per preset: id TAB name TAB how many settings it overrides.
 Presets are created and edited in the desktop client; a connect uses one via
 `punktfunk launch --preset` or a punktfunk:// link that names it.
-`punktfunk profiles` is the old spelling; its --json keeps the `profiles` key."
+`punktfunk profiles` with no host is the old spelling; its --json keeps the
+`profiles` key."
             }
             "reset" => {
                 "\
@@ -327,6 +348,8 @@ from the config directory for a true factory reset."
                 | "--profile"
                 | "--port"
                 | "--timeout"
+                | "--as"
+                | "--pick"
         )
     }
 
@@ -453,7 +476,11 @@ from the config directory for a true factory reset."
             "speed-test" => speed_test(&rest),
             "network-check" => network_check(&rest),
             "presets" => presets(&rest, false),
-            "profiles" => presets(&rest, true),
+            // Before the rename `profiles` listed presets; a bare call and `list` still do.
+            "profiles" => match positional(&rest, 0).as_deref() {
+                None | Some("list") if !has(&rest, "--pick") => presets(&rest, true),
+                _ => profiles_cmd(&rest),
+            },
             "reset" => reset(),
             "-h" | "--help" | "help" => match positional(&rest, 0) {
                 None => {
@@ -1061,7 +1088,112 @@ from the config directory for a true factory reset."
         if request_access {
             plan.connect_timeout_secs = Some(REQUEST_ACCESS_TIMEOUT_SECS);
         }
+        // An id or a name; the session looks a name up in the host's list.
+        if let Some(wanted) = value(args, "--as") {
+            plan.profile = Some(wanted);
+        }
         run_plan(plan, exec, request_access)
+    }
+
+    fn list_profiles(host: &KnownHost) -> Result<Option<Vec<ListedProfile>>, u8> {
+        let Some(pin) = trust::parse_hex32(&host.fp_hex) else {
+            eprintln!(
+                "{} isn't paired yet — punktfunk pair {}",
+                host.name, host.addr
+            );
+            return Err(NEEDS_INTERACTION);
+        };
+        let identity = trust::load_or_create_identity().map_err(|e| {
+            eprintln!("client identity: {e:#}");
+            CONNECT_FAILED
+        })?;
+        profiles::fetch_enumerate(&host.addr, host.effective_mgmt_port(), &identity, Some(pin))
+            .map_err(|e| {
+                eprintln!("profiles: {e}");
+                CONNECT_FAILED
+            })
+    }
+
+    /// `profiles <host-ref>` — who plays on the host, and which of them this device plays as.
+    fn profiles_cmd(args: &[String]) -> u8 {
+        let usage = "punktfunk profiles <host-ref> [--json] [--pick PROFILE | --clear]";
+        let (mut known, i) = match resolve_or_default(args, usage) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        if has(args, "--clear") {
+            known.hosts[i].profile = None;
+            return match known.save() {
+                Ok(()) => {
+                    println!("cleared");
+                    OK
+                }
+                Err(e) => {
+                    eprintln!("save hosts: {e:#}");
+                    CONNECT_FAILED
+                }
+            };
+        }
+        let listed = match list_profiles(&known.hosts[i]) {
+            Ok(Some(listed)) => listed,
+            Ok(None) => {
+                eprintln!("{} has no profiles", known.hosts[i].name);
+                return UNRESOLVED;
+            }
+            Err(code) => return code,
+        };
+        if let Some(wanted) = value(args, "--pick") {
+            let Some(p) = profiles::find(&listed, &wanted) else {
+                eprintln!("{} has no profile called \"{wanted}\"", known.hosts[i].name);
+                return UNRESOLVED;
+            };
+            known.hosts[i].profile = Some(p.pick());
+            return match known.save() {
+                Ok(()) => {
+                    println!("{}\t{}", p.id, p.display_name);
+                    OK
+                }
+                Err(e) => {
+                    eprintln!("save hosts: {e:#}");
+                    CONNECT_FAILED
+                }
+            };
+        }
+        let picked = known.hosts[i].profile.as_ref().map(|p| p.id.as_str());
+        if has(args, "--json") {
+            let rows: Vec<serde_json::Value> = listed
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p.id,
+                        "display_name": p.display_name,
+                        "accent": p.accent,
+                        "owner": p.owner,
+                        "note": p.note(),
+                        "legacy_seat": p.legacy_seat,
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({ "profiles": rows, "picked": picked })
+            );
+        } else {
+            for p in &listed {
+                let mark = if picked == Some(p.id.as_str()) {
+                    "\t*"
+                } else {
+                    ""
+                };
+                println!(
+                    "{}\t{}\t{}{mark}",
+                    p.id,
+                    p.display_name,
+                    p.note().unwrap_or_default()
+                );
+            }
+        }
+        OK
     }
 
     /// `open <url>` — the `punktfunk://` grammar, headless. Same parser, same refusal rules and
@@ -1859,6 +1991,15 @@ from the config directory for a true factory reset."
             // A flag followed by another flag has no value.
             assert_eq!(value(&argv(&["--preset", "--exec"]), "--preset"), None);
             assert!(has(&a, "--exec"));
+        }
+
+        /// `--as` and `--pick` take a value, so it is never read as the host.
+        #[test]
+        fn a_profile_flag_is_not_the_host() {
+            let a = argv(&["--as", "kid", "couch", "--game", "steam:570"]);
+            assert_eq!(positional(&a, 0).as_deref(), Some("couch"));
+            assert_eq!(value(&a, "--as").as_deref(), Some("kid"));
+            assert_eq!(positional(&argv(&["--pick", "Kid"]), 0), None);
         }
     }
 }

@@ -13318,6 +13318,10 @@
             "description": "When a session last played as it; `0`: never.",
             "minimum": 0
           },
+          "legacy_seat": {
+            "type": "boolean",
+            "description": "The asking device's old seat became this profile. A client takes it without a picker."
+          },
           "owner": {
             "type": "boolean",
             "description": "The box's own session."

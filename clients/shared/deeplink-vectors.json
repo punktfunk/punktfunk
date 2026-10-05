@@ -1,5 +1,5 @@
 {
-  "$comment": "Cross-language contract for the punktfunk:// grammar (design/client-deep-links.md §2). The Rust (crates/pf-client-core/src/deeplink.rs), Swift (PunktfunkShared/DeepLink.swift) and Kotlin parsers each run every case in their own test suite, so the three cannot drift into three different security postures. `expect` fields absent from a case must parse as absent; `emit` is the canonical URL the parsed link must serialise back to (note that pf:// never round-trips — it is an accepted input alias, never an output). `error` is the stable refusal code, not a message. `profile` is the pre-rename spelling of `preset`: it still parses (`preset` wins wherever it sits), and emitters write both so an older parser keeps the preset.",
+  "$comment": "Cross-language contract for the punktfunk:// grammar (design/client-deep-links.md §2). The Rust (crates/pf-client-core/src/deeplink.rs), Swift (PunktfunkShared/DeepLink.swift) and Kotlin parsers each run every case in their own test suite, so the three cannot drift into three different security postures. `expect` fields absent from a case must parse as absent; `emit` is the canonical URL the parsed link must serialise back to (note that pf:// never round-trips — it is an accepted input alias, never an output). `error` is the stable refusal code, not a message. `profile` is the pre-rename spelling of `preset`: it still parses (`preset` wins wherever it sits), and emitters write both so an older parser keeps the preset. `as` names the profile to play as (design/profiles-and-seats.md §10.2).",
   "version": 2,
   "cases": [
     {
@@ -149,6 +149,17 @@
         "preset": "Work"
       },
       "emit": "punktfunk://connect/Desk?preset=Work&profile=Work"
+    },
+    {
+      "name": "as-names-the-profile-beside-the-preset",
+      "url": "punktfunk://connect/couch-pc?as=Kid&launch=steam:570&profile=Work",
+      "expect": {
+        "route": "connect",
+        "host_ref": "couch-pc",
+        "launch": "steam:570",
+        "preset": "Work",
+        "as": "Kid"
+      }
     },
     {
       "name": "preset-wins-over-the-legacy-spelling",

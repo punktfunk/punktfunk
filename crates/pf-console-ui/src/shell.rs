@@ -11,7 +11,8 @@ use crate::anim::{springs, Spring};
 use crate::glyphs::GlyphStyle;
 use crate::library::LibraryShared;
 use crate::model::{
-    ConsoleBus, ConsoleCmd, ConsoleShared, HostRow, PairPhase, SpeedPhase, SpeedStatus, WakeStatus,
+    ConsoleBus, ConsoleCmd, ConsoleShared, HostRow, PairPhase, ProfilesAnswer, SpeedPhase,
+    SpeedStatus, WakeStatus,
 };
 use crate::palette::{field_camera, field_motion, field_sksl, palette, VIOLET_FIELD};
 use crate::platform::Platform;
@@ -19,7 +20,7 @@ use crate::platform::Platform;
 use crate::pointer::DRAG_TICK_DP;
 use crate::pointer::{Pointer, PointerKind, Touch};
 use crate::screens::home::HomeScreen;
-use crate::screens::{Bg, ConnectIntent, Ctx, Nav, Outbox, Screen};
+use crate::screens::{Bg, ConnectIntent, Ctx, Nav, Outbox, ProfileAsk, Screen};
 use crate::store::SettingsStore;
 use anyhow::{anyhow, Result};
 use pf_client_core::console::OverlayAction;
@@ -189,6 +190,18 @@ struct Toast {
     seat: Spring,
 }
 
+/// A connect waiting on its box's profile list (§10.1) before it dials.
+struct Asking {
+    intent: ConnectIntent,
+    ask: ProfileAsk,
+    since: f64,
+}
+
+/// Seconds a connect waits for the profile list before it dials with the card's saved pick.
+const PROFILES_WAIT: f64 = 3.0;
+/// A list slower than this puts the connect card up; a fast one shows nothing.
+const ASKING_CARD_AFTER: f64 = 0.25;
+
 struct Connecting {
     title: String,
     appear: f64,
@@ -319,6 +332,9 @@ pub struct ConsoleOptions {
     /// This device's own screen, for the Aspect row. `None` where streams go to a window or a
     /// TV: only a panel of an unusual shape (a phone) changes what the row offers.
     pub screen: Option<DeviceScreen>,
+    /// The host answers [`ConsoleCmd::FetchProfiles`], so a connect checks the box's profiles
+    /// first. False connects with the card's saved pick, unchecked.
+    pub profiles: bool,
 }
 
 /// A built-in screen in landscape pixels, whole and clear of its cutout.
@@ -346,6 +362,7 @@ impl ConsoleOptions {
             platform: Platform::Desktop,
             gpu_cache_bytes: DEFAULT_GPU_CACHE_BYTES,
             screen: None,
+            profiles: true,
         }
     }
 }
@@ -412,6 +429,8 @@ pub(crate) struct Shell {
     pub(crate) in_stream: bool,
     connecting: Option<Connecting>,
     launching: Option<Launching>,
+    /// Input waits while this is up; Back drops it.
+    asking: Option<Asking>,
     /// Host title of the last connect. [`Self::session_reconnecting`] has no
     /// `Launch` of its own, so nothing else can name the host.
     last_connect_title: Option<String>,
@@ -543,6 +562,7 @@ impl Shell {
                 fallback_ui: opts.fallback_ui,
                 pyrowave_ok: opts.pyrowave_ok,
                 av1_ok: opts.av1_ok,
+                profiles: opts.profiles,
                 name: opts.device_name,
                 version: opts.version.unwrap_or_else(|| crate::VERSION.into()),
             },
@@ -553,6 +573,7 @@ impl Shell {
             in_stream: false,
             connecting: None,
             launching: None,
+            asking: None,
             last_connect_title: None,
             wake: None,
             wake_optimistic: false,
@@ -664,6 +685,7 @@ impl Shell {
             && self.strip_focus
             && self.connecting.is_none()
             && self.launching.is_none()
+            && self.asking.is_none()
             && self.wake.is_none()
             && self.speed.is_none()
     }
@@ -693,6 +715,7 @@ impl Shell {
         if self.in_stream
             || self.holds_stream()
             || self.connecting.is_some()
+            || self.asking.is_some()
             || self.wake.is_some()
             || self.speed.is_some()
         {
@@ -983,6 +1006,7 @@ impl Shell {
         self.sync_pair();
         self.open_first_paired_library();
         self.sync_wake();
+        self.tick_asking();
         self.home_shelf();
         self.tick_launch();
         self.tick_downloads();
@@ -1090,6 +1114,13 @@ impl Shell {
             if l.waiting() {
                 if let Some(sections) = self.console.licenses() {
                     l.set_host(sections.as_ref().clone());
+                }
+            }
+        }
+        if let Some(Screen::Profiles(p)) = self.stack.last_mut() {
+            if p.waiting() {
+                if let Some(answer) = self.console.take_profiles(p.fp_hex()) {
+                    p.set_answer(answer);
                 }
             }
         }
@@ -1238,10 +1269,84 @@ impl Shell {
         self.mount(Tab::Games, root);
     }
 
-    pub(crate) fn start_connect(&mut self, intent: ConnectIntent) {
+    /// Every connect starts here. One that asks first waits for the box's profile list
+    /// ([`Self::tick_asking`]); the rest dial now.
+    pub(crate) fn start_connect(&mut self, mut intent: ConnectIntent) {
+        let Some(ask) = intent.ask.take().filter(|_| self.device.profiles) else {
+            return self.dial(intent);
+        };
+        // An answer left from an earlier ask is not this one's.
+        self.console.take_profiles(&intent.fp_hex);
+        self.send_cmd(ConsoleCmd::FetchProfiles {
+            addr: intent.addr.clone(),
+            mgmt: ask.mgmt,
+            fp_hex: intent.fp_hex.clone(),
+        });
+        let since = self.t();
+        self.asking = Some(Asking { intent, ask, since });
+    }
+
+    /// The asking connect, once its list lands: §10.1 through `picker_decision`. No answer
+    /// in [`PROFILES_WAIT`], or a failed one, dials with the card's saved pick.
+    fn tick_asking(&mut self) {
+        let Some(a) = &self.asking else { return };
+        let answer = self.console.take_profiles(&a.intent.fp_hex);
+        let waited = self.t() - a.since;
+        if answer.is_none() && waited < PROFILES_WAIT {
+            if waited >= ASKING_CARD_AFTER && self.connecting.is_none() {
+                let title = a.intent.title.clone();
+                self.set_connecting(Some(title));
+            }
+            return;
+        }
+        let Some(Asking {
+            mut intent, ask, ..
+        }) = self.asking.take()
+        else {
+            return;
+        };
+        self.connecting = None;
+        let listed = match answer {
+            Some(ProfilesAnswer::Listed(l)) if !l.is_empty() => Some(l),
+            Some(ProfilesAnswer::Listed(_) | ProfilesAnswer::NoProfiles) => None,
+            Some(ProfilesAnswer::Failed(_)) | None => return self.dial(intent),
+        };
+        // The row as it stands now: a shelf's copy predates a pick made since it opened.
+        let saved = self
+            .hosts
+            .iter()
+            .find(|h| h.host_key() == ask.key)
+            .map_or_else(|| ask.saved.clone(), |h| h.profile.clone());
+        let d = pf_client_core::profiles::picker_decision(listed.as_deref(), saved.as_ref(), None);
+        if d.picker {
+            let screen = crate::screens::profiles::ProfilesScreen::before(
+                intent,
+                ProfileAsk { saved, ..ask },
+                listed.unwrap_or_default(),
+                d.gone,
+            );
+            return self.apply_nav(Nav::Push(Box::new(Screen::Profiles(screen))));
+        }
+        if d.remember != saved {
+            self.send_cmd(ConsoleCmd::SetProfile {
+                key: ask.key,
+                profile: d.remember,
+            });
+        }
+        intent.profile = d.send;
+        self.dial(intent);
+    }
+
+    fn dial(&mut self, intent: ConnectIntent) {
         // A game launch comes off a shelf, which knows both the host's management
-        // port and where it just drew the tile.
-        let launch = match (&intent.launch, self.stack.last().and_then(Screen::shelf)) {
+        // port and where it just drew the tile. A picker on top is leaving: its shelf is under it.
+        let shelf = self
+            .stack
+            .iter()
+            .rev()
+            .find(|s| !matches!(s, Screen::Profiles(_)))
+            .and_then(Screen::shelf);
+        let launch = match (&intent.launch, shelf) {
             (Some(id), Some(lib)) => Some((
                 LaunchHost {
                     id: id.clone(),
@@ -1268,6 +1373,7 @@ impl Shell {
             title: intent.title,
             request_access: intent.request_access,
             preset: intent.preset,
+            profile: intent.profile,
         });
     }
 
@@ -1567,6 +1673,15 @@ impl Shell {
             }
             return None;
         }
+        if self.asking.is_some() {
+            if ev != MenuEvent::Back {
+                return None;
+            }
+            // Nothing has dialed yet: no cancel to send.
+            self.asking = None;
+            self.connecting = None;
+            return Some(MenuPulse::Confirm);
+        }
         if self.connecting.is_some() {
             if ev == MenuEvent::Back {
                 // Drop the takeover here, not on the next `session_phase`.
@@ -1688,6 +1803,7 @@ impl Shell {
         if p.kind == PointerKind::Back {
             if self.stack.len() > 1
                 || self.connecting.is_some()
+                || self.asking.is_some()
                 || self.wake.is_some()
                 || self.speed.is_some()
             {
@@ -1697,7 +1813,11 @@ impl Shell {
         }
         // Clicking through a connect takeover onto the library would start
         // a second session. Same early return as the menu path.
-        if self.connecting.is_some() || self.wake.is_some() || self.speed.is_some() {
+        if self.connecting.is_some()
+            || self.asking.is_some()
+            || self.wake.is_some()
+            || self.speed.is_some()
+        {
             return true;
         }
         if !matches!(self.motion, Motion::None) {
@@ -1897,6 +2017,9 @@ impl Shell {
             }
             if let ConsoleCmd::Pair { addr, port, .. } = &cmd {
                 self.pairing = Some((addr.clone(), *port));
+            }
+            if let ConsoleCmd::FetchProfiles { fp_hex, .. } = &cmd {
+                self.console.take_profiles(fp_hex);
             }
             // Gate wake in this call, like `connecting`. First WakeStatus is
             // ~100 ms–1 s away; without a placeholder the cursor keeps moving

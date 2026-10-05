@@ -4,11 +4,13 @@
 //! shows, a profile's picture, and waking its seat. Everything that changes a profile is the
 //! console's. A profile is not a trust boundary: any paired device may pick any profile.
 
+use super::auth::PairedDevice;
 use super::shared::*;
 use crate::profiles::{
     EditError, Home, OsAccount, Profile, ProfileCreate, ProfileUpdate, Profiles,
 };
 use axum::http::header;
+use axum::Extension;
 
 /// One profile as a client's picker shows it.
 #[derive(Serialize, ToSchema, Clone)]
@@ -31,6 +33,10 @@ pub(crate) struct ProfilePublic {
     seat: Option<SeatPublic>,
     /// When a session last played as it; `0`: never.
     last_used_unix: u64,
+    /// The asking device's old seat became this profile. A client takes it without a picker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schema(required = false)]
+    legacy_seat: bool,
 }
 
 /// A profile's seat right now.
@@ -91,7 +97,7 @@ fn no_profiles() -> Response {
     api_error(StatusCode::NOT_FOUND, "this host has no profiles")
 }
 
-fn public(st: &MgmtState, p: &Profile, owner: Option<&str>) -> ProfilePublic {
+fn public(st: &MgmtState, p: &Profile, owner: Option<&str>, device: Option<&str>) -> ProfilePublic {
     let is_owner = owner == Some(p.id.as_str());
     ProfilePublic {
         id: p.id.clone(),
@@ -102,6 +108,9 @@ fn public(st: &MgmtState, p: &Profile, owner: Option<&str>) -> ProfilePublic {
         home: p.home,
         seat: (!matches!(p.os_account, OsAccount::Operator)).then(|| seat(st, p)),
         last_used_unix: p.last_used_unix,
+        legacy_seat: device
+            .zip(p.legacy_device.as_deref())
+            .is_some_and(|(d, l)| d.eq_ignore_ascii_case(l)),
     }
 }
 
@@ -153,7 +162,7 @@ fn steam_sign_in(id: &str) -> Option<bool> {
 fn admin(st: &MgmtState, profiles: &Profiles, p: &Profile) -> ProfileAdmin {
     let owner = profiles.owner_id();
     ProfileAdmin {
-        public: public(st, p, owner.as_deref()),
+        public: public(st, p, owner.as_deref(), None),
         legacy_device: p.legacy_device.clone(),
         default: profiles.default_profile_id().as_deref() == Some(p.id.as_str()),
     }
@@ -184,7 +193,11 @@ fn edit_error(e: EditError) -> Response {
         (status = NOT_FOUND, description = "This host has no profiles", body = ApiError),
     )
 )]
-pub(crate) async fn enumerate_profiles(State(st): State<Arc<MgmtState>>) -> Response {
+pub(crate) async fn enumerate_profiles(
+    State(st): State<Arc<MgmtState>>,
+    device: Option<Extension<PairedDevice>>,
+) -> Response {
+    let device = device.map(|Extension(PairedDevice(fp))| fp);
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
     };
@@ -192,7 +205,7 @@ pub(crate) async fn enumerate_profiles(State(st): State<Arc<MgmtState>>) -> Resp
     let rows: Vec<ProfilePublic> = profiles
         .list()
         .iter()
-        .map(|p| public(&st, p, owner.as_deref()))
+        .map(|p| public(&st, p, owner.as_deref(), device.as_deref()))
         .collect();
     Json(rows).into_response()
 }
@@ -272,7 +285,7 @@ pub(crate) async fn wake_profile(
         return no_profiles();
     };
     match profiles.get(&id) {
-        Some(p) => Json(public(&st, &p, profiles.owner_id().as_deref())).into_response(),
+        Some(p) => Json(public(&st, &p, profiles.owner_id().as_deref(), None)).into_response(),
         None => api_error(StatusCode::NOT_FOUND, "no profile with that id"),
     }
 }

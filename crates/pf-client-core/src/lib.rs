@@ -121,6 +121,9 @@ pub mod settings;
 pub mod speed;
 #[cfg(portable)]
 pub mod trust;
+// Profiles on a box and the picker rule every shell shares (`design/profiles-and-seats.md` §10).
+#[cfg(portable)]
+pub mod profiles;
 // The `host_sort` / `host_grouping` order every shell on a device shares.
 #[cfg(portable)]
 pub mod host_order;

@@ -905,6 +905,16 @@ class Plugin:
             return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
         return await _cli_json(["library", ref, "--json"], timeout=20.0)
 
+    async def profiles(self, ref: str) -> dict:
+        """Who plays on the host (``punktfunk profiles <host-ref> --json``).
+
+        ``{ok: True, profiles: [{id, display_name, accent, owner, note}], picked}``. A host
+        without profiles answers ``unresolved``, which the panel reads as "no chips"."""
+        ref = str(ref).strip()
+        if not ref or ref.startswith("-"):
+            return {"ok": False, "error": "unresolved", "detail": "bad host reference"}
+        return await _cli_json(["profiles", ref, "--json"], timeout=20.0)
+
     async def shortcut_art(self) -> dict:
         """The Steam-shortcut artwork shipped with the plugin (committed under ``assets/``):
         base64 PNGs (grid/gridwide/hero/logo) for SetCustomArtworkForApp plus the icon's
