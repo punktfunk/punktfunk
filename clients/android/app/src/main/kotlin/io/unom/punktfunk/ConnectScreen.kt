@@ -312,6 +312,11 @@ fun ConnectScreen(
             delay(30_000)
         }
     }
+    // A profile picker a connect waits on, and the Switch profile one a host menu opened (its
+    // answer is null while the host is asked). A link's `as=` waits here for its dial.
+    var profileAsk by remember { mutableStateOf<ProfileAsk?>(null) }
+    var switching by remember { mutableStateOf<Pair<KnownHost, ProfilesAnswer?>?>(null) }
+    var linkAs by remember { mutableStateOf<String?>(null) }
     // A destructive host action awaiting its confirmation (restart / shut down).
     var confirmAction by remember { mutableStateOf<Pair<KnownHost, HostActions.Action>?>(null) }
 
@@ -330,9 +335,11 @@ fun ConnectScreen(
         timeoutMs: Int,
         preset: StreamPreset?,
         launch: String?,
+        profile: String? = null,
     ): Long = connectToHost(
         context, settings.effectiveFor(preset), id, targetHost, targetPort, pinHex,
         launch = launch, dialer = "touch/host-grid", timeoutMs = timeoutMs, preset = preset,
+        profile = profile,
     )
 
     // What the stream screen is handed: the settings this connect used, and the host's record.
@@ -361,8 +368,27 @@ fun ConnectScreen(
         notice = null
         discovery.removeListener(subscriber) // let the browse go; the stream session wants the radio
         scope.launch {
-            val handle =
-                connectNative(id, targetHost, targetPort, pinHex ?: "", CONNECT_TIMEOUT_MS, preset, launch)
+            val record = pinHex?.let { knownHostStore.resolve(it, targetHost, targetPort) }
+            val choice = chooseProfile(knownHostStore, id, record, linkAs.also { linkAs = null }) { ask ->
+                if (thisAttempt.cancelled.get()) {
+                    ask.answer.complete(null)
+                } else {
+                    attempt = null // the picker takes the overlay's place
+                    profileAsk = ask
+                }
+            }
+            profileAsk = null
+            if (thisAttempt.cancelled.get()) return@launch
+            if (choice !is ProfileChoice.Dial) {
+                connecting = false
+                discovery.addListener(subscriber)
+                return@launch
+            }
+            attempt = thisAttempt
+            savedHosts = knownHostStore.all()
+            val handle = connectNative(
+                id, targetHost, targetPort, pinHex ?: "", CONNECT_TIMEOUT_MS, preset, launch, choice.id,
+            )
             // Cancelled mid-dial: the UI's already been returned (and discovery restarted) by
             // cancelConnect — drop the just-opened session silently rather than navigating into it.
             if (thisAttempt.cancelled.get()) {
@@ -374,9 +400,9 @@ fun ConnectScreen(
             if (handle != 0L) {
                 // By this dial's pin (the address may also name the other OS of a dual-boot box);
                 // with no saved record, a TOFU dial pins what the host presented, unpaired.
-                val record = pinHex?.let { knownHostStore.resolve(it, targetHost, targetPort) }
+                val dialed = record
                     ?: SessionFactory.pinPresented(handle, targetHost, targetPort, name, paired = false, knownHostStore)
-                onConnected(session(handle, record, preset))
+                onConnected(session(handle, dialed, preset))
             } else {
                 discovery.addListener(subscriber)
                 val token = NativeBridge.nativeTakeLastError()
@@ -393,6 +419,10 @@ fun ConnectScreen(
                     // A typed host rejection (busy / versions differ / pairing required) means the
                     // host is awake — waking it would be nonsense; show the stated reason instead.
                     status = ConnectErrors.connectMessage(token, requestAccess = false)
+                    if (token == "profile-unknown" && record != null) {
+                        knownHostStore.savePick(record, null)
+                        savedHosts = knownHostStore.all()
+                    }
                 }
             }
         }
@@ -683,6 +713,18 @@ fun ConnectScreen(
         }
     }
 
+    // Switch profile: ask the host, show the picker. A pick saves; it does not connect.
+    fun switchProfile(kh: KnownHost) {
+        val id = requireIdentity() ?: return
+        switching = kh to null
+        scope.launch {
+            val answer = withContext(Dispatchers.IO) {
+                HostProfiles.fetch(id, kh.address, kh.effectiveMgmtPort, kh.fpHex)
+            }
+            if (switching?.first?.id == kh.id) switching = kh to answer
+        }
+    }
+
     // "Send logs to host" — [SendLogs], the same upload the console's host menu runs. The outcome
     // is a notice either way (success and failure both name the host), because the row's whole job
     // is to tell a reporter whether the bundle actually landed.
@@ -758,9 +800,10 @@ fun ConnectScreen(
                     return@LaunchedEffect
                 }
                 if (resolved is HostResolution.Confirm) {
-                    pendingLinkConnect = PendingLinkConnect(resolved.host, presetRef, link.launch)
+                    pendingLinkConnect = PendingLinkConnect(resolved.host, presetRef, link.launch, link.asProfile)
                     return@LaunchedEffect
                 }
+                linkAs = link.asProfile
                 connect(
                     resolved.host.address, resolved.host.port,
                     oneOffPreset = presetRef, launch = link.launch, saved = resolved.host,
@@ -849,6 +892,7 @@ fun ConnectScreen(
         onWake = { kh -> wakeHost(kh) },
         onSpeedTest = { kh -> startSpeedTest(HostCardEntry(kh, null)) },
         onSendLogs = { kh -> sendLogs(kh) },
+        onSwitchProfile = { kh -> switchProfile(kh) },
         hostActions = hostActions,
         onHostAction = { kh, a -> hostAction(kh, a) },
         onCopyLink = { kh, pin -> copyLink(kh, pin) },
@@ -886,6 +930,31 @@ fun ConnectScreen(
     // `discovery.hosts.first { host.matches($0) }?.macAddresses`.
     val editSuggestedMacs =
         editTarget?.let { kh -> discovered.firstOrNull { kh.matches(it) }?.mac } ?: emptyList()
+
+    profileAsk?.let { ask ->
+        ProfilePickerDialog(
+            hostName = ask.host.name.ifBlank { ask.host.address },
+            answer = ProfilesAnswer.Listed(ask.listed),
+            saved = ask.host.asProfile,
+            gone = ask.gone,
+            onPick = { ask.answer.complete(it) },
+            onDismiss = { ask.answer.complete(null) },
+        )
+    }
+    switching?.let { (kh, answer) ->
+        ProfilePickerDialog(
+            hostName = kh.name.ifBlank { kh.address },
+            answer = answer,
+            saved = kh.asProfile,
+            gone = null,
+            onPick = { pick ->
+                knownHostStore.savePick(kh, pick)
+                savedHosts = knownHostStore.all()
+                switching = null
+            },
+            onDismiss = { switching = null },
+        )
+    }
 
     // A destructive host action's confirmation. Kept here rather than in ConnectPrompts because
     // it is a one-question dialog owned by the row that raised it — the same place the row's
@@ -928,6 +997,7 @@ fun ConnectScreen(
         pendingLinkConnect = pendingLinkConnect,
         onConfirmLinkConnect = { plc ->
             pendingLinkConnect = null
+            linkAs = plc.asProfile
             connect(
                 plc.host.address, plc.host.port,
                 oneOffPreset = plc.preset, launch = plc.launch, saved = plc.host,

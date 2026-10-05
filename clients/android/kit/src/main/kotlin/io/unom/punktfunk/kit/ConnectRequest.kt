@@ -89,6 +89,8 @@ data class ConnectRequest(
     val deliveryProfile: Int = 0,
     /** What a network check asks besides: the host's facts (`1`), probes only (`2`). */
     val deliveryFlags: Int = 0,
+    /** The host profile to play as (its id); `null` sends none. Rides the Hello as `profile`. */
+    val profile: String? = null,
 ) {
     fun toJson(): String = JSONObject()
         .put("host", host)
@@ -122,5 +124,6 @@ data class ConnectRequest(
         .put("dialer", dialer)
         .put("preset_id", presetId ?: JSONObject.NULL)
         .put("preset_name", presetName ?: JSONObject.NULL)
+        .put("profile", profile ?: JSONObject.NULL)
         .toString()
 }

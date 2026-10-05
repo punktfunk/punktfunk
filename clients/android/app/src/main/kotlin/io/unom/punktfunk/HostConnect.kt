@@ -138,6 +138,8 @@ suspend fun connectToHost(
     // What a network check asks besides the profile on the host's record ([DELIVERY_FACTS],
     // [DELIVERY_PROBE_ONLY]); a plain connect asks nothing besides.
     deliveryFlags: Int = 0,
+    // The host profile to play as (its id); `null` sends none.
+    profile: String? = null,
 ): Long {
     // One launch, one session: every shell's connect lands here, so the refusal lives here too.
     if (!SessionGate.take()) {
@@ -147,7 +149,7 @@ suspend fun connectToHost(
     try {
         return dial(
             context, settings, identity, host, port, pinHex, launch, dialer, timeoutMs, preset,
-            deliveryFlags,
+            deliveryFlags, profile,
         )
     } finally {
         SessionGate.release()
@@ -167,6 +169,7 @@ private suspend fun dial(
     timeoutMs: Int,
     preset: StreamPreset?,
     deliveryFlags: Int,
+    profile: String?,
 ): Long {
     // Advertise HDR only when the user enabled it AND this device's display can present it (else the
     // host sends a proper SDR stream rather than PQ the panel would mis-tone-map).
@@ -265,6 +268,7 @@ private suspend fun dial(
             // the ask streams as it always has.
             deliveryProfile = if (pinHex.isEmpty()) 0 else KnownHostStore(context).getByFp(pinHex)?.delivery ?: 0,
             deliveryFlags = deliveryFlags,
+            profile = profile,
         )
         NativeBridge.nativeConnect(request.toJson())
     }

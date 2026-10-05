@@ -236,6 +236,18 @@ fun LibraryScreen(
     }
     val streamSettings = remember(settings, preset) { settings.effectiveFor(preset) }
     val knownHostStore = remember { KnownHostStore(context) }
+    // The profile picker a launch waits on.
+    var profileAsk by remember { mutableStateOf<ProfileAsk?>(null) }
+    profileAsk?.let { ask ->
+        ProfilePickerDialog(
+            hostName = host.name.ifBlank { host.address },
+            answer = ProfilesAnswer.Listed(ask.listed),
+            saved = ask.host.asProfile,
+            gone = ask.gone,
+            onPick = { ask.answer.complete(it) },
+            onDismiss = { ask.answer.complete(null) },
+        )
+    }
 
     // Keyed on the mgmt port too: a discovery tick can learn it after this screen is composed, and
     // the fetch must redo itself against the real port rather than stay on a stale 47990 failure.
@@ -269,12 +281,19 @@ fun LibraryScreen(
             LibraryPosition.remember(context, host.id, game.id)
         }
         scope.launch {
+            val choice = chooseProfile(knownHostStore, identity, host, null) { profileAsk = it }
+            profileAsk = null
+            if (choice !is ProfileChoice.Dial) {
+                launching = false
+                return@launch
+            }
             val handle = connectToHost(
                 context, streamSettings, identity,
                 host.address, host.port, host.fpHex,
                 launch = game.id.takeUnless { game.isDesktop },
                 dialer = "touch/library",
                 preset = preset,
+                profile = choice.id,
             )
             launching = false
             if (handle != 0L) {
@@ -295,9 +314,11 @@ fun LibraryScreen(
                     ),
                 )
             } else {
+                val token = NativeBridge.nativeTakeLastError()
+                if (token == "profile-unknown") knownHostStore.savePick(host, null)
                 Toast.makeText(
                     context,
-                    ConnectErrors.connectMessage(NativeBridge.nativeTakeLastError(), requestAccess = false),
+                    ConnectErrors.connectMessage(token, requestAccess = false),
                     Toast.LENGTH_LONG,
                 ).show()
             }

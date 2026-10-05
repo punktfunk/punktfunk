@@ -1,6 +1,7 @@
 package io.unom.punktfunk.kit.security
 
 import android.content.Context
+import io.unom.punktfunk.kit.ProfilePick
 import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
@@ -93,6 +94,8 @@ data class KnownHost(
     /** Unix seconds of the last session that connected; `null` until one has. Mirrors the Rust
      *  `KnownHost.last_used` and the Apple client's `StoredHost.lastConnected`. */
     val lastUsed: Long? = null,
+    /** The profile on the host this device plays as, `null` until one is picked. */
+    val asProfile: ProfilePick? = null,
 ) {
     /** This record re-pointed at [to]:[toPort], remembering the address it leaves. */
     fun movedTo(to: String, toPort: Int): KnownHost = copy(
@@ -408,6 +411,12 @@ class KnownHostStore(context: Context) {
             .put("prev_addrs", JSONArray(host.prevAddresses))
             .put("added", host.addedAt ?: 0)
             .put("last_used", host.lastUsed ?: 0)
+            // Not `profile`: that key is the old spelling of the settings preset.
+            .put(
+                "as_profile",
+                host.asProfile?.let { JSONObject().put("id", it.id).put("display_name", it.displayName) }
+                    ?: JSONObject.NULL,
+            )
             .toString()
 
         /** One stored record, or null when it does not parse. */
@@ -440,6 +449,9 @@ class KnownHostStore(context: Context) {
                 // 0 (or absent) = never stamped, the same sentinel as `mgmt`.
                 addedAt = j.optLong("added", 0).takeIf { it > 0 },
                 lastUsed = j.optLong("last_used", 0).takeIf { it > 0 },
+                asProfile = j.optJSONObject("as_profile")?.let {
+                    ProfilePick(it.optString("id"), it.optString("display_name")).takeIf { p -> p.id.isNotEmpty() }
+                },
             )
         }.getOrNull()
 

@@ -22,7 +22,8 @@ use crate::session::{jni_guard, HandleTable};
 use pf_client_core::menu_nav::MenuSample;
 use pf_console_ui::bridge::{self, CreateOptions, EntryJson, MenuCode, PadsJson, PresetJson};
 use pf_console_ui::{
-    HostRow, Insets, LibraryGame, LibraryPhase, PairPhase, Platform, SpeedPhase, Stale, WakeStatus,
+    HostRow, Insets, LibraryGame, LibraryPhase, PairPhase, Platform, ProfilesAnswer, SpeedPhase,
+    Stale, WakeStatus,
 };
 use std::time::Duration;
 
@@ -450,6 +451,30 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleAdva
             json_arg::<SpeedPhase>(env, &json),
         ) {
             h.handles.console.advance_speed(&k, p);
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// `NativeBridge.nativeConsoleSetProfiles(handle, fpHex, json)` — the answer to
+/// `ConsoleCmd::FetchProfiles` for the host pinned to `fpHex`: `{"Listed": [rows]}`,
+/// `"NoProfiles"` or `{"Failed": "why"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleSetProfiles(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    fp_hex: JString,
+    json: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        if let (Some(h), Ok(fp), Some(a)) = (
+            CONSOLES.get(handle),
+            fp_hex.try_to_string(env),
+            json_arg::<ProfilesAnswer>(env, &json),
+        ) {
+            h.handles.console.set_profiles(&fp, a);
         }
         Ok(())
     })
