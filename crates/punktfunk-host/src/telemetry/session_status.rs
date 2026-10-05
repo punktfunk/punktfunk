@@ -2021,6 +2021,7 @@ pub(crate) mod tests {
                 fingerprint: None,
                 preset: None,
                 plane: crate::events::Plane::Gamestream,
+                profile: None,
                 // No signals: inert lease, so no watcher thread races the assertions.
                 spec: crate::library::DetectSpec::default(),
                 nested: false,

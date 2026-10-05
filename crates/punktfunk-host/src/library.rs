@@ -267,7 +267,7 @@ pub struct GameEntry {
     /// Play stats, once this host has launched the title (`stats.rs`). Joined at read
     /// time from `library-stats.json`, never stored on the entry.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stats: Option<GameStats>,
+    pub stats: Option<EntryStats>,
     /// Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),
     /// set by the plugin that lists the entry. Not sent to paired clients.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -439,7 +439,7 @@ fn collect_games() -> Vec<GameEntry> {
         .map(GameEntry::from)
         .collect();
     for g in &mut games {
-        g.stats = stats.get(&g.id).copied();
+        g.stats = stats.get(&g.id).map(|t| t.entry(None));
         fills.apply(g);
     }
     games.sort_by_cached_key(sort_key);

@@ -2014,6 +2014,7 @@ pub(crate) async fn run_admitted(
         fingerprint: conn.peer_fingerprint().map(hex::encode),
         plane: conn.plane(),
         preset: session_preset.clone(),
+        profile: Some(resolved.id.clone()),
     };
     let (prep_cmds, prep_env) = launch_prep(&hello, &welcome, session_preset.as_ref());
     // Reprieve, claim, prep and the launch hold, before the display opens. `block_in_place`:

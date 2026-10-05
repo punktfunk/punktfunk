@@ -4187,11 +4187,11 @@ async fn library_stats_ride_on_the_entry() {
         "a never-launched title carries no stats key: {json}"
     );
 
-    crate::library::record_launch(&id);
-    crate::library::record_run_time(&id, std::time::Duration::from_millis(1_500));
-    crate::library::record_run_time(&id, std::time::Duration::from_millis(500));
+    crate::library::record_launch(&id, Some("kid"));
+    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(1_500));
+    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(500));
     // A run credited to an id with no entry is kept but never surfaces.
-    crate::library::record_run_time("steam:404", std::time::Duration::from_secs(1));
+    crate::library::record_run_time("steam:404", None, std::time::Duration::from_secs(1));
 
     let (s, json) = send(&app, get_req("/api/v1/library")).await;
     assert_eq!(s, StatusCode::OK);
@@ -4203,6 +4203,22 @@ async fn library_stats_ride_on_the_entry() {
     assert!(stats["last_played_unix_ms"]
         .as_u64()
         .is_some_and(|ms| ms > 0));
+    assert!(stats.get("mine").is_none(), "no `as`, no `mine`: {json}");
+
+    // Another profile's launch moves the totals, not the kid's own numbers.
+    crate::library::record_launch(&id, Some("enrico"));
+    for path in ["/api/v1/library?as=kid", "/api/v1/library/page?as=kid"] {
+        let (s, json) = send(&app, get_req(path)).await;
+        assert_eq!(s, StatusCode::OK);
+        let stats = json
+            .get("items")
+            .map_or(&json[0]["stats"], |items| &items[0]["stats"]);
+        assert_eq!(stats["launch_count"], 2, "{path}: {json}");
+        assert_eq!(stats["mine"]["launch_count"], 1, "{path}: {json}");
+        assert_eq!(stats["mine"]["play_time_ms"], 2_000, "{path}: {json}");
+    }
+    let (_, json) = send(&app, get_req("/api/v1/library?as=nobody")).await;
+    assert!(json[0]["stats"].get("mine").is_none(), "{json}");
 }
 
 /// The lease watcher credits a recorded launch's run: seen running, then gone, lands on disk.
@@ -4233,6 +4249,7 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
             fingerprint: None,
             preset: None,
             plane: crate::events::Plane::Native,
+            profile: Some("kid".into()),
             spec: crate::library::DetectSpec::dir(tmp.path()),
             nested: false,
             scope_pid: None,
@@ -4263,7 +4280,9 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
     wait_for(crate::gamelease::GameState::Exited, 30);
 
     let stats = crate::library::game_stats();
-    let s = stats.get("custom:stats-run").expect("the run was credited");
+    let title = stats.get("custom:stats-run").expect("the run was credited");
+    assert_eq!(title.by_profile["kid"], title.totals, "one profile ran it");
+    let s = title.totals;
     assert!(s.play_time_ms >= 500, "seen running for a while: {s:?}");
     assert_eq!(s.last_run_ms, s.play_time_ms, "one run: {s:?}");
     assert_eq!(s.launch_count, 0, "the lease never counts launches: {s:?}");

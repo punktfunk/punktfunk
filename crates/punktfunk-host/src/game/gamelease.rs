@@ -143,6 +143,8 @@ pub struct LeaseShared {
     /// The launching session's preset, on the game events.
     pub preset: Option<crate::events::PresetRef>,
     pub plane: crate::events::Plane,
+    /// The launching session's profile: play time is credited to it.
+    pub profile: Option<String>,
     kind: LeaseKind,
     state: AtomicU8,
     /// Watcher stop: session ended, or the lease was terminated.
@@ -295,6 +297,8 @@ pub struct LeaseRequest {
     /// The launching session's preset; `None` for plain settings and on GameStream.
     pub preset: Option<crate::events::PresetRef>,
     pub plane: crate::events::Plane,
+    /// The launching session's profile, credited in play stats.
+    pub profile: Option<String>,
     pub spec: DetectSpec,
     /// `true` when a bare-spawn gamescope owns the game.
     pub nested: bool,
@@ -409,6 +413,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         fingerprint,
         preset,
         plane,
+        profile,
         spec,
         nested,
         scope_pid,
@@ -457,6 +462,7 @@ pub fn open(req: LeaseRequest, on_exit: OnExit) -> GameLease {
         fingerprint,
         preset,
         plane,
+        profile,
         kind: kind.clone(),
         state: AtomicU8::new(GameState::Launching as u8),
         cancel: Arc::new(AtomicBool::new(false)),
@@ -946,7 +952,7 @@ impl Watcher {
                 let run = self
                     .credit
                     .clone()
-                    .map(|id| RunClock::since(id, self.spawned_at));
+                    .map(|id| RunClock::since(id, self.shared.profile.clone(), self.spawned_at));
                 finish(
                     &self.shared,
                     &self.on_exit,
@@ -1063,7 +1069,7 @@ impl Watcher {
         let mut run = self
             .credit
             .take()
-            .map(|id| RunClock::since(id, Instant::now()));
+            .map(|id| RunClock::since(id, self.shared.profile.clone(), Instant::now()));
         let mut gone_since: Option<Instant> = None;
         let mut vetoed = false;
         let shared = self.shared.clone();
@@ -1169,11 +1175,13 @@ fn exit_confirmed(gone_for: Duration, hint_running: bool) -> bool {
     gone_for >= EXIT_CONFIRM && (!hint_running || gone_for >= VETO_LIMIT)
 }
 
-/// Play-time clock for one run, credited to a library id. Flushes deltas, so
-/// a reconnect's second watcher adds to the same run instead of restarting it.
+/// Play-time clock for one run, credited to a library id and the launching profile.
+/// Flushes deltas, so a reconnect's second watcher adds to the same run instead of
+/// restarting it.
 #[cfg(any(target_os = "linux", windows))]
 struct RunClock {
     id: String,
+    profile: Option<String>,
     started: Instant,
     /// How much of `started.elapsed()` is already on disk.
     flushed: Duration,
@@ -1182,9 +1190,10 @@ struct RunClock {
 
 #[cfg(any(target_os = "linux", windows))]
 impl RunClock {
-    fn since(id: String, started: Instant) -> Self {
+    fn since(id: String, profile: Option<String>, started: Instant) -> Self {
         Self {
             id,
+            profile,
             started,
             flushed: Duration::ZERO,
             last_flush: Instant::now(),
@@ -1200,7 +1209,11 @@ impl RunClock {
 
     fn flush(&mut self) {
         let total = self.started.elapsed();
-        crate::library::record_run_time(&self.id, total.saturating_sub(self.flushed));
+        crate::library::record_run_time(
+            &self.id,
+            self.profile.as_deref(),
+            total.saturating_sub(self.flushed),
+        );
         self.flushed = total;
         self.last_flush = Instant::now();
     }
@@ -1941,6 +1954,7 @@ mod tests {
             fingerprint: None,
             preset: None,
             plane: crate::events::Plane::Native,
+            profile: None,
             spec,
             nested,
             scope_pid: None,
@@ -2412,6 +2426,7 @@ mod tests {
                 fingerprint: None,
                 preset: None,
                 plane: crate::events::Plane::Native,
+                profile: None,
                 // Real signal nothing will match: the game never shows up.
                 spec: DetectSpec::steam(999_001),
                 nested: false,
@@ -2660,6 +2675,7 @@ mod tests {
                 fingerprint: None,
                 preset: None,
                 plane: crate::events::Plane::Native,
+                profile: None,
                 spec: DetectSpec::dir(td.path()),
                 nested: false,
                 scope_pid: None,

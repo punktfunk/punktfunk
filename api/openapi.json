@@ -2264,7 +2264,7 @@
           "library"
         ],
         "summary": "List every title this host knows, sorted by title.",
-        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
+        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the\nasking device's profile: each title it has launched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
         "operationId": "getLibrary",
         "parameters": [
           {
@@ -2280,6 +2280,15 @@
             "name": "platform",
             "in": "query",
             "description": "Only entries on this platform (case-insensitive, e.g. `PS2`)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id whose own play stats fill `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -3255,7 +3264,7 @@
           "library"
         ],
         "summary": "One page of the library.",
-        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them.",
+        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded.",
         "operationId": "getLibraryPage",
         "parameters": [
           {
@@ -3327,6 +3336,15 @@
             "name": "install",
             "in": "query",
             "description": "`installed` (on this host) or `missing` (not installed)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id whose own play stats fill `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -9766,6 +9784,29 @@
           }
         }
       },
+      "EntryStats": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GameStats"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mine": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GameStats"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One title on `GET /library`: the host-wide numbers, plus `mine` for the profile the\nrequest named (`?as=`) once that profile has launched the title."
+      },
       "EnvMarker": {
         "type": "object",
         "description": "Plugin-owned stores must name this on [`DetectHint`]; the host does not\nread the launcher's files. Heroic's `HEROIC_APP_NAME` is the only signal\nunder Proton.",
@@ -10527,7 +10568,7 @@
                     "type": "null"
                   },
                   {
-                    "$ref": "#/components/schemas/GameStats",
+                    "$ref": "#/components/schemas/EntryStats",
                     "description": "Play stats, once this host has launched the title (`stats.rs`). Joined at read\ntime from `library-stats.json`, never stored on the entry."
                   }
                 ]

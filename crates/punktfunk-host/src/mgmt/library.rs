@@ -81,6 +81,21 @@ fn check_privileged_fields(
     None
 }
 
+/// `?as=<profile id>`: the profile whose own numbers ride as `stats.mine`.
+#[derive(Deserialize)]
+pub(crate) struct AsProfile {
+    #[serde(rename = "as")]
+    profile: Option<String>,
+}
+
+impl AsProfile {
+    fn fill<'a>(&self, games: impl IntoIterator<Item = &'a mut crate::library::GameEntry>) {
+        if let Some(p) = self.profile.as_deref().filter(|p| !p.is_empty()) {
+            crate::library::fill_mine(games, p);
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct LibraryQuery {
     provider: Option<String>,
@@ -91,7 +106,8 @@ pub(crate) struct LibraryQuery {
 ///
 /// Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's
 /// art proxy, local paths and remote URLs alike; a URL the proxy already refused passes
-/// through. `?provider=` / `?platform=` (case-insensitive) narrow.
+/// through. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the
+/// asking device's profile: each title it has launched carries its own numbers in `stats.mine`.
 ///
 /// The operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.
 /// Every other lane is filtered upstream and cannot tell they exist.
@@ -103,6 +119,7 @@ pub(crate) struct LibraryQuery {
     params(
         ("provider" = Option<String>, Query, description = "Only entries owned by this external provider"),
         ("platform" = Option<String>, Query, description = "Only entries on this platform (case-insensitive, e.g. `PS2`)"),
+        ("as" = Option<String>, Query, description = "Profile id whose own play stats fill `stats.mine`"),
     ),
     responses(
         (status = OK, description = "Unified library across all stores (the operator's lane also gets hidden entries, flagged)", body = [crate::library::OperatorGameEntry]),
@@ -112,6 +129,7 @@ pub(crate) struct LibraryQuery {
 pub(crate) async fn get_library(
     Extension(lane): Extension<AuthLane>,
     Query(q): Query<LibraryQuery>,
+    Query(who): Query<AsProfile>,
 ) -> Response {
     // Operator list is a different type, not a flag, so a hidden title cannot reach a paired
     // client by forgetting a filter. Skip redaction here: this arm is the operator's token,
@@ -120,6 +138,7 @@ pub(crate) async fn get_library(
         let mut rows = crate::library::all_games_for_operator();
         rows.retain(|r| matches_query(&r.entry, &q));
         crate::library::downloads::fill_free(rows.iter_mut().map(|r| &mut r.entry));
+        who.fill(rows.iter_mut().map(|r| &mut r.entry));
         for r in &mut rows {
             crate::library::proxy_art(&r.entry.id, &mut r.entry.art);
         }
@@ -128,6 +147,7 @@ pub(crate) async fn get_library(
     let mut games = crate::library::all_games();
     games.retain(|g| matches_query(g, &q));
     crate::library::downloads::fill_free(games.iter_mut());
+    who.fill(games.iter_mut());
     // Rewrite to the art proxy: an on-host path a client cannot reach, and a CDN URL every
     // client would otherwise fetch over the WAN for itself.
     for g in &mut games {
@@ -229,7 +249,8 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
 /// an offset: a title added or removed between two pages neither repeats nor skips one.
 /// `q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,
 /// `launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a
-/// caller that needs only that entry. Lanes see what `GET /library` shows them.
+/// caller that needs only that entry. Lanes see what `GET /library` shows them, `as`
+/// included.
 #[utoipa::path(
     get,
     path = "/library/page",
@@ -244,6 +265,7 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
         ("role" = Option<String>, Query, description = "`game` or `launcher`"),
         ("id" = Option<String>, Query, description = "Only the entry with this library id"),
         ("install" = Option<String>, Query, description = "`installed` (on this host) or `missing` (not installed)"),
+        ("as" = Option<String>, Query, description = "Profile id whose own play stats fill `stats.mine`"),
     ),
     responses(
         (status = OK, description = "One page, the total and the platform counts", body = LibraryPage),
@@ -254,6 +276,7 @@ fn decode_cursor(cursor: &str) -> Option<(String, String)> {
 pub(crate) async fn get_library_page(
     Extension(lane): Extension<AuthLane>,
     Query(q): Query<LibraryPageQuery>,
+    Query(who): Query<AsProfile>,
 ) -> Response {
     let after = match q.cursor.as_deref().filter(|c| !c.is_empty()) {
         None => None,
@@ -333,6 +356,7 @@ pub(crate) async fn get_library_page(
         .then(|| items.last().map(|r| encode_cursor(&sort_key(&r.entry))))
         .flatten();
     crate::library::downloads::fill_free(items.iter_mut().map(|r| &mut r.entry));
+    who.fill(items.iter_mut().map(|r| &mut r.entry));
     for r in &mut items {
         crate::library::proxy_art(&r.entry.id, &mut r.entry.art);
         redact_for_lane(&mut r.entry, &lane);
