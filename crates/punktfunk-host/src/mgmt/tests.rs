@@ -5527,6 +5527,19 @@ async fn the_console_edits_profiles() {
     assert_eq!(kid["accent"], "#f97316");
     assert_eq!(kid["seat"]["port"], 9777);
 
+    let (status, sharer) = send(
+        &app,
+        json(
+            "POST",
+            "/api/v1/profiles",
+            r#"{"display_name":"Ben","seat":false}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(sharer["home"], "desktop");
+    assert!(sharer.get("seat").is_none(), "plays on the box: {sharer}");
+
     let (status, _) = send(
         &app,
         json("POST", "/api/v1/profiles", r#"{"display_name":"kid"}"#),
@@ -5542,7 +5555,7 @@ async fn the_console_edits_profiles() {
         json(
             "POST",
             "/api/v1/profiles",
-            r#"{"display_name":"Ben","accent":"red"}"#,
+            r#"{"display_name":"Max","accent":"red"}"#,
         ),
     )
     .await;
@@ -5593,7 +5606,7 @@ async fn the_console_edits_profiles() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, list) = send(&app, get_req("/api/v1/profiles")).await;
     let rows = list.as_array().unwrap();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
     let owner = rows.iter().find(|r| r["owner"] == true).unwrap();
     assert!(owner.get("seat").is_none(), "the owner has no seat");
     assert!(rows

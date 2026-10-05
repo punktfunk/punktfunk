@@ -13277,7 +13277,7 @@
               },
               {
                 "$ref": "#/components/schemas/SeatPublic",
-                "description": "Where this profile plays; absent for the owner."
+                "description": "Its own seat; absent when it plays on the box's own session."
               }
             ]
           }

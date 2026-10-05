@@ -26,7 +26,7 @@ pub(crate) struct ProfilePublic {
     owner: bool,
     /// What a bare connect opens.
     home: Home,
-    /// Where this profile plays; absent for the owner.
+    /// Its own seat; absent when it plays on the box's own session.
     #[serde(skip_serializing_if = "Option::is_none")]
     seat: Option<SeatPublic>,
     /// When a session last played as it; `0`: never.
@@ -100,7 +100,7 @@ fn public(st: &MgmtState, p: &Profile, owner: Option<&str>) -> ProfilePublic {
         avatar: p.avatar.clone(),
         owner: is_owner,
         home: p.home,
-        seat: (!is_owner).then(|| seat(st, p)),
+        seat: (!matches!(p.os_account, OsAccount::Operator)).then(|| seat(st, p)),
         last_used_unix: p.last_used_unix,
     }
 }
