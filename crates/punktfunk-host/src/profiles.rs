@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use utoipa::ToSchema;
 
 /// Bumped on a breaking change to a field's meaning; `serde(default)` covers additions.
 pub const PROFILES_SCHEMA_VERSION: u32 = 1;
@@ -84,6 +85,9 @@ pub struct Profile {
     pub created_unix: u64,
     #[serde(default)]
     pub updated_unix: u64,
+    /// When a session last resolved to this profile. `0`: never.
+    #[serde(default)]
+    pub last_used_unix: u64,
 }
 
 /// Where a profile's session runs.
@@ -125,7 +129,7 @@ pub enum SeatTier {
     Full,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Home {
     /// The session as it is.
@@ -210,6 +214,78 @@ pub enum ProfileError {
     SessionUnavailable,
 }
 
+/// Why an edit was refused, each one HTTP status.
+#[derive(Debug)]
+pub enum EditError {
+    /// No profile with that id.
+    NotFound,
+    /// The body breaks a rule; the sentence says which.
+    Invalid(String),
+    /// Another profile has that name.
+    NameTaken,
+    /// The box already has [`PROFILES_MAX`].
+    Full,
+    /// The owner profile is the box's own session; it can't be removed.
+    Owner,
+    /// The file did not parse, or the save failed.
+    Store(anyhow::Error),
+}
+
+impl std::fmt::Display for EditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditError::NotFound => f.write_str("no profile with that id"),
+            EditError::Invalid(why) => f.write_str(why),
+            EditError::NameTaken => f.write_str("another profile has that name"),
+            EditError::Full => write!(f, "a host holds at most {PROFILES_MAX} profiles"),
+            EditError::Owner => f.write_str("the owner profile can't be removed"),
+            EditError::Store(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+/// What a new profile starts as.
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct ProfileCreate {
+    pub display_name: String,
+    /// `#RRGGBB`.
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// Defaults to `bigpicture` for a seat profile, `desktop` otherwise.
+    #[serde(default)]
+    pub home: Option<Home>,
+    /// A seat of its own (the default), or the box's own session under another name.
+    #[serde(default = "yes")]
+    pub seat: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A change to a profile; absent fields stay.
+#[derive(Clone, Debug, Default, Deserialize, ToSchema)]
+pub struct ProfileUpdate {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// `#RRGGBB`.
+    #[serde(default)]
+    pub accent: Option<String>,
+    #[serde(default)]
+    pub home: Option<Home>,
+}
+
+/// Ids of removed profiles, for the sessions playing as them.
+static REMOVED: std::sync::OnceLock<tokio::sync::broadcast::Sender<ProfileId>> =
+    std::sync::OnceLock::new();
+
+/// Hears every profile removed from now on.
+pub fn removed() -> tokio::sync::broadcast::Receiver<ProfileId> {
+    REMOVED
+        .get_or_init(|| tokio::sync::broadcast::channel(16).0)
+        .subscribe()
+}
+
 /// A stored picture.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Avatar {
@@ -254,6 +330,199 @@ impl Profiles {
 
     pub fn list(&self) -> Vec<Profile> {
         self.lock().file.profiles.clone()
+    }
+
+    /// The owner's id: the box's own session.
+    pub fn owner_id(&self) -> Option<ProfileId> {
+        let state = self.lock();
+        state
+            .file
+            .profiles
+            .iter()
+            .find(|p| is_owner(p))
+            .map(|p| p.id.clone())
+    }
+
+    pub fn default_profile_id(&self) -> Option<ProfileId> {
+        default_profile(&self.lock().file).map(|p| p.id.clone())
+    }
+
+    pub fn create(&self, input: ProfileCreate) -> Result<Profile, EditError> {
+        let name = clean_name(&input.display_name)
+            .ok_or_else(|| EditError::Invalid("a profile needs a name".into()))?;
+        let accent = input.accent.map(valid_accent).transpose()?;
+        let mut made = None;
+        self.edit(|file| {
+            if file.profiles.len() >= PROFILES_MAX {
+                return Err(EditError::Full);
+            }
+            if name_taken(&file.profiles, &name, None) {
+                return Err(EditError::NameTaken);
+            }
+            let now = now_unix();
+            let (os_account, home) = if input.seat {
+                let account = OsAccount::Seat {
+                    seat: None,
+                    tier: SeatTier::Light,
+                };
+                (account, input.home.unwrap_or(Home::Bigpicture))
+            } else {
+                (OsAccount::Operator, input.home.unwrap_or(Home::Desktop))
+            };
+            let profile = Profile {
+                id: new_id(&name),
+                display_name: name.clone(),
+                accent: accent.clone(),
+                avatar: None,
+                os_account,
+                home,
+                legacy_device: None,
+                assigned_fingerprints: Vec::new(),
+                passcode: None,
+                require_passcode_even_when_assigned: false,
+                allow_shared_view: false,
+                tvos_user_ids: Vec::new(),
+                library_scope: LibraryScope::All,
+                custom_entries: Vec::new(),
+                session_defaults: SessionDefaults::default(),
+                created_unix: now,
+                updated_unix: now,
+                last_used_unix: 0,
+            };
+            file.profiles.push(profile.clone());
+            made = Some(profile);
+            Ok(())
+        })?;
+        made.ok_or(EditError::NotFound)
+    }
+
+    /// Rename, recolour, rehome. A rename drops `legacy_device`: the name was the device's.
+    pub fn update(&self, id: &str, input: ProfileUpdate) -> Result<Profile, EditError> {
+        let name = input
+            .display_name
+            .as_deref()
+            .map(|n| {
+                clean_name(n).ok_or_else(|| EditError::Invalid("a profile needs a name".into()))
+            })
+            .transpose()?;
+        let accent = input.accent.map(valid_accent).transpose()?;
+        let mut out = None;
+        self.edit(|file| {
+            if let Some(name) = &name {
+                if name_taken(&file.profiles, name, Some(id)) {
+                    return Err(EditError::NameTaken);
+                }
+            }
+            let p = file
+                .profiles
+                .iter_mut()
+                .find(|p| p.id == id)
+                .ok_or(EditError::NotFound)?;
+            if let Some(name) = name {
+                if name != p.display_name {
+                    p.legacy_device = None;
+                }
+                p.display_name = name;
+            }
+            if let Some(accent) = accent {
+                p.accent = Some(accent);
+            }
+            if let Some(home) = input.home {
+                p.home = home;
+            }
+            p.updated_unix = now_unix();
+            out = Some(p.clone());
+            Ok(())
+        })?;
+        out.ok_or(EditError::NotFound)
+    }
+
+    /// Removes `id`. `erase` also deletes its Steam home and picture; without it the home stays
+    /// for the console to list. Sessions playing as it hear [`removed`].
+    pub fn delete(&self, id: &str, erase: bool) -> Result<Profile, EditError> {
+        let mut gone = None;
+        self.edit(|file| {
+            let at = file
+                .profiles
+                .iter()
+                .position(|p| p.id == id)
+                .ok_or(EditError::NotFound)?;
+            if file
+                .profiles
+                .iter()
+                .find(|p| is_owner(p))
+                .map(|p| p.id.as_str())
+                == Some(id)
+            {
+                return Err(EditError::Owner);
+            }
+            if file.default_profile_id.as_deref() == Some(id) {
+                file.default_profile_id = None;
+            }
+            gone = Some(file.profiles.remove(at));
+            Ok(())
+        })?;
+        let gone = gone.ok_or(EditError::NotFound)?;
+        if erase && safe_id(id) {
+            let state = self.lock();
+            remove_avatar_files(&state.path.with_file_name("profiles"), id, None);
+            drop(state);
+            #[cfg(target_os = "linux")]
+            {
+                let _ = std::fs::remove_dir_all(pf_paths::seat_home(id));
+                let _ = std::fs::remove_file(pf_paths::seat_record(id));
+            }
+        }
+        if let Some(tx) = REMOVED.get() {
+            let _ = tx.send(id.to_string());
+        }
+        Ok(gone)
+    }
+
+    /// Where a device that names no profile lands; `None` is the owner.
+    pub fn set_default(&self, id: Option<&str>) -> Result<(), EditError> {
+        self.edit(|file| {
+            if let Some(id) = id {
+                if !file.profiles.iter().any(|p| p.id == id) {
+                    return Err(EditError::NotFound);
+                }
+            }
+            file.default_profile_id = id.map(str::to_string);
+            Ok(())
+        })
+    }
+
+    /// Stamps `last_used_unix`. Best-effort: a connect never fails on it.
+    pub fn touch(&self, id: &str) {
+        let known = self.lock().file.profiles.iter().any(|p| p.id == id);
+        if known {
+            let _ = self.mutate(|file| {
+                if let Some(p) = file.profiles.iter_mut().find(|p| p.id == id) {
+                    p.last_used_unix = now_unix();
+                }
+                Ok(())
+            });
+        }
+    }
+
+    /// [`Self::mutate`] with the edit's own error kinds.
+    fn edit(
+        &self,
+        change: impl FnOnce(&mut ProfilesFile) -> Result<(), EditError>,
+    ) -> Result<(), EditError> {
+        let mut refused = None;
+        let saved = self.mutate(|file| {
+            change(file).map_err(|e| {
+                let msg = e.to_string();
+                refused = Some(e);
+                anyhow::anyhow!(msg)
+            })
+        });
+        match (refused, saved) {
+            (Some(e), _) => Err(e),
+            (None, Ok(())) => Ok(()),
+            (None, Err(e)) => Err(EditError::Store(e)),
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<Profile> {
@@ -301,6 +570,7 @@ impl Profiles {
                     session_defaults: SessionDefaults::default(),
                     created_unix: now,
                     updated_unix: now,
+                    last_used_unix: 0,
                 },
             );
             Ok(())
@@ -378,6 +648,7 @@ impl Profiles {
                 session_defaults: SessionDefaults::default(),
                 created_unix: now,
                 updated_unix: now,
+                last_used_unix: 0,
             });
             Ok(())
         })?;
@@ -604,6 +875,22 @@ pub fn clean_name(raw: &str) -> Option<String> {
         .collect();
     let name = name.trim_end().to_string();
     (!name.is_empty()).then_some(name)
+}
+
+fn name_taken(profiles: &[Profile], name: &str, except: Option<&str>) -> bool {
+    profiles
+        .iter()
+        .any(|p| Some(p.id.as_str()) != except && p.display_name.eq_ignore_ascii_case(name))
+}
+
+/// `#RRGGBB`, lowercased.
+fn valid_accent(accent: String) -> Result<String, EditError> {
+    let hex = accent.strip_prefix('#').unwrap_or("");
+    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(accent.to_ascii_lowercase())
+    } else {
+        Err(EditError::Invalid("an accent is #RRGGBB".into()))
+    }
 }
 
 /// `name`, or `name 2`, `name 3`…: display names are unique ignoring case.

@@ -591,6 +591,30 @@ const REJECT_BUSY_CODE: u32 = punktfunk_core::reject::REJECT_BUSY_CLOSE_CODE;
 
 /// Close with the typed reject code before the session task returns `Err`. A bare drop
 /// closes with code 0, which the client cannot tell from transport trouble.
+/// Ends the session when the console removes the profile it plays as.
+fn spawn_profile_watch(conn: link::SessionLink, profile: String) {
+    let mut removed = crate::profiles::removed();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = conn.closed() => return,
+                id = removed.recv() => match id {
+                    Ok(id) if id == profile => break,
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => return,
+                },
+            }
+        }
+        tracing::info!(%profile, "profile removed — closing its session");
+        let reason = punktfunk_core::reject::RejectReason::SeatUnavailable;
+        conn.refuse(
+            reason.close_code(),
+            "Your profile was removed by the host's owner.",
+        )
+        .await;
+    });
+}
+
 async fn close_rejected(conn: &link::SessionLink, reason: punktfunk_core::reject::RejectReason) {
     conn.refuse(reason.close_code(), &reason.to_string()).await;
 }
@@ -1501,6 +1525,12 @@ pub(crate) async fn run_admitted(
         }
     };
     tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
+    profiles.touch(&resolved.id);
+    spawn_profile_watch(conn.clone(), resolved.id.clone());
+    let profile_ref = crate::events::ProfileRef {
+        id: resolved.id.clone(),
+        display_name: resolved.display_name.clone(),
+    };
     // One relaxed load per event; the lifecycle task is the only writer after admission.
     let session_grants = Arc::new(AtomicU32::new(initial_grants));
     let expires_in_secs = remaining_secs_wire(deadline_unix, admit_unix);
@@ -1687,6 +1717,7 @@ pub(crate) async fn run_admitted(
         pad_slots: pad_slots.clone(),
         fingerprint: session_fp_hex.clone(),
         preset: session_preset.clone(),
+        profile: Some(profile_ref.clone()),
         pad_owner: pad_id.owner,
         preferred_pad_slot: Arc::new(std::sync::atomic::AtomicU8::new(
             preferred_pad_slot.unwrap_or(crate::session_status::NO_PAD_SLOT),
@@ -1847,6 +1878,7 @@ pub(crate) async fn run_admitted(
             fingerprint: session_fp_hex.clone(),
             plane: conn.plane(),
             preset: session_preset.clone(),
+            profile: Some(profile_ref.clone()),
         },
     );
 
@@ -1959,6 +1991,7 @@ pub(crate) async fn run_admitted(
         launch: hello.launch.clone(),
         plane: conn.plane(),
         preset: session_preset.clone(),
+        profile: Some(profile_ref.clone()),
     });
     // Linux `PUNKTFUNK_PIN_CLOCKS`: refcounted vendor clock floor while any session streams.
     #[cfg(target_os = "linux")]

@@ -1124,7 +1124,7 @@ pub(crate) async fn get_library_art(
 }
 
 /// Whether an `If-None-Match` value names `etag`: a list, `*`, or a weak `W/` form of it.
-fn not_modified(if_none_match: Option<&str>, etag: &str) -> bool {
+pub(super) fn not_modified(if_none_match: Option<&str>, etag: &str) -> bool {
     if_none_match.is_some_and(|v| {
         v.split(',')
             .map(|t| t.trim().trim_start_matches("W/"))

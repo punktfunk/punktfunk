@@ -5167,6 +5167,583 @@
         }
       }
     },
+    "/api/v1/profiles": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List the profiles with what the console manages",
+        "operationId": "listProfiles",
+        "responses": {
+          "200": {
+            "description": "The profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileAdmin"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This host has no profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Add a profile",
+        "description": "A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the\nbox's own session under its own name.",
+        "operationId": "createProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or an accent that is not #RRGGBB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another profile has that name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The box already has eight profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/default": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Where a device that names no profile lands",
+        "operationId": "setDefaultProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/enumerate": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List the profiles a device can pick",
+        "description": "Every profile on the box, the owner first. A client shows this as its picker.",
+        "operationId": "enumerateProfiles",
+        "responses": {
+          "200": {
+            "description": "The profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfilePublic"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This host has no profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Rename, recolour or rehome a profile",
+        "operationId": "updateProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty name, or an accent that is not #RRGGBB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another profile has that name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Remove a profile",
+        "description": "Sessions playing as it end with `SEAT_UNAVAILABLE`. With `erase`, its Steam home and picture\ngo too; without, the home stays.",
+        "operationId": "deleteProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "erase",
+            "in": "query",
+            "description": "Also delete its Steam home and picture.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The owner profile can't be removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/avatar": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "A profile's picture",
+        "description": "The stored image with an `ETag` of its bytes; a request whose `If-None-Match` names that tag\ngets 304 with no body.",
+        "operationId": "getProfileAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "An `ETag` from an earlier response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "304": {
+            "description": "The tag in `If-None-Match` is current"
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No picture for that profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set a profile's picture",
+        "description": "PNG, JPEG or WebP, at most 1 MiB. The console crops it square first.",
+        "operationId": "setProfileAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "Not a PNG, JPEG or WebP image, or over 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Remove a profile's picture",
+        "operationId": "deleteProfileAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/wake": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Get a profile's seat ready",
+        "description": "Starts a stopped seat so the next connect lands in it. A light seat starts with its first\nconnect, so on Linux this only answers the row.",
+        "operationId": "wakeProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat as it is now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfilePublic"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/session": {
       "delete": {
         "tags": [
@@ -8256,6 +8833,17 @@
                 "description": "The preset the client dialled with. Absent for plain settings and on GameStream."
               }
             ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile the session plays as. Absent on GameStream."
+              }
+            ]
           }
         }
       },
@@ -8542,6 +9130,19 @@
           "deny",
           "forget"
         ]
+      },
+      "DefaultProfile": {
+        "type": "object",
+        "description": "`PUT /profiles/default`.",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` is the owner."
+          }
+        }
       },
       "DetectHint": {
         "type": "object",
@@ -10304,6 +10905,13 @@
             "type": "boolean"
           }
         }
+      },
+      "Home": {
+        "type": "string",
+        "enum": [
+          "desktop",
+          "bigpicture"
+        ]
       },
       "HookEntry": {
         "type": "object",
@@ -12555,6 +13163,171 @@
           }
         }
       },
+      "ProfileAdmin": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProfilePublic"
+          },
+          {
+            "type": "object",
+            "required": [
+              "default"
+            ],
+            "properties": {
+              "default": {
+                "type": "boolean",
+                "description": "Where a device that names no profile lands."
+              },
+              "legacy_device": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The device whose seat became this profile, lowercase hex."
+              }
+            }
+          }
+        ],
+        "description": "One profile as the console manages it."
+      },
+      "ProfileCreate": {
+        "type": "object",
+        "description": "What a new profile starts as.",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "home": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Home",
+                "description": "Defaults to `bigpicture` for a seat profile, `desktop` otherwise."
+              }
+            ]
+          },
+          "seat": {
+            "type": "boolean",
+            "description": "A seat of its own (the default), or the box's own session under another name."
+          }
+        }
+      },
+      "ProfilePublic": {
+        "type": "object",
+        "description": "One profile as a client's picker shows it.",
+        "required": [
+          "id",
+          "display_name",
+          "owner",
+          "home",
+          "last_used_unix"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB` behind the initials when there is no picture."
+          },
+          "avatar": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Host-relative URL of the picture."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "home": {
+            "$ref": "#/components/schemas/Home",
+            "description": "What a bare connect opens."
+          },
+          "id": {
+            "type": "string",
+            "example": "9a3f1c2b7e40"
+          },
+          "last_used_unix": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When a session last played as it; `0`: never.",
+            "minimum": 0
+          },
+          "owner": {
+            "type": "boolean",
+            "description": "The box's own session."
+          },
+          "seat": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SeatPublic",
+                "description": "Where this profile plays; absent for the owner."
+              }
+            ]
+          }
+        }
+      },
+      "ProfileRef": {
+        "type": "object",
+        "description": "A profile as events, status and hooks name it.",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProfileUpdate": {
+        "type": "object",
+        "description": "A change to a profile; absent fields stay.",
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "home": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Home"
+              }
+            ]
+          }
+        }
+      },
       "ProviderEntryInput": {
         "allOf": [
           {
@@ -13050,6 +13823,56 @@
           }
         }
       },
+      "SeatPublic": {
+        "type": "object",
+        "description": "A profile's seat right now.",
+        "required": [
+          "state",
+          "port"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The progress line while `starting`, or why while `unavailable`."
+          },
+          "occupant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device playing on it while `occupied`."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The port to dial for this profile.",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/SeatState"
+          },
+          "steam_sign_in": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Its Steam has no account yet: the first connect shows Steam's sign-in. `null` where the\nhost can't tell."
+          }
+        }
+      },
+      "SeatState": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "starting",
+          "stopped",
+          "occupied",
+          "unavailable"
+        ]
+      },
       "SessionAccess": {
         "type": "object",
         "required": [
@@ -13329,6 +14152,17 @@
               "null"
             ],
             "description": "Name of the settings preset the client dialled with. Absent for plain settings."
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile the session plays as. Blank, like `client_name`, for another device's\nsession on the cert lane."
+              }
+            ]
           },
           "shared_path_with": {
             "type": "array",
@@ -14619,6 +15453,10 @@
     {
       "name": "library",
       "description": "Game library: the titles each installed library plugin syncs, plus user-curated custom entries"
+    },
+    {
+      "name": "profiles",
+      "description": "The people on this box: the list a client's picker shows, their pictures, and the console's edits"
     },
     {
       "name": "stats",

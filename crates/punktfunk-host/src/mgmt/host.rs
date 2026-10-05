@@ -406,6 +406,10 @@ pub(crate) struct SessionRow {
     /// Name of the settings preset the client dialled with. Absent for plain settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     preset_name: Option<String>,
+    /// The profile the session plays as. Blank, like `client_name`, for another device's
+    /// session on the cert lane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<crate::events::ProfileRef>,
     /// `WxH@Hz`.
     #[schema(example = "3840x2160@120")]
     mode: String,
@@ -673,6 +677,7 @@ pub(crate) async fn get_status(
                 client: if own { s.client.clone() } else { String::new() },
                 client_name: s.client_name.clone().filter(|_| own),
                 preset_name: s.preset_name.clone(),
+                profile: s.profile.clone().filter(|_| own),
                 mode: crate::events::mode_str(s.width, s.height, s.fps),
                 hdr: s.hdr,
                 join: s.join,

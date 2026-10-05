@@ -43,6 +43,7 @@ mod library;
 mod native;
 mod plugin_access;
 pub(crate) mod plugins;
+mod profiles;
 mod session;
 mod settings;
 pub(crate) mod shared;
@@ -517,6 +518,16 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(store::list_sources))
         .routes(routes!(store::put_source, store::delete_source))
         .routes(routes!(store::get_runtime, store::set_runtime))
+        .routes(routes!(profiles::enumerate_profiles))
+        .routes(routes!(profiles::list_profiles, profiles::create_profile))
+        .routes(routes!(profiles::set_default_profile))
+        .routes(routes!(profiles::update_profile, profiles::delete_profile))
+        .routes(routes!(
+            profiles::get_profile_avatar,
+            profiles::set_profile_avatar,
+            profiles::delete_profile_avatar
+        ))
+        .routes(routes!(profiles::wake_profile))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))
@@ -556,6 +567,7 @@ pub fn openapi_json() -> String {
         (name = "native", description = "Native punktfunk/1 pairing: arm a window, display the host PIN, manage paired devices"),
         (name = "session", description = "Active streaming session control"),
         (name = "library", description = "Game library: the titles each installed library plugin syncs, plus user-curated custom entries"),
+        (name = "profiles", description = "The people on this box: the list a client's picker shows, their pictures, and the console's edits"),
         (name = "stats", description = "Streaming performance-stats capture: arm/stop a recording, read the live + saved time-series for graphing"),
         (name = "logs", description = "Host log stream: the newest in-memory log entries, cursor-paged for live following"),
         (name = "events", description = "Host lifecycle events: an SSE stream (client/session/stream lifecycle, pairing, displays, library, host) with Last-Event-ID resume and server-side kind filters"),

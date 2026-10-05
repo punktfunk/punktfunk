@@ -30,6 +30,8 @@ pub struct StreamInfo {
     pub plane: crate::events::Plane,
     /// The dialled preset, for lifecycle events; never in the marker file.
     pub preset: Option<crate::events::PresetRef>,
+    /// The profile the session plays as.
+    pub profile: Option<crate::events::ProfileRef>,
 }
 
 fn stream_ref(info: &StreamInfo) -> crate::events::StreamRef {
@@ -160,13 +162,17 @@ mod imp {
              PF_STREAM_REFRESH={hz}\n\
              PF_STREAM_HDR={hdr}\n\
              PF_STREAM_SESSIONS={n}\n\
-             PF_STREAM_CLIENT='{client}'\n",
+             PF_STREAM_CLIENT='{client}'\n\
+             PF_STREAM_PROFILE_ID='{profile_id}'\n\
+             PF_STREAM_PROFILE='{profile}'\n",
             w = primary.width,
             h = primary.height,
             hz = primary.refresh_hz,
             hdr = u8::from(primary.hdr),
             n = reg.sessions.len(),
             client = sanitize(&primary.client),
+            profile_id = sanitize(primary.profile.as_ref().map_or("", |p| p.id.as_str())),
+            profile = sanitize(primary.profile.as_ref().map_or("", |p| p.display_name.as_str())),
         );
 
         if let Err(e) = pf_paths::replace_file(path, body.as_bytes()) {
@@ -221,6 +227,7 @@ mod imp {
                 preset: None,
                 launch: None,
                 plane: crate::events::Plane::Native,
+                profile: None,
             });
             rewrite_to(&path, &reg);
             let text = std::fs::read_to_string(&path).expect("marker exists while streaming");
@@ -241,6 +248,7 @@ mod imp {
                 preset: None,
                 launch: None,
                 plane: crate::events::Plane::Gamestream,
+                profile: None,
             });
             rewrite_to(&path, &reg);
             let text = std::fs::read_to_string(&path).unwrap();
@@ -280,6 +288,7 @@ mod tests {
             preset: None,
             launch: Some("Hades".to_string()),
             plane: Plane::Gamestream,
+            profile: None,
         };
         let r = stream_ref(&info);
         assert_eq!(r.plane, Plane::Gamestream);

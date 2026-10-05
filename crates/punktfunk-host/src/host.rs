@@ -91,6 +91,8 @@ pub struct AppState {
     pub access: std::sync::OnceLock<Arc<crate::native_pairing::NativePairing>>,
     /// The people on this box. Set once by [`serve`] with the owner ensured.
     pub profiles: std::sync::OnceLock<Arc<crate::profiles::Profiles>>,
+    /// The native port clients dial, for the profile list's `seat.port`. Set once by [`serve`].
+    pub native_port: std::sync::OnceLock<u16>,
     #[cfg(feature = "gamestream")]
     pub gs: crate::gamestream::GsState,
 }
@@ -120,6 +122,7 @@ impl AppState {
             stats,
             access: std::sync::OnceLock::new(),
             profiles: std::sync::OnceLock::new(),
+            native_port: std::sync::OnceLock::new(),
             #[cfg(feature = "gamestream")]
             gs,
         }
@@ -226,6 +229,7 @@ pub fn serve(
     }
     let profiles = Arc::new(profiles);
     let _ = state.profiles.set(profiles.clone());
+    let _ = state.native_port.set(native.port);
     tracing::info!(
         hostname = %state.host.hostname,
         uniqueid = %state.host.uniqueid,

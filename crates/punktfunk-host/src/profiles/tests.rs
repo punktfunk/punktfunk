@@ -34,6 +34,7 @@ fn profile(id: &str, name: &str, os_account: OsAccount) -> Profile {
         session_defaults: SessionDefaults::default(),
         created_unix: 1,
         updated_unix: 1,
+        last_used_unix: 0,
     }
 }
 

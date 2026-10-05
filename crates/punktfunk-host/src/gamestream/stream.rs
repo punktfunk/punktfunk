@@ -134,12 +134,14 @@ pub fn start(
                 launch: app.as_ref().map(|a| a.title.clone()),
                 plane: crate::events::Plane::Gamestream,
                 preset: None,
+                profile: None,
             });
             let event_client = crate::events::ClientRef {
                 name: client_label.clone(),
                 fingerprint: life.fingerprint.clone(),
                 plane: crate::events::Plane::Gamestream,
                 preset: None,
+                profile: None,
             };
             crate::events::emit(crate::events::EventKind::ClientConnected {
                 client: event_client.clone(),
