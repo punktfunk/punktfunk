@@ -4,12 +4,14 @@
 //! (delegated-approval) flow parks an identified connect until the operator approves it.
 
 use super::lucide;
+use super::profiles;
 use super::style::*;
 use super::{AppCtx, Screen, Svc, Target};
 use crate::trust::{self, KnownHosts};
 use pf_client_core::orchestrate::{
     trust_route, CancelHandle, ConnectOutcome, TrustRoute, WakeOutcome, WakeWait,
 };
+use punktfunk_core::reject::RejectReason;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,8 +78,41 @@ fn initiate_opts(
         wake_on_fail,
         ..ConnectOpts::default()
     };
-    // `None` is TOFU: the spawn pins the advertised fingerprint.
-    connect_with(ctx, &target, pin, set_screen, set_status, opts);
+    ask_then_connect(ctx, target, pin, set_screen, set_status, opts);
+}
+
+/// A paired host is asked who plays first; its pick (or the link's `as=`) rides the connect.
+/// Any other host dials at once, with the link's `as=`.
+fn ask_then_connect(
+    ctx: &Arc<AppCtx>,
+    target: Target,
+    pin: Option<[u8; 32]>,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+    mut opts: ConnectOpts,
+) {
+    let fp = pin
+        .map(|p| trust::hex(&p))
+        .or_else(|| target.fp_hex.clone());
+    let saved = KnownHosts::load()
+        .resolve(fp.as_deref(), &target.addr, target.port)
+        .filter(|h| h.paired)
+        .map(|h| h.profile.clone());
+    let Some(saved) = saved else {
+        opts.profile = target.link_profile.clone();
+        // `None` is TOFU: the spawn pins the advertised fingerprint.
+        return connect_with(ctx, &target, pin, set_screen, set_status, opts);
+    };
+    let (ctx2, t, ss, st) = (
+        ctx.clone(),
+        target.clone(),
+        set_screen.clone(),
+        set_status.clone(),
+    );
+    profiles::then_connect(ctx, target, saved, pin, set_screen, move |profile| {
+        let opts = ConnectOpts { profile, ..opts };
+        connect_with(&ctx2, &t, pin, &ss, &st, opts)
+    });
 }
 
 /// Start a stream that launches a library title on connect (`--launch id`): the library page's
@@ -137,6 +172,8 @@ pub(crate) struct ConnectOpts {
     /// A library title id (`steam:570`, …) the host launches during the connect handshake —
     /// the library page's tap-to-play, passed to the spawned session child as `--launch`.
     launch: Option<String>,
+    /// The profile id the session names: the picker's answer, or a link's `as=`. `None` names none.
+    profile: Option<String>,
 }
 
 impl Default for ConnectOpts {
@@ -148,10 +185,12 @@ impl Default for ConnectOpts {
             cancel: None,
             wake_on_fail: false,
             launch: None,
+            profile: None,
         }
     }
 }
 
+/// A fresh pairing's first connect: it asks who plays, as any connect to a paired host does.
 pub(crate) fn connect(
     ctx: &Arc<AppCtx>,
     target: &Target,
@@ -159,9 +198,9 @@ pub(crate) fn connect(
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
 ) {
-    connect_with(
+    ask_then_connect(
         ctx,
-        target,
+        target.clone(),
         pin,
         set_screen,
         set_status,
@@ -230,6 +269,7 @@ fn connect_spawn(
     // The closure owns `target`/`fp_hex`; the call itself borrows copies.
     let (addr, port, fp_arg) = (target.addr.clone(), target.port, fp_hex.clone());
     let preset_arg = target.preset.clone();
+    let profile_arg = opts.profile.clone();
     // The launch id: an explicit opts pick (the library's tap-to-play), else one riding
     // the target — a deep link's `launch=` that detoured through the PIN ceremony.
     let launch_arg = opts.launch.clone().or_else(|| target.launch.clone());
@@ -240,6 +280,7 @@ fn connect_spawn(
         opts.connect_timeout.as_secs(),
         launch_arg.as_deref(),
         preset_arg.as_deref(),
+        profile_arg.as_deref(),
         child,
         move |event| {
             use crate::spawn::SpawnEvent;
@@ -287,6 +328,15 @@ fn connect_spawn(
                         *shared.target.lock().unwrap() = target.clone();
                         ss.call(Screen::Pair);
                     }
+                    // The host refused the profile. It answered, so this is never the wake case,
+                    // and a profile it no longer has is forgotten.
+                    ConnectOutcome::ConnectFailed(msg) if profile_rejection(&msg).is_some() => {
+                        if profile_rejection(&msg) == Some(RejectReason::ProfileUnknown) {
+                            profiles::save_pick(Some(&fp_hex), &target.addr, target.port, None);
+                        }
+                        st.call(msg);
+                        ss.call(Screen::Hosts);
+                    }
                     // The dial-first attempt to a non-advertising host failed — it may
                     // genuinely be asleep. Only with auto-wake on: the wait is worth showing
                     // only while magic packets are going out to end it.
@@ -318,6 +368,20 @@ fn connect_spawn(
         set_status.call(e);
         set_screen.call(Screen::Hosts);
     }
+}
+
+/// The profile refusal `msg` words, if it is one. The session reports a refusal as its player
+/// sentence, so this is how the shell tells the four apart from a dial that failed.
+fn profile_rejection(msg: &str) -> Option<RejectReason> {
+    use RejectReason as R;
+    [
+        R::ProfileUnknown,
+        R::NoSeat,
+        R::SeatOccupied,
+        R::SeatUnavailable,
+    ]
+    .into_iter()
+    .find(|r| pf_client_core::trust::connect_reject_message(*r) == msg)
 }
 
 /// "Open console UI": run the console (`punktfunk-session --browse`) in the session window.
@@ -555,4 +619,25 @@ pub(crate) fn waking_page(ctx: &Arc<AppCtx>, set_screen: &AsyncSetState<Screen>)
          minute for a sleeping or powered-off machine.",
         vec![cancel_btn.into()],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_refusals_are_told_from_other_failures() {
+        for r in [
+            RejectReason::ProfileUnknown,
+            RejectReason::NoSeat,
+            RejectReason::SeatOccupied,
+            RejectReason::SeatUnavailable,
+        ] {
+            let said = pf_client_core::trust::connect_reject_message(r);
+            assert_eq!(profile_rejection(&said), Some(r));
+        }
+        let busy = pf_client_core::trust::connect_reject_message(RejectReason::Busy);
+        assert_eq!(profile_rejection(&busy), None);
+        assert_eq!(profile_rejection("The host didn't answer"), None);
+    }
 }

@@ -35,7 +35,8 @@ pub(crate) fn renderer_failed_banner(code: i32) -> String {
 /// Spawn the session binary for a connect with `fp_hex` pinned and feed its lifecycle to
 /// `on_event` from a reader thread. `slot` is the handle Disconnect/Cancel kill. `launch`
 /// carries a library title id for the host to launch during the handshake; `preset` is a
-/// ONE-OFF settings-preset pick. `Err` = the spawn itself failed (binary missing?) —
+/// ONE-OFF settings-preset pick. `profile` is the shell's answer for who plays: it replaces
+/// the saved pick the plan read, and `None` names none. `Err` = the spawn itself failed (binary missing?) —
 /// surfaced as a connect error by the caller.
 ///
 /// The argv and the `--resolved-spec` come from [`orchestrate::session_command`], so this
@@ -48,6 +49,7 @@ pub(crate) fn spawn_session(
     connect_timeout_secs: u64,
     launch: Option<&str>,
     preset: Option<&str>,
+    profile: Option<&str>,
     slot: CancelHandle,
     on_event: impl FnMut(SpawnEvent) + Send + 'static,
 ) -> Result<(), String> {
@@ -65,6 +67,7 @@ pub(crate) fn spawn_session(
         launch.map(str::to_string),
         preset.map(str::to_string),
     );
+    plan.profile = profile.map(str::to_string);
     plan.connect_timeout_secs = Some(connect_timeout_secs);
     let (cmd, spec_path) = orchestrate::session_command(&plan);
     spawn(cmd, spec_path, &format!("{addr}:{port}"), slot, on_event)
