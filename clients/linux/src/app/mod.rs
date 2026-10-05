@@ -137,7 +137,7 @@ pub enum AppMsg {
     SessionExited {
         req: ConnectRequest,
         code: i32,
-        error: Option<(String, bool)>,
+        error: Option<pf_client_core::orchestrate::SessionError>,
         ended: Option<String>,
         tofu: bool,
     },

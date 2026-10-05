@@ -436,11 +436,13 @@ impl Shell {
                 SessionEvent::Failed {
                     msg,
                     trust_rejected,
+                    refused,
                 } => {
                     if !self.browse {
                         return ControlFlow::Break(Outcome::ConnectFailed {
                             msg,
                             trust_rejected,
+                            refused,
                         });
                     }
                     tracing::warn!(%msg, "connect failed — back to the console");

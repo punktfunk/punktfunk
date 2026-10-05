@@ -92,7 +92,7 @@ pub fn spawn_session(
     let plan = plan_for(&req, &fp_hex, tofu, &opts);
     let persist_paired = opts.persist_paired;
     let cancel = opts.cancel.clone();
-    let (mut error, mut ended) = (None::<(String, bool)>, None::<String>);
+    let (mut error, mut ended) = (None::<orchestrate::SessionError>, None::<String>);
     orchestrate::spawn_session(&plan, opts.cancel, move |ev| match ev {
         SessionEvent::Ready => {
             let _ = sender.send(AppMsg::SessionReady {
@@ -103,10 +103,7 @@ pub fn spawn_session(
                 cancel: cancel.clone(),
             });
         }
-        SessionEvent::Error {
-            msg,
-            trust_rejected,
-        } => error = Some((msg, trust_rejected)),
+        SessionEvent::Error(e) => error = Some(e),
         SessionEvent::Ended(msg) => ended = Some(msg),
         // The brain persists the window size; this shell shows no live stats.
         SessionEvent::Window { .. } | SessionEvent::Stats(_) => {}

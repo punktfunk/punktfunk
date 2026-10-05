@@ -1321,7 +1321,7 @@ from the config directory for a true factory reset."
             eprintln!("{e}");
             return RENDERER_FAILED;
         }
-        let mut failure: Option<(String, bool)> = None;
+        let mut failure: Option<orchestrate::SessionError> = None;
         while let Ok(ev) = rx.recv() {
             match ev {
                 SessionEvent::Ready => {
@@ -1345,10 +1345,7 @@ from the config directory for a true factory reset."
                         }
                     }
                 }
-                SessionEvent::Error {
-                    msg,
-                    trust_rejected,
-                } => failure = Some((msg, trust_rejected)),
+                SessionEvent::Error(e) => failure = Some(e),
                 SessionEvent::Ended(reason) => eprintln!("{reason}"),
                 // The window size is persisted by the brain on the way past.
                 SessionEvent::Window { .. } | SessionEvent::Stats(_) => {}
@@ -1359,7 +1356,8 @@ from the config directory for a true factory reset."
                             eprintln!("{msg}");
                             TRUST_REJECTED
                         }
-                        ConnectOutcome::ConnectFailed(msg) => {
+                        ConnectOutcome::ConnectFailed(msg)
+                        | ConnectOutcome::Refused { msg, .. } => {
                             eprintln!("{msg}");
                             CONNECT_FAILED
                         }

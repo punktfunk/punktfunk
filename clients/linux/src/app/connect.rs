@@ -119,7 +119,7 @@ impl AppModel {
         &mut self,
         req: ConnectRequest,
         code: i32,
-        error: Option<(String, bool)>,
+        error: Option<pf_client_core::orchestrate::SessionError>,
         ended: Option<String>,
         tofu: bool,
         sender: &ComponentSender<Self>,
@@ -146,11 +146,9 @@ impl AppModel {
             // already said so.
             ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {}
             ConnectOutcome::Ended(Some(reason)) => self.hosts.emit(HostsMsg::ShowError(reason)),
-            // The host answered and refused the profile: not a wake, not "unreachable".
-            ConnectOutcome::ConnectFailed(msg) if profile::profile_reject(&msg).is_some() => {
-                if profile::profile_reject(&msg)
-                    == Some(punktfunk_core::reject::RejectReason::ProfileUnknown)
-                {
+            // The host answered and refused: never a wake. A profile it no longer has is forgotten.
+            ConnectOutcome::Refused { msg, reason } => {
+                if reason == punktfunk_core::reject::RejectReason::ProfileUnknown {
                     self.forget_profile(&req);
                 }
                 self.hosts.emit(HostsMsg::ShowError(msg));

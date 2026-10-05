@@ -328,10 +328,10 @@ fn connect_spawn(
                         *shared.target.lock().unwrap() = target.clone();
                         ss.call(Screen::Pair);
                     }
-                    // The host refused the profile. It answered, so this is never the wake case,
-                    // and a profile it no longer has is forgotten.
-                    ConnectOutcome::ConnectFailed(msg) if profile_rejection(&msg).is_some() => {
-                        if profile_rejection(&msg) == Some(RejectReason::ProfileUnknown) {
+                    // The host answered and refused: never a wake. A profile it no longer has is
+                    // forgotten.
+                    ConnectOutcome::Refused { msg, reason } => {
+                        if reason == RejectReason::ProfileUnknown {
                             profiles::save_pick(Some(&fp_hex), &target.addr, target.port, None);
                         }
                         st.call(msg);
@@ -368,20 +368,6 @@ fn connect_spawn(
         set_status.call(e);
         set_screen.call(Screen::Hosts);
     }
-}
-
-/// The profile refusal `msg` words, if it is one. The session reports a refusal as its player
-/// sentence, so this is how the shell tells the four apart from a dial that failed.
-fn profile_rejection(msg: &str) -> Option<RejectReason> {
-    use RejectReason as R;
-    [
-        R::ProfileUnknown,
-        R::NoSeat,
-        R::SeatOccupied,
-        R::SeatUnavailable,
-    ]
-    .into_iter()
-    .find(|r| pf_client_core::trust::connect_reject_message(*r) == msg)
 }
 
 /// "Open console UI": run the console (`punktfunk-session --browse`) in the session window.
@@ -421,6 +407,7 @@ pub(crate) fn open_console(
                 match outcome {
                     ConnectOutcome::TrustRejected(msg)
                     | ConnectOutcome::ConnectFailed(msg)
+                    | ConnectOutcome::Refused { msg, .. }
                     | ConnectOutcome::Ended(Some(msg)) => st.call(msg),
                     ConnectOutcome::RendererFailed { code } => {
                         st.call(crate::spawn::renderer_failed_banner(code))
@@ -619,25 +606,4 @@ pub(crate) fn waking_page(ctx: &Arc<AppCtx>, set_screen: &AsyncSetState<Screen>)
          minute for a sleeping or powered-off machine.",
         vec![cancel_btn.into()],
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn profile_refusals_are_told_from_other_failures() {
-        for r in [
-            RejectReason::ProfileUnknown,
-            RejectReason::NoSeat,
-            RejectReason::SeatOccupied,
-            RejectReason::SeatUnavailable,
-        ] {
-            let said = pf_client_core::trust::connect_reject_message(r);
-            assert_eq!(profile_rejection(&said), Some(r));
-        }
-        let busy = pf_client_core::trust::connect_reject_message(RejectReason::Busy);
-        assert_eq!(profile_rejection(&busy), None);
-        assert_eq!(profile_rejection("The host didn't answer"), None);
-    }
 }

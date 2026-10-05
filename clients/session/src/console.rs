@@ -318,6 +318,7 @@ pub fn run(target: Option<&str>) -> u8 {
                 emit(SessionLine::Error {
                     msg: &format!("{e:#}"),
                     trust_rejected: Some(false),
+                    refused: None,
                 });
             }
             eprintln!("console: {e:#}");

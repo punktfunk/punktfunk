@@ -2,26 +2,10 @@
 
 use super::*;
 use pf_client_core::profiles;
-use pf_client_core::trust::connect_reject_message;
-use punktfunk_core::reject::RejectReason;
 use std::time::Duration;
 
 /// The longest a connect waits for the host's profile list.
 const ASK_BUDGET: Duration = Duration::from_secs(3);
-
-/// The profile refusal a session's error line carries, if it is one. The line is the typed
-/// reason's own sentence.
-pub(super) fn profile_reject(msg: &str) -> Option<RejectReason> {
-    use RejectReason as R;
-    [
-        R::ProfileUnknown,
-        R::NoSeat,
-        R::SeatOccupied,
-        R::SeatUnavailable,
-    ]
-    .into_iter()
-    .find(|r| connect_reject_message(*r) == msg)
-}
 
 impl AppModel {
     /// Asks the host for its profiles off the UI thread. A connect holds the card in its
@@ -240,24 +224,5 @@ impl AppModel {
         }
         dialog.set_extra_child(Some(&flow));
         dialog.present(Some(&self.window));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_the_four_profile_refusals_are_recognised() {
-        for r in [
-            RejectReason::ProfileUnknown,
-            RejectReason::NoSeat,
-            RejectReason::SeatOccupied,
-            RejectReason::SeatUnavailable,
-        ] {
-            assert_eq!(profile_reject(&connect_reject_message(r)), Some(r));
-        }
-        let busy = connect_reject_message(RejectReason::Busy);
-        assert_eq!(profile_reject(&busy), None);
     }
 }

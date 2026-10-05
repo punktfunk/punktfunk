@@ -84,6 +84,14 @@ macro_rules! reject_reasons {
                     $(Self::$variant => $token,)*
                 }
             }
+
+            /// Inverse of [`Self::as_str`]. `None` for a token this build doesn't know.
+            pub fn from_token(token: &str) -> Option<Self> {
+                match token {
+                    $($token => Some(Self::$variant),)*
+                    _ => None,
+                }
+            }
         }
 
         impl std::fmt::Display for RejectReason {
@@ -141,7 +149,9 @@ mod tests {
     fn close_codes_round_trip() {
         for &r in RejectReason::ALL {
             assert_eq!(RejectReason::from_close_code(r.close_code()), Some(r));
+            assert_eq!(RejectReason::from_token(r.as_str()), Some(r));
         }
+        assert_eq!(RejectReason::from_token("from-a-newer-host"), None);
     }
 
     #[test]

@@ -547,6 +547,11 @@ pub enum ConnectOutcome {
     /// Stream ended cleanly. `Some` is the host's stated reason.
     Ended(Option<String>),
     ConnectFailed(String),
+    /// The host answered and refused, saying why. Never a wake.
+    Refused {
+        msg: String,
+        reason: punktfunk_core::reject::RejectReason,
+    },
     /// No pin, or the pin no longer matches. Never retried silently.
     TrustRejected(String),
     /// The session died without a contract line. `-1` = no exit code (a Unix signal).
@@ -563,13 +568,21 @@ impl ConnectOutcome {
     /// code our kill leaves: `-1` from a Unix signal, `1` from Windows' TerminateProcess.
     pub fn from_exit(
         code: i32,
-        error: Option<(String, bool)>,
+        error: Option<SessionError>,
         ended: Option<String>,
         cancelled: bool,
     ) -> ConnectOutcome {
         match (code, error) {
-            (_, Some((msg, true))) => ConnectOutcome::TrustRejected(msg),
-            (_, Some((msg, false))) => ConnectOutcome::ConnectFailed(msg),
+            (_, Some(e)) if e.trust_rejected => ConnectOutcome::TrustRejected(e.msg),
+            (
+                _,
+                Some(SessionError {
+                    msg,
+                    refused: Some(reason),
+                    ..
+                }),
+            ) => ConnectOutcome::Refused { msg, reason },
+            (_, Some(e)) => ConnectOutcome::ConnectFailed(e.msg),
             (0, None) => ConnectOutcome::Ended(ended),
             _ if cancelled => ConnectOutcome::Cancelled,
             (code, None) => ConnectOutcome::RendererFailed { code },
@@ -680,10 +693,7 @@ pub enum SessionEvent {
     Ready,
     /// One `stats-json:` window, once a second.
     Stats(Box<punktfunk_core::hud::StatsSnapshot>),
-    Error {
-        msg: String,
-        trust_rejected: bool,
-    },
+    Error(SessionError),
     Ended(String),
     /// Session window logical size under match-window. The SPAWNER persists it:
     /// a renderer that load-modify-saves settings was a concurrent writer for a
@@ -694,6 +704,17 @@ pub enum SessionEvent {
     },
     /// EOF: the child is gone. `-1` = killed by a signal.
     Exited(i32),
+}
+
+/// The session's terminal `{"error": …}` line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionError {
+    pub msg: String,
+    /// No pin, or the pin no longer matches.
+    pub trust_rejected: bool,
+    /// The host's typed refusal (`"refused": "<token>"`). A token this build doesn't know
+    /// reads as `None`, an untyped failure.
+    pub refused: Option<punktfunk_core::reject::RejectReason>,
 }
 
 /// Parse one stdout line of the session contract. `None` for the text `stats:` line, which
@@ -709,10 +730,14 @@ pub fn parse_session_line(line: &str) -> Option<SessionEvent> {
         return Some(SessionEvent::Ready);
     }
     if let Some(msg) = v.get("error").and_then(|m| m.as_str()) {
-        return Some(SessionEvent::Error {
+        return Some(SessionEvent::Error(SessionError {
             msg: msg.to_string(),
             trust_rejected: v.get("trust_rejected").and_then(|t| t.as_bool()) == Some(true),
-        });
+            refused: v
+                .get("refused")
+                .and_then(|r| r.as_str())
+                .and_then(punktfunk_core::reject::RejectReason::from_token),
+        }));
     }
     if let Some(msg) = v.get("ended").and_then(|m| m.as_str()) {
         return Some(SessionEvent::Ended(msg.to_string()));
@@ -742,6 +767,7 @@ pub enum SessionLine<'a> {
     Error {
         msg: &'a str,
         trust_rejected: Option<bool>,
+        refused: Option<punktfunk_core::reject::RejectReason>,
     },
     Ended(&'a str),
     Window {
@@ -762,12 +788,18 @@ impl SessionLine<'_> {
             SessionLine::Ready => json!({ "ready": true }).to_string(),
             SessionLine::Error {
                 msg,
-                trust_rejected: None,
-            } => json!({ "error": msg }).to_string(),
-            SessionLine::Error {
-                msg,
-                trust_rejected: Some(t),
-            } => json!({ "error": msg, "trust_rejected": t }).to_string(),
+                trust_rejected,
+                refused,
+            } => {
+                let mut line = json!({ "error": msg });
+                if let Some(t) = trust_rejected {
+                    line["trust_rejected"] = json!(t);
+                }
+                if let Some(r) = refused {
+                    line["refused"] = json!(r.as_str());
+                }
+                line.to_string()
+            }
             SessionLine::Ended(msg) => json!({ "ended": msg }).to_string(),
             // Not `json!`: its map sorts keys, and this line has always been `w` first.
             SessionLine::Window { w, h } => format!(r#"{{"window":{{"w":{w},"h":{h}}}}}"#),
@@ -1356,12 +1388,27 @@ mod tests {
     fn session_exits_classify_once() {
         use ConnectOutcome as O;
         // A contract line says more than a code.
-        let trust = O::from_exit(3, Some(("pin".into(), true)), None, false);
+        use punktfunk_core::reject::RejectReason as R;
+        let err = |msg: &str, trust_rejected, refused| SessionError {
+            msg: msg.into(),
+            trust_rejected,
+            refused,
+        };
+        let trust = O::from_exit(3, Some(err("pin", true, None)), None, false);
         assert_eq!(trust, O::TrustRejected("pin".into()));
         assert!(!trust.warrants_wake(), "the host answered");
-        let failed = O::from_exit(2, Some(("no route".into(), false)), None, false);
+        let failed = O::from_exit(2, Some(err("no route", false, None)), None, false);
         assert_eq!(failed, O::ConnectFailed("no route".into()));
         assert!(failed.warrants_wake());
+        let busy = O::from_exit(2, Some(err("busy", false, Some(R::Busy))), None, false);
+        assert_eq!(
+            busy,
+            O::Refused {
+                msg: "busy".into(),
+                reason: R::Busy
+            }
+        );
+        assert!(!busy.warrants_wake(), "the host answered");
         assert_eq!(O::from_exit(0, None, None, false), O::Ended(None));
         assert_eq!(
             O::from_exit(0, None, Some("Host ended".into()), false),
@@ -1397,18 +1444,33 @@ mod tests {
         );
         assert_eq!(
             parse_session_line(r#"{"error":"no route","trust_rejected":false}"#),
-            Some(SessionEvent::Error {
+            Some(SessionEvent::Error(SessionError {
                 msg: "no route".into(),
-                trust_rejected: false
-            })
+                trust_rejected: false,
+                refused: None,
+            }))
         );
         assert_eq!(
             parse_session_line(r#"{"error":"pin","trust_rejected":true}"#),
-            Some(SessionEvent::Error {
+            Some(SessionEvent::Error(SessionError {
                 msg: "pin".into(),
-                trust_rejected: true
-            })
+                trust_rejected: true,
+                refused: None,
+            }))
         );
+        // A refusal names itself; a token from a newer session is an untyped failure.
+        assert_eq!(
+            parse_session_line(r#"{"error":"gone","refused":"profile-unknown"}"#),
+            Some(SessionEvent::Error(SessionError {
+                msg: "gone".into(),
+                trust_rejected: false,
+                refused: Some(punktfunk_core::reject::RejectReason::ProfileUnknown),
+            }))
+        );
+        assert!(matches!(
+            parse_session_line(r#"{"error":"x","refused":"from-a-newer-session"}"#),
+            Some(SessionEvent::Error(SessionError { refused: None, .. }))
+        ));
         assert_eq!(
             parse_session_line(r#"{"ended":"Host ended the session"}"#),
             Some(SessionEvent::Ended("Host ended the session".into()))
@@ -1440,25 +1502,42 @@ mod tests {
         let pin = SessionLine::Error {
             msg: "pin \"x\"\n\tno",
             trust_rejected: Some(true),
+            refused: None,
         };
         assert_eq!(
             parse(pin),
-            Some(SessionEvent::Error {
+            Some(SessionEvent::Error(SessionError {
                 msg: "pin \"x\"\n\tno".into(),
-                trust_rejected: true
-            })
+                trust_rejected: true,
+                refused: None,
+            }))
         );
         let bare = SessionLine::Error {
             msg: "no window",
             trust_rejected: None,
+            refused: None,
         };
         assert_eq!(bare.render(), r#"{"error":"no window"}"#);
         assert_eq!(
             parse(bare),
-            Some(SessionEvent::Error {
+            Some(SessionEvent::Error(SessionError {
                 msg: "no window".into(),
-                trust_rejected: false
-            })
+                trust_rejected: false,
+                refused: None,
+            }))
+        );
+        let refused = SessionLine::Error {
+            msg: "All seats are taken.",
+            trust_rejected: Some(false),
+            refused: Some(punktfunk_core::reject::RejectReason::NoSeat),
+        };
+        assert_eq!(
+            parse(refused),
+            Some(SessionEvent::Error(SessionError {
+                msg: "All seats are taken.".into(),
+                trust_rejected: false,
+                refused: Some(punktfunk_core::reject::RejectReason::NoSeat),
+            }))
         );
         assert_eq!(
             parse(SessionLine::Ended("Host ended")),

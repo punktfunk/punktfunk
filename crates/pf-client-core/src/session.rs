@@ -294,10 +294,11 @@ pub enum SessionEvent {
     },
     /// `trust_rejected` is set on a TLS trust failure (`Crypto`): for a pinned connect
     /// this is the fingerprint-changed signal, so the UI can offer re-pair rather than
-    /// a dead-end error.
+    /// a dead-end error. `refused` is the host's typed refusal: it answered, so no wake.
     Failed {
         msg: String,
         trust_rejected: bool,
+        refused: Option<punktfunk_core::reject::RejectReason>,
     },
     Ended(Option<String>),
     /// Negotiated codec ran out of decode rungs; the client can finish only as a
@@ -678,6 +679,10 @@ fn dial(
     .map(Arc::new)
     .map_err(|e| {
         let trust_rejected = matches!(e, PunktfunkError::Crypto);
+        let refused = match e {
+            PunktfunkError::Rejected(reason) => Some(reason),
+            _ => None,
+        };
         let msg = match e {
             PunktfunkError::Crypto => {
                 "Host identity rejected — wrong fingerprint, or the host requires pairing"
@@ -695,6 +700,7 @@ fn dial(
         SessionEvent::Failed {
             msg,
             trust_rejected,
+            refused,
         }
     })
 }

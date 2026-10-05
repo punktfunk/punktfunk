@@ -112,16 +112,13 @@ fn spawn(
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     add_window_pos(&mut cmd);
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let (mut error, mut ended) = (None::<(String, bool)>, None::<String>);
+    let (mut error, mut ended) = (None::<orchestrate::SessionError>, None::<String>);
     let cancel = slot.clone();
     orchestrate::spawn_child(cmd, spec_path, Some(slot), crate::logfile::Tee, move |ev| {
         match ev {
             SessionEvent::Ready => on_event(SpawnEvent::Ready),
             SessionEvent::Stats(s) => on_event(SpawnEvent::Stats(s)),
-            SessionEvent::Error {
-                msg,
-                trust_rejected,
-            } => error = Some((msg, trust_rejected)),
+            SessionEvent::Error(e) => error = Some(e),
             SessionEvent::Ended(msg) => ended = Some(msg),
             // orchestrate persists the window size on the way past.
             SessionEvent::Window { .. } => {}

@@ -934,6 +934,7 @@ mod session_main {
                 emit(SessionLine::Error {
                     msg: "this device's client key didn't load",
                     trust_rejected: None,
+                    refused: None,
                 });
                 return exit::CONNECT_FAILED;
             }
@@ -957,6 +958,7 @@ mod session_main {
                     emit(SessionLine::Error {
                         msg: "this stream's settings didn't load",
                         trust_rejected: None,
+                        refused: None,
                     });
                     return exit::CONNECT_FAILED;
                 }
@@ -996,6 +998,7 @@ mod session_main {
                     "{addr}:{port} isn't paired with this device yet. Pair it to continue."
                 ),
                 trust_rejected: Some(true),
+                refused: None,
             });
             return exit::TRUST_REJECTED;
         };
@@ -1101,10 +1104,12 @@ mod session_main {
             Ok(pf_presenter::Outcome::ConnectFailed {
                 msg,
                 trust_rejected,
+                refused,
             }) => {
                 emit(SessionLine::Error {
                     msg: &msg,
                     trust_rejected: Some(trust_rejected),
+                    refused,
                 });
                 if trust_rejected {
                     exit::TRUST_REJECTED
@@ -1117,6 +1122,7 @@ mod session_main {
                 emit(SessionLine::Error {
                     msg: "the stream window didn't start",
                     trust_rejected: None,
+                    refused: None,
                 });
                 exit::RENDERER_FAILED
             }
