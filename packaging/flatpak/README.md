@@ -185,4 +185,4 @@ re-add the remote (the `GPGKey` changed), so rotate rarely.
 - **Flathub (blocked):** its [Generative AI policy](https://docs.flathub.org/docs/for-app-authors/requirements)
   bans AI-assisted manifests and AI-opened submissions, so a person writes both, not a copy of this
   manifest. Flathub also builds Skia from source (Neovide's manifest shows how), wants the newest
-  GNOME runtime, and flags `/tmp/.X11-unix` (`finish-args-host-tmp-access`) until granted an exception.
+  GNOME runtime.
