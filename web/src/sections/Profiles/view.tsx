@@ -49,8 +49,18 @@ const STATE_WORD: Record<SeatState, () => string> = {
 	unavailable: () => m.profiles_state_unavailable(),
 };
 
+/**
+ * **Steam per seat** on this host: on, off until the first Own Steam profile turns it on, or
+ * off because the operator set it so. While off, an Own Steam profile plays on the owner's Steam.
+ */
+export type SeatHome = "on" | "turns-on" | "off";
+
 /** Where a profile plays, as one line: the owner's desktop, a share of it, or its own seat. */
-export function playsLine(p: ProfileAdmin, ownerName: string): string {
+export function playsLine(
+	p: ProfileAdmin,
+	ownerName: string,
+	seatHome: SeatHome = "on",
+): string {
 	if (p.owner) return m.profiles_plays_owner();
 	const seat = p.seat;
 	if (!seat) return m.profiles_plays_shared({ owner: ownerName });
@@ -58,6 +68,7 @@ export function playsLine(p: ProfileAdmin, ownerName: string): string {
 		return m.profiles_occupied_by({ device: seat.occupant });
 	if (seat.state === "starting" || seat.state === "unavailable")
 		return seat.detail || STATE_WORD[seat.state]();
+	if (seatHome !== "on") return m.profiles_plays_steam_off();
 	if (seat.steam_sign_in === true) return m.profiles_plays_steam_sign_in();
 	if (seat.steam_sign_in === false) return m.profiles_plays_steam_signed_in();
 	return m.profiles_plays_steam();
@@ -75,6 +86,7 @@ export const ProfilesView: FC<{
 	onRemove: (p: ProfileAdmin) => void;
 	/** The profile an edit is in flight for; its buttons wait. */
 	busyId: string | null;
+	seatHome?: SeatHome;
 }> = ({
 	profiles,
 	avatarVersions,
@@ -84,6 +96,7 @@ export const ProfilesView: FC<{
 	onRemovePicture,
 	onRemove,
 	busyId,
+	seatHome = "on",
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -109,6 +122,7 @@ export const ProfilesView: FC<{
 									key={p.id}
 									profile={p}
 									ownerName={ownerName}
+									seatHome={seatHome}
 									version={avatarVersions?.[p.id]}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
@@ -128,6 +142,7 @@ export const ProfilesView: FC<{
 const ProfileRow: FC<{
 	profile: ProfileAdmin;
 	ownerName: string;
+	seatHome: SeatHome;
 	version?: number;
 	busy: boolean;
 	onRename: () => void;
@@ -137,6 +152,7 @@ const ProfileRow: FC<{
 }> = ({
 	profile: p,
 	ownerName,
+	seatHome,
 	version,
 	busy,
 	onRename,
@@ -146,7 +162,7 @@ const ProfileRow: FC<{
 }) => {
 	const file = useRef<HTMLInputElement>(null);
 	const facts = [
-		playsLine(p, ownerName),
+		playsLine(p, ownerName, seatHome),
 		p.home === "bigpicture"
 			? m.profiles_home_bigpicture()
 			: m.profiles_home_desktop(),
@@ -248,10 +264,19 @@ export const AddProfileDialog: FC<{
 	ownerName: string;
 	/** A light seat (own Steam) is a Linux host's. */
 	linux: boolean;
+	seatHome?: SeatHome;
 	onCancel: () => void;
 	onCreate: (body: ProfileCreate, picture: File | null) => void;
 	isPending: boolean;
-}> = ({ open, ownerName, linux, onCancel, onCreate, isPending }) => {
+}> = ({
+	open,
+	ownerName,
+	linux,
+	seatHome = "on",
+	onCancel,
+	onCreate,
+	isPending,
+}) => {
 	const [name, setName] = useState("");
 	const [accent, setAccent] = useState<string>(ACCENTS[1]);
 	const [picture, setPicture] = useState<File | null>(null);
@@ -285,9 +310,13 @@ export const AddProfileDialog: FC<{
 		{
 			id: "steam",
 			label: m.profiles_plays_steam(),
-			hint: linux
-				? m.profiles_outcome_steam_hint()
-				: m.profiles_outcome_needs_linux(),
+			hint: !linux
+				? m.profiles_outcome_needs_linux()
+				: {
+						on: m.profiles_outcome_steam_hint,
+						"turns-on": m.profiles_outcome_steam_hint_turns_on,
+						off: m.profiles_outcome_steam_hint_off,
+					}[seatHome](),
 			disabled: !linux,
 		},
 		{

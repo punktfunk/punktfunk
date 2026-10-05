@@ -49,6 +49,24 @@ export const AddOnLinux: Story = {
 	),
 };
 
+/** **Add profile** while **Steam per seat** is untouched: the first Own Steam profile turns it on. */
+export const AddTurnsOnSteamPerSeat: Story = {
+	render: () => (
+		<AddProfileDialog
+			open
+			ownerName="Enrico"
+			linux
+			seatHome="turns-on"
+			onCancel={noop}
+			onCreate={noop}
+			isPending={false}
+		/>
+	),
+};
+
+/** **Steam per seat** set off by the operator: seat profiles say they need it. */
+export const SteamPerSeatOff: Story = { args: { seatHome: "off" } };
+
 /** **Add profile** on a host that is not Linux: sharing the desktop is the one choice today. */
 export const AddElsewhere: Story = {
 	render: () => (
