@@ -190,6 +190,9 @@ libloading = { version = "0.9", optional = true }
 # — the same stance pf-capture and pf-vdisplay already take on this crate. No extension
 # features: root-window properties and an event mask are core X11.
 x11rb = { version = "0.14", default-features = false, optional = true }
+# `overlay_focus` dials gamescope's abstract X socket with a deadline: std's connect has none,
+# and a listener that never accepts (a desktop's idle Xwayland socket) would park the watcher.
+socket2 = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 wasapi = { version = "0.24", optional = true }
@@ -286,7 +289,7 @@ desktop = [
     "dep:pf-vkdecode", "dep:pf-bitstream", "dep:async-channel", "dep:openh264", "dep:rav1d",
     "dep:libc", "dep:opus", "discovery", "dep:ureq", "dep:pf-update-check", "dep:rustls",
     "dep:tracing-subscriber", "dep:tracing-log",
-    "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:pf-vaapi", "dep:pf-libva", "dep:pf-v4l2dec", "dep:pf-v4l2", "dep:libloading", "dep:x11rb",
+    "dep:pipewire", "dep:sdl3", "dep:zbus", "dep:pf-vaapi", "dep:pf-libva", "dep:pf-v4l2dec", "dep:pf-v4l2", "dep:libloading", "dep:x11rb", "dep:socket2",
     "dep:pf-dmabuf",
     "dep:wasapi", "dep:winreg", "d3d11va",
 ]
