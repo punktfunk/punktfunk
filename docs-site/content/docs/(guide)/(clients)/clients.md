@@ -25,7 +25,8 @@ Every Punktfunk app finds hosts on your network, [pairs](/docs/pairing) once and
 own, browses the host's [game library](/docs/game-library), and has a controller interface for the
 couch. They share [presets and `punktfunk://` links](/docs/presets-and-links), the
 [in-stream keys](/docs/input#getting-your-input-back) and the settings on
-[Client settings](/docs/client-settings).
+[Client settings](/docs/client-settings). The Apple, Android, Linux and Windows apps also ask which
+[profile](/docs/profiles#how-players-pick) plays.
 
 ## Apple app (Mac, iPhone, iPad, Apple TV)
 
