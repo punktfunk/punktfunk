@@ -7,6 +7,7 @@ import {
 	getLibraryPage,
 } from "@/api/gen/library/library";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
+import { useListProfiles } from "@/api/gen/profiles/profiles";
 import {
 	useEndGame,
 	useRequestIdr,
@@ -56,6 +57,10 @@ export const SectionDashboard: FC = () => {
 		})),
 	});
 	const library = running.flatMap((r) => r.data?.items ?? []);
+	// Names and pictures for the session rows. A host without profiles answers 404: no names.
+	const profiles = useListProfiles({
+		query: { staleTime: 60_000, retry: false },
+	});
 	const stop = useStopSession();
 	const idr = useRequestIdr();
 	const endGame = useEndGame();
@@ -141,6 +146,7 @@ export const SectionDashboard: FC = () => {
 		<DashboardView
 			status={status}
 			library={library}
+			profiles={profiles.data}
 			attention={<AttentionCard />}
 			onStopSession={async () => {
 				if (!(await confirmStopAll())) return;

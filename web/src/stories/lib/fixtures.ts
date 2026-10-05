@@ -13,6 +13,7 @@ import type { NativePairStatus } from "@/api/gen/model/nativePairStatus";
 import type { PairedClient } from "@/api/gen/model/pairedClient";
 import type { PairingStatus } from "@/api/gen/model/pairingStatus";
 import type { PendingDevice } from "@/api/gen/model/pendingDevice";
+import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { StatsSample } from "@/api/gen/model/statsSample";
 import type { StatsStatus } from "@/api/gen/model/statsStatus";
@@ -61,6 +62,7 @@ export const statusActive: RuntimeStatus = {
 			plane: "native",
 			client: "aabbccddeeff",
 			client_name: "Living room TV",
+			profile: { id: "9a3f1c2b7e40", display_name: "Kid" },
 			mode: "5120x1440@240",
 			hdr: true,
 			join: false,
@@ -76,6 +78,7 @@ export const statusActive: RuntimeStatus = {
 			plane: "native",
 			client: "112233445566",
 			client_name: "Enrico's phone",
+			profile: { id: "4f1c3a9b0e27", display_name: "Enrico" },
 			mode: "5120x1440@240",
 			hdr: false,
 			join: true,
@@ -540,4 +543,107 @@ export const displayPolicy: DisplayPolicy = {
 	preset: "default",
 	game_session: "auto",
 	version: 1,
+};
+
+/** A box with one person: the owner card alone, and the page's only control is Add profile. */
+export const profilesOne: ProfileAdmin[] = [
+	{
+		id: "4f1c3a9b0e27",
+		display_name: "Enrico",
+		accent: "#3b82f6",
+		owner: true,
+		home: "desktop",
+		last_used_unix: accessNowUnix - 3600,
+		default: true,
+	},
+];
+
+/** Every card state on Linux: the owner, a desktop sharer, and a light seat in each seat state. */
+export const profilesEvery: ProfileAdmin[] = [
+	...profilesOne,
+	{
+		id: "0b7d5e2a91c4",
+		display_name: "Anna",
+		accent: "#ec4899",
+		owner: false,
+		home: "desktop",
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "9a3f1c2b7e40",
+		display_name: "Kid",
+		accent: "#f97316",
+		owner: false,
+		home: "bigpicture",
+		seat: { state: "ready", port: 9777, steam_sign_in: false },
+		last_used_unix: accessNowUnix - 600,
+		default: false,
+		legacy_device: "ab12cd34",
+	},
+	{
+		id: "2c4e6a8b0d1f",
+		display_name: "Guest",
+		owner: false,
+		home: "bigpicture",
+		seat: { state: "ready", port: 9777, steam_sign_in: true },
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		accent: "#22c55e",
+		owner: false,
+		home: "bigpicture",
+		seat: { state: "occupied", port: 9777, occupant: "Leon's Deck" },
+		last_used_unix: accessNowUnix - 60,
+		default: false,
+	},
+	{
+		id: "5a7c9e1b3d5f",
+		display_name: "Mia",
+		accent: "#a855f7",
+		owner: false,
+		home: "bigpicture",
+		seat: { state: "starting", port: 9777, detail: "Starting Steam" },
+		last_used_unix: accessNowUnix - 86_400,
+		default: false,
+	},
+	{
+		id: "3d5f7b9a1c3e",
+		display_name: "Oma",
+		accent: "#14b8a6",
+		owner: false,
+		home: "desktop",
+		seat: { state: "stopped", port: 9777 },
+		last_used_unix: accessNowUnix - 7 * 86_400,
+		default: false,
+	},
+	{
+		id: "8b0d2f4a6c8e",
+		display_name: "Alice",
+		accent: "#eab308",
+		owner: false,
+		home: "desktop",
+		seat: {
+			state: "unavailable",
+			port: 9777,
+			detail: "This profile signs in to an account this host can't start yet.",
+		},
+		last_used_unix: 0,
+		default: false,
+	},
+];
+
+/** A knock from a device that asked to play as a profile. */
+export const pendingWithProfile: PendingDevice = {
+	id: 5,
+	name: "Kid's iPad",
+	fingerprint:
+		"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+	age_secs: 5,
+	source: "lan",
+	until_disconnect: false,
+	profile: { id: "9a3f1c2b7e40", display_name: "Kid" },
 };

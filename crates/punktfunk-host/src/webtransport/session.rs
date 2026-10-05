@@ -90,6 +90,7 @@ pub(crate) async fn run(
                 pairing,
                 &label,
                 &hex::encode(fp),
+                first.profile.as_deref(),
                 &sem,
             )
             .await?
@@ -543,7 +544,8 @@ mod tests {
         assert_eq!(label, "Safari on Mac");
 
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let park = crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, &sem);
+        let park =
+            crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, None, &sem);
         let console = async {
             let pending = loop {
                 if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {

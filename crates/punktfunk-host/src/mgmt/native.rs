@@ -199,6 +199,9 @@ pub(crate) struct PendingDevice {
     source: String,
     /// Stored "this session" setting if this fingerprint was paired before. `false` if unknown.
     until_disconnect: bool,
+    /// The profile the device asked to play as. Absent when it named none this host knows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<crate::events::ProfileRef>,
 }
 
 /// Approve body. `{}` keeps the knock name and, on re-approve, stored access
@@ -637,6 +640,14 @@ pub(crate) async fn list_pending_devices(
                         crate::native_pairing::KnockSource::Lan => "lan".into(),
                         crate::native_pairing::KnockSource::Wan => "wan".into(),
                     },
+                    profile: p
+                        .profile
+                        .as_deref()
+                        .and_then(|id| st.app.profiles.get()?.get(id))
+                        .map(|p| crate::events::ProfileRef {
+                            id: p.id,
+                            display_name: p.display_name,
+                        }),
                 }
             })
             .collect(),

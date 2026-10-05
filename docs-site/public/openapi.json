@@ -12656,6 +12656,17 @@
             "description": "Client's own name, else fingerprint-derived.",
             "example": "Enrico's MacBook"
           },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile the device asked to play as. Absent when it named none this host knows."
+              }
+            ]
+          },
           "source": {
             "type": "string",
             "description": "Where the knock came from: `\"lan\"` or `\"wan\"`. A `\"wan\"` device cannot be admitted by\napprove — arm a PIN bound to its fingerprint instead.",

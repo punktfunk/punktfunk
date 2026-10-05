@@ -1124,6 +1124,7 @@ pub(crate) async fn park_knock(
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
+    profile: Option<&str>,
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<Result<tokio::sync::OwnedSemaphorePermit, punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
@@ -1131,7 +1132,7 @@ pub(crate) async fn park_knock(
         "unpaired device knocked — parking connection for delegated approval in the console");
     // QUIC-validated source IP for the pending per-source cap. Knock generation makes
     // this connection the one an approval admits — siblings must not all start a session.
-    let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()));
+    let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()), profile);
     let wait = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT);
     tokio::pin!(wait);
     let mut pending = tokio::time::interval(PENDING_EVERY);
@@ -1276,13 +1277,15 @@ async fn serve_session(
                 &fp_hex,
             );
             drop(permit);
-            permit = match park_knock(&conn, Some(&mut send), np, &label, &fp_hex, &sem).await? {
-                Ok(permit) => permit,
-                Err(reason) => {
-                    close_rejected(&conn, reason).await;
-                    anyhow::bail!("pairing request refused: {reason}");
-                }
-            };
+            let asked = first.profile.as_deref();
+            permit =
+                match park_knock(&conn, Some(&mut send), np, &label, &fp_hex, asked, &sem).await? {
+                    Ok(permit) => permit,
+                    Err(reason) => {
+                        close_rejected(&conn, reason).await;
+                        anyhow::bail!("pairing request refused: {reason}");
+                    }
+                };
         }
     }
     // Admitted. From here the session is the same on every carrier.

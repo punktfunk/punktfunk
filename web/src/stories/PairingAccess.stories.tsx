@@ -11,6 +11,7 @@ import {
 	pairedClients,
 	pendingDevices,
 	pendingGuestReknock,
+	pendingWithProfile,
 } from "./lib/fixtures";
 
 const noop = () => {};
@@ -49,6 +50,19 @@ export const ApproveDevice: Story = {
 	render: () => (
 		<ApproveDialog
 			device={pendingDevices[0] ?? null}
+			onCancel={noop}
+			onApprove={noop}
+			isPending={false}
+			failure={null}
+		/>
+	),
+};
+
+/** A knock that names a profile: the dialog says who the device asks to play as. */
+export const ApproveForProfile: Story = {
+	render: () => (
+		<ApproveDialog
+			device={pendingWithProfile}
 			onCancel={noop}
 			onApprove={noop}
 			isPending={false}
