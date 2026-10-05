@@ -61,6 +61,8 @@ struct ContentView: View {
         let preset: PresetSelection
         /// A `browse` link: open the host's library instead of dialing it.
         let browse: Bool
+        /// The link's `as=`: the host profile to play as, this connect only.
+        var asProfile: String?
 
         var actionTitle: String { browse ? "Open Library" : "Connect" }
         var message: String {
@@ -88,6 +90,8 @@ struct ContentView: View {
     /// A delegated-approval connect is in flight (host parks it until the operator approves):
     /// drives the cancelable "Waiting for approval" prompt and the pin-as-paired on success.
     @State private var awaitingApproval: ApprovalRequest?
+    /// The profile picker a connect waits on.
+    @State private var profileAsk: ProfileAsk?
     @State private var speedTestTarget: StoredHost?
     @State private var libraryTarget: LibraryTarget?
     #if os(iOS) || os(visionOS) || os(tvOS)
@@ -249,6 +253,8 @@ struct ContentView: View {
                     + "web console (port 47992 → Pairing). This device connects automatically once "
                     + "you approve it — no need to reconnect.")
             }
+            // Who is playing: shown by a connect when its host lists several profiles.
+            .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }
             // Informational deep-link outcome (unknown host, a refused preset, already
             // streaming). Not an error.
             .alert("Can't open", isPresented: deepLinkNoticePresented) {
@@ -277,7 +283,9 @@ struct ContentView: View {
         if confirm.browse {
             libraryTarget = LibraryTarget(host: confirm.host, preset: confirm.preset)
         } else {
-            flow.connect(confirm.host, launchID: confirm.launch, preset: confirm.preset)
+            flow.connect(
+                confirm.host, launchID: confirm.launch, preset: confirm.preset,
+                profile: .ask(link: confirm.asProfile))
         }
     }
 
@@ -771,9 +779,12 @@ struct ContentView: View {
             break // deep-linked to the host we're already on — nothing to do
         case .confirm(let host, let selection):
             deepLinkConfirm = DeepLinkConfirm(
-                host: host, launch: link.launch, preset: selection, browse: false)
+                host: host, launch: link.launch, preset: selection, browse: false,
+                asProfile: link.asProfile)
         case .proceed(let host, let selection):
-            flow.connect(host, launchID: link.launch, preset: selection)
+            flow.connect(
+                host, launchID: link.launch, preset: selection,
+                profile: .ask(link: link.asProfile))
         }
     }
 
@@ -893,10 +904,11 @@ struct ContentView: View {
             entry: $libraryTarget, notice: $deepLinkNotice, pairing: $pairingTarget,
             linkConfirm: $deepLinkConfirm, runLink: runDeepLinkConfirm,
             onFailed: { consoleFailed = true }, onPaired: handlePaired,
-            connect: { flow.connect($0, preset: $1) }, connectDiscovered: flow.connectDiscovered,
+            connect: { flow.connect($0, preset: $1, profile: .send($2)) },
+            connectDiscovered: flow.connectDiscovered,
             requestAccess: flow.consoleRequestAccess,
             requestAccessDiscovered: flow.requestAccessDiscovered,
-            launchTitle: launchTitle, connectShelf: connectFromShelf,
+            launchTitle: { launch($0, $1, profile: .send($2)) }, connectShelf: connectFromShelf,
             wakeOnly: { flow.wakeOnly($0) })
     }
 
@@ -1291,7 +1303,7 @@ struct ContentView: View {
         ConnectFlow(
             model: model, store: store, presets: presets, discovery: discovery, waker: waker,
             autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
-            awaitingApproval: $awaitingApproval)
+            awaitingApproval: $awaitingApproval, profileAsk: $profileAsk)
     }
 
     /// A title picked on a library shelf: dial its host, booting straight into that title — with
@@ -1299,8 +1311,12 @@ struct ContentView: View {
     /// launch made there streams with the preset the card promises; the host's own shelf carries
     /// `.inherit` and the binding decides, exactly as a plain card tap does.
     private func launchTitle(_ shelf: LibraryTarget, _ id: String) {
+        launch(shelf, id, profile: .ask())
+    }
+
+    private func launch(_ shelf: LibraryTarget, _ id: String, profile: ConnectFlow.ProfileChoice) {
         libraryTarget = nil
-        flow.connect(shelf.host, launchID: id, preset: shelf.preset)
+        flow.connect(shelf.host, launchID: id, preset: shelf.preset, profile: profile)
     }
 
     /// A shelf's own Connect / Resume: dial its host launching NOTHING. The host is already

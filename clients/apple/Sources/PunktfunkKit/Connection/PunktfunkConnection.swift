@@ -123,6 +123,11 @@ public enum HostRejection: Sendable {
     /// connect down the untyped path, where a reachable host reads as unreachable and the app
     /// answers with Wake-on-LAN.
     case setupFailed
+    /// The hello named a profile the host doesn't list. The saved pick is stale: the app drops it.
+    case profileUnknown
+    case noSeat
+    case seatOccupied
+    case seatUnavailable
 
     init?(status: Int32) {
         switch status {
@@ -139,6 +144,10 @@ public enum HostRejection: Sendable {
         case PUNKTFUNK_STATUS_REJECTED_LAUNCH_NOT_PERMITTED.rawValue: self = .launchNotPermitted
         case PUNKTFUNK_STATUS_REJECTED_HOST_POWER.rawValue: self = .hostPower
         case PUNKTFUNK_STATUS_REJECTED_SETUP_FAILED.rawValue: self = .setupFailed
+        case PUNKTFUNK_STATUS_REJECTED_PROFILE_UNKNOWN.rawValue: self = .profileUnknown
+        case PUNKTFUNK_STATUS_REJECTED_NO_SEAT.rawValue: self = .noSeat
+        case PUNKTFUNK_STATUS_REJECTED_SEAT_OCCUPIED.rawValue: self = .seatOccupied
+        case PUNKTFUNK_STATUS_REJECTED_SEAT_UNAVAILABLE.rawValue: self = .seatUnavailable
         default: return nil
         }
     }
@@ -180,6 +189,14 @@ public enum HostRejection: Sendable {
         case .setupFailed:
             return "The host accepted the connection but couldn't start the stream — the "
                 + "host's log (web console → Log) has the cause."
+        case .profileUnknown:
+            return "That profile is gone from this host. Pick another one."
+        case .noSeat:
+            return "All seats are taken."
+        case .seatOccupied:
+            return "Someone is already playing as that profile."
+        case .seatUnavailable:
+            return "That profile can't play on this host right now."
         }
     }
 }
@@ -898,6 +915,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
         clientCaps: UInt8 = 0, // ABI v11: PUNKTFUNK_CLIENT_CAP_CURSOR = render the host cursor locally
         videoFit: UInt8 = 0, // PUNKTFUNK_VIDEO_FIT_*: how this view fills; a host framing for another device reframes to it
         launchID: String? = nil,
+        profileID: String? = nil, // the host profile to play as; nil lets the host choose
         deviceName: String? = nil, // nil = this device's OS name (`DeviceName.current`)
         timeoutMs: UInt32 = 10_000,
         // The delivery ask: the profile on the host's record (1 capped, 2 smooth) and the flags a
@@ -954,28 +972,31 @@ public final class PunktfunkConnection: @unchecked Sendable {
             withOptionalCString(identity?.certPEM) { cert in
                 withOptionalCString(identity?.keyPEM) { key in
                     withOptionalCString(launchID) { launch in
-                        withOptionalCString(settings.presetID) { presetID in
-                            withOptionalCString(settings.presetName) { presetName in
-                                label.withCString { name in
-                                    opts.host = cs
-                                    opts.client_cert_pem = cert
-                                    opts.client_key_pem = key
-                                    opts.launch_id = launch
-                                    opts.device_name = name
-                                    // This dial's preset; nil names none.
-                                    opts.preset_id = presetID
-                                    opts.preset_name = presetName
-                                    func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
-                                        opts.pin_sha256 = pin
-                                        return punktfunk_connect_opts(
-                                            &opts, &observed, &connectStatus)
-                                    }
-                                    if let pin = pinSHA256 {
-                                        return pin.withUnsafeBytes { p in
-                                            dial(p.bindMemory(to: UInt8.self).baseAddress)
+                        withOptionalCString(profileID) { profile in
+                            withOptionalCString(settings.presetID) { presetID in
+                                withOptionalCString(settings.presetName) { presetName in
+                                    label.withCString { name in
+                                        opts.profile_id = profile
+                                        opts.host = cs
+                                        opts.client_cert_pem = cert
+                                        opts.client_key_pem = key
+                                        opts.launch_id = launch
+                                        opts.device_name = name
+                                        // This dial's preset; nil names none.
+                                        opts.preset_id = presetID
+                                        opts.preset_name = presetName
+                                        func dial(_ pin: UnsafePointer<UInt8>?) -> OpaquePointer? {
+                                            opts.pin_sha256 = pin
+                                            return punktfunk_connect_opts(
+                                                &opts, &observed, &connectStatus)
                                         }
+                                        if let pin = pinSHA256 {
+                                            return pin.withUnsafeBytes { p in
+                                                dial(p.bindMemory(to: UInt8.self).baseAddress)
+                                            }
+                                        }
+                                        return dial(nil)
                                     }
-                                    return dial(nil)
                                 }
                             }
                         }

@@ -119,6 +119,8 @@ public enum ConsoleJSON {
             "running": running[fp] ?? "",
             // This client binds no preset per title yet, so the bind screen's marks are empty.
             "game_presets": [String: String](),
+            "profile": host.pickedProfile.map { ["id": $0.id, "display_name": $0.displayName] }
+                ?? NSNull(),
         ]
     }
 

@@ -61,6 +61,10 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     /// finding. Per host: a Wi-Fi TV and a wired desk differ. nil asks nothing, and nil is what an
     /// older saved record decodes to.
     public var delivery: Int?
+    /// The host profile this device plays as on this box, picked in the profile picker. nil: no
+    /// pick yet, or a box without profiles. Not `presetID` (a settings preset). Optional for the
+    /// same forward-compat reason as `mgmtPort`.
+    public var pickedProfile: ProfilePick?
 
     /// How many left-behind addresses a host keeps.
     public static let maxPreviousAddresses = 3
@@ -91,6 +95,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, pinnedSHA256, lastConnected, mgmtPort, macAddresses
         case clipboardSync, presetID, pinnedPresetIDs, addedAt, osChain, previousAddresses
+        case pickedProfile
         /// Pre-rename keys (design/preset-rename.md): read when the new key is absent, and
         /// written beside it so an older build keeps the bindings.
         case profileID, pinnedProfileIDs
@@ -114,6 +119,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt)
         osChain = try c.decodeIfPresent(String.self, forKey: .osChain)
         previousAddresses = try c.decodeIfPresent([String].self, forKey: .previousAddresses)
+        pickedProfile = try c.decodeIfPresent(ProfilePick.self, forKey: .pickedProfile)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -134,6 +140,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(addedAt, forKey: .addedAt)
         try c.encodeIfPresent(osChain, forKey: .osChain)
         try c.encodeIfPresent(previousAddresses, forKey: .previousAddresses)
+        try c.encodeIfPresent(pickedProfile, forKey: .pickedProfile)
     }
 
     public var displayName: String { name.isEmpty ? address : name }

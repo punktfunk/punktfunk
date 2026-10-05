@@ -29,6 +29,16 @@ struct ConnectFlow {
     /// A delegated-approval connect is in flight (host parks it until the operator approves):
     /// drives the cancelable "Waiting for approval" prompt and the pin-as-paired on success.
     @Binding var awaitingApproval: ApprovalRequest?
+    /// The profile picker a connect is waiting on.
+    @Binding var profileAsk: ProfileAsk?
+
+    /// Which profile a connect plays as.
+    enum ProfileChoice {
+        /// Ask the paired host first; `link` is a link's `as=`, which wins for this connect.
+        case ask(link: String? = nil)
+        /// Already decided (the console's own picker): dial with this id, nil sends none.
+        case send(String?)
+    }
 
     /// `preset` is this connect's one-off pick ("Connect with ▸", a pinned card, a link's
     /// `preset=`). `.inherit` — the default, and what a plain card tap passes — falls through to
@@ -37,7 +47,7 @@ struct ConnectFlow {
     func connect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
-        fromLibrary: Bool = false
+        fromLibrary: Bool = false, profile: ProfileChoice = .ask()
     ) {
         // A pinned host dials on its stored fingerprint. An unpinned one may TOFU only when the
         // caller says so, or when its live advert says `pair=optional` (rule 3a); any other gets
@@ -54,9 +64,55 @@ struct ConnectFlow {
                 return
             }
         }
-        startSession(
-            host, launchID: launchID, preset: preset, allowTofu: host.pinnedSHA256 == nil,
-            fromLibrary: fromLibrary)
+        let allowTofu = host.pinnedSHA256 == nil
+        switch profile {
+        case .send(let id):
+            startSession(
+                host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                fromLibrary: fromLibrary, profileID: id)
+        case .ask(let link):
+            // An unpinned host can't be asked (no paired identity), and the demo host has no
+            // management API.
+            guard !allowTofu, !DemoMode.isDemo(host) else {
+                startSession(
+                    host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                    fromLibrary: fromLibrary)
+                return
+            }
+            askProfile(host, link: link) { id in
+                startSession(
+                    host, launchID: launchID, preset: preset, allowTofu: false,
+                    fromLibrary: fromLibrary, profileID: id)
+            }
+        }
+    }
+
+    /// Ask the host who is playing, then run `go` with the id to dial as. A box without profiles,
+    /// a failed answer and a late one dial as before, with the saved pick.
+    private func askProfile(
+        _ host: StoredHost, link: String?, go: @escaping @MainActor (String?) -> Void
+    ) {
+        let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
+        Task { @MainActor in
+            let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+            guard case .listed(let rows) = answer else {
+                go(link ?? saved?.id)
+                return
+            }
+            let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
+            guard d.picker, let rows else {
+                store.setProfile(host.id, d.remember)
+                go(d.send)
+                return
+            }
+            profileAsk = ProfileAsk(
+                hostName: host.displayName,
+                content: .choose(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone),
+                pick: { pick in
+                    store.setProfile(host.id, pick)
+                    go(pick.id)
+                })
+        }
     }
 
     /// Resolve the stream mode + input prefs and hand off to the session model. The gamepad-type
@@ -67,7 +123,7 @@ struct ConnectFlow {
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false
+        fromLibrary: Bool = false, profileID: String? = nil
     ) {
         // Dial the record as it stands NOW: a host that came back on a new DHCP lease was re-keyed
         // by the reachability check while we waited, and the value captured here is then stale.
@@ -76,7 +132,7 @@ struct ConnectFlow {
                 store.hosts.first { $0.id == host.id } ?? host,
                 launchID: launchID, preset: preset, allowTofu: allowTofu,
                 requestAccess: requestAccess, approvalReq: approvalReq,
-                fromLibrary: fromLibrary)
+                fromLibrary: fromLibrary, profileID: profileID)
         }
         // A host the probe calls down still gets the dial first: a routed host (VPN, another
         // subnet) answers without advertising. `prepareWake` already sent the magic packet, so
@@ -87,6 +143,7 @@ struct ConnectFlow {
             startSessionDirect(
                 host, launchID: launchID, preset: preset, allowTofu: allowTofu,
                 requestAccess: requestAccess, approvalReq: approvalReq, fromLibrary: fromLibrary,
+                profileID: profileID,
                 onUnreachable: {
                     waker.start(
                         host: host, connectsAfter: true, macs: host.wakeMacs, lastIP: host.address,
@@ -106,7 +163,7 @@ struct ConnectFlow {
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false,
+        fromLibrary: Bool = false, profileID: String? = nil,
         onUnreachable: (@MainActor () -> Void)? = nil
     ) {
         prepareWake(for: host)
@@ -125,6 +182,7 @@ struct ConnectFlow {
                 setting: PunktfunkConnection.GamepadType(
                     rawValue: UInt32(clamping: effective.gamepadType)) ?? .auto),
             launchID: launchID,
+            profileID: profileID,
             // Where this session goes back to when it ends: the shelf it started from — the
             // host's own, or the pinned card whose preset it is using. nil for a connect that
             // did NOT come off a shelf, which is what keeps a plain host-list connect ending on
@@ -133,6 +191,8 @@ struct ConnectFlow {
                 ? LibraryTarget(host: host, preset: preset) : nil,
             allowTofu: allowTofu,
             requestAccess: requestAccess,
+            // The host no longer lists the saved profile: forget it, so the next connect asks.
+            onProfileUnknown: { store.setProfile(host.id, nil) },
             onUnreachable: onUnreachable)
     }
 

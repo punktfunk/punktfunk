@@ -72,6 +72,19 @@ extension ConsoleModel {
             }
         case "BindPreset":
             bindPreset(key: a["key"] as? String ?? "", preset: a["preset_id"] as? String)
+        case "FetchProfiles":
+            fetchProfiles(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "")
+        case "SetProfile":
+            if let host = host(key: a["key"] as? String ?? "") {
+                let pick = a["profile"] as? [String: Any]
+                store.setProfile(
+                    host.id,
+                    (pick?["id"] as? String).map {
+                        ProfilePick(id: $0, displayName: pick?["display_name"] as? String ?? "")
+                    })
+            }
         case "SetClipboard":
             if var host = host(key: a["key"] as? String ?? "") {
                 host.clipboardSync = a["on"] as? Bool ?? false
@@ -320,6 +333,31 @@ extension ConsoleModel {
 
     // MARK: - hosts
 
+    /// The host's profile list, handed back to the shell's connect or Switch-profile screen.
+    private func fetchProfiles(addr: String, mgmt: UInt16, fp: String) {
+        guard let host = host(fp: fp, addr: addr, port: 0) else {
+            pushProfiles(fp, ["Failed": "That host is no longer saved."])
+            return
+        }
+        Task { [weak self] in
+            let answer = await ProfileFetch.list(host, mgmt: mgmt > 0 ? mgmt : nil)
+            switch answer {
+            case .listed(let rows?):
+                let data = try? JSONEncoder().encode(rows)
+                let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? []
+                self?.pushProfiles(fp, ["Listed": json])
+            case .listed(nil):
+                self?.pushProfiles(fp, "NoProfiles")
+            case .failed:
+                self?.pushProfiles(fp, ["Failed": "Couldn't load the profiles."])
+            }
+        }
+    }
+
+    private func pushProfiles(_ fp: String, _ answer: Any) {
+        bridge.push(.profiles, ConsoleJSON.string(["fp_hex": fp, "answer": answer]))
+    }
+
     private func saveHost(name: String, addr: String, port: UInt16) {
         var host = StoredHost(name: name, address: addr)
         host.port = port
@@ -354,7 +392,7 @@ extension ConsoleModel {
             onOnline: { [weak self] in
                 guard let self else { return }
                 bridge.push(.wake, "null")
-                if thenConnect { actions.connect(host, .inherit) }
+                if thenConnect { actions.connect(host, .inherit, host.pickedProfile?.id) }
             })
     }
 

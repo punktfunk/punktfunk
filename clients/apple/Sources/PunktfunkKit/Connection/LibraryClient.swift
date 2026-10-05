@@ -619,6 +619,35 @@ public enum LibraryClient {
         return games
     }
 
+    /// The profiles on this host, from `GET /api/v1/profiles/enumerate`, in host order. nil: the
+    /// box has no profiles (a 404, or a host too old to know the route).
+    public static func profiles(
+        address: String,
+        port: UInt16 = punktfunkDefaultMgmtPort,
+        certPEM: String,
+        keyPEM: String,
+        hostFingerprint: Data?
+    ) async throws -> [ListedProfile]? {
+        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
+        let response = try await send(
+            path: "/api/v1/profiles/enumerate", address: address, port: port,
+            identity: identity, hostFingerprint: hostFingerprint)
+        switch response.status {
+        case 200:
+            do {
+                return try JSONDecoder().decode([ListedProfile].self, from: response.body)
+            } catch {
+                throw LibraryError.unreachable("bad JSON")
+            }
+        case 404:
+            return nil
+        case 401, 403:
+            throw LibraryError.unauthorized
+        default:
+            throw LibraryError.http(response.status)
+        }
+    }
+
     /// What the host currently has running, from `GET /api/v1/status`.
     ///
     /// Same lane, same identity, no new host work: `/status` is already on the paired-certificate
