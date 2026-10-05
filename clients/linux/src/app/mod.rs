@@ -8,6 +8,7 @@
 mod connect;
 pub mod gate;
 mod host_ops;
+mod profile;
 pub mod spawn;
 
 use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage, Phase};
@@ -17,6 +18,7 @@ use crate::trust;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
+use pf_client_core::profiles::{ListedProfile as ProfileRow, ProfilePick};
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use relm4::prelude::*;
@@ -93,6 +95,22 @@ pub enum AppMsg {
     SpeedTest(ConnectRequest),
     /// The Library on this host's shelf.
     OpenLibrary(ConnectRequest),
+    /// "Switch profile…": the picker without a connect.
+    SwitchProfile(ConnectRequest),
+    /// The profile list came back (`None`: the ask failed or ran late).
+    ProfileAsked {
+        req: ConnectRequest,
+        fp_hex: String,
+        switch: bool,
+        listed: Option<Option<Vec<ProfileRow>>>,
+    },
+    /// A circle in the picker was chosen.
+    ProfilePicked {
+        req: ConnectRequest,
+        fp_hex: String,
+        pick: ProfilePick,
+        connect: bool,
+    },
     /// Show a destination by its view name.
     ShowView(&'static str),
     Find,
@@ -319,6 +337,7 @@ impl SimpleComponent for AppModel {
                 HostsOutput::Pair(req) => AppMsg::Pair(req),
                 HostsOutput::SpeedTest(req) => AppMsg::SpeedTest(req),
                 HostsOutput::Library(req) => AppMsg::OpenLibrary(req),
+                HostsOutput::SwitchProfile(req) => AppMsg::SwitchProfile(req),
                 HostsOutput::SendLogs(req, mgmt) => AppMsg::SendLogs(req, mgmt),
                 HostsOutput::HostAction {
                     req,
@@ -506,6 +525,23 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::SpeedTest(req) => self.speed_test(req, &sender),
+            AppMsg::SwitchProfile(req) => {
+                if let Some(fp_hex) = req.fp_hex.clone() {
+                    self.ask_profile(req, fp_hex, true, &sender);
+                }
+            }
+            AppMsg::ProfileAsked {
+                req,
+                fp_hex,
+                switch,
+                listed,
+            } => self.profile_asked(req, fp_hex, switch, listed, &sender),
+            AppMsg::ProfilePicked {
+                req,
+                fp_hex,
+                pick,
+                connect,
+            } => self.profile_picked(req, fp_hex, pick, connect, &sender),
             AppMsg::SendLogs(req, mgmt_port) => self.send_logs(req, mgmt_port, &sender),
             AppMsg::HostAction {
                 req,

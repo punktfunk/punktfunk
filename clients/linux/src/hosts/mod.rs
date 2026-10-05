@@ -45,6 +45,8 @@ pub struct ConnectRequest {
     /// host, `None` honors the binding. It never rebinds anything — the host's default changes
     /// only through an explicit pick on its page (design/client-settings-profiles.md §5.2).
     pub preset: Option<String>,
+    /// A link's `as=`: the profile this connect asks for, which wins over the saved pick.
+    pub profile: Option<String>,
 }
 
 /// A saved host's plain connect: its fingerprint is already pinned, so this is the silent
@@ -63,6 +65,7 @@ pub fn saved_request(k: &trust::KnownHost) -> ConnectRequest {
         launch: None,
         mac: k.mac.clone(),
         preset: None,
+        profile: None,
     }
 }
 
@@ -107,6 +110,7 @@ pub enum Act {
     Library(ConnectRequest),
     Pair(ConnectRequest),
     SpeedTest(ConnectRequest),
+    SwitchProfile(ConnectRequest),
     SendLogs(ConnectRequest),
     /// One of the host's own actions (`design/host-actions.md` §7); `danger` asks first.
     HostAction {
@@ -213,6 +217,7 @@ pub enum HostsOutput {
     Pair(ConnectRequest),
     SpeedTest(ConnectRequest),
     Library(ConnectRequest),
+    SwitchProfile(ConnectRequest),
     /// With the advertised mgmt port when a live advert carries one.
     SendLogs(ConnectRequest, Option<u16>),
     /// Run one of the host's own actions — same mgmt-port resolution as [`HostsOutput::SendLogs`].
@@ -719,6 +724,7 @@ impl HostsPage {
             Act::Pair(req) => out(HostsOutput::Pair(req)),
             Act::SpeedTest(req) => out(HostsOutput::SpeedTest(req)),
             Act::Library(req) => out(HostsOutput::Library(req)),
+            Act::SwitchProfile(req) => out(HostsOutput::SwitchProfile(req)),
             Act::SendLogs(req) => {
                 let mgmt = self.mgmt_port_for(&req);
                 out(HostsOutput::SendLogs(req, mgmt));

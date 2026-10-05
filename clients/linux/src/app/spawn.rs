@@ -27,6 +27,9 @@ pub struct SpawnOpts {
     /// A cancel handle to arm (request-access's waiting dialog): killing the child is
     /// the only abort a parked connect has.
     pub cancel: Option<CancelHandle>,
+    /// The picker's verdict, which replaces the saved pick on the plan: `Some(None)` sends no
+    /// profile, `None` leaves the saved pick in force.
+    pub profile: Option<Option<String>>,
 }
 
 pub use orchestrate::{session_binary, CancelHandle};
@@ -64,6 +67,9 @@ fn plan_for(req: &ConnectRequest, fp_hex: &str, tofu: bool, opts: &SpawnOpts) ->
     plan.wake = false;
     plan.connect_timeout_secs = opts.connect_timeout_secs;
     plan.tofu = tofu;
+    if let Some(profile) = &opts.profile {
+        plan.profile = profile.clone();
+    }
     plan
 }
 
@@ -177,6 +183,10 @@ mod tests {
                 paired: true,
                 preset_id: Some("aaaaaaaaaaaa".into()),
                 clipboard_sync: true,
+                profile: Some(pf_client_core::profiles::ProfilePick {
+                    id: "saved".into(),
+                    display_name: "Kid".into(),
+                }),
                 ..Default::default()
             }],
         };
@@ -191,6 +201,7 @@ mod tests {
             launch: None,
             mac: vec![],
             preset: None,
+            profile: None,
         };
         let opts = SpawnOpts::default();
 
@@ -201,6 +212,16 @@ mod tests {
         assert_eq!(plan.settings.codec, "av1");
         assert_eq!(plan.preset.as_ref().map(|p| p.name.as_str()), Some("Game"));
         assert!(plan.clipboard, "the host's own opt-in");
+        // The saved pick rides until the picker's verdict replaces it, `None` included.
+        assert_eq!(plan.profile.as_deref(), Some("saved"));
+        let pick = |profile| SpawnOpts {
+            profile: Some(profile),
+            ..SpawnOpts::default()
+        };
+        let plan_pick = plan_for(&req, &"a".repeat(64), false, &pick(Some("other".into())));
+        assert_eq!(plan_pick.profile.as_deref(), Some("other"));
+        let plan_none = plan_for(&req, &"a".repeat(64), false, &pick(None));
+        assert_eq!(plan_none.profile, None);
         // …and the spec the child actually runs from is those same settings.
         assert_eq!(plan.spec(plan.clipboard).settings, plan.settings);
         // The fullscreen policy rides the argv from the resolved settings, not a shell global.
