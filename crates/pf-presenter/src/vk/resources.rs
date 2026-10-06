@@ -18,6 +18,9 @@ impl Retired {
             // of ours to destroy. Drop sends the release token; the caller
             // reaches here only after the sampling fence (GPU reads done).
             Retired::NativeVk(frame) => drop(frame),
+            // The planes go with the frame's hold, or stay with the decoder.
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            Retired::Pyro(frame) => drop(frame),
         }
     }
 }

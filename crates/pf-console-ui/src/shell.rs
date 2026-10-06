@@ -337,7 +337,7 @@ pub struct ConsoleOptions {
     /// asks for is a setting that silently does nothing.
     pub pyrowave_ok: bool,
     /// This device decodes AV1 in hardware — the same answer that gates the client's
-    /// `CODEC_AV1` advertisement (`pf_client_core::video::av1_hardware_decodable`). A host
+    /// `CODEC_AV1` advertisement (`pf_client_core::video::av1_advertised`). A host
     /// that learns it only once its GPU exists starts `true` and corrects it.
     pub av1_ok: bool,
     /// Settings and preset catalog. `None` uses the desktop file store
