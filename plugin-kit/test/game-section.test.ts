@@ -56,6 +56,26 @@ describe("game section", () => {
 		expect(body.status[0].text).not.toContain("\u0007");
 	});
 
+	test("the entry's page route goes out only as one segment", async () => {
+		const page = (route: string) =>
+			makeGameHandler({
+				schema: Section,
+				load: () => Effect.succeed({ enabled: true, paths: [] }),
+				save: () => Effect.void,
+				page: () => Effect.succeed(route),
+			});
+		const read = async (route: string) =>
+			(
+				(await (await page(route)(new Request(url("steam:1")))).json()) as {
+					page?: string;
+				}
+			).page;
+		expect(await read("game.cm9tbS8x")).toBe("game.cm9tbS8x");
+		expect(await read("game/../../settings")).toBeUndefined();
+		expect(await read("https://example.com")).toBeUndefined();
+		expect((await setup().handler(new Request(url("steam:1")))).ok).toBe(true);
+	});
+
 	test("no section for an entry is a 404", async () => {
 		const { handler } = setup();
 		const res = await handler(new Request(url("custom:abc")));

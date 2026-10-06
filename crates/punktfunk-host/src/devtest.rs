@@ -580,6 +580,7 @@ pub fn mirror_test(args: &[String]) -> Result<()> {
             capture: crate::session_plan::CaptureBackend::resolve(),
             kwin: compositor == crate::vdisplay::Compositor::Kwin,
             gamescope: compositor == crate::vdisplay::Compositor::Gamescope,
+            stream_hz: mode.refresh_hz,
         },
     )
     .context("attach a capturer to the mirrored monitor")?;
