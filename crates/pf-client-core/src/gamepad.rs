@@ -1198,7 +1198,13 @@ impl Worker {
                     if raw_sc2 {
                         slot.sc2 = slot.pad.path().and_then(|path| {
                             c.set_sc2_gate(index, self.sc2_gate());
-                            crate::sc2_capture::Sc2Capture::open(&path, c.clone(), index)
+                            crate::sc2_capture::Sc2Capture::open(
+                                &path,
+                                c.clone(),
+                                index,
+                                slot.pad.serial_number(),
+                                pref == GamepadPref::SteamController2Puck,
+                            )
                         });
                     }
                 }

@@ -56,7 +56,15 @@ pub(crate) struct Sc2Capture {
 impl Sc2Capture {
     /// `path` is the SDL slot's HID path. `None` when the node will not open (not a HIDAPI
     /// device, no permission): the slot keeps the typed plane.
-    pub(crate) fn open(path: &str, client: Arc<NativeClient>, pad: u8) -> Option<Sc2Capture> {
+    /// `serial` is the pad's USB serial; `puck` marks a Puck slot. The reader sends the pad's
+    /// identity ([`NativeClient::send_pad_identity`]) before its first report.
+    pub(crate) fn open(
+        path: &str,
+        client: Arc<NativeClient>,
+        pad: u8,
+        serial: Option<String>,
+        puck: bool,
+    ) -> Option<Sc2Capture> {
         let Some(dev) = Dev::open(path) else {
             tracing::warn!(path, error = %sdl3::get_error(), "open steam controller 2 hid node");
             return None;
@@ -65,7 +73,10 @@ impl Sc2Capture {
         let (tx, rx) = std::sync::mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("pf-sc2-raw".into())
-            .spawn(move || run(dev, &rx, &client, pad))
+            .spawn(move || {
+                send_identity(&dev, &client, pad, serial.unwrap_or_default(), puck);
+                run(dev, &rx, &client, pad)
+            })
             .map_err(|e| tracing::warn!(error = %e, "spawn steam controller 2 reader"))
             .ok()?;
         Some(Sc2Capture {
@@ -120,6 +131,27 @@ impl Dev {
         (!dev.0.is_null()).then_some(dev)
     }
 
+    /// SET one feature query, then GET until the reply echoes its command, for up to a second:
+    /// a Puck stalls the GET until its pad answers over the radio.
+    fn exchange(&self, request: &[u8]) -> Option<Vec<u8>> {
+        let mut frame = [0u8; 64];
+        frame[..request.len()].copy_from_slice(request);
+        if self.send_feature(&frame) < 0 {
+            return None;
+        }
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let mut buf = [0u8; 65];
+            buf[0] = request[0];
+            // SAFETY: `self.0` is open and used only on this thread; `buf` is writable.
+            let n = unsafe { hid::SDL_hid_get_feature_report(self.0, buf.as_mut_ptr(), buf.len()) };
+            if n > 1 && buf[1] == request[1] {
+                return Some(buf[..n as usize].to_vec());
+            }
+        }
+        None
+    }
+
     fn send_feature(&self, r: &[u8]) -> i32 {
         // SAFETY: `self.0` is an open handle only this thread uses; `r` is valid for its length.
         unsafe { hid::SDL_hid_send_feature_report(self.0, r.as_ptr(), r.len()) }
@@ -141,6 +173,31 @@ impl Drop for Dev {
             // SAFETY: an open handle, closed once, on the thread that owns it.
             unsafe { hid::SDL_hid_close(self.0) };
         }
+    }
+}
+
+/// Read the pad's replies to core's feature queries and send them with its serial, so the host
+/// builds its virtual pad as this one.
+fn send_identity(dev: &Dev, client: &NativeClient, pad: u8, serial: String, puck: bool) {
+    let answered: Vec<(&[u8], Vec<u8>)> = punktfunk_core::client::sc2::identity_requests(puck)
+        .filter_map(|req| dev.exchange(req).map(|reply| (req, reply)))
+        .collect();
+    let replies = punktfunk_core::quic::pack_identity_replies(
+        answered.iter().map(|(req, reply)| (*req, reply.as_slice())),
+    );
+    tracing::info!(
+        pad,
+        serial,
+        replies = answered.len(),
+        "steam controller 2 identity read"
+    );
+    let id = punktfunk_core::quic::PadIdentity {
+        pad,
+        serial,
+        replies,
+    };
+    if let Err(error) = client.send_pad_identity(id) {
+        tracing::warn!(pad, %error, "steam controller 2 identity not sent");
     }
 }
 
