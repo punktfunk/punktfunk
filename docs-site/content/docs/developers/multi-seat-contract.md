@@ -201,14 +201,15 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   the daemon runs. `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
   `start|stop|delete <id>` and `doctor` send the same requests.
 - **The user.** Its comment is `punktfunk-seat=<id>`, and the daemon touches or deletes only an
-  account whose comment matches exactly. The home is `seats/<id>/home`. It joins `render`, `input`
-  and `punktfunk`.
+  account whose comment matches exactly. The home is `seats/<id>/home`. It joins `render` and
+  `punktfunk-games`, the shared games folder's group, which the owner joins too. Never `punktfunk`,
+  which may power the box off, nor `input`, which reads every input device on the box.
 - **The environment.** The variables in the tables above, minus the display slot and `NO_ISOLATE`,
   go into `/run/punktfunk/seats/<user>.env` (root `0600`), which systemd reads as root.
   `PUNKTFUNK_CONFIG_DIR` is `<home>/.config/punktfunk`. Each start adds a fresh
   `PUNKTFUNK_MGMT_TOKEN` and writes the same line to `seats/hosts/<id>/mgmt-token`, owned by the
   `punktfunk` user (root without one), so the box host reaches the seat's loopback API. Every seat
-  user is in the `punktfunk` group, so no secret relies on group read.
+  user shares `punktfunk-games`, so no secret relies on group read.
 - **The trust copy.** The seat reads `trust/<id>/`, not the box directory: `native-cert.pem`,
   `native-key.pem`, `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` and
   `profiles/`, `root:<seat user>` `0640`. The daemon recopies a file within 2 seconds of its

@@ -13,9 +13,13 @@ use std::path::{Path, PathBuf};
 /// `=`, not `:`: the colon separates passwd fields and `useradd` refuses it in a comment.
 const MARKER_PREFIX: &str = "punktfunk-seat=";
 
-/// Groups a seat user joins when they exist: GPU and input device access, then the shared games
-/// folder. `punktfunk` is required; the other two are reported by doctor when missing.
-const GROUPS: [&str; 3] = ["render", "input", "punktfunk"];
+/// Groups a seat user joins when they exist: the GPU, then the shared games folder. Never
+/// `punktfunk`, which may power the box off and stop its display manager, nor `input`, which
+/// reads every input device on the box, the owner's keyboard too.
+const GROUPS: [&str; 2] = ["render", GAMES_GROUP];
+
+/// The shared games folder's group: every seat user and the owner.
+pub(super) const GAMES_GROUP: &str = "punktfunk-games";
 
 /// The GECOS text that marks `id`'s account as ours.
 pub(super) fn marker(id: &SeatId) -> String {
@@ -84,6 +88,16 @@ pub(super) fn all() -> Result<Vec<Passwd>, BackendError> {
 /// The gid of group `name`, `None` when it doesn't exist.
 pub(super) fn group_gid(name: &str) -> Result<Option<u32>, BackendError> {
     Ok(getent("group", name)?.and_then(|line| line.split(':').nth(2)?.parse().ok()))
+}
+
+/// `name`'s gid, creating it as a system group first when it is missing.
+pub(super) fn ensure_group(name: &str) -> Result<u32, BackendError> {
+    if let Some(gid) = group_gid(name)? {
+        return Ok(gid);
+    }
+    super::run("groupadd_failed", "groupadd", &["--system", name])?;
+    group_gid(name)?
+        .ok_or_else(|| super::err("group_missing", format!("group {name} after groupadd")))
 }
 
 fn getent(database: &str, key: &str) -> Result<Option<String>, BackendError> {

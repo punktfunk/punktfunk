@@ -105,6 +105,9 @@ door_on() {
         useradd --system --no-user-group --gid punktfunk --home-dir "$BOX" --shell "$shell" punktfunk
     fi
     install -d -m 0711 -o punktfunk -g punktfunk "$BOX"
+    # The shared games folder's group; the owner's Steam moves games into it at their next login.
+    getent group punktfunk-games >/dev/null || groupadd --system punktfunk-games
+    usermod -aG punktfunk-games "$user"
     if [ ! -e "$MARK" ]; then
         for f in $FILES; do take "$f"; done
         take_avatars

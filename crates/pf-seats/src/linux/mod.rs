@@ -415,12 +415,7 @@ impl PlatformBackend for LinuxBackend {
     fn provision(&self, seat: &Seat) -> Result<(), BackendError> {
         accounts::check_name(&seat.account)?;
         let box_dir = &self.inner.box_dir;
-        let gid = accounts::group_gid("punktfunk")?.ok_or_else(|| {
-            err(
-                "group_missing",
-                "the punktfunk group doesn't exist; the package creates it",
-            )
-        })?;
+        let gid = accounts::ensure_group(accounts::GAMES_GROUP)?;
         shared::ensure_games(box_dir, gid)?;
         let (passwd, created) = accounts::ensure(seat, box_dir)?;
         let finished = shared::ensure_seat_dirs(box_dir, &seat.id, &passwd);

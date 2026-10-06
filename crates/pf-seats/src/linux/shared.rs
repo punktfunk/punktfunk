@@ -145,7 +145,8 @@ pub(super) fn ensure_games(box_dir: &Path, gid: u32) -> Result<(), BackendError>
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o2775))
             .map_err(|e| io("set the mode of", e))?;
     }
-    let mut args = vec!["-m".to_owned(), "g:punktfunk:rwX,d:g:punktfunk:rwX".into()];
+    let group = super::accounts::GAMES_GROUP;
+    let mut args = vec!["-m".to_owned(), format!("g:{group}:rwX,d:g:{group}:rwX")];
     args.extend(dirs.iter().map(|d| d.to_string_lossy().into_owned()));
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run("setfacl_failed", "setfacl", &args).map(drop)
