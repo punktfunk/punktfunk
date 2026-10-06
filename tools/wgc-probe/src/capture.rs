@@ -738,12 +738,17 @@ impl Session {
     /// is above SDR white says whether the surface really carries scRGB.
     fn shot(&mut self, t: &Target, path: &Path) -> Result<(), String> {
         let frame = self.grab(t.rect)?;
-        let tex = texture(&frame)?;
+        let saved = texture(&frame).and_then(|tex| self.save(&tex, path));
+        let _ = frame.Close();
+        saved
+    }
+
+    /// `tex` as a BMP at `path`: [`Self::shot`] for a frame the caller already holds.
+    fn save(&mut self, tex: &ID3D11Texture2D, path: &Path) -> Result<(), String> {
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         // SAFETY: `tex` is live and `desc` is a live out-param.
         unsafe { tex.GetDesc(&mut desc) };
-        let (bytes, bpp) = self.read(&tex, (0, 0, desc.Width, desc.Height))?;
-        let _ = frame.Close();
+        let (bytes, bpp) = self.read(tex, (0, 0, desc.Width, desc.Height))?;
         let bgra = if bpp == 8 {
             let (mut peak, mut over1, mut over4, mut negative) = (0f32, 0u64, 0u64, 0u64);
             let mut out = Vec::with_capacity(bytes.len() / 2);
@@ -1017,6 +1022,7 @@ pub fn capture(o: &Opts) -> Result<i32, String> {
     let (mut ages, mut gaps) = (Vec::<i64>::new(), Vec::<i64>::new());
     let (mut total, mut in_second, mut second) = (0u64, 0u64, 1u64);
     let mut last_time: Option<i64> = None;
+    let mut shot_taken = false;
     while Instant::now() < end {
         if s.closed.load(Ordering::Acquire) {
             log(
@@ -1055,6 +1061,13 @@ pub fn capture(o: &Opts) -> Result<i32, String> {
             if o.touch && i == newest {
                 s.touch(&texture(f)?)?;
             }
+            // The picture as it is this far into the run, whatever the desktop is doing then.
+            if let Some(path) = o.shot.as_ref().filter(|_| i == newest && !shot_taken) {
+                if o.shot_at > 0 && begun.elapsed() >= Duration::from_secs(o.shot_at) {
+                    s.save(&texture(f)?, path)?;
+                    shot_taken = true;
+                }
+            }
             let _ = f.Close();
         }
         total += frames.len() as u64;
@@ -1080,7 +1093,7 @@ pub fn capture(o: &Opts) -> Result<i32, String> {
     log("dwm", dwm_timing());
     // Alone, the shot comes first so it shows the square. With the cursor leg it comes last, so
     // it shows the pointer that leg left switched on.
-    if let Some(path) = o.shot.as_ref().filter(|_| !o.cursor_ab) {
+    if let Some(path) = o.shot.as_ref().filter(|_| !o.cursor_ab && o.shot_at == 0) {
         s.shot(&t, path)?;
     }
     animating.store(false, Ordering::Release);
@@ -1089,7 +1102,7 @@ pub fn capture(o: &Opts) -> Result<i32, String> {
     }
     if o.cursor_ab {
         s.cursor_ab(&t, o.nudge)?;
-        if let Some(path) = &o.shot {
+        if let Some(path) = o.shot.as_ref().filter(|_| o.shot_at == 0) {
             s.shot(&t, path)?;
         }
     }

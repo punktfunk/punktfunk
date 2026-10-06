@@ -66,6 +66,8 @@ mod win {
         pub canary_ms: u64,
         pub touch: bool,
         pub shot: Option<PathBuf>,
+        /// Take the shot this many seconds into the run, not at its end. `0` is the end.
+        pub shot_at: u64,
         pub cursor_ab: bool,
         /// Move the pointer one pixel and back before the cursor leg, so it is showing.
         pub nudge: bool,
@@ -88,6 +90,7 @@ mod win {
                 canary_ms: 1000,
                 touch: false,
                 shot: None,
+                shot_at: 0,
                 cursor_ab: false,
                 nudge: false,
                 animate: false,
@@ -101,7 +104,7 @@ mod win {
             "usage: wgc-probe list\n       \
              wgc-probe capture --monitor <\\\\.\\DISPLAYn|ours|physical> [--secs N] [--format bgra|fp16]\n                 \
              [--fps N] [--buffers N] [--cursor on|off] [--no-access] [--keep-border]\n                 \
-             [--canary-ms N] [--touch] [--animate] [--shot out.bmp] [--cursor-ab [--nudge]]\n       \
+             [--canary-ms N] [--touch] [--animate] [--shot out.bmp [--shot-at N]] [--cursor-ab [--nudge]]\n       \
              wgc-probe opens --monitor <…> [--count N]\n       \
              wgc-probe animate --monitor <…> [--secs N]\n       \
              wgc-probe as-user|as-system --out <log> -- <list|capture|opens …>"
@@ -128,6 +131,7 @@ mod win {
                 "--canary-ms" => o.canary_ms = number(value(&mut it)),
                 "--touch" => o.touch = true,
                 "--shot" => o.shot = Some(PathBuf::from(value(&mut it))),
+                "--shot-at" => o.shot_at = number(value(&mut it)),
                 "--cursor-ab" => o.cursor_ab = true,
                 "--nudge" => o.nudge = true,
                 "--animate" => o.animate = true,
