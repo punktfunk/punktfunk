@@ -230,6 +230,7 @@ enum Sc2Device {
     static let lizardRefreshSeconds: TimeInterval = 3.0
 
     // MARK: - Button bits in the state report's u32 (SDL `TritonButtons`)
+    // SDL's enum swaps the View and Menu names; its mapping and hid-steam agree with these values.
 
     static let btnA: UInt32 = 0x0000_0001
     static let btnB: UInt32 = 0x0000_0002
@@ -237,7 +238,7 @@ enum Sc2Device {
     static let btnY: UInt32 = 0x0000_0008
     static let btnQAM: UInt32 = 0x0000_0010
     static let btnR3: UInt32 = 0x0000_0020
-    static let btnView: UInt32 = 0x0000_0040
+    static let btnMenu: UInt32 = 0x0000_0040
     static let btnR4: UInt32 = 0x0000_0080
     static let btnR5: UInt32 = 0x0000_0100
     static let btnRB: UInt32 = 0x0000_0200
@@ -245,7 +246,7 @@ enum Sc2Device {
     static let btnDpadRight: UInt32 = 0x0000_0800
     static let btnDpadLeft: UInt32 = 0x0000_1000
     static let btnDpadUp: UInt32 = 0x0000_2000
-    static let btnMenu: UInt32 = 0x0000_4000
+    static let btnView: UInt32 = 0x0000_4000
     static let btnL3: UInt32 = 0x0000_8000
     static let btnSteam: UInt32 = 0x0001_0000
     static let btnL4: UInt32 = 0x0002_0000

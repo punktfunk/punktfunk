@@ -31,15 +31,7 @@ final class Sc2DeviceTests: XCTestCase {
     /// `clients/shared/sc2-vectors.json`: the host's id-INCLUDED lengths, which
     /// `pf_driver_proto::triton::out_report_len` and the Kotlin table replay too.
     func testStrippedLenPlusOneMatchesTheSharedVectors() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // PunktfunkKitTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // apple
-            .deletingLastPathComponent() // clients
-            .appendingPathComponent("shared/sc2-vectors.json")
-        let root = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        for row in try XCTUnwrap(root["out_report_len"] as? [[String: Any]]) {
+        for row in try sharedRows("out_report_len") {
             let id = try UInt8(XCTUnwrap(row["id"] as? Int))
             // Undeclared ids answer nil: clamp to what arrived, never guess a length.
             let want = (row["len"] as? Int).map { $0 - 1 }
@@ -199,32 +191,14 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertFalse(Sc2Device.parseState(short, into: &out))
     }
 
-    func testWireMapMatchesAndroidPairForPair() {
-        // The full SC2-bit → GamepadWire-bit table (Sc2Device.kt WIRE_MAP): paddles R4/L4/R5/L5
-        // = PADDLE1..4, QAM = MISC1, right-pad click = the touchpad wire bit.
-        let expected: [(UInt32, UInt32)] = [
-            (Sc2Device.btnA, GamepadWire.a),
-            (Sc2Device.btnB, GamepadWire.b),
-            (Sc2Device.btnX, GamepadWire.x),
-            (Sc2Device.btnY, GamepadWire.y),
-            (Sc2Device.btnLB, GamepadWire.leftShoulder),
-            (Sc2Device.btnRB, GamepadWire.rightShoulder),
-            (Sc2Device.btnView, GamepadWire.back),
-            (Sc2Device.btnMenu, GamepadWire.start),
-            (Sc2Device.btnSteam, GamepadWire.guide),
-            (Sc2Device.btnL3, GamepadWire.leftStickClick),
-            (Sc2Device.btnR3, GamepadWire.rightStickClick),
-            (Sc2Device.btnDpadUp, GamepadWire.dpadUp),
-            (Sc2Device.btnDpadDown, GamepadWire.dpadDown),
-            (Sc2Device.btnDpadLeft, GamepadWire.dpadLeft),
-            (Sc2Device.btnDpadRight, GamepadWire.dpadRight),
-            (Sc2Device.btnQAM, GamepadWire.misc1),
-            (Sc2Device.btnR4, GamepadWire.paddle1),
-            (Sc2Device.btnL4, GamepadWire.paddle2),
-            (Sc2Device.btnR5, GamepadWire.paddle3),
-            (Sc2Device.btnL5, GamepadWire.paddle4),
-            (Sc2Device.btnRPadClick, GamepadWire.touchpadClick),
-        ]
+    /// `clients/shared/sc2-vectors.json` `buttons`: Kotlin's `WIRE_MAP` and the host's typed
+    /// fallback replay the same rows.
+    func testWireMapMatchesTheSharedVectors() throws {
+        let expected = try sharedRows("buttons").map { row -> (UInt32, UInt32) in
+            let sc2 = try XCTUnwrap(row["sc2"] as? Int)
+            let wire = try XCTUnwrap(row["wire"] as? Int)
+            return (UInt32(sc2), UInt32(wire))
+        }
         XCTAssertEqual(Sc2Device.wireMap.count, expected.count)
         for (sc2, wire) in expected {
             XCTAssertEqual(Sc2Device.wireButtons(sc2), wire, "sc2 bit 0x\(String(sc2, radix: 16))")
@@ -236,6 +210,19 @@ final class Sc2DeviceTests: XCTestCase {
         // Unmapped SC2 bits translate to nothing.
         XCTAssertEqual(Sc2Device.wireButtons(~allSc2), 0)
         XCTAssertEqual(Sc2Device.wireButtons(0), 0)
+    }
+
+    /// One section of `clients/shared/sc2-vectors.json`.
+    private func sharedRows(_ key: String) throws -> [[String: Any]] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // PunktfunkKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // apple
+            .deletingLastPathComponent() // clients
+            .appendingPathComponent("shared/sc2-vectors.json")
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try XCTUnwrap(root[key] as? [[String: Any]])
     }
 
     func testSc2ButtonsInvertsTheWireMap() {

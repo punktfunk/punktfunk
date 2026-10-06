@@ -44,6 +44,7 @@ pub const TRITON_STATE_LEN: usize = 54;
 pub const TRITON_RDESC: &[u8] = &pf_driver_proto::triton::RDESC;
 
 /// SDL `TritonButtons`. Only the bits the typed fallback synthesizes; the raw path carries the rest.
+/// SDL's enum swaps the View and Menu names; its mapping and hid-steam agree with these values.
 pub mod tbtn {
     pub const A: u32 = 0x0000_0001;
     pub const B: u32 = 0x0000_0002;
@@ -51,7 +52,7 @@ pub mod tbtn {
     pub const Y: u32 = 0x0000_0008;
     pub const QAM: u32 = 0x0000_0010;
     pub const R3: u32 = 0x0000_0020;
-    pub const VIEW: u32 = 0x0000_0040;
+    pub const MENU: u32 = 0x0000_0040;
     pub const R4: u32 = 0x0000_0080;
     pub const R5: u32 = 0x0000_0100;
     pub const RB: u32 = 0x0000_0200;
@@ -59,7 +60,7 @@ pub mod tbtn {
     pub const DPAD_RIGHT: u32 = 0x0000_0800;
     pub const DPAD_LEFT: u32 = 0x0000_1000;
     pub const DPAD_UP: u32 = 0x0000_2000;
-    pub const MENU: u32 = 0x0000_4000;
+    pub const VIEW: u32 = 0x0000_4000;
     pub const L3: u32 = 0x0000_8000;
     pub const STEAM: u32 = 0x0001_0000;
     pub const L4: u32 = 0x0002_0000;
@@ -288,6 +289,24 @@ mod tests {
         st.raw_len = 3;
         let (r, len) = st.report(&mut seq);
         assert_eq!((len, &r[..3], seq), (3, &[0x45, 0x11, 0x22][..], 8));
+    }
+
+    /// `clients/shared/sc2-vectors.json` `buttons`: the Swift and Kotlin wire maps read the same
+    /// rows in the other direction.
+    #[test]
+    fn fallback_buttons_match_the_shared_vectors() {
+        let raw = include_str!("../../../../../clients/shared/sc2-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vector file parses");
+        for row in file["buttons"].as_array().expect("buttons") {
+            let wire = row["wire"].as_u64().unwrap() as u32;
+            let st = TritonState::from_gamepad(wire, 0, 0, 0, 0, 0, 0);
+            assert_eq!(
+                u64::from(st.buttons),
+                row["sc2"].as_u64().unwrap(),
+                "{}",
+                row["name"]
+            );
+        }
     }
 
     #[test]

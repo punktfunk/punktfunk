@@ -25,9 +25,10 @@ const ID_WIRELESS: u8 = 0x79;
 /// SDL `TritonButtons` bits that [`Gate::system_forward`] keeps local.
 const BTN_QAM: u32 = 0x0000_0010;
 const BTN_STEAM: u32 = 0x0001_0000;
-/// SDL `TritonButtons` bits of the ring chord, Select (View) then A.
+/// SDL `TritonButtons` bits of the ring chord, Select (View ⧉) then A. SDL's enum calls `0x4000`
+/// MENU, but drives BACK from it, as hid-steam does.
 const BTN_A: u32 = 0x0000_0001;
-const BTN_VIEW: u32 = 0x0000_0040;
+const BTN_VIEW: u32 = 0x0000_4000;
 
 /// A queued host write waits at most this long behind a read.
 const READ_TIMEOUT_MS: i32 = 4;
@@ -323,6 +324,21 @@ mod tests {
         r[30..34].copy_from_slice(&ts.to_le_bytes());
         r[36] = 0x11; // gyro
         r
+    }
+
+    /// The ring chord's Select is the bit `clients/shared/sc2-vectors.json` maps to wire Back,
+    /// so the raw gate holds the same button the typed plane opens the ring on.
+    #[test]
+    fn ring_select_is_the_shared_back_bit() {
+        let raw = include_str!("../../../clients/shared/sc2-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vector file parses");
+        let back = file["buttons"]
+            .as_array()
+            .expect("buttons")
+            .iter()
+            .find(|r| r["name"] == "back")
+            .expect("back row");
+        assert_eq!(u64::from(BTN_VIEW), back["sc2"].as_u64().unwrap());
     }
 
     /// `clients/shared/sc2-vectors.json`'s trace through one gate; the Swift and Kotlin gates
