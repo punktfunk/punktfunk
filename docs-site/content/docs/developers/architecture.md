@@ -47,12 +47,12 @@ comes back.
 
 Both run in one `punktfunk-host serve` process.
 
-| | `punktfunk/1` | GameStream |
+| | `punktfunk/2` | GameStream |
 |---|---|---|
 | Clients | The native clients | Moonlight |
 | On | Always | `serve --gamestream` (trusted LAN only) |
 | Control | QUIC: SPAKE2 pairing, mode changes, clock sync, adaptive bitrate, clipboard | HTTPS pairing (nvhttp), RTSP, ENet |
-| Data | UDP, GF(2¹⁶) Leopard FEC, AES-GCM | UDP, GF(2⁸) Reed–Solomon FEC |
+| Data | The QUIC port's UDP path, GF(2¹⁶) Leopard FEC, keys from the TLS exporter | UDP, GF(2⁸) Reed–Solomon FEC |
 | Discovery | mDNS `_punktfunk._udp` | mDNS `_nvstream._tcp` |
 | Code | `punktfunk-core`, `punktfunk-host/src/native*` | `punktfunk-host/src/gamestream` |
 
@@ -60,10 +60,10 @@ Both run in one `punktfunk-host serve` process.
 plane, WebTransport for the browser client, is off unless `--webtransport` is passed. Port numbers:
 [Ports](/docs/ports).
 
-`punktfunk/2` is the native protocol's successor, a preview the host answers under
-`PUNKTFUNK_PROTOCOL=2` (ALPN `pkf2`, beside `pkf1`). Control and media share the QUIC port, media
-keys come from the TLS exporter, and timestamps run on a per-session clock. Native clients offer
-it on every dial; the browser plane serves it at `/pf2` under the same opt-in.
+`punktfunk/2` is ALPN `pkf2`. Control and media share the QUIC port, media keys come from the
+TLS exporter, and timestamps run on a per-session clock. The browser plane serves it at `/pf2`. A
+client that offers only `pkf1` is closed with the wire-version code, which it shows as "update
+both".
 
 ## Control plane and management API
 
@@ -174,7 +174,7 @@ git dependencies.
   `WxH@Hz`; every compositor keeps its own backend behind the `VirtualDisplay` trait. Scaling
   happens in the client's presenter.
 - **FEC sized to the protocol.** GF(2⁸) (at most 255 shards a block) for Moonlight; GF(2¹⁶) (up
-  to 65535 shards, O(n log n)) for `punktfunk/1`.
+  to 65535 shards, O(n log n)) for `punktfunk/2`.
 - **Each version moves alone.** `WIRE_VERSION` changes only when the handshake or a plane breaks,
   and hosts equality-check it. `ABI_VERSION` tracks the C surface; `PROTOCOL_VERSION` in
   `pf-driver-proto` tracks the driver. Never ride one bump on another.

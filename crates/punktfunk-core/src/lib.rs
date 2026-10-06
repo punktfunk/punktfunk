@@ -67,7 +67,7 @@ pub mod transport;
 pub mod video_fit;
 pub mod wol;
 
-pub use config::{CompositorPref, Config, FecConfig, FecScheme, Mode, ProtocolPhase, Role};
+pub use config::{CompositorPref, Config, FecConfig, FecScheme, Mode, Role};
 pub use error::{PunktfunkError, PunktfunkStatus, Result};
 pub use session::{Frame, Session};
 pub use stats::Stats;
@@ -82,14 +82,6 @@ pub use stats::Stats;
 /// the caller's buffer is a bump: the version check is the overrun guard
 /// (`PunktfunkHidOutput` at 27, `PunktfunkProbeResult` at 43).
 ///
-/// Not [`WIRE_VERSION`]. The C surface can grow without a wire byte changing.
-/// Pin the integer in `punktfunk-ffi` (`abi_version_is_pinned`). Per-bump notes live
-/// in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 43;
-
-/// punktfunk/1 wire version. `Hello`/`Welcome` carry it; hosts equality-check it.
-///
-/// Separate from [`ABI_VERSION`]: the C surface can grow without a wire byte changing.
-/// Bump only when the handshake or a plane changes incompatibly. Riding a C-only bump
-/// onto the wire locks new clients out of every deployed host.
-pub const WIRE_VERSION: u32 = 2;
+/// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
+/// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
+pub const ABI_VERSION: u32 = 44;

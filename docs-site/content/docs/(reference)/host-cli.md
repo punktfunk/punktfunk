@@ -32,7 +32,7 @@ and `web` print their usage when run with no arguments.
 
 ## `serve`
 
-Runs the native `punktfunk/1` host and the management API in one process. The native plane always
+Runs the native `punktfunk/2` host and the management API in one process. The native plane always
 runs.
 
 ```sh
@@ -44,7 +44,6 @@ punktfunk-host serve
 | `--gamestream` / `--moonlight` | `PUNKTFUNK_GAMESTREAM=1` | Also serve stock [Moonlight](/docs/moonlight) clients. Trusted LAN only: GameStream pairs over plain HTTP. |
 | `--native-port <PORT>` | `PUNKTFUNK_NATIVE_PORT` | Native QUIC port (default `9777`). |
 | `--mgmt-bind <IP:PORT>` | `PUNKTFUNK_MGMT_BIND` | Management API address (default `0.0.0.0:47990`). `127.0.0.1:47990` keeps it off the LAN, and paired clients can't browse your library. |
-| `--data-port <PORT>` | `PUNKTFUNK_DATA_PORT` | Pin the video data plane to one UDP port, to open or forward. Default: a fresh port per session. |
 | `--webtransport` | `PUNKTFUNK_WEBTRANSPORT=1` | Also accept the [browser client](/docs/browser-client) (preview). |
 | `--webtransport-port <PORT>` | `PUNKTFUNK_WEBTRANSPORT_PORT` | Its UDP port (default `9778`). |
 | `--webtransport-bind <IP>` | `PUNKTFUNK_WEBTRANSPORT_BIND` | Its interface (default: all). |
@@ -142,7 +141,7 @@ covers the host cached for clients.
 
 ## `punktfunk1-host`
 
-A standalone native-only host for testing the `punktfunk/1` path, with no GameStream and no console.
+A standalone native-only host for testing the `punktfunk/2` path, with no GameStream and no console.
 Pairing is required; it logs a PIN at startup.
 
 ```sh
@@ -166,7 +165,6 @@ punktfunk-host punktfunk1-host --source virtual
 | `--max-sessions <N>` | Exit after N sessions (default `0`, serve forever). |
 | `--allow-tofu` | Also accept unpaired clients. Trusted LANs only. |
 | `--pairing-pin <PIN>` | Fixed pairing PIN, for test harnesses. A guessable PIN defeats the rate limit. |
-| `--data-port <PORT>` | Pin the data plane to one UDP port. Fits one session; concurrent ones get a random port. |
 | `--idle-timeout-ms <MS>` | How fast a dead client is detected (QUIC idle timeout, default 8000). |
 | `--no-mdns` | Skip the mDNS advert. |
 

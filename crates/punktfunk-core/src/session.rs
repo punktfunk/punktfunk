@@ -1,25 +1,22 @@
 //! Session lifecycle and the two hot-path state machines.
 //!
 //! - **Host** ([`Session::submit_frame`]): encoded access unit → FEC + packetize →
-//!   optional AES-GCM seal → transport send.
-//! - **Client** ([`Session::poll_frame`]): transport recv → optional open → reorder +
-//!   FEC recover + reassemble → whole access unit.
+//!   seal under the exporter's media keys → transport send.
+//! - **Client** ([`Session::poll_frame`]): transport recv → open → reorder + FEC recover +
+//!   reassemble → whole access unit.
 //!
-//! Both directions also carry input: a client [`Session::send_input`]s events; the host
-//! drains them with [`Session::poll_input`].
+//! Input rides the QUIC connection, not this plane.
 
 use crate::config::{Config, Role};
 use crate::crypto::{MediaKeys, SessionCrypto};
 use crate::error::{PunktfunkError, Result};
 use crate::fec::{coder_for, ErasureCoder};
-use crate::input::InputEvent;
 use crate::packet::{
     encode_v2, PacketHeader, Packetizer, Reassembler, ReassemblerLimits, StreamedAu, V2Stamp,
     MAX_DATAGRAM_BYTES,
 };
 use crate::stats::{Stats, StatsCounters};
 use crate::transport::Transport;
-use zerocopy::IntoBytes;
 
 /// One contiguous piece of an access unit under [`Session::set_deliver_frame_parts`].
 /// Handed up while the rest is still on the wire so a `PARTIAL_FRAME` decoder can start
@@ -61,30 +58,19 @@ pub struct Frame {
     pub received_ns: u64,
 }
 
-/// What a `punktfunk/2` session takes beyond [`Config`] ([`Session::new_v2`]).
-#[derive(Clone, Debug)]
+/// What a session takes beyond [`Config`] ([`Session::new`]). `Default` is unsealed with capture
+/// times from 0, for a loopback.
+#[derive(Clone, Debug, Default)]
 pub struct MediaV2 {
     /// The host instant, Unix ns, that capture time 0 stands for. Both ends learn it in the
     /// handshake; the wire carries microseconds after it.
     pub clock_origin_ns: u64,
     /// Sealing keys from the connection's exporter. `None` on a carrier that already
-    /// encrypts (WebTransport); `Config::encrypt`, `key` and `salt` are never used.
+    /// encrypts (WebTransport).
     pub keys: Option<MediaKeys>,
     /// Host: the session clock video pts leave in. Its origin is `clock_origin_ns`. `None`
     /// on a receiver, and on a sender whose pts are already wire time.
     pub clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
-}
-
-/// Which header a session writes. `punktfunk/2` keeps the stamp it puts on every packet;
-/// its `seq` is filled per packet.
-#[derive(Clone, Debug)]
-enum Framing {
-    V1,
-    /// The stamp, and on the host the session clock its pts leave in.
-    V2(
-        V2Stamp,
-        Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
-    ),
 }
 
 /// One end of a stream. Built for a single [`Role`]; the other role's methods return
@@ -95,7 +81,10 @@ enum Framing {
 /// sealed datagram is not. Video also dedups per-frame in the reassembler.
 pub struct Session {
     config: Config,
-    framing: Framing,
+    /// The header fields every packet carries; `seq` is filled per packet.
+    stamp: V2Stamp,
+    /// Host: the session clock video pts leave in. `None` when pts are already wire time.
+    clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
     coder: Box<dyn ErasureCoder>,
     /// `Arc` so the second seal lane can share the cipher; uncontended otherwise.
     crypto: Option<std::sync::Arc<SessionCrypto>>,
@@ -144,33 +133,21 @@ fn stamp_received(mut f: Frame) -> Frame {
     f
 }
 
-/// Write one packet's plaintext at its final wire offset. `punktfunk/1`: `seq(8) ‖ header ‖
-/// body` sealed, `header ‖ body` clear. `punktfunk/2`: `header ‖ body` either way, the packet
-/// number inside the header. A sealed wire ends in TAG_LEN zeros for the tag.
+/// Write one packet's plaintext at its final wire offset: `header ‖ body`, the packet number
+/// inside the header. A sealed wire ends in TAG_LEN zeros for the tag.
 fn stage_wire(
     wire: &mut Vec<u8>,
-    framing: &Framing,
+    stamp: &V2Stamp,
+    clock: Option<&crate::quic::v2::clock::SessionClock>,
     seq: u64,
     sealed: bool,
     hdr: &PacketHeader,
     body: &[u8],
 ) {
     wire.clear();
-    match framing {
-        Framing::V1 => {
-            if sealed {
-                wire.extend_from_slice(&seq.to_be_bytes());
-            }
-            wire.extend_from_slice(hdr.as_bytes());
-        }
-        Framing::V2(stamp, clock) => {
-            let pts_ns = clock
-                .as_ref()
-                .map_or(hdr.pts_ns, |c| c.video_to_wire(hdr.pts_ns));
-            let hdr = PacketHeader { pts_ns, ..*hdr };
-            wire.extend_from_slice(&encode_v2(&hdr, &V2Stamp { seq, ..*stamp }))
-        }
-    }
+    let pts_ns = clock.map_or(hdr.pts_ns, |c| c.video_to_wire(hdr.pts_ns));
+    let hdr = PacketHeader { pts_ns, ..*hdr };
+    wire.extend_from_slice(&encode_v2(&hdr, &V2Stamp { seq, ..*stamp }));
     wire.extend_from_slice(body);
     if sealed {
         wire.resize(wire.len() + crate::crypto::TAG_LEN, 0);
@@ -184,7 +161,7 @@ mod seal;
 pub use perf::{PumpPerf, SealPerf};
 
 use perf::TimedCoder;
-use replay::{seq_of, ReplayWindow};
+use replay::ReplayWindow;
 use seal::{
     hand_chunk, seal_wire_slice, SealJob, SealLane, SEAL_CHUNK_SHARDS, TWO_LANE_MIN_PACKETS,
 };
@@ -196,17 +173,29 @@ pub use seal::{SealSink, SendFn};
 const RECV_BATCH: usize = 128;
 
 impl Session {
-    pub fn new(config: Config, transport: Box<dyn Transport>) -> Result<Session> {
+    /// [`crate::packet::encode_v2`] headers both ways, sealed under `media.keys` when it has
+    /// them.
+    pub fn new(config: Config, media: MediaV2, transport: Box<dyn Transport>) -> Result<Session> {
         config.validate()?;
         let coder = coder_for(config.fec.scheme);
-        let crypto = config.encrypt.then(|| {
-            std::sync::Arc::new(SessionCrypto::new(&config.key, config.salt, config.role))
-        });
-        let replay = config.encrypt.then(ReplayWindow::new);
+        let crypto = media
+            .keys
+            .as_ref()
+            .map(|keys| std::sync::Arc::new(SessionCrypto::media(keys, config.role)));
+        let replay = crypto.is_some().then(ReplayWindow::new);
         let packetizer = Packetizer::new(&config);
-        let reassembler = Reassembler::new(ReassemblerLimits::from_config(&config));
+        let reassembler = Reassembler::new(
+            ReassemblerLimits::from_config(&config),
+            media.clock_origin_ns,
+        );
         Ok(Session {
-            framing: Framing::V1,
+            stamp: V2Stamp {
+                seq: 0,
+                epoch: 0,
+                clock_origin_ns: media.clock_origin_ns,
+                max_data_per_block: config.fec.max_data_per_block,
+            },
+            clock: media.clock,
             coder,
             crypto,
             replay,
@@ -239,45 +228,10 @@ impl Session {
         })
     }
 
-    /// A `punktfunk/2` session: [`crate::packet::encode_v2`] headers both ways, sealed under
-    /// `media.keys` when it has them. `config.encrypt` must be off: v1's key and salt never apply.
-    pub fn new_v2(
-        config: Config,
-        media: MediaV2,
-        transport: Box<dyn Transport>,
-    ) -> Result<Session> {
-        if config.encrypt {
-            return Err(PunktfunkError::InvalidArg(
-                "punktfunk/2 media takes its keys from MediaV2",
-            ));
-        }
-        let mut s = Session::new(config, transport)?;
-        if let Some(keys) = &media.keys {
-            s.crypto = Some(std::sync::Arc::new(SessionCrypto::media(
-                keys,
-                s.config.role,
-            )));
-            s.replay = Some(ReplayWindow::new());
-        }
-        s.framing = Framing::V2(
-            V2Stamp {
-                seq: 0,
-                epoch: 0,
-                clock_origin_ns: media.clock_origin_ns,
-                max_data_per_block: s.config.fec.max_data_per_block,
-            },
-            media.clock,
-        );
-        s.reassembler.set_v2(media.clock_origin_ns);
-        Ok(s)
-    }
-
     /// Host: stamp `epoch` on every packet from the next frame on, after the `StreamConfig`
-    /// that announces it. No effect on `punktfunk/1`, which has no epoch.
+    /// that announces it.
     pub fn set_epoch(&mut self, epoch: u8) {
-        if let Framing::V2(stamp, _) = &mut self.framing {
-            stamp.epoch = epoch;
-        }
+        self.stamp.epoch = epoch;
     }
 
     /// Drain receive-path stage timings since the last call (window semantics: the pump
@@ -333,47 +287,6 @@ impl Session {
         }
     }
 
-    /// Seal one plaintext packet into reused `wire` in place. Layout is
-    /// `seq(8) || ciphertext || tag` with crypto on, or the packet with crypto off.
-    /// `clear()` keeps the buffer's capacity; the receiver derives the GCM nonce from `seq`.
-    fn seal_into(&mut self, packet: &[u8], wire: &mut Vec<u8>) -> Result<()> {
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.wrapping_add(1);
-        wire.clear();
-        match &self.crypto {
-            Some(c) => {
-                wire.extend_from_slice(&seq.to_be_bytes());
-                wire.extend_from_slice(packet);
-                wire.resize(wire.len() + crate::crypto::TAG_LEN, 0); // tag scratch for seal_in_place
-                c.seal_in_place(seq, &mut wire[8..])?;
-            }
-            None => wire.extend_from_slice(packet),
-        }
-        Ok(())
-    }
-
-    fn open_from_wire(&self, wire: &[u8]) -> Result<Vec<u8>> {
-        match &self.crypto {
-            Some(c) => {
-                if wire.len() < 8 {
-                    return Err(PunktfunkError::BadPacket);
-                }
-                let seq = u64::from_be_bytes(wire[..8].try_into().unwrap());
-                c.open(seq, &wire[8..])
-            }
-            None => Ok(wire.to_vec()),
-        }
-    }
-
-    /// Anti-replay: `true` = fresh, `false` = replay or older than the window. Returns `true`
-    /// when the session is not encrypting (no window, no sequence on the wire).
-    fn accept_seq(&mut self, seq: u64) -> bool {
-        match self.replay.as_mut() {
-            Some(w) => w.accept(seq),
-            None => true,
-        }
-    }
-
     // -- Host path --------------------------------------------------------
 
     /// Host: FEC-protect, packetize, and seal one access unit without sending. Counts the
@@ -417,12 +330,9 @@ impl Session {
 
     /// Bytes one AU of `frame_len` puts on the wire at the current geometry.
     pub fn frame_wire_len(&self, frame_len: usize) -> usize {
-        let sealed = self.crypto.is_some();
-        let header = match self.framing {
-            Framing::V1 if sealed => crate::packet::HEADER_LEN + crate::packet::CRYPTO_OVERHEAD,
-            Framing::V1 => crate::packet::HEADER_LEN,
-            Framing::V2(..) if sealed => crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN,
-            Framing::V2(..) => crate::packet::V2_HEADER_LEN,
+        let header = match self.crypto {
+            Some(_) => crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN,
+            None => crate::packet::V2_HEADER_LEN,
         };
         self.packetizer.geometry(frame_len).wire_packets()
             * (self.packetizer.shard_payload() + header)
@@ -479,7 +389,7 @@ impl Session {
         geo.check()?;
         let perf_armed = self.seal_perf.is_some();
         let fec_ns = std::sync::atomic::AtomicU64::new(0);
-        let framing = self.framing.clone();
+        let (stamp, clock) = (self.stamp, self.clock.clone());
         let Session {
             packetizer,
             coder,
@@ -548,7 +458,7 @@ impl Session {
             }
             let wire = &mut wires[used];
             used += 1;
-            stage_wire(wire, &framing, *next_seq, true, hdr, body);
+            stage_wire(wire, &stamp, clock.as_deref(), *next_seq, true, hdr, body);
             *next_seq = next_seq.wrapping_add(1);
             bytes += wire.len() as u64;
             if is_data && used - chunk_start >= SEAL_CHUNK_SHARDS {
@@ -706,7 +616,7 @@ impl Session {
         let fec_ns = std::sync::atomic::AtomicU64::new(0);
         let mut seal_ns = 0u64;
         let two_lane = self.seal_two_lane;
-        let framing = self.framing.clone();
+        let (stamp, clock) = (self.stamp, self.clock.clone());
         let Session {
             packetizer,
             coder,
@@ -743,7 +653,15 @@ impl Session {
                 }
                 let wire = &mut wires[*used];
                 *used += 1;
-                stage_wire(wire, &framing, *next_seq, encrypting, hdr, body);
+                stage_wire(
+                    wire,
+                    &stamp,
+                    clock.as_deref(),
+                    *next_seq,
+                    encrypting,
+                    hdr,
+                    body,
+                );
                 *next_seq = next_seq.wrapping_add(1);
                 Ok(())
             };
@@ -838,16 +756,15 @@ impl Session {
         self.wire_pool = wires;
     }
 
-    /// Host: GSO on this session's transport where the platform has it. The env gate
-    /// (`PUNKTFUNK_GSO`) stays beside it; a path that refused GSO stays refused.
+    /// Host: GSO on this session's transport where the platform has it.
     pub fn set_gso(&self, on: bool) {
         self.transport.set_gso(on);
     }
 
-    /// Host: send one chunk of already-sealed packets in one `sendmmsg`. Returns how many
-    /// the kernel accepted; the rest are send-buffer drops. Whole frame, or per paced chunk.
+    /// Host: send one chunk of already-sealed packets as one batch. Returns how many the
+    /// kernel accepted; the rest are send-buffer drops. Whole frame, or per paced chunk.
     pub fn send_sealed(&self, packets: &[&[u8]]) -> Result<usize> {
-        // GSO when enabled (UdpTransport/Linux), else sendmmsg — same short-count drop contract.
+        // GSO where the transport has it, else a batch — same short-count drop contract.
         let sent = self.transport.send_gso(packets)?;
         if sent < packets.len() {
             StatsCounters::add(
@@ -923,35 +840,6 @@ impl Session {
 
     pub fn fec_percent(&self) -> u8 {
         self.packetizer.fec_percent()
-    }
-
-    pub fn poll_input(&mut self) -> Result<Option<InputEvent>> {
-        if self.config.role != Role::Host {
-            return Err(PunktfunkError::InvalidArg(
-                "poll_input called on a client session",
-            ));
-        }
-        if matches!(self.framing, Framing::V2(..)) {
-            return Err(PunktfunkError::Unsupported("punktfunk/2 input rides QUIC"));
-        }
-        while let Some(wire) = self.transport.recv()? {
-            let pkt = match self.open_from_wire(&wire) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            // A captured input datagram opens cleanly (seq + tag still valid); the window
-            // rejects the second copy. `len >= 8` holds because sealed open succeeded.
-            if self.replay.is_some() && !self.accept_seq(seq_of(&wire)) {
-                StatsCounters::add(&self.stats.packets_dropped, 1);
-                continue;
-            }
-            StatsCounters::add(&self.stats.packets_received, 1);
-            if let Some(ev) = InputEvent::decode(&pkt) {
-                return Ok(Some(ev));
-            }
-            // Stray video (or anything else) — ignore and keep draining.
-        }
-        Ok(None)
     }
 
     // -- Client path ------------------------------------------------------
@@ -1067,7 +955,7 @@ impl Session {
             // decrypt accounting (exception path, not line rate).
             let t_dec = self.perf.is_some().then(std::time::Instant::now);
             let (pkt_range, seq) = match &self.crypto {
-                Some(c) if c.is_media() => {
+                Some(c) => {
                     use crate::packet::V2_CLEAR_LEN;
                     if len < crate::packet::V2_HEADER_LEN + crate::crypto::TAG_LEN {
                         continue;
@@ -1083,17 +971,6 @@ impl Session {
                     let (aad, rest) = wire.split_at_mut(V2_CLEAR_LEN);
                     match c.open_media(seq, aad, rest) {
                         Ok(n) => (0..V2_CLEAR_LEN + n, Some(seq)),
-                        Err(_) => continue,
-                    }
-                }
-                Some(c) => {
-                    // A sealed datagram is at least seq prefix + tag; anything shorter is noise.
-                    if len < 8 + crate::crypto::TAG_LEN {
-                        continue;
-                    }
-                    let seq = u64::from_be_bytes(self.recv_scratch[i][..8].try_into().unwrap());
-                    match c.open_in_place(seq, &mut self.recv_scratch[i][8..len]) {
-                        Ok(n) => (8..8 + n, Some(seq)),
                         Err(_) => continue,
                     }
                 }
@@ -1176,42 +1053,20 @@ impl Session {
         StatsCounters::add(&self.stats.packets_dropped, flushed);
         Ok(flushed)
     }
-
-    pub fn send_input(&mut self, event: &InputEvent) -> Result<()> {
-        if self.config.role != Role::Client {
-            return Err(PunktfunkError::InvalidArg(
-                "send_input called on a host session",
-            ));
-        }
-        if matches!(self.framing, Framing::V2(..)) {
-            return Err(PunktfunkError::Unsupported("punktfunk/2 input rides QUIC"));
-        }
-        let pkt = event.encode();
-        let mut wire = Vec::new(); // rare + per-event; no pool
-        self.seal_into(&pkt, &mut wire)?;
-        StatsCounters::add(&self.stats.packets_sent, 1);
-        StatsCounters::add(&self.stats.bytes_sent, wire.len() as u64);
-        if !self.transport.send(&wire)? {
-            StatsCounters::add(&self.stats.packets_send_dropped, 1);
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod wire_equivalence_tests {
     use super::*;
-    use crate::config::{FecConfig, FecScheme, ProtocolPhase};
-    use crate::crypto::SessionKey;
+    use crate::config::{FecConfig, FecScheme};
+    use crate::crypto::MediaSuite;
+    use crate::packet::{HEADER_LEN, V2_CLEAR_LEN};
     use crate::transport::loopback_pair;
+    use zerocopy::FromBytes;
 
-    fn host_cfg(scheme: FecScheme, fec_percent: u8, encrypt: bool) -> Config {
+    fn host_cfg(scheme: FecScheme, fec_percent: u8) -> Config {
         Config {
             role: Role::Host,
-            phase: match scheme {
-                FecScheme::Gf8 => ProtocolPhase::P1GameStream,
-                FecScheme::Gf16 => ProtocolPhase::P2Punktfunk,
-            },
             fec: FecConfig {
                 scheme,
                 fec_percent,
@@ -1219,20 +1074,27 @@ mod wire_equivalence_tests {
             },
             shard_payload: 64,
             max_frame_bytes: 8 * 1024 * 1024,
-            encrypt,
-            key: SessionKey::Aes128Gcm([7u8; 16]),
-            salt: [3, 1, 4, 1],
             loopback_drop_period: 0,
         }
     }
 
-    fn host_session(cfg: Config) -> Session {
-        let (h, _c) = loopback_pair(0, 0);
-        Session::new(cfg, Box::new(h)).unwrap()
+    /// Sealed under test keys when `sealed`, else as on a carrier that already encrypts.
+    /// Capture times count from 0.
+    fn media(sealed: bool) -> MediaV2 {
+        MediaV2 {
+            clock_origin_ns: 0,
+            keys: sealed.then(|| media_keys(MediaSuite::Aes128Gcm)),
+            clock: None,
+        }
     }
 
-    /// Reference wire path: `packetize` wrapper then per-packet `seal_into`. Shares
-    /// session state with `seal_frame` and nothing else, so the equality pin is real.
+    fn host_session(cfg: Config, sealed: bool) -> Session {
+        let (h, _c) = loopback_pair(0, 0);
+        Session::new(cfg, media(sealed), Box::new(h)).unwrap()
+    }
+
+    /// Reference wire path: the `packetize` wrapper, then each packet staged and sealed on its
+    /// own. Shares session state with `seal_frame` and nothing else, so the equality pin is real.
     fn seal_via_wrapper(sess: &mut Session, frame: &[u8], pts_ns: u64, flags: u32) -> Vec<Vec<u8>> {
         let packets = sess
             .packetizer
@@ -1240,8 +1102,24 @@ mod wire_equivalence_tests {
             .unwrap();
         let mut wires = Vec::new();
         for pkt in &packets {
+            let hdr = PacketHeader::read_from_bytes(&pkt[..HEADER_LEN]).unwrap();
+            let seq = sess.next_seq;
+            sess.next_seq += 1;
+            let sealed = sess.crypto.is_some();
             let mut wire = Vec::new();
-            sess.seal_into(pkt, &mut wire).unwrap();
+            stage_wire(
+                &mut wire,
+                &sess.stamp,
+                None,
+                seq,
+                sealed,
+                &hdr,
+                &pkt[HEADER_LEN..],
+            );
+            if let Some(c) = &sess.crypto {
+                let (aad, rest) = wire.split_at_mut(V2_CLEAR_LEN);
+                c.seal_media(seq, aad, rest).unwrap();
+            }
             wires.push(wire);
         }
         wires
@@ -1255,8 +1133,8 @@ mod wire_equivalence_tests {
         for scheme in [FecScheme::Gf8, FecScheme::Gf16] {
             for fec_percent in [0u8, 50] {
                 for encrypt in [true, false] {
-                    let mut opt = host_session(host_cfg(scheme, fec_percent, encrypt));
-                    let mut refr = host_session(host_cfg(scheme, fec_percent, encrypt));
+                    let mut opt = host_session(host_cfg(scheme, fec_percent), encrypt);
+                    let mut refr = host_session(host_cfg(scheme, fec_percent), encrypt);
 
                     // shard_payload 64 × max_data_per_block 8: >512 B spans FEC blocks.
                     let frames: Vec<Vec<u8>> = vec![
@@ -1297,9 +1175,9 @@ mod wire_equivalence_tests {
     fn chunk_pipeline_matches_the_whole_frame_seal() {
         for encrypt in [true, false] {
             for fec_percent in [0u8, 50] {
-                let cfg = host_cfg(FecScheme::Gf16, fec_percent, encrypt);
-                let mut piped = host_session(cfg.clone());
-                let mut whole = host_session(cfg);
+                let cfg = host_cfg(FecScheme::Gf16, fec_percent);
+                let mut piped = host_session(cfg.clone(), encrypt);
+                let mut whole = host_session(cfg, encrypt);
                 // At shard 64: 47, 2, 313 and 1 data shards; 313 is three chunks of 128.
                 let frames = [pattern(3000), pattern(100), pattern(20000), Vec::new()];
                 for (i, frame) in frames.iter().enumerate() {
@@ -1345,8 +1223,8 @@ mod wire_equivalence_tests {
     /// corpse must be dropped so the next large frame respawns a fresh lane.
     #[test]
     fn dead_seal_lane_falls_back_to_single_lane_whole_frame() {
-        let mut opt = host_session(host_cfg(FecScheme::Gf16, 20, true));
-        let mut refr = host_session(host_cfg(FecScheme::Gf16, 20, true));
+        let mut opt = host_session(host_cfg(FecScheme::Gf16, 20), true);
+        let mut refr = host_session(host_cfg(FecScheme::Gf16, 20), true);
         // Worker already gone: both far ends dropped, so `send` fails immediately and
         // hands the job (back half of the frame) back.
         let (to_worker, jobs) = std::sync::mpsc::sync_channel::<SealJob>(1);
@@ -1383,7 +1261,6 @@ mod wire_equivalence_tests {
         use crate::packet::USER_FLAG_CHUNK_ALIGNED;
         let mk = |role| Config {
             role,
-            phase: ProtocolPhase::P2Punktfunk,
             fec: FecConfig {
                 scheme: FecScheme::Gf16,
                 fec_percent: 0, // no parity — any drop leaves a hole
@@ -1391,14 +1268,11 @@ mod wire_equivalence_tests {
             },
             shard_payload: 1024,
             max_frame_bytes: 8 * 1024 * 1024,
-            encrypt: false,
-            key: SessionKey::Aes128Gcm([0u8; 16]),
-            salt: [0u8; 4],
             loopback_drop_period: 0,
         };
         let (h, c) = crate::transport::loopback_pair(3, 1);
-        let mut host = Session::new(mk(Role::Host), Box::new(h)).unwrap();
-        let mut client = Session::new(mk(Role::Client), Box::new(c)).unwrap();
+        let mut host = Session::new(mk(Role::Host), media(false), Box::new(h)).unwrap();
+        let mut client = Session::new(mk(Role::Client), media(false), Box::new(c)).unwrap();
         client.set_deliver_partial_frames(true);
 
         let frame = pattern(8 * 1024);
@@ -1444,8 +1318,8 @@ mod wire_equivalence_tests {
 
         // Control: without the chunk-aligned flag the same loss is a drop, opt-in or not.
         let (h2, c2) = crate::transport::loopback_pair(3, 1);
-        let mut host2 = Session::new(mk(Role::Host), Box::new(h2)).unwrap();
-        let mut client2 = Session::new(mk(Role::Client), Box::new(c2)).unwrap();
+        let mut host2 = Session::new(mk(Role::Host), media(false), Box::new(h2)).unwrap();
+        let mut client2 = Session::new(mk(Role::Client), media(false), Box::new(c2)).unwrap();
         client2.set_deliver_partial_frames(true);
         host2.submit_frame(&pattern(8 * 1024), 1_000, 0).unwrap();
         let mut saw_partial = false;
@@ -1476,7 +1350,6 @@ mod wire_equivalence_tests {
         for shard in [1216usize, crate::config::MIN_SHARD_PAYLOAD] {
             let mk = |role| Config {
                 role,
-                phase: ProtocolPhase::P2Punktfunk,
                 fec: FecConfig {
                     scheme: FecScheme::Gf16,
                     fec_percent: 0, // no parity — any drop leaves a hole
@@ -1484,14 +1357,11 @@ mod wire_equivalence_tests {
                 },
                 shard_payload: shard,
                 max_frame_bytes: 8 * 1024 * 1024,
-                encrypt: true,
-                key: SessionKey::Aes128Gcm([7u8; 16]),
-                salt: [3, 1, 4, 1],
                 loopback_drop_period: 0,
             };
             let (h, c) = crate::transport::loopback_pair(3, 1);
-            let mut host = Session::new(mk(Role::Host), Box::new(h)).unwrap();
-            let mut client = Session::new(mk(Role::Client), Box::new(c)).unwrap();
+            let mut host = Session::new(mk(Role::Host), media(true), Box::new(h)).unwrap();
+            let mut client = Session::new(mk(Role::Client), media(true), Box::new(c)).unwrap();
             client.set_deliver_partial_frames(true);
             // Parse window every embedder walks is the clamped session value.
             assert_eq!(client.shard_payload(), shard);
@@ -1548,15 +1418,15 @@ mod wire_equivalence_tests {
     #[test]
     fn mid_session_shard_swap_delivers_frames_over_the_sealed_wire() {
         let mk = |role: Role| {
-            let mut c = host_cfg(FecScheme::Gf16, 20, true);
+            let mut c = host_cfg(FecScheme::Gf16, 20);
             c.role = role;
             c.shard_payload = 1408;
             c.fec.max_data_per_block = 64;
             c
         };
         let (ht, ct) = loopback_pair(0, 0);
-        let mut host = Session::new(mk(Role::Host), Box::new(ht)).unwrap();
-        let mut client = Session::new(mk(Role::Client), Box::new(ct)).unwrap();
+        let mut host = Session::new(mk(Role::Host), media(true), Box::new(ht)).unwrap();
+        let mut client = Session::new(mk(Role::Client), media(true), Box::new(ct)).unwrap();
 
         let phases: [(usize, &[usize]); 4] = [
             (1408, &[3000, 3 * 1408]),    // negotiated default (incl. exact multiple)
@@ -1614,7 +1484,7 @@ mod wire_equivalence_tests {
         clock: Option<std::sync::Arc<crate::quic::v2::clock::SessionClock>>,
     ) -> (Session, Session) {
         let mk = |role: Role| {
-            let mut c = host_cfg(FecScheme::Gf16, 25, false);
+            let mut c = host_cfg(FecScheme::Gf16, 25);
             c.role = role;
             c.shard_payload = 512;
             c
@@ -1631,8 +1501,8 @@ mod wire_equivalence_tests {
             clock,
             ..media.clone()
         };
-        let host = Session::new_v2(mk(Role::Host), host_media, Box::new(ht)).unwrap();
-        let client = Session::new_v2(mk(Role::Client), media, Box::new(ct)).unwrap();
+        let host = Session::new(mk(Role::Host), host_media, Box::new(ht)).unwrap();
+        let client = Session::new(mk(Role::Client), media, Box::new(ct)).unwrap();
         (host, client)
     }
 
@@ -1702,20 +1572,9 @@ mod wire_equivalence_tests {
         host.submit_probe_frame(&pattern(500), origin).unwrap();
         let probe = client.poll_frame().unwrap();
         assert!(probe.flags & crate::packet::FLAG_PROBE as u32 != 0);
-        assert!(matches!(
-            client.send_input(&InputEvent {
-                kind: crate::input::InputKind::KeyDown,
-                _pad: [0; 3],
-                code: 4,
-                x: 0,
-                y: 0,
-                flags: 0,
-            }),
-            Err(PunktfunkError::Unsupported(_))
-        ));
     }
 
-    /// Parity repairs a dropped shard on the v2 wire, and v1's key never seals v2 media.
+    /// Parity repairs a dropped shard on the v2 wire.
     #[test]
     fn v2_parity_repairs_loss() {
         // Every 17th packet: at most one loss in any 8 + 2 block, always within parity.
@@ -1732,14 +1591,6 @@ mod wire_equivalence_tests {
         }
         assert_eq!(got, 20);
         assert!(client.stats().fec_recovered_shards > 0);
-        let (h, _) = loopback_pair(0, 0);
-        let sealed = host_cfg(FecScheme::Gf16, 25, true);
-        let media = MediaV2 {
-            clock_origin_ns: 0,
-            keys: None,
-            clock: None,
-        };
-        assert!(Session::new_v2(sealed, media, Box::new(h)).is_err());
     }
 
     /// A streamed frame in slice mode reassembles on the v2 wire whichever block lands first.

@@ -36,12 +36,15 @@ pub struct ClockSkew {
 /// Needs the feature for its runtime; the [`ClockProbe`]/[`ClockEcho`] codecs above do not, and a
 /// browser drives the same rounds over its own stream.
 #[cfg(feature = "quic")]
-pub async fn clock_sync<W, R>(send: &mut W, recv: &mut super::io::MsgReader<R>) -> Option<ClockSkew>
+pub async fn clock_sync<W, R>(
+    send: &mut W,
+    recv: &mut super::v2::io::FrameReader<R>,
+) -> Option<ClockSkew>
 where
     W: tokio::io::AsyncWrite + Unpin,
     R: tokio::io::AsyncRead + Unpin,
 {
-    use super::io;
+    use super::v2::{io, msg::decode};
     use std::time::Duration;
     const ROUNDS: usize = 8;
     let read_timeout = Duration::from_secs(2);
@@ -49,16 +52,15 @@ where
     let mut aside = Vec::new();
     'rounds: for _ in 0..ROUNDS {
         let t1 = wall_clock_ns();
-        let probe = ClockProbe { t1_ns: t1 }.encode();
-        if io::write_msg(send, &probe).await.is_err() {
+        if io::send(send, &ClockProbe { t1_ns: t1 }).await.is_err() {
             break;
         }
         let deadline = tokio::time::Instant::now() + read_timeout;
         let echo = loop {
-            match tokio::time::timeout_at(deadline, recv.read_msg()).await {
-                Ok(Ok(b)) => match ClockEcho::decode(&b) {
+            match tokio::time::timeout_at(deadline, recv.read_frame()).await {
+                Ok(Ok((ty, body))) => match decode::<ClockEcho>(ty, &body) {
                     Ok(e) => break e,
-                    Err(_) => aside.push(b),
+                    Err(_) => aside.push((ty, body)),
                 },
                 _ => break 'rounds, // timeout / stream error: pre-skew host
             }
@@ -242,6 +244,8 @@ impl ResyncGuard {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "quic")]
+    use crate::quic::v2::{io as v2io, io::FrameReader, msg::decode};
     use crate::quic::*;
 
     #[test]
@@ -378,12 +382,13 @@ mod tests {
         let host = tokio::spawn(async move {
             let conn = server.accept().await.unwrap().await.unwrap();
             let (mut send, recv) = conn.accept_bi().await.unwrap();
-            let mut recv = io::MsgReader::new(recv);
+            let mut recv = FrameReader::new(recv);
             let early = AudioState { muted: true };
             for round in 0..8 {
-                let probe = ClockProbe::decode(&recv.read_msg().await.unwrap()).unwrap();
+                let (ty, body) = recv.read_frame().await.unwrap();
+                let probe = decode::<ClockProbe>(ty, &body).unwrap();
                 if round == 2 {
-                    io::write_msg(&mut send, &early.encode()).await.unwrap();
+                    v2io::send(&mut send, &early).await.unwrap();
                 }
                 let t = wall_clock_ns();
                 let echo = ClockEcho {
@@ -391,22 +396,22 @@ mod tests {
                     t2_ns: t,
                     t3_ns: t,
                 };
-                io::write_msg(&mut send, &echo.encode()).await.unwrap();
+                v2io::send(&mut send, &echo).await.unwrap();
             }
             (server, conn, send)
         });
         let client = endpoint::client_insecure().unwrap();
         let conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
         let (mut send, recv) = conn.open_bi().await.unwrap();
-        let mut recv = io::MsgReader::new(recv);
+        let mut recv = FrameReader::new(recv);
         let skew = clock_sync(&mut send, &mut recv)
             .await
             .expect("host answered");
         assert_eq!(skew.rounds, 8);
         let _host = host.await.unwrap();
-        let next = recv.read_msg().await.unwrap();
+        let (ty, body) = recv.read_frame().await.unwrap();
         assert_eq!(
-            AudioState::decode(&next).unwrap(),
+            decode::<AudioState>(ty, &body).unwrap(),
             AudioState { muted: true }
         );
     }

@@ -1610,7 +1610,7 @@ fn spawn_audio(
     // Decoder + playback from the host-resolved format, never the request. Opening
     // the device from the request is the failure a clamping host would trigger.
     let fmt = punktfunk_core::audio::plane::PlaneFormat::of(&connector);
-    // A codec this client does not speak is refused out loud. `Welcome::decode`
+    // A codec this client does not speak is refused out loud. `ServerHello`
     // takes `audio_codec` verbatim — folding an unknown id onto Opus would
     // Opus-decode a `0xD3` payload (noise) or wait forever for `0xC9` (silence).
     if !matches!(

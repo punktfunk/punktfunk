@@ -178,7 +178,6 @@ pub fn start(
                         .unwrap_or_default(),
                     client_name: (!client_label.is_empty()).then(|| client_label.clone()),
                     plane: crate::events::Plane::Gamestream,
-                    wire: 0,
                     hdr: cfg.hdr,
                     ttff_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                     last_resize_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),

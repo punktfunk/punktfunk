@@ -1,23 +1,18 @@
 //! Core acceptance: round-trip access units through host→client
 //! (packetize → FEC → loopback with simulated loss → recover → reassemble)
-//! and assert byte-exact recovery, both FEC schemes, with and without
-//! encryption. Property tests cover FEC loss patterns.
+//! and assert byte-exact recovery, both FEC schemes, sealed and unsealed.
+//! Property tests cover FEC loss patterns.
 
 use proptest::prelude::*;
-use punktfunk_core::config::{Config, FecConfig, FecScheme, ProtocolPhase, Role};
-use punktfunk_core::crypto::SessionKey;
+use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+use punktfunk_core::crypto::{MediaKeys, MediaSuite};
 use punktfunk_core::fec::coder_for;
-use punktfunk_core::input::{InputEvent, InputKind};
-use punktfunk_core::session::Session;
+use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::loopback_pair;
 
-fn config(role: Role, scheme: FecScheme, encrypt: bool, drop_period: u32) -> Config {
+fn config(role: Role, scheme: FecScheme, drop_period: u32) -> Config {
     Config {
         role,
-        phase: match scheme {
-            FecScheme::Gf8 => ProtocolPhase::P1GameStream,
-            FecScheme::Gf16 => ProtocolPhase::P2Punktfunk,
-        },
         fec: FecConfig {
             scheme,
             fec_percent: 25,
@@ -25,10 +20,16 @@ fn config(role: Role, scheme: FecScheme, encrypt: bool, drop_period: u32) -> Con
         },
         shard_payload: 1024,
         max_frame_bytes: 8 * 1024 * 1024,
-        encrypt,
-        key: SessionKey::Aes128Gcm([7u8; 16]),
-        salt: [1, 2, 3, 4],
         loopback_drop_period: drop_period,
+    }
+}
+
+/// Sealed under test keys of `suite`, or unsealed; capture times count from 0.
+fn media(suite: Option<MediaSuite>) -> MediaV2 {
+    MediaV2 {
+        clock_origin_ns: 0,
+        keys: suite.map(|s| MediaKeys::derive(&[7; 32], s)),
+        clock: None,
     }
 }
 
@@ -36,18 +37,20 @@ fn config(role: Role, scheme: FecScheme, encrypt: bool, drop_period: u32) -> Con
 /// byte-identical. Returns the client's final stats.
 fn run_stream(
     scheme: FecScheme,
-    encrypt: bool,
+    suite: Option<MediaSuite>,
     drop_period: u32,
     frames: &[Vec<u8>],
 ) -> punktfunk_core::Stats {
     let (host_tp, client_tp) = loopback_pair(drop_period, 0);
     let mut host = Session::new(
-        config(Role::Host, scheme, encrypt, drop_period),
+        config(Role::Host, scheme, drop_period),
+        media(suite),
         Box::new(host_tp),
     )
     .unwrap();
     let mut client = Session::new(
-        config(Role::Client, scheme, encrypt, drop_period),
+        config(Role::Client, scheme, drop_period),
+        media(suite),
         Box::new(client_tp),
     )
     .unwrap();
@@ -79,7 +82,7 @@ fn sample_frames() -> Vec<Vec<u8>> {
 fn gf8_stream_recovers_under_loss() {
     let frames = sample_frames();
     // drop_period 8 deletes the 1st of every 8 packets → real data-shard loss.
-    let stats = run_stream(FecScheme::Gf8, false, 8, &frames);
+    let stats = run_stream(FecScheme::Gf8, None, 8, &frames);
     assert_eq!(stats.frames_completed, frames.len() as u64);
     assert!(
         stats.fec_recovered_shards > 0,
@@ -90,7 +93,7 @@ fn gf8_stream_recovers_under_loss() {
 #[test]
 fn gf16_stream_recovers_under_loss() {
     let frames = sample_frames();
-    let stats = run_stream(FecScheme::Gf16, false, 8, &frames);
+    let stats = run_stream(FecScheme::Gf16, None, 8, &frames);
     assert_eq!(stats.frames_completed, frames.len() as u64);
     assert!(stats.fec_recovered_shards > 0);
 }
@@ -98,38 +101,30 @@ fn gf16_stream_recovers_under_loss() {
 #[test]
 fn encrypted_stream_recovers_under_loss() {
     let frames = sample_frames();
-    let stats = run_stream(FecScheme::Gf8, true, 8, &frames);
+    let stats = run_stream(FecScheme::Gf8, Some(MediaSuite::Aes128Gcm), 8, &frames);
     assert_eq!(stats.frames_completed, frames.len() as u64);
 }
 
 /// ChaCha20-Poly1305 through the same lossy full-stream path. Loss/replay is
-/// cipher-independent (the replay window keys off the authenticated seq), so
+/// cipher-independent (the replay window keys off the authenticated packet number), so
 /// recovery must be byte-identical to the AES run above.
 #[test]
 fn chacha20_encrypted_stream_recovers_under_loss() {
     let frames = sample_frames();
-    let mk = |role| {
-        let mut c = config(role, FecScheme::Gf16, true, 8);
-        c.key = SessionKey::ChaCha20Poly1305([7u8; 32]);
-        c
-    };
-    let (host_tp, client_tp) = loopback_pair(8, 0);
-    let mut host = Session::new(mk(Role::Host), Box::new(host_tp)).unwrap();
-    let mut client = Session::new(mk(Role::Client), Box::new(client_tp)).unwrap();
-    for (i, frame) in frames.iter().enumerate() {
-        host.submit_frame(frame, i as u64 * 1_000_000, 0).unwrap();
-        let got = client
-            .poll_frame()
-            .expect("frame should recover despite loss");
-        assert_eq!(&got.data, frame, "frame {i} mismatched after recovery");
-    }
-    assert!(client.stats().fec_recovered_shards > 0);
+    let stats = run_stream(
+        FecScheme::Gf16,
+        Some(MediaSuite::ChaCha20Poly1305),
+        8,
+        &frames,
+    );
+    assert_eq!(stats.frames_completed, frames.len() as u64);
+    assert!(stats.fec_recovered_shards > 0);
 }
 
 #[test]
 fn lossless_stream_is_exact() {
     let frames = sample_frames();
-    let stats = run_stream(FecScheme::Gf16, false, 0, &frames);
+    let stats = run_stream(FecScheme::Gf16, None, 0, &frames);
     assert_eq!(stats.frames_completed, frames.len() as u64);
     assert_eq!(
         stats.fec_recovered_shards, 0,
@@ -144,12 +139,14 @@ fn lossless_stream_is_exact() {
 fn flush_backlog_discards_queue_and_recovers() {
     let (host_tp, client_tp) = loopback_pair(0, 0);
     let mut host = Session::new(
-        config(Role::Host, FecScheme::Gf16, false, 0),
+        config(Role::Host, FecScheme::Gf16, 0),
+        media(None),
         Box::new(host_tp),
     )
     .unwrap();
     let mut client = Session::new(
-        config(Role::Client, FecScheme::Gf16, false, 0),
+        config(Role::Client, FecScheme::Gf16, 0),
+        media(None),
         Box::new(client_tp),
     )
     .unwrap();
@@ -175,36 +172,6 @@ fn flush_backlog_discards_queue_and_recovers() {
     host.submit_frame(&recovery, 99_000_000, 0).unwrap();
     let got = client.poll_frame().expect("post-flush frame completes");
     assert_eq!(got.data, recovery);
-}
-
-#[test]
-fn input_round_trips_client_to_host() {
-    let (host_tp, client_tp) = loopback_pair(0, 0);
-    let mut host = Session::new(
-        config(Role::Host, FecScheme::Gf8, false, 0),
-        Box::new(host_tp),
-    )
-    .unwrap();
-    let mut client = Session::new(
-        config(Role::Client, FecScheme::Gf8, false, 0),
-        Box::new(client_tp),
-    )
-    .unwrap();
-
-    let sent = InputEvent {
-        kind: InputKind::MouseMove,
-        _pad: [0; 3],
-        code: 0,
-        x: -7,
-        y: 13,
-        flags: 0,
-    };
-    client.send_input(&sent).unwrap();
-    let got = host
-        .poll_input()
-        .unwrap()
-        .expect("host should receive the input event");
-    assert_eq!(got, sent);
 }
 
 proptest! {

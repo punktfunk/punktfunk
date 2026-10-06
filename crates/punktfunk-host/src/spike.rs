@@ -363,10 +363,18 @@ struct Loopback {
 impl Loopback {
     fn new() -> Result<Loopback> {
         let (host_tx, client_tx) = punktfunk_core::transport::loopback_pair(0, 0);
-        let host = Session::new(Config::p1_defaults(Role::Host), Box::new(host_tx))
-            .map_err(|e| anyhow!("host session: {e:?}"))?;
-        let client = Session::new(Config::p1_defaults(Role::Client), Box::new(client_tx))
-            .map_err(|e| anyhow!("client session: {e:?}"))?;
+        let host = Session::new(
+            Config::defaults(Role::Host),
+            punktfunk_core::session::MediaV2::default(),
+            Box::new(host_tx),
+        )
+        .map_err(|e| anyhow!("host session: {e:?}"))?;
+        let client = Session::new(
+            Config::defaults(Role::Client),
+            punktfunk_core::session::MediaV2::default(),
+            Box::new(client_tx),
+        )
+        .map_err(|e| anyhow!("client session: {e:?}"))?;
         Ok(Loopback {
             host,
             client,

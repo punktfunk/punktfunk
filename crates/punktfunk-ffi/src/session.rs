@@ -1,21 +1,18 @@
-//! The raw data-plane session: packetize, FEC and seal on one side, reassemble on the
-//! other, over UDP or an in-process loopback. The host and the C harness drive it; a
-//! client uses the connection API instead.
+//! The raw media session: packetize and FEC on one side, reassemble on the other, over an
+//! in-process loopback. The C harness drives it; a client uses the connection API instead.
 
 use crate::*;
-use punktfunk_core::config::{Config, FecConfig, FecScheme, ProtocolPhase, Role};
-use punktfunk_core::crypto::SessionKey;
+use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
 use punktfunk_core::input::InputEvent;
-use punktfunk_core::session::Session;
+use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::stats::Stats;
-use punktfunk_core::transport::{loopback_pair, Transport, UdpTransport};
+use punktfunk_core::transport::loopback_pair;
 
 /// Opaque session handle. C sees only the pointer.
 pub struct PunktfunkSession {
     inner: Session,
     /// Last polled frame. [`PunktfunkFrame::data`] is valid until the next poll/free.
     last_frame: Option<punktfunk_core::session::Frame>,
-    input_cb: Option<(PunktfunkInputCb, *mut c_void)>,
 }
 
 /// Session configuration. Set `struct_size` to `sizeof(PunktfunkConfig)`; a
@@ -26,17 +23,11 @@ pub struct PunktfunkConfig {
     pub struct_size: u32,
     /// 0 = host, 1 = client.
     pub role: u32,
-    /// 1 = P1 (GameStream-compatible), 2 = P2 (`punktfunk/1`).
-    pub phase: u32,
     /// 0 = GF(2⁸), 1 = GF(2¹⁶).
     pub fec_scheme: u32,
     pub fec_percent: u32,
     pub max_data_per_block: u32,
     pub shard_payload: u32,
-    /// Non-zero enables AES-128-GCM.
-    pub encrypt: u32,
-    pub key: [u8; 16],
-    pub salt: [u8; 4],
     /// Test hook for the loopback transport; 0 in production.
     pub loopback_drop_period: u32,
     /// Largest encoded access unit the receiver accepts (reassembler memory bound).
@@ -48,11 +39,6 @@ impl PunktfunkConfig {
         let role = match self.role {
             0 => Role::Host,
             1 => Role::Client,
-            _ => return Err(PunktfunkStatus::InvalidArg),
-        };
-        let phase = match self.phase {
-            1 => ProtocolPhase::P1GameStream,
-            2 => ProtocolPhase::P2Punktfunk,
             _ => return Err(PunktfunkStatus::InvalidArg),
         };
         // Reject before narrowing: 300% or a 65600-shard block must not wrap to a valid u8/u16.
@@ -69,7 +55,6 @@ impl PunktfunkConfig {
             usize::try_from(self.max_frame_bytes).map_err(|_| PunktfunkStatus::InvalidArg)?;
         let cfg = Config {
             role,
-            phase,
             fec: FecConfig {
                 scheme,
                 fec_percent,
@@ -77,10 +62,6 @@ impl PunktfunkConfig {
             },
             shard_payload: self.shard_payload as usize,
             max_frame_bytes,
-            encrypt: self.encrypt != 0,
-            // 16-byte key is AES-128-GCM. A different cipher needs an ABI bump.
-            key: SessionKey::Aes128Gcm(self.key),
-            salt: self.salt,
             loopback_drop_period: self.loopback_drop_period,
         };
         cfg.validate().map_err(|e| e.status())?;
@@ -153,58 +134,15 @@ impl From<Stats> for PunktfunkStats {
     }
 }
 
-/// Host-side callback for each input event drained by `punktfunk_host_poll_input`.
-pub type PunktfunkInputCb = extern "C" fn(event: *const InputEvent, user: *mut c_void);
-
 fn new_handle(session: Session) -> *mut PunktfunkSession {
     Box::into_raw(Box::new(PunktfunkSession {
         inner: session,
         last_frame: None,
-        input_cb: None,
     }))
 }
 
-/// Create a session over UDP (`local`/`peer` are `host:port` strings). NULL on error.
-///
-/// # Safety
-/// `cfg`, `local`, `peer` are valid pointers; the strings are NUL-terminated.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn punktfunk_session_new(
-    cfg: *const PunktfunkConfig,
-    local: *const c_char,
-    peer: *const c_char,
-) -> *mut PunktfunkSession {
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        if cfg.is_null() || local.is_null() || peer.is_null() {
-            return ptr::null_mut();
-        }
-        // SAFETY: pointers are caller-supplied and null-checked on this path.
-        let config = match unsafe { config_from_ptr(cfg) } {
-            Ok(c) => c,
-            Err(_) => return ptr::null_mut(),
-        };
-        // SAFETY: caller C string, NUL-terminated; borrowed for this call only.
-        let Ok(Some(local)) = (unsafe { opt_cstr(local) }) else {
-            return ptr::null_mut();
-        };
-        // SAFETY: caller C string, NUL-terminated; borrowed for this call only.
-        let Ok(Some(peer)) = (unsafe { opt_cstr(peer) }) else {
-            return ptr::null_mut();
-        };
-        let transport: Box<dyn Transport> = match UdpTransport::connect(local, peer) {
-            Ok(t) => Box::new(t),
-            Err(_) => return ptr::null_mut(),
-        };
-        match Session::new(config, transport) {
-            Ok(s) => new_handle(s),
-            Err(_) => ptr::null_mut(),
-        }
-    }));
-    result.unwrap_or(ptr::null_mut())
-}
-
 /// Connected host+client pair on in-process loopback. Test/dev only: full FEC
-/// + framing without a network.
+/// + framing without a network, unsealed.
 ///
 /// # Safety
 /// All four pointers are valid; the two out-params receive owned handles.
@@ -231,11 +169,11 @@ pub unsafe extern "C" fn punktfunk_test_loopback_pair(
             Err(s) => return s,
         };
         let (ht, ct) = loopback_pair(hconf.loopback_drop_period, cconf.loopback_drop_period);
-        let hs = match Session::new(hconf, Box::new(ht)) {
+        let hs = match Session::new(hconf, MediaV2::default(), Box::new(ht)) {
             Ok(s) => s,
             Err(e) => return e.status(),
         };
-        let cs = match Session::new(cconf, Box::new(ct)) {
+        let cs = match Session::new(cconf, MediaV2::default(), Box::new(ct)) {
             Ok(s) => s,
             Err(e) => return e.status(),
         };
@@ -251,7 +189,7 @@ pub unsafe extern "C" fn punktfunk_test_loopback_pair(
 /// Free a session handle. NULL is a no-op.
 ///
 /// # Safety
-/// `s` is a handle from `punktfunk_session_new` / `punktfunk_test_loopback_pair`, freed once.
+/// `s` is a handle from `punktfunk_test_loopback_pair`, freed once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn punktfunk_session_free(s: *mut PunktfunkSession) {
     guard_void(|| {
@@ -330,31 +268,6 @@ pub unsafe extern "C" fn punktfunk_client_poll_frame(
     })
 }
 
-/// Client: serialize and send one input event to the host.
-/// `InvalidArg` if `ev->kind` is not a recognized event kind.
-///
-/// # Safety
-/// `s` is a valid client handle; `ev` points to a readable `InputEvent`-sized allocation.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn punktfunk_send_input(
-    s: *mut PunktfunkSession,
-    ev: *const InputEvent,
-) -> PunktfunkStatus {
-    guard(|| {
-        // SAFETY: caller handle or null; `as_mut`/`as_ref` never dereference null.
-        let s = match unsafe { s.as_mut() } {
-            Some(s) => s,
-            None => return PunktfunkStatus::NullPointer,
-        };
-        // SAFETY: `read_input_event` validates the tag before forming `&InputEvent` (else UB).
-        let ev = match unsafe { read_input_event(ev) } {
-            Ok(e) => e,
-            Err(status) => return status,
-        };
-        status_of(s.inner.send_input(ev))
-    })
-}
-
 /// Validate the `kind` tag as a raw byte before forming `&InputEvent`. An
 /// unknown `ev->kind` is UB once the typed reference exists; other fields are integers.
 ///
@@ -372,63 +285,6 @@ pub(crate) unsafe fn read_input_event<'a>(
     }
     // SAFETY: discriminant validated; remaining fields are valid for any bit pattern.
     Ok(unsafe { &*ev })
-}
-
-/// Register the host-side input callback (NULL fn pointer clears). Fires from
-/// [`punktfunk_host_poll_input`] on the calling thread.
-///
-/// # Safety
-/// `s` is a valid host handle; `user` is passed back verbatim to `cb`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn punktfunk_set_input_callback(
-    s: *mut PunktfunkSession,
-    // Explicit `Option<fn>` so cbindgen emits a nullable C function pointer, not a wrapper.
-    cb: Option<extern "C" fn(event: *const InputEvent, user: *mut c_void)>,
-    user: *mut c_void,
-) -> PunktfunkStatus {
-    guard(|| {
-        // SAFETY: caller handle or null; `as_mut`/`as_ref` never dereference null.
-        let s = match unsafe { s.as_mut() } {
-            Some(s) => s,
-            None => return PunktfunkStatus::NullPointer,
-        };
-        s.input_cb = cb.map(|c| (c, user));
-        PunktfunkStatus::Ok
-    })
-}
-
-/// Host: drain pending input events, invoking the registered callback for each.
-/// Returns the count dispatched (≥ 0), or a negative [`PunktfunkStatus`] on error.
-///
-/// # Safety
-/// `s` is a valid host handle. The callback must not free `s`: the drain uses it again.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn punktfunk_host_poll_input(s: *mut PunktfunkSession) -> i32 {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let mut count = 0i32;
-        loop {
-            // Drop the `&mut` before the callback: it may re-enter this handle (noalias UB).
-            // Re-read `input_cb` each iteration so a mid-drain NULL clear takes effect now.
-            let (ev, cb) = {
-                // SAFETY: caller handle or null; `as_mut`/`as_ref` never dereference null.
-                let s = match unsafe { s.as_mut() } {
-                    Some(s) => s,
-                    None => return PunktfunkStatus::NullPointer as i32,
-                };
-                match s.inner.poll_input() {
-                    Ok(Some(ev)) => (ev, s.input_cb),
-                    Ok(None) => break,
-                    Err(e) => return e.status() as i32,
-                }
-            };
-            if let Some((cb, user)) = cb {
-                cb(&ev as *const InputEvent, user);
-            }
-            count += 1;
-        }
-        count
-    }));
-    r.unwrap_or(PunktfunkStatus::Panic as i32)
 }
 
 /// Copy session counters into `*out`.

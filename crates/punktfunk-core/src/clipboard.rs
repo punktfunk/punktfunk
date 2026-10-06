@@ -119,7 +119,6 @@ pub async fn run(
     let mut serve_bufs: HashMap<u32, Vec<u8>> = HashMap::new();
     let mut fetch_cancels: HashMap<u32, oneshot::Sender<()>> = HashMap::new();
     let mut next_req_id: u32 = 1;
-    let v2 = clipstream::is_v2(&conn);
 
     loop {
         tokio::select! {
@@ -132,7 +131,7 @@ pub async fn run(
                 }
                 let events = events.clone();
                 let waiters = serve_waiters.clone();
-                tokio::spawn(serve_inbound(send, recv, req_id, events, waiters, v2));
+                tokio::spawn(serve_inbound(send, recv, req_id, events, waiters));
             }
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { break }; // NativeClient dropped
@@ -199,18 +198,13 @@ async fn serve_inbound(
     req_id: u32,
     events: SyncSender<ClipEventCore>,
     waiters: ServeWaiters,
-    v2: bool,
 ) {
     let _ = send.set_priority(-1);
-    let kind = match clipstream::read_stream_header(&mut recv, v2).await {
-        Ok(k) => k,
-        Err(_) => return,
-    };
-    if kind != clipstream::CLIP_STREAM_KIND_FETCH {
+    if clipstream::read_stream_header(&mut recv).await.is_err() {
         let _ = send.reset(clipstream::cancelled_code());
         return;
     }
-    let req = match clipstream::read_fetch(&mut recv, v2).await {
+    let req = match clipstream::read_fetch(&mut recv).await {
         Ok(r) => r,
         Err(_) => return,
     };
@@ -233,7 +227,6 @@ async fn serve_inbound(
                 status: CLIP_FETCH_UNAVAILABLE,
                 total_size: 0,
             },
-            v2,
         )
         .await;
         return;
@@ -264,7 +257,6 @@ async fn serve_inbound(
                     status: CLIP_FETCH_OK,
                     total_size: bytes.len() as u64,
                 },
-                v2,
             )
             .await
             .is_ok()
@@ -280,7 +272,6 @@ async fn serve_inbound(
                     status: CLIP_FETCH_UNAVAILABLE,
                     total_size: 0,
                 },
-                v2,
             )
             .await;
         }
@@ -294,12 +285,11 @@ async fn run_outbound_fetch(
     events: SyncSender<ClipEventCore>,
     cancel_rx: oneshot::Receiver<()>,
 ) {
-    let v2 = clipstream::is_v2(&conn);
     let transfer = async {
         let (send, mut recv) = clipstream::open_fetch(&conn, &req)
             .await
             .map_err(|_| PunktfunkStatus::Io as i32)?;
-        let hdr = clipstream::read_fetch_hdr(&mut recv, v2)
+        let hdr = clipstream::read_fetch_hdr(&mut recv)
             .await
             .map_err(|_| PunktfunkStatus::Io as i32)?;
         if hdr.status != CLIP_FETCH_OK {
@@ -391,7 +381,7 @@ mod tests {
             ClipEventCore::Error { id, .. } => assert_eq!(id, req_id),
             other => panic!("expected Error, got {other:?}"),
         }
-        let hdr = clipstream::read_fetch_hdr(&mut recv, false).await.unwrap();
+        let hdr = clipstream::read_fetch_hdr(&mut recv).await.unwrap();
         assert_eq!(hdr.status, CLIP_FETCH_UNAVAILABLE);
     }
 }

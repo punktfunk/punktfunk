@@ -42,21 +42,33 @@ use self::state::StreamState;
 pub(super) use self::synth_abr::{synthetic_abr_stream, SynthAbrContext};
 pub use self::synth_abr::{Content, KeyframeAnswer, SynthAbrShape, DEFAULT_IDR_PCT};
 
+/// Test frames at 60 Hz. The frames have no size, so an accepted mode switch is delivered as
+/// the next epoch, the way a rebuilt pipeline delivers one.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn synthetic_stream(
     session: &mut Session,
     frames: u32,
     stop: &AtomicBool,
-    probe_rx: &std::sync::mpsc::Receiver<ProbeShaped>,
-    probe_result_tx: &tokio::sync::mpsc::UnboundedSender<ProbeResult>,
+    ends: &super::wiring::StreamEnds,
     fec_target: &AtomicU8,
     timing_conn: Option<&super::link::SessionLink>,
     probe_seq: bool,
 ) -> Result<()> {
+    let (probe_rx, probe_result_tx) = (&ends.probe_rx, &ends.probe_result_tx);
     let interval = std::time::Duration::from_millis(1000 / 60);
+    let mut epoch = 0u8;
     for idx in 0..frames {
         if stop.load(Ordering::SeqCst) {
             break;
+        }
+        if let Some(mode) = ends.reconfig.try_iter().last() {
+            epoch = epoch.wrapping_add(1);
+            session.set_epoch(epoch);
+            let _ = ends.reconfig_result_tx.send(super::wiring::Delivered {
+                mode,
+                epoch,
+                corrects: false,
+            });
         }
         apply_fec_target(session, fec_target);
         service_probes(session, stop, probe_rx, probe_result_tx, probe_seq);
@@ -752,15 +764,25 @@ pub(super) fn virtual_stream(ctx: SessionContext, prepared: Option<PreparedDispl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use punktfunk_core::quic::ProbeRequest;
 
     /// A host session onto an in-process link, and the client that reads it back.
     fn loopback_sessions() -> (Session, Session) {
         use punktfunk_core::config::{Config, Role};
         let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         (
-            Session::new(Config::p1_defaults(Role::Host), Box::new(host_tp)).expect("host session"),
-            Session::new(Config::p1_defaults(Role::Client), Box::new(client_tp))
-                .expect("client session"),
+            Session::new(
+                Config::defaults(Role::Host),
+                punktfunk_core::session::MediaV2::default(),
+                Box::new(host_tp),
+            )
+            .expect("host session"),
+            Session::new(
+                Config::defaults(Role::Client),
+                punktfunk_core::session::MediaV2::default(),
+                Box::new(client_tp),
+            )
+            .expect("client session"),
         )
     }
 

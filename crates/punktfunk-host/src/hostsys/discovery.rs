@@ -1,9 +1,10 @@
-//! Native punktfunk/1 mDNS advert; [`crate::gamestream::mdns`] is the GameStream analogue.
+//! Native punktfunk mDNS advert; [`crate::gamestream::mdns`] is the GameStream analogue.
 //!
 //! Type **`_punktfunk._udp.local.`** (UDP: the protocol is QUIC). Port is the QUIC
 //! control/data port a client `--connect`s. TXT:
 //!
-//! - `proto` — wire id ([`NATIVE_PROTO`]); an incompatible revision is distinguishable here.
+//! - `proto` — service id ([`NATIVE_PROTO`]). Clients drop an advert with another value, so it
+//!   stays `punktfunk/1` while the protocol itself moves; `wire` names the protocol.
 //! - `fp` — host cert SHA-256 (lowercase hex). mDNS is unauthenticated, so this is advisory;
 //!   TOFU still verifies on connect.
 //! - `pair` — `required` or `optional`.
@@ -11,7 +12,7 @@
 //! - `mgmt` — management API TCP port when served; omitted otherwise.
 //! - `mac` — wake-capable NIC MAC(s), comma-separated, routed NIC first; omitted when none.
 //! - `os` — OS identity chain (`linux/fedora/bazzite`; [`crate::osinfo`]).
-//! - `wire` — the punktfunk protocols this host answers, comma-separated (`1,2`).
+//! - `wire` — the punktfunk protocols this host answers, comma-separated (`2`).
 //! - `addr` — IPv4 this advert was registered for. The resolved A-set is a union polluted by
 //!   other per-interface responders; the picker uses this as a tie-break.
 //!
@@ -135,7 +136,6 @@ pub fn advertise_native(
     uniqueid: &str,
     mgmt_port: Option<u16>,
     os_chain: &str,
-    protocol2: bool,
 ) -> Result<Advert> {
     // `hostname` is the instance label clients read back; the A-record target must be a legal
     // DNS name, hence [`dns_label`].
@@ -156,7 +156,7 @@ pub fn advertise_native(
         .into(),
     );
     fixed.insert("id".into(), uniqueid.to_string());
-    fixed.insert("wire".into(), if protocol2 { "1,2" } else { "1" }.into());
+    fixed.insert("wire".into(), "2".into());
     if let Some(mgmt) = mgmt_port {
         fixed.insert("mgmt".into(), mgmt.to_string());
     }
@@ -168,7 +168,7 @@ pub fn advertise_native(
         port,
         host = %host_name,
         pair = if require_pairing { "required" } else { "optional" },
-        "native punktfunk/1 mDNS advertising"
+        "native punktfunk mDNS advertising"
     );
     advertise_live(NATIVE_SERVICE, move |ip| {
         let mut props = fixed.clone();

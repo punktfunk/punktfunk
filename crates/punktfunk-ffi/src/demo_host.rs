@@ -1,10 +1,9 @@
 //! A host on `127.0.0.1`, inside the client library: the app's demo mode.
 //!
 //! The embedder draws and encodes the pictures and hands each access unit to
-//! [`DemoHost::submit_video`]. This side speaks what a real host speaks — `punktfunk/2` to a
-//! client that offers it, `punktfunk/1` otherwise: the handshake, the clock handshake, the sealed
-//! data plane and the Opus audio plane — so the embedder's connect, decode, present, HUD and
-//! input paths run unchanged against a pinned loopback host.
+//! [`DemoHost::submit_video`]. This side speaks what a real host speaks — `punktfunk/2`: the
+//! handshake, the clock handshake, the sealed media and the Opus audio plane — so the embedder's
+//! connect, decode, present, HUD and input paths run unchanged against a pinned loopback host.
 //!
 //! One session at a time: a new client supersedes the old one. Input comes back through
 //! [`DemoHost::next_input`] so the picture can answer it. Audio is Opus silence with a short
@@ -17,15 +16,15 @@ use punktfunk_core::error::{PunktfunkError, Result};
 use punktfunk_core::input::{GamepadSnapshot, InputEvent, InputKind, INPUT_MAGIC};
 use punktfunk_core::packet::{FLAG_PIC, FLAG_SOF};
 use punktfunk_core::quic::v2::clock::SessionClock;
-use punktfunk_core::quic::v2::translate::{RxEdge, SessionFields, TxEdge};
+use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+use punktfunk_core::quic::v2::msg::decode;
 use punktfunk_core::quic::v2::{dgram, io as v2io, registry};
 use punktfunk_core::quic::{
-    self, endpoint, io, wall_clock_ns, ClockEcho, ClockProbe, Hello, Reconfigure, Reconfigured,
-    RequestKeyframe, RfiRequest, Start, Welcome,
+    self, endpoint, wall_clock_ns, ClockEcho, ClockProbe, Reconfigure, Reconfigured,
+    RequestKeyframe, RfiRequest, Welcome,
 };
 use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::shared::MediaSender;
-use punktfunk_core::transport::UdpTransport;
 use rand::RngCore;
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -45,8 +44,6 @@ const VIDEO_QUEUE: usize = 4;
 const INPUT_QUEUE: usize = 512;
 /// One `0xC9` Opus frame: 5 ms at 48 kHz.
 const AUDIO_FRAME_SAMPLES: usize = 240;
-/// A client's punch follows its clock handshake; 2.5 s matches the real host's wait.
-const PUNCH_WAIT: Duration = Duration::from_millis(2500);
 
 /// The live session, as the embedder should render it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,8 +62,8 @@ pub struct DemoSession {
 type VideoQueue = mpsc::SyncSender<(Vec<u8>, bool)>;
 
 /// The control stream's halves, `punktfunk/2`'s behind the translation edges.
-type CtlSend = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
-type CtlRecv = io::MsgReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
+type CtlSend = quinn::SendStream;
+type CtlRecv = v2io::FrameReader<quinn::RecvStream>;
 
 /// State one session owns, tagged with its connection's `stable_id` so a superseded session's
 /// teardown cannot clear its successor.
@@ -109,7 +106,7 @@ impl DemoHost {
                 &cert.cert.pem(),
                 &cert.signing_key.serialize_pem(),
                 endpoint::DEFAULT_IDLE_TIMEOUT,
-                &[registry::ALPN, endpoint::QUIC_ALPN],
+                &[registry::ALPN],
             )
             .map_err(|e| std::io::Error::other(e.to_string()))?
         };
@@ -240,50 +237,24 @@ async fn serve(
     media_socket: &UdpSocket,
 ) -> Result<()> {
     let id = conn.stable_id();
-    let v2 = endpoint::negotiated_alpn(conn).as_deref() == Some(registry::ALPN);
     // A reachability probe closes before opening a stream; that ends here.
-    let (send, mut recv) = conn.accept_bi().await.map_err(|_| PunktfunkError::Closed)?;
+    let (mut send, mut recv) = conn.accept_bi().await.map_err(|_| PunktfunkError::Closed)?;
     let clock = Arc::new(SessionClock::new());
-    let rx_edge = Arc::new(Mutex::new(RxEdge {
-        clock: Some(clock.clone()),
-        ..RxEdge::default()
-    }));
-    let tx_edge = Arc::new(Mutex::new(TxEdge::host(clock.clone())));
-    let (mut send, mut recv): (CtlSend, CtlRecv) = if v2 {
-        if v2io::read_stream_type(&mut recv).await? != registry::STREAM_CONTROL {
-            return Err(PunktfunkError::InvalidArg("first stream is not control"));
-        }
-        let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
-            Box::new(v2io::V2Reader::new(recv, rx_edge.clone()));
-        (
-            Box::new(v2io::V2Writer::new(send, tx_edge.clone())),
-            io::MsgReader::new(recv),
-        )
-    } else {
-        let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(recv);
-        (Box::new(send), io::MsgReader::new(recv))
-    };
-    let hello = Hello::decode(&recv.read_msg().await?)?;
+    if v2io::read_stream_type(&mut recv).await? != registry::STREAM_CONTROL {
+        return Err(PunktfunkError::InvalidArg("first stream is not control"));
+    }
+    let mut recv: CtlRecv = v2io::FrameReader::new(recv);
+    let (ty, body) = recv.read_frame().await?;
+    let client = decode::<ClientHello>(ty, &body)?;
+    let hello = &client.hello;
     // AES-GCM unless the client offers only ChaCha20-Poly1305.
-    let suite = {
-        let rx = rx_edge.lock().unwrap();
-        let offered = rx
-            .client
-            .as_ref()
-            .map(|c| c.suites.clone())
-            .unwrap_or_default();
-        match offered.first() {
-            Some(&only) if !offered.contains(&MediaSuite::Aes128Gcm) => only,
-            _ => MediaSuite::Aes128Gcm,
-        }
+    let offered = &client.suites;
+    let suite = match offered.first() {
+        Some(&only) if !offered.contains(&MediaSuite::Aes128Gcm) => only,
+        _ => MediaSuite::Aes128Gcm,
     };
     let mut session_id = [0u8; 16];
     rand::rng().fill_bytes(&mut session_id);
-    tx_edge.lock().unwrap().set_session(SessionFields {
-        session_id,
-        clock_origin_ns: clock.origin_ns(),
-        suite: Some(suite),
-    });
     let Some(codec) = quic::resolve_codec(hello.video_codecs, codecs, hello.preferred_codec) else {
         conn.close(0u32.into(), b"no shared codec");
         return Err(PunktfunkError::Unsupported("no codec the demo can encode"));
@@ -297,22 +268,7 @@ async fn serve(
         0 => DEFAULT_BITRATE_KBPS,
         kbps => kbps.clamp(2_000, 40_000),
     };
-    // `punktfunk/2` media leaves from the endpoint's own socket: no data port.
-    let data_sock = if v2 {
-        None
-    } else {
-        Some(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?)
-    };
-    let mut key = [0u8; 16];
-    let mut salt = [0u8; 4];
-    rand::rng().fill_bytes(&mut key);
-    rand::rng().fill_bytes(&mut salt);
     let welcome = Welcome {
-        abi_version: punktfunk_core::WIRE_VERSION,
-        udp_port: match &data_sock {
-            Some(s) => s.local_addr()?.port(),
-            None => 0,
-        },
         mode,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
@@ -323,9 +279,6 @@ async fn serve(
             0 => 1408,
             max => max.min(1408),
         },
-        encrypt: true,
-        key,
-        salt,
         frames: 0,
         compositor: CompositorPref::Auto,
         gamepad: hello.gamepad,
@@ -336,11 +289,9 @@ async fn serve(
         audio_channels: 2,
         codec,
         host_caps: quic::HOST_CAP_GAMEPAD_STATE,
-        cipher: quic::CIPHER_AES_128_GCM,
         mgmt_port: 0,
         grants: quic::GRANT_ALL,
         expires_in_secs: 0,
-        key_chacha: None,
         audio_codec: quic::AUDIO_CODEC_OPUS,
         audio_rate_hz: SAMPLE_RATE_HZ,
         audio_bits: punktfunk_core::audio::pcm::BITS_16,
@@ -348,8 +299,17 @@ async fn serve(
         host_caps2: 0,
         audio_layout: 0,
     };
-    io::write_msg(&mut send, &welcome.encode()).await?;
-    let start = Start::decode(&recv.read_msg().await?)?;
+    let config = welcome.session_config(Role::Host);
+    let server = ServerHello {
+        welcome,
+        session_id,
+        clock_origin_ns: clock.origin_ns(),
+        suite: Some(suite),
+        features: Default::default(),
+    };
+    v2io::send(&mut send, &server).await?;
+    let (ty, body) = recv.read_frame().await?;
+    decode::<Ready>(ty, &body)?;
 
     let (video_tx, video_rx) = mpsc::sync_channel(VIDEO_QUEUE);
     let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -375,78 +335,50 @@ async fn serve(
         "demo session started"
     );
 
-    let config = welcome.session_config(Role::Host);
-    let open: OpenSession = match data_sock {
-        Some(sock) => {
-            let peer = conn.remote_address().ip();
-            let fallback = SocketAddr::new(peer, start.client_udp_port);
-            Box::new(move || {
-                let (transport, _) =
-                    UdpTransport::from_socket_punch(sock, &fallback.to_string(), peer, PUNCH_WAIT)?;
-                Session::new(config, Box::new(transport))
-            })
-        }
-        None => {
-            let keys =
-                endpoint::media_keys(conn, &session_id, suite).ok_or(PunktfunkError::Crypto)?;
-            let sender = MediaSender::new(media_socket, conn.clone())?;
-            let media = MediaV2 {
-                clock_origin_ns: clock.origin_ns(),
-                keys: Some(keys),
-                clock: Some(clock.clone()),
-            };
-            let config = punktfunk_core::config::Config {
-                encrypt: false,
-                ..config
-            };
-            Box::new(move || Session::new_v2(config, media, Box::new(sender)))
-        }
+    let keys = endpoint::media_keys(conn, &session_id, suite).ok_or(PunktfunkError::Crypto)?;
+    let sender = MediaSender::new(media_socket, conn.clone())?;
+    let media = MediaV2 {
+        clock_origin_ns: clock.origin_ns(),
+        keys: Some(keys),
+        clock: Some(clock.clone()),
     };
+    let open: OpenSession = Box::new(move || Session::new(config, media, Box::new(sender)));
     let video = tokio::task::spawn_blocking(move || send_video(open, video_rx));
     let dgrams = Dgrams {
         conn,
-        clock: v2.then_some(clock),
+        clock: clock.clone(),
     };
-    // Control runs before the punch lands: the client's clock handshake comes first.
     tokio::select! {
-        r = control_loop(send, recv, shared, id) => r,
+        r = control_loop(send, recv, &clock, shared, id) => r,
         () = input_loop(&dgrams, shared) => Ok(()),
         r = audio_loop(&dgrams, shared) => r,
         r = video => r.map_err(|_| PunktfunkError::Closed)?,
     }
 }
 
-/// Opens the video session on the send thread: after the punch on `punktfunk/1`, at once on
-/// `punktfunk/2`.
+/// Opens the video session on the send thread.
 type OpenSession = Box<dyn FnOnce() -> Result<Session> + Send>;
 
-/// The connection's datagrams as `punktfunk/1` encodings. On `punktfunk/2` (`clock` set) they
-/// carry a kind, and host stamps leave in session time.
+/// The connection's datagrams: each carries a kind, and host stamps leave in session time.
 struct Dgrams<'a> {
     conn: &'a quinn::Connection,
-    clock: Option<Arc<SessionClock>>,
+    clock: Arc<SessionClock>,
 }
 
 impl Dgrams<'_> {
     /// `false` once the connection is gone.
     fn send(&self, mut d: Vec<u8>) -> bool {
-        if let Some(clock) = &self.clock {
-            clock.retime_datagram(&mut d);
-            let Some(w) = dgram::wrap(&d) else {
-                return true;
-            };
-            d = w;
-        }
-        self.conn.send_datagram(d.into()).is_ok()
+        self.clock.retime_datagram(&mut d);
+        let Some(w) = dgram::wrap(&d) else {
+            return true;
+        };
+        self.conn.send_datagram(w.into()).is_ok()
     }
 
     async fn recv(&self) -> Option<Vec<u8>> {
         use dgram::Dgram;
         loop {
             let b = self.conn.read_datagram().await.ok()?;
-            if self.clock.is_none() {
-                return Some(b.to_vec());
-            }
             if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) =
                 dgram::decode(&b)
             {
@@ -472,22 +404,26 @@ fn send_video(open: OpenSession, rx: mpsc::Receiver<(Vec<u8>, bool)>) -> Result<
 async fn control_loop(
     mut send: CtlSend,
     mut recv: CtlRecv,
+    clock: &SessionClock,
     shared: &Shared,
     id: usize,
 ) -> Result<()> {
     loop {
-        let msg = recv.read_msg().await?;
-        if let Ok(probe) = ClockProbe::decode(&msg) {
-            let t2_ns = wall_clock_ns();
+        let (ty, body) = recv.read_frame().await?;
+        if let Ok(probe) = decode::<ClockProbe>(ty, &body) {
+            // In the session clock media leaves in.
+            let t2_ns = clock.to_wire(wall_clock_ns());
             let echo = ClockEcho {
                 t1_ns: probe.t1_ns,
                 t2_ns,
-                t3_ns: wall_clock_ns(),
+                t3_ns: clock.to_wire(wall_clock_ns()),
             };
-            io::write_msg(&mut send, &echo.encode()).await?;
-        } else if RequestKeyframe::decode(&msg).is_ok() || RfiRequest::decode(&msg).is_ok() {
+            v2io::send(&mut send, &echo).await?;
+        } else if decode::<RequestKeyframe>(ty, &body).is_ok()
+            || decode::<RfiRequest>(ty, &body).is_ok()
+        {
             shared.keyframe.store(true, Ordering::SeqCst);
-        } else if let Ok(asked) = Reconfigure::decode(&msg) {
+        } else if let Ok(asked) = decode::<Reconfigure>(ty, &body) {
             let mode = demo_mode(asked.mode);
             if let Some((owner, s)) = shared.session.lock().unwrap().as_mut() {
                 if *owner == id {
@@ -500,7 +436,7 @@ async fn control_loop(
                 accepted: true,
                 mode,
             };
-            io::write_msg(&mut send, &answer.encode()).await?;
+            v2io::send(&mut send, &answer).await?;
         }
         // Everything else (loss reports, bitrate asks, speed tests) has no demo answer.
     }
@@ -642,15 +578,9 @@ mod tests {
         assert!(!is_press(&snap(0), &mut pads), "a release is not a press");
     }
 
-    /// A real client dials the demo host pinned, streams, and its input comes back, on either
-    /// protocol.
+    /// A real client dials the demo host pinned, streams, and its input comes back.
     #[test]
     fn a_native_client_streams_from_the_demo_host() {
-        streams_from_the_demo_host(true);
-        streams_from_the_demo_host(false);
-    }
-
-    fn streams_from_the_demo_host(offer_v2: bool) {
         let host = DemoHost::start(quic::CODEC_H264).expect("demo host");
         let mode = Mode {
             width: 1280,
@@ -662,7 +592,6 @@ mod tests {
                 video_codecs: quic::CODEC_H264 | quic::CODEC_HEVC,
                 launch: Some("custom:aurora".into()),
                 pin: Some(host.fingerprint()),
-                offer_v2,
                 ..punktfunk_core::client::ConnectParams::new(
                     "127.0.0.1",
                     host.port(),
@@ -671,13 +600,12 @@ mod tests {
                 )
             })
             .expect("connect");
-        assert_eq!(client.wire(), if offer_v2 { 2 } else { 1 });
         let session = host.session().expect("a live session");
         assert_eq!(session.codec, quic::CODEC_H264);
         assert_eq!(session.launch.as_deref(), Some("custom:aurora"));
         assert_eq!((session.mode.width, session.mode.height), (1280, 720));
 
-        // The punch lands after the clock handshake; resend until a frame arrives.
+        // Media opens after the clock handshake; resend until a frame arrives.
         let au = vec![0x5a; 30_000];
         let frame = (0..100)
             .find_map(|_| {

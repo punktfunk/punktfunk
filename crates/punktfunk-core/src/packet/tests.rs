@@ -1,7 +1,6 @@
 use super::reassemble::LOSS_WINDOW_NS;
 use super::*;
 use crate::config::{Config, FecScheme};
-use crate::crypto::SessionKey;
 use crate::fec::coder_for;
 use crate::stats::StatsCounters;
 use zerocopy::{FromBytes, IntoBytes};
@@ -52,14 +51,25 @@ impl Rig {
 
     fn with(limits: ReassemblerLimits, scheme: FecScheme) -> Rig {
         Rig {
-            r: Reassembler::new(limits),
+            r: Reassembler::new(limits, 0),
             coder: coder_for(scheme),
             stats: StatsCounters::default(),
         }
     }
 
+    /// `p` is the logical header's bytes and the body: the header is handed over decoded, as
+    /// the wire's decoder would.
     fn push(&mut self, p: &[u8]) -> Option<crate::session::Frame> {
-        self.r.push(p, self.coder.as_ref(), &self.stats).unwrap()
+        let Some(h) = p
+            .get(..HEADER_LEN)
+            .and_then(|b| PacketHeader::read_from_bytes(b).ok())
+        else {
+            StatsCounters::add(&self.stats.packets_dropped, 1);
+            return None;
+        };
+        self.r
+            .push_header(h, 0, &p[HEADER_LEN..], self.coder.as_ref(), &self.stats)
+            .unwrap()
     }
 
     /// The one frame `delivery` completes, if any. Completing twice fails the test.
@@ -194,10 +204,9 @@ fn incomplete_frames_age_out_by_capture_time_not_frame_count() {
 /// Explicit `frame_index` must not bump the packetizer's internal video or probe counters.
 #[test]
 fn explicit_frame_index_is_stamped_and_internal_counter_untouched() {
-    use crate::config::{FecConfig, FecScheme, ProtocolPhase, Role};
+    use crate::config::{FecConfig, FecScheme, Role};
     let cfg = Config {
         role: Role::Host,
-        phase: ProtocolPhase::P2Punktfunk,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
             fec_percent: 0,
@@ -205,9 +214,6 @@ fn explicit_frame_index_is_stamped_and_internal_counter_untouched() {
         },
         shard_payload: 16,
         max_frame_bytes: 4096,
-        encrypt: false,
-        key: SessionKey::Aes128Gcm([0u8; 16]),
-        salt: [0u8; 4],
         loopback_drop_period: 0,
     };
     let coder = coder_for(FecScheme::Gf16);
@@ -278,10 +284,9 @@ fn aged_out_probe_frames_do_not_count_as_dropped() {
 }
 
 fn e2e_config(scheme: FecScheme, fec_percent: u8) -> Config {
-    use crate::config::{FecConfig, ProtocolPhase, Role};
+    use crate::config::{FecConfig, Role};
     Config {
         role: Role::Host,
-        phase: ProtocolPhase::P2Punktfunk,
         fec: FecConfig {
             scheme,
             fec_percent,
@@ -289,9 +294,6 @@ fn e2e_config(scheme: FecScheme, fec_percent: u8) -> Config {
         },
         shard_payload: 16,
         max_frame_bytes: 4096,
-        encrypt: false,
-        key: SessionKey::Aes128Gcm([0u8; 16]),
-        salt: [0u8; 4],
         loopback_drop_period: 0,
     }
 }
@@ -922,10 +924,9 @@ fn streamed_lying_final_totals_kill_the_frame_wholesale() {
 
 /// Block size large enough that slice cuts land inside a block (variable-K sentinels).
 fn slice_config() -> Config {
-    use crate::config::{FecConfig, ProtocolPhase, Role};
+    use crate::config::{FecConfig, Role};
     Config {
         role: Role::Host,
-        phase: ProtocolPhase::P2Punktfunk,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
             fec_percent: 50,
@@ -933,9 +934,6 @@ fn slice_config() -> Config {
         },
         shard_payload: 16,
         max_frame_bytes: 4096,
-        encrypt: false,
-        key: SessionKey::Aes128Gcm([0u8; 16]),
-        salt: [0u8; 4],
         loopback_drop_period: 0,
     }
 }
@@ -1512,10 +1510,9 @@ fn streamed_second_final_with_different_totals_is_rejected() {
 
 /// 1500-MTU shard payload and the 8 MiB floor the QUIC handshake negotiates.
 fn prod_slice_config() -> Config {
-    use crate::config::{FecConfig, ProtocolPhase, Role};
+    use crate::config::{FecConfig, Role};
     Config {
         role: Role::Host,
-        phase: ProtocolPhase::P2Punktfunk,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
             fec_percent: 20,
@@ -1523,9 +1520,6 @@ fn prod_slice_config() -> Config {
         },
         shard_payload: crate::config::mtu1500_shard_payload(),
         max_frame_bytes: 8 << 20,
-        encrypt: false,
-        key: SessionKey::Aes128Gcm([0u8; 16]),
-        salt: [0u8; 4],
         loopback_drop_period: 0,
     }
 }
