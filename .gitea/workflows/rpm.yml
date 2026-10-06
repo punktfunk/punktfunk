@@ -44,6 +44,7 @@ on:
       - 'crates/pf-paths-win/**'
       - 'crates/pf-portal/**'
       - 'crates/pf-presenter/**'
+      - 'crates/pf-seats/**'
       - 'crates/pf-update/**'
       - 'crates/pf-update-check/**'
       - 'crates/pf-vaapi/**'
@@ -77,6 +78,8 @@ on:
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
       - 'packaging/linux/*.sh'
+      - 'packaging/linux/*.tmpfiles'
+      - 'packaging/linux/seat-*'
       - 'packaging/linux/*.xml'
       - 'packaging/linux/icons/**'
       - 'LICENSE-MIT'
@@ -470,6 +473,7 @@ jobs:
             dist/punktfunk-"${PF_VERSION}-${PF_RELEASE}"*.rpm \
             dist/punktfunk-web-"${PF_VERSION}-${PF_RELEASE}"*.rpm \
             dist/punktfunk-scripting-"${PF_VERSION}-${PF_RELEASE}"*.rpm \
+            dist/punktfunk-seats-"${PF_VERSION}-${PF_RELEASE}"*.rpm \
             dist/punktfunk-bun-"${PF_VERSION}-${PF_RELEASE}"*.rpm
 
       # Read the capability matrix back OUT of the image that is about to be published — the one

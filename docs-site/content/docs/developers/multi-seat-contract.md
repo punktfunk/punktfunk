@@ -192,6 +192,9 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 (`kwin_wayland`, else gamescope) and a stock `punktfunk-host serve`, all run by
 `/usr/libexec/punktfunk/seat-session`.
 
+- **The package.** `punktfunk-seats` is its own package: an rpm and a deb the host recommends, a
+  pacman package the host lists as an optional dependency, and `services.punktfunk.seats.enable` on
+  NixOS. The rpm, deb and pacman packages install the units without enabling them.
 - **The socket.** `/run/punktfunk/seats.sock` carries the same frames and commands as the Windows
   pipe. It answers root and the `punktfunk` user, judged by the peer's credentials; any other peer
   is closed unanswered. `enable` answers like `seating`, and `disable` is refused: seats are on while

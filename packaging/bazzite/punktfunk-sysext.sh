@@ -242,6 +242,11 @@ post_merge() {
   # 'input': writing 'attach' materialises an arbitrary emulated USB device (review 2026-08-05 M-4),
   # so it stays a group users join on purpose — see `ujust add-user-to-input-group` for the other one.
   getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || :
+  # The seat supervisor's directories and modes: the RPM's %post does this, and a sysext's
+  # tmpfiles.d only exists once merged. The daemon is not enabled here; the console turns seats on.
+  if [ -f /usr/lib/tmpfiles.d/punktfunk-seats.conf ]; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/punktfunk-seats.conf 2>/dev/null || :
+  fi
   # Creating the group is necessary but NOT sufficient, and the difference is invisible until a
   # stream fails: `pf-dm-helper` gates on MEMBERSHIP, so a host whose user never joined gets
   # "stopping the display manager needs privilege" on every managed takeover — sddm's autologin

@@ -33,9 +33,9 @@ REPO_URL="https://git.unom.io/api/packages/unom/debian"
 # Debian 12 (bookworm) is absent entirely: glibc 2.36 is below the host's 2.39 floor, so nothing
 # we ship installs there and there is nothing to smoke-test.
 MATRIX=(
-  "ubuntu:24.04|punktfunk-host punktfunk-web punktfunk-scripting"
-  "ubuntu:26.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-client punktfunk-gamescope"
-  "debian:trixie|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-gamescope"
+  "ubuntu:24.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats"
+  "ubuntu:26.04|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats punktfunk-client punktfunk-gamescope"
+  "debian:trixie|punktfunk-host punktfunk-web punktfunk-scripting punktfunk-seats punktfunk-gamescope"
 )
 
 if [ -n "${PF_SMOKE_IMAGES:-}" ]; then
@@ -100,7 +100,7 @@ for row in "${MATRIX[@]}"; do
           # (`if ldd | grep; then fail` rather than `grep && exit 1`: the latter leaves the block
           # returning grep NOT-found = 1, which under `set -e` fails the container on success.)
           for pkg in $PACKAGES; do
-            for bin in $(dpkg -L "$pkg" | grep "^/usr/bin/" || true); do
+            for bin in $(dpkg -L "$pkg" | grep -E "^/usr/(bin|libexec/punktfunk)/" || true); do
               if ldd "$bin" 2>/dev/null | grep -F "not found"; then
                 echo "UNRESOLVED SONAME in $bin (from $pkg)"
                 exit 1

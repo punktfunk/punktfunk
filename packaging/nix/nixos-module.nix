@@ -4,7 +4,8 @@
 # UDP socket-buffer sysctls, the firewall openers, the `input`- and `punktfunk`-group membership
 # for virtual gamepads, the management web console (`services.punktfunk.web`, on by default with
 # the host — the RPM/deb Recommends), and the plugin/script runner
-# (`services.punktfunk.scripting`, likewise on by default — the game-library scanners are plugins).
+# (`services.punktfunk.scripting`, likewise on by default — the game-library scanners are plugins),
+# and the seat supervisor (`services.punktfunk.seats`, off by default).
 #
 # Usage (flake):
 #   { inputs.punktfunk.url = "git+https://git.unom.io/unom/punktfunk?ref=nix-stable";
@@ -79,6 +80,18 @@ let
   # Non-triggering conditions on the same unit (punktfunk-web-init's ConditionPathExists) still
   # have to hold, which is the behaviour we want.
   userScope = if cfg.host.users == [ ] then [ "!@system" ] else map (u: "|${u}") cfg.host.users;
+
+  # What the seat supervisor and seat-session run: useradd/userdel, setfacl, loginctl/systemctl,
+  # pkill, a compositor. The system profile carries kwin if the desktop has it; the patched
+  # gamescope is the same one the host unit puts on its PATH.
+  seatPath = [
+    config.system.path
+    pkgs.bash
+    pkgs.coreutils
+    pkgs.shadow
+    pkgs.acl
+  ]
+  ++ optional cfg.host.gamescopeHdr cfg.host.gamescopePackage;
 
   # Native punktfunk ports (QUIC control and media + discovery + mgmt API).
   nativeTCP = [ 47990 ]; # mgmt/library REST API (HTTPS + mTLS)
@@ -390,6 +403,20 @@ in
           It remains opt-OUT: set this to `false`, or per user
           `systemctl --user mask punktfunk-scripting`.
         '';
+      };
+    };
+
+    # The seat supervisor: a root daemon that gives each profile its own user, logind session,
+    # headless desktop and stock host. Off by default, unlike the packaged distros, where the
+    # package installs it disabled and the console turns it on: here the option is that decision.
+    seats = {
+      enable = mkEnableOption "the punktfunk seat supervisor (a user, a session and a host per profile)";
+
+      package = mkOption {
+        type = types.package;
+        default = self.packages.${system}.punktfunk-seats;
+        defaultText = literalExpression "punktfunk.packages.\${system}.punktfunk-seats";
+        description = "The punktfunk-seats package (the root daemon, its units and its tmpfiles rules).";
       };
     };
   };
@@ -895,6 +922,41 @@ in
             "AF_NETLINK"
           ];
         };
+      };
+    })
+
+    # --- seat supervisor -----------------------------------------------------------------------
+    # The units and tmpfiles rules are the same files the other packages ship; the package
+    # rewrites their /usr/libexec paths to the store. NixOS layers the PATH and the install target
+    # on top as drop-ins, because a unit from `systemd.packages` has neither.
+    (mkIf cfg.seats.enable {
+      assertions = [
+        {
+          # Every seat runs the host, and `users.groups.punktfunk` is declared with it.
+          assertion = cfg.host.enable;
+          message = "services.punktfunk.seats needs services.punktfunk.host.enable: each seat runs the host.";
+        }
+        {
+          # The supervisor creates a seat's user with useradd, which rewrites /etc/passwd.
+          assertion = config.users.mutableUsers;
+          message = "services.punktfunk.seats needs users.mutableUsers = true: the supervisor creates seat users with useradd.";
+        }
+      ];
+
+      systemd.packages = [ cfg.seats.package ];
+      systemd.tmpfiles.packages = [ cfg.seats.package ];
+
+      systemd.services.punktfunk-seats = {
+        wantedBy = [ "multi-user.target" ];
+        path = seatPath;
+      };
+
+      systemd.services."punktfunk-seat@" = {
+        path = seatPath;
+        # seat-session starts this host; the packaged default is /usr/bin/punktfunk-host.
+        environment.PUNKTFUNK_HOST_BIN = "${cfg.host.package}/bin/punktfunk-host";
+        # A switch must not end a seat's session. Seats survive an update on every other package.
+        restartIfChanged = false;
       };
     })
   ];

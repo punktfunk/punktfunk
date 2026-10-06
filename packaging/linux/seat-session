@@ -98,6 +98,8 @@ start_kwin() {
 
     # Pre-authorised RemoteDesktop grant: without it the portal asks a question nobody answers.
     local share=/usr/share/punktfunk/headless db="$HOME/.local/share/flatpak/db/kde-authorized"
+    # The Debian host package keeps this data under punktfunk-host.
+    [[ -d $share ]] || share=/usr/share/punktfunk-host/headless
     if [[ ! -s "$db" && -s "$share/kde-authorized" ]]; then
         mkdir -p "$(dirname "$db")" && cp "$share/kde-authorized" "$db"
     fi

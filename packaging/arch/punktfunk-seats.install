@@ -1,0 +1,21 @@
+# pacman scriptlet for the seat supervisor — mirrors build-seats-deb.sh's maintainer scripts.
+# Nothing here enables the daemon: the console turns seats on.
+_ensure_dirs() {
+  # The seat users join the group and tmpfiles.d names it; the host package creates it too.
+  getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || true
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/punktfunk-seats.conf 2>/dev/null || true
+}
+
+post_install() {
+  _ensure_dirs
+}
+
+post_upgrade() {
+  _ensure_dirs
+  # Restarts a running daemon, never enables one. Running seats stay up.
+  systemctl try-restart punktfunk-seats.service 2>/dev/null || true
+}
+
+pre_remove() {
+  systemctl disable --now punktfunk-seats.service 2>/dev/null || true
+}

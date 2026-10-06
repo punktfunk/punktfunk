@@ -49,6 +49,7 @@ on:
       - 'crates/pf-paths-win/**'
       - 'crates/pf-portal/**'
       - 'crates/pf-presenter/**'
+      - 'crates/pf-seats/**'
       - 'crates/pf-update/**'
       - 'crates/pf-update-check/**'
       - 'crates/pf-vaapi/**'

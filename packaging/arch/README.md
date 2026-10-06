@@ -140,11 +140,13 @@ neither auto-enabled. The commands are on the
 [`data/platforms.json`](../../data/platforms.json).
 
 ## Files
-- `PKGBUILD` — split package: `punktfunk-host` + `punktfunk-client` (builds the working tree via
-  `PF_SRCDIR`, or a git tag for AUR).
+- `PKGBUILD` — split package: `punktfunk-host` + `punktfunk-client` + `punktfunk-seats` (builds the
+  working tree via `PF_SRCDIR`, or a git tag for AUR). `punktfunk-seats` is the root supervisor
+  behind profile seats: a host `optdepends`, installed under `/usr/libexec/punktfunk`, never enabled.
 - `punktfunk-host.install` / `punktfunk-client.install` — pacman scriptlets (udev reload + sysctl +
   first-run hint, incl. the ufw/firewalld enable command for whichever is present), mirror the RPM
   `%post` / deb postinst. `punktfunk-scripting.install` loads the runner's AppArmor profile.
+  `punktfunk-seats.install` creates the `punktfunk` group and the seat directories.
 - The firewall openers are shared across all Linux packaging and live in [`../linux/`](../linux/):
   the ufw application profile (`punktfunk.ufw` → `/etc/ufw/applications.d/punktfunk`) and the
   firewalld service definitions (`punktfunk-native.xml` / `punktfunk-gamestream.xml` /

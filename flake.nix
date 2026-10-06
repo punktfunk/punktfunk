@@ -116,6 +116,7 @@
             punktfunk-client
             punktfunk-web
             punktfunk-scripting
+            punktfunk-seats
             punktfunk-tray
             punktfunk-gamescope
             ;
@@ -166,6 +167,7 @@
             punktfunk-client
             punktfunk-web
             punktfunk-scripting
+            punktfunk-seats
             ;
 
           # The NixOS module, actually evaluated. `nix flake check` does NOT do this for

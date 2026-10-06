@@ -18,7 +18,8 @@ can hold: how the packages are built, and the traps.
 | `packages.…punktfunk-client` | `punktfunk-client` (GTK4 shell) + `punktfunk-session` (without the Skia OSD — see below) |
 | `packages.…punktfunk-web` | the management console (bun-built Nitro SSR bundle) |
 | `packages.…punktfunk-scripting` | the plugin/script runner (bun-bundled Effect SDK) |
-| `nixosModules.default` | `services.punktfunk.host` / `.client` / `.web` / `.scripting` |
+| `packages.…punktfunk-seats` | the seat supervisor, its helpers, and its units and tmpfiles rules rewritten to the store path |
+| `nixosModules.default` | `services.punktfunk.host` / `.client` / `.web` / `.scripting` / `.seats` |
 | `devShells.…default` | pinned Rust from `rust-toolchain.toml` + every system library |
 | `checks.…nixos-module` | evaluates the module against real nixpkgs and asserts on the rendered units |
 

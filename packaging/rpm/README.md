@@ -98,6 +98,7 @@ upgrade`, so a box tracks new builds automatically.
 ```sh
 PF_VERSION=0.0.1 bash packaging/rpm/build-rpm.sh                # host + client
 PF_VERSION=0.0.1 PF_WITH_WEB=1 bash packaging/rpm/build-rpm.sh  # + punktfunk-web (needs bun on PATH)
+# The host build also yields punktfunk-seats, the seat supervisor the host Recommends (never enabled).
 # -> dist/punktfunk-0.0.1-1.fcNN.x86_64.rpm  (+ punktfunk-web and punktfunk-bun with PF_WITH_WEB=1;
 #    punktfunk-bun is the vendored bun web and scripting share, at /usr/libexec/punktfunk-bun/bun)
 ```

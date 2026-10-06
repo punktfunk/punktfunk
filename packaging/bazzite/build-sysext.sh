@@ -5,7 +5,7 @@
 # /var/lib/extensions/, survives OS updates, and is toggled/updated without a reboot.
 #
 # Counterpart to ../arch/build-sysext.sh (which wraps a pacman package for SteamOS). This one
-# wraps the Fedora RPMs (punktfunk, -web, -scripting, -bun) and additionally:
+# wraps the Fedora RPMs (punktfunk, -web, -scripting, -seats, -bun) and additionally:
 #   * relocates the RPMs' /etc payload to /usr/share/punktfunk/etc/ (a sysext carries ONLY /usr;
 #     punktfunk-sysext(8) copies these into the real /etc on install),
 #   * bakes SELinux labels in as squashfs pseudo-xattrs, computed with matchpathcon from the
