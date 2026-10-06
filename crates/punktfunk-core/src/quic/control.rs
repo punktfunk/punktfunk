@@ -503,6 +503,59 @@ pub struct PadSlots {
     pub slots: u16,
 }
 
+/// `client → host` ([`MSG_PAD_IDENTITY`](super::v2::registry::MSG_PAD_IDENTITY)): who a captured
+/// Steam Controller 2 is — its USB serial and its replies to Steam's feature queries — so the
+/// host's virtual pad answers as the physical one. Sent before the pad's arrival.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PadIdentity {
+    pub pad: u8,
+    /// The USB serial string: the pad's engraved serial, or its Puck's.
+    pub serial: String,
+    /// `(request, reply)` pairs, id first ([`pack_identity_replies`]).
+    pub replies: Vec<u8>,
+}
+
+/// Longest [`PadIdentity::serial`] in bytes.
+pub const PAD_IDENTITY_SERIAL_MAX: usize = 32;
+/// Longest [`PadIdentity::replies`] in bytes: room for every query with margin.
+pub const PAD_IDENTITY_REPLIES_MAX: usize = 4096;
+
+/// Pack `(request, reply)` pairs as `[len][request][len][reply]…`, each part cut at 64 bytes.
+pub fn pack_identity_replies<'a>(pairs: impl IntoIterator<Item = (&'a [u8], &'a [u8])>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (req, reply) in pairs {
+        for part in [req, reply] {
+            let part = &part[..part.len().min(64)];
+            out.push(part.len() as u8);
+            out.extend_from_slice(part);
+        }
+    }
+    out
+}
+
+/// The pairs [`pack_identity_replies`] packed; `None` when a length runs past the end.
+pub fn unpack_identity_replies(b: &[u8]) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+    let mut parts = Vec::new();
+    let mut rest = b;
+    while let Some((&n, tail)) = rest.split_first() {
+        let n = usize::from(n);
+        if n > 64 || tail.len() < n {
+            return None;
+        }
+        parts.push(tail[..n].to_vec());
+        rest = &tail[n..];
+    }
+    if parts.len() % 2 != 0 {
+        return None;
+    }
+    let mut it = parts.into_iter();
+    let mut pairs = Vec::new();
+    while let (Some(req), Some(reply)) = (it.next(), it.next()) {
+        pairs.push((req, reply));
+    }
+    Some(pairs)
+}
+
 /// Longest [`LaunchOutcome::message`] in UTF-8 bytes. One sentence plus a cause;
 /// a host cannot make the client hold more than this.
 pub const LAUNCH_MESSAGE_MAX: usize = 200;

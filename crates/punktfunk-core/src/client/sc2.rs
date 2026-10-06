@@ -21,6 +21,35 @@ const BTN_STEAM: u32 = 0x0001_0000;
 /// Wire pads a client can address: every `pad` masks to 16.
 pub(crate) const PADS: usize = 16;
 
+/// Feature queries whose replies make a pad's identity, id first: the attributes, the four
+/// strings, the three firmware blocks. Steam asks the same; the slot state (`0xB4`) is live
+/// and stays out.
+const PAD_REQUESTS: &[&[u8]] = &[
+    &[0x01, 0x83, 0x00],
+    &[0x01, 0xAE, 0x15, 0x00],
+    &[0x01, 0xAE, 0x15, 0x01],
+    &[0x01, 0xAE, 0x15, 0x02],
+    &[0x01, 0xAE, 0x15, 0x03],
+    &[0x01, 0xF2, 0x01, 0x00],
+    &[0x01, 0xF2, 0x01, 0x01],
+    &[0x01, 0xF2, 0x01, 0x02],
+];
+/// A Puck slot adds the pad's two config keys and the dongle's attributes and bond.
+const PUCK_REQUESTS: &[&[u8]] = &[
+    b"\x01\xED\x17user/wireless_transport",
+    b"\x01\xED\x08esb/bond",
+    &[0x02, 0x83, 0x00],
+    &[0x02, 0xA3, 0x00],
+];
+
+/// What a client reads off a pad (SET the request, GET the reply) for
+/// [`NativeClient::send_pad_identity`](super::NativeClient::send_pad_identity). A Puck stalls
+/// each GET until the pad answers over the radio, about 40 ms; retry for a second.
+pub fn identity_requests(puck: bool) -> impl Iterator<Item = &'static [u8]> {
+    let extra: &[&[u8]] = if puck { PUCK_REQUESTS } else { &[] };
+    PAD_REQUESTS.iter().chain(extra).copied()
+}
+
 /// [`Sc2Gate::from_bits`]: the C ABI and JNI spelling of a gate.
 pub const SC2_GATE_MASKED: u32 = 1;
 pub const SC2_GATE_SYSTEM_LOCAL: u32 = 2;
@@ -192,6 +221,29 @@ mod tests {
         let mut r = state(5, buttons);
         f.apply(&mut r);
         u32::from_le_bytes([r[2], r[3], r[4], r[5]])
+    }
+
+    #[test]
+    fn identity_requests_name_their_own_lengths() {
+        assert_eq!(identity_requests(false).count(), 8);
+        let puck: Vec<_> = identity_requests(true).collect();
+        assert_eq!(puck.len(), 12);
+        for key in puck.iter().filter(|r| r[1] == 0xED) {
+            assert_eq!(usize::from(key[2]), key.len() - 3, "{key:02X?}");
+        }
+        assert!(
+            identity_requests(true).all(|r| r[1] != 0xB4),
+            "slot state stays live"
+        );
+        let packed = crate::quic::pack_identity_replies(puck.iter().map(|r| (*r, *r)));
+        let back = crate::quic::unpack_identity_replies(&packed).unwrap();
+        assert_eq!(back.len(), 12);
+        assert_eq!(back[8].0, puck[8]);
+        assert!(crate::quic::unpack_identity_replies(&packed[..packed.len() - 1]).is_none());
+        assert!(
+            crate::quic::unpack_identity_replies(&[1, 0x83]).is_none(),
+            "a request alone"
+        );
     }
 
     #[test]

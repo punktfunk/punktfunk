@@ -42,6 +42,8 @@ pub(crate) enum CtrlRequest {
     /// A key press or release, toward a host that reads them off the control stream
     /// (`HOST_CAP2_INPUT_EDGES`): QUIC resends what the datagram plane would lose.
     InputEdge(crate::input::InputEvent),
+    /// A captured Steam Controller 2's identity, ahead of its arrival.
+    PadIdentity(crate::quic::PadIdentity),
 }
 
 /// Handshake snapshot the worker reports to [`NativeClient::connect`]. Field-for-field copy onto

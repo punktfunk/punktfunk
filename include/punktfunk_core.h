@@ -931,6 +931,12 @@
 // so 120² RGBA (57.6 KiB) is the largest it takes. Host downscales anything larger.
 #define PUNKTFUNK_CURSOR_SHAPE_MAX_SIDE 120
 
+// Longest [`PadIdentity::serial`] in bytes.
+#define PUNKTFUNK_PAD_IDENTITY_SERIAL_MAX 32
+
+// Longest [`PadIdentity::replies`] in bytes: room for every query with margin.
+#define PUNKTFUNK_PAD_IDENTITY_REPLIES_MAX 4096
+
 // Longest [`LaunchOutcome::message`] in UTF-8 bytes. One sentence plus a cause;
 // a host cannot make the client hold more than this.
 #define PUNKTFUNK_LAUNCH_MESSAGE_MAX 200
@@ -3052,6 +3058,30 @@ PunktfunkStatus punktfunk_connection_send_hid_report(PunktfunkConnection *c,
 PunktfunkStatus punktfunk_connection_set_sc2_gate(PunktfunkConnection *c,
                                                   uint8_t pad,
                                                   uint32_t gate);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The `index`-th feature query a client reads off a Steam Controller 2 for
+// [`punktfunk_connection_send_pad_identity`], id first, copied into `out`. Returns its length;
+// 0 past the last one or when `cap` is short. `puck` adds a Puck slot's queries.
+//
+// # Safety
+// `out` points to `cap` writable bytes.
+uintptr_t punktfunk_sc2_identity_request(bool puck, uint32_t index, uint8_t *out, uintptr_t cap);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Tell the host who the Steam Controller 2 on `pad` is, before its arrival: `serial` is its USB
+// serial (UTF-8, NUL-terminated), `replies` the `(request, reply)` pairs packed as
+// `[len][request][len][reply]…`, each part at most 64 bytes. Too long or torn is `InvalidArg`.
+//
+// # Safety
+// `c` is a valid connection handle; `serial` is NUL-terminated; `replies` points to `len` bytes.
+PunktfunkStatus punktfunk_connection_send_pad_identity(PunktfunkConnection *c,
+                                                       uint8_t pad,
+                                                       const char *serial,
+                                                       const uint8_t *replies,
+                                                       uintptr_t len);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

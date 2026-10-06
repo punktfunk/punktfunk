@@ -126,6 +126,7 @@ impl ControlTask {
                         CtrlRequest::CursorRender(m) => m.encode_v2(),
                         CtrlRequest::Phase(p) => p.encode_v2(),
                         CtrlRequest::InputEdge(ev) => v2msg::encode_input_event(&ev),
+                        CtrlRequest::PadIdentity(id) => id.encode_v2(),
                     };
                     if v2io::write_frame(&mut ctrl_send, &frame).await.is_err() {
                         break;

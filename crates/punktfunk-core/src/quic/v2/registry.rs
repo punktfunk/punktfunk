@@ -119,6 +119,9 @@ pub const MSG_CLIP_FETCH_HDR: u64 = 0x44;
 /// Control stream: one input edge — a key press or release — that must not be lost, in order
 /// with the others. The body is the event's own encoding.
 pub const MSG_INPUT_EVENT: u64 = 0x50;
+/// `client → host`, control stream: a captured pad's USB serial and feature replies, before its
+/// arrival (`PadIdentity`).
+pub const MSG_PAD_IDENTITY: u64 = 0x51;
 
 /// Every frame type, its name and the bound on its body.
 pub const FRAMES: &[(&str, u64, usize)] = &[
@@ -168,6 +171,7 @@ pub const FRAMES: &[(&str, u64, usize)] = &[
     ("MSG_CLIP_FETCH", MSG_CLIP_FETCH, 1024),
     ("MSG_CLIP_FETCH_HDR", MSG_CLIP_FETCH_HDR, 256),
     ("MSG_INPUT_EVENT", MSG_INPUT_EVENT, 256),
+    ("MSG_PAD_IDENTITY", MSG_PAD_IDENTITY, 8 * 1024),
 ];
 
 /// The bound on a body of type `ty`; [`UNKNOWN_MAX_BODY`] for a type this build does not know.

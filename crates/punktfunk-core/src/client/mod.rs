@@ -41,7 +41,7 @@ mod pump;
 mod recovery;
 mod resume;
 /// cbindgen:ignore
-mod sc2;
+pub mod sc2;
 use crate::rumble;
 mod worker;
 
@@ -1542,6 +1542,21 @@ impl NativeClient {
             }
         }
         self.input_tx.send(*ev).map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// Tell the host who the Steam Controller 2 on `id.pad` is, before its arrival: the host's
+    /// virtual pad then answers Steam with this serial and these replies
+    /// ([`sc2::identity_requests`] lists what to read). An older host skips the frame.
+    pub fn send_pad_identity(&self, id: crate::quic::PadIdentity) -> Result<()> {
+        if id.serial.len() > crate::quic::PAD_IDENTITY_SERIAL_MAX
+            || id.replies.len() > crate::quic::PAD_IDENTITY_REPLIES_MAX
+            || crate::quic::unpack_identity_replies(&id.replies).is_none()
+        {
+            return Err(PunktfunkError::InvalidArg("pad identity out of bounds"));
+        }
+        self.ctrl_tx
+            .try_send(CtrlRequest::PadIdentity(id))
+            .map_err(|_| PunktfunkError::Closed)
     }
 
     /// How a Steam Controller 2's raw reports on wire pad `pad` are gated: the client's overlay,
