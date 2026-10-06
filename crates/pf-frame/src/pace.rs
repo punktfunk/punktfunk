@@ -1,6 +1,6 @@
 //! Pacing for a virtual display that ticks faster than its stream: the credit the encode thread
-//! spends per frame, and the timestamp correction for the panel's tick. Plain arithmetic in QPC
-//! ticks, so both are tested off Windows.
+//! spends per frame, and the timestamp correction for the panel's tick. Plain arithmetic in any
+//! clock's ticks: QPC in the Windows driver, nanoseconds in the Linux host.
 
 /// A credit bucket at the stream rate. Each encoded frame spends one period; credit refills with
 /// time up to two periods. A frame that lands one panel tick early still passes, and the long-run
@@ -140,6 +140,42 @@ impl Restamp {
     }
 }
 
+/// How far each frame's gap moved from the one before it, on two stamps of the same frames: the
+/// producer's (`raw`) and the corrected one (`out`). Near zero is an even cadence; a panel tick
+/// is jitter the stamps pass on.
+#[derive(Clone, Debug, Default)]
+pub struct GapChange {
+    last: Option<(u64, u64)>,
+    gaps: Option<(u64, u64)>,
+    n: u64,
+    raw: u64,
+    out: u64,
+}
+
+impl GapChange {
+    /// One frame's two stamps.
+    pub fn note(&mut self, raw: u64, out: u64) {
+        let gaps = match self.last.replace((raw, out)) {
+            Some((r, o)) if raw > r && out > o => Some((raw - r, out - o)),
+            _ => None,
+        };
+        if let (Some((rg, og)), Some((last_rg, last_og))) = (gaps, self.gaps) {
+            self.n += 1;
+            self.raw += rg.abs_diff(last_rg);
+            self.out += og.abs_diff(last_og);
+        }
+        self.gaps = gaps;
+    }
+
+    /// The mean change per frame, `(raw, out)` in ticks, since the last take; the stamps carry on.
+    pub fn take(&mut self) -> (u64, u64) {
+        let n = core::mem::take(&mut self.n).max(1);
+        let raw = core::mem::take(&mut self.raw);
+        let out = core::mem::take(&mut self.out);
+        (raw / n, out / n)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +288,18 @@ mod tests {
             let (raw, out) = spacing_error(gap, 300);
             assert!(out * 10 < raw, "{gap}: raw {raw} us, corrected {out} us");
         }
+    }
+
+    #[test]
+    fn gap_change_reads_zero_for_even_and_a_tick_for_flipped() {
+        let mut g = GapChange::default();
+        for k in 0..10 {
+            // Even corrected stamps, raw ones alternating 1 and 3 ticks apart.
+            let raw = k * 2 * TICK + if k % 2 == 1 { TICK } else { 0 };
+            g.note(1_000_000 + raw, 1_000_000 + k * 2 * TICK);
+        }
+        assert_eq!(g.take(), (2 * TICK, 0));
+        assert_eq!(g.take(), (0, 0), "a take starts the means over");
     }
 
     #[test]

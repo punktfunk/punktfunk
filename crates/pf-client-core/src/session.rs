@@ -215,7 +215,11 @@ impl SessionParams {
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
-        let ten_bit = crate::video::ten_bit_decodable(probes.vulkan.as_ref(), &settings.decoder);
+        let ten_bit = crate::video::ten_bit_decodable(
+            probes.vulkan.as_ref(),
+            &settings.decoder,
+            settings.preferred_codec(),
+        );
         if !ten_bit && (settings.hdr_enabled || settings.ten_bit_sdr) {
             tracing::info!("10-bit not advertised: no hardware decoder here has a 10-bit path");
         }
@@ -1073,6 +1077,10 @@ fn pump(
     let mut window_start = Instant::now();
     // The pin-unsustainable notice goes out once per session.
     let mut pin_noticed = false;
+    // Decoder overrun: skips and decodes at the last window close, and the run of
+    // windows in which a tenth of the stream was skipped.
+    let (mut behind_seen, mut decoded_seen, mut overrun_secs) = (0u64, 0u64, 0u32);
+    let mut overrun_noticed = false;
     // The last launch verdict turned into a notice: each verdict is said once.
     let mut launch_told: Option<punktfunk_core::quic::LaunchOutcome> = None;
     // Report decode stage to ABR only when armed. Constant for the session.
@@ -1478,6 +1486,27 @@ fn pump(
                     "This device can't keep up with the pinned {} Mbps. Set the bitrate to \
                      Automatic or lower it.",
                     pin_kbps / 1000
+                )));
+            }
+            let (behind, decoded) = (
+                connector.frames_behind() - behind_seen,
+                total_frames - decoded_seen,
+            );
+            behind_seen += behind;
+            decoded_seen += decoded;
+            overrun_secs = if behind * 10 >= behind + decoded && behind > 0 {
+                overrun_secs + 1
+            } else {
+                0
+            };
+            // Five seconds running is the device, not a hitch. Said once.
+            if overrun_secs == 5 && !overrun_noticed {
+                overrun_noticed = true;
+                let m = connector.mode();
+                let _ = ev_tx.try_send(SessionEvent::Notice(format!(
+                    "This device can't keep up with this stream at {}×{}. Lower the \
+                     resolution or the refresh rate.",
+                    m.width, m.height
                 )));
             }
             if let Some(outcome) = connector.launch_outcome() {

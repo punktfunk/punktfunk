@@ -965,6 +965,12 @@ pub fn av1_hardware_decodable(vk: Option<&VulkanDecodeDevice>) -> bool {
     platform
 }
 
+/// Does the Hello offer AV1 on this device? [`av1_hardware_decodable`] or a V4L2 node
+/// that takes AV1 — the answer a settings UI must show.
+pub fn av1_advertised(vk: Option<&VulkanDecodeDevice>) -> bool {
+    av1_hardware_decodable(vk) || v4l2_summary(vk).codecs & punktfunk_core::quic::CODEC_AV1 != 0
+}
+
 /// Can this client decode 4:4:4 HEVC — the promise `VIDEO_CAP_444` makes.
 ///
 /// Vulkan only: VAAPI/DXVA/CPU are 4:2:0. Advertising 4:4:4 without a Vulkan
@@ -1058,14 +1064,21 @@ pub fn multi_slice_decodable(vendor_id: Option<u32>) -> bool {
 /// Can a 10-bit stream be decoded here? The CPU rung is 8-bit, so this needs a
 /// hardware rung with a 10-bit path: Vulkan Video, the platform rung, V4L2 with
 /// a linear 10-bit format, or PyroWave. A software pin has only the last one.
-pub fn ten_bit_decodable(vk: Option<&VulkanDecodeDevice>, decoder_pref: &str) -> bool {
-    ten_bit_decodable_with(vk, decoder_pref, v4l2_summary(vk))
+/// PyroWave counts only when `preferred_codec` asks for it: the host never picks
+/// it unasked, so its depth would buy an HEVC Main10 stream nothing here decodes.
+pub fn ten_bit_decodable(
+    vk: Option<&VulkanDecodeDevice>,
+    decoder_pref: &str,
+    preferred_codec: u8,
+) -> bool {
+    ten_bit_decodable_with(vk, decoder_pref, preferred_codec, v4l2_summary(vk))
 }
 
 /// [`ten_bit_decodable`] over an explicit V4L2 answer; tests need no device node.
 pub(crate) fn ten_bit_decodable_with(
     vk: Option<&VulkanDecodeDevice>,
     decoder_pref: &str,
+    preferred_codec: u8,
     v4l2: V4l2Summary,
 ) -> bool {
     // No device facts: keep the promise and let the rungs decide.
@@ -1077,7 +1090,8 @@ pub(crate) fn ten_bit_decodable_with(
     #[cfg(not(target_os = "linux"))]
     let platform = v.d3d11_import;
     let hardware = v.video_decode || platform || v4l2.ten_bit != 0;
-    v.pyrowave_decode || (hardware && !decode_pinned_to_software(decoder_pref))
+    let pyrowave = v.pyrowave_decode && preferred_codec == punktfunk_core::quic::CODEC_PYROWAVE;
+    pyrowave || (hardware && !decode_pinned_to_software(decoder_pref))
 }
 
 /// Desktop `video_caps` from the user switches, testable without a GPU.
@@ -2583,31 +2597,48 @@ mod tests {
         }
         let none = V4l2Summary::default();
         let vulkan = decode_device(0x10DE, "NVIDIA GeForce RTX 3070 Ti");
-        assert!(ten_bit_decodable_with(Some(&vulkan), "auto", none));
+        assert!(ten_bit_decodable_with(Some(&vulkan), "auto", 0, none));
         assert!(
-            !ten_bit_decodable_with(Some(&vulkan), "software", none),
+            !ten_bit_decodable_with(Some(&vulkan), "software", 0, none),
             "a software pin makes the hardware unreachable"
         );
 
         let mut soc = decode_device(0x5143, "Turnip Adreno (TM) 750");
         soc.video_decode = false;
-        assert!(!ten_bit_decodable_with(Some(&soc), "auto", none));
+        assert!(!ten_bit_decodable_with(Some(&soc), "auto", 0, none));
         let eight_bit_only = V4l2Summary {
             codecs: CODEC_H264 | CODEC_HEVC,
             ten_bit: 0,
         };
-        assert!(!ten_bit_decodable_with(Some(&soc), "auto", eight_bit_only));
+        assert!(!ten_bit_decodable_with(
+            Some(&soc),
+            "auto",
+            0,
+            eight_bit_only
+        ));
         let p010 = V4l2Summary {
             codecs: CODEC_H264 | CODEC_HEVC,
             ten_bit: CODEC_HEVC,
         };
-        assert!(ten_bit_decodable_with(Some(&soc), "auto", p010));
+        assert!(ten_bit_decodable_with(Some(&soc), "auto", 0, p010));
 
-        // PyroWave carries its own depth and its own decoder.
+        // PyroWave carries its own depth, but only a player who picked it gets a
+        // PyroWave stream. On auto the host builds HEVC Main10 for an 8-bit V4L2 node.
         soc.pyrowave_decode = true;
-        assert!(ten_bit_decodable_with(Some(&soc), "software", none));
+        assert!(!ten_bit_decodable_with(
+            Some(&soc),
+            "auto",
+            0,
+            eight_bit_only
+        ));
+        assert!(ten_bit_decodable_with(
+            Some(&soc),
+            "software",
+            CODEC_PYROWAVE,
+            none
+        ));
         // No device facts: the promise stays, as before.
-        assert!(ten_bit_decodable_with(None, "auto", none));
+        assert!(ten_bit_decodable_with(None, "auto", 0, none));
     }
 
     /// A pin with stray whitespace is still a pin. `"native-vulkan "` matched
