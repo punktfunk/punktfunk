@@ -13,7 +13,9 @@ about.toml) produces an equivalent, network-augmented result in CI; this is the 
 fallback that also runs locally and is committed as a baseline.
 
 By default it covers the WHOLE workspace, which is what the root file must be (the host and
-the desktop clients ship out of it). `--packages <name>[,<name>…]` restricts it to the transitive
+the desktop clients ship out of it). A repeated `--manifest` adds another workspace's crates:
+the root file also names the seat keeper's, a separate workspace the Windows host installer
+ships. `--packages <name>[,<name>…]` restricts one workspace to the transitive
 dependency closure of the named workspace members instead — the Apple and Android clients link
 exactly one Rust crate each (`punktfunk-ffi`, and the JNI bridge over the core), so a workspace-wide
 copy attributed them things they do not contain: FFmpeg, the NVENC SDK, GTK, windows-rs. Listing a
@@ -21,6 +23,7 @@ dependency that is not there is not a licence violation, but it is a false state
 whose entire job is to be true.
 
 Usage:  python3 scripts/gen-third-party-notices.py [--out THIRD-PARTY-NOTICES.txt]
+                                                   [--manifest Cargo.toml …]
                                                    [--packages punktfunk-core,…]
 """
 import argparse
@@ -118,7 +121,8 @@ VENDORED_TREES = [
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="THIRD-PARTY-NOTICES.txt")
-    ap.add_argument("--manifest", default="Cargo.toml")
+    ap.add_argument("--manifest", action="append", default=[],
+                    help="a workspace manifest; repeat to merge workspaces (default Cargo.toml)")
     ap.add_argument(
         "--packages",
         default="",
@@ -135,11 +139,20 @@ def main():
     # the workspace-wide union. Resolving every feature over-approximates instead, which is the
     # safe direction for an attribution file: listing a crate that is not linked is untidy,
     # omitting one that is is the failure this file exists to prevent.
-    meta = json.loads(subprocess.check_output(
+    manifests = args.manifest or ["Cargo.toml"]
+    if args.packages.strip() and len(manifests) > 1:
+        ap.error("--packages scopes one workspace; pass a single --manifest with it")
+    metas = [json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--offline", "--all-features",
-         "--manifest-path", args.manifest],
-        text=True))
-    ws_members = set(meta.get("workspace_members", []))
+         "--manifest-path", m],
+        text=True)) for m in manifests]
+    meta = metas[0]
+    ws_members = set()
+    by_id = {}
+    for m in metas:
+        ws_members.update(m.get("workspace_members", []))
+        for p in m["packages"]:
+            by_id.setdefault(p["id"], p)
 
     # No --filter-platform either: a `cfg(windows)` crate stays listed for a Linux build, the
     # safe direction for an attribution file.
@@ -148,7 +161,7 @@ def main():
         keep = closure(meta, [n.strip() for n in args.packages.split(",") if n.strip()])
 
     pkgs = []
-    for p in meta["packages"]:
+    for p in by_id.values():
         if p["id"] in ws_members:
             continue  # first-party (covered by the root LICENSE-MIT / LICENSE-APACHE)
         if keep is not None and p["id"] not in keep:

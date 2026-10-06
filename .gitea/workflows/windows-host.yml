@@ -88,6 +88,8 @@ on:
       - 'crates/pf-audio/**'
       - 'crates/pf-paths/**'
       - 'crates/pf-paths-win/**'
+      - 'crates/pf-seats/**'
+      - 'crates/pf-seat-keeper/**'
       - 'crates/pf-driver-proto/**'
       - 'crates/pf-clipboard/**'
       - 'crates/pf-update-check/**'
@@ -125,6 +127,8 @@ on:
       - 'crates/pf-audio/**'
       - 'crates/pf-paths/**'
       - 'crates/pf-paths-win/**'
+      - 'crates/pf-seats/**'
+      - 'crates/pf-seat-keeper/**'
       - 'crates/pf-driver-proto/**'
       - 'crates/pf-clipboard/**'
       - 'crates/pf-update-check/**'
@@ -220,11 +224,15 @@ jobs:
         # every extra feature set re-checks the crates the runs share.
         run: |
           cargo clippy --release --locked -p punktfunk-host -p punktfunk-tray --features nvenc,qsv --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "host clippy" }
-          cargo clippy --release --locked -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p display-disturb --all-targets --features nvenc,qsv --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "subsystem clippy" }
+          cargo clippy --release --locked -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p pf-seats -p display-disturb --all-targets --features nvenc,qsv --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "subsystem clippy" }
+          # The seat keeper is its own workspace (IronRDP's lockfile); see its Cargo.toml.
+          cargo clippy --release --locked --manifest-path crates/pf-seat-keeper/Cargo.toml --target x86_64-pc-windows-msvc -- -D warnings; if ($LASTEXITCODE) { throw "seat keeper clippy" }
 
       - name: Format check
         # Cheap, needs no compile, and the Linux lane cannot see these crates' Windows modules.
-        run: cargo fmt -p punktfunk-host -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p punktfunk-tray --check
+        run: |
+          cargo fmt -p punktfunk-host -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p pf-seats -p punktfunk-tray --check; if ($LASTEXITCODE) { throw "fmt" }
+          cargo fmt --manifest-path crates/pf-seat-keeper/Cargo.toml --check; if ($LASTEXITCODE) { throw "seat keeper fmt" }
 
       - name: Test (pf-capture + pf-vdisplay + pf-win-display, Windows)
         # The crates whose Windows test binaries link against nothing this runner lacks —
@@ -241,6 +249,8 @@ jobs:
           cargo test --release --locked -p pf-capture --target x86_64-pc-windows-msvc; if ($LASTEXITCODE) { throw "pf-capture tests" }
           cargo test --release --locked -p pf-vdisplay --target x86_64-pc-windows-msvc; if ($LASTEXITCODE) { throw "pf-vdisplay tests" }
           cargo test --release --locked -p pf-win-display --target x86_64-pc-windows-msvc; if ($LASTEXITCODE) { throw "pf-win-display tests" }
+          # The seat ledger, accounts and pipe. The pipe test opens a SYSTEM/Administrators pipe.
+          cargo test --release --locked -p pf-seats --target x86_64-pc-windows-msvc; if ($LASTEXITCODE) { throw "pf-seats tests" }
 
   package:
     runs-on: windows-amd64
@@ -375,6 +385,12 @@ jobs:
         # The per-user notification-area companion the installer bundles (punktfunk-tray.exe).
         run: cargo build --release --locked -p punktfunk-tray --target ${{ matrix.target }}
 
+      - name: Build (release, seat keeper)
+        shell: pwsh
+        # punktfunk-seat-keeper.exe, from its own workspace into the same CARGO_TARGET_DIR, so
+        # it lands beside punktfunk-host.exe where the pack script takes it.
+        run: cargo build --release --locked --manifest-path crates/pf-seat-keeper/Cargo.toml --target ${{ matrix.target }}
+
       - name: Clippy (host + tray, Windows)
         shell: pwsh
         # --release reuses the tree the Build steps made. A debug clippy builds a second one, and
@@ -386,7 +402,8 @@ jobs:
         run: |
           $t = '${{ matrix.target }}'
           cargo clippy --release --locked -p punktfunk-host -p punktfunk-tray ${{ matrix.host_flags }} --target $t -- -D warnings; if ($LASTEXITCODE) { throw "host clippy" }
-          cargo clippy --release --locked -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p display-disturb --all-targets ${{ matrix.encode_flags }} --target $t -- -D warnings; if ($LASTEXITCODE) { throw "subsystem clippy" }
+          cargo clippy --release --locked -p pf-encode -p pf-encode-core -p pf-encode-win -p pf-capture -p pf-vdisplay -p pf-win-display -p pf-inject -p pf-audio -p pf-seats -p display-disturb --all-targets ${{ matrix.encode_flags }} --target $t -- -D warnings; if ($LASTEXITCODE) { throw "subsystem clippy" }
+          cargo clippy --release --locked --manifest-path crates/pf-seat-keeper/Cargo.toml --target $t -- -D warnings; if ($LASTEXITCODE) { throw "seat keeper clippy" }
 
       - name: Test (pf-capture, Windows)
         if: matrix.arch == 'x64'
@@ -413,6 +430,7 @@ jobs:
           # Same argument, same tree shape: pf-win-display has no encoder dependency either, and
           # its 29 CCD path/mode transform tests were compiled by clippy and run nowhere.
           cargo test --release --locked -p pf-win-display --target ${{ matrix.target }}; if ($LASTEXITCODE) { throw "pf-win-display tests" }
+          cargo test --release --locked -p pf-seats --target ${{ matrix.target }}; if ($LASTEXITCODE) { throw "pf-seats tests" }
 
       - name: Test (pf-vdisplay, Windows)
         if: matrix.arch == 'x64'

@@ -8,7 +8,8 @@
 //! in-process via IDD direct-push.
 //!
 //! The second child is the web management console (bun/Nitro on :47992), spawned plainly into
-//! session 0 so a session switch does not tear it down.
+//! session 0 so a session switch does not tear it down. The seat supervisor ([`seats`]) runs
+//! in this process and starts seat hosts in jobs of its own.
 //!
 //! Subcommands: `run` (SCM binPath), `install`/`uninstall`, `start`/`stop`/`restart`/`status`.
 //! Config: `%ProgramData%\punktfunk\host.env`. Logs: `%ProgramData%\punktfunk\logs\`.
@@ -62,10 +63,11 @@ mod firewall;
 mod host_env;
 mod rollback;
 mod runtime;
+mod seats;
 mod setup;
 mod web;
 
-use self::{firewall::*, host_env::*, rollback::*, runtime::*, setup::*, web::*};
+use self::{firewall::*, host_env::*, rollback::*, runtime::*, seats::*, setup::*, web::*};
 pub(crate) use firewall::{
     allow_public_network, firewall_profile_arg, fw_add_rule_args, run_netsh,
 };

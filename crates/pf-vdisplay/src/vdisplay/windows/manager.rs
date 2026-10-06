@@ -656,8 +656,8 @@ impl VirtualDisplayManager {
                     own_session = own,
                     console_session = console,
                     "punktfunk seat host is intentionally outside the active console session — \
-                     the seats add-on active-RDP keeper must keep this RDP session active; display \
-                     activation errors that follow are real and mean the keeper or session is unavailable"
+                     the seat keeper must keep this RDP session active; display activation errors \
+                     that follow are real and mean the keeper or session is unavailable"
                 );
             } else {
                 tracing::error!(

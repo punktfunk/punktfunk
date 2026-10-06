@@ -109,6 +109,10 @@ The drivers carry a separate self-signed certificate (`CN=punktfunk-driver`, SHA
 - **Logs.** `%ProgramData%\punktfunk\logs\` holds `service.log` and `host.log`, each rotated at
   10 MB. Only Administrators can read them, so use an elevated PowerShell or the console's
   **Troubleshooting** page. `RUST_LOG=debug` in `host.env` adds detail.
+- **Seats for several people.** Running a seat per person needs **Windows Server** and a **Remote
+  Desktop Services CAL for every seat**; Per-Device CALs fit fixed seats. Windows 10 and 11 serve
+  one session at a time, so a second seat can't stream beside the first there. How seats run is in
+  the [multi-seat contract](/docs/developers/multi-seat-contract).
 - **Two processes.** Task Manager shows two `punktfunk-host.exe`: the service and the worker it
   starts in your session. Ending the worker only makes the service start another; stop the host
   from the status icon or with `punktfunk-host service stop`.
