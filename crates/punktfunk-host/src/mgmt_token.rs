@@ -145,6 +145,9 @@ fn load_or_generate_impl(env_var: &str, file: &str) -> Result<String> {
         if parse_token(&fs::read_to_string(&path).unwrap_or_default(), env_var).as_deref()
             != Some(pinned.as_str())
         {
+            // A seat's config directory doesn't exist before its host's first start.
+            pf_paths::create_private_dir(&dir)
+                .with_context(|| format!("create {}", dir.display()))?;
             write_token(&path, env_var, &pinned)?;
         }
         return Ok(pinned);
