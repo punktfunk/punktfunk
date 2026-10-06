@@ -36,7 +36,13 @@ pub struct TritonWinPad {
     /// Synth-mode sequence only. The raw path mirrors the physical pad's
     /// bytes, its own sequence byte included.
     seq: u8,
+    /// A sparse report (battery, status) owns the one input slot until then.
+    hold_until: Option<std::time::Instant>,
 }
+
+/// Longer than two of the driver's 2 ms samples, so a sparse report is served before the next
+/// state report replaces it in the slot.
+const SPARSE_HOLD: std::time::Duration = std::time::Duration::from_millis(5);
 
 impl TritonWinPad {
     /// The devnode always carries an identity property: it outlives the pad, and a pad without
@@ -67,12 +73,27 @@ impl TritonWinPad {
                 )),
             },
         )?;
-        Ok(TritonWinPad { shm, seq: 0 })
+        Ok(TritonWinPad {
+            shm,
+            seq: 0,
+            hold_until: None,
+        })
     }
 
+    /// The whole 64-byte slot: the driver trims to the report id's declared length. An id the
+    /// descriptor lacks never reaches Steam, so it is not published over an unread state; a
+    /// state report waits out a sparse report's hold and the next one carries the newest.
     fn write_state(&mut self, st: &TritonState) {
-        // The whole 64-byte slot: the driver trims to the report id's declared length.
         let (r, _) = st.report(&mut self.seq);
+        if pf_driver_proto::triton::input_len(r[0]).is_none() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let sparse = !matches!(r[0], 0x42 | 0x45);
+        if !sparse && self.hold_until.is_some_and(|t| now < t) {
+            return;
+        }
+        self.hold_until = sparse.then(|| now + SPARSE_HOLD);
         self.shm.publish(&r);
     }
 
