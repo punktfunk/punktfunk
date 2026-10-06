@@ -89,6 +89,12 @@ pub struct SessionParams {
     /// Handshake budget. The "request access" path must exceed the host's approval
     /// window — the host parks until Approve (`PENDING_APPROVAL_WAIT`).
     pub connect_timeout: Duration,
+    /// Auto-wake is on. A host that just woke answers before it can stream, so a setup
+    /// refusal before the first frame ends as [`SessionEvent::HostNotReady`].
+    pub auto_wake: bool,
+    /// When a not-ready host stops being dialed again. `None` on a first dial; the embedder
+    /// sets it on the re-dial, and a pump that finds it set pauses 2 s before dialing.
+    pub settle_until: Option<Instant>,
     /// Presenter raises this when hardware frames cannot be displayed. The pump demotes
     /// to software and re-requests a keyframe. Decode still succeeds in that state, so
     /// without this the stream stays black.
@@ -260,6 +266,8 @@ impl SessionParams {
             pin: Some(dial.pin),
             identity: probes.identity,
             connect_timeout: dial.connect_timeout,
+            auto_wake: settings.auto_wake,
+            settle_until: None,
             force_software: probes.force_software,
             preset,
             preset_id,
@@ -273,7 +281,19 @@ impl SessionParams {
             latch_grid: probes.latch_grid,
         }
     }
+
+    /// A setup refusal now reads as a host still waking: auto-wake is on and the settle
+    /// window, once started, is open.
+    pub fn waking(&self) -> bool {
+        self.auto_wake && self.settle_until.is_none_or(|t| Instant::now() < t)
+    }
 }
+
+/// How long a host that answers but can't stream yet is dialed again. Room for a resumed
+/// display and GPU; a host that stays broken still says so within 20 s.
+pub const WAKE_SETTLE: Duration = Duration::from_secs(20);
+/// Between those dials: a refusal can come back at once.
+const REDIAL_PAUSE: Duration = Duration::from_secs(2);
 
 /// Decode-side facts the overlay window cannot read off the connector, about once a
 /// second. Levels, not a window: the presenter diffs `health` over its own window.
@@ -299,6 +319,10 @@ pub enum SessionEvent {
         trust_rejected: bool,
     },
     Ended(Option<String>),
+    /// The host answered but couldn't start the stream, before any frame, while
+    /// [`SessionParams::waking`] held. Terminal; the embedder dials again on the same params
+    /// with `settle_until` set [`WAKE_SETTLE`] after the first one. Carries the host's words.
+    HostNotReady(String),
     /// Negotiated codec ran out of decode rungs; the client can finish only as a
     /// different codec. Terminal like [`Self::Ended`], with the retry already computed.
     /// An embedder that does not retry must still show `msg` and stop. A separate
@@ -676,6 +700,11 @@ fn dial(
     .map(Arc::new)
     .map_err(|e| {
         let trust_rejected = matches!(e, PunktfunkError::Crypto);
+        let not_ready = params.waking()
+            && matches!(
+                e,
+                PunktfunkError::Rejected(punktfunk_core::reject::RejectReason::SetupFailed)
+            );
         let msg = match e {
             PunktfunkError::Crypto => {
                 "Host identity rejected — wrong fingerprint, or the host requires pairing"
@@ -690,6 +719,9 @@ fn dial(
                 "The host didn't answer".to_string()
             }
         };
+        if not_ready {
+            return SessionEvent::HostNotReady(msg);
+        }
         SessionEvent::Failed {
             msg,
             trust_rejected,
@@ -979,6 +1011,12 @@ fn pump(
         advertised_codecs,
         ..
     } = plan;
+    if params.settle_until.is_some() {
+        let until = Instant::now() + REDIAL_PAUSE;
+        while Instant::now() < until && !stop.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     let connector = match dial(&params, &stop, &plan) {
         Ok(c) => c,
         Err(failed) => {
@@ -1111,6 +1149,8 @@ fn pump(
     // Set when the ladder ran out of rungs. `Some` is the only way the pump ends
     // with a retry attached.
     let mut codec_fallback: Option<SessionEvent> = None;
+    // Set when the host refused setup before any frame while it may still be waking.
+    let mut not_ready = false;
 
     let end: Option<String> = loop {
         if stop.load(Ordering::SeqCst) {
@@ -1427,6 +1467,9 @@ fn pump(
                 // A typed mid-session rejection names itself — access expiry would
                 // otherwise file under HostError as "the host ended with an error".
                 if let Some(reason) = connector.end_reject() {
+                    not_ready = total_frames == 0
+                        && reason == punktfunk_core::reject::RejectReason::SetupFailed
+                        && params.waking();
                     break Some(crate::trust::reject_message(
                         reason,
                         connector.end_reject_said(),
@@ -1585,7 +1628,12 @@ fn pump(
     }
     // Codec-exhaustion end is sent here, after those threads have joined, so a
     // reconnect never has two sessions' threads on the same connector.
-    let _ = ev_tx.send_blocking(codec_fallback.unwrap_or(SessionEvent::Ended(end)));
+    let last = match codec_fallback {
+        Some(ev) => ev,
+        None if not_ready => SessionEvent::HostNotReady(end.unwrap_or_default()),
+        None => SessionEvent::Ended(end),
+    };
+    let _ = ev_tx.send_blocking(last);
 }
 
 /// Terminal event for a codec that exhausted the decode ladder, and bump telemetry.
