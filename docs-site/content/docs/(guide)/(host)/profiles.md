@@ -63,7 +63,7 @@ background, and the monitor is never touched. It is also what gives a profile a 
 own: **Own desktop** is a user of its own with its own Steam, and up to four seats share the box,
 yours included.
 
-1. Add your user to the group that may start the switch, then log in again:
+1. Add your user to the group that may start the switch:
 
    ```sh
    sudo usermod -aG punktfunk-update $USER
@@ -80,7 +80,7 @@ What turning it on does:
 - **You become a seat.** Your own `punktfunk-host` moves to the first seat's ports and serves
   your library, plugins and Steam from your own home. The console reaches it from **Library**,
   **Game sources** and **Plugins**; a chip, **Whose library**, picks another seat's.
-- **The monitor wins.** When you log in at the machine, the background session ends within two
+- **The monitor wins.** When you log in at the machine, the background session ends within a few
   seconds and your own session hosts you. Streams on the background session end, and the client
   reconnects. Nothing on your monitor is closed.
 - **The console is the door's.** It listens on the same port with the same password.
@@ -90,7 +90,7 @@ their own stay on the box, stopped, and come back with the switch.
 
 | Check | Fix |
 |---|---|
-| The switch says `Add … to the punktfunk-update group first` | Run the command in step 1, then log in again. |
+| The switch says `Add … to the punktfunk-update group first` | Run the command in step 1, then try again. |
 | A profile shows **Unavailable** | Its seat didn't start. **Doctor** names the failing check. |
 
 ## How players pick
