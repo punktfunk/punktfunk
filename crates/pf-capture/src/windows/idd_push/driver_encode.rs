@@ -233,6 +233,25 @@ impl AuSection {
     }
 }
 
+/// The process a session's section and event are duplicated into: the driver's WUDFHost, or a
+/// capture worker. The values it returns are valid only there.
+pub(crate) trait HandleTarget {
+    /// Duplicate `h` into the process with exactly `access`, or the source's own rights.
+    fn dup_into(&self, h: BorrowedHandle<'_>, access: Option<u32>) -> Result<u64>;
+    /// Close a value [`Self::dup_into`] returned that the process never adopted.
+    fn close_remote(&self, value: u64);
+}
+
+impl HandleTarget for ChannelBroker {
+    fn dup_into(&self, h: BorrowedHandle<'_>, access: Option<u32>) -> Result<u64> {
+        ChannelBroker::dup_into(self, h, access)
+    }
+
+    fn close_remote(&self, value: u64) {
+        ChannelBroker::close_remote(self, value);
+    }
+}
+
 /// Open the driver's encoder for `endpoint` and hand back the stream loop's [`Encoder`].
 /// Every open re-raises the WUDFHost's GPU scheduling class, which a driver reload resets.
 /// Structured failure: [`DriverEncodeOpenError`] when the driver walked the list and none
@@ -243,10 +262,23 @@ pub fn open_driver_encoder(
     set_encode: SetEncodeSender,
     encode_ctl: EncodeCtlSender,
 ) -> Result<Box<dyn Encoder>> {
-    let heap = au::heap_bytes_for(params.bitrate_kbps, params.fps);
-    let section = AuSection::create(heap, params.wire_seq_base)?;
     let broker = ChannelBroker::open(endpoint.wudf_pid)?;
     broker.raise_gpu_priority();
+    open_remote_encoder(&broker, endpoint.target_id, params, set_encode, encode_ctl)
+}
+
+/// [`open_driver_encoder`] against any [`HandleTarget`]: create the section, plant its two
+/// handles in `broker`'s process, send `SET_ENCODE` through `set_encode`. `target_id` names
+/// the monitor in the request, the logs and the dump file.
+pub(crate) fn open_remote_encoder(
+    broker: &dyn HandleTarget,
+    target_id: u32,
+    params: &DriverEncodeParams,
+    set_encode: SetEncodeSender,
+    encode_ctl: EncodeCtlSender,
+) -> Result<Box<dyn Encoder>> {
+    let heap = au::heap_bytes_for(params.bitrate_kbps, params.fps);
+    let section = AuSection::create(heap, params.wire_seq_base)?;
     let section_v = broker.dup_into(section.section.handle.as_handle(), Some(SECTION_MAP_RW))?;
     let event_v = match broker.dup_into(section.event.as_handle(), Some(EVENT_MODIFY_STATE)) {
         Ok(e) => e,
@@ -256,7 +288,7 @@ pub fn open_driver_encoder(
         }
     };
     let req = SetEncodeRequest {
-        target_id: endpoint.target_id,
+        target_id,
         _pad: 0,
         section: section_v,
         event: event_v,
@@ -310,7 +342,7 @@ pub fn open_driver_encoder(
         // `EncoderProxy` exists yet to close it on drop. Send the same CLOSE that `Drop` does,
         // or the session stays open on a section nobody will ever drain.
         let _ = encode_ctl(&EncodeCtlRequest {
-            target_id: endpoint.target_id,
+            target_id,
             op: encode::ENCODE_CTL_CLOSE,
             arg0: header.generation,
             arg1: 0,
@@ -320,7 +352,7 @@ pub fn open_driver_encoder(
     }
     let caps = caps_from_wire(&reply.caps);
     tracing::info!(
-        target_id = endpoint.target_id,
+        target_id = target_id,
         backend = backend_name(reply.backend_opened),
         ?caps,
         applied_kbps = reply.applied_bitrate_kbps,
@@ -333,7 +365,7 @@ pub fn open_driver_encoder(
     Ok(Box::new(EncoderProxy {
         reader: AuReader::new(view, params.wire_seq_base),
         section,
-        target_id: endpoint.target_id,
+        target_id,
         ctl: encode_ctl,
         caps,
         applied_bps: u64::from(reply.applied_bitrate_kbps) * 1000,
@@ -346,7 +378,7 @@ pub fn open_driver_encoder(
         au_repeat: false,
         last_arrival: None,
         last_split: None,
-        dump: AuDump::create(endpoint.target_id),
+        dump: AuDump::create(target_id),
         opened_at: Instant::now(),
         backend: backend_name(reply.backend_opened),
         // Opt-in: without it the card sits in its idle clocks under a stream.
