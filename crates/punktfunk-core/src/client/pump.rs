@@ -94,6 +94,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         ctrl_recv,
         negotiated,
         host_caps,
+        landed_at,
     } = hs;
     let WorkerArgs {
         params,
@@ -308,11 +309,11 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     ));
 
     // Connection close: classify, then shutdown. A lost `punktfunk/2` session is kept for the
-    // next dial's resume.
+    // next dial's resume, under the host that ran it.
     {
         let shared = shared.clone();
         let conn = conn.clone();
-        let (host, port) = (params.host.clone(), params.port);
+        let (host, port) = landed_at;
         tokio::spawn(async move {
             let why = conn.closed().await;
             // Reason before `shutdown`: different threads observe the two; the flag must not win.

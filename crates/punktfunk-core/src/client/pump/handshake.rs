@@ -18,6 +18,9 @@ pub(super) struct HandshakeOut {
     pub(super) ctrl_recv: CtlRecv,
     pub(super) negotiated: Negotiated,
     pub(super) host_caps: u8,
+    /// The host and port that run the session: a seat's after a redirect. A lost session is
+    /// kept under them, so the next dial's resume reaches the host that holds it.
+    pub(super) landed_at: (String, u16),
 }
 
 /// What one dial came to: a session, or the host's word that it runs elsewhere on the box.
@@ -364,6 +367,7 @@ async fn dial(
                 ctrl_recv: recv,
                 negotiated,
                 host_caps,
+                landed_at: (host.to_string(), port),
             })))
         }
         // Nothing of this connection carries over; the next dial is a fresh handshake.
