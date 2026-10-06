@@ -1,0 +1,56 @@
+# What Windows Graphics Capture does on this box: the spikes of punktfunk-planning
+# `design/windows-wgc-capture.md` §7 as one command. It opens a monitor the way the capture worker
+# will (a user process a SYSTEM parent started), then reports stage timings, the first frame, the
+# delivered rate, each frame's age and whether the pointer is in the picture.
+[package]
+name = "wgc-probe"
+description = "On-glass probe: does WGC open from a host-spawned user process, how fast, at what rate, with which pointer?"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The display inventory the host pins on and the compose canary its recovery ladder draws, so the
+# probe names monitors and forces a compose exactly as a WGC session's host will.
+pf-win-display = { path = "../../crates/pf-win-display" }
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Metadata",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    # `GraphicsCaptureAccess::RequestAccessAsync` answers with this namespace's status enum.
+    "Security_Authorization_AppCapabilityAccess",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    # What rate DWM composes at, beside what WGC delivers.
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_RemoteDesktop",
+    # Whether the input desktop opens: a user process is refused while Winlogon owns input.
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    # Per-monitor awareness, so the pointer position and the output rectangle are both pixels.
+    "Win32_UI_HiDpi",
+    # `--nudge`: one pixel there and back, so a hidden pointer shows for the cursor leg.
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true
