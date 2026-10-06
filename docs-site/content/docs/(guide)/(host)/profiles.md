@@ -14,9 +14,10 @@ the owner, named after you; while it is the only one, nothing changes for anyone
 3. Under **Where this profile plays**, pick one:
    - **Shares Alex's desktop**, with your name: the same desktop and games, under another name.
    - **Own Steam** (Linux): Big Picture with a Steam account of its own.
+   - **Own desktop** (Windows Server): [a Windows desktop of its own](#on-windows-server).
 
-**Own desktop** stays greyed with **Needs the seats package**. A host holds up to 8 profiles, and
-two can't share a name.
+On Linux, **Own desktop** stays greyed with **Needs the seats package**. A host holds up to 8
+profiles, and two can't share a name.
 
 ## Before the first Own Steam profile
 
@@ -31,6 +32,25 @@ under **Host** → **Settings** → **Show advanced**.
 
 The first connect as that profile opens Steam's sign-in. Sign in once; the profile keeps it. Until
 then the profile's card on the client says **Steam sign-in once**.
+
+## On Windows Server
+
+An **Own desktop** profile signs in to a Windows account of its own, so two people play at once
+without sharing a desktop.
+
+1. Open **Profiles** → **Seats**. Seats need Windows Server with the Remote Desktop Session Host
+   role and licensing, and a GPU. The checks there list what is missing.
+2. Tick **Seats are on**. Leave **Allow Remote Desktop from the network** off to limit Remote
+   Desktop to this machine; tick it if you manage this server over Remote Desktop from another
+   computer.
+3. Open **Add profile** and pick **Own desktop**. Each profile gets a Windows account of its own,
+   and the player signs in to Steam and the stores once per seat.
+
+A player who picks a stopped seat sees `Getting Kid's desk ready…` while it starts. A card's
+**Start**, **Stop** and **End session** do the same by hand; **End session** keeps the seat
+running. [**Seats kept warm**](/docs/configuration#what-some-settings-do) starts the seats of
+recently played profiles with the host, and a seat nobody plays on for 4 hours stops. **Remove**
+deletes the profile's Windows account and its files too.
 
 ## How players pick
 

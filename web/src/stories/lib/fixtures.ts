@@ -15,6 +15,7 @@ import type { PairingStatus } from "@/api/gen/model/pairingStatus";
 import type { PendingDevice } from "@/api/gen/model/pendingDevice";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
+import type { Seating } from "@/api/gen/model/seating";
 import type { StatsSample } from "@/api/gen/model/statsSample";
 import type { StatsStatus } from "@/api/gen/model/statsStatus";
 
@@ -635,6 +636,116 @@ export const profilesEvery: ProfileAdmin[] = [
 		default: false,
 	},
 ];
+
+/** A Windows Server host: the owner, a desktop sharer and a seat in each seat state. */
+export const profilesWindows: ProfileAdmin[] = [
+	...profilesOne,
+	{
+		id: "0b7d5e2a91c4",
+		display_name: "Anna",
+		accent: "#ec4899",
+		owner: false,
+		home: "desktop",
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "9a3f1c2b7e40",
+		display_name: "Kid",
+		accent: "#f97316",
+		owner: false,
+		home: "desktop",
+		seat: { state: "ready", port: 9777 },
+		last_used_unix: accessNowUnix - 600,
+		default: false,
+	},
+	{
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		accent: "#22c55e",
+		owner: false,
+		home: "desktop",
+		seat: { state: "occupied", port: 9777, occupant: "Leon's Deck" },
+		last_used_unix: accessNowUnix - 60,
+		default: false,
+	},
+	{
+		id: "5a7c9e1b3d5f",
+		display_name: "Mia",
+		accent: "#a855f7",
+		owner: false,
+		home: "desktop",
+		seat: { state: "starting", port: 9777 },
+		last_used_unix: accessNowUnix - 86_400,
+		default: false,
+	},
+	{
+		id: "3d5f7b9a1c3e",
+		display_name: "Oma",
+		accent: "#14b8a6",
+		owner: false,
+		home: "desktop",
+		seat: { state: "stopped", port: 9777 },
+		last_used_unix: accessNowUnix - 7 * 86_400,
+		default: false,
+	},
+	{
+		id: "8b0d2f4a6c8e",
+		display_name: "Alice",
+		accent: "#eab308",
+		owner: false,
+		home: "desktop",
+		seat: {
+			state: "unavailable",
+			port: 9777,
+			detail: "Remote Desktop licensing has run out for this server.",
+		},
+		last_used_unix: 0,
+		default: false,
+	},
+];
+
+/** Seats on, every check passing. */
+export const seatingOn: Seating = {
+	enabled: true,
+	platform: "windows",
+	checks: [
+		{
+			level: "info",
+			code: "windows_build",
+			message: "Windows build 26100 meets the 22621 minimum",
+		},
+		{
+			level: "info",
+			code: "rds_role",
+			message: "The Remote Desktop Session Host role is installed",
+		},
+	],
+};
+
+/** A turn-on the checks refused: still off, the failing lines first. */
+export const seatingRefused: Seating = {
+	enabled: false,
+	platform: "windows",
+	checks: [
+		{
+			level: "info",
+			code: "windows_build",
+			message: "Windows build 26100 meets the 22621 minimum",
+		},
+		{
+			level: "error",
+			code: "rds_role",
+			message: "Install the Remote Desktop Session Host role, then try again.",
+		},
+		{
+			level: "warning",
+			code: "rds_licensing",
+			message:
+				"Remote Desktop licensing isn't set up. Seats stop after the grace period.",
+		},
+	],
+};
 
 /** A knock from a device that asked to play as a profile. */
 export const pendingWithProfile: PendingDevice = {

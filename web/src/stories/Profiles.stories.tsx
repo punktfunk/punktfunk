@@ -3,8 +3,15 @@ import {
 	AddProfileDialog,
 	ProfilesView,
 	RemoveProfileDialog,
+	SeatsDialog,
 } from "@/sections/Profiles/view";
-import { profilesEvery, profilesOne } from "./lib/fixtures";
+import {
+	profilesEvery,
+	profilesOne,
+	profilesWindows,
+	seatingOn,
+	seatingRefused,
+} from "./lib/fixtures";
 
 const noop = () => {};
 
@@ -86,6 +93,108 @@ export const RemoveSeat: Story = {
 	render: () => (
 		<RemoveProfileDialog
 			profile={profilesEvery[2] ?? null}
+			onCancel={noop}
+			onRemove={noop}
+			isPending={false}
+			failure={null}
+		/>
+	),
+};
+
+const windows = {
+	onSeats: noop,
+	onStart: noop,
+	onStop: noop,
+	onEnd: noop,
+	doctor: { message: null, checking: false, onRun: noop },
+};
+
+/** A Windows Server host: a seat ready, in use, starting, stopped and unavailable. */
+export const WindowsEveryState: Story = {
+	args: {
+		profiles: { data: profilesWindows, isLoading: false, error: null },
+		windows,
+	},
+};
+
+/** The doctor found a problem: its first error, and **Doctor** to run it again. */
+export const WindowsDoctorError: Story = {
+	args: {
+		profiles: { data: profilesWindows, isLoading: false, error: null },
+		windows: {
+			...windows,
+			doctor: {
+				message: "Remote Desktop licensing has run out for this server.",
+				checking: false,
+				onRun: noop,
+			},
+		},
+	},
+};
+
+/** **Seats** with seats on: the switch and what the checks found. */
+export const SeatsOn: Story = {
+	render: () => (
+		<SeatsDialog
+			open
+			seating={seatingOn}
+			isPending={false}
+			onChange={noop}
+			onClose={noop}
+		/>
+	),
+};
+
+/** A turn-on the checks refused: seats stay off and the failing line comes first. */
+export const SeatsRefused: Story = {
+	render: () => (
+		<SeatsDialog
+			open
+			seating={seatingRefused}
+			isPending={false}
+			onChange={noop}
+			onClose={noop}
+		/>
+	),
+};
+
+/** **Add profile** on Windows with seats on: **Own desktop** is offered. */
+export const AddOnWindows: Story = {
+	render: () => (
+		<AddProfileDialog
+			open
+			ownerName="Enrico"
+			linux={false}
+			windows
+			seatsOn
+			onCancel={noop}
+			onCreate={noop}
+			isPending={false}
+		/>
+	),
+};
+
+/** **Add profile** on Windows with seats off: **Own desktop** waits for them. */
+export const AddOnWindowsSeatsOff: Story = {
+	render: () => (
+		<AddProfileDialog
+			open
+			ownerName="Enrico"
+			linux={false}
+			windows
+			onCancel={noop}
+			onCreate={noop}
+			isPending={false}
+		/>
+	),
+};
+
+/** **Remove** a Windows seat profile: no choice to keep its account, and the password. */
+export const RemoveWindowsSeat: Story = {
+	render: () => (
+		<RemoveProfileDialog
+			profile={profilesWindows[2] ?? null}
+			windows
 			onCancel={noop}
 			onRemove={noop}
 			isPending={false}

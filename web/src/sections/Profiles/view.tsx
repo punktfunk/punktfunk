@@ -1,8 +1,18 @@
 import Section from "@unom/ui/section";
-import { ImageMinus, ImagePlus, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+	Check,
+	CircleX,
+	ImageMinus,
+	ImagePlus,
+	Pencil,
+	Plus,
+	Trash2,
+	TriangleAlert,
+} from "lucide-react";
 import { type FC, useEffect, useRef, useState } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
+import type { Seating } from "@/api/gen/model/seating";
 import type { SeatState } from "@/api/gen/model/seatState";
 import {
 	PasswordConfirmField,
@@ -60,19 +70,40 @@ export function playsLine(
 	p: ProfileAdmin,
 	ownerName: string,
 	seatHome: SeatHome = "on",
+	windows = false,
 ): string {
 	if (p.owner) return m.profiles_plays_owner();
 	const seat = p.seat;
 	if (!seat) return m.profiles_plays_shared({ owner: ownerName });
 	if (seat.state === "occupied" && seat.occupant)
 		return m.profiles_occupied_by({ device: seat.occupant });
-	if (seat.state === "starting" || seat.state === "unavailable")
-		return seat.detail || STATE_WORD[seat.state]();
+	if (seat.state === "starting")
+		return seat.detail || m.profiles_seat_starting();
+	if (seat.state === "unavailable")
+		return seat.detail || STATE_WORD.unavailable();
+	if (windows) return m.profiles_outcome_desktop();
 	if (seatHome !== "on") return m.profiles_plays_steam_off();
 	if (seat.steam_sign_in === true) return m.profiles_plays_steam_sign_in();
 	if (seat.steam_sign_in === false) return m.profiles_plays_steam_signed_in();
 	return m.profiles_plays_steam();
 }
+
+/** The doctor's line under the cards. `message` is its first error; `null` is healthy. */
+export type DoctorLine = {
+	message: string | null;
+	checking: boolean;
+	onRun: () => void;
+};
+
+/** What a Windows host adds to the page: **Seats**, a seat's buttons and the doctor's line. */
+export type WindowsSeats = {
+	onSeats: () => void;
+	onStart: (p: ProfileAdmin) => void;
+	onStop: (p: ProfileAdmin) => void;
+	onEnd: (p: ProfileAdmin) => void;
+	/** `null` until the doctor has answered. */
+	doctor: DoctorLine | null;
+};
 
 /** The page: one card per profile, the owner first, and **Add profile**. */
 export const ProfilesView: FC<{
@@ -87,6 +118,7 @@ export const ProfilesView: FC<{
 	/** The profile an edit is in flight for; its buttons wait. */
 	busyId: string | null;
 	seatHome?: SeatHome;
+	windows?: WindowsSeats;
 }> = ({
 	profiles,
 	avatarVersions,
@@ -97,6 +129,7 @@ export const ProfilesView: FC<{
 	onRemove,
 	busyId,
 	seatHome = "on",
+	windows,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -105,10 +138,17 @@ export const ProfilesView: FC<{
 			<div className="flex flex-col gap-card">
 				<div className="flex items-center justify-between gap-4">
 					<h1 className="text-2xl font-semibold">{m.profiles_title()}</h1>
-					<Button onClick={onAdd} disabled={profiles.data == null}>
-						<Plus className="size-4" />
-						{m.profiles_add()}
-					</Button>
+					<div className="flex gap-2">
+						{windows && (
+							<Button variant="outline" onClick={windows.onSeats}>
+								{m.profiles_seats()}
+							</Button>
+						)}
+						<Button onClick={onAdd} disabled={profiles.data == null}>
+							<Plus className="size-4" />
+							{m.profiles_add()}
+						</Button>
+					</div>
 				</div>
 				<QueryState
 					isLoading={profiles.isLoading}
@@ -123,6 +163,7 @@ export const ProfilesView: FC<{
 									profile={p}
 									ownerName={ownerName}
 									seatHome={seatHome}
+									windows={windows}
 									version={avatarVersions?.[p.id]}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
@@ -133,6 +174,7 @@ export const ProfilesView: FC<{
 							))}
 						</CardContent>
 					</Card>
+					{windows?.doctor && <DoctorFooter line={windows.doctor} />}
 				</QueryState>
 			</div>
 		</Section>
@@ -143,6 +185,7 @@ const ProfileRow: FC<{
 	profile: ProfileAdmin;
 	ownerName: string;
 	seatHome: SeatHome;
+	windows?: WindowsSeats;
 	version?: number;
 	busy: boolean;
 	onRename: () => void;
@@ -153,6 +196,7 @@ const ProfileRow: FC<{
 	profile: p,
 	ownerName,
 	seatHome,
+	windows,
 	version,
 	busy,
 	onRename,
@@ -161,8 +205,9 @@ const ProfileRow: FC<{
 	onRemove,
 }) => {
 	const file = useRef<HTMLInputElement>(null);
+	const state = p.seat?.state;
 	const facts = [
-		playsLine(p, ownerName, seatHome),
+		playsLine(p, ownerName, seatHome, windows != null),
 		p.home === "bigpicture"
 			? m.profiles_home_bigpicture()
 			: m.profiles_home_desktop(),
@@ -191,7 +236,40 @@ const ProfileRow: FC<{
 					<p className="text-sm text-muted-foreground">{facts.join(" · ")}</p>
 				</div>
 			</div>
-			<div className="flex shrink-0 justify-end gap-1">
+			<div className="flex shrink-0 items-center justify-end gap-1">
+				{windows && state === "stopped" && (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={busy}
+						onClick={() => windows.onStart(p)}
+					>
+						{m.profiles_seat_start()}
+					</Button>
+				)}
+				{windows && state === "occupied" && (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={busy}
+						onClick={() => windows.onEnd(p)}
+					>
+						{m.profiles_seat_end()}
+					</Button>
+				)}
+				{windows &&
+					(state === "ready" ||
+						state === "occupied" ||
+						state === "starting") && (
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={busy}
+							onClick={() => windows.onStop(p)}
+						>
+							{m.profiles_seat_stop()}
+						</Button>
+					)}
 				<Button
 					variant="ghost"
 					size="icon"
@@ -252,7 +330,7 @@ const ProfileRow: FC<{
 	);
 };
 
-/** One answer to where a new profile plays. `seats` is a full seat, which needs P3's package. */
+/** One answer to where a new profile plays. `seats` is a desktop of its own: Windows seats. */
 type Outcome = "shared" | "steam" | "seats";
 
 /**
@@ -264,6 +342,9 @@ export const AddProfileDialog: FC<{
 	ownerName: string;
 	/** A light seat (own Steam) is a Linux host's. */
 	linux: boolean;
+	/** A desktop of its own is a Windows host's, once its seats are on. */
+	windows?: boolean;
+	seatsOn?: boolean;
 	seatHome?: SeatHome;
 	onCancel: () => void;
 	onCreate: (body: ProfileCreate, picture: File | null) => void;
@@ -272,6 +353,8 @@ export const AddProfileDialog: FC<{
 	open,
 	ownerName,
 	linux,
+	windows = false,
+	seatsOn = false,
 	seatHome = "on",
 	onCancel,
 	onCreate,
@@ -291,7 +374,11 @@ export const AddProfileDialog: FC<{
 	const submit = () => {
 		if (!name.trim()) return;
 		onCreate(
-			{ display_name: name.trim(), accent, seat: outcome === "steam" },
+			{
+				display_name: name.trim(),
+				accent,
+				seat: outcome === "steam" || outcome === "seats",
+			},
 			picture,
 		);
 	};
@@ -322,8 +409,12 @@ export const AddProfileDialog: FC<{
 		{
 			id: "seats",
 			label: m.profiles_outcome_desktop(),
-			hint: m.profiles_outcome_needs_seats(),
-			disabled: true,
+			hint: !windows
+				? m.profiles_outcome_needs_seats()
+				: seatsOn
+					? m.profiles_outcome_desktop_hint()
+					: m.profiles_outcome_seats_off(),
+			disabled: !windows || !seatsOn,
 		},
 	];
 	return (
@@ -437,8 +528,8 @@ export const AddProfileDialog: FC<{
 };
 
 /**
- * **Remove**, behind the console password. `erase` is spelled out and only offered where there
- * is a seat home to delete.
+ * **Remove**, behind the console password. `erase` is offered where a seat home can stay; a
+ * Windows seat's account always goes with it.
  */
 export const RemoveProfileDialog: FC<{
 	profile: ProfileAdmin | null;
@@ -446,7 +537,8 @@ export const RemoveProfileDialog: FC<{
 	onRemove: (id: string, erase: boolean, password: string) => void;
 	isPending: boolean;
 	failure: PasswordFailure;
-}> = ({ profile, onCancel, onRemove, isPending, failure }) => {
+	windows?: boolean;
+}> = ({ profile, onCancel, onRemove, isPending, failure, windows = false }) => {
 	const [erase, setErase] = useState(false);
 	const [password, setPassword] = useState("");
 	useEffect(() => {
@@ -454,8 +546,10 @@ export const RemoveProfileDialog: FC<{
 		setErase(false);
 		setPassword("");
 	}, [profile]);
+	const windowsSeat = windows && profile?.seat != null;
 	const submit = () => {
-		if (profile && password) onRemove(profile.id, erase, password);
+		if (profile && password)
+			onRemove(profile.id, erase || windowsSeat, password);
 	};
 	return (
 		<Dialog open={profile !== null} onOpenChange={(o) => !o && onCancel()}>
@@ -467,9 +561,11 @@ export const RemoveProfileDialog: FC<{
 						</DialogTitle>
 						<DialogDescription>
 							{m.profiles_remove_body({ name: profile.display_name })}
+							{windowsSeat &&
+								` ${m.profiles_remove_windows({ name: profile.display_name })}`}
 						</DialogDescription>
 					</DialogHeader>
-					{profile.seat && (
+					{profile.seat && !windowsSeat && (
 						<div className="flex items-start gap-2">
 							<Checkbox
 								id="profile-erase"
@@ -509,6 +605,102 @@ export const RemoveProfileDialog: FC<{
 					</DialogFooter>
 				</DialogContent>
 			)}
+		</Dialog>
+	);
+};
+
+/** The doctor's verdict under the cards: quiet when healthy, its first error otherwise. */
+const DoctorFooter: FC<{ line: DoctorLine }> = ({ line }) => (
+	<div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+		<span className={cn(line.message && "text-destructive")}>
+			{line.message ?? m.profiles_seats_healthy()}
+		</span>
+		<Button
+			variant="outline"
+			size="sm"
+			disabled={line.checking}
+			onClick={line.onRun}
+		>
+			{m.profiles_seats_doctor()}
+		</Button>
+	</div>
+);
+
+const LEVEL = {
+	error: { rank: 0, Icon: CircleX, tone: "text-destructive" },
+	warning: { rank: 1, Icon: TriangleAlert, tone: "text-[var(--warning)]" },
+	info: { rank: 2, Icon: Check, tone: "text-muted-foreground" },
+} as const;
+
+/**
+ * **Seats**: the switch, the Remote Desktop choice a turn-on carries, and what the checks found.
+ * A refused turn-on answers off with its errors, which is what the list shows.
+ */
+export const SeatsDialog: FC<{
+	open: boolean;
+	seating: Seating | undefined;
+	isPending: boolean;
+	onChange: (enabled: boolean, allowRdp: boolean) => void;
+	onClose: () => void;
+}> = ({ open, seating, isPending, onChange, onClose }) => {
+	const [allowRdp, setAllowRdp] = useState(false);
+	useEffect(() => {
+		if (open) setAllowRdp(false);
+	}, [open]);
+	const on = seating?.enabled === true;
+	const checks = [...(seating?.checks ?? [])].sort(
+		(a, b) => LEVEL[a.level].rank - LEVEL[b.level].rank,
+	);
+	return (
+		<Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle>{m.profiles_seats()}</DialogTitle>
+				</DialogHeader>
+				<div className="flex items-center gap-2">
+					<Checkbox
+						id="seats-on"
+						checked={on}
+						disabled={isPending || !seating}
+						onCheckedChange={(v) => onChange(v === true, allowRdp)}
+					/>
+					<Label htmlFor="seats-on">{m.profiles_seats_on()}</Label>
+				</div>
+				{!on && (
+					<div className="flex items-start gap-2">
+						<Checkbox
+							id="seats-rdp"
+							className="mt-0.5"
+							checked={allowRdp}
+							onCheckedChange={(v) => setAllowRdp(v === true)}
+						/>
+						<div className="space-y-1">
+							<Label htmlFor="seats-rdp" className="leading-snug">
+								{m.profiles_seats_rdp()}
+							</Label>
+							<p className="text-xs text-muted-foreground">
+								{m.profiles_seats_rdp_hint()}
+							</p>
+						</div>
+					</div>
+				)}
+				{checks.length > 0 && (
+					<ul className="flex flex-col gap-1.5 text-sm">
+						{checks.map((c, i) => {
+							const { Icon, tone } = LEVEL[c.level];
+							return (
+								<li key={`${c.code}-${i}`} className="flex items-start gap-2">
+									<Icon className={cn("mt-0.5 size-4 shrink-0", tone)} />
+									<span>{c.message}</span>
+								</li>
+							);
+						})}
+					</ul>
+				)}
+				<DialogFooter>
+					<Button onClick={onClose}>{m.common_done()}</Button>
+				</DialogFooter>
+			</DialogContent>
 		</Dialog>
 	);
 };

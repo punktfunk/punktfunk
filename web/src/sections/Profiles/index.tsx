@@ -11,11 +11,19 @@ import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
 import {
 	deleteProfile,
+	endProfileSession,
+	getGetSeatingQueryKey,
+	getGetSeatsDoctorQueryKey,
 	getListProfilesQueryKey,
 	setProfileAvatar,
+	startProfileSeat,
+	stopProfileSeat,
 	useCreateProfile,
 	useDeleteProfileAvatar,
+	useGetSeating,
+	useGetSeatsDoctor,
 	useListProfiles,
+	useSetSeating,
 	useUpdateProfile,
 } from "@/api/gen/profiles/profiles";
 import { useDialogs } from "@/components/dialogs";
@@ -28,16 +36,39 @@ import {
 	ProfilesView,
 	RemoveProfileDialog,
 	type SeatHome,
+	SeatsDialog,
 } from "./view";
+
+type SeatAct = "start" | "stop" | "end";
+const SEAT_ACT = {
+	start: startProfileSeat,
+	stop: stopProfileSeat,
+	end: endProfileSession,
+};
 
 /** The Profiles page: the cards, **Add profile** and **Remove**. Edits are the operator's. */
 export const SectionProfiles: FC = () => {
 	useLocale();
 	const qc = useQueryClient();
 	const { promptText } = useDialogs();
-	const profiles = useListProfiles({ query: { refetchInterval: 15_000 } });
+	// A seat that is starting changes within seconds; the rest of the time the list is a glance.
+	const profiles = useListProfiles({
+		query: {
+			refetchInterval: (q) =>
+				q.state.data?.some((p) => p.seat?.state === "starting")
+					? 2_000
+					: 15_000,
+		},
+	});
 	const host = useGetHostInfo();
 	const linux = host.data?.os?.startsWith("linux") ?? false;
+	const windows = host.data?.os?.startsWith("windows") ?? false;
+	const seating = useGetSeating({ query: { enabled: windows } });
+	const seatsOn = seating.data?.enabled === true;
+	const doctor = useGetSeatsDoctor({
+		query: { enabled: windows && seatsOn, refetchInterval: 60_000 },
+	});
+	const [seatsOpen, setSeatsOpen] = useState(false);
 	const settings = useGetHostSettings({ query: { enabled: linux } });
 	const seatRow = settings.data?.settings.find(
 		(s) => s.id === "steam_seat_home",
@@ -80,6 +111,41 @@ export const SectionProfiles: FC = () => {
 				},
 			),
 	});
+
+	// The answer is the profile as the host sees it now.
+	const seatAct = useMutation({
+		mutationFn: ({ id, act }: { id: string; act: SeatAct }) =>
+			SEAT_ACT[act](id),
+		onSuccess: (row) =>
+			qc.setQueryData<ProfileAdmin[]>(getListProfilesQueryKey(), (rows) =>
+				rows?.map((p) => (p.id === row.id ? row : p)),
+			),
+		onError: failed(m.profiles_seat_failed()),
+	});
+	// A refused turn-on answers `enabled: false` with its checks, so only a transport failure toasts.
+	const changeSeating = useSetSeating({
+		mutation: {
+			onSuccess: (next) => {
+				qc.setQueryData(getGetSeatingQueryKey(), next);
+				qc.invalidateQueries({ queryKey: getGetSeatsDoctorQueryKey() });
+				refresh();
+			},
+			onError: failed(m.profiles_seats_failed()),
+		},
+	});
+	const act = (p: ProfileAdmin, a: SeatAct) =>
+		seatAct.mutate({ id: p.id, act: a });
+	const firstError = doctor.data?.diagnostics.find((d) => d.level === "error");
+	const doctorLine =
+		seatsOn && (doctor.data || doctor.error)
+			? {
+					message: doctor.data
+						? (firstError?.message ?? null)
+						: (apiErrorMessage(doctor.error) ?? m.common_error()),
+					checking: doctor.isFetching,
+					onRun: () => void doctor.refetch(),
+				}
+			: null;
 
 	const upload = (id: string, file: File) =>
 		picture.mutate(
@@ -149,6 +215,7 @@ export const SectionProfiles: FC = () => {
 		(update.isPending ? update.variables?.id : undefined) ??
 		(picture.isPending ? picture.variables?.id : undefined) ??
 		(clearPicture.isPending ? clearPicture.variables?.id : undefined) ??
+		(seatAct.isPending ? seatAct.variables?.id : undefined) ??
 		null;
 
 	return (
@@ -157,6 +224,17 @@ export const SectionProfiles: FC = () => {
 				profiles={profiles}
 				avatarVersions={versions}
 				seatHome={seatHome}
+				windows={
+					windows
+						? {
+								onSeats: () => setSeatsOpen(true),
+								onStart: (p) => act(p, "start"),
+								onStop: (p) => act(p, "stop"),
+								onEnd: (p) => act(p, "end"),
+								doctor: doctorLine,
+							}
+						: undefined
+				}
 				onAdd={() => setAdding(true)}
 				onRename={onRename}
 				onPicture={(p, file) => upload(p.id, file)}
@@ -179,12 +257,28 @@ export const SectionProfiles: FC = () => {
 				open={adding}
 				ownerName={ownerName}
 				linux={linux}
+				windows={windows}
+				seatsOn={seatsOn}
 				seatHome={seatHome}
 				onCancel={() => setAdding(false)}
 				onCreate={onCreate}
 				isPending={create.isPending}
 			/>
+			{windows && (
+				<SeatsDialog
+					open={seatsOpen}
+					seating={seating.data}
+					isPending={changeSeating.isPending}
+					onChange={(enabled, allowRdp) =>
+						changeSeating.mutate({
+							data: { enabled, allow_rdp_from_network: allowRdp },
+						})
+					}
+					onClose={() => setSeatsOpen(false)}
+				/>
+			)}
 			<RemoveProfileDialog
+				windows={windows}
 				profile={removing}
 				onCancel={() => setRemoving(null)}
 				onRemove={onRemove}
