@@ -123,16 +123,26 @@ fn stop_unit(inner: &Inner, id: &SeatId, account: &str) -> Result<(), BackendErr
 
 /// Starts the owner's own `punktfunk-host` in their user manager. The owner's user unit stands
 /// down while the row's unit runs, so this is what brings it back. A user with no manager has no
-/// login to host, and nothing starts.
+/// login to host, and nothing starts. `setpriv` becomes the user without a PAM session of its own.
 fn start_user_host(account: &str) {
-    let machine = format!("{account}@.host");
+    let Ok(Some(user)) = accounts::lookup(account) else {
+        return;
+    };
+    let (uid, gid) = (user.uid.to_string(), user.gid.to_string());
+    let runtime = format!("XDG_RUNTIME_DIR=/run/user/{uid}");
     let started = run(
         "systemctl_failed",
-        "systemctl",
+        "setpriv",
         &[
+            "--reuid",
+            &uid,
+            "--regid",
+            &gid,
+            "--init-groups",
+            "env",
+            &runtime,
+            "systemctl",
             "--user",
-            "--machine",
-            &machine,
             "start",
             "punktfunk-host.service",
         ],
@@ -364,6 +374,7 @@ impl LinuxBackend {
             "setfacl",
             "loginctl",
             "systemctl",
+            "setpriv",
             "cp",
         ]
         .into_iter()
@@ -464,12 +475,9 @@ impl PlatformBackend for LinuxBackend {
         Ok(RuntimeStatus::running())
     }
 
+    /// Ends the headless session. A host in the owner's own login stays: it isn't the unit's.
     fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
         self.stop_unit(seat)?;
-        if seat.owner {
-            // The headless session ends; a login of the owner's own keeps its host.
-            start_user_host(&seat.account);
-        }
         Ok(RuntimeStatus::stopped())
     }
 
@@ -610,7 +618,8 @@ impl LinuxBackend {
     }
 
     /// The owner's row as it is: the headless unit's state while it runs, else running when the
-    /// owner's own host answers on the row's ports, else stopped.
+    /// owner is at the machine and their own host answers on the row's ports, else stopped. A host
+    /// the owner's manager keeps without a login has no desktop to stream, so it isn't the row.
     fn owner_status(&self, seat: &Seat, state: &session::UnitState) -> RuntimeStatus {
         if state.live() {
             if state.active == "active" && !self.is_ready(seat) {
@@ -621,7 +630,7 @@ impl LinuxBackend {
             }
             return state.runtime();
         }
-        if session::port_open(seat.mgmt_port) {
+        if session::port_open(seat.mgmt_port) && owner_at_desk(&seat.account) {
             return RuntimeStatus::running();
         }
         state.runtime()

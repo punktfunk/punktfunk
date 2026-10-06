@@ -53,7 +53,7 @@ as_door() { runuser -u punktfunk -- "$@"; }
 
 # The user's systemd manager, when they have one. A user with no login and no linger has none, and
 # then there is nothing running to change.
-user_ctl() { systemctl --user --machine "$user@.host" "$@" 2>/dev/null; }
+user_ctl() { runuser -u "$user" -- env "XDG_RUNTIME_DIR=/run/user/$uid" systemctl --user "$@" 2>/dev/null; }
 
 # $1 a file name under $OWN, copied to $BOX for the door.
 take() {
@@ -113,12 +113,12 @@ door_on() {
     systemctl enable --now punktfunk-seats.service
     wait_for_socket
     "$SEATS" adopt-owner "$user" >/dev/null
-    # The console's own port is the door's from here, so the user's console stands down first.
+    # The box's ports are the door's from here, so the user's console and host leave them first.
+    # The host restarts on the owner row's contract: its own ports, and the box's identity.
     user_ctl stop punktfunk-web.service || true
+    user_ctl try-restart punktfunk-host.service || true
     systemctl enable punktfunk-door.service punktfunk-web-door.service
     systemctl restart punktfunk-door.service punktfunk-web-door.service
-    # The user's host reads the owner row's contract now: its ports, and the box's identity.
-    user_ctl try-restart punktfunk-host.service || true
     echo "door on for $user"
 }
 
