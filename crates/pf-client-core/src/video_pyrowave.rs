@@ -417,6 +417,18 @@ pub struct PyroWaveDecoder {
     /// Shard payload: parse-window size for chunk-aligned AUs. Each window holds whole
     /// self-delimiting packets, zero-padded.
     wire_window: usize,
+    split: DecodeSplit,
+}
+
+/// Where the last decode's wall time went, in microseconds.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct DecodeSplit {
+    /// Packets into the decoder (CPU).
+    pub parse_us: u32,
+    /// Command recording, payload upload included (CPU).
+    pub record_us: u32,
+    /// Submit to fence: the GPU's own time plus whatever queued ahead of it.
+    pub gpu_us: u32,
 }
 
 // SAFETY: used only from the single decode thread; the shared-queue accesses go through
@@ -617,6 +629,7 @@ impl PyroWaveDecoder {
             color,
             hdr16,
             wire_window: shard_payload.max(64),
+            split: DecodeSplit::default(),
         })
     }
 
@@ -775,6 +788,37 @@ impl PyroWaveDecoder {
         }
     }
 
+    /// The last [`Self::decode_frame`]'s wall split.
+    pub fn last_split(&self) -> DecodeSplit {
+        self.split
+    }
+
+    /// The vendored decoder's GPU time per stage, one line each. `reset` starts a new window.
+    pub fn gpu_stage_report(&self, reset: bool) -> Vec<String> {
+        unsafe extern "C" fn collect(ud: *mut c_void, msg: *const c_char) {
+            // SAFETY: `ud` is the `Vec` below, alive for the call; `msg` is a C string.
+            unsafe {
+                (*(ud as *mut Vec<String>)).push(
+                    std::ffi::CStr::from_ptr(msg)
+                        .to_string_lossy()
+                        .trim()
+                        .to_owned(),
+                );
+            }
+        }
+        let mut lines: Vec<String> = Vec::new();
+        // SAFETY: `pw_dev` is this decoder's; the callback only runs inside the call.
+        unsafe {
+            pw::pyrowave_device_report_performance_stats(
+                self.pw_dev,
+                Some(collect),
+                &mut lines as *mut Vec<String> as *mut c_void,
+                reset,
+            );
+        }
+        lines
+    }
+
     /// One AU in → one frame out. `aligned`: shard-window chunked (each `wire_window`
     /// holds whole self-delimiting packets, zero-padded). `complete`: every shard arrived;
     /// a partial still decodes — missing blocks are localized blur for this frame only.
@@ -792,6 +836,7 @@ impl PyroWaveDecoder {
                 self.reconfigure(dims.0, dims.1)?;
             }
         }
+        let parse_started = Instant::now();
         let mut push_err: Option<anyhow::Error> = None;
         if aligned {
             let mut frag: Vec<u8> = Vec::new();
@@ -804,6 +849,7 @@ impl PyroWaveDecoder {
         } else if let Err(e) = self.push_packet(au, "push_packet") {
             push_err = Some(e);
         }
+        self.split.parse_us = parse_started.elapsed().as_micros() as u32;
         if let Some(e) = push_err {
             // A partial straddling a resize can carry blocks the (possibly wrong-size)
             // decoder rejects — one lost frame, not a broken session. A complete frame
@@ -865,6 +911,7 @@ impl PyroWaveDecoder {
     /// Record `slot`'s decode, submit it, and wait for its fence. On `Err` the command buffer
     /// may be recording or pending; the caller idles the queue before reusing it.
     fn record_and_wait(&mut self, slot: usize) -> Result<()> {
+        let record_started = Instant::now();
         let dev = self.device.clone();
         // SAFETY: `cmd` is this decoder's and idle: the last submit's fence was waited, or
         // a failed decode idled the queue and reset it.
@@ -989,6 +1036,8 @@ impl PyroWaveDecoder {
             dev.end_command_buffer(self.cmd)?;
             dev.reset_fences(&[self.fence])?;
         }
+        self.split.record_us = record_started.elapsed().as_micros() as u32;
+        let gpu_started = Instant::now();
         {
             let _guard = self.queue_lock.guard();
             let cmds = [self.cmd];
@@ -1005,6 +1054,7 @@ impl PyroWaveDecoder {
         // SAFETY: `fence` is this decoder's, named by the submit above.
         unsafe { dev.wait_for_fences(&[self.fence], true, 5_000_000_000) }
             .context("pyrowave decode fence")?;
+        self.split.gpu_us = gpu_started.elapsed().as_micros() as u32;
         Ok(())
     }
 }
