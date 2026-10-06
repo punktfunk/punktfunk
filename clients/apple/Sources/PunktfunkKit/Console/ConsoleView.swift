@@ -338,9 +338,16 @@ public final class ConsoleMetalView: ConsolePlatformView {
             return [.select, .upArrow, .downArrow, .leftArrow, .rightArrow, .playPause, .menu]
                 .contains(press.type)
         }
+        let typed = typed(press)
         if let key = key(for: press) {
             let shift = press.key?.modifierFlags.contains(.shift) ?? false
             bridge.key(key, shift: shift, repeated: repeated)
+            // Space, Y and X are characters too: an open field types them and drops the key.
+            if let typed { bridge.text(typed) }
+            return true
+        }
+        if let typed {
+            bridge.text(typed)
             return true
         }
         let event: ConsoleBridge.Menu
@@ -377,6 +384,16 @@ public final class ConsoleMetalView: ConsolePlatformView {
         guard let held, presses.contains(where: { ObjectIdentifier($0) == held.press }) else { return }
         held.timer.invalidate()
         self.held = nil
+    }
+
+    /// The character a hardware key types. A named key reports its name (`UIKeyInputF1`)
+    /// and a chord is not typing, so neither is text.
+    private func typed(_ press: UIPress) -> String? {
+        guard let key = press.key, key.modifierFlags.isDisjoint(with: [.command, .control]),
+            key.characters.count == 1,
+            key.characters.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F })
+        else { return nil }
+        return key.characters
     }
 
     /// A hardware keyboard's key, when the console has a use for it.
