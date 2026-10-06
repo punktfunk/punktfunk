@@ -629,26 +629,59 @@ pub(crate) struct ReleaseDisplayResult {
 )]
 pub(crate) async fn get_display_state() -> Json<DisplayStateResponse> {
     let snap = crate::vdisplay::registry::snapshot();
+    let displays = snap.displays.into_iter().map(|d| ApiDisplayInfo {
+        slot: d.slot,
+        backend: d.backend,
+        mode: format!("{}x{}@{}", d.mode.0, d.mode.1, d.mode.2),
+        state: d.state,
+        expires_in_ms: d.expires_in_ms,
+        sessions: d.sessions,
+        client: d.client,
+        group: d.group,
+        display_index: d.display_index,
+        x: d.position.0,
+        y: d.position.1,
+        identity_slot: d.identity_slot,
+        topology: d.topology,
+    });
+    #[cfg(target_os = "linux")]
+    let displays = displays.chain(held_game_mode());
     Json(DisplayStateResponse {
-        displays: snap
-            .displays
-            .into_iter()
-            .map(|d| ApiDisplayInfo {
-                slot: d.slot,
-                backend: d.backend,
-                mode: format!("{}x{}@{}", d.mode.0, d.mode.1, d.mode.2),
-                state: d.state,
-                expires_in_ms: d.expires_in_ms,
-                sessions: d.sessions,
-                client: d.client,
-                group: d.group,
-                display_index: d.display_index,
-                x: d.position.0,
-                y: d.position.1,
-                identity_slot: d.identity_slot,
-                topology: d.topology,
-            })
-            .collect(),
+        displays: displays.collect(),
+    })
+}
+
+/// The `slot` of a held gamescope takeover. Not a pool generation, and safe as a JS number.
+#[cfg(target_os = "linux")]
+const GAME_MODE_SLOT: u64 = (1 << 53) - 1;
+
+/// The box's own Game Mode, held between sessions by a takeover: a kept row, so Release reaches it.
+#[cfg(target_os = "linux")]
+fn held_game_mode() -> Option<ApiDisplayInfo> {
+    if crate::native::gamescope_sessions_live() {
+        return None;
+    }
+    let held = crate::vdisplay::held_managed_session()?;
+    let (w, h, hz) = held.mode.unwrap_or_default();
+    Some(ApiDisplayInfo {
+        slot: GAME_MODE_SLOT,
+        backend: "gamescope".into(),
+        mode: format!("{w}x{h}@{hz}"),
+        state: if held.restore_in.is_some() {
+            "lingering"
+        } else {
+            "pinned"
+        }
+        .into(),
+        expires_in_ms: held.restore_in.map(|d| d.as_millis() as u64),
+        sessions: 0,
+        client: None,
+        group: 0,
+        display_index: 0,
+        x: 0,
+        y: 0,
+        identity_slot: None,
+        topology: crate::vdisplay::registry::topology_str(),
     })
 }
 
@@ -674,9 +707,19 @@ pub(crate) async fn release_display(
     // PowerShell shell-out — seconds of blocking work. Off the async worker, as the listing
     // above already does.
     let slot = req.slot;
-    let released = tokio::task::spawn_blocking(move || crate::vdisplay::registry::release(slot))
-        .await
-        .unwrap_or(0);
+    let released = tokio::task::spawn_blocking(move || {
+        let released = crate::vdisplay::registry::release(slot);
+        #[cfg(target_os = "linux")]
+        if slot.is_none_or(|s| s == GAME_MODE_SLOT)
+            && !crate::native::gamescope_sessions_live()
+            && crate::vdisplay::release_managed_session()
+        {
+            return released + 1;
+        }
+        released
+    })
+    .await
+    .unwrap_or(0);
     tracing::info!(slot = ?req.slot, released, "management API: display release");
     Json(ReleaseDisplayResult { released })
 }

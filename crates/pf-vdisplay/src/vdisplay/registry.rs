@@ -53,7 +53,7 @@ pub struct Snapshot {
 ///
 /// The HOST's answer, not any one device's: this is the snapshot `/display/state` serves,
 /// and a per-device topology belongs on that device's row rather than on the whole list.
-fn topology_str() -> String {
+pub fn topology_str() -> String {
     use super::policy::Topology;
     match super::effective_topology(None) {
         Topology::Extend => "extend",

@@ -2620,6 +2620,11 @@ async fn teardown(
 /// Live sessions, on either plane, that may stream a gamescope the host took over.
 static LIVE_GAMESCOPE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Whether any session holds a [`GamescopeHold`]: a held takeover is then streaming, not kept.
+pub(crate) fn gamescope_sessions_live() -> bool {
+    LIVE_GAMESCOPE.load(Ordering::SeqCst) > 0
+}
+
 /// One count in [`LIVE_GAMESCOPE`], taken before the session resolves its compositor. Resolving
 /// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again.
 pub(crate) struct GamescopeHold;

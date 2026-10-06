@@ -548,6 +548,19 @@ pub fn restore_managed_session() {
 #[cfg(not(target_os = "linux"))]
 pub fn restore_managed_session() {}
 
+/// The takeover the host still holds, for the console's display list. `None` = nothing held.
+#[cfg(target_os = "linux")]
+pub fn held_managed_session() -> Option<gamescope::HeldTakeover> {
+    gamescope::held_takeover()
+}
+
+/// Console Release of a held takeover: the box's own session comes back now. Call only with no
+/// session live. `false` = nothing held.
+#[cfg(target_os = "linux")]
+pub fn release_managed_session() -> bool {
+    gamescope::release_takeover()
+}
+
 /// Host-lifetime worker for debounced [`restore_managed_session`]. Hold the
 /// returned handle for the host's life; dropping it stops the worker. Call
 /// once from `serve()`.
