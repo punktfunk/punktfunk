@@ -130,7 +130,13 @@ fn degrade_if_no_uhid(chosen: GamepadPref) -> GamepadPref {
             | GamepadPref::HoripadSteam
             | GamepadPref::JoyConPair
     );
+    // A Steam Controller 2 attaches over usbip first; UHID is only its fallback.
+    let sc2_on_usbip = matches!(
+        chosen,
+        GamepadPref::SteamController2 | GamepadPref::SteamController2Puck
+    ) && crate::inject::switch2_usbip::available();
     if needs_uhid
+        && !sc2_on_usbip
         && std::fs::OpenOptions::new()
             .write(true)
             .open("/dev/uhid")
