@@ -89,6 +89,20 @@ impl PlatformBackend for FakeBackend {
     fn doctor(&self, _ledger: &Ledger) -> Result<Vec<Diagnostic>, BackendError> {
         Ok(vec![Diagnostic::info("fake", "fake backend is healthy")])
     }
+
+    fn adopt(&self, seat: &Seat) -> Result<(), BackendError> {
+        self.record("adopt", seat);
+        if seat.account == "ghost" {
+            return Err(BackendError::new("account_missing", "no such account"));
+        }
+        Ok(())
+    }
+}
+
+fn adopt(account: &str) -> Command {
+    Command::AdoptOwner {
+        account: account.into(),
+    }
 }
 
 fn create(name: &str, account: &str, autostart: bool) -> Command {
@@ -180,6 +194,49 @@ fn startup_starts_autostart_only_and_refreshes_other_seats() {
         service.ledger().seat(&auto.id).unwrap().runtime.state,
         RuntimeState::Running
     );
+}
+
+/// Adopting the owner twice answers the one row; another account is a conflict; an account the
+/// backend refuses leaves no row; deleting the row asks the backend to remove it.
+#[test]
+fn the_owner_row_is_adopted_once_and_released_by_delete() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    let service = SeatService::open(temp.path(), backend.clone()).unwrap();
+    let owner = |result: Result<CommandResult, _>| match result.unwrap() {
+        CommandResult::Created { seat } => seat,
+        other => panic!("unexpected result: {other:?}"),
+    };
+
+    assert!(service.dispatch(adopt("ghost")).is_err());
+    assert!(service.ledger().seats.is_empty());
+
+    let first = owner(service.dispatch(adopt("enrico")));
+    assert!(first.owner);
+    let again = owner(service.dispatch(adopt("enrico")));
+    assert_eq!(again.id, first.id);
+    assert_eq!(
+        backend
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("adopt:"))
+            .count(),
+        2,
+        "the refused account and the first adoption reach the backend; the repeat does not"
+    );
+    let other = service.dispatch(adopt("ben")).unwrap_err();
+    assert_eq!(other.code, ErrorCode::Conflict);
+
+    let seat = service.dispatch(create("Kid", "pf-kid", false)).unwrap();
+    assert!(matches!(seat, CommandResult::Created { seat } if !seat.owner));
+    service
+        .dispatch(Command::Delete {
+            id: first.id.clone(),
+        })
+        .unwrap();
+    assert!(service.ledger().owner().is_none());
+    assert_eq!(service.ledger().seats.len(), 1);
+    assert!(backend.calls().contains(&format!("remove:{}", first.id)));
 }
 
 #[test]

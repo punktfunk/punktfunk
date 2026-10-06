@@ -6,6 +6,9 @@
 //! backend can choose a different reserved range without changing the ledger.
 //! Every value is validated again after deserialization. Runtime state is an
 //! observation, not a substitute for the backend's own process identity.
+//!
+//! On Linux one row may be the box owner's: an account that already exists,
+//! adopted rather than created. It takes a slot and ports like any seat.
 
 use rand::RngCore;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -147,6 +150,9 @@ pub struct Seat {
     pub autostart: bool,
     #[serde(default)]
     pub runtime: RuntimeStatus,
+    /// The box owner's row (Linux). Its account is never created or deleted by the ledger.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +192,12 @@ impl Ledger {
         let mut accounts = HashSet::new();
         let mut slots = HashSet::new();
         let mut ports = HashSet::new();
+        if self.seats.iter().filter(|seat| seat.owner).count() > 1 {
+            return Err(ValidationError::Duplicate {
+                kind: "owner",
+                value: "a second owner row".into(),
+            });
+        }
         for seat in &self.seats {
             SeatId::parse(seat.id.as_str())?;
             validate_name(&seat.name)?;
@@ -225,13 +237,25 @@ impl Ledger {
                 break id;
             }
         };
-        self.allocate_with_id(request, id)
+        self.allocate_with_id(request, id, false)
+    }
+
+    /// The owner's row for `account`, with the slot and ports a seat gets. The caller checks
+    /// that the account exists and that no owner row does.
+    pub fn allocate_owner(&mut self, account: &str) -> Result<Seat, ValidationError> {
+        let request = CreateSeat {
+            name: account.to_owned(),
+            account: account.to_owned(),
+            autostart: false,
+        };
+        self.allocate_with_id(request, SeatId::random(), true)
     }
 
     fn allocate_with_id(
         &mut self,
         request: CreateSeat,
         id: SeatId,
+        owner: bool,
     ) -> Result<Seat, ValidationError> {
         self.validate()?;
         if self.seats.len() == MAX_SEATS {
@@ -261,6 +285,7 @@ impl Ledger {
             mgmt_port,
             autostart: request.autostart,
             runtime: RuntimeStatus::stopped(),
+            owner,
         };
         self.seats.push(seat.clone());
         if let Err(error) = self.validate() {
@@ -272,6 +297,10 @@ impl Ledger {
 
     pub fn seat(&self, id: &SeatId) -> Option<&Seat> {
         self.seats.iter().find(|seat| &seat.id == id)
+    }
+
+    pub fn owner(&self) -> Option<&Seat> {
+        self.seats.iter().find(|seat| seat.owner)
     }
 
     pub fn remove(&mut self, id: &SeatId) -> Option<Seat> {
@@ -386,7 +415,7 @@ mod tests {
         let mut ledger = Ledger::new();
         let first_id = SeatId::parse("01".repeat(16)).unwrap();
         let first = ledger
-            .allocate_with_id(request(1), first_id.clone())
+            .allocate_with_id(request(1), first_id.clone(), false)
             .unwrap();
         let second = ledger.allocate(request(2)).unwrap();
         assert_eq!(
@@ -488,6 +517,38 @@ mod tests {
         ));
     }
 
+    /// The owner's row takes a slot and ports from the pools a seat uses, counts toward the four,
+    /// and is the only one. A row written before the field existed reads as not the owner.
+    #[test]
+    fn the_owner_row_shares_the_allocator_and_is_unique() {
+        let mut ledger = Ledger::new();
+        let first = ledger.allocate(request(1)).unwrap();
+        let owner = ledger.allocate_owner("enrico").unwrap();
+        assert!(owner.owner && !first.owner);
+        assert_eq!(
+            (owner.display_slot, owner.native_port, owner.mgmt_port),
+            (13, 9779, 47996)
+        );
+        assert_eq!(owner.name, "enrico");
+        assert_eq!(ledger.owner().map(|s| &s.id), Some(&owner.id));
+
+        let mut second = ledger.clone();
+        second.seats[0].owner = true;
+        assert!(matches!(
+            second.validate(),
+            Err(ValidationError::Duplicate { kind: "owner", .. })
+        ));
+
+        let wire = serde_json::to_value(&first).unwrap();
+        assert!(
+            wire.get("owner").is_none(),
+            "a seat's wire form is unchanged"
+        );
+        assert_eq!(serde_json::to_value(&owner).unwrap()["owner"], true);
+        let old: Seat = serde_json::from_value(wire).unwrap();
+        assert!(!old.owner);
+    }
+
     #[test]
     fn version_capacity_and_slot_are_validated() {
         let mut ledger = Ledger::new();
@@ -514,6 +575,7 @@ mod tests {
                 mgmt_port: 2000 + n as u16,
                 autostart: false,
                 runtime: RuntimeStatus::default(),
+                owner: false,
             })
             .collect();
         assert!(matches!(

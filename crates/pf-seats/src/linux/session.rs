@@ -29,6 +29,16 @@ pub(super) fn env_path(account: &str) -> PathBuf {
     Path::new(ENV_DIR).join(format!("{account}.env"))
 }
 
+/// The unit's `RuntimeDirectory=`: the runner records its session id here, and the owner's runner
+/// marks `ready` once the host in the headless session serves.
+pub(super) fn runtime_dir(account: &str) -> PathBuf {
+    PathBuf::from(format!("/run/punktfunk-seat-{account}"))
+}
+
+pub(super) fn ready_path(account: &str) -> PathBuf {
+    runtime_dir(account).join("ready")
+}
+
 pub(super) fn dropin_dir(account: &str) -> PathBuf {
     Path::new(DROPIN_ROOT).join(format!("{}.d", unit(account)))
 }
@@ -55,17 +65,26 @@ pub(super) fn mint_token() -> String {
 }
 
 /// The seat contract the host reads (`multi-seat-contract.md`), one `KEY="value"` per line, then
-/// the management token the box's client presents.
+/// the management token the box's client presents. Only the door advertises, so no seat does.
+///
+/// The owner's row keeps the owner's own config directory, host name and GameStream setting: it
+/// is the owner's host, behind the door. `PUNKTFUNK_SEAT_OWNER` tells the runner and the host so.
 pub(super) fn render_env(seat: &Seat, home: &Path, box_dir: &Path, token: &str) -> String {
-    let config = home.join(".config/punktfunk");
     let trust = shared::trust_dir(box_dir, &seat.id);
-    let rows = [
+    let mut rows = vec![
         ("PUNKTFUNK_SEAT_SESSION", "1".to_owned()),
         ("PUNKTFUNK_SEAT_ID", seat.id.to_string()),
-        (
+    ];
+    if seat.owner {
+        rows.push(("PUNKTFUNK_SEAT_OWNER", "1".to_owned()));
+    } else {
+        let config = home.join(".config/punktfunk");
+        rows.push((
             "PUNKTFUNK_CONFIG_DIR",
             config.to_string_lossy().into_owned(),
-        ),
+        ));
+    }
+    rows.extend([
         ("PUNKTFUNK_TRUST_DIR", trust.to_string_lossy().into_owned()),
         ("PUNKTFUNK_PAIRING", "refused".to_owned()),
         ("PUNKTFUNK_NATIVE_PORT", seat.native_port.to_string()),
@@ -73,9 +92,12 @@ pub(super) fn render_env(seat: &Seat, home: &Path, box_dir: &Path, token: &str) 
             "PUNKTFUNK_MGMT_BIND",
             format!("127.0.0.1:{}", seat.mgmt_port),
         ),
-        ("PUNKTFUNK_HOST_NAME", seat.name.clone()),
-        ("PUNKTFUNK_GAMESTREAM", "0".to_owned()),
-    ];
+    ]);
+    if !seat.owner {
+        rows.push(("PUNKTFUNK_HOST_NAME", seat.name.clone()));
+        rows.push(("PUNKTFUNK_GAMESTREAM", "0".to_owned()));
+    }
+    rows.push(("PUNKTFUNK_MDNS", "0".to_owned()));
     let mut out: String = rows.iter().map(|(key, value)| quoted(key, value)).collect();
     out.push_str(&token_line(token));
     out
@@ -94,6 +116,12 @@ pub(super) fn render_binds(box_dir: &Path, id: &SeatId) -> String {
         ));
     }
     out
+}
+
+/// The owner's drop-in: a `background` session, so the monitor's own login stays the one logind
+/// and polkit treat as the user's display.
+pub(super) fn render_class() -> &'static str {
+    "[Service]\nEnvironment=XDG_SESSION_CLASS=background\n"
 }
 
 /// Writes `contents` at `path` with `mode` unless it already holds exactly that. `true` when it
@@ -120,24 +148,44 @@ pub(super) fn write_if_changed(path: &Path, contents: &str, mode: u32) -> std::i
     Ok(true)
 }
 
-/// Writes both files for `seat`, then reloads systemd when the drop-in changed. The environment
-/// file holds a secret: root reads it before the unit drops privileges, nobody else.
+/// Writes the environment file for `seat`. It holds a secret: root reads it before the unit drops
+/// privileges, nobody else. The owner's user unit reads it too, so it is the owner's, `0600`.
+pub(super) fn write_env(
+    seat: &Seat,
+    home: &Path,
+    box_dir: &Path,
+    token: &str,
+    owner: Option<(u32, u32)>,
+) -> Result<(), BackendError> {
+    let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
+    let path = env_path(&seat.account);
+    write_if_changed(&path, &render_env(seat, home, box_dir, token), 0o600)
+        .map_err(|e| io("write the seat environment file", e))?;
+    if let Some((uid, gid)) = owner {
+        std::os::unix::fs::chown(&path, Some(uid), Some(gid))
+            .map_err(|e| io("hand the environment file to its owner", e))?;
+    }
+    Ok(())
+}
+
+/// Writes both files for `seat`, then reloads systemd when the drop-in changed.
 pub(super) fn write_unit_files(
     seat: &Seat,
     home: &Path,
     box_dir: &Path,
     token: &str,
+    owner: Option<(u32, u32)>,
 ) -> Result<(), BackendError> {
     let io = |what: &str, error: std::io::Error| err("session_files", format!("{what}: {error}"));
-    write_if_changed(
-        &env_path(&seat.account),
-        &render_env(seat, home, box_dir, token),
-        0o600,
-    )
-    .map_err(|e| io("write the seat environment file", e))?;
-    let binds = dropin_dir(&seat.account).join("binds.conf");
-    let changed = write_if_changed(&binds, &render_binds(box_dir, &seat.id), 0o644)
-        .map_err(|e| io("write the seat bind drop-in", e))?;
+    write_env(seat, home, box_dir, token, owner)?;
+    let (name, contents) = if seat.owner {
+        ("class.conf", render_class().to_owned())
+    } else {
+        ("binds.conf", render_binds(box_dir, &seat.id))
+    };
+    let dropin = dropin_dir(&seat.account).join(name);
+    let changed = write_if_changed(&dropin, &contents, 0o644)
+        .map_err(|e| io("write the seat unit drop-in", e))?;
     if changed {
         daemon_reload()?;
     }
@@ -237,7 +285,44 @@ mod tests {
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
+            owner: false,
         }
+    }
+
+    /// The owner's row for the account `enrico`, as adopted.
+    fn owner() -> Seat {
+        Seat {
+            account: "enrico".into(),
+            name: "enrico".into(),
+            owner: true,
+            ..seat("enrico")
+        }
+    }
+
+    /// The owner's host is the owner's own: no config directory, host name or GameStream
+    /// setting from the row, only the contract that moves its ports behind the door.
+    #[test]
+    fn the_owner_s_env_file_leaves_its_config_and_settings_alone() {
+        let text = render_env(
+            &owner(),
+            Path::new("/home/enrico"),
+            Path::new("/var/lib/punktfunk"),
+            "ab12",
+        );
+        assert_eq!(
+            text,
+            "PUNKTFUNK_SEAT_SESSION=\"1\"\n\
+             PUNKTFUNK_SEAT_ID=\"0123456789abcdef0123456789abcdef\"\n\
+             PUNKTFUNK_SEAT_OWNER=\"1\"\n\
+             PUNKTFUNK_TRUST_DIR=\"/var/lib/punktfunk/trust/0123456789abcdef0123456789abcdef\"\n\
+             PUNKTFUNK_PAIRING=\"refused\"\n\
+             PUNKTFUNK_NATIVE_PORT=\"9778\"\n\
+             PUNKTFUNK_MGMT_BIND=\"127.0.0.1:47995\"\n\
+             PUNKTFUNK_MDNS=\"0\"\n\
+             PUNKTFUNK_MGMT_TOKEN=ab12\n"
+        );
+        assert!(!text.contains("CONFIG_DIR"));
+        assert!(render_class().contains("XDG_SESSION_CLASS=background"));
     }
 
     /// The whole seat contract, in the order the doc lists it, with each path under its seat.
@@ -260,6 +345,7 @@ mod tests {
              PUNKTFUNK_MGMT_BIND=\"127.0.0.1:47995\"\n\
              PUNKTFUNK_HOST_NAME=\"Mara\"\n\
              PUNKTFUNK_GAMESTREAM=\"0\"\n\
+             PUNKTFUNK_MDNS=\"0\"\n\
              PUNKTFUNK_MGMT_TOKEN=ab12\n"
         );
     }
@@ -279,7 +365,7 @@ mod tests {
             .find(|l| l.starts_with("PUNKTFUNK_HOST_NAME="))
             .unwrap();
         assert_eq!(line, r#"PUNKTFUNK_HOST_NAME="A \"B\" \\ $HOME 100%""#);
-        assert_eq!(text.lines().count(), 10);
+        assert_eq!(text.lines().count(), 11);
     }
 
     /// The token line is the exact form the box's client parses, and every mint differs.

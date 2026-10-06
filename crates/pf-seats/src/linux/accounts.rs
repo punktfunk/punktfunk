@@ -156,6 +156,27 @@ pub(super) fn ensure(seat: &Seat, box_dir: &Path) -> Result<(Passwd, bool), Back
     Ok((created, true))
 }
 
+/// Whether `passwd` is a person's own account: in the ordinary uid range and not a seat's.
+pub(super) fn is_ordinary(passwd: &Passwd) -> bool {
+    (1000..60000).contains(&passwd.uid) && !passwd.gecos.starts_with(MARKER_PREFIX)
+}
+
+/// The owner's account for `account`: it must exist and be an ordinary user. Never created here,
+/// and never deleted.
+pub(super) fn require_owner(account: &str) -> Result<Passwd, BackendError> {
+    match lookup(account)? {
+        Some(found) if is_ordinary(&found) => Ok(found),
+        Some(_) => Err(err(
+            "account_not_ordinary",
+            format!("account '{account}' is a system or seat account, not a person's"),
+        )),
+        None => Err(err(
+            "account_missing",
+            format!("account '{account}' doesn't exist"),
+        )),
+    }
+}
+
 /// The seat's user, which must exist and carry the seat's marker.
 pub(super) fn require(seat: &Seat) -> Result<Passwd, BackendError> {
     match lookup(&seat.account)? {
@@ -258,6 +279,21 @@ mod tests {
         assert!(!owned("punktfunk-seat=0123456789abcdef"));
         assert!(!owned("Ada Lovelace"));
         assert!(!owned(""));
+    }
+
+    /// The owner is a person: uid 1000 up and below the nobody range, never a seat's marked
+    /// account, and never a system user such as `punktfunk`.
+    #[test]
+    fn only_an_ordinary_account_can_be_the_owner() {
+        let row = |uid: u32, gecos: &str| {
+            parse_passwd(&format!("u:x:{uid}:{uid}:{gecos}:/home/u:/bin/bash")).unwrap()
+        };
+        assert!(is_ordinary(&row(1000, "Enrico")));
+        assert!(is_ordinary(&row(59999, "")));
+        assert!(!is_ordinary(&row(999, "")), "a system user");
+        assert!(!is_ordinary(&row(60000, "")), "nobody and the above");
+        assert!(!is_ordinary(&row(0, "root")));
+        assert!(!is_ordinary(&row(1001, &marker(&id()))), "a seat's account");
     }
 
     #[test]

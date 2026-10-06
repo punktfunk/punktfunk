@@ -47,6 +47,11 @@ pub enum Command {
     Disable {
         keep_accounts: bool,
     },
+    /// Linux: the box owner's row for `account`, an ordinary user that already exists. Answers
+    /// the row that exists, or creates it; `Delete` releases it and never removes the account.
+    AdoptOwner {
+        account: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,6 +326,12 @@ mod tests {
                     keep_accounts: true,
                 },
                 r#"{"type":"disable","keep_accounts":true}"#,
+            ),
+            (
+                Command::AdoptOwner {
+                    account: "enrico".into(),
+                },
+                r#"{"type":"adopt_owner","account":"enrico"}"#,
             ),
         ] {
             assert_eq!(serde_json::to_string(&command).unwrap(), wire);

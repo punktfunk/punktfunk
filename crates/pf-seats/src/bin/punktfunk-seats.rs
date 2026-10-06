@@ -29,6 +29,7 @@ mod linux {
         \x20 serve [--steam-source DIR]  run the supervisor (root)\n\
         \x20 list                        every seat and its state\n\
         \x20 create <name>               add a seat\n\
+        \x20 adopt-owner <account>       make a user the box owner's row\n\
         \x20 start <id> | stop <id> | delete <id>\n\
         \x20 doctor                      what a seat needs and what is missing\n\
         \x20 seating                     whether seats are on\n";
@@ -75,6 +76,9 @@ mod linux {
                     autostart: false,
                 })
             }
+            "adopt-owner" => Command::AdoptOwner {
+                account: argument.ok_or(format!("adopt-owner needs an account\n{USAGE}"))?,
+            },
             "start" => Command::Start { id: id(argument)? },
             "stop" => Command::Stop { id: id(argument)? },
             "delete" => Command::Delete { id: id(argument)? },
@@ -103,8 +107,9 @@ mod linux {
     fn print_result(result: &CommandResult) -> Result<(), String> {
         let line = |seat: &pf_seats::Seat| {
             let detail = seat.runtime.detail.as_deref().unwrap_or("");
+            let owner = if seat.owner { " owner" } else { "" };
             println!(
-                "{} {:?} {} native={} mgmt={} {:?} {detail}",
+                "{} {:?} {} native={} mgmt={} {:?}{owner} {detail}",
                 seat.id,
                 seat.runtime.state,
                 seat.account,
@@ -155,6 +160,7 @@ mod linux {
                 .open_service()
                 .map_err(|e| format!("open the seat ledger: {e}"))?,
         );
+        service.backend().prepare_owners(&service.ledger());
         if let Err(error) = service.reconcile_startup() {
             tracing::warn!(code = ?error.code, "seat autostart: {}", error.message);
         }

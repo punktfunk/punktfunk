@@ -21,6 +21,12 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
+    /// Check that `seat`, the owner's new row, names an ordinary account that already exists,
+    /// and prepare what its host reads. Nothing is created: the account is the owner's own.
+    fn adopt(&self, _seat: &Seat) -> Result<(), BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
     /// Whether seats are on, with the checks that gate turning them on.
     fn seating(&self) -> Result<SeatingStatus, BackendError> {
         Err(UnsupportedBackend::unavailable())

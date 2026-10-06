@@ -66,7 +66,12 @@ impl<B: PlatformBackend> SeatService<B> {
                 self.seating(|backend| backend.enable(allow_rdp_from_network))
             }
             Command::Disable { keep_accounts } => self.disable(keep_accounts),
+            Command::AdoptOwner { account } => self.adopt_owner(&account),
         }
+    }
+
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
 
     pub fn reconcile_startup(&self) -> Result<(), ApiError> {
@@ -119,6 +124,34 @@ impl<B: PlatformBackend> SeatService<B> {
         self.backend.provision(&seat).map_err(ApiError::from)?;
         if let Err(error) = self.commit(&mut current, next) {
             // The account exists but no ledger row does, so delete could never reach it.
+            let _ = self.backend.remove(&seat);
+            return Err(error);
+        }
+        Ok(CommandResult::Created { seat })
+    }
+
+    /// The owner's row: the one that exists when it names `account`, else a new one the backend
+    /// has checked. A second account is refused, since the box has one owner.
+    fn adopt_owner(&self, account: &str) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
+        let mut current = self.lock();
+        if let Some(owner) = current.owner() {
+            return if owner.account == account {
+                Ok(CommandResult::Created {
+                    seat: owner.clone(),
+                })
+            } else {
+                Err(ApiError::new(
+                    ErrorCode::Conflict,
+                    format!("the box owner is already {}", owner.account),
+                ))
+            };
+        }
+        let mut next = current.clone();
+        let seat = next.allocate_owner(account).map_err(ApiError::from)?;
+        self.backend.adopt(&seat).map_err(ApiError::from)?;
+        if let Err(error) = self.commit(&mut current, next) {
+            // Releasing the row removes what adopting prepared and never the account.
             let _ = self.backend.remove(&seat);
             return Err(error);
         }

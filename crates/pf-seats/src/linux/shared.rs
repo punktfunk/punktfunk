@@ -233,9 +233,46 @@ fn stamp(meta: &std::fs::Metadata) -> std::io::Result<(SystemTime, u64)> {
     Ok((meta.modified()?, meta.len()))
 }
 
-/// Copies `src` to `dst` as `root:gid 0640` when it differs, and removes `dst` when `src` is gone.
+/// Who reads a trust copy. A seat user reads through the group, `root:gid 0640`. The owner's own
+/// account may have a shared primary group, so it reads as the file's owner, `uid:gid 0600`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Reader {
+    uid: Option<u32>,
+    gid: u32,
+}
+
+impl Reader {
+    pub(super) fn group(gid: u32) -> Self {
+        Self { uid: None, gid }
+    }
+
+    pub(super) fn person(uid: u32, gid: u32) -> Self {
+        Self {
+            uid: Some(uid),
+            gid,
+        }
+    }
+
+    fn file_mode(self) -> u32 {
+        if self.uid.is_some() {
+            0o600
+        } else {
+            0o640
+        }
+    }
+
+    fn dir_mode(self) -> u32 {
+        if self.uid.is_some() {
+            0o700
+        } else {
+            0o750
+        }
+    }
+}
+
+/// Copies `src` to `dst` for `reader` when it differs, and removes `dst` when `src` is gone.
 /// Returns whether `dst` changed.
-fn sync_file(src: &Path, dst: &Path, gid: u32) -> std::io::Result<bool> {
+fn sync_file(src: &Path, dst: &Path, reader: Reader) -> std::io::Result<bool> {
     let Some((mut file, meta)) = open_regular(src)? else {
         return match std::fs::remove_file(dst) {
             Ok(()) => Ok(true),
@@ -257,11 +294,11 @@ fn sync_file(src: &Path, dst: &Path, gid: u32) -> std::io::Result<bool> {
     let mut out = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o640)
+        .mode(reader.file_mode())
         .open(&temp)?;
     out.write_all(&bytes)?;
-    out.set_permissions(std::fs::Permissions::from_mode(0o640))?;
-    std::os::unix::fs::fchown(&out, None, Some(gid))?;
+    out.set_permissions(std::fs::Permissions::from_mode(reader.file_mode()))?;
+    std::os::unix::fs::fchown(&out, reader.uid, Some(reader.gid))?;
     out.set_modified(wanted.0)?;
     drop(out);
     std::fs::rename(temp, dst)?;
@@ -270,11 +307,16 @@ fn sync_file(src: &Path, dst: &Path, gid: u32) -> std::io::Result<bool> {
 
 /// Brings the seat's trust copy level with the box. The identity pair must exist: a seat that
 /// minted its own would strand every client's pin. Returns whether anything changed.
-pub(super) fn refresh_trust(box_dir: &Path, id: &SeatId, gid: u32) -> Result<bool, BackendError> {
+pub(super) fn refresh_trust(
+    box_dir: &Path,
+    id: &SeatId,
+    reader: Reader,
+) -> Result<bool, BackendError> {
     let dst = trust_dir(box_dir, id);
     let io = |what: &str, e| io_err("trust_copy", what, e);
-    make_dir(&dst, 0o750).map_err(|e| io("create the trust copy", e))?;
-    std::os::unix::fs::chown(&dst, None, Some(gid)).map_err(|e| io("own the trust copy", e))?;
+    make_dir(&dst, reader.dir_mode()).map_err(|e| io("create the trust copy", e))?;
+    std::os::unix::fs::chown(&dst, reader.uid, Some(reader.gid))
+        .map_err(|e| io("own the trust copy", e))?;
     for name in REQUIRED {
         if !box_dir.join(name).is_file() {
             return Err(err(
@@ -285,28 +327,28 @@ pub(super) fn refresh_trust(box_dir: &Path, id: &SeatId, gid: u32) -> Result<boo
     }
     let mut changed = false;
     for name in TRUST_FILES {
-        changed |= sync_file(&box_dir.join(name), &dst.join(name), gid)
+        changed |= sync_file(&box_dir.join(name), &dst.join(name), reader)
             .map_err(|e| io(&format!("copy {name}"), e))?;
     }
-    changed |= sync_avatars(&box_dir.join(AVATARS), &dst.join(AVATARS), gid)
+    changed |= sync_avatars(&box_dir.join(AVATARS), &dst.join(AVATARS), reader)
         .map_err(|e| io("copy the avatars", e))?;
     Ok(changed)
 }
 
 /// Mirrors the flat avatar directory: copies each file, drops copies whose source is gone.
-fn sync_avatars(src: &Path, dst: &Path, gid: u32) -> std::io::Result<bool> {
+fn sync_avatars(src: &Path, dst: &Path, reader: Reader) -> std::io::Result<bool> {
     let mut wanted = HashSet::new();
     let mut changed = false;
     if src.is_dir() {
-        make_dir(dst, 0o750)?;
-        std::os::unix::fs::chown(dst, None, Some(gid))?;
+        make_dir(dst, reader.dir_mode())?;
+        std::os::unix::fs::chown(dst, reader.uid, Some(reader.gid))?;
         for entry in std::fs::read_dir(src)? {
             let name = entry?.file_name();
             let Some(text) = name.to_str().filter(|n| safe_name(n)) else {
                 continue;
             };
             // A link or oversized entry is skipped, not copied and not fatal.
-            if let Ok(did) = sync_file(&src.join(text), &dst.join(text), gid) {
+            if let Ok(did) = sync_file(&src.join(text), &dst.join(text), reader) {
                 changed |= did;
                 wanted.insert(text.to_owned());
             }
@@ -518,7 +560,9 @@ mod tests {
         let box_dir = temp.path();
         let gid = own_gid(box_dir);
         assert_eq!(
-            refresh_trust(box_dir, &id(), gid).unwrap_err().code,
+            refresh_trust(box_dir, &id(), Reader::group(gid))
+                .unwrap_err()
+                .code,
             "trust_missing",
             "no identity, no seat"
         );
@@ -528,7 +572,7 @@ mod tests {
         std::fs::write(box_dir.join("profiles/p1.png"), "png").unwrap();
         std::fs::write(box_dir.join("mgmt-token"), "secret").unwrap();
 
-        assert!(refresh_trust(box_dir, &id(), gid).unwrap());
+        assert!(refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap());
         let trust = trust_dir(box_dir, &id());
         assert_eq!(
             std::fs::read_to_string(trust.join("native-key.pem")).unwrap(),
@@ -545,7 +589,7 @@ mod tests {
             "only the listed files cross"
         );
         assert!(
-            !refresh_trust(box_dir, &id(), gid).unwrap(),
+            !refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap(),
             "unchanged is a no-op"
         );
 
@@ -553,7 +597,7 @@ mod tests {
         std::fs::write(box_dir.join("profiles.json"), "{\"a\":1}").unwrap();
         std::fs::write(box_dir.join("profiles/p2.png"), "png2").unwrap();
         std::fs::remove_file(box_dir.join("profiles/p1.png")).unwrap();
-        assert!(refresh_trust(box_dir, &id(), gid).unwrap());
+        assert!(refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap());
         assert_eq!(
             std::fs::read_to_string(trust.join("profiles.json")).unwrap(),
             "{\"a\":1}"
@@ -563,8 +607,27 @@ mod tests {
 
         // A file the box drops is dropped from the copy.
         std::fs::remove_file(box_dir.join("profiles.json")).unwrap();
-        assert!(refresh_trust(box_dir, &id(), gid).unwrap());
+        assert!(refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap());
         assert!(!trust.join("profiles.json").exists());
+    }
+
+    /// The owner's copy is theirs alone: owned by the account, closed to every group, because a
+    /// person's primary group may be one everybody on the box shares.
+    #[test]
+    fn the_owner_s_trust_copy_is_private_to_the_account() {
+        let temp = tempfile::tempdir().unwrap();
+        let box_dir = temp.path();
+        box_with_identity(box_dir);
+        std::fs::create_dir(box_dir.join("profiles")).unwrap();
+        std::fs::write(box_dir.join("profiles/a.png"), "png").unwrap();
+        let me = std::fs::metadata(box_dir).unwrap();
+        let reader = Reader::person(me.uid(), me.gid());
+        assert!(refresh_trust(box_dir, &id(), reader).is_ok());
+        let trust = trust_dir(box_dir, &id());
+        assert_eq!(mode(&trust), 0o700);
+        assert_eq!(mode(&trust.join("native-key.pem")), 0o600);
+        assert_eq!(mode(&trust.join("profiles")), 0o700);
+        assert_eq!(mode(&trust.join("profiles/a.png")), 0o600);
     }
 
     /// A link in the box directory is never followed into the copy.
@@ -577,7 +640,7 @@ mod tests {
         std::fs::write(&secret, "root only").unwrap();
         std::os::unix::fs::symlink(&secret, box_dir.join("profiles.json")).unwrap();
         let gid = own_gid(box_dir);
-        let error = refresh_trust(box_dir, &id(), gid).unwrap_err();
+        let error = refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap_err();
         assert_eq!(error.code, "trust_copy");
         assert!(!trust_dir(box_dir, &id()).join("profiles.json").exists());
     }
