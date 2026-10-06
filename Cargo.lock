@@ -3188,6 +3188,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "bitflags 2.13.1",
+ "bytemuck",
  "libc",
  "pf-dmabuf",
  "pf-driver-proto",
@@ -3356,6 +3357,19 @@ dependencies = [
  "pyrowave-sys",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "pf-encode-session"
+version = "0.43.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "pf-driver-proto",
+ "pf-encode-win",
+ "pf-frame",
+ "tracing",
+ "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3870,6 +3884,21 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
+]
+
+[[package]]
+name = "punktfunk-capture-worker"
+version = "0.43.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "pf-driver-proto",
+ "pf-encode-session",
+ "pf-encode-win",
+ "pf-frame",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -6225,6 +6254,14 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "wgc-probe"
+version = "0.43.1"
+dependencies = [
+ "pf-win-display",
+ "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "wide"

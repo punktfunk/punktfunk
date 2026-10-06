@@ -340,6 +340,13 @@ pub trait Capturer: Send {
     fn driver_endpoint(&self) -> Option<DriverEndpoint> {
         None
     }
+
+    /// The capture worker this session's encoder opens in ([`open_worker_encoder`]).
+    /// `None` = the source is not a worker's.
+    #[cfg(target_os = "windows")]
+    fn worker_endpoint(&self) -> Option<WorkerEndpoint> {
+        None
+    }
 }
 
 /// Deterministic moving BGRx test pattern: a sweeping bar plus an animated
@@ -713,6 +720,12 @@ mod au_reader;
 mod cursor_witness;
 #[cfg(target_os = "windows")]
 pub use idd_push::driver_encode::{open_driver_encoder, DriverEncodeOpenError, DriverEncodeParams};
+// A monitor the host did not create, captured and encoded by a capture worker.
+#[cfg(target_os = "windows")]
+#[path = "windows/wgc.rs"]
+mod wgc;
+#[cfg(target_os = "windows")]
+pub use wgc::{open_wgc, open_worker_encoder, WgcSource, WorkerEndpoint, WorkerProcess};
 #[cfg(target_os = "linux")]
 #[path = "linux/mod.rs"]
 mod linux;
