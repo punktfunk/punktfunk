@@ -1486,6 +1486,7 @@ mod tests {
             pad: 1,
             serial: "FXA0000000001".into(),
             replies: Vec::new(),
+            slot: 0,
         });
         assert!(!pads.waits_for_identity(1));
         pads.kinds[3] = GamepadPref::SteamController2;

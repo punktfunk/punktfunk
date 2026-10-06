@@ -194,7 +194,8 @@ pub unsafe extern "C" fn punktfunk_sc2_identity_request(
 
 /// Tell the host who the Steam Controller 2 on `pad` is, before its arrival: `serial` is its USB
 /// serial (UTF-8, NUL-terminated), `replies` the `(request, reply)` pairs packed as
-/// `[len][request][len][reply]…`, each part at most 64 bytes. Too long or torn is `InvalidArg`.
+/// `[len][request][len][reply]…`, each part at most 64 bytes. `slot` is a Puck pad's slot (its USB
+/// interface less 2), else 0. Too long, torn or a slot past 3 is `InvalidArg`.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `serial` is NUL-terminated; `replies` points to `len` bytes.
@@ -203,6 +204,7 @@ pub unsafe extern "C" fn punktfunk_sc2_identity_request(
 pub unsafe extern "C" fn punktfunk_connection_send_pad_identity(
     c: *mut PunktfunkConnection,
     pad: u8,
+    slot: u8,
     serial: *const std::ffi::c_char,
     replies: *const u8,
     len: usize,
@@ -225,6 +227,7 @@ pub unsafe extern "C" fn punktfunk_connection_send_pad_identity(
             pad: pad & 0xF,
             serial: serial.to_string(),
             replies,
+            slot,
         }))
     })
 }

@@ -3073,12 +3073,14 @@ uintptr_t punktfunk_sc2_identity_request(bool puck, uint32_t index, uint8_t *out
 #if defined(PUNKTFUNK_FEATURE_QUIC)
 // Tell the host who the Steam Controller 2 on `pad` is, before its arrival: `serial` is its USB
 // serial (UTF-8, NUL-terminated), `replies` the `(request, reply)` pairs packed as
-// `[len][request][len][reply]…`, each part at most 64 bytes. Too long or torn is `InvalidArg`.
+// `[len][request][len][reply]…`, each part at most 64 bytes. `slot` is a Puck pad's slot (its USB
+// interface less 2), else 0. Too long, torn or a slot past 3 is `InvalidArg`.
 //
 // # Safety
 // `c` is a valid connection handle; `serial` is NUL-terminated; `replies` points to `len` bytes.
 PunktfunkStatus punktfunk_connection_send_pad_identity(PunktfunkConnection *c,
                                                        uint8_t pad,
+                                                       uint8_t slot,
                                                        const char *serial,
                                                        const uint8_t *replies,
                                                        uintptr_t len);

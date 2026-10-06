@@ -513,6 +513,9 @@ pub struct PadIdentity {
     pub serial: String,
     /// `(request, reply)` pairs, id first ([`pack_identity_replies`]).
     pub replies: Vec<u8>,
+    /// A Puck pad's slot, 0–3: its USB interface less 2. The host seats pads that share a Puck
+    /// serial on one virtual Puck at these slots. Zero for a pad on a cable or Bluetooth.
+    pub slot: u8,
 }
 
 /// `host → client` ([`MSG_PAD_FEATURE`](super::v2::registry::MSG_PAD_FEATURE)): a feature

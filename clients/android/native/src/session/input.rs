@@ -650,6 +650,7 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadIden
             pad,
             serial,
             replies,
+            slot: 0,
         };
         if let Err(e) = h.client.send_pad_identity(id) {
             log::warn!("pad identity not sent: {e:#}");

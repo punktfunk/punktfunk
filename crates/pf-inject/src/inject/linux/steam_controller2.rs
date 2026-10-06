@@ -158,10 +158,13 @@ impl TritonTransport {
 
 /// Best Steam-visible SC2 transport: usbip (`vhci_hcd`) then UHID. Steam ignores the
 /// UHID leg (`Interface: -1`), so fallback is hidraw-only — log the `vhci_hcd` remedy.
-fn open_transport(idx: u8, puck: bool) -> Result<TritonTransport> {
+fn open_transport(
+    idx: u8,
+    puck: Option<&mut crate::triton_usbip::PuckHubs>,
+) -> Result<TritonTransport> {
     if crate::steam_usbip::usbip_preferred() {
-        let opened = if puck {
-            crate::triton_usbip::TritonUsbip::open_puck(idx)
+        let opened = if let Some(hubs) = puck {
+            crate::triton_usbip::TritonUsbip::open_puck(idx, hubs)
         } else {
             crate::triton_usbip::TritonUsbip::open(idx)
         };
@@ -183,14 +186,17 @@ fn open_transport(idx: u8, puck: bool) -> Result<TritonTransport> {
 }
 
 /// Triton [`PadProto`]: raw mirroring with typed fallback, and raw-forwarding `service`.
+/// A Puck backend keeps this session's virtual Pucks, so pads of one Puck share it.
 #[derive(Default)]
 pub struct TritonProto {
-    puck: bool,
+    puck: Option<crate::triton_usbip::PuckHubs>,
 }
 
 impl TritonProto {
     pub fn puck() -> Self {
-        Self { puck: true }
+        Self {
+            puck: Some(crate::triton_usbip::PuckHubs::default()),
+        }
     }
 }
 
@@ -202,7 +208,7 @@ impl PadProto for TritonProto {
     const CREATE_HINT: &'static str = "";
 
     fn open(&mut self, idx: u8) -> Result<TritonTransport> {
-        open_transport(idx, self.puck)
+        open_transport(idx, self.puck.as_mut())
     }
 
     /// Typed fallback. Once `raw_len > 0`, only refresh typed fields for diagnostics;

@@ -277,6 +277,8 @@ pub struct Sc2Identity {
     pub serial: Option<String>,
     /// `(SET frame, GET reply)`, both id-first.
     pub replies: Vec<(Vec<u8>, [u8; 64])>,
+    /// A Puck pad's slot, 0–3.
+    pub slot: u8,
 }
 
 impl Sc2Identity {
@@ -310,7 +312,11 @@ impl Sc2Identity {
             })
             .collect();
         let serial = (!id.serial.is_empty()).then(|| id.serial.clone());
-        (serial.is_some() || !replies.is_empty()).then_some(Sc2Identity { serial, replies })
+        (serial.is_some() || !replies.is_empty()).then_some(Sc2Identity {
+            serial,
+            replies,
+            slot: id.slot,
+        })
     }
 }
 
@@ -368,6 +374,7 @@ mod tests {
                 (&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..]),
                 (&[0x01, 0xAE, 0x15, 0x02][..], &[][..]),
             ]),
+            slot: 1,
         };
         let id = Sc2Identity::from_wire(&sent).unwrap();
         assert_eq!(id.serial.as_deref(), Some("FXA0000000001"));
@@ -397,6 +404,7 @@ mod tests {
                 ),
                 (vec![0x02, 0xB4], pad(&[0x02, 0xB4, 0x01, 0x02])),
             ],
+            slot: 0,
         };
         // Steam's own length byte differs from the capture's; the attribute picks the reply.
         let r = id.reply(&[0x01, 0xAE, 0x14, 0x01]).unwrap();

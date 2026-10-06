@@ -458,18 +458,31 @@ final class Sc2UsbLink {
         log.info("SC2 USB: slot serial \(serial)")
     }
 
-    /// `source`'s identity for the host: its USB serial and its replies to core's feature
-    /// queries. A Puck stalls each GET until its pad answers over the radio (~40 ms), so each is
-    /// retried for up to a second. On `queue`, which it blocks for the reads.
+    /// `source`'s identity for the host: its USB serial, its replies to core's feature queries,
+    /// and on a Puck its slot (interface 2–5), so the host seats pads of one Puck together. A Puck
+    /// stalls each GET until its pad answers over the radio (~40 ms), so each is retried for up
+    /// to a second. On `queue`, which it blocks for the reads.
     func identity(source: UInt64) -> PunktfunkConnection.PadIdentity? {
         guard let dev = open[source] else { return nil }
         let serial = (IOHIDDeviceGetProperty(dev, kIOHIDSerialNumberKey as CFString) as? String) ?? ""
-        let requests = PunktfunkConnection.sc2IdentityRequests(puck: isDongle(source: source))
+        let puck = isDongle(source: source)
+        let requests = PunktfunkConnection.sc2IdentityRequests(puck: puck)
         let replies = requests.compactMap { request in
             exchange(dev, request).map { PunktfunkConnection.PadIdentity.Reply(request: request, reply: $0) }
         }
-        log.info("SC2 USB: identity \(serial, privacy: .public), \(replies.count, privacy: .public)/\(requests.count, privacy: .public) replies")
-        return .init(serial: serial, replies: replies)
+        let slot = puck ? UInt8(clamping: min(max((Self.interfaceNumber(dev) ?? 2) - 2, 0), 3)) : 0
+        log.info("SC2 USB: identity \(serial, privacy: .public) slot \(slot), \(replies.count, privacy: .public)/\(requests.count, privacy: .public) replies")
+        return .init(serial: serial, replies: replies, slot: slot)
+    }
+
+    /// The USB interface `device` is: `bInterfaceNumber` on its nearest IOKit ancestor.
+    private static func interfaceNumber(_ device: IOHIDDevice) -> Int? {
+        let service = IOHIDDeviceGetService(device)
+        guard service != MACH_PORT_NULL else { return nil }
+        let value = IORegistryEntrySearchCFProperty(
+            service, kIOServicePlane, "bInterfaceNumber" as CFString, kCFAllocatorDefault,
+            IOOptionBits(kIORegistryIterateRecursively | kIORegistryIterateParents))
+        return (value as? NSNumber)?.intValue
     }
 
     /// SET one feature query, then GET until the reply echoes its command. Id-first both ways.

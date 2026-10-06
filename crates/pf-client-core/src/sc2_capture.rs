@@ -131,6 +131,17 @@ impl Dev {
         (!dev.0.is_null()).then_some(dev)
     }
 
+    /// The USB interface this node is; 0 when SDL cannot say.
+    fn interface(&self) -> u8 {
+        // SAFETY: `self.0` is an open device; SDL keeps the info alive while the handle is open.
+        let info = unsafe { hid::SDL_hid_get_device_info(self.0) };
+        if info.is_null() {
+            return 0;
+        }
+        // SAFETY: non-null, owned by SDL, read before the handle can close.
+        u8::try_from(unsafe { (*info).interface_number }).unwrap_or(0)
+    }
+
     /// SET one feature query, then GET until the reply echoes its command, for up to a second:
     /// a Puck stalls the GET until its pad answers over the radio.
     fn exchange(&self, request: &[u8]) -> Option<Vec<u8>> {
@@ -191,10 +202,17 @@ fn send_identity(dev: &Dev, client: &NativeClient, pad: u8, serial: String, puck
         replies = answered.len(),
         "steam controller 2 identity read"
     );
+    // A Puck's pad slots are its interfaces 2–5.
+    let slot = if puck {
+        dev.interface().saturating_sub(2).min(3)
+    } else {
+        0
+    };
     let id = punktfunk_core::quic::PadIdentity {
         pad,
         serial,
         replies,
+        slot,
     };
     if let Err(error) = client.send_pad_identity(id) {
         tracing::warn!(pad, %error, "steam controller 2 identity not sent");

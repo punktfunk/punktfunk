@@ -1904,6 +1904,8 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public struct PadIdentity: Equatable, Sendable {
         public var serial: String
         public var replies: [Reply]
+        /// A Puck pad's slot, 0–3 (its USB interface less 2); 0 on a cable or Bluetooth.
+        public var slot: UInt8 = 0
 
         public struct Reply: Equatable, Sendable {
             public var request: [UInt8]
@@ -1947,7 +1949,7 @@ public final class PunktfunkConnection: @unchecked Sendable {
             guard granted(Self.grantGamepad, handle: h) else { return }
             _ = packed.withUnsafeBufferPointer { buf in
                 punktfunk_connection_send_pad_identity(
-                    h, pad, identity.serial, buf.baseAddress, UInt(buf.count))
+                    h, pad, identity.slot, identity.serial, buf.baseAddress, UInt(buf.count))
             }
         }
     }

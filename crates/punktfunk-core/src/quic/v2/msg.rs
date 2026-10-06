@@ -214,8 +214,10 @@ v2_message!(ShardPayloadChanged = reg::MSG_SHARD_PAYLOAD_CHANGED, { 1 => shard_p
 v2_message!(ShardPayloadAck = reg::MSG_SHARD_PAYLOAD_ACK, { 1 => shard_payload });
 v2_message!(ClockProbe = reg::MSG_CLOCK_PROBE, { 1 => t1_ns });
 v2_message!(ClockEcho = reg::MSG_CLOCK_ECHO, { 1 => t1_ns, 2 => t2_ns, 3 => t3_ns });
-v2_message!(PadIdentity = reg::MSG_PAD_IDENTITY, { 1 => pad, 2 => serial, 3 => replies },
-    check |m| m.serial.len() <= PAD_IDENTITY_SERIAL_MAX
+v2_message!(PadIdentity = reg::MSG_PAD_IDENTITY,
+    { 1 => pad, 2 => serial, 3 => replies, 4 => slot },
+    check |m| m.slot < 4
+        && m.serial.len() <= PAD_IDENTITY_SERIAL_MAX
         && m.replies.len() <= PAD_IDENTITY_REPLIES_MAX
         && unpack_identity_replies(&m.replies).is_some());
 v2_message!(PadFeature = reg::MSG_PAD_FEATURE, { 1 => pad, 2 => data },
@@ -449,6 +451,7 @@ mod tests {
             pad: 3,
             serial: "FXA0000000001".into(),
             replies: pack_identity_replies([(&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..])]),
+            slot: 2,
         });
         round_trip(PadFeature {
             pad: 1,
