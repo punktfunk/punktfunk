@@ -331,9 +331,9 @@ pub struct HostConfig {
     pub max_fps: Option<u32>,
     /// Row `pyrowave_bpp` — bits per pixel a PyroWave frame gets at 4:2:0 SDR.
     pub pyrowave_bpp: f64,
-    /// `PUNKTFUNK_VDISPLAY_HZ_MULT` — virtual-display refresh as a multiple of the
-    /// session rate; the stream stays at the session rate. Clamped 1..=4; `0` (unset) is
-    /// [`Self::vdisplay_hz_mult_for`]'s automatic choice.
+    /// Row `vdisplay_hz_mult` — virtual-display refresh as a multiple of the session
+    /// rate; the stream stays at the session rate. At most 4; `0` (unset) is
+    /// [`Self::vdisplay_hz_mult_for`]'s automatic choice per compositor.
     pub vdisplay_hz_mult: u32,
     /// `PUNKTFUNK_GAMESCOPE_VRR=0` — opt out of adaptive sync. Default on: capable
     /// gamescope gets `--adaptive-sync` + `--framerate-limit` at the game rate so
@@ -418,9 +418,6 @@ impl HostConfig {
                 .filter(|s| !s.trim().is_empty()),
             on_connect_cmd: val("PUNKTFUNK_ON_CONNECT_CMD").filter(|s| !s.trim().is_empty()),
             on_disconnect_cmd: val("PUNKTFUNK_ON_DISCONNECT_CMD").filter(|s| !s.trim().is_empty()),
-            vdisplay_hz_mult: val("PUNKTFUNK_VDISPLAY_HZ_MULT")
-                .and_then(|s| s.trim().parse::<u32>().ok())
-                .map_or(0, |m| m.clamp(1, 4)),
             gamescope_vrr: row_bool("PUNKTFUNK_GAMESCOPE_VRR"),
             ..Self::default()
         }
@@ -451,6 +448,10 @@ impl HostConfig {
         self.pyrowave_bpp = get("pyrowave_bpp")
             .as_f64()
             .unwrap_or(registry::PYROWAVE_BPP);
+        // 0 is automatic, not "no display".
+        self.vdisplay_hz_mult = get("vdisplay_hz_mult")
+            .as_u64()
+            .map_or(0, |m| m.min(4) as u32);
         self.audio_output_mode =
             AudioOutputMode::parse(&text("audio_output_mode")).unwrap_or_default();
         self.audio_voice_chat =
@@ -490,16 +491,12 @@ impl HostConfig {
     }
 
     /// The virtual display's refresh multiple for a `session_hz` session: the configured one,
-    /// or automatically 2 on Windows while the display stays at or under 1000 Hz, else 1.
-    /// DWM composes on the panel's fixed tick, so at 1x a frame that misses one tick
-    /// collides with the next and one of the two is never shown.
-    pub fn vdisplay_hz_mult_for(&self, session_hz: u32) -> u32 {
-        self.mult_for(session_hz, cfg!(windows))
-    }
-
-    fn mult_for(&self, session_hz: u32, windows: bool) -> u32 {
+    /// or automatically 2 for a compositor that paints on the display's own fixed tick
+    /// (`own_tick`) while the display stays at or under 1000 Hz, else 1. On that tick a frame
+    /// that misses one collides with the next at 1x, and one of the two is never shown.
+    pub fn vdisplay_hz_mult_for(&self, session_hz: u32, own_tick: bool) -> u32 {
         match self.vdisplay_hz_mult {
-            0 if windows && session_hz <= 500 => 2,
+            0 if own_tick && session_hz <= 500 => 2,
             0 => 1,
             set => set,
         }
@@ -539,20 +536,20 @@ mod tests {
     #[test]
     fn display_multiple_is_automatic_until_set() {
         let auto = HostConfig::default();
-        assert_eq!(auto.mult_for(60, true), 2);
-        assert_eq!(auto.mult_for(500, true), 2);
+        assert_eq!(auto.vdisplay_hz_mult_for(60, true), 2);
+        assert_eq!(auto.vdisplay_hz_mult_for(500, true), 2);
         assert_eq!(
-            auto.mult_for(540, true),
+            auto.vdisplay_hz_mult_for(540, true),
             1,
             "the panel stays at or under 1000 Hz"
         );
-        assert_eq!(auto.mult_for(60, false), 1);
+        assert_eq!(auto.vdisplay_hz_mult_for(60, false), 1);
         let set = HostConfig {
             vdisplay_hz_mult: 3,
             ..Default::default()
         };
-        assert_eq!(set.mult_for(60, true), 3);
-        assert_eq!(set.mult_for(60, false), 3);
+        assert_eq!(set.vdisplay_hz_mult_for(60, true), 3);
+        assert_eq!(set.vdisplay_hz_mult_for(60, false), 3);
     }
 
     #[test]

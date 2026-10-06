@@ -465,6 +465,8 @@ pub static SETTINGS: &[Setting] = &[
     row("sdr10_widen", "PUNKTFUNK_10BIT_SDR_WIDEN", Kind::Bool, D::Bool(false), Video, NextSession, "Allow 10-bit SDR", "hdr").advanced(),
     row("chroma_444", "PUNKTFUNK_444", Kind::Bool, D::Bool(true), Video, NextSession, "Full color 4:4:4", "configuration"),
     row("max_fps", "PUNKTFUNK_MAX_FPS", Kind::Int { min: 0, max: 240, unit: "fps" }, D::Int(0), Video, NextSession, "Game frame limit", "gamescope").only(LINUX),
+    // 0 is the host's pick per compositor (`HostConfig::vdisplay_hz_mult_for`); 1 is off.
+    row("vdisplay_hz_mult", "PUNKTFUNK_VDISPLAY_HZ_MULT", Kind::Int { min: 0, max: 4, unit: "×" }, D::Int(0), Video, NextSession, "Display refresh multiple", "configuration").advanced().only(LINUX_WINDOWS),
     row("portal_cursor_mode", "PUNKTFUNK_PORTAL_CURSOR_MODE", Kind::Enum(&["auto", "embedded", "metadata", "hidden"]), D::Str("auto"), Video, NextSession, "Cursor capture", "configuration")
         .advanced()
         .only(LINUX)
