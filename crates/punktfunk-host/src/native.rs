@@ -305,7 +305,7 @@ pub(crate) async fn serve(
         }
     };
 
-    // Host-lifetime capturer: one PipeWire stream, handed session to session (`AudioCapSlot`).
+    // A sinkless capturer handed session to session (`AudioCapSlot`, `park_audio_capture`).
     let audio_cap: AudioCapSlot = Arc::new(std::sync::Mutex::new(None));
     // Host-lifetime injector: one RemoteDesktop-portal grant. A CreateSession per session
     // races portal teardown on reconnect and wedges KWin EIS. Gamepads stay per-session.
