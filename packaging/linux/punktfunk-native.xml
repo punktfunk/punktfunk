@@ -23,7 +23,7 @@
   <short>Punktfunk (native)</short>
   <description>Low-latency game-streaming host over the native punktfunk protocol (QUIC). Opens the default QUIC port, which carries control and media, the browser-streaming port, mDNS for auto-discovery, and the mgmt/library REST API (HTTPS + mTLS; off-loopback it serves only read-only status/library to paired clients).</description>
   <port protocol="udp" port="9777"/>  <!-- QUIC control and media (default 9777)        -->
-  <port protocol="udp" port="9778"/>  <!-- browser streaming (closed until switched on) -->
+  <port protocol="udp" port="9778-9781"/> <!-- browser streaming (closed until switched on), and the seats a door redirects to -->
   <port protocol="udp" port="5353"/>  <!-- mDNS auto-discovery (_punktfunk._udp.local) -->
   <port protocol="tcp" port="47990"/> <!-- mgmt/library REST API (HTTPS + mTLS; LAN = read-only, paired) -->
 </service>

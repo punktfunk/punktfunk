@@ -1,0 +1,29 @@
+// "Reachable without logging in" moves the box's host between a user's session and a system
+// service, which needs root. Members of the `punktfunk-update` group may START the two root helper
+// templates that do it, and nothing else:
+//
+//     sudo usermod -aG punktfunk-update <your user>
+//
+// The group ships empty, as for 49-punktfunk-update.rules. `verb == "start"` keeps stop, restart
+// and enable out of the grant. The helper takes the instance name as data and refuses a user who
+// isn't in that group, so starting `punktfunk-door-on@someone-else` does nothing.
+//
+// The door runs as the `punktfunk` user and may start only the off template: it turns itself off
+// when its console asks, and never turns on.
+polkit.addRule(function (action, subject) {
+    if (
+        action.id != "org.freedesktop.systemd1.manage-units" ||
+        action.lookup("verb") != "start"
+    ) {
+        return;
+    }
+    var unit = action.lookup("unit") || "";
+    var on = /^punktfunk-door-on@[^@]+\.service$/.test(unit);
+    var off = /^punktfunk-door-off@[^@]+\.service$/.test(unit);
+    if ((on || off) && subject.isInGroup("punktfunk-update")) {
+        return polkit.Result.YES;
+    }
+    if (off && subject.user == "punktfunk") {
+        return polkit.Result.YES;
+    }
+});
