@@ -210,6 +210,11 @@ const DoorRow: FC<{ door: DoorControl }> = ({ door }) => (
 			<p className="text-sm text-muted-foreground">
 				{m.profiles_door_hint()} <DocsLink path="profiles#on-linux" />
 			</p>
+			{door.on && (
+				<p className="text-sm text-muted-foreground">
+					{m.profiles_door_games()}
+				</p>
+			)}
 		</div>
 		{door.changing ? (
 			<span className="flex items-center gap-2 text-sm text-muted-foreground">

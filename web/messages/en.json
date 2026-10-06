@@ -1293,6 +1293,7 @@
 	"seat_open_profiles": "Open Profiles",
 	"profiles_door": "Reachable without logging in",
 	"profiles_door_hint": "A paired device can start your session while the lock screen stays on your monitor.",
+	"profiles_door_games": "Seats share games in /var/lib/punktfunk/games. Move one there in Steam under Settings → Storage.",
 	"profiles_door_off_hint": "Your own session serves the box again, and the box's files move back to it.",
 	"profiles_door_on": "Turn on",
 	"profiles_door_off": "Turn off",

@@ -1209,6 +1209,7 @@
 	"seat_open_profiles": "Profile öffnen",
 	"profiles_door": "Ohne Anmeldung erreichbar",
 	"profiles_door_hint": "Ein gekoppeltes Gerät kann deine Sitzung starten, während der Sperrbildschirm am Monitor bleibt.",
+	"profiles_door_games": "Seats teilen Spiele in /var/lib/punktfunk/games. Verschiebe eins dorthin in Steam unter Einstellungen → Speicher.",
 	"profiles_door_off_hint": "Deine eigene Sitzung bedient den Rechner wieder, und seine Dateien ziehen dorthin zurück.",
 	"profiles_door_on": "Einschalten",
 	"profiles_door_off": "Ausschalten",
