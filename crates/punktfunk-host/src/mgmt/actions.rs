@@ -189,14 +189,29 @@ fn plan_display_next(
 
 /// [`plan_display_next`] on this host. Blocking: one monitor-list IPC when a pin is stored.
 fn next_monitor_target() -> Result<(String, String), &'static str> {
-    if !cfg!(target_os = "linux") {
-        return Err("Switching the streamed monitor needs a Linux host.");
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Err(NO_MIRROR);
     }
     plan_display_next(
         pf_host_config::config().capture_monitor.as_deref(),
         crate::vdisplay::policy::prefs().get().capture_monitor,
-        || crate::vdisplay::detect().and_then(crate::vdisplay::monitors::list),
+        host_monitors,
     )
+}
+
+/// What `display.next` answers on a host with no mirror backend.
+const NO_MIRROR: &str = "Switching the streamed monitor needs a Linux or Windows host.";
+
+/// The heads `display.next` cycles through.
+fn host_monitors() -> anyhow::Result<Vec<crate::vdisplay::monitors::PhysicalMonitor>> {
+    #[cfg(windows)]
+    {
+        crate::vdisplay::monitors::list_windows()
+    }
+    #[cfg(not(windows))]
+    {
+        crate::vdisplay::detect().and_then(crate::vdisplay::monitors::list)
+    }
 }
 
 /// List host actions
@@ -291,7 +306,7 @@ fn log_denial_once(fp: &str, action: &str, device: &str) {
         (status = FORBIDDEN, description = "This caller's access does not include this action (no Host power grant, or no live session of its own for `display.next`)", body = ApiError),
         (status = NOT_FOUND, description = "Unknown action id", body = ApiError),
         (status = CONFLICT, description = "Refused: an action is already in flight, another device's session is live (cert lane), or the platform said no (a foreign sleep inhibitor, a second local user, a single monitor, …)", body = ApiError),
-        (status = NOT_IMPLEMENTED, description = "This host platform has no executor for it (macOS host; `display.next` off Linux)", body = ApiError),
+        (status = NOT_IMPLEMENTED, description = "This host platform has no executor for it (macOS host)", body = ApiError),
         (status = INTERNAL_SERVER_ERROR, description = "`display.next` could not store the new monitor", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid credentials", body = ApiError),
     )
@@ -423,11 +438,8 @@ async fn invoke_display_next(
             "Only the device that is streaming can switch the monitor.",
         );
     }
-    if !cfg!(target_os = "linux") {
-        return api_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "Switching the streamed monitor needs a Linux host.",
-        );
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return api_error(StatusCode::NOT_IMPLEMENTED, NO_MIRROR);
     }
     let switched = tokio::task::spawn_blocking(|| {
         let (from, to) = next_monitor_target().map_err(|r| (StatusCode::CONFLICT, r.into()))?;

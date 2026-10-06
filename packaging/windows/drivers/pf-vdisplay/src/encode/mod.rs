@@ -1,27 +1,25 @@
 //! In-driver encode (design/windows-video-plane-overhaul.md §2): the encoder backends opened
-//! and driven inside WUDFHost — the driver's only video transport. [`convert`] bridges the driver's
-//! `windows` 0.58 objects to the backends' 0.62 and owns the input targets a pool slot is
-//! written in; [`section`] is the host's AU section and the session installed on a monitor;
-//! [`thread`] opens a backend, reports, and publishes. The S5 probe (`encode_probe.rs`) is a
-//! thin client of the same pieces. [`set_encode`] is the control-plane verb.
+//! and driven inside WUDFHost — the driver's only video transport. The session itself — the
+//! loop, the AU writer, the backend open and the slot targets — is `pf-encode-session`, shared
+//! with the capture worker. This side owns what a swap chain needs: [`convert`] bridges the
+//! driver's `windows` 0.58 objects to the session's 0.62, [`pool`] fills slots inside the
+//! acquire window, [`section`] maps the host's AU section, [`thread`] runs the loop. The S5
+//! probe (`encode_probe.rs`) is a thin client of the same pieces. [`set_encode`] is the
+//! control-plane verb.
 
 pub mod convert;
-pub mod drive;
 pub mod pool;
 pub mod section;
 pub mod thread;
 
-use std::mem::offset_of;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
-use pf_driver_proto::encode::au::{self, AuHeader};
 use pf_driver_proto::encode::{self as wire, EncodeCtlRequest, SetEncodeReply, SetEncodeRequest};
 use wdk_sys::NTSTATUS;
 
-use self::section::{AuSection, Ctl, EncodeSession};
+use self::section::{Ctl, EncodeSession};
 use self::thread::{EncodeThread, ThreadCtx, fail_reply};
 use crate::monitor::Monitor;
 use crate::{STATUS_INVALID_PARAMETER, STATUS_NOT_FOUND, STATUS_SUCCESS, registry};
@@ -93,7 +91,7 @@ pub fn set_encode(owner: u32, req: &SetEncodeRequest) -> Result<SetEncodeReply, 
     else {
         return Err(STATUS_NOT_FOUND);
     };
-    let section = match AuSection::map(req.section, req.event, req.section_bytes) {
+    let section = match section::map(req.section, req.event, req.section_bytes) {
         Ok(s) => s,
         Err(_) => return Err(STATUS_INVALID_PARAMETER),
     };
@@ -138,7 +136,7 @@ pub fn set_encode(owner: u32, req: &SetEncodeRequest) -> Result<SetEncodeReply, 
         thread.stop(&session.section);
         return Ok(reply);
     }
-    drop(session.set_thread(thread));
+    drop(session.set_thread(Box::new(thread)));
     match monitor.set_encode(session) {
         Ok(displaced) => {
             if let Some(old) = displaced {
@@ -166,12 +164,6 @@ pub fn encode_ctl(owner: u32, req: &EncodeCtlRequest) -> NTSTATUS {
         return STATUS_NOT_FOUND;
     };
     let op = match req.op {
-        wire::ENCODE_CTL_REQUEST_KEYFRAME => Ctl::RequestKeyframe,
-        wire::ENCODE_CTL_INVALIDATE_REF_FRAMES => Ctl::InvalidateRefFrames(req.arg0, req.arg1),
-        wire::ENCODE_CTL_DISTRUST_REFERENCES => Ctl::DistrustReferences,
-        wire::ENCODE_CTL_RECONFIGURE_BITRATE => Ctl::ReconfigureBitrate(req.arg0),
-        wire::ENCODE_CTL_SET_HDR_META => Ctl::SetHdrMeta(req.payload),
-        wire::ENCODE_CTL_FLUSH => Ctl::Flush,
         wire::ENCODE_CTL_RESET => return reset(&monitor, &session, req.arg0),
         wire::ENCODE_CTL_CLOSE => {
             // The host's proxy is gone; a stale proxy names an older generation and stops
@@ -188,7 +180,10 @@ pub fn encode_ctl(owner: u32, req: &EncodeCtlRequest) -> NTSTATUS {
             }
             return STATUS_SUCCESS;
         }
-        _ => return STATUS_INVALID_PARAMETER,
+        _ => match Ctl::queued(req) {
+            Some(op) => op,
+            None => return STATUS_INVALID_PARAMETER,
+        },
     };
     session.push_ctl(op);
     if let Some(pool) = monitor.pool() {
@@ -210,24 +205,7 @@ fn reset(monitor: &Arc<Monitor>, session: &Arc<EncodeSession>, wire_seq_base: u3
     if let Some(pool) = monitor.pool() {
         pool.reclaim();
     }
-    // The old thread's published slots: the new heap ring knows nothing of their bytes and
-    // would place its IDR over them while the host still reads them, and both would carry the
-    // new base. Freed here, where nothing writes; a slot the host holds READING stays its own.
-    for i in 0..au::AU_SLOTS as usize {
-        let _ = session.section.slot_state(i).compare_exchange(
-            au::PUBLISHED,
-            au::FREE,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
-    }
-    session
-        .wire_seq_base
-        .store(wire_seq_base, Ordering::Release);
-    session.stale.store(false, Ordering::Release);
-    session
-        .section
-        .store_u32(offset_of!(AuHeader, wire_seq_base), wire_seq_base);
+    session.rebase(wire_seq_base);
     let Some(device) = monitor
         .render_luid()
         .and_then(crate::direct_3d_device::pooled_device)
@@ -249,7 +227,7 @@ fn reset(monitor: &Arc<Monitor>, session: &Arc<EncodeSession>, wire_seq_base: u3
         reply.map(|r| r.status)
     );
     if reply.is_some_and(|r| r.status == wire::SET_ENCODE_OK) {
-        drop(session.set_thread(thread));
+        drop(session.set_thread(Box::new(thread)));
         STATUS_SUCCESS
     } else {
         thread.stop(&session.section);
