@@ -44,7 +44,11 @@ pub(crate) struct Asker<'a> {
 /// the owner's desktop and a light seat on the owner's row, a full seat on its own. A profile no
 /// row serves, because the box has no owner row yet, is refused rather than played here.
 pub(crate) fn place(profile: &crate::profiles::Resolved, asker: &Asker) -> Placement {
-    if !super::is_door() && ledger_seat(&profile.os_account).is_none() {
+    // A seat host plays the profile it was asked for: resolving it already checked it is this
+    // seat's, and a seat has no ledger to place anything in.
+    if pf_paths::seat::is_seat_host()
+        || (!super::is_door() && ledger_seat(&profile.os_account).is_none())
+    {
         return Placement::Here;
     }
     let snap = super::snapshot();

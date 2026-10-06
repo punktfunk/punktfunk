@@ -554,8 +554,13 @@ pub(crate) async fn get_host_info(State(st): State<Arc<MgmtState>>) -> Json<Host
         os: h.os_chain.clone(),
         os_name: h.os_name.clone(),
         // Same mask as GameStream/QUIC negotiation (`host_wire_caps`), not the compile-time list.
+        // A door encodes nothing, so it names none and never probes the GPU.
         codecs: {
-            let caps = crate::encode::host_wire_caps();
+            let caps = if pf_paths::seat::is_door() {
+                0
+            } else {
+                crate::encode::host_wire_caps()
+            };
             use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
             [
                 (CODEC_H264, ApiCodec::H264),
