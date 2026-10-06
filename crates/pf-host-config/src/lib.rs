@@ -331,8 +331,8 @@ pub struct HostConfig {
     pub max_fps: Option<u32>,
     /// Row `pyrowave_bpp` — bits per pixel a PyroWave frame gets at 4:2:0 SDR.
     pub pyrowave_bpp: f64,
-    /// `PUNKTFUNK_VDISPLAY_HZ_MULT` — virtual-display refresh as a multiple of the
-    /// session rate; the stream stays at the session rate. Clamped 1..=4; `0` (unset) is
+    /// Row `vdisplay_hz_mult` — virtual-display refresh as a multiple of the session
+    /// rate; the stream stays at the session rate. At most 4; `0` (unset) is
     /// [`Self::vdisplay_hz_mult_for`]'s automatic choice per compositor.
     pub vdisplay_hz_mult: u32,
     /// `PUNKTFUNK_GAMESCOPE_VRR=0` — opt out of adaptive sync. Default on: capable
@@ -418,9 +418,6 @@ impl HostConfig {
                 .filter(|s| !s.trim().is_empty()),
             on_connect_cmd: val("PUNKTFUNK_ON_CONNECT_CMD").filter(|s| !s.trim().is_empty()),
             on_disconnect_cmd: val("PUNKTFUNK_ON_DISCONNECT_CMD").filter(|s| !s.trim().is_empty()),
-            vdisplay_hz_mult: val("PUNKTFUNK_VDISPLAY_HZ_MULT")
-                .and_then(|s| s.trim().parse::<u32>().ok())
-                .map_or(0, |m| m.clamp(1, 4)),
             gamescope_vrr: row_bool("PUNKTFUNK_GAMESCOPE_VRR"),
             ..Self::default()
         }
@@ -451,6 +448,10 @@ impl HostConfig {
         self.pyrowave_bpp = get("pyrowave_bpp")
             .as_f64()
             .unwrap_or(registry::PYROWAVE_BPP);
+        // 0 is automatic, not "no display".
+        self.vdisplay_hz_mult = get("vdisplay_hz_mult")
+            .as_u64()
+            .map_or(0, |m| m.min(4) as u32);
         self.audio_output_mode =
             AudioOutputMode::parse(&text("audio_output_mode")).unwrap_or_default();
         self.audio_voice_chat =
