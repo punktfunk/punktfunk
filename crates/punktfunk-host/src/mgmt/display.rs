@@ -2,8 +2,8 @@
 //! custom presets.
 //!
 //! A PUT stores the next-session policy; a running session keeps the display it opened on.
-//! `keep_alive: forever` pins until `POST /display/release`. Off Linux, `capture_monitor` is
-//! dropped on write — there is no mirror backend.
+//! `keep_alive: forever` pins until `POST /display/release`. A host with no mirror backend
+//! (neither Linux nor Windows) drops `capture_monitor` on write.
 //!
 //! See `design/display-management.md` and `design/per-monitor-portal-capture.md`.
 
@@ -163,9 +163,9 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if edid_lock_available() {
         enforced.push("edid_lock".into());
     }
-    // Linux-only: `capture_monitor` needs the MIRROR backend (`vdisplay::open`). Do not
-    // advertise it off Linux — a stored pin would never take effect.
-    if cfg!(target_os = "linux") {
+    // `capture_monitor` needs the mirror backend (`vdisplay::open`): Linux and Windows. Do not
+    // advertise it elsewhere — a stored pin would never take effect.
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
         enforced.push("capture_monitor".into());
     }
     // Hyprland and sway only. KWin is a later step, and Mutter/GNOME, gamescope and Windows
@@ -282,17 +282,17 @@ pub(crate) async fn set_display_settings(
 /// Store a host-wide policy, keeping the stored overlays, then re-aim absolute input at its
 /// pin (or clear the anchor) without a restart. The PUT and `display.next` both write here.
 ///
-/// Off Linux there is no mirror backend, so `capture_monitor` is dropped rather than refused:
-/// the PUT is whole-object, and a stored pin would reject every later save over a field the
-/// operator cannot see.
+/// A host with no mirror backend drops `capture_monitor` rather than refusing it: the PUT is
+/// whole-object, and a stored pin would reject every later save over a field the operator
+/// cannot see.
 pub(super) fn write(policy: crate::vdisplay::policy::DisplayPolicy) -> anyhow::Result<()> {
-    #[cfg_attr(target_os = "linux", allow(unused_mut))]
+    #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(unused_mut))]
     let mut policy = policy;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     if let Some(dropped) = policy.capture_monitor.take() {
         tracing::warn!(
-            "management API: ignoring capture_monitor={dropped:?} — streaming a chosen physical \
-             monitor is Linux-only (no Windows mirror backend); the pin was NOT stored"
+            "management API: ignoring capture_monitor={dropped:?} — this host cannot stream a \
+             chosen physical monitor; the pin was NOT stored"
         );
     }
     write_with(|stored| *stored = with_stored_overlays(policy, stored))
@@ -517,11 +517,10 @@ pub(crate) struct MonitorsResponse {
     monitors: Vec<ApiMonitorInfo>,
     /// Configured pin, even when it matches no head (console can show a dangling pin).
     pinned: Option<String>,
-    /// True when this build can stream a chosen physical head.
+    /// True when this build can stream a chosen physical head: Linux and Windows.
     ///
-    /// Enumeration and capture are separate. Off Linux, heads are listed but there is no
-    /// mirror backend (`vdisplay::open` has no Windows arm; `pf-capture` only has
-    /// `open_idd_push`). The console treats `false` as a read-only picker.
+    /// Enumeration and capture are separate, so a host can list heads it cannot stream. The
+    /// console treats `false` as a read-only picker.
     pin_supported: bool,
     /// Enumeration failure. `None` with an empty list means the host has no heads.
     error: Option<String>,
@@ -542,14 +541,13 @@ pub(crate) struct MonitorsResponse {
     )
 )]
 pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
+    let pin_supported = cfg!(any(target_os = "linux", target_os = "windows"));
     // Effective pin (env override, else stored policy): highlight what sessions will mirror.
-    #[cfg(target_os = "linux")]
-    let pinned = crate::vdisplay::capture_monitor();
-    // No mirror backend. Report `None` even if a pin is stored — highlighting a head nothing will
-    // capture is the false signal this field exists to avoid. `pin_supported: false` is the flag.
-    #[cfg(not(target_os = "linux"))]
-    let pinned: Option<String> = None;
-    let pin_supported = cfg!(target_os = "linux");
+    // With no mirror backend report `None` even if a pin is stored — highlighting a head
+    // nothing will capture is the false signal this field exists to avoid.
+    let pinned = pin_supported
+        .then(crate::vdisplay::capture_monitor)
+        .flatten();
     // Shells out / D-Bus / Wayland, and on Windows walks CCD (can serialize on the display-config
     // lock). Off the async worker.
     let (compositor, listed) = tokio::task::spawn_blocking(|| {
