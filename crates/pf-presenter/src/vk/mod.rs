@@ -1509,7 +1509,7 @@ impl Presenter {
             queue_family_index: self.qfi,
             queue_lock: self.queue_lock.clone(),
             api_version: self.overlay_api_version(),
-            av1_decode: pf_client_core::video::av1_hardware_decodable(self.video_export.as_ref()),
+            av1_decode: pf_client_core::video::av1_advertised(self.video_export.as_ref()),
         }
     }
 

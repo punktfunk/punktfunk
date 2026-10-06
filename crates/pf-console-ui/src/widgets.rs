@@ -1624,12 +1624,14 @@ pub enum KeyMsg {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Char(char),
+    /// Arms the next letter as a capital.
+    Shift,
     Space,
     Backspace,
     Done,
 }
 
-/// Digits first, then letters; last char column is hostname punctuation. Swift grid, verbatim.
+/// Digits first, then letters; last char column is hostname punctuation.
 fn key_rows() -> &'static [Vec<Key>] {
     use std::sync::OnceLock;
     static ROWS: OnceLock<Vec<Vec<Key>>> = OnceLock::new();
@@ -1640,7 +1642,7 @@ fn key_rows() -> &'static [Vec<Key>] {
             chars("qwertyuiop"),
             chars("asdfghjkl-"),
             chars("zxcvbnm._:"),
-            vec![Key::Space, Key::Backspace, Key::Done],
+            vec![Key::Shift, Key::Space, Key::Backspace, Key::Done],
         ]
     })
 }
@@ -1714,6 +1716,8 @@ pub(crate) fn entry_hints(deck: bool, done: &'static str) -> Vec<crate::glyphs::
 pub struct Keyboard {
     row: usize,
     col: usize,
+    /// Shift is armed: the next letter types as a capital and disarms it.
+    shift: bool,
     /// Tray slide-in, 0 hidden → 1 seated. Swift `.spring(0.32, 0.86)`.
     tray: Spring,
     /// Asked to show, and the frame's `dt`, both from [`Self::seat`].
@@ -1739,6 +1743,7 @@ impl Keyboard {
         Keyboard {
             row: 1, // letter row, not digits
             col: 0,
+            shift: false,
             tray: Spring::rest(0.0),
             shown: false,
             dt: 0.0,
@@ -1768,8 +1773,19 @@ impl Keyboard {
             self.col = c;
         }
         self.tree.press();
+        self.strike(key)
+    }
+
+    /// What pressing `key` asks for. Shift arms one capital; any typed key spends it.
+    fn strike(&mut self, key: Key) -> (KeyMsg, Option<MenuPulse>) {
+        let shift = std::mem::take(&mut self.shift);
         match key {
+            Key::Char(c) if shift => (KeyMsg::Type(c.to_ascii_uppercase()), None),
             Key::Char(c) => (KeyMsg::Type(c), None),
+            Key::Shift => {
+                self.shift = !shift;
+                (KeyMsg::None, Some(MenuPulse::Move))
+            }
             Key::Space => (KeyMsg::Type(' '), None),
             Key::Backspace => (KeyMsg::Backspace, None),
             Key::Done => (KeyMsg::Done, Some(MenuPulse::Confirm)),
@@ -1824,12 +1840,7 @@ impl Keyboard {
             }
             MenuEvent::Confirm => {
                 self.tree.press();
-                match rows[self.row][self.col] {
-                    Key::Char(c) => (KeyMsg::Type(c), None),
-                    Key::Space => (KeyMsg::Type(' '), None),
-                    Key::Backspace => (KeyMsg::Backspace, None),
-                    Key::Done => (KeyMsg::Done, Some(MenuPulse::Confirm)),
-                }
+                self.strike(rows[self.row][self.col])
             }
             MenuEvent::Tertiary => (KeyMsg::Backspace, None),
             MenuEvent::Secondary | MenuEvent::Back => (KeyMsg::Done, Some(MenuPulse::Confirm)),
@@ -1942,6 +1953,7 @@ impl Keyboard {
         let gap = 7.0 * k;
         let key_h = 42.0 * k;
         let corner = (9.0 * k) as f32;
+        let shift = self.shift;
         let mut root = El::column();
         for (r, row) in rows.iter().enumerate() {
             let n = row.len() as f64;
@@ -1953,7 +1965,7 @@ impl Keyboard {
                 self.keys
                     .push((kr.with_offset((seated.left, seated.top + slide)), key));
                 root = root.child(
-                    El::paint(move |canvas, r| draw_key(canvas, fonts, key, r, corner, k))
+                    El::paint(move |canvas, r| draw_key(canvas, fonts, key, shift, r, corner, k))
                         .id(key_id(r, c))
                         .focusable(corner)
                         .place(kr),
@@ -1984,14 +1996,20 @@ fn key_id(row: usize, col: usize) -> Id {
     Id::new("keyboard", row * 16 + col)
 }
 
-/// One key's face and legend in `r`. Focus is the plate behind it.
-fn draw_key(canvas: &Canvas, fonts: &Fonts, key: Key, r: Rect, corner: f32, k: f64) {
-    canvas.draw_rrect(RRect::new_rect_xy(r, corner, corner), &fill(fg(0.08)));
+/// One key's face and legend in `r`. Focus is the plate behind it. Armed, Shift's face is
+/// lit and the letters show the capital they would type.
+fn draw_key(canvas: &Canvas, fonts: &Fonts, key: Key, shift: bool, r: Rect, corner: f32, k: f64) {
+    let face = if shift && key == Key::Shift {
+        0.3
+    } else {
+        0.08
+    };
+    canvas.draw_rrect(RRect::new_rect_xy(r, corner, corner), &fill(fg(face)));
     let ink = fg(1.0);
     let (cx, cy) = (f64::from(r.center_x()), f64::from(r.center_y()));
     match key {
         Key::Char(ch) => {
-            let s = ch.to_string();
+            let s = if shift { ch.to_ascii_uppercase() } else { ch }.to_string();
             let size = 18.0 * k;
             let tw = fonts.measure(&s, W::Medium, size) as f64;
             fonts.draw(
@@ -2004,6 +2022,7 @@ fn draw_key(canvas: &Canvas, fonts: &Fonts, key: Key, r: Rect, corner: f32, k: f
                 ink,
             );
         }
+        Key::Shift => draw_shift_icon(canvas, cx, cy, k, ink),
         Key::Space => draw_space_icon(canvas, cx, cy, k, ink),
         Key::Backspace => draw_backspace_icon(canvas, cx, cy, k, ink),
         Key::Done => {
@@ -2031,6 +2050,20 @@ fn stroke_paint(ink: skia_safe::Color4f, width: f32) -> Paint {
     p.set_stroke_cap(skia_safe::PaintCap::Round);
     p.set_stroke_join(skia_safe::PaintJoin::Round);
     p
+}
+
+fn draw_shift_icon(canvas: &Canvas, cx: f64, cy: f64, k: f64, ink: skia_safe::Color4f) {
+    // Shift: an up arrow, head over stem.
+    let (w, h) = (14.0 * k, 16.0 * k);
+    let p = stroke_paint(ink, (1.6 * k) as f32);
+    let (l, r, t, b) = (cx - w / 2.0, cx + w / 2.0, cy - h / 2.0, cy + h / 2.0);
+    let mut path = PathBuilder::new();
+    path.move_to((l as f32, cy as f32));
+    path.line_to((cx as f32, t as f32));
+    path.line_to((r as f32, cy as f32));
+    path.move_to((cx as f32, t as f32));
+    path.line_to((cx as f32, b as f32));
+    canvas.draw_path(&path.detach(), &p);
 }
 
 fn draw_space_icon(canvas: &Canvas, cx: f64, cy: f64, k: f64, ink: skia_safe::Color4f) {
@@ -2167,9 +2200,35 @@ mod tests {
             k.menu(MenuEvent::Move(MenuDir::Down));
         }
         assert_eq!(k.row, 4);
-        assert_eq!(k.col, 2, "rightmost column maps onto Done");
+        assert_eq!(k.col, 3, "rightmost column maps onto Done");
         let (msg, _) = k.menu(MenuEvent::Confirm);
         assert_eq!(msg, KeyMsg::Done);
+    }
+
+    /// Shift is the bottom row's first key: it arms one capital, which the next letter
+    /// spends, and a second press disarms it. Digits type as they are.
+    #[test]
+    fn keyboard_shift_types_one_capital() {
+        let mut k = kb();
+        for _ in 0..3 {
+            k.menu(MenuEvent::Move(MenuDir::Down));
+        }
+        assert_eq!((k.row, k.col), (4, 0));
+        assert!(matches!(
+            k.menu(MenuEvent::Confirm),
+            (KeyMsg::None, Some(MenuPulse::Move))
+        ));
+        for _ in 0..3 {
+            k.menu(MenuEvent::Move(MenuDir::Up));
+        }
+        assert_eq!(k.menu(MenuEvent::Confirm).0, KeyMsg::Type('Q'));
+        assert_eq!(k.menu(MenuEvent::Confirm).0, KeyMsg::Type('q'), "one-shot");
+
+        k.shift = true;
+        k.strike(Key::Shift);
+        assert!(!k.shift, "a second press disarms");
+        k.shift = true;
+        assert_eq!(k.strike(Key::Char('7')).0, KeyMsg::Type('7'));
     }
 
     /// A press between two keys is still on the keyboard: it types nothing and must not
