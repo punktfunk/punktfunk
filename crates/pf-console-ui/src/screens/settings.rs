@@ -1436,10 +1436,12 @@ pub fn row_on(id: RowId, platform: crate::platform::Platform) -> bool {
     // row nobody weighed it against. Unlisted here means universal, as it always did.
     use Platform::{Android, Apple, Desktop, WebOS};
     let on: &[Platform] = match id {
-        // Phone sensors and the Steam Controller 2 dongle: hardware a TV does not have.
-        // Apple keeps them for the iPhone and iPad (`rumbleOnDevice`, `gyroFromDevice`,
-        // `sc2Capture`); an Apple TV simply has no sensor to report.
-        RowId::PhoneRumble | RowId::PhoneGyro | RowId::Sc2Passthrough => &[Android, Apple],
+        // Phone sensors: hardware a TV does not have. Apple keeps them for the iPhone and
+        // iPad (`rumbleOnDevice`, `gyroFromDevice`); an Apple TV has no sensor to report.
+        RowId::PhoneRumble | RowId::PhoneGyro => &[Android, Apple],
+        // Apple asks before it captures a Steam Controller 2 (`sc2Capture`); Android captures
+        // one whenever it is present.
+        RowId::Sc2Passthrough => &[Apple],
         // The weak-GPU row. On Android it also shrinks the surface; webOS's compositor
         // already hands a 1080p buffer, so there it is the cheaper backdrop alone.
         RowId::ReduceUiResolution => &[Android, WebOS],

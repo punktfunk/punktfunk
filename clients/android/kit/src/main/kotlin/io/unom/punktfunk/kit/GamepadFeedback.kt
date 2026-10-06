@@ -426,7 +426,9 @@ class GamepadFeedback(
                 if (len > 0) {
                     val data = ByteArray(len)
                     buf.get(data)
-                    onHidRaw?.invoke(pad, kind, data)
+                    // Controller rumble off plays Steam's rumble report as a stop, like every pad's.
+                    val muted = !rumble && kind == 0 && data[0] == 0x80.toByte()
+                    onHidRaw?.invoke(pad, kind, if (muted) Sc2Device.rumbleFrame(0, 0) else data)
                 }
             }
             else -> Log.d(TAG, "hidout: unknown kind, dropped")

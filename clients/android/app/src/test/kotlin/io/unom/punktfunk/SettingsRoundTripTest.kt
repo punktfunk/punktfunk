@@ -58,7 +58,6 @@ class SettingsRoundTripTest {
         padRumble = false,
         rumbleOnPhone = true,
         gyroOnPhone = true,
-        sc2Capture = false,
         dsCapture = false,
         padHaptics = false,
         padSpeaker = true,

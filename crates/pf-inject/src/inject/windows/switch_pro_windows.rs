@@ -56,6 +56,7 @@ impl SwitchWinPad {
                 bluetooth: false,
                 description: "Punktfunk Virtual Pro Controller",
                 enumerator: "VID_057E&PID_2009",
+                property: None,
             },
         )
     }
@@ -85,6 +86,7 @@ impl SwitchWinPad {
                 bluetooth: true,
                 description: &format!("Punktfunk Virtual Joy-Con ({side})"),
                 enumerator: &vid_pid,
+                property: None,
             },
         )
     }

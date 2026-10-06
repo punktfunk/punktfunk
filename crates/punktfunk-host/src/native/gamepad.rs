@@ -130,7 +130,13 @@ fn degrade_if_no_uhid(chosen: GamepadPref) -> GamepadPref {
             | GamepadPref::HoripadSteam
             | GamepadPref::JoyConPair
     );
+    // A Steam Controller 2 attaches over usbip first; UHID is only its fallback.
+    let sc2_on_usbip = matches!(
+        chosen,
+        GamepadPref::SteamController2 | GamepadPref::SteamController2Puck
+    ) && crate::inject::switch2_usbip::available();
     if needs_uhid
+        && !sc2_on_usbip
         && std::fs::OpenOptions::new()
             .write(true)
             .open("/dev/uhid")
@@ -311,13 +317,15 @@ fn degrade_xbox_identity(chosen: GamepadPref) -> GamepadPref {
 /// UMDF identities newer than the first driver package, with the INF model token each needs. One
 /// package carries both Joy-Con halves, so the left one stands for the pair.
 #[cfg(target_os = "windows")]
-const DRIVER_IDENTITIES: [(GamepadPref, &str); 6] = [
+const DRIVER_IDENTITIES: [(GamepadPref, &str); 8] = [
     (GamepadPref::SwitchPro, "pf_switchpro"),
     (GamepadPref::EightBitDoUltimate2, "pf_8bitdo_ultimate2"),
     (GamepadPref::EightBitDoPro2, "pf_8bitdo_pro2"),
     (GamepadPref::EightBitDoPro3, "pf_8bitdo_pro3"),
     (GamepadPref::HoripadSteam, "pf_horipad_steam"),
     (GamepadPref::JoyConPair, "pf_joycon_left"),
+    (GamepadPref::SteamController2, "pf_triton"),
+    (GamepadPref::SteamController2Puck, "pf_triton"),
 ];
 
 /// Fold an identity to the 360 pad when no driver-store package declares its hardware id. An

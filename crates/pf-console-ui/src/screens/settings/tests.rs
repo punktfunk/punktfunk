@@ -1288,6 +1288,8 @@ fn platform_row_split_hides_only_the_other_platforms_concepts() {
             RowId::CursorGestures,
             // Every controller already gets its own wire slot, so player 1 is not a choice.
             RowId::Pad,
+            // A present Steam Controller 2 is captured; only Apple asks first.
+            RowId::Sc2Passthrough,
         ]
     );
     // Every row reaches at least one platform: a row listed in a tab and offered nowhere

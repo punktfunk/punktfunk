@@ -497,8 +497,6 @@ private fun padAction(activity: MainActivity?, action: String, padKey: String) {
             if (!pulsed) SkiaConsole.notice("No motor answered.")
         }
         "sc2_bluetooth" -> when {
-            !settings.sc2Capture ->
-                SkiaConsole.notice("Enable \"Steam Controller 2 passthrough\" in Settings first.")
             Sc2BleLink.permissionGranted(activity) ->
                 SkiaConsole.notice("Bluetooth access is already granted.")
             // The system dialog pauses the activity; onResume re-probes and engages the capture,
@@ -507,13 +505,8 @@ private fun padAction(activity: MainActivity?, action: String, padKey: String) {
                 ActivityCompat.requestPermissions(activity, arrayOf(it), 5)
             }
         }
-        "sc2_usb" ->
-            if (!settings.sc2Capture) {
-                SkiaConsole.notice("Enable \"Steam Controller 2 passthrough\" in Settings first.")
-            } else {
-                // Asks for the USB grant when one is missing and engages the capture on it.
-                activity.startSc2MenuNav(forceAsk = true)
-            }
+        // Asks for the USB grant when one is missing and engages the capture on it.
+        "sc2_usb" -> activity.startSc2MenuNav(forceAsk = true)
         "ds_usb" -> {
             val dev = usb.deviceList.values.firstOrNull {
                 it.vendorId == DsDevice.VID_SONY && it.productId in DsDevice.USB_PIDS

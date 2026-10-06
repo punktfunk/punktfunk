@@ -258,6 +258,10 @@ class GamepadRouter(
      * streaming, and the twist needs a touchscreen. Carries the pad's wire index.
      */
     var onRingChord: ((Int) -> Unit)? = null
+        set(value) {
+            field = value
+            pushSc2Gate()
+        }
 
     /** A pad press while the ring owns the pad ([setRingOpen]). Main thread. */
     var onRingNav: ((RingNav) -> Unit)? = null
@@ -276,6 +280,19 @@ class GamepadRouter(
         ringOpen = open
         stickSector = null
         if (open) slots.values.forEach { releaseHeld(it) }
+        pushSc2Gate()
+    }
+
+    /**
+     * Core holds back of a Steam Controller 2's raw reports what this router holds back of the
+     * typed plane: everything while the ring is up, Steam and QAM under a local system-button
+     * policy, and the ring's own Select+A. Harmless on a pad that sends no raw reports.
+     */
+    private fun pushSc2Gate() {
+        val gate = (if (ringOpen) SC2_GATE_MASKED else 0) or
+            (if (!systemForward) SC2_GATE_SYSTEM_LOCAL else 0) or
+            (if (onRingChord != null) SC2_GATE_CHORDS else 0)
+        slots.values.forEach { NativeBridge.nativeSetSc2Gate(handle, it.index, gate) }
     }
 
     /**
@@ -725,6 +742,13 @@ class GamepadRouter(
             if (slot != null && forwarding && !ringOpen) NativeBridge.nativeSendGamepadAxis(handle, id, value, index)
         }
 
+        /** The pad's identity, for the host's virtual pad ([NativeBridge.nativeSendPadIdentity]). */
+        fun identity(puckSlot: Int, serial: String, replies: ByteArray) {
+            if (slot != null && forwarding) {
+                NativeBridge.nativeSendPadIdentity(handle, index, puckSlot, serial, replies)
+            }
+        }
+
         /** One raw HID report, forwarded verbatim for the host's as-is virtual pad. */
         fun hidReport(buf: java.nio.ByteBuffer, len: Int) {
             if (slot != null && forwarding) NativeBridge.nativeSendPadHidReport(handle, index, buf, len)
@@ -789,6 +813,7 @@ class GamepadRouter(
             hasMuteButton = hasMute,
             ownMotion = ownMotion,
         )
+        pushSc2Gate()
         return ExternalPad(syntheticId, index, motionReaches)
     }
 
@@ -951,6 +976,11 @@ class GamepadRouter(
     internal companion object {
         /** Mirror of `punktfunk-core::input::MAX_PADS` — wire pad indices 0..15. */
         const val MAX_PADS = 16
+
+        /** The C ABI's `PUNKTFUNK_SC2_GATE_*` bits, for [NativeBridge.nativeSetSc2Gate]. */
+        const val SC2_GATE_MASKED = 1
+        const val SC2_GATE_SYSTEM_LOCAL = 2
+        const val SC2_GATE_CHORDS = 4
 
         /** A sector, once engaged, keeps the stick until the angle is this far past its 30° edge —
          *  a thumb resting between two slots would otherwise flicker between them. */

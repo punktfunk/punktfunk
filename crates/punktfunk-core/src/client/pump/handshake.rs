@@ -156,7 +156,9 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             } else {
                 vec![MediaSuite::Aes128Gcm]
             },
-            features: FeatureSet::default().with(registry::FEATURE_STREAM_CONFIG),
+            features: FeatureSet::default()
+                .with(registry::FEATURE_STREAM_CONFIG)
+                .with(registry::FEATURE_PAD_WRITES),
         };
         v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
