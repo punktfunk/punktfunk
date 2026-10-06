@@ -57,6 +57,7 @@ members = [
     "tools/gen-headers",
     "tools/loss-harness",
     "tools/scroll-probe",
+    "tools/wgc-probe",
     "tools/wl-scanout-probe",
 ]
 # Standalone PoC (built on its own; pulls usbip/tokio/libusb we don't want in the workspace).
