@@ -78,6 +78,9 @@ On gamescope the game keeps running as long as its screen does.
   audio; mute one from the **Sessions** card on **Home**.
 - **Is told it's busy**.
 
+On a Windows host a device that shares the screen sees the pointer as part of the picture. It
+does not see Windows permission prompts or the lock screen; the first device still does.
+
 The same device reconnecting always resumes. A Moonlight host serves one session: **Shares the
 screen** turns the second client away, and the other two hand the host over.
 
@@ -108,19 +111,25 @@ Click **Display settings…** on a device in **Displays** or **Devices**. Each q
 
 ## Stream a real monitor instead
 
-**Linux hosts.** In **Your monitors**, click **Stream this monitor** on a row. Every device then
-sees that monitor instead of its own virtual screen. **Give each device its own screen** switches
-back.
+**Linux and Windows hosts.** In **Your monitors**, click **Stream this monitor** on a row. Every
+device then sees that monitor instead of its own virtual screen. **Give each device its own
+screen** switches back.
 
 - The monitor is never touched, so keep-alive, **Your monitors** and layout don't apply.
 - The resolution is the monitor's; the client scales the picture.
 - Absolute mouse and pen input lands on that monitor.
 - Works on KWin, GNOME, Sway, Hyprland and gamescope Game Mode, with no chooser dialog. A nested or
   headless gamescope has no monitor to list.
+- On Windows the pointer is part of the picture, and Windows permission prompts and the lock
+  screen are not: the stream keeps showing the desktop behind a prompt, while your input goes to
+  the prompt. A device that connects while the PC is locked or signed out gets a virtual screen
+  instead, so you can sign in; the monitor is streamed again from the next connection.
 
-Monitors are named by connector (`HDMI-A-1`, `DP-2`). `punktfunk-host list-monitors` lists them,
-and `mirror-test` checks the capture without a client ([Host CLI](/docs/host-cli#list-monitors)).
-`punktfunk-host anchor-test --monitor HDMI-A-1` checks where absolute input lands.
+On Linux, monitors are named by connector (`HDMI-A-1`, `DP-2`). `punktfunk-host list-monitors`
+lists them, and `mirror-test` checks the capture without a client
+([Host CLI](/docs/host-cli#list-monitors)). `punktfunk-host anchor-test --monitor HDMI-A-1` checks
+where absolute input lands. On Windows they carry the Windows display name (`\\.\DISPLAY1`), which
+the console shows.
 
 To pin it from the host instead, set `PUNKTFUNK_CAPTURE_MONITOR=HDMI-A-1` in
 [`host.env`](/docs/configuration). It wins over the console, which then shows the choice as locked.
