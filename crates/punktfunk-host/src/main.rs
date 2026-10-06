@@ -100,12 +100,12 @@ mod encode {
 
     /// Refresh rate a client may ask for, the companion to [`validate_dimensions`].
     ///
-    /// The driver multiplies it by `vdisplay_hz_mult_for` before advertising the mode, so bound
-    /// the product: an out-of-contract value otherwise reaches mode selection and kills the
-    /// session after Welcome, and a huge one overflows the multiply.
+    /// The display is created at it times `vdisplay_hz_mult_for`, so bound the product at the
+    /// largest multiple any compositor gets: an out-of-contract value otherwise reaches mode
+    /// selection and kills the session after Welcome, and a huge one overflows the multiply.
     pub(crate) fn validate_refresh(refresh_hz: u32) -> anyhow::Result<()> {
         const MAX_HZ: u32 = 1000;
-        let mult = pf_host_config::config().vdisplay_hz_mult_for(refresh_hz);
+        let mult = pf_host_config::config().vdisplay_hz_mult_for(refresh_hz, true);
         let effective = refresh_hz.saturating_mul(mult);
         anyhow::ensure!(
             (1..=MAX_HZ).contains(&refresh_hz) && effective <= MAX_HZ,

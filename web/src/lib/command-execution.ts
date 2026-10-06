@@ -24,6 +24,7 @@ export const UNPRIVILEGED_LAUNCH_KINDS: readonly string[] = [
 	"ea",
 	"rockstar",
 	"exec",
+	"emulator",
 	"desktop_id",
 	"gamebar",
 ];
