@@ -128,7 +128,8 @@ fn exchange(dev: &HidDevice, rid: u8, cmd: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Run every query this collection answers and print request, reply and any serial in it.
-pub fn query(dev: &HidDevice, pid: u16, usage: u16) {
+/// Returns the answered `(request, reply)` pairs.
+pub fn query(dev: &HidDevice, pid: u16, usage: u16) -> Vec<(Vec<u8>, Vec<u8>)> {
     let puck = matches!(pid, 0x1304 | 0x1305);
     println!("\n-- SC2 FEATURE REPLIES (pid {pid:04X}, usage FF00:{usage:02X}) --");
     for rid in [RID_PAD, RID_DONGLE] {
@@ -140,6 +141,7 @@ pub fn query(dev: &HidDevice, pid: u16, usage: u16) {
         }
     }
     let extra: &[(u8, &[u8])] = if puck { PUCK_QUERIES } else { &[] };
+    let mut answered = Vec::new();
     for &(rid, cmd) in PAD_QUERIES.iter().chain(extra) {
         let shown = hex(&cmd[..cmd.len().min(3)]);
         match exchange(dev, rid, cmd) {
@@ -149,10 +151,28 @@ pub fn query(dev: &HidDevice, pid: u16, usage: u16) {
                 if !text.is_empty() {
                     println!("  {:<15}    text: {text}", "");
                 }
+                answered.push((frame(rid, cmd)[..1 + cmd.len()].to_vec(), r));
             }
             Err(e) => println!("  {rid:02X} {shown:<12} -> {e}"),
         }
     }
+    answered
+}
+
+/// Write `answered` as a capture `PUNKTFUNK_SC2_IDENTITY` replays: the USB serial, then one
+/// `<request> <reply>` hex pair per line. Replies lose their zero tail; the reader restores it.
+pub fn write_identity(
+    path: &str,
+    serial: &str,
+    answered: &[(Vec<u8>, Vec<u8>)],
+) -> std::io::Result<()> {
+    let compact = |b: &[u8]| b.iter().map(|x| format!("{x:02X}")).collect::<String>();
+    let mut out = format!("# hid-descriptor-dump --sc2-identity\nserial {serial}\n");
+    for (req, reply) in answered {
+        let end = reply.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        out += &format!("{} {}\n", compact(req), compact(&reply[..end]));
+    }
+    std::fs::write(path, out)
 }
 
 /// `0x87 SET_SETTINGS`, one entry: `LIZARD_MODE` (9) = `on`.

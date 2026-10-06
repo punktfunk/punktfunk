@@ -46,6 +46,7 @@ struct Args {
     symbol: Option<String>,
     sc2: bool,
     sc2_watch: Option<u64>,
+    sc2_identity: Option<String>,
 }
 
 /// Pull a `static NAME: [u8; N] = [ 0x.., ... ];` out of a Rust source file.
@@ -108,6 +109,7 @@ fn parse_args() -> Result<Args, String> {
         symbol: None,
         sc2: false,
         sc2_watch: None,
+        sc2_identity: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -133,6 +135,10 @@ fn parse_args() -> Result<Args, String> {
             "--rust-source" => a.rust_source = Some(it.next().ok_or("--rust-source wants a path")?),
             "--symbol" => a.symbol = Some(it.next().ok_or("--symbol wants an identifier")?),
             "--sc2" => a.sc2 = true,
+            "--sc2-identity" => {
+                a.sc2 = true;
+                a.sc2_identity = Some(it.next().ok_or("--sc2-identity wants a file")?);
+            }
             "--sc2-watch" => {
                 let v = it.next().ok_or("--sc2-watch wants seconds")?;
                 a.sc2_watch = Some(
@@ -169,6 +175,7 @@ hid-descriptor-dump — capture a real HID device's report descriptor
   --symbol <IDENT>       which `static IDENT: [u8; N]` in that file to decode
   --sc2                  Steam Controller 2: print the pad's (and Puck's) feature replies
   --sc2-watch <secs>     Steam Controller 2: print each button edge by bit and name
+  --sc2-identity <file>  --sc2, and save the first pad that answers for PUNKTFUNK_SC2_IDENTITY
 
 With --vid/--pid every matching collection is dumped: a real Xbox pad presents two (a game
 controller and a keyboard), and they are separate devices to hidapi.
@@ -382,6 +389,7 @@ fn main() -> ExitCode {
     }
 
     let mut failures = 0usize;
+    let mut identity_saved = false;
     for (n, d) in selected.iter().enumerate() {
         println!("\n{}", "=".repeat(96));
         println!(
@@ -441,7 +449,24 @@ fn main() -> ExitCode {
         // the Puck's management interface.
         if d.usage_page() == 0xFF00 {
             if args.sc2 {
-                sc2::query(&dev, d.product_id(), d.usage());
+                let answered = sc2::query(&dev, d.product_id(), d.usage());
+                // A Puck's empty slot answers only for the dongle (report 2); keep a real pad.
+                let pad_answered = answered.iter().any(|(req, _)| req[0] == 0x01);
+                if let (Some(path), false, true) =
+                    (&args.sc2_identity, identity_saved, pad_answered)
+                {
+                    let serial = d.serial_number().unwrap_or("");
+                    match sc2::write_identity(path, serial, &answered) {
+                        Ok(()) => {
+                            identity_saved = true;
+                            println!(
+                                "  saved {} replies and serial {serial} to {path}",
+                                answered.len()
+                            );
+                        }
+                        Err(e) => eprintln!("  !! {path}: {e}"),
+                    }
+                }
             }
             if let (Some(secs), 0x01) = (args.sc2_watch, d.usage()) {
                 sc2::watch_buttons(&dev, secs);
