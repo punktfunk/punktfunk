@@ -215,7 +215,11 @@ impl SessionParams {
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
-        let ten_bit = crate::video::ten_bit_decodable(probes.vulkan.as_ref(), &settings.decoder);
+        let ten_bit = crate::video::ten_bit_decodable(
+            probes.vulkan.as_ref(),
+            &settings.decoder,
+            settings.preferred_codec(),
+        );
         if !ten_bit && (settings.hdr_enabled || settings.ten_bit_sdr) {
             tracing::info!("10-bit not advertised: no hardware decoder here has a 10-bit path");
         }
