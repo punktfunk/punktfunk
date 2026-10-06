@@ -232,13 +232,15 @@ What the dial can hold:
 | Group | Actions |
 |---|---|
 | Session | **End stream**, **End game** (a game this device launched, then the stream), **Disconnect, keep the game running** |
-| Input | **Touch mode**, **Keyboard**, **Virtual controller**, **Send text**, **Guide button**, **Quick access menu**, **Controller mouse** |
+| Input | **Touch mode**, **Keyboard**, **Virtual controller**, **Send text**, **Guide button**, **Quick access menu**, **Controller mouse**, **Controller type** |
 | View · Audio | **Statistics**, **Screens** (dual-screen handhelds: the panel below, the picture below, or the picture across both), **Microphone**, **Mute this stream** (this device only) |
 | Host | **Sleep host**, **Restart host**, **Shut down host** ([Host power](/docs/host-power)) |
 | Shortcuts | Key combinations you add, such as Alt+F4 |
 
 A button a client can't serve is dimmed and says why. **Send text** works on Android against a
-host that takes typed text.
+host that takes typed text. **Controller type** works on the desktop clients: each press re-plugs
+your controllers as the next type (Automatic, Xbox 360, Xbox One, DualSense, DualShock 4, Steam
+Deck) for this stream. The next stream starts from your settings.
 
 ### Controller mouse
 
