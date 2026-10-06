@@ -14471,9 +14471,14 @@
         "required": [
           "enabled",
           "platform",
-          "checks"
+          "checks",
+          "allow_rdp_from_network"
         ],
         "properties": {
+          "allow_rdp_from_network": {
+            "type": "boolean",
+            "description": "Windows: seats are on and the network may reach Remote Desktop. Off elsewhere."
+          },
           "checks": {
             "type": "array",
             "items": {

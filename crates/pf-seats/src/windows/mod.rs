@@ -160,6 +160,7 @@ impl PlatformBackend for WindowsBackend {
     fn seating(&self) -> Result<SeatingStatus, BackendError> {
         Ok(SeatingStatus {
             enabled: seats_enabled(),
+            allow_rdp_from_network: enable::rdp_from_network(),
             checks: enable::checks(),
         })
     }
@@ -175,6 +176,7 @@ impl PlatformBackend for WindowsBackend {
         }
         Ok(SeatingStatus {
             enabled: seats_enabled(),
+            allow_rdp_from_network: enable::rdp_from_network(),
             checks,
         })
     }
@@ -183,6 +185,7 @@ impl PlatformBackend for WindowsBackend {
         let checks = enable::turn_off().err().map(enable::refusal).into_iter();
         Ok(SeatingStatus {
             enabled: seats_enabled(),
+            allow_rdp_from_network: enable::rdp_from_network(),
             checks: checks.collect(),
         })
     }

@@ -5567,7 +5567,12 @@ async fn seating_off_windows_reads_off_and_refuses_a_change() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body,
-        serde_json::json!({"enabled": false, "platform": "other", "checks": []})
+        serde_json::json!({
+            "enabled": false,
+            "platform": "other",
+            "checks": [],
+            "allow_rdp_from_network": false,
+        })
     );
     for body in [
         r#"{"enabled":true,"allow_rdp_from_network":false}"#,

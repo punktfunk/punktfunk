@@ -570,6 +570,7 @@ impl PlatformBackend for LinuxBackend {
         Ok(SeatingStatus {
             enabled: true,
             checks: self.prerequisites(),
+            allow_rdp_from_network: false,
         })
     }
 

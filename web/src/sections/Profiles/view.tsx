@@ -744,8 +744,9 @@ const LEVEL = {
 } as const;
 
 /**
- * **Seats**: the switch, the Remote Desktop choice a turn-on carries, and what the checks found.
- * A refused turn-on answers off with its errors, which is what the list shows.
+ * **Seats**: the switch, the Remote Desktop choice, and what the checks found. While seats are on,
+ * changing the choice turns them on again with it. A refused turn-on answers off with its errors,
+ * which is what the list shows.
  */
 export const SeatsDialog: FC<{
 	open: boolean;
@@ -755,9 +756,10 @@ export const SeatsDialog: FC<{
 	onClose: () => void;
 }> = ({ open, seating, isPending, onChange, onClose }) => {
 	const [allowRdp, setAllowRdp] = useState(false);
+	const stored = seating?.allow_rdp_from_network === true;
 	useEffect(() => {
-		if (open) setAllowRdp(false);
-	}, [open]);
+		if (open) setAllowRdp(stored);
+	}, [open, stored]);
 	const on = seating?.enabled === true;
 	const checks = [...(seating?.checks ?? [])].sort(
 		(a, b) => LEVEL[a.level].rank - LEVEL[b.level].rank,
@@ -777,13 +779,17 @@ export const SeatsDialog: FC<{
 					/>
 					<Label htmlFor="seats-on">{m.profiles_seats_on()}</Label>
 				</div>
-				{!on && (
+				{seating && (
 					<div className="flex items-start gap-2">
 						<Checkbox
 							id="seats-rdp"
 							className="mt-0.5"
 							checked={allowRdp}
-							onCheckedChange={(v) => setAllowRdp(v === true)}
+							disabled={isPending}
+							onCheckedChange={(v) => {
+								setAllowRdp(v === true);
+								if (on) onChange(true, v === true);
+							}}
 						/>
 						<div className="space-y-1">
 							<Label htmlFor="seats-rdp" className="leading-snug">

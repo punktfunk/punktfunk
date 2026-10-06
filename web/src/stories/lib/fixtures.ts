@@ -795,6 +795,7 @@ export const profilesDoor: ProfileAdmin[] = [
 export const seatingOn: Seating = {
 	enabled: true,
 	platform: "windows",
+	allow_rdp_from_network: false,
 	checks: [
 		{
 			level: "info",
@@ -813,6 +814,7 @@ export const seatingOn: Seating = {
 export const seatingRefused: Seating = {
 	enabled: false,
 	platform: "windows",
+	allow_rdp_from_network: false,
 	checks: [
 		{
 			level: "info",

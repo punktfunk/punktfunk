@@ -152,6 +152,9 @@ pub struct DoctorReport {
 pub struct SeatingStatus {
     pub enabled: bool,
     pub checks: Vec<Diagnostic>,
+    /// Windows: seats are on and the network may reach Remote Desktop.
+    #[serde(default)]
+    pub allow_rdp_from_network: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -344,6 +347,7 @@ mod tests {
             status: SeatingStatus {
                 enabled: false,
                 checks: vec![Diagnostic::error("no_gpu", "No graphics card was found.")],
+                allow_rdp_from_network: false,
             },
         });
         let mut frame = Vec::new();

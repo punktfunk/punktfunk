@@ -844,6 +844,8 @@ pub(crate) struct Seating {
     platform: SeatingPlatform,
     /// The prerequisites, one each. Empty on `other`.
     checks: Vec<SeatCheck>,
+    /// Windows: seats are on and the network may reach Remote Desktop. Off elsewhere.
+    allow_rdp_from_network: bool,
 }
 
 /// `PUT /profiles/seating`.
@@ -903,6 +905,7 @@ async fn seating(command: Command) -> Response {
                 SeatingPlatform::Linux
             },
             checks: status.checks.into_iter().map(SeatCheck::from).collect(),
+            allow_rdp_from_network: status.allow_rdp_from_network,
         })
         .into_response(),
         Ok(_) => api_error(
@@ -936,6 +939,7 @@ pub(crate) async fn get_seating() -> Response {
             enabled: false,
             platform: SeatingPlatform::Other,
             checks: Vec::new(),
+            allow_rdp_from_network: false,
         })
         .into_response();
     }

@@ -143,6 +143,14 @@ pub(super) fn turn_off() -> WinResult<()> {
         .map_err(|cause| refuse("seats_key", "Couldn't turn seats off.", cause))
 }
 
+/// Seats are on and the operator let the network reach Remote Desktop.
+pub(super) fn rdp_from_network() -> bool {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_WOW64_64KEY)
+        .and_then(|seats| seats.get_value::<u32, _>(RDP_FROM_NETWORK))
+        .is_ok_and(|allowed| allowed == 1)
+}
+
 /// A refusal as the check list shows it.
 pub(super) fn refusal(error: BackendError) -> Diagnostic {
     Diagnostic::error(error.code, error.message)
