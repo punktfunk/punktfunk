@@ -63,6 +63,7 @@ pub(in crate::native) fn prepare_display(
     chroma: crate::encode::ChromaFormat,
     codec: crate::encode::Codec,
     shard_payload: u16,
+    join_live: bool,
     quit: &Arc<AtomicBool>,
     stop: &Arc<AtomicBool>,
     trace: &crate::bringup::Trace,
@@ -91,8 +92,12 @@ pub(in crate::native) fn prepare_display(
     if codec == crate::encode::Codec::PyroWave {
         plan.wire_chunk = Some(shard_payload as usize);
     }
+    if join_live {
+        plan = plan.sharing_live_display();
+    }
     let mut vd = crate::vdisplay::open(compositor)?;
     vd.set_client_identity(client_identity);
+    vd.set_join_live(join_live);
     vd.set_client_hdr(client_hdr);
     vd.set_hdr(hdr);
     vd.set_hw_cursor(cursor_forward);
@@ -336,7 +341,7 @@ pub(super) fn open_session_encoder(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
 )> {
-    if plan.capture == crate::session_plan::CaptureBackend::IddPush {
+    if plan.capture.encodes_remotely() {
         return crate::windows::idd::open_driver_encoder(
             plan,
             capturer,

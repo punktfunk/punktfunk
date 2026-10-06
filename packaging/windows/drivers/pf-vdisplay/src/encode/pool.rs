@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use pf_driver_proto::encode as wire;
 use pf_driver_proto::encode::au::AuHeader;
+use pf_encode_session::drive::{FrameSource, Slot};
 use pf_frame::CapturedFrame;
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D11::{
@@ -640,6 +641,54 @@ impl Pool {
         let _ = self.cursor.take_dirty();
         let cursor = self.cursor.to_blend();
         st.targets.frame(slot, pts_ns, cursor)
+    }
+}
+
+/// The pool as the shared session loop drives it: each method is the inherent one of the same
+/// name.
+impl FrameSource for Pool {
+    fn set_live(&self, live: bool) {
+        Pool::set_live(self, live);
+    }
+
+    fn take_within(&self, budget: usize) -> (Option<Slot>, u64) {
+        Pool::take_within(self, budget)
+    }
+
+    fn republish(&self) -> Option<Slot> {
+        Pool::republish(self)
+    }
+
+    fn cursor_pending(&self) -> bool {
+        Pool::cursor_pending(self)
+    }
+
+    fn cursor_republish(&self) -> Option<Slot> {
+        Pool::cursor_republish(self)
+    }
+
+    fn cursor_changed(&self) {
+        Pool::cursor_changed(self);
+    }
+
+    fn frame(&self, slot: usize, pts_ns: u64) -> Result<CapturedFrame, Fail> {
+        Pool::frame(self, slot, pts_ns)
+    }
+
+    fn release(&self, slot: usize) {
+        Pool::release(self, slot);
+    }
+
+    fn event(&self) -> std::os::windows::io::RawHandle {
+        Pool::event(self).0
+    }
+
+    fn has_full(&self) -> bool {
+        Pool::has_full(self)
+    }
+
+    fn drop_one(&self) -> u64 {
+        self.dropped.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
