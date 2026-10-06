@@ -41,8 +41,6 @@ pub mod kind {
     pub const SET_ENCODE: u32 = 3;
     /// `EncodeCtlRequest` → [`CtlReply`](super::CtlReply).
     pub const ENCODE_CTL: u32 = 4;
-    /// [`SetCursor`](super::SetCursor) → [`CtlReply`](super::CtlReply).
-    pub const SET_CURSOR: u32 = 5;
     /// Event: [`SourceChanged`](super::SourceChanged), after the worker rebuilt its capture.
     pub const SOURCE_CHANGED: u32 = 0x100;
     /// Event: [`SourceGone`](super::SourceGone).
@@ -142,7 +140,7 @@ pub struct SourceReply {
     pub format: u32,
 }
 
-/// The answer to `ENCODE_CTL` and `SET_CURSOR`: `0`, or the reason nothing was done.
+/// The answer to `ENCODE_CTL`: `0`, or the reason nothing was done.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
 pub struct CtlReply {
@@ -158,14 +156,6 @@ pub const CTL_INVALID: u32 = 2;
 /// The op ran and failed.
 pub const CTL_FAILED: u32 = 3;
 
-/// Whether the capture draws the pointer, switched live.
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
-pub struct SetCursor {
-    /// Non-zero = in the picture.
-    pub in_picture: u32,
-}
-
 /// The source's size or format moved and the capture follows it. The session opened for the
 /// old one is stale: the host answers with a new `SET_ENCODE`.
 #[repr(C)]
@@ -176,14 +166,13 @@ pub struct SourceChanged {
     pub format: u32,
 }
 
-/// [`SourceGone::reason`]: the capture item closed.
-pub const GONE_CLOSED: u32 = 1;
-/// The capture failed and could not be rebuilt.
-pub const GONE_FAILED: u32 = 2;
+/// [`SourceGone::reason`]: the monitor the capture was opened on no longer exists. One that
+/// re-arrives is a new monitor, even under its old name.
+pub const GONE_MONITOR: u32 = 1;
 
-/// The source is no longer captured. The capture API does not always say so (a removed
-/// monitor can just go quiet), so the host does not wait for this: it re-opens the source
-/// itself whenever it changes the display.
+/// The source is no longer what was opened. The capture API does not say so (its frames just
+/// thin out or stop), so the worker watches the monitor itself. The host answers by resolving
+/// the display again and opening a new capture.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq, Eq)]
 pub struct SourceGone {
@@ -199,7 +188,6 @@ const _: () = {
     assert!(size_of::<OpenSource>() == 72);
     assert!(size_of::<SourceReply>() == 36);
     assert!(size_of::<CtlReply>() == 4);
-    assert!(size_of::<SetCursor>() == 4);
     assert!(size_of::<SourceChanged>() == 12);
     assert!(size_of::<SourceGone>() == 4);
     assert!(size_of::<crate::encode::SetEncodeRequest>() <= MAX_BODY as usize);
@@ -303,9 +291,9 @@ mod tests {
 
     #[test]
     fn a_reply_is_its_request_with_the_reply_bit() {
-        let bytes = encode(kind::SET_CURSOR | REPLY, 9, &CtlReply { status: CTL_OK });
+        let bytes = encode(kind::ENCODE_CTL | REPLY, 9, &CtlReply { status: CTL_OK });
         let (frame, rest) = split(&bytes);
-        assert_eq!(frame.kind & !REPLY, kind::SET_CURSOR);
+        assert_eq!(frame.kind & !REPLY, kind::ENCODE_CTL);
         assert_ne!(frame.kind & REPLY, 0);
         assert_eq!(body::<CtlReply>(rest), Some(CtlReply { status: CTL_OK }));
     }
@@ -333,13 +321,13 @@ mod tests {
             kind::SOURCE_GONE,
             0,
             &SourceGone {
-                reason: GONE_CLOSED,
+                reason: GONE_MONITOR,
             },
         );
         assert_eq!(body::<SourceChanged>(&bytes[16..]), None);
         assert_eq!(
             body::<SourceGone>(&bytes[16..20]).map(|g| g.reason),
-            Some(GONE_CLOSED)
+            Some(GONE_MONITOR)
         );
         assert_eq!(body::<SourceGone>(&bytes[16..19]), None);
     }

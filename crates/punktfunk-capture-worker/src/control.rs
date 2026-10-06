@@ -107,7 +107,15 @@ impl Worker {
             };
             let _ = tx.send(kind::SOURCE_CHANGED, 0, &changed);
         });
-        match Source::open(req, on_resize) {
+        let tx = self.tx.clone();
+        let on_gone = Box::new(move || {
+            tracing::info!("the captured monitor is gone");
+            let gone = proto::SourceGone {
+                reason: proto::GONE_MONITOR,
+            };
+            let _ = tx.send(kind::SOURCE_GONE, 0, &gone);
+        });
+        match Source::open(req, on_resize, on_gone) {
             Ok(source) => {
                 let (width, height) = source.size();
                 self.source = Some(Arc::new(source));
@@ -255,14 +263,6 @@ impl Worker {
             },
         }
     }
-
-    fn set_cursor(&self, req: &proto::SetCursor) -> u32 {
-        match &self.source {
-            Some(source) if source.set_cursor(req.in_picture != 0) => proto::CTL_OK,
-            Some(_) => proto::CTL_FAILED,
-            None => proto::CTL_NOT_FOUND,
-        }
-    }
 }
 
 /// Serve the host until it closes its end. `rx` and `tx` are this process's two pipe ends.
@@ -297,11 +297,6 @@ pub fn serve(mut rx: File, tx: File) -> Result<()> {
             kind::ENCODE_CTL => {
                 let req = proto::body(&body).context("ENCODE_CTL body")?;
                 let status = worker.encode_ctl(&req);
-                tx.send(reply, frame.seq, &proto::CtlReply { status })
-            }
-            kind::SET_CURSOR => {
-                let req = proto::body(&body).context("SET_CURSOR body")?;
-                let status = worker.set_cursor(&req);
                 tx.send(reply, frame.seq, &proto::CtlReply { status })
             }
             other => bail!("unknown control message {other:#x}"),

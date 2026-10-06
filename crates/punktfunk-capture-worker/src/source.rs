@@ -7,7 +7,9 @@
 //! Evidence: `design/windows-wgc-capture.md` §4.4 and the measurements in §7.1.
 
 use std::mem::offset_of;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use pf_driver_proto::encode::au::{self, AuHeader};
 use pf_driver_proto::worker as proto;
@@ -37,7 +39,8 @@ use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1,
 };
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS, HMONITOR,
+    EnumDisplaySettingsW, GetMonitorInfoW, DEVMODEW, ENUM_CURRENT_SETTINGS, HMONITOR, MONITORINFO,
+    MONITORINFOEXW,
 };
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
@@ -82,6 +85,27 @@ fn find_output(gdi: &str) -> Result<(IDXGIAdapter1, HMONITOR), Refusal> {
         }
     }
     Err((proto::SOURCE_NOT_FOUND, 0, "output"))
+}
+
+/// How often the captured monitor is checked for still being there.
+const PRESENCE_EVERY: Duration = Duration::from_millis(250);
+
+/// Whether `monitor` is still the display named `gdi`. A removed monitor's handle stops
+/// answering, and one that re-arrives is a new monitor under the old name. The capture item
+/// reports neither: its frames thin out or stop.
+fn monitor_present(monitor: isize, gdi: &[u16; 32]) -> bool {
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: `info` is a sized local the call fills; an invalid handle makes it fail, which
+    // is the answer being asked for.
+    let ok = unsafe {
+        GetMonitorInfoW(
+            HMONITOR(monitor as *mut core::ffi::c_void),
+            (&raw mut info).cast::<MONITORINFO>(),
+        )
+    };
+    ok.as_bool()
+        && proto::gdi_name_text(&info.szDevice).eq_ignore_ascii_case(&proto::gdi_name_text(gdi))
 }
 
 /// The output's refresh in whole Hz; `0` when the mode does not say.
@@ -183,9 +207,48 @@ struct Shared {
     qpc_hz: u64,
     /// Called with the new size after the capture's buffers were rebuilt for it.
     on_resize: Box<dyn Fn(u32, u32) + Send + Sync>,
+    /// The monitor the capture was opened on, as its handle value, and its name then.
+    monitor: isize,
+    gdi: [u16; 32],
+    /// Called once, when that monitor is gone.
+    on_gone: Box<dyn Fn() + Send + Sync>,
+    gone: AtomicBool,
 }
 
 impl Shared {
+    /// Whether the monitor is gone, saying so once. From then on nothing is fed: what the
+    /// capture still delivers is not the source the session was opened on. The verdict
+    /// stays: a monitor that re-arrives can take the old one's handle and name, and is still
+    /// not the one this capture was opened on.
+    fn gone(&self, feed: &mut Feed) -> bool {
+        if self.gone.load(Ordering::Acquire) {
+            return true;
+        }
+        if monitor_present(self.monitor, &self.gdi) {
+            return false;
+        }
+        if !self.gone.swap(true, Ordering::AcqRel) {
+            feed.sink = None;
+            feed.last = None;
+            (self.on_gone)();
+        }
+        true
+    }
+
+    /// The watch for a source that went quiet: a removed monitor sends no last frame to
+    /// notice it on.
+    fn watch(shared: Weak<Self>) {
+        loop {
+            std::thread::sleep(PRESENCE_EVERY);
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            if shared.gone(&mut lock(&shared.feed)) {
+                return;
+            }
+        }
+    }
+
     fn offer(feed: &Feed, tex: &ID3D11Texture2D, qpc: u64) {
         let Some((pool, session)) = &feed.sink else {
             return;
@@ -201,10 +264,7 @@ impl Shared {
             Offer::Dropped(n) => section.store_u64(offset_of!(AuHeader, dropped_total), n),
             // The session was opened for another size or format: say so where the host looks.
             Offer::Refused => {
-                if !session
-                    .stale
-                    .swap(true, std::sync::atomic::Ordering::AcqRel)
-                {
+                if !session.stale.swap(true, Ordering::AcqRel) {
                     section.store_u32(offset_of!(AuHeader, encoder_state), au::ENCODER_WEDGED);
                 }
             }
@@ -213,6 +273,9 @@ impl Shared {
 
     /// The pool's arrival callback: keep the newest frame, hand it to the live pool.
     fn arrived(&self, pool: &Direct3D11CaptureFramePool) {
+        // Taken before the drain: a free-threaded pool may call back on two threads at once,
+        // and the frames must reach the session in the order they were captured.
+        let mut feed = lock(&self.feed);
         let mut newest = None;
         while let Ok(frame) = pool.TryGetNextFrame() {
             if let Some(older) = newest.replace(frame) {
@@ -222,7 +285,6 @@ impl Shared {
         let Some(frame) = newest else {
             return;
         };
-        let mut feed = lock(&self.feed);
         let size = frame.ContentSize().unwrap_or(SizeInt32 {
             Width: feed.size.0,
             Height: feed.size.1,
@@ -230,6 +292,10 @@ impl Shared {
         if (size.Width, size.Height) != feed.size && size.Width > 0 && size.Height > 0 {
             // The source changed mode. Its frames no longer fit the buffers or the session.
             let _ = frame.Close();
+            // A size that changed because the monitor was replaced is not this source's.
+            if self.gone(&mut feed) {
+                return;
+            }
             feed.last = None;
             feed.sink = None;
             if pool
@@ -285,6 +351,7 @@ impl Source {
     pub fn open(
         req: &proto::OpenSource,
         on_resize: Box<dyn Fn(u32, u32) + Send + Sync>,
+        on_gone: Box<dyn Fn() + Send + Sync>,
     ) -> Result<Self, Refusal> {
         let known = proto::OPEN_FP16 | proto::OPEN_CURSOR;
         let gdi = proto::gdi_name_text(&req.gdi_name);
@@ -332,7 +399,16 @@ impl Source {
             format,
             qpc_hz: qpc_frequency(),
             on_resize,
+            monitor: monitor.0 as isize,
+            gdi: req.gdi_name,
+            on_gone,
+            gone: AtomicBool::new(false),
         });
+        let watched = Arc::downgrade(&shared);
+        std::thread::Builder::new()
+            .name("pf-cw-presence".into())
+            .spawn(move || Shared::watch(watched))
+            .map_err(|_| (proto::SOURCE_OPEN_FAILED, 0, "watch"))?;
         let handler = shared.clone();
         pool.FrameArrived(
             &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |pool, _| {
@@ -396,11 +472,6 @@ impl Source {
     pub fn size(&self) -> (u32, u32) {
         let (w, h) = lock(&self.shared.feed).size;
         (w as u32, h as u32)
-    }
-
-    /// Whether the capture draws the pointer into its frames, from the next one on.
-    pub fn set_cursor(&self, in_picture: bool) -> bool {
-        self.session.SetIsCursorCaptureEnabled(in_picture).is_ok()
     }
 
     /// Feed `pool` from now on, starting with the frame already held: a still desktop sends
