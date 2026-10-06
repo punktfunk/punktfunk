@@ -71,7 +71,9 @@ extension ConsoleModel {
                 store.setPinned(host.id, presetID: preset, pinned: a["pin"] as? Bool ?? false)
             }
         case "BindPreset":
-            bindPreset(key: a["key"] as? String ?? "", preset: a["preset_id"] as? String)
+            bindPreset(
+                key: a["key"] as? String ?? "", game: a["game"] as? String,
+                preset: a["preset_id"] as? String)
         case "SetClipboard":
             if var host = host(key: a["key"] as? String ?? "") {
                 host.clipboardSync = a["on"] as? Bool ?? false
@@ -334,9 +336,16 @@ extension ConsoleModel {
         store.update(host)
     }
 
-    private func bindPreset(key: String, preset: String?) {
+    /// The host's default binding, or with `game` that one title's. A nil `preset` clears either.
+    private func bindPreset(key: String, game: String?, preset: String?) {
         guard var host = host(key: key) else { return }
-        host.presetID = preset
+        if let game {
+            var bound = host.gamePresets ?? [:]
+            bound[game] = preset
+            host.gamePresets = bound.isEmpty ? nil : bound
+        } else {
+            host.presetID = preset
+        }
         store.update(host)
     }
 

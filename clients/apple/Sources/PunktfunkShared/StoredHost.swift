@@ -61,6 +61,9 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     /// finding. Per host: a Wi-Fi TV and a wired desk differ. nil asks nothing, and nil is what an
     /// older saved record decodes to.
     public var delivery: Int?
+    /// Library title id → preset id: what a launch of that title streams with, beating
+    /// `presetID`. A dangling id falls through to `presetID`. nil until the first binding.
+    public var gamePresets: [String: String]?
 
     /// How many left-behind addresses a host keeps.
     public static let maxPreviousAddresses = 3
@@ -70,7 +73,8 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         pinnedSHA256: Data? = nil, lastConnected: Date? = nil, mgmtPort: UInt16? = nil,
         macAddresses: [String]? = nil, clipboardSync: Bool? = nil,
         presetID: String? = nil, pinnedPresetIDs: [String]? = nil, addedAt: Date? = nil,
-        osChain: String? = nil, previousAddresses: [String]? = nil
+        osChain: String? = nil, previousAddresses: [String]? = nil,
+        gamePresets: [String: String]? = nil
     ) {
         self.id = id
         self.name = name
@@ -86,11 +90,13 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         self.addedAt = addedAt
         self.osChain = osChain
         self.previousAddresses = previousAddresses
+        self.gamePresets = gamePresets
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, pinnedSHA256, lastConnected, mgmtPort, macAddresses
         case clipboardSync, presetID, pinnedPresetIDs, addedAt, osChain, previousAddresses
+        case gamePresets
         /// Pre-rename keys (design/preset-rename.md): read when the new key is absent, and
         /// written beside it so an older build keeps the bindings.
         case profileID, pinnedProfileIDs
@@ -114,6 +120,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt)
         osChain = try c.decodeIfPresent(String.self, forKey: .osChain)
         previousAddresses = try c.decodeIfPresent([String].self, forKey: .previousAddresses)
+        gamePresets = try c.decodeIfPresent([String: String].self, forKey: .gamePresets)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -134,6 +141,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(addedAt, forKey: .addedAt)
         try c.encodeIfPresent(osChain, forKey: .osChain)
         try c.encodeIfPresent(previousAddresses, forKey: .previousAddresses)
+        try c.encodeIfPresent(gamePresets, forKey: .gamePresets)
     }
 
     public var displayName: String { name.isEmpty ? address : name }
