@@ -490,9 +490,12 @@ pub fn capture_virtual_output(
     .map_err(|(e, _keep)| e.context("IDD-push capture open (no fallback)"))
 }
 
-/// Capture a monitor this host did not create: start a capture worker as the signed-in user
+/// Capture a monitor this session does not own: start a capture worker as the signed-in user
 /// and open the monitor in it. The absolute-input aim moves to that monitor, as the IDD-push
-/// open does for its own. The worker gets the GPU scheduling class a session's encoder gets.
+/// open does for its own.
+///
+/// A mirror's worker gets the GPU scheduling class a session's encoder gets. A viewer of
+/// another session's display keeps the default, below the driver that encodes for its owner.
 #[cfg(target_os = "windows")]
 fn capture_external_output(
     vout: crate::vdisplay::VirtualOutput,
@@ -517,8 +520,16 @@ fn capture_external_output(
         target_id: target.target_id,
         hdr,
     };
-    pf_capture::open_wgc(worker, source, want.hdr, stream_hz, true, vout.keepalive)
-        .context("WGC capture open (no fallback)")
+    let own_priority = crate::session_plan::mirrored();
+    pf_capture::open_wgc(
+        worker,
+        source,
+        want.hdr,
+        stream_hz,
+        own_priority,
+        vout.keepalive,
+    )
+    .context("WGC capture open (no fallback)")
 }
 
 /// The driver encoder's HDR flag and depth for a session negotiated at `plan_hdr`/`bit_depth`.

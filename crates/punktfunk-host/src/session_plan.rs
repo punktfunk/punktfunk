@@ -369,6 +369,18 @@ pub(crate) fn mirrored() -> bool {
     pf_vdisplay::mirrors_pinned()
 }
 
+impl SessionPlan {
+    /// The plan of a session `mode_conflict: join` admitted. On Windows the owner's display is
+    /// captured by a worker; a Linux joiner gets a second cast through the same portal path.
+    pub(crate) fn sharing_live_display(mut self) -> Self {
+        if cfg!(target_os = "windows") {
+            self.capture = CaptureBackend::Wgc;
+            self.topology = resolve_topology(self.capture);
+        }
+        self
+    }
+}
+
 /// Open the encoder for `frame` through `open(width, height)` and return it with the framing
 /// it encodes. A joiner's `reframe_to` frames the owner's picture for its view; a mirrored head
 /// larger than the client's `negotiated` picture fits inside it. Either crops and scales on
