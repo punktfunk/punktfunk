@@ -419,6 +419,8 @@ impl Presenter {
                 #[cfg(target_os = "linux")]
                 DirectSrc::Dmabuf => matches!(self.retired_hw, Some(Retired::Dmabuf(_))),
                 DirectSrc::Cpu => self.cpu_planes.is_some(),
+                #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+                DirectSrc::Pyro => matches!(self.retired_hw, Some(Retired::Pyro(_))),
             }),
             Lane::Native(f) => {
                 let (depth, msb_packed) = csc_depth_packing_or_8bit(f.vk_format);
@@ -450,8 +452,15 @@ impl Presenter {
             }),
             #[cfg(windows)]
             Lane::D3d11(..) => None,
+            // 10-bit planes hold MSB-packed codes, PQ or SDR.
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
-            Lane::Pyro(_) => None,
+            Lane::Pyro(f) => Some(DirectLast {
+                src: DirectSrc::Pyro,
+                uv_scale: [1.0, 1.0],
+                color: f.color,
+                depth: if f.ten_bit { 10 } else { 8 },
+                msb_packed: f.ten_bit,
+            }),
         };
         let direct = match (last, source, placement) {
             (Some(l), Some((_, w, h)), Some(p))
@@ -671,10 +680,10 @@ impl Presenter {
                         };
                         // 10-bit planes hold MSB-packed codes, PQ or SDR.
                         let (depth, msb_packed) = if f.ten_bit { (10, true) } else { (8, false) };
-                        let target = CscTarget::Video {
+                        let target = direct_target.unwrap_or(CscTarget::Video {
                             framebuffer: v.framebuffer,
                             extent,
-                        };
+                        });
                         self.record_csc(true, target, [1.0, 1.0], f.color, depth, msb_packed);
                     }
                 }
@@ -805,6 +814,18 @@ impl Presenter {
                                 );
                             }
                             DirectSrc::Cpu => {
+                                self.record_csc(
+                                    true,
+                                    target,
+                                    l.uv_scale,
+                                    l.color,
+                                    l.depth,
+                                    l.msb_packed,
+                                );
+                            }
+                            // Planes stay in GENERAL; the held frame keeps them.
+                            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+                            DirectSrc::Pyro => {
                                 self.record_csc(
                                     true,
                                     target,
@@ -1098,6 +1119,11 @@ impl Presenter {
             };
             self.last_submit_us = submit_started.elapsed().as_micros() as u32;
             submitted?;
+            // In the queue: the decode lane's next submit may follow.
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            if let Lane::Pyro(f) = &lane {
+                self.queue_lock.end_present_turn(f.turn);
+            }
             self.submitted = true;
             self.acquired = None;
             // A real frame from any other lane ends the D3D11 picture; `Redraw` keeps it.
@@ -1119,6 +1145,8 @@ impl Presenter {
                         f.guard.mark_presented();
                         Some(Retired::NativeVk(f))
                     }
+                    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+                    Lane::Pyro(f) => Some(Retired::Pyro(f)),
                     _ => None,
                 };
             }

@@ -8,12 +8,20 @@ use pw::spa;
 /// gets its first (Mutter's first paint follows a request only once a cycle has run).
 pub(super) const HEARTBEAT: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// The least spacing between two paints: one wire interval. The multiplier is undone —
-/// a driven monitor never ticks on its own, so a multiplied refresh only inflates the
-/// mode its clients see.
-pub(super) fn wire_interval(preferred: Option<(u32, u32, u32)>) -> std::time::Duration {
-    let hz = preferred.map(|(_, _, hz)| hz).unwrap_or(60).max(1);
-    let hz = (hz / pf_host_config::config().vdisplay_hz_mult.max(1)).max(1);
+/// The least spacing between two paints: one wire interval, at `stream_hz` when the host
+/// named it. Otherwise the configured multiplier is undone from the output's refresh — a
+/// driven monitor never ticks on its own, so a multiplied refresh only inflates the mode
+/// its clients see.
+pub(super) fn wire_interval(
+    preferred: Option<(u32, u32, u32)>,
+    stream_hz: u32,
+) -> std::time::Duration {
+    let hz = if stream_hz > 0 {
+        stream_hz
+    } else {
+        let hz = preferred.map(|(_, _, hz)| hz).unwrap_or(60).max(1);
+        (hz / pf_host_config::config().vdisplay_hz_mult.max(1)).max(1)
+    };
     std::time::Duration::from_nanos(1_000_000_000 / u64::from(hz))
 }
 
