@@ -53,6 +53,11 @@ at a menu built from the same data (`overview.per_client_data`, `BIsPerClientDat
 tokens. Selecting a Steam client calls `SteamClient.Apps.SetStreamingClientForApp`, exactly as
 Steam's own item does.
 
+Steam renders the ▾ only while `per_client_data` holds a second client. Where a Punktfunk host has
+the title and the ▾ is missing, the plugin adds one: the main button's component in Steam's
+`StreamingSelector` classes. The Play button is re-dressed only with a ▾ on the page, because the
+menu's **This device** row is the way back.
+
 Every attempt logs where it got to in `window.__punktfunkDiag` (CEF console lines start with
 `punktfunk:`); `localStorage["punktfunk:diagVerbose"] = "1"` traces every step.
 

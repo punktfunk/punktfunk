@@ -1081,6 +1081,14 @@ public final class LibraryArtLoader: LibraryArtSource, @unchecked Sendable {
         return fetched
     }
 
+    /// The poster the disk cache or the URL itself already holds. Never the network: a
+    /// powered-off host costs a full request timeout per poster it is asked for.
+    public func cached(for url: URL) async -> Data? {
+        if url.scheme?.lowercased() == "data" { return try? Self.inlineBytes(url) }
+        let key = Self.cacheKey(for: url, hostAddress: address, hostPort: port, pin: hostFingerprint)
+        return await cache?.data(forKey: key)
+    }
+
     /// The bytes of a base64 `data:` URL — art a plugin inlined rather than linked. Base64 is the
     /// only form the kit emits; anything else, or a body over the transport ceiling, is refused.
     static func inlineBytes(_ url: URL) throws -> Data {
