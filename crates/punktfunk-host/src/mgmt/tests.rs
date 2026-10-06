@@ -2700,8 +2700,9 @@ async fn display_settings_surface() {
         "EDID lock is the AMD driver's connector emulation, which exists only on Windows"
     );
     assert!(
-        !enforced.contains(&"capture_monitor") || cfg!(target_os = "linux"),
-        "pinning a real monitor needs the Linux MIRROR backend"
+        !enforced.contains(&"capture_monitor")
+            || cfg!(any(target_os = "linux", target_os = "windows")),
+        "pinning a real monitor needs a mirror backend"
     );
     assert!(
         !enforced.contains(&"game_session") || cfg!(target_os = "linux"),

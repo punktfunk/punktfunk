@@ -40,6 +40,33 @@ final class ClientLogTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0.contains("debug-only") })
     }
 
+    /// A run's file is the next run's `previous`, marked under its header, and stays under its
+    /// cap with the newest lines kept.
+    func testFileKeepsThePreviousRunAndTrims() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("client-log-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let first = ClientLogFile(directory: dir, maxBytes: 4096, header: "h1")
+        for i in 0..<1000 { first.append("line \(i)") }
+        first.flush()
+        let size = try FileManager.default.attributesOfItem(atPath: first.current.path)[.size] as? Int
+        XCTAssertLessThanOrEqual(try XCTUnwrap(size), 4096)
+        let text = try String(contentsOf: first.current, encoding: .utf8)
+        XCTAssertTrue(text.hasPrefix("h1\n… older lines trimmed"), text)
+        XCTAssertTrue(text.hasSuffix("\nline 999\n"))
+        XCTAssertFalse(text.contains("\nline 0\n"))
+        XCTAssertNil(first.previousRun())
+
+        let second = ClientLogFile(directory: dir, maxBytes: 4096, header: "h2")
+        let previous = try XCTUnwrap(second.previousRun())
+        XCTAssertTrue(previous.hasPrefix("h1\n… the app's previous run"), previous)
+        XCTAssertTrue(previous.hasSuffix("\nline 999\n"))
+        XCTAssertEqual(try String(contentsOf: second.current, encoding: .utf8), "h2\n")
+        second.dropPrevious()
+        XCTAssertNil(second.previousRun())
+    }
+
     func testHeaderNamesTheAppAndPlatform() {
         let header = ClientLogRing.header()
         XCTAssertTrue(header.hasPrefix("punktfunk-apple "))
