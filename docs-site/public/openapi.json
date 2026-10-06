@@ -129,7 +129,7 @@
             }
           },
           "501": {
-            "description": "This host platform has no executor for it (macOS host; `display.next` off Linux)",
+            "description": "This host platform has no executor for it (macOS host)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13257,7 +13257,7 @@
           },
           "pin_supported": {
             "type": "boolean",
-            "description": "True when this build can stream a chosen physical head.\n\nEnumeration and capture are separate. Off Linux, heads are listed but there is no\nmirror backend (`vdisplay::open` has no Windows arm; `pf-capture` only has\n`open_idd_push`). The console treats `false` as a read-only picker."
+            "description": "True when this build can stream a chosen physical head: Linux and Windows.\n\nEnumeration and capture are separate, so a host can list heads it cannot stream. The\nconsole treats `false` as a read-only picker."
           },
           "pinned": {
             "type": [

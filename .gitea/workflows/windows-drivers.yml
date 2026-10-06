@@ -30,6 +30,7 @@ on:
       # The driver hosts the encoder backends, so a change to them is a driver change.
       - 'crates/pf-encode-core/**'
       - 'crates/pf-encode-win/**'
+      - 'crates/pf-encode-session/**'
       # …and the crates those backends compile against: pf-frame owns the frame vocabulary
       # their signatures take, pf-zerocopy and pf-dmabuf sit under it, and the two -sys crates are the
       # QSV and PyroWave features. Unlisted, a change to any of them reached main with no
@@ -51,6 +52,7 @@ on:
       # The driver hosts the encoder backends, so a change to them is a driver change.
       - 'crates/pf-encode-core/**'
       - 'crates/pf-encode-win/**'
+      - 'crates/pf-encode-session/**'
       # …and the crates those backends compile against: pf-frame owns the frame vocabulary
       # their signatures take, pf-zerocopy and pf-dmabuf sit under it, and the two -sys crates are the
       # QSV and PyroWave features. Unlisted, a change to any of them reached main with no

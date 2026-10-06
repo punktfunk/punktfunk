@@ -18,25 +18,11 @@ use pf_driver_proto::cursor::{CursorShm, ShapeRgba};
 
 use crate::encode::pool::Pool;
 
-/// Straight-alpha RGBA at its frame-relative top-left. `serial` is the OS shape id.
-#[derive(Clone)]
-pub struct CursorImage {
-    pub x: i32,
-    pub y: i32,
-    pub w: u32,
-    pub h: u32,
-    pub hot_x: u32,
-    pub hot_y: u32,
-    pub rgba: Arc<Vec<u8>>,
-    pub serial: u32,
-    pub visible: bool,
-}
+pub use pf_encode_session::targets::CursorImage;
 
-impl CursorImage {
-    /// What a viewer sees of this pointer: where it is, which shape, whether at all.
-    fn seen(&self) -> (i32, i32, u32, bool) {
-        (self.x, self.y, self.serial, self.visible)
-    }
+/// What a viewer sees of this pointer: where it is, which shape, whether at all.
+fn seen(image: &CursorImage) -> (i32, i32, u32, bool) {
+    (image.x, image.y, image.serial, image.visible)
 }
 
 /// See the module docs. The worker and the pool hold clones; neither pins the monitor.
@@ -159,7 +145,7 @@ impl CursorCell {
         img.visible = visible;
         let changed = {
             let mut slot = crate::registry::lock(&self.image);
-            let changed = slot.as_ref().is_none_or(|old| old.seen() != img.seen());
+            let changed = slot.as_ref().is_none_or(|old| seen(old) != seen(img));
             *slot = Some(img.clone());
             changed
         };

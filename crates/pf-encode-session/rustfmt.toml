@@ -1,0 +1,3 @@
+# This crate's files came out of the driver workspace, which formats under the 2024 style
+# edition. Keeping that here keeps the move a move; the root pin would reformat every line.
+style_edition = "2024"
