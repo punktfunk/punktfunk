@@ -125,6 +125,7 @@ pub fn run(opts: Options) -> Result<()> {
                     capture: crate::session_plan::CaptureBackend::resolve(),
                     kwin: compositor == crate::vdisplay::Compositor::Kwin,
                     gamescope: compositor == crate::vdisplay::Compositor::Gamescope,
+                    stream_hz: opts.fps,
                 },
             )
             .context("capture virtual output")?

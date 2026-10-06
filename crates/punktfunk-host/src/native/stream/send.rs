@@ -284,16 +284,22 @@ pub(super) struct SendStats {
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
 }
 
-/// Pace rate for one frame, bits/s: the stream rate times the factor, or the
-/// link rate the client's ramp proved when that is higher. `factor` 0 keeps
-/// the deadline-only spread whatever the link.
+/// Pace rate for one frame, bits/s: the stream rate times the factor. A stream paced
+/// against the link takes the rate the client's ramp proved instead, whether that is
+/// above the factor or below it, once the stream fits in 70 % of it — the share of a
+/// measured wall the ramp licenses. Past the proof a frame queues at the slowest port
+/// on the path: a 1 MB PyroWave frame at 3× its rate overflows a 2.5 GbE client port
+/// behind a 10 GbE host. `factor` 0 keeps the deadline-only spread whatever the link.
 fn pace_rate_bps(bitrate_kbps: u32, factor: f64, link_kbps: Option<u32>) -> u64 {
     if factor == 0.0 {
         return 0;
     }
-    let by_stream = (bitrate_kbps as f64 * 1000.0 * factor) as u64;
+    let stream = u64::from(bitrate_kbps) * 1000;
     let by_link = link_kbps.map_or(0, |k| u64::from(k) * 1000);
-    by_stream.max(by_link)
+    if by_link > 0 && by_link * 7 >= stream * 10 {
+        return by_link;
+    }
+    (stream as f64 * factor) as u64
 }
 
 /// Whether this session may accept a mid-stream `Reconfigure`.
@@ -688,10 +694,18 @@ mod tests {
     }
 
     #[test]
-    fn the_link_rate_only_ever_raises_the_pace() {
+    fn a_pinned_stream_paces_at_the_proven_link_rate() {
         assert_eq!(pace_rate_bps(778_000, 3.0, None), 2_334_000_000);
+        // Above the factor: a 10 GbE path spends no time it does not need.
         assert_eq!(pace_rate_bps(778_000, 3.0, Some(8_900_000)), 8_900_000_000);
+        // Under the factor: a 2.5 GbE client behind a 10 GbE host is sent its own rate.
+        assert_eq!(
+            pace_rate_bps(1_427_000, 3.0, Some(2_450_000)),
+            2_450_000_000
+        );
+        // A proof the stream does not fit under is no pace: the factor stands.
         assert_eq!(pace_rate_bps(778_000, 3.0, Some(1_000_000)), 2_334_000_000);
+        assert_eq!(pace_rate_bps(778_000, 3.0, Some(0)), 2_334_000_000);
         assert_eq!(pace_rate_bps(778_000, 0.0, Some(8_900_000)), 0);
     }
 }
