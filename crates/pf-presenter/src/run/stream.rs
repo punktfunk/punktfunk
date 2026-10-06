@@ -390,9 +390,9 @@ pub(super) fn cycle_pad_mouse(c: &NativeClient, ring_opener: Option<u8>) {
 }
 
 impl Shell {
-    /// Drain the pump's session events. A browse stream ending or a codec fallback
-    /// replaces `stream` mid-drain, so each event re-borrows it and a terminal one stops
-    /// the drain. `Break` is a single-mode stream ending the loop.
+    /// Drain the pump's session events. A browse stream ending, a codec fallback or a
+    /// not-ready host replaces `stream` mid-drain, so each event re-borrows it and a
+    /// terminal one stops the drain. `Break` is a single-mode stream ending the loop.
     pub(super) fn drain_session_events(
         &mut self,
         stream: &mut Option<StreamState>,
@@ -463,6 +463,30 @@ impl Shell {
                     let phase =
                         SessionPhase::Ended(if st.canceled { None } else { reason.as_deref() });
                     self.end_stream(stream, phase);
+                    break;
+                }
+                // A woken host that answered before it could stream: dial it again. The
+                // window opens at the first refusal; past it the pump ends as usual.
+                SessionEvent::HostNotReady(said) => {
+                    tracing::info!(host_said = %said, "host not ready to stream — dialing again");
+                    self.release_stream(st);
+                    if st.canceled {
+                        self.end_stream(stream, SessionPhase::Ended(None));
+                        break;
+                    }
+                    let mut params = st.params.clone();
+                    params
+                        .settle_until
+                        .get_or_insert_with(|| Instant::now() + session::WAKE_SETTLE);
+                    let force_software = Arc::new(AtomicBool::new(false));
+                    params.force_software = force_software.clone();
+                    self.end_stream(
+                        stream,
+                        SessionPhase::Reconnecting(
+                            "The host isn't ready to stream yet — trying again.",
+                        ),
+                    );
+                    *stream = Some(self.start_stream(params, force_software));
                     break;
                 }
                 // The negotiated codec ran out of decode rungs: re-dial the same host
