@@ -707,10 +707,11 @@ public enum LibraryClient {
     /// its web console's Logs page next to its own log. Returns the stored bundle id (empty for a
     /// host that predates the id in the reply).
     ///
-    /// Why it exists: on an Apple TV (or a phone, for anyone who is not a developer) there is no
-    /// way to get the client's log off the device, so every fault report arrived with only the
-    /// host's half of the story. `hostFingerprint` is required, not optional: this is an outbound
-    /// write carrying the device's diagnostics, and it goes to the host the user paired with.
+    /// The app's previous run goes first as its own bundle, best effort, and is dropped once
+    /// stored: after a freeze or a kill it is the run the report is about.
+    ///
+    /// `hostFingerprint` is required, not optional: this is an outbound write carrying the
+    /// device's diagnostics, and it goes to the host the user paired with.
     public static func sendLogs(
         address: String,
         port: UInt16 = punktfunkDefaultMgmtPort,
@@ -719,6 +720,14 @@ public enum LibraryClient {
         hostFingerprint: Data
     ) async throws -> String {
         let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
+        if let file = ClientLogFile.shared, let previous = file.previousRun(),
+           let stored = try? await send(
+               path: "/api/v1/client-logs", address: address, port: port,
+               identity: identity, hostFingerprint: hostFingerprint,
+               body: (Data(previous.utf8), "text/plain; charset=utf-8")),
+           stored.status == 200 || stored.status == 201 {
+            file.dropPrevious()
+        }
         let body = Data(ClientLogRing.render(header: ClientLogRing.header()).utf8)
         let response = try await send(
             path: "/api/v1/client-logs", address: address, port: port,

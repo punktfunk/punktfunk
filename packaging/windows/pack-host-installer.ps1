@@ -71,6 +71,10 @@ $exe = Join-Path $TargetDir 'punktfunk-host.exe'
 if (-not (Test-Path $exe)) { throw "missing build artifact 'punktfunk-host.exe' in $TargetDir (did 'cargo build --release -p punktfunk-host --features nvenc' run?)" }
 $trayExe = Join-Path $TargetDir 'punktfunk-tray.exe'
 if (-not (Test-Path $trayExe)) { throw "missing build artifact 'punktfunk-tray.exe' in $TargetDir (did 'cargo build --release -p punktfunk-tray' run?)" }
+# The host starts this beside itself to capture a monitor it did not create (a pinned monitor, a
+# shared screen). Without it those sessions fail; everything else streams.
+$workerExe = Join-Path $TargetDir 'punktfunk-capture-worker.exe'
+if (-not (Test-Path $workerExe)) { throw "missing build artifact 'punktfunk-capture-worker.exe' in $TargetDir (did 'cargo build --release -p punktfunk-capture-worker' run?)" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 # The version goes into a copy: cargo re-links its own output on the next build.
 $stampedExe = Join-Path $OutDir 'punktfunk-host.exe'
@@ -220,13 +224,14 @@ function Sign-File([string]$Path) {
 # --- sign the inner exes before they're packed -------------------------------------------------
 Sign-File $exe
 Sign-File $trayExe
+Sign-File $workerExe
 
 # --- resolve + validate the installer's source files ------------------------------------------
 $repoRoot = (Resolve-Path (Join-Path $here '..\..')).Path
 $hostEnvSrc = Join-Path $repoRoot 'scripts\windows\host.env.example'
 $readmeSrc = Join-Path $here 'README.md'
 $brandIco = Join-Path $here 'branding\punktfunk.ico'
-foreach ($p in @($exe, $trayExe, $hostEnvSrc, $readmeSrc, $brandIco)) {
+foreach ($p in @($exe, $trayExe, $workerExe, $hostEnvSrc, $readmeSrc, $brandIco)) {
     if (-not (Test-Path -LiteralPath $p)) { throw "installer source file missing: $p" }
 }
 
@@ -384,7 +389,7 @@ $packer = if ($Arch -eq 'x64') { Join-Path $wizRel 'punktfunk-setup-pack.exe' } 
 $appStage = Join-Path $OutDir 'app'
 if (Test-Path $appStage) { Remove-Item $appStage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $appStage | Out-Null
-Copy-Item $exe, $trayExe, $hostEnvSrc -Destination $appStage -Force
+Copy-Item $exe, $trayExe, $workerExe, $hostEnvSrc -Destination $appStage -Force
 Copy-Item $readmeSrc -Destination (Join-Path $appStage 'README.txt') -Force
 Copy-Item $brandIco -Destination $appStage -Force
 Copy-Item $licStage -Destination (Join-Path $appStage 'licenses') -Recurse -Force

@@ -1542,11 +1542,7 @@ pub(crate) async fn run_admitted(
             .configured_effective()
             .is_some_and(|e| e.identity == crate::vdisplay::policy::Identity::PerClientMode);
         // Pin at bring-up; a console change mid-session must not change this session's answer.
-        // Linux-only: `vdisplay::open` only routes to the mirror there.
-        #[cfg(target_os = "linux")]
-        let mirrored = crate::vdisplay::capture_monitor().is_some();
-        #[cfg(not(target_os = "linux"))]
-        let mirrored = false;
+        let mirrored = crate::session_plan::mirrored();
         reconfig_allowed(compositor, per_client_mode_identity, mirrored || join_live)
     };
     // `Copy` so the control task's `async move` and SessionContext both keep it.
