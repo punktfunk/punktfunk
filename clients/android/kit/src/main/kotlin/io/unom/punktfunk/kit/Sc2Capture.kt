@@ -51,7 +51,13 @@ class Sc2Capture(
      *  link" — acting on that tore the slot down 255 ms after creation (first on-glass run). */
     private var dongleLink = false
 
-    private var pad: GamepadRouter.ExternalPad? = null
+    @Volatile private var pad: GamepadRouter.ExternalPad? = null
+
+    /** Set while [claim] reads the pad's identity; reports until then are dropped. */
+    @Volatile private var claiming = false
+
+    /** Bumped by [releaseSlot]: a claim that finishes after it opens no slot. */
+    @Volatile private var epoch = 0
     private val rawBuf: ByteBuffer = ByteBuffer.allocateDirect(64)
 
     // Typed-mirror diff state (wire units).
@@ -197,20 +203,66 @@ class Sc2Capture(
             mirrorUi()
             return
         }
-        val pref = if (dongleLink) {
-            Gamepad.PREF_STEAMCONTROLLER2_PUCK
-        } else {
-            Gamepad.PREF_STEAMCONTROLLER2
-        }
-        val p = pad ?: router.openExternal(pref)?.also {
-            pad = it
-            Log.i(
-                TAG,
-                "SC2 captured → wire pad ${it.index} (${if (dongleLink) "Puck" else "direct"} passthrough)",
-            )
-        } ?: return // all 16 wire indices taken — drop until one frees
+        val p = pad ?: return claim(router)
         forwardRaw(report, len)
         mirrorTyped(p)
+    }
+
+    /**
+     * Read the pad's identity, then open its wire slot and send the identity: the host builds the
+     * virtual pad from it. On its own thread — a query through a Puck blocks up to a second, and a
+     * GATT read must not wait inside a GATT callback. A full slot table drops reports until one frees.
+     */
+    private fun claim(router: GamepadRouter) {
+        if (claiming) return
+        claiming = true
+        val (puck, link, started) = Triple(dongleLink, activeLink, epoch)
+        Thread({
+            val identity = runCatching { readIdentity(link) }.getOrNull()
+            synchronized(this) {
+                if (started == epoch) {
+                    val pref = if (puck) Gamepad.PREF_STEAMCONTROLLER2_PUCK else Gamepad.PREF_STEAMCONTROLLER2
+                    pad = router.openExternal(pref)?.also { p ->
+                        identity?.let { (serial, replies) -> p.identity(serial, replies) }
+                        val via = if (puck) "Puck" else "direct"
+                        Log.i(TAG, "SC2 captured → wire pad ${p.index} ($via passthrough, serial ${identity?.first})")
+                    }
+                }
+                claiming = false
+            }
+        }, "pf-sc2-claim").start()
+    }
+
+    /**
+     * The serial and packed replies the host mirrors: the USB serial over a cable or Puck, the
+     * engraved serial (`0xAE` attribute 1) over Bluetooth. Null when the pad answered nothing.
+     */
+    private fun readIdentity(link: Int): Pair<String, ByteArray>? {
+        val packed = java.io.ByteArrayOutputStream()
+        var unitSerial = ""
+        var answered = 0
+        var asked = 0
+        while (true) {
+            val request = NativeBridge.nativeSc2IdentityRequest(dongleLink, asked) ?: break
+            asked++
+            val reply = when (link) {
+                LINK_USB -> usb.exchange(request)
+                LINK_BLE -> ble.exchange(request)
+                else -> null
+            } ?: continue
+            for (part in arrayOf(request, reply)) {
+                val n = part.size.coerceAtMost(64)
+                packed.write(n)
+                packed.write(part, 0, n)
+            }
+            answered++
+            if (request.contentEquals(SERIAL_QUERY)) {
+                unitSerial = reply.drop(4).takeWhile { it != 0.toByte() }.toByteArray().decodeToString()
+            }
+        }
+        val serial = (if (link == LINK_USB) usb.serialNumber() else null) ?: unitSerial
+        Log.i(TAG, "SC2 identity $serial, $answered/$asked replies")
+        return if (answered == 0 && serial.isEmpty()) null else serial to packed.toByteArray()
     }
 
     private fun forwardRaw(report: ByteArray, len: Int) {
@@ -292,7 +344,8 @@ class Sc2Capture(
         onActiveChanged?.invoke(false)
     }
 
-    private fun releaseSlot() {
+    private fun releaseSlot() = synchronized(this) {
+        epoch++
         pad?.close()
         pad = null
         mirror = TypedMirror()
@@ -303,6 +356,9 @@ class Sc2Capture(
         const val LINK_NONE = 0
         const val LINK_USB = 1
         const val LINK_BLE = 2
+
+        /** The `0xAE` query for attribute 1, the engraved serial. */
+        val SERIAL_QUERY = byteArrayOf(0x01, 0xAE.toByte(), 0x15, 0x01)
 
         /** The C ABI's `HID_RAW_OUTPUT` — the kind every output report goes out as. */
         const val HID_RAW_OUTPUT = 0

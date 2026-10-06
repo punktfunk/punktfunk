@@ -7,7 +7,7 @@
 //! signed 120-unit delta, +=up/right; keys are Windows VK (mapped from KEYCODE_* on the Kotlin side).
 
 use jni::errors::LogErrorAndDefault;
-use jni::objects::{JByteBuffer, JFloatArray, JObject, JString};
+use jni::objects::{JByteArray, JByteBuffer, JFloatArray, JObject, JString};
 use jni::sys::{jboolean, jint, jlong};
 use jni::EnvUnowned;
 use punktfunk_core::input::scroll::ScrollEvent;
@@ -606,6 +606,57 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetSc2Gate(
             h.client.set_sc2_gate((pad as u32 & 0xF) as u8, gate);
         }
     })
+}
+
+/// `NativeBridge.nativeSc2IdentityRequest(puck, index): ByteArray?` — the `index`th feature
+/// query a Steam Controller 2's identity is read with; null past the last.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSc2IdentityRequest<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    puck: jboolean,
+    index: jint,
+) -> JByteArray<'local> {
+    env.with_env(|env| -> jni::errors::Result<JByteArray<'local>> {
+        let nth = usize::try_from(index).ok();
+        match nth.and_then(|i| punktfunk_core::client::sc2::identity_requests(puck).nth(i)) {
+            Some(request) => env.byte_array_from_slice(request),
+            None => Ok(JByteArray::default()),
+        }
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// `NativeBridge.nativeSendPadIdentity(handle, pad, serial, replies)` — a captured Steam
+/// Controller 2's identity for wire pad `pad`: its USB serial (empty when unknown) and its replies
+/// to the identity queries, packed `[len][request][len][reply]…`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadIdentity(
+    mut env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    pad: jint,
+    serial: JString,
+    replies: JByteArray,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let Some(h) = SESSIONS.get(handle) else {
+            return Ok(());
+        };
+        let serial = serial.try_to_string(env).unwrap_or_default();
+        let replies = env.convert_byte_array(&replies)?;
+        let pad = (pad as u32 & 0xF) as u8;
+        let id = punktfunk_core::quic::PadIdentity {
+            pad,
+            serial,
+            replies,
+        };
+        if let Err(e) = h.client.send_pad_identity(id) {
+            log::warn!("pad identity not sent: {e:#}");
+        }
+        Ok(())
+    })
+    .resolve::<LogErrorAndDefault>()
 }
 
 /// `NativeBridge.nativeSendPadTouch(handle, pad, finger, active, x, y)` — one touchpad contact

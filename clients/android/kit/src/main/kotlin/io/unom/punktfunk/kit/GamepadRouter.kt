@@ -734,6 +734,11 @@ class GamepadRouter(
             if (slot != null && forwarding && !ringOpen) NativeBridge.nativeSendGamepadAxis(handle, id, value, index)
         }
 
+        /** The pad's identity, for the host's virtual pad ([NativeBridge.nativeSendPadIdentity]). */
+        fun identity(serial: String, replies: ByteArray) {
+            if (slot != null && forwarding) NativeBridge.nativeSendPadIdentity(handle, index, serial, replies)
+        }
+
         /** One raw HID report, forwarded verbatim for the host's as-is virtual pad. */
         fun hidReport(buf: java.nio.ByteBuffer, len: Int) {
             if (slot != null && forwarding) NativeBridge.nativeSendPadHidReport(handle, index, buf, len)

@@ -498,6 +498,25 @@ class HidUsbLink(
         }
     }
 
+    /** The device's USB serial; null before [start] or when the device withholds it. */
+    fun serialNumber(): String? = runCatching { device?.serialNumber }.getOrNull()
+
+    /**
+     * One feature query: SET [request] zero-padded to [len], then GET its reply, retried for up
+     * to a second — a Puck holds the GET while it relays the query over the radio. Blocks the
+     * caller; never on the report path.
+     */
+    fun exchange(request: ByteArray, len: Int = 64): ByteArray? {
+        if (request.isEmpty()) return null
+        val frame = request.copyOf(len)
+        if (!setReport(REPORT_TYPE_FEATURE, frame)) return null
+        repeat(50) {
+            getReport(REPORT_TYPE_FEATURE, frame[0].toInt() and 0xFF, len)?.let { return it }
+            Thread.sleep(20)
+        }
+        return null
+    }
+
     /**
      * Stop the read loop and the keep-alive, write [Config.releaseFeatures], then release the
      * interfaces. Idempotent; does not fire [onClosed].

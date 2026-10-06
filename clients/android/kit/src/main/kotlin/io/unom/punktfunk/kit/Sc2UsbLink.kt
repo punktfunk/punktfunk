@@ -63,6 +63,11 @@ class Sc2UsbLink(
     fun writeRaw(kind: Int, data: ByteArray) =
         link.writeRaw(kind, data, Sc2Device.outputCoalesceKey(data))
 
+    /** One feature query and its reply ([HidUsbLink.exchange]). Blocks up to a second. */
+    fun exchange(request: ByteArray): ByteArray? = link.exchange(request)
+
+    fun serialNumber(): String? = link.serialNumber()
+
     /** Restore lizard mode, stop the read loop, release the interfaces. Idempotent; fires no callback. */
     fun stop() = link.stop()
 }
