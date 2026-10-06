@@ -64,7 +64,6 @@ mod pad_uplink;
 use input::{input_thread, ClientInput};
 
 mod handshake;
-#[cfg(test)]
 pub(crate) use handshake::redirect;
 /// `PUNKTFUNK_WIRE_MTU`, the control-connection path-MTU watch, and the per-peer shard clamp.
 mod wire_mtu;
@@ -1534,6 +1533,43 @@ pub(crate) async fn run_admitted(
     };
     tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
     profiles.touch(&resolved.id);
+    // A seat profile plays on its seat's host: send the client there, or say why not.
+    {
+        use crate::seats::placement::{place, Asker, Placement};
+        let fp = session_fp_hex.clone();
+        let follows = first
+            .features
+            .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
+        let who = resolved.clone();
+        let placed = tokio::task::spawn_blocking(move || {
+            let joins = crate::vdisplay::policy::prefs()
+                .get()
+                .effective_for(fp.as_deref())
+                .mode_conflict
+                == crate::vdisplay::policy::ModeConflict::Join;
+            let asker = Asker {
+                fp: fp.as_deref(),
+                follows_redirects: follows,
+                joins,
+            };
+            place(&who, &asker)
+        })
+        .await
+        .context("placement task")?;
+        match placed {
+            Placement::Here => {}
+            Placement::Redirect(to) => {
+                tracing::info!(profile = %resolved.id, seat = %to.seat_name, port = to.port,
+                    "redirected to the profile's seat");
+                redirect(&conn, &mut send, &to).await?;
+                return Ok(Served::Session);
+            }
+            Placement::Refuse(reason) => {
+                close_rejected(&conn, reason).await;
+                anyhow::bail!("seat refused: {reason}");
+            }
+        }
+    }
     spawn_profile_watch(conn.clone(), resolved.id.clone());
     let profile_ref = crate::events::ProfileRef {
         id: resolved.id.clone(),

@@ -88,9 +88,32 @@ impl Client {
     /// Explicit config dir so pin-mismatch tests need no `PUNKTFUNK_CONFIG_DIR`
     /// (`unsafe` since edition 2024).
     pub fn connect_in(dir: &Path, global_timeout: Option<Duration>) -> Result<Client> {
-        let pin = load_pin(dir)?;
-        let token = load_token(dir)?;
         let port = pf_paths::published_mgmt_port_in(dir).unwrap_or(crate::mgmt::DEFAULT_PORT);
+        Self::build(load_pin(dir)?, load_token(dir)?, port, global_timeout)
+    }
+
+    /// A seat host's API on `port`: it presents the box's certificate, so `box_dir` holds the
+    /// pin; the token is the seat's own, in `seat_dir`.
+    pub fn seat(
+        box_dir: &Path,
+        seat_dir: &Path,
+        port: u16,
+        global_timeout: Option<Duration>,
+    ) -> Result<Client> {
+        Self::build(
+            load_pin(box_dir)?,
+            load_token(seat_dir)?,
+            port,
+            global_timeout,
+        )
+    }
+
+    fn build(
+        pin: [u8; 32],
+        token: String,
+        port: u16,
+        global_timeout: Option<Duration>,
+    ) -> Result<Client> {
         let observed = Arc::new(Mutex::new(None));
         Ok(Client {
             agent: agent(pin, observed.clone(), global_timeout),

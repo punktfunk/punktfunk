@@ -161,6 +161,7 @@ mod native_pairing;
     allow(dead_code, reason = "the handshake and the management routes read it")
 )]
 mod profiles;
+mod seats;
 // Live per-session pad tap the console's Controllers page streams.
 mod emulators;
 mod pad_feed;

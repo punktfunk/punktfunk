@@ -22,6 +22,8 @@ libloading = "0.9"
 pf-update-check = { path = "../pf-update-check" }
 # Config-dir + owner-private file helpers (moved out of the gamestream junk drawer, plan §W6).
 pf-paths = { path = "../pf-paths" }
+# The seat supervisor's ledger and pipe frames: the service runs it, placement reads it.
+pf-seats = { path = "../pf-seats" }
 # Windows owner/DACL checks (planted secrets, admin-only staging dirs).
 pf-paths-win = { path = "../pf-paths-win" }
 # Process-wide host config global, extracted to a leaf crate (plan §W6).
@@ -244,8 +246,6 @@ ashpd = { version = "0.13", features = ["screencast", "remote_desktop", "setting
 # Verified unused before removal: zero `use`/path references across src/ + build.rs.
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# The seat supervisor the service runs beside the console host (windows/service/seats.rs).
-pf-seats = { path = "../pf-seats" }
 # Windows host backends. `windows` covers the Win32/CCD APIs the SudoVDA virtual-display backend
 # drives (SetupAPI device enumeration, DeviceIoControl IOCTLs, QueryDisplayConfig name resolution);
 # capture/encode/input/audio backends extend the feature set as they land.

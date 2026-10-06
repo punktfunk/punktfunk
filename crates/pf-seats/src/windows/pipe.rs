@@ -4,7 +4,8 @@
 //! ([`crate::ipc::answer`]) and closes. The first instance carries
 //! `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a process that created the name first makes
 //! [`PipeServer::bind`] fail instead of answering clients in the supervisor's place. The pipe
-//! mode refuses remote clients. [`wake`] ends a wait so the loop can see its stop flag.
+//! mode refuses remote clients. [`wake`] ends a wait so the loop can see its stop flag;
+//! [`request`] is the client the console host calls.
 
 use super::util::{io_error, wide, WinResult};
 use crate::backend::PlatformBackend;
@@ -114,6 +115,45 @@ pub fn wake(name: &str) {
         .read(true)
         .write(true)
         .open(name);
+}
+
+/// Sends one request on `name` and reads its answer, the console host's side of the pipe. The
+/// server has one instance waiting at a time, so a connect that lands between two retries for
+/// up to two seconds.
+pub fn request(
+    name: &str,
+    command: crate::ipc::Command,
+) -> Result<crate::ipc::CommandResult, crate::ipc::ApiError> {
+    use crate::ipc::{ApiError, ErrorCode, Request, Response};
+    let transport = |what: &str, error: &dyn std::fmt::Display| {
+        ApiError::new(ErrorCode::Transport, format!("{what}: {error}"))
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut file = loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+        {
+            Ok(file) => break file,
+            // ERROR_FILE_NOT_FOUND between instances, ERROR_PIPE_BUSY while one is taken.
+            Err(error)
+                if matches!(error.raw_os_error(), Some(2 | 231))
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(transport("open the seats pipe", &error)),
+        }
+    };
+    crate::ipc::write_json_frame(&mut file, &Request::new(command))
+        .map_err(|error| transport("write the seats request", &error))?;
+    match crate::ipc::read_json_frame::<_, Response>(&mut file)
+        .map_err(|error| transport("read the seats answer", &error))?
+    {
+        Response::Success { result, .. } => Ok(result),
+        Response::Error { error, .. } => Err(error),
+    }
 }
 
 /// One counted connection; the count drops with it.

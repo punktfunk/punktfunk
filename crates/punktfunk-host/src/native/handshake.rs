@@ -336,7 +336,6 @@ const REDIRECT_LINGER: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Send the client to another host of this box instead of a `ServerHello`: the frame, then the
 /// client's close, then ours. Placement by profile is the caller.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn redirect(
     conn: &super::link::SessionLink,
     send: &mut super::link::CtlSend,
