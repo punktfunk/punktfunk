@@ -65,9 +65,11 @@ describe("game section", () => {
 				page: () => Effect.succeed(route),
 			});
 		const read = async (route: string) =>
-			((await (await page(route)(new Request(url("steam:1")))).json()) as {
-				page?: string;
-			}).page;
+			(
+				(await (await page(route)(new Request(url("steam:1")))).json()) as {
+					page?: string;
+				}
+			).page;
 		expect(await read("game.cm9tbS8x")).toBe("game.cm9tbS8x");
 		expect(await read("game/../../settings")).toBeUndefined();
 		expect(await read("https://example.com")).toBeUndefined();

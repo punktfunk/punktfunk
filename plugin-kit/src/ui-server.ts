@@ -157,7 +157,9 @@ export interface ServeUiGame<S extends Schema.Top> {
 
 /** One path segment the console's plugin route can carry: no `/`, nothing to escape. */
 const pageRoute = (page: string | undefined): string | undefined =>
-	page !== undefined && /^[A-Za-z0-9._~-]{1,200}$/.test(page) ? page : undefined;
+	page !== undefined && /^[A-Za-z0-9._~-]{1,200}$/.test(page)
+		? page
+		: undefined;
 
 /**
  * A library id the host accepts: `<store>:<external id>`, both halves non-empty, at most 1024
