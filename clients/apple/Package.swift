@@ -50,6 +50,9 @@ let package = Package(
                 // assets/launcher-icons masters by scripts/gen-launcher-icons.sh — per-mark
                 // provenance and licensing in that README). Loaded via LauncherIcon.swift.
                 .process("Resources/LauncherIcons.xcassets"),
+                // The Controller type quick action's pad outlines (scripts/gen-pad-marks.py, from
+                // the console's Kenney outlines). Loaded via PadType.swift.
+                .process("Resources/PadMarks.xcassets"),
             ],
             linkerSettings: [
                 // Rust staticlib system deps.

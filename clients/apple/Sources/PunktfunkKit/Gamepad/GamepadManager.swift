@@ -186,8 +186,9 @@ public final class GamepadManager: ObservableObject {
     }
 
     /// The user's controller-type choice AS CHOSEN (not resolved) for the session being dialed —
-    /// adopted by `resolveType` and read back by `declaredKind(for:)`. `.auto` = detect per pad.
-    public private(set) var typeSetting: PunktfunkConnection.GamepadType = .auto
+    /// adopted by `resolveType`, changed mid-stream by `GamepadCapture.setPadType`, and read back
+    /// by `declaredKind(for:)`. `.auto` = detect per pad.
+    public internal(set) var typeSetting: PunktfunkConnection.GamepadType = .auto
 
     /// The kind to DECLARE to the host for one forwarded controller (its `GamepadArrival`).
     /// An explicit setting wins for every pad — the handshake's session default alone does NOT
