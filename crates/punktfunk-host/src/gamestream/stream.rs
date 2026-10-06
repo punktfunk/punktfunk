@@ -871,7 +871,7 @@ fn gs_open_encoder(
     cursor_blend: bool,
     wire_seq_base: u32,
 ) -> Result<Box<dyn encode::Encoder>> {
-    if plan.capture == crate::session_plan::CaptureBackend::IddPush {
+    if plan.capture.encodes_remotely() {
         return crate::windows::idd::open_driver_encoder(
             plan,
             capturer,

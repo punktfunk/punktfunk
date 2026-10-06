@@ -564,8 +564,7 @@ mod plat {
         hdr: bool,
     ) -> Result<Option<Box<dyn Encoder>>> {
         let driver_encode = opts.source == Source::Virtual
-            && crate::session_plan::CaptureBackend::resolve()
-                == crate::session_plan::CaptureBackend::IddPush;
+            && crate::session_plan::CaptureBackend::resolve().encodes_remotely();
         if !driver_encode {
             return Ok(None);
         }
