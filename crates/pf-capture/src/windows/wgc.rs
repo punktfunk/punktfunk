@@ -46,6 +46,8 @@ const CTL_BOUND: Duration = Duration::from_secs(2);
 const EXIT_BOUND: Duration = Duration::from_millis(500);
 /// The largest picture a worker may report. Past it the reply is not a size.
 const MAX_SIDE: u32 = 16_384;
+/// A source with no new frame for this long reads as idle on the health surface.
+const IDLE_AFTER: Duration = Duration::from_secs(2);
 
 type Message = (proto::Frame, Vec<u8>);
 
@@ -435,6 +437,7 @@ pub fn open_wgc(
         seen_seq: 0,
         delivered: None,
         frames: 0,
+        last_fresh: Instant::now(),
         _keepalive: keepalive,
     }))
 }
@@ -455,6 +458,8 @@ struct WgcCapturer {
     /// The geometry last delivered; a new one is a delivery of its own.
     delivered: Option<(u32, u32)>,
     frames: u64,
+    /// When the worker's pool last took a frame, for the health surface.
+    last_fresh: Instant,
     _keepalive: Box<dyn Send>,
 }
 
@@ -496,6 +501,7 @@ impl WgcCapturer {
         self.seen_seq = seq;
         self.delivered = Some(geometry);
         self.frames += 1;
+        self.last_fresh = Instant::now();
         Ok(Some(CapturedFrame {
             provenance: pf_frame::Provenance::source(self.frames, 0),
             width: self.width,
@@ -547,6 +553,45 @@ impl Capturer for WgcCapturer {
 
     fn observe_encoder(&mut self, t: Option<pf_frame::health::EncoderTelemetry>) {
         self.encoder = t;
+    }
+
+    /// The operator surface's view. The capture delivers only what changes, so a quiet source
+    /// is `idle`, never a stall, and no recovery rung hangs off this. Under the secure desktop
+    /// the capture keeps showing the desktop without the prompt: that state is named.
+    fn health(&self) -> Option<crate::CaptureHealth> {
+        use pf_driver_proto::encode::au;
+        let enc = self.encoder.as_ref();
+        let source_gap = self.last_fresh.elapsed();
+        let class = if pf_win_display::secure_desktop() {
+            "secure_desktop"
+        } else if source_gap > IDLE_AFTER {
+            "idle"
+        } else {
+            "healthy"
+        };
+        Some(crate::CaptureHealth {
+            class,
+            stall_class: None,
+            source_gap,
+            evidence: None,
+            present_to_arrival: enc.and_then(|e| e.present_to_arrival),
+            late_frames: false,
+            encoder_state: enc.map(|e| match e.state {
+                au::ENCODER_CLOSED => "closed",
+                au::ENCODER_OPEN => "open",
+                au::ENCODER_ENCODING => "encoding",
+                _ => "wedged",
+            }),
+            backend_opened: enc.map(|e| e.backend),
+            detached: 0,
+            published_total: enc.map_or(0, |e| e.published_total),
+            dropped_total: enc.map_or(0, |e| e.dropped_total),
+            source_seq: enc.map_or(0, |e| e.source_seq),
+            current_stage: None,
+            last_episode: None,
+            episodes_suppressed: 0,
+            cooldown_remaining: None,
+        })
     }
 
     fn worker_endpoint(&self) -> Option<WorkerEndpoint> {
