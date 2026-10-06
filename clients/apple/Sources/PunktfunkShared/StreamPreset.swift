@@ -505,10 +505,12 @@ public struct PresetCatalog: Codable, Equatable, Sendable {
         presets.first { $0.id == id }
     }
 
-    /// The binding a host resolves to, dropping a dangling id: a preset deleted out from under a
-    /// host is "no preset" (today's behaviour), never an error and never a blocked connect.
-    public func binding(for host: StoredHost) -> StreamPreset? {
-        host.presetID.flatMap { preset(id: $0) }
+    /// The binding a connect resolves to: the launched title's own, else the host's default.
+    /// A dangling id is skipped, never an error: a deleted title binding falls through to the
+    /// host's default, and a deleted default is "no preset".
+    public func binding(for host: StoredHost, launch: String? = nil) -> StreamPreset? {
+        launch.flatMap { host.gamePresets?[$0] }.flatMap { preset(id: $0) }
+            ?? host.presetID.flatMap { preset(id: $0) }
     }
 
     /// This host's pinned presets, in card order, with duplicates and dangling ids dropped —

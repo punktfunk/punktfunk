@@ -117,8 +117,7 @@ public enum ConsoleJSON {
             "pin": NSNull(),
             "bound_preset": bound.map(chip) ?? NSNull(),
             "running": running[fp] ?? "",
-            // This client binds no preset per title yet, so the bind screen's marks are empty.
-            "game_presets": [String: String](),
+            "game_presets": host.gamePresets ?? [:],
         ]
     }
 
