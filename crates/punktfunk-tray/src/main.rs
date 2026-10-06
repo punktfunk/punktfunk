@@ -6,8 +6,8 @@
 //!
 //! Process state is SCM / the systemd user unit first; a listener on the mgmt
 //! port cannot make a stopped service look running. Streaming detail is
-//! loopback `GET /api/v1/local/summary`. `--mgmt-port` pins the port; otherwise
-//! it follows `<config_dir>/mgmt-endpoint`, then 47990.
+//! loopback `GET /api/v1/local/summary` on `<config_dir>/tray-token`. `--mgmt-port`
+//! pins the port; otherwise it follows `<config_dir>/mgmt-endpoint`, then 47990.
 //!
 //! Poller: `status.rs`. Linux SNI: `linux.rs`. Windows notify-icon: `win.rs`.
 //!

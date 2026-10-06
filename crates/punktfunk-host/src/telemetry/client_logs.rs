@@ -88,10 +88,9 @@ fn bundle_id(unix_ms: u64, fp_hex: &str, name: &str) -> String {
 }
 
 impl ClientLogStore {
-    /// `create_secret_dir`, not `create_private_dir`: on Windows the latter grants
-    /// `BUILTIN\Users` an inheritable read, and every stored bundle would inherit it.
+    /// Owner-only: a stored bundle is another person's log.
     pub fn new(dir: PathBuf) -> std::sync::Arc<Self> {
-        if let Err(e) = pf_paths::create_secret_dir(&dir) {
+        if let Err(e) = pf_paths::create_private_dir(&dir) {
             tracing::warn!(dir = %dir.display(), error = %e, "client-logs dir not created");
         }
         std::sync::Arc::new(ClientLogStore { dir })

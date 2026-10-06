@@ -108,15 +108,15 @@ pub fn publish_endpoint(bind: SocketAddr) {
 /// IO half of [`publish_endpoint`]. Directory is injected so tests skip
 /// `PUNKTFUNK_CONFIG_DIR`.
 ///
-/// Not `pf_paths::write_secret_file`: the port is already in mDNS TXT, and
-/// a SYSTEM/Administrators DACL would hide it from a user-session console.
-/// The 0700 config dir is the access control.
+/// Readable by every local account: the port is already in mDNS TXT, and the
+/// per-user tray and runner follow it. The config dir itself admits only
+/// SYSTEM/Administrators on Windows, so the file carries its own ACE.
 fn write_endpoint(dir: &std::path::Path, port: u16) -> std::io::Result<std::path::PathBuf> {
     let path = dir.join(ENDPOINT_FILE);
     // Replace, not write: systemd may source this mid-rewrite. A torn read
     // yields empty `PUNKTFUNK_MGMT_URL`; a set-but-blank var is not the
     // built-in default.
-    pf_paths::replace_file(&path, endpoint_line(port).as_bytes())?;
+    pf_paths::replace_users_readable_file(&path, endpoint_line(port).as_bytes())?;
     Ok(path)
 }
 
@@ -136,6 +136,9 @@ pub struct Options {
     /// Per-plugin bearers by plugin id — the same route set, plus an identity the handlers use
     /// to refuse a plugin writing another plugin's registration.
     pub plugin_tokens: std::collections::BTreeMap<String, String>,
+    /// The tray's bearer for `/local/summary` (`mgmt_token::mint_tray_token`). `None` serves
+    /// no summary: a seat host, or a token file that did not land.
+    pub tray_token: Option<String>,
 }
 
 impl Default for Options {
@@ -145,6 +148,7 @@ impl Default for Options {
             token: None,
             plugin_token: None,
             plugin_tokens: std::collections::BTreeMap::new(),
+            tray_token: None,
         }
     }
 }
@@ -167,6 +171,8 @@ pub(crate) struct MgmtState {
     /// Per-plugin tokens by id ([`Options::plugin_tokens`]). A match also stamps
     /// [`auth::PluginIdentity`], which is what the id-scoped routes check.
     pub(crate) plugin_tokens: PluginTokens,
+    /// [`Options::tray_token`]: `/local/summary` and nothing else.
+    tray_token: Option<String>,
     /// Folder grants, denials, and pending requests — the `/plugin-access` routes' store.
     access: Arc<crate::plugins::access::AccessStore>,
     /// Where `plugin-run/` lives: auth re-reads the token file there on a miss.
@@ -238,6 +244,7 @@ pub async fn run(
         Some(token),
         opts.plugin_token.filter(|t| !t.trim().is_empty()),
         Arc::new(RwLock::new(opts.plugin_tokens)),
+        opts.tray_token,
         opts.bind.port(),
         native,
         stats,
@@ -285,6 +292,7 @@ fn app(
     token: Option<String>,
     plugin_token: Option<String>,
     plugin_tokens: PluginTokens,
+    tray_token: Option<String>,
     port: u16,
     native: Option<Arc<crate::native_pairing::NativePairing>>,
     stats: Arc<crate::stats_recorder::StatsRecorder>,
@@ -307,6 +315,7 @@ fn app(
         token,
         plugin_token,
         plugin_tokens,
+        tray_token,
         port,
         device_auth: device_auth::DeviceAuth::default(),
         identity_fingerprint,
