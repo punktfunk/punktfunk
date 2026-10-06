@@ -16,6 +16,7 @@ use punktfunk_core::client::{ActuatorQuirks, NativeClient};
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::{gamepad as wire, InputEvent, InputKind};
 use punktfunk_core::quic::{HidOutput, RichInput};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -234,6 +235,8 @@ pub enum SelectChord {
 pub struct GamepadService {
     pads: Arc<Mutex<Vec<PadInfo>>>,
     active: Arc<Mutex<Option<PadInfo>>>,
+    /// The last [`Self::set_kind_override`], as [`GamepadPref::to_u8`].
+    kind: Arc<AtomicU8>,
     ctl: Sender<Ctl>,
     escape_rx: async_channel::Receiver<()>,
     disconnect_rx: async_channel::Receiver<()>,
@@ -274,6 +277,7 @@ impl GamepadService {
         GamepadService {
             pads,
             active,
+            kind: Arc::default(),
             ctl,
             escape_rx,
             disconnect_rx,
@@ -311,6 +315,7 @@ impl GamepadService {
             GamepadService {
                 pads,
                 active,
+                kind: Arc::default(),
                 ctl,
                 escape_rx,
                 disconnect_rx,
@@ -381,11 +386,17 @@ impl GamepadService {
         let _ = self.ctl.send(Ctl::Pin(key));
     }
 
-    /// Explicit controller-type for the session about to start (`Auto` = per pad).
-    /// Call before [`Self::attach`]: the host honors [`InputKind::GamepadArrival`] over
-    /// the Hello default and does not hot-swap a device that already exists.
+    /// Explicit controller-type (`Auto` = per pad). The host builds a pad from its
+    /// [`InputKind::GamepadArrival`] and never swaps a built one, so a change mid-session
+    /// re-plugs each forwarded pad whose declared kind moves.
     pub fn set_kind_override(&self, pref: GamepadPref) {
+        self.kind.store(pref.to_u8(), Ordering::Relaxed);
         let _ = self.ctl.send(Ctl::KindOverride(pref));
+    }
+
+    /// The controller-type [`Self::set_kind_override`] last asked for.
+    pub fn kind_override(&self) -> GamepadPref {
+        GamepadPref::from_u8(self.kind.load(Ordering::Relaxed))
     }
 
     /// Off holds no slot: no arrival and the hidraw node stays free for a passthrough
@@ -1142,6 +1153,27 @@ impl Worker {
         }
     }
 
+    /// A controller-type change. In a session, each forwarded pad whose declared kind moves
+    /// is closed and reopened, a re-plug the host builds the new kind from.
+    fn set_kind_override(&mut self, pref: GamepadPref) {
+        self.kind_override = pref;
+        if self.attached.is_none() {
+            return;
+        }
+        let moved: Vec<u32> = self
+            .slots
+            .iter()
+            .filter(|s| declared_kind(pref, s.pref) != s.declared)
+            .map(|s| s.id)
+            .collect();
+        for id in moved {
+            if let Some(i) = self.slots.iter().position(|s| s.id == id) {
+                self.close_slot_at(i);
+                self.open_slot(id);
+            }
+        }
+    }
+
     /// Close unwanted slots (flush first) and open newly-wanted pads into the lowest free
     /// index. A disconnect frees only its own index; others keep theirs.
     fn reconcile_slots(&mut self) {
@@ -1798,7 +1830,7 @@ impl Worker {
                     self.pinned = key;
                     self.refresh_active();
                 }
-                Ok(Ctl::KindOverride(pref)) => self.kind_override = pref,
+                Ok(Ctl::KindOverride(pref)) => self.set_kind_override(pref),
                 Ok(Ctl::ChordsLive(on)) => {
                     self.chords_live = on;
                     self.push_sc2_gate();
