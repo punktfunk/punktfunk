@@ -78,13 +78,16 @@ fn quoted(arg: &str) -> String {
 
 /// Run `wgc-probe <rest after -->` in the console session and return its exit code: as the
 /// signed-in user, or with `system` as this process's own SYSTEM token moved into that session.
+/// `--exe <path>` runs that program with the same arguments instead: how a host build is
+/// started the way the service starts it.
 pub fn relaunch(args: &[String], system: bool) -> Result<i32, String> {
     identity();
-    let (mut out, mut child) = (None, Vec::new());
+    let (mut out, mut child, mut exe) = (None, Vec::new(), None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--out" => out = it.next().cloned(),
+            "--exe" => exe = it.next().map(std::path::PathBuf::from),
             "--" => {
                 child = it.cloned().collect();
                 break;
@@ -96,7 +99,10 @@ pub fn relaunch(args: &[String], system: bool) -> Result<i32, String> {
     if child.is_empty() {
         return Err("needs a command after `--`".into());
     }
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let exe = match exe {
+        Some(exe) => exe,
+        None => std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?,
+    };
     let line = std::iter::once(quoted(&exe.to_string_lossy()))
         .chain(child.iter().map(|a| quoted(a)))
         .collect::<Vec<_>>()
