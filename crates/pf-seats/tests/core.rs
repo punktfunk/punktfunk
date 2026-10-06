@@ -269,3 +269,70 @@ fn persisted_secrets_are_owner_only() {
     assert_eq!(root_mode, 0o700);
     assert_eq!(file_mode, 0o600);
 }
+
+/// A start in the backend while the ledger answers: the start gate is the test's own.
+#[derive(Clone, Default)]
+struct SlowStart {
+    inner: FakeBackend,
+    gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl PlatformBackend for SlowStart {
+    fn provision(&self, seat: &Seat) -> Result<(), BackendError> {
+        self.inner.provision(seat)
+    }
+    fn start(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
+        let (open, wake) = &*self.gate;
+        let mut open = open.lock().unwrap();
+        while !*open {
+            open = wake.wait(open).unwrap();
+        }
+        drop(open);
+        self.inner.start(seat)
+    }
+    fn stop(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
+        self.inner.stop(seat)
+    }
+    fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
+        self.inner.remove(seat)
+    }
+    fn status(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
+        self.inner.status(seat)
+    }
+}
+
+#[test]
+fn the_ledger_answers_while_a_seat_starts() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend = SlowStart::default();
+    let service = Arc::new(SeatService::open(temp.path(), backend.clone()).unwrap());
+    let CommandResult::Created { seat } =
+        service.dispatch(create("Desk", "pf-desk", false)).unwrap()
+    else {
+        panic!("create");
+    };
+    let starter = {
+        let service = Arc::clone(&service);
+        let id = seat.id.clone();
+        std::thread::spawn(move || service.dispatch(Command::Start { id }))
+    };
+    // The start is parked in the backend; List still answers, and says starting.
+    let mut seen = None;
+    for _ in 0..200 {
+        if let CommandResult::List { seats } = service.dispatch(Command::List).unwrap()
+            && seats[0].runtime.state == RuntimeState::Starting
+        {
+            seen = Some(());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(seen.is_some(), "List never showed the seat starting");
+    let (open, wake) = &*backend.gate;
+    *open.lock().unwrap() = true;
+    wake.notify_all();
+    assert!(matches!(
+        starter.join().unwrap(),
+        Ok(CommandResult::Started { ref seat }) if seat.runtime.state == RuntimeState::Running
+    ));
+}

@@ -5,7 +5,9 @@
 //! commit never deletes an account: only an explicit Delete command may do so.
 //! Runtime observations, including backend failures, are persisted. Startup
 //! reconciliation starts autostart seats and refreshes the rest. One mutex
-//! serializes backend calls because four seats do not need rollback races.
+//! serializes lifecycle calls because four seats do not need rollback races; the
+//! ledger's own lock is never held across a start or stop, so `List` answers while
+//! a seat takes its tens of seconds to come up.
 
 use crate::backend::{BackendError, PlatformBackend};
 use crate::ipc::{
@@ -21,6 +23,10 @@ pub struct SeatService<B> {
     backend: B,
     store: LedgerStore,
     ledger: Mutex<Ledger>,
+    /// Held across every create, start, stop and delete.
+    ops: Mutex<()>,
+    /// The seat a start or stop is changing; `List` reports its published state meanwhile.
+    changing: Mutex<Option<SeatId>>,
 }
 
 impl<B: PlatformBackend> SeatService<B> {
@@ -31,6 +37,8 @@ impl<B: PlatformBackend> SeatService<B> {
             backend,
             store,
             ledger: Mutex::new(ledger),
+            ops: Mutex::new(()),
+            changing: Mutex::new(None),
         })
     }
 
@@ -79,9 +87,17 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     fn list(&self) -> Result<CommandResult, ApiError> {
+        let changing = self
+            .changing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let mut current = self.lock();
         let mut next = current.clone();
         for seat in &mut next.seats {
+            if changing.as_ref() == Some(&seat.id) {
+                continue;
+            }
             seat.runtime = self
                 .backend
                 .status(seat)
@@ -96,6 +112,7 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     fn create(&self, request: CreateSeat) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
         let mut current = self.lock();
         let mut next = current.clone();
         let seat = next.allocate(request).map_err(ApiError::from)?;
@@ -117,13 +134,30 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     fn change_runtime(&self, id: &SeatId, start: bool) -> Result<CommandResult, ApiError> {
-        let mut current = self.lock();
-        let original = current.seat(id).cloned().ok_or_else(|| not_found(id))?;
+        let _op = self.op();
+        let original = self.lock().seat(id).cloned().ok_or_else(|| not_found(id))?;
+        // Marked before the publish: a `List` in between would read the backend's old state.
+        *self.changing.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
+        if start {
+            let published = self.publish_runtime(
+                id,
+                RuntimeStatus {
+                    state: RuntimeState::Starting,
+                    detail: None,
+                },
+            );
+            if let Err(error) = published {
+                *self.changing.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return Err(error);
+            }
+        }
         let result = if start {
             self.backend.start(&original)
         } else {
             self.backend.stop(&original)
         };
+        *self.changing.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let mut current = self.lock();
         let mut next = current.clone();
         let seat = next
             .seats
@@ -148,6 +182,7 @@ impl<B: PlatformBackend> SeatService<B> {
     }
 
     fn delete(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
         let mut current = self.lock();
         let seat = current.seat(id).cloned().ok_or_else(|| not_found(id))?;
         self.backend.remove(&seat).map_err(ApiError::from)?;
@@ -233,10 +268,24 @@ impl<B: PlatformBackend> SeatService<B> {
         Ok(())
     }
 
+    /// Persists `status` as `id`'s runtime so `List` shows it before a long backend call.
+    fn publish_runtime(&self, id: &SeatId, status: RuntimeStatus) -> Result<(), ApiError> {
+        let mut current = self.lock();
+        let mut next = current.clone();
+        if let Some(seat) = next.seats.iter_mut().find(|seat| &seat.id == id) {
+            seat.runtime = status;
+        }
+        self.commit(&mut current, next)
+    }
+
     fn lock(&self) -> MutexGuard<'_, Ledger> {
         self.ledger
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn op(&self) -> MutexGuard<'_, ()> {
+        self.ops.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 
