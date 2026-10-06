@@ -1119,6 +1119,11 @@ impl Presenter {
             };
             self.last_submit_us = submit_started.elapsed().as_micros() as u32;
             submitted?;
+            // In the queue: the decode lane's next submit may follow.
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            if let Lane::Pyro(f) = &lane {
+                self.queue_lock.end_present_turn(f.turn);
+            }
             self.submitted = true;
             self.acquired = None;
             // A real frame from any other lane ends the D3D11 picture; `Redraw` keeps it.

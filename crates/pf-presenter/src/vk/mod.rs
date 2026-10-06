@@ -443,6 +443,16 @@ impl Presenter {
     /// Selected presenter-device facts. `video_decode` inside says whether
     /// Vulkan Video is usable — the rest of the bundle is returned anyway so
     /// vendor and import gates still work; on Linux this is always `Some`.
+    /// The frame of present turn `turn` is in hand: the decode lane waits for its submit.
+    pub(crate) fn begin_present_turn(&self, turn: u64) {
+        self.queue_lock.begin_present_turn(turn);
+    }
+
+    /// No frame up to `turn` is about to be submitted: the decode lane may go.
+    pub(crate) fn end_present_turn(&self, turn: u64) {
+        self.queue_lock.end_present_turn(turn);
+    }
+
     pub fn vulkan_decode(&self) -> Option<pf_client_core::video::VulkanDecodeDevice> {
         self.video_export.clone()
     }

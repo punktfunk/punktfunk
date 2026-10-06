@@ -225,6 +225,8 @@ pub struct PyroWavePlanarFrame {
     pub ten_bit: bool,
     /// Independently decodable — always a clean re-anchor.
     pub keyframe: bool,
+    /// This frame's present turn ([`QueueLock::offer_present_turn`]); the presenter ends it.
+    pub turn: u64,
 }
 
 struct PlaneSet {
@@ -439,6 +441,8 @@ pub struct PyroWaveDecoder {
     /// self-delimiting packets, zero-padded.
     wire_window: usize,
     split: DecodeSplit,
+    /// Frames handed out: the present-turn number of the next one.
+    turn: u64,
 }
 
 /// Where the last decode's wall time went, in microseconds.
@@ -652,6 +656,7 @@ impl PyroWaveDecoder {
             hdr16,
             wire_window: shard_payload.max(64),
             split: DecodeSplit::default(),
+            turn: 0,
         })
     }
 
@@ -906,6 +911,8 @@ impl PyroWaveDecoder {
         self.reap_retired();
 
         let (w, h) = (self.width, self.height);
+        self.turn += 1;
+        self.queue_lock.offer_present_turn(self.turn);
         let set = &self.ring.sets[slot];
         Ok(Some(PyroWavePlanarFrame {
             hold: self.ring.clone(),
@@ -917,6 +924,7 @@ impl PyroWaveDecoder {
             color: self.color,
             ten_bit: self.hdr16,
             keyframe: true,
+            turn: self.turn,
         }))
     }
 
@@ -1050,6 +1058,8 @@ impl PyroWaveDecoder {
             dev.reset_fences(&[self.fence])?;
         }
         self.split.record_us = record_started.elapsed().as_micros() as u32;
+        // The frame before this one goes to the screen first.
+        self.queue_lock.yield_to_present();
         let gpu_started = Instant::now();
         {
             let _guard = self.queue_lock.guard();
