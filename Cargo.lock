@@ -2014,9 +2014,10 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hermir"
 version = "0.1.0"
-source = "git+https://github.com/unom-io/hermir?rev=fe636600629faaf6708a729d88684692871ee35e#fe636600629faaf6708a729d88684692871ee35e"
+source = "git+https://github.com/unom-io/hermir?rev=1a6939c7a0456894c63b0eba745a803fb3ce5a13#1a6939c7a0456894c63b0eba745a803fb3ce5a13"
 dependencies = [
  "flate2",
+ "md-5",
  "schemars",
  "serde",
  "serde_json",
@@ -2677,6 +2678,16 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
 
 [[package]]
 name = "mdns-sd"

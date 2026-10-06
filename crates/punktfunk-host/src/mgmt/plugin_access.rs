@@ -44,6 +44,10 @@ pub(crate) struct AccessRequest {
     /// cores folder; `refused:no_retroarch` without one on this host.
     #[serde(default)]
     pub cores: Vec<String>,
+    /// Ask to read and restore emulator saves. One yes covers every emulator on this host; the
+    /// answer names the folder the grant lands on.
+    #[serde(default)]
+    pub saves: bool,
     /// Why the plugin wants it, in the plugin's words. Optional, sanitized, ≤120 chars.
     #[serde(default)]
     pub reason: Option<String>,
@@ -220,6 +224,19 @@ pub(crate) async fn request_plugin_access(
                 refused("no_retroarch")
             };
             outcomes.push(outcome);
+        }
+    }
+    if req.saves {
+        let dir = crate::emulators::saves_grant();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return store_err(e, "make the saves folder");
+        }
+        match st.access.request_saves(&id, &dir, reason.clone()) {
+            Ok(m) => {
+                changed |= m.changed;
+                outcomes.push(m.value);
+            }
+            Err(e) => return store_err(e, "record the saves request"),
         }
     }
     if changed {
