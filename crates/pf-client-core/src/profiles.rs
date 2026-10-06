@@ -180,6 +180,44 @@ pub fn picker_decision(
     }
 }
 
+/// What a client does with a picked profile's seat before it dials (§9.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SeatGate {
+    /// Dial now. The host places the connect, or says why it can't.
+    Dial,
+    /// `POST /api/v1/profiles/{id}/wake`, then wait: `Getting Kid's desk ready…`.
+    Wake,
+    /// The seat is coming up. Poll `enumerate` every 2 s, show `detail`, offer **Cancel**; there
+    /// is no timeout.
+    Wait { detail: Option<String> },
+    /// The seat can't play now; the line says why. Don't dial.
+    Refuse(String),
+}
+
+/// The gate for `p`'s seat, as `enumerate` lists it.
+pub fn seat_gate(p: &ListedProfile) -> SeatGate {
+    let Some(seat) = &p.seat else {
+        return SeatGate::Dial;
+    };
+    match seat.state {
+        SeatState::Ready | SeatState::Occupied | SeatState::Other => SeatGate::Dial,
+        SeatState::Stopped => SeatGate::Wake,
+        SeatState::Starting => SeatGate::Wait {
+            detail: seat.detail.clone(),
+        },
+        SeatState::Unavailable => SeatGate::Refuse(
+            seat.detail
+                .clone()
+                .unwrap_or_else(|| "That profile can't play on this host right now.".into()),
+        ),
+    }
+}
+
+/// The line while a seat comes up: `Getting Kid's desk ready…`.
+pub fn waking_line(display_name: &str) -> String {
+    format!("Getting {display_name}'s desk ready…")
+}
+
 /// `GET /api/v1/profiles/enumerate`. `Ok(None)` when the box has no profiles (404).
 #[cfg(desktop)]
 pub fn fetch_enumerate(
@@ -205,9 +243,57 @@ pub fn fetch_enumerate(
         .map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
 }
 
+/// `POST /api/v1/profiles/{id}/wake`: starts a stopped seat and answers with its row, which
+/// says `starting` until the seat is up.
+#[cfg(desktop)]
+pub fn wake(
+    addr: &str,
+    mgmt_port: u16,
+    identity: &(String, String),
+    pin: Option<[u8; 32]>,
+    id: &str,
+) -> Result<ListedProfile, crate::library::LibraryError> {
+    use crate::library::{agent, base_url, classify, LibraryError};
+    let agent = agent(identity, pin)?;
+    let url = format!("{}/api/v1/profiles/{id}/wake", base_url(addr, mgmt_port));
+    let mut resp = agent.post(&url).send_empty().map_err(classify)?;
+    let body = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| LibraryError::Unreachable(format!("read body: {e}")))?;
+    serde_json::from_str(&body).map_err(|e| LibraryError::Unreachable(format!("bad JSON: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_seat_is_dialed_woken_waited_for_or_refused() {
+        let with = |state: &str, detail: Option<&str>| -> ListedProfile {
+            serde_json::from_value(serde_json::json!({
+                "id": "kid", "display_name": "Kid",
+                "seat": { "state": state, "detail": detail, "port": 9778 },
+            }))
+            .unwrap()
+        };
+        let none: ListedProfile = serde_json::from_value(serde_json::json!({"id": "own"})).unwrap();
+        assert_eq!(seat_gate(&none), SeatGate::Dial);
+        assert_eq!(seat_gate(&with("ready", None)), SeatGate::Dial);
+        assert_eq!(seat_gate(&with("occupied", None)), SeatGate::Dial);
+        assert_eq!(seat_gate(&with("stopped", None)), SeatGate::Wake);
+        assert_eq!(
+            seat_gate(&with("starting", Some("Signing in"))),
+            SeatGate::Wait {
+                detail: Some("Signing in".into())
+            }
+        );
+        assert_eq!(
+            seat_gate(&with("unavailable", Some("Seats are off."))),
+            SeatGate::Refuse("Seats are off.".into())
+        );
+        assert_eq!(waking_line("Kid"), "Getting Kid's desk ready…");
+    }
 
     #[derive(Deserialize)]
     struct Vectors {
