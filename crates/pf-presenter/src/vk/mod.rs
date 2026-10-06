@@ -143,6 +143,9 @@ enum Retired {
     Dmabuf(HwFrame),
     /// Decoder-owned image + views: destroy nothing; drop after the fence to return the slot.
     NativeVk(NativeVkFrame),
+    /// The frame holds its plane ring: a `Redraw` samples planes that are still there.
+    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+    Pyro(pf_client_core::video_pyrowave::PyroWavePlanarFrame),
 }
 
 /// Which planes the direct pass sampled last, and how. A `Redraw` replays this: the
@@ -165,6 +168,9 @@ enum DirectSrc {
     Dmabuf,
     /// The software rung's plane images, which persist.
     Cpu,
+    /// `retired_hw` holds the wavelet frame.
+    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+    Pyro,
 }
 
 /// Premultiplied-alpha quad blended over the swapchain image after the video blit.
@@ -437,6 +443,16 @@ impl Presenter {
     /// Selected presenter-device facts. `video_decode` inside says whether
     /// Vulkan Video is usable — the rest of the bundle is returned anyway so
     /// vendor and import gates still work; on Linux this is always `Some`.
+    /// The frame of present turn `turn` is in hand: the decode lane waits for its submit.
+    pub(crate) fn begin_present_turn(&self, turn: u64) {
+        self.queue_lock.begin_present_turn(turn);
+    }
+
+    /// No frame up to `turn` is about to be submitted: the decode lane may go.
+    pub(crate) fn end_present_turn(&self, turn: u64) {
+        self.queue_lock.end_present_turn(turn);
+    }
+
     pub fn vulkan_decode(&self) -> Option<pf_client_core::video::VulkanDecodeDevice> {
         self.video_export.clone()
     }

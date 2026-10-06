@@ -16,7 +16,18 @@
 pub struct QueueLock {
     locked: std::sync::Mutex<bool>,
     cv: std::sync::Condvar,
+    /// The open present turn: the frame it is for, when it lapses, and whether the
+    /// presenter has taken it up.
+    turn: std::sync::Mutex<Option<(u64, std::time::Instant, bool)>>,
+    turn_cv: std::sync::Condvar,
+    /// A presenter on another thread ends turns ([`QueueLock::take_turns`]).
+    takes_turns: std::sync::atomic::AtomicBool,
 }
+
+/// How long a decode submit holds back for a present under way. A present is one short
+/// pass and its record, behind at most the pass before it; past this the presenter is
+/// stuck, not slow.
+const PRESENT_TURN: std::time::Duration = std::time::Duration::from_millis(4);
 
 impl QueueLock {
     #[allow(clippy::new_without_default)]
@@ -24,6 +35,60 @@ impl QueueLock {
         QueueLock {
             locked: std::sync::Mutex::new(false),
             cv: std::sync::Condvar::new(),
+            turn: std::sync::Mutex::new(None),
+            turn_cv: std::sync::Condvar::new(),
+            takes_turns: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The presenter runs on its own thread and ends every turn it is offered. Without
+    /// this no turn opens: a lane that presents on its decode thread has no one to wait for.
+    pub fn take_turns(&self) {
+        self.takes_turns
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Decode lane: frame `frame` is on its way to the presenter. Its present goes ahead
+    /// of the next decode on the shared queue, or it waits a whole decode behind it.
+    pub fn offer_present_turn(&self, frame: u64) {
+        if self.takes_turns.load(std::sync::atomic::Ordering::Relaxed) {
+            *self.turn.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((frame, std::time::Instant::now() + PRESENT_TURN, false));
+        }
+    }
+
+    /// Presenter: it has frame `frame` in hand and is deciding what to do with it.
+    pub fn begin_present_turn(&self, frame: u64) {
+        if let Some((open, _, begun)) = self.turn.lock().unwrap_or_else(|e| e.into_inner()).as_mut()
+        {
+            *begun |= *open <= frame;
+        }
+    }
+
+    /// Presenter: every frame up to `frame` is submitted, dropped, or held for later.
+    pub fn end_present_turn(&self, frame: u64) {
+        let mut turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
+        if turn.is_some_and(|(open, ..)| open <= frame) {
+            *turn = None;
+            self.turn_cv.notify_all();
+        }
+    }
+
+    /// Decode lane, before its submit: wait out a present turn the presenter has taken
+    /// up. One it has not reached yet is forfeit: a slow presenter must not stall decode.
+    pub fn yield_to_present(&self) {
+        let mut turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
+        while let Some((_, until, begun)) = *turn {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if !begun || left.is_zero() {
+                *turn = None;
+                break;
+            }
+            turn = self
+                .turn_cv
+                .wait_timeout(turn, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
     }
 
@@ -160,5 +225,71 @@ impl VulkanDecodeDevice {
     /// (NVIDIA VAAPI is barred from auto). Intel/unknown try the platform rung first.
     pub fn prefer_vulkan_first(&self) -> bool {
         self.vendor_id == VENDOR_NVIDIA || self.vendor_id == VENDOR_AMD
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QueueLock;
+    use std::time::{Duration, Instant};
+
+    /// A decode submit waits for a present the presenter has taken up, and only for
+    /// that: an older frame's end does not release it, a frame the presenter has not
+    /// reached is not waited for, and a stuck presenter costs one bounded turn.
+    #[test]
+    fn a_present_turn_holds_the_decode_submit_until_it_ends() {
+        let lock = std::sync::Arc::new(QueueLock::new());
+        lock.offer_present_turn(1);
+        lock.begin_present_turn(1);
+        let t = Instant::now();
+        lock.yield_to_present();
+        assert!(
+            t.elapsed() < Duration::from_millis(2),
+            "no presenter takes turns"
+        );
+
+        lock.take_turns();
+        lock.offer_present_turn(1);
+        let t = Instant::now();
+        lock.yield_to_present();
+        assert!(
+            t.elapsed() < Duration::from_millis(2),
+            "the presenter never took it up"
+        );
+
+        lock.offer_present_turn(2);
+        lock.begin_present_turn(2);
+        lock.end_present_turn(1);
+        let ender = {
+            let lock = lock.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1));
+                lock.end_present_turn(2);
+            })
+        };
+        let t = Instant::now();
+        lock.yield_to_present();
+        let waited = t.elapsed();
+        ender.join().unwrap();
+        assert!(
+            waited >= Duration::from_micros(900),
+            "frame 1's end released frame 2"
+        );
+        assert!(
+            waited < super::PRESENT_TURN,
+            "frame 2's end did not release it"
+        );
+
+        lock.offer_present_turn(3);
+        lock.begin_present_turn(3);
+        let t = Instant::now();
+        lock.yield_to_present();
+        assert!(
+            t.elapsed() >= super::PRESENT_TURN,
+            "a stuck presenter costs one turn"
+        );
+        let t = Instant::now();
+        lock.yield_to_present();
+        assert!(t.elapsed() < Duration::from_millis(2), "and only one");
     }
 }
