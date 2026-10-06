@@ -18,6 +18,8 @@ pub use desktop::valid_desktop_id;
 mod emulator;
 mod exec;
 pub use emulator::spec_is_valid as emulator_spec_is_valid;
+#[cfg(windows)]
+pub(crate) use exec::win_quote;
 pub use exec::{spec_is_valid as exec_spec_is_valid, ExecRecipe};
 #[cfg(windows)]
 mod windows;
