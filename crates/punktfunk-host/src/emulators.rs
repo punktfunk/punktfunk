@@ -245,6 +245,202 @@ pub fn prepare(
         .collect()
 }
 
+/// `platform` as the catalog spells it, from its id or any alias; as given when unknown.
+fn platform_id(h: &Hermir, platform: &str) -> String {
+    h.catalog()
+        .find_platform(platform)
+        .map_or_else(|| platform.to_string(), |p| p.id.clone())
+}
+
+/// What a library needs of the catalog: platforms and emulators, offered on this OS or not.
+pub fn registry() -> hermir::Result<hermir::Registry> {
+    Ok(open()?.registry())
+}
+
+/// The libretro cores each copy of `id` has, by exe; empty for every emulator but RetroArch.
+pub fn cores(h: &Hermir, install: &hermir::Install) -> Vec<String> {
+    h.emulator(&install.emulator)
+        .map(|e| e.cores(install))
+        .unwrap_or_default()
+}
+
+/// Runs `f` on the best copy of `id`: managed, else the first found. `Invalid` without one.
+fn on_best<T>(
+    id: &str,
+    f: impl FnOnce(&Hermir, &hermir::EmulatorHandle<'_>, &hermir::Install) -> hermir::Result<T>,
+) -> hermir::Result<T> {
+    let h = open()?;
+    let emulator = h.emulator(id)?;
+    let install = emulator
+        .best()?
+        .ok_or_else(|| hermir::Error::Invalid(format!("no copy of {id} on this host")))?;
+    f(&h, &emulator, &install)
+}
+
+/// The save units of `platform` on the best copy; `game` is the game's folder.
+pub fn units(
+    id: &str,
+    platform: &str,
+    game: Option<&Path>,
+) -> hermir::Result<Vec<hermir::SaveUnit>> {
+    on_best(id, |h, e, i| e.units(i, &platform_id(h, platform), game))
+}
+
+/// Each named unit written into `out`, a tar for a folder.
+pub fn export_units(
+    id: &str,
+    platform: &str,
+    game: Option<&Path>,
+    units: &[(hermir::SaveKind, String)],
+    out: &Path,
+) -> hermir::Result<Vec<(hermir::SaveKind, hermir::ExportedUnit)>> {
+    std::fs::create_dir_all(out).map_err(|e| hermir::Error::Io {
+        op: "create",
+        path: out.to_path_buf(),
+        source: e,
+    })?;
+    on_best(id, |h, e, i| {
+        let platform = platform_id(h, platform);
+        units
+            .iter()
+            .map(|(kind, name)| Ok((*kind, e.export_unit(i, &platform, game, *kind, name, out)?)))
+            .collect()
+    })
+}
+
+/// One unit put back from the file `from`, into the first of `kinds` with a place for it.
+pub fn import_unit(
+    id: &str,
+    platform: &str,
+    game: Option<&Path>,
+    kinds: &[hermir::SaveKind],
+    name: &str,
+    from: &Path,
+    others: &[String],
+) -> hermir::Result<hermir::PrepareStep> {
+    on_best(id, |h, e, i| {
+        e.import_unit(
+            i,
+            &platform_id(h, platform),
+            game,
+            kinds,
+            name,
+            from,
+            others,
+        )
+    })
+}
+
+/// A game's update or DLC files, installed the way the emulator takes them.
+pub fn install_content(
+    id: &str,
+    platform: &str,
+    kind: &str,
+    files: &[PathBuf],
+) -> hermir::Result<Vec<hermir::ContentStep>> {
+    on_best(id, |h, e, i| {
+        e.install_content(i, &platform_id(h, platform), kind, files)
+    })
+}
+
+/// Whether the best copy has `platform`'s firmware; `None` when the platform needs none.
+pub fn firmware_status(id: &str, platform: &str) -> hermir::Result<Option<hermir::FirmwareStatus>> {
+    on_best(id, |h, e, i| {
+        e.firmware_status(i, &platform_id(h, platform))
+    })
+}
+
+/// The command that starts `file` in the best copy of `id`, fullscreen.
+pub fn launch_spec(
+    id: &str,
+    platform: &str,
+    file: &Path,
+    core: Option<&str>,
+) -> hermir::Result<hermir::LaunchSpec> {
+    on_best(id, |h, e, i| {
+        e.launch(
+            i,
+            &hermir::LaunchRequest {
+                file: Some(file.to_path_buf()),
+                platform: Some(platform_id(h, platform)),
+                fullscreen: Some(true),
+                core: core.map(str::to_string),
+                ..Default::default()
+            },
+        )
+    })
+}
+
+/// Points hermir at the operator's own copy of `id`; `keep: false` forgets it.
+pub fn adopt(id: &str, exe: &Path, keep: bool) -> hermir::Result<Option<hermir::Install>> {
+    open()?.emulator(id)?.adopt(exe, keep)
+}
+
+/// The folder whose read grant lets a plugin move emulator saves: hermir's own backups of
+/// the saves it replaced. The grant is the operator's one yes for every emulator.
+pub fn saves_grant() -> PathBuf {
+    prefix().join(".save-backups")
+}
+
+/// Whether `id` names an emulator in hermir's catalog. Read once: the catalog is compiled in.
+pub fn in_catalog(id: &str) -> bool {
+    static IDS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        hermir::Catalog::embedded()
+            .map(|c| c.entries().iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_default()
+    })
+    .iter()
+    .any(|known| known == id)
+}
+
+/// Before an `emulator` entry starts: every copy past its first-run questions, the platform's
+/// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads.
+/// What it did goes to the log; a launch never waits on it to succeed.
+pub fn prepare_launch(library_id: &str) {
+    let Some(entry) = crate::library::entry_for_library_id(library_id) else {
+        return;
+    };
+    let Some(spec) = entry.launch.as_ref().filter(|s| s.kind == "emulator") else {
+        return;
+    };
+    let platform = spec
+        .args
+        .iter()
+        .flatten()
+        .find(|a| a.name == "platform")
+        .map(|a| a.value.as_str());
+    let staged = entry
+        .provider
+        .as_deref()
+        .zip(platform)
+        .and_then(|(provider, platform)| staged_firmware(provider, platform));
+    match prepare(&spec.value, platform, staged.as_deref()) {
+        Ok(copies) => {
+            for (exe, prepared) in copies {
+                for s in prepared.steps {
+                    tracing::info!(emulator = %spec.value, %exe, kind = %s.kind, target = %s.target.display(), outcome = ?s.outcome, note = s.note.as_deref().unwrap_or(""), "emulator prepared for the launch");
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(emulator = %spec.value, error = %e, "emulator not prepared for the launch")
+        }
+    }
+}
+
+/// `<plugin-state>/<provider>/firmware/<platform>` when it is a folder inside that plugin's own
+/// state: a link out of it would hand the emulator files the plugin could never write.
+fn staged_firmware(provider: &str, platform: &str) -> Option<PathBuf> {
+    let own = pf_paths::config_dir()
+        .join("plugin-state")
+        .join(provider)
+        .canonicalize()
+        .ok()?;
+    let dir = own.join("firmware").join(platform).canonicalize().ok()?;
+    (dir.is_dir() && dir.starts_with(&own)).then_some(dir)
+}
+
 /// A core name as the buildbot spells it: `snes9x`, `mupen64plus_next`.
 pub fn valid_core(core: &str) -> bool {
     !core.is_empty()

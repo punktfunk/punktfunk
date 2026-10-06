@@ -213,6 +213,10 @@ impl EglContext {
     ///
     /// EGL leaves a window's dataspace UNKNOWN, and a composer has to guess what a
     /// 10/10/10/2 buffer holds. The console draws sRGB, so the buffers say so.
+    ///
+    /// A 10/10/10/2 window also asks for CPU-readable buffers, which an allocator lays out
+    /// linear. Left to choose, it may compress them in a layout the display engine decodes
+    /// wrong: a TCL P7K scans the console out with every detailed tile in colour noise.
     pub(super) fn window_surface(
         &self,
         window: &ndk::native_window::NativeWindow,
@@ -241,6 +245,10 @@ impl EglContext {
             // 1 = present on the panel's cadence, never faster: `eglSwapBuffers` blocks and
             // paces the render loop, which is the whole frame-timing story of this host.
             eglSwapInterval(self.display, 1);
+            // After the make-current: a PowerVR EGL writes its own usage there.
+            if self.ten_bit {
+                request_linear_buffers(window);
+            }
             let (mut w, mut h) = (0, 0);
             eglQuerySurface(self.display, surface, EGL_WIDTH, &mut w);
             eglQuerySurface(self.display, surface, EGL_HEIGHT, &mut h);
@@ -259,6 +267,39 @@ impl EglContext {
         unsafe {
             eglMakeCurrent(self.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
+    }
+}
+
+/// AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY.
+const LINEAR_WINDOW_USAGE: u64 = (1 << 9) | 2;
+
+type SetUsageFn = unsafe extern "C" fn(*mut c_void, u64) -> i32;
+
+/// Ask `window` for linear buffers: EGL renders into them, and the CPU-read bit rules out a
+/// compressed layout. The call replaces the usage EGL asked for, so it names that too.
+/// `ANativeWindow_setUsage` is in every `libnativewindow.so` since API 26 but not in the
+/// NDK stubs, hence the `dlsym`.
+fn request_linear_buffers(window: &ndk::native_window::NativeWindow) {
+    // SAFETY: the `ndk` crate links `libnativewindow.so`, so `dlopen` only bumps its refcount
+    // (never closed; null is checked). `SetUsageFn` is the signature in `vndk/window.h`.
+    let set_usage: Option<SetUsageFn> = unsafe {
+        let lib = libc::dlopen(c"libnativewindow.so".as_ptr(), libc::RTLD_NOW);
+        if lib.is_null() {
+            None
+        } else {
+            crate::sym(lib, c"ANativeWindow_setUsage")
+        }
+    };
+    let Some(set_usage) = set_usage else {
+        log::warn!(
+            "console: 10-bit window keeps the allocator's layout: no ANativeWindow_setUsage"
+        );
+        return;
+    };
+    // SAFETY: `window` is live for the call.
+    match unsafe { set_usage(window.ptr().as_ptr().cast(), LINEAR_WINDOW_USAGE) } {
+        0 => log::info!("console: 10-bit window asks for linear buffers"),
+        e => log::warn!("console: 10-bit window keeps the allocator's layout: {e}"),
     }
 }
 

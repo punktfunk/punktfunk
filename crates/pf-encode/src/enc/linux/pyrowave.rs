@@ -2807,6 +2807,52 @@ mod tests {
         dump("ref-dense444-cr.bin", &cr);
     }
 
+    /// Input for the client's `pyrowave_bench` example: a `PUNKTFUNK_DUMP_VIDEO`-shaped
+    /// capture at `PYROWAVE_BENCH_OUT`, shaped by `PYROWAVE_BENCH_MODE=WxH:fps:mbps:bits`
+    /// (default `3840x2160:120:1200:10`). `PF_WAVE_NOISE=1` fills the rate budget the way
+    /// game content does.
+    #[test]
+    #[ignore = "fixture generator — needs a real Vulkan 1.3 compute device"]
+    fn pyrowave_dump_bench_capture() {
+        let Ok(out) = std::env::var("PYROWAVE_BENCH_OUT") else {
+            eprintln!("PYROWAVE_BENCH_OUT not set — skipping dump");
+            return;
+        };
+        let mode =
+            std::env::var("PYROWAVE_BENCH_MODE").unwrap_or_else(|_| "3840x2160:120:1200:10".into());
+        let f: Vec<u64> = mode
+            .split([':', 'x'])
+            .map(|v| v.parse().expect("PYROWAVE_BENCH_MODE=WxH:fps:mbps:bits"))
+            .collect();
+        let (w, h, bits) = (f[0] as u32, f[1] as u32, f[4] as u8);
+        let mut enc = PyroWaveEncoder::open(
+            w,
+            h,
+            f[2] as u32,
+            f[3] * 1_000_000,
+            crate::ChromaFormat::Yuv420,
+            bits,
+            bits >= 10,
+        )
+        .expect("open");
+        enc.set_wire_chunking(1408);
+        // The index a client dump writes: `offset len flags complete`, flags = chunk-aligned.
+        let (mut data, mut idx) = (Vec::new(), String::new());
+        for i in 0..24usize {
+            let mut frame = cpu_frame(w, h, i as u64 * 8_333_333, [0; 4]);
+            frame.payload = FramePayload::Cpu(crate::smoke_pattern::scroll_pattern(
+                w as usize, h as usize, i,
+            ));
+            enc.submit(&frame).expect("submit");
+            let au = enc.poll().expect("poll").expect("AU").data;
+            idx.push_str(&format!("{} {} 0x40 1\n", data.len(), au.len()));
+            data.extend_from_slice(&au);
+        }
+        eprintln!("{mode}: 24 AUs, mean {} bytes", data.len() / 24);
+        std::fs::write(&out, &data).expect("write capture");
+        std::fs::write(format!("{out}.idx"), idx).expect("write index");
+    }
+
     // Device-create ladder needs a real GPU. Grammar is what drifts: same env var drives
     // Windows (patch live) and Linux. Device-free: `queue_priority_candidates` takes the
     // raw string so env-var tests do not race.

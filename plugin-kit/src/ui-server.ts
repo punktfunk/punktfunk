@@ -148,7 +148,18 @@ export interface ServeUiGame<S extends Schema.Top> {
 	readonly status?: (
 		entryId: string,
 	) => Effect.Effect<ReadonlyArray<StatusLine>>;
+	/**
+	 * This entry's route in the plugin's own page, one segment like `game.abc`. The tab links to
+	 * it; anything else is dropped.
+	 */
+	readonly page?: (entryId: string) => Effect.Effect<string | undefined>;
 }
+
+/** One path segment the console's plugin route can carry: no `/`, nothing to escape. */
+const pageRoute = (page: string | undefined): string | undefined =>
+	page !== undefined && /^[A-Za-z0-9._~-]{1,200}$/.test(page)
+		? page
+		: undefined;
 
 /**
  * A library id the host accepts: `<store>:<external id>`, both halves non-empty, at most 1024
@@ -209,7 +220,17 @@ export const makeGameHandler = <S extends Schema.Top>(
 			const status = game.status
 				? await Effect.runPromise(game.status(entry)).catch(() => [])
 				: [];
-			return Response.json({ schema, value, status: cleanStatus(status) });
+			const page = game.page
+				? pageRoute(
+						await Effect.runPromise(game.page(entry)).catch(() => undefined),
+					)
+				: undefined;
+			return Response.json({
+				schema,
+				value,
+				status: cleanStatus(status),
+				...(page ? { page } : {}),
+			});
 		}
 		if (req.method === "PUT") {
 			let body: unknown;

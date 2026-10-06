@@ -139,13 +139,15 @@ fn head_extent(mode: Option<(u32, u32, u32)>) -> Option<(u16, u16)> {
 /// implementation so the facade takes two arguments. `codec` is the session's
 /// resolved encoder — Linux uses it to seed the gamescope tiled offer, other
 /// platforms ignore it. `kwin`/`gamescope` carry PipeWire producer contracts
-/// node ids and remote fds cannot reveal.
+/// node ids and remote fds cannot reveal. `stream_hz` is the wire rate, which a display
+/// created at a multiple of it cannot tell the capture.
 pub(crate) struct VirtualCaptureRequest {
     pub output: OutputFormat,
     pub codec: Option<crate::encode::Codec>,
     pub capture: crate::session_plan::CaptureBackend,
     pub kwin: bool,
     pub gamescope: bool,
+    pub stream_hz: u32,
 }
 
 /// A live output's metadata without its keepalive: what [`capture_virtual_output`] needs to
@@ -219,6 +221,7 @@ pub fn capture_virtual_output(
         capture: _capture,
         kwin,
         gamescope,
+        stream_hz,
     } = request;
     // Portal negotiates its own pixel format, so `want.gpu` gates GPU zero-copy
     // (this path is always the portal; `CaptureBackend` is Windows-only dispatch)
@@ -301,6 +304,7 @@ pub fn capture_virtual_output(
             sdr10_native: want.sdr10_native,
             expect_exact_dims: vout.expect_exact_dims,
             producer,
+            stream_hz,
             policy: pf_capture::ZeroCopyPolicy {
                 // No route here. A wrong "foreign" only keeps the LINEAR offer.
                 gamescope_tiled,
@@ -406,6 +410,8 @@ pub fn capture_virtual_output(
         // CURSOR_SUPPRESSED.
         kwin: _kwin,
         gamescope: _gamescope,
+        // The driver paces its own encodes (`pf_frame::pace`).
+        stream_hz: _stream_hz,
     } = request;
     let target = vout.win_capture.clone().ok_or_else(|| {
         anyhow::anyhow!(
@@ -591,6 +597,7 @@ pub fn capture_virtual_output(
         capture: _capture,
         kwin: _kwin,
         gamescope: _gamescope,
+        stream_hz: _stream_hz,
     } = request;
     anyhow::bail!("virtual-output capture requires Linux or Windows")
 }
@@ -636,6 +643,7 @@ mod live_tests {
                 capture: crate::session_plan::CaptureBackend::IddPush,
                 kwin: false,
                 gamescope: false,
+                stream_hz: 60,
             },
         )
         .expect("open the IDD-push capturer");
@@ -758,6 +766,7 @@ mod live_tests {
                 capture: crate::session_plan::CaptureBackend::IddPush,
                 kwin: false,
                 gamescope: false,
+                stream_hz: 60,
             },
         )
         .expect("open the IDD-push capturer");

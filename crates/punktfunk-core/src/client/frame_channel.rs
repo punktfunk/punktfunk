@@ -416,8 +416,10 @@ struct FrameQueue {
     /// Every AU decodes independently (PyroWave): [`FrameChannel::pop`] drains to the newest.
     all_intra: bool,
     /// AUs skipped by the all-intra drain since last [`FrameChannel::take_skipped`].
-    /// Not losses — the wire delivered them; the pump logs them at debug.
+    /// Not losses — the wire delivered them; the overlay counts them as skipped.
     skipped_total: u64,
+    /// The same skips over the whole session.
+    skipped_ever: u64,
 }
 
 /// [`FrameChannel::pop`] result. `next_frame` maps Timeout/Closed as-is.
@@ -435,6 +437,7 @@ impl FrameChannel {
                 closed: false,
                 all_intra: false,
                 skipped_total: 0,
+                skipped_ever: 0,
             }),
             ready: Condvar::new(),
             consumer_seen: AtomicBool::new(false),
@@ -471,6 +474,11 @@ impl FrameChannel {
     pub(crate) fn take_skipped(&self) -> u64 {
         let mut st = self.inner.lock().unwrap();
         std::mem::take(&mut st.skipped_total)
+    }
+
+    /// All-intra skips this session. Monotonic.
+    pub(crate) fn skipped_ever(&self) -> u64 {
+        self.inner.lock().unwrap().skipped_ever
     }
 
     pub(crate) fn push(&self, frame: Frame) {
@@ -529,6 +537,7 @@ impl FrameChannel {
         }
         if st.all_intra && st.q.len() > 1 {
             st.skipped_total += (st.q.len() - 1) as u64;
+            st.skipped_ever += (st.q.len() - 1) as u64;
             let newest = st.q.pop_back().expect("len > 1");
             st.q.clear();
             return FramePop::Frame(newest);
@@ -637,6 +646,7 @@ mod frame_channel_tests {
         ch.push(frame(4));
         assert_eq!(popped(&ch), Some(4));
         assert_eq!(ch.take_skipped(), 0);
+        assert_eq!(ch.skipped_ever(), 2);
     }
 
     #[test]
