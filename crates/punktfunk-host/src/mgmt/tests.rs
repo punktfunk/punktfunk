@@ -2146,6 +2146,10 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/profiles/{id}/avatar", false, true),
         ("POST", "/api/v1/profiles/{id}/wake", false, true),
         ("GET", "/api/v1/profiles", false, false),
+        // Turning seats on installs a driver and opens Remote Desktop: the operator's alone.
+        ("GET", "/api/v1/profiles/seating", false, false),
+        ("PUT", "/api/v1/profiles/seating", false, false),
+        ("GET", "/api/v1/profiles/doctor", false, false),
         ("POST", "/api/v1/profiles", false, false),
         ("PUT", "/api/v1/profiles/default", false, false),
         ("PUT", "/api/v1/profiles/{id}", false, false),
@@ -5517,6 +5521,38 @@ async fn the_cert_lane_reads_profiles_but_never_edits_them() {
         .body(Body::from(r#"{"display_name":"Kid"}"#))
         .unwrap();
     assert_eq!(send_cert(&app, create, fp).await, StatusCode::UNAUTHORIZED);
+}
+
+/// Where there are no seats the read says so and a change is a plain 409. The lanes are
+/// pinned by `every_route_is_classified_for_the_plugin_and_cert_lanes`.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn seating_off_windows_reads_off_and_refuses_a_change() {
+    let app = test_app(state_with_profiles("seating"), None);
+    let put = |body: &str| {
+        axum::http::Request::put("/api/v1/profiles/seating")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let (status, body) = send(&app, get_req("/api/v1/profiles/seating")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        serde_json::json!({"enabled": false, "platform": "other", "checks": []})
+    );
+    for body in [
+        r#"{"enabled":true,"allow_rdp_from_network":false}"#,
+        r#"{"enabled":false}"#,
+    ] {
+        let (status, answer) = send(&app, put(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(answer["error"], "Seats need Windows Server.");
+    }
+    assert_eq!(
+        send(&app, get_req("/api/v1/profiles/doctor")).await.0,
+        StatusCode::CONFLICT
+    );
 }
 
 /// Create, rename, a picture, the default, then removal; the owner can't be removed.

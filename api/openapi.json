@@ -5353,6 +5353,58 @@
         }
       }
     },
+    "/api/v1/profiles/doctor": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Check the seats",
+        "description": "The supervisor's own report: the ledger, Windows, Remote Desktop, the certificate pin and\neach seat's account, session and ports. Admin lane only.",
+        "operationId": "getSeatsDoctor",
+        "responses": {
+          "200": {
+            "description": "The report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatsDoctor"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This host has no seats to check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles/enumerate": {
       "get": {
         "tags": [
@@ -5387,6 +5439,108 @@
           },
           "404": {
             "description": "This host has no profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/seating": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Whether seats are on",
+        "description": "Windows reports whether the box's seats are on and what turning them on needs: Windows\nServer, the Remote Desktop Session Host role, licensing and a graphics card. Other\nplatforms answer `enabled: false` with `platform: other`. Admin lane only.",
+        "operationId": "getSeating",
+        "responses": {
+          "200": {
+            "description": "Seats now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seating"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Turn seats on or off",
+        "description": "On runs the checks, installs the seat display driver, turns Remote Desktop on for this\nmachine and records its certificate. A check that fails changes nothing: the answer is 200\nwith `enabled: false` and the failed check as an `error`. The driver replaces the display of\nevery Remote Desktop session on the machine. Off stops every seat, keeps their accounts\nand restores what on changed. Admin lane only.",
+        "operationId": "setSeating",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatingChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Seats as they are after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seating"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This host has no seats to turn on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor doesn't answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -8687,6 +8841,15 @@
             "description": "32 random bytes, lowercase hex. Single-use, and short-lived."
           }
         }
+      },
+      "CheckLevel": {
+        "type": "string",
+        "description": "What a seat check found. An `error` stops seats from turning on.",
+        "enum": [
+          "info",
+          "warning",
+          "error"
+        ]
       },
       "CheckSource": {
         "type": "string",
@@ -13889,6 +14052,36 @@
           }
         }
       },
+      "SeatCheck": {
+        "type": "object",
+        "description": "One thing the seat checks found.",
+        "required": [
+          "level",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable id such as `rds_role`.",
+            "example": "rds_role"
+          },
+          "level": {
+            "$ref": "#/components/schemas/CheckLevel"
+          },
+          "message": {
+            "type": "string",
+            "description": "One plain sentence for the operator."
+          },
+          "seat_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The seat it is about; absent when it is about the box."
+          }
+        }
+      },
       "SeatPublic": {
         "type": "object",
         "description": "A profile's seat right now.",
@@ -13938,6 +14131,74 @@
           "occupied",
           "unavailable"
         ]
+      },
+      "Seating": {
+        "type": "object",
+        "description": "Whether this box runs its profiles in seats of their own, with what turning that on needs.",
+        "required": [
+          "enabled",
+          "platform",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatCheck"
+            },
+            "description": "The prerequisites, one each. Empty on `other`."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SeatingPlatform",
+            "description": "`other` has no seats to turn on."
+          }
+        }
+      },
+      "SeatingChange": {
+        "type": "object",
+        "description": "`PUT /profiles/seating`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "allow_rdp_from_network": {
+            "type": "boolean",
+            "description": "Leave Remote Desktop reachable from the network. Off keeps it on this machine."
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SeatingPlatform": {
+        "type": "string",
+        "enum": [
+          "windows",
+          "other"
+        ]
+      },
+      "SeatsDoctor": {
+        "type": "object",
+        "description": "The seat supervisor's own checks.",
+        "required": [
+          "healthy",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatCheck"
+            }
+          },
+          "healthy": {
+            "type": "boolean",
+            "description": "No check is an `error`."
+          }
+        }
       },
       "SessionAccess": {
         "type": "object",

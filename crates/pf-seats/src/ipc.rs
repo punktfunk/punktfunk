@@ -24,10 +24,28 @@ pub const PIPE_NAME: &str = r"\\.\pipe\punktfunk-seats";
 pub enum Command {
     List,
     Create(CreateSeat),
-    Start { id: SeatId },
-    Stop { id: SeatId },
-    Delete { id: SeatId },
+    Start {
+        id: SeatId,
+    },
+    Stop {
+        id: SeatId,
+    },
+    Delete {
+        id: SeatId,
+    },
     Doctor,
+    /// Whether seats are on, with what turning them on needs.
+    Seating,
+    /// Turn seats on. Remote Desktop stays reachable from this machine only unless
+    /// `allow_rdp_from_network`.
+    Enable {
+        allow_rdp_from_network: bool,
+    },
+    /// Stop every seat and turn seats off. Only `keep_accounts: true` is served: an account
+    /// goes with its profile.
+    Disable {
+        keep_accounts: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +72,7 @@ pub enum CommandResult {
     Stopped { seat: Seat },
     Deleted { id: SeatId },
     Doctor { report: DoctorReport },
+    Seating { status: SeatingStatus },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +138,14 @@ pub enum ErrorCode {
 pub struct DoctorReport {
     pub healthy: bool,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Whether seats are on and what the checks for turning them on found. A check that failed is
+/// an error-level [`Diagnostic`] whose message is one plain sentence for the operator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatingStatus {
+    pub enabled: bool,
+    pub checks: Vec<Diagnostic>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +303,45 @@ mod tests {
         assert_eq!(decoded, request);
     }
 
+    /// The seating commands and their answer cross a frame unchanged, and the wire names are
+    /// the ones the console host and the supervisor share.
+    #[test]
+    fn the_seating_frames_round_trip() {
+        for (command, wire) in [
+            (Command::Seating, r#"{"type":"seating"}"#),
+            (
+                Command::Enable {
+                    allow_rdp_from_network: true,
+                },
+                r#"{"type":"enable","allow_rdp_from_network":true}"#,
+            ),
+            (
+                Command::Disable {
+                    keep_accounts: true,
+                },
+                r#"{"type":"disable","keep_accounts":true}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&command).unwrap(), wire);
+            let mut frame = Vec::new();
+            write_json_frame(&mut frame, &Request::new(command.clone())).unwrap();
+            let decoded: Request = read_json_frame(&mut Cursor::new(frame)).unwrap();
+            assert_eq!(decoded.command, command);
+        }
+        let answer = Response::success(CommandResult::Seating {
+            status: SeatingStatus {
+                enabled: false,
+                checks: vec![Diagnostic::error("no_gpu", "No graphics card was found.")],
+            },
+        });
+        let mut frame = Vec::new();
+        write_json_frame(&mut frame, &answer).unwrap();
+        assert_eq!(
+            read_json_frame::<_, Response>(&mut Cursor::new(frame)).unwrap(),
+            answer
+        );
+    }
+
     /// One duplex stream for [`answer`]: reads from `input`, writes to `output`.
     struct Duplex {
         input: Cursor<Vec<u8>>,
@@ -304,6 +370,43 @@ mod tests {
         };
         answer(service, &mut stream).unwrap();
         read_json_frame(&mut Cursor::new(stream.output)).unwrap()
+    }
+
+    /// Without a platform every seating command answers the unsupported error, and a disable
+    /// that would delete accounts is refused before it gets that far.
+    #[test]
+    fn seating_is_unavailable_without_a_platform() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = SeatService::open(temp.path(), crate::UnsupportedBackend).unwrap();
+        let refuse = |command: Command| {
+            let mut frame = Vec::new();
+            write_json_frame(&mut frame, &Request::new(command)).unwrap();
+            let Response::Error { error, .. } = ask(&service, frame) else {
+                panic!("a platform without seats refuses")
+            };
+            error
+        };
+        for command in [
+            Command::Seating,
+            Command::Enable {
+                allow_rdp_from_network: false,
+            },
+            Command::Disable {
+                keep_accounts: true,
+            },
+        ] {
+            let error = refuse(command);
+            assert_eq!(error.code, ErrorCode::Backend);
+            assert!(
+                error.message.starts_with("platform_unavailable"),
+                "{}",
+                error.message
+            );
+        }
+        let error = refuse(Command::Disable {
+            keep_accounts: false,
+        });
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
     }
 
     /// A list on an empty ledger answers with no seats; a wrong schema and a frame that is

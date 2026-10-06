@@ -10,6 +10,7 @@
 use crate::backend::{BackendError, PlatformBackend};
 use crate::ipc::{
     ApiError, Command, CommandResult, Diagnostic, DiagnosticLevel, DoctorReport, ErrorCode,
+    SeatingStatus,
 };
 use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
@@ -49,6 +50,14 @@ impl<B: PlatformBackend> SeatService<B> {
             Command::Stop { id } => self.stop(&id),
             Command::Delete { id } => self.delete(&id),
             Command::Doctor => Ok(self.doctor()),
+            Command::Seating => self.seating(|backend| backend.seating()),
+            Command::Enable {
+                allow_rdp_from_network,
+            } => {
+                let _serialized = self.lock();
+                self.seating(|backend| backend.enable(allow_rdp_from_network))
+            }
+            Command::Disable { keep_accounts } => self.disable(keep_accounts),
         }
     }
 
@@ -147,6 +156,32 @@ impl<B: PlatformBackend> SeatService<B> {
             .expect("cloned ledger retains the selected seat");
         self.commit(&mut current, next)?;
         Ok(CommandResult::Deleted { id: id.clone() })
+    }
+
+    fn seating(
+        &self,
+        run: impl FnOnce(&B) -> Result<SeatingStatus, BackendError>,
+    ) -> Result<CommandResult, ApiError> {
+        run(&self.backend)
+            .map(|status| CommandResult::Seating { status })
+            .map_err(ApiError::from)
+    }
+
+    /// Stops every seat before the backend turns seats off, so none runs without its display
+    /// driver.
+    fn disable(&self, keep_accounts: bool) -> Result<CommandResult, ApiError> {
+        if !keep_accounts {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "seat accounts are removed with their profile, not when seats go off",
+            ));
+        }
+        let ids: Vec<SeatId> = self.lock().seats.iter().map(|s| s.id.clone()).collect();
+        for id in &ids {
+            self.change_runtime(id, false)?;
+        }
+        let _serialized = self.lock();
+        self.seating(|backend| backend.disable(keep_accounts))
     }
 
     fn doctor(&self) -> CommandResult {

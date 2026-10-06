@@ -7,7 +7,7 @@
 //! Tests use an in-memory fake, while other targets return a stable unsupported
 //! diagnostic without pretending that a seat is running.
 
-use crate::ipc::Diagnostic;
+use crate::ipc::{Diagnostic, SeatingStatus};
 use crate::model::{Ledger, RuntimeStatus, Seat};
 
 pub trait PlatformBackend: Send + Sync + 'static {
@@ -19,6 +19,22 @@ pub trait PlatformBackend: Send + Sync + 'static {
 
     fn doctor(&self, _ledger: &Ledger) -> Result<Vec<Diagnostic>, BackendError> {
         Ok(Vec::new())
+    }
+
+    /// Whether seats are on, with the checks that gate turning them on.
+    fn seating(&self) -> Result<SeatingStatus, BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
+    /// Run the checks, then turn seats on. A refusal is `Ok` with an error-level check, so the
+    /// operator reads why; `Err` is a failure the operator can't act on.
+    fn enable(&self, _allow_rdp_from_network: bool) -> Result<SeatingStatus, BackendError> {
+        Err(UnsupportedBackend::unavailable())
+    }
+
+    /// Turn seats off after every seat has stopped.
+    fn disable(&self, _keep_accounts: bool) -> Result<SeatingStatus, BackendError> {
+        Err(UnsupportedBackend::unavailable())
     }
 }
 

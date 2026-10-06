@@ -4,12 +4,13 @@
 //! into narrow modules. `WindowsBackend` runs inside the punktfunk service and
 //! owns only per-instance state. It opens one hardened secret root, takes the
 //! host executable from its caller, and delegates each portable command. The
-//! `HKLM\SOFTWARE\Punktfunk\Seats` key is the switch: without it no seat
-//! starts. Doctor reports prerequisite and ownership evidence but never infers
+//! `HKLM\SOFTWARE\Punktfunk\Seats` key is the switch, which `enable` writes
+//! and removes: without it no seat starts. Doctor reports prerequisite and ownership evidence but never infers
 //! HDR or IDD health from static configuration.
 
 mod accounts;
 mod credentials;
+mod enable;
 pub mod keeper;
 pub mod pipe;
 mod process;
@@ -19,7 +20,7 @@ mod util;
 mod wts;
 
 use crate::backend::{BackendError, PlatformBackend};
-use crate::ipc::{Diagnostic, DiagnosticLevel};
+use crate::ipc::{Diagnostic, DiagnosticLevel, SeatingStatus};
 use crate::model::{
     Ledger, RuntimeState, RuntimeStatus, Seat, DEFAULT_MGMT_PORTS, DEFAULT_NATIVE_PORTS,
 };
@@ -154,6 +155,36 @@ impl PlatformBackend for WindowsBackend {
 
     fn doctor(&self, ledger: &Ledger) -> Result<Vec<Diagnostic>, BackendError> {
         Ok(self.doctor_report(ledger))
+    }
+
+    fn seating(&self) -> Result<SeatingStatus, BackendError> {
+        Ok(SeatingStatus {
+            enabled: seats_enabled(),
+            checks: enable::checks(),
+        })
+    }
+
+    fn enable(&self, allow_rdp_from_network: bool) -> Result<SeatingStatus, BackendError> {
+        let mut checks = enable::checks();
+        if !checks
+            .iter()
+            .any(|check| check.level == DiagnosticLevel::Error)
+        {
+            let turned_on = enable::turn_on(&self.host_path, allow_rdp_from_network);
+            checks.extend(turned_on.err().map(enable::refusal));
+        }
+        Ok(SeatingStatus {
+            enabled: seats_enabled(),
+            checks,
+        })
+    }
+
+    fn disable(&self, _keep_accounts: bool) -> Result<SeatingStatus, BackendError> {
+        let checks = enable::turn_off().err().map(enable::refusal).into_iter();
+        Ok(SeatingStatus {
+            enabled: seats_enabled(),
+            checks: checks.collect(),
+        })
     }
 }
 

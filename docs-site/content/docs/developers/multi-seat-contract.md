@@ -17,13 +17,14 @@ host restart leaves them running; stopping the service logs every seat account o
 
 - **The pipe.** `\\.\pipe\punktfunk-seats` admits SYSTEM and Administrators only and refuses
   remote clients. Each connection carries one request: a four-byte big-endian length, then JSON,
-  64 KiB at most. Commands are `list`, `create`, `start`, `stop`, `delete` and `doctor`.
+  64 KiB at most. Commands are `list`, `create`, `start`, `stop`, `delete`, `doctor`, `seating`,
+  `enable` and `disable`.
 - **The keeper.** `punktfunk-seat-keeper.exe`, beside `punktfunk-host.exe`, holds one seat's
   loopback RDP session open. The supervisor hands it the seat's credentials on stdin, never on the
   command line. Run `punktfunk-seat-keeper trust` from an elevated prompt once, before the first
-  seat: it records the RDP certificate the keeper will accept.
+  seat: it records the RDP certificate the keeper will accept. Turning seats on does this too.
 - **Seats on and off.** Without the reservation marker below the ledger is still listed, and
-  every start answers `seats_off`.
+  every start answers `seats_off`. [Turn seats on and off](#turn-seats-on-and-off) writes the marker.
 
 ## The reservation marker
 
@@ -43,6 +44,31 @@ connectors:
   process, can't reserve connectors from its own environment.
 - When the driver places a monitor outside the host's range, the host removes it and refuses the
   session.
+
+## Turn seats on and off
+
+The management API turns seats on from the box's console. These routes take the management token,
+never a paired device or a plugin.
+
+| Request | Does |
+|---|---|
+| `GET /api/v1/profiles/seating` | Returns `enabled`, `platform` (`windows` or `other`) and `checks`: Windows Server, the Remote Desktop Session Host role, licensing and a graphics card. |
+| `PUT /api/v1/profiles/seating` with `{"enabled": true, "allow_rdp_from_network": false}` | Turns seats on. |
+| `PUT /api/v1/profiles/seating` with `{"enabled": false}` | Stops every seat and turns seats off. The accounts stay. |
+| `GET /api/v1/profiles/doctor` | Returns the supervisor's report. |
+
+A failed check changes nothing: the answer is 200 with `enabled: false` and the check as an
+`error`. When every check passes, turning on:
+
+1. Writes the reservation marker.
+2. Installs `pf_vdisplay_seats.inf` from `staging\pfvdisplay\` beside `punktfunk-host.exe`.
+3. Turns the Remote Desktop listener on if it was off, and limits the **Remote Desktop**
+   firewall rules to `127.0.0.0/8` unless `allow_rdp_from_network` is `true`.
+4. Records the Remote Desktop certificate, as `punktfunk-seat-keeper trust` does.
+
+Turning off puts the listener and the firewall scope back and removes the marker. The seat
+display driver stays in the driver store. Off Windows, `GET` answers `enabled: false` with
+`platform: other`, and `PUT` answers 409.
 
 ## The environment a seat host is started with
 
@@ -124,9 +150,9 @@ Remote Desktop included, so the build produces two packages from the same `.inx`
 | Package | Claims | Installed by |
 |---|---|---|
 | `pf_vdisplay.{inf,cat}` | the console display device, `Root\pf_vdisplay` | every punktfunk install |
-| `pf_vdisplay_seats.{inf,cat}` | `RdpIdd_IndirectDisplay` only | an operator, on an explicit choice |
+| `pf_vdisplay_seats.{inf,cat}` | `RdpIdd_IndirectDisplay` only | the console, when seats are turned on |
 
-A machine without the seats package never claims the id.
+A machine that never turned seats on never claims the id.
 
 **Losing the claim is silent.** Windows' own `rdpidd.inf` ranks the same as ours (`0x00FF0000`), so
 the newer `DriverVer` date wins. A seat on Microsoft's adapter still logs in and never streams.

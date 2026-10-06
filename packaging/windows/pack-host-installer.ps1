@@ -399,6 +399,13 @@ if ($wantWeb -or $wantScripting) {
 if ($wantWeb) { Copy-Item $webStage -Destination (Join-Path $appStage 'web\.output') -Recurse -Force }
 if ($wantScripting) { Copy-Item $scrStage -Destination (Join-Path $appStage 'scripting') -Recurse -Force }
 if ($layerStage -and (Test-Path $layerStage)) { Copy-Item $layerStage -Destination (Join-Path $appStage 'vklayer') -Recurse -Force }
+# The seats display driver stays on disk beside the host, since the extracted staging tree below is
+# deleted after setup. Setup never installs it: the console does, when the operator turns seats on.
+if (-not $NoDriver) {
+    $seatsDir = Join-Path $appStage 'staging\pfvdisplay'
+    New-Item -ItemType Directory -Force -Path $seatsDir | Out-Null
+    foreach ($f in 'pf_vdisplay_seats.inf', 'pf_vdisplay_seats.cat', 'pf_vdisplay.dll') { Copy-Item (Join-Path $stage $f) -Destination $seatsDir -Force }
+}
 # Driver payloads: extracted beside the wizard, handed to `driver install --dir <staging>\...`.
 $stagingRoot = Join-Path $OutDir 'staging'
 if (Test-Path $stagingRoot) { Remove-Item $stagingRoot -Recurse -Force }
