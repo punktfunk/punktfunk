@@ -519,6 +519,14 @@ pub enum ConsoleCmd {
         mgmt: u16,
         fp_hex: String,
     },
+    /// Start profile `id`'s stopped seat (`POST /api/v1/profiles/{id}/wake`). No answer: the
+    /// shell polls [`Self::FetchProfiles`] until the seat is `ready`.
+    WakeProfile {
+        addr: String,
+        mgmt: u16,
+        fp_hex: String,
+        id: String,
+    },
     /// Save the profile this device plays as on a saved host (`KnownHost::profile`).
     /// `None` clears it. `key` as in [`Self::SetPin`]. Idempotent.
     SetProfile {

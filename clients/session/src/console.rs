@@ -534,6 +534,12 @@ impl ServiceState {
             ConsoleCmd::FetchProfiles { addr, mgmt, fp_hex } => {
                 self.fetch_profiles(addr, mgmt, fp_hex)
             }
+            ConsoleCmd::WakeProfile {
+                addr,
+                mgmt,
+                fp_hex,
+                id,
+            } => self.wake_profile(addr, mgmt, fp_hex, id),
             ConsoleCmd::SetProfile { key, profile } => self.set_profile(key, profile),
             ConsoleCmd::SendLogs {
                 addr,
@@ -721,6 +727,20 @@ impl ServiceState {
                     }
                 };
                 console.set_profiles(&fp_hex, answer);
+            })
+            .ok();
+    }
+
+    /// Starts a profile's stopped seat. The shell polls the list for `ready` itself.
+    fn wake_profile(&self, addr: String, mgmt: u16, fp_hex: String, id: String) {
+        let identity = self.identity.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-wake-seat".into())
+            .spawn(move || {
+                if let Err(e) = profiles::wake(&addr, mgmt, &identity, pin, &id) {
+                    tracing::info!(%addr, error = %e, "profile seat did not wake");
+                }
             })
             .ok();
     }
