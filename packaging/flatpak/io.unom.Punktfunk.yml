@@ -65,14 +65,11 @@ finish-args:
   - --socket=wayland                 # GTK4 native Wayland window (the client is Wayland-first)
   - --socket=fallback-x11            # Xwayland fallback when no Wayland socket is exposed
   - --share=ipc                      # required alongside X11 for shared-memory surfaces
-  # Gaming Mode's overlay signal lives on a DIFFERENT X server than ours. gamescope runs
-  # `--xwayland-count 2`: Steam and the GAMESCOPE_FOCUSED_APP/_GFX atoms are on the first,
-  # the app is handed the second, so `$DISPLAY` alone can never see them — and --socket=x11
-  # would not help, since flatpak binds only the ONE socket named by DISPLAY. Read-only
-  # access to the socket directory is what lets `overlay_focus` reach the root ctx and stop
-  # forwarding the pad while the Steam menu / QAM is up. gamescope's Xwayland takes
-  # unauthenticated local connections, so no cookie has to cross with it.
-  - --filesystem=/tmp/.X11-unix:ro
+  # Gaming Mode's overlay signal lives on a DIFFERENT X server than ours: gamescope runs
+  # `--xwayland-count 2`, Steam and the GAMESCOPE_FOCUSED_APP/_GFX atoms on the first, the app
+  # on the second. flatpak binds only the ONE socket DISPLAY names and keeps /tmp/.X11-unix a
+  # private tmpfs, so no --filesystem grant reaches the first. `overlay_focus` dials its
+  # ABSTRACT socket instead, which `--share=network` below leaves open. Do not unshare it.
   # --- GPU + all input devices ---
   # --device=all (not just --device=dri): covers the GPU render node (VAAPI HEVC decode + GL),
   # evdev joysticks, AND the hidraw CHAR devices SDL3's HIDAPI needs for DualSense touchpad/

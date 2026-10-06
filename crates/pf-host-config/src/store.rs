@@ -677,5 +677,15 @@ mod tests {
         assert_eq!(zero.config.max_fps, None, "0 is no limit");
         let empty = build(&env_of(&[]), &obj(json!({"audio_voice_apps": []})), &[]);
         assert_eq!(empty.config.audio_voice_apps, crate::DEFAULT_VOICE_APPS);
+        let off = build(&env_of(&[]), &obj(json!({"vdisplay_hz_mult": 1})), &[]);
+        assert_eq!(off.config.vdisplay_hz_mult, 1, "the console turns it off");
+        for (raw, want) in [("0", 0), ("9", 4)] {
+            let s = build(
+                &env_of(&[("PUNKTFUNK_VDISPLAY_HZ_MULT", raw)]),
+                &Map::new(),
+                &[],
+            );
+            assert_eq!(s.config.vdisplay_hz_mult, want, "{raw}");
+        }
     }
 }
