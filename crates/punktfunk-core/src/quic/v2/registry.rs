@@ -122,6 +122,9 @@ pub const MSG_INPUT_EVENT: u64 = 0x50;
 /// `client → host`, control stream: a captured pad's USB serial and feature replies, before its
 /// arrival (`PadIdentity`).
 pub const MSG_PAD_IDENTITY: u64 = 0x51;
+/// `host → client`, control stream: a feature report the host's stack set on a pad's virtual
+/// device, for the physical pad (`PadFeature`). Under [`FEATURE_PAD_WRITES`].
+pub const MSG_PAD_FEATURE: u64 = 0x52;
 
 /// Every frame type, its name and the bound on its body.
 pub const FRAMES: &[(&str, u64, usize)] = &[
@@ -172,6 +175,7 @@ pub const FRAMES: &[(&str, u64, usize)] = &[
     ("MSG_CLIP_FETCH_HDR", MSG_CLIP_FETCH_HDR, 256),
     ("MSG_INPUT_EVENT", MSG_INPUT_EVENT, 256),
     ("MSG_PAD_IDENTITY", MSG_PAD_IDENTITY, 8 * 1024),
+    ("MSG_PAD_FEATURE", MSG_PAD_FEATURE, 256),
 ];
 
 /// The bound on a body of type `ty`; [`UNKNOWN_MAX_BODY`] for a type this build does not know.
@@ -237,6 +241,9 @@ pub const FEATURE_V1_HOST_CAPS2: u32 = 24;
 /// Both ends: the host sends a `StreamConfig` for every epoch, and the client moves its mode
 /// at that epoch's first frame. `Reconfigured` then only says a switch was accepted.
 pub const FEATURE_STREAM_CONFIG: u32 = 32;
+/// Both ends: a feature report for a client's pad rides the control stream
+/// ([`MSG_PAD_FEATURE`]), where a lost one is resent; output reports stay datagrams.
+pub const FEATURE_PAD_WRITES: u32 = 33;
 
 #[cfg(test)]
 mod tests {
@@ -269,6 +276,7 @@ mod tests {
         ("FEATURE_V1_HOST_CAPS", FEATURE_V1_HOST_CAPS),
         ("FEATURE_V1_HOST_CAPS2", FEATURE_V1_HOST_CAPS2),
         ("FEATURE_STREAM_CONFIG", FEATURE_STREAM_CONFIG),
+        ("FEATURE_PAD_WRITES", FEATURE_PAD_WRITES),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.

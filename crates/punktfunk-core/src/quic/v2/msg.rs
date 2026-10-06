@@ -218,6 +218,8 @@ v2_message!(PadIdentity = reg::MSG_PAD_IDENTITY, { 1 => pad, 2 => serial, 3 => r
     check |m| m.serial.len() <= PAD_IDENTITY_SERIAL_MAX
         && m.replies.len() <= PAD_IDENTITY_REPLIES_MAX
         && unpack_identity_replies(&m.replies).is_some());
+v2_message!(PadFeature = reg::MSG_PAD_FEATURE, { 1 => pad, 2 => data },
+    check |m| !m.data.is_empty() && m.data.len() <= crate::quic::HID_REPORT_MAX);
 
 /// No fields: the frame is the ask.
 impl V2Message for RequestKeyframe {
@@ -447,6 +449,10 @@ mod tests {
             pad: 3,
             serial: "FXA0000000001".into(),
             replies: pack_identity_replies([(&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..])]),
+        });
+        round_trip(PadFeature {
+            pad: 1,
+            data: vec![0x01, 0x87, 0x03, 0x08, 0x07, 0x00],
         });
         round_trip(PairResult { ok: true });
         round_trip(AuthChallenge { nonce: [6; 32] });

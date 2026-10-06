@@ -515,6 +515,15 @@ pub struct PadIdentity {
     pub replies: Vec<u8>,
 }
 
+/// `host → client` ([`MSG_PAD_FEATURE`](super::v2::registry::MSG_PAD_FEATURE)): a feature
+/// report for the physical pad, id first — [`HidOutput::HidRaw`](super::HidOutput::HidRaw) with
+/// [`HID_RAW_FEATURE`](super::HID_RAW_FEATURE), on the control stream.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PadFeature {
+    pub pad: u8,
+    pub data: Vec<u8>,
+}
+
 /// Longest [`PadIdentity::serial`] in bytes.
 pub const PAD_IDENTITY_SERIAL_MAX: usize = 32;
 /// Longest [`PadIdentity::replies`] in bytes: room for every query with margin.

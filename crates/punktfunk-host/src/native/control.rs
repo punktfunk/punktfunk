@@ -265,7 +265,8 @@ pub(super) struct Task {
     pub(super) audio_rx: tokio::sync::mpsc::UnboundedReceiver<punktfunk_core::quic::AudioState>,
     /// OS pad slots this session holds, from the input thread. The client names the
     /// player it is from this; wire indices are per client and say nothing about it.
-    pub(super) pad_slots_rx: tokio::sync::mpsc::UnboundedReceiver<punktfunk_core::quic::PadSlots>,
+    /// And the feature reports Steam set on them, for the physical pads.
+    pub(super) pad_rx: tokio::sync::mpsc::UnboundedReceiver<super::input::PadToClient>,
     /// What became of this session's library launch, from the launch site and
     /// from the lease when the game dies on the spot.
     pub(super) launch_outcome_rx:
@@ -364,7 +365,7 @@ pub(super) async fn run(task: Task) {
         session_grants,
         mut access_rx,
         mut audio_rx,
-        mut pad_slots_rx,
+        mut pad_rx,
         mut launch_outcome_rx,
         peer,
         plane,
@@ -834,11 +835,15 @@ pub(super) async fn run(task: Task) {
                     break;
                 }
             }
-            slots = pad_slots_rx.recv(), if !pad_slots_closed => {
+            msg = pad_rx.recv(), if !pad_slots_closed => {
                 // Same closed-mpsc rule as the audio arm above. The input thread is
                 // the only sender, and it ends with the session.
-                let Some(slots) = slots else { pad_slots_closed = true; continue };
-                if v2io::send(&mut ctrl_send, &slots).await.is_err() {
+                let sent = match msg {
+                    None => { pad_slots_closed = true; continue }
+                    Some(super::input::PadToClient::Slots(s)) => v2io::send(&mut ctrl_send, &s).await,
+                    Some(super::input::PadToClient::Feature(f)) => v2io::send(&mut ctrl_send, &f).await,
+                };
+                if sent.is_err() {
                     break;
                 }
             }

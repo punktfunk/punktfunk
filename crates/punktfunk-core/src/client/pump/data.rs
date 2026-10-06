@@ -953,6 +953,7 @@ mod tests {
         let (clip_event_tx, _clip_event_rx) = std::sync::mpsc::sync_channel(8);
         let (cursor_shape_tx, _cursor_shape_rx) = crate::client::planes::shape_queue();
         let (access_tx, _access_rx) = std::sync::mpsc::sync_channel(8);
+        let (hidout_tx, _hidout_rx) = std::sync::mpsc::sync_channel(8);
         let mode = crate::config::Mode {
             width: 1920,
             height: 1080,
@@ -973,6 +974,7 @@ mod tests {
                 cursor_shape_tx,
                 mode_gen: Arc::new(AtomicU32::new(0)),
                 access_tx,
+                hidout_tx,
             }
             .run(),
         );

@@ -725,7 +725,8 @@ pub(super) async fn negotiate(
     session.settle(suite);
     let features = first.features.intersect(
         punktfunk_core::quic::v2::features::FeatureSet::default()
-            .with(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG),
+            .with(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG)
+            .with(punktfunk_core::quic::v2::registry::FEATURE_PAD_WRITES),
     );
     let server_hello = ServerHello {
         welcome,

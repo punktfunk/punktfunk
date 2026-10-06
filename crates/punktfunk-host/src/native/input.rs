@@ -1116,8 +1116,15 @@ pub(super) fn spawn_datagram_reader(
 /// them inside its 1.5 s grace.
 ///
 /// `pad_id` names the device its pads belong to and the player slot the operator
-/// picked for it; `pad_slots` and `pad_slots_tx` publish the slots it ends up with,
+/// picked for it; `pad_slots` and `pad_tx` publish the slots it ends up with,
 /// to `/status` and to the client's overlay.
+/// Input thread → control task: what the client hears about its pads on the reliable stream.
+pub(super) enum PadToClient {
+    Slots(punktfunk_core::quic::PadSlots),
+    /// A feature report for the physical pad. Only toward a client with `FEATURE_PAD_WRITES`.
+    Feature(punktfunk_core::quic::PadFeature),
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn input_thread(
     rx: std::sync::mpsc::Receiver<ClientInput>,
@@ -1127,7 +1134,9 @@ pub(super) fn input_thread(
     pad_audio_on: bool,
     pad_id: crate::inject::pad_pool::PadIdentity,
     pad_slots: Arc<std::sync::atomic::AtomicU16>,
-    pad_slots_tx: Option<tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::PadSlots>>,
+    pad_tx: Option<tokio::sync::mpsc::UnboundedSender<PadToClient>>,
+    // The client reads feature reports off the control stream (`FEATURE_PAD_WRITES`).
+    pad_writes: bool,
     // Live grant mask. Dispatch already drops non-granted traffic; the guards
     // below are deny-at-setup: without `GRANT_GAMEPAD` no arm that could create
     // a virtual pad or pad-audio streamer runs. One relaxed load per item.
@@ -1313,8 +1322,18 @@ pub(super) fn input_thread(
             |pad, low, high, lt, rt| {
                 conn.send_datagram(rumble.on_level(pad, (low, high, lt, rt)));
             },
-            |h| {
-                conn.send_datagram(h.encode());
+            |h| match (h, &pad_tx) {
+                (punktfunk_core::quic::HidOutput::HidRaw { pad, kind, data }, Some(tx))
+                    if pad_writes && kind == punktfunk_core::quic::HID_RAW_FEATURE =>
+                {
+                    let _ = tx.send(PadToClient::Feature(punktfunk_core::quic::PadFeature {
+                        pad,
+                        data,
+                    }));
+                }
+                (h, _) => {
+                    conn.send_datagram(h.encode());
+                }
             },
         );
         // Held-steady UHID pads send no wire events; heartbeat re-emits. Xbox is a no-op.
@@ -1323,8 +1342,9 @@ pub(super) fn input_thread(
         // as a pad leaving and coming back. Silent while the slots stand.
         if let Some(mask) = pads.take_slot_change() {
             pad_slots.store(mask, std::sync::atomic::Ordering::Relaxed);
-            if let Some(tx) = &pad_slots_tx {
-                let _ = tx.send(punktfunk_core::quic::PadSlots { slots: mask });
+            if let Some(tx) = &pad_tx {
+                let slots = punktfunk_core::quic::PadSlots { slots: mask };
+                let _ = tx.send(PadToClient::Slots(slots));
             }
         }
         rumble.tick(std::time::Instant::now(), |d| {
@@ -1540,6 +1560,7 @@ mod tests {
                     PadIdentity::anonymous(),
                     Arc::new(std::sync::atomic::AtomicU16::new(0)),
                     None,
+                    false,
                     Arc::new(AtomicU32::new(0)),
                     Arc::new(std::sync::Mutex::new(
                         punktfunk_core::video_fit::Reframe::default(),
