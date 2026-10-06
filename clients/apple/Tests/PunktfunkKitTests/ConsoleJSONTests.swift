@@ -25,6 +25,7 @@ final class ConsoleJSONTests: XCTestCase {
     func testHostRowsCarryTheModelsKeys() throws {
         var saved = host(name: "Desk")
         saved.pinnedPresetIDs = ["p1"]
+        saved.gamePresets = ["halo": "p1"]
         let preset = StreamPreset(name: "Couch", id: "p1")
         let json = ConsoleJSON.hostRows(
             saved: [saved], discovered: [], online: [saved.id], presets: [preset])
@@ -42,6 +43,9 @@ final class ConsoleJSONTests: XCTestCase {
         XCTAssertEqual(row["os"] as? String, "linux/fedora")
         XCTAssertEqual(row["last_used"] as? Int, 1_700_000_000)
         XCTAssertTrue(row["pin"] is NSNull, "the primary tile carries no pin")
+        XCTAssertEqual(
+            row["game_presets"] as? [String: String], ["halo": "p1"],
+            "the bind screen marks a title's preset from this map")
 
         let card = rows[1]
         XCTAssertEqual(

@@ -1455,6 +1455,303 @@
         }
       }
     },
+    "/api/v1/emulators/catalog": {
+      "get": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "Read the emulator registry",
+        "description": "Every platform (names, aliases, extensions, folder shape) and every emulator as a library\nsees it: what it plays, whether this OS installs it, which platforms take saves, add-ons and\nfirmware. The facts a plugin needs to list games and pick an emulator.",
+        "operationId": "getEmulatorRegistry",
+        "responses": {
+          "200": {
+            "description": "The registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmulatorRegistry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The catalog could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/emulators/{id}/adopt": {
+      "post": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "Adopt a copy of an emulator",
+        "description": "Points the host at the operator's own copy, one no rule finds (a portable build unpacked\nanywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane\nonly.",
+        "operationId": "adoptEmulator",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Adopted, or forgotten",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/EmulatorCopy"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a program on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not in the catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another install holds the prefix",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/emulators/{id}/content": {
+      "post": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "Install a game's update or DLC",
+        "description": "Hands the files to the best copy of the emulator the way it takes them: a folder it scans,\nits own installer, or a registration file. One step per file. An emulator with no way says\nwhy.",
+        "operationId": "installEmulatorContent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One step per file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmulatorStep"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed platform or kind, no way to install it, or no copy on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A file outside the plugin's reach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not in the catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/emulators/{id}/firmware": {
+      "get": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "Check a platform's firmware",
+        "description": "Whether the best copy of the emulator has the platform's firmware, each file hashed against\nthe good dumps the catalog knows. `null` when the platform needs none.",
+        "operationId": "getEmulatorFirmware",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "description": "A catalog platform id or alias, like `ps2`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The platform's firmware, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FirmwareStatusView"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed platform, or no copy on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not in the catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/emulators/{id}/install": {
       "post": {
         "tags": [
@@ -1709,6 +2006,272 @@
           },
           "500": {
             "description": "Not installed by the host, or the files could not be removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/emulators/{id}/saves": {
+      "get": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "List a platform's saves",
+        "description": "The save units of the platform on the best copy of the emulator: name, kind, size and a\nstamp that changes with the save. A plugin needs the operator's save grant.",
+        "operationId": "getEmulatorSaves",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "description": "A catalog platform id or alias, like `ps2`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "game",
+            "in": "query",
+            "description": "The game's folder, for an emulator that keeps saves beside its games",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The save units",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SaveUnitView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed platform, or no copy on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No save grant, or a game folder outside the plugin's reach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not in the catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/emulators/{id}/saves/export": {
+      "post": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "Copy saves out",
+        "description": "Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in\nits headers that differs between machines. A plugin's `dir` is inside its own state folder.",
+        "operationId": "exportEmulatorSaves",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportUnitsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The files written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExportedUnitView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed platform or unit, or no copy on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No save grant, or a folder outside the plugin's reach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not in the catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/emulators/{id}/saves/import": {
+      "post": {
+        "tags": [
+          "emulators"
+        ],
+        "summary": "Put saves back",
+        "description": "Each unit goes where the emulator keeps it, in the first of its kinds with a place for its\nname; what was there is kept in hermir's save backups. A unit with no place yet is a step\nthat says so. A plugin's files are inside its own state folder.",
+        "operationId": "importEmulatorSaves",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportUnitsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One step per unit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmulatorStep"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed platform or unit, a missing file, or no copy on this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No save grant, or a file outside the plugin's reach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not in the catalog",
             "content": {
               "application/json": {
                 "schema": {
@@ -7503,6 +8066,10 @@
               "null"
             ],
             "description": "Why the plugin wants it, in the plugin's words. Optional, sanitized, ≤120 chars."
+          },
+          "saves": {
+            "type": "boolean",
+            "description": "Ask to read and restore emulator saves. One yes covers every emulator on this host; the\nanswer names the folder the grant lands on."
           }
         }
       },
@@ -7639,6 +8206,22 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "AdoptRequest": {
+        "type": "object",
+        "required": [
+          "exe"
+        ],
+        "properties": {
+          "exe": {
+            "type": "string",
+            "description": "The copy's program, absolute."
+          },
+          "forget": {
+            "type": "boolean",
+            "description": "Forget the copy instead."
           }
         }
       },
@@ -8865,6 +9448,30 @@
           }
         }
       },
+      "ContentRequest": {
+        "type": "object",
+        "required": [
+          "platform",
+          "kind",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The add-on files: absolute under a folder the plugin was granted, or relative to its own\nstate folder."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`update` or `dlc`."
+          },
+          "platform": {
+            "type": "string"
+          }
+        }
+      },
       "CustomEntry": {
         "allOf": [
           {
@@ -9690,6 +10297,13 @@
               "null"
             ]
           },
+          "cores": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "RetroArch: the libretro cores this copy has (`snes9x`)."
+          },
           "exe": {
             "type": "string",
             "description": "The program, or `flatpak run <app id>`."
@@ -9705,6 +10319,10 @@
             ]
           }
         }
+      },
+      "EmulatorRegistry": {
+        "type": "object",
+        "description": "hermir's registry, as hermir writes it; its JSON Schema is hermir's own."
       },
       "EmulatorStatus": {
         "type": "object",
@@ -9753,6 +10371,41 @@
               "type": "string"
             },
             "description": "Platform ids the emulator plays."
+          }
+        }
+      },
+      "EmulatorStep": {
+        "type": "object",
+        "description": "What one save or add-on step did.",
+        "required": [
+          "target",
+          "outcome"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`applied`, `present`, `skipped`, `conflict` or `failed`."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": "string"
           }
         }
       },
@@ -10469,6 +11122,132 @@
           }
         ],
         "description": "Internally tagged `\"kind\": \"<domain>.<verb>\"`, flattened into [`HostEvent`].\nAdditive-only within [`SCHEMA_VERSION`]."
+      },
+      "ExportUnitsRequest": {
+        "type": "object",
+        "required": [
+          "platform",
+          "units",
+          "dir"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string",
+            "description": "The folder the files go to: relative to a plugin's own state folder, absolute for the\noperator. Made when missing."
+          },
+          "game": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "string"
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnitRef"
+            }
+          }
+        }
+      },
+      "ExportedUnitView": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "file",
+          "size",
+          "md5"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The file written, spelled the way the request spelled `dir`."
+          },
+          "kind": {
+            "type": "string"
+          },
+          "md5": {
+            "type": "string",
+            "description": "MD5, hex."
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FirmwareFileView": {
+        "type": "object",
+        "required": [
+          "name",
+          "md5"
+        ],
+        "properties": {
+          "known": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` a known good dump, `false` named right but not one, absent when no hashes are known."
+          },
+          "md5": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's name."
+          }
+        }
+      },
+      "FirmwareStatusView": {
+        "type": "object",
+        "description": "One platform's firmware on the best copy.",
+        "required": [
+          "platform",
+          "ok",
+          "optional",
+          "any_of",
+          "found"
+        ],
+        "properties": {
+          "any_of": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Accepted file names."
+          },
+          "found": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FirmwareFileView"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the platform needs, in a phrase a UI shows."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "The need is met."
+          },
+          "optional": {
+            "type": "boolean"
+          },
+          "platform": {
+            "type": "string"
+          }
+        }
       },
       "GameEndReason": {
         "type": "string",
@@ -11347,6 +12126,58 @@
           "per-client",
           "per-client-mode"
         ]
+      },
+      "ImportUnit": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The file to put back: relative to a plugin's own state folder, absolute for the operator."
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ImportUnitsRequest": {
+        "type": "object",
+        "required": [
+          "platform",
+          "units"
+        ],
+        "properties": {
+          "game": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "others": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The names a server holds for the same game."
+          },
+          "platform": {
+            "type": "string"
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportUnit"
+            },
+            "description": "Rows of one name go to the first of their kinds with a place for it."
+          }
+        }
       },
       "InputCounts": {
         "type": "object",
@@ -12713,6 +13544,10 @@
               "null"
             ]
           },
+          "saves": {
+            "type": "boolean",
+            "description": "The plugin asks to read and restore emulator saves; `path` is the folder that grant lands on."
+          },
           "write": {
             "type": "boolean"
           }
@@ -13822,6 +14657,53 @@
           "unit": {
             "type": "string",
             "description": "systemd unit or scheduled-task name."
+          }
+        }
+      },
+      "SaveUnitView": {
+        "type": "object",
+        "description": "One save unit on the best copy.",
+        "required": [
+          "kind",
+          "name",
+          "shared",
+          "written_at_start",
+          "size",
+          "files",
+          "modified"
+        ],
+        "properties": {
+          "files": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "`save`, `memcard` or `state`."
+          },
+          "modified": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its newest change, milliseconds since 1970.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The same on every machine; `.tar` ends a folder's."
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "It holds every game's data at once (a shared memory card)."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "written_at_start": {
+            "type": "boolean",
+            "description": "The emulator writes an empty one when a game first starts."
           }
         }
       },
@@ -15129,6 +16011,22 @@
         ],
         "properties": {
           "pkg": {
+            "type": "string"
+          }
+        }
+      },
+      "UnitRef": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`save`, `memcard` or `state`."
+          },
+          "name": {
             "type": "string"
           }
         }

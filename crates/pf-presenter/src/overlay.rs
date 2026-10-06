@@ -29,9 +29,9 @@ pub struct SharedDevice {
     /// and the loader. Do not probe `vkEnumerateInstanceVersion` — extra
     /// `vkGetDeviceProcAddr` entry points above that are null.
     pub api_version: u32,
-    /// This device decodes AV1 in hardware
-    /// ([`pf_client_core::video::av1_hardware_decodable`]) — the same answer that gates the
-    /// `CODEC_AV1` advertisement, so a settings UI on this overlay says what the Hello asks.
+    /// This device decodes AV1 in hardware ([`pf_client_core::video::av1_advertised`]) —
+    /// the same answer that gates the `CODEC_AV1` advertisement, so a settings UI on this
+    /// overlay says what the Hello asks.
     pub av1_decode: bool,
 }
 

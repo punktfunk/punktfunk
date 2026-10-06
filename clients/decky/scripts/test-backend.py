@@ -87,8 +87,7 @@ check("cli argv: native sibling found", main._cli_argv() == [str(tmp / "punktfun
 # and the panel reported the client up to date forever. One branch INSTALLED is not enough to
 # make the query unambiguous; the ambiguity lives on the remote.
 shutil.rmtree("/tmp/pf-test-home", ignore_errors=True)
-# An arm install (Steam Frame): the resolver must look under the machine's arch, not x86_64.
-main._FLATPAK_ARCH = "aarch64"
+# An arm install (Steam Frame): the resolver must look under the installed arch, not uname's.
 _fp_root = Path("/tmp/pf-test-home/.local/share/flatpak/app/io.unom.Punktfunk/aarch64")
 main._flatpak = lambda: "/usr/bin/flatpak"
 main._client_argv = _real_client_argv  # undo the fixture patches above
@@ -109,7 +108,7 @@ check("ref: a branch dir without `active` is leftovers, not an install", main._f
 _install_branch("canary")
 ref = main._flatpak_ref()
 check("ref: the single installed branch is used", ref == {
-    "scope": "--user", "branch": "canary", "ref": "io.unom.Punktfunk//canary",
+    "scope": "--user", "branch": "canary", "arch": "aarch64", "ref": "io.unom.Punktfunk//canary",
 })
 check(
     "ref: the launcher pins that branch, app id still LAST",
