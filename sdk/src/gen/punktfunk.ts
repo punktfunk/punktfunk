@@ -1062,6 +1062,8 @@ export type ArmNativePairing400 = ApiError
 export const ArmNativePairing400 = ApiError
 export type ArmNativePairing401 = ApiError
 export const ArmNativePairing401 = ApiError
+export type ArmNativePairing409 = ApiError
+export const ArmNativePairing409 = ApiError
 export type ArmNativePairing503 = ApiError
 export const ArmNativePairing503 = ApiError
 export type ListPendingDevices200 = ReadonlyArray<PendingDevice>
@@ -2317,6 +2319,7 @@ export const make = (
       "2xx": decodeSuccess(ArmNativePairing200),
       "400": decodeError("ArmNativePairing400", ArmNativePairing400),
       "401": decodeError("ArmNativePairing401", ArmNativePairing401),
+      "409": decodeError("ArmNativePairing409", ArmNativePairing409),
       "503": decodeError("ArmNativePairing503", ArmNativePairing503),
       orElse: unexpectedStatus
     }))
@@ -3311,7 +3314,7 @@ readonly "disarmNativePairing": <Config extends OperationConfig>(options: { read
 * Opens a window and mints a PIN. `grants` / `expires_in_secs` apply to
 * whichever device completes the ceremony.
 */
-readonly "armNativePairing": <Config extends OperationConfig>(options: { readonly payload: typeof ArmNativePairingRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof ArmNativePairing200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ArmNativePairing400", typeof ArmNativePairing400.Type> | PunktfunkError<"ArmNativePairing401", typeof ArmNativePairing401.Type> | PunktfunkError<"ArmNativePairing503", typeof ArmNativePairing503.Type>>
+readonly "armNativePairing": <Config extends OperationConfig>(options: { readonly payload: typeof ArmNativePairingRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof ArmNativePairing200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ArmNativePairing400", typeof ArmNativePairing400.Type> | PunktfunkError<"ArmNativePairing401", typeof ArmNativePairing401.Type> | PunktfunkError<"ArmNativePairing409", typeof ArmNativePairing409.Type> | PunktfunkError<"ArmNativePairing503", typeof ArmNativePairing503.Type>>
   /**
 * Unpaired knocks while pairing is required. Approve to pair without a PIN.
 * Entries expire after ~10 minutes.
