@@ -420,7 +420,9 @@ final class SessionModel: ObservableObject {
                  allowTofu: Bool = false,
                  autoTrust: Bool = false,
                  requestAccess: Bool = false,
-                 onProfileUnknown: (@MainActor () -> Void)? = nil,
+                 /// The host refused `profileID` as unknown. Return true to re-dial: the error
+                 /// is then not shown.
+                 onProfileUnknown: (@MainActor () -> Bool)? = nil,
                  onUnreachable: (@MainActor () -> Void)? = nil) {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
@@ -545,8 +547,10 @@ final class SessionModel: ObservableObject {
                     // otherwise nothing here does. It would sit over the home screen until the
                     // next session, and on tvOS it makes the host grid unfocusable behind it.
                     self.revealStream()
-                    if case PunktfunkClientError.rejected(.profileUnknown) = error {
-                        onProfileUnknown?()
+                    // true: the caller re-dials and says what it ends in.
+                    if case PunktfunkClientError.rejected(.profileUnknown) = error,
+                       onProfileUnknown?() == true {
+                        return
                     }
                     if let message = ConnectOffer.failureMessage(
                         error, hostName: host.displayName, pinned: pin != nil,

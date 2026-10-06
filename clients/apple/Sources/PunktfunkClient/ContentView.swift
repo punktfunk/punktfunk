@@ -92,6 +92,8 @@ struct ContentView: View {
     @State private var awaitingApproval: ApprovalRequest?
     /// The profile picker a connect waits on.
     @State private var profileAsk: ProfileAsk?
+    /// The wait for a profile's seat to come up, before the dial.
+    @State private var seatWait: SeatWait?
     @State private var speedTestTarget: StoredHost?
     @State private var libraryTarget: LibraryTarget?
     #if os(iOS) || os(visionOS) || os(tvOS)
@@ -255,6 +257,8 @@ struct ContentView: View {
             }
             // Who is playing: shown by a connect when its host lists several profiles.
             .sheet(item: $profileAsk) { ProfilePickerView(ask: $0) }
+            // The seat of the picked profile is starting; the dial follows once it is up.
+            .sheet(item: $seatWait) { SeatWaitView(wait: $0) }
             // Informational deep-link outcome (unknown host, a refused preset, already
             // streaming). Not an error.
             .alert("Can't open", isPresented: deepLinkNoticePresented) {
@@ -1303,7 +1307,7 @@ struct ContentView: View {
         ConnectFlow(
             model: model, store: store, presets: presets, discovery: discovery, waker: waker,
             autoWake: $autoWakeEnabled, approvalChoice: $approvalChoice,
-            awaitingApproval: $awaitingApproval, profileAsk: $profileAsk)
+            awaitingApproval: $awaitingApproval, profileAsk: $profileAsk, seatWait: $seatWait)
     }
 
     /// A title picked on a library shelf: dial its host, booting straight into that title — with

@@ -31,6 +31,8 @@ struct ConnectFlow {
     @Binding var awaitingApproval: ApprovalRequest?
     /// The profile picker a connect is waiting on.
     @Binding var profileAsk: ProfileAsk?
+    /// The wait for the picked profile's seat to come up.
+    @Binding var seatWait: SeatWait?
 
     /// Which profile a connect plays as.
     enum ProfileChoice {
@@ -102,7 +104,7 @@ struct ConnectFlow {
             let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
             guard d.picker, let rows else {
                 store.setProfile(host.id, d.remember)
-                go(d.send)
+                settleSeat(host, rows: rows, id: d.send, go: go)
                 return
             }
             profileAsk = ProfileAsk(
@@ -110,8 +112,75 @@ struct ConnectFlow {
                 content: .choose(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone),
                 pick: { pick in
                     store.setProfile(host.id, pick)
-                    go(pick.id)
+                    settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: go)
                 })
+        }
+    }
+
+    /// Run `go` with `id` once its seat can take the connect: now for a profile without a seat
+    /// or one that is up, after a wake and a wait for one that is not, never for one that
+    /// can't play. `afterSheet`: the picker is still closing, so a sheet or alert waits for it.
+    private func settleSeat(
+        _ host: StoredHost, rows: [ListedProfile]?, id: String?, afterSheet: Bool = false,
+        go: @escaping @MainActor (String?) -> Void
+    ) {
+        guard let id, let row = rows?.first(where: { $0.id == id }) else {
+            go(id)
+            return
+        }
+        let gate = HostProfiles.seatGate(row)
+        if gate == .dial {
+            go(id)
+            return
+        }
+        Task { @MainActor in
+            if afterSheet { try? await Task.sleep(nanoseconds: 400_000_000) }
+            switch gate {
+            case .dial: go(id)
+            case .refuse(let line): model.errorMessage = line
+            case .wake, .wait: waitForSeat(host, row, wake: gate == .wake, go: go)
+            }
+        }
+    }
+
+    /// The sheet while a seat comes up: wake it when stopped, then read the list every 2 s.
+    /// Closing the sheet cancels; there is no timeout.
+    private func waitForSeat(
+        _ host: StoredHost, _ first: ListedProfile, wake: Bool,
+        go: @escaping @MainActor (String?) -> Void
+    ) {
+        var detail: String?
+        if case .wait(let line) = HostProfiles.seatGate(first) { detail = line }
+        let wait = SeatWait(title: HostProfiles.wakingLine(first.displayName), detail: detail)
+        seatWait = wait
+        wait.task = Task { @MainActor in
+            if wake, !(await ProfileFetch.wake(host, id: first.id)) {
+                seatWait = nil
+                model.errorMessage =
+                    "Couldn't wake \(first.displayName)'s desk. Try again in a moment."
+                return
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+                // The sheet closed meanwhile: that is Cancel.
+                guard !Task.isCancelled, seatWait === wait else { return }
+                // A failed read keeps waiting. A profile the list dropped is the host's to refuse.
+                guard case .listed(let rows) = answer else { continue }
+                let row = rows?.first { $0.id == first.id }
+                switch row.map(HostProfiles.seatGate) ?? .dial {
+                case .dial:
+                    seatWait = nil
+                    go(first.id)
+                    return
+                case .refuse(let line):
+                    seatWait = nil
+                    model.errorMessage = line
+                    return
+                case .wait(let line): wait.detail = line
+                case .wake: wait.detail = nil
+                }
+            }
         }
     }
 
@@ -163,7 +232,7 @@ struct ConnectFlow {
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false, profileID: String? = nil,
+        fromLibrary: Bool = false, profileID: String? = nil, redialed: Bool = false,
         onUnreachable: (@MainActor () -> Void)? = nil
     ) {
         prepareWake(for: host)
@@ -191,8 +260,33 @@ struct ConnectFlow {
                 ? LibraryTarget(host: host, preset: preset) : nil,
             allowTofu: allowTofu,
             requestAccess: requestAccess,
-            // The host no longer lists the saved profile: forget it, so the next connect asks.
-            onProfileUnknown: { store.setProfile(host.id, nil) },
+            onProfileUnknown: {
+                // One re-dial when the list still has the profile: a seat host refused a stale
+                // seat. Otherwise forget the pick, so the next connect asks.
+                guard !redialed, let profileID else {
+                    store.setProfile(host.id, nil)
+                    return false
+                }
+                Task { @MainActor in
+                    let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+                    guard case .listed(let rows?) = answer,
+                          rows.contains(where: { $0.id == profileID }) else {
+                        store.setProfile(host.id, nil)
+                        model.errorMessage =
+                            "\(host.displayName): \(HostRejection.profileUnknown.userMessage)"
+                        return
+                    }
+                    settleSeat(host, rows: rows, id: profileID) { id in
+                        startSessionDirect(
+                            store.hosts.first { $0.id == host.id } ?? host,
+                            launchID: launchID, preset: preset, allowTofu: allowTofu,
+                            requestAccess: requestAccess, approvalReq: approvalReq,
+                            fromLibrary: fromLibrary, profileID: id, redialed: true,
+                            onUnreachable: onUnreachable)
+                    }
+                }
+                return true
+            },
             onUnreachable: onUnreachable)
     }
 

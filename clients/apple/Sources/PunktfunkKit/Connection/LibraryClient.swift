@@ -648,6 +648,32 @@ public enum LibraryClient {
         }
     }
 
+    /// Start profile `id`'s stopped seat: `POST /api/v1/profiles/{id}/wake`. The host answers the
+    /// row, `starting` until the seat is up; the caller reads progress from the list.
+    public static func wakeProfile(
+        id: String,
+        address: String,
+        port: UInt16 = punktfunkDefaultMgmtPort,
+        certPEM: String,
+        keyPEM: String,
+        hostFingerprint: Data?
+    ) async throws {
+        let identity = try clientIdentity(certPEM: certPEM, keyPEM: keyPEM)
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let response = try await send(
+            path: "/api/v1/profiles/\(escaped)/wake", address: address, port: port,
+            identity: identity, hostFingerprint: hostFingerprint,
+            body: (Data(), "application/json"))
+        switch response.status {
+        case 200, 202:
+            return
+        case 401, 403:
+            throw LibraryError.unauthorized
+        default:
+            throw LibraryError.http(response.status)
+        }
+    }
+
     /// What the host currently has running, from `GET /api/v1/status`.
     ///
     /// Same lane, same identity, no new host work: `/status` is already on the paired-certificate

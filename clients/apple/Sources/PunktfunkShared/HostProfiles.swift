@@ -184,4 +184,34 @@ public enum HostProfiles {
         }
         return Decision(picker: true, gone: remembered?.displayName)
     }
+
+    /// What a client does with a picked profile's seat before it dials.
+    public enum SeatGate: Equatable, Sendable {
+        /// Dial now. The host places the connect, or says why it can't.
+        case dial
+        /// `POST /api/v1/profiles/{id}/wake`, then wait.
+        case wake
+        /// The seat is coming up. Poll the list every 2 s, show `detail`, offer Cancel; there is
+        /// no timeout.
+        case wait(detail: String?)
+        /// The seat can't play now; the line says why. Don't dial.
+        case refuse(String)
+    }
+
+    /// The gate for `p`'s seat, as `enumerate` lists it.
+    public static func seatGate(_ p: ListedProfile) -> SeatGate {
+        guard let seat = p.seat else { return .dial }
+        switch seat.state {
+        case .ready, .occupied, .other: return .dial
+        case .stopped: return .wake
+        case .starting: return .wait(detail: seat.detail)
+        case .unavailable:
+            return .refuse(seat.detail ?? "That profile can't play on this host right now.")
+        }
+    }
+
+    /// The line while a seat comes up: `Getting Kid's desk ready…`.
+    public static func wakingLine(_ displayName: String) -> String {
+        "Getting \(displayName)'s desk ready…"
+    }
 }

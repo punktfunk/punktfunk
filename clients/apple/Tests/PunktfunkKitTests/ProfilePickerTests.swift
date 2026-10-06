@@ -55,6 +55,28 @@ final class ProfilePickerTests: XCTestCase {
         XCTAssertEqual(HostProfiles.initials("anna lena x"), "AL")
     }
 
+    func testASeatIsDialedWokenWaitedForOrRefused() {
+        func row(_ state: SeatState?, _ detail: String? = nil) -> ListedProfile {
+            ListedProfile(
+                id: "kid", displayName: "Kid",
+                seat: state.map { ProfileSeat(state: $0, detail: detail) })
+        }
+        XCTAssertEqual(HostProfiles.seatGate(row(nil)), .dial)
+        XCTAssertEqual(HostProfiles.seatGate(row(.ready)), .dial)
+        XCTAssertEqual(HostProfiles.seatGate(row(.occupied)), .dial)
+        XCTAssertEqual(HostProfiles.seatGate(row(.other)), .dial)
+        XCTAssertEqual(HostProfiles.seatGate(row(.stopped)), .wake)
+        XCTAssertEqual(
+            HostProfiles.seatGate(row(.starting, "Signing in")), .wait(detail: "Signing in"))
+        XCTAssertEqual(HostProfiles.seatGate(row(.starting)), .wait(detail: nil))
+        XCTAssertEqual(
+            HostProfiles.seatGate(row(.unavailable, "Seats are off.")), .refuse("Seats are off."))
+        XCTAssertEqual(
+            HostProfiles.seatGate(row(.unavailable)),
+            .refuse("That profile can't play on this host right now."))
+        XCTAssertEqual(HostProfiles.wakingLine("Kid"), "Getting Kid's desk ready…")
+    }
+
     func testAnOldSavedHostDecodesWithoutAPick() throws {
         let old = """
             {"id":"11111111-2222-4333-8444-555555555555","name":"Desk","address":"10.0.0.2",

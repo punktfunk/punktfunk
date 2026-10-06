@@ -76,6 +76,10 @@ extension ConsoleModel {
             fetchProfiles(
                 addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
                 fp: a["fp_hex"] as? String ?? "")
+        case "WakeProfile":
+            wakeProfile(
+                addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
+                fp: a["fp_hex"] as? String ?? "", id: a["id"] as? String ?? "")
         case "SetProfile":
             if let host = host(key: a["key"] as? String ?? "") {
                 let pick = a["profile"] as? [String: Any]
@@ -352,6 +356,12 @@ extension ConsoleModel {
                 self?.pushProfiles(fp, ["Failed": "Couldn't load the profiles."])
             }
         }
+    }
+
+    /// Starts a profile's stopped seat. The shell polls `FetchProfiles` for `ready` itself.
+    private func wakeProfile(addr: String, mgmt: UInt16, fp: String, id: String) {
+        guard let host = host(fp: fp, addr: addr, port: 0) else { return }
+        Task { _ = await ProfileFetch.wake(host, mgmt: mgmt > 0 ? mgmt : nil, id: id) }
     }
 
     private func pushProfiles(_ fp: String, _ answer: Any) {

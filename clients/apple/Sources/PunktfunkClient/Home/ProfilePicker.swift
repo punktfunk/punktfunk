@@ -1,7 +1,8 @@
 // The profile picker: who is playing on this box. A connect asks the paired host for its profiles
 // first (`ProfileFetch`), applies the shared rule (`HostProfiles.pickerDecision`) and shows this
 // only when the rule says so. "Switch profile…" opens it directly and saves the pick without
-// connecting. A sheet on iOS and macOS, a focus grid on tvOS.
+// connecting. A sheet on iOS and macOS, a focus grid on tvOS. `SeatWait` is the sheet a connect
+// shows while the picked profile's seat starts.
 
 import PunktfunkKit
 import SwiftUI
@@ -48,6 +49,60 @@ enum ProfileFetch {
             group.cancelAll()
             return first
         }
+    }
+}
+
+extension ProfileFetch {
+    /// Start profile `id`'s stopped seat on `host`. false: the host didn't take the call.
+    static func wake(_ host: StoredHost, mgmt: UInt16? = nil, id: String) async -> Bool {
+        guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
+            return false
+        }
+        do {
+            try await LibraryClient.wakeProfile(
+                id: id, address: host.address, port: mgmt ?? host.effectiveMgmtPort,
+                certPEM: identity.certPEM, keyPEM: identity.keyPEM,
+                hostFingerprint: host.pinnedSHA256)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
+/// A connect waiting for a profile's seat to come up. Closing the sheet cancels the poll.
+@MainActor
+final class SeatWait: ObservableObject, Identifiable {
+    let title: String
+    @Published var detail: String?
+    var task: Task<Void, Never>?
+
+    init(title: String, detail: String?) {
+        self.title = title
+        self.detail = detail
+    }
+}
+
+struct SeatWaitView: View {
+    @ObservedObject var wait: SeatWait
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 24) {
+            ProgressView()
+            Text(wait.title)
+                .font(.title2.bold())
+                .multilineTextAlignment(.center)
+            if let detail = wait.detail {
+                Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            Button("Cancel") { dismiss() }
+        }
+        .padding(32)
+        #if os(macOS)
+        .frame(minWidth: 380)
+        #endif
+        .onDisappear { wait.task?.cancel() }
     }
 }
 
