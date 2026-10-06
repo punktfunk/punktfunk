@@ -143,6 +143,9 @@ enum Retired {
     Dmabuf(HwFrame),
     /// Decoder-owned image + views: destroy nothing; drop after the fence to return the slot.
     NativeVk(NativeVkFrame),
+    /// The frame holds its plane ring: a `Redraw` samples planes that are still there.
+    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+    Pyro(pf_client_core::video_pyrowave::PyroWavePlanarFrame),
 }
 
 /// Which planes the direct pass sampled last, and how. A `Redraw` replays this: the
@@ -165,6 +168,9 @@ enum DirectSrc {
     Dmabuf,
     /// The software rung's plane images, which persist.
     Cpu,
+    /// `retired_hw` holds the wavelet frame.
+    #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+    Pyro,
 }
 
 /// Premultiplied-alpha quad blended over the swapchain image after the video blit.
