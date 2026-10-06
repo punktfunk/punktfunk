@@ -1,6 +1,6 @@
 ---
 title: Multi-seat contract
-description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit; and the variables a seat host starts with.
+description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit, and the owner's row behind the door; and the variables a seat host starts with.
 ---
 
 The rules between the host and its seat supervisor, which runs one host per seat so several people
@@ -53,7 +53,7 @@ never a paired device or a plugin.
 
 | Request | Does |
 |---|---|
-| `GET /api/v1/profiles/seating` | Returns `enabled`, `platform` (`windows` or `other`) and `checks`: Windows Server, the Remote Desktop Session Host role, licensing and a graphics card. |
+| `GET /api/v1/profiles/seating` | Returns `enabled`, `platform` (`windows`, `linux` on a door, or `other`) and `checks`: Windows Server, the Remote Desktop Session Host role, licensing and a graphics card. |
 | `PUT /api/v1/profiles/seating` with `{"enabled": true, "allow_rdp_from_network": false}` | Turns seats on. |
 | `PUT /api/v1/profiles/seating` with `{"enabled": false}` | Stops every seat and turns seats off. The accounts stay. |
 | `GET /api/v1/profiles/doctor` | Returns the supervisor's report. |
@@ -68,8 +68,8 @@ A failed check changes nothing: the answer is 200 with `enabled: false` and the 
 4. Records the Remote Desktop certificate, as `punktfunk-seat-keeper trust` does.
 
 Turning off puts the listener and the firewall scope back and removes the marker. The seat
-display driver stays in the driver store. Off Windows, `GET` answers `enabled: false` with
-`platform: other`, and `PUT` answers 409.
+display driver stays in the driver store. Off Windows and off a door, `GET` answers `enabled: false`
+with `platform: other`, and `PUT` answers 409.
 
 ## The environment a seat host is started with
 
@@ -198,8 +198,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 - **The socket.** `/run/punktfunk/seats.sock` carries the same frames and commands as the Windows
   pipe. It answers root and the `punktfunk` user, judged by the peer's credentials; any other peer
   is closed unanswered. `enable` answers like `seating`, and `disable` is refused: seats are on while
-  the daemon runs. `punktfunk-seats list`, `create <name>`, `start|stop|delete <id>` and `doctor`
-  send the same requests.
+  the daemon runs. `punktfunk-seats list`, `create <name>`, `adopt-owner <user>`,
+  `start|stop|delete <id>` and `doctor` send the same requests.
 - **The user.** Its comment is `punktfunk-seat=<id>`, and the daemon touches or deletes only an
   account whose comment matches exactly. The home is `seats/<id>/home`. It joins `render`, `input`
   and `punktfunk`.
@@ -226,3 +226,38 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
 
 `punktfunk-seats doctor` checks systemd, logind, the groups, a GPU render node, a compositor and
 the installed unit.
+
+### The owner's row and the door
+
+On a box with [**Reachable without logging in**](/docs/profiles#on-linux) on, the box's own host
+is the door: `punktfunk-host serve --door` (or `PUNKTFUNK_DOOR=1`), run as the `punktfunk` user by
+`punktfunk-door.service` with `PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk`. It advertises, pairs,
+serves the management API and places every connect, and opens no display, capture, input or
+audio device. A connect is answered with a `Redirect` to a seat, or refused with
+`SEAT_UNAVAILABLE`: the door never streams. `GET /api/v1/host` reports `door: true`.
+
+The box owner is a seat like any other. `adopt-owner <user>` adds a ledger row for an ordinary
+account that exists (uid 1000 up, never a seat's); deleting the row never removes the account or
+its home. It takes a slot and ports from the same pools, and the door places the owner profile,
+the profiles that share the owner's desktop and the light seats on it.
+
+| Variable | The owner's row |
+|---|---|
+| `PUNKTFUNK_SEAT_OWNER` | `1`: the seat host is the owner's own, and also serves the owner and light-seat profiles. |
+| `PUNKTFUNK_CONFIG_DIR`, `PUNKTFUNK_HOST_NAME`, `PUNKTFUNK_GAMESTREAM` | Not set: the owner keeps `~/.config/punktfunk` and their own settings. |
+
+Every row sets `PUNKTFUNK_MDNS=0`, since only the door advertises. The row's environment file is
+`/run/punktfunk/seats/<user>.env`, owned by the owner, and the owner's user `punktfunk-host` reads
+it, so it moves to the row's ports at boot, logged in or not.
+
+- **One owner host.** The row's unit runs the owner's host in a `background` session, on a
+  private D-Bus, beside whatever the owner has on the monitor; the user unit stands down while the
+  unit's runtime directory exists.
+- **The monitor wins.** The supervisor polls logind every 2 seconds. When the owner has a session
+  on a seat that isn't the row's own, it stops the row's unit and starts the owner's user host. The
+  owner's session is never ended.
+- **Switching.** `PUT /api/v1/profiles/door` with `{"on": true}` or `{"on": false}` answers 202.
+  The owner's host starts `punktfunk-door-on@<user>.service`, the door
+  `punktfunk-door-off@<user>.service`; both run `door-helper`, which moves the box's files between
+  the owner's `~/.config/punktfunk` and `/var/lib/punktfunk` and turns the units on or off. The user
+  must be in the `punktfunk-update` group.

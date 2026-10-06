@@ -16,8 +16,8 @@ the owner, named after you; while it is the only one, nothing changes for anyone
    - **Own Steam** (Linux): Big Picture with a Steam account of its own.
    - **Own desktop** (Windows Server): [a Windows desktop of its own](#on-windows-server).
 
-On Linux, **Own desktop** stays greyed with **Needs the seats package**. A host holds up to 8
-profiles, and two can't share a name.
+On Linux, **Own desktop** needs [**Reachable without logging in**](#on-linux) and stays greyed until
+it is on. A host holds up to 8 profiles, and two can't share a name.
 
 ## Before the first Own Steam profile
 
@@ -54,6 +54,44 @@ deletes the profile's Windows account and its files too.
 
 **Library**, **Game sources** and **Plugins** are per seat: once a seat exists, a chip (**Whose
 library**, **Whose plugins**) switches the page to that seat's own.
+
+## On Linux
+
+**Reachable without logging in** makes the box answer clients from boot, with the lock screen still
+on your monitor. A paired device that picks your profile starts a session of yours in the
+background, and the monitor is never touched. It is also what gives a profile a desktop of its
+own: **Own desktop** is a user of its own with its own Steam, and up to four seats share the box,
+yours included.
+
+1. Add your user to the group that may start the switch, then log in again:
+
+   ```sh
+   sudo usermod -aG punktfunk-update $USER
+   ```
+
+2. Open **Profiles** and tick **Reachable without logging in**. Confirm with the console
+   password. The page reloads while the host restarts, and the console asks you to sign in again.
+
+What turning it on does:
+
+- **Files move.** The host's identity, pairings, profiles, display and hook settings, and the
+  console password are copied to `/var/lib/punktfunk`, owned by a `punktfunk` system user that
+  runs the host from then on. Paired clients keep working: the fingerprint is the same.
+- **You become a seat.** Your own `punktfunk-host` moves to the first seat's ports and serves
+  your library, plugins and Steam from your own home. The console reaches it from **Library**,
+  **Game sources** and **Plugins**; a chip, **Whose library**, picks another seat's.
+- **The monitor wins.** When you log in at the machine, the background session ends within two
+  seconds and your own session hosts you. Streams on the background session end, and the client
+  reconnects. Nothing on your monitor is closed.
+- **The console is the door's.** It listens on the same port with the same password.
+
+Turning it off copies the files back to your home and your own host serves the box again. Seats of
+their own stay on the box, stopped, and come back with the switch.
+
+| Check | Fix |
+|---|---|
+| The switch says `Add … to the punktfunk-update group first` | Run the command in step 1, then log in again. |
+| A profile shows **Unavailable** | Its seat didn't start. **Doctor** names the failing check. |
 
 ## How players pick
 
