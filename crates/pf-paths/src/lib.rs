@@ -189,6 +189,18 @@ pub mod env_file {
     }
 }
 
+/// The mode [`create_private_dir`] gives `dir`: 0700, except the door's box directory
+/// (`config`), which every seat user walks to its own entry below it. Its files are 0600 and
+/// its subdirectories 0700, so execute-only shows names and no more.
+#[cfg(unix)]
+fn private_dir_mode(door: bool, dir: &std::path::Path, config: &std::path::Path) -> u32 {
+    if door && dir == config {
+        0o711
+    } else {
+        0o700
+    }
+}
+
 /// Tightens an already-existing dir. Windows refuses a reparse point
 /// ([`reject_reparse_point`]): hardening a junction would harden the
 /// attacker-chosen target while the link stays theirs. Default
@@ -197,13 +209,14 @@ pub fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let mode = private_dir_mode(seat::is_door(), dir, &config_dir());
         let r = std::fs::DirBuilder::new()
             .recursive(true)
-            .mode(0o700)
+            .mode(mode)
             .create(dir);
         // `recursive` does not re-chmod an existing dir.
         if dir.exists() {
-            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
         }
         r
     }
@@ -788,6 +801,20 @@ mod tests {
         let name = a.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("display-settings.json."), "{name}");
         assert!(name.ends_with(".tmp"), "{name}");
+    }
+
+    /// Only a door's own box directory is walkable by others; its subdirectories and every
+    /// other host's directory stay private.
+    #[cfg(unix)]
+    #[test]
+    fn the_door_s_box_directory_is_the_one_private_dir_others_may_walk() {
+        let box_dir = PathBuf::from("/var/lib/punktfunk");
+        assert_eq!(private_dir_mode(true, &box_dir, &box_dir), 0o711);
+        assert_eq!(private_dir_mode(false, &box_dir, &box_dir), 0o700);
+        assert_eq!(
+            private_dir_mode(true, &box_dir.join("seats"), &box_dir),
+            0o700
+        );
     }
 
     #[test]
