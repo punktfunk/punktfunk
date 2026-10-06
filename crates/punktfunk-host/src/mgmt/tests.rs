@@ -2429,6 +2429,27 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
     }
 }
 
+/// The seat proxy is the operator's: no plugin and no paired device reaches a seat through it.
+#[test]
+fn the_seat_proxy_is_admin_only() {
+    use axum::http::Method;
+    for method in [Method::GET, Method::POST, Method::PUT, Method::DELETE] {
+        for path in [
+            "/api/v1/profiles/kid/proxy/library",
+            "/api/v1/profiles/kid/proxy/status",
+        ] {
+            assert!(
+                !auth::plugin_may_access(&method, path),
+                "plugin {method} {path}"
+            );
+            assert!(
+                !auth::cert_may_access(&method, path),
+                "cert {method} {path}"
+            );
+        }
+    }
+}
+
 /// Segment-wise match: a path that merely starts with an allowed one is not swallowed.
 /// A prefix deny also covers routes that do not exist yet.
 #[test]

@@ -538,9 +538,15 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(update::apply_update))
         .routes(routes!(actions::list_actions))
         .routes(routes!(actions::invoke_action));
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1", api_v1)
-        .split_for_parts()
+        .split_for_parts();
+    // Any method passes through to the seat's host, so the spec has no one shape to document.
+    let router = router.route(
+        "/api/v1/profiles/{id}/proxy/{*rest}",
+        axum::routing::any(profiles::proxy_profile_seat),
+    );
+    (router, api)
 }
 
 /// `punktfunk-host openapi`; checked in at `api/openapi.json`.

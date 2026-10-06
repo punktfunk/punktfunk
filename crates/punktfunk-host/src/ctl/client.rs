@@ -63,6 +63,8 @@ pub type Result<T> = std::result::Result<T, Failure>;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// One-shot verbs. `watch` passes `None` (long-lived by design).
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
+/// A proxied answer's ceiling: library art is the largest thing a seat host serves.
+const RAW_BODY_LIMIT: u64 = 64 << 20;
 
 pub struct Client {
     agent: ureq::Agent,
@@ -174,6 +176,44 @@ impl Client {
             .header("Content-Type", "application/json")
             .send(body.to_string());
         self.finish(sent, path)
+    }
+
+    /// One request passed through as bytes, for the console's proxy to a seat host. The answer
+    /// keeps its status and content type, so a refusal reads as the seat host's own.
+    pub fn raw(
+        &self,
+        method: &str,
+        path: &str,
+        content_type: Option<&str>,
+        body: Vec<u8>,
+    ) -> Result<(u16, Option<String>, Vec<u8>)> {
+        let mut req = ureq::http::Request::builder()
+            .method(method)
+            .uri(self.url(path))
+            .header("Authorization", &self.bearer);
+        if let Some(ct) = content_type {
+            req = req.header("Content-Type", ct);
+        }
+        let req = req
+            .body(body)
+            .map_err(|e| Failure::usage(format!("{path}: {e}")))?;
+        let mut resp = self
+            .agent
+            .run(req)
+            .map_err(|e| self.transport_failure(e, path))?;
+        let status = resp.status().as_u16();
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = resp
+            .body_mut()
+            .with_config()
+            .limit(RAW_BODY_LIMIT)
+            .read_to_vec()
+            .map_err(|e| Failure::api(format!("{path}: read the answer: {e}")))?;
+        Ok((status, content_type, bytes))
     }
 
     /// Raw GET body, left unread so `watch` can consume SSE frames as they arrive.

@@ -179,3 +179,32 @@ pub(crate) fn end_sessions(seat: &pf_seats::Seat) -> bool {
     .and_then(|client| client.delete("/api/v1/session"))
     .is_ok()
 }
+
+/// A seat host's API, for the console's proxy: `path_and_query` under `/api/v1/`. `None` when
+/// the seat host doesn't answer.
+pub(crate) fn forward(
+    seat: &pf_seats::Seat,
+    method: &str,
+    path_and_query: &str,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> Option<(u16, Option<String>, Vec<u8>)> {
+    let client = crate::ctl::client::Client::seat(
+        &pf_paths::config_dir(),
+        &host_dir(seat),
+        seat.mgmt_port,
+        Some(PROXY_TIMEOUT),
+    )
+    .ok()?;
+    client
+        .raw(
+            method,
+            &format!("/api/v1/{path_and_query}"),
+            content_type,
+            body,
+        )
+        .ok()
+}
+
+/// A proxied library page with art can take a while on a cold seat.
+const PROXY_TIMEOUT: Duration = Duration::from_secs(30);

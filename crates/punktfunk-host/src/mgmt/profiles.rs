@@ -1093,6 +1093,77 @@ pub(crate) async fn end_profile_session(
     Json(admin(&st, profiles, &p, &*seats_now().await)).into_response()
 }
 
+/// Paths the seat proxy never passes: pairing, trust and profiles are the box's, and a seat host
+/// updates with the box. A `.` or `..` segment is refused outright.
+fn proxy_refuses(rest: &str) -> bool {
+    let path = rest.split('?').next().unwrap_or("");
+    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    path.split('/').any(|s| s == "." || s == "..")
+        || matches!(
+            first,
+            "native" | "pair" | "profiles" | "update" | "actions" | "clients"
+        )
+}
+
+/// `ANY /api/v1/profiles/{id}/proxy/{*rest}`: the console reaching a seat profile's own host for
+/// what is per seat (library, game sources, plugins). Admin lane only: neither the plugin nor
+/// the device allowlist names it. Undocumented in the spec, because it forwards any method.
+pub(crate) async fn proxy_profile_seat(
+    State(st): State<Arc<MgmtState>>,
+    Path((id, rest)): Path<(String, String)>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if proxy_refuses(&rest) {
+        return api_error(
+            StatusCode::FORBIDDEN,
+            "That part of a seat is the box's. Change it on this page, not through a seat.",
+        );
+    }
+    let (_, seat) = match seat_of(&st, &id) {
+        Ok(found) => found,
+        Err(refusal) => return refused(refusal),
+    };
+    let Some(row) = seats_now().await.seat(&seat).map(|(s, _)| s.clone()) else {
+        return api_error(StatusCode::NOT_FOUND, "This profile's seat is gone.");
+    };
+    let target = match uri.query() {
+        Some(q) => format!("{rest}?{q}"),
+        None => rest,
+    };
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let method = method.as_str().to_string();
+    let answer = tokio::task::spawn_blocking(move || {
+        crate::seats::forward(
+            &row,
+            &method,
+            &target,
+            content_type.as_deref(),
+            body.to_vec(),
+        )
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some((status, content_type, bytes)) = answer else {
+        return api_error(
+            StatusCode::BAD_GATEWAY,
+            "The seat didn't answer. Start it, then try again.",
+        );
+    };
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut resp = (status, bytes).into_response();
+    if let Some(ct) = content_type.and_then(|c| header::HeaderValue::from_str(&c).ok()) {
+        resp.headers_mut().insert(header::CONTENT_TYPE, ct);
+    }
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1121,6 +1192,25 @@ mod tests {
             desktop_edition: false,
             seats: vec![seat],
             occupants,
+        }
+    }
+
+    #[test]
+    fn the_seat_proxy_keeps_the_box_s_own_routes_to_itself() {
+        assert!(!proxy_refuses("library"));
+        assert!(!proxy_refuses("library/page?as=kid"));
+        assert!(!proxy_refuses("plugins/rom-manager"));
+        for refused in [
+            "native/pair/arm",
+            "profiles",
+            "pair/pin",
+            "update",
+            "actions/power.sleep/invoke",
+            "clients",
+            "library/../native/pair/arm",
+            "./native",
+        ] {
+            assert!(proxy_refuses(refused), "{refused}");
         }
     }
 
