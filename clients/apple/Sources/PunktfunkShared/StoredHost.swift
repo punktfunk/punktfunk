@@ -96,7 +96,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, pinnedSHA256, lastConnected, mgmtPort, macAddresses
         case clipboardSync, presetID, pinnedPresetIDs, addedAt, osChain, previousAddresses
-        case gamePresets
+        case gamePresets, delivery
         /// Pre-rename keys (design/preset-rename.md): read when the new key is absent, and
         /// written beside it so an older build keeps the bindings.
         case profileID, pinnedProfileIDs
@@ -121,6 +121,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         osChain = try c.decodeIfPresent(String.self, forKey: .osChain)
         previousAddresses = try c.decodeIfPresent([String].self, forKey: .previousAddresses)
         gamePresets = try c.decodeIfPresent([String: String].self, forKey: .gamePresets)
+        delivery = try c.decodeIfPresent(Int.self, forKey: .delivery)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -142,6 +143,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(osChain, forKey: .osChain)
         try c.encodeIfPresent(previousAddresses, forKey: .previousAddresses)
         try c.encodeIfPresent(gamePresets, forKey: .gamePresets)
+        try c.encodeIfPresent(delivery, forKey: .delivery)
     }
 
     public var displayName: String { name.isEmpty ? address : name }

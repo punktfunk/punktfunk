@@ -18,7 +18,7 @@ final class SharedFoundationTests: XCTestCase {
     // MARK: - StoredHost JSON codec
 
     func testStoredHostRoundTrips() throws {
-        let host = StoredHost(
+        var host = StoredHost(
             id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
             name: "Tower", address: "192.168.1.173", port: 9777,
             pinnedSHA256: Data([0xDE, 0xAD, 0xBE, 0xEF]),
@@ -28,11 +28,13 @@ final class SharedFoundationTests: XCTestCase {
             addedAt: Date(timeIntervalSince1970: 1_600_000_000),
             osChain: "linux/fedora/bazzite", previousAddresses: ["100.64.0.7"],
             gamePresets: ["steam:374320": "0f0f0f0f0f0f"])
+        host.delivery = 1
 
         let data = try JSONEncoder().encode(host)
         let decoded = try JSONDecoder().decode(StoredHost.self, from: data)
         XCTAssertEqual(decoded, host)
         XCTAssertEqual(decoded.gamePresets, ["steam:374320": "0f0f0f0f0f0f"])
+        XCTAssertEqual(decoded.delivery, 1, "a network check's finding outlives the app")
         XCTAssertEqual(decoded.osChain, "linux/fedora/bazzite")
     }
 
