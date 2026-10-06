@@ -18,7 +18,7 @@ final class SharedFoundationTests: XCTestCase {
     // MARK: - StoredHost JSON codec
 
     func testStoredHostRoundTrips() throws {
-        let host = StoredHost(
+        var host = StoredHost(
             id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
             name: "Tower", address: "192.168.1.173", port: 9777,
             pinnedSHA256: Data([0xDE, 0xAD, 0xBE, 0xEF]),
@@ -26,11 +26,15 @@ final class SharedFoundationTests: XCTestCase {
             mgmtPort: 47990, macAddresses: ["aa:bb:cc:dd:ee:ff"], clipboardSync: true,
             presetID: "a1b2c3d4e5f6", pinnedPresetIDs: ["0f0f0f0f0f0f"],
             addedAt: Date(timeIntervalSince1970: 1_600_000_000),
-            osChain: "linux/fedora/bazzite", previousAddresses: ["100.64.0.7"])
+            osChain: "linux/fedora/bazzite", previousAddresses: ["100.64.0.7"],
+            gamePresets: ["steam:374320": "0f0f0f0f0f0f"])
+        host.delivery = 1
 
         let data = try JSONEncoder().encode(host)
         let decoded = try JSONDecoder().decode(StoredHost.self, from: data)
         XCTAssertEqual(decoded, host)
+        XCTAssertEqual(decoded.gamePresets, ["steam:374320": "0f0f0f0f0f0f"])
+        XCTAssertEqual(decoded.delivery, 1, "a network check's finding outlives the app")
         XCTAssertEqual(decoded.osChain, "linux/fedora/bazzite")
     }
 
@@ -55,6 +59,7 @@ final class SharedFoundationTests: XCTestCase {
         XCTAssertNil(decoded.addedAt)
         XCTAssertNil(decoded.osChain)
         XCTAssertNil(decoded.previousAddresses)
+        XCTAssertNil(decoded.gamePresets)
         // Resolvers fall back cleanly.
         XCTAssertEqual(decoded.effectiveMgmtPort, punktfunkDefaultMgmtPort)
         XCTAssertEqual(decoded.wakeMacs, [])
@@ -602,6 +607,30 @@ final class SharedFoundationTests: XCTestCase {
 
         host.pinnedPresetIDs = ["222222222222", "deadbeefdead", "222222222222", "111111111111"]
         XCTAssertEqual(catalog.pinned(for: host).map(\.id), ["222222222222", "111111111111"])
+    }
+
+    /// A title's own binding beats the host's default for that launch only, and a deleted one
+    /// falls through to the default rather than past it to the globals.
+    func testATitleBindingBeatsTheHostDefault() {
+        let catalog = PresetCatalog(presets: [
+            StreamPreset(name: "Game", id: "111111111111"),
+            StreamPreset(name: "Work", id: "222222222222"),
+        ])
+        var host = StoredHost(name: "Desk", address: "10.0.0.1")
+        host.presetID = "111111111111"
+        host.gamePresets = ["halo": "222222222222", "gone": "deadbeefdead"]
+
+        XCTAssertEqual(catalog.binding(for: host, launch: "halo")?.name, "Work")
+        XCTAssertEqual(catalog.binding(for: host, launch: "other")?.name, "Game")
+        XCTAssertEqual(catalog.binding(for: host, launch: "gone")?.name, "Game")
+        XCTAssertEqual(catalog.binding(for: host)?.name, "Game", "the desktop keeps the default")
+
+        // A one-off pick (a pinned card) still wins over the title's binding.
+        let pinned = EffectiveSettings.resolve(
+            host: host, selection: .preset("111111111111"), launch: "halo", catalog: catalog)
+        XCTAssertEqual(pinned.presetName, "Game")
+        let plain = EffectiveSettings.resolve(host: host, launch: "halo", catalog: catalog)
+        XCTAssertEqual(plain.presetName, "Work")
     }
 
     /// The accent is a plain `#RRGGBB` string in the catalog — the palette is what this client

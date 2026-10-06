@@ -419,6 +419,8 @@ struct StreamState {
     last_slot_ns: u64,
     /// The presenter handed the frame back (no swapchain image yet): wake in 1 ms.
     busy_retry: bool,
+    /// Present turn of the newest wavelet frame taken in.
+    newest_turn: u64,
     /// One-shot log latch: smoothness was requested but PyroWave collapsed the store
     /// to latency (plane-ring retirement assumes newest-wins).
     #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]

@@ -114,6 +114,8 @@ struct CaptureOpts {
     /// (Mutter ≥ 49 virtual monitors): it then paints when it asks, one paint per
     /// wire interval at most. See [`crate::lazy_capture`].
     lazy: bool,
+    /// The wire rate ([`crate::VirtualOutputOpts::stream_hz`]); `0` = unknown.
+    stream_hz: u32,
 }
 
 #[derive(Clone)]
@@ -353,6 +355,7 @@ impl PortalCapturer {
                 unpaced: false,
                 // A monitor mirror paints on the panel's own vblank; nothing to drive.
                 lazy: false,
+                stream_hz: 0,
             },
             policy,
         )?
@@ -387,6 +390,7 @@ impl PortalCapturer {
             pool_max: kwin.then_some(crate::KWIN_POOL_MAX),
             unpaced: kwin && crate::unpaced_capture(),
             lazy: crate::lazy_capture(),
+            stream_hz: opts.stream_hz,
         };
         tracing::info!(
             node_id,

@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { Cpu, Download, Trash2 } from "lucide-react";
-import type { FC } from "react";
+import { Cpu, Download, FolderSearch, Trash2 } from "lucide-react";
+import { type FC, type FormEvent, useState } from "react";
 import {
 	getGetEmulatorsQueryKey,
+	useAdoptEmulator,
 	useGetEmulators,
 	useInstallEmulator,
 	useRemoveEmulator,
@@ -11,6 +12,7 @@ import {
 import type { EmulatorStatus } from "@/api/gen/model/emulatorStatus";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { m } from "@/paraglide/messages";
 
 /** One line on where the emulator is, or why it is not. */
@@ -38,9 +40,39 @@ const Where: FC<{ e: EmulatorStatus }> = ({ e }) => {
 	);
 };
 
+/** The operator's own copy, one no rule finds: its program's path, adopted on Add. */
+const Adopt: FC<{ id: string; onDone: () => void }> = ({ id, onDone }) => {
+	const [exe, setExe] = useState("");
+	const adopt = useAdoptEmulator({
+		mutation: {
+			onSuccess: onDone,
+			onError: () => toast.error(m.emulators_adopt_failed()),
+		},
+	});
+	const submit = (e: FormEvent) => {
+		e.preventDefault();
+		if (exe.trim()) adopt.mutate({ id, data: { exe: exe.trim() } });
+	};
+	return (
+		<form onSubmit={submit} className="flex w-full gap-2">
+			<Input
+				value={exe}
+				onChange={(e) => setExe(e.target.value)}
+				placeholder={m.emulators_adopt_path()}
+				aria-label={m.emulators_adopt_path()}
+				className="font-mono text-xs"
+			/>
+			<Button size="sm" type="submit" disabled={!exe.trim() || adopt.isPending}>
+				{m.emulators_adopt_add()}
+			</Button>
+		</form>
+	);
+};
+
 /**
  * Every emulator the host knows: installed by punktfunk, found on the box, or neither. Installing
- * is the operator's act here; a plugin's own ask lands in its source's Access rows instead.
+ * and pointing at the operator's own copy are the operator's acts here; a plugin's own ask lands
+ * in its source's Access rows instead.
  */
 export const EmulatorsCard: FC = () => {
 	const qc = useQueryClient();
@@ -60,6 +92,7 @@ export const EmulatorsCard: FC = () => {
 		},
 	});
 	const busy = install.isPending || remove.isPending;
+	const [adopting, setAdopting] = useState<string>();
 	const list = rows.data ?? [];
 	if (list.length === 0) return null;
 	return (
@@ -111,7 +144,26 @@ export const EmulatorsCard: FC = () => {
 									{e.managed ? m.emulators_reinstall() : m.emulators_install()}
 								</Button>
 							) : null}
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() =>
+									setAdopting(adopting === e.id ? undefined : e.id)
+								}
+							>
+								<FolderSearch className="size-3.5" />
+								{m.emulators_adopt()}
+							</Button>
 						</div>
+						{adopting === e.id && (
+							<Adopt
+								id={e.id}
+								onDone={() => {
+									setAdopting(undefined);
+									void refresh();
+								}}
+							/>
+						)}
 					</div>
 				))}
 			</CardContent>
