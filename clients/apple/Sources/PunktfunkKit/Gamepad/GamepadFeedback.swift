@@ -305,7 +305,10 @@ public final class GamepadFeedback {
         // the main-actor hop would only add latency to Steam's 25–40 ms rumble resends.
         if case let .hidRaw(pad, kind, data) = ev {
             let sink = withRouting { hidRawSink }
-            sink?(pad, kind, data)
+            // Controller rumble off plays Steam's rumble report as a stop, like every pad's.
+            let rumbleOff = UserDefaults.standard.object(forKey: DefaultsKey.padRumble) as? Bool == false
+            let muted = rumbleOff && kind == 0 && data.first == 0x80
+            sink?(pad, kind, muted ? [0x80] + [UInt8](repeating: 0, count: 9) : data)
             return
         }
         DispatchQueue.main.async {
