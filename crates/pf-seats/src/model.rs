@@ -24,7 +24,8 @@ pub const DISPLAY_SLOTS: [u8; MAX_SEATS] = [12, 13, 14, 15];
 pub const RESERVED_PORTS: [u16; 2] = [CONSOLE_NATIVE_PORT, CONSOLE_MGMT_PORT];
 pub const CONSOLE_NATIVE_PORT: u16 = 9777;
 pub const CONSOLE_MGMT_PORT: u16 = 47990;
-pub const DEFAULT_NATIVE_PORTS: [u16; MAX_SEATS] = [9778, 9779, 9780, 9781];
+/// After the browser plane's 9778.
+pub const DEFAULT_NATIVE_PORTS: [u16; MAX_SEATS] = [9779, 9780, 9781, 9782];
 pub const DEFAULT_MGMT_PORTS: [u16; MAX_SEATS] = [47995, 47996, 47997, 47998];
 /// `LM20_UNLEN`: NetUserAdd rejects longer SAM account names.
 pub const MAX_ACCOUNT_LEN: usize = 20;
@@ -420,11 +421,11 @@ mod tests {
         let second = ledger.allocate(request(2)).unwrap();
         assert_eq!(
             (first.display_slot, first.native_port, first.mgmt_port),
-            (12, 9778, 47995)
+            (12, 9779, 47995)
         );
         assert_eq!(
             (second.display_slot, second.native_port, second.mgmt_port),
-            (13, 9779, 47996)
+            (13, 9780, 47996)
         );
         assert_eq!(ledger.seat(&first_id).unwrap().id, first_id);
         ledger.remove(&first_id).unwrap();
@@ -476,7 +477,7 @@ mod tests {
         second.name = "Other".into();
         second.account = "other".into();
         second.display_slot = 13;
-        second.native_port = 9779;
+        second.native_port = 9780;
         second.mgmt_port = 47996;
         ledger.seats = vec![first, second];
         assert!(ledger.validate().is_ok());
@@ -527,7 +528,7 @@ mod tests {
         assert!(owner.owner && !first.owner);
         assert_eq!(
             (owner.display_slot, owner.native_port, owner.mgmt_port),
-            (13, 9779, 47996)
+            (13, 9780, 47996)
         );
         assert_eq!(owner.name, "enrico");
         assert_eq!(ledger.owner().map(|s| &s.id), Some(&owner.id));

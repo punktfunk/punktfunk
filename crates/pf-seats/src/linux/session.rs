@@ -281,7 +281,7 @@ mod tests {
             name: name.into(),
             account: "pf-seat-1".into(),
             display_slot: 12,
-            native_port: 9778,
+            native_port: 9779,
             mgmt_port: 47995,
             autostart: false,
             runtime: RuntimeStatus::stopped(),
@@ -316,7 +316,7 @@ mod tests {
              PUNKTFUNK_SEAT_OWNER=\"1\"\n\
              PUNKTFUNK_TRUST_DIR=\"/var/lib/punktfunk/trust/0123456789abcdef0123456789abcdef\"\n\
              PUNKTFUNK_PAIRING=\"refused\"\n\
-             PUNKTFUNK_NATIVE_PORT=\"9778\"\n\
+             PUNKTFUNK_NATIVE_PORT=\"9779\"\n\
              PUNKTFUNK_MGMT_BIND=\"127.0.0.1:47995\"\n\
              PUNKTFUNK_MDNS=\"0\"\n\
              PUNKTFUNK_MGMT_TOKEN=ab12\n"
@@ -341,7 +341,7 @@ mod tests {
              PUNKTFUNK_CONFIG_DIR=\"/var/lib/punktfunk/seats/0123456789abcdef0123456789abcdef/home/.config/punktfunk\"\n\
              PUNKTFUNK_TRUST_DIR=\"/var/lib/punktfunk/trust/0123456789abcdef0123456789abcdef\"\n\
              PUNKTFUNK_PAIRING=\"refused\"\n\
-             PUNKTFUNK_NATIVE_PORT=\"9778\"\n\
+             PUNKTFUNK_NATIVE_PORT=\"9779\"\n\
              PUNKTFUNK_MGMT_BIND=\"127.0.0.1:47995\"\n\
              PUNKTFUNK_HOST_NAME=\"Mara\"\n\
              PUNKTFUNK_GAMESTREAM=\"0\"\n\
