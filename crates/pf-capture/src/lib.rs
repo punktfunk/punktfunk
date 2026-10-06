@@ -788,6 +788,9 @@ pub struct VirtualOutputOpts {
     pub expect_exact_dims: bool,
     pub producer: Producer,
     pub policy: ZeroCopyPolicy,
+    /// The wire rate; the output may run at a multiple of it. `0` derives it from the output's
+    /// refresh and the configured multiple.
+    pub stream_hz: u32,
 }
 
 /// Linux capturer for an existing virtual output's PipeWire node. `keepalive` owns the output.
