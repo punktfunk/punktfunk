@@ -5,6 +5,23 @@
 pub const ID_GET_ATTRIBUTES_VALUES: u8 = 0x83;
 pub const ID_GET_STRING_ATTRIBUTE: u8 = 0xAE;
 pub const ID_GET_FIRMWARE_INFO: u8 = 0xF2;
+/// A Puck slot's config store, read by key string (`esb/bond`, `user/wireless_transport`).
+pub const ID_GET_CONFIG_VALUE: u8 = 0xED;
+
+/// What picks a feature reply out of a set of recorded ones: the report id, the command, and
+/// its argument — the attribute of `0xAE`, the index of `0xF2`, the key string of `0xED`.
+/// `set` is the SET frame, id first.
+pub fn request_key(set: &[u8]) -> (u8, u8, &[u8]) {
+    let rid = set.first().copied().unwrap_or(0);
+    let cmd = set.get(1).copied().unwrap_or(0);
+    let tail = set.get(3..).unwrap_or(&[]);
+    let arg = match cmd {
+        ID_GET_STRING_ATTRIBUTE | ID_GET_FIRMWARE_INFO => tail.get(..1).unwrap_or(&[]),
+        ID_GET_CONFIG_VALUE => &tail[..tail.iter().position(|&b| b == 0).unwrap_or(tail.len())],
+        _ => &[],
+    };
+    (rid, cmd, arg)
+}
 /// Output report id Steam rumbles with (`80 | type | intensity16 | Lspeed16 Lgain | Rspeed16 Rgain`).
 pub const ID_OUT_REPORT_HAPTIC_RUMBLE: u8 = 0x80;
 
@@ -233,6 +250,26 @@ mod tests {
         assert_eq!(&r[..4], &[0x01, 0xF2, 0x29, 0x00]);
         // Bytes 4..8 mirror the 0x83 reply's tag-4 build time — Steam may cross-check.
         assert_eq!(r[4..8], FW_BUILD_TIME.to_le_bytes());
+    }
+
+    #[test]
+    fn request_key_keeps_only_what_selects_the_reply() {
+        assert_eq!(request_key(&[0x01, 0x83, 0x00]), (0x01, 0x83, &[][..]));
+        // Steam and hid-steam disagree on 0xAE's length byte; only the attribute counts.
+        assert_eq!(
+            request_key(&[0x01, 0xAE, 0x15, 0x00]),
+            request_key(&[0x01, 0xAE, 0x14, 0x00, 0x00])
+        );
+        assert_ne!(
+            request_key(&[0x01, 0xAE, 0x15, 0x00]),
+            request_key(&[0x01, 0xAE, 0x15, 0x01])
+        );
+        assert_eq!(request_key(&[0x01, 0xF2, 0x01, 0x02]).2, &[0x02]);
+        let mut bond = [0u8; 64];
+        bond[..11].copy_from_slice(b"\x01\xED\x08esb/bond");
+        assert_eq!(request_key(&bond), (0x01, 0xED, &b"esb/bond"[..]));
+        assert_eq!(request_key(&[0x02, 0xA3, 0x00]), (0x02, 0xA3, &[][..]));
+        assert_eq!(request_key(&[]), (0, 0, &[][..]));
     }
 
     #[test]

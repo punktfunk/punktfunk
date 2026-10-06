@@ -16,7 +16,7 @@
 use super::steam_usbip::{attach_device, boxed, UsbipAttachment};
 use super::triton_proto::{
     parse_triton_rumble, serialize_triton_state, triton_feature_reply, triton_serial,
-    triton_unit_id, TritonState, TRITON_RDESC, TRITON_STATE_LEN,
+    triton_unit_id, Sc2Identity, TritonState, TRITON_RDESC, TRITON_STATE_LEN,
 };
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -202,6 +202,8 @@ struct TritonHandler {
     /// Last feature SET_REPORT, id-first. GET echoes this command.
     last_set: Vec<u8>,
     last_get_logged: u8,
+    /// A real pad's recorded replies, answered before the canned table.
+    identity: Option<Arc<Sc2Identity>>,
 }
 
 impl TritonHandler {
@@ -237,10 +239,13 @@ impl UsbInterfaceHandler for TritonHandler {
         if ep.is_ep0() {
             Ok(match (setup.request_type, setup.request) {
                 (0x81, 0x06) if (setup.value >> 8) == 0x22 => TRITON_RDESC.to_vec(),
-                // Feature GET: echo last SET's command. Wrong type → Steam drops the pad.
-                // Cannot round-trip to the physical device on this URB.
+                // Feature GET: the real pad's recorded reply to the last SET, else a canned one
+                // echoing its command. A wrong command byte makes Steam drop the pad.
                 (0xA1, 0x01) => {
-                    let reply = if let Some(status) = self.puck_status {
+                    let recorded = self.identity.as_ref().and_then(|i| i.reply(&self.last_set));
+                    let reply = if let Some(reply) = recorded {
+                        reply
+                    } else if let Some(status) = self.puck_status {
                         triton_puck_feature_reply(
                             &self.last_set,
                             &self.serial,
@@ -454,6 +459,7 @@ fn build_triton_device(
     index: u8,
     reports: &Arc<Mutex<InputReports>>,
     feedback: &Arc<Mutex<TritonUsbFeedback>>,
+    identity: Option<&Arc<Sc2Identity>>,
 ) -> UsbDevice {
     let ep = |addr: u8| UsbEndpoint {
         address: addr,
@@ -474,7 +480,11 @@ fn build_triton_device(
     dev.speed = UsbSpeed::Full as u32;
     dev.set_manufacturer_name("Valve Software");
     dev.set_product_name("Steam Controller");
-    dev.set_serial_number(&triton_serial(index));
+    dev.set_serial_number(
+        &identity
+            .and_then(|i| i.serial.clone())
+            .unwrap_or_else(|| triton_serial(index)),
+    );
     dev.unset_configuration_name(); // iConfiguration = 0
     dev.configuration_attributes = 0xA0; // bus powered + remote wakeup
     dev.configuration_max_power = 250; // 500 mA in 2 mA units
@@ -492,6 +502,7 @@ fn build_triton_device(
             puck_status: None,
             last_set: Vec::new(),
             last_get_logged: 0,
+            identity: identity.cloned(),
         }),
     )
 }
@@ -501,6 +512,7 @@ fn build_puck_device(
     index: u8,
     reports: &Arc<Mutex<InputReports>>,
     feedback: &Arc<Mutex<TritonUsbFeedback>>,
+    identity: Option<&Arc<Sc2Identity>>,
 ) -> UsbDevice {
     let interrupt = |addr: u8, interval: u8| UsbEndpoint {
         address: addr,
@@ -533,7 +545,11 @@ fn build_puck_device(
     ]);
     dev.set_manufacturer_name("Valve Software");
     dev.set_product_name("Steam Controller Puck");
-    dev.set_serial_number(&format!("FVPFPUCK{index:04}"));
+    dev.set_serial_number(
+        &identity
+            .and_then(|i| i.serial.clone())
+            .unwrap_or_else(|| format!("FVPFPUCK{index:04}")),
+    );
     dev.unset_configuration_name();
 
     dev = dev.with_interface(
@@ -582,6 +598,8 @@ fn build_puck_device(
             puck_status: Some(puck_status),
             last_set: Vec::new(),
             last_get_logged: 0,
+            // The recording is of the pad on slot 0; an empty slot keeps the canned answers.
+            identity: identity.filter(|_| slot == 0).cloned(),
         });
         dev = dev.with_interface(
             0x03,
@@ -617,8 +635,9 @@ impl TritonUsbip {
     pub fn open(index: u8) -> Result<TritonUsbip> {
         let reports = Arc::new(Mutex::new(InputReports::new(neutral_report())));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
+        let identity = Sc2Identity::from_env().map(Arc::new);
         let attach = attach_device(
-            || build_triton_device(index, &reports, &feedback),
+            || build_triton_device(index, &reports, &feedback, identity.as_ref()),
             &format!("virtual Steam Controller 2 {index}"),
         )?;
         Ok(TritonUsbip {
@@ -636,8 +655,9 @@ impl TritonUsbip {
             puck_connect_report(),
         )));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
+        let identity = Sc2Identity::from_env().map(Arc::new);
         let attach = attach_device(
-            || build_puck_device(index, &reports, &feedback),
+            || build_puck_device(index, &reports, &feedback, identity.as_ref()),
             &format!("virtual Steam Controller 2 Puck {index}"),
         )?;
         Ok(TritonUsbip {
@@ -712,7 +732,7 @@ mod tests {
     fn device_matches_wired_capture() {
         let reports = Arc::new(Mutex::new(InputReports::new(InputReport::default())));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
-        let dev = build_triton_device(3, &reports, &feedback);
+        let dev = build_triton_device(3, &reports, &feedback, None);
         assert_eq!((dev.vendor_id, dev.product_id), (0x28DE, 0x1302));
         assert_eq!(
             (dev.device_class, dev.device_subclass, dev.device_protocol),
@@ -751,7 +771,7 @@ mod tests {
             puck_connect_report(),
         )));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
-        let dev = build_puck_device(1, &reports, &feedback);
+        let dev = build_puck_device(1, &reports, &feedback, None);
         assert_eq!((dev.vendor_id, dev.product_id), (0x28DE, 0x1304));
         assert_eq!(
             (
@@ -926,6 +946,7 @@ mod tests {
             puck_status: None,
             last_set: Vec::new(),
             last_get_logged: 0,
+            identity: None,
         };
         let iface_dummy = UsbInterface {
             interface_class: 3,

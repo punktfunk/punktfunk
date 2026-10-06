@@ -4,8 +4,8 @@
 //! The client captures the physical pad and forwards raw input reports
 //! ([`RichInput::HidReport`](punktfunk_core::quic::RichInput)); the host mirrors them unchanged.
 //! Host hidraw writes (lizard-off / IMU-enable features, `0x80` rumble) go back as
-//! [`HidOutput::HidRaw`](punktfunk_core::quic::HidOutput). Mainline `hid-steam` does not bind this
-//! PID, so Steam Input drives hidraw as it would a physical pad.
+//! [`HidOutput::HidRaw`](punktfunk_core::quic::HidOutput). Steam Input drives the hidraw as it
+//! would a physical pad; from kernel 7.3 `hid-steam` binds this PID too (#1368).
 //!
 //! Ground truth: SDL `SDL_hidapi_steam_triton.c` + `steam/controller_structs.h`. Input ids
 //! `0x42`/`0x45` (`TritonMTUNoQuat_t`, 46 bytes with id), `0x47` (trackpad timestamp), `0x43`
@@ -269,6 +269,86 @@ pub fn triton_feature_reply(last_set: &[u8], serial: &str, unit_id: u32) -> [u8;
     pf_driver_proto::triton::feature_reply(last_set, serial, unit_id)
 }
 
+/// A real pad's identity: its USB serial and its replies to Steam's feature queries, as
+/// `tools/hid-descriptor-dump --sc2-identity` records them. The virtual pad answers with these
+/// before the canned table, so Steam sees the controller it knows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sc2Identity {
+    pub serial: Option<String>,
+    /// `(SET frame, GET reply)`, both id-first.
+    pub replies: Vec<(Vec<u8>, [u8; 64])>,
+}
+
+impl Sc2Identity {
+    /// The recorded reply to the request `last_set` makes. `0xB4` is the slot's live state,
+    /// so it is never replayed.
+    pub fn reply(&self, last_set: &[u8]) -> Option<[u8; 64]> {
+        use pf_driver_proto::triton::request_key;
+        let want = request_key(last_set);
+        if want.1 == 0xB4 {
+            return None;
+        }
+        self.replies
+            .iter()
+            .find(|(req, _)| request_key(req) == want)
+            .map(|(_, reply)| *reply)
+    }
+
+    /// `serial <text>` lines and `<request hex> <reply hex>` lines; `#` starts a comment.
+    pub fn parse(text: &str) -> Result<Sc2Identity, String> {
+        let hex = |s: &str| -> Result<Vec<u8>, String> {
+            if s.len() % 2 != 0 {
+                return Err(format!("odd-length hex `{s}`"));
+            }
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| format!("`{s}`: {e}")))
+                .collect()
+        };
+        let mut id = Sc2Identity::default();
+        for line in text.lines().map(str::trim) {
+            match line.split_whitespace().collect::<Vec<_>>()[..] {
+                [] => {}
+                [first, ..] if first.starts_with('#') => {}
+                ["serial", serial] => id.serial = Some(serial.to_string()),
+                [req, rep] => {
+                    let (req, rep) = (hex(req)?, hex(rep)?);
+                    let mut reply = [0u8; 64];
+                    let n = rep.len().min(64);
+                    reply[..n].copy_from_slice(&rep[..n]);
+                    id.replies.push((req, reply));
+                }
+                _ => return Err(format!("unreadable line `{line}`")),
+            }
+        }
+        Ok(id)
+    }
+
+    /// `PUNKTFUNK_SC2_IDENTITY`: a capture to replay on every virtual SC2. A test knob until
+    /// clients send their pad's own.
+    pub fn from_env() -> Option<Sc2Identity> {
+        let path = std::env::var_os("PUNKTFUNK_SC2_IDENTITY")?;
+        let parsed = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| Sc2Identity::parse(&t));
+        match parsed {
+            Ok(id) => {
+                tracing::info!(
+                    path = %path.to_string_lossy(),
+                    serial = id.serial.as_deref().unwrap_or("-"),
+                    replies = id.replies.len(),
+                    "virtual SC2 replays a recorded identity"
+                );
+                Some(id)
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.to_string_lossy(), %error, "SC2 identity file unreadable");
+                None
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +369,30 @@ mod tests {
         st.raw_len = 3;
         let (r, len) = st.report(&mut seq);
         assert_eq!((len, &r[..3], seq), (3, &[0x45, 0x11, 0x22][..], 8));
+    }
+
+    #[test]
+    fn a_recorded_identity_answers_by_request_and_never_replays_slot_state() {
+        let id = Sc2Identity::parse(
+            "# capture\n\
+             serial FXA0000000001\n\
+             018300 01831E0102130000\n\
+             01AE1501 01AE1401465841\n\
+             01ED08657362 01ED18AA\n\
+             02B4 02B40102\n",
+        )
+        .unwrap();
+        assert_eq!(id.serial.as_deref(), Some("FXA0000000001"));
+        // Steam's own length byte differs from the capture's; the attribute picks the reply.
+        let r = id.reply(&[0x01, 0xAE, 0x14, 0x01]).unwrap();
+        assert_eq!(&r[..7], &[0x01, 0xAE, 0x14, 0x01, 0x46, 0x58, 0x41]);
+        assert_eq!(id.reply(&[0x01, 0x83, 0x00]).unwrap()[2], 0x1E);
+        assert!(
+            id.reply(&[0x01, 0xAE, 0x15, 0x00]).is_none(),
+            "unrecorded attribute"
+        );
+        assert!(id.reply(&[0x02, 0xB4]).is_none(), "slot state stays live");
+        assert!(Sc2Identity::parse("0183 0").is_err());
     }
 
     /// `clients/shared/sc2-vectors.json` `buttons`: the Swift and Kotlin wire maps read the same
