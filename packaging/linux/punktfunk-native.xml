@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  firewalld service definition for the native punktfunk/1 host (the secure default 'serve', or the
+  firewalld service definition for the native punktfunk host (the secure default 'serve', or the
   punktfunk1-host subcommand).
 
   Installed to /usr/lib/firewalld/services/ by the punktfunk-host package. NOT enabled automatically
@@ -10,9 +10,7 @@
   ships a ufw application profile (punktfunk.ufw). Exact commands: your distro's install guide, or the
   per-distro packaging README (Firewall section).
 
-  The media DATA plane binds an EPHEMERAL UDP port (0.0.0.0:0) chosen per session and reported to the
-  client, so there is no fixed data port to open. On a restrictive firewall you must also allow the
-  ephemeral UDP range (the project does not pin one).
+  Video and audio ride the QUIC port (9777); there is no second port to open.
 
   The mgmt REST API (TCP 47990, HTTPS + mTLS) is opened here because `serve` binds it to all interfaces
   by default so paired clients can browse the game library over the LAN. Off-loopback it exposes ONLY
@@ -22,9 +20,9 @@
   `mgmt-bind` option).
 -->
 <service>
-  <short>Punktfunk (native punktfunk/1)</short>
-  <description>Low-latency game-streaming host over the native punktfunk/1 protocol (QUIC control plane). Opens the default QUIC control port, the browser-streaming port, mDNS for auto-discovery, and the mgmt/library REST API (HTTPS + mTLS; off-loopback it serves only read-only status/library to paired clients). The media data plane uses an ephemeral UDP port negotiated per session, not opened here.</description>
-  <port protocol="udp" port="9777"/>  <!-- QUIC control plane (default 9777)            -->
+  <short>Punktfunk (native)</short>
+  <description>Low-latency game-streaming host over the native punktfunk protocol (QUIC). Opens the default QUIC port, which carries control and media, the browser-streaming port, mDNS for auto-discovery, and the mgmt/library REST API (HTTPS + mTLS; off-loopback it serves only read-only status/library to paired clients).</description>
+  <port protocol="udp" port="9777"/>  <!-- QUIC control and media (default 9777)        -->
   <port protocol="udp" port="9778"/>  <!-- browser streaming (closed until switched on) -->
   <port protocol="udp" port="5353"/>  <!-- mDNS auto-discovery (_punktfunk._udp.local) -->
   <port protocol="tcp" port="47990"/> <!-- mgmt/library REST API (HTTPS + mTLS; LAN = read-only, paired) -->

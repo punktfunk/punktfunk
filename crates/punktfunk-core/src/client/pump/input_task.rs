@@ -176,7 +176,7 @@ fn flush_dirty(
 }
 
 pub(super) async fn run(
-    conn: impl Into<ClientConn>,
+    conn: ClientConn,
     mut input_rx: tokio::sync::mpsc::UnboundedReceiver<InputEvent>,
     mut pad_touch_rx: tokio::sync::mpsc::UnboundedReceiver<Contact>,
     gamepad_snapshots: bool,
@@ -186,7 +186,6 @@ pub(super) async fn run(
     mouse_args: MouseArgs,
 ) {
     use std::sync::atomic::Ordering;
-    let conn: ClientConn = conn.into();
     // bit0 haptics, bit1 speaker. Fed by [`NativeClient::set_pad_audio_caps`] and
     // by arrival events that already carry the bits.
     let pad_audio_caps = &mouse_args.client.pad_audio_caps;
@@ -401,7 +400,7 @@ mod tests {
     use super::*;
     use crate::input::{gamepad, InputEvent, InputKind};
 
-    async fn loopback() -> (quinn::Endpoint, quinn::Connection, quinn::Connection) {
+    async fn loopback() -> (quinn::Endpoint, ClientConn, quinn::Connection) {
         let server = crate::quic::endpoint::server("127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = server.local_addr().unwrap();
         let client = crate::quic::endpoint::client_insecure().unwrap();
@@ -416,7 +415,15 @@ mod tests {
         });
         let client_conn = client.connect(addr, "punktfunk").unwrap().await.unwrap();
         let (server, host_conn) = accept.await.unwrap();
-        (server, client_conn, host_conn)
+        (server, ClientConn::new(client_conn), host_conn)
+    }
+
+    /// The input datagram inside a client datagram's kind.
+    fn input_payload(dg: &[u8]) -> Vec<u8> {
+        match crate::quic::v2::dgram::decode(dg) {
+            Some(crate::quic::v2::dgram::Dgram::InputState(p)) => p.to_vec(),
+            other => panic!("not an input datagram: {other:?}"),
+        }
     }
 
     fn client(grants: u32) -> Arc<ClientShared> {
@@ -538,7 +545,7 @@ mod tests {
                 .await
                 .expect("a datagram")
                 .unwrap();
-            let ev = InputEvent::decode(&dg).unwrap();
+            let ev = InputEvent::decode(&input_payload(&dg)).unwrap();
             match GamepadSnapshot::from_event(&ev) {
                 Some(s) if skip.contains(&s.pad) => {
                     assert!(s.pad != 0 || s.buttons == 0, "a mouse pad stays neutral")
@@ -744,8 +751,8 @@ mod tests {
             .await
             .expect("a datagram")
             .unwrap();
-        let snap =
-            GamepadSnapshot::from_event(&InputEvent::decode(&dg).unwrap()).expect("a snapshot");
+        let snap = GamepadSnapshot::from_event(&InputEvent::decode(&input_payload(&dg)).unwrap())
+            .expect("a snapshot");
         assert_eq!(
             (
                 snap.seq,

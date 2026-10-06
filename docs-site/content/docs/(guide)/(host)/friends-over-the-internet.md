@@ -15,18 +15,7 @@ may do; this page only gets them to the host.
 | A phone, tablet, Apple TV, or no Steam | [Tailscale machine sharing](#tailscale) |
 | Anything, and you run your own router | [Port forwarding](#port-forwarding): not recommended, the only path that exposes the host to the internet |
 
-## Pin the video port
-
-Every path needs this first. Video normally uses a random UDP port per session; a tunnel or a rule
-has to name one. Add this to `host.env` ([Configuration](/docs/configuration)) and restart the
-host:
-
-```ini
-PUNKTFUNK_DATA_PORT=9779
-```
-
-Any free UDP port works except 9778, which browser streaming uses. The pinned port carries one
-session at a time, so one friend at a time streams through it.
+Every path opens one port: UDP `9777` carries the stream, video and audio included.
 
 ## Porthole
 
@@ -34,7 +23,7 @@ session at a time, so one friend at a time streams through it.
 Steam friends, behind any router.
 
 1. You both install Porthole from Steam.
-2. You create a lobby and share UDP `9777` and `9779`, without remapping. Add TCP `47990` if the
+2. You create a lobby and share UDP `9777`, without remapping. Add TCP `47990` if the
    friend should browse your game library.
 3. The friend joins with your share code or from the friends list, accepts the ports, and adds
    `127.0.0.1:9777` as a host in their Punktfunk client.
@@ -55,7 +44,7 @@ them reach every port on it, so step 2 matters.
    ```jsonc
    "acls": [
      { "action": "accept", "src": ["autogroup:member"], "dst": ["*:*"] },
-     { "action": "accept", "src": ["autogroup:shared"], "dst": ["100.x.y.z:9777,9779"] }
+     { "action": "accept", "src": ["autogroup:shared"], "dst": ["100.x.y.z:9777"] }
    ]
    ```
 
@@ -77,7 +66,7 @@ running session at once.
 Prefer [Porthole](#porthole) or [Tailscale](#tailscale): both keep the host unreachable from the
 internet, and this doesn't.
 
-Forward UDP `9777` and `9779` to the host. **Never forward `47990`, `47992` or `9778`**: the
+Forward UDP `9777` to the host. **Never forward `47990`, `47992` or `9778`**: the
 management API, the web console and browser streaming.
 
 Send your friend a [link](/docs/presets-and-links), not a bare address, so their first connect

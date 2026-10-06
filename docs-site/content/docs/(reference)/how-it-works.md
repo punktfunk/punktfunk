@@ -42,8 +42,8 @@ your client all support it. The full breakdown is in the [Support matrix](/docs/
 
 ## Two protocols
 
-- **punktfunk/1** — Punktfunk's own protocol: a QUIC control channel and an encrypted UDP media
-  channel with forward error correction. The [native clients](/docs/clients) (Apple, Android, Linux,
+- **punktfunk/2** — Punktfunk's own protocol: control, video and audio over one encrypted QUIC
+  port, with forward error correction on the video. The [native clients](/docs/clients) (Apple, Android, Linux,
   Windows) use it. It is always on.
 - **GameStream** — the protocol [Moonlight](/docs/moonlight) speaks, so any Moonlight client
   connects. It is off until you turn on **GameStream** in **Host → Settings**, and it pairs over

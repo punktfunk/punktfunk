@@ -6,6 +6,14 @@
 
 use super::*;
 
+/// The mode epoch `epoch` delivers, from the stream thread. `corrects`: it is not what the client
+/// was last told, so a client without `StreamConfig` gets a second `Reconfigured`.
+pub(crate) struct Delivered {
+    pub(crate) mode: punktfunk_core::Mode,
+    pub(crate) epoch: u8,
+    pub(crate) corrects: bool,
+}
+
 /// Values the control task and the stream thread both read or write. A clone shares them.
 #[derive(Clone)]
 pub(crate) struct SessionShared {
@@ -54,7 +62,7 @@ pub(crate) struct ControlEnds {
     pub(crate) bitrate_tx: std::sync::mpsc::Sender<u32>,
     pub(crate) probe_tx: std::sync::mpsc::Sender<ProbeShaped>,
     pub(crate) probe_result_rx: tokio::sync::mpsc::UnboundedReceiver<ProbeResult>,
-    pub(crate) reconfig_result_rx: tokio::sync::mpsc::UnboundedReceiver<Reconfigured>,
+    pub(crate) reconfig_result_rx: tokio::sync::mpsc::UnboundedReceiver<Delivered>,
     pub(crate) retarget_rx: tokio::sync::mpsc::UnboundedReceiver<(u32, AckReason)>,
     pub(crate) gap_rx: tokio::sync::mpsc::UnboundedReceiver<u32>,
     /// Wire-MTU watcher → `ShardPayloadChanged`; this task is the control stream's sole
@@ -76,9 +84,8 @@ pub(crate) struct StreamEnds {
     pub(crate) shard_rx: std::sync::mpsc::Receiver<usize>,
     pub(crate) probe_rx: std::sync::mpsc::Receiver<ProbeShaped>,
     pub(crate) probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
-    /// The accept ack goes out before the rebuild; a failed or differently-honoured rebuild
-    /// corrects the client's mode slot with a second `Reconfigured { accepted: true, mode }`.
-    pub(crate) reconfig_result_tx: tokio::sync::mpsc::UnboundedSender<Reconfigured>,
+    /// The accept ack goes out before the rebuild; what each epoch then delivers follows here.
+    pub(crate) reconfig_result_tx: tokio::sync::mpsc::UnboundedSender<Delivered>,
     /// The rate the encoder settled on and what settled it, forwarded as `BitrateChanged` so
     /// the client's climb base tracks the encoder: a rebuild re-resolving Automatic is
     /// `Granted`, a short apply `EncoderLimit`.

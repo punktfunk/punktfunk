@@ -18,10 +18,57 @@
 
 use super::*;
 use crate::native_pairing::sanitize_device_name;
-use punktfunk_core::quic::{PairChallenge, PairProof, PairResult};
+use punktfunk_core::quic::v2::io::{self as v2io, FrameReader};
+use punktfunk_core::quic::{pkf1, PairChallenge, PairProof, PairResult};
 
 /// 60 s: a person reads the PIN off the host and types it. Session handshake is machine-speed.
 const PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A pairing connection's stream and how it frames the ceremony: `punktfunk/2` frames, or the
+/// `pkf1` framing a client from before `punktfunk/2` still pairs in.
+pub(crate) enum PairWire<W, R> {
+    V2 { send: W, recv: FrameReader<R> },
+    Pkf1 { send: W, recv: R },
+}
+
+impl<W, R> PairWire<W, R>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    R: tokio::io::AsyncRead + Unpin,
+{
+    async fn send_challenge(&mut self, c: &PairChallenge) -> std::io::Result<()> {
+        match self {
+            PairWire::V2 { send, .. } => v2io::send(send, c).await,
+            PairWire::Pkf1 { send, .. } => pkf1::write(send, &c.encode_pkf1()).await,
+        }
+    }
+
+    async fn recv_proof(&mut self) -> Result<PairProof> {
+        let bad = |e| anyhow!("PairProof decode: {e:?}");
+        match self {
+            PairWire::V2 { recv, .. } => {
+                let (ty, body) = recv.read_frame().await?;
+                punktfunk_core::quic::v2::msg::decode::<PairProof>(ty, &body).map_err(bad)
+            }
+            PairWire::Pkf1 { recv, .. } => {
+                PairProof::decode_pkf1(&pkf1::read(recv).await?).map_err(bad)
+            }
+        }
+    }
+
+    async fn send_result(&mut self, r: &PairResult) -> std::io::Result<()> {
+        match self {
+            PairWire::V2 { send, .. } => v2io::send(send, r).await,
+            PairWire::Pkf1 { send, .. } => pkf1::write(send, &r.encode_pkf1()).await,
+        }
+    }
+
+    /// The generic write side's "no more data": quinn's `finish` under another name.
+    async fn shutdown(&mut self) {
+        let (PairWire::V2 { send, .. } | PairWire::Pkf1 { send, .. }) = self;
+        let _ = tokio::io::AsyncWriteExt::shutdown(send).await;
+    }
+}
 
 /// Host SPAKE2 (role B). Consumes the armed PIN before the challenge write, so a
 /// client that stalls or resets that write still spends its one online guess.
@@ -35,8 +82,7 @@ const PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn pair_ceremony<W, R>(
     conn: &super::link::SessionLink,
-    mut send: W,
-    mut recv: R,
+    mut wire: PairWire<W, R>,
     req: PairRequest,
     client_fp: &[u8; 32],
     host_fp: &[u8; 32],
@@ -69,24 +115,17 @@ where
     let access = consume_window(np, pin)?;
 
     // Timeout: this write waits on the client's stream window.
-    tokio::time::timeout(
-        PAIRING_TIMEOUT,
-        io::write_msg(
-            &mut send,
-            &PairChallenge {
-                spake_b,
-                confirm: confirms.host,
-            }
-            .encode(),
-        ),
-    )
-    .await
-    .map_err(|_| anyhow!("pairing timed out sending the challenge"))??;
+    let challenge = PairChallenge {
+        spake_b,
+        confirm: confirms.host,
+    };
+    tokio::time::timeout(PAIRING_TIMEOUT, wire.send_challenge(&challenge))
+        .await
+        .map_err(|_| anyhow!("pairing timed out sending the challenge"))??;
 
-    let proof = tokio::time::timeout(PAIRING_TIMEOUT, io::read_msg(&mut recv))
+    let proof = tokio::time::timeout(PAIRING_TIMEOUT, wire.recv_proof())
         .await
         .map_err(|_| anyhow!("pairing timed out waiting for the client's confirmation"))??;
-    let proof = PairProof::decode(&proof).map_err(|e| anyhow!("PairProof decode: {e:?}"))?;
 
     // Wrong PIN or split certs: different SPAKE2 key; MAC mismatch. No offline search.
     let verified = pake::verify(&confirms.client, &proof.confirm);
@@ -106,14 +145,10 @@ where
         tracing::warn!(name = %name, "pairing rejected (wrong PIN) — fingerprint not stored");
     }
     // Same flow-control trap as the challenge write.
-    tokio::time::timeout(
-        PAIRING_TIMEOUT,
-        io::write_msg(&mut send, &PairResult { ok }.encode()),
-    )
-    .await
-    .map_err(|_| anyhow!("pairing timed out sending the result"))??;
-    // The generic write side's "no more data": quinn's `finish` under another name.
-    let _ = tokio::io::AsyncWriteExt::shutdown(&mut send).await;
+    tokio::time::timeout(PAIRING_TIMEOUT, wire.send_result(&PairResult { ok }))
+        .await
+        .map_err(|_| anyhow!("pairing timed out sending the result"))??;
+    wire.shutdown().await;
     // 5 s: wait for the client to ACK PairResult before we close. A vanished
     // peer must not occupy the sequential host.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), conn.closed()).await;

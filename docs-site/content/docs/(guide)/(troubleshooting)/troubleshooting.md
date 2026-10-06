@@ -56,7 +56,6 @@ echo 'options nvidia-drm modeset=1' | sudo tee /etc/modprobe.d/nvidia-drm.conf
 - [No client can reach a Windows host](#windows-firewall)
 - [The host is asleep and won't wake](/docs/troubleshooting-connect#the-host-is-asleep-and-wont-wake)
 - [Pairing is rejected, or the client can't connect](/docs/troubleshooting-connect#pairing-is-rejected--the-client-cant-connect)
-- [Video is slow to start, or fails across subnets](/docs/troubleshooting-connect#video-is-slow-to-start-or-fails-across-subnets)
 - [A plugin's interface doesn't load](/docs/troubleshooting-connect#a-plugins-interface-doesnt-load)
 
 ### No client can reach a Windows host [#windows-firewall]

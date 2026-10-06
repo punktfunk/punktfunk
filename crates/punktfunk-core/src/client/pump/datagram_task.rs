@@ -6,7 +6,7 @@ use super::*;
 // One parameter per demuxed plane; a struct would only move the field list off the call site.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run(
-    conn: impl Into<ClientConn>,
+    conn: ClientConn,
     audio_tx: std::sync::mpsc::SyncSender<AudioPacket>,
     rumble_tx: std::sync::mpsc::SyncSender<RumbleUpdate>,
     rumble_feed: super::super::rumble::RumbleFeed,
@@ -27,7 +27,6 @@ pub(super) async fn run(
     let mut audio_red = crate::audio::AudioRedRecovery::new();
     // One seq space for every audio plane: a late or duplicate packet never reaches a decoder.
     let mut audio_seq = crate::audio::AudioSeqGate::new();
-    let conn: ClientConn = conn.into();
     while let Ok(d) = conn.read_datagram().await {
         match d.first() {
             Some(&crate::quic::AUDIO_MAGIC) => {
@@ -178,7 +177,7 @@ mod tests {
         let rumble_feed =
             super::super::rumble::RumbleFeed(Arc::new(super::super::rumble::RumbleShared::new()));
         tokio::spawn(run(
-            client_conn,
+            ClientConn::new(client_conn),
             audio_tx,
             rumble_tx,
             rumble_feed,
@@ -207,7 +206,13 @@ mod tests {
         crate::audio::pcm::from_f32(&samples, bits, &mut wire);
         assert_eq!(wire.len(), n * 3);
         host_conn
-            .send_datagram(crate::quic::encode_audio_pcm_datagram(7, 1_234_567, &wire).into())
+            .send_datagram(
+                crate::quic::v2::dgram::wrap(&crate::quic::encode_audio_pcm_datagram(
+                    7, 1_234_567, &wire,
+                ))
+                .expect("audio has a kind")
+                .into(),
+            )
             .expect("datagram fits the path");
 
         let got = tokio::task::spawn_blocking(move || {

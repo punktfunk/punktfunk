@@ -39,9 +39,8 @@ pub(crate) fn allow_public_network(args: &[String]) -> Result<bool> {
 ///
 /// A port-only `dir=in action=allow` admits any process that binds first (high ports need no
 /// elevation) and suppresses the Windows prompt. Name `program` so the ports are ours only.
-/// Keep `ports` too: both is tighter. Dropped only for [`add_data_plane_firewall_rule`]
-/// (ephemeral per session). `program: None` is the old any-program rule — a looser rule still
-/// streams; no rule is a black screen.
+/// Keep `ports` too: both is tighter. `program: None` is the old any-program rule — a looser
+/// rule still streams; no rule is a black screen.
 pub(crate) fn fw_add_rule_args(
     name: &str,
     proto: &str,
@@ -110,14 +109,14 @@ pub(super) fn native_port(host_env: &str) -> u16 {
 /// `mgmt::require_auth` is read-only to a paired client cert, so opening it adds no admin surface.
 pub(super) fn add_firewall_rules(allow_public: bool) {
     let profile = firewall_profile_arg(allow_public);
-    // Resolved once, shared with the data-plane rule. `service install` remove-then-adds on
-    // every upgrade, so a moved install cannot leave a stale path.
+    // `service install` remove-then-adds on every upgrade, so a moved install cannot leave a
+    // stale path.
     let exe = match std::env::current_exe() {
         Ok(p) => Some(p),
         Err(e) => {
             eprintln!(
                 "warning: could not resolve the host executable path ({e}) — the rules below stay \
-                 open to any program on those ports, and the per-session data-plane rule is skipped"
+                 open to any program on those ports"
             );
             None
         }
@@ -147,7 +146,6 @@ pub(super) fn add_firewall_rules(allow_public: bool) {
             eprintln!("warning: firewall rule '{name}' not added (add it manually if needed)");
         }
     }
-    add_data_plane_firewall_rule(profile, exe.as_deref());
     // Print only when scoping actually happened: with no exe path the rules are still wide open.
     if exe.is_some() {
         println!(
@@ -165,45 +163,8 @@ pub(super) fn add_firewall_rules(allow_public: bool) {
     }
 }
 
-pub(super) const FW_DATA_PLANE_RULE: &str = "Punktfunk UDP (data plane)";
-
-/// Inbound UDP for the host executable at any local port.
-///
-/// The media data plane binds `0.0.0.0:0` per session (reported in Welcome), so no `localport=`
-/// rule can cover it. Without this, the client's hole-punch (`PUNCH_MAGIC`) never opens the
-/// return path: control stays healthy, picture is black. Program-scoped, not a pinned port —
-/// covers whatever the session picks and does not collide with Sunshine/Apollo's 47998-48010.
-///
-/// `exe: None` skips the rule rather than widening it: a program-less "any inbound UDP" rule
-/// is an open host, not a looser version of this.
-pub(super) fn add_data_plane_firewall_rule(profile: &str, exe: Option<&std::path::Path>) {
-    let Some(exe) = exe else {
-        eprintln!(
-            "warning: no host executable path — skipping the data-plane firewall rule; streams may \
-             show a black picture behind a healthy connection on networks that need the client's \
-             hole-punch to open the path"
-        );
-        return;
-    };
-    let ok = run_netsh(&fw_add_rule_args(
-        FW_DATA_PLANE_RULE,
-        "UDP",
-        None,
-        Some(exe),
-        profile,
-    ));
-    if ok {
-        println!(
-            "Firewall rule added: {FW_DATA_PLANE_RULE} (any UDP port for {}) [{profile}]",
-            exe.display()
-        );
-    } else {
-        eprintln!(
-            "warning: could not add firewall rule '{FW_DATA_PLANE_RULE}' — the per-session video \
-             data port stays closed to inbound, so the client's hole-punch cannot reach it"
-        );
-    }
-}
+/// The any-UDP rule a host with a second video port needed. Video now rides the native port.
+const FW_DATA_PLANE_RULE: &str = "Punktfunk UDP (data plane)";
 
 pub(super) fn remove_firewall_rules() {
     let _ = run_quiet(
@@ -307,19 +268,6 @@ mod firewall_tests {
         assert!(args.contains(&"action=allow".to_string()));
         assert!(args.contains(&"profile=domain,private".to_string()));
         assert_eq!(&args[..4], &["advfirewall", "firewall", "add", "rule"]);
-    }
-
-    /// Data plane has no port (`0.0.0.0:0` per session). A program-less "any inbound UDP" rule
-    /// is an open host, not a looser version of this.
-    #[test]
-    fn the_data_plane_rule_has_a_program_but_no_port() {
-        let exe = Path::new(r"C:\Program Files\Punktfunk\punktfunk-host.exe");
-        let args = fw_add_rule_args(FW_DATA_PLANE_RULE, "UDP", None, Some(exe), "profile=any");
-        assert!(args.contains(&format!("program={}", exe.display())));
-        assert!(
-            !args.iter().any(|a| a.starts_with("localport=")),
-            "the per-session data port is ephemeral — pinning one would close the others"
-        );
     }
 
     /// Missing executable → port-only rule, not no rule. A looser rule still streams; none is black.

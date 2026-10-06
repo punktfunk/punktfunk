@@ -1,11 +1,8 @@
-//! Connect + handshake: cert-pinned dial, Hello/Welcome/Start on the control stream,
-//! wall-clock skew, the data plane and its [`Session`]. A typed application close from the
-//! host is [`PunktfunkError::Rejected`], not a transport error.
-//!
-//! Offering `punktfunk/2` changes three things when the host answers it: the control stream is
-//! translated at its edge (the same messages go out as v2 frames), the media rides the
-//! connection's own socket instead of a punched second one, and its keys come from the
-//! connection's exporter instead of `Welcome`.
+//! Connect + handshake: cert-pinned `pkf2` dial, Hello/Welcome/Start on the control stream
+//! (translated at its edge into `ClientHello`/`ServerHello`/`Ready`), wall-clock skew, and the
+//! [`Session`] over the connection's own socket, keyed from its exporter. A typed application
+//! close from the host is [`PunktfunkError::Rejected`], not a transport error; a host that
+//! answers no `pkf2` is the wire-version rejection.
 
 use super::*;
 use crate::crypto::MediaSuite;
@@ -30,20 +27,8 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
     let io_err = |e: endpoint::anyhow_result::Error| {
         PunktfunkError::Io(std::io::Error::other(e.to_string()))
     };
-    // Offering `pkf2` puts the endpoint on the shared socket either way: a host that answers
-    // `pkf1` only leaves its media queue empty.
-    let (ep, observed, mut media) = if p.offer_v2 {
-        let (r, observed) = endpoint::client_shared(
-            pin,
-            identity,
-            &[crate::quic::v2::registry::ALPN, endpoint::QUIC_ALPN],
-        );
-        let (ep, media) = r.map_err(io_err)?;
-        (ep, observed, Some(media))
-    } else {
-        let (ep, observed) = endpoint::client_pinned_with_identity(pin, identity);
-        (ep.map_err(io_err)?, observed, None)
-    };
+    let (r, observed) = endpoint::client_shared(pin, identity, &[crate::quic::v2::registry::ALPN]);
+    let (ep, media) = r.map_err(io_err)?;
     // Retry silence across the connect budget. One quinn dial dies after the ~8 s idle
     // window, shorter than a suspend-to-RAM resume, and per-attempt retransmits back
     // off. A host that answers (pin/ALPN/typed close) must surface; shutdown stops us.
@@ -73,6 +58,11 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 if fp_mismatch {
                     return Err(PunktfunkError::Crypto);
                 }
+                if endpoint::refused_alpn(&e) {
+                    return Err(PunktfunkError::Rejected(
+                        crate::reject::RejectReason::WireVersionMismatch,
+                    ));
+                }
                 // Only TimedOut (host never answered) is retryable.
                 let host_silent = matches!(e, quinn::ConnectionError::TimedOut);
                 if !host_silent {
@@ -92,21 +82,14 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         tracing::debug!(%remote, "host silent — re-dialing (wake/resume tolerant connect)");
     };
     let fingerprint = observed.lock().unwrap().unwrap_or([0u8; 32]);
-    let v2 = media.is_some()
-        && endpoint::negotiated_alpn(&conn).as_deref() == Some(crate::quic::v2::registry::ALPN);
-    tracing::info!(
-        wire = if v2 { "punktfunk/2" } else { "punktfunk/1" },
-        "connected"
-    );
-    // The host streams as soon as it has `Start`, with no punch to wait for on `punktfunk/2`,
-    // so its address is whitelisted for media before the handshake. Later is the opening IDR.
-    if let Some(m) = media.as_ref().filter(|_| v2) {
-        m.stats().set_host(conn.remote_address());
-    }
+    tracing::info!("connected");
+    // The host streams as soon as it has `Start`, so its address is whitelisted for media
+    // before the handshake. Later is the opening IDR.
+    media.stats().set_host(conn.remote_address());
     // Inner future so a failure can read `conn.close_reason()`: a typed application
     // close is `Rejected`, not the generic transport error the failed read produces.
     let handshake = async {
-        let (send, recv) = conn
+        let (mut send, recv) = conn
             .open_bi()
             .await
             .map_err(|e| PunktfunkError::Io(std::io::Error::other(e.to_string())))?;
@@ -118,45 +101,18 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
         let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
         // The delivery ask rides only when the dial made one; a host that reads it answers.
         let delivery: Vec<u8> = p.delivery.map(|d| d.encode().to_vec()).unwrap_or_default();
-        // `punktfunk/2` carries the `Start` entries in the `ClientHello`: every v2 host reads them.
-        let (mut send, recv, rx_edge): (CtlSend, _, _) = if v2 {
-            use crate::quic::v2::{io as v2io, registry, translate};
-            let mut send = send;
-            v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-            let entries = crate::quic::start_ext(
-                crate::quic::HOST_CAP2_EXT,
-                &label,
-                &abr,
-                &preset,
-                &delivery,
-            );
-            let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
-            let extra = translate::ClientExtra {
-                start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
-                resume: crate::client::resume::peek(&p.host, p.port),
-                suites: if wants_chacha {
-                    vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
-                } else {
-                    vec![MediaSuite::Aes128Gcm]
-                },
-            };
-            let rx = Arc::new(Mutex::new(translate::RxEdge::default()));
-            let tx = Arc::new(Mutex::new(translate::TxEdge::client(extra)));
-            let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
-                Box::new(v2io::V2Reader::new(recv, rx.clone()));
-            (Box::new(v2io::V2Writer::new(send, tx)), reader, Some(rx))
-        } else {
-            let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(recv);
-            (Box::new(send), reader, None)
-        };
+        use crate::quic::v2::features::FeatureSet;
+        use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
+        use crate::quic::v2::{io as v2io, msg::V2Message, registry};
+        v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
+        let entries = crate::quic::start_ext(&label, &abr, &preset, &delivery);
+        let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
         // Resumable reader: `select!` and the clock-sync timeout can both interrupt a
         // read; a lost partial frame would misalign the stream for the session.
-        let mut recv = io::MsgReader::new(recv);
+        let mut recv = CtlRecv::new(recv);
 
-        io::write_msg(
-            &mut send,
-            &Hello {
-                abi_version: crate::WIRE_VERSION,
+        let hello = ClientHello {
+            hello: Hello {
                 mode: p.mode,
                 compositor: p.compositor,
                 gamepad: p.gamepad,
@@ -191,15 +147,33 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 audio_layout: p.audio_layout.wire(),
                 // How this client fills its view; a host framing for another device reframes to it.
                 video_fit: p.video_fit.wire(),
-            }
-            .encode(),
-        )
-        .await?;
+            },
+            // The `Start` entries: every host reads them.
+            start_ext: entries.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
+            resume: crate::client::resume::peek(&p.host, p.port),
+            suites: if wants_chacha {
+                vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm]
+            } else {
+                vec![MediaSuite::Aes128Gcm]
+            },
+            features: FeatureSet::default().with(registry::FEATURE_STREAM_CONFIG),
+        };
+        v2io::send(&mut send, &hello).await?;
         // The hello carried the resume id, so the entry is spent now, not by a dial that died.
-        if v2 {
-            crate::client::resume::take(&p.host, p.port);
-        }
-        let welcome = Welcome::decode(&recv.read_msg().await?)?;
+        crate::client::resume::take(&p.host, p.port);
+        // `Pending` repeats while the host asks its console about this device.
+        let mut waiting = false;
+        let server = loop {
+            let (ty, body) = recv.read_frame().await?;
+            match ty {
+                ServerHello::TYPE => break ServerHello::from_body(&body)?,
+                registry::MSG_PENDING if !std::mem::replace(&mut waiting, true) => {
+                    tracing::info!("the host is waiting for this device to be approved");
+                }
+                _ => {}
+            }
+        };
+        let welcome = server.welcome;
         if welcome.compositor != CompositorPref::Auto {
             tracing::info!(
                 compositor = welcome.compositor.as_str(),
@@ -213,27 +187,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
             );
         }
 
-        // A v2 session binds no data socket: its media arrives on the connection's.
-        let udp_port = if v2 {
-            0
-        } else {
-            let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
-            let port = probe.local_addr()?.port();
-            drop(probe);
-            port
-        };
-        // Hello is frozen and first contact, so the client's own label rides here — and only
-        // toward a host that said it parses the block. An older host reads the 6 bytes it knows.
-        let start = Start {
-            client_udp_port: udp_port,
-        };
-        let ext = crate::quic::start_ext(welcome.host_caps2, &label, &abr, &preset, &delivery);
-        let start_msg = if ext.is_empty() {
-            start.encode()
-        } else {
-            start.encode_ext(&ext)?
-        };
-        io::write_msg(&mut send, &start_msg).await?;
+        v2io::send(&mut send, &Ready {}).await?;
 
         // Skew handshake before the control task takes the stream. 0 ⇒ old host did
         // not answer (shared-clock). Embedder present times are in the host capture clock.
@@ -251,46 +205,25 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
                 None => (0, None),
             };
 
-        let mut session = match (rx_edge, media.take()) {
-            (Some(rx), Some(media)) => {
-                let server = rx.lock().unwrap_or_else(|e| e.into_inner()).server.ok_or(
-                    PunktfunkError::InvalidArg("punktfunk/2 host sent no session"),
-                )?;
-                let suite = server
-                    .suite
-                    .ok_or(PunktfunkError::Unsupported("unsealed punktfunk/2 media"))?;
-                let keys = endpoint::media_keys(&conn, &server.session_id, suite)
-                    .ok_or(PunktfunkError::Crypto)?;
-                if let Ok(sock) = media.try_clone_socket() {
-                    *args.shared.data_sock.lock().unwrap() = Some(sock);
-                }
-                *args.shared.local_ip.lock().unwrap() = conn.local_ip();
-                *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
-                // v1's key and salt never apply: the media keys came from the exporter.
-                let mut cfg = welcome.session_config(Role::Client);
-                cfg.encrypt = false;
-                let media_v2 = crate::session::MediaV2 {
-                    clock_origin_ns: server.clock_origin_ns,
-                    keys: Some(keys),
-                    clock: None,
-                };
-                Session::new_v2(cfg, media_v2, Box::new(media))?
-            }
-            _ => {
-                let host_udp = std::net::SocketAddr::new(remote.ip(), welcome.udp_port);
-                let transport =
-                    UdpTransport::connect(&format!("0.0.0.0:{udp_port}"), &host_udp.to_string())?;
-                // Punch the data port: video is raw UDP, unlike client-initiated QUIC side
-                // planes. Stops with the shared shutdown flag.
-                if let Ok(sock) = transport.try_clone_socket() {
-                    crate::transport::spawn_data_punch(sock, shutdown.clone());
-                }
-                if let Ok(sock) = transport.try_clone_socket() {
-                    *args.shared.data_sock.lock().unwrap() = Some(sock);
-                }
-                Session::new(welcome.session_config(Role::Client), Box::new(transport))?
-            }
+        let suite = server
+            .suite
+            .ok_or(PunktfunkError::Unsupported("unsealed native media"))?;
+        let keys =
+            endpoint::media_keys(&conn, &server.session_id, suite).ok_or(PunktfunkError::Crypto)?;
+        if let Ok(sock) = media.try_clone_socket() {
+            *args.shared.data_sock.lock().unwrap() = Some(sock);
+        }
+        *args.shared.local_ip.lock().unwrap() = conn.local_ip();
+        *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
+        args.shared.anchor.lock().unwrap().on =
+            server.features.has(registry::FEATURE_STREAM_CONFIG);
+        let cfg = welcome.session_config(Role::Client);
+        let media_v2 = crate::session::MediaV2 {
+            clock_origin_ns: server.clock_origin_ns,
+            keys: Some(keys),
+            clock: None,
         };
+        let mut session = Session::new(cfg, media_v2, Box::new(media))?;
         // PyroWave: aged-out lossy frames as blocks-with-holes. All-intra renders
         // localized blur, better than a freeze.
         if welcome.codec == crate::quic::CODEC_PYROWAVE {
@@ -354,7 +287,7 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
     };
     match outcome {
         Ok((session, send, recv, negotiated, host_caps)) => Ok(HandshakeOut {
-            conn: ClientConn::new(conn, v2),
+            conn: ClientConn::new(conn),
             ep,
             session,
             ctrl_send: send,

@@ -1,21 +1,16 @@
 //! Per-transfer clipboard fetch streams (`design/clipboard-and-file-transfer.md`).
 //!
-//! Bulk clipboard / file bytes never ride the control stream (u16-capped) or datagrams
-//! (lossy, single-packet). The requester opens a fresh QUIC bi-stream, writes
-//! [`STREAM_MAGIC`] + kind + a [`ClipFetch`]; the holder replies with a [`ClipFetchHdr`]
-//! then raw chunks until FIN. One transfer per stream: flow control, `RESET_STREAM`
-//! cancel, no head-of-line blocking against control or other transfers.
+//! Bulk clipboard / file bytes never ride the control stream or datagrams (lossy,
+//! single-packet). The requester opens a fresh QUIC bi-stream of type transfer and writes a
+//! [`ClipFetch`] frame; the holder replies with a [`ClipFetchHdr`] frame then raw chunks until
+//! FIN. One transfer per stream: flow control, `RESET_STREAM` cancel, no head-of-line blocking
+//! against control or other transfers.
 //!
 //! Transport only — no clipboard state. Host and client-core share these helpers;
 //! each side runs its own accept loop because they own the connection differently.
 
-use super::{io, ClipFetch, ClipFetchHdr};
-
-/// Magic so a clipboard bi-stream cannot be misread as a future stream kind.
-pub const STREAM_MAGIC: &[u8; 4] = b"PKFs";
-
-/// Other stream kinds mux under [`STREAM_MAGIC`] with a different byte.
-pub const CLIP_STREAM_KIND_FETCH: u8 = 0x01;
+use super::v2::{io as v2io, msg::V2Message, registry};
+use super::{ClipFetch, ClipFetchHdr};
 
 /// Stream-reset / stop code for a cancelled fetch. Distinct from connection close
 /// codes (`0x51`/`0x52` quit/exit, `0x42` reject, `0x60`–`0x67` pairing) so a
@@ -29,12 +24,6 @@ pub fn cancelled_code() -> quinn::VarInt {
     quinn::VarInt::from_u32(CLIP_CANCELLED_CODE)
 }
 
-/// Whether `conn` runs `punktfunk/2`. Its transfer streams open with their stream type
-/// instead of [`STREAM_MAGIC`] and carry v2 frames; the data after the header is the same.
-pub fn is_v2(conn: &quinn::Connection) -> bool {
-    super::endpoint::negotiated_alpn(conn).as_deref() == Some(super::v2::registry::ALPN)
-}
-
 /// Send is for `reset`/`finish`; recv sits at [`ClipFetchHdr`] ([`read_fetch_hdr`]).
 pub async fn open_fetch(
     conn: &quinn::Connection,
@@ -45,67 +34,34 @@ pub async fn open_fetch(
     // head-of-line-block input/audio/control on this connection.
     let _ = send.set_priority(-1);
     // quinn: the opener must write before the peer's `accept_bi()` can return.
-    if is_v2(conn) {
-        use super::v2::{io as v2io, msg::V2Message, registry};
-        v2io::write_stream_type(&mut send, registry::STREAM_TRANSFER).await?;
-        v2io::write_frame(&mut send, &req.encode_v2()).await?;
-        return Ok((send, recv));
-    }
-    let mut hdr = Vec::with_capacity(5);
-    hdr.extend_from_slice(STREAM_MAGIC);
-    hdr.push(CLIP_STREAM_KIND_FETCH);
-    send.write_all(&hdr).await.map_err(std::io::Error::other)?;
-    io::write_msg(&mut send, &req.encode()).await?;
+    v2io::write_stream_type(&mut send, registry::STREAM_TRANSFER).await?;
+    v2io::write_frame(&mut send, &req.encode_v2()).await?;
     Ok((send, recv))
 }
 
-/// The stream's kind. Bad magic, or on `v2` a type other than transfer, is an error; the
-/// caller `stop`s the stream.
-pub async fn read_stream_header(recv: &mut quinn::RecvStream, v2: bool) -> std::io::Result<u8> {
-    if v2 {
-        use super::v2::{io as v2io, registry};
-        return match v2io::read_stream_type(recv).await? {
-            registry::STREAM_TRANSFER => Ok(CLIP_STREAM_KIND_FETCH),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "not a transfer stream",
-            )),
-        };
-    }
-    let mut hdr = [0u8; 5];
-    recv.read_exact(&mut hdr)
-        .await
-        .map_err(std::io::Error::other)?;
-    if &hdr[0..4] != STREAM_MAGIC {
-        return Err(std::io::Error::new(
+/// A stream of another type is an error; the caller `stop`s the stream.
+pub async fn read_stream_header(recv: &mut quinn::RecvStream) -> std::io::Result<()> {
+    match v2io::read_stream_type(recv).await? {
+        registry::STREAM_TRANSFER => Ok(()),
+        _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "bad clip stream magic",
-        ));
+            "not a transfer stream",
+        )),
     }
-    Ok(hdr[4])
 }
 
-pub async fn read_fetch(recv: &mut quinn::RecvStream, v2: bool) -> std::io::Result<ClipFetch> {
+pub async fn read_fetch(recv: &mut quinn::RecvStream) -> std::io::Result<ClipFetch> {
     let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "bad ClipFetch");
-    if v2 {
-        let (ty, body) = super::v2::io::read_one_frame(recv).await?;
-        return super::v2::msg::decode::<ClipFetch>(ty, &body).map_err(|_| bad());
-    }
-    let raw = io::read_msg(recv).await?;
-    ClipFetch::decode(&raw).map_err(|_| bad())
+    let (ty, body) = v2io::read_one_frame(recv).await?;
+    super::v2::msg::decode::<ClipFetch>(ty, &body).map_err(|_| bad())
 }
 
 /// Header must precede any data chunks.
 pub async fn write_fetch_hdr(
     send: &mut quinn::SendStream,
     hdr: &ClipFetchHdr,
-    v2: bool,
 ) -> std::io::Result<()> {
-    if v2 {
-        use super::v2::msg::V2Message;
-        return super::v2::io::write_frame(send, &hdr.encode_v2()).await;
-    }
-    io::write_msg(send, &hdr.encode()).await
+    v2io::write_frame(send, &hdr.encode_v2()).await
 }
 
 /// Call only after [`super::CLIP_FETCH_OK`]. FIN so [`read_data`] terminates.
@@ -117,18 +73,11 @@ pub async fn write_data(send: &mut quinn::SendStream, data: &[u8]) -> std::io::R
     Ok(())
 }
 
-/// One frame and no further, on either wire: the data follows it on the stream.
-pub async fn read_fetch_hdr(
-    recv: &mut quinn::RecvStream,
-    v2: bool,
-) -> std::io::Result<ClipFetchHdr> {
+/// One frame and no further: the data follows it on the stream.
+pub async fn read_fetch_hdr(recv: &mut quinn::RecvStream) -> std::io::Result<ClipFetchHdr> {
     let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "bad ClipFetchHdr");
-    if v2 {
-        let (ty, body) = super::v2::io::read_one_frame(recv).await?;
-        return super::v2::msg::decode::<ClipFetchHdr>(ty, &body).map_err(|_| bad());
-    }
-    let raw = io::read_msg(recv).await?;
-    ClipFetchHdr::decode(&raw).map_err(|_| bad())
+    let (ty, body) = v2io::read_one_frame(recv).await?;
+    super::v2::msg::decode::<ClipFetchHdr>(ty, &body).map_err(|_| bad())
 }
 
 /// `max_bytes` is the requester size cap. A breach errors; the caller resets the stream.
@@ -141,7 +90,7 @@ pub async fn read_data(recv: &mut quinn::RecvStream, max_bytes: usize) -> std::i
 #[cfg(test)]
 mod tests {
     use crate::quic::clipstream;
-    use crate::quic::test_util::{connect_pair, connect_pair_v2};
+    use crate::quic::test_util::connect_pair;
     use crate::quic::*;
 
     #[tokio::test]
@@ -150,26 +99,16 @@ mod tests {
         fetch_then_cancel(host_conn, client_conn).await;
     }
 
-    #[tokio::test]
-    async fn fetch_text_transfers_then_cancel_resets_on_v2() {
-        let (_server_ep, _client_ep, host_conn, client_conn) = connect_pair_v2().await;
-        assert!(clipstream::is_v2(&host_conn) && clipstream::is_v2(&client_conn));
-        fetch_then_cancel(host_conn, client_conn).await;
-    }
-
     async fn fetch_then_cancel(host_conn: quinn::Connection, client_conn: quinn::Connection) {
-        let v2 = clipstream::is_v2(&client_conn);
-
         let payload = b"hello clipboard \xf0\x9f\x93\x8b".to_vec();
         let holder_payload = payload.clone();
 
         let holder = tokio::spawn(async move {
             let (mut send, mut recv) = host_conn.accept_bi().await.expect("accept fetch #1");
-            let kind = clipstream::read_stream_header(&mut recv, v2)
+            clipstream::read_stream_header(&mut recv)
                 .await
                 .expect("stream header #1");
-            assert_eq!(kind, clipstream::CLIP_STREAM_KIND_FETCH);
-            let req = clipstream::read_fetch(&mut recv, v2)
+            let req = clipstream::read_fetch(&mut recv)
                 .await
                 .expect("fetch req #1");
             assert_eq!(req.seq, 1);
@@ -181,7 +120,6 @@ mod tests {
                     status: CLIP_FETCH_OK,
                     total_size: holder_payload.len() as u64,
                 },
-                v2,
             )
             .await
             .expect("write hdr #1");
@@ -190,10 +128,10 @@ mod tests {
                 .expect("write data #1");
 
             let (mut send2, mut recv2) = host_conn.accept_bi().await.expect("accept fetch #2");
-            clipstream::read_stream_header(&mut recv2, v2)
+            clipstream::read_stream_header(&mut recv2)
                 .await
                 .expect("stream header #2");
-            let _ = clipstream::read_fetch(&mut recv2, v2)
+            let _ = clipstream::read_fetch(&mut recv2)
                 .await
                 .expect("fetch req #2");
             send2.reset(clipstream::cancelled_code()).unwrap();
@@ -209,7 +147,7 @@ mod tests {
         let (_send, mut recv) = clipstream::open_fetch(&client_conn, &req)
             .await
             .expect("open fetch #1");
-        let hdr = clipstream::read_fetch_hdr(&mut recv, v2)
+        let hdr = clipstream::read_fetch_hdr(&mut recv)
             .await
             .expect("read hdr #1");
         assert_eq!(hdr.status, CLIP_FETCH_OK);
@@ -228,7 +166,7 @@ mod tests {
             .await
             .expect("open fetch #2");
         assert!(
-            clipstream::read_fetch_hdr(&mut recv2, v2).await.is_err(),
+            clipstream::read_fetch_hdr(&mut recv2).await.is_err(),
             "a cancelled fetch must surface as an error, not a hang"
         );
 
@@ -243,17 +181,14 @@ mod tests {
         let holder_payload = big.clone();
         let holder = tokio::spawn(async move {
             let (mut send, mut recv) = host_conn.accept_bi().await.expect("accept");
-            clipstream::read_stream_header(&mut recv, false)
-                .await
-                .unwrap();
-            let _ = clipstream::read_fetch(&mut recv, false).await.unwrap();
+            clipstream::read_stream_header(&mut recv).await.unwrap();
+            let _ = clipstream::read_fetch(&mut recv).await.unwrap();
             clipstream::write_fetch_hdr(
                 &mut send,
                 &ClipFetchHdr {
                     status: CLIP_FETCH_OK,
                     total_size: holder_payload.len() as u64,
                 },
-                false,
             )
             .await
             .unwrap();
@@ -268,10 +203,7 @@ mod tests {
         };
         let (_send, mut recv) = clipstream::open_fetch(&client_conn, &req).await.unwrap();
         assert_eq!(
-            clipstream::read_fetch_hdr(&mut recv, false)
-                .await
-                .unwrap()
-                .status,
+            clipstream::read_fetch_hdr(&mut recv).await.unwrap().status,
             CLIP_FETCH_OK
         );
         assert!(clipstream::read_data(&mut recv, 64 * 1024).await.is_err());

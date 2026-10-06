@@ -54,8 +54,6 @@ struct LiveSession {
     client_name: Option<String>,
     /// Which plane serves it. Both register here, so a stop or a keyframe reaches either.
     plane: crate::events::Plane,
-    /// `1` or `2` on a punktfunk session; `0` on GameStream.
-    wire: u8,
     hdr: bool,
     /// Bring-up total (hello → first packet), ms. 0 until the first packet left.
     ttff_ms: Arc<AtomicU32>,
@@ -511,8 +509,6 @@ pub struct SessionSnapshot {
     pub preset_name: Option<String>,
     /// Which plane serves it.
     pub plane: crate::events::Plane,
-    /// `1` or `2` on a punktfunk session; `0` on GameStream.
-    pub wire: u8,
     /// The capturer's live health, if it classifies.
     pub capture_health: Option<pf_capture::CaptureHealth>,
     /// Bring-up total (hello → first packet), ms. 0 while still bringing up.
@@ -651,8 +647,6 @@ pub struct Registration {
     pub client_name: Option<String>,
     /// Which plane serves it.
     pub plane: crate::events::Plane,
-    /// `1` or `2` on a punktfunk session; `0` on GameStream.
-    pub wire: u8,
     pub hdr: bool,
     /// Bring-up total slot (hello → first packet), ms. 0 until first packet.
     pub ttff_ms: Arc<AtomicU32>,
@@ -691,7 +685,6 @@ pub fn register(reg: Registration) -> LiveSessionGuard {
         client,
         client_name,
         plane,
-        wire,
         hdr,
         ttff_ms,
         last_resize_ms,
@@ -730,7 +723,6 @@ pub fn register(reg: Registration) -> LiveSessionGuard {
         client,
         client_name,
         plane,
-        wire,
         hdr,
         ttff_ms,
         last_resize_ms,
@@ -1096,7 +1088,6 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
                 client_name: s.client_name.clone(),
                 preset_name: s.controls.preset.as_ref().map(|p| p.name.clone()),
                 plane: s.plane,
-                wire: s.wire,
                 capture_health: s
                     .capture_health
                     .lock()
@@ -1461,7 +1452,6 @@ pub(crate) mod tests {
             quit: quit.clone(),
             client_name: Some("Living Room TV".into()),
             plane: crate::events::Plane::Gamestream,
-            wire: 0,
             hdr: true,
             bit_depth: 10,
             ..Registration::fake("9f86d0818840")
@@ -1497,7 +1487,6 @@ pub(crate) mod tests {
                 client: client.into(),
                 client_name: None,
                 plane: crate::events::Plane::Native,
-                wire: 1,
                 hdr: false,
                 ttff_ms: Arc::new(AtomicU32::new(0)),
                 last_resize_ms: Arc::new(AtomicU32::new(0)),

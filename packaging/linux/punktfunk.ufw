@@ -8,16 +8,13 @@
 # reads this directory on every command, so no reload is needed after the
 # package drops the file — just:
 #
-#     sudo ufw allow punktfunk-native        # the secure native punktfunk/1 host (the default)
+#     sudo ufw allow punktfunk-native        # the secure native punktfunk host (the default)
 #     sudo ufw allow punktfunk-gamestream    # add GameStream/Moonlight compat (opt-in)
 #     sudo ufw allow punktfunk-web           # reach the web console from the LAN (if punktfunk-web is installed)
 #     sudo ufw app info punktfunk-native     # show what a profile opens
 #
-# Same port map as the firewalld services. The punktfunk/1 DATA plane is an
-# ephemeral UDP port chosen per session and is NOT listed here: the host
-# hole-punches, so a deny-inbound firewall still works (it just adds ~2.5 s at
-# session start). To open a fixed one instead, run the host with
-# `serve --data-port 9779` and `sudo ufw allow 9779/udp`.
+# Same port map as the firewalld services. Video and audio ride the QUIC port
+# (9777), so there is no second port to open.
 #
 # 9778/udp is browser streaming (console: Browser streaming). Nothing listens
 # there until it is switched on, and the console switch cannot open a firewall.

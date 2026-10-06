@@ -1,6 +1,7 @@
-//! GPU-free microbenchmarks for the punktfunk/1 hot path; they run in ordinary CI.
+//! GPU-free microbenchmarks for the punktfunk/2 media hot path; they run in ordinary CI.
 //!
-//! `crypto/*` — AES-128-GCM and ChaCha20-Poly1305 on one ~MTU shard.
+//! `crypto/*` — AES-128-GCM and ChaCha20-Poly1305 on one ~MTU shard, sealed in place as media
+//! is.
 //! `pipeline/*` — one frame through FEC encode → seal → packetize → loopback → reassemble →
 //! FEC decode → open. A core throughput/latency regression shows up here.
 //!
@@ -8,9 +9,9 @@
 //! `cargo bench -p punktfunk-core`.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use punktfunk_core::config::{Config, FecConfig, FecScheme, ProtocolPhase, Role};
-use punktfunk_core::crypto::{SessionCrypto, SessionKey};
-use punktfunk_core::session::Session;
+use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+use punktfunk_core::crypto::{MediaKeys, MediaSuite, SessionCrypto};
+use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::loopback_pair;
 // Not `criterion::black_box`: deprecated in 0.8 (forwards here). Benches compile under
 // `--all-targets -D warnings`, so that import is an error, not a warning.
@@ -22,10 +23,6 @@ const SHARD: usize = punktfunk_core::config::mtu1500_shard_payload();
 fn cfg(role: Role, scheme: FecScheme) -> Config {
     Config {
         role,
-        phase: match scheme {
-            FecScheme::Gf8 => ProtocolPhase::P1GameStream,
-            FecScheme::Gf16 => ProtocolPhase::P2Punktfunk,
-        },
         fec: FecConfig {
             scheme,
             fec_percent: 25,
@@ -37,12 +34,21 @@ fn cfg(role: Role, scheme: FecScheme) -> Config {
         },
         shard_payload: SHARD,
         max_frame_bytes: 8 * 1024 * 1024,
-        encrypt: true, // bench the real path — crypto is always on for punktfunk/1
-        key: SessionKey::Aes128Gcm([7u8; 16]),
-        salt: [1, 2, 3, 4],
         loopback_drop_period: 0, // throughput run: no induced loss (loss-harness covers recovery)
     }
 }
+
+/// Sealed, as native media always is.
+fn media() -> MediaV2 {
+    MediaV2 {
+        clock_origin_ns: 0,
+        keys: Some(MediaKeys::derive(&[7; 32], MediaSuite::Aes128Gcm)),
+        clock: None,
+    }
+}
+
+/// The clear prefix of a media packet, the AEAD's associated data.
+const AAD: [u8; 5] = [0, 1, 2, 3, 4];
 
 fn bench_crypto(c: &mut Criterion) {
     let mut g = c.benchmark_group("crypto");
@@ -50,40 +56,30 @@ fn bench_crypto(c: &mut Criterion) {
     // Both negotiated AEADs. The `_chacha20` series is the host sealing-cost check for the
     // soft-AES-armv7 path (`design/chacha20-session-cipher.md`). AES keeps unsuffixed names so
     // the CI regression compare retains its history.
-    for (suffix, key) in [
-        ("", SessionKey::Aes128Gcm([7u8; 16])),
-        ("_chacha20", SessionKey::ChaCha20Poly1305([7u8; 32])),
+    for (suffix, suite) in [
+        ("", MediaSuite::Aes128Gcm),
+        ("_chacha20", MediaSuite::ChaCha20Poly1305),
     ] {
-        let host = SessionCrypto::new(&key, [1, 2, 3, 4], Role::Host);
-        let client = SessionCrypto::new(&key, [1, 2, 3, 4], Role::Client);
-        let payload = vec![0xABu8; SHARD];
-        let sealed = host.seal(0, &payload).unwrap();
+        let keys = MediaKeys::derive(&[7; 32], suite);
+        let host = SessionCrypto::media(&keys, Role::Host);
+        let client = SessionCrypto::media(&keys, Role::Client);
+        let mut sealed = vec![0xABu8; SHARD + TAG_LEN];
+        host.seal_media(0, &AAD, &mut sealed).unwrap();
 
-        g.bench_function(format!("seal{suffix}"), |b| {
-            let mut seq = 0u64;
-            b.iter(|| {
-                let ct = host.seal(seq, black_box(&payload)).unwrap();
-                seq += 1;
-                black_box(ct)
-            })
-        });
         g.bench_function(format!("seal_in_place{suffix}"), |b| {
             let mut seq = 0u64;
             let mut buf = vec![0xABu8; SHARD + TAG_LEN];
             b.iter(|| {
-                host.seal_in_place(seq, black_box(&mut buf)).unwrap();
+                host.seal_media(seq, &AAD, black_box(&mut buf)).unwrap();
                 seq += 1;
             })
-        });
-        g.bench_function(format!("open{suffix}"), |b| {
-            b.iter(|| black_box(client.open(0, black_box(&sealed)).unwrap()))
         });
         g.bench_function(format!("open_in_place{suffix}"), |b| {
             // In-place open consumes the buffer, so each iteration restores the ciphertext first.
             let mut buf = sealed.clone();
             b.iter(|| {
                 buf.copy_from_slice(black_box(&sealed));
-                black_box(client.open_in_place(0, &mut buf).unwrap());
+                black_box(client.open_media(0, &AAD, &mut buf).unwrap());
             })
         });
     }
@@ -102,8 +98,9 @@ fn bench_pipeline(c: &mut Criterion) {
             g.throughput(Throughput::Bytes(size as u64));
             g.bench_with_input(BenchmarkId::new(label, size), &size, |b, &size| {
                 let (h, cl) = loopback_pair(0, 0);
-                let mut host = Session::new(cfg(Role::Host, scheme), Box::new(h)).unwrap();
-                let mut client = Session::new(cfg(Role::Client, scheme), Box::new(cl)).unwrap();
+                let mut host = Session::new(cfg(Role::Host, scheme), media(), Box::new(h)).unwrap();
+                let mut client =
+                    Session::new(cfg(Role::Client, scheme), media(), Box::new(cl)).unwrap();
                 let frame = vec![0x5Au8; size];
                 let mut seq = 0u64;
                 b.iter(|| {

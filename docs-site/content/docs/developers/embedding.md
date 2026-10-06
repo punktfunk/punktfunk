@@ -4,7 +4,7 @@ description: Build a client for a platform without a Punktfunk app by linking th
 ---
 
 Link `punktfunk-ffi` into your own client and it speaks the whole protocol for you: the QUIC
-handshake, pairing, the encrypted UDP data plane, FEC and loss recovery, clock sync. You decode
+handshake, pairing, the encrypted media path, FEC and loss recovery, clock sync. You decode
 video, present it, play audio and read input. The contract is
 [`include/punktfunk_core.h`](https://git.unom.io/unom/punktfunk/src/branch/main/include/punktfunk_core.h):
 every symbol carries a doc comment, and this page is the map to it. A Rust client depends on
@@ -24,7 +24,7 @@ with cbindgen; the header is checked in, and CI fails when it is stale.
 
 Compile your code with `-DPUNKTFUNK_FEATURE_QUIC`. The whole client API (`punktfunk_connect*`,
 `punktfunk_connection_*`, `punktfunk_pair`, `punktfunk_probe`) sits behind that define. Without it
-the header declares only the raw transport (`punktfunk_session_*`), which the host and tests use.
+the header declares only the raw loopback session (`punktfunk_session_*`), which the tests use.
 
 ```sh
 cc -std=c11 -DPUNKTFUNK_FEATURE_QUIC -I include -c myclient.c

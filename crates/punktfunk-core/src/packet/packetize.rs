@@ -85,7 +85,7 @@ impl Packetizer {
             shard_payload: config.shard_payload,
             max_frame_bytes: config.max_frame_bytes,
             fec: config.fec,
-            version: config.phase as u8,
+            version: 2,
             tail: Vec::new(),
             recovery: Vec::new(),
             // Mirrors `ReassemblerLimits::from_config` — keep the two in step.

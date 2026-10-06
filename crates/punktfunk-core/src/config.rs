@@ -1,24 +1,13 @@
-//! Session configuration: role, protocol phase, FEC, shard/MTU knobs, and `Config`.
+//! Session configuration: role, FEC, shard/MTU knobs, and `Config`.
 
-use crate::crypto::SessionKey;
 use crate::error::{PunktfunkError, Result};
 use crate::packet::{CRYPTO_OVERHEAD, HEADER_LEN, MAX_DATAGRAM_BYTES};
-use zeroize::Zeroize;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     Host = 0,
     Client = 1,
-}
-
-/// Negotiated generation. P1 is GameStream-compatible GF(2⁸); P2 is `punktfunk/1`
-/// (GF(2¹⁶), multi-block framing, optional QUIC control).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProtocolPhase {
-    P1GameStream = 1,
-    P2Punktfunk = 2,
 }
 
 /// On-wire `fec_scheme` tag.
@@ -500,50 +489,18 @@ pub fn jumbo_shard_payload_for(wire_mtu: usize, peer: core::net::IpAddr) -> usiz
     p.clamp(MIN_SHARD_PAYLOAD, max_shard_payload())
 }
 
-/// Inputs to construct a [`Session`](crate::session::Session).
-/// `Debug` redacts `key`/`salt`; both are zeroized on drop.
-#[derive(Clone)]
+/// Inputs to construct a [`Session`](crate::session::Session). Keys are not among them:
+/// they come from the connection's exporter ([`crate::session::MediaV2`]).
+#[derive(Clone, Debug)]
 pub struct Config {
     pub role: Role,
-    pub phase: ProtocolPhase,
     pub fec: FecConfig,
     /// Even, and ≤ [`max_shard_payload`].
     pub shard_payload: usize,
     /// Reassembler cap; bounds memory against hostile/corrupt headers.
     pub max_frame_bytes: usize,
-    pub encrypt: bool,
-    /// Session AEAD. AES-128-GCM by default; ChaCha20-Poly1305 when the client
-    /// negotiated it (soft-AES armv7). Unique per session when `encrypt` is set
-    /// ([`crate::crypto`] nonce-uniqueness).
-    pub key: SessionKey,
-    /// Unique per (key, session).
-    pub salt: [u8; 4],
     /// Test hook: drop one of every N loopback packets. 0 = lossless.
     pub loopback_drop_period: u32,
-}
-
-impl Drop for Config {
-    fn drop(&mut self) {
-        self.key.zeroize();
-        self.salt.zeroize();
-    }
-}
-
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("role", &self.role)
-            .field("phase", &self.phase)
-            .field("fec", &self.fec)
-            .field("shard_payload", &self.shard_payload)
-            .field("max_frame_bytes", &self.max_frame_bytes)
-            .field("encrypt", &self.encrypt)
-            // SessionKey Debug redacts material but keeps the cipher visible.
-            .field("key", &self.key)
-            .field("salt", &"<redacted>")
-            .field("loopback_drop_period", &self.loopback_drop_period)
-            .finish()
-    }
 }
 
 impl Config {
@@ -589,21 +546,14 @@ impl Config {
                 "max_frame_bytes too large for this shard/block configuration (block count overflows u16)",
             ));
         }
-        if self.encrypt && self.key.is_zero() {
-            return Err(PunktfunkError::InvalidArg(
-                "encrypt requires a non-zero session key (see crypto nonce-uniqueness contract)",
-            ));
-        }
         Ok(())
     }
 
-    /// P1 defaults: GF(2⁸), 15% FEC, 1024-byte shards, no encryption, 64 MiB frame cap.
-    /// All-zero `key`/`salt` are rejected by [`validate`](Self::validate) once encryption
-    /// is on — replace them from pairing.
-    pub fn p1_defaults(role: Role) -> Self {
+    /// GF(2⁸), 15% FEC, 1024-byte shards, 64 MiB frame cap. A session's [`crate::quic::Welcome`]
+    /// overrides the FEC and shard size it negotiated.
+    pub fn defaults(role: Role) -> Self {
         Config {
             role,
-            phase: ProtocolPhase::P1GameStream,
             fec: FecConfig {
                 scheme: FecScheme::Gf8,
                 fec_percent: 15,
@@ -611,9 +561,6 @@ impl Config {
             },
             shard_payload: 1024,
             max_frame_bytes: 64 * 1024 * 1024,
-            encrypt: false,
-            key: SessionKey::Aes128Gcm([0u8; 16]),
-            salt: [0u8; 4],
             loopback_drop_period: 0,
         }
     }
@@ -623,25 +570,11 @@ impl Config {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rejects_encrypt_with_zero_key() {
-        let mut c = Config::p1_defaults(Role::Host);
-        c.encrypt = true;
-        assert!(c.validate().is_err());
-        c.key = SessionKey::Aes128Gcm([1u8; 16]);
-        assert!(c.validate().is_ok());
-        // Same rejection for ChaCha20-Poly1305.
-        c.key = SessionKey::ChaCha20Poly1305([0u8; 32]);
-        assert!(c.validate().is_err());
-        c.key = SessionKey::ChaCha20Poly1305([1u8; 32]);
-        assert!(c.validate().is_ok());
-    }
-
     /// Client `shard_payload` comes from Welcome and is the reassembler floor;
     /// a sub-floor value must fail rather than lower that floor.
     #[test]
     fn rejects_negotiated_shard_payload_below_the_floor() {
-        let mut c = Config::p1_defaults(Role::Client);
+        let mut c = Config::defaults(Role::Client);
         c.shard_payload = 2;
         assert!(c.validate().is_err());
         c.shard_payload = MIN_SHARD_PAYLOAD - 2;
@@ -656,7 +589,7 @@ mod tests {
 
     #[test]
     fn rejects_oversized_shard_payload() {
-        let mut c = Config::p1_defaults(Role::Host);
+        let mut c = Config::defaults(Role::Host);
         c.shard_payload = max_shard_payload() + 2; // even, but won't fit a datagram
         assert!(c.validate().is_err());
     }
@@ -783,7 +716,7 @@ mod tests {
 
     #[test]
     fn rejects_block_exceeding_scheme_ceiling() {
-        let mut c = Config::p1_defaults(Role::Host); // Gf8, ceiling 255
+        let mut c = Config::defaults(Role::Host); // Gf8, ceiling 255
         c.fec.max_data_per_block = 250;
         c.fec.fec_percent = 15; // 250 + ceil(250*15/100) = 288 > 255
         assert!(c.validate().is_err());

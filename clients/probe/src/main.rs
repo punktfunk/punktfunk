@@ -21,12 +21,14 @@ use punktfunk_core::config::Role;
 use punktfunk_core::fp::{hex, parse_hex32};
 use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::packet::FLAG_PROBE;
+use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
+use punktfunk_core::quic::v2::io as v2io;
+use punktfunk_core::quic::v2::msg::{decode, V2Message};
 use punktfunk_core::quic::{
-    endpoint, io, window_loss_ppm, BitrateChanged, CursorRenderMode, DeliveryReport, Hello,
-    LinkReport, LossReport, ProbeRequest, ProbeResult, Reconfigure, Reconfigured, RequestKeyframe,
-    SetBitrate, Start, Welcome,
+    endpoint, window_loss_ppm, BitrateChanged, CursorRenderMode, DeliveryReport, Hello, LinkReport,
+    LossReport, ProbeRequest, ProbeResult, Reconfigure, Reconfigured, RequestKeyframe, SetBitrate,
+    Welcome,
 };
-use punktfunk_core::transport::UdpTransport;
 use punktfunk_core::{CompositorPref, Mode, PunktfunkError, Session};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
@@ -147,34 +149,27 @@ struct Args {
 }
 
 /// The control stream's halves; `punktfunk/2`'s cross the translation edges.
-type CtlTx = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
-type CtlRx = io::MsgReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>;
+type CtlTx = quinn::SendStream;
+type CtlRx = v2io::FrameReader<quinn::RecvStream>;
 
 /// The connection, its datagrams as `punktfunk/1` encodings: on `punktfunk/2` they carry a kind.
 #[derive(Clone)]
 struct Wire {
     conn: quinn::Connection,
-    v2: bool,
 }
 
 impl Wire {
     fn send_datagram(&self, d: Vec<u8>) -> Result<(), quinn::SendDatagramError> {
-        if !self.v2 {
-            return self.conn.send_datagram(d.into());
-        }
         match punktfunk_core::quic::v2::dgram::wrap(&d) {
             Some(w) => self.conn.send_datagram(w.into()),
             None => Ok(()),
         }
     }
 
-    /// The next datagram; on `punktfunk/2` a kind the probe reads nothing from is skipped.
+    /// The next datagram; a kind the probe reads nothing from is skipped.
     async fn read_datagram(&self) -> Result<Vec<u8>, quinn::ConnectionError> {
         loop {
             let b = self.conn.read_datagram().await?;
-            if !self.v2 {
-                return Ok(b.to_vec());
-            }
             use punktfunk_core::quic::v2::dgram::{decode, Dgram};
             if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) = decode(&b) {
                 return Ok(p.to_vec());
@@ -544,84 +539,57 @@ struct Counters {
 }
 
 async fn session(args: Args) -> Result<()> {
-    let (ep, quic, remote, shared) = connect(&args).await?;
-    let v2 = endpoint::negotiated_alpn(&quic).as_deref()
-        == Some(punktfunk_core::quic::v2::registry::ALPN);
-    tracing::info!(wire = if v2 { 2 } else { 1 }, "protocol the host answered");
-    let conn = Wire {
-        conn: quic.clone(),
-        v2,
-    };
-    let (send, recv) = conn.open_bi().await.context("open control stream")?;
-    let rx_edge = Arc::new(std::sync::Mutex::new(
-        punktfunk_core::quic::v2::translate::RxEdge::default(),
-    ));
+    let (ep, quic, shared) = connect(&args).await?;
+    let conn = Wire { conn: quic.clone() };
+    let (mut send, recv) = conn.open_bi().await.context("open control stream")?;
     // Frame every read on the control stream through the resumable reader, exactly as the client
     // pump does: `clock_sync` bounds each read with a timeout, and a frame straddling two wakeups
     // would otherwise leave the stream permanently misaligned for the rest of the run.
-    let (mut send, mut recv): (CtlTx, CtlRx) = if v2 {
-        use punktfunk_core::quic::v2::{io as v2io, registry, translate};
-        let mut send = send;
-        v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-        // The `Start` entries ride the `ClientHello` on `punktfunk/2`.
-        let preset = args.preset.as_ref().map(|p| p.encode()).unwrap_or_default();
-        let extra = translate::ClientExtra {
-            start_ext: if preset.is_empty() {
-                Vec::new()
-            } else {
-                vec![(punktfunk_core::quic::EXT_TAG_PRESET, preset)]
-            },
-            resume: None,
-            suites: if std::env::var_os("PUNKTFUNK_CLIENT_CHACHA20").is_some() {
-                vec![
-                    punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305,
-                    punktfunk_core::crypto::MediaSuite::Aes128Gcm,
-                ]
-            } else {
-                vec![punktfunk_core::crypto::MediaSuite::Aes128Gcm]
-            },
-        };
-        let tx = Arc::new(std::sync::Mutex::new(translate::TxEdge::client(extra)));
-        let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
-            Box::new(v2io::V2Reader::new(recv, rx_edge.clone()));
-        (
-            Box::new(v2io::V2Writer::new(send, tx)),
-            io::MsgReader::new(recv),
-        )
-    } else {
-        let recv: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(recv);
-        (Box::new(send), io::MsgReader::new(recv))
+    v2io::write_stream_type(
+        &mut send,
+        punktfunk_core::quic::v2::registry::STREAM_CONTROL,
+    )
+    .await?;
+    let mut recv: CtlRx = v2io::FrameReader::new(recv);
+    // The `Start` entries ride the `ClientHello`.
+    let preset = args.preset.as_ref().map(|p| p.encode()).unwrap_or_default();
+    let extra = Extra {
+        start_ext: if preset.is_empty() {
+            Vec::new()
+        } else {
+            vec![(punktfunk_core::quic::EXT_TAG_PRESET, preset)]
+        },
+        resume: None,
+        suites: if std::env::var_os("PUNKTFUNK_CLIENT_CHACHA20").is_some() {
+            vec![
+                punktfunk_core::crypto::MediaSuite::ChaCha20Poly1305,
+                punktfunk_core::crypto::MediaSuite::Aes128Gcm,
+            ]
+        } else {
+            vec![punktfunk_core::crypto::MediaSuite::Aes128Gcm]
+        },
     };
-    let (welcome, udp_port) = handshake(&mut send, &mut recv, &args, v2).await?;
-    // `punktfunk/2`: media on the dialing socket, under keys from the connection's exporter.
-    let media = match shared.filter(|_| v2) {
-        Some(shared) => {
-            let server = rx_edge
-                .lock()
-                .unwrap()
-                .server
-                .context("the punktfunk/2 host sent no session")?;
-            let suite = server.suite.context("unsealed punktfunk/2 media")?;
-            let keys = endpoint::media_keys(&quic, &server.session_id, suite)
-                .context("punktfunk/2 media keys")?;
-            shared.stats().set_host(quic.remote_address());
-            Some((
-                shared,
-                punktfunk_core::session::MediaV2 {
-                    clock_origin_ns: server.clock_origin_ns,
-                    keys: Some(keys),
-                    clock: None,
-                },
-            ))
-        }
-        None => None,
-    };
+    let server = handshake(&mut send, &mut recv, &args, extra).await?;
+    let welcome = server.welcome;
+    // Media on the dialing socket, under keys from the connection's exporter.
+    let suite = server.suite.context("unsealed native media")?;
+    let keys =
+        endpoint::media_keys(&quic, &server.session_id, suite).context("native media keys")?;
+    shared.stats().set_host(quic.remote_address());
+    let media = (
+        shared,
+        punktfunk_core::session::MediaV2 {
+            clock_origin_ns: server.clock_origin_ns,
+            keys: Some(keys),
+            clock: None,
+        },
+    );
     let clock_offset_ns = clock(&mut send, &mut recv, args.clock_resync).await?;
     let counters = Arc::new(Counters {
         loss_ppm: AtomicU32::new(u32::MAX),
         ..Counters::default()
     });
-    control_plane(&args, &conn, send, recv, welcome.encrypt, &counters).await?;
+    control_plane(&args, &conn, send, recv, &counters).await?;
     if args.input_test {
         spawn_input_test(&conn, args.mode);
     }
@@ -661,8 +629,6 @@ async fn session(args: Args) -> Result<()> {
     let result = tokio::task::spawn_blocking(move || {
         data_plane(
             welcome,
-            remote,
-            udp_port,
             media,
             out_path,
             seconds,
@@ -711,30 +677,18 @@ async fn connect(
 ) -> Result<(
     quinn::Endpoint,
     quinn::Connection,
-    std::net::SocketAddr,
-    Option<punktfunk_core::transport::shared::ClientMedia>,
+    punktfunk_core::transport::shared::ClientMedia,
 )> {
     let remote: std::net::SocketAddr = args.connect.parse().context("--connect host:port")?;
     let identity = load_or_create_identity()?;
     let identity = Some((identity.0.as_str(), identity.1.as_str()));
-    // `punktfunk/2` beside `punktfunk/1` on the shared socket, as the clients dial.
-    let offer_v2 = punktfunk_core::client::offer_v2_from_env();
-    let (ep, observed, media) = if offer_v2 {
-        let (r, observed) = endpoint::client_shared(
-            args.pin,
-            identity,
-            &[
-                punktfunk_core::quic::v2::registry::ALPN,
-                endpoint::QUIC_ALPN,
-            ],
-        );
-        let (ep, media) = r.map_err(|e| anyhow!("QUIC client endpoint: {e}"))?;
-        (ep, observed, Some(media))
-    } else {
-        let (ep, observed) = endpoint::client_pinned_with_identity(args.pin, identity);
-        let ep = ep.map_err(|e| anyhow!("QUIC client endpoint: {e}"))?;
-        (ep, observed, None)
-    };
+    // QUIC and media on one socket, as the clients dial.
+    let (r, observed) = endpoint::client_shared(
+        args.pin,
+        identity,
+        &[punktfunk_core::quic::v2::registry::ALPN],
+    );
+    let (ep, media) = r.map_err(|e| anyhow!("QUIC client endpoint: {e}"))?;
     let conn = ep
         .connect(remote, "punktfunk")
         .context("connect")?
@@ -749,21 +703,25 @@ async fn connect(
         ),
         (None, None) => tracing::info!(%remote, "connected"),
     }
-    Ok((ep, conn, remote, media))
+    Ok((ep, conn, media))
 }
 
-/// Hello out and Welcome back, then `Start` naming the data-plane port this probe reserved.
-/// A `punktfunk/2` session names none: its media arrives on the connection's socket.
+/// What the `ClientHello` carries beyond the `Hello`.
+struct Extra {
+    start_ext: Vec<(u16, Vec<u8>)>,
+    resume: Option<[u8; 16]>,
+    suites: Vec<punktfunk_core::crypto::MediaSuite>,
+}
+
+/// `ClientHello` out and `ServerHello` back, then `Ready`.
 async fn handshake(
     send: &mut CtlTx,
     recv: &mut CtlRx,
     args: &Args,
-    v2: bool,
-) -> Result<(Welcome, u16)> {
-    io::write_msg(
-        send,
-        &Hello {
-            abi_version: punktfunk_core::WIRE_VERSION,
+    extra: Extra,
+) -> Result<ServerHello> {
+    let hello = ClientHello {
+        hello: Hello {
             mode: args.mode,
             compositor: args.compositor,
             gamepad: args.gamepad,
@@ -871,16 +829,31 @@ async fn handshake(
             // invites exactly the misreading that a rate alone asks for something.
             audio_rate_hz: args.audio_format.map(|(r, _)| r).unwrap_or(0),
             audio_bits: args.audio_format.map(|(_, b)| b).unwrap_or(0),
+        },
+        start_ext: extra.start_ext,
+        resume: extra.resume,
+        suites: extra.suites,
+        features: Default::default(),
+    };
+    v2io::send(send, &hello).await?;
+    // `Pending` repeats while the host asks its console about this probe.
+    let server = loop {
+        let (ty, body) = recv.read_frame().await?;
+        match ty {
+            ServerHello::TYPE => {
+                break ServerHello::from_body(&body)
+                    .map_err(|e| anyhow!("ServerHello decode: {e:?}"))?
+            }
+            punktfunk_core::quic::v2::registry::MSG_PENDING => {
+                tracing::info!("the host is waiting for this probe to be approved")
+            }
+            _ => {}
         }
-        .encode(),
-    )
-    .await?;
-    let welcome =
-        Welcome::decode(&recv.read_msg().await?).map_err(|e| anyhow!("Welcome decode: {e:?}"))?;
+    };
+    let welcome = &server.welcome;
     tracing::info!(
         mode = ?welcome.mode,
         fec = ?welcome.fec,
-        encrypt = welcome.encrypt,
         frames = welcome.frames,
         compositor = welcome.compositor.as_str(),
         gamepad = welcome.gamepad.as_str(),
@@ -890,35 +863,12 @@ async fn handshake(
         chroma_444 = welcome.chroma_format == punktfunk_core::quic::CHROMA_IDC_444,
         chroma_format_idc = welcome.chroma_format,
         codec = codec_ext(welcome.codec),
-        cipher = if welcome.cipher == punktfunk_core::quic::CIPHER_CHACHA20_POLY1305 {
-            "chacha20-poly1305"
-        } else {
-            "aes-128-gcm"
-        },
+        suite = ?server.suite,
         "session offer"
     );
 
-    // Reserve our data-plane port, then tell the host to start.
-    let udp_port = if v2 {
-        0
-    } else {
-        let probe = std::net::UdpSocket::bind("0.0.0.0:0")?;
-        let port = probe.local_addr()?.port();
-        drop(probe);
-        port
-    };
-    let start = Start {
-        client_udp_port: udp_port,
-    };
-    let preset = args.preset.as_ref().map(|p| p.encode()).unwrap_or_default();
-    let start_msg =
-        if preset.is_empty() || welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_EXT == 0 {
-            start.encode()
-        } else {
-            start.encode_ext(&[(punktfunk_core::quic::EXT_TAG_PRESET, &preset)])?
-        };
-    io::write_msg(send, &start_msg).await?;
-    Ok((welcome, udp_port))
+    v2io::send(send, &Ready {}).await?;
+    Ok(server)
 }
 
 /// The wall-clock skew handshake, plus the `--clock-resync` re-probe. `None` is an old host
@@ -986,11 +936,10 @@ async fn control_plane(
     conn: &Wire,
     mut send: CtlTx,
     recv: CtlRx,
-    encrypt: bool,
     counters: &Arc<Counters>,
 ) -> Result<()> {
     if let Some(proven_kbps) = args.link_kbps {
-        io::write_msg(&mut send, &LinkReport { proven_kbps }.encode())
+        v2io::send(&mut send, &LinkReport { proven_kbps })
             .await
             .map_err(|e| anyhow!("LinkReport write: {e}"))?;
         tracing::info!(proven_kbps, "sent the link report");
@@ -1000,7 +949,7 @@ async fn control_plane(
     } else if let Some((new_kbps, after_secs)) = args.rebitrate {
         spawn_rebitrate(conn, send, recv, new_kbps, after_secs);
     } else if let Some(test) = args.speed_test {
-        spawn_speed_test(conn, send, recv, test, encrypt, counters);
+        spawn_speed_test(conn, send, recv, test, counters);
     } else if args.cursor_capture || args.cursor_nochannel || args.cursor_channel {
         spawn_cursor_test(conn, send, recv, args.cursor_capture, args.cursor_channel);
     } else {
@@ -1016,14 +965,18 @@ fn spawn_remode(mut rs: CtlTx, mut rr: CtlRx, new_mode: Mode, after_secs: u32) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(after_secs as u64)).await;
         tracing::info!(?new_mode, "requesting mid-stream mode switch");
-        if io::write_msg(&mut rs, &Reconfigure { mode: new_mode }.encode())
+        if v2io::send(&mut rs, &Reconfigure { mode: new_mode })
             .await
             .is_err()
         {
             tracing::error!("Reconfigure write failed");
             return;
         }
-        match rr.read_msg().await.map(|b| Reconfigured::decode(&b)) {
+        match rr
+            .read_frame()
+            .await
+            .map(|(ty, b)| decode::<Reconfigured>(ty, &b))
+        {
             Ok(Ok(ack)) if ack.accepted => {
                 tracing::info!(mode = ?ack.mode, "mode switch ACCEPTED")
             }
@@ -1062,12 +1015,11 @@ fn spawn_rebitrate(conn: &Wire, mut rs: CtlTx, mut rr: CtlRx, new_kbps: u32, aft
             if !sent && std::time::Instant::now() >= switch_at {
                 sent = true;
                 tracing::info!(new_kbps, "requesting mid-stream bitrate change");
-                if io::write_msg(
+                if v2io::send(
                     &mut rs,
                     &SetBitrate {
                         bitrate_kbps: new_kbps,
-                    }
-                    .encode(),
+                    },
                 )
                 .await
                 .is_err()
@@ -1075,7 +1027,11 @@ fn spawn_rebitrate(conn: &Wire, mut rs: CtlTx, mut rr: CtlRx, new_kbps: u32, aft
                     tracing::error!("SetBitrate write failed");
                     return;
                 }
-                match rr.read_msg().await.map(|b| BitrateChanged::decode(&b)) {
+                match rr
+                    .read_frame()
+                    .await
+                    .map(|(ty, b)| decode::<BitrateChanged>(ty, &b))
+                {
                     Ok(Ok(ack)) => tracing::info!(
                         applied_kbps = ack.bitrate_kbps,
                         "BITRATE CHANGE acked by host"
@@ -1095,17 +1051,12 @@ fn spawn_speed_test(
     mut ss: CtlTx,
     mut sr: CtlRx,
     (target_kbps, duration_ms): (u32, u32),
-    encrypt: bool,
     counters: &Arc<Counters>,
 ) {
     let c = counters.clone();
-    // Per-packet wire size to express delivered bytes as link bytes (header + shard + crypto);
+    // Per-packet wire size to express delivered bytes as link bytes (header + shard + tag);
     // every shard is zero-padded to shard_payload so all data packets are this exact size.
-    let crypto_overhead = if encrypt {
-        punktfunk_core::packet::CRYPTO_OVERHEAD as u64
-    } else {
-        0
-    };
+    let crypto_overhead = punktfunk_core::crypto::TAG_LEN as u64;
     let conn2 = conn.clone();
     tokio::spawn(async move {
         use std::sync::atomic::Ordering::Relaxed;
@@ -1131,21 +1082,19 @@ fn spawn_speed_test(
         let base_pkts = c.rx_wire_packets.load(Relaxed);
         let base_bytes = c.rx_wire_bytes.load(Relaxed);
         tracing::info!(target_kbps, duration_ms, "requesting speed-test probe");
-        if io::write_msg(
-            &mut ss,
-            &ProbeRequest {
-                target_kbps,
-                duration_ms,
-            }
-            .encode(),
-        )
-        .await
-        .is_err()
-        {
+        let ask = punktfunk_core::quic::ProbeShaped::from(ProbeRequest {
+            target_kbps,
+            duration_ms,
+        });
+        if v2io::send(&mut ss, &ask).await.is_err() {
             tracing::error!("ProbeRequest write failed");
             return;
         }
-        let res = match sr.read_msg().await.map(|b| ProbeResult::decode(&b)) {
+        let res = match sr
+            .read_frame()
+            .await
+            .map(|(ty, b)| decode::<ProbeResult>(ty, &b))
+        {
             Ok(Ok(r)) => r,
             other => {
                 tracing::error!(?other, "bad ProbeResult");
@@ -1220,9 +1169,7 @@ fn spawn_cursor_test(
         if flip_twice {
             for (at, client_draws) in [(15, false), (20, true)] {
                 tokio::time::sleep(std::time::Duration::from_secs(at)).await;
-                if let Err(e) =
-                    io::write_msg(&mut cs, &CursorRenderMode { client_draws }.encode()).await
-                {
+                if let Err(e) = v2io::send(&mut cs, &CursorRenderMode { client_draws }).await {
                     tracing::error!(error = %format!("{e:#}"), "cursor-channel: render-mode write failed");
                     return;
                 }
@@ -1231,12 +1178,11 @@ fn spawn_cursor_test(
         }
         if flip_channel {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            match io::write_msg(
+            match v2io::send(
                 &mut cs,
                 &CursorRenderMode {
                     client_draws: false,
-                }
-                .encode(),
+                },
             )
             .await
             {
@@ -1251,12 +1197,8 @@ fn spawn_cursor_test(
             }
         }
         // Drain (and just log) whatever the host still sends on the control stream.
-        while let Ok(b) = cr.read_msg().await {
-            tracing::debug!(
-                len = b.len(),
-                ty = b.get(4).copied().unwrap_or(0),
-                "cursor-capture: control message drained"
-            );
+        while let Ok((ty, b)) = cr.read_frame().await {
+            tracing::debug!(len = b.len(), ty, "cursor-capture: control message drained");
         }
     });
     let wiggle_conn = conn.clone();
@@ -1306,10 +1248,7 @@ fn spawn_loss_relay(mut ls: CtlTx, counters: &Arc<Counters>) {
             let d = c.dropped_frames.load(Relaxed);
             if d > last_dropped {
                 last_dropped = d;
-                if io::write_msg(&mut ls, &RequestKeyframe.encode())
-                    .await
-                    .is_err()
-                {
+                if v2io::send(&mut ls, &RequestKeyframe).await.is_err() {
                     break; // control stream gone
                 }
                 tracing::debug!(dropped = d, "unrecoverable frame — requested keyframe");
@@ -1323,12 +1262,11 @@ fn spawn_loss_relay(mut ls: CtlTx, counters: &Arc<Counters>) {
                 let received = c.rx_wire_packets.load(Relaxed);
                 if received == 0 || !delivery_confirmed {
                     delivery_confirmed = received > 0;
-                    if io::write_msg(
+                    if v2io::send(
                         &mut ls,
                         &DeliveryReport {
                             packets_received: received,
-                        }
-                        .encode(),
+                        },
                     )
                     .await
                     .is_err()
@@ -1337,7 +1275,7 @@ fn spawn_loss_relay(mut ls: CtlTx, counters: &Arc<Counters>) {
                     }
                 }
                 if v != u32::MAX
-                    && io::write_msg(&mut ls, &LossReport { loss_ppm: v }.encode())
+                    && v2io::send(&mut ls, &LossReport { loss_ppm: v })
                         .await
                         .is_err()
                 {
@@ -1729,19 +1667,16 @@ fn spawn_datagram_rx(
 #[allow(clippy::too_many_arguments)]
 fn data_plane(
     welcome: Welcome,
-    remote: std::net::SocketAddr,
-    udp_port: u16,
-    media: Option<(
+    (shared, media): (
         punktfunk_core::transport::shared::ClientMedia,
         punktfunk_core::session::MediaV2,
-    )>,
+    ),
     out_path: Option<String>,
     seconds: Option<u64>,
     clock_offset_ns: Option<i64>,
     counters: Arc<Counters>,
     host_timing_rx: std::sync::mpsc::Receiver<punktfunk_core::quic::HostTiming>,
 ) -> Result<()> {
-    let host_udp = std::net::SocketAddr::new(remote.ip(), welcome.udp_port);
     let cfg = welcome.session_config(Role::Client);
     let expected = welcome.frames;
     // Express our receive time in the host clock before differencing against the host-stamped
@@ -1749,30 +1684,8 @@ fn data_plane(
     // is then only valid same-host, as before).
     let clock_offset = clock_offset_ns.unwrap_or(0);
     let skew_corrected = clock_offset_ns.is_some();
-    let mut session = match media {
-        // `punktfunk/2`: no data port to bind or punch.
-        Some((shared, media)) => {
-            let cfg = punktfunk_core::config::Config {
-                encrypt: false,
-                ..cfg
-            };
-            Session::new_v2(cfg, media, Box::new(shared))
-        }
-        None => {
-            let transport =
-                UdpTransport::connect(&format!("0.0.0.0:{udp_port}"), &host_udp.to_string())
-                    .context("bind data plane")?;
-            // Hole-punch the host's data port so video traverses a NAT / inter-VLAN firewall.
-            // This tool runs one session then exits, so the keepalive thread dies with the
-            // process — no explicit stop needed (the flag is never set).
-            if let Ok(sock) = transport.try_clone_socket() {
-                let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                punktfunk_core::transport::spawn_data_punch(sock, stop);
-            }
-            Session::new(cfg, Box::new(transport))
-        }
-    }
-    .map_err(|e| anyhow!("client session: {e:?}"))?;
+    let mut session =
+        Session::new(cfg, media, Box::new(shared)).map_err(|e| anyhow!("client session: {e:?}"))?;
     let mut sink = match &out_path {
         Some(p) => Some(std::io::BufWriter::new(
             std::fs::File::create(p).with_context(|| format!("create {p}"))?,

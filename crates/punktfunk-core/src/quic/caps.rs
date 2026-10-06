@@ -42,9 +42,8 @@ pub const VIDEO_CAP_PROBE_SEQ: u8 = 0x10;
 /// to clients that set this bit; others get a whole-AU seal.
 pub const VIDEO_CAP_STREAMED_AU: u8 = 0x20;
 /// [`Hello::video_caps`]: client can open ChaCha20-Poly1305 session datagrams and wants
-/// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows,
-/// answering [`Welcome::cipher`] `= 1` plus [`Welcome::key_chacha`]. Other clients keep
-/// the AES-128-GCM Welcome byte-identical.
+/// them (software-AES targets). The host grants only when `PUNKTFUNK_CHACHA20` allows, and
+/// says so in the `ServerHello` suite.
 pub const VIDEO_CAP_CHACHA20: u8 = 0x40;
 /// [`Hello::video_caps`]: the decoder accepts multi-slice AUs. The embedder sets this from
 /// the decode stack — some mobile/TV SoCs wedge on multi-slice HEVC — not from a host
@@ -129,10 +128,8 @@ pub const CLIENT_CAP_AUDIO_HIRES: u8 = 0x10;
 /// host-global wiring, so any live session that asked wins until it ends.
 pub const CLIENT_CAP_KEEP_HOST_AUDIO: u8 = 0x20;
 
-/// [`Hello::client_caps`]: the client parses the tagged extension block after Welcome's
-/// frozen positional layout ([`EXT_TAG_PADDING`](super::EXT_TAG_PADDING)). The host
-/// appends a block only toward this bit, so a client that leaves it clear still gets the
-/// Welcome byte-identical to today's. `0x80` is the last free `client_caps` bit.
+/// [`Hello::client_caps`]: every client sets it; it gates nothing on `punktfunk/2`.
+/// `0x80` is the last free `client_caps` bit.
 pub const CLIENT_CAP_EXT: u8 = 0x40;
 
 /// [`Welcome::host_caps`]: the session is on the lossless audio plane
@@ -159,9 +156,8 @@ pub const HOST_CAP2_REPEAT_MARK: u8 = 0x01;
 /// contacts vanish with no error (`design/touch-client-overlay.md`).
 pub const HOST_CAP2_TOUCH: u8 = 0x02;
 
-/// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host parses the tagged
-/// extension block after `Start`'s 6 bytes. The client appends one only after seeing this
-/// bit — Hello is first contact, with no host capability known yet, and stays frozen.
+/// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads the
+/// `ClientHello` entries. Every host sets it; a 0.43 client sends them only toward it.
 pub const HOST_CAP2_EXT: u8 = 0x04;
 
 /// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the injector consumes
@@ -336,6 +332,8 @@ mod tests {
     use crate::audio::pcm::BITS_16;
     use crate::audio::SAMPLE_RATE_HZ;
     use crate::config::{CompositorPref, FecConfig, FecScheme, GamepadPref, Mode};
+    use crate::quic::v2::hello::ServerHello;
+    use crate::quic::v2::msg::V2Message;
     use crate::quic::*;
 
     /// Every capability constant, grouped by the wire byte it is a bit of. Two features on
@@ -403,9 +401,8 @@ mod tests {
         ),
     ];
 
-    /// The `Start` extension block's tag space: ids, not bits, so they only have to differ.
+    /// The `ClientHello` entry tag space: ids, not bits, so they only have to differ.
     const EXT_TAGS: &[(&str, u16)] = &[
-        ("EXT_TAG_PADDING", EXT_TAG_PADDING),
         ("EXT_TAG_CLIENT", EXT_TAG_CLIENT),
         ("EXT_TAG_ABR", EXT_TAG_ABR),
         ("EXT_TAG_DELIVERY", EXT_TAG_DELIVERY),
@@ -476,11 +473,9 @@ mod tests {
     }
 
     #[test]
-    fn host_cap_clipboard_bit_is_distinct_and_survives_welcome() {
+    fn host_cap_clipboard_bit_is_distinct_and_survives_server_hello() {
         assert_ne!(HOST_CAP_CLIPBOARD, HOST_CAP_GAMEPAD_STATE);
         let mut w = Welcome {
-            abi_version: 1,
-            udp_port: 1,
             mode: Mode {
                 width: 1920,
                 height: 1080,
@@ -492,9 +487,6 @@ mod tests {
                 max_data_per_block: 1024,
             },
             shard_payload: 1024,
-            encrypt: false,
-            key: [0; 16],
-            salt: [0; 4],
             frames: 0,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
@@ -508,8 +500,6 @@ mod tests {
             mgmt_port: 0,
             grants: GRANT_ALL,
             expires_in_secs: 0,
-            cipher: 0,
-            key_chacha: None,
             audio_codec: AUDIO_CODEC_OPUS,
             audio_rate_hz: SAMPLE_RATE_HZ,
             audio_bits: BITS_16,
@@ -517,17 +507,26 @@ mod tests {
             host_caps2: 0,
             audio_layout: 0,
         };
-        let got = Welcome::decode(&w.encode()).unwrap();
+        let round = |welcome: Welcome| {
+            let sh = ServerHello {
+                welcome,
+                session_id: [0; 16],
+                clock_origin_ns: 0,
+                suite: None,
+                features: Default::default(),
+            };
+            ServerHello::from_body(&sh.fields().into_body())
+                .unwrap()
+                .welcome
+        };
+        let got = round(w);
         assert_eq!(got.host_caps & HOST_CAP_CLIPBOARD, HOST_CAP_CLIPBOARD);
         assert_eq!(
             got.host_caps & HOST_CAP_GAMEPAD_STATE,
             HOST_CAP_GAMEPAD_STATE
         );
         w.host_caps = HOST_CAP_GAMEPAD_STATE;
-        assert_eq!(
-            Welcome::decode(&w.encode()).unwrap().host_caps & HOST_CAP_CLIPBOARD,
-            0
-        );
+        assert_eq!(round(w).host_caps & HOST_CAP_CLIPBOARD, 0);
     }
 
     #[test]
