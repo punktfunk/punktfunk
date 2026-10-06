@@ -56,6 +56,17 @@
 // send via [`punktfunk_connection_send_hid_report`], never by building the datagram.
 #define PUNKTFUNK_RICH_HID_REPORT 4
 
+// [`punktfunk_connection_set_sc2_gate`] bit: the client's overlay owns the pad. Its raw state
+// goes out neutral, and a button held now stays off the wire until it is released.
+#define PUNKTFUNK_SC2_GATE_MASKED 1
+
+// [`punktfunk_connection_set_sc2_gate`] bit: Steam and QAM stay with the client.
+#define PUNKTFUNK_SC2_GATE_SYSTEM_LOCAL 2
+
+// [`punktfunk_connection_set_sc2_gate`] bit: the client opens its ring on Select then A, so
+// that chord stays off the wire.
+#define PUNKTFUNK_SC2_GATE_CHORDS 4
+
 // [`PunktfunkPenSample::state`] bit: the pen hovers in range (implied by `TOUCHING`).
 #define PUNKTFUNK_PEN_IN_RANGE 1
 
@@ -3185,6 +3196,18 @@ PunktfunkStatus punktfunk_connection_send_hid_report(PunktfunkConnection *c,
                                                      uint8_t pad,
                                                      const uint8_t *data,
                                                      uintptr_t len);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Gate what of a Steam Controller 2's raw reports on `pad` reaches the host: an OR of
+// `PUNKTFUNK_SC2_GATE_*`. Call when the client's overlay takes or returns the pad and when its
+// system-button policy changes. Latest wins; unknown bits are ignored; `pad` masks to 16.
+//
+// # Safety
+// `c` is a valid connection handle. Callable from any thread.
+PunktfunkStatus punktfunk_connection_set_sc2_gate(PunktfunkConnection *c,
+                                                  uint8_t pad,
+                                                  uint32_t gate);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

@@ -148,6 +148,25 @@ pub unsafe extern "C" fn punktfunk_connection_send_hid_report(
     })
 }
 
+/// Gate what of a Steam Controller 2's raw reports on `pad` reaches the host: an OR of
+/// `PUNKTFUNK_SC2_GATE_*`. Call when the client's overlay takes or returns the pad and when its
+/// system-button policy changes. Latest wins; unknown bits are ignored; `pad` masks to 16.
+///
+/// # Safety
+/// `c` is a valid connection handle. Callable from any thread.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_set_sc2_gate(
+    c: *mut PunktfunkConnection,
+    pad: u8,
+    gate: u32,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        c.inner.set_sc2_gate(pad & 0xF, punktfunk_core::client::Sc2Gate::from_bits(gate));
+        PunktfunkStatus::Ok
+    })
+}
+
 /// Send one stylus sample batch — `count` (`1..=PUNKTFUNK_PEN_BATCH_MAX`)
 /// [`PunktfunkPenSample`]s, oldest first — as one `0xCC/0x05` pen datagram
 /// (`design/pen-tablet-input.md`). Split longer runs. Gate on

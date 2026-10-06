@@ -590,6 +590,24 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadHidR
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativeSetSc2Gate(handle, pad, gate)` — what core holds back of a Steam
+/// Controller 2's raw reports on wire pad `pad`: `PUNKTFUNK_SC2_GATE_*` bits, latest wins.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSetSc2Gate(
+    _env: EnvUnowned,
+    _this: JObject,
+    handle: jlong,
+    pad: jint,
+    gate: jint,
+) {
+    jni_guard((), || {
+        if let Some(h) = SESSIONS.get(handle) {
+            let gate = punktfunk_core::client::Sc2Gate::from_bits(gate as u32);
+            h.client.set_sc2_gate((pad as u32 & 0xF) as u8, gate);
+        }
+    })
+}
+
 /// `NativeBridge.nativeSendPadTouch(handle, pad, finger, active, x, y)` — one touchpad contact
 /// from a client-captured controller (the Sony USB capture), forwarded on the rich-input plane
 /// (`RichInput::Touchpad`, 0xCC). `finger`: contact slot 0/1; `x`/`y`: normalized 0..=65535 in

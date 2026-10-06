@@ -16,7 +16,7 @@
 use crate::clipboard::{ClipCommand, ClipEventCore};
 use crate::config::{CompositorPref, GamepadPref, Mode};
 use crate::error::{PunktfunkError, Result};
-use crate::input::{InputEvent, PadMouseMode};
+use crate::input::{InputEvent, InputKind, PadMouseMode};
 use crate::quic::{
     endpoint, ClipControl, ClipKind, ClipOffer, ColorInfo, HdrMeta, HidOutput, PadAudioFrame,
     ProbeRequest, RfiRequest, RichInput,
@@ -40,6 +40,8 @@ mod probe;
 mod pump;
 mod recovery;
 mod resume;
+/// cbindgen:ignore
+mod sc2;
 use crate::rumble;
 mod worker;
 
@@ -72,6 +74,7 @@ use self::probe::ProbeState;
 use self::pump::run_pump;
 pub use self::recovery::FrameOrder;
 use self::recovery::{RecentRfis, RecoveryAsk, RfiRecovery, ShortFrames};
+pub use self::sc2::{Sc2Gate, SC2_GATE_CHORDS, SC2_GATE_MASKED, SC2_GATE_SYSTEM_LOCAL};
 use self::worker::{ClientShared, WorkerArgs};
 
 /// What this client calls itself in the host's `handshake complete` line: build plus the shell
@@ -264,6 +267,8 @@ pub struct NativeClient {
     rich_input_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     /// Touchpad contacts of controller-mouse pads, for the input task's pointer.
     pad_touch_tx: tokio::sync::mpsc::UnboundedSender<pad_touch::Contact>,
+    /// Per wire pad: what of a Steam Controller 2's raw reports reaches the host.
+    sc2: Mutex<[sc2::Filter; sc2::PADS]>,
     /// Bounded ([`CTRL_QUEUE`]). Sparse; full means the control task is wedged — treat as closed.
     ctrl_tx: tokio::sync::mpsc::Sender<CtrlRequest>,
     clip: Mutex<Receiver<ClipEventCore>>,
@@ -810,6 +815,7 @@ impl NativeClient {
             mic_tx,
             rich_input_tx,
             pad_touch_tx,
+            sc2: Mutex::default(),
             ctrl_tx,
             clip: Mutex::new(clip_event_rx),
             clip_cmd_tx,
@@ -1546,9 +1552,30 @@ impl NativeClient {
     }
 
     /// Queue one event. The input task drops a class the live grants refuse; the host
-    /// enforces the same mask.
+    /// enforces the same mask. A pad's arrival or removal restarts its SC2 filter.
     pub fn send_input(&self, ev: &InputEvent) -> Result<()> {
+        if matches!(
+            ev.kind,
+            InputKind::GamepadArrival | InputKind::GamepadRemove
+        ) {
+            if let Some(f) = self
+                .sc2
+                .lock()
+                .unwrap()
+                .get_mut(usize::from(ev.flags as u8))
+            {
+                f.reset();
+            }
+        }
         self.input_tx.send(*ev).map_err(|_| PunktfunkError::Closed)
+    }
+
+    /// How a Steam Controller 2's raw reports on wire pad `pad` are gated: the client's overlay,
+    /// its system-button policy and its ring chord. Latest wins; an index past 15 is ignored.
+    pub fn set_sc2_gate(&self, pad: u8, gate: Sc2Gate) {
+        if let Some(f) = self.sc2.lock().unwrap().get_mut(usize::from(pad)) {
+            f.gate = gate;
+        }
     }
 
     /// Welcome [`crate::quic::HOST_CAP_GAMEPAD_STATE`] / [`crate::quic::HOST_CAP_CLIPBOARD`].
@@ -1733,10 +1760,20 @@ impl NativeClient {
         self.shared.pad_mouse.live()
     }
 
-    /// DualSense touchpad/motion (0xCC). Best-effort. No-op unless the host runs DualSense.
-    /// Under controller mouse a pad's touchpads move the pointer instead, and a full-mouse pad
-    /// keeps its gyro too, so it cannot aim the neutral host pad.
+    /// Rich input (0xCC): touchpads, motion, a Steam Controller 2's raw reports. Best-effort.
+    /// A raw report passes its pad's [`Sc2Gate`] first. Under controller mouse a pad's touchpads
+    /// move the pointer instead, and a full-mouse pad keeps its gyro too, so it cannot aim the
+    /// neutral host pad.
     pub fn send_rich_input(&self, mut rich: RichInput) -> Result<()> {
+        if let RichInput::HidReport { pad, len, data } = &mut rich {
+            let n = usize::from(*len).min(data.len());
+            let mut filters = self.sc2.lock().unwrap();
+            if let Some(f) = filters.get_mut(usize::from(*pad)) {
+                if !f.apply(&mut data[..n]) {
+                    return Ok(());
+                }
+            }
+        }
         let bit = 1u16.checked_shl(u32::from(rich.pad())).unwrap_or(0);
         let grants = self.access_grants();
         let full = self.shared.pad_mouse.active(grants) & bit != 0;

@@ -212,6 +212,15 @@ pub const PUNKTFUNK_RICH_TOUCHPAD_EX: u8 = 3;
 /// send via [`punktfunk_connection_send_hid_report`], never by building the datagram.
 pub const PUNKTFUNK_RICH_HID_REPORT: u8 = 4;
 
+/// [`punktfunk_connection_set_sc2_gate`] bit: the client's overlay owns the pad. Its raw state
+/// goes out neutral, and a button held now stays off the wire until it is released.
+pub const PUNKTFUNK_SC2_GATE_MASKED: u32 = 1;
+/// [`punktfunk_connection_set_sc2_gate`] bit: Steam and QAM stay with the client.
+pub const PUNKTFUNK_SC2_GATE_SYSTEM_LOCAL: u32 = 2;
+/// [`punktfunk_connection_set_sc2_gate`] bit: the client opens its ring on Select then A, so
+/// that chord stays off the wire.
+pub const PUNKTFUNK_SC2_GATE_CHORDS: u32 = 4;
+
 /// One rich client→host input for the host virtual DualSense
 /// ([`punktfunk_connection_send_rich_input`]): touchpad contact or motion sample.
 /// Set `kind` and the matching fields; the others are ignored.
@@ -584,6 +593,9 @@ const _: () = {
     assert!(PUNKTFUNK_PEN_TILT_UNKNOWN == punktfunk_core::quic::PEN_TILT_UNKNOWN);
     assert!(PUNKTFUNK_PEN_ANGLE_UNKNOWN == punktfunk_core::quic::PEN_ANGLE_UNKNOWN);
     assert!(PUNKTFUNK_PEN_DISTANCE_UNKNOWN == punktfunk_core::quic::PEN_DISTANCE_UNKNOWN);
+    assert!(PUNKTFUNK_SC2_GATE_MASKED == punktfunk_core::client::SC2_GATE_MASKED);
+    assert!(PUNKTFUNK_SC2_GATE_SYSTEM_LOCAL == punktfunk_core::client::SC2_GATE_SYSTEM_LOCAL);
+    assert!(PUNKTFUNK_SC2_GATE_CHORDS == punktfunk_core::client::SC2_GATE_CHORDS);
 };
 
 // ABI gamepad constants must match the wire enum.

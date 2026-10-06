@@ -12,11 +12,10 @@ import java.nio.ByteBuffer
  * [Sc2BleLink]) and one of two consumers:
  *
  * **Stream mode** (`router != null`, owned by StreamScreen):
- * - **Raw plane (the point):** every input report is forwarded byte-for-byte
+ * - **Raw plane (the point):** every input report goes to core
  *   ([GamepadRouter.ExternalPad.hidReport]) for the host's as-is virtual `28DE:1302` pad, which
- *   Steam Input drives like the physical controller — with ONE exception: [Sc2ImuGate] zeroes a
- *   frozen (gyro-off) IMU block out of state reports, so a stale resting sample can't drive
- *   Steam's desktop gyro-mouse (the cursor-fly the bench debugged 2026-06-08).
+ *   Steam Input drives like the physical controller. Core gates it as on every client: the frozen
+ *   IMU block, the ring, the system-button policy.
  * - **Typed mirror:** buttons/sticks/triggers are ALSO diffed onto the ordinary per-transition
  *   plane, so the emergency exit chord works, and a host that degraded the kind (no UHID → the
  *   Xbox 360 pad) still gets a playable controller.
@@ -54,14 +53,6 @@ class Sc2Capture(
 
     private var pad: GamepadRouter.ExternalPad? = null
     private val rawBuf: ByteBuffer = ByteBuffer.allocateDirect(64)
-
-    /** Zeroes a frozen (gyro-off) IMU block out of forwarded state reports — see [Sc2ImuGate]. */
-    private val imuGate = Sc2ImuGate()
-
-    /** Puck connect arrives before its first state report (and therefore before a wire pad exists).
-     * Preserve it so the native virtual Puck slot sees the same connect edge before state. */
-    private val pendingWireless = ByteArray(2)
-    private var pendingWirelessLen = 0
 
     // Typed-mirror diff state (wire units).
     private val state = Sc2Device.State()
@@ -189,18 +180,10 @@ class Sc2Capture(
         // marks the controller connected unconditionally and reconnects on any state report).
         if ((id == Sc2Device.ID_WIRELESS || id == Sc2Device.ID_WIRELESS_X) && len >= 2) {
             if (dongleLink) {
-                when (report[1].toInt() and 0xFF) {
-                    Sc2Device.WIRELESS_CONNECT -> {
-                        pendingWireless[0] = report[0]
-                        pendingWireless[1] = report[1]
-                        pendingWirelessLen = 2
-                    }
-                    Sc2Device.WIRELESS_DISCONNECT -> {
-                        pendingWirelessLen = 0
-                        Log.i(TAG, "Puck reports controller powered off — releasing wire slot")
-                        releaseSlot()
-                        releaseUiKeys()
-                    }
+                if (report[1].toInt() and 0xFF == Sc2Device.WIRELESS_DISCONNECT) {
+                    Log.i(TAG, "Puck reports controller powered off — releasing wire slot")
+                    releaseSlot()
+                    releaseUiKeys()
                 }
             }
             return
@@ -225,10 +208,6 @@ class Sc2Capture(
                 TAG,
                 "SC2 captured → wire pad ${it.index} (${if (dongleLink) "Puck" else "direct"} passthrough)",
             )
-            if (pendingWirelessLen > 0) {
-                forwardRaw(pendingWireless, pendingWirelessLen)
-                pendingWirelessLen = 0
-            }
         } ?: return // all 16 wire indices taken — drop until one frees
         forwardRaw(report, len)
         mirrorTyped(p)
@@ -236,10 +215,6 @@ class Sc2Capture(
 
     private fun forwardRaw(report: ByteArray, len: Int) {
         val p = pad ?: return
-        // Both links hand over buffers that are dead once this call returns (the USB reader
-        // refills its scratch, BLE frames a fresh array per notification) and the typed mirror
-        // reads only bytes 0..17, all below the IMU block — so the gate may zero in place.
-        imuGate.apply(report, len)
         val n = len.coerceAtMost(rawBuf.capacity())
         rawBuf.clear()
         rawBuf.put(report, 0, n)
@@ -321,10 +296,6 @@ class Sc2Capture(
         pad?.close()
         pad = null
         mirror = TypedMirror()
-        pendingWirelessLen = 0
-        // Every teardown funnels through here (stop, link drop, Puck power-off), so whatever
-        // connects next re-proves its IMU live before the block passes through again.
-        imuGate.reset()
     }
 
     private companion object {

@@ -1,20 +1,16 @@
 // Local chords and the quick-action ring for ONE captured Steam Controller 2 pad — the state
-// machine `Sc2Capture` runs per source, kept pure so tests can drive it (the `Sc2ImuGate`
-// precedent; a capture needs a live connection and a radio, this needs neither).
+// machine `Sc2Capture` runs per source, kept pure so tests can drive it (a
+// capture needs a live connection and a radio, this needs neither).
 //
 // A captured SC2 never enters `GamepadCapture`, so the chords that belong to the CLIENT — the
 // ring's `Select+A` opener and the stats overlay's `Select+X` — have to be read here or they are
 // simply unreachable with that pad in your hands. They are read off the hardware buttons, before
 // any gating: the exit chord's contract is that no client-side gate can hide the way out.
 //
-// What the client consumes must not also reach the game, which on a raw-passthrough pad means
-// editing the report rather than dropping it — `apply` clears the swallowed buttons and, while
-// the ring owns the pad, every stick and trigger, so the host keeps receiving well-formed state
-// at the pad's own cadence. Dropping reports instead would freeze its virtual pad on whatever
-// was held when the dial opened, which is a held sprint that outlives the menu.
-//
-// A swallowed button stays swallowed until the hardware releases it: its press never went out,
-// so its release must not either.
+// What the client consumes must not also reach the game. Core gates the raw report by the same
+// rules (`PunktfunkConnection.setSc2Gate`); `apply` gates the parsed state the typed mirror and
+// the pad-mouse fold read. A swallowed button stays swallowed until the hardware releases it:
+// its press never went out, so its release must not either.
 //
 // Call order per state report is `read` then `apply` — `read` sees the hardware, `apply` decides
 // what is left of it.
@@ -77,12 +73,11 @@ final class Sc2RingGate {
         return []
     }
 
-    /// Hold the client's own input out of the report and the parsed state. Runs after `read`.
-    func apply(_ report: inout [UInt8], _ state: inout Sc2Device.State) {
+    /// Hold the client's own input out of the parsed state. Runs after `read`.
+    func apply(_ state: inout Sc2Device.State) {
         swallow &= state.buttons
         if ringOpen { swallow |= state.buttons }
         guard swallow != 0 || ringOpen else { return }
-        Sc2Device.maskInputs(&report, clear: swallow, zeroAxes: ringOpen)
         state.buttons &= ~swallow
         guard ringOpen else { return }
         state.lsX = 0

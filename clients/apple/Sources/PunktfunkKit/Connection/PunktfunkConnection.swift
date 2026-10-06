@@ -1899,6 +1899,18 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
+    /// What core holds back of a Steam Controller 2's raw reports on `pad`
+    /// (`punktfunk_connection_set_sc2_gate`): everything while the client's overlay owns the pad,
+    /// Steam and QAM when they stay local, and the ring's own Select+A. Latest wins.
+    public func setSc2Gate(pad: UInt8, masked: Bool, systemLocal: Bool, chords: Bool) {
+        let gate = (masked ? UInt32(PUNKTFUNK_SC2_GATE_MASKED) : 0)
+            | (systemLocal ? UInt32(PUNKTFUNK_SC2_GATE_SYSTEM_LOCAL) : 0)
+            | (chords ? UInt32(PUNKTFUNK_SC2_GATE_CHORDS) : 0)
+        withLiveHandle(or: ()) { h in
+            _ = punktfunk_connection_set_sc2_gate(h, pad, gate)
+        }
+    }
+
     // MARK: - Shared clipboard (design/clipboard-and-file-transfer.md §5)
 
     /// One advertised clipboard format in a lazy offer — the format list crosses the wire,

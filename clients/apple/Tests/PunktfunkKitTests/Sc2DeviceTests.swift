@@ -102,18 +102,6 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertEqual(Sc2Device.parseSerial(Array("ABCDEFGH:IJKLMNOP".utf8)), "ABCDEFGH")
     }
 
-    func testWirelessReplayNormalizesEitherIdTo0x79() {
-        // The replay must carry 0x79 whichever wireless id the Puck emitted: 0x46 is not in the
-        // virtual identity's report descriptor, and the Windows driver drops undeclared ids.
-        XCTAssertEqual(
-            Sc2Device.wirelessReplay([Sc2Device.idWirelessX, Sc2Device.wirelessConnect]),
-            [Sc2Device.idWireless, Sc2Device.wirelessConnect])
-        XCTAssertEqual(
-            Sc2Device.wirelessReplay([Sc2Device.idWireless, Sc2Device.wirelessConnect]),
-            [Sc2Device.idWireless, Sc2Device.wirelessConnect])
-        XCTAssertEqual(Sc2Device.wirelessReplay([Sc2Device.idWireless]).count, 2)
-    }
-
     func testFeatureCommandBytesVerbatim() {
         // DISABLE_LIZARD: [1][0x87 ID_SET_SETTINGS_VALUES][3][9 SETTING_LIZARD_MODE][0 0 u16],
         // zero-padded to the 64-byte feature size (Android sends the identical frame).
@@ -226,8 +214,8 @@ final class Sc2DeviceTests: XCTestCase {
     }
 
     func testSc2ButtonsInvertsTheWireMap() {
-        // A chord is written in wire bits; the raw report and the parsed state speak the
-        // device's layout, so the ring's swallow needs the map read backwards.
+        // A chord is written in wire bits; the parsed state speaks the device's layout, so the
+        // ring's swallow needs the map read backwards.
         XCTAssertEqual(
             Sc2Device.sc2Buttons(forWire: GamepadWire.back | GamepadWire.a),
             Sc2Device.btnView | Sc2Device.btnA)
@@ -237,42 +225,6 @@ final class Sc2DeviceTests: XCTestCase {
             XCTAssertEqual(Sc2Device.sc2Buttons(forWire: wire), sc2)
             XCTAssertEqual(Sc2Device.wireButtons(Sc2Device.sc2Buttons(forWire: wire)), wire)
         }
-    }
-
-    func testMaskInputsClearsOnlyWhatTheRingConsumes() {
-        var report = stateReport(
-            buttons: Sc2Device.btnA | Sc2Device.btnView | Sc2Device.btnY,
-            lt: 200, lsX: 32767, rsY: -4000)
-        report[30] = 0xAB // an IMU byte: the gate above this one owns that block, not this
-        Sc2Device.maskInputs(&report, clear: Sc2Device.btnA | Sc2Device.btnView, zeroAxes: false)
-        var out = Sc2Device.State()
-        XCTAssertTrue(Sc2Device.parseState(report, into: &out))
-        XCTAssertEqual(out.buttons, Sc2Device.btnY) // the chord's two are gone, the third stays
-        XCTAssertEqual(out.lsX, 32767) // axes untouched while the ring is closed
-        XCTAssertEqual(out.rsY, -4000)
-        XCTAssertEqual(report[0], Sc2Device.idStateBLE) // still a well-formed state report
-        XCTAssertEqual(report[30], 0xAB)
-
-        // Ring open: every stick and trigger reads neutral, at the same cadence.
-        Sc2Device.maskInputs(&report, clear: Sc2Device.btnY, zeroAxes: true)
-        XCTAssertTrue(Sc2Device.parseState(report, into: &out))
-        XCTAssertEqual(out.buttons, 0)
-        XCTAssertEqual(out.lsX, 0)
-        XCTAssertEqual(out.rsY, 0)
-        XCTAssertEqual(out.lt, 0)
-        XCTAssertEqual(report[30], 0xAB)
-
-        // Non-state and short reports are left exactly as they are.
-        var battery: [UInt8] = [Sc2Device.idBattery, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-                                10, 11, 12, 13, 14, 15, 16, 17, 18]
-        let untouched = battery
-        Sc2Device.maskInputs(&battery, clear: .max, zeroAxes: true)
-        XCTAssertEqual(battery, untouched)
-        var short = stateReport(buttons: Sc2Device.btnA)
-        short.removeSubrange(17...)
-        let shortUntouched = short
-        Sc2Device.maskInputs(&short, clear: .max, zeroAxes: true)
-        XCTAssertEqual(short, shortUntouched)
     }
 }
 

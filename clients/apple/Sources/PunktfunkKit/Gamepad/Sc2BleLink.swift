@@ -19,7 +19,7 @@
 // virtual pad only relays what Steam sends AFTER it claims the pad, so until then nothing else
 // would feed the firmware watchdog and the controller would fall back to lizard mode. `stop()`
 // writes lizard back ON before it disconnects, so the pad drives the OS again at once. The client
-// NEVER self-enables the gyro — Steam's own forwarded write drives `Sc2ImuGate`.
+// NEVER self-enables the gyro — Steam's own forwarded write drives core's IMU gate.
 
 import CoreBluetooth
 import Foundation

@@ -211,19 +211,10 @@ enum Sc2Device {
         return String(decoding: best, as: UTF8.self)
     }
 
-    /// The frame `Sc2Capture` replays onto a fresh wire slot for a wireless edge the Puck
-    /// emitted before that slot existed — always id `0x79`, whichever of `0x79`/`0x46` arrived.
-    /// The virtual identity's report descriptor declares `0x79` but not `0x46`
-    /// (`pf_driver_proto::triton::RDESC`), and the Windows driver drops undeclared input ids,
-    /// so a `0x46`-shaped replay would silently vanish on one host and land on the other.
-    static func wirelessReplay(_ framed: [UInt8]) -> [UInt8] {
-        [idWireless, framed.count >= 2 ? framed[1] : 0]
-    }
-
     /// The gyro-enable Steam itself sends — WRITE_REGISTER, reg 0x30 (GYRO_MODE), value 0x0018
     /// (raw accel | raw gyro); confirmed both ways on real hardware 2026-06-08. Kept ONLY for
     /// logging and tests: the client must NEVER self-enable the gyro (a permanent enable re-flies
-    /// the desktop cursor) — Steam's own forwarded write is what opens `Sc2ImuGate`.
+    /// the desktop cursor) — Steam's own forwarded write is what opens core's IMU gate.
     static let gyroEnableReference: [UInt8] = [0x01, 0x87, 0x03, 0x30, 0x18, 0x00]
 
     /// SDL's lizard-off refresh cadence.
@@ -329,40 +320,13 @@ enum Sc2Device {
     }
 
     /// The SC2 bits behind a wire mask — `wireButtons` read backwards, so a chord expressed in
-    /// `GamepadWire` terms can be cleared from a raw report and a parsed state, which both speak
-    /// the device's own layout.
+    /// `GamepadWire` terms can be cleared from a parsed state, which speaks the device's layout.
     static func sc2Buttons(forWire wire: UInt32) -> UInt32 {
         var out: UInt32 = 0
         for (sc2, w) in wireMap where wire & w != 0 {
             out |= sc2
         }
         return out
-    }
-
-    /// Clear input the host must not see from a state report, in place: the buttons in `clear`
-    /// (device layout), plus every stick and trigger when `zeroAxes`. What the quick-action ring
-    /// forwards while it owns the pad — a well-formed report at the same cadence, so the host's
-    /// virtual pad stays live instead of freezing on whatever was held when the dial opened.
-    /// Same id-first offsets `parseState` reads, and identical in all three state shapes.
-    static func maskInputs(_ report: inout [UInt8], clear: UInt32, zeroAxes: Bool) {
-        guard report.count >= 18 else { return }
-        switch report[0] {
-        case idState, idStateBLE, idStateTimestamp: break
-        default: return
-        }
-        if clear != 0 {
-            let held = (UInt32(report[2]) | (UInt32(report[3]) << 8)
-                | (UInt32(report[4]) << 16) | (UInt32(report[5]) << 24)) & ~clear
-            report[2] = UInt8(held & 0xFF)
-            report[3] = UInt8((held >> 8) & 0xFF)
-            report[4] = UInt8((held >> 16) & 0xFF)
-            report[5] = UInt8((held >> 24) & 0xFF)
-        }
-        if zeroAxes {
-            for i in 6 ..< 18 {
-                report[i] = 0
-            }
-        }
     }
 
     // MARK: - Framing (pure; the BLE shim calls these — see Sc2FramingTests)

@@ -721,6 +721,10 @@ object NativeBridge {
      */
     external fun nativeSendPadHidReport(handle: Long, pad: Int, buf: java.nio.ByteBuffer, len: Int)
 
+    /** What core holds back of a Steam Controller 2's raw reports on [pad]: an OR of
+     *  [GamepadRouter.SC2_GATE_MASKED] and its siblings, latest wins. */
+    external fun nativeSetSc2Gate(handle: Long, pad: Int, gate: Int)
+
     /**
      * One touchpad contact from a client-captured controller (the Sony USB capture), forwarded on
      * the rich-input plane (`RichInput::Touchpad`). [finger] is the contact slot (0/1); [x]/[y]

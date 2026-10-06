@@ -1197,12 +1197,8 @@ impl Worker {
                     // After the arrival, so the host builds the as-is pad before raw reports.
                     if raw_sc2 {
                         slot.sc2 = slot.pad.path().and_then(|path| {
-                            crate::sc2_capture::Sc2Capture::open(
-                                &path,
-                                c.clone(),
-                                index,
-                                self.sc2_gate(),
-                            )
+                            c.set_sc2_gate(index, self.sc2_gate());
+                            crate::sc2_capture::Sc2Capture::open(&path, c.clone(), index)
                         });
                     }
                 }
@@ -1345,18 +1341,19 @@ impl Worker {
     }
 
     /// The typed plane's mask and system-button routing, for raw SC2 reports.
-    fn sc2_gate(&self) -> crate::sc2_capture::Gate {
-        crate::sc2_capture::Gate {
+    fn sc2_gate(&self) -> punktfunk_core::client::Sc2Gate {
+        punktfunk_core::client::Sc2Gate {
             masked: self.masked,
-            system_forward: self.system_forward,
+            system_local: !self.system_forward,
             chords: self.chords_live,
         }
     }
 
     fn push_sc2_gate(&self) {
+        let Some(c) = &self.attached else { return };
         let gate = self.sc2_gate();
-        for cap in self.slots.iter().filter_map(|s| s.sc2.as_ref()) {
-            cap.set_gate(gate);
+        for slot in self.slots.iter().filter(|s| s.sc2.is_some()) {
+            c.set_sc2_gate(slot.index, gate);
         }
     }
 
