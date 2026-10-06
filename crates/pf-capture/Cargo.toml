@@ -59,6 +59,8 @@ bitflags = "2"
 # The `Encoder` contract the driver-encode proxy implements, and the D3D11 converters the
 # P010 self-test drives.
 pf-encode-win = { path = "../pf-encode-win" }
+# The capture worker's messages are Pod; pinned to pf-driver-proto's so the graph resolves one.
+bytemuck = "1.19"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
