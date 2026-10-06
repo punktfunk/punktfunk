@@ -42,6 +42,7 @@ restart*.
 | Allow 10-bit SDR | `PUNKTFUNK_10BIT_SDR_WIDEN` | `on` · `off` | `off` | next session |
 | Full color 4:4:4 | `PUNKTFUNK_444` | `on` · `off` | `on` | next session |
 | Game frame limit (Linux) | `PUNKTFUNK_MAX_FPS` | 0–240 fps | `0` | next session |
+| Display refresh multiple (Linux, Windows) | `PUNKTFUNK_VDISPLAY_HZ_MULT` | 0–4 × | `0` | next session |
 | Cursor capture (Linux) | `PUNKTFUNK_PORTAL_CURSOR_MODE` | `auto` · `embedded` · `metadata` · `hidden` | `auto` | next session |
 | Vulkan encoding (Linux) | `PUNKTFUNK_VULKAN_ENCODE` | `on` · `off` | `on` | next session |
 | Direct capture (Linux) | `PUNKTFUNK_DIRECT_CAPTURE` | `on` · `off` | `on` | next session |
@@ -96,6 +97,7 @@ The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc
 | **Encoder** | `software` is Linux-only, and `auto` never picks it. How `auto` chooses: [Support matrix](/docs/support-matrix#how-the-host-picks-a-backend). |
 | **Full color 4:4:4** | A host-side allow; each client's **Full chroma** setting asks for it. Native clients only — Moonlight stays 4:2:0. |
 | **Game frame limit** | gamescope only. Games also see the display as that many Hz; the stream still runs at the client's rate. |
+| **Display refresh multiple** | Runs the virtual display at a multiple of the stream rate, so a frame that just misses the desktop's next paint still shows. The stream stays at its own rate. `0` lets the host pick: 2× on Windows for streams up to 500 Hz, otherwise off. `1` turns it off. A game with V-Sync on renders at the display's rate unless something caps it. |
 | **Cursor capture** | A troubleshooting knob: which cursor mode the host asks the screen-cast portal for. `auto` settles on one the portal offers. |
 | **Vulkan encoding** | AMD and Intel: HEVC and AV1 through Vulkan Video, which recovers from loss without a full keyframe. Off uses VAAPI. |
 | **Direct capture** | wlroots and Hyprland: capture the output directly instead of through the portal, on GPU sessions. A failure falls back to the portal. |
@@ -171,7 +173,6 @@ Env-only additions to the **Game Mode** rows above. See [gamescope](/docs/gamesc
 | `PUNKTFUNK_FEC_PCT` | `0`–`90` (percent) | Pins error correction and turns adaptive FEC off (normally 5–50 %, starting at 10 %). `0` disables it. On GameStream it sets the starting percent and floor instead. Leave it unset. |
 | `PUNKTFUNK_OH264_THREADS` | number (default `2`) | Software encoder threads. |
 | `PUNKTFUNK_OH264_GOP` | frames (default fps × 600) | Software encoder keyframe interval; `0` lets the encoder decide. |
-| `PUNKTFUNK_VDISPLAY_HZ_MULT` | `1`–`4` (unset: `2` on Windows for streams up to 500 Hz, else `1`) | Runs the virtual display at a multiple of the stream rate, so a frame waits less for the compositor's next paint and a late frame never displaces the next one. The stream stays at its own rate. A game with V-Sync on renders at the display's rate unless something caps it. `1` turns it off. |
 | `PUNKTFUNK_NVENC_RAW` | `1` · `0` | NVIDIA on Linux: convert the captured buffer straight into NVENC's input, on by default. `0` uses the copy-and-blend path. |
 | `PUNKTFUNK_VULKAN_DIRECT_PLANES` | `1` · `0` | Vulkan Video on Linux: write the converted picture straight into the encoder where the driver allows, on by default. `0` keeps the extra copy. |
 
