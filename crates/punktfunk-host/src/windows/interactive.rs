@@ -149,7 +149,7 @@ pub fn in_session_user_temp<R>(f: impl FnOnce(&Path) -> R) -> Result<R> {
 }
 
 /// A primary token for the signed-in user of this process's WTS session. Needs SYSTEM.
-fn session_user_token() -> Result<Owned<HANDLE>> {
+pub(super) fn session_user_token() -> Result<Owned<HANDLE>> {
     let session = current_process_session_id()?;
     let mut user_token = HANDLE::default();
     // SAFETY: `session` is a plain id and `user_token` a live local out-param.
@@ -177,7 +177,7 @@ fn session_user_token() -> Result<Owned<HANDLE>> {
 }
 
 /// `primary`'s environment block with this host's settings overlaid ([`merged_env_block`]).
-fn user_env_block(primary: &Owned<HANDLE>) -> Vec<u16> {
+pub(super) fn user_env_block(primary: &Owned<HANDLE>) -> Vec<u16> {
     let mut env_block: *mut core::ffi::c_void = std::ptr::null_mut();
     // SAFETY: `env_block` is a live local out-param and `primary` a live token; on success
     // the call stores an owned block pointer, destroyed exactly once below.

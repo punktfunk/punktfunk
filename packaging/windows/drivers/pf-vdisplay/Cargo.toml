@@ -30,6 +30,7 @@ encode-probe = []
 # AMF and Media Foundation ride along on every arch; the three x86-64 ones sit in the target
 # table at the end of this file.
 pf-encode-win.workspace = true
+pf-encode-session.workspace = true
 pf-frame.workspace = true
 # The backends' error type; the driver only formats it.
 anyhow = "1"
@@ -83,3 +84,4 @@ workspace = true
 # either: an ARM64 driver opens Media Foundation and nothing else.
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 pf-encode-win = { workspace = true, features = ["nvenc", "qsv", "pyrowave"] }
+pf-encode-session = { workspace = true, features = ["nvenc", "qsv", "pyrowave"] }
