@@ -357,7 +357,12 @@ fn join_seats_group(account: &str) -> WinResult<()> {
 
 /// [`SEATS_GROUP`]'s SID as text, or `None` on a box that never provisioned a seat.
 pub fn seats_group_sid() -> Option<String> {
-    let sid = account_sid(SEATS_GROUP).ok()?;
+    sid_string(SEATS_GROUP)
+}
+
+/// A local account's or group's SID as text, or `None` when it doesn't exist.
+pub(super) fn sid_string(account: &str) -> Option<String> {
+    let sid = account_sid(account).ok()?;
     let mut text = PWSTR::null();
     // SAFETY: `sid` holds the SID LookupAccountNameW wrote; `text` receives one LocalAlloc string.
     unsafe { ConvertSidToStringSidW(sid.psid(), &mut text) }.ok()?;

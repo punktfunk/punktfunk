@@ -63,6 +63,14 @@ pub fn box_library_dir() -> Option<std::path::PathBuf> {
         .filter(|dir| dir.is_absolute())
 }
 
+/// A Windows seat's own `steam.exe` (`PUNKTFUNK_SEAT_STEAM`), which may not be copied yet. A seat
+/// host starts Steam from nowhere else. `None` on every other host, and for a relative path.
+pub fn seat_steam() -> Option<std::path::PathBuf> {
+    std::env::var_os("PUNKTFUNK_SEAT_STEAM")
+        .map(std::path::PathBuf::from)
+        .filter(|exe| exe.is_absolute())
+}
+
 /// Where this host reads its library: [`box_library_dir`], else its own config dir. Play stats
 /// are never here; they stay in [`crate::config_dir`].
 pub fn library_dir() -> std::path::PathBuf {

@@ -21,6 +21,7 @@ pub mod model;
 pub mod persistence;
 pub mod pin;
 pub mod service;
+pub mod steam;
 #[cfg(windows)]
 pub mod windows;
 

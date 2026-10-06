@@ -460,18 +460,6 @@ fn clone_install(src: &Path, dst: &Path) -> Result<(), BackendError> {
     run("steam_clone", "cp", &args).map(drop)
 }
 
-/// The smallest `libraryfolders.vdf` Steam accepts: one numbered entry per folder.
-fn library_folders_vdf(paths: &[String]) -> String {
-    let mut out = String::from("\"libraryfolders\"\n{\n");
-    for (i, path) in paths.iter().enumerate() {
-        out.push_str(&format!(
-            "\t\"{i}\"\n\t{{\n\t\t\"path\"\t\t\"{path}\"\n\t}}\n"
-        ));
-    }
-    out.push_str("}\n");
-    out
-}
-
 /// Lists the shared games folder first, then the seat's own Steam. Written once; Steam owns the
 /// file afterwards.
 fn write_library_folders(box_dir: &Path, steam: &Path) -> std::io::Result<()> {
@@ -485,7 +473,7 @@ fn write_library_folders(box_dir: &Path, steam: &Path) -> std::io::Result<()> {
         games_dir(box_dir).to_string_lossy().into_owned(),
         steam.to_string_lossy().into_owned(),
     ];
-    std::fs::write(file, library_folders_vdf(&folders))
+    std::fs::write(file, crate::steam::library_folders_vdf(&folders))
 }
 
 #[cfg(test)]
@@ -531,16 +519,6 @@ mod tests {
         ] {
             assert!(!excluded_from_clone(kept), "{kept}");
         }
-    }
-
-    #[test]
-    fn the_library_list_names_the_shared_folder_first() {
-        let list = library_folders_vdf(&["/g".to_owned(), "/home/s/.local/share/Steam".to_owned()]);
-        assert_eq!(
-            list,
-            "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"/g\"\n\t}\n\
-             \t\"1\"\n\t{\n\t\t\"path\"\t\t\"/home/s/.local/share/Steam\"\n\t}\n}\n"
-        );
     }
 
     #[test]

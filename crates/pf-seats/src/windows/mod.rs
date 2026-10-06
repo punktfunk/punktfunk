@@ -15,6 +15,7 @@ pub mod keeper;
 pub mod pipe;
 mod process;
 mod rdp;
+mod steam;
 mod supervisor;
 mod util;
 mod wts;
@@ -368,6 +369,28 @@ impl WindowsBackend {
                 seat,
             )),
         }
+        diagnostics.push(match (steam::box_install(), steam::seat_exe(&seat.account)) {
+            (None, _) => seat_diagnostic(
+                DiagnosticLevel::Info,
+                "steam_client",
+                "the box has no Steam install".into(),
+                seat,
+            ),
+            (Some(_), Some(exe)) if exe.is_file() => seat_diagnostic(
+                DiagnosticLevel::Info,
+                "steam_client",
+                format!("own Steam client at {}", exe.display()),
+                seat,
+            ),
+            (Some(_), _) => seat_diagnostic(
+                DiagnosticLevel::Warning,
+                "steam_client",
+                "no Steam client of its own yet: the seat copies the box's when it starts, and \
+                 its Steam titles start once the copy lands"
+                    .into(),
+                seat,
+            ),
+        });
         let snapshot = self.supervisor.status(seat);
         diagnostics.push(seat_diagnostic(
             if snapshot.status.state == RuntimeState::Failed {

@@ -155,26 +155,17 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
                 return None;
             }
             let uri = format!("steam://rungameid/{}", spec.value);
-            // Steam.exe + URI, else explorer.exe for the steam:// user-hive handler.
-            let cmdline = match steam_exe() {
-                Some(exe) => format!("\"{}\" \"{uri}\"", exe.display()),
-                None => format!("explorer.exe \"{uri}\""),
-            };
             // Forwarder either way: running Steam posts the URI and exits; cold Steam *is* the client.
-            Some(WinRecipe::handoff(cmdline))
+            steam_cmdline(&uri).map(WinRecipe::handoff)
         }
-        // Steam client UI (design D4). Same Steam.exe-then-explorer ladder as `steam_appid`.
+        // Steam client UI (design D4). Same Steam as `steam_appid`.
         "steam_ui" => {
             let uri = match spec.value.as_str() {
                 "bigpicture" => "steam://open/bigpicture",
                 "desktop" => "steam://open/main",
                 _ => return None,
             };
-            let cmdline = match steam_exe() {
-                Some(exe) => format!("\"{}\" \"{uri}\"", exe.display()),
-                None => format!("explorer.exe \"{uri}\""),
-            };
-            Some(WinRecipe::handoff(cmdline))
+            steam_cmdline(uri).map(WinRecipe::handoff)
         }
         // explorer.exe + Epic URI: one argv, no shell. Same pattern as the Steam fallback.
         "epic" => epic_launch_uri(&spec.value)
@@ -279,6 +270,36 @@ fn windows_launch_for(spec: &LaunchSpec) -> Option<WinRecipe> {
         }
         _ => None,
     }
+}
+
+/// `steam.exe` with `uri`, else `explorer.exe` for the `steam://` handler in the user's hive. A
+/// Windows seat starts only its own copy under its own IPC name ([`pf_seats::steam`]): any other
+/// Steam closes the one running in another session. `None` on a seat until that copy exists.
+fn steam_cmdline(uri: &str) -> Option<String> {
+    if !pf_paths::seat::is_seat_host() {
+        return Some(match steam_exe() {
+            Some(exe) => format!("\"{}\" \"{uri}\"", exe.display()),
+            None => format!("explorer.exe \"{uri}\""),
+        });
+    }
+    let exe = pf_paths::seat::seat_steam().filter(|exe| exe.is_file());
+    match (exe, pf_paths::seat::seat_id().ok().flatten()) {
+        (Some(exe), Some(id)) => Some(seat_steam_cmdline(&exe, &id, uri)),
+        _ => {
+            tracing::warn!(
+                "this seat has no Steam client of its own yet; its Steam titles don't start"
+            );
+            None
+        }
+    }
+}
+
+fn seat_steam_cmdline(exe: &std::path::Path, seat_id: &str, uri: &str) -> String {
+    format!(
+        "\"{}\" -master_ipc_name_override {} \"{uri}\"",
+        exe.display(),
+        pf_seats::steam::ipc_name(seat_id)
+    )
 }
 
 /// Default `steam.exe` only. Non-default installs use the explorer.exe protocol
@@ -997,6 +1018,20 @@ mod tests {
         // No `_` → nothing to reduce; must not invent a hash.
         assert!(pfn_from_full("NoUnderscore", "NoUnderscore").is_none());
     }
+
+    #[test]
+    fn a_seat_starts_its_own_steam_under_its_own_name() {
+        let line = seat_steam_cmdline(
+            std::path::Path::new(r"C:\Users\pf_seat1\Steam\steam.exe"),
+            "0123456789abcdef0123456789abcdef",
+            "steam://rungameid/570",
+        );
+        assert_eq!(
+            line,
+            r#""C:\Users\pf_seat1\Steam\steam.exe" -master_ipc_name_override pfseat0123456789abcdef0123456789abcdef "steam://rungameid/570""#
+        );
+    }
+
     #[test]
     fn windows_launch_for_maps_and_guards() {
         let steam = LaunchSpec {

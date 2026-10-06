@@ -443,6 +443,10 @@ fn run_cycle(
         }
     };
     runtime.update(|snapshot| snapshot.session_id = Some(session.id));
+    // The profile exists once the session does. A first copy runs beside the start; the seat's
+    // Steam titles start once it lands.
+    super::steam::ensure_copy(session.id, &seat.account);
+    let steam = super::steam::box_install().and(super::steam::seat_exe(&seat.account));
     let result = (|| {
         let host_root = root
             .open_child_dir("hosts")
@@ -452,7 +456,7 @@ fn run_cycle(
             .open_child_dir("temp")
             .and_then(|temp| temp.open_child_dir(seat.id.as_str()))
             .map_err(|error| io_error("seat_root", "open per-seat temporary root", error))?;
-        let environment = process::seat_environment(host_root.path(), seat)?;
+        let environment = process::seat_environment(host_root.path(), seat, steam.as_deref())?;
         let workdir = host_path.parent().ok_or_else(|| {
             backend_error(
                 "host_missing",

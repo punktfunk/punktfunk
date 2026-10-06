@@ -392,7 +392,12 @@ fn session_system_token(session_id: u32) -> WinResult<OwnedHandle> {
     Ok(primary)
 }
 
-pub(super) fn seat_environment(host_root: &Path, seat: &Seat) -> WinResult<Vec<u16>> {
+/// `steam` is the seat's own `steam.exe` ([`super::steam::seat_exe`]), set when the box has Steam.
+pub(super) fn seat_environment(
+    host_root: &Path,
+    seat: &Seat,
+    steam: Option<&Path>,
+) -> WinResult<Vec<u16>> {
     let mut entries: BTreeMap<String, OsString> = BTreeMap::new();
     for name in [
         "ComSpec",
@@ -454,6 +459,9 @@ pub(super) fn seat_environment(host_root: &Path, seat: &Seat) -> WinResult<Vec<u
     ];
     for (name, value) in values {
         entries.insert(name.into(), value);
+    }
+    if let Some(exe) = steam {
+        entries.insert("PUNKTFUNK_SEAT_STEAM".into(), exe.as_os_str().to_owned());
     }
     let mut block = Vec::new();
     for (name, value) in entries {
