@@ -721,6 +721,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pf-encode-session"
+version = "0.43.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "pf-driver-proto",
+ "pf-encode-win",
+ "pf-frame",
+ "tracing",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "pf-encode-win"
 version = "0.43.1"
 dependencies = [
@@ -782,6 +795,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "pf-driver-proto",
+ "pf-encode-session",
  "pf-encode-win",
  "pf-frame",
  "pf-umdf-util",
