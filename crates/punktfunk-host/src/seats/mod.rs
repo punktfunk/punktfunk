@@ -1,8 +1,9 @@
 //! The box's seats as its own host sees them: the supervisor's ledger over its pipe, who plays
 //! on each seat host, and [`placement`], which host a profile's connect goes to.
 //!
-//! Windows runs the supervisor in the service (`windows/service/seats.rs`); elsewhere there is
-//! none yet, every call answers so, and no connect is placed.
+//! Windows runs the supervisor in the service (`windows/service/seats.rs`); Linux runs it as the
+//! root `punktfunk-seats` daemon behind a Unix socket. Elsewhere there is none, every call
+//! answers so, and no connect is placed.
 
 pub(crate) mod placement;
 
@@ -18,23 +19,34 @@ pub(crate) fn call(command: Command) -> Result<CommandResult, ApiError> {
     {
         pf_seats::windows::pipe::request(pf_seats::ipc::PIPE_NAME, command)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        pf_seats::linux::socket::request(
+            std::path::Path::new(pf_seats::linux::SOCKET_PATH),
+            command,
+        )
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = command;
         Err(ApiError::new(
             ErrorCode::Backend,
-            "seats run on a Windows Server host",
+            "seats run on a Windows Server or Linux host",
         ))
     }
 }
 
-/// Whether the operator turned seats on.
+/// Whether seats are on: on Windows the operator's marker, on Linux a supervisor that answers.
 pub(crate) fn enabled() -> bool {
     #[cfg(windows)]
     {
         pf_seats::windows::seats_enabled()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        matches!(call(Command::Seating), Ok(CommandResult::Seating { status }) if status.enabled)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         false
     }

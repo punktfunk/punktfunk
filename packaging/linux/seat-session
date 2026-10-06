@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# punktfunk seat runner: a headless desktop, then a stock `punktfunk-host serve` on it.
+#
+# punktfunk-seat@.service runs this as the seat's user inside a logind session. The seat contract
+# (PUNKTFUNK_SEAT_*, the ports, the trust dir, PUNKTFUNK_MGMT_TOKEN) arrives in the environment.
+# The desktop mirrors scripts/headless/run-headless-kde.sh; without kwin_wayland the host starts
+# gamescope itself.
+#
+# pam_systemd moves this process and its children into the session's scope, so stopping the unit
+# signals only this script. It records the session id for seat-reap and kills its own children on
+# SIGTERM; seat-reap kills whatever is left.
+set -u
+
+HOST="${PUNKTFUNK_HOST_BIN:-/usr/bin/punktfunk-host}"
+SIZE="${PUNKTFUNK_SEAT_SIZE:-1920x1080}"
+W="${SIZE%x*}"
+H="${SIZE#*x}"
+
+# Only the host gets the management token; kwin, plasmashell and games never see it.
+TOKEN="${PUNKTFUNK_MGMT_TOKEN:-}"
+unset PUNKTFUNK_MGMT_TOKEN
+
+if [[ -z "${XDG_SESSION_ID:-}" || -z "${RUNTIME_DIRECTORY:-}" ]]; then
+    echo "seat-session: no logind session or runtime directory; run it from punktfunk-seat@.service" >&2
+    exit 1
+fi
+printf '%s\n' "$XDG_SESSION_ID" >"$RUNTIME_DIRECTORY/session"
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+
+KWIN_PID=""
+cleanup() {
+    trap - TERM INT
+    # shellcheck disable=SC2046
+    kill $(jobs -p) 2>/dev/null
+    pkill -TERM -u "$(id -u)" plasmashell 2>/dev/null
+    wait 2>/dev/null
+    exit 0
+}
+trap cleanup TERM INT
+
+alive() { [[ -z "$KWIN_PID" ]] || kill -0 "$KWIN_PID" 2>/dev/null; }
+
+start_kwin() {
+    export XDG_CURRENT_DESKTOP=KDE XDG_MENU_PREFIX=plasma- KDE_FULL_SESSION=true
+    export KDE_SESSION_VERSION=6 DESKTOP_SESSION=plasma
+    export WAYLAND_DISPLAY=wayland-kde KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+    export PUNKTFUNK_COMPOSITOR="${PUNKTFUNK_COMPOSITOR:-kwin}"
+    export PUNKTFUNK_VIDEO_SOURCE="${PUNKTFUNK_VIDEO_SOURCE:-virtual}"
+    export PUNKTFUNK_INPUT_BACKEND="${PUNKTFUNK_INPUT_BACKEND:-libei}"
+    export PUNKTFUNK_KWIN_VIRTUAL_PRIMARY="${PUNKTFUNK_KWIN_VIRTUAL_PRIMARY:-1}"
+
+    # Under the 0700 runtime dir: the DISPLAY detection below reads this file.
+    local log="$XDG_RUNTIME_DIR/punktfunk-kwin.log"
+    : >"$log"
+    chmod 600 "$log"
+    kwin_wayland --virtual --xwayland --width "$W" --height "$H" --no-lockscreen \
+        --socket "$WAYLAND_DISPLAY" >"$log" 2>&1 &
+    KWIN_PID=$!
+
+    # Ready means kwin offers the screencast global, not that the socket file exists.
+    local deadline=$((SECONDS + 30))
+    until "$HOST" probe-compositor >/dev/null 2>&1; do
+        if ! kill -0 "$KWIN_PID" 2>/dev/null; then
+            echo "seat-session: kwin_wayland exited during startup:" >&2
+            tail -n 20 "$log" >&2
+            exit 1
+        fi
+        if ((SECONDS >= deadline)); then
+            echo "seat-session: kwin did not become ready within 30s" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
+
+    # Several seats share /tmp/.X11-unix, so never take the first socket: use the display kwin
+    # logged (kwin before 6.7), else the newest X socket this seat user owns.
+    local n=""
+    for _ in $(seq 1 40); do
+        n=$(grep -oE 'Using public X11 display :[0-9]+' "$log" | grep -oE '[0-9]+' | head -1 || true)
+        [[ -z "$n" ]] && n=$(find /tmp/.X11-unix -maxdepth 1 -name 'X[0-9]*' -user "$(id -u)" \
+            -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -1 | sed 's/.* X//')
+        [[ -n "$n" ]] && break
+        sleep 0.25
+    done
+    if [[ -n "$n" ]]; then
+        export DISPLAY=":$n"
+    else
+        echo "seat-session: kwin reported no X display; X11 apps such as Steam won't open" >&2
+    fi
+
+    # The portal binds the compositor that existed when it started: import the live env first.
+    systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+        DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR ${DISPLAY:+DISPLAY} 2>/dev/null || true
+    dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+        DBUS_SESSION_BUS_ADDRESS ${DISPLAY:+DISPLAY} 2>/dev/null || true
+
+    # Pre-authorised RemoteDesktop grant: without it the portal asks a question nobody answers.
+    local share=/usr/share/punktfunk/headless db="$HOME/.local/share/flatpak/db/kde-authorized"
+    if [[ ! -s "$db" && -s "$share/kde-authorized" ]]; then
+        mkdir -p "$(dirname "$db")" && cp "$share/kde-authorized" "$db"
+    fi
+    # The virtual speaker the host captures; PipeWire reads its config at start.
+    local sink="$HOME/.config/pipewire/pipewire.conf.d/50-punktfunk-sink.conf"
+    if [[ ! -s "$sink" && -s "$share/punktfunk-sink.conf" ]]; then
+        mkdir -p "$(dirname "$sink")" && cp "$share/punktfunk-sink.conf" "$sink"
+        systemctl --user restart pipewire 2>/dev/null || true
+    fi
+    # xdg-desktop-portal needs graphical-session.target, which refuses a manual start by default.
+    local dropin="$HOME/.config/systemd/user/graphical-session.target.d"
+    if [[ ! -f "$dropin/10-punktfunk-headless.conf" ]]; then
+        mkdir -p "$dropin"
+        printf '[Unit]\nRefuseManualStart=no\n' >"$dropin/10-punktfunk-headless.conf"
+        systemctl --user daemon-reload 2>/dev/null || true
+    fi
+    systemctl --user start graphical-session.target 2>/dev/null || true
+    systemctl --user --no-block restart plasma-xdg-desktop-portal-kde.service 2>/dev/null || true
+    systemctl --user --no-block start xdg-desktop-portal.service 2>/dev/null || true
+
+    kbuildsycoca6 >/dev/null 2>&1 || true
+    # plasmashell draws the desktop and can crash; restart it for as long as kwin lives.
+    (
+        while kill -0 "$KWIN_PID" 2>/dev/null; do
+            plasmashell
+            sleep 2
+        done
+    ) &
+}
+
+if command -v kwin_wayland >/dev/null 2>&1; then
+    start_kwin
+else
+    export PUNKTFUNK_COMPOSITOR=gamescope
+fi
+
+# The host restarts on its own, backing off while it fails, for as long as the desktop lives. A
+# desktop that dies ends the seat and the unit's Restart= starts it over.
+delay=1
+while alive; do
+    started=$SECONDS
+    PUNKTFUNK_MGMT_TOKEN="$TOKEN" "$HOST" serve &
+    wait $!
+    echo "seat-session: host exited with $?; restarting in ${delay}s" >&2
+    ((SECONDS - started > 60)) && delay=1
+    # A background sleep, so SIGTERM interrupts the wait instead of queueing behind it.
+    sleep "$delay" &
+    wait $!
+    ((delay = delay * 2 > 30 ? 30 : delay * 2))
+done
+echo "seat-session: the compositor exited" >&2
+exit 1

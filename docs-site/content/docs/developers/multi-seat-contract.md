@@ -1,12 +1,13 @@
 ---
 title: Multi-seat contract
-description: How the Windows host runs seats — the supervisor in the service, its pipe, the seat keeper, the variables a seat host starts with and the connector reservation.
+description: How the host runs seats — on Windows the supervisor in the service, its pipe, the seat keeper and the connector reservation; on Linux the seat daemon, its socket and unit; and the variables a seat host starts with.
 ---
 
 The rules between the host and its seat supervisor, which runs one host per seat so several people
-can play on one Windows Server box. A normal install has one host on the console session, and none
-of this applies to it. Seats need Windows Server and a CAL per seat; see
-[Windows host → Good to know](/docs/windows-host#good-to-know).
+can play on one box. A normal install has one host on the console session, and none of this applies
+to it. Windows seats need Windows Server and a CAL per seat; see
+[Windows host → Good to know](/docs/windows-host#good-to-know). Linux seats are
+[further down](#linux-seats).
 
 ## The supervisor
 
@@ -181,3 +182,44 @@ powershell -File check-seat-audio.ps1
 [`check-seat-audio.ps1`](https://git.unom.io/unom/punktfunk/src/branch/main/packaging/windows/check-seat-audio.ps1)
 exits 1 when neither is present. A virtual cable is no substitute: the host never loopback-captures
 a cable, and `PUNKTFUNK_MIC_DEVICE` only pins the microphone.
+
+## Linux seats
+
+On Linux the supervisor is the root daemon `punktfunk-seats` (`punktfunk-seats.service`), not part
+of the box host. It keeps its ledger in `seats/` under the box host's config directory,
+`/var/lib/punktfunk`, and starts one `punktfunk-seat@<user>.service` per seat. A seat is a
+system-range user, `pf-seat-<n>`, with a logind session of its own, a headless compositor
+(`kwin_wayland`, else gamescope) and a stock `punktfunk-host serve`, all run by
+`/usr/libexec/punktfunk/seat-session`.
+
+- **The socket.** `/run/punktfunk/seats.sock` carries the same frames and commands as the Windows
+  pipe. It answers root and the `punktfunk` user, judged by the peer's credentials; any other peer
+  is closed unanswered. `enable` answers like `seating`, and `disable` is refused: seats are on while
+  the daemon runs. `punktfunk-seats list`, `create <name>`, `start|stop|delete <id>` and `doctor`
+  send the same requests.
+- **The user.** Its comment is `punktfunk-seat=<id>`, and the daemon touches or deletes only an
+  account whose comment matches exactly. The home is `seats/<id>/home`. It joins `render`, `input`
+  and `punktfunk`.
+- **The environment.** The variables in the tables above, minus the display slot and `NO_ISOLATE`,
+  go into `/run/punktfunk/seats/<user>.env` (root `0600`), which systemd reads as root.
+  `PUNKTFUNK_CONFIG_DIR` is `<home>/.config/punktfunk`. Each start adds a fresh
+  `PUNKTFUNK_MGMT_TOKEN` and writes the same line to `seats/hosts/<id>/mgmt-token`, owned by the
+  `punktfunk` user (root without one), so the box host reaches the seat's loopback API. Every seat
+  user is in the `punktfunk` group, so no secret relies on group read.
+- **The trust copy.** The seat reads `trust/<id>/`, not the box directory: `native-cert.pem`,
+  `native-key.pem`, `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` and
+  `profiles/`, `root:<seat user>` `0640`. The daemon recopies a file within 2 seconds of its
+  change while the seat runs. A seat can't start before the box host has made its identity.
+- **Games.** `games/steamapps/` is one library every seat writes (group `punktfunk`, setgid,
+  default ACL). Each seat's own `compatdata`, `shadercache` and `downloading` under `seats/<id>/`
+  are bind-mounted over the shared ones, so prefixes never cross. Everything that needs the
+  binds must descend from the unit; a process started through `systemd-run --user` or a user
+  service doesn't see them. The daemon repairs the ACL mask under `games/` after a seat stops and
+  every 10 minutes, because a file created with mode `0644` is otherwise read-only to the other
+  seats.
+- **Stopping.** `pam_systemd` moves the runner into the session's scope, so stopping the unit
+  can't reach it. The runner ends its children on `SIGTERM`, and `seat-reap` ends the session
+  by the id the runner recorded.
+
+`punktfunk-seats doctor` checks systemd, logind, the groups, a GPU render node, a compositor and
+the installed unit.

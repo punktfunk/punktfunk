@@ -1,10 +1,11 @@
-# The Windows seat supervisor, run inside the punktfunk service behind a SYSTEM-only pipe
-# (design/multi-seat-product.md). The core builds and tests on every platform; the Windows
-# half adds accounts, credentials and job-contained seat hosts. The RDP keeper links IronRDP
-# and builds apart, in crates/pf-seat-keeper.
+# The seat supervisor (design/multi-seat-product.md). The core builds and tests on every
+# platform. Windows runs it inside the punktfunk service behind a SYSTEM-only pipe and adds
+# accounts, credentials and job-contained seat hosts; the RDP keeper links IronRDP and builds
+# apart, in crates/pf-seat-keeper. Linux runs it as the root `punktfunk-seats` daemon behind a
+# Unix socket and starts one systemd unit per seat.
 [package]
 name = "pf-seats"
-description = "Windows multi-seat supervisor: seat ledger, accounts, RDP keepers, seat hosts"
+description = "Multi-seat supervisor: seat ledger, Windows RDP keepers and seat hosts, the Linux seat daemon"
 version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
@@ -22,6 +23,11 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 zeroize = "1"
+
+# `net` reads a socket peer's credentials (SO_PEERCRED) and `fs` opens a file without following a
+# link, both through safe wrappers, so this half keeps `forbid(unsafe_code)`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs", "net"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"

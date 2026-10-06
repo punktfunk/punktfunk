@@ -3493,6 +3493,7 @@ dependencies = [
  "hex",
  "pf-paths",
  "rand 0.9.5",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",
