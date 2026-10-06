@@ -326,6 +326,8 @@ fn reduce_ui_res_defaults_on_for_tvs_and_stays_revertible() {
     assert!(reduce_ui_res(&s, Platform::WebOS, false));
     assert!(reduce_ui_res(&s, Platform::Android, false));
     assert!(!reduce_ui_res(&s, Platform::Android, true));
+    assert!(reduce_ui_res(&s, Platform::Tizen, false));
+    assert!(!reduce_ui_res(&s, Platform::Web, false));
     assert!(!reduce_ui_res(&s, Platform::Desktop, false));
 
     let mut off = s.clone();

@@ -386,12 +386,14 @@ fn reduce_ui_key(platform: crate::platform::Platform) -> &'static str {
     }
 }
 
-/// The value an unwritten [`reduce_ui_key`] resolves to: on for the TV shells — a webOS set
-/// always is one, and an Android host without the touch fallback is the box plugged into a
-/// panel far faster than its GPU. Off elsewhere, where the GPU is not the bottleneck.
+/// The value an unwritten [`reduce_ui_key`] resolves to: on for the TV shells. A webOS or
+/// Samsung set always is one, and an Android host without the touch fallback is the box
+/// plugged into a panel far faster than its GPU. Off elsewhere, where the GPU is not the
+/// bottleneck.
 fn reduce_ui_default(platform: crate::platform::Platform, fallback_ui: bool) -> bool {
     use crate::platform::Platform;
-    platform == Platform::WebOS || (platform == Platform::Android && !fallback_ui)
+    matches!(platform, Platform::WebOS | Platform::Tizen)
+        || (platform == Platform::Android && !fallback_ui)
 }
 
 /// The resolved "Reduce interface resolution" flag. The settings rows read it; the shell's
