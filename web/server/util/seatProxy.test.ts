@@ -7,7 +7,7 @@ import {
 	seatPath,
 } from "./seatProxy";
 
-const ID = "0123456789abcdef0123456789abcdef";
+const ID = "0a1b2c3d4e5f";
 const base = `/api/v1/profiles/${ID}/proxy`;
 
 describe("seatCall", () => {
@@ -28,7 +28,7 @@ describe("seatCall", () => {
 	test("refuses a path that is not a seat's", () => {
 		expect(seatCall(`/api/v1/profiles/${ID}/proxy`)).toBeNull();
 		expect(seatCall(`/api/v1/profiles/${ID}/proxy/`)).toBeNull();
-		expect(seatCall(`/api/v1/profiles/nope/proxy/library`)).toBeNull();
+		expect(seatCall(`/api/v1/profiles/bad.id/proxy/library`)).toBeNull();
 		expect(seatCall(`${base}/../../library`)).toBeNull();
 	});
 

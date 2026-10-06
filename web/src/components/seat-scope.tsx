@@ -24,8 +24,8 @@ import {
 import { useLocalPref } from "@/lib/prefs";
 import { m } from "@/paraglide/messages";
 
-/** The box's own entry in the chip. A profile id is hex, so no seat can be called this. */
-const BOX = "box";
+/** The box's own entry in the chip. A profile id has no `-`, so no seat can be called this. */
+const BOX = "-box-";
 
 const isIdOrNull = (v: unknown): v is string | null =>
 	v === null || typeof v === "string";

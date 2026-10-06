@@ -3,8 +3,8 @@
 // ask on the seat's too: `gatedRoute` names the one that guards `rest`.
 import { normalizePath } from "./auth";
 
-/** A profile id: 32 lowercase hex digits. */
-const ID = /^[0-9a-f]{32}$/;
+/** A profile id as the host accepts one: ASCII letters and digits, at most 64. */
+const ID = /^[A-Za-z0-9]{1,64}$/;
 
 export interface SeatCall {
 	id: string;

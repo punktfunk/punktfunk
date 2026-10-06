@@ -4,7 +4,7 @@ import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import { apiFetch } from "./fetcher";
 import { isFullSeat, seatChoices, seatClient } from "./seat";
 
-const KID = "0123456789abcdef0123456789abcdef";
+const KID = "0a1b2c3d4e5f";
 const realFetch = globalThis.fetch;
 afterEach(() => {
 	globalThis.fetch = realFetch;

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { apiFetch, inSeat, seatUrl } from "./fetcher";
 
-const KID = "0123456789abcdef0123456789abcdef";
+const KID = "0a1b2c3d4e5f";
 
 test("a seat's call is the box's proxy path, and only /api/v1 moves", () => {
 	expect(seatUrl("/api/v1/library/page?limit=1", KID)).toBe(
