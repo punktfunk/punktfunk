@@ -4,18 +4,21 @@
 //!
 //! The sheet is an in-tree overlay like the host editor: a ContentDialog takes text only, and
 //! the picker needs circles. It lives at root, so a worker thread can raise it over any screen.
+//! A profile whose seat is starting gets a second sheet of the same frame, [`SeatWait`].
 
 use super::style::*;
 use super::{AppCtx, Screen, Target};
 use crate::trust::KnownHosts;
-use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick};
-use std::sync::atomic::{AtomicU64, Ordering};
+use pf_client_core::profiles::{self, Decision, ListedProfile, ProfilePick, SeatGate};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use windows_reactor::*;
 
 /// How long a connect waits for the host's list before it dials as it would have.
 const FETCH_CUTOFF: Duration = Duration::from_secs(3);
+/// How often the waiting sheet re-reads the seat.
+const SEAT_POLL: Duration = Duration::from_secs(2);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// What a pick does: saves it, then connects (or just closes, for "Switch profile…").
@@ -59,6 +62,25 @@ impl PickerAsk {
             on_pick: Arc::new(Mutex::new(Some(Box::new(on_pick)))),
             cancel_to,
         }
+    }
+}
+
+/// A profile's seat coming up. Root state, so each new line re-renders the sheet.
+#[derive(Clone)]
+pub(crate) struct SeatWait {
+    title: String,
+    detail: Option<String>,
+    /// Cancel sets it; the poll stops and nothing dials.
+    cancel: Arc<AtomicBool>,
+    /// Cancel returns to the host list.
+    back: AsyncSetState<Screen>,
+}
+
+impl PartialEq for SeatWait {
+    fn eq(&self, other: &Self) -> bool {
+        self.title == other.title
+            && self.detail == other.detail
+            && Arc::ptr_eq(&self.cancel, &other.cancel)
     }
 }
 
@@ -114,18 +136,136 @@ fn open(ctx: &AppCtx, ask: PickerAsk) {
     }
 }
 
-/// Before a connect to a paired host: ask who plays, then `go(profile id)`. Runs off the UI
-/// thread. A failed or late answer goes on with the link's `as=`, else the saved pick.
+/// `id`'s row in `listed`, the list the id came from.
+fn row_of(listed: Option<&[ListedProfile]>, id: Option<&str>) -> Option<ListedProfile> {
+    listed?.iter().find(|p| Some(p.id.as_str()) == id).cloned()
+}
+
+/// The host's list again, for the profile it just refused as unknown: that profile's row, or
+/// `None` when the host no longer lists it. Blocks; run it off the UI thread.
+pub(crate) fn relisted(
+    ctx: &AppCtx,
+    target: &Target,
+    pin: Option<[u8; 32]>,
+    id: &str,
+) -> Option<ListedProfile> {
+    let listed = fetch(ctx, target, pin)??;
+    profiles::find(&listed, id).cloned()
+}
+
+/// A settled profile's seat decides what the connect does (§9.2): `go` dials now, a stopped or
+/// starting seat gets the waiting sheet first, and one that can't play says why and stops.
+/// `row` is the profile's row in the list it came from; without one the connect dials. Only a
+/// dial runs on the calling thread, so the picker's click may call this.
+pub(crate) fn seat_then(
+    ctx: &Arc<AppCtx>,
+    target: Target,
+    pin: Option<[u8; 32]>,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+    row: Option<ListedProfile>,
+    go: impl FnOnce() + Send + 'static,
+) {
+    let Some(row) = row else { return go() };
+    let wake = match profiles::seat_gate(&row) {
+        SeatGate::Dial => return go(),
+        SeatGate::Refuse(line) => {
+            set_status.call(line);
+            set_screen.call(Screen::Hosts);
+            return;
+        }
+        SeatGate::Wake => true,
+        SeatGate::Wait { .. } => false,
+    };
+    let Some(set_seat) = ctx.shared.set_seat.lock().unwrap().clone() else {
+        return go();
+    };
+    let (ctx, set_screen, set_status) = (ctx.clone(), set_screen.clone(), set_status.clone());
+    let _ = std::thread::Builder::new()
+        .name("pf-seat".into())
+        .spawn(move || {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let title = profiles::waking_line(&row.display_name);
+            // A request in flight when Cancel lands finishes into nothing: Cancel has already
+            // closed the sheet and gone back to the host list.
+            let show = |detail: Option<String>| {
+                if !cancel.load(Ordering::SeqCst) {
+                    set_seat.call(Some(SeatWait {
+                        title: title.clone(),
+                        detail,
+                        cancel: cancel.clone(),
+                        back: set_screen.clone(),
+                    }));
+                }
+            };
+            let stop = |line: String| {
+                if !cancel.load(Ordering::SeqCst) {
+                    set_seat.call(None);
+                    set_status.call(line);
+                    set_screen.call(Screen::Hosts);
+                }
+            };
+            let mgmt = target
+                .mgmt_port
+                .unwrap_or(pf_client_core::library::DEFAULT_MGMT_PORT);
+            let mut row = row;
+            show(None);
+            if wake {
+                match profiles::wake(&target.addr, mgmt, &ctx.identity, pin, &row.id) {
+                    Ok(woken) => row = woken,
+                    Err(e) => {
+                        return stop(format!(
+                            "Couldn't wake {}'s desk \u{2014} {e}",
+                            row.display_name
+                        ));
+                    }
+                }
+            }
+            loop {
+                match profiles::seat_gate(&row) {
+                    SeatGate::Dial => {
+                        if !cancel.load(Ordering::SeqCst) {
+                            set_seat.call(None);
+                            go();
+                        }
+                        return;
+                    }
+                    SeatGate::Refuse(line) => return stop(line),
+                    SeatGate::Wait { detail } => show(detail),
+                    SeatGate::Wake => show(None),
+                }
+                std::thread::sleep(SEAT_POLL);
+                if cancel.load(Ordering::SeqCst) {
+                    return;
+                }
+                match profiles::fetch_enumerate(&target.addr, mgmt, &ctx.identity, pin) {
+                    Ok(listed) => match row_of(listed.as_deref(), Some(&row.id)) {
+                        Some(polled) => row = polled,
+                        None => {
+                            return stop(format!("{} is gone from this host.", row.display_name))
+                        }
+                    },
+                    // A poll that fails waits for the next one.
+                    Err(e) => tracing::debug!(error = %e, "seat poll"),
+                }
+            }
+        });
+}
+
+/// Before a connect to a paired host: ask who plays, then `go(profile id)` once that profile's
+/// seat allows it. Runs off the UI thread. A failed or late answer goes on with the link's
+/// `as=`, else the saved pick.
 pub(crate) fn then_connect(
     ctx: &Arc<AppCtx>,
     target: Target,
     saved: Option<ProfilePick>,
     pin: Option<[u8; 32]>,
     set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
     go: impl FnOnce(Option<String>) + Send + 'static,
 ) {
     set_screen.call(Screen::Connecting);
-    let (ctx, set_screen) = (ctx.clone(), set_screen.clone());
+    let (ctx, set_screen, set_status) = (ctx.clone(), set_screen.clone(), set_status.clone());
     let _ = std::thread::Builder::new()
         .name("pf-profiles".into())
         .spawn(move || {
@@ -142,25 +282,35 @@ pub(crate) fn then_connect(
                 },
             };
             let fp = target.fp_hex.clone();
+            let listed = fetched.flatten();
             if !d.picker {
                 if d.remember != saved {
                     save_pick(fp.as_deref(), &target.addr, target.port, d.remember);
                 }
-                return go(d.send);
+                let row = row_of(listed.as_deref(), d.send.as_deref());
+                return seat_then(
+                    &ctx,
+                    target,
+                    pin,
+                    &set_screen,
+                    &set_status,
+                    row,
+                    move || go(d.send),
+                );
             }
-            let (addr, port) = (target.addr.clone(), target.port);
-            let on_pick = move |p: ProfilePick| {
-                save_pick(fp.as_deref(), &addr, port, Some(p.clone()));
-                go(Some(p.id));
-            };
-            let ask = PickerAsk::new(
-                &target,
-                fetched.flatten(),
-                saved,
-                d.gone,
-                on_pick,
-                Some(set_screen),
+            let rows = listed.clone();
+            let (ctx2, t, ss, st) = (
+                ctx.clone(),
+                target.clone(),
+                set_screen.clone(),
+                set_status.clone(),
             );
+            let on_pick = move |p: ProfilePick| {
+                save_pick(t.fp_hex.as_deref(), &t.addr, t.port, Some(p.clone()));
+                let row = row_of(rows.as_deref(), Some(&p.id));
+                seat_then(&ctx2, t, pin, &ss, &st, row, move || go(Some(p.id)));
+            };
+            let ask = PickerAsk::new(&target, listed, saved, d.gone, on_pick, Some(set_screen));
             open(&ctx, ask);
         });
 }
@@ -240,6 +390,91 @@ fn profile_card(p: &ListedProfile, saved: bool, go: impl Fn() + Clone + 'static)
     vstack(parts).spacing(6.0).into()
 }
 
+fn quiet(text: String) -> Element {
+    text_block(text)
+        .font_size(13.0)
+        .wrap()
+        .foreground(ThemeRef::SecondaryText)
+        .into()
+}
+
+/// A sheet over the screen: `body` in a dialog surface on a scrim. `cancel` runs on Escape and
+/// on a tap outside the surface.
+fn sheet(body: Vec<Element>, cancel: impl Fn() + Clone + 'static) -> Element {
+    // A tap inside the card bubbles to the scrim; the flag makes the scrim swallow it.
+    let inside_tap = std::rc::Rc::new(std::cell::Cell::new(false));
+    let modal = dialog_surface(scroll_view(vstack(body).spacing(14.0)))
+        .on_tapped({
+            let inside_tap = inside_tap.clone();
+            move || inside_tap.set(true)
+        })
+        .max_width(640.0)
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .vertical_alignment(VerticalAlignment::Center)
+        .margin(uniform(24.0));
+    let scrim_cancel = cancel.clone();
+    Element::from(
+        border(modal)
+            .background(Color {
+                a: 140,
+                r: 0,
+                g: 0,
+                b: 0,
+            })
+            .on_tapped(move || {
+                if inside_tap.replace(false) {
+                    return;
+                }
+                scrim_cancel();
+            }),
+    )
+    .keyboard_accelerator(KeyboardAccelerator::new(
+        VirtualKey::Escape,
+        VirtualKeyModifiers::None,
+        cancel,
+    ))
+}
+
+/// The seat wait overlay, in its own stable root slot: the line, the host's detail and Cancel.
+pub(crate) fn seat_slot(
+    wait: &Option<SeatWait>,
+    set_seat: &AsyncSetState<Option<SeatWait>>,
+) -> Element {
+    let Some(w) = wait else {
+        return border(vstack(Vec::<Element>::new())).into();
+    };
+    let mut body: Vec<Element> = vec![
+        ProgressRing::indeterminate()
+            .width(32.0)
+            .height(32.0)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .into(),
+        text_block(w.title.clone())
+            .font_size(20.0)
+            .bold()
+            .wrap()
+            .into(),
+    ];
+    if let Some(detail) = &w.detail {
+        body.push(quiet(detail.clone()));
+    }
+    let cancel = {
+        let (set, flag, back) = (set_seat.clone(), w.cancel.clone(), w.back.clone());
+        move || {
+            flag.store(true, Ordering::SeqCst);
+            set.call(None);
+            back.call(Screen::Hosts);
+        }
+    };
+    body.push(
+        button("Cancel")
+            .on_click(cancel.clone())
+            .horizontal_alignment(HorizontalAlignment::Right)
+            .into(),
+    );
+    sheet(body, cancel)
+}
+
 /// The picker overlay, in a stable root slot: a same-kind empty border while closed.
 pub(crate) fn picker_slot(
     ask: &Option<PickerAsk>,
@@ -253,13 +488,6 @@ pub(crate) fn picker_slot(
         .bold()
         .wrap()
         .into()];
-    let quiet = |text: String| -> Element {
-        text_block(text)
-            .font_size(13.0)
-            .wrap()
-            .foreground(ThemeRef::SecondaryText)
-            .into()
-    };
     if let Some(gone) = &a.gone {
         body.push(quiet(format!("{gone} is gone from this host.")));
     }
@@ -303,36 +531,5 @@ pub(crate) fn picker_slot(
             .horizontal_alignment(HorizontalAlignment::Right)
             .into(),
     );
-    // A tap inside the card bubbles to the scrim; the flag makes the scrim swallow it.
-    let inside_tap = std::rc::Rc::new(std::cell::Cell::new(false));
-    let modal = dialog_surface(scroll_view(vstack(body).spacing(14.0)))
-        .on_tapped({
-            let inside_tap = inside_tap.clone();
-            move || inside_tap.set(true)
-        })
-        .max_width(640.0)
-        .horizontal_alignment(HorizontalAlignment::Center)
-        .vertical_alignment(VerticalAlignment::Center)
-        .margin(uniform(24.0));
-    let scrim_cancel = cancel.clone();
-    Element::from(
-        border(modal)
-            .background(Color {
-                a: 140,
-                r: 0,
-                g: 0,
-                b: 0,
-            })
-            .on_tapped(move || {
-                if inside_tap.replace(false) {
-                    return;
-                }
-                scrim_cancel();
-            }),
-    )
-    .keyboard_accelerator(KeyboardAccelerator::new(
-        VirtualKey::Escape,
-        VirtualKeyModifiers::None,
-        cancel,
-    ))
+    sheet(body, cancel)
 }

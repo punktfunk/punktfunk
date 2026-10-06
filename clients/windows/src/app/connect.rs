@@ -109,10 +109,55 @@ fn ask_then_connect(
         set_screen.clone(),
         set_status.clone(),
     );
-    profiles::then_connect(ctx, target, saved, pin, set_screen, move |profile| {
-        let opts = ConnectOpts { profile, ..opts };
-        connect_with(&ctx2, &t, pin, &ss, &st, opts)
-    });
+    profiles::then_connect(
+        ctx,
+        target,
+        saved,
+        pin,
+        set_screen,
+        set_status,
+        move |profile| {
+            let opts = ConnectOpts { profile, ..opts };
+            connect_with(&ctx2, &t, pin, &ss, &st, opts)
+        },
+    );
+}
+
+/// The host refused `id` as unknown. A seat host says so for a seat that went stale too, so its
+/// list is read again: while it still lists the profile, one more dial goes through the seat
+/// gate. Otherwise `give_up` shows the refusal.
+fn redial_profile(
+    ctx: &Arc<AppCtx>,
+    target: Target,
+    pin: Option<[u8; 32]>,
+    id: String,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+    give_up: impl FnOnce() + Send + 'static,
+) {
+    let (ctx, ss, st) = (ctx.clone(), set_screen.clone(), set_status.clone());
+    let _ = std::thread::Builder::new()
+        .name("pf-profiles".into())
+        .spawn(move || {
+            let Some(row) = profiles::relisted(&ctx, &target, pin, &id) else {
+                return give_up();
+            };
+            let (ctx2, t, ss2, st2, id) = (
+                ctx.clone(),
+                target.clone(),
+                ss.clone(),
+                st.clone(),
+                row.id.clone(),
+            );
+            profiles::seat_then(&ctx, target, pin, &ss, &st, Some(row), move || {
+                let opts = ConnectOpts {
+                    profile: Some(id),
+                    retried: true,
+                    ..ConnectOpts::default()
+                };
+                connect_with(&ctx2, &t, pin, &ss2, &st2, opts)
+            });
+        });
 }
 
 /// Start a stream that launches a library title on connect (`--launch id`): the library page's
@@ -174,6 +219,8 @@ pub(crate) struct ConnectOpts {
     launch: Option<String>,
     /// The profile id the session names: the picker's answer, or a link's `as=`. `None` names none.
     profile: Option<String>,
+    /// This dial is the one retry after the host refused the profile as unknown.
+    retried: bool,
 }
 
 impl Default for ConnectOpts {
@@ -186,6 +233,7 @@ impl Default for ConnectOpts {
             wake_on_fail: false,
             launch: None,
             profile: None,
+            retried: false,
         }
     }
 }
@@ -273,6 +321,11 @@ fn connect_spawn(
     // The launch id: an explicit opts pick (the library's tap-to-play), else one riding
     // the target — a deep link's `launch=` that detoured through the PIN ceremony.
     let launch_arg = opts.launch.clone().or_else(|| target.launch.clone());
+    // What a `PROFILE_UNKNOWN` refusal may dial again: never the retry itself.
+    let (retry, retry_launch) = (
+        opts.profile.clone().filter(|_| !opts.retried),
+        launch_arg.clone(),
+    );
     let spawned = crate::spawn::spawn_session(
         &addr,
         port,
@@ -329,13 +382,35 @@ fn connect_spawn(
                         ss.call(Screen::Pair);
                     }
                     // The host answered and refused: never a wake. A profile it no longer has is
-                    // forgotten.
+                    // forgotten, after one more look at its list.
                     ConnectOutcome::Refused { msg, reason } => {
-                        if reason == RejectReason::ProfileUnknown {
-                            profiles::save_pick(Some(&fp_hex), &target.addr, target.port, None);
+                        let unknown = reason == RejectReason::ProfileUnknown;
+                        let give_up = {
+                            let (fp_hex, target) = (fp_hex.clone(), target.clone());
+                            let (ss, st) = (ss.clone(), st.clone());
+                            move || {
+                                if unknown {
+                                    profiles::save_pick(
+                                        Some(&fp_hex),
+                                        &target.addr,
+                                        target.port,
+                                        None,
+                                    );
+                                }
+                                st.call(msg);
+                                ss.call(Screen::Hosts);
+                            }
+                        };
+                        match retry.clone().filter(|_| unknown) {
+                            Some(id) => {
+                                let target = Target {
+                                    launch: retry_launch.clone(),
+                                    ..target.clone()
+                                };
+                                redial_profile(&ctx2, target, pin, id, &ss, &st, give_up);
+                            }
+                            None => give_up(),
                         }
-                        st.call(msg);
-                        ss.call(Screen::Hosts);
                     }
                     // The dial-first attempt to a non-advertising host failed — it may
                     // genuinely be asleep. Only with auto-wake on: the wait is worth showing

@@ -194,6 +194,8 @@ pub(crate) struct Shared {
     /// Opens the profile picker over whatever screen is up. Installed by root; a connect's worker
     /// thread raises the picker through it ([`profiles::then_connect`]).
     pub(crate) set_picker: Mutex<Option<AsyncSetState<Option<profiles::PickerAsk>>>>,
+    /// Opens the wait for a profile's seat the same way ([`profiles::seat_then`]).
+    pub(crate) set_seat: Mutex<Option<AsyncSetState<Option<profiles::SeatWait>>>>,
 }
 
 pub struct AppCtx {
@@ -350,6 +352,12 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
     cx.use_effect((), {
         let (ctx, set_picker) = (ctx.clone(), set_picker.clone());
         move || *ctx.shared.set_picker.lock().unwrap() = Some(set_picker)
+    });
+    // The wait for a starting seat, raised the same way.
+    let (seat, set_seat) = cx.use_async_state(Option::<profiles::SeatWait>::None);
+    cx.use_effect((), {
+        let (ctx, set_seat) = (ctx.clone(), set_seat.clone());
+        move || *ctx.shared.set_seat.lock().unwrap() = Some(set_seat)
     });
     // `punktfunk://` links: the receiver thread queues them (from this launch's argv, or from a
     // later instance over WM_COPYDATA) and this poll pulls them onto the UI thread. Thread-fed
@@ -870,6 +878,7 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
         page,
         link_dialog,
         profiles::picker_slot(&picker, &set_picker),
+        profiles::seat_slot(&seat, &set_seat),
     ])
     .into()
 }
