@@ -39,13 +39,14 @@ public enum ClientLogRing {
         var dropped = 0
     }
 
-    /// Append one formatted log line (no trailing newline). Oversized lines are truncated to keep
-    /// a single event from evicting the whole ring.
+    /// Append one formatted log line (no trailing newline) to the ring and its file. Oversized
+    /// lines are truncated to keep a single event from evicting the whole ring.
     public static func note(_ line: String) {
         // `decoding:` rather than `String(_:)`: a cut mid-scalar yields U+FFFD, not nil.
         let line = line.utf8.count > 2048
             ? String(decoding: line.utf8.prefix(2048), as: UTF8.self) + "…" : line
         let size = line.utf8.count
+        ClientLogFile.shared?.append(line)
         lock.withLock { s in
             s.lines.append(line)
             s.bytes += size
@@ -107,6 +108,90 @@ public enum ClientLogRing {
     /// next to (the session client's `wallclock`).
     static func stamp(_ date: Date = Date()) -> String {
         Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date)
+    }
+}
+
+/// The ring's lines mirrored to a file, so a run that a force restart, a jetsam kill or a crash
+/// ended still has its log at the next launch. Launch moves the last run's file to `previous`;
+/// "Send logs" uploads it as its own bundle. Writes and the once-a-second fsync run on a utility
+/// queue, never on the logging thread.
+final class ClientLogFile: @unchecked Sendable {
+    static let shared: ClientLogFile? = FileManager.default
+        .urls(for: .cachesDirectory, in: .userDomainMask).first
+        .map { ClientLogFile(directory: $0.appendingPathComponent(
+            "\(Bundle.main.bundleIdentifier ?? "punktfunk")/client-log")) }
+
+    let current: URL
+    let previous: URL
+    /// Past this the file keeps its newest half, so a previous run always fits the host's
+    /// 1 MiB bundle cap.
+    let maxBytes: Int
+    private let header: String
+    private let queue = DispatchQueue(label: "io.unom.punktfunk.client-log", qos: .utility)
+    private var handle: FileHandle?
+    private var bytes = 0
+    private var lastSyncNs: UInt64 = 0
+
+    init(directory: URL, maxBytes: Int = ClientLogRing.maxBytes, header: String = ClientLogRing.header()) {
+        current = directory.appendingPathComponent("client.log")
+        previous = directory.appendingPathComponent("client-previous.log")
+        self.maxBytes = maxBytes
+        self.header = header
+        let fm = FileManager.default
+        try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: current.path) {
+            try? fm.removeItem(at: previous)
+            try? fm.moveItem(at: current, to: previous)
+        }
+        let head = Data((header + "\n").utf8)
+        if fm.createFile(atPath: current.path, contents: head) {
+            handle = try? FileHandle(forWritingTo: current)
+            _ = try? handle?.seekToEnd()
+            bytes = head.count
+        }
+    }
+
+    func append(_ line: String) {
+        queue.async { [self] in
+            guard let handle else { return }
+            let data = Data((line + "\n").utf8)
+            if bytes + data.count > maxBytes { trim(handle) }
+            try? handle.write(contentsOf: data)
+            bytes += data.count
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now &- lastSyncNs > 1_000_000_000 {
+                try? handle.synchronize()
+                lastSyncNs = now
+            }
+        }
+    }
+
+    /// Keep the header and the newest half of the file, cut at a line start.
+    private func trim(_ handle: FileHandle) {
+        guard let data = try? Data(contentsOf: current) else { return }
+        let tail = data.suffix(maxBytes / 2)
+        let start = tail.firstIndex(of: UInt8(ascii: "\n")).map { tail.index(after: $0) } ?? tail.endIndex
+        let kept = Data((header + "\n… older lines trimmed from the file …\n").utf8) + tail[start...]
+        try? handle.truncate(atOffset: 0)
+        try? handle.write(contentsOf: kept)
+        bytes = kept.count
+    }
+
+    /// The last run's log, marked as such under its header. Nil when there is none.
+    func previousRun() -> String? {
+        guard let text = try? String(contentsOf: previous, encoding: .utf8), !text.isEmpty else { return nil }
+        guard let newline = text.firstIndex(of: "\n") else { return text }
+        return String(text[...newline]) + "… the app's previous run, kept across its restart …\n"
+            + text[text.index(after: newline)...]
+    }
+
+    func dropPrevious() {
+        try? FileManager.default.removeItem(at: previous)
+    }
+
+    /// Wait for queued writes. Tests only.
+    func flush() {
+        queue.sync {}
     }
 }
 

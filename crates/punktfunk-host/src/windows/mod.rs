@@ -11,6 +11,7 @@ pub(crate) mod idd;
 // Pause NVIDIA Instant Replay while it shares the encoder with a stream; resume after.
 pub(crate) mod instant_replay;
 // WM_CLOSE on the interactive desktop, then TerminateProcess.
+pub(crate) mod capture_worker;
 pub(crate) mod game_term;
 pub(crate) mod install;
 pub(crate) mod interactive;
