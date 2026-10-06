@@ -965,6 +965,12 @@ pub fn av1_hardware_decodable(vk: Option<&VulkanDecodeDevice>) -> bool {
     platform
 }
 
+/// Does the Hello offer AV1 on this device? [`av1_hardware_decodable`] or a V4L2 node
+/// that takes AV1 — the answer a settings UI must show.
+pub fn av1_advertised(vk: Option<&VulkanDecodeDevice>) -> bool {
+    av1_hardware_decodable(vk) || v4l2_summary(vk).codecs & punktfunk_core::quic::CODEC_AV1 != 0
+}
+
 /// Can this client decode 4:4:4 HEVC — the promise `VIDEO_CAP_444` makes.
 ///
 /// Vulkan only: VAAPI/DXVA/CPU are 4:2:0. Advertising 4:4:4 without a Vulkan
