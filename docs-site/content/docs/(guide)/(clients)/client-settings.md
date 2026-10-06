@@ -95,7 +95,7 @@ Touch modes, mouse modes and the in-stream keys are explained on [Input](/docs/i
 | **Hold Select for guide** | Automatic | Hold Select about ⅓ s to press the host's guide button. A Select tap then arrives a beat late. Automatic turns it on in Gaming Mode and on iPhone, iPad and Apple TV. | All |
 | **Controller haptics** | On | Plays a DualSense's voice-coil haptics, over USB or Bluetooth (Android: USB). See [Controller audio](/docs/controller-audio). | Linux, Windows, Android |
 | **Controller speaker** | On (Android: off) | Plays the game's pad audio on a DualSense's speaker. | Linux, Windows, Android |
-| **Steam Controller 2 passthrough** | On (Apple: off) | Passes a Steam Controller 2 to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Android and Mac: USB, the Puck or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. | Android, Apple |
+| **Steam Controller 2 passthrough** | Off | Passes a Steam Controller 2 to a Linux or Windows host as itself, so its trackpads, gyro and haptics work as they do locally. Mac: USB, the Puck or Bluetooth. iPhone, iPad, Apple TV: Bluetooth. Android and the desktop clients always pass one through. | Apple |
 | **DualSense over USB** | On | Drives a USB DualSense or DualShock 4 directly, for adaptive triggers, lightbar and gyro. | Android |
 | **Rumble on this phone**, **Gyro from this phone** | Off | The phone's own motor and gyro stand in for a clip-on pad's. | Android, iPhone |
 
