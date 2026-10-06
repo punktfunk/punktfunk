@@ -1,6 +1,6 @@
 //! The encode thread's steady state ([`Drive`]): pool slot → `submit` → `poll` → heap + slot
 //! table → `latest` + event, with back-pressure taken on pool slots and the wedge state word
-//! kept for the host's classifier.
+//! kept for the host's classifier. The pool is whatever [`FrameSource`] the side runs.
 //!
 //! The loop is frame-driven, not timed: submit while there is room and a frame, publish while an
 //! access unit is owed and ready, and otherwise park once on `{stop, pool, the backend's
@@ -11,12 +11,14 @@
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::mem::offset_of;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use pf_driver_proto::encode::FrameToken;
 use pf_driver_proto::encode::au::{self, AuHeader, AuSlot, HeapRing};
 use pf_encode_win::{AuChunk, Encoder};
+use pf_frame::CapturedFrame;
 use pf_frame::pace::{FrameCredit, GapChange, Restamp};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
@@ -25,15 +27,46 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::PCWSTR;
 
-use super::pool::{Offer, Pool};
-use super::section::{Ctl, EncodeSession};
-use super::thread::{hdr_meta, qpc_frequency, qpc_now, qpc_to_ns};
-use crate::worker::OwnedHandle;
+use crate::Fail;
+use crate::open::{hdr_meta, qpc_frequency, qpc_now, qpc_to_ns};
+use crate::section::{Ctl, EncodeSession};
+
+/// One queued frame: its slot, the compositor's present stamp in QPC ticks (zero when it has
+/// none), and its source sequence.
+pub type Slot = (usize, u64, u64);
+
+/// Where a session's frames come from: the driver's pool under its swap chain, the capture
+/// worker's under Windows Graphics Capture. Every method is called from the encode thread.
+pub trait FrameSource: Sync {
+    /// The encode thread starts (`true`) or stops (`false`) consuming.
+    fn set_live(&self, live: bool);
+    /// The oldest queued frame within `budget` frames, now the encoder's, and how many queued
+    /// frames were shed to stay inside it.
+    fn take_within(&self, budget: usize) -> (Option<Slot>, u64);
+    /// The frame last taken, again: a recovery frame nothing composed for.
+    fn republish(&self) -> Option<Slot>;
+    /// A pointer this source blends moved, and its last frame can be re-encoded now.
+    fn cursor_pending(&self) -> bool;
+    /// That re-encode, with the pointer where it is now.
+    fn cursor_republish(&self) -> Option<Slot>;
+    /// A pointer-only frame was dropped: the move is still owed.
+    fn cursor_changed(&self);
+    /// `slot` as the frame `submit` takes, stamped `pts_ns`.
+    fn frame(&self, slot: usize, pts_ns: u64) -> Result<CapturedFrame, Fail>;
+    /// Hand `slot` back, whether its access unit was published or it was skipped.
+    fn release(&self, slot: usize);
+    /// Signalled once per queued frame and once per control wake.
+    fn event(&self) -> RawHandle;
+    /// Whether a frame is queued.
+    fn has_full(&self) -> bool;
+    /// Count one dropped frame; the new total, for the header.
+    fn drop_one(&self) -> u64;
+}
 
 /// Submits allowed ahead of the oldest AU — the host's pipeline depth. Also what the pool
 /// guarantees a backend that encodes an input texture where it lies: a slot handed to the
 /// encoder sits in `encoding` and no drain pass can take it back until the AU is published.
-pub(crate) const MAX_INFLIGHT: usize = 2;
+pub const MAX_INFLIGHT: usize = 2;
 /// Polls that return nothing while an AU is owed, before the state word says WEDGED.
 const WEDGE_AFTER: Duration = Duration::from_secs(2);
 /// How often the loop re-enters `poll` for a backend with no completion event
@@ -46,23 +79,12 @@ const SLOT_WAIT: Duration = Duration::from_millis(250);
 /// Consecutive failed submits before the thread gives up on its backend.
 const MAX_SUBMIT_FAILURES: u32 = 8;
 
-/// G3 fault injection: encode this many frames, then never return from the encode work
-/// (`PFVD_ENCODE_BLOCK_AFTER`, a frame count; unset or unparsable disables it). Read once per
-/// encoder open, so a `reset` reopens blocked again until the knob is cleared.
-#[cfg(feature = "encode-probe")]
-fn block_after() -> Option<u64> {
-    crate::log::knob("PFVD_ENCODE_BLOCK_AFTER")?
-        .trim()
-        .parse()
-        .ok()
-}
-
-/// Park forever, holding the pool slot and the session, once `encoded` passes the knob. Nothing
-/// unparks this thread: the drain worker has to keep composing against a thread that is gone.
-#[cfg(feature = "encode-probe")]
+/// Fault injection: park forever, holding the pool slot and the session, once `encoded` passes
+/// `limit`. Nothing unparks this thread: the source has to keep producing against a thread
+/// that is gone. `None`, which every shipping open passes, never parks.
 fn block_if_armed(limit: Option<u64>, encoded: u64) {
     if limit.is_some_and(|n| encoded > n) {
-        dbglog!("[pf-vd] encode: PFVD_ENCODE_BLOCK_AFTER — wedging at frame {encoded}");
+        tracing::info!("encode: block-after armed — wedging at frame {encoded}");
         loop {
             std::thread::park();
         }
@@ -74,21 +96,25 @@ fn stop_signalled(stop: HANDLE) -> bool {
     unsafe { WaitForSingleObject(stop, 0) == WAIT_OBJECT_0 }
 }
 
-/// The stream's frame rate and the refresh the monitor was created at, both in Hz.
+/// The stream's frame rate and the refresh the source composes at, both in Hz.
 pub struct Rates {
     pub fps: u32,
     pub panel_hz: u32,
 }
 
 impl<'a> Drive<'a> {
+    /// `stop` is the thread's stop event, alive for as long as this value. `block_after` is the
+    /// fault-injection frame count ([`block_if_armed`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         enc: Box<dyn Encoder>,
-        pool: &'a Pool,
+        pool: &'a dyn FrameSource,
         session: &'a EncodeSession,
-        stop: HANDLE,
+        stop: RawHandle,
         live: &'a AtomicBool,
         rates: Rates,
         opened_kbps: u32,
+        block_after: Option<u64>,
     ) -> Self {
         let (heap_offset, heap_bytes) = session.section.heap();
         let fps = rates.fps.max(1);
@@ -120,11 +146,9 @@ impl<'a> Drive<'a> {
             report: Report::new(qpc_hz, 1_000_000 / u64::from(fps)),
             applied_kbps: opened_kbps,
             state: au::ENCODER_OPEN,
-            stop,
+            stop: HANDLE(stop),
             live,
-            #[cfg(feature = "encode-probe")]
-            block_after: block_after(),
-            #[cfg(feature = "encode-probe")]
+            block_after,
             encoded: 0,
         }
     }
@@ -168,7 +192,7 @@ struct Owed {
 /// keyframe request re-encodes the stash; the first frame is the pool's or the seed's.
 pub struct Drive<'a> {
     enc: Box<dyn Encoder>,
-    pool: &'a Pool,
+    pool: &'a dyn FrameSource,
     session: &'a EncodeSession,
     ring: HeapRing,
     /// Next wire index to stamp; every published AU takes exactly one, a dropped AU none.
@@ -217,9 +241,8 @@ pub struct Drive<'a> {
     state: u32,
     stop: HANDLE,
     live: &'a AtomicBool,
-    #[cfg(feature = "encode-probe")]
     block_after: Option<u64>,
-    #[cfg(feature = "encode-probe")]
+    /// Frames submitted, for [`block_if_armed`].
     encoded: u64,
 }
 
@@ -298,7 +321,7 @@ impl Drive<'_> {
                             .applied_bitrate_bps()
                             .map_or(kbps, |bps| (bps / 1000) as u32);
                     } else {
-                        dbglog!("[pf-vd] encode: backend declined bitrate {kbps} kbps in place");
+                        tracing::info!("encode: backend declined bitrate {kbps} kbps in place");
                     }
                     // Declined or clamped, the host must see what is encoding: the ctl has no
                     // reply, so this stamp is the only thing that can contradict the ask.
@@ -310,7 +333,7 @@ impl Drive<'_> {
                 Ctl::SetHdrMeta(bytes) => self.enc.set_hdr_meta(hdr_meta(&bytes)),
                 Ctl::Flush => {
                     if let Err(e) = self.enc.flush() {
-                        dbglog!("[pf-vd] encode: flush failed: {e:#}");
+                        tracing::info!("encode: flush failed: {e:#}");
                     }
                     self.drain_all();
                 }
@@ -381,22 +404,19 @@ impl Drive<'_> {
                 return true;
             }
         };
-        #[cfg(feature = "encode-probe")]
-        {
-            self.encoded += 1;
-            block_if_armed(self.block_after, self.encoded);
-        }
+        self.encoded += 1;
+        block_if_armed(self.block_after, self.encoded);
         let index = self.wire_seq.wrapping_add(self.inflight.len() as u32);
         let submitted = qpc_now();
         if let Err(e) = self.enc.submit_indexed(&frame, index) {
-            dbglog!("[pf-vd] encode: submit failed: {e:#}");
+            tracing::info!("encode: submit failed: {e:#}");
             self.release_if_live(slot);
             self.set_state(au::ENCODER_WEDGED);
             // A lazy backend re-runs its whole bring-up per submit; stop retrying at the compose
             // rate and leave the session threadless for the host's reset rung.
             self.submit_failures += 1;
             if self.submit_failures >= MAX_SUBMIT_FAILURES {
-                dbglog!("[pf-vd] encode: {MAX_SUBMIT_FAILURES} submits failed in a row — leaving");
+                tracing::info!("encode: {MAX_SUBMIT_FAILURES} submits failed in a row — leaving");
                 return false;
             }
             return true;
@@ -453,7 +473,7 @@ impl Drive<'_> {
             }
             Ok(None) => false,
             Err(e) => {
-                dbglog!("[pf-vd] encode: poll failed: {e:#}");
+                tracing::info!("encode: poll failed: {e:#}");
                 self.set_state(au::ENCODER_WEDGED);
                 // A detached thread's slots were reclaimed by its successor; releasing one
                 // here would free a slot that successor is encoding.
@@ -512,7 +532,9 @@ impl Drive<'_> {
                 .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
             };
             // SAFETY: the handle was just created here and nothing else can close it.
-            self.timer = made.ok().map(|h| unsafe { OwnedHandle::from_raw(h) });
+            self.timer = made
+                .ok()
+                .map(|h| unsafe { OwnedHandle::from_raw_handle(h.0) });
         }
         let Some(timer) = &self.timer else {
             return false;
@@ -521,7 +543,10 @@ impl Drive<'_> {
         let due_100ns = -((due.as_nanos() / 100).max(1).min(i64::MAX as u128) as i64);
         // SAFETY: our own timer handle; `due_100ns` is a valid local read during the call, and
         // there is no completion routine or resume.
-        unsafe { SetWaitableTimer(timer.as_raw(), &due_100ns, 0, None, None, false).is_ok() }
+        unsafe {
+            let timer = HANDLE(timer.as_raw_handle());
+            SetWaitableTimer(timer, &due_100ns, 0, None, None, false).is_ok()
+        }
     }
 
     /// The loop's only wait: stop, a filled pool slot, the backend's completion event, and the
@@ -536,7 +561,7 @@ impl Drive<'_> {
         let mut handles = [self.stop; 4];
         let mut ready_at = usize::MAX;
         let mut n = 1;
-        handles[n] = self.pool.event();
+        handles[n] = HANDLE(self.pool.event());
         n += 1;
         if let Some(ev) = self.ready_handle() {
             ready_at = n;
@@ -547,7 +572,7 @@ impl Drive<'_> {
             && self.arm_timer(due)
             && let Some(timer) = &self.timer
         {
-            handles[n] = timer.as_raw();
+            handles[n] = HANDLE(timer.as_raw_handle());
             n += 1;
         }
         let ms = if self.inflight.is_empty() {
@@ -585,11 +610,10 @@ impl Drive<'_> {
         if !self.live.load(Ordering::Acquire) {
             return;
         }
-        if let Offer::Dropped(n) = self.pool.drop_one() {
-            self.session
-                .section
-                .store_u64(offset_of!(AuHeader, dropped_total), n);
-        }
+        let n = self.pool.drop_one();
+        self.session
+            .section
+            .store_u64(offset_of!(AuHeader, dropped_total), n);
     }
 
     /// One chunk of the oldest in-flight AU: published, or dropped with the rest of its AU. A
@@ -623,10 +647,7 @@ impl Drive<'_> {
                     .section
                     .add_u64(offset_of!(AuHeader, published_total), 1);
                 if n == 1 {
-                    dbglog!(
-                        "[pf-vd] encode: first AU published ({} B)",
-                        chunk.data.len()
-                    );
+                    tracing::info!("encode: first AU published ({} B)", chunk.data.len());
                 }
             }
             // Stamped before the release: that release is what ends a bypass hold.
@@ -787,8 +808,8 @@ impl Report {
             return;
         }
         let (raw, pts) = self.gap_change.take();
-        dbglog!(
-            "[pf-vd] drive: win_ms={window_ms} published={} submits={} parks={} shed={} aged={} au_age_us mean={} max={} enc_us mean={} max={} over={} gap_change_us raw={} pts={}",
+        tracing::info!(
+            "drive: win_ms={window_ms} published={} submits={} parks={} shed={} aged={} au_age_us mean={} max={} enc_us mean={} max={} over={} gap_change_us raw={} pts={}",
             self.n,
             self.submits,
             self.parks,

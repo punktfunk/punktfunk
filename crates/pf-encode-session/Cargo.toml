@@ -1,0 +1,43 @@
+# One Windows encode session: frames from a frame source through an encoder backend into the
+# host's AU section. The pf-vdisplay driver links it under its swap chain and the capture worker
+# under Windows Graphics Capture, so the loop, its back-pressure and its pacing exist once
+# (design/windows-wgc-capture.md §4.5). Path dependency of BOTH workspaces, like pf-encode-win.
+[package]
+name = "pf-encode-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "punktfunk Windows encode session: pool slot to encoder to AU section, shared by the display driver and the capture worker."
+publish = false
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The backends the open ladder walks, and the converters the targets run.
+pf-encode-win = { path = "../pf-encode-win" }
+pf-frame = { path = "../pf-frame" }
+# `SET_ENCODE`, the AU section layout and the slot policy the loop publishes by.
+pf-driver-proto = { path = "../pf-driver-proto" }
+anyhow = "1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+# `SetEncodeReply` is Pod; pinned to pf-driver-proto's so the graph resolves one bytemuck.
+bytemuck = "1.19"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
+[features]
+default = []
+# One per x86-64-only backend; each side turns on what its target can link.
+nvenc = ["pf-encode-win/nvenc"]
+qsv = ["pf-encode-win/qsv"]
+pyrowave = ["pf-encode-win/pyrowave"]
+
+[lints]
+workspace = true

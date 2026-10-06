@@ -969,6 +969,8 @@ pub struct PfVdisplayDisplay {
     /// Deliberate-quit flag (`None` = linger policy). A user "stop" tears the monitor down
     /// immediately instead of lingering.
     quit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// `mode_conflict: join` admitted this session: share the live display it named.
+    join_live: bool,
 }
 
 impl PfVdisplayDisplay {
@@ -979,6 +981,7 @@ impl PfVdisplayDisplay {
             client_hdr: None,
             hw_cursor: false,
             quit: None,
+            join_live: false,
         })
     }
 }
@@ -1008,7 +1011,22 @@ impl VirtualDisplay for PfVdisplayDisplay {
         self.quit = Some(quit);
     }
 
+    fn set_join_live(&mut self, on: bool) {
+        self.join_live = on;
+    }
+
+    fn join_live(&self) -> bool {
+        self.join_live
+    }
+
+    /// A joiner gets a reference on the display it was admitted to, and no display of its own.
+    /// With nothing left to join it creates, as every other backend does.
     fn create(&mut self, mode: Mode) -> Result<VirtualOutput> {
+        if self.join_live {
+            if let Some(shared) = super::manager::vdm().join(mode, self.client_fp) {
+                return Ok(shared);
+            }
+        }
         super::manager::vdm().acquire(
             mode,
             self.client_fp,
