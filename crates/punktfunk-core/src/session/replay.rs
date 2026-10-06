@@ -1,12 +1,5 @@
-//! Sliding-window anti-replay over the AEAD-authenticated wire sequence.
-//! Applied on both encrypted receive paths:
-//! [`Session::poll_frame`](super::Session::poll_frame) and
-//! [`Session::poll_input`](super::Session::poll_input).
-
-/// Call only after a successful open (`wire.len() >= 8`).
-pub(super) fn seq_of(wire: &[u8]) -> u64 {
-    u64::from_be_bytes(wire[..8].try_into().unwrap())
-}
+//! Sliding-window anti-replay over the AEAD-authenticated packet number, applied on the
+//! sealed receive path ([`Session::poll_frame`](super::Session::poll_frame)).
 
 /// Sequences. Must cover [`LOSS_WINDOW_NS`](crate::packet) (120 ms) at line rate
 /// or a late-but-usable shard dies here as "older than the window". 131072 is
@@ -185,12 +178,5 @@ mod tests {
         assert!(w.accept(42));
         assert!(!w.accept(42));
         assert!(w.accept(43));
-    }
-
-    #[test]
-    fn seq_of_reads_the_big_endian_prefix() {
-        let mut wire = 0x0102_0304_0506_0708u64.to_be_bytes().to_vec();
-        wire.extend_from_slice(b"ciphertext-and-tag");
-        assert_eq!(seq_of(&wire), 0x0102_0304_0506_0708);
     }
 }

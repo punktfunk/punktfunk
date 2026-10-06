@@ -129,6 +129,10 @@ pub(super) struct StreamState {
     /// The live output's metadata for a capture-only rebuild (`on_capture_lost`).
     #[cfg(target_os = "linux")]
     pub(super) lease: Option<crate::capture::OutputLease>,
+    /// Source stamps moved off a display faster than the stream onto the content's cadence.
+    /// `None` at 1x. The Windows driver corrects its own stamps.
+    #[cfg(target_os = "linux")]
+    pub(super) restamp: Option<super::encode::SourceStamps>,
     /// Source can change format/size with no client Reconfigure; in-place encoder reset cannot follow.
     pub(super) enc_src: (pf_frame::PixelFormat, u32, u32),
     /// The mode a rebuild reopens at: the client's latest ask, or the source's delivered size.
@@ -221,7 +225,8 @@ pub(super) struct StreamState {
     pub(super) rfi: std::sync::mpsc::Receiver<(u32, u32)>,
     pub(super) bitrate_rx: std::sync::mpsc::Receiver<u32>,
     pub(super) session_rx: std::sync::mpsc::Receiver<SessionSwitch>,
-    pub(super) reconfig_result_tx: tokio::sync::mpsc::UnboundedSender<Reconfigured>,
+    pub(super) reconfig_result_tx:
+        tokio::sync::mpsc::UnboundedSender<crate::native::wiring::Delivered>,
     pub(super) retarget_tx: tokio::sync::mpsc::UnboundedSender<(u32, AckReason)>,
     pub(super) gap_tx: tokio::sync::mpsc::UnboundedSender<u32>,
 }
@@ -276,6 +281,7 @@ impl StreamState {
         {
             publish_gamescope_xwayland(&self.gamescope_xwayland, p.lease.as_ref());
             self.lease = p.lease;
+            self.restamp = p.panel_tick_ns.map(super::encode::SourceStamps::new);
         }
         self.inflight.clear();
         self.watchdog.on_au();
@@ -338,19 +344,26 @@ impl StreamState {
         delivered_mode(self.frame.width, self.frame.height, self.interval)
     }
 
-    /// Publish the delivered mode to `/status` and correct the client when it differs from `asked`.
+    /// Publish the delivered mode to `/status` and to the client, correcting it when it
+    /// differs from `asked`.
     pub(super) fn publish_delivered_mode(&self, asked: punktfunk_core::Mode) {
         let actual = self.delivered_mode();
         self.live_mode.store(
             pack_mode(actual.width, actual.height, actual.refresh_hz),
             Ordering::Relaxed,
         );
-        if actual != asked {
-            let _ = self.reconfig_result_tx.send(Reconfigured {
-                accepted: true,
-                mode: actual,
+        self.tell_delivered(actual, actual != asked);
+    }
+
+    /// Tell the control task what the current epoch delivers.
+    pub(super) fn tell_delivered(&self, mode: punktfunk_core::Mode, corrects: bool) {
+        let _ = self
+            .reconfig_result_tx
+            .send(crate::native::wiring::Delivered {
+                mode,
+                epoch: self.epoch,
+                corrects,
             });
-        }
     }
 
     /// Bring the session up: display, pipeline, library launch, game lease, send thread.
@@ -612,6 +625,8 @@ impl StreamState {
             reframe,
             #[cfg(target_os = "linux")]
             lease,
+            #[cfg(target_os = "linux")]
+            panel_tick_ns,
         } = pipe;
         *frame_map.lock().unwrap_or_else(|e| e.into_inner()) = reframe;
         #[cfg(target_os = "linux")]
@@ -628,9 +643,10 @@ impl StreamState {
         if adopted_at_bringup {
             let actual = delivered_mode(frame.width, frame.height, interval);
             if actual != mode {
-                let _ = reconfig_result_tx.send(Reconfigured {
-                    accepted: true,
+                let _ = reconfig_result_tx.send(crate::native::wiring::Delivered {
                     mode: actual,
+                    epoch: 0,
+                    corrects: true,
                 });
             }
         }
@@ -903,7 +919,6 @@ impl StreamState {
             client: client_label,
             client_name,
             plane: conn.plane(),
-            wire: conn.wire(),
             hdr: plan.hdr,
             ttff_ms: bringup.total_slot(),
             last_resize_ms: resize_ms.clone(),
@@ -998,6 +1013,8 @@ impl StreamState {
             epoch: 0,
             #[cfg(target_os = "linux")]
             lease,
+            #[cfg(target_os = "linux")]
+            restamp: panel_tick_ns.map(super::encode::SourceStamps::new),
             enc_src,
             cur_mode: mode,
             bitrate_kbps,

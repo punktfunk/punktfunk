@@ -185,6 +185,73 @@ pub(crate) fn gs_button_to_evdev(b: u32) -> Option<u32> {
     })
 }
 
+/// HID usage (keyboard page 7) for the Pause key, which has no plain set-1 make.
+pub(crate) const HID_USAGE_PAUSE: u8 = 0x48;
+
+/// Set-1 scancodes 0x00..=0x58 → HID keyboard usage; 0 = none. Index = scancode.
+#[rustfmt::skip]
+const SCAN_TO_HID: [u8; 0x59] = [
+    0x00, 0x29, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, // ·  Esc 1 2 3 4 5 6
+    0x24, 0x25, 0x26, 0x27, 0x2D, 0x2E, 0x2A, 0x2B, // 7 8 9 0 - = Bksp Tab
+    0x14, 0x1A, 0x08, 0x15, 0x17, 0x1C, 0x18, 0x0C, // Q W E R T Y U I
+    0x12, 0x13, 0x2F, 0x30, 0x28, 0xE0, 0x04, 0x16, // O P [ ] Enter LCtrl A S
+    0x07, 0x09, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x33, // D F G H J K L ;
+    0x34, 0x35, 0xE1, 0x31, 0x1D, 0x1B, 0x06, 0x19, // ' ` LShift \ Z X C V
+    0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0xE5, 0x55, // B N M , . / RShift KP*
+    0xE2, 0x2C, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, // LAlt Space Caps F1 F2 F3 F4 F5
+    0x3F, 0x40, 0x41, 0x42, 0x43, 0x53, 0x47, 0x5F, // F6 F7 F8 F9 F10 NumLock ScrLk KP7
+    0x60, 0x61, 0x56, 0x5C, 0x5D, 0x5E, 0x57, 0x59, // KP8 KP9 KP- KP4 KP5 KP6 KP+ KP1
+    0x5A, 0x5B, 0x62, 0x63, 0x00, 0x00, 0x64, 0x44, // KP2 KP3 KP0 KP. SysRq · ISO\ F11
+    0x45,                                           // F12
+];
+
+/// Set-1 scancode (`extended` = E0-prefixed) → HID keyboard usage, the inverse of the table
+/// Windows applies to a HID keyboard. `None` for a key a keyboard reports on another usage page
+/// (media, power) or that has no make code of its own (SysRq, Pause).
+pub(crate) fn scan_to_hid_usage(scan: u16, extended: bool) -> Option<u8> {
+    let usage = if extended {
+        match scan {
+            0x1C => 0x58, // keypad Enter
+            0x1D => 0xE4, // right Ctrl
+            0x20 => 0x7F, // Mute
+            0x2E => 0x81, // Volume Down
+            0x30 => 0x80, // Volume Up
+            0x35 => 0x54, // keypad /
+            0x37 => 0x46, // Print Screen
+            0x38 => 0xE6, // right Alt
+            0x47 => 0x4A, // Home
+            0x48 => 0x52, // Up
+            0x49 => 0x4B, // Page Up
+            0x4B => 0x50, // Left
+            0x4D => 0x4F, // Right
+            0x4F => 0x4D, // End
+            0x50 => 0x51, // Down
+            0x51 => 0x4E, // Page Down
+            0x52 => 0x49, // Insert
+            0x53 => 0x4C, // Delete
+            0x5B => 0xE3, // left Windows
+            0x5C => 0xE7, // right Windows
+            0x5D => 0x65, // Menu
+            _ => 0,
+        }
+    } else {
+        match scan {
+            0..=0x58 => SCAN_TO_HID[usize::from(scan)],
+            0x59 => 0x67,                              // keypad =
+            0x64..=0x6E => 0x68 + (scan - 0x64) as u8, // F13..F23
+            0x70 => 0x88,                              // Katakana/Hiragana
+            0x73 => 0x87,                              // Ro
+            0x76 => 0x73,                              // F24
+            0x79 => 0x8A,                              // Henkan
+            0x7B => 0x8B,                              // Muhenkan
+            0x7D => 0x89,                              // Yen
+            0x7E => 0x85,                              // keypad , (Brazil)
+            _ => 0,
+        }
+    };
+    (usage != 0).then_some(usage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +274,51 @@ mod tests {
         assert!(vk_forced_extended(0x5B)); // VK_LWIN
         assert!(vk_forced_extended(0xA3)); // VK_RCONTROL
         assert!(vk_forced_extended(0xA5)); // VK_RMENU
+    }
+
+    #[test]
+    fn scancodes_map_to_the_hid_usages_a_keyboard_sends() {
+        let plain = |scan| scan_to_hid_usage(scan, false);
+        let e0 = |scan| scan_to_hid_usage(scan, true);
+        assert_eq!(plain(0x1E), Some(0x04)); // A
+        assert_eq!(plain(0x2C), Some(0x1D)); // Z
+        assert_eq!(plain(0x02), Some(0x1E)); // 1
+        assert_eq!(plain(0x0B), Some(0x27)); // 0
+        assert_eq!(plain(0x1C), Some(0x28)); // Enter
+        assert_eq!(e0(0x1C), Some(0x58)); // keypad Enter
+        assert_eq!(plain(0x1D), Some(0xE0)); // left Ctrl
+        assert_eq!(e0(0x1D), Some(0xE4)); // right Ctrl
+        assert_eq!(plain(0x3B), Some(0x3A)); // F1
+        assert_eq!(plain(0x58), Some(0x45)); // F12
+        assert_eq!(plain(0x56), Some(0x64)); // ISO key left of Z
+        assert_eq!(e0(0x48), Some(0x52)); // Up
+        assert_eq!(plain(0x48), Some(0x60)); // keypad 8
+        assert_eq!(plain(0x45), Some(0x53)); // NumLock
+        assert_eq!(plain(0x54), None); // SysRq
+        assert_eq!(e0(0x22), None); // Play/Pause: consumer page
+                                    // No two keys share a usage.
+        let mut seen = std::collections::HashSet::new();
+        for scan in 0..0x80u16 {
+            for ext in [false, true] {
+                if let Some(u) = scan_to_hid_usage(scan, ext) {
+                    assert!(u <= 0xE7, "{scan:#x}");
+                    assert!(seen.insert(u), "usage {u:#x} twice");
+                }
+            }
+        }
+    }
+
+    /// Every positional VK below F13 has a set-1 make equal to its evdev code; each one must
+    /// reach a HID usage.
+    #[test]
+    fn every_positional_key_has_a_hid_usage() {
+        for vk in 0..=255u8 {
+            let Some(code) = vk_to_evdev(vk) else {
+                continue;
+            };
+            if code <= 0x58 && !matches!(code, 0x54 | 0x55) {
+                assert!(scan_to_hid_usage(code, false).is_some(), "vk {vk:#x}");
+            }
+        }
     }
 }

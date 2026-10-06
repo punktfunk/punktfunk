@@ -851,14 +851,6 @@ cmd_status() {
   else
     warn "xdg-desktop-portal-hyprland not running (screen capture needs it)"
   fi
-
-  # The data plane is an EPHEMERAL UDP port, so there is no rule to add for it and `punched=false`
-  # under ufw is expected, not broken: the host's first outbound packet creates the conntrack state
-  # the return path rides. Say so here, because "hole punch failed" in a log reads like a fault.
-  say ""
-  say "  The video data plane uses an ephemeral UDP port and needs no ufw rule — the host's own"
-  say "  outbound packet opens the return path. Pin it with PUNKTFUNK_DATA_PORT + one more rule"
-  say "  only if you want strict egress control (costs you concurrent sessions on that port)."
 }
 
 # ── capture mode / pairing TUIs (menu) ─────────────────────────────────────────────────────────

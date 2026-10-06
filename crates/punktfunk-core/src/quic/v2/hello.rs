@@ -46,15 +46,15 @@ fn suite_of(id: u8) -> Option<MediaSuite> {
 /// `client → host`, first frame of the control stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientHello {
-    /// Everything `punktfunk/1`'s `Hello` said. `abi_version` is not on this wire and decodes
-    /// as [`crate::WIRE_VERSION`].
     pub hello: Hello,
-    /// `Start` extension entries by their v1 tags, values as v1 encodes them.
+    /// The entries a client adds ([`EXT_TAG_CLIENT`] and after), by tag.
     pub start_ext: Vec<(u16, Vec<u8>)>,
     /// The session this client held, to take back after a drop.
     pub resume: Option<[u8; 16]>,
     /// Media AEADs the client takes, most wanted first. Empty on a carrier that encrypts.
     pub suites: Vec<MediaSuite>,
+    /// Bits from 32 up ([`FeatureSet::native`]); `hello`'s capability bytes fill 0–31.
+    pub features: FeatureSet,
 }
 
 impl ClientHello {
@@ -72,7 +72,9 @@ impl V2Message for ClientHello {
 
     fn fields(&self) -> Fields {
         let h = &self.hello;
-        let features = FeatureSet::client(h.video_caps, h.client_caps).encode();
+        let features = FeatureSet::client(h.video_caps, h.client_caps)
+            .union(self.features.native())
+            .encode();
         let suites: Vec<u8> = self.suites.iter().map(|&s| suite_id(s)).collect();
         let mut f = Fields::new()
             .when(self.resume.is_some(), |f| {
@@ -120,7 +122,6 @@ impl V2Message for ClientHello {
 
     fn from_body(body: &[u8]) -> Result<Self> {
         let mut h = Hello {
-            abi_version: crate::WIRE_VERSION,
             mode: Mode::default(),
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
@@ -140,6 +141,7 @@ impl V2Message for ClientHello {
             video_fit: 0,
         };
         let (mut resume, mut suites, mut start_ext) = (None, Vec::new(), Vec::new());
+        let mut features = FeatureSet::default();
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -160,6 +162,7 @@ impl V2Message for ClientHello {
                 9 => {
                     let f = FeatureSet::decode(v);
                     (h.video_caps, h.client_caps) = (f.video_caps(), f.client_caps());
+                    features = f.native();
                 }
                 10 => h.audio_channels = u8_of(v)?,
                 11 => h.video_codecs = u8_of(v)?,
@@ -180,7 +183,7 @@ impl V2Message for ClientHello {
                 }
             }
         }
-        // The folding `Hello::decode` applies.
+        // Fold what this build cannot honour onto its default.
         h.audio_channels = crate::audio::normalize_channels(h.audio_channels);
         if h.audio_rate_hz == 0 {
             h.audio_rate_hz = crate::audio::SAMPLE_RATE_HZ;
@@ -193,6 +196,7 @@ impl V2Message for ClientHello {
             start_ext,
             resume,
             suites,
+            features,
         })
     }
 }
@@ -207,8 +211,7 @@ fn label(v: &[u8], max: usize) -> Option<String> {
         .flatten()
 }
 
-/// `host → client`: the session. Its [`Welcome`] carries no data port, key or salt on this
-/// wire; those fields decode as zero.
+/// `host → client`: the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerHello {
     pub welcome: Welcome,
@@ -218,6 +221,8 @@ pub struct ServerHello {
     pub clock_origin_ns: u64,
     /// The media AEAD; `None` on a carrier that already encrypts.
     pub suite: Option<MediaSuite>,
+    /// Native bits in force: the ones both ends set ([`ClientHello::features`]).
+    pub features: FeatureSet,
 }
 
 impl V2Message for ServerHello {
@@ -225,7 +230,9 @@ impl V2Message for ServerHello {
 
     fn fields(&self) -> Fields {
         let w = &self.welcome;
-        let features = FeatureSet::host(w.host_caps, w.host_caps2).encode();
+        let features = FeatureSet::host(w.host_caps, w.host_caps2)
+            .union(self.features.native())
+            .encode();
         let c = w.color;
         let mut f = Fields::new()
             .bytes(1, &self.session_id)
@@ -260,8 +267,6 @@ impl V2Message for ServerHello {
 
     fn from_body(body: &[u8]) -> Result<Self> {
         let mut w = Welcome {
-            abi_version: crate::WIRE_VERSION,
-            udp_port: 0,
             mode: Mode::default(),
             fec: FecConfig {
                 scheme: FecScheme::Gf16,
@@ -269,9 +274,6 @@ impl V2Message for ServerHello {
                 max_data_per_block: 0,
             },
             shard_payload: 0,
-            encrypt: false,
-            key: [0; 16],
-            salt: [0; 4],
             frames: 0,
             compositor: CompositorPref::Auto,
             gamepad: GamepadPref::Auto,
@@ -282,11 +284,9 @@ impl V2Message for ServerHello {
             audio_channels: 2,
             codec: CODEC_HEVC,
             host_caps: 0,
-            cipher: CIPHER_AES_128_GCM,
             mgmt_port: 0,
             grants: GRANT_ALL,
             expires_in_secs: 0,
-            key_chacha: None,
             audio_codec: AUDIO_CODEC_OPUS,
             audio_rate_hz: crate::audio::SAMPLE_RATE_HZ,
             audio_bits: crate::audio::pcm::BITS_16,
@@ -295,6 +295,7 @@ impl V2Message for ServerHello {
             audio_layout: 0,
         };
         let (mut session_id, mut clock_origin_ns, mut suite) = (None, 0, None);
+        let mut features = FeatureSet::default();
         let mut seen = Vec::new();
         let mut r = FieldReader::new(body);
         while let Some((tag, v)) = r.next_field()? {
@@ -310,6 +311,7 @@ impl V2Message for ServerHello {
                 4 => {
                     let f = FeatureSet::decode(v);
                     (w.host_caps, w.host_caps2) = (f.host_caps(), f.host_caps2());
+                    features = f.native();
                 }
                 5 => w.mode = Mode::get(v)?,
                 6 => {
@@ -350,7 +352,7 @@ impl V2Message for ServerHello {
                 _ => {}
             }
         }
-        // The folding `Welcome::decode` applies.
+        // Fold what this build cannot honour onto its default.
         if w.chroma_format != CHROMA_IDC_444 {
             w.chroma_format = CHROMA_IDC_420;
         }
@@ -367,16 +369,12 @@ impl V2Message for ServerHello {
         if w.audio_frame_us != 0 {
             w.audio_frame_us = w.audio_frame_us.max(1_000);
         }
-        // This wire sends no key; the zeroed slot keeps `Welcome`'s cipher and key consistent.
-        if suite == Some(MediaSuite::ChaCha20Poly1305) {
-            w.cipher = CIPHER_CHACHA20_POLY1305;
-            w.key_chacha = Some([0; 32]);
-        }
         Ok(ServerHello {
             welcome: w,
             session_id: session_id.ok_or_else(bad)?,
             clock_origin_ns,
             suite,
+            features,
         })
     }
 }
@@ -433,7 +431,6 @@ mod tests {
             ),
         )
             .prop_map(|(a, b, c)| Hello {
-                abi_version: crate::WIRE_VERSION,
                 mode: Mode {
                     width: a.0,
                     height: a.1,
@@ -508,8 +505,6 @@ mod tests {
                     (d.2, d.3, d.4) = (crate::audio::SAMPLE_RATE_HZ, crate::audio::pcm::BITS_16, 0);
                 }
                 Welcome {
-                    abi_version: crate::WIRE_VERSION,
-                    udp_port: 0,
                     mode: Mode {
                         width: a.0,
                         height: a.1,
@@ -521,9 +516,6 @@ mod tests {
                         max_data_per_block: a.4,
                     },
                     shard_payload: a.5,
-                    encrypt: false,
-                    key: [0; 16],
-                    salt: [0; 4],
                     frames: b.0,
                     compositor: CompositorPref::from_u8(b.1),
                     gamepad: GamepadPref::from_u8(b.2),
@@ -539,11 +531,9 @@ mod tests {
                     audio_channels: c.1,
                     codec: c.2,
                     host_caps: c.3,
-                    cipher: CIPHER_AES_128_GCM,
                     mgmt_port: c.4,
                     grants: c.5,
                     expires_in_secs: d.0,
-                    key_chacha: None,
                     audio_codec: d.1,
                     audio_rate_hz: d.2,
                     audio_bits: d.3,
@@ -557,18 +547,19 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(512))]
 
-        /// A `Hello` and a `Welcome` reach the far side with the same values over either wire.
+        /// One trip folds a `Hello` or `Welcome` to what the far side acts on; a second trip
+        /// changes nothing.
         #[test]
-        fn v1_and_v2_decode_alike(h in hello_strategy(), w in welcome_strategy()) {
-            let ch = ClientHello { hello: h.clone(), start_ext: vec![], resume: None, suites: vec![] };
-            let via_v2 = ClientHello::from_body(&ch.fields().into_body()).unwrap().hello;
-            let via_v1 = Hello::decode(&h.encode()).unwrap();
-            prop_assert_eq!(via_v2, via_v1);
+        fn hellos_settle_after_one_trip(h in hello_strategy(), w in welcome_strategy()) {
+            let ch = ClientHello { hello: h, start_ext: vec![], resume: None, suites: vec![], features: FeatureSet::default() };
+            let once = ClientHello::from_body(&ch.fields().into_body()).unwrap();
+            let twice = ClientHello::from_body(&once.fields().into_body()).unwrap();
+            prop_assert_eq!(twice, once);
 
-            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None };
-            let via_v2 = ServerHello::from_body(&sh.fields().into_body()).unwrap().welcome;
-            let via_v1 = Welcome::decode(&w.encode()).unwrap();
-            prop_assert_eq!(via_v2, via_v1);
+            let sh = ServerHello { welcome: w, session_id: [7; 16], clock_origin_ns: 1, suite: None, features: FeatureSet::default() };
+            let once = ServerHello::from_body(&sh.fields().into_body()).unwrap();
+            let twice = ServerHello::from_body(&once.fields().into_body()).unwrap();
+            prop_assert_eq!(twice, once);
         }
 
         /// Hostile bytes never panic either hello decoder.
@@ -583,34 +574,29 @@ mod tests {
     fn start_extensions_and_session_fields_ride_along() {
         let preset = SessionPreset::new("p1", "Couch").unwrap().encode();
         let ch = ClientHello {
-            hello: Hello::decode(
-                &Hello {
-                    abi_version: crate::WIRE_VERSION,
-                    mode: Mode {
-                        width: 1920,
-                        height: 1080,
-                        refresh_hz: 60,
-                    },
-                    compositor: CompositorPref::Auto,
-                    gamepad: GamepadPref::Auto,
-                    bitrate_kbps: 0,
-                    name: Some("Deck".into()),
-                    launch: None,
-                    video_caps: VIDEO_CAP_CHACHA20,
-                    audio_channels: 2,
-                    video_codecs: CODEC_HEVC,
-                    preferred_codec: 0,
-                    display_hdr: None,
-                    client_caps: CLIENT_CAP_EXT,
-                    max_shard_payload: 1408,
-                    audio_rate_hz: 0,
-                    audio_bits: 0,
-                    audio_layout: 0,
-                    video_fit: 0,
-                }
-                .encode(),
-            )
-            .unwrap(),
+            hello: Hello {
+                mode: Mode {
+                    width: 1920,
+                    height: 1080,
+                    refresh_hz: 60,
+                },
+                compositor: CompositorPref::Auto,
+                gamepad: GamepadPref::Auto,
+                bitrate_kbps: 0,
+                name: Some("Deck".into()),
+                launch: None,
+                video_caps: VIDEO_CAP_CHACHA20,
+                audio_channels: 2,
+                video_codecs: CODEC_HEVC,
+                preferred_codec: 0,
+                display_hdr: None,
+                client_caps: CLIENT_CAP_EXT,
+                max_shard_payload: 1408,
+                audio_rate_hz: crate::audio::SAMPLE_RATE_HZ,
+                audio_bits: crate::audio::pcm::BITS_16,
+                audio_layout: 0,
+                video_fit: 0,
+            },
             start_ext: vec![
                 (EXT_TAG_CLIENT, b"android 0.43".to_vec()),
                 (EXT_TAG_ABR, vec![EXT_ABR_ACK_REASON]),
@@ -627,6 +613,7 @@ mod tests {
             ],
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
+            features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
         };
         let back = ClientHello::from_body(&ch.fields().into_body()).unwrap();
         assert_eq!(back, ch);
@@ -635,16 +622,15 @@ mod tests {
         assert_eq!(SessionPreset::from_ext(&entries).unwrap().name, "Couch");
         assert_eq!(DeliveryAsk::from_ext(&entries).unwrap().profile, 2);
 
-        let mut sh = ServerHello {
+        let sh = ServerHello {
             welcome: ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body())
                 .unwrap()
                 .welcome,
             session_id: [9; 16],
             clock_origin_ns: 1_700_000_000_000_000_000,
             suite: Some(MediaSuite::ChaCha20Poly1305),
+            features: FeatureSet::default().with(reg::FEATURE_STREAM_CONFIG),
         };
-        sh.welcome.cipher = CIPHER_CHACHA20_POLY1305;
-        sh.welcome.key_chacha = Some([0; 32]);
         assert_eq!(
             ServerHello::from_body(&sh.fields().into_body()).unwrap(),
             sh

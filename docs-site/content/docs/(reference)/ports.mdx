@@ -13,8 +13,7 @@ Linux packages install firewalld services and ufw profiles but never enable them
 - **`punktfunk-web`** only when you open the console from another device. Plugin interfaces use
   its second port — see [Two ports, not one](/docs/web-console#two-ports-not-one).
 - **`punktfunk-gamestream`** only with [Moonlight](/docs/moonlight) compat on.
-- **Video needs no open port.** The client hole-punches an ephemeral UDP port and the host answers
-  through it. To open one fixed port instead, set `PUNKTFUNK_DATA_PORT`.
+- **Video needs no port of its own.** It rides the native QUIC port with control and audio.
 - **The browser client** (preview, off by default) uses UDP 9778, in `punktfunk-native` — see
   [Browser Client](/docs/browser-client). A rule from before
   0.41 lacks it: `sudo ufw app update punktfunk-native && sudo ufw reload`, or `sudo firewall-cmd
@@ -53,8 +52,7 @@ sudo ufw allow punktfunk-gamestream   # only with Moonlight compat on
 | NixOS | `openFirewall = true` in the module opens the ports |
 | Windows | `service install` adds the rules |
 
-On Windows each rule names the Punktfunk executable as well as the port, and video gets an inbound
-UDP rule for the executable alone, because Windows drops the client's hole-punch. The rules cover
+On Windows each rule names the Punktfunk executable as well as the port. The rules cover
 Private and Domain networks; `service install --allow-public-network` adds Public — see
 [Host CLI](/docs/host-cli#service-windows). Another program that answered discovery through
 Punktfunk's 5353 rule needs a rule of its own.
@@ -74,6 +72,5 @@ machine with Sunshine — see [Switching from Sunshine](/docs/switching-from-sun
 | Port | Setting | Clients |
 |---|---|---|
 | Management API | `PUNKTFUNK_MGMT_BIND=IP:PORT` | Relearn it from discovery. The console, plugin runner and tray read it from `mgmt-endpoint`, which the host rewrites on every start. |
-| Native control | `PUNKTFUNK_NATIVE_PORT` | Relearn it over mDNS. A host added by address keeps the port it was added with. |
-| Video data | `PUNKTFUNK_DATA_PORT` | One fixed UDP port instead of one per session. |
+| Native control | `PUNKTFUNK_NATIVE_PORT` | Relearn it over mDNS. A host added by address keeps the port it was added with. Video moves with it. |
 | Browser client | `PUNKTFUNK_WEBTRANSPORT_PORT` | Default 9778. |

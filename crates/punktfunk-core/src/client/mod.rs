@@ -600,10 +600,6 @@ pub struct ConnectParams {
     pub client_caps: u8,
     /// AU prefixes as [`Frame`]s with `part = Some`. Only for a decoder that takes parts.
     pub frame_parts: bool,
-    /// Offer `punktfunk/2` (ALPN `pkf2`) before `punktfunk/1`; the host picks. One that answers
-    /// it carries media on the connection's own socket; one that does not runs `punktfunk/1`.
-    /// [`ConnectParams::new`] sets it from [`offer_v2_from_env`].
-    pub offer_v2: bool,
     /// Store-qualified library id to launch (`steam:570`).
     pub launch: Option<String>,
     /// [`crate::quic::Hello::name`], usually [`device_name`]. `None` knocks as "device abcd1234".
@@ -627,22 +623,6 @@ pub struct ConnectParams {
     pub cancel: Option<Arc<AtomicBool>>,
 }
 
-/// Whether a dial offers `punktfunk/2`. `PUNKTFUNK_PROTOCOL=1` pins `punktfunk/1`; unset or
-/// `2` offers both and the host picks. Any other value is logged and offers both.
-pub fn offer_v2_from_env() -> bool {
-    match std::env::var("PUNKTFUNK_PROTOCOL") {
-        Err(_) => true,
-        Ok(v) => match v.trim() {
-            "1" => false,
-            "2" => true,
-            other => {
-                tracing::warn!(value = other, "unknown PUNKTFUNK_PROTOCOL value");
-                true
-            }
-        },
-    }
-}
-
 impl ConnectParams {
     /// A plain dial to `host:port` at (up to) `mode`, giving up after `timeout`.
     pub fn new(host: impl Into<String>, port: u16, mode: Mode, timeout: Duration) -> Self {
@@ -664,7 +644,6 @@ impl ConnectParams {
             display_hdr: None,
             client_caps: 0,
             frame_parts: false,
-            offer_v2: offer_v2_from_env(),
             launch: None,
             name: None,
             pin: None,
@@ -980,6 +959,12 @@ impl NativeClient {
         self.shared.frames_dropped.load(Ordering::Relaxed)
     }
 
+    /// Whole AUs skipped because the decoder was still busy when newer ones arrived
+    /// (all-intra streams only). Monotonic; compare against the last observed value.
+    pub fn frames_behind(&self) -> u64 {
+        self.shared.frames.skipped_ever()
+    }
+
     /// The pinned bitrate (kbps) this client could not keep up with — it shed its receive
     /// backlog repeatedly and a pin leaves nothing else to give. `0` = not so far. Latches
     /// for the session; show it to the user once with the next move (Automatic, or lower).
@@ -1136,6 +1121,12 @@ impl NativeClient {
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
     /// colour, audio format, counters. The caller adds the decoder, display HDR and extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
+        // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
+        let behind = self.shared.frames.take_skipped();
+        if behind > 0 {
+            self.hud
+                .note_skipped(0, behind.min(u64::from(u32::MAX)) as u32);
+        }
         let mut s = self.hud.drain(&self.hud_counters());
         let m = self.mode();
         (s.width, s.height, s.refresh_hz) = (m.width, m.height, m.refresh_hz);
@@ -1288,11 +1279,6 @@ impl NativeClient {
         *self.shared.delivery.lock().unwrap()
     }
 
-    /// The protocol this session runs: `2` when the host answered `punktfunk/2`, else `1`.
-    pub fn wire(&self) -> u8 {
-        self.shared.wire.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
     /// What the host said about its end of the path, when the dial asked for it.
     pub fn host_facts(&self) -> Option<crate::quic::HostFacts> {
         *self.shared.host_facts.lock().unwrap()
@@ -1305,8 +1291,7 @@ impl NativeClient {
 
     /// A diagnostic session: the dial asked for probes only, so no video ever comes.
     pub fn probe_only(&self) -> bool {
-        self.delivery_ask()
-            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
+        self.shared.probe_only()
     }
 
     /// Packets the OS dropped at this session's receive buffer so far; `None` where the

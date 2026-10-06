@@ -91,8 +91,9 @@ fn routed_local_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// The `proto` TXT a compatible host advertises. Absent is an older host.
-const PROTO: &str = "punktfunk/1";
+/// The `proto` TXT values of a compatible host; absent is an older host. Hosts still advertise
+/// `punktfunk/1`, which every shipped client accepts; `punktfunk/2` is read so they can move.
+const PROTOS: [&str; 2] = ["punktfunk/1", "punktfunk/2"];
 
 /// One resolved `_punktfunk._udp` advert.
 #[derive(Clone, Debug, PartialEq)]
@@ -145,7 +146,7 @@ pub fn advert_from_txt<'a>(
 ) -> Option<DiscoveredHost> {
     let val = |k: &str| txt(k).unwrap_or("");
     let proto = val("proto");
-    if !proto.is_empty() && proto != PROTO {
+    if !proto.is_empty() && !PROTOS.contains(&proto) {
         return None;
     }
     let addr = pick_host_addr(v4, val("addr").parse().ok())?.to_string();
@@ -327,6 +328,7 @@ mod tests {
     #[test]
     fn another_proto_or_no_ipv4_is_no_host() {
         assert!(advert(&[("proto", "sunshine/1")]).is_none());
+        assert!(advert(&[("proto", "punktfunk/2")]).is_some());
         assert!(advert_from_txt("x.local.", 9777, &[], |_| None).is_none());
     }
 

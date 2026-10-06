@@ -230,6 +230,9 @@ pub const FEATURE_V1_CLIENT_CAPS: u32 = 8;
 pub const FEATURE_V1_HOST_CAPS: u32 = 16;
 /// First bit of `punktfunk/1`'s `host_caps2`.
 pub const FEATURE_V1_HOST_CAPS2: u32 = 24;
+/// Both ends: the host sends a `StreamConfig` for every epoch, and the client moves its mode
+/// at that epoch's first frame. `Reconfigured` then only says a switch was accepted.
+pub const FEATURE_STREAM_CONFIG: u32 = 32;
 
 #[cfg(test)]
 mod tests {
@@ -253,6 +256,15 @@ mod tests {
         ("DGRAM_CURSOR_STATE", DGRAM_CURSOR_STATE),
         ("DGRAM_HOST_TIMING", DGRAM_HOST_TIMING),
         ("DGRAM_HDR_META", DGRAM_HDR_META),
+    ];
+
+    /// Bit positions; the four `punktfunk/1` bytes are 8 wide each.
+    const FEATURES: &[(&str, u32)] = &[
+        ("FEATURE_V1_VIDEO_CAPS", FEATURE_V1_VIDEO_CAPS),
+        ("FEATURE_V1_CLIENT_CAPS", FEATURE_V1_CLIENT_CAPS),
+        ("FEATURE_V1_HOST_CAPS", FEATURE_V1_HOST_CAPS),
+        ("FEATURE_V1_HOST_CAPS2", FEATURE_V1_HOST_CAPS2),
+        ("FEATURE_STREAM_CONFIG", FEATURE_STREAM_CONFIG),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.
@@ -333,6 +345,12 @@ mod tests {
         assert_unique("stream type", STREAMS.iter().copied());
         assert_unique("datagram kind", DGRAMS.iter().copied());
         assert_unique("close code", CODES.iter().copied());
+        assert_unique("feature bit", FEATURES.iter().copied());
+        // A bit of its own never lands inside one of the four capability bytes.
+        assert!(FEATURES
+            .iter()
+            .filter(|(n, _)| !n.starts_with("FEATURE_V1_"))
+            .all(|&(_, bit)| (32..128).contains(&bit)));
     }
 
     #[test]
@@ -352,6 +370,8 @@ mod tests {
                 DGRAMS.iter().any(|(n, _)| *n == name)
             } else if name.starts_with("STOP_") {
                 CODES.iter().any(|(n, _)| *n == name)
+            } else if name.starts_with("FEATURE_") {
+                FEATURES.iter().any(|(n, _)| *n == name)
             } else {
                 true
             };

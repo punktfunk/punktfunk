@@ -28,9 +28,7 @@ pub(crate) struct ClientShared {
     /// [`NativeClient::disconnect_quit`] → [`crate::quic::QUIT_CLOSE_CODE`] (skip keep-alive
     /// linger). A plain drop leaves this false → close code 0.
     pub(crate) quit: AtomicBool,
-    /// The wire the host answered: `1` or `2`. Set before the embedder can read it.
-    pub(crate) wire: AtomicU8,
-    /// Welcome mode, then every accepted switch the control task applies.
+    /// Welcome mode, then each switch the host delivers.
     pub(crate) mode: Mutex<Mode>,
     pub(crate) probe: Mutex<ProbeState>,
     /// Unrecoverable AUs. Watch for increases to request a keyframe: infinite GOP conceals
@@ -71,6 +69,8 @@ pub(crate) struct ClientShared {
     pub(crate) local_ip: Mutex<Option<std::net::IpAddr>>,
     /// The `punktfunk/2` session id the host issued, kept for a resume if the link is lost.
     pub(crate) v2_session: Mutex<Option<[u8; 16]>>,
+    /// Moves [`Self::mode`] at the first frame of each configured epoch.
+    pub(crate) anchor: Mutex<super::pump::anchor::ModeAnchor>,
     /// Live encoder target (kbps): the Welcome seed, then every `BitrateChanged` ack.
     pub(crate) live_bitrate_kbps: AtomicU32,
     /// [`crate::hud::RateCut`] code the pump publishes each window; `0` = no standing cut.
@@ -114,7 +114,6 @@ impl ClientShared {
             shutdown: Arc::new(AtomicBool::new(false)),
             end_reason: AtomicU8::new(PunktfunkEndReason::None as u8),
             quit: AtomicBool::new(false),
-            wire: AtomicU8::new(1),
             mode: Mutex::new(mode),
             probe: Mutex::default(),
             frames_dropped: AtomicU64::new(0),
@@ -133,6 +132,7 @@ impl ClientShared {
             data_sock: Mutex::default(),
             local_ip: Mutex::default(),
             v2_session: Mutex::default(),
+            anchor: Mutex::default(),
             live_bitrate_kbps: AtomicU32::new(0),
             rate_cut: AtomicU8::new(0),
             recent_rfis: Mutex::default(),
@@ -149,6 +149,14 @@ impl ClientShared {
             end_reject_code: AtomicU32::new(0),
             end_reject_said: std::sync::OnceLock::new(),
         }
+    }
+
+    /// A diagnostic session: the dial asked for probes only, so no video ever comes.
+    pub(crate) fn probe_only(&self) -> bool {
+        self.delivery_ask
+            .lock()
+            .unwrap()
+            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
     }
 }
 

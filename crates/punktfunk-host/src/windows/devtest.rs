@@ -15,19 +15,30 @@ pub fn deck_windows_spike(args: &[String]) -> Result<()> {
     crate::inject::dualsense_windows::deck_spike_hold(0, secs)
 }
 
-/// Hold the pf-mouse virtual HID pointer and sweep the cursor via HID reports.
+/// Hold the pf-mouse virtual HID device and sweep the cursor via HID reports.
 ///
-/// Stack: devnode → INF → mshidumdf → mouhid → win32k. A resident pointer makes
-/// `SM_MOUSEPRESENT` true so DWM composites the cursor with no dongle. Stop the host
-/// service first — it owns the mailbox. `--seconds N` (default 30).
+/// Stack: devnode → INF → mshidumdf → mouhid/kbdhid → win32k. Stop the host service
+/// first — it owns the mailbox. `--seconds N` (default 30). `--relative` turns a focused
+/// game's view and clicks instead. `--selftest` checks every report kind arrives as
+/// hardware (raw input device, no injected flag) and exits non-zero if one does not.
 pub fn vmouse_spike(args: &[String]) -> Result<()> {
+    // An elevated admin, unlike the SYSTEM service, may open WUDFHost to hand it the section
+    // only with SeDebugPrivilege on.
+    anyhow::Context::context(
+        pf_frame::privilege::enable("SeDebugPrivilege"),
+        "enable SeDebugPrivilege",
+    )?;
+    if args.iter().any(|a| a == "--selftest") {
+        return crate::inject::hid_selftest::run();
+    }
     let secs: u64 = args
         .iter()
         .skip_while(|a| *a != "--seconds")
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
-    crate::inject::mouse_windows::spike_hold(secs)
+    let relative = args.iter().any(|a| a == "--relative");
+    crate::inject::mouse_windows::spike_hold(secs, relative)
 }
 
 /// Probe which HID IOCTL hidclass forwards to a UMDF HID minidriver.

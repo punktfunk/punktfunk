@@ -80,9 +80,7 @@ let
   # have to hold, which is the behaviour we want.
   userScope = if cfg.host.users == [ ] then [ "!@system" ] else map (u: "|${u}") cfg.host.users;
 
-  # Native punktfunk/1 ports (control plane + discovery + mgmt API). The media data plane is an
-  # ephemeral per-session UDP port the host hole-punches, so nothing fixed to open (see
-  # packaging/linux/punktfunk.ufw).
+  # Native punktfunk ports (QUIC control and media + discovery + mgmt API).
   nativeTCP = [ 47990 ]; # mgmt/library REST API (HTTPS + mTLS)
   nativeUDP = [
     9777
@@ -235,10 +233,9 @@ in
         type = types.bool;
         default = false;
         description = ''
-          Open the host's inbound ports. Native punktfunk/1 always: UDP 9777 (QUIC), 9778 (browser
-          streaming) + 5353 (mDNS), TCP 47990 (mgmt API). With `gamestream = true` also TCP 47984/47989/48010 and UDP
-          47998/47999/48000. The ephemeral media UDP port is hole-punched, so a default-deny
-          firewall still streams (it just adds ~2.5 s at session start).
+          Open the host's inbound ports. Native punktfunk always: UDP 9777 (QUIC control and
+          media), 9778 (browser streaming) + 5353 (mDNS), TCP 47990 (mgmt API). With
+          `gamestream = true` also TCP 47984/47989/48010 and UDP 47998/47999/48000.
         '';
       };
 

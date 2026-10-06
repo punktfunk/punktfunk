@@ -21,8 +21,6 @@ pub const MSG_PAIR_REQUEST: u8 = 0x10;
 pub const MSG_PAIR_CHALLENGE: u8 = 0x11;
 pub const MSG_PAIR_PROOF: u8 = 0x12;
 pub const MSG_PAIR_RESULT: u8 = 0x13;
-pub const MSG_AUTH_CHALLENGE: u8 = 0x14;
-pub const MSG_AUTH_RESPONSE: u8 = 0x15;
 /// `host → client`, browser plane: why the host is about to close. The native plane says this
 /// with the QUIC close code and reason; a browser cannot read those in every engine (WebKit
 /// hands back a bare error), so the same code and text go on the control stream first.
@@ -134,7 +132,7 @@ fn get_bytes(b: &[u8], off: usize) -> Result<(&[u8], usize)> {
 }
 
 impl PairRequest {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode_pkf1(&self) -> Vec<u8> {
         // Same cap as Hello: truncate on a char boundary. A mid-sequence cut
         // puts invalid UTF-8 on the wire and the host stores U+FFFD forever.
         let name = super::handshake::truncate_to(&self.name, HELLO_NAME_MAX).as_bytes();
@@ -152,7 +150,7 @@ impl PairRequest {
         b
     }
 
-    pub fn decode(b: &[u8]) -> Result<PairRequest> {
+    pub fn decode_pkf1(b: &[u8]) -> Result<PairRequest> {
         if b.len() < 6 || &b[0..4] != CTL_MAGIC || b[4] != MSG_PAIR_REQUEST {
             return Err(PunktfunkError::InvalidArg("bad PairRequest"));
         }
@@ -178,54 +176,8 @@ impl PairRequest {
     }
 }
 
-impl AuthChallenge {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(37);
-        b.extend_from_slice(CTL_MAGIC);
-        b.push(MSG_AUTH_CHALLENGE);
-        b.extend_from_slice(&self.nonce);
-        b
-    }
-
-    pub fn decode(b: &[u8]) -> Result<AuthChallenge> {
-        if b.len() != 37 || &b[0..4] != CTL_MAGIC || b[4] != MSG_AUTH_CHALLENGE {
-            return Err(PunktfunkError::InvalidArg("bad AuthChallenge"));
-        }
-        let mut nonce = [0u8; 32];
-        nonce.copy_from_slice(&b[5..37]);
-        Ok(AuthChallenge { nonce })
-    }
-}
-
-impl AuthResponse {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(9 + self.device_key.len() + self.signature.len());
-        b.extend_from_slice(CTL_MAGIC);
-        b.push(MSG_AUTH_RESPONSE);
-        put_bytes(&mut b, &self.device_key);
-        put_bytes(&mut b, &self.signature);
-        b
-    }
-
-    pub fn decode(b: &[u8]) -> Result<AuthResponse> {
-        if b.len() < 5 || &b[0..4] != CTL_MAGIC || b[4] != MSG_AUTH_RESPONSE {
-            return Err(PunktfunkError::InvalidArg("bad AuthResponse"));
-        }
-        let (device_key, end) = get_bytes(b, 5)?;
-        let device_key = device_key.to_vec();
-        let (signature, end) = get_bytes(b, end)?;
-        if end != b.len() {
-            return Err(PunktfunkError::InvalidArg("trailing bytes"));
-        }
-        Ok(AuthResponse {
-            device_key,
-            signature: signature.to_vec(),
-        })
-    }
-}
-
 impl PairChallenge {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode_pkf1(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(7 + self.spake_b.len() + 32);
         b.extend_from_slice(CTL_MAGIC);
         b.push(MSG_PAIR_CHALLENGE);
@@ -234,7 +186,7 @@ impl PairChallenge {
         b
     }
 
-    pub fn decode(b: &[u8]) -> Result<PairChallenge> {
+    pub fn decode_pkf1(b: &[u8]) -> Result<PairChallenge> {
         if b.len() < 5 || &b[0..4] != CTL_MAGIC || b[4] != MSG_PAIR_CHALLENGE {
             return Err(PunktfunkError::InvalidArg("bad PairChallenge"));
         }
@@ -252,7 +204,7 @@ impl PairChallenge {
 }
 
 impl PairProof {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode_pkf1(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(37);
         b.extend_from_slice(CTL_MAGIC);
         b.push(MSG_PAIR_PROOF);
@@ -260,7 +212,7 @@ impl PairProof {
         b
     }
 
-    pub fn decode(b: &[u8]) -> Result<PairProof> {
+    pub fn decode_pkf1(b: &[u8]) -> Result<PairProof> {
         if b.len() != 37 || &b[0..4] != CTL_MAGIC || b[4] != MSG_PAIR_PROOF {
             return Err(PunktfunkError::InvalidArg("bad PairProof"));
         }
@@ -271,7 +223,7 @@ impl PairProof {
 }
 
 impl PairResult {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode_pkf1(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(6);
         b.extend_from_slice(CTL_MAGIC);
         b.push(MSG_PAIR_RESULT);
@@ -279,7 +231,7 @@ impl PairResult {
         b
     }
 
-    pub fn decode(b: &[u8]) -> Result<PairResult> {
+    pub fn decode_pkf1(b: &[u8]) -> Result<PairResult> {
         if b.len() != 6 || &b[0..4] != CTL_MAGIC || b[4] != MSG_PAIR_RESULT {
             return Err(PunktfunkError::InvalidArg("bad PairResult"));
         }
@@ -288,7 +240,7 @@ impl PairResult {
 }
 
 impl Refused {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode_pkf1(&self) -> Vec<u8> {
         let reason = super::handshake::truncate_to(&self.reason, REFUSED_REASON_MAX).as_bytes();
         let mut b = Vec::with_capacity(11 + reason.len());
         b.extend_from_slice(CTL_MAGIC);
@@ -298,7 +250,7 @@ impl Refused {
         b
     }
 
-    pub fn decode(b: &[u8]) -> Result<Refused> {
+    pub fn decode_pkf1(b: &[u8]) -> Result<Refused> {
         if b.len() < 9 || &b[0..4] != CTL_MAGIC || b[4] != MSG_REFUSED {
             return Err(PunktfunkError::InvalidArg("bad Refused"));
         }
@@ -326,18 +278,18 @@ mod tests {
             code: crate::reject::SETUP_FAILED_CLOSE_CODE,
             reason: "no usable compositor".into(),
         };
-        assert_eq!(Refused::decode(&r.encode()).unwrap(), r);
+        assert_eq!(Refused::decode_pkf1(&r.encode_pkf1()).unwrap(), r);
         let long = Refused {
             code: 1,
             reason: "é".repeat(400),
         };
-        let back = Refused::decode(&long.encode()).unwrap();
+        let back = Refused::decode_pkf1(&long.encode_pkf1()).unwrap();
         assert!(back.reason.len() <= REFUSED_REASON_MAX, "capped");
         assert!(
             back.reason.chars().all(|c| c == 'é'),
             "cut on a char boundary"
         );
-        assert!(Refused::decode(&PairResult { ok: true }.encode()).is_err());
+        assert!(Refused::decode_pkf1(&PairResult { ok: true }.encode_pkf1()).is_err());
     }
 
     #[test]
@@ -347,28 +299,33 @@ mod tests {
             spake_a: vec![1, 2, 3, 4, 5],
             device_key: Vec::new(),
         };
-        assert_eq!(PairRequest::decode(&pr.encode()).unwrap(), pr);
+        assert_eq!(PairRequest::decode_pkf1(&pr.encode_pkf1()).unwrap(), pr);
         let keyed = PairRequest {
             device_key: vec![0x30, 0x59, 0x30, 0x13],
             ..pr.clone()
         };
-        assert_eq!(PairRequest::decode(&keyed.encode()).unwrap(), keyed);
+        assert_eq!(
+            PairRequest::decode_pkf1(&keyed.encode_pkf1()).unwrap(),
+            keyed
+        );
         let pc = PairChallenge {
             spake_b: vec![9; 33],
             confirm: [7u8; 32],
         };
-        assert_eq!(PairChallenge::decode(&pc.encode()).unwrap(), pc);
+        assert_eq!(PairChallenge::decode_pkf1(&pc.encode_pkf1()).unwrap(), pc);
         let pp = PairProof { confirm: [3u8; 32] };
-        assert_eq!(PairProof::decode(&pp.encode()).unwrap(), pp);
+        assert_eq!(PairProof::decode_pkf1(&pp.encode_pkf1()).unwrap(), pp);
         for ok in [true, false] {
             assert_eq!(
-                PairResult::decode(&PairResult { ok }.encode()).unwrap().ok,
+                PairResult::decode_pkf1(&PairResult { ok }.encode_pkf1())
+                    .unwrap()
+                    .ok,
                 ok
             );
         }
-        let mut bad = pp.encode();
+        let mut bad = pp.encode_pkf1();
         bad.push(0);
-        assert!(PairProof::decode(&bad).is_err());
+        assert!(PairProof::decode_pkf1(&bad).is_err());
     }
 
     #[test]
@@ -380,7 +337,7 @@ mod tests {
             spake_a: vec![1, 2, 3],
             device_key: Vec::new(),
         };
-        let dec = PairRequest::decode(&pr.encode()).unwrap();
+        let dec = PairRequest::decode_pkf1(&pr.encode_pkf1()).unwrap();
         assert!(dec.name.len() <= HELLO_NAME_MAX && dec.name.starts_with('x'));
         assert!(
             !dec.name.contains('\u{FFFD}'),
@@ -397,7 +354,7 @@ mod tests {
             spake_a: vec![7; 33],
             device_key: Vec::new(),
         };
-        let bytes = pr.encode();
+        let bytes = pr.encode_pkf1();
         let mut expected = Vec::new();
         expected.extend_from_slice(CTL_MAGIC);
         expected.push(MSG_PAIR_REQUEST);
@@ -406,25 +363,6 @@ mod tests {
         expected.extend_from_slice(&33u16.to_le_bytes());
         expected.extend_from_slice(&[7; 33]);
         assert_eq!(bytes, expected, "the field is absent, not empty-encoded");
-    }
-
-    #[test]
-    fn auth_messages_roundtrip() {
-        let c = AuthChallenge { nonce: [0x5a; 32] };
-        assert_eq!(AuthChallenge::decode(&c.encode()).unwrap(), c);
-        let r = AuthResponse {
-            device_key: vec![0x30, 0x59],
-            signature: vec![0x30, 0x45, 0x02],
-        };
-        assert_eq!(AuthResponse::decode(&r.encode()).unwrap(), r);
-        for m in [c.encode(), r.encode()] {
-            let mut bad = m.clone();
-            bad.push(0);
-            assert!(
-                AuthChallenge::decode(&bad).is_err() && AuthResponse::decode(&bad).is_err(),
-                "a trailing byte is a different message, not a longer one"
-            );
-        }
     }
 
     /// The signature has to name the connection it was made on, or one captured response opens

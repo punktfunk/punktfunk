@@ -393,14 +393,13 @@ def _native_client() -> str | None:
     return None
 
 
-# The one architecture the flatpak client is built for.
-_FLATPAK_ARCH = "x86_64"
-
-
 def _flatpak_ref() -> dict | None:
     """The INSTALLED client flatpak resolved to a SCOPE and a BRANCH, or None when there is none.
 
-    ``{"scope": "--user"|"--system", "branch": "canary", "ref": "io.unom.Punktfunk//canary"}``.
+    ``{"scope": "--user"|"--system", "branch": "canary", "arch": "aarch64", "ref": "io.unom.Punktfunk//canary"}``.
+
+    The arch is read off the installed tree, not `os.uname()`: Decky's Python can be an x86_64
+    process on an aarch64 SteamOS (Steam Frame).
 
     ⭐⭐ **Naming no branch is not a shorthand for "the only one".** flatpak refuses an ambiguous
     ref rather than guessing at one, and the ambiguity does not need two branches *installed*:
@@ -426,14 +425,16 @@ def _flatpak_ref() -> dict | None:
         (Path("/var/lib/flatpak"), "--system"),
     ):
         try:
-            branches = sorted(
-                p.name for p in (root / "app" / APP_ID / _FLATPAK_ARCH).iterdir()
+            found = sorted(
+                (p.parent.name, p.name) for p in (root / "app" / APP_ID).glob("*/*")
                 if (p / "active").exists()
             )
         except OSError:
             continue  # not installed in this scope
-        if not branches:
+        if not found:
             continue
+        arch = found[0][0]
+        branches = [b for a, b in found if a == arch]
         branch = "stable" if "stable" in branches else branches[0]
         if len(branches) > 1:
             decky.logger.warning(
@@ -441,7 +442,7 @@ def _flatpak_ref() -> dict | None:
                 "to; uninstall the others so the client you launch is the client we update",
                 APP_ID, len(branches), ", ".join(branches), branch,
             )
-        return {"scope": scope, "branch": branch, "ref": f"{APP_ID}//{branch}"}
+        return {"scope": scope, "branch": branch, "arch": arch, "ref": f"{APP_ID}//{branch}"}
     return None
 
 
@@ -476,7 +477,7 @@ def _client_argv() -> list[str] | None:
     if forced != "flatpak" and not ref and native:
         return [native]
     if ref:
-        return [_flatpak(), "run", f"--arch={_FLATPAK_ARCH}", f"--branch={ref['branch']}", APP_ID]
+        return [_flatpak(), "run", f"--arch={ref['arch']}", f"--branch={ref['branch']}", APP_ID]
     return [native] if native else None
 
 

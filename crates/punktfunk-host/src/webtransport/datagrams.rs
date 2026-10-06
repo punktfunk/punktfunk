@@ -18,27 +18,24 @@ use wtransport::Connection;
 /// The pump's view of one browser connection.
 pub(crate) struct WebTransportPlane {
     conn: Connection,
-    /// `/pf2`: each media packet goes out as a `DGRAM_MEDIA` datagram.
-    v2: Option<Arc<V2Session>>,
+    v2: Arc<V2Session>,
 }
 
 impl WebTransportPlane {
-    pub(crate) fn new(conn: Connection, v2: Option<Arc<V2Session>>) -> WebTransportPlane {
+    pub(crate) fn new(conn: Connection, v2: Arc<V2Session>) -> WebTransportPlane {
         WebTransportPlane { conn, v2 }
     }
 
-    pub(crate) fn v2(&self) -> Option<&Arc<V2Session>> {
-        self.v2.as_ref()
+    pub(crate) fn v2(&self) -> &Arc<V2Session> {
+        &self.v2
     }
 }
 
 impl Transport for WebTransportPlane {
     /// `Ok(false)` for a datagram the connection would not take — the same lossy contract a full
-    /// UDP send buffer has, which the caller counts and FEC covers.
+    /// UDP send buffer has, which the caller counts and FEC covers. Each media packet goes out as
+    /// a `DGRAM_MEDIA` datagram.
     fn send(&self, packet: &[u8]) -> io::Result<bool> {
-        if self.v2.is_none() {
-            return Ok(self.conn.send_datagram(packet).is_ok());
-        }
         let mut d = Vec::with_capacity(1 + packet.len());
         punktfunk_core::quic::v2::field::put_varint(
             &mut d,

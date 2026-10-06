@@ -21,7 +21,6 @@ use crate::fec::ErasureCoder;
 use crate::session::{Frame, FramePart};
 use crate::stats::StatsCounters;
 use std::collections::HashMap;
-use zerocopy::FromBytes;
 
 /// Incomplete-frame fuse: capture time behind the newest pts. Time, not index count —
 /// 4 frames is 66 ms at 60 fps and 33 ms at 120 fps, inside Wi-Fi retry/reorder.
@@ -201,21 +200,13 @@ fn reclaim_parity(
     }
 }
 
-/// Which header the reassembler reads.
-#[derive(Clone, Copy, Debug)]
-enum RxFraming {
-    V1,
-    /// `pts_ref_us` is the newest capture time seen, which unwraps the 32-bit field; `None`
-    /// until the first packet seeds it.
-    V2 {
-        clock_origin_ns: u64,
-        pts_ref_us: Option<i64>,
-    },
-}
-
 pub struct Reassembler {
     limits: ReassemblerLimits,
-    framing: RxFraming,
+    /// The host instant the session's capture times count from.
+    clock_origin_ns: u64,
+    /// The newest capture time seen, which unwraps the 32-bit field; `None` until the first
+    /// packet seeds it.
+    pts_ref_us: Option<i64>,
     /// Opt-in: emit aged-out [`USER_FLAG_CHUNK_ALIGNED`] frames instead of dropping
     /// them. Still counted in `frames_dropped` — a partial is lost data.
     deliver_partial: bool,
@@ -243,10 +234,12 @@ pub struct Reassembler {
 }
 
 impl Reassembler {
-    pub fn new(limits: ReassemblerLimits) -> Self {
+    /// Reads [`decode_v2`] packets whose capture times count from `clock_origin_ns`.
+    pub fn new(limits: ReassemblerLimits, clock_origin_ns: u64) -> Self {
         Reassembler {
             limits,
-            framing: RxFraming::V1,
+            clock_origin_ns,
+            pts_ref_us: None,
             deliver_partial: false,
             pending_partial: None,
             deliver_parts: false,
@@ -257,15 +250,6 @@ impl Reassembler {
             shard_delay_ns: Vec::with_capacity(SHARD_DELAY_SAMPLES),
             short_tails: Vec::new(),
         }
-    }
-
-    /// Read `punktfunk/2` packets ([`decode_v2`]) from now on. `clock_origin_ns` is the host
-    /// instant the session's capture times count from.
-    pub fn set_v2(&mut self, clock_origin_ns: u64) {
-        self.framing = RxFraming::V2 {
-            clock_origin_ns,
-            pts_ref_us: None,
-        };
     }
 
     /// The first-shard delays since the last call, oldest first. Raw
@@ -308,29 +292,42 @@ impl Reassembler {
         coder: &dyn ErasureCoder,
         stats: &StatsCounters,
     ) -> Result<Option<Frame>> {
+        match decode_v2(pkt, self.clock_origin_ns, &mut self.pts_ref_us) {
+            Some((hdr, epoch, body)) => self.push_header(hdr, epoch, body, coder, stats),
+            None => {
+                StatsCounters::add(&stats.packets_dropped, 1);
+                Ok(None)
+            }
+        }
+    }
+
+    /// [`Self::push`] past the header decode. Tests craft hostile headers here: most of the
+    /// logical header has no wire field of its own.
+    pub(crate) fn push_header(
+        &mut self,
+        hdr: PacketHeader,
+        epoch: u8,
+        body: &[u8],
+        coder: &dyn ErasureCoder,
+        stats: &StatsCounters,
+    ) -> Result<Option<Frame>> {
         Ok(self
-            .push_inner(pkt, coder, stats)
+            .push_inner(hdr, epoch, body, coder, stats)
             .unwrap_or_else(|Dropped| {
                 StatsCounters::add(&stats.packets_dropped, 1);
                 None
             }))
     }
 
-    /// [`Self::push`] with every counted drop as `Err(Dropped)`.
+    /// [`Self::push_header`] with every counted drop as `Err(Dropped)`.
     fn push_inner(
         &mut self,
-        pkt: &[u8],
+        hdr: PacketHeader,
+        epoch: u8,
+        body: &[u8],
         coder: &dyn ErasureCoder,
         stats: &StatsCounters,
     ) -> std::result::Result<Option<Frame>, Dropped> {
-        let (hdr, epoch, body) = match &mut self.framing {
-            RxFraming::V1 => parse_v1(pkt).map(|(h, b)| (h, 0, b)),
-            RxFraming::V2 {
-                clock_origin_ns,
-                pts_ref_us,
-            } => decode_v2(pkt, *clock_origin_ns, pts_ref_us),
-        }
-        .ok_or(Dropped)?;
         let lim = self.limits;
         let g = firewall(&hdr, body.len(), &lim).ok_or(Dropped)?;
         let body = &body[..g.shard_bytes];
@@ -339,7 +336,8 @@ impl Reassembler {
         // frame entry is mutably borrowed.
         let Reassembler {
             limits: _,
-            framing: _,
+            clock_origin_ns: _,
+            pts_ref_us: _,
             deliver_partial,
             pending_partial,
             deliver_parts,
@@ -357,11 +355,14 @@ impl Reassembler {
         let is_probe = hdr.user_flags & (FLAG_PROBE as u32) != 0;
         if is_probe {
             // Probe receive accounting, stamped at the routing decision so video in
-            // flight around the burst cannot contaminate it. Bytes = whole plaintext
-            // packet. First packet since the pump zeroed the slot claims first-arrival.
+            // flight around the burst cannot contaminate it. Bytes = the whole plaintext packet,
+            // header included. First packet since the pump zeroed the slot claims first-arrival.
             let now_ns = crate::stats::now_monotonic_ns();
             StatsCounters::add(&stats.probe_packets_received, 1);
-            StatsCounters::add(&stats.probe_bytes_received, pkt.len() as u64);
+            StatsCounters::add(
+                &stats.probe_bytes_received,
+                (super::V2_HEADER_LEN + body.len()) as u64,
+            );
             let _ = stats.probe_first_arrival_ns.compare_exchange(
                 0,
                 now_ns,
@@ -740,12 +741,6 @@ struct Geom {
     need_shards: usize,
     /// Where this block's data shards start in the AU.
     base_shard: usize,
-}
-
-/// A `punktfunk/1` packet: the 40-byte header and the bytes after it.
-fn parse_v1(pkt: &[u8]) -> Option<(PacketHeader, &[u8])> {
-    let hdr = PacketHeader::read_from_bytes(pkt.get(..HEADER_LEN)?).ok()?;
-    Some((hdr, &pkt[HEADER_LEN..]))
 }
 
 /// Bound every attacker-controlled header field before anything allocates on it.
@@ -1162,13 +1157,16 @@ mod reset_tests {
     /// [`Reassembler::reset`] as the first frame after jump-to-live.
     #[test]
     fn reset_drops_a_parked_partial() {
-        let mut r = Reassembler::new(ReassemblerLimits {
-            min_shard_bytes: 64,
-            max_shard_bytes: 64,
-            max_data_shards: 8,
-            max_total_shards: 16,
-            max_frame_bytes: 4096,
-        });
+        let mut r = Reassembler::new(
+            ReassemblerLimits {
+                min_shard_bytes: 64,
+                max_shard_bytes: 64,
+                max_data_shards: 8,
+                max_total_shards: 16,
+                max_frame_bytes: 4096,
+            },
+            0,
+        );
         r.pending_partial = Some(Frame {
             data: vec![0u8; 64],
             frame_index: 7,

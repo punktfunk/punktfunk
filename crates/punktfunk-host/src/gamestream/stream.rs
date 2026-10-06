@@ -178,7 +178,6 @@ pub fn start(
                         .unwrap_or_default(),
                     client_name: (!client_label.is_empty()).then(|| client_label.clone()),
                     plane: crate::events::Plane::Gamestream,
-                    wire: 0,
                     hdr: cfg.hdr,
                     ttff_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                     last_resize_ms: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -629,6 +628,7 @@ fn open_gs_mirror_source(
             capture: crate::session_plan::CaptureBackend::resolve(),
             kwin: compositor == crate::vdisplay::Compositor::Kwin,
             gamescope: compositor == crate::vdisplay::Compositor::Gamescope,
+            stream_hz: cfg.fps,
         },
     )
     .context("attach a capturer to the mirrored monitor")
@@ -824,6 +824,7 @@ fn gs_capture_output(
             capture: crate::session_plan::CaptureBackend::resolve(),
             kwin: compositor == crate::vdisplay::Compositor::Kwin,
             gamescope: compositor == crate::vdisplay::Compositor::Gamescope,
+            stream_hz: cfg.fps,
         },
     )
     .context("capture virtual output")?;

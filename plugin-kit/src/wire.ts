@@ -26,7 +26,7 @@ export type Artwork = typeof Artwork.Type;
  * | `command` | a shell command (operator-trust tier) | both |
  * | `steam_appid` | digits — an appid, or a 64-bit non-Steam-shortcut game id | both |
  * | `steam_ui` | `bigpicture` \| `desktop` — opens the Steam client itself | both |
- * | `launcher_ui` | which launcher UI to open: `heroic` \| `heroic-console` \| `lutris` on linux; `playnite` \| `epic` \| `gog` \| `xbox` on windows | both |
+ * | `launcher_ui` | which launcher UI to open: `heroic` \| `heroic-console` \| `lutris` \| `hydra-big-picture` on linux; `playnite` \| `epic` \| `gog` \| `xbox` \| `hydra-big-picture` on windows | both |
  * | `lutris_id` | digits — a pga.db game id | linux |
  * | `heroic` | `<runner>:<appName>`, runner ∈ legendary/gog/nile | linux |
  * | `epic` | `<namespace>:<catalogItemId>:<appName>` or a bare appName | windows |
@@ -42,6 +42,7 @@ export type Artwork = typeof Artwork.Type;
  * | `gamebar` | an exe's absolute path; the host runs it only if a signed-in user's Game Bar list names it | windows |
  * | `desktop_id` | an installed `.desktop` entry's id; the host reads its `Exec` | linux |
  * | `exec` | the name of an `exec` template in THIS plugin's manifest — see below | both |
+ * | `emulator` | a catalog emulator id (`pcsx2`); `args` name `platform`, `file`, and optionally `core` and `extra` | both |
  *
  * `exec` is how a tile the host cannot name on its own (a ROM through whichever emulator the
  * operator configured) still launches. The template — program and argv — lives in the `punktfunk`
@@ -50,13 +51,16 @@ export type Artwork = typeof Artwork.Type;
  * the template declares. A plugin never composes a command line, and nothing it says at runtime
  * widens what may run.
  *
+ * `emulator` names no program at all: the host starts `file` in its best copy of that emulator,
+ * fullscreen, with the command hermir renders. `file` must lie inside the plugin's roots.
+ *
  * An unknown kind is accepted on the wire and simply yields no launch recipe on that host, so a
  * plugin targeting a newer host degrades to an unlaunchable tile rather than a failed reconcile.
  */
 export const LaunchSpec = Schema.Struct({
 	kind: Schema.String,
 	value: Schema.String,
-	/** Values for an `exec` template's `{param}` placeholders. */
+	/** Values for an `exec` template's `{param}` placeholders, or an `emulator` launch's arguments. */
 	args: Schema.optionalKey(
 		Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String })),
 	),

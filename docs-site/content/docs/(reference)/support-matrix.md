@@ -58,7 +58,7 @@ Each session gets its own display at the client's resolution and refresh rate �
 
 | Host | Input backend | Approval dialog | Client-drawn cursor | HDR10 source |
 |---|---|---|---|---|
-| Windows | SendInput | none ¹ | ✅ ² | ✅ ³ |
+| Windows | virtual HID device ¹¹ | none ¹ | ✅ ² | ✅ ³ |
 | KDE Plasma (KWin) | KWin fake input | none ⁴ | ✅ | ❌ ⁵ |
 | GNOME (Mutter) | libei, direct to Mutter | none | ✅ ⁶ | ⚠️ ⁷ |
 | gamescope | libei (gamescope's own) | none | ⚠️ ⁸ | ⚠️ ⁹ |
@@ -83,6 +83,9 @@ Each session gets its own display at the client's resolution and refresh rate �
 9. Needs the patched `punktfunk-gamescope` and a session this host started or manages; an attached
    session streams SDR. See [HDR on gamescope](/docs/gamescope#hdr-on-gamescope).
 10. Their portals offer no separate cursor, so the pointer is always part of the video.
+11. Mouse and keyboard reach Windows as a USB-style HID device, so games that refuse injected input
+    take them. Text, touch and pen use `SendInput` and synthetic pointers. A seat host, and a point
+    off the primary monitor, use `SendInput` too.
 
 ### Version floors worth knowing
 
@@ -357,8 +360,8 @@ know is not offered, and the session goes ahead without it — see
 
 | Contract | Current | Rule |
 |---|---|---|
-| `punktfunk/1` wire version | **2** | Client and host must match. |
-| C ABI version | **37** | Between an app and the core library it ships with. |
+| Native protocol | **`punktfunk/2`** | Client and host must both speak it. A host refuses an older client with "update both". |
+| C ABI version | **44** | Between an app and the core library it ships with. |
 | Windows display-driver protocol | **9** | Host and driver must match; the installer updates both. |
 | Windows virtual-gamepad channel | **3** | Host and pad driver must match; same installer. |
 

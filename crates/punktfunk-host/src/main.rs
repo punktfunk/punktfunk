@@ -1,7 +1,7 @@
 //! Streaming host: virtual display, capture, encode, then FEC + packetize + pace
 //! + send via `punktfunk_core`. Input returns through the inject backends.
 //!
-//! `serve` is the secure default (native punktfunk/1 + management API).
+//! `serve` is the secure default (native punktfunk + management API).
 //! `--gamestream` is opt-in, trusted-LAN only. `punktfunk1-host` is the native
 //! plane alone. `spike` writes encoded AUs to a file and loopbacks them through
 //! `punktfunk_core`.
@@ -100,12 +100,12 @@ mod encode {
 
     /// Refresh rate a client may ask for, the companion to [`validate_dimensions`].
     ///
-    /// The driver multiplies it by `vdisplay_hz_mult` before advertising the mode, so bound the
-    /// product: an out-of-contract value otherwise reaches mode selection and kills the session
-    /// after Welcome, and a huge one overflows the multiply.
+    /// The display is created at it times `vdisplay_hz_mult_for`, so bound the product at the
+    /// largest multiple any compositor gets: an out-of-contract value otherwise reaches mode
+    /// selection and kills the session after Welcome, and a huge one overflows the multiply.
     pub(crate) fn validate_refresh(refresh_hz: u32) -> anyhow::Result<()> {
         const MAX_HZ: u32 = 1000;
-        let mult = pf_host_config::config().vdisplay_hz_mult.max(1);
+        let mult = pf_host_config::config().vdisplay_hz_mult_for(refresh_hz, true);
         let effective = refresh_hz.saturating_mul(mult);
         anyhow::ensure!(
             (1..=MAX_HZ).contains(&refresh_hz) && effective <= MAX_HZ,
@@ -595,10 +595,6 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
     let mut opts = mgmt::Options::default();
     let mut native_port: u16 = 9777;
 
-    // Env default; `--data-port` overrides. `Some` = bind that port; `None` = ephemeral.
-    let mut data_port: Option<u16> = std::env::var("PUNKTFUNK_DATA_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok());
     let mut open = false;
     let mut gamestream = false;
     // The browser plane, off unless asked for — same stance as GameStream above.
@@ -637,12 +633,10 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
                     .map_err(|_| anyhow::anyhow!("bad --native-port (want a port number)"))?;
                 native_port_explicit = true;
             }
+            // Video rides the native port. Accepted so an older service unit still starts.
             "--data-port" => {
-                data_port = Some(
-                    next()?
-                        .parse()
-                        .map_err(|_| anyhow::anyhow!("bad --data-port (want a port number)"))?,
-                )
+                next()?;
+                tracing::warn!("--data-port is ignored: video uses the native port");
             }
             "--gamestream" | "--moonlight" => gamestream = true,
             "--webtransport" => webtransport = true,
@@ -711,7 +705,6 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
         require_pairing: !open,
         // Real bound port, not the default, so mDNS clients follow a moved mgmt port.
         mgmt_port: opts.bind.port(),
-        data_port,
         mdns: !no_mdns && discovery::mdns_enabled(),
         // Resolved just below, once the env fallbacks have been applied.
         webtransport_bind: None,
@@ -795,14 +788,9 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
         allow_pairing: true,
         pairing_pin: None,
         paired_store: None,
-        // Fixed port = one number to open or proxy; the client's punch still picks the path.
-        data_port: std::env::var("PUNKTFUNK_DATA_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok()),
         // QUIC idle timeout; flag overrides env; absent = core default (8 s).
         idle_timeout: native::idle_timeout_from_env(),
         mdns: discovery::mdns_enabled(),
-        protocol2: native::protocol2_from_env(),
     };
     let mut source = "synthetic".to_string();
     // What `--source synthetic-abr` encodes; ignored by the other sources.
@@ -833,7 +821,6 @@ fn parse_punktfunk1(args: &[String]) -> Result<native::Punktfunk1Options> {
                 p if p.trim().is_empty() => bail!("--pairing-pin must not be empty"),
                 p => opts.pairing_pin = Some(p),
             },
-            "--data-port" => opts.data_port = Some(value(arg, next()?)?),
             "--idle-timeout-ms" => match value::<u64>(arg, next()?)? {
                 0 => bail!("--idle-timeout-ms must be > 0"),
                 ms => opts.idle_timeout = Some(std::time::Duration::from_millis(ms)),
@@ -1006,7 +993,7 @@ fn print_usage() {
         "punktfunk-host — Linux streaming host
 
 USAGE:
-    punktfunk-host serve [OPTIONS]            native punktfunk/1 host + management REST API
+    punktfunk-host serve [OPTIONS]            native punktfunk host + management REST API
                                               (secure default; add --gamestream for Moonlight compat)
     punktfunk-host ctl <VERB>                 operator control over the local management API —
                                               pairing, devices, sessions, `watch` (line-JSON for a
@@ -1020,7 +1007,7 @@ USAGE:
     punktfunk-host openapi                    print the management API's OpenAPI document (codegen)
     punktfunk-host library [art --clear]      print the game catalog as JSON; `art --clear` drops
                                               every cover the host fetched and cached on disk
-    punktfunk-host punktfunk1-host [OPTIONS]  native punktfunk/1 host (QUIC control + UDP data plane)
+    punktfunk-host punktfunk1-host [OPTIONS]  native punktfunk host alone (tests and benches)
     punktfunk-host probe-compositor           exit 0 iff the compositor is up + ready (bringup gate)
     punktfunk-host list-monitors              list the host's physical monitors (Linux) — the
                                               connector names PUNKTFUNK_CAPTURE_MONITOR takes
@@ -1040,15 +1027,10 @@ SERVE OPTIONS:
                                  reuse, security-review #5/#9); enable only on a TRUSTED LAN.
                                  The flag locks the console's GameStream setting; an install sets
                                  that setting instead (`settings set gamestream true`)
-    --native                     no-op (the native punktfunk/1 plane always runs in `serve` now)
+    --native                     no-op (the native plane always runs in `serve`)
     --native-port <PORT>         native QUIC port (or PUNKTFUNK_NATIVE_PORT in host.env, which
                                  this flag overrides). Default 9777. Clients follow via mDNS, and
                                  a manually-added host keeps whatever port it was added with
-    --data-port <PORT>           pin the per-session video data plane to this fixed UDP port —
-                                 one number to open in a firewall, forward on a router or share
-                                 through a port proxy. Video still follows the client's hole-punch,
-                                 so a remapping NAT on the client's side works. Default (unset) or
-                                 PUNKTFUNK_DATA_PORT: a fresh random port per session
     --open                       disable mandatory native pairing (default: pairing REQUIRED —
                                  an open host any LAN device can stream from is insecure)
     --no-mdns                    skip the mDNS adverts (native + GameStream) — for multicast-dead
@@ -1090,10 +1072,6 @@ PUNKTFUNK1-HOST OPTIONS:
     --max-sessions <N>           exit after N sessions; 0 = serve forever (default: 0)
     --max-concurrent <N>         stream at most N sessions at once (NVENC bound); overflow waits
                                  in the accept queue; 0 = unlimited (default: 4)
-    --data-port <PORT>           pin the video data plane to this fixed UDP port (one number to
-                                 open, forward or proxy; video still follows the client's punch).
-                                 Default or PUNKTFUNK_DATA_PORT: a random port per session.
-                                 A fixed port fits one session; concurrent ones fall back to random
     --allow-tofu                 also accept UNPAIRED clients (trust-on-first-use) and advertise
                                  pair=optional. Default: pairing REQUIRED — the host rejects
                                  unpaired clients and logs a 4-digit pairing PIN at startup;

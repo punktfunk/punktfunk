@@ -89,8 +89,8 @@ fn endpoint_config() -> quinn::EndpointConfig {
     cfg
 }
 
-/// Fresh self-signed cert. Tests/dev only — persist identity with
-/// [`server_with_identity`] so the pin stays stable.
+/// Fresh self-signed cert. Tests/dev only; a host persists its identity and serves through
+/// [`server_shared`].
 pub fn server(addr: std::net::SocketAddr) -> anyhow_result::Result<quinn::Endpoint> {
     let cert = rcgen::generate_simple_self_signed(vec!["punktfunk".into()])
         .map_err(|e| anyhow_result::Error::msg(format!("self-signed cert: {e}")))?;
@@ -99,34 +99,8 @@ pub fn server(addr: std::net::SocketAddr) -> anyhow_result::Result<quinn::Endpoi
     server_from_der(cert_der, key_der.into(), addr, DEFAULT_IDLE_TIMEOUT)
 }
 
-/// Persisted PEM identity so the pinned fingerprint survives restarts.
-/// Idle is [`DEFAULT_IDLE_TIMEOUT`]; tune with [`server_with_identity_idle`].
-pub fn server_with_identity(
-    addr: std::net::SocketAddr,
-    cert_pem: &str,
-    key_pem: &str,
-) -> anyhow_result::Result<quinn::Endpoint> {
-    server_with_identity_idle(addr, cert_pem, key_pem, DEFAULT_IDLE_TIMEOUT)
-}
-
-/// [`server_with_identity`] with a host-chosen idle timeout (clamped in
-/// `stream_transport_idle`).
-pub fn server_with_identity_idle(
-    addr: std::net::SocketAddr,
-    cert_pem: &str,
-    key_pem: &str,
-    idle: std::time::Duration,
-) -> anyhow_result::Result<quinn::Endpoint> {
-    use rustls::pki_types::pem::PemObject;
-    let cert_der = rustls::pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes())
-        .map_err(|e| anyhow_result::Error::msg(format!("cert pem: {e}")))?;
-    let key_der = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-        .map_err(|e| anyhow_result::Error::msg(format!("key pem: {e}")))?;
-    server_from_der(cert_der, key_der, addr, idle)
-}
-
-/// `pkf1`. Both ends must set the same value; a host with ALPN set rejects a
-/// client that offers none.
+/// `pkf1`, the protocol before `punktfunk/2`. A host lists it only to answer an older client's
+/// PIN ceremony and to refuse everything else that client sends with the wire-version code.
 pub const QUIC_ALPN: &[u8] = b"pkf1";
 
 fn server_from_der(
@@ -135,7 +109,7 @@ fn server_from_der(
     addr: std::net::SocketAddr,
     idle: std::time::Duration,
 ) -> anyhow_result::Result<quinn::Endpoint> {
-    let server_config = server_config(cert_der, key_der, idle, &[QUIC_ALPN])?;
+    let server_config = server_config(cert_der, key_der, idle, &[super::v2::registry::ALPN])?;
     Ok(quinn::Endpoint::server(server_config, addr)?)
 }
 
@@ -239,9 +213,18 @@ pub fn client_pinned_with_identity(
     pin: Option<[u8; 32]>,
     identity: Option<(&str, &str)>,
 ) -> PinnedClient {
+    client_pinned_offering(pin, identity, &[super::v2::registry::ALPN])
+}
+
+/// [`client_pinned_with_identity`] offering `alpns`, in order.
+pub fn client_pinned_offering(
+    pin: Option<[u8; 32]>,
+    identity: Option<(&str, &str)>,
+    alpns: &[&[u8]],
+) -> PinnedClient {
     let observed = Arc::new(Mutex::new(None));
     let ep = (|| {
-        let client_cfg = client_config(pin, identity, &observed, &[QUIC_ALPN])?;
+        let client_cfg = client_config(pin, identity, &observed, alpns)?;
         // `Endpoint::client` hardcodes `EndpointConfig::default()` (1472-byte
         // `max_udp_payload_size`), which would cap the host's MTU search. Build by
         // hand so [`endpoint_config`] can advertise jumbo.
@@ -339,6 +322,17 @@ pub fn media_keys(
     let keys = crate::crypto::MediaKeys::derive(&out, suite);
     out.zeroize();
     Some(keys)
+}
+
+/// Whether a dial failed because the peer speaks none of the offered protocols: TLS alert 120
+/// (`no_application_protocol`), from either end.
+pub fn refused_alpn(e: &quinn::ConnectionError) -> bool {
+    let alert = quinn::TransportErrorCode::crypto(120);
+    match e {
+        quinn::ConnectionError::ConnectionClosed(c) => c.error_code == alert,
+        quinn::ConnectionError::TransportError(t) => t.code == alert,
+        _ => false,
+    }
 }
 
 /// The ALPN a connection settled on, `None` before the handshake or without one.

@@ -55,14 +55,14 @@ run_cli() {
         # PATH at all — which is the environment a Steam launch option can leave us in.
         exec "${PF_CLIENT_BIN%/*}/punktfunk" "$@"
     fi
-    exec "$FLATPAK" run --arch=x86_64 --command=punktfunk "$APPID" "$@"
+    exec "$FLATPAK" run --command=punktfunk "$APPID" "$@"
 }
 
 run_session() {
     if [ -n "${PF_CLIENT_BIN:-}" ]; then
         exec "$PF_CLIENT_BIN" "$@"
     fi
-    exec "$FLATPAK" run --arch=x86_64 "$APPID" "$@"
+    exec "$FLATPAK" run "$APPID" "$@"
 }
 
 # What we are about to run, for the log line each branch prints.

@@ -15,7 +15,9 @@ use super::*;
 mod desktop;
 #[cfg(not(windows))]
 pub use desktop::valid_desktop_id;
+mod emulator;
 mod exec;
+pub use emulator::spec_is_valid as emulator_spec_is_valid;
 pub use exec::{spec_is_valid as exec_spec_is_valid, ExecRecipe};
 #[cfg(windows)]
 mod windows;
@@ -61,14 +63,14 @@ pub fn resolve_launch(id: &str) -> Option<LaunchTarget> {
     plat::launch_target(entry, game)
 }
 
-/// Recipe for an `exec`-kind entry, built from the owning plugin's manifest. `None` for every
-/// other kind, so both OS resolvers try this first.
+/// Recipe for an `exec` entry, built from the owning plugin's manifest, or an `emulator` entry,
+/// built by hermir. `None` for every other kind, so both OS resolvers try this first.
 ///
 /// Lives here rather than in `command_for` / `windows_launch_for` because it needs `provider`
 /// (stamped from `PUT /library/provider/{provider}`): the manifest that may be used is the one
 /// belonging to the plugin that published the entry.
 fn exec_recipe(entry: &GameEntry) -> Option<ExecRecipe> {
-    exec::recipe(entry)
+    exec::recipe(entry).or_else(|| emulator::recipe(entry))
 }
 
 // Per-kind launch values. Scanners supply the VALUE; the host builds the URI.

@@ -1,6 +1,6 @@
 ---
 title: Connection & discovery
-description: Fixes for a client that can't find or reach the host — other streaming hosts, discovery, the video port, wake, pairing and plugin pages.
+description: Fixes for a client that can't find or reach the host — other streaming hosts, discovery, wake, pairing and plugin pages.
 ---
 
 Fixes for a client that can't find or reach the host. A Windows host on a **Public** network is
@@ -43,16 +43,6 @@ The host admits only paired devices. Approve the device in the web console, or p
 pairing again.
 
 ## After connecting
-
-### Video is slow to start, or fails across subnets
-
-A host firewall drops the client's first packet to the video port, which is random per session.
-Each start then waits about 2.5 s, and the host log warns
-`no hole-punch reached this host's data port`.
-
-[Pin the video port](/docs/friends-over-the-internet#pin-the-video-port), then open it on a Linux
-host, for example `sudo ufw allow 9779/udp`. A pinned port carries one session at a time; a second
-one falls back to a random port.
 
 ### A plugin's interface doesn't load
 

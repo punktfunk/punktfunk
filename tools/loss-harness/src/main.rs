@@ -2,24 +2,28 @@
 //!
 //! Drives access units through the in-process loopback at increasing loss rates, for
 //! both FEC schemes, and prints how many frames survive. A pure-software stand-in for
-//! `tc netem` that needs no network and runs anywhere `punktfunk_core` builds. The real punktfunk/1
-//! harness adds `tc netem` jitter/reorder on the UDP path.
+//! `tc netem` that needs no network and runs anywhere `punktfunk_core` builds. The real harness
+//! adds `tc netem` jitter/reorder on the UDP path.
 #![forbid(unsafe_code)]
 
-use punktfunk_core::config::{Config, FecConfig, FecScheme, ProtocolPhase, Role};
-use punktfunk_core::crypto::SessionKey;
+use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
 use punktfunk_core::error::PunktfunkError;
 use punktfunk_core::packet::{FLAG_PIC, FLAG_SOF, USER_FLAG_CHUNK_ALIGNED};
-use punktfunk_core::session::Session;
+use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::loopback_pair;
+
+/// Unsealed: loss recovery does not depend on the AEAD. Capture times count from 0.
+fn media() -> MediaV2 {
+    MediaV2 {
+        clock_origin_ns: 0,
+        keys: None,
+        clock: None,
+    }
+}
 
 fn config(role: Role, scheme: FecScheme, drop_period: u32) -> Config {
     Config {
         role,
-        phase: match scheme {
-            FecScheme::Gf8 => ProtocolPhase::P1GameStream,
-            FecScheme::Gf16 => ProtocolPhase::P2Punktfunk,
-        },
         fec: FecConfig {
             scheme,
             fec_percent: 25,
@@ -27,9 +31,6 @@ fn config(role: Role, scheme: FecScheme, drop_period: u32) -> Config {
         },
         shard_payload: 1024,
         max_frame_bytes: 8 * 1024 * 1024,
-        encrypt: false,
-        key: SessionKey::Aes128Gcm([0u8; 16]),
-        salt: [0u8; 4],
         loopback_drop_period: drop_period,
     }
 }
@@ -46,8 +47,18 @@ fn run(
     streamed: bool,
 ) -> (usize, usize) {
     let (h, c) = loopback_pair(drop_period, 0);
-    let mut host = Session::new(config(Role::Host, scheme, drop_period), Box::new(h)).unwrap();
-    let mut client = Session::new(config(Role::Client, scheme, drop_period), Box::new(c)).unwrap();
+    let mut host = Session::new(
+        config(Role::Host, scheme, drop_period),
+        media(),
+        Box::new(h),
+    )
+    .unwrap();
+    let mut client = Session::new(
+        config(Role::Client, scheme, drop_period),
+        media(),
+        Box::new(c),
+    )
+    .unwrap();
 
     let send_wires = |host: &mut Session, wires: Vec<Vec<u8>>| {
         let refs: Vec<&[u8]> = wires.iter().map(|w| w.as_slice()).collect();
@@ -107,7 +118,6 @@ fn run(
 fn partial_config(role: Role) -> Config {
     Config {
         role,
-        phase: ProtocolPhase::P2Punktfunk,
         fec: FecConfig {
             scheme: FecScheme::Gf16,
             fec_percent: 0,
@@ -115,9 +125,6 @@ fn partial_config(role: Role) -> Config {
         },
         shard_payload: 1408,
         max_frame_bytes: 8 * 1024 * 1024,
-        encrypt: false,
-        key: SessionKey::Aes128Gcm([0u8; 16]),
-        salt: [0u8; 4],
         loopback_drop_period: 0, // loss is injected here, per packet, so it can be random
     }
 }
@@ -206,8 +213,8 @@ fn run_partial(
     const FRAME_NS: u64 = 16_666_667;
 
     let (h, c) = loopback_pair(0, 0);
-    let mut host = Session::new(partial_config(Role::Host), Box::new(h)).unwrap();
-    let mut client = Session::new(partial_config(Role::Client), Box::new(c)).unwrap();
+    let mut host = Session::new(partial_config(Role::Host), media(), Box::new(h)).unwrap();
+    let mut client = Session::new(partial_config(Role::Client), media(), Box::new(c)).unwrap();
     // The PyroWave client's real setting (`client/pump/handshake.rs` turns this on for every
     // CODEC_PYROWAVE session).
     client.set_deliver_partial_frames(true);
@@ -365,7 +372,7 @@ fn main() {
     let periods = [0u32, 32, 16, 8, 6, 4, 3, 2];
 
     println!("punktfunk loss-harness — 25% FEC, {frames} frames of {frame_len} bytes");
-    println!("(GF8 = P1/GameStream-compat, GF16 = P2/wall-breaker, strm = streamed-AU wire)\n");
+    println!("(GF8 = GameStream-sized blocks, GF16 = native, strm = streamed-AU wire)\n");
     println!(
         "{:>10}  {:>9}  {:>14}  {:>14}  {:>14}",
         "drop 1/N", "~loss %", "GF8 recovered", "GF16 recovered", "GF16 strm"

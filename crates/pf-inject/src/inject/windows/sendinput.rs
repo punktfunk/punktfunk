@@ -4,6 +4,11 @@
 //! retry-on-failure: the thread stays bound and only reattaches
 //! (`OpenInputDesktop`/`SetThreadDesktop`) when `SendInput` reports a short write.
 //!
+//! Mouse and key events go out through the resident HID device first
+//! ([`crate::mouse_windows::with_hid`]): `SendInput` marks everything injected, and games
+//! behind kernel anti-cheat drop it. `SendInput` keeps text, touch, and whatever the device
+//! can't carry.
+//!
 //! Keyboard (`crate::KEY_FLAG_SEMANTIC_VK`): first-party clients send US-positional
 //! VKs, resolved through [`positional_vk_to_scan`]. GameStream/Moonlight send
 //! layout-semantic VKs, resolved under the foreground app's layout. Never resolve a
@@ -122,6 +127,44 @@ impl SendInputInjector {
         self.send(&inputs)
     }
 
+    /// Send `event` as a report from the resident HID device, which raw input and anti-cheat
+    /// read as hardware. `false` leaves it to `SendInput`: no device (a seat host, an old
+    /// driver), text, touch, an unmapped key, or a point off the primary monitor.
+    fn inject_hid(&mut self, event: &InputEvent) -> bool {
+        use crate::mouse_windows::with_hid;
+        let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
+        match event.kind {
+            InputKind::MouseMove => with_hid(|m| m.move_by(event.x, event.y)).is_some(),
+            InputKind::MouseMoveAbs => abs_desktop_px(event)
+                .and_then(crate::stream_target::primary_hid_abs)
+                .and_then(|(x, y)| with_hid(|m| m.move_to(x, y)))
+                .is_some(),
+            InputKind::MouseButtonDown | InputKind::MouseButtonUp => hid_button_bit(event.code)
+                .and_then(|bit| with_hid(|m| m.button(bit, down)))
+                .is_some(),
+            InputKind::MouseScroll | InputKind::Scroll => with_hid(|m| {
+                for op in self.scroll.plan(event) {
+                    if let ScrollOp::Discrete120 { horizontal, value } = op {
+                        m.scroll(horizontal, value);
+                    }
+                }
+            })
+            .is_some(),
+            InputKind::KeyDown | InputKind::KeyUp => {
+                let vk = (event.code & 0xff) as u16;
+                let semantic = (event.flags & crate::KEY_FLAG_SEMANTIC_VK) != 0;
+                let usage = if vk == crate::keymap::VK_PAUSE {
+                    Some(crate::keymap::HID_USAGE_PAUSE)
+                } else {
+                    key_scan(vk, semantic, |vk| scan_ex(vk, semantic))
+                        .and_then(|(scan, ext)| crate::keymap::scan_to_hid_usage(scan, ext))
+                };
+                usage.and_then(|u| with_hid(|m| m.key(u, down))).is_some()
+            }
+            _ => false,
+        }
+    }
+
     /// Inject with Sunshine's retry-on-failure: stay bound to the last desktop, and only
     /// when `SendInput` reports a short write (0 = input desktop switched) reattach and
     /// retry once. No per-event `OpenInputDesktop`/`SetThreadDesktop`.
@@ -167,6 +210,9 @@ impl Drop for SendInputInjector {
 
 impl InputInjector for SendInputInjector {
     fn inject(&mut self, event: &InputEvent) -> Result<()> {
+        if self.inject_hid(event) {
+            return Ok(());
+        }
         let down = matches!(event.kind, InputKind::MouseButtonDown | InputKind::KeyDown);
         match event.kind {
             InputKind::MouseMove => self.send(&[mouse(MOUSEINPUT {
@@ -239,15 +285,7 @@ impl SendInputInjector {
 /// over the desktop alone is the Extend-topology offset bug (design/pen-tablet-input.md).
 /// `None` for a zero extent, which the contract drops.
 fn abs_move_input(event: &InputEvent) -> Option<MOUSEINPUT> {
-    let w = (event.flags >> 16) & 0xffff;
-    let h = event.flags & 0xffff;
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let cx = (event.x.clamp(0, w as i32)) as f64 / w as f64;
-    let cy = (event.y.clamp(0, h as i32)) as f64 / h as f64;
-    let px = crate::stream_target::map_normalized(cx, cy);
-    let (ax, ay) = crate::stream_target::desktop_px_to_virtualdesk(px);
+    let (ax, ay) = crate::stream_target::desktop_px_to_virtualdesk(abs_desktop_px(event)?);
     Some(MOUSEINPUT {
         dx: ax,
         dy: ay,
@@ -255,6 +293,31 @@ fn abs_move_input(event: &InputEvent) -> Option<MOUSEINPUT> {
         dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
         time: 0,
         dwExtraInfo: 0,
+    })
+}
+
+/// The streamed-output desktop pixel an absolute move names. `None` for a zero extent.
+fn abs_desktop_px(event: &InputEvent) -> Option<(i32, i32)> {
+    let w = (event.flags >> 16) & 0xffff;
+    let h = event.flags & 0xffff;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let cx = (event.x.clamp(0, w as i32)) as f64 / w as f64;
+    let cy = (event.y.clamp(0, h as i32)) as f64 / h as f64;
+    Some(crate::stream_target::map_normalized(cx, cy))
+}
+
+/// Wire button 1..=5 (left, middle, right, X1, X2) → HID button bit (primary, secondary,
+/// middle, X1, X2).
+fn hid_button_bit(code: u32) -> Option<u8> {
+    Some(match code {
+        1 => 0,
+        2 => 2,
+        3 => 1,
+        4 => 3,
+        5 => 4,
+        _ => return None,
     })
 }
 
@@ -280,10 +343,8 @@ fn mouse_button_input(code: u32, down: bool) -> Option<MOUSEINPUT> {
     })
 }
 
-/// One key edge as a scancode input. Positional VKs take the US table for the layout-variant
-/// typing area; everything else, and every semantic VK, goes through `map` (the extended
-/// scancode `MapVirtualKeyExW` returns, 0 = unmappable → `None`). Pause make is E1 1D 45:
-/// scan 0x45 is NumLock and KEYEVENTF_EXTENDEDKEY invents E0+45, so Pause goes by `wVk`.
+/// One key edge as a scancode input ([`key_scan`]). Pause make is E1 1D 45: scan 0x45 is
+/// NumLock and KEYEVENTF_EXTENDEDKEY invents E0+45, so Pause goes by `wVk`.
 fn key_input(
     vk: u16,
     semantic: bool,
@@ -303,25 +364,7 @@ fn key_input(
             dwExtraInfo: 0,
         });
     }
-    let table = if semantic {
-        None
-    } else {
-        positional_vk_to_scan(vk)
-    };
-    let (scan, extended) = match table {
-        // Typing area: never E0-extended. Keypad Enter is.
-        Some(scan) => (scan, crate::keymap::vk_forced_extended(vk)),
-        None => {
-            let sc_ex = map(vk);
-            if sc_ex == 0 {
-                return None;
-            }
-            (
-                (sc_ex & 0xff) as u16,
-                (sc_ex & 0xe000) == 0xe000 || crate::keymap::vk_forced_extended(vk),
-            )
-        }
-    };
+    let (scan, extended) = key_scan(vk, semantic, map)?;
     let mut flags = KEYEVENTF_SCANCODE;
     if extended {
         flags |= KEYEVENTF_EXTENDEDKEY;
@@ -336,6 +379,30 @@ fn key_input(
         time: 0,
         dwExtraInfo: 0,
     })
+}
+
+/// A key's set-1 scancode and E0 flag. Positional VKs take the US table for the
+/// layout-variant typing area; everything else, and every semantic VK, goes through `map`
+/// (0 = unmappable → `None`).
+fn key_scan(vk: u16, semantic: bool, map: impl FnOnce(u16) -> u32) -> Option<(u16, bool)> {
+    let table = if semantic {
+        None
+    } else {
+        positional_vk_to_scan(vk)
+    };
+    match table {
+        // Typing area: never E0-extended. Keypad Enter is.
+        Some(scan) => Some((scan, crate::keymap::vk_forced_extended(vk))),
+        None => {
+            let sc_ex = map(vk);
+            (sc_ex != 0).then(|| {
+                (
+                    (sc_ex & 0xff) as u16,
+                    (sc_ex & 0xe000) == 0xe000 || crate::keymap::vk_forced_extended(vk),
+                )
+            })
+        }
+    }
 }
 
 /// `MapVirtualKeyExW` VK → extended scancode, under the foreground app's layout for a
@@ -586,5 +653,21 @@ mod tests {
         let ki = key_input(0x6C, false, true, |_| 0).expect("keypad Enter maps");
         assert_eq!(ki.wScan, 0x1C);
         assert!(ki.dwFlags.contains(KEYEVENTF_EXTENDEDKEY));
+    }
+
+    /// The HID path reuses the scancode resolution, then the keyboard-page table. Wire button 2
+    /// is the middle one, which HID numbers third.
+    #[test]
+    fn keys_and_buttons_reach_their_hid_usages() {
+        let usage = |vk, sc_ex| {
+            key_scan(vk, false, |_| sc_ex)
+                .and_then(|(scan, ext)| crate::keymap::scan_to_hid_usage(scan, ext))
+        };
+        assert_eq!(usage(0x41, 0), Some(0x04)); // A, positional table
+        assert_eq!(usage(0x26, 0xE048), Some(0x52)); // Up, E0 48
+        assert_eq!(usage(0xA3, 0x1D), Some(0xE4)); // right Ctrl, forced E0
+        assert_eq!(usage(0x6C, 0), Some(0x58)); // keypad Enter
+        let bits: Vec<_> = (1..=6).map(hid_button_bit).collect();
+        assert_eq!(bits, [Some(0), Some(2), Some(1), Some(3), Some(4), None]);
     }
 }

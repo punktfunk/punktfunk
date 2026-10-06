@@ -1442,7 +1442,13 @@ mod tests {
             std::thread::spawn(move || {
                 input_thread(
                     input_rx,
-                    super::super::link::SessionLink::Quic(host_conn),
+                    super::super::link::SessionLink::QuicV2(
+                        host_conn.clone(),
+                        Arc::new(super::super::link::V2Link::new(
+                            host_conn,
+                            Arc::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap()),
+                        )),
+                    ),
                     InputRoute::new(inj_tx),
                     GamepadPref::Xbox360,
                     false,

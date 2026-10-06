@@ -19,13 +19,11 @@ static PunktfunkConfig make_config(uint32_t role, uint32_t drop_period) {
     memset(&c, 0, sizeof(c));
     c.struct_size = (uint32_t)sizeof(PunktfunkConfig);
     c.role = role;                 /* 0 = host, 1 = client */
-    c.phase = 1;                   /* P1, GameStream-compatible */
     c.fec_scheme = 0;              /* GF(2^8) */
     c.fec_percent = 25;
     c.max_data_per_block = 64;
     c.shard_payload = 1024;
     c.max_frame_bytes = 8 * 1024 * 1024;
-    c.encrypt = 0;
     c.loopback_drop_period = drop_period;
     return c;
 }

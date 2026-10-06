@@ -124,6 +124,7 @@ fn shape_from_overlay(ov: &pf_frame::CursorOverlay, scale: f64) -> Option<Cursor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use punktfunk_core::quic::v2::msg::{decode, V2Message};
     use std::sync::Arc;
 
     fn overlay(w: u32, h: u32, hot: (u32, u32)) -> pf_frame::CursorOverlay {
@@ -145,7 +146,7 @@ mod tests {
         let s = shape_from_overlay(&overlay(32, 32, (4, 5)), 1.0).unwrap();
         assert_eq!((s.w, s.h, s.hot_x, s.hot_y, s.serial), (32, 32, 4, 5, 3));
         assert_eq!(s.rgba.len(), 32 * 32 * 4);
-        assert!(s.encode().len() <= u16::MAX as usize);
+        assert!(s.encode_v2().len() <= u16::MAX as usize);
     }
 
     #[test]
@@ -155,8 +156,9 @@ mod tests {
         assert!(s.w <= CURSOR_SHAPE_MAX_SIDE && s.h <= CURSOR_SHAPE_MAX_SIDE);
         assert_eq!(s.rgba.len(), s.w as usize * s.h as usize * 4);
         assert!(s.hot_x < s.w && s.hot_y < s.h);
-        assert!(s.encode().len() <= u16::MAX as usize);
-        assert_eq!(CursorShape::decode(&s.encode()).unwrap(), s);
+        assert!(s.encode_v2().len() <= u16::MAX as usize);
+        let body = s.fields().into_body();
+        assert_eq!(decode::<CursorShape>(CursorShape::TYPE, &body).unwrap(), s);
     }
 
     #[test]

@@ -197,10 +197,7 @@ impl StreamState {
                 Err(e) => {
                     tracing::warn!(error = %format!("{e:#}"), ?new_mode,
                         "mode-switch rebuild failed — staying on the current mode");
-                    let _ = self.reconfig_result_tx.send(Reconfigured {
-                        accepted: true,
-                        mode: self.delivered_mode(),
-                    });
+                    self.tell_delivered(self.delivered_mode(), true);
                     false
                 }
             };
@@ -580,10 +577,7 @@ impl StreamState {
             pack_mode(actual.width, actual.height, actual.refresh_hz),
             Ordering::Relaxed,
         );
-        let _ = self.reconfig_result_tx.send(Reconfigured {
-            accepted: true,
-            mode: actual,
-        });
+        self.tell_delivered(actual, true);
         Ok(true)
     }
 }

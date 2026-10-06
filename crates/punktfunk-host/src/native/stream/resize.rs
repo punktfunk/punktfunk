@@ -1,7 +1,7 @@
 //! The Windows in-place resize: mode-set the live monitor, restore its presentation, swap only
 //! the encoder. Also the topology re-assert recovery, which is the same path with a liveness gate.
 
-use super::pipeline::{display_mode_for, is_gamescope, open_session_encoder, pacing_hz};
+use super::pipeline::{display_mode_for, open_session_encoder, pacing_hz};
 use super::state::StreamState;
 use super::*;
 
@@ -20,7 +20,7 @@ impl StreamState {
         let Some(cur_target) = self.capturer.capture_target_id() else {
             return false;
         };
-        let new_display_mode = display_mode_for(new_mode, is_gamescope(self.vd.as_ref()));
+        let new_display_mode = display_mode_for(new_mode, self.vd.name());
         let vout = match crate::vdisplay::registry::acquire(
             &mut self.vd,
             new_display_mode,
@@ -187,6 +187,7 @@ impl StreamState {
         self.enc = new_enc;
         self.carry_pipelining();
         self.frame = new_frame;
+        self.epoch = self.epoch.wrapping_add(1);
         self.interval = std::time::Duration::from_secs_f64(1.0 / effective_hz.max(1) as f64);
         trace.mark("encoder_open");
         true

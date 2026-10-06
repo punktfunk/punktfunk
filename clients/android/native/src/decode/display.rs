@@ -231,17 +231,14 @@ pub(super) fn apply_reported_dataspace(
 
 /// The decoder's picture size: the crop rect when the output format carries one (1080 rows decode
 /// into a 1088-row buffer), else its width × height. `None` before a format is known.
+///
+/// The NDK format holds the crop as one inclusive rect under `crop`. Only Java's `MediaFormat`
+/// splits it into `crop-left`…`crop-bottom`, so those keys never exist here.
 pub(super) fn picture_size(codec: &MediaCodec) -> Option<(i32, i32)> {
     let fmt = codec.output_format();
     let (w, h) = (fmt.i32("width")?, fmt.i32("height")?);
-    let crop = (
-        fmt.i32("crop-left"),
-        fmt.i32("crop-top"),
-        fmt.i32("crop-right"),
-        fmt.i32("crop-bottom"),
-    );
-    Some(match crop {
-        (Some(l), Some(t), Some(r), Some(b)) if r >= l && b >= t => (r - l + 1, b - t + 1),
+    Some(match fmt.rect("crop") {
+        Some((l, t, r, b)) if r >= l && b >= t => (r - l + 1, b - t + 1),
         _ => (w, h),
     })
 }

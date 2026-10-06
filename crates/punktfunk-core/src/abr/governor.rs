@@ -358,6 +358,7 @@ mod tests {
                 probe: false,
                 probe_target_kbps: None,
                 ramp: false,
+                probe_only: false,
                 reads_delivery,
                 pin_kbps: None,
             },
