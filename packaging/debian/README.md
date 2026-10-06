@@ -32,7 +32,8 @@ bun they run on, at `/usr/lib/punktfunk-bun/bun`, never on PATH.
 
 **`punktfunk-seats`** (`build-seats-deb.sh`) is the root supervisor behind profile seats. The host
 job builds it beside the host, and `punktfunk-host` Recommends it. It ships disabled: the console
-turns seats on. It pins `punktfunk-host` to its own version.
+turns seats on. It pins `punktfunk-host` to its own version. It also carries the door's units, its
+root helper and its polkit rule (Reachable without logging in), disabled the same way.
 
 Package layout mirrors the Fedora RPM (`../rpm/punktfunk.spec`): the host binary, the `/dev/uinput`
 udev rule, the systemd **user** unit, headless session helpers, the example config, and the OpenAPI

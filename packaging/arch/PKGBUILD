@@ -415,10 +415,11 @@ package_punktfunk-client() {
 }
 
 package_punktfunk-seats() {
-  pkgdesc="punktfunk seat supervisor — a user, a logind session and a host per profile (root daemon, ships disabled)"
+  pkgdesc="punktfunk seat supervisor and door — a user, a logind session and a host per profile (root daemon, ships disabled)"
   # The host is pinned: the supervisor and the host it starts per seat speak one socket protocol.
-  # The rest is what the supervisor runs: useradd/userdel, setfacl, loginctl/systemctl, pkill.
-  depends=("punktfunk-host=${pkgver}-${pkgrel}" 'shadow' 'acl' 'systemd' 'procps-ng')
+  # The rest is what the supervisor and the door helper run: useradd/groupadd/usermod, runuser and
+  # setpriv, setfacl, loginctl/systemctl, pkill.
+  depends=("punktfunk-host=${pkgver}-${pkgrel}" 'shadow' 'util-linux' 'acl' 'systemd' 'procps-ng')
   install=punktfunk-seats.install
   local R; R="$(_repo)"; local T="$srcdir/target/release"
 
@@ -433,6 +434,12 @@ package_punktfunk-seats() {
     install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
   done
   install -Dm0644 "$R/packaging/linux/punktfunk-seats.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/punktfunk-seats.conf"
+  # The door: the box's host as a system service, and the root helper the console turns it on with.
+  install -Dm0755 "$R/packaging/linux/door-helper" "$pkgdir/usr/libexec/punktfunk/door-helper"
+  for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
+    install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
+  done
+  install -Dm0644 "$R/packaging/linux/49-punktfunk-door.rules" "$pkgdir/usr/share/polkit-1/rules.d/49-punktfunk-door.rules"
   install -Dm0644 "$R/LICENSE-MIT"    "$pkgdir/usr/share/licenses/punktfunk-seats/LICENSE-MIT"
   install -Dm0644 "$R/LICENSE-APACHE" "$pkgdir/usr/share/licenses/punktfunk-seats/LICENSE-APACHE"
 }

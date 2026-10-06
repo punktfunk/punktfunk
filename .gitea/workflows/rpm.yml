@@ -80,6 +80,7 @@ on:
       - 'packaging/linux/*.sh'
       - 'packaging/linux/*.tmpfiles'
       - 'packaging/linux/seat-*'
+      - 'packaging/linux/door-*'
       - 'packaging/linux/*.xml'
       - 'packaging/linux/icons/**'
       - 'LICENSE-MIT'

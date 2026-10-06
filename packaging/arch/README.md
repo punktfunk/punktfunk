@@ -143,6 +143,7 @@ neither auto-enabled. The commands are on the
 - `PKGBUILD` — split package: `punktfunk-host` + `punktfunk-client` + `punktfunk-seats` (builds the
   working tree via `PF_SRCDIR`, or a git tag for AUR). `punktfunk-seats` is the root supervisor
   behind profile seats: a host `optdepends`, installed under `/usr/libexec/punktfunk`, never enabled.
+  It also carries the door's units, root helper and polkit rule.
 - `punktfunk-host.install` / `punktfunk-client.install` — pacman scriptlets (udev reload + sysctl +
   first-run hint, incl. the ufw/firewalld enable command for whichever is present), mirror the RPM
   `%post` / deb postinst. `punktfunk-scripting.install` loads the runner's AppArmor profile.

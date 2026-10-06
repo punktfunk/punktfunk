@@ -13,9 +13,10 @@ post_install() {
 post_upgrade() {
   _ensure_dirs
   # Restarts a running daemon, never enables one. Running seats stay up.
-  systemctl try-restart punktfunk-seats.service 2>/dev/null || true
+  systemctl try-restart punktfunk-seats.service punktfunk-door.service punktfunk-web-door.service 2>/dev/null || true
 }
 
 pre_remove() {
-  systemctl disable --now punktfunk-seats.service 2>/dev/null || true
+  # door-helper enables the door's units, so removal disables them.
+  systemctl disable --now punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service 2>/dev/null || true
 }

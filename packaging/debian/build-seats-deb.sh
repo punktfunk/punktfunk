@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the punktfunk-seats .deb: the root supervisor that runs a user, a logind session and a
-# host per profile seat. The host .deb Recommends it. Installed, never enabled: the console turns
-# seats on.
+# host per profile seat, and the door's units and root helper (reachable without logging in).
+# The host .deb Recommends it. Installed, never enabled: the console turns seats and the door on.
 #
 # The binary is built beside the host in the same cargo pass (deb.yml), on the Ubuntu 24.04 image,
 # so one package serves 24.04 through 26.04. Without a prebuilt binary the script builds it.
@@ -36,6 +36,11 @@ for f in punktfunk-seats.service punktfunk-seat@.service; do
   install -Dm0644 "packaging/linux/$f" "$STAGE/usr/lib/systemd/system/$f"
 done
 install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles "$STAGE/usr/lib/tmpfiles.d/punktfunk-seats.conf"
+install -Dm0755 packaging/linux/door-helper "$LIBEXEC/door-helper"
+for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
+  install -Dm0644 "packaging/linux/$f" "$STAGE/usr/lib/systemd/system/$f"
+done
+install -Dm0644 packaging/linux/49-punktfunk-door.rules "$STAGE/usr/share/polkit-1/rules.d/49-punktfunk-door.rules"
 install -Dm0644 LICENSE-MIT    "$DOCDIR/LICENSE-MIT"
 install -Dm0644 LICENSE-APACHE "$DOCDIR/LICENSE-APACHE"
 
@@ -70,8 +75,9 @@ rm -rf "$SHLIB_TMP"
 [ -n "$SHDEPS" ] || { echo "dpkg-shlibdeps produced no deps — is dpkg-dev installed?" >&2; exit 1; }
 
 # The host is pinned: the supervisor and the host it starts per seat speak one socket protocol.
-# The rest is what the supervisor runs: useradd/userdel, setfacl, loginctl/systemctl, pkill.
-DEPENDS="$SHDEPS, punktfunk-host (= $VERSION), passwd, acl, systemd, procps"
+# The rest is what the supervisor and the door helper run: useradd/groupadd/usermod, runuser and
+# setpriv, setfacl, loginctl/systemctl, pkill.
+DEPENDS="$SHDEPS, punktfunk-host (= $VERSION), passwd, util-linux, acl, systemd, procps"
 
 INSTALLED_KB="$(du -k -s "$STAGE" | cut -f1)"
 
@@ -88,10 +94,11 @@ Homepage: https://git.unom.io/unom/punktfunk
 Depends: $DEPENDS
 Description: punktfunk seat supervisor (a user, a session and a host per profile)
  The root daemon behind profile seats. Each seat is a system user with its own logind
- session, a headless desktop and a stock punktfunk host.
+ session, a headless desktop and a stock punktfunk host. The package also carries the
+ door units, which keep the box reachable with nobody logged in.
  .
- Installed but not enabled: the console turns seats on. Stopping or restarting the
- daemon leaves running seats up.
+ Installed but not enabled: the console turns seats and the door on. Stopping or
+ restarting the daemon leaves running seats up.
 EOF
 
 cat > "$STAGE/DEBIAN/postinst" <<'EOF'
@@ -106,7 +113,7 @@ if [ "$1" = "configure" ]; then
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload || true
         # Restarts a running daemon, never enables one. Running seats stay up.
-        systemctl try-restart punktfunk-seats.service || true
+        systemctl try-restart punktfunk-seats.service punktfunk-door.service punktfunk-web-door.service || true
     fi
 fi
 exit 0
@@ -115,7 +122,8 @@ cat > "$STAGE/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
-    systemctl disable --now punktfunk-seats.service || true
+    # door-helper enables the door's units, so removal disables them.
+    systemctl disable --now punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service || true
 fi
 exit 0
 EOF

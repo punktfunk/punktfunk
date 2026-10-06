@@ -133,6 +133,7 @@ let
   seats = evalWith {
     services.punktfunk.host = {
       enable = true;
+      openFirewall = true;
       gamescopeHdr = false;
     };
     services.punktfunk.seats.enable = true;
@@ -454,6 +455,73 @@ let
       name = "a host without seats defines neither seat unit";
       ok =
         !(desktop.systemd.services ? punktfunk-seats) && !(desktop.systemd.services ? "punktfunk-seat@");
+    }
+
+    # --- the door: the box's host as a system service ------------------------------------------
+    {
+      # The packaged unit names /usr/bin/punktfunk-host. The empty line first clears it: a second
+      # ExecStart on a simple service is an error.
+      name = "the door runs the system's host build";
+      ok =
+        hasSys seats "punktfunk-door.service"
+          "ExecStart=\nExecStart=/pf-stub/system-punktfunk-host/bin/punktfunk-host serve --door";
+    }
+    {
+      name = "the door's console runs the module's web package";
+      ok =
+        hasSys seats "punktfunk-web-door.service"
+          "ExecStart=\nExecStart=/pf-stub/punktfunk-web/bin/punktfunk-web-server";
+    }
+    {
+      # The helper calls useradd, runuser, flock and awk by name.
+      name = "the door's helpers have a PATH with the account tools";
+      ok =
+        let
+          onPath =
+            name:
+            hasSys seats name "-shadow-"
+            && hasSys seats name "-util-linux-"
+            && hasSys seats name "-gawk-";
+        in
+        onPath "punktfunk-door-on@.service" && onPath "punktfunk-door-off@.service";
+    }
+    {
+      # polkit reads /etc/polkit-1/rules.d; the rule is the package's file, not a copy.
+      name = "the door's polkit rule is the package's file";
+      ok =
+        seats.security.polkit.enable
+        && seats.environment.etc."polkit-1/rules.d/49-punktfunk-door.rules".source
+          == "/pf-stub/punktfunk-seats/share/polkit-1/rules.d/49-punktfunk-door.rules";
+    }
+    {
+      # The rule and the helper both name this group.
+      name = "the door's group exists";
+      ok = seats.users.groups ? punktfunk-update;
+    }
+    {
+      name = "seats open the seat ports with the host's";
+      ok = lib.elem {
+        from = 9779;
+        to = 9782;
+      } seats.networking.firewall.allowedUDPPortRanges;
+    }
+    {
+      # The owner's own host and console stand down while the door serves the box's ports.
+      name = "seats make the user host and console stand down for the door";
+      ok =
+        has seats "punktfunk-host" "ConditionPathExists=!/run/punktfunk-seat-%u\n"
+        && has seats "punktfunk-host" "EnvironmentFile=-/run/punktfunk/seats/%u.env\n"
+        && has seats "punktfunk-web" "ConditionPathExists=!/run/punktfunk-web-door\n";
+    }
+    {
+      name = "a host without seats keeps its user units and ports as they were";
+      ok =
+        !(has appliance "punktfunk-host" "/run/punktfunk-seat")
+        && !(has appliance "punktfunk-host" "/run/punktfunk/seats")
+        && !(has appliance "punktfunk-web" "punktfunk-web-door")
+        && appliance.networking.firewall.allowedUDPPortRanges == [ ]
+        && !(desktop.systemd.services ? punktfunk-door)
+        && !(desktop.users.groups ? punktfunk-update);
     }
 
     # --- the client half must not drag the host's system wiring in -----------------------------

@@ -261,7 +261,9 @@ in
 
   # The seat supervisor: a root daemon, the helpers its units run, and those units and tmpfiles
   # rules with the /usr/libexec path rewritten to this store path. The NixOS module installs them
-  # through `systemd.packages` and `systemd.tmpfiles.packages`. Pure Rust, so no GPU runpath.
+  # through `systemd.packages` and `systemd.tmpfiles.packages`. The door's files ride along: its
+  # two host and console units still name /usr/bin, which the module points at its own packages.
+  # Pure Rust, so no GPU runpath.
   punktfunk-seats = craneLib.buildPackage (
     commonArgs
     // {
@@ -281,6 +283,19 @@ in
             --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"
         done
         install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles "$out/lib/tmpfiles.d/punktfunk-seats.conf"
+        install -Dm0755 packaging/linux/door-helper "$out/libexec/punktfunk/door-helper"
+        substituteInPlace "$out/libexec/punktfunk/door-helper" \
+          --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"
+        for f in punktfunk-door-on@.service punktfunk-door-off@.service; do
+          install -Dm0644 "packaging/linux/$f" "$out/lib/systemd/system/$f"
+          substituteInPlace "$out/lib/systemd/system/$f" \
+            --replace-fail /usr/libexec/punktfunk "$out/libexec/punktfunk"
+        done
+        for f in punktfunk-door.service punktfunk-web-door.service; do
+          install -Dm0644 "packaging/linux/$f" "$out/lib/systemd/system/$f"
+        done
+        install -Dm0644 packaging/linux/49-punktfunk-door.rules \
+          "$out/share/polkit-1/rules.d/49-punktfunk-door.rules"
         # seat-session seeds the portal grant and the virtual speaker from these two files. They
         # live in the package, not the host's, so the store path does not depend on the host build.
         for f in kde-authorized punktfunk-sink.conf; do
