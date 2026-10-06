@@ -86,7 +86,9 @@ impl TritonPad {
                 if let Some(r) = parse_triton_rumble(rep) {
                     rumble = Some(r); // some stacks send haptics on the feature path
                 }
-                queue_raw(pending_raw, HID_RAW_FEATURE, rep);
+                if pf_driver_proto::triton::forwards_to_pad(rep) {
+                    queue_raw(pending_raw, HID_RAW_FEATURE, rep);
+                }
                 // Selects the next GET_REPORT answer (Valve query dance).
                 *last_set = rep.to_vec();
             }

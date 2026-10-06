@@ -97,6 +97,8 @@ impl TritonWinPad {
                 if let Some(r) = parse_triton_rumble(bytes) {
                     rumble = Some(r);
                 }
+            } else if !pf_driver_proto::triton::forwards_to_pad(bytes) {
+                return;
             }
             hidout.push(HidOutput::HidRaw {
                 pad: idx,

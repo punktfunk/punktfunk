@@ -315,7 +315,9 @@ impl UsbInterfaceHandler for TritonHandler {
                         }
                         3 => {
                             self.last_set = framed.clone();
-                            self.queue_raw(HID_RAW_FEATURE, framed);
+                            if pf_driver_proto::triton::forwards_to_pad(&framed) {
+                                self.queue_raw(HID_RAW_FEATURE, framed);
+                            }
                         }
                         _ => {}
                     }
@@ -1047,6 +1049,9 @@ mod tests {
             length: 5,
         };
         h.handle_urb(&iface_dummy, ep0, 5, setup, &[0x87, 3, 9, 0, 0])
+            .unwrap();
+        // hid-steam's lizard-on stays here.
+        h.handle_urb(&iface_dummy, ep0, 2, setup, &[0x85, 0])
             .unwrap();
         let fb = feedback.lock();
         assert_eq!(fb.rumble, Some((0x2000, 0x4000)));

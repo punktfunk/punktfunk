@@ -9,6 +9,27 @@ pub const ID_GET_FIRMWARE_INFO: u8 = 0xF2;
 pub const ID_GET_CONFIG_VALUE: u8 = 0xED;
 /// A Puck slot's live state: never answered from a recording.
 pub const ID_GET_SLOT_STATE: u8 = 0xB4;
+/// Lizard mode off, lizard mode on, and the factory settings — what hid-steam writes when it
+/// binds a pad and again whenever Steam lets go of it.
+pub const ID_CLEAR_DIGITAL_MAPPINGS: u8 = 0x81;
+pub const ID_SET_DEFAULT_DIGITAL_MAPPINGS: u8 = 0x85;
+pub const ID_LOAD_DEFAULT_SETTINGS: u8 = 0x8E;
+
+/// Whether a feature SET from the host's stack goes on to the physical pad. Lizard mode and the
+/// factory settings stay on the virtual pad: the client holds lizard mode off while it forwards
+/// and restores it on release, and a reset would undo the settings Steam wrote. `set` is id-first
+/// or already stripped (a command is `0x80` or above).
+pub fn forwards_to_pad(set: &[u8]) -> bool {
+    let cmd = match set {
+        [first, ..] if *first >= 0x80 => *first,
+        [_, cmd, ..] => *cmd,
+        _ => return true,
+    };
+    !matches!(
+        cmd,
+        ID_CLEAR_DIGITAL_MAPPINGS | ID_SET_DEFAULT_DIGITAL_MAPPINGS | ID_LOAD_DEFAULT_SETTINGS
+    )
+}
 
 /// Devnode property `{783BFBEF-EBC2-4159-80FB-4737ABA2F523}`, pid 2: a virtual SC2's
 /// [`identity_blob`]. The host sets it at `SwDeviceCreate`; the driver reads it at
@@ -299,6 +320,18 @@ pub fn feature_reply(last_set: &[u8], serial: &str, unit_id: u32) -> [u8; 64] {
 mod tests {
     use super::*;
     use crate::gamepad;
+
+    #[test]
+    fn lizard_and_reset_writes_stay_on_the_virtual_pad() {
+        assert!(!forwards_to_pad(&[0x01, 0x85, 0x00]));
+        assert!(!forwards_to_pad(&[0x8E, 0x00]));
+        assert!(!forwards_to_pad(&[0x01, 0x81]));
+        assert!(
+            forwards_to_pad(&[0x01, 0x87, 0x03, 0x08, 0x07]),
+            "Steam's settings go through"
+        );
+        assert!(forwards_to_pad(&[0x01, 0xAE, 0x15, 0x01]));
+    }
 
     /// The driver answers from the blob the host wrote; a torn blob is no identity.
     #[test]
