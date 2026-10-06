@@ -19,6 +19,8 @@ export type ActionOutcome = { readonly "monitor": string }
 export const ActionOutcome = Schema.Struct({ "monitor": Schema.String.annotate({ "description": "Connector streamed from now on." }) }).annotate({ "description": "What `display.next` did (`200`). Power actions answer `202` with no body." })
 export type ActiveGame = { readonly "app_id"?: string | null, readonly "awaiting_window"?: boolean, readonly "client": string, readonly "endable"?: boolean, readonly "grace_remaining_s"?: number | null, readonly "plane": "native" | "gamestream" | "web", readonly "session_id"?: number, readonly "state": string, readonly "store"?: string | null, readonly "title": string }
 export const ActiveGame = Schema.Struct({ "app_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Store-qualified library id (`steam:570`); matches `GET /library`. Absent for a typed GameStream command." })), "awaiting_window": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Present and true while `running` on a host that will report `window` next. A launch hold\nwaits for that instead of revealing a game that is still loading." })), "client": Schema.String.annotate({ "description": "Client-supplied device name of the session that launched it; may be empty." }), "endable": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Present and true when this caller may end it with `POST /game/end`: the operator any\nlaunched game, a paired device only a game it launched." })), "grace_remaining_s": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), Schema.Null]).annotate({ "description": "Seconds until this game is ended — only present on a `grace` row." })), "plane": Schema.Literals(["native", "gamestream", "web"]).annotate({ "description": "`native`, `gamestream` or `web`." }), "session_id": Schema.optionalKey(Schema.Number.annotate({ "description": "Streaming session; `null` while waiting out the reconnect window. Pass it to\n`DELETE /session/{id}` to stop that one session.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "state": Schema.String.annotate({ "description": "`launching` | `running` | `window` (its window is on the streamed screen) | `exited` |\n`untracked` (exit will never be seen) | `grace` (reconnect window) | `detached` (still\nrunning, no session holds it)." }), "store": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Which store surfaced it (`steam`, `heroic`, `custom`, …), when known." })), "title": Schema.String })
+export type AdoptRequest = { readonly "exe": string, readonly "forget"?: boolean }
+export const AdoptRequest = Schema.Struct({ "exe": Schema.String.annotate({ "description": "The copy's program, absolute." }), "forget": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Forget the copy instead." })) })
 export type ApiActiveGpu = { readonly "backend": string, readonly "id": string, readonly "name": string, readonly "sessions": number, readonly "vendor": string }
 export const ApiActiveGpu = Schema.Struct({ "backend": Schema.String.annotate({ "description": "`nvenc` | `amf` | `qsv` | `mf` | `vaapi` | `software`." }), "id": Schema.String.annotate({ "description": "Matches a `gpus` entry; empty when encoding on CPU/software." }), "name": Schema.String, "sessions": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "vendor": Schema.String.annotate({ "description": "`nvidia` | `amd` | `intel` | `other`." }) }).annotate({ "description": "GPU live encode sessions are on now (not the next-session pick)." })
 export type ApiCodec = "h264" | "hevc" | "av1" | "pyrowave"
@@ -65,6 +67,8 @@ export type ClientLogMeta = { readonly "device_name": string, readonly "fingerpr
 export const ClientLogMeta = Schema.Struct({ "device_name": Schema.String.annotate({ "description": "Paired device name at upload, filesystem-sanitized." }), "fingerprint_prefix": Schema.String.annotate({ "description": "First 16 hex chars of the pairing fingerprint — enough to match the roster\nwithout repeating the full identity in every filename." }), "id": Schema.String.annotate({ "description": "Filename stem; pass to fetch/delete." }), "received_ms": Schema.Number.annotate({ "description": "Upload time (unix ms from the file mtime, not the stem timestamp).", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "size_bytes": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) })
 export type ClientLogUploaded = { readonly "id": string }
 export const ClientLogUploaded = Schema.Struct({ "id": Schema.String })
+export type ContentRequest = { readonly "files": ReadonlyArray<string>, readonly "kind": string, readonly "platform": string }
+export const ContentRequest = Schema.Struct({ "files": Schema.Array(Schema.String).annotate({ "description": "The add-on files: absolute under a folder the plugin was granted, or relative to its own\nstate folder." }), "kind": Schema.String.annotate({ "description": "`update` or `dlc`." }), "platform": Schema.String })
 export type DecisionInput = "allow" | "deny" | "forget"
 export const DecisionInput = Schema.Literals(["allow", "deny", "forget"])
 export type DefaultProfile = { readonly "id"?: string | null }
@@ -79,14 +83,22 @@ export type DownloadState = "queued" | "downloading" | "paused" | "installing" |
 export const DownloadState = Schema.Literals(["queued", "downloading", "paused", "installing", "done", "failed", "cancelled"])
 export type DownloadsAccepted = { readonly "matched": number, readonly "unknown": number }
 export const DownloadsAccepted = Schema.Struct({ "matched": Schema.Number.annotate({ "description": "Rows naming one of the provider's titles." }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "unknown": Schema.Number.annotate({ "description": "Rows naming a title the provider doesn't list (the report raced a reconcile)." }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) })
-export type EmulatorCopy = { readonly "config_root"?: string | null, readonly "exe": string, readonly "kind": string, readonly "version"?: string | null }
-export const EmulatorCopy = Schema.Struct({ "config_root": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "exe": Schema.String.annotate({ "description": "The program, or `flatpak run <app id>`." }), "kind": Schema.String.annotate({ "description": "`managed`, `flatpak`, `native` or `portable`." }), "version": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])) }).annotate({ "description": "One copy of an emulator on this host." })
+export type EmulatorCopy = { readonly "config_root"?: string | null, readonly "cores"?: ReadonlyArray<string>, readonly "exe": string, readonly "kind": string, readonly "version"?: string | null }
+export const EmulatorCopy = Schema.Struct({ "config_root": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "cores": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "RetroArch: the libretro cores this copy has (`snes9x`)." })), "exe": Schema.String.annotate({ "description": "The program, or `flatpak run <app id>`." }), "kind": Schema.String.annotate({ "description": "`managed`, `flatpak`, `native` or `portable`." }), "version": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])) }).annotate({ "description": "One copy of an emulator on this host." })
+export type EmulatorRegistry = {  }
+export const EmulatorRegistry = Schema.Struct({  }).annotate({ "description": "hermir's registry, as hermir writes it; its JSON Schema is hermir's own." })
+export type EmulatorStep = { readonly "name"?: string | null, readonly "note"?: string | null, readonly "outcome": string, readonly "source"?: string | null, readonly "target": string }
+export const EmulatorStep = Schema.Struct({ "name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "outcome": Schema.String.annotate({ "description": "`applied`, `present`, `skipped`, `conflict` or `failed`." }), "source": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "target": Schema.String }).annotate({ "description": "What one save or add-on step did." })
 export type EndGameRequest = { readonly "app_id"?: string | null, readonly "streaming"?: boolean }
 export const EndGameRequest = Schema.Struct({ "app_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Store-qualified id (`steam:570`); omit to reach every title." })), "streaming": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Also end games on a live session, not only games nobody is streaming." })) })
 export type EndGameResult = { readonly "ended": number }
 export const EndGameResult = Schema.Struct({ "ended": Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) })
 export type EnvMarker = { readonly "key": string, readonly "value"?: string | null }
 export const EnvMarker = Schema.Struct({ "key": Schema.String, "value": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`None` matches key presence only — safe solely for one-game-at-a-time launchers." })) }).annotate({ "description": "Plugin-owned stores must name this on [`DetectHint`]; the host does not\nread the launcher's files. Heroic's `HEROIC_APP_NAME` is the only signal\nunder Proton." })
+export type ExportedUnitView = { readonly "file": string, readonly "kind": string, readonly "md5": string, readonly "name": string, readonly "size": number }
+export const ExportedUnitView = Schema.Struct({ "file": Schema.String.annotate({ "description": "The file written, spelled the way the request spelled `dir`." }), "kind": Schema.String, "md5": Schema.String.annotate({ "description": "MD5, hex." }), "name": Schema.String, "size": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) })
+export type FirmwareFileView = { readonly "known"?: boolean | null, readonly "md5": string, readonly "name": string }
+export const FirmwareFileView = Schema.Struct({ "known": Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null]).annotate({ "description": "`true` a known good dump, `false` named right but not one, absent when no hashes are known." })), "md5": Schema.String, "name": Schema.String.annotate({ "description": "The file's name." }) })
 export type GameEndReason = "exited" | "terminated"
 export const GameEndReason = Schema.Literals(["exited", "terminated"])
 export type GameMeta = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string> }
@@ -119,6 +131,8 @@ export type HostTheme = { readonly "accent"?: string | null, readonly "mode"?: s
 export const HostTheme = Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#rrggbb`, or `null` when the desktop has no accent to report." })), "mode": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`light` | `dark`, or `null` when the desktop expresses no preference." })), "source": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Where the answer came from, for the console's \"Follow host — Windows\" line.\n`null` when nothing answered." })) }).annotate({ "description": "The desktop's appearance, as far as this host can see it." })
 export type Identity = "shared" | "per-client" | "per-client-mode"
 export const Identity = Schema.Literals(["shared", "per-client", "per-client-mode"]).annotate({ "description": "Stable identity so DEs persist per-display config (KDE scaling). Carried\nas Windows EDID serial + IddCx connector index, KWin per-slot output\nname, and the host-persisted Mutter scale map." })
+export type ImportUnit = { readonly "file": string, readonly "kind": string, readonly "name": string }
+export const ImportUnit = Schema.Struct({ "file": Schema.String.annotate({ "description": "The file to put back: relative to a plugin's own state folder, absolute for the operator." }), "kind": Schema.String, "name": Schema.String })
 export type InputCounts = { readonly "dropped": number, readonly "events": number, readonly "mic": number, readonly "rich": number }
 export const InputCounts = Schema.Struct({ "dropped": Schema.Number.annotate({ "description": "Offers the input queue refused because it was full. Not a wire loss.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "events": Schema.Number.annotate({ "description": "Keyboard, pointer and touch events.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "mic": Schema.Number.annotate({ "description": "Opus microphone frames.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "rich": Schema.Number.annotate({ "description": "Gamepad and stylus batches.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) }).annotate({ "description": "Client datagrams this session took, by class.\n\nCounted up to the moment the session was summarized: the reader task ends with the\nconnection, which closes after this, so a last straggler can fall outside." })
 export type InstallRequest = { readonly "accept_unverified"?: boolean, readonly "id"?: string | null, readonly "source"?: string | null, readonly "spec"?: string | null }
@@ -163,8 +177,8 @@ export type PendingCeremony = { readonly "fingerprint": string, readonly "peer_i
 export const PendingCeremony = Schema.Struct({ "fingerprint": Schema.String, "peer_ip": Schema.String, "uniqueid": Schema.String }).annotate({ "description": "One pairing handshake parked waiting for its PIN." })
 export type PendingDevice = { readonly "access_level"?: string | null, readonly "age_secs": number, readonly "expires_unix"?: number | null, readonly "fingerprint": string, readonly "granted_unix"?: number | null, readonly "grants"?: number | null, readonly "id": number, readonly "name": string, readonly "profile"?: null | { readonly "display_name": string, readonly "id": string }, readonly "source": string, readonly "until_disconnect": boolean }
 export const PendingDevice = Schema.Struct({ "access_level": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Stored mask's preset. `null` with no stored record — unlike\n[`NativeClient`], where it is always derivable." })), "age_secs": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "expires_unix": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()), Schema.Null]).annotate({ "description": "Stored absolute expiry (unix seconds; often already past). `null` if\nunknown or permanent." })), "fingerprint": Schema.String.annotate({ "description": "Hex SHA-256 of the device certificate — what approval pins." }), "granted_unix": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()), Schema.Null]).annotate({ "description": "Stored grant time, unix seconds. `null` if unknown." })), "grants": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), Schema.Null]).annotate({ "description": "Stored mask if this fingerprint was paired before (expired-guest\nre-knock). `null` if unknown, or a pre-grants record (= full)." })), "id": Schema.Number.annotate({ "description": "Approve/deny id. Per-process; entries expire after ~10 minutes.", "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "name": Schema.String.annotate({ "description": "Client's own name, else fingerprint-derived." }), "profile": Schema.optionalKey(Schema.Union([Schema.Null, Schema.Struct({ "display_name": Schema.String, "id": Schema.String }).annotate({ "description": "The profile the device asked to play as. Absent when it named none this host knows." })], { mode: "oneOf" })), "source": Schema.String.annotate({ "description": "Where the knock came from: `\"lan\"` or `\"wan\"`. A `\"wan\"` device cannot be admitted by\napprove — arm a PIN bound to its fingerprint instead." }), "until_disconnect": Schema.Boolean.annotate({ "description": "Stored \"this session\" setting if this fingerprint was paired before. `false` if unknown." }) }).annotate({ "description": "Knock awaiting delegated approval (pair here instead of fetching a PIN)." })
-export type PendingRequest = { readonly "at": string, readonly "core"?: string | null, readonly "emulator"?: string | null, readonly "path": string, readonly "reason"?: string | null, readonly "write": boolean }
-export const PendingRequest = Schema.Struct({ "at": Schema.String, "core": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "A libretro core to install into `path` (RetroArch's cores folder) first." })), "emulator": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "An emulator to install into `path` first: the operator's yes installs, then grants." })), "path": Schema.String, "reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "write": Schema.Boolean }).annotate({ "description": "A path a plugin asked for that the operator has not answered yet." })
+export type PendingRequest = { readonly "at": string, readonly "core"?: string | null, readonly "emulator"?: string | null, readonly "path": string, readonly "reason"?: string | null, readonly "saves"?: boolean, readonly "write": boolean }
+export const PendingRequest = Schema.Struct({ "at": Schema.String, "core": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "A libretro core to install into `path` (RetroArch's cores folder) first." })), "emulator": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "An emulator to install into `path` first: the operator's yes installs, then grants." })), "path": Schema.String, "reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "saves": Schema.optionalKey(Schema.Boolean.annotate({ "description": "The plugin asks to read and restore emulator saves; `path` is the folder that grant lands on." })), "write": Schema.Boolean }).annotate({ "description": "A path a plugin asked for that the operator has not answered yet." })
 export type Plane = "native" | "gamestream" | "web"
 export const Plane = Schema.Literals(["native", "gamestream", "web"]).annotate({ "description": "Origin plane. Every plane must emit; filtering is the consumer's job." })
 export type PlatformCount = { readonly "count": number, readonly "platform": string }
@@ -213,6 +227,8 @@ export type RuntimeRequest = { readonly "enabled": boolean }
 export const RuntimeRequest = Schema.Struct({ "enabled": Schema.Boolean })
 export type RuntimeView = { readonly "detail"?: string | null, readonly "enabled": boolean, readonly "installed": boolean, readonly "principal"?: string | null, readonly "running": boolean, readonly "unit": string }
 export const RuntimeView = Schema.Struct({ "detail": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "enabled": Schema.Boolean, "installed": Schema.Boolean, "principal": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Windows: the account the task runs as." })), "running": Schema.Boolean, "unit": Schema.String.annotate({ "description": "systemd unit or scheduled-task name." }) })
+export type SaveUnitView = { readonly "files": number, readonly "kind": string, readonly "modified": number, readonly "name": string, readonly "shared": boolean, readonly "size": number, readonly "written_at_start": boolean }
+export const SaveUnitView = Schema.Struct({ "files": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "kind": Schema.String.annotate({ "description": "`save`, `memcard` or `state`." }), "modified": Schema.Number.annotate({ "description": "Its newest change, milliseconds since 1970.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "name": Schema.String.annotate({ "description": "The same on every machine; `.tar` ends a folder's." }), "shared": Schema.Boolean.annotate({ "description": "It holds every game's data at once (a shared memory card)." }), "size": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "written_at_start": Schema.Boolean.annotate({ "description": "The emulator writes an empty one when a game first starts." }) }).annotate({ "description": "One save unit on the best copy." })
 export type ScannerInfo = { readonly "enabled": boolean, readonly "entries"?: number | null, readonly "id": string, readonly "label": string, readonly "origin": "builtin" | "plugin", readonly "provider"?: string | null }
 export const ScannerInfo = Schema.Struct({ "enabled": Schema.Boolean, "entries": Schema.optionalKey(Schema.Union([Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), Schema.Null]).annotate({ "description": "Titles this source currently contributes. `None` on `Builtin` (counting would walk launcher files)." })), "id": Schema.String.annotate({ "description": "Entry `store`, provider id, and store claim. One string, so a disabled\ntoggle survives the store's plugin taking over." }), "label": Schema.String, "origin": Schema.Literals(["builtin", "plugin"]).annotate({ "description": "Always `plugin` on this host. `Builtin` remains so OpenAPI still names it for N-1 consoles." }), "provider": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Provider id. `None` only for a `Builtin` source an N-1 host still reports." })) }).annotate({ "description": "One game source and its enable state — the console toggle row." })
 export type ScannerToggle = { readonly "enabled": boolean }
@@ -267,6 +283,8 @@ export type UiCredential = { readonly "port": number, readonly "secret": string 
 export const UiCredential = Schema.Struct({ "port": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "secret": Schema.String }).annotate({ "description": "The only shape that returns a secret. The console BFF denylists this lookup from the browser." })
 export type UninstallRequest = { readonly "pkg": string }
 export const UninstallRequest = Schema.Struct({ "pkg": Schema.String })
+export type UnitRef = { readonly "kind": string, readonly "name": string }
+export const UnitRef = Schema.Struct({ "kind": Schema.String.annotate({ "description": "`save`, `memcard` or `state`." }), "name": Schema.String })
 export type UnpairAllResult = { readonly "unpaired": number }
 export const UnpairAllResult = Schema.Struct({ "unpaired": Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) }).annotate({ "description": "Bulk-unpair result, shared by `/clients` and `/native/clients`.\n\nA count, not 204: unpair-everything is idempotent, and the operator still\nneeds to know whether that was three devices or none." })
 export type UpdateJobInfo = { readonly "received_bytes": number, readonly "stage": string, readonly "started_unix": number, readonly "target_version": string, readonly "total_bytes"?: number | null }
@@ -281,8 +299,8 @@ export type WebTransportInfo = { readonly "allow_pooling": boolean, readonly "ce
 export const WebTransportInfo = Schema.Struct({ "allow_pooling": Schema.Boolean.annotate({ "description": "`allowPooling: true` is a `TypeError` when combined with `serverCertificateHashes`, so a\nclient must pass this. Stated here because a browser that ignores it fails at Web PKI\nvalidation with no useful error." }), "cert_hash_sha256": Schema.String.annotate({ "description": "Lowercase hex SHA-256 of the leaf certificate DER — the bytes that go in\n`serverCertificateHashes[0].value`." }), "cert_hash_sig": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Hex ECDSA-P256-SHA256 signature (ASN.1 DER) by the host's long-lived native identity over\n`\"punktfunk-wt-cert-v1:\" + cert_hash_sha256`. Absent when that identity is the legacy RSA\npair. A browser that has paired MUST check this; one that has not cannot, and does not." })), "expires_at": Schema.Number.annotate({ "description": "Unix seconds. Past this the certificate has rotated and the hash above is stale; fetch\nagain rather than cache. Always under two weeks out — the spec refuses anything longer.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "host_cert_der": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Base64 DER of the native identity's leaf certificate — the key that verifies\n`cert_hash_sig`. A browser hashes it and compares with the fingerprint it stored at\npairing; trusting it without that check would defeat the whole exercise." })), "port": Schema.Number.annotate({ "description": "UDP port the plane listens on. Not the management port, and not the native plane's.", "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) }).annotate({ "description": "Everything `new WebTransport(url, { serverCertificateHashes })` needs." })
 export type WorkspacePlacement = "own" | "current"
 export const WorkspacePlacement = Schema.Literals(["own", "current"]).annotate({ "description": "Where a library launch's windows open on the streamed head.\n\nDefault `own`: the player gets the game on an empty workspace instead of\nthe operator's desk. Honoured only by the backends that can place a launch\n(`claim_workspace`); everywhere else a launch is always `current`.\n\n[`DisplayPolicy`] field, not part of [`EffectivePolicy`]: a preset never\nclobbers it. A library entry's own `on_window.workspace` outranks it." })
-export type AccessRequest = { readonly "cores"?: ReadonlyArray<string>, readonly "emulators"?: ReadonlyArray<string>, readonly "paths"?: ReadonlyArray<AccessPathRequest>, readonly "reason"?: string | null }
-export const AccessRequest = Schema.Struct({ "cores": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "libretro cores the plugin wants in RetroArch (`snes9x`). Each answers with RetroArch's\ncores folder; `refused:no_retroarch` without one on this host." })), "emulators": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "Catalog ids of emulators the plugin wants installed (`pcsx2`). Each answers with the\nfolder the install lands in; the operator's yes installs it, then grants that folder." })), "paths": Schema.optionalKey(Schema.Array(AccessPathRequest)), "reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Why the plugin wants it, in the plugin's words. Optional, sanitized, ≤120 chars." })) })
+export type AccessRequest = { readonly "cores"?: ReadonlyArray<string>, readonly "emulators"?: ReadonlyArray<string>, readonly "paths"?: ReadonlyArray<AccessPathRequest>, readonly "reason"?: string | null, readonly "saves"?: boolean }
+export const AccessRequest = Schema.Struct({ "cores": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "libretro cores the plugin wants in RetroArch (`snes9x`). Each answers with RetroArch's\ncores folder; `refused:no_retroarch` without one on this host." })), "emulators": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "Catalog ids of emulators the plugin wants installed (`pcsx2`). Each answers with the\nfolder the install lands in; the operator's yes installs it, then grants that folder." })), "paths": Schema.optionalKey(Schema.Array(AccessPathRequest)), "reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Why the plugin wants it, in the plugin's words. Optional, sanitized, ≤120 chars." })), "saves": Schema.optionalKey(Schema.Boolean.annotate({ "description": "Ask to read and restore emulator saves. One yes covers every emulator on this host; the\nanswer names the folder the grant lands on." })) })
 export type ActionList = { readonly "actions": ReadonlyArray<ActionInfo> }
 export const ActionList = Schema.Struct({ "actions": Schema.Array(ActionInfo) })
 export type DisplayStateResponse = { readonly "displays": ReadonlyArray<ApiDisplayInfo> }
@@ -303,12 +321,16 @@ export type Download = { readonly "app_id": string, readonly "by"?: string | nul
 export const Download = Schema.Struct({ "app_id": Schema.String.annotate({ "description": "Library id, as `GET /library` lists it." }), "by": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Who asked for it: `console`, a client's label. Absent when the plugin started it." })), "done_bytes": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "eta_s": Schema.optionalKey(Schema.Number.annotate({ "description": "Seconds left at the last 30 s's pace, while downloading with a known total.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "phase": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "rate_bps": Schema.optionalKey(Schema.Number.annotate({ "description": "Bytes per second over the last 5 s, while downloading.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "started_at": Schema.String.annotate({ "description": "RFC 3339." }), "state": DownloadState, "title": Schema.String, "total_bytes": Schema.optionalKey(Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "updated_at": Schema.String.annotate({ "description": "RFC 3339." }) }).annotate({ "description": "One title's download as the host serves it." })
 export type DownloadReport = { readonly "done_bytes"?: number, readonly "error"?: string | null, readonly "external_id": string, readonly "phase"?: string | null, readonly "state": DownloadState, readonly "total_bytes"?: number }
 export const DownloadReport = Schema.Struct({ "done_bytes": Schema.optionalKey(Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Why it failed, one sentence for the player." })), "external_id": Schema.String, "phase": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "What the plugin is doing, in its words: `File 2 of 3`, `Verifying`. At most 80 chars." })), "state": DownloadState, "total_bytes": Schema.optionalKey(Schema.Number.annotate({ "description": "Absent while the size isn't known yet.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))) }).annotate({ "description": "One title in a plugin's report." })
+export type FirmwareStatusView = { readonly "any_of": ReadonlyArray<string>, readonly "found": ReadonlyArray<FirmwareFileView>, readonly "note"?: string | null, readonly "ok": boolean, readonly "optional": boolean, readonly "platform": string }
+export const FirmwareStatusView = Schema.Struct({ "any_of": Schema.Array(Schema.String).annotate({ "description": "Accepted file names." }), "found": Schema.Array(FirmwareFileView), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "What the platform needs, in a phrase a UI shows." })), "ok": Schema.Boolean.annotate({ "description": "The need is met." }), "optional": Schema.Boolean, "platform": Schema.String }).annotate({ "description": "One platform's firmware on the best copy." })
 export type MetadataEntryInput = { readonly "art"?: { readonly "header"?: string | null, readonly "hero"?: string | null, readonly "logo"?: string | null, readonly "portrait"?: string | null }, readonly "id": string, readonly "meta"?: GameMeta }
 export const MetadataEntryInput = Schema.Struct({ "art": Schema.optionalKey(Schema.Struct({ "header": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Steam `header.jpg` — the universal fallback." })), "hero": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Steam `library_hero.jpg`." })), "logo": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Steam `logo.png`." })), "portrait": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Steam `library_600x900.jpg`." })) }).annotate({ "description": "`http(s)` URLs only; the host fetches and keeps them like a provider's CDN art." })), "id": Schema.String.annotate({ "description": "Library id, as `GET /library` lists it (`steam:570`, `custom:3f9a0c1b2d4e`)." }), "meta": Schema.optionalKey(GameMeta) }).annotate({ "description": "One entry in a source's push." })
 export type SessionSettings = { readonly "disconnect_grace_seconds"?: number, readonly "game_on_new_launch"?: GameOnNewLaunch, readonly "game_on_session_end"?: GameOnSessionEnd, readonly "session_on_game_exit"?: boolean, readonly "version"?: number }
 export const SessionSettings = Schema.Struct({ "disconnect_grace_seconds": Schema.optionalKey(Schema.Number.annotate({ "description": "Ignored unless `game_on_session_end` is `Always`.", "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "game_on_new_launch": Schema.optionalKey(GameOnNewLaunch), "game_on_session_end": Schema.optionalKey(GameOnSessionEnd), "session_on_game_exit": Schema.optionalKey(Schema.Boolean), "version": Schema.optionalKey(Schema.Number.annotate({ "format": "int32" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))) })
 export type ProfileUpdate = { readonly "accent"?: string | null, readonly "display_name"?: string | null, readonly "home"?: null | Home }
 export const ProfileUpdate = Schema.Struct({ "accent": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "`#RRGGBB`." })), "display_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "home": Schema.optionalKey(Schema.Union([Schema.Null, Home], { mode: "oneOf" })) }).annotate({ "description": "A change to a profile; absent fields stay." })
+export type ImportUnitsRequest = { readonly "game"?: string | null, readonly "others"?: ReadonlyArray<string>, readonly "platform": string, readonly "units": ReadonlyArray<ImportUnit> }
+export const ImportUnitsRequest = Schema.Struct({ "game": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "others": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "description": "The names a server holds for the same game." })), "platform": Schema.String, "units": Schema.Array(ImportUnit).annotate({ "description": "Rows of one name go to the first of their kinds with a place for it." }) })
 export type LogPage = { readonly "dropped": boolean, readonly "entries": ReadonlyArray<LogEntry>, readonly "next": number }
 export const LogPage = Schema.Struct({ "dropped": Schema.Boolean.annotate({ "description": "Entries between `after` and the first returned one were already evicted." }), "entries": Schema.Array(LogEntry), "next": Schema.Number.annotate({ "description": "Last returned seq, or the request's `after` when the page is empty.", "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)) })
 export type EmulatorStatus = { readonly "detected": ReadonlyArray<EmulatorCopy>, readonly "home": string, readonly "id": string, readonly "managed"?: null | ManagedEmulator, readonly "name": string, readonly "offered": boolean, readonly "platforms": ReadonlyArray<string> }
@@ -361,6 +383,8 @@ export type Job = { readonly "error"?: string | null, readonly "finished_at"?: n
 export const Job = Schema.Struct({ "error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "finished_at": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), Schema.Null])), "id": Schema.String, "kind": Schema.String, "log": Schema.Array(Schema.String), "phase": Schema.String, "started_at": Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), "state": State, "target": Schema.String }).annotate({ "description": "Snake_case matches the management API; index/sources/manifest files use npm camelCase." })
 export type ClientOverlay = { readonly "capture_monitor"?: string | null, readonly "game_session"?: null | GameSession, readonly "identity"?: null | Identity, readonly "keep_alive"?: null | KeepAlive, readonly "max_mode"?: string | null, readonly "mode_conflict"?: null | ModeConflict, readonly "scale"?: number | null, readonly "topology"?: null | Topology }
 export const ClientOverlay = Schema.Struct({ "capture_monitor": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Mirror this connector for this device only. Absent follows the host,\nwhich is also the only way back to a virtual screen — a device cannot\nopt OUT of a host-wide pin. Nobody has asked to; the reverse direction\nis what the field exists for." })), "game_session": Schema.optionalKey(Schema.Union([Schema.Null, GameSession], { mode: "oneOf" })), "identity": Schema.optionalKey(Schema.Union([Schema.Null, Identity], { mode: "oneOf" })), "keep_alive": Schema.optionalKey(Schema.Union([Schema.Null, KeepAlive], { mode: "oneOf" })), "max_mode": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Largest mode this device is granted, `WIDTHxHEIGHT@HZ`. A phone asking for 4K120\non a weak host degrades every other session; the operator caps it once and the\nclient is told the smaller mode rather than silently given one." })), "mode_conflict": Schema.optionalKey(Schema.Union([Schema.Null, ModeConflict], { mode: "oneOf" })), "scale": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "double" }).check(Schema.isFinite()), Schema.Null]).annotate({ "description": "Scale this device's screen is created at, when the desktop has not already\nremembered one for it (`display-management.md` §5.4). Mutter mints a fresh EDID\nserial per session, so its own `monitors.xml` never rematches — without this the\noperator re-sets the scale on every connect." })), "topology": Schema.optionalKey(Schema.Union([Schema.Null, Topology], { mode: "oneOf" })) }).annotate({ "description": "One paired device's deviations from the host policy\n(`design/web-console-overhaul.md` §6.1).\n\nEvery field is optional and absent means **follow the host**. That is the\nwhole point: a copied policy would silently stop following host changes,\nwhile an overlay only pins what the operator actually chose for this\ndevice. The TV wants take-over and keep-forever; the tablet wants its own\nscreen and no linger — one host policy cannot serve both.\n\n`max_displays` and `layout` are deliberately absent: they are properties of\nthe host's desktop, not of a device connecting to it." })
+export type ExportUnitsRequest = { readonly "dir": string, readonly "game"?: string | null, readonly "platform": string, readonly "units": ReadonlyArray<UnitRef> }
+export const ExportUnitsRequest = Schema.Struct({ "dir": Schema.String.annotate({ "description": "The folder the files go to: relative to a plugin's own state folder, absolute for the\noperator. Made when missing." }), "game": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])), "platform": Schema.String, "units": Schema.Array(UnitRef) })
 export type UpdateStatus = { readonly "apply": string, readonly "available": boolean, readonly "channel": string, readonly "channel_hint": string, readonly "check_disabled": boolean, readonly "current_version": string, readonly "install_kind": string, readonly "job"?: null | UpdateJobInfo, readonly "last_checked_unix"?: number | null, readonly "last_error"?: string | null, readonly "last_result"?: null | UpdateResultInfo, readonly "manifest"?: null | UpdateManifestInfo, readonly "not_published": boolean, readonly "opt_in_hint"?: string | null }
 export const UpdateStatus = Schema.Struct({ "apply": Schema.String.annotate({ "description": "`notify` (show the command) | `full` (one-click) | `staged` (apply + reboot)." }), "available": Schema.Boolean.annotate({ "description": "Newer than `current_version` on this channel. Unparseable pairs never flag." }), "channel": Schema.String.annotate({ "description": "`stable` | `canary`." }), "channel_hint": Schema.String.annotate({ "description": "Copy-paste update command for this install kind." }), "check_disabled": Schema.Boolean.annotate({ "description": "`PUNKTFUNK_UPDATE_CHECK=0`." }), "current_version": Schema.String, "install_kind": Schema.String.annotate({ "description": "`windows-installer` | `sysext` | `rpm-ostree` | `apt` | `dnf` | `pacman` |\n`steamos-source` | `nix` | `source`." }), "job": Schema.optionalKey(Schema.Union([Schema.Null, UpdateJobInfo], { mode: "oneOf" })), "last_checked_unix": Schema.optionalKey(Schema.Union([Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)), Schema.Null]).annotate({ "description": "Last successful check (unix seconds)." })), "last_error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "Last check failure, verbatim." })), "last_result": Schema.optionalKey(Schema.Union([Schema.Null, UpdateResultInfo], { mode: "oneOf" })), "manifest": Schema.optionalKey(Schema.Union([Schema.Null, UpdateManifestInfo], { mode: "oneOf" })), "not_published": Schema.Boolean.annotate({ "description": "Feed 404 for this channel: nothing published yet, not a check failure.\nMutually exclusive with `last_error`. Never set once a manifest has been\nseen — a feed that then 404s is an error." }), "opt_in_hint": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "description": "One-click apply is possible but not opted in — command to run\n(Linux: join `punktfunk-update`)." })) })
 export type CustomEntry = { readonly "description"?: string | null, readonly "developer"?: string | null, readonly "genres"?: ReadonlyArray<string>, readonly "platform"?: string | null, readonly "players"?: number | null, readonly "publisher"?: string | null, readonly "region"?: string | null, readonly "release_year"?: number | null, readonly "tags"?: ReadonlyArray<string>, readonly "art"?: Artwork, readonly "audio"?: null | { readonly "sessions"?: AudioSessions }, readonly "detect"?: { readonly "env_marker"?: null | EnvMarker, readonly "exe"?: string | null, readonly "install_dir"?: string | null, readonly "process_name"?: string | null, readonly "steam_appid"?: number | null }, readonly "external_id"?: string | null, readonly "icon"?: string | null, readonly "id": string, readonly "ids"?: { readonly [x: string]: string }, readonly "install"?: null | { readonly "free_bytes"?: number, readonly "size_bytes"?: number, readonly "state": InstallState, readonly "target"?: string | null }, readonly "launch"?: null | LaunchSpec, readonly "on_window"?: { readonly "focus"?: boolean | null, readonly "fullscreen"?: boolean | null, readonly "move_to_stream_output"?: boolean | null, readonly "workspace"?: null | WorkspacePlacement }, readonly "prep"?: ReadonlyArray<PrepCmd>, readonly "provider"?: string | null, readonly "role"?: GameRole, readonly "store"?: string | null, readonly "title": string }
@@ -598,6 +622,46 @@ export type GetEmulators401 = ApiError
 export const GetEmulators401 = ApiError
 export type GetEmulators500 = ApiError
 export const GetEmulators500 = ApiError
+export type GetEmulatorRegistry200 = EmulatorRegistry
+export const GetEmulatorRegistry200 = EmulatorRegistry
+export type GetEmulatorRegistry401 = ApiError
+export const GetEmulatorRegistry401 = ApiError
+export type GetEmulatorRegistry500 = ApiError
+export const GetEmulatorRegistry500 = ApiError
+export type AdoptEmulatorRequestJson = AdoptRequest
+export const AdoptEmulatorRequestJson = AdoptRequest
+export type AdoptEmulator200 = null | EmulatorCopy
+export const AdoptEmulator200 = Schema.Union([Schema.Null, EmulatorCopy], { mode: "oneOf" })
+export type AdoptEmulator400 = ApiError
+export const AdoptEmulator400 = ApiError
+export type AdoptEmulator401 = ApiError
+export const AdoptEmulator401 = ApiError
+export type AdoptEmulator404 = ApiError
+export const AdoptEmulator404 = ApiError
+export type AdoptEmulator409 = ApiError
+export const AdoptEmulator409 = ApiError
+export type InstallEmulatorContentRequestJson = ContentRequest
+export const InstallEmulatorContentRequestJson = ContentRequest
+export type InstallEmulatorContent200 = ReadonlyArray<EmulatorStep>
+export const InstallEmulatorContent200 = Schema.Array(EmulatorStep)
+export type InstallEmulatorContent400 = ApiError
+export const InstallEmulatorContent400 = ApiError
+export type InstallEmulatorContent401 = ApiError
+export const InstallEmulatorContent401 = ApiError
+export type InstallEmulatorContent403 = ApiError
+export const InstallEmulatorContent403 = ApiError
+export type InstallEmulatorContent404 = ApiError
+export const InstallEmulatorContent404 = ApiError
+export type GetEmulatorFirmwareParams = { readonly "platform": string }
+export const GetEmulatorFirmwareParams = Schema.Struct({ "platform": Schema.String })
+export type GetEmulatorFirmware200 = null | FirmwareStatusView
+export const GetEmulatorFirmware200 = Schema.Union([Schema.Null, FirmwareStatusView], { mode: "oneOf" })
+export type GetEmulatorFirmware400 = ApiError
+export const GetEmulatorFirmware400 = ApiError
+export type GetEmulatorFirmware401 = ApiError
+export const GetEmulatorFirmware401 = ApiError
+export type GetEmulatorFirmware404 = ApiError
+export const GetEmulatorFirmware404 = ApiError
 export type InstallEmulator200 = ManagedEmulator
 export const InstallEmulator200 = ManagedEmulator
 export type InstallEmulator400 = ApiError
@@ -636,6 +700,42 @@ export type RemoveEmulator409 = ApiError
 export const RemoveEmulator409 = ApiError
 export type RemoveEmulator500 = ApiError
 export const RemoveEmulator500 = ApiError
+export type GetEmulatorSavesParams = { readonly "platform": string, readonly "game"?: string }
+export const GetEmulatorSavesParams = Schema.Struct({ "platform": Schema.String, "game": Schema.optionalKey(Schema.String) })
+export type GetEmulatorSaves200 = ReadonlyArray<SaveUnitView>
+export const GetEmulatorSaves200 = Schema.Array(SaveUnitView)
+export type GetEmulatorSaves400 = ApiError
+export const GetEmulatorSaves400 = ApiError
+export type GetEmulatorSaves401 = ApiError
+export const GetEmulatorSaves401 = ApiError
+export type GetEmulatorSaves403 = ApiError
+export const GetEmulatorSaves403 = ApiError
+export type GetEmulatorSaves404 = ApiError
+export const GetEmulatorSaves404 = ApiError
+export type ExportEmulatorSavesRequestJson = ExportUnitsRequest
+export const ExportEmulatorSavesRequestJson = ExportUnitsRequest
+export type ExportEmulatorSaves200 = ReadonlyArray<ExportedUnitView>
+export const ExportEmulatorSaves200 = Schema.Array(ExportedUnitView)
+export type ExportEmulatorSaves400 = ApiError
+export const ExportEmulatorSaves400 = ApiError
+export type ExportEmulatorSaves401 = ApiError
+export const ExportEmulatorSaves401 = ApiError
+export type ExportEmulatorSaves403 = ApiError
+export const ExportEmulatorSaves403 = ApiError
+export type ExportEmulatorSaves404 = ApiError
+export const ExportEmulatorSaves404 = ApiError
+export type ImportEmulatorSavesRequestJson = ImportUnitsRequest
+export const ImportEmulatorSavesRequestJson = ImportUnitsRequest
+export type ImportEmulatorSaves200 = ReadonlyArray<EmulatorStep>
+export const ImportEmulatorSaves200 = Schema.Array(EmulatorStep)
+export type ImportEmulatorSaves400 = ApiError
+export const ImportEmulatorSaves400 = ApiError
+export type ImportEmulatorSaves401 = ApiError
+export const ImportEmulatorSaves401 = ApiError
+export type ImportEmulatorSaves403 = ApiError
+export const ImportEmulatorSaves403 = ApiError
+export type ImportEmulatorSaves404 = ApiError
+export const ImportEmulatorSaves404 = ApiError
 export type StreamEventsParams = { readonly "since"?: number, readonly "kinds"?: string, readonly "Last-Event-ID"?: never }
 export const StreamEventsParams = Schema.Struct({ "since": Schema.optionalKey(Schema.Number.annotate({ "format": "int64" }).check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))), "kinds": Schema.optionalKey(Schema.String), "Last-Event-ID": Schema.optionalKey(Schema.Never) })
 export type StreamEvents200Sse = HostEvent
@@ -1791,6 +1891,46 @@ export const make = (
       orElse: unexpectedStatus
     }))
   ),
+    "getEmulatorRegistry": (options) => HttpClientRequest.get(`/api/v1/emulators/catalog`).pipe(
+    withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetEmulatorRegistry200),
+      "401": decodeError("GetEmulatorRegistry401", GetEmulatorRegistry401),
+      "500": decodeError("GetEmulatorRegistry500", GetEmulatorRegistry500),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "adoptEmulator": (id, options) => HttpClientRequest.post(`/api/v1/emulators/${id}/adopt`).pipe(
+    HttpClientRequest.bodyJsonUnsafe(options.payload),
+    withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(AdoptEmulator200),
+      "400": decodeError("AdoptEmulator400", AdoptEmulator400),
+      "401": decodeError("AdoptEmulator401", AdoptEmulator401),
+      "404": decodeError("AdoptEmulator404", AdoptEmulator404),
+      "409": decodeError("AdoptEmulator409", AdoptEmulator409),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "installEmulatorContent": (id, options) => HttpClientRequest.post(`/api/v1/emulators/${id}/content`).pipe(
+    HttpClientRequest.bodyJsonUnsafe(options.payload),
+    withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(InstallEmulatorContent200),
+      "400": decodeError("InstallEmulatorContent400", InstallEmulatorContent400),
+      "401": decodeError("InstallEmulatorContent401", InstallEmulatorContent401),
+      "403": decodeError("InstallEmulatorContent403", InstallEmulatorContent403),
+      "404": decodeError("InstallEmulatorContent404", InstallEmulatorContent404),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "getEmulatorFirmware": (id, options) => HttpClientRequest.get(`/api/v1/emulators/${id}/firmware`).pipe(
+    HttpClientRequest.setUrlParams({ "platform": options.params["platform"] as any }),
+    withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetEmulatorFirmware200),
+      "400": decodeError("GetEmulatorFirmware400", GetEmulatorFirmware400),
+      "401": decodeError("GetEmulatorFirmware401", GetEmulatorFirmware401),
+      "404": decodeError("GetEmulatorFirmware404", GetEmulatorFirmware404),
+      orElse: unexpectedStatus
+    }))
+  ),
     "installEmulator": (id, options) => HttpClientRequest.post(`/api/v1/emulators/${id}/install`).pipe(
     withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(InstallEmulator200),
@@ -1823,6 +1963,39 @@ export const make = (
       "409": decodeError("RemoveEmulator409", RemoveEmulator409),
       "500": decodeError("RemoveEmulator500", RemoveEmulator500),
       "204": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+  ),
+    "getEmulatorSaves": (id, options) => HttpClientRequest.get(`/api/v1/emulators/${id}/saves`).pipe(
+    HttpClientRequest.setUrlParams({ "platform": options.params["platform"] as any, "game": options.params["game"] as any }),
+    withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetEmulatorSaves200),
+      "400": decodeError("GetEmulatorSaves400", GetEmulatorSaves400),
+      "401": decodeError("GetEmulatorSaves401", GetEmulatorSaves401),
+      "403": decodeError("GetEmulatorSaves403", GetEmulatorSaves403),
+      "404": decodeError("GetEmulatorSaves404", GetEmulatorSaves404),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "exportEmulatorSaves": (id, options) => HttpClientRequest.post(`/api/v1/emulators/${id}/saves/export`).pipe(
+    HttpClientRequest.bodyJsonUnsafe(options.payload),
+    withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ExportEmulatorSaves200),
+      "400": decodeError("ExportEmulatorSaves400", ExportEmulatorSaves400),
+      "401": decodeError("ExportEmulatorSaves401", ExportEmulatorSaves401),
+      "403": decodeError("ExportEmulatorSaves403", ExportEmulatorSaves403),
+      "404": decodeError("ExportEmulatorSaves404", ExportEmulatorSaves404),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "importEmulatorSaves": (id, options) => HttpClientRequest.post(`/api/v1/emulators/${id}/saves/import`).pipe(
+    HttpClientRequest.bodyJsonUnsafe(options.payload),
+    withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ImportEmulatorSaves200),
+      "400": decodeError("ImportEmulatorSaves400", ImportEmulatorSaves400),
+      "401": decodeError("ImportEmulatorSaves401", ImportEmulatorSaves401),
+      "403": decodeError("ImportEmulatorSaves403", ImportEmulatorSaves403),
+      "404": decodeError("ImportEmulatorSaves404", ImportEmulatorSaves404),
       orElse: unexpectedStatus
     }))
   ),
@@ -2982,6 +3155,29 @@ readonly "getDownloads": <Config extends OperationConfig>(options: { readonly co
 */
 readonly "getEmulators": <Config extends OperationConfig>(options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof GetEmulators200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulators401", typeof GetEmulators401.Type> | PunktfunkError<"GetEmulators500", typeof GetEmulators500.Type>>
   /**
+* Every platform (names, aliases, extensions, folder shape) and every emulator as a library
+* sees it: what it plays, whether this OS installs it, which platforms take saves, add-ons and
+* firmware. The facts a plugin needs to list games and pick an emulator.
+*/
+readonly "getEmulatorRegistry": <Config extends OperationConfig>(options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof GetEmulatorRegistry200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorRegistry401", typeof GetEmulatorRegistry401.Type> | PunktfunkError<"GetEmulatorRegistry500", typeof GetEmulatorRegistry500.Type>>
+  /**
+* Points the host at the operator's own copy, one no rule finds (a portable build unpacked
+* anywhere), so it is listed and launched like any other; `forget` drops it again. Admin lane
+* only.
+*/
+readonly "adoptEmulator": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof AdoptEmulatorRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof AdoptEmulator200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AdoptEmulator400", typeof AdoptEmulator400.Type> | PunktfunkError<"AdoptEmulator401", typeof AdoptEmulator401.Type> | PunktfunkError<"AdoptEmulator404", typeof AdoptEmulator404.Type> | PunktfunkError<"AdoptEmulator409", typeof AdoptEmulator409.Type>>
+  /**
+* Hands the files to the best copy of the emulator the way it takes them: a folder it scans,
+* its own installer, or a registration file. One step per file. An emulator with no way says
+* why.
+*/
+readonly "installEmulatorContent": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof InstallEmulatorContentRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof InstallEmulatorContent200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"InstallEmulatorContent400", typeof InstallEmulatorContent400.Type> | PunktfunkError<"InstallEmulatorContent401", typeof InstallEmulatorContent401.Type> | PunktfunkError<"InstallEmulatorContent403", typeof InstallEmulatorContent403.Type> | PunktfunkError<"InstallEmulatorContent404", typeof InstallEmulatorContent404.Type>>
+  /**
+* Whether the best copy of the emulator has the platform's firmware, each file hashed against
+* the good dumps the catalog knows. `null` when the platform needs none.
+*/
+readonly "getEmulatorFirmware": <Config extends OperationConfig>(id: string, options: { readonly params: typeof GetEmulatorFirmwareParams.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof GetEmulatorFirmware200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorFirmware400", typeof GetEmulatorFirmware400.Type> | PunktfunkError<"GetEmulatorFirmware401", typeof GetEmulatorFirmware401.Type> | PunktfunkError<"GetEmulatorFirmware404", typeof GetEmulatorFirmware404.Type>>
+  /**
 * Fetches the emulator through its own release channel (Flatpak on Linux, the official
 * portable build on Windows), verifies it, and places it under the host's emulator prefix.
 * Reinstalls an existing copy. Admin lane only.
@@ -3000,6 +3196,22 @@ readonly "prepareEmulator": <Config extends OperationConfig>(id: string, options
 * A Flatpak is uninstalled. Grants on its folder stay until the operator forgets them.
 */
 readonly "removeEmulator": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof RemoveEmulatorRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"RemoveEmulator401", typeof RemoveEmulator401.Type> | PunktfunkError<"RemoveEmulator404", typeof RemoveEmulator404.Type> | PunktfunkError<"RemoveEmulator409", typeof RemoveEmulator409.Type> | PunktfunkError<"RemoveEmulator500", typeof RemoveEmulator500.Type>>
+  /**
+* The save units of the platform on the best copy of the emulator: name, kind, size and a
+* stamp that changes with the save. A plugin needs the operator's save grant.
+*/
+readonly "getEmulatorSaves": <Config extends OperationConfig>(id: string, options: { readonly params: typeof GetEmulatorSavesParams.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof GetEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetEmulatorSaves400", typeof GetEmulatorSaves400.Type> | PunktfunkError<"GetEmulatorSaves401", typeof GetEmulatorSaves401.Type> | PunktfunkError<"GetEmulatorSaves403", typeof GetEmulatorSaves403.Type> | PunktfunkError<"GetEmulatorSaves404", typeof GetEmulatorSaves404.Type>>
+  /**
+* Writes each named unit into `dir`: the save file, or a tar of a save folder with nothing in
+* its headers that differs between machines. A plugin's `dir` is inside its own state folder.
+*/
+readonly "exportEmulatorSaves": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof ExportEmulatorSavesRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof ExportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ExportEmulatorSaves400", typeof ExportEmulatorSaves400.Type> | PunktfunkError<"ExportEmulatorSaves401", typeof ExportEmulatorSaves401.Type> | PunktfunkError<"ExportEmulatorSaves403", typeof ExportEmulatorSaves403.Type> | PunktfunkError<"ExportEmulatorSaves404", typeof ExportEmulatorSaves404.Type>>
+  /**
+* Each unit goes where the emulator keeps it, in the first of its kinds with a place for its
+* name; what was there is kept in hermir's save backups. A unit with no place yet is a step
+* that says so. A plugin's files are inside its own state folder.
+*/
+readonly "importEmulatorSaves": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof ImportEmulatorSavesRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof ImportEmulatorSaves200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ImportEmulatorSaves400", typeof ImportEmulatorSaves400.Type> | PunktfunkError<"ImportEmulatorSaves401", typeof ImportEmulatorSaves401.Type> | PunktfunkError<"ImportEmulatorSaves403", typeof ImportEmulatorSaves403.Type> | PunktfunkError<"ImportEmulatorSaves404", typeof ImportEmulatorSaves404.Type>>
   /**
 * `id:` is `seq`, `event:` is kind, `data:` is HostEvent JSON. Resume with `Last-Event-ID`
 * or `?since=`; `event: dropped` means the ring no longer has that cursor — resync from REST.

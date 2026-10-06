@@ -58,6 +58,10 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_max_fps,
 		hint: m.setting_max_fps_hint,
 	},
+	vdisplay_hz_mult: {
+		label: m.setting_vdisplay_hz_mult,
+		hint: m.setting_vdisplay_hz_mult_hint,
+	},
 	audio_output_mode: {
 		label: m.setting_audio_output_mode,
 		options: {
