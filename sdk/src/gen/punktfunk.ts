@@ -1108,6 +1108,8 @@ export type CreateProfile409 = ApiError
 export const CreateProfile409 = ApiError
 export type CreateProfile422 = ApiError
 export const CreateProfile422 = ApiError
+export type CreateProfile503 = ApiError
+export const CreateProfile503 = ApiError
 export type SetDefaultProfileRequestJson = DefaultProfile
 export const SetDefaultProfileRequestJson = DefaultProfile
 export type SetDefaultProfile401 = ApiError
@@ -1164,6 +1166,8 @@ export type DeleteProfile404 = ApiError
 export const DeleteProfile404 = ApiError
 export type DeleteProfile409 = ApiError
 export const DeleteProfile409 = ApiError
+export type DeleteProfile503 = ApiError
+export const DeleteProfile503 = ApiError
 export type GetProfileAvatarParams = { readonly "If-None-Match"?: string | null }
 export const GetProfileAvatarParams = Schema.Struct({ "If-None-Match": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])) })
 export type GetProfileAvatar401 = ApiError
@@ -1180,6 +1184,34 @@ export type DeleteProfileAvatar401 = ApiError
 export const DeleteProfileAvatar401 = ApiError
 export type DeleteProfileAvatar404 = ApiError
 export const DeleteProfileAvatar404 = ApiError
+export type EndProfileSession200 = ProfileAdmin
+export const EndProfileSession200 = ProfileAdmin
+export type EndProfileSession401 = ApiError
+export const EndProfileSession401 = ApiError
+export type EndProfileSession404 = ApiError
+export const EndProfileSession404 = ApiError
+export type EndProfileSession409 = ApiError
+export const EndProfileSession409 = ApiError
+export type EndProfileSession503 = ApiError
+export const EndProfileSession503 = ApiError
+export type StartProfileSeat200 = ProfileAdmin
+export const StartProfileSeat200 = ProfileAdmin
+export type StartProfileSeat401 = ApiError
+export const StartProfileSeat401 = ApiError
+export type StartProfileSeat404 = ApiError
+export const StartProfileSeat404 = ApiError
+export type StartProfileSeat409 = ApiError
+export const StartProfileSeat409 = ApiError
+export type StopProfileSeat200 = ProfileAdmin
+export const StopProfileSeat200 = ProfileAdmin
+export type StopProfileSeat401 = ApiError
+export const StopProfileSeat401 = ApiError
+export type StopProfileSeat404 = ApiError
+export const StopProfileSeat404 = ApiError
+export type StopProfileSeat409 = ApiError
+export const StopProfileSeat409 = ApiError
+export type StopProfileSeat503 = ApiError
+export const StopProfileSeat503 = ApiError
 export type WakeProfile200 = ProfilePublic
 export const WakeProfile200 = ProfilePublic
 export type WakeProfile401 = ApiError
@@ -2338,6 +2370,7 @@ export const make = (
       "401": decodeError("CreateProfile401", CreateProfile401),
       "409": decodeError("CreateProfile409", CreateProfile409),
       "422": decodeError("CreateProfile422", CreateProfile422),
+      "503": decodeError("CreateProfile503", CreateProfile503),
       orElse: unexpectedStatus
     }))
   ),
@@ -2402,6 +2435,7 @@ export const make = (
       "401": decodeError("DeleteProfile401", DeleteProfile401),
       "404": decodeError("DeleteProfile404", DeleteProfile404),
       "409": decodeError("DeleteProfile409", DeleteProfile409),
+      "503": decodeError("DeleteProfile503", DeleteProfile503),
       "204": () => Effect.void,
       orElse: unexpectedStatus
     }))
@@ -2429,6 +2463,35 @@ export const make = (
       "401": decodeError("DeleteProfileAvatar401", DeleteProfileAvatar401),
       "404": decodeError("DeleteProfileAvatar404", DeleteProfileAvatar404),
       "204": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+  ),
+    "endProfileSession": (id, options) => HttpClientRequest.post(`/api/v1/profiles/${id}/end`).pipe(
+    withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(EndProfileSession200),
+      "401": decodeError("EndProfileSession401", EndProfileSession401),
+      "404": decodeError("EndProfileSession404", EndProfileSession404),
+      "409": decodeError("EndProfileSession409", EndProfileSession409),
+      "503": decodeError("EndProfileSession503", EndProfileSession503),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "startProfileSeat": (id, options) => HttpClientRequest.post(`/api/v1/profiles/${id}/start`).pipe(
+    withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(StartProfileSeat200),
+      "401": decodeError("StartProfileSeat401", StartProfileSeat401),
+      "404": decodeError("StartProfileSeat404", StartProfileSeat404),
+      "409": decodeError("StartProfileSeat409", StartProfileSeat409),
+      orElse: unexpectedStatus
+    }))
+  ),
+    "stopProfileSeat": (id, options) => HttpClientRequest.post(`/api/v1/profiles/${id}/stop`).pipe(
+    withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(StopProfileSeat200),
+      "401": decodeError("StopProfileSeat401", StopProfileSeat401),
+      "404": decodeError("StopProfileSeat404", StopProfileSeat404),
+      "409": decodeError("StopProfileSeat409", StopProfileSeat409),
+      "503": decodeError("StopProfileSeat503", StopProfileSeat503),
       orElse: unexpectedStatus
     }))
   ),
@@ -3241,9 +3304,10 @@ readonly "getPluginUiCredential": <Config extends OperationConfig>(id: string, o
 readonly "listProfiles": <Config extends OperationConfig>(options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof ListProfiles200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"ListProfiles401", typeof ListProfiles401.Type> | PunktfunkError<"ListProfiles404", typeof ListProfiles404.Type>>
   /**
 * A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the
-* box's own session under its own name.
+* box's own session under its own name. On Windows a seat is a desktop of its own: its account
+* is made here, and seats must be on.
 */
-readonly "createProfile": <Config extends OperationConfig>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type>>
+readonly "createProfile": <Config extends OperationConfig>(options: { readonly payload: typeof CreateProfileRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof CreateProfile201.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"CreateProfile400", typeof CreateProfile400.Type> | PunktfunkError<"CreateProfile401", typeof CreateProfile401.Type> | PunktfunkError<"CreateProfile409", typeof CreateProfile409.Type> | PunktfunkError<"CreateProfile422", typeof CreateProfile422.Type> | PunktfunkError<"CreateProfile503", typeof CreateProfile503.Type>>
   /**
 * Where a device that names no profile lands
 */
@@ -3277,9 +3341,10 @@ readonly "setSeating": <Config extends OperationConfig>(options: { readonly payl
 readonly "updateProfile": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof UpdateProfileRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof UpdateProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"UpdateProfile400", typeof UpdateProfile400.Type> | PunktfunkError<"UpdateProfile401", typeof UpdateProfile401.Type> | PunktfunkError<"UpdateProfile404", typeof UpdateProfile404.Type> | PunktfunkError<"UpdateProfile409", typeof UpdateProfile409.Type>>
   /**
 * Sessions playing as it end with `SEAT_UNAVAILABLE`. With `erase`, its Steam home and picture
-* go too; without, the home stays.
+* go too; without, the home stays. A Windows seat's account goes with its profile, so removing
+* one needs `erase`.
 */
-readonly "deleteProfile": <Config extends OperationConfig>(id: string, options: { readonly params?: typeof DeleteProfileParams.Encoded | undefined; readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteProfile401", typeof DeleteProfile401.Type> | PunktfunkError<"DeleteProfile404", typeof DeleteProfile404.Type> | PunktfunkError<"DeleteProfile409", typeof DeleteProfile409.Type>>
+readonly "deleteProfile": <Config extends OperationConfig>(id: string, options: { readonly params?: typeof DeleteProfileParams.Encoded | undefined; readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteProfile401", typeof DeleteProfile401.Type> | PunktfunkError<"DeleteProfile404", typeof DeleteProfile404.Type> | PunktfunkError<"DeleteProfile409", typeof DeleteProfile409.Type> | PunktfunkError<"DeleteProfile503", typeof DeleteProfile503.Type>>
   /**
 * The stored image with an `ETag` of its bytes; a request whose `If-None-Match` names that tag
 * gets 304 with no body.
@@ -3294,7 +3359,20 @@ readonly "setProfileAvatar": <Config extends OperationConfig>(id: string, option
 */
 readonly "deleteProfileAvatar": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"DeleteProfileAvatar401", typeof DeleteProfileAvatar401.Type> | PunktfunkError<"DeleteProfileAvatar404", typeof DeleteProfileAvatar404.Type>>
   /**
-* Starts a stopped seat so the next connect lands in it. A light seat starts with its first
+* Disconnects whoever plays there and keeps the seat running for the next connect.
+*/
+readonly "endProfileSession": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof EndProfileSession200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"EndProfileSession401", typeof EndProfileSession401.Type> | PunktfunkError<"EndProfileSession404", typeof EndProfileSession404.Type> | PunktfunkError<"EndProfileSession409", typeof EndProfileSession409.Type> | PunktfunkError<"EndProfileSession503", typeof EndProfileSession503.Type>>
+  /**
+* The console's **Start**: as `wake`, from the console.
+*/
+readonly "startProfileSeat": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof StartProfileSeat200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"StartProfileSeat401", typeof StartProfileSeat401.Type> | PunktfunkError<"StartProfileSeat404", typeof StartProfileSeat404.Type> | PunktfunkError<"StartProfileSeat409", typeof StartProfileSeat409.Type>>
+  /**
+* Logs the seat off; whoever plays there is disconnected. The next pick starts it again.
+*/
+readonly "stopProfileSeat": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof StopProfileSeat200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"StopProfileSeat401", typeof StopProfileSeat401.Type> | PunktfunkError<"StopProfileSeat404", typeof StopProfileSeat404.Type> | PunktfunkError<"StopProfileSeat409", typeof StopProfileSeat409.Type> | PunktfunkError<"StopProfileSeat503", typeof StopProfileSeat503.Type>>
+  /**
+* Starts a stopped seat so the next connect lands in it, and answers at once with the seat
+* `starting`; poll `enumerate` until it is `ready`. A light seat starts with its first
 * connect, so on Linux this only answers the row.
 */
 readonly "wakeProfile": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof WakeProfile200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"WakeProfile401", typeof WakeProfile401.Type> | PunktfunkError<"WakeProfile404", typeof WakeProfile404.Type>>

@@ -369,7 +369,8 @@ impl Profiles {
         default_profile(&self.lock().file).map(|p| p.id.clone())
     }
 
-    pub fn create(&self, input: ProfileCreate) -> Result<Profile, EditError> {
+    /// `seat` is the ledger row a Windows seat profile plays on; a Linux seat needs none.
+    pub fn create(&self, input: ProfileCreate, seat: Option<String>) -> Result<Profile, EditError> {
         let name = clean_name(&input.display_name)
             .ok_or_else(|| EditError::Invalid("a profile needs a name".into()))?;
         let accent = input.accent.map(valid_accent).transpose()?;
@@ -383,11 +384,16 @@ impl Profiles {
             }
             let now = now_unix();
             let (os_account, home) = if input.seat {
-                let account = OsAccount::Seat {
-                    seat: None,
-                    tier: SeatTier::Light,
+                // A Windows seat is a desktop of its own; a Linux one is a Steam home.
+                let (tier, home) = match &seat {
+                    Some(_) => (SeatTier::Full, Home::Desktop),
+                    None => (SeatTier::Light, Home::Bigpicture),
                 };
-                (account, input.home.unwrap_or(Home::Bigpicture))
+                let account = OsAccount::Seat {
+                    seat: seat.clone(),
+                    tier,
+                };
+                (account, input.home.unwrap_or(home))
             } else {
                 (OsAccount::Operator, input.home.unwrap_or(Home::Desktop))
             };

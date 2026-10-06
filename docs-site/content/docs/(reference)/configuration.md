@@ -72,7 +72,7 @@ restart*.
 | Grab the cursor (Linux) | `PUNKTFUNK_GAMESCOPE_GRAB_CURSOR` | `on` · `off` | `off` | next session |
 | Steam per seat (Linux) | `PUNKTFUNK_STEAM_SEAT_HOME` | `on` · `off` | `off` | next session |
 | Pads per seat (Linux) | `PUNKTFUNK_STEAM_SEAT_SANDBOX` | `on` · `off` | `off` | next session |
-| Seats kept warm (Linux) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
+| Seats kept warm (Linux, Windows) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
 | Bind patched gamescope (Linux) | `PUNKTFUNK_GAMESCOPE_BIND` | `auto` · `on` · `off` | `auto` | next session |
 | Follow mode switches (Linux) | `PUNKTFUNK_SESSION_WATCH` | `auto` · `on` · `off` | `auto` | next session |
 | Local discovery | `PUNKTFUNK_MDNS` | `on` · `off` | `on` | after a restart |
@@ -110,7 +110,7 @@ The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc
 | **Audio redundancy** | `auto` sends audio twice only to clients that support it, and only while the link loses packets. |
 | **Steam per seat** | Each profile's Steam launch runs under its own home in `~/.local/share/punktfunk/seats/`, so two people play at once and the desktop Steam keeps running. Each profile signs in to Steam once, and one Steam account plays on one seat at a time. The owner profile uses the box's own Steam. Needs a native Steam; the seat reuses your library folders. |
 | **Pads per seat** | Each seat's Steam sees only the controllers of the device playing on it. Needs **Steam per seat** and `bwrap`. The box's own Steam still sees every pad. |
-| **Seats kept warm** | How many profiles keep Big Picture running before anyone picks them, so a launch skips Steam's cold start. Only profiles that launched a Steam title in the last 14 days. |
+| **Seats kept warm** | How many people's seats are ready before they connect, so a pick skips the wait. Linux: Big Picture runs in the profiles that launched a Steam title in the last 14 days. Windows Server: the seats of the profiles played in the last 14 days start with the host; a seat nobody plays on for 4 hours stops. |
 | **Disconnect timeout** | How long before a vanished client counts as gone and a kept display starts its linger. A deliberate quit is instant. |
 
 ## Session anchors

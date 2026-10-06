@@ -530,6 +530,9 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
             profiles::delete_profile_avatar
         ))
         .routes(routes!(profiles::wake_profile))
+        .routes(routes!(profiles::start_profile_seat))
+        .routes(routes!(profiles::stop_profile_seat))
+        .routes(routes!(profiles::end_profile_session))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))

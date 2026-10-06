@@ -7,8 +7,10 @@
 pub(crate) mod placement;
 
 use pf_seats::ipc::{ApiError, Command, CommandResult, ErrorCode};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// One request to the seat supervisor. Blocking: call it off the async workers.
 pub(crate) fn call(command: Command) -> Result<CommandResult, ApiError> {
@@ -47,6 +49,64 @@ pub(crate) fn list() -> Result<Vec<pf_seats::Seat>, ApiError> {
             format!("seats list answered {other:?}"),
         )),
     }
+}
+
+/// The ledger and who plays on each running seat. A profile list reads every seat at once, and
+/// reads within [`FRESH`] of the last one share it.
+#[derive(Default)]
+pub(crate) struct Snapshot {
+    /// The operator turned seats on.
+    pub on: bool,
+    pub seats: Vec<pf_seats::Seat>,
+    /// Seat id → who streams there, for each running seat whose host answered.
+    pub occupants: BTreeMap<String, Vec<Occupant>>,
+}
+
+impl Snapshot {
+    /// A seat's row and its number, counted from 1 in ledger order.
+    pub(crate) fn seat(&self, id: &str) -> Option<(&pf_seats::Seat, u8)> {
+        let at = self.seats.iter().position(|s| s.id.as_str() == id)?;
+        Some((&self.seats[at], at as u8 + 1))
+    }
+}
+
+/// How long a snapshot answers for the box: a picker polls every 2 s.
+const FRESH: Duration = Duration::from_secs(2);
+
+static LAST: Mutex<Option<(Instant, Arc<Snapshot>)>> = Mutex::new(None);
+
+/// The seats as they are now, at most [`FRESH`] old. Blocking: call it off the async workers.
+pub(crate) fn snapshot() -> Arc<Snapshot> {
+    if !cfg!(windows) {
+        return Arc::default();
+    }
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, snap)) = last.as_ref() {
+        if at.elapsed() < FRESH {
+            return Arc::clone(snap);
+        }
+    }
+    let seats = list().unwrap_or_else(|e| {
+        tracing::debug!(code = ?e.code, "seats ledger did not load: {}", e.message);
+        Vec::new()
+    });
+    let occupants = seats
+        .iter()
+        .filter(|s| s.runtime.state == pf_seats::RuntimeState::Running)
+        .filter_map(|s| Some((s.id.as_str().to_string(), occupants(s)?)))
+        .collect();
+    let snap = Arc::new(Snapshot {
+        on: enabled(),
+        seats,
+        occupants,
+    });
+    *last = Some((Instant::now(), Arc::clone(&snap)));
+    snap
+}
+
+/// The next [`snapshot`] reads afresh: a seat was just started or stopped.
+pub(crate) fn invalidate() {
+    *LAST.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// A seat host's own config dir, where it keeps its management token.
@@ -92,4 +152,16 @@ pub(crate) fn occupants(seat: &pf_seats::Seat) -> Option<Vec<Occupant>> {
             })
             .collect(),
     )
+}
+
+/// Ends every session on `seat` through its host's loopback API. `false` when it didn't answer.
+pub(crate) fn end_sessions(seat: &pf_seats::Seat) -> bool {
+    crate::ctl::client::Client::seat(
+        &pf_paths::config_dir(),
+        &host_dir(seat),
+        seat.mgmt_port,
+        Some(STATUS_TIMEOUT),
+    )
+    .and_then(|client| client.delete("/api/v1/session"))
+    .is_ok()
 }

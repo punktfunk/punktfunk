@@ -10,9 +10,13 @@ use super::shared::*;
 use crate::profiles::{
     EditError, Home, OsAccount, Profile, ProfileCreate, ProfileUpdate, Profiles,
 };
+use crate::seats::Snapshot;
 use axum::http::header;
 use axum::Extension;
-use pf_seats::ipc::{Command, CommandResult, Diagnostic, DiagnosticLevel, ErrorCode};
+use pf_seats::ipc::{
+    ApiError as SeatError, Command, CommandResult, Diagnostic, DiagnosticLevel, ErrorCode,
+};
+use pf_seats::RuntimeState;
 
 /// One profile as a client's picker shows it.
 #[derive(Serialize, ToSchema, Clone)]
@@ -99,7 +103,13 @@ fn no_profiles() -> Response {
     api_error(StatusCode::NOT_FOUND, "this host has no profiles")
 }
 
-fn public(st: &MgmtState, p: &Profile, owner: Option<&str>, device: Option<&str>) -> ProfilePublic {
+fn public(
+    st: &MgmtState,
+    p: &Profile,
+    owner: Option<&str>,
+    device: Option<&str>,
+    seats: &Snapshot,
+) -> ProfilePublic {
     let is_owner = owner == Some(p.id.as_str());
     ProfilePublic {
         id: p.id.clone(),
@@ -108,7 +118,7 @@ fn public(st: &MgmtState, p: &Profile, owner: Option<&str>, device: Option<&str>
         avatar: p.avatar.clone(),
         owner: is_owner,
         home: p.home,
-        seat: (!matches!(p.os_account, OsAccount::Operator)).then(|| seat(st, p)),
+        seat: (!matches!(p.os_account, OsAccount::Operator)).then(|| seat(st, p, seats)),
         last_used_unix: p.last_used_unix,
         legacy_seat: device
             .zip(p.legacy_device.as_deref())
@@ -116,8 +126,9 @@ fn public(st: &MgmtState, p: &Profile, owner: Option<&str>, device: Option<&str>
     }
 }
 
-/// A light seat starts with its first connect, so it is always ready to dial.
-fn seat(st: &MgmtState, p: &Profile) -> SeatPublic {
+/// A light seat starts with its first connect, so it is always ready to dial. A Windows seat
+/// reads its ledger row.
+fn seat(st: &MgmtState, p: &Profile, seats: &Snapshot) -> SeatPublic {
     let port = st.app.native_port.get().copied().unwrap_or(0);
     let unavailable = |why: &str| SeatPublic {
         state: SeatState::Unavailable,
@@ -127,6 +138,7 @@ fn seat(st: &MgmtState, p: &Profile) -> SeatPublic {
         steam_sign_in: None,
     };
     match &p.os_account {
+        OsAccount::Seat { seat: Some(id), .. } => seated(seats, id),
         OsAccount::Seat { .. } | OsAccount::Operator => SeatPublic {
             state: SeatState::Ready,
             detail: None,
@@ -137,6 +149,159 @@ fn seat(st: &MgmtState, p: &Profile) -> SeatPublic {
         OsAccount::Linux { .. } | OsAccount::Windows { .. } => {
             unavailable("This profile signs in to an account this host can't start yet.")
         }
+    }
+}
+
+/// A Windows seat's line: its ledger row, and who plays there.
+fn seated(seats: &Snapshot, id: &str) -> SeatPublic {
+    let line = |state, port, detail: Option<&str>| SeatPublic {
+        state,
+        detail: detail.map(str::to_string),
+        port,
+        occupant: None,
+        steam_sign_in: None,
+    };
+    let Some((seat, _)) = seats.seat(id) else {
+        return line(
+            SeatState::Unavailable,
+            0,
+            Some("This profile's seat is gone. Remove the profile and add it again."),
+        );
+    };
+    let port = seat.native_port;
+    if !seats.on {
+        return line(
+            SeatState::Unavailable,
+            port,
+            Some("This host needs seats turned on for a second profile."),
+        );
+    }
+    let detail = seat.runtime.detail.as_deref();
+    match seat.runtime.state {
+        RuntimeState::Running => match seats.occupants.get(id).and_then(|o| o.first()) {
+            Some(o) => SeatPublic {
+                occupant: o.name.clone(),
+                ..line(SeatState::Occupied, port, None)
+            },
+            None => line(SeatState::Ready, port, None),
+        },
+        RuntimeState::Starting => line(SeatState::Starting, port, detail),
+        RuntimeState::Failed => line(
+            SeatState::Unavailable,
+            port,
+            Some(detail.unwrap_or("This seat didn't start.")),
+        ),
+        RuntimeState::Stopping | RuntimeState::Stopped | RuntimeState::Unknown => {
+            line(SeatState::Stopped, port, None)
+        }
+    }
+}
+
+/// The seats as they are now; the empty snapshot where the supervisor doesn't answer.
+async fn seats_now() -> Arc<Snapshot> {
+    tokio::task::spawn_blocking(crate::seats::snapshot)
+        .await
+        .unwrap_or_default()
+}
+
+/// A refusal to answer with: the status and its sentence.
+type Refusal = (StatusCode, String);
+
+fn refused((status, message): Refusal) -> Response {
+    api_error(status, &message)
+}
+
+/// The status a supervisor refusal reads as.
+fn seat_error(e: SeatError) -> Refusal {
+    let status = match e.code {
+        ErrorCode::Capacity => StatusCode::UNPROCESSABLE_ENTITY,
+        ErrorCode::Conflict => StatusCode::CONFLICT,
+        ErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (status, e.message)
+}
+
+/// A Windows seat for a new profile. Its account is `pf_seat<n>`, never shown to a player.
+fn new_seat(name: &str) -> Result<String, Refusal> {
+    if !crate::seats::enabled() {
+        return Err((
+            StatusCode::CONFLICT,
+            "Turn seats on before adding a profile with a desktop of its own.".into(),
+        ));
+    }
+    let taken: Vec<String> = crate::seats::list()
+        .map_err(seat_error)?
+        .into_iter()
+        .map(|s| s.account)
+        .collect();
+    let account = (1..=4)
+        .map(|n| format!("pf_seat{n}"))
+        .find(|a| !taken.contains(a))
+        .ok_or_else(|| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "This host already serves four seats, the most it can.".to_string(),
+            )
+        })?;
+    let made = crate::seats::call(Command::Create(pf_seats::CreateSeat {
+        name: name.trim().to_string(),
+        account,
+        autostart: false,
+    }));
+    crate::seats::invalidate();
+    match made.map_err(seat_error)? {
+        CommandResult::Created { seat } => Ok(seat.id.as_str().to_string()),
+        other => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("seats create answered {other:?}"),
+        )),
+    }
+}
+
+/// Stops a seat and removes it with its Windows account. A seat already gone is no error.
+fn drop_seat(id: &str) -> Result<(), Refusal> {
+    let Ok(id) = pf_seats::SeatId::parse(id) else {
+        return Ok(());
+    };
+    let _ = crate::seats::call(Command::Stop { id: id.clone() });
+    let removed = crate::seats::call(Command::Delete { id });
+    crate::seats::invalidate();
+    match removed {
+        Ok(_) => Ok(()),
+        Err(e) if e.code == ErrorCode::NotFound => Ok(()),
+        Err(e) => Err(seat_error(e)),
+    }
+}
+
+/// Starts a stopped seat in the background: a first logon takes tens of seconds, and the
+/// caller answers with the seat as it is now, `starting`.
+fn start_seat(id: &str) {
+    let Ok(id) = pf_seats::SeatId::parse(id) else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("seat-wake".into())
+        .spawn(move || {
+            let seats = crate::seats::snapshot();
+            let idle = seats.seat(id.as_str()).is_some_and(|(s, _)| {
+                matches!(
+                    s.runtime.state,
+                    RuntimeState::Stopped | RuntimeState::Failed | RuntimeState::Unknown
+                )
+            });
+            if !idle || !seats.on {
+                return;
+            }
+            crate::seats::invalidate();
+            if let Err(e) = crate::seats::call(Command::Start { id }) {
+                tracing::warn!(code = ?e.code, "seat did not start: {}", e.message);
+            }
+            crate::seats::invalidate();
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "seat wake thread did not start");
     }
 }
 
@@ -161,10 +326,10 @@ fn steam_sign_in(id: &str) -> Option<bool> {
     }
 }
 
-fn admin(st: &MgmtState, profiles: &Profiles, p: &Profile) -> ProfileAdmin {
+fn admin(st: &MgmtState, profiles: &Profiles, p: &Profile, seats: &Snapshot) -> ProfileAdmin {
     let owner = profiles.owner_id();
     ProfileAdmin {
-        public: public(st, p, owner.as_deref(), None),
+        public: public(st, p, owner.as_deref(), None, seats),
         legacy_device: p.legacy_device.clone(),
         default: profiles.default_profile_id().as_deref() == Some(p.id.as_str()),
     }
@@ -204,10 +369,11 @@ pub(crate) async fn enumerate_profiles(
         return no_profiles();
     };
     let owner = profiles.owner_id();
+    let seats = seats_now().await;
     let rows: Vec<ProfilePublic> = profiles
         .list()
         .iter()
-        .map(|p| public(&st, p, owner.as_deref(), device.as_deref()))
+        .map(|p| public(&st, p, owner.as_deref(), device.as_deref(), &seats))
         .collect();
     Json(rows).into_response()
 }
@@ -265,7 +431,8 @@ pub(crate) async fn get_profile_avatar(
 
 /// Get a profile's seat ready
 ///
-/// Starts a stopped seat so the next connect lands in it. A light seat starts with its first
+/// Starts a stopped seat so the next connect lands in it, and answers at once with the seat
+/// `starting`; poll `enumerate` until it is `ready`. A light seat starts with its first
 /// connect, so on Linux this only answers the row.
 #[utoipa::path(
     post,
@@ -286,10 +453,29 @@ pub(crate) async fn wake_profile(
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
     };
-    match profiles.get(&id) {
-        Some(p) => Json(public(&st, &p, profiles.owner_id().as_deref(), None)).into_response(),
-        None => api_error(StatusCode::NOT_FOUND, "no profile with that id"),
+    let Some(p) = profiles.get(&id) else {
+        return api_error(StatusCode::NOT_FOUND, "no profile with that id");
+    };
+    if let OsAccount::Seat {
+        seat: Some(seat), ..
+    } = &p.os_account
+    {
+        start_seat(seat);
     }
+    let mut row = public(
+        &st,
+        &p,
+        profiles.owner_id().as_deref(),
+        None,
+        &*seats_now().await,
+    );
+    // The wake thread may not have published `starting` yet; the answer says it anyway.
+    if matches!(p.os_account, OsAccount::Seat { seat: Some(_), .. }) {
+        if let Some(seat) = row.seat.as_mut().filter(|s| s.state == SeatState::Stopped) {
+            seat.state = SeatState::Starting;
+        }
+    }
+    Json(row).into_response()
 }
 
 /// List the profiles with what the console manages
@@ -308,10 +494,11 @@ pub(crate) async fn list_profiles(State(st): State<Arc<MgmtState>>) -> Response 
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
     };
+    let seats = seats_now().await;
     let rows: Vec<ProfileAdmin> = profiles
         .list()
         .iter()
-        .map(|p| admin(&st, profiles, p))
+        .map(|p| admin(&st, profiles, p, &seats))
         .collect();
     Json(rows).into_response()
 }
@@ -319,7 +506,8 @@ pub(crate) async fn list_profiles(State(st): State<Arc<MgmtState>>) -> Response 
 /// Add a profile
 ///
 /// A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the
-/// box's own session under its own name.
+/// box's own session under its own name. On Windows a seat is a desktop of its own: its account
+/// is made here, and seats must be on.
 #[utoipa::path(
     post,
     path = "/profiles",
@@ -330,8 +518,9 @@ pub(crate) async fn list_profiles(State(st): State<Arc<MgmtState>>) -> Response 
         (status = CREATED, description = "The new profile", body = ProfileAdmin),
         (status = BAD_REQUEST, description = "No name, or an accent that is not #RRGGBB", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
-        (status = CONFLICT, description = "Another profile has that name", body = ApiError),
-        (status = UNPROCESSABLE_ENTITY, description = "The box already has eight profiles", body = ApiError),
+        (status = CONFLICT, description = "Another profile has that name, or seats are off (Windows)", body = ApiError),
+        (status = UNPROCESSABLE_ENTITY, description = "The box already has eight profiles, or four seats (Windows)", body = ApiError),
+        (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer (Windows)", body = ApiError),
     )
 )]
 pub(crate) async fn create_profile(
@@ -341,9 +530,28 @@ pub(crate) async fn create_profile(
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
     };
-    match profiles.create(input) {
-        Ok(p) => (StatusCode::CREATED, Json(admin(&st, profiles, &p))).into_response(),
-        Err(e) => edit_error(e),
+    let seat = if input.seat && cfg!(windows) {
+        let name = input.display_name.clone();
+        match tokio::task::spawn_blocking(move || new_seat(&name)).await {
+            Ok(Ok(id)) => Some(id),
+            Ok(Err(refusal)) => return refused(refusal),
+            Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    } else {
+        None
+    };
+    match profiles.create(input, seat.clone()) {
+        Ok(p) => {
+            let seats = seats_now().await;
+            (StatusCode::CREATED, Json(admin(&st, profiles, &p, &seats))).into_response()
+        }
+        Err(e) => {
+            // No profile names the seat just made: take it back with its account.
+            if let Some(id) = seat {
+                let _ = tokio::task::spawn_blocking(move || drop_seat(&id)).await;
+            }
+            edit_error(e)
+        }
     }
 }
 
@@ -372,7 +580,7 @@ pub(crate) async fn update_profile(
         return no_profiles();
     };
     match profiles.update(&id, input) {
-        Ok(p) => Json(admin(&st, profiles, &p)).into_response(),
+        Ok(p) => Json(admin(&st, profiles, &p, &*seats_now().await)).into_response(),
         Err(e) => edit_error(e),
     }
 }
@@ -380,7 +588,8 @@ pub(crate) async fn update_profile(
 /// Remove a profile
 ///
 /// Sessions playing as it end with `SEAT_UNAVAILABLE`. With `erase`, its Steam home and picture
-/// go too; without, the home stays.
+/// go too; without, the home stays. A Windows seat's account goes with its profile, so removing
+/// one needs `erase`.
 #[utoipa::path(
     delete,
     path = "/profiles/{id}",
@@ -391,7 +600,8 @@ pub(crate) async fn update_profile(
         (status = NO_CONTENT, description = "Removed"),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
         (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
-        (status = CONFLICT, description = "The owner profile can't be removed", body = ApiError),
+        (status = CONFLICT, description = "The owner profile can't be removed, or a Windows seat's without `erase`", body = ApiError),
+        (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer (Windows)", body = ApiError),
     )
 )]
 pub(crate) async fn delete_profile(
@@ -402,6 +612,22 @@ pub(crate) async fn delete_profile(
     let Some(profiles) = st.app.profiles.get() else {
         return no_profiles();
     };
+    if let Some(OsAccount::Seat {
+        seat: Some(seat), ..
+    }) = profiles.get(&id).map(|p| p.os_account)
+    {
+        if !q.erase {
+            return api_error(
+                StatusCode::CONFLICT,
+                "Removing this profile also removes its Windows account. Confirm with erase.",
+            );
+        }
+        match tokio::task::spawn_blocking(move || drop_seat(&seat)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(refusal)) => return refused(refusal),
+            Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    }
     match profiles.delete(&id, q.erase) {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => edit_error(e),
@@ -711,5 +937,206 @@ pub(crate) async fn get_seats_doctor() -> Response {
             "The seat supervisor answered something unexpected.",
         ),
         Err(response) => response,
+    }
+}
+
+/// The profile's Windows seat id, or the answer for a profile that has none.
+fn seat_of(st: &MgmtState, id: &str) -> Result<(Profile, String), Refusal> {
+    let Some(profiles) = st.app.profiles.get() else {
+        return Err((StatusCode::NOT_FOUND, "this host has no profiles".into()));
+    };
+    let Some(p) = profiles.get(id) else {
+        return Err((StatusCode::NOT_FOUND, "no profile with that id".into()));
+    };
+    match &p.os_account {
+        OsAccount::Seat {
+            seat: Some(seat), ..
+        } => {
+            let seat = seat.clone();
+            Ok((p, seat))
+        }
+        _ => Err((
+            StatusCode::CONFLICT,
+            "This profile plays on the host's own desktop; it has no seat to start or stop.".into(),
+        )),
+    }
+}
+
+/// Start a profile's seat
+///
+/// The console's **Start**: as `wake`, from the console.
+#[utoipa::path(
+    post,
+    path = "/profiles/{id}/start",
+    tag = "profiles",
+    operation_id = "startProfileSeat",
+    params(("id" = String, Path, description = "The profile id")),
+    responses(
+        (status = OK, description = "The profile, its seat `starting`", body = ProfileAdmin),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
+        (status = CONFLICT, description = "The profile has no seat of its own", body = ApiError),
+    )
+)]
+pub(crate) async fn start_profile_seat(
+    State(st): State<Arc<MgmtState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let (p, seat) = match seat_of(&st, &id) {
+        Ok(found) => found,
+        Err(refusal) => return refused(refusal),
+    };
+    start_seat(&seat);
+    let Some(profiles) = st.app.profiles.get() else {
+        return no_profiles();
+    };
+    let mut row = admin(&st, profiles, &p, &*seats_now().await);
+    if let Some(s) = row
+        .public
+        .seat
+        .as_mut()
+        .filter(|s| s.state == SeatState::Stopped)
+    {
+        s.state = SeatState::Starting;
+    }
+    Json(row).into_response()
+}
+
+/// Stop a profile's seat
+///
+/// Logs the seat off; whoever plays there is disconnected. The next pick starts it again.
+#[utoipa::path(
+    post,
+    path = "/profiles/{id}/stop",
+    tag = "profiles",
+    operation_id = "stopProfileSeat",
+    params(("id" = String, Path, description = "The profile id")),
+    responses(
+        (status = OK, description = "The profile, its seat stopped", body = ProfileAdmin),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
+        (status = CONFLICT, description = "The profile has no seat of its own", body = ApiError),
+        (status = SERVICE_UNAVAILABLE, description = "The seat supervisor didn't answer", body = ApiError),
+    )
+)]
+pub(crate) async fn stop_profile_seat(
+    State(st): State<Arc<MgmtState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let (p, seat) = match seat_of(&st, &id) {
+        Ok(found) => found,
+        Err(refusal) => return refused(refusal),
+    };
+    let stopped = tokio::task::spawn_blocking(move || {
+        let id = pf_seats::SeatId::parse(seat)
+            .map_err(|e| SeatError::new(ErrorCode::InvalidRequest, e.to_string()))?;
+        let done = crate::seats::call(Command::Stop { id });
+        crate::seats::invalidate();
+        done
+    })
+    .await;
+    match stopped {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return refused(seat_error(e)),
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+    let Some(profiles) = st.app.profiles.get() else {
+        return no_profiles();
+    };
+    Json(admin(&st, profiles, &p, &*seats_now().await)).into_response()
+}
+
+/// End the session on a profile's seat
+///
+/// Disconnects whoever plays there and keeps the seat running for the next connect.
+#[utoipa::path(
+    post,
+    path = "/profiles/{id}/end",
+    tag = "profiles",
+    operation_id = "endProfileSession",
+    params(("id" = String, Path, description = "The profile id")),
+    responses(
+        (status = OK, description = "The profile, its seat free", body = ProfileAdmin),
+        (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
+        (status = NOT_FOUND, description = "No profile with that id", body = ApiError),
+        (status = CONFLICT, description = "The profile has no seat of its own", body = ApiError),
+        (status = SERVICE_UNAVAILABLE, description = "The seat's host didn't answer", body = ApiError),
+    )
+)]
+pub(crate) async fn end_profile_session(
+    State(st): State<Arc<MgmtState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let (p, seat) = match seat_of(&st, &id) {
+        Ok(found) => found,
+        Err(refusal) => return refused(refusal),
+    };
+    let ended = tokio::task::spawn_blocking(move || {
+        let snap = crate::seats::snapshot();
+        let row = snap.seat(&seat).map(|(s, _)| s.clone());
+        let done = row.as_ref().is_some_and(crate::seats::end_sessions);
+        crate::seats::invalidate();
+        done
+    })
+    .await
+    .unwrap_or(false);
+    if !ended {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The seat didn't answer. Stop it instead to disconnect whoever plays there.",
+        );
+    }
+    let Some(profiles) = st.app.profiles.get() else {
+        return no_profiles();
+    };
+    Json(admin(&st, profiles, &p, &*seats_now().await)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::seats::Occupant;
+
+    const ID: &str = "0123456789abcdef0123456789abcdef";
+
+    fn snap(on: bool, state: RuntimeState, occupied: bool) -> Snapshot {
+        let seat: pf_seats::Seat = serde_json::from_value(serde_json::json!({
+            "id": ID, "name": "Kid", "account": "pf_seat1", "display_slot": 12,
+            "native_port": 9778, "mgmt_port": 47991, "runtime": { "state": state },
+        }))
+        .unwrap();
+        let mut occupants = std::collections::BTreeMap::new();
+        if occupied {
+            occupants.insert(
+                ID.to_string(),
+                vec![Occupant {
+                    client: "aa11bb22".into(),
+                    name: Some("Ben's Apple TV".into()),
+                }],
+            );
+        }
+        Snapshot {
+            on,
+            seats: vec![seat],
+            occupants,
+        }
+    }
+
+    #[test]
+    fn a_windows_seat_reads_its_ledger_row() {
+        let ready = seated(&snap(true, RuntimeState::Running, false), ID);
+        assert_eq!((ready.state, ready.port), (SeatState::Ready, 9778));
+        let busy = seated(&snap(true, RuntimeState::Running, true), ID);
+        assert_eq!(
+            (busy.state, busy.occupant.as_deref()),
+            (SeatState::Occupied, Some("Ben's Apple TV"))
+        );
+        let state = |on, s| seated(&snap(on, s, false), ID).state;
+        assert_eq!(state(true, RuntimeState::Starting), SeatState::Starting);
+        assert_eq!(state(true, RuntimeState::Stopped), SeatState::Stopped);
+        assert_eq!(state(true, RuntimeState::Failed), SeatState::Unavailable);
+        assert_eq!(state(false, RuntimeState::Running), SeatState::Unavailable);
+        let gone = seated(&snap(true, RuntimeState::Running, false), &"f".repeat(32));
+        assert_eq!(gone.state, SeatState::Unavailable);
     }
 }

@@ -5243,7 +5243,7 @@
           "profiles"
         ],
         "summary": "Add a profile",
-        "description": "A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the\nbox's own session under its own name.",
+        "description": "A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the\nbox's own session under its own name. On Windows a seat is a desktop of its own: its account\nis made here, and seats must be on.",
         "operationId": "createProfile",
         "requestBody": {
           "content": {
@@ -5287,7 +5287,7 @@
             }
           },
           "409": {
-            "description": "Another profile has that name",
+            "description": "Another profile has that name, or seats are off (Windows)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5297,7 +5297,17 @@
             }
           },
           "422": {
-            "description": "The box already has eight profiles",
+            "description": "The box already has eight profiles, or four seats (Windows)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer (Windows)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5638,7 +5648,7 @@
           "profiles"
         ],
         "summary": "Remove a profile",
-        "description": "Sessions playing as it end with `SEAT_UNAVAILABLE`. With `erase`, its Steam home and picture\ngo too; without, the home stays.",
+        "description": "Sessions playing as it end with `SEAT_UNAVAILABLE`. With `erase`, its Steam home and picture\ngo too; without, the home stays. A Windows seat's account goes with its profile, so removing\none needs `erase`.",
         "operationId": "deleteProfile",
         "parameters": [
           {
@@ -5685,7 +5695,17 @@
             }
           },
           "409": {
-            "description": "The owner profile can't be removed",
+            "description": "The owner profile can't be removed, or a Windows seat's without `erase`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer (Windows)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5873,13 +5893,222 @@
         }
       }
     },
+    "/api/v1/profiles/{id}/end": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "End the session on a profile's seat",
+        "description": "Disconnects whoever plays there and keeps the seat running for the next connect.",
+        "operationId": "endProfileSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat free",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat's host didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/start": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Start a profile's seat",
+        "description": "The console's **Start**: as `wake`, from the console.",
+        "operationId": "startProfileSeat",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat `starting`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/stop": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Stop a profile's seat",
+        "description": "Logs the seat off; whoever plays there is disconnected. The next pick starts it again.",
+        "operationId": "stopProfileSeat",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles/{id}/wake": {
       "post": {
         "tags": [
           "profiles"
         ],
         "summary": "Get a profile's seat ready",
-        "description": "Starts a stopped seat so the next connect lands in it. A light seat starts with its first\nconnect, so on Linux this only answers the row.",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A light seat starts with its first\nconnect, so on Linux this only answers the row.",
         "operationId": "wakeProfile",
         "parameters": [
           {

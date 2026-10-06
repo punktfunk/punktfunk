@@ -2156,6 +2156,9 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("DELETE", "/api/v1/profiles/{id}", false, false),
         ("PUT", "/api/v1/profiles/{id}/avatar", false, false),
         ("DELETE", "/api/v1/profiles/{id}/avatar", false, false),
+        ("POST", "/api/v1/profiles/{id}/start", false, false),
+        ("POST", "/api/v1/profiles/{id}/stop", false, false),
+        ("POST", "/api/v1/profiles/{id}/end", false, false),
         // Mode + accent of the desktop, for a console that follows it. Operator
         // decoration, so it sits with the other host configuration rather than on
         // the cert lane — no streaming client asks what colour the desktop is.

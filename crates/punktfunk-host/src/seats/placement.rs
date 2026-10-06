@@ -42,25 +42,19 @@ pub(crate) fn place(profile: &crate::profiles::Resolved, asker: &Asker) -> Place
     let Some(seat_id) = windows_seat(&profile.os_account) else {
         return Placement::Here;
     };
-    let seats_on = super::enabled();
-    let ledger = if seats_on {
-        super::list().unwrap_or_else(|e| {
-            tracing::warn!(code = ?e.code, "seats ledger did not load: {}", e.message);
-            Vec::new()
-        })
-    } else {
-        Vec::new()
-    };
-    let at = ledger.iter().position(|s| s.id.as_str() == seat_id);
-    let seat = at.map(|i| (&ledger[i], i as u8 + 1));
-    let occupants = seat
-        .filter(|(s, _)| s.runtime.state == RuntimeState::Running)
-        .and_then(|(s, _)| super::occupants(s))
-        .unwrap_or_default();
+    let snap = super::snapshot();
+    let occupants = snap.occupants.get(seat_id).map_or(&[][..], Vec::as_slice);
     let mut held = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
     held.retain(|_, (_, until)| *until > Instant::now());
     let held_by = held.get(seat_id).map(|(fp, _)| fp.as_str());
-    let placed = decide(&profile.id, asker, seats_on, seat, &occupants, held_by);
+    let placed = decide(
+        &profile.id,
+        asker,
+        snap.on,
+        snap.seat(seat_id),
+        occupants,
+        held_by,
+    );
     if let (Placement::Redirect(_), Some(fp)) = (&placed, asker.fp) {
         held.insert(
             seat_id.to_string(),
