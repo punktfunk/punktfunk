@@ -2,7 +2,8 @@
 // resolved once at connect and read from there on (design/client-settings-profiles.md §4.2/§4.4):
 //
 //     effective = overlay(preset).apply(globals)
-//     preset   = one-off pick (Connect with ▸)  ??  host.presetID  ??  none
+//     preset   = one-off pick (Connect with ▸)  ??  the launched title's binding
+//                ??  host.presetID  ??  none
 //
 // Session readers read their own session's copy: `PunktfunkConnection.settings` in the kit,
 // `SessionModel.settings` in the app. Never the globals mid-session, and never another window's.
@@ -223,7 +224,7 @@ public struct EffectiveSettings: Equatable, Sendable {
     /// a binding, a link naming one that no longer exists — resolves as none: never an error,
     /// never a blocked connect (§4.4).
     public static func resolve(
-        host: StoredHost?, selection: PresetSelection = .inherit,
+        host: StoredHost?, selection: PresetSelection = .inherit, launch: String? = nil,
         catalog: PresetCatalog? = nil, defaults: UserDefaults = .standard
     ) -> EffectiveSettings {
         let base = EffectiveSettings(defaults: defaults)
@@ -235,7 +236,7 @@ public struct EffectiveSettings: Equatable, Sendable {
                 return (catalog ?? PresetCatalog.load()).preset(id: id)
             case .inherit:
                 guard let host else { return nil }
-                return (catalog ?? PresetCatalog.load()).binding(for: host)
+                return (catalog ?? PresetCatalog.load()).binding(for: host, launch: launch)
             }
         }()
         guard let preset else { return base }

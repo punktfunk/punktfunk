@@ -1004,6 +1004,8 @@
 	"setting_chroma_444_hint": "Schärferer Text, wo Gerät und GPU es unterstützen.",
 	"setting_max_fps": "Bildraten-Limit",
 	"setting_max_fps_hint": "Begrenzt, wie schnell das Spiel rendert, nicht den Stream. 0 heißt kein Limit.",
+	"setting_vdisplay_hz_mult": "Bildraten-Vielfaches",
+	"setting_vdisplay_hz_mult_hint": "Der virtuelle Bildschirm läuft schneller als der Stream, damit ein spätes Bild erscheint. 0 ist automatisch, 1 aus.",
 	"setting_audio_output_mode": "Wo der Ton spielt",
 	"setting_audio_output_mode_client_only": "Nur Gerät",
 	"setting_audio_output_mode_host_and_client": "Gerät und Host",
