@@ -161,13 +161,30 @@ mod linux {
                 .map_err(|e| format!("open the seat ledger: {e}"))?,
         );
         service.backend().prepare_owners(&service.ledger());
+        let listener = socket::bind(socket_path)
+            .map_err(|e| format!("bind {}: {e}", socket_path.display()))?;
+        notify_ready();
+        // A request that arrives while autostart seats come up waits in the socket's queue.
         if let Err(error) = service.reconcile_startup() {
             tracing::warn!(code = ?error.code, "seat autostart: {}", error.message);
         }
-        let listener = socket::bind(socket_path)
-            .map_err(|e| format!("bind {}: {e}", socket_path.display()))?;
         tracing::info!(socket = %socket_path.display(), "seat supervisor serving");
         socket::serve(listener, service);
         Ok(())
+    }
+
+    /// `READY=1` to systemd (`Type=notify`): the owner's files are written and the socket is
+    /// bound. Only a path socket, which is what systemd hands a system service.
+    fn notify_ready() {
+        use std::os::unix::net::UnixDatagram;
+        let Some(path) =
+            std::env::var_os("NOTIFY_SOCKET").filter(|p| !p.as_encoded_bytes().starts_with(b"@"))
+        else {
+            return;
+        };
+        let sent = UnixDatagram::unbound().and_then(|s| s.send_to(b"READY=1", path));
+        if let Err(error) = sent {
+            tracing::warn!(%error, "systemd was not told the supervisor is ready");
+        }
     }
 }

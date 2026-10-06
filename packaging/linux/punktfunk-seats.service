@@ -9,9 +9,15 @@
 Description=punktfunk seat supervisor
 After=local-fs.target systemd-logind.service
 Wants=systemd-logind.service
+# The owner's host reads its contract from /run/punktfunk/seats, which this writes at start. A
+# user manager starts after systemd-user-sessions, so ready here is before any user host starts
+# on the box's own ports.
+Before=systemd-user-sessions.service
 
 [Service]
-Type=simple
+# Ready once the owner's files are written and the socket is bound.
+Type=notify
+TimeoutStartSec=30
 # The box host's config directory. The ledger lands in seats/ below it.
 Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk
 ExecStart=/usr/libexec/punktfunk/punktfunk-seats serve --socket /run/punktfunk/seats.sock
