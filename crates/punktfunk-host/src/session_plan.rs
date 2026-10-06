@@ -19,16 +19,28 @@ pub enum CaptureBackend {
     /// host runs as SYSTEM in the interactive console session, so it captures
     /// the secure desktop too.
     IddPush,
+    /// Windows: a monitor the host did not create, captured with Windows Graphics Capture
+    /// by a capture worker that runs as the signed-in user. It does not show the secure
+    /// desktop.
+    Wgc,
 }
 
 impl CaptureBackend {
     /// Shared by [`SessionPlan::resolve`] and the standalone callers (GameStream / spike).
     pub fn resolve() -> Self {
-        if cfg!(target_os = "windows") {
-            CaptureBackend::IddPush
-        } else {
+        if !cfg!(target_os = "windows") {
             CaptureBackend::Portal
+        } else if mirrored() {
+            CaptureBackend::Wgc
+        } else {
+            CaptureBackend::IddPush
         }
+    }
+
+    /// The session's encoder runs outside this process, behind an AU section: in the driver,
+    /// or in the capture worker. The host then opens a proxy, never a backend.
+    pub fn encodes_remotely(self) -> bool {
+        matches!(self, CaptureBackend::IddPush | CaptureBackend::Wgc)
     }
 }
 
@@ -37,6 +49,9 @@ pub enum SessionTopology {
     /// One process captures and encodes: Linux portal, or Windows IDD-push in the
     /// host's SYSTEM process in the interactive console session.
     SingleProcess,
+    /// Windows: a capture worker in the user's session captures and encodes; the host reads
+    /// its access units.
+    CaptureWorker,
 }
 
 /// Recorded for logging. The encoder open still goes through
@@ -119,9 +134,10 @@ impl SessionPlan {
         cursor_forward: bool,
         multi_slice: bool,
     ) -> Self {
+        let capture = CaptureBackend::resolve();
         SessionPlan {
-            capture: CaptureBackend::resolve(),
-            topology: resolve_topology(),
+            capture,
+            topology: resolve_topology(capture),
             encoder: resolve_encoder(),
             bit_depth,
             hdr,
@@ -207,8 +223,12 @@ impl SessionPlan {
     }
 }
 
-pub(crate) fn resolve_topology() -> SessionTopology {
-    SessionTopology::SingleProcess
+pub(crate) fn resolve_topology(capture: CaptureBackend) -> SessionTopology {
+    if capture == CaptureBackend::Wgc {
+        SessionTopology::CaptureWorker
+    } else {
+        SessionTopology::SingleProcess
+    }
 }
 
 /// THE rule for [`SessionPlan::cursor_blend`], shared by every resolve caller
@@ -344,16 +364,9 @@ fn resolve_encoder() -> EncoderBackend {
     }
 }
 
-/// Whether this host streams a pinned physical head instead of a virtual display.
+/// Whether a session opened now streams a pinned physical head instead of a virtual display.
 pub(crate) fn mirrored() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        crate::vdisplay::capture_monitor().is_some()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
+    pf_vdisplay::mirrors_pinned()
 }
 
 /// Open the encoder for `frame` through `open(width, height)` and return it with the framing

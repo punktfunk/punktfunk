@@ -284,6 +284,8 @@ windows = { version = "0.62", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",
     "Win32_System_Threading",
+    # The capture worker's three pipes (windows/capture_worker.rs).
+    "Win32_System_Pipes",
     "Win32_System_Environment",
     # Module-path crash records and the System32-scoped AVRT loader.
     "Win32_System_LibraryLoader",

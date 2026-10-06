@@ -259,8 +259,9 @@ pub(super) fn cursor_forward(
         // Windows: the v5 IddCx hardware-cursor channel. Without it DWM paints the pointer
         // into the IDD frame and a second copy doubles it. The encoder is not consulted: the
         // IDD capturer composites on the capture-mouse flip; no Windows encode backend blends.
+        // A mirrored monitor's pointer is in the picture the capture worker takes.
         let _ = (compositor, codec, bit_depth, hdr);
-        crate::windows::idd::hw_cursor_capable()
+        !crate::session_plan::mirrored() && crate::windows::idd::hw_cursor_capable()
     }
 }
 

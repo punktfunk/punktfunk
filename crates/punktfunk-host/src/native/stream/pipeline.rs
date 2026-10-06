@@ -336,7 +336,7 @@ pub(super) fn open_session_encoder(
     Box<dyn crate::encode::Encoder>,
     punktfunk_core::video_fit::Reframe,
 )> {
-    if plan.capture == crate::session_plan::CaptureBackend::IddPush {
+    if plan.capture.encodes_remotely() {
         return crate::windows::idd::open_driver_encoder(
             plan,
             capturer,

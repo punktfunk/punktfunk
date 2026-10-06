@@ -411,8 +411,12 @@ pub fn capture_virtual_output(
         kwin: _kwin,
         gamescope: _gamescope,
         // The driver paces its own encodes (`pf_frame::pace`).
-        stream_hz: _stream_hz,
+        stream_hz,
     } = request;
+    // A monitor this host did not create is captured by a worker; the driver has no part in it.
+    if vout.ownership == crate::vdisplay::DisplayOwnership::External {
+        return capture_external_output(vout, want, stream_hz);
+    }
     let target = vout.win_capture.clone().ok_or_else(|| {
         anyhow::anyhow!(
             "pf-vdisplay target not yet an active display path (activation failed — see the \
@@ -486,6 +490,37 @@ pub fn capture_virtual_output(
     .map_err(|(e, _keep)| e.context("IDD-push capture open (no fallback)"))
 }
 
+/// Capture a monitor this host did not create: start a capture worker as the signed-in user
+/// and open the monitor in it. The absolute-input aim moves to that monitor, as the IDD-push
+/// open does for its own. The worker gets the GPU scheduling class a session's encoder gets.
+#[cfg(target_os = "windows")]
+fn capture_external_output(
+    vout: crate::vdisplay::VirtualOutput,
+    want: OutputFormat,
+    stream_hz: u32,
+) -> Result<Box<dyn Capturer>> {
+    use anyhow::Context as _;
+    let target = vout
+        .win_capture
+        .clone()
+        .context("the mirrored monitor carries no capture target")?;
+    let key = pf_win_display::win_display::CcdTargetKey::new(target.adapter_luid, target.target_id);
+    let hdr = pf_win_display::display_events::snapshot_or_query()
+        .target(key)
+        .and_then(|t| t.hdr)
+        .unwrap_or(false);
+    crate::inject::set_stream_extent(head_extent(vout.preferred_mode));
+    crate::inject::set_stream_target(Some(key));
+    let worker = crate::windows::capture_worker::spawn().context("start the capture worker")?;
+    let source = pf_capture::WgcSource {
+        gdi_name: target.gdi_name,
+        target_id: target.target_id,
+        hdr,
+    };
+    pf_capture::open_wgc(worker, source, want.hdr, stream_hz, true, vout.keepalive)
+        .context("WGC capture open (no fallback)")
+}
+
 /// The driver encoder's HDR flag and depth for a session negotiated at `plan_hdr`/`bit_depth`.
 /// The driver's pool refuses every surface not in the format it opened for, so an HDR session
 /// whose display composes SDR (HDR switched off, advanced colour refused) opens 8-bit SDR.
@@ -514,23 +549,6 @@ pub fn open_driver_encoder(
     wire_seq_base: u32,
 ) -> Result<Box<dyn crate::encode::Encoder>> {
     use crate::encode::{Codec, WindowsBackend};
-    let endpoint = capturer
-        .driver_endpoint()
-        .ok_or_else(|| anyhow::anyhow!("driver encode: the capture source is not IDD-push"))?;
-    let control = crate::vdisplay::manager::control_device_handle().ok_or_else(|| {
-        anyhow::anyhow!(
-            "pf-vdisplay control device not open (monitor not created via the manager?)"
-        )
-    })?;
-    let control_open = control.clone();
-    let set_encode: pf_capture::SetEncodeSender =
-        std::sync::Arc::new(move |req: &pf_driver_proto::encode::SetEncodeRequest| {
-            crate::vdisplay::driver::send_set_encode(&control_open, req)
-        });
-    let encode_ctl: pf_capture::EncodeCtlSender =
-        std::sync::Arc::new(move |req: &pf_driver_proto::encode::EncodeCtlRequest| {
-            crate::vdisplay::driver::send_encode_ctl(&control, req)
-        });
     use pf_driver_proto::encode::{backend as be, codec as cc};
     let backend = match plan.codec {
         Codec::PyroWave => be::PYROWAVE,
@@ -572,18 +590,55 @@ pub fn open_driver_encoder(
         backends: [backend, fallback, 0, 0],
         wire_seq_base,
     };
-    let enc = pf_capture::open_driver_encoder(endpoint, &params, set_encode, encode_ctl)?;
-    // The driver walks the preference list, so the record names what actually opened —
+    // The capturer says where its encoder runs: a capture worker's source opens there.
+    let worker = capturer.worker_endpoint();
+    let enc = match &worker {
+        Some(worker) => pf_capture::open_worker_encoder(worker, &params)?,
+        None => open_in_driver(capturer, &params)?,
+    };
+    // The list was walked on the other side, so the record names what actually opened —
     // reading back the request's first choice would hide every fallback.
-    let label = match enc.telemetry().map(|t| t.backend) {
-        Some("nvenc") => "driver-nvenc",
-        Some("amf") => "driver-amf",
-        Some("qsv") => "driver-qsv",
-        Some("pyrowave") => "driver-pyrowave",
-        Some("mf") => "driver-mf",
-        _ => "driver",
+    let label = match (worker.is_some(), enc.telemetry().map(|t| t.backend)) {
+        (false, Some("nvenc")) => "driver-nvenc",
+        (false, Some("amf")) => "driver-amf",
+        (false, Some("qsv")) => "driver-qsv",
+        (false, Some("pyrowave")) => "driver-pyrowave",
+        (false, Some("mf")) => "driver-mf",
+        (false, _) => "driver",
+        (true, Some("nvenc")) => "worker-nvenc",
+        (true, Some("amf")) => "worker-amf",
+        (true, Some("qsv")) => "worker-qsv",
+        (true, Some("pyrowave")) => "worker-pyrowave",
+        (true, Some("mf")) => "worker-mf",
+        (true, _) => "worker",
     };
     Ok(crate::encode::track_session(enc, label))
+}
+
+/// The in-driver open: the two IOCTL senders over the manager's control handle.
+#[cfg(target_os = "windows")]
+fn open_in_driver(
+    capturer: &dyn Capturer,
+    params: &pf_capture::DriverEncodeParams,
+) -> Result<Box<dyn crate::encode::Encoder>> {
+    let endpoint = capturer
+        .driver_endpoint()
+        .ok_or_else(|| anyhow::anyhow!("driver encode: the capture source is not IDD-push"))?;
+    let control = crate::vdisplay::manager::control_device_handle().ok_or_else(|| {
+        anyhow::anyhow!(
+            "pf-vdisplay control device not open (monitor not created via the manager?)"
+        )
+    })?;
+    let control_open = control.clone();
+    let set_encode: pf_capture::SetEncodeSender =
+        std::sync::Arc::new(move |req: &pf_driver_proto::encode::SetEncodeRequest| {
+            crate::vdisplay::driver::send_set_encode(&control_open, req)
+        });
+    let encode_ctl: pf_capture::EncodeCtlSender =
+        std::sync::Arc::new(move |req: &pf_driver_proto::encode::EncodeCtlRequest| {
+            crate::vdisplay::driver::send_encode_ctl(&control, req)
+        });
+    pf_capture::open_driver_encoder(endpoint, params, set_encode, encode_ctl)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
