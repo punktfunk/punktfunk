@@ -326,14 +326,23 @@ public final class Sc2Capture {
         let source = sources.first(where: { $0.value.padIndex == pad })?.key
         lock.unlock()
         guard let source else { return } // addressed to some other controller
+        write(source: source, kind: kind, frame: data)
+    }
+
+    /// One id-first frame to `source`'s transport, on its link queue.
+    private func write(source: UInt64, kind: UInt8, frame: [UInt8]) {
         #if os(macOS)
         if source != Self.bleSource {
-            usbLink.writeRaw(source: source, kind: kind, frame: data)
+            usbLink.writeRaw(source: source, kind: kind, frame: frame)
             return
         }
         #endif
-        link.writeRaw(kind: kind, frame: data)
+        link.writeRaw(kind: kind, frame: frame)
     }
+
+    /// A zero `0x80` rumble. The firmware holds the last level it got, so a stream that ends
+    /// mid-rumble would leave the motors running.
+    private static let rumbleStop: [UInt8] = [0x80] + [UInt8](repeating: 0, count: 9)
 
     // MARK: - Report path (link queue)
 
@@ -587,6 +596,7 @@ public final class Sc2Capture {
         lock.unlock()
         chord?.cancel()
         guard let index else { return }
+        write(source: source, kind: 0, frame: Self.rumbleStop)
         connection.send(.gamepadRemove(pad: UInt32(index)))
         DispatchQueue.main.async { [weak self, manager] in
             MainActor.assumeIsolated {

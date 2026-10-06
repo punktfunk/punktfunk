@@ -68,6 +68,9 @@ class Sc2UsbLink(
 
     fun serialNumber(): String? = link.serialNumber()
 
+    /** One output report on EP0, for a write that must land while the link stops. */
+    fun writeControl(frame: ByteArray): Boolean = link.writeControl(frame)
+
     /** Restore lizard mode, stop the read loop, release the interfaces. Idempotent; fires no callback. */
     fun stop() = link.stop()
 }

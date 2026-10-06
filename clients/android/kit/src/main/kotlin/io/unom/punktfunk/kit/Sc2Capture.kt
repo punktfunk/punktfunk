@@ -44,12 +44,12 @@ class Sc2Capture(
 ) {
     private val usb = Sc2UsbLink(context, ::onReport, ::onLinkClosed)
     private val ble = Sc2BleLink(context, ::onReport, ::onLinkClosed)
-    private var activeLink: Int = LINK_NONE
+    @Volatile private var activeLink: Int = LINK_NONE
 
     /** True when the USB link is a Puck dongle — the only transport whose wireless-status
      *  reports are authoritative. A WIRED pad also emits them, truthfully reporting "no radio
      *  link" — acting on that tore the slot down 255 ms after creation (first on-glass run). */
-    private var dongleLink = false
+    @Volatile private var dongleLink = false
 
     @Volatile private var pad: GamepadRouter.ExternalPad? = null
 
@@ -69,7 +69,7 @@ class Sc2Capture(
 
     /** Whether the live transport is delivering reports. Deliberately not `activeLink !=
      *  LINK_NONE`: a BLE link stays selected while it re-acquires a pad that was switched off. */
-    private var reporting = false
+    @Volatile private var reporting = false
 
     // UI-mode state (router == null): held navigation keys + the stick's current synth direction.
     private var uiHeld = HashSet<Int>()
@@ -158,6 +158,12 @@ class Sc2Capture(
     /** Stop the link and free the wire slot (host tears the virtual pad down). Idempotent. */
     fun stop() {
         val wasActive = activeLink != LINK_NONE
+        // The firmware holds the last rumble level it got: put the motors down before letting go.
+        // USB goes EP0-direct, since the interrupt queue stops draining with the reader.
+        when (activeLink) {
+            LINK_USB -> usb.writeControl(RUMBLE_STOP)
+            LINK_BLE -> ble.writeRaw(HID_RAW_OUTPUT, RUMBLE_STOP)
+        }
         when (activeLink) {
             LINK_USB -> usb.stop()
             LINK_BLE -> ble.stop()
@@ -356,6 +362,8 @@ class Sc2Capture(
         const val LINK_NONE = 0
         const val LINK_USB = 1
         const val LINK_BLE = 2
+
+        val RUMBLE_STOP = Sc2Device.rumbleFrame(0, 0)
 
         /** The `0xAE` query for attribute 1, the engraved serial. */
         val SERIAL_QUERY = byteArrayOf(0x01, 0xAE.toByte(), 0x15, 0x01)
