@@ -116,7 +116,8 @@ works.
 
 ## Installer signing (Azure Artifact Signing)
 
-`setup.exe`, `punktfunk-host.exe`, `punktfunk-tray.exe` and the Vulkan HDR layer are signed with
+`setup.exe`, `punktfunk-host.exe`, `punktfunk-tray.exe`, `punktfunk-capture-worker.exe` and the
+Vulkan HDR layer are signed with
 **Azure Artifact Signing** (formerly Trusted Signing): account `unomsigning`, certificate profile
 `unom-io`, endpoint `https://neu.codesigning.azure.net/`. It is a publicly trusted CA, so users get
 a named publisher in the UAC prompt and there is no `.cer` to import — `HOST_CER_PATH` is simply not
