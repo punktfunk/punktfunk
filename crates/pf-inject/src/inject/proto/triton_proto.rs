@@ -283,15 +283,18 @@ impl Sc2Identity {
     /// The recorded reply to the request `last_set` makes. `0xB4` is the slot's live state,
     /// so it is never replayed.
     pub fn reply(&self, last_set: &[u8]) -> Option<[u8; 64]> {
-        use pf_driver_proto::triton::request_key;
-        let want = request_key(last_set);
-        if want.1 == 0xB4 {
-            return None;
-        }
+        pf_driver_proto::triton::recorded_reply(self.pairs(), last_set)
+    }
+
+    fn pairs(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
         self.replies
             .iter()
-            .find(|(req, _)| request_key(req) == want)
-            .map(|(_, reply)| *reply)
+            .map(|(q, r)| (q.as_slice(), r.as_slice()))
+    }
+
+    /// The devnode property a Windows virtual SC2 reads this from.
+    pub fn blob(&self) -> Vec<u8> {
+        pf_driver_proto::triton::identity_blob(self.serial.as_deref().unwrap_or(""), self.pairs())
     }
 
     /// `serial <text>` lines and `<request hex> <reply hex>` lines; `#` starts a comment.

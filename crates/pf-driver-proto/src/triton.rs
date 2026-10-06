@@ -7,6 +7,89 @@ pub const ID_GET_STRING_ATTRIBUTE: u8 = 0xAE;
 pub const ID_GET_FIRMWARE_INFO: u8 = 0xF2;
 /// A Puck slot's config store, read by key string (`esb/bond`, `user/wireless_transport`).
 pub const ID_GET_CONFIG_VALUE: u8 = 0xED;
+/// A Puck slot's live state: never answered from a recording.
+pub const ID_GET_SLOT_STATE: u8 = 0xB4;
+
+/// Devnode property `{783BFBEF-EBC2-4159-80FB-4737ABA2F523}`, pid 2: a virtual SC2's
+/// [`identity_blob`]. The host sets it at `SwDeviceCreate`; the driver reads it at
+/// `EvtDeviceAdd`, before Steam asks for the serial.
+pub const IDENTITY_PROPKEY_FMTID: u128 = 0x783B_FBEF_EBC2_4159_80FB_4737_ABA2_F523;
+pub const IDENTITY_PROPKEY_PID: u32 = 2;
+
+/// A virtual SC2's identity as the host hands it to the driver: `[n][serial]`, then
+/// `[len][request][len][reply]…`, each part at most 64 bytes.
+pub fn identity_blob<'a>(
+    serial: &str,
+    pairs: impl IntoIterator<Item = (&'a [u8], &'a [u8])>,
+) -> alloc::vec::Vec<u8> {
+    let serial = &serial.as_bytes()[..serial.len().min(64)];
+    let mut b = alloc::vec![serial.len() as u8];
+    b.extend_from_slice(serial);
+    for (req, reply) in pairs {
+        for part in [req, reply] {
+            let part = &part[..part.len().min(64)];
+            b.push(part.len() as u8);
+            b.extend_from_slice(part);
+        }
+    }
+    b
+}
+
+/// An [`identity_blob`], read back. The serial is empty when the client sent none.
+#[derive(Clone, Copy, Debug)]
+pub struct Identity<'a> {
+    pub serial: &'a str,
+    pairs: &'a [u8],
+}
+
+impl<'a> Identity<'a> {
+    /// `None` when a length runs past the end, a reply has no request, or the serial is not UTF-8.
+    pub fn parse(blob: &'a [u8]) -> Option<Identity<'a>> {
+        let (&n, rest) = blob.split_first()?;
+        let serial = core::str::from_utf8(rest.get(..usize::from(n))?).ok()?;
+        let pairs = rest.get(usize::from(n)..)?;
+        let (mut cur, mut parts) = (pairs, 0usize);
+        while let Some((&len, tail)) = cur.split_first() {
+            cur = tail.get(usize::from(len)..).filter(|_| len <= 64)?;
+            parts += 1;
+        }
+        (parts % 2 == 0).then_some(Identity { serial, pairs })
+    }
+
+    /// The recorded `(request, reply)` pairs, both id-first.
+    pub fn pairs(&self) -> impl Iterator<Item = (&'a [u8], &'a [u8])> + 'a {
+        let mut cur = self.pairs;
+        let mut part = move || {
+            let (&n, tail) = cur.split_first()?;
+            let (p, rest) = (tail.get(..usize::from(n))?, tail.get(usize::from(n)..)?);
+            cur = rest;
+            Some(p)
+        };
+        core::iter::from_fn(move || Some((part()?, part()?)))
+    }
+
+    pub fn reply(&self, last_set: &[u8]) -> Option<[u8; 64]> {
+        recorded_reply(self.pairs(), last_set)
+    }
+}
+
+/// The recorded reply to the request `last_set` makes, zero-padded to 64 bytes.
+pub fn recorded_reply<'a>(
+    pairs: impl IntoIterator<Item = (&'a [u8], &'a [u8])>,
+    last_set: &[u8],
+) -> Option<[u8; 64]> {
+    let want = request_key(last_set);
+    if want.1 == ID_GET_SLOT_STATE {
+        return None;
+    }
+    let (_, rep) = pairs
+        .into_iter()
+        .find(|(req, rep)| !rep.is_empty() && request_key(req) == want)?;
+    let mut reply = [0u8; 64];
+    let n = rep.len().min(64);
+    reply[..n].copy_from_slice(&rep[..n]);
+    Some(reply)
+}
 
 /// What picks a feature reply out of a set of recorded ones: the report id, the command, and
 /// its argument — the attribute of `0xAE`, the index of `0xF2`, the key string of `0xED`.
@@ -216,6 +299,31 @@ pub fn feature_reply(last_set: &[u8], serial: &str, unit_id: u32) -> [u8; 64] {
 mod tests {
     use super::*;
     use crate::gamepad;
+
+    /// The driver answers from the blob the host wrote; a torn blob is no identity.
+    #[test]
+    fn identity_blob_round_trips() {
+        let serial_q = [0x01, 0xAE, 0x15, 0x01];
+        let serial_r = [0x01, 0xAE, 0x15, 0x01, b'F', b'X', b'A'];
+        let slot_q = [0x02, 0xB4, 0x00];
+        let blob = identity_blob(
+            "FXA9954800A07",
+            [
+                (&serial_q[..], &serial_r[..]),
+                (&slot_q[..], &[0x02, 0xB4][..]),
+            ],
+        );
+        let id = Identity::parse(&blob).expect("parses");
+        assert_eq!(id.serial, "FXA9954800A07");
+        assert_eq!(id.pairs().count(), 2);
+        let mut asked = [0u8; 64];
+        asked[..4].copy_from_slice(&serial_q);
+        assert_eq!(id.reply(&asked).map(|r| r[4]), Some(b'F'));
+        assert_eq!(id.reply(&slot_q), None, "slot state is live");
+        assert!(Identity::parse(&blob[..blob.len() - 1]).is_none());
+        assert!(Identity::parse(&identity_blob("", [(&serial_q[..], &[][..])])).is_some());
+        assert!(Identity::parse(&[0]).is_some_and(|i| i.serial.is_empty()));
+    }
 
     #[test]
     fn triton_devtype_is_the_next_free_slot() {

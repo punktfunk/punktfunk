@@ -223,10 +223,10 @@ impl Pads {
     }
 
     /// A client sends a pad's identity on the control stream and its arrival as a datagram, so
-    /// the arrival can land first. A Linux SC2 waits up to [`IDENTITY_WAIT`] for it: the virtual
+    /// the arrival can land first. An SC2 waits up to [`IDENTITY_WAIT`] for it: the virtual
     /// pad is built once, as itself. A client that sends none gets the canned identity.
     fn waits_for_identity(&self, idx: usize) -> bool {
-        cfg!(target_os = "linux")
+        cfg!(any(target_os = "linux", windows))
             && self.owner[idx].is_none()
             && is_sc2(self.kinds[idx])
             && self.identities[idx].is_none()

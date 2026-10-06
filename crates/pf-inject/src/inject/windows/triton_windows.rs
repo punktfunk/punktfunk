@@ -20,7 +20,7 @@
 
 use super::gamepad_raii::SwDeviceProfile;
 use super::pad_shm::ShmPad;
-use crate::triton_proto::{parse_triton_rumble, triton_serial, TritonState};
+use crate::triton_proto::{parse_triton_rumble, triton_serial, Sc2Identity, TritonState};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use pf_driver_proto::gamepad::DEVTYPE_TRITON;
@@ -39,7 +39,10 @@ pub struct TritonWinPad {
 }
 
 impl TritonWinPad {
-    fn open(index: u8) -> Result<TritonWinPad> {
+    /// The devnode always carries an identity property: it outlives the pad, and a pad without
+    /// an identity must not answer with the last one's.
+    fn open(index: u8, identity: Option<&Sc2Identity>) -> Result<TritonWinPad> {
+        let blob = identity.map_or_else(|| vec![0], Sc2Identity::blob);
         let shm = ShmPad::open(
             index,
             DEVTYPE_TRITON,
@@ -55,7 +58,13 @@ impl TritonWinPad {
                 usb_mi: None,
                 bluetooth: false,
                 description: "Punktfunk Virtual Steam Controller",
-                enumerator: "punktfunk",
+                // Steam merges a pad's HID views by the VID/PID token in the instance path.
+                enumerator: "VID_28DE&PID_1302",
+                property: Some((
+                    pf_driver_proto::triton::IDENTITY_PROPKEY_FMTID,
+                    pf_driver_proto::triton::IDENTITY_PROPKEY_PID,
+                    &blob,
+                )),
             },
         )?;
         Ok(TritonWinPad { shm, seq: 0 })
@@ -127,11 +136,13 @@ impl PadProto for TritonWinProto {
         " (install/repair: punktfunk-host.exe driver install --gamepad)";
 
     fn open(&mut self, idx: u8) -> Result<TritonWinPad> {
-        let p = TritonWinPad::open(idx)?;
+        let identity = crate::triton_proto::identity_for(idx);
+        let p = TritonWinPad::open(idx, identity.as_deref())?;
+        let serial = identity.as_ref().and_then(|i| i.serial.clone());
         tracing::info!(
             index = idx,
-            // Serial the driver answers GET_REPORT with, derived from idx.
-            serial = %triton_serial(idx),
+            serial = serial.unwrap_or_else(|| triton_serial(idx)),
+            replies = identity.as_ref().map_or(0, |i| i.replies.len()),
             "virtual Steam Controller 2 created (Windows UMDF shm channel, as-is raw passthrough)"
         );
         Ok(p)
