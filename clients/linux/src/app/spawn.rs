@@ -30,6 +30,8 @@ pub struct SpawnOpts {
     /// The picker's verdict, which replaces the saved pick on the plan: `Some(None)` sends no
     /// profile, `None` leaves the saved pick in force.
     pub profile: Option<Option<String>>,
+    /// This dial is the one retry after the host refused the profile as unknown.
+    pub redial: bool,
 }
 
 pub use orchestrate::{session_binary, CancelHandle};

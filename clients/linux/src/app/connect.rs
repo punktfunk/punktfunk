@@ -47,6 +47,7 @@ impl AppModel {
             }
             return;
         }
+        self.retry_profile = opts.profile.clone().flatten().filter(|_| !opts.redial);
         self.hosts.emit(HostsMsg::ClearError);
         self.hosts.emit(HostsMsg::SetSession(Some((
             req.card_key(),
@@ -134,6 +135,7 @@ impl AppModel {
         // visible wake-and-wait instead of an error alert. Matched by fingerprint (else
         // address) so a stale armed request can never redirect another host's failure.
         let cancelled = std::mem::take(&mut self.session_cancelled);
+        let retry = self.retry_profile.take();
         let wake_fb = self
             .wake_fallback
             .take()
@@ -146,9 +148,14 @@ impl AppModel {
             // already said so.
             ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {}
             ConnectOutcome::Ended(Some(reason)) => self.hosts.emit(HostsMsg::ShowError(reason)),
-            // The host answered and refused: never a wake. A profile it no longer has is forgotten.
+            // The host answered and refused: never a wake. A profile it no longer has is
+            // forgotten, after one more look at its list.
             ConnectOutcome::Refused { msg, reason } => {
-                if reason == punktfunk_core::reject::RejectReason::ProfileUnknown {
+                let unknown = reason == punktfunk_core::reject::RejectReason::ProfileUnknown;
+                if let (true, Some(id), Some(fp_hex)) = (unknown, retry, req.fp_hex.clone()) {
+                    return self.reask_profile(req, fp_hex, id, msg, sender);
+                }
+                if unknown {
                     self.forget_profile(&req);
                 }
                 self.hosts.emit(HostsMsg::ShowError(msg));

@@ -340,7 +340,7 @@ fn request_access(
             connect_timeout_secs: Some(185),
             persist_paired: true,
             cancel: Some(cancel),
-            profile: None,
+            ..SpawnOpts::default()
         },
     });
 }

@@ -25,6 +25,8 @@ use relm4::prelude::*;
 use spawn::{CancelHandle, SpawnOpts};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub const APP_ID: &str = "io.unom.Punktfunk";
 
@@ -69,6 +71,11 @@ pub struct AppModel {
     /// once on the child's exit: without it, EVERY signal death read as "we meant that" and
     /// an OOM-killed or crashed stream vanished with no message at all.
     session_cancelled: bool,
+    /// The profile id the running session dialed, unless that dial is already the retry. A
+    /// `PROFILE_UNKNOWN` refusal at its exit reads the list again and dials once more.
+    retry_profile: Option<String>,
+    /// The dialog waiting for a profile's seat to come up.
+    seat_wait: Option<profile::SeatWait>,
     /// Controllers attached at the last poll — the edge Controller-optimized UI opens on.
     pads: usize,
     /// Fullscreen Always put the window there, so turning it off may take it back out.
@@ -108,9 +115,25 @@ pub enum AppMsg {
     ProfilePicked {
         req: ConnectRequest,
         fp_hex: String,
-        pick: ProfilePick,
+        row: ProfileRow,
         connect: bool,
     },
+    /// The host refused the dialed profile as unknown; its list came back (`None`: the read
+    /// failed or ran late). `msg` is the refusal, shown when the profile is gone.
+    ProfileReasked {
+        req: ConnectRequest,
+        fp_hex: String,
+        id: String,
+        msg: String,
+        listed: Option<Option<Vec<ProfileRow>>>,
+    },
+    /// A seat poll's row, or the line that ends the wait. `stop` names the wait it belongs to.
+    SeatPolled {
+        stop: Arc<AtomicBool>,
+        row: Result<ProfileRow, String>,
+    },
+    /// The seat dialog closed by Cancel or Escape.
+    SeatCancelled(Arc<AtomicBool>),
     /// Show a destination by its view name.
     ShowView(&'static str),
     Find,
@@ -408,6 +431,8 @@ impl SimpleComponent for AppModel {
             wake_fallback: None,
             waiting: Rc::new(RefCell::new(None)),
             session_cancelled: false,
+            retry_profile: None,
+            seat_wait: None,
             pads: 0,
             session: None,
             streaming,
@@ -539,9 +564,18 @@ impl SimpleComponent for AppModel {
             AppMsg::ProfilePicked {
                 req,
                 fp_hex,
-                pick,
+                row,
                 connect,
-            } => self.profile_picked(req, fp_hex, pick, connect, &sender),
+            } => self.profile_picked(req, fp_hex, row, connect, &sender),
+            AppMsg::ProfileReasked {
+                req,
+                fp_hex,
+                id,
+                msg,
+                listed,
+            } => self.profile_reasked(req, fp_hex, id, msg, listed, &sender),
+            AppMsg::SeatPolled { stop, row } => self.seat_polled(stop, row, &sender),
+            AppMsg::SeatCancelled(stop) => self.seat_cancelled(&stop),
             AppMsg::SendLogs(req, mgmt_port) => self.send_logs(req, mgmt_port, &sender),
             AppMsg::HostAction {
                 req,
