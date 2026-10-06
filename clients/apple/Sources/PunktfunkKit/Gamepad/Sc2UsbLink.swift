@@ -453,6 +453,44 @@ final class Sc2UsbLink {
         log.info("SC2 USB: slot serial \(serial)")
     }
 
+    /// `source`'s identity for the host: its USB serial and its replies to core's feature
+    /// queries. A Puck stalls each GET until its pad answers over the radio (~40 ms), so each is
+    /// retried for up to a second. On `queue`, which it blocks for the reads.
+    func identity(source: UInt64) -> PunktfunkConnection.PadIdentity? {
+        guard let dev = open[source] else { return nil }
+        let serial = (IOHIDDeviceGetProperty(dev, kIOHIDSerialNumberKey as CFString) as? String) ?? ""
+        let requests = PunktfunkConnection.sc2IdentityRequests(puck: isDongle(source: source))
+        let replies = requests.compactMap { request in
+            exchange(dev, request).map { PunktfunkConnection.PadIdentity.Reply(request: request, reply: $0) }
+        }
+        log.info("SC2 USB: identity \(serial, privacy: .public), \(replies.count, privacy: .public)/\(requests.count, privacy: .public) replies")
+        return .init(serial: serial, replies: replies)
+    }
+
+    /// SET one feature query, then GET until the reply echoes its command. Id-first both ways.
+    private func exchange(_ dev: IOHIDDevice, _ request: [UInt8]) -> [UInt8]? {
+        guard request.count >= 2 else { return nil }
+        let id = request[0]
+        let frame = request + [UInt8](repeating: 0, count: max(0, 64 - request.count))
+        let set = frame.withUnsafeBufferPointer { buf in
+            IOHIDDeviceSetReport(dev, kIOHIDReportTypeFeature, CFIndex(id), buf.baseAddress!, buf.count)
+        }
+        guard set == kIOReturnSuccess else { return nil }
+        for _ in 0..<50 {
+            usleep(20_000)
+            var buf = [UInt8](repeating: 0, count: 64)
+            buf[0] = id
+            var len: CFIndex = buf.count
+            let rc = buf.withUnsafeMutableBufferPointer { p in
+                IOHIDDeviceGetReport(dev, kIOHIDReportTypeFeature, CFIndex(id), p.baseAddress!, &len)
+            }
+            if rc == kIOReturnSuccess, len > 1, buf[1] == request[1] {
+                return Array(buf[..<min(Int(len), buf.count)])
+            }
+        }
+        return nil
+    }
+
     // MARK: - Lizard keep-alive
 
     /// Re-send the initialization features on SDL's cadence, and once immediately: without it the

@@ -475,6 +475,13 @@ public final class Sc2Capture {
     /// success sends `gamepadArrival` (pref 9, or 10 for a Puck slot) — the declaration the
     /// host builds the virtual SC2 from — before any input can flow on that index.
     private func claimSlot(source: UInt64) {
+        // On the link queue: the host builds the virtual pad from this, so it is read before the
+        // arrival goes out. BLE sends none yet.
+        #if os(macOS)
+        let identity = source == Self.bleSource ? nil : usbLink.identity(source: source)
+        #else
+        let identity: PunktfunkConnection.PadIdentity? = nil
+        #endif
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             MainActor.assumeIsolated {
@@ -522,7 +529,8 @@ public final class Sc2Capture {
                 }
                 src.padIndex = index
                 // Under the lock, like the link queue's own sends: a report must not reach the
-                // host before the arrival that creates its pad.
+                // host before the arrival that creates its pad, nor the arrival before its identity.
+                if let identity { self.connection.sendPadIdentity(pad: index, identity) }
                 self.connection.send(.gamepadArrival(pref: kind.rawValue, pad: UInt32(index)))
                 self.pushGateLocked(pad: index)
                 self.lock.unlock()

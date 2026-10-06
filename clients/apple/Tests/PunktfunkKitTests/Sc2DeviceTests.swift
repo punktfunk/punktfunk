@@ -200,6 +200,22 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertEqual(Sc2Device.wireButtons(0), 0)
     }
 
+    /// The identity rides core's `[len][request][len][reply]` packing, and core lists the queries.
+    func testPadIdentityPacksAsCoreReadsIt() {
+        let id = PunktfunkConnection.PadIdentity(serial: "FXA0000000001", replies: [
+            .init(request: [0x01, 0x83, 0x00], reply: [0x01, 0x83, 0x1E]),
+            .init(request: [0x01, 0xAE, 0x15, 0x01], reply: Array(repeating: 0x46, count: 70)),
+        ])
+        let packed = id.packedReplies
+        XCTAssertEqual(Array(packed[..<8]), [3, 0x01, 0x83, 0x00, 3, 0x01, 0x83, 0x1E])
+        XCTAssertEqual(packed[8], 4)
+        XCTAssertEqual(packed[13], 64, "a part is cut at 64 bytes")
+        XCTAssertEqual(packed.count, 8 + 5 + 65)
+        XCTAssertEqual(PunktfunkConnection.sc2IdentityRequests(puck: false).count, 8)
+        XCTAssertEqual(PunktfunkConnection.sc2IdentityRequests(puck: true).count, 12)
+        XCTAssertEqual(PunktfunkConnection.sc2IdentityRequests(puck: false).first, [0x01, 0x83, 0x00])
+    }
+
     /// One section of `clients/shared/sc2-vectors.json`.
     private func sharedRows(_ key: String) throws -> [[String: Any]] {
         let url = URL(fileURLWithPath: #filePath)
