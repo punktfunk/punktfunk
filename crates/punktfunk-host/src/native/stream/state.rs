@@ -398,6 +398,9 @@ impl StreamState {
             plan.wire_chunk = Some(ctx.common.session.shard_payload());
         }
         plan.reframe_to = ctx.reframe_to;
+        if ctx.join_live {
+            plan = plan.sharing_live_display();
+        }
         tracing::info!(?plan, "resolved session plan");
         // Automatic PyroWave: the client's ramp closes with one lower pin, so
         // the window lingers past pipeline-ready for it to cross.

@@ -43,6 +43,9 @@ pf-driver-proto = { path = "../../../crates/pf-driver-proto" }
 # signatures take (`CapturedFrame`/`PixelFormat`); pf-encode-win does not re-export it.
 pf-encode-win = { path = "../../../crates/pf-encode-win" }
 pf-frame = { path = "../../../crates/pf-frame" }
+# The encode session those backends run in: the loop, the AU writer and the slot targets, shared
+# with the capture worker so neither side has its own.
+pf-encode-session = { path = "../../../crates/pf-encode-session" }
 
 # Vendored windows-drivers-rs 0.5.1 (the published, self-contained crates) + an added `iddcx`
 # ApiSubset (M1 — bindgens iddcx/1.10/IddCx.h reusing wdk_default for WDF type-identity). Redirect ALL
