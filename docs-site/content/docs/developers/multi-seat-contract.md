@@ -83,6 +83,7 @@ them together.
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
 | `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's identity, pairing store, `profiles.json` and per-device display overlays from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. |
+| `PUNKTFUNK_LIBRARY_DIR` | the box's config directory (Windows only) | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and the plugin manifests and grants its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
 presents the box's certificate and honours the box's pairings and grants.
@@ -105,6 +106,9 @@ session by design, and display activation fails while its session is inactive.
 - **The box's trust.** The seat never mints an identity or writes the pairing store or profiles. A
   grant changed in the box console applies to the seat's next check. Sleep, restart and shut down
   are refused: the box's own host is the one that does them.
+- **The box's library, on Windows.** A Windows seat runs no plugins. It lists and launches the
+  box's titles as its own user, and answers every library change with 409. Titles from sources
+  that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out.
 - **One profile.** The seat serves the profile whose seat it is. A connect that names another seat
   profile is refused as an unknown profile; one that names none plays as this seat's profile.
 - **One connector, one lock.** A seat host creates its virtual display on its own connector only

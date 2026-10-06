@@ -236,14 +236,14 @@ pub(crate) fn granted_roots_in(id: &str, config_dir: PathBuf) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Extra roots the operator granted a plugin, by id: `<config>/plugin-run/plugin-grants.json` via
-/// [`crate::plugins::access::AccessStore`].
+/// Extra roots the operator granted a plugin, by id: `<library dir>/plugin-run/plugin-grants.json`
+/// via [`crate::plugins::access::AccessStore`]. A Windows seat host reads the box's.
 ///
 /// Written by `punktfunk-host plugins grant` or an operator's `allow` decision, never by a
 /// plugin — the file is the operator's answer to "this package may also reach here", so
 /// nothing in the plugin lane may edit it.
 pub fn granted_roots(id: &str) -> Vec<PathBuf> {
-    granted_roots_in(id, pf_paths::config_dir())
+    granted_roots_in(id, pf_paths::seat::library_dir())
 }
 
 /// Every installed plugin's manifest, keyed by the id it declares.
@@ -251,9 +251,10 @@ pub fn granted_roots(id: &str) -> Vec<PathBuf> {
 /// Installed means what the runner discovers: the dependencies of `<config>/plugins/package.json`,
 /// not every package under `node_modules`, where a plugin's own libraries live too. Without that
 /// file the tree is scanned. An id is one lowercase path component, and an id two packages claim
-/// is refused for both. Read fresh: installs and updates land between launches.
+/// is refused for both. Read fresh: installs and updates land between launches. A Windows seat
+/// host reads the box's plugins dir, which its `exec` entries came from.
 pub fn installed() -> BTreeMap<String, PluginManifest> {
-    installed_in(&pf_paths::config_dir().join("plugins"))
+    installed_in(&pf_paths::seat::library_dir().join("plugins"))
 }
 
 fn installed_in(plugins: &Path) -> BTreeMap<String, PluginManifest> {
@@ -331,7 +332,7 @@ pub fn id_of_package(pkg: &str) -> Option<String> {
         }
         bare => format!("@punktfunk/plugin-{bare}"),
     };
-    let dir = pf_paths::config_dir()
+    let dir = pf_paths::seat::library_dir()
         .join("plugins")
         .join("node_modules")
         .join(pkg);

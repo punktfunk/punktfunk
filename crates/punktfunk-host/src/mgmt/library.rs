@@ -14,9 +14,31 @@
 use super::auth::{AnyId, AuthLane, OwnedId, ProviderId};
 use super::shared::*;
 use crate::library::sort_key;
-use axum::http::header;
+use axum::extract::Request;
+use axum::http::{header, Method};
+use axum::middleware::Next;
 use axum::Extension;
 use sha2::{Digest, Sha256};
+
+/// A seat host reading the box's library ([`pf_paths::seat::box_library_dir`], `box_library`)
+/// changes none of it: every write under `/api/v1/library` answers 409. The box host is the
+/// library's one writer.
+pub(super) async fn box_library_is_read_only(
+    box_library: bool,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    let library = path == "/api/v1/library" || path.starts_with("/api/v1/library/");
+    let write = !matches!(*req.method(), Method::GET | Method::HEAD);
+    if box_library && library && write {
+        return api_error(
+            StatusCode::CONFLICT,
+            "This seat plays the box's library, so it can't be changed here. Change it on the box.",
+        );
+    }
+    next.run(req).await
+}
 
 /// Refuse a custom-entry write that carries an operator-privileged field on a lane that may
 /// not set one, or local art the proxy would not serve.

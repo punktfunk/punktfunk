@@ -17,7 +17,9 @@
 use crate::gamestream::tls::serve_https_with_plain;
 use crate::host::AppState;
 use anyhow::{Context, Result};
+use axum::extract::Request;
 use axum::http::StatusCode;
+use axum::middleware::Next;
 use axum::{middleware, routing::get, Json, Router};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -247,6 +249,7 @@ pub async fn run(
         gamestream_enabled,
         identity_fingerprint,
         browser_plane,
+        pf_paths::seat::box_library_dir().is_some(),
     );
     // The plane's `/mgmt` tunnel dispatches into this very router. A second `app()` would mint
     // its own `DeviceAuth`, and a token earned on one would be refused by the other.
@@ -298,6 +301,9 @@ fn app(
     // Whether the WebTransport plane is running. State only for `cors::enabled`, so it is not
     // on `MgmtState` — no handler asks.
     browser_plane: bool,
+    // A seat host reading the box's library, which answers every library write 409. Passed in
+    // rather than read per request, so a test's environment never reaches another test's app.
+    box_library: bool,
 ) -> Router {
     let shared = Arc::new(MgmtState {
         app: state,
@@ -317,10 +323,15 @@ fn app(
         config_dir,
     });
     let (api_routes, api) = api_router_parts();
-    let routed = api_routes.route_layer(middleware::from_fn_with_state(
-        shared.clone(),
-        auth::require_auth,
-    ));
+    // Auth wraps the library guard: a caller without a credential gets 401, never the 409.
+    let routed = api_routes
+        .route_layer(middleware::from_fn(move |req: Request, next: Next| {
+            library::box_library_is_read_only(box_library, req, next)
+        }))
+        .route_layer(middleware::from_fn_with_state(
+            shared.clone(),
+            auth::require_auth,
+        ));
     // Outside the auth gate, because a CORS preflight carries no credential and must be
     // answered rather than refused. Absent entirely on a host that serves no browsers, so a
     // plane nobody enabled cannot widen what a page may read. See `mgmt::cors`.

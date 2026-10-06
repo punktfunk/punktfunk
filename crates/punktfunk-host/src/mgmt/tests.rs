@@ -87,6 +87,11 @@ fn shared_plugin_tokens(tokens: std::collections::BTreeMap<String, String>) -> s
 // `None` installs "test-secret" (`send` attaches the matching bearer). An explicit token
 // is for mismatch cases such as `bearer_token_is_enforced`.
 fn test_app(state: Arc<AppState>, token: Option<&str>) -> Router {
+    test_app_on(state, token, false)
+}
+
+/// `box_library`: the app of a seat host reading the box's library, which refuses its writes.
+fn test_app_on(state: Arc<AppState>, token: Option<&str>, box_library: bool) -> Router {
     let stats = state.stats.clone();
     app(
         state,
@@ -103,6 +108,7 @@ fn test_app(state: Arc<AppState>, token: Option<&str>) -> Router {
         None,
         // No browser plane: the default, and the one that must emit no CORS headers.
         false,
+        box_library,
     )
 }
 
@@ -122,6 +128,7 @@ fn test_app_browser(state: Arc<AppState>) -> Router {
         false,
         None,
         true,
+        false,
     )
 }
 
@@ -141,6 +148,7 @@ fn test_app_native(state: Arc<AppState>, np: Arc<crate::native_pairing::NativePa
         false,
         // A fixed binding, so a device test signs what the host will check.
         Some([0x5a; 32]),
+        false,
         false,
     )
 }
@@ -1212,6 +1220,7 @@ async fn host_info_publishes_the_hosts_own_fingerprint() {
         false,
         Some([0xab; 32]),
         false,
+        false,
     );
     let (status, body) = send(&app, get_req("/api/v1/host")).await;
     assert_eq!(status, StatusCode::OK);
@@ -1277,26 +1286,48 @@ async fn status_reflects_runtime_state() {
 }
 
 /// Overrides `PUNKTFUNK_CONFIG_DIR` for one test and restores it on drop, even on panic.
+/// [`ConfigDirOverride::seat`] also points `PUNKTFUNK_LIBRARY_DIR` at a box's library.
 ///
 /// One helper for the whole file: `check-unsafe-hygiene.sh` greps this file for a fixed
-/// count of `set_var` sites (and prose mentions). The lock is a field so Drop restores
-/// the env while still holding it — fields drop after `Drop::drop`.
+/// count of `set_var` sites (and prose mentions), all in [`write_env`]. The lock is a field so
+/// Drop restores the env while still holding it — fields drop after `Drop::drop`.
 struct ConfigDirOverride {
     tmp: tempfile::TempDir,
-    prev: Option<std::ffi::OsString>,
+    prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
     _serial: std::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigDirOverride {
     fn new() -> ConfigDirOverride {
+        Self::with_library(None)
+    }
+
+    /// A Windows seat host's view: its own config dir, and the box's library in `library`.
+    fn seat(library: &std::path::Path) -> ConfigDirOverride {
+        Self::with_library(Some(library))
+    }
+
+    fn with_library(library: Option<&std::path::Path>) -> ConfigDirOverride {
         let _serial = crate::identity::CONFIG_DIR_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        let prev = std::env::var_os("PUNKTFUNK_CONFIG_DIR");
-        // SAFETY: `_serial` holds CONFIG_DIR_TEST_LOCK, which serializes every test in this binary
-        // that reads or writes this variable.
-        unsafe { std::env::set_var("PUNKTFUNK_CONFIG_DIR", tmp.path()) };
+        let vars = [
+            ("PUNKTFUNK_CONFIG_DIR", Some(tmp.path().as_os_str())),
+            (
+                "PUNKTFUNK_LIBRARY_DIR",
+                library.map(std::path::Path::as_os_str),
+            ),
+        ];
+        let prev = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var_os(k)))
+            .collect();
+        for (key, value) in vars {
+            // SAFETY: `_serial` holds CONFIG_DIR_TEST_LOCK, which serializes every test in this
+            // binary that reads or writes these variables.
+            unsafe { write_env(key, value) };
+        }
         ConfigDirOverride { tmp, prev, _serial }
     }
 
@@ -1308,13 +1339,23 @@ impl ConfigDirOverride {
 
 impl Drop for ConfigDirOverride {
     fn drop(&mut self) {
-        match self.prev.take() {
+        for (key, value) in self.prev.drain(..) {
             // SAFETY: `self._serial` is still alive here (fields drop after `Drop::drop`), so this
-            // runs under the same serialization as the `set_var` in `new`.
-            Some(v) => unsafe { std::env::set_var("PUNKTFUNK_CONFIG_DIR", v) },
-            // SAFETY: as above.
-            None => unsafe { std::env::remove_var("PUNKTFUNK_CONFIG_DIR") },
+            // runs under the same serialization as `with_library`.
+            unsafe { write_env(key, value.as_deref()) };
         }
+    }
+}
+
+/// # Safety
+/// The caller holds `CONFIG_DIR_TEST_LOCK`: the process environment is global, and unsound to
+/// change while another thread reads it.
+unsafe fn write_env(key: &str, value: Option<&std::ffi::OsStr>) {
+    match value {
+        // SAFETY: the caller's lock (this function's contract) serializes every reader and writer.
+        Some(v) => unsafe { std::env::set_var(key, v) },
+        // SAFETY: as above.
+        None => unsafe { std::env::remove_var(key) },
     }
 }
 
@@ -1691,6 +1732,7 @@ async fn a_refreshed_plugin_token_takes_effect_live() {
         test_access_dir(),
         false,
         None,
+        false,
         false,
     );
     *tokens
@@ -4200,6 +4242,47 @@ fn the_built_library_is_kept_until_an_input_moves() {
     assert!(!Arc::ptr_eq(&second, &crate::library::sorted_games()));
 }
 
+/// A Windows seat lists and resolves the box's titles from `PUNKTFUNK_LIBRARY_DIR`, leaves one
+/// account's sources out, rebuilds on its own play stats, and answers a library write with 409.
+#[tokio::test]
+async fn a_seat_plays_the_boxs_library_and_changes_none_of_it() {
+    let boxdir = tempfile::tempdir().unwrap();
+    let catalog = serde_json::json!({
+        "entries": [
+            {"id": "s1", "title": "Portal", "provider": "steam", "store": "steam",
+             "external_id": "400", "launch": {"kind": "steam_appid", "value": "400"}},
+            {"id": "p1", "title": "The owner's", "provider": "playnite", "external_id": "x1"},
+        ],
+        "claims": {"steam": "steam"},
+    });
+    std::fs::write(boxdir.path().join("library.json"), catalog.to_string()).unwrap();
+    let seat = ConfigDirOverride::seat(boxdir.path());
+    let app = test_app_on(test_state(), None, true);
+
+    let games = crate::library::sorted_games();
+    let ids: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
+    assert_eq!(ids, ["steam:400"]);
+    assert!(crate::library::resolve_launch("steam:400").is_some());
+    let sources: Vec<String> = crate::library::list_scanners()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(sources, ["steam"]);
+
+    std::fs::write(seat.path().join("library-stats.json"), r#"{"games":{}}"#).unwrap();
+    assert!(!Arc::ptr_eq(&games, &crate::library::sorted_games()));
+
+    let hide = put_json(
+        "/api/v1/library/hidden/steam:400",
+        serde_json::json!({"hidden": true}),
+    );
+    let (s, _) = send(&app, hide).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert!(!boxdir.path().join("library-hidden.json").exists());
+    let (s, _) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(s, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn library_stats_ride_on_the_entry() {
     let _tmp = ConfigDirOverride::new();
@@ -5131,6 +5214,7 @@ fn test_app_access(state: Arc<AppState>, access_dir: &std::path::Path) -> Router
         access_dir.to_path_buf(),
         false,
         None,
+        false,
         false,
     )
 }

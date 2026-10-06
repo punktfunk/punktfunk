@@ -424,6 +424,11 @@ pub(super) fn seat_environment(host_root: &Path, seat: &Seat) -> WinResult<Vec<u
             "PUNKTFUNK_TRUST_DIR",
             pf_paths::config_dir().into_os_string(),
         ),
+        // The box's catalog, read only: a Windows seat runs no plugins of its own.
+        (
+            "PUNKTFUNK_LIBRARY_DIR",
+            pf_paths::config_dir().into_os_string(),
+        ),
         ("PUNKTFUNK_PAIRING", OsString::from("refused")),
         ("PUNKTFUNK_SEAT_ID", OsString::from(seat.id.as_str())),
         ("PUNKTFUNK_SEAT_SESSION", OsString::from("1")),

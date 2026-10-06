@@ -177,9 +177,9 @@ impl From<CustomEntry> for GameEntry {
 }
 
 fn custom_path() -> PathBuf {
-    // Hardened host config dir, not CWD. `prep`/`launch` run as the host user, so this
-    // file sits with hooks.json and is DACL/0600-locked.
-    pf_paths::config_dir().join("library.json")
+    // Hardened config dir, not CWD: `prep`/`launch` run as the host user, so this file is
+    // DACL/0600-locked like hooks.json. A Windows seat host reads the box's copy.
+    pf_paths::seat::library_dir().join("library.json")
 }
 
 /// `library.json` v2: entries plus the store-claim map.
@@ -282,16 +282,16 @@ pub(crate) fn source_id_for(e: &CustomEntry) -> Option<&str> {
     e.store.as_deref().or(e.provider.as_deref())
 }
 
-/// Gated like [`super::collect_games`]: a source the operator switched off must not serve art
-/// (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not applied here —
-/// the console draws a dimmed cover, and this resolver cannot see the caller's lane.
+/// Gated like [`super::collect_games`]: a source switched off, or left out on a seat, must not
+/// serve art (`GET /library/art` is on the paired-cert allowlist). Per-entry hide is not applied
+/// here — the console draws a dimmed cover, and this resolver cannot see the caller's lane.
 pub fn entry_for_library_id(library_id: &str) -> Option<CustomEntry> {
     let off = disabled_scanners();
     catalog()
         .entries
         .iter()
         .find(|e| library_id_for(e) == library_id)
-        .filter(|e| !source_id_for(e).is_some_and(|src| off.contains(src)))
+        .filter(|e| !source_off(e, &off))
         .cloned()
 }
 

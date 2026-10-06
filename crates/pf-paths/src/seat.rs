@@ -53,6 +53,22 @@ pub fn trust_dir() -> Option<std::path::PathBuf> {
         .filter(|dir| dir.is_absolute())
 }
 
+/// The box's config dir a Windows seat host reads the library from (`PUNKTFUNK_LIBRARY_DIR`):
+/// `library*.json`, `library-metadata/`, and the plugin manifests and grants an `exec` entry
+/// resolves against. Read only; the box host is their one writer. `None` on every other host,
+/// and for a relative path.
+pub fn box_library_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("PUNKTFUNK_LIBRARY_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+}
+
+/// Where this host reads its library: [`box_library_dir`], else its own config dir. Play stats
+/// are never here; they stay in [`crate::config_dir`].
+pub fn library_dir() -> std::path::PathBuf {
+    box_library_dir().unwrap_or_else(crate::config_dir)
+}
+
 /// `PUNKTFUNK_PAIRING=refused`: devices pair with the box, never with this host. A knock is
 /// refused, a PIN window never opens.
 pub fn pairing_refused() -> bool {
