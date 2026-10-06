@@ -866,6 +866,7 @@ object SkiaConsole {
                     c.optJSONObject("Wake")?.let(::wake)
                     c.optJSONObject("SetPin")?.let(::setPin)
                     c.optJSONObject("FetchProfiles")?.let(::fetchProfiles)
+                    c.optJSONObject("WakeProfile")?.let(::wakeProfile)
                     c.optJSONObject("SetProfile")?.let(::setProfile)
                     c.optJSONObject("BindPreset")?.let(::bindPreset)
                     c.optJSONObject("SetClipboard")?.let(::setClipboard)
@@ -986,6 +987,14 @@ object SkiaConsole {
             }
             main.post { if (handle != 0L) NativeBridge.nativeConsoleSetProfiles(handle, fp, json) }
         }
+    }
+
+    /** `ConsoleCmd::WakeProfile`: start a stopped seat. No answer: the shell polls `FetchProfiles`. */
+    private fun wakeProfile(c: JSONObject) {
+        val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+        val profile = c.optString("id")
+        val id = identity ?: return
+        ioPool.execute { HostProfiles.wake(id, addr, mgmt, fp, profile) }
     }
 
     /** `ConsoleCmd::SetProfile`: save (or with no profile, clear) the pick on a host. */

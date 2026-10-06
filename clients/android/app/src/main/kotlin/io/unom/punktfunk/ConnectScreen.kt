@@ -315,6 +315,7 @@ fun ConnectScreen(
     // A profile picker a connect waits on, and the Switch profile one a host menu opened (its
     // answer is null while the host is asked). A link's `as=` waits here for its dial.
     var profileAsk by remember { mutableStateOf<ProfileAsk?>(null) }
+    var seatWait by remember { mutableStateOf<ProfileWait?>(null) }
     var switching by remember { mutableStateOf<Pair<KnownHost, ProfilesAnswer?>?>(null) }
     var linkAs by remember { mutableStateOf<String?>(null) }
     // A destructive host action awaiting its confirmation (restart / shut down).
@@ -349,7 +350,8 @@ fun ConnectScreen(
     // The actual dial (identity already ready). A TOFU dial (no saved record; pinned to the
     // advertised fingerprint when there is one) saves what the host presented, as an unpaired
     // known host. [onFailure] takes over an unreachable dial (the wake-wait fallback, discovery
-    // already restarted); [onMismatch] takes over a refused pin.
+    // already restarted); [onMismatch] takes over a refused pin. [redial] marks the one dial a
+    // `profile-unknown` refusal of a still-listed profile earns.
     fun doConnectDirect(
         targetHost: String,
         targetPort: Int,
@@ -359,6 +361,7 @@ fun ConnectScreen(
         launch: String? = null,
         onFailure: (() -> Unit)? = null,
         onMismatch: (() -> Unit)? = null,
+        redial: Boolean = false,
     ) {
         val id = requireIdentity() ?: return
         val thisAttempt = ConnectAttempt(name)
@@ -369,7 +372,17 @@ fun ConnectScreen(
         discovery.removeListener(subscriber) // let the browse go; the stream session wants the radio
         scope.launch {
             val record = pinHex?.let { knownHostStore.resolve(it, targetHost, targetPort) }
-            val choice = chooseProfile(knownHostStore, id, record, linkAs.also { linkAs = null }) { ask ->
+            val choice = chooseProfile(
+                knownHostStore, id, record, linkAs.also { linkAs = null },
+                wait = { w ->
+                    if (w != null && thisAttempt.cancelled.get()) {
+                        w.cancelled.complete(Unit)
+                    } else {
+                        if (w != null) attempt = null // the wait takes the overlay's place
+                        seatWait = w
+                    }
+                },
+            ) { ask ->
                 if (thisAttempt.cancelled.get()) {
                     ask.answer.complete(null)
                 } else {
@@ -381,6 +394,7 @@ fun ConnectScreen(
             if (thisAttempt.cancelled.get()) return@launch
             if (choice !is ProfileChoice.Dial) {
                 connecting = false
+                if (choice is ProfileChoice.Refused) status = choice.line
                 discovery.addListener(subscriber)
                 return@launch
             }
@@ -415,6 +429,16 @@ fun ConnectScreen(
                 } else if (onMismatch != null && token == "crypto") {
                     // The saved pin was refused: another identity answers at this address.
                     onMismatch()
+                } else if (token == "profile-unknown" && !redial && record != null && choice.id != null &&
+                    stillListed(id, record, choice.id)
+                ) {
+                    // A seat host refused a stale seat: the profile is still there, so dial it
+                    // once more. The dial reads the seat's state afresh.
+                    linkAs = choice.id
+                    doConnectDirect(
+                        targetHost, targetPort, name, pinHex, preset, launch, onFailure, onMismatch,
+                        redial = true,
+                    )
                 } else {
                     // A typed host rejection (busy / versions differ / pairing required) means the
                     // host is awake — waking it would be nonsense; show the stated reason instead.
@@ -940,6 +964,9 @@ fun ConnectScreen(
             onPick = { ask.answer.complete(it) },
             onDismiss = { ask.answer.complete(null) },
         )
+    }
+    seatWait?.let { w ->
+        SeatWaitDialog(w, onCancel = { w.cancelled.complete(Unit); seatWait = null })
     }
     switching?.let { (kh, answer) ->
         ProfilePickerDialog(

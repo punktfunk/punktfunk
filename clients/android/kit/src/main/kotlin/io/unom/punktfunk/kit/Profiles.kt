@@ -142,3 +142,33 @@ fun pickerDecision(
     }
     return ProfileDecision(picker = true, gone = remembered?.displayName)
 }
+
+/** What a client does with a picked profile's seat before it dials. */
+sealed interface SeatGate {
+    /** Dial now. The host places the connect, or says why it can't. */
+    data object Dial : SeatGate
+
+    /** `POST /api/v1/profiles/{id}/wake`, then [Wait]. */
+    data object Wake : SeatGate
+
+    /** The seat is coming up: poll `enumerate`, show [detail], offer Cancel. */
+    data class Wait(val detail: String?) : SeatGate
+
+    /** The seat can't play now; [line] says why. Don't dial. */
+    data class Refuse(val line: String) : SeatGate
+}
+
+/** The gate for [p]'s seat, as `enumerate` lists it. */
+fun seatGate(p: ListedProfile): SeatGate {
+    val seat = p.seat ?: return SeatGate.Dial
+    return when (seat.state) {
+        SeatState.READY, SeatState.OCCUPIED, SeatState.OTHER -> SeatGate.Dial
+        SeatState.STOPPED -> SeatGate.Wake
+        SeatState.STARTING -> SeatGate.Wait(seat.detail)
+        SeatState.UNAVAILABLE ->
+            SeatGate.Refuse(seat.detail ?: "That profile can't play on this host right now.")
+    }
+}
+
+/** The line while a seat comes up: `Getting Kid's desk ready…`. */
+fun wakingLine(displayName: String): String = "Getting $displayName's desk ready…"

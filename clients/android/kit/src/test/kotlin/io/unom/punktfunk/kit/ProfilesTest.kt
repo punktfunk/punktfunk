@@ -45,4 +45,27 @@ class ProfilesTest {
         assertEquals(SeatState.OTHER, rows[1].seat!!.state)
         assertEquals("AL", initials("anna lena x"))
     }
+
+    @Test
+    fun aSeatIsDialedWokenWaitedForOrRefused() {
+        fun row(state: String, detail: String? = null) = ListedProfile.parse(
+            JSONObject().put("id", "kid").put("display_name", "Kid").put(
+                "seat",
+                JSONObject().put("state", state).put("detail", detail ?: JSONObject.NULL).put("port", 9778),
+            ),
+        )
+        assertEquals(SeatGate.Dial, seatGate(ListedProfile.parse(JSONObject().put("id", "own"))))
+        assertEquals(SeatGate.Dial, seatGate(row("ready")))
+        assertEquals(SeatGate.Dial, seatGate(row("occupied")))
+        assertEquals(SeatGate.Dial, seatGate(row("sleeping")))
+        assertEquals(SeatGate.Wake, seatGate(row("stopped")))
+        assertEquals(SeatGate.Wait("Signing in"), seatGate(row("starting", "Signing in")))
+        assertEquals(SeatGate.Wait(null), seatGate(row("starting")))
+        assertEquals(SeatGate.Refuse("Seats are off."), seatGate(row("unavailable", "Seats are off.")))
+        assertEquals(
+            SeatGate.Refuse("That profile can't play on this host right now."),
+            seatGate(row("unavailable")),
+        )
+        assertEquals("Getting Kid's desk ready…", wakingLine("Kid"))
+    }
 }
