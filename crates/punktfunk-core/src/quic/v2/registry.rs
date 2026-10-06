@@ -30,7 +30,8 @@ pub const MSG_SERVER_HELLO: u64 = 0x02;
 pub const MSG_READY: u64 = 0x03;
 /// `host → client`, before `ServerHello`: still deciding (console approval). Repeats.
 pub const MSG_PENDING: u64 = 0x04;
-/// `host → client`, instead of `ServerHello`: dial this address and port instead.
+/// `host → client`, instead of `ServerHello`: dial this address and port instead, pinned to
+/// the certificate it names.
 pub const MSG_REDIRECT: u64 = 0x05;
 /// `host → client`: why the close that follows happens, as a code and a sentence.
 pub const MSG_REFUSED: u64 = 0x06;

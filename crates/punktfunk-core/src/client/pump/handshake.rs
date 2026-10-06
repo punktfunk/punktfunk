@@ -36,20 +36,26 @@ pub(super) async fn connect_and_handshake(args: &WorkerArgs) -> Result<Handshake
     let p = &args.params;
     // One connect budget covers a redirect's second dial.
     let deadline = tokio::time::Instant::now() + p.timeout;
-    let (mut host, mut port) = (p.host.clone(), p.port);
+    let (mut host, mut port, mut pin) = (p.host.clone(), p.port, p.pin);
     let mut redirected = false;
     loop {
-        match dial(args, &host, port, deadline).await? {
+        match dial(args, &host, port, pin, deadline).await? {
             Dialed::Session(out) => return Ok(*out),
-            Dialed::Redirected(to) => follow(&mut redirected, &mut host, &mut port, &to)?,
+            Dialed::Redirected(to) => {
+                follow(&mut redirected, (&mut host, &mut port, &mut pin), &to)?
+            }
         }
     }
 }
 
-/// Take a `Redirect` once: the next dial goes to its address and port with the same pin and
-/// the same `ClientHello`. A second one on the same connect is a host that can't place this
-/// client, not a seat.
-fn follow(redirected: &mut bool, host: &mut String, port: &mut u16, to: &Redirect) -> Result<()> {
+/// Take a `Redirect` once: the next dial goes to its address and port with the same
+/// `ClientHello`, pinned to the certificate it names; an empty pin keeps the one dialed with.
+/// A second one on the same connect is a host that can't place this client, not a seat.
+fn follow(
+    redirected: &mut bool,
+    (host, port, pin): (&mut String, &mut u16, &mut Option<[u8; 32]>),
+    to: &Redirect,
+) -> Result<()> {
     if std::mem::replace(redirected, true) {
         return Err(PunktfunkError::InvalidArg(
             "redirected twice on one connect",
@@ -65,6 +71,10 @@ fn follow(redirected: &mut bool, host: &mut String, port: &mut u16, to: &Redirec
         *host = to.addr.clone();
     }
     *port = to.port;
+    if !to.pin.is_empty() {
+        // The message's own check admits only 64 hex characters.
+        *pin = crate::fp::parse_hex32(&to.pin);
+    }
     Ok(())
 }
 
@@ -72,10 +82,11 @@ async fn dial(
     args: &WorkerArgs,
     host: &str,
     port: u16,
+    pin: Option<[u8; 32]>,
     deadline: tokio::time::Instant,
 ) -> Result<Dialed> {
     let p = &args.params;
-    let (pin, shutdown) = (p.pin, &args.shared.shutdown);
+    let shutdown = &args.shared.shutdown;
     let remote = dial_addr(host, port).await?;
     let identity = p.identity.as_ref().map(|(c, k)| (c.as_str(), k.as_str()));
     let io_err = |e: endpoint::anyhow_result::Error| {
@@ -385,23 +396,45 @@ mod tests {
     /// redirect on the same connect is refused with the dial left where the first put it.
     #[test]
     fn one_redirect_per_connect() {
-        let (mut redirected, mut host, mut port) = (false, "couch-pc".to_string(), 9777);
+        let (mut redirected, mut host, mut port, mut pin) =
+            (false, "couch-pc".to_string(), 9777, Some([1; 32]));
         let same_box = Redirect {
             port: 9778,
             ..Redirect::default()
         };
-        follow(&mut redirected, &mut host, &mut port, &same_box).unwrap();
-        assert_eq!((host.as_str(), port), ("couch-pc", 9778));
+        follow(&mut redirected, (&mut host, &mut port, &mut pin), &same_box).unwrap();
+        assert_eq!(
+            (host.as_str(), port, pin),
+            ("couch-pc", 9778, Some([1; 32]))
+        );
         let elsewhere = Redirect {
             addr: "10.0.0.5".into(),
             port: 9779,
+            pin: "ab".repeat(32),
             ..Redirect::default()
         };
-        assert!(follow(&mut redirected, &mut host, &mut port, &elsewhere).is_err());
-        assert_eq!((host.as_str(), port), ("couch-pc", 9778));
+        let second = follow(
+            &mut redirected,
+            (&mut host, &mut port, &mut pin),
+            &elsewhere,
+        );
+        assert!(second.is_err());
+        assert_eq!(
+            (host.as_str(), port, pin),
+            ("couch-pc", 9778, Some([1; 32]))
+        );
 
-        let (mut redirected, mut host, mut port) = (false, "couch-pc".to_string(), 9777);
-        follow(&mut redirected, &mut host, &mut port, &elsewhere).unwrap();
-        assert_eq!((host.as_str(), port), ("10.0.0.5", 9779));
+        let (mut redirected, mut host, mut port, mut pin) =
+            (false, "couch-pc".to_string(), 9777, Some([1; 32]));
+        follow(
+            &mut redirected,
+            (&mut host, &mut port, &mut pin),
+            &elsewhere,
+        )
+        .unwrap();
+        assert_eq!(
+            (host.as_str(), port, pin),
+            ("10.0.0.5", 9779, Some([0xab; 32]))
+        );
     }
 }

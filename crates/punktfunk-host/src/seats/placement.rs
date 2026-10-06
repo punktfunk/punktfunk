@@ -125,6 +125,7 @@ fn decide(
         seat_no,
         seat_name: seat.name.clone(),
         occupant: other.and_then(|o| o.name.clone()).unwrap_or_default(),
+        pin: String::new(),
     })
 }
 

@@ -254,11 +254,15 @@ pub const REDIRECT_ADDR_MAX: usize = 253;
 /// Longest profile id on any wire or ABI: `char id[65]` on the C side.
 pub const PROFILE_ID_MAX: usize = 64;
 
+/// [`Redirect::pin`]: a SHA-256 fingerprint in hex.
+pub const REDIRECT_PIN_LEN: usize = 64;
+
 /// `host → client`, instead of `ServerHello`: the session runs on another host of this box.
 /// The client dials `addr:port` with the same `ClientHello`, once; an empty `addr` is the
-/// address it dialed. `profile` is the id the host resolved, `seat_no` and `seat_name` the
-/// seat, and `occupant` the device already there when this one joins a live session.
-/// `punktfunk/2` only.
+/// address it dialed. `pin` is that host's certificate fingerprint, which the box vouches for
+/// over the connection the client already pinned; empty keeps the pin it dialed with.
+/// `profile` is the id the host resolved, `seat_no` and `seat_name` the seat, and `occupant`
+/// the device already there when this one joins a live session. `punktfunk/2` only.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Redirect {
     pub addr: String,
@@ -267,13 +271,17 @@ pub struct Redirect {
     pub seat_no: u8,
     pub seat_name: String,
     pub occupant: String,
+    pub pin: String,
 }
 
 v2_message!(Redirect = reg::MSG_REDIRECT,
-    { 1 => addr, 2 => port, 3 => profile, 4 => seat_no, 5 => seat_name, 6 => occupant },
+    { 1 => addr, 2 => port, 3 => profile, 4 => seat_no, 5 => seat_name, 6 => occupant,
+      7 => pin },
     check |m| m.port != 0 && m.addr.len() <= REDIRECT_ADDR_MAX
         && m.profile.len() <= PROFILE_ID_MAX && m.seat_name.len() <= HELLO_NAME_MAX
-        && m.occupant.len() <= HELLO_NAME_MAX);
+        && m.occupant.len() <= HELLO_NAME_MAX
+        && (m.pin.is_empty()
+            || (m.pin.len() == REDIRECT_PIN_LEN && m.pin.bytes().all(|b| b.is_ascii_hexdigit()))));
 
 v2_message!(ClipControl = reg::MSG_CLIP_CONTROL, { 1 => enabled, 2 => flags });
 v2_message!(ClipState = reg::MSG_CLIP_STATE, { 1 => enabled, 2 => policy, 3 => reason });
@@ -467,6 +475,7 @@ mod tests {
             seat_no: 1,
             seat_name: "Seat 1".into(),
             occupant: "Ben's Apple TV".into(),
+            pin: "ab".repeat(32),
         });
         round_trip(Reconfigure { mode });
         round_trip(Reconfigured {
@@ -617,11 +626,12 @@ mod tests {
                 seat_no: 2,
                 seat_name: String::new(),
                 occupant: String::new(),
+                pin: String::new(),
             }
             .encode_v2(),
             [
-                0x05, 0x11, 0x01, 0x00, 0x02, 0x02, 0x32, 0x26, 0x03, 0x02, 0x61, 0x62, 0x04, 0x01,
-                0x02, 0x05, 0x00, 0x06, 0x00
+                0x05, 0x13, 0x01, 0x00, 0x02, 0x02, 0x32, 0x26, 0x03, 0x02, 0x61, 0x62, 0x04, 0x01,
+                0x02, 0x05, 0x00, 0x06, 0x00, 0x07, 0x00
             ]
         );
     }
@@ -657,6 +667,14 @@ mod tests {
             ..Redirect::default()
         };
         assert!(Redirect::from_body(&nobody.fields().into_body()).is_err());
+        for pin in ["ab".repeat(31), "zz".repeat(32), "ab".repeat(33)] {
+            let unpinnable = Redirect {
+                port: 9778,
+                pin,
+                ..Redirect::default()
+            };
+            assert!(Redirect::from_body(&unpinnable.fields().into_body()).is_err());
+        }
         let bad_cursor = CursorShape {
             serial: 1,
             w: CURSOR_SHAPE_MAX_SIDE + 1,

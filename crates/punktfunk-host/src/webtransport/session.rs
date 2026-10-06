@@ -658,6 +658,7 @@ mod tests {
             seat_no: 1,
             seat_name: "Seat 1".into(),
             occupant: String::new(),
+            pin: String::new(),
         };
         let host = crate::native::redirect(&link, &mut tx, &to);
         let read = async {
