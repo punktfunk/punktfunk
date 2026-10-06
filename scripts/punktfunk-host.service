@@ -39,6 +39,9 @@
 [Unit]
 Description=punktfunk streaming host
 After=pipewire.service punktfunk-kde-session.service
+# Stands down while the box's owner row runs this user's host in its own headless session
+# (punktfunk-seat@%u, `Reachable without logging in`): one owner host holds the row's ports.
+ConditionPathExists=!/run/punktfunk-seat-%u
 # Capture and audio ride PipeWire. A desktop login starts it; a lingering headless manager has
 # nothing else that would, so pull it in (a missing unit is ignored).
 Wants=pipewire.service
@@ -57,6 +60,9 @@ PartOf=punktfunk-kde-session.service
 # `punktfunk-host serve` by hand already does. Contrast punktfunk-web.service, which marks
 # mgmt-token mandatory ON PURPOSE so Restart waits for the host to write it — this is not that.
 EnvironmentFile=-%h/.config/punktfunk/host.env
+# With the door on, the seat supervisor writes the owner row's contract here: the host moves to the
+# row's ports and reads the box's identity and pairings. Absent otherwise, and then it changes nothing.
+EnvironmentFile=-/run/punktfunk/seats/%u.env
 ExecStart=%h/punktfunk/target/release/punktfunk-host serve
 Restart=on-failure
 RestartSec=2

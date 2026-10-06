@@ -9,6 +9,12 @@
 # pam_systemd moves this process and its children into the session's scope, so stopping the unit
 # signals only this script. It records the session id for seat-reap and kills its own children on
 # SIGTERM; seat-reap kills whatever is left.
+#
+# The box owner's row (PUNKTFUNK_SEAT_OWNER=1) runs as the owner in a `background` session beside
+# whatever they have on the monitor. It leaves their user manager, their config and their
+# PipeWire alone: the desktop and the host sit on a bus of their own, and the owner's own
+# punktfunk-host stands down while this runs (its unit has ConditionPathExists= on the runtime
+# directory). The owner's host.env applies; the seat contract wins over it.
 set -u
 
 HOST="${PUNKTFUNK_HOST_BIN:-/usr/bin/punktfunk-host}"
@@ -26,19 +32,83 @@ if [[ -z "${XDG_SESSION_ID:-}" || -z "${RUNTIME_DIRECTORY:-}" ]]; then
 fi
 printf '%s\n' "$XDG_SESSION_ID" >"$RUNTIME_DIRECTORY/session"
 
+OWNER="${PUNKTFUNK_SEAT_OWNER:-}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
 KWIN_PID=""
+BUS_PID=""
+SHELL_PID=""
 cleanup() {
     trap - TERM INT
     # shellcheck disable=SC2046
     kill $(jobs -p) 2>/dev/null
-    pkill -TERM -u "$(id -u)" plasmashell 2>/dev/null
+    if [[ -n "$OWNER" ]]; then
+        # The owner's physical plasmashell is the same user's: end only this session's.
+        [[ -n "$SHELL_PID" ]] && pkill -TERM -P "$SHELL_PID" 2>/dev/null
+        [[ -n "$BUS_PID" ]] && kill "$BUS_PID" 2>/dev/null
+    else
+        pkill -TERM -u "$(id -u)" plasmashell 2>/dev/null
+    fi
     wait 2>/dev/null
     exit 0
 }
 trap cleanup TERM INT
+
+# The owner's settings (host.env), under the seat contract: the contract's variables keep the
+# values the supervisor wrote.
+load_owner_settings() {
+    local file="$HOME/.config/punktfunk/host.env" key
+    local -A keep=()
+    [[ -r "$file" ]] || return 0
+    for key in PUNKTFUNK_SEAT_SESSION PUNKTFUNK_SEAT_ID PUNKTFUNK_SEAT_OWNER PUNKTFUNK_TRUST_DIR \
+        PUNKTFUNK_PAIRING PUNKTFUNK_NATIVE_PORT PUNKTFUNK_MGMT_BIND PUNKTFUNK_MDNS; do
+        keep[$key]="${!key-}"
+    done
+    set -a
+    # shellcheck disable=SC1090
+    . "$file" 2>/dev/null
+    set +a
+    for key in "${!keep[@]}"; do
+        export "$key=${keep[$key]}"
+    done
+}
+
+# A bus of its own: the owner's shared one holds whatever KWin and portals their login started,
+# and a second KWin there would take names the first needs. dbus-daemon prints its address
+# and its pid, one per line.
+start_private_bus() {
+    local out
+    out=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 \
+        --address="unix:path=$RUNTIME_DIRECTORY/bus") || return 1
+    DBUS_SESSION_BUS_ADDRESS=$(printf '%s\n' "$out" | grep -m1 '^unix:')
+    BUS_PID=$(printf '%s\n' "$out" | grep -m1 -E '^[0-9]+$')
+    export DBUS_SESSION_BUS_ADDRESS
+}
+
+# The screencast and input portals on the private bus. Their activation files name systemd units
+# of the owner's manager, which this session doesn't use, so the frontend is started by hand and
+# activates its KDE backend itself.
+start_private_portal() {
+    local exe
+    for exe in /usr/libexec/xdg-desktop-portal /usr/lib/xdg-desktop-portal \
+        /usr/lib64/xdg-desktop-portal; do
+        if [[ -x "$exe" ]]; then
+            "$exe" >/dev/null 2>&1 &
+            return 0
+        fi
+    done
+    echo "seat-session: no xdg-desktop-portal found; input and capture need it" >&2
+}
+
+# Marks the headless host as serving once its management port answers, for the supervisor.
+mark_ready_when_serving() {
+    local port="${PUNKTFUNK_MGMT_BIND##*:}"
+    (
+        until (: >"/dev/tcp/127.0.0.1/$port") 2>/dev/null; do sleep 0.5; done
+        : >"$RUNTIME_DIRECTORY/ready"
+    ) &
+}
 
 alive() { [[ -z "$KWIN_PID" ]] || kill -0 "$KWIN_PID" 2>/dev/null; }
 
@@ -51,6 +121,7 @@ start_kwin() {
     export PUNKTFUNK_INPUT_BACKEND="${PUNKTFUNK_INPUT_BACKEND:-libei}"
     export PUNKTFUNK_KWIN_VIRTUAL_PRIMARY="${PUNKTFUNK_KWIN_VIRTUAL_PRIMARY:-1}"
 
+    [[ -n "$OWNER" ]] && start_private_bus
     # Under the 0700 runtime dir: the DISPLAY detection below reads this file.
     local log="$XDG_RUNTIME_DIR/punktfunk-kwin.log"
     : >"$log"
@@ -90,6 +161,13 @@ start_kwin() {
         echo "seat-session: kwin reported no X display; X11 apps such as Steam won't open" >&2
     fi
 
+    if [[ -n "$OWNER" ]]; then
+        start_private_portal
+        kbuildsycoca6 >/dev/null 2>&1 || true
+        start_plasmashell
+        return
+    fi
+
     # The portal binds the compositor that existed when it started: import the live env first.
     systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
         DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR ${DISPLAY:+DISPLAY} 2>/dev/null || true
@@ -121,18 +199,30 @@ start_kwin() {
     systemctl --user --no-block start xdg-desktop-portal.service 2>/dev/null || true
 
     kbuildsycoca6 >/dev/null 2>&1 || true
-    # plasmashell draws the desktop and can crash; restart it for as long as kwin lives.
+    start_plasmashell
+}
+
+# plasmashell draws the desktop and can crash; restart it for as long as kwin lives.
+start_plasmashell() {
     (
         while kill -0 "$KWIN_PID" 2>/dev/null; do
             plasmashell
             sleep 2
         done
     ) &
+    SHELL_PID=$!
 }
 
+if [[ -n "$OWNER" ]]; then
+    load_owner_settings
+    # The owner's own host and this one must not both hold the row's ports.
+    systemctl --user stop punktfunk-host.service 2>/dev/null || true
+    mark_ready_when_serving
+fi
 if command -v kwin_wayland >/dev/null 2>&1; then
     start_kwin
 else
+    [[ -n "$OWNER" ]] && start_private_bus
     export PUNKTFUNK_COMPOSITOR=gamescope
 fi
 
