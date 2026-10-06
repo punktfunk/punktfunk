@@ -248,6 +248,9 @@ public final class GamepadManager: ObservableObject {
         didSet { if steamController2Claims != oldValue { rebuild() } }
     }
 
+    /// Suppressed twins whose system gestures `reselect` holds; released when they rejoin.
+    private var gestureClaimedTwins: Set<ObjectIdentifier> = []
+
     /// Whether a GameController device is the SC2 family's shadow. Keyed on the measured
     /// vendorName; GameController surfaced no Valve device before the SC2 family, so the prefix
     /// only matches hardware `Sc2Capture` captures.
@@ -286,6 +289,17 @@ public final class GamepadManager: ObservableObject {
             suppressed.insert(ObjectIdentifier(entry.controller))
             remaining -= 1
         }
+        // The passthrough forwards a twin's Steam and share presses, so the OS must not act on
+        // them too. `GamepadCapture` claims only forwarded pads; a suppressed twin is claimed here.
+        for entry in controllers {
+            let key = ObjectIdentifier(entry.controller)
+            let claim = suppressed.contains(key)
+            guard claim != gestureClaimedTwins.contains(key) else { continue }
+            for element in entry.controller.physicalInputProfile.elements.values {
+                element.preferredSystemGestureState = claim ? .disabled : .enabled
+            }
+        }
+        gestureClaimedTwins = suppressed
         let candidates = controllers.filter {
             $0.isExtended && !suppressed.contains(ObjectIdentifier($0.controller))
         }
