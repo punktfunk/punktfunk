@@ -386,14 +386,27 @@ impl LinuxBackend {
             "the account and ACL tools are installed",
             &format!("These tools are missing: {}.", missing.join(", ")),
         );
-        let installed = [
-            "/usr/lib/systemd/system/punktfunk-seat@.service",
-            "/etc/systemd/system/punktfunk-seat@.service",
-        ]
-        .iter()
-        .any(|p| Path::new(p).is_file())
-            && Path::new("/usr/libexec/punktfunk/seat-session").is_file()
-            && Path::new("/usr/libexec/punktfunk/seat-reap").is_file();
+        // What systemd would run, wherever the package put it.
+        let installed = run(
+            "seat_unit",
+            "systemctl",
+            &[
+                "show",
+                "punktfunk-seat@doctor.service",
+                "-p",
+                "LoadState",
+                "-p",
+                "ExecStart",
+                "-p",
+                "ExecStopPost",
+            ],
+        )
+        .is_ok_and(|show| {
+            let programs = exec_paths(&show);
+            show.lines().any(|l| l == "LoadState=loaded")
+                && programs.len() >= 2
+                && programs.iter().all(|p| p.is_file())
+        });
         check(
             installed,
             "seat_unit",
@@ -699,8 +712,32 @@ fn which(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// The programs in `systemctl show`'s `Exec*` lines: each `{ path=<program> ; argv[]=… }`.
+fn exec_paths(show: &str) -> Vec<PathBuf> {
+    show.split("path=")
+        .skip(1)
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(PathBuf::from)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn doctor_reads_the_programs_systemd_would_run() {
+        let show = "LoadState=loaded\n\
+            ExecStart={ path=/nix/store/abc-seats/libexec/punktfunk/seat-session ; argv[]=/nix/store/abc-seats/libexec/punktfunk/seat-session ; ignore_errors=no }\n\
+            ExecStopPost={ path=/nix/store/abc-seats/libexec/punktfunk/seat-reap ; argv[]=x %i ; ignore_errors=no }\n";
+        assert_eq!(
+            super::exec_paths(show),
+            [
+                std::path::PathBuf::from("/nix/store/abc-seats/libexec/punktfunk/seat-session"),
+                std::path::PathBuf::from("/nix/store/abc-seats/libexec/punktfunk/seat-reap"),
+            ]
+        );
+        assert!(super::exec_paths("LoadState=not-found\nExecStart=\n").is_empty());
+    }
+
     use super::*;
 
     #[test]
