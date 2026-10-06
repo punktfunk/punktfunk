@@ -2100,10 +2100,12 @@ impl VirtualDisplayManager {
         }
     }
 
-    /// `mode_conflict: join`: a reference on another client's live monitor at `mode`, the
-    /// oldest one. The output is [`DisplayOwnership::External`]: the joiner captures it and
-    /// owns none of it, and its lease gives back only the reference, so the monitor outlives
-    /// whichever of the two leaves first. `None` when no such monitor is live.
+    /// `mode_conflict: join`: a reference on another client's live monitor, the oldest one at
+    /// `mode`. A rejoin after the owner changed mode finds none at the mode it was admitted
+    /// to, and takes the oldest of any: it follows the display, not the size. The output is
+    /// [`DisplayOwnership::External`]: the joiner captures it and owns none of it, and its
+    /// lease gives back only the reference, so the monitor outlives whichever of the two
+    /// leaves first. `None` when no other client's monitor is live.
     ///
     /// The joiner's quit is not passed on: a viewer that stops must not tear the display down
     /// under its owner's linger policy.
@@ -2119,17 +2121,15 @@ impl VirtualDisplayManager {
             .iter()
             .filter_map(|(&slot, state)| match state {
                 SlotState::Active { mon, .. }
-                    if Some(slot) != own
-                        && (mon.mode.width, mon.mode.height) == (mode.width, mode.height)
-                        && mon.gdi_name.is_some()
-                        && wudf_alive(mon.wudf_pid) =>
+                    if Some(slot) != own && mon.gdi_name.is_some() && wudf_alive(mon.wudf_pid) =>
                 {
-                    Some((mon.generation, slot))
+                    let other_mode = (mon.mode.width, mon.mode.height) != (mode.width, mode.height);
+                    Some((other_mode, mon.generation, slot))
                 }
                 _ => None,
             })
             .min()
-            .map(|(_, slot)| slot)?;
+            .map(|(.., slot)| slot)?;
         let Some(SlotState::Active { mon, refs }) = inner.slots.get_mut(&slot) else {
             return None;
         };
