@@ -141,6 +141,31 @@ fn a_seat_host_refuses_another_seats_profile() {
     );
 }
 
+/// The box rewrites `path`; a later mtime than any earlier write, whatever the clock granularity.
+fn box_writes(path: &Path, file: &ProfilesFile) {
+    std::fs::write(path, serde_json::to_vec(file).unwrap()).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    let f = std::fs::File::options().write(true).open(path).unwrap();
+    f.set_modified(later).unwrap();
+}
+
+#[test]
+fn a_seat_host_reads_the_box_file_and_plays_its_own_profile() {
+    let mut file = box_file();
+    file.profiles
+        .push(seat("aaaaaaaaaaaa", "Mine", Some("seat-a")));
+    let path = temp_dir("box-copy").join("profiles.json");
+    std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+    let p = Profiles::load_box(path.clone(), Some("seat-a".into()));
+    // No ask, even from a device with an old seat: this seat's own profile.
+    assert_eq!(p.resolve(Some(DEVICE), None).unwrap().id, "aaaaaaaaaaaa");
+    assert!(p.set_default(None).is_err(), "a seat never writes profiles");
+
+    // The box removes the seat's profile: the seat plays for nobody.
+    box_writes(&path, &box_file());
+    assert_eq!(p.resolve(None, None), Err(ProfileError::SessionUnavailable));
+}
+
 #[test]
 fn an_os_user_profile_has_no_session_yet() {
     let mut file = box_file();

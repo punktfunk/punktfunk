@@ -44,6 +44,21 @@ pub fn seat_id() -> Result<Option<String>, &'static str> {
     validate_seat_id(text).map(|id| Some(id.to_owned()))
 }
 
+/// The box's config dir a seat host reads its trust from (`PUNKTFUNK_TRUST_DIR`): the
+/// identity, the pairing store, `profiles.json` and the device display overlays. Read only;
+/// the box host is their one writer. `None` on the box host, and for a relative path.
+pub fn trust_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("PUNKTFUNK_TRUST_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+}
+
+/// `PUNKTFUNK_PAIRING=refused`: devices pair with the box, never with this host. A knock is
+/// refused, a PIN window never opens.
+pub fn pairing_refused() -> bool {
+    std::env::var("PUNKTFUNK_PAIRING").as_deref() == Ok("refused")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

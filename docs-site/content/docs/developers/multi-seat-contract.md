@@ -46,17 +46,19 @@ connectors:
 
 ## The environment a seat host is started with
 
-The supervisor starts an ordinary `punktfunk-host serve` with these. Don't set them by hand; set all
-three together.
+The supervisor starts an ordinary `punktfunk-host serve` with these. Don't set them by hand; set
+them together.
 
 | Variable | Value | Rule |
 |---|---|---|
 | `PUNKTFUNK_SEAT_SESSION` | `1` | Marks a seat host. Unset or any other value is the console host. |
 | `PUNKTFUNK_SEAT_ID` | 32 lowercase hexadecimal characters | Required with `PUNKTFUNK_SEAT_SESSION=1`. Missing or any other form: the host mints no audio devices. |
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
+| `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's identity, pairing store, `profiles.json` and per-device display overlays from here, read only, and follows their changes. A relative path is ignored. |
+| `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. |
 
-It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. Each seat
-is an independent host on the network, with its own pairing and name.
+It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
+presents the box's certificate and honours the box's pairings and grants.
 
 | Variable | Supervisor's value |
 |---|---|
@@ -73,6 +75,11 @@ session by design, and display activation fails while its session is inactive.
 
 ## What the host does differently on a seat
 
+- **The box's trust.** The seat never mints an identity or writes the pairing store or profiles. A
+  grant changed in the box console applies to the seat's next check. Sleep, restart and shut down
+  are refused: the box's own host is the one that does them.
+- **One profile.** The seat serves the profile whose seat it is. A connect that names another seat
+  profile is refused as an unknown profile; one that names none plays as this seat's profile.
 - **One connector, one lock.** A seat host creates its virtual display on its own connector only
   and holds the mutex `Global\punktfunk-vdisplay-manager-seat-<slot>`; the console host holds
   `Global\punktfunk-vdisplay-manager`. Hosts on different connectors start independently. A second

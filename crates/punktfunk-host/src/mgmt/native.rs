@@ -296,6 +296,7 @@ pub(crate) async fn get_native_pairing(State(st): State<Arc<MgmtState>>) -> Json
     responses(
         (status = OK, description = "Pairing armed; the response carries the PIN to display", body = NativePairStatus),
         (status = BAD_REQUEST, description = "Reserved grant bits set", body = ApiError),
+        (status = CONFLICT, description = "A seat host: devices pair with the box", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "Native host not available in this process", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
@@ -310,6 +311,12 @@ pub(crate) async fn arm_native_pairing(
             "native host not available in this process",
         );
     };
+    if np.pairing_refused() {
+        return api_error(
+            StatusCode::CONFLICT,
+            "This is a seat. Pair devices with the box in its console.",
+        );
+    }
     // 400 must not leave a window open — validate grants before `arm_for`.
     if let Some(resp) = req.grants.and_then(reject_reserved) {
         return resp;

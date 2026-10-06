@@ -302,6 +302,9 @@ struct State {
     unparsed: Option<Vec<u8>>,
     /// Lowercase `legacy_device` fingerprint → profile id.
     legacy: HashMap<String, ProfileId>,
+    /// The box's file on a seat host: never written, re-read when its mtime moves.
+    read_only: bool,
+    stamp: Option<std::time::SystemTime>,
 }
 
 /// The profile store. One per host process, shared like the pairing store.
@@ -323,6 +326,25 @@ impl Profiles {
                 file,
                 unparsed,
                 legacy,
+                read_only: false,
+                stamp: None,
+            }),
+            seat,
+        }
+    }
+
+    /// A seat host's view of the box's `profiles.json` in its trust dir: read only, followed
+    /// as the box console edits it. `seat` is this host's seat id.
+    pub fn load_box(path: PathBuf, seat: Option<String>) -> Profiles {
+        let (file, unparsed) = parse(&path, std::fs::read(&path).ok());
+        Profiles {
+            state: Mutex::new(State {
+                stamp: mtime(&path),
+                legacy: legacy_index(&file),
+                path,
+                file,
+                unparsed,
+                read_only: true,
             }),
             seat,
         }
@@ -688,6 +710,17 @@ impl Profiles {
                 }
                 (Some(found), ResolveVia::Asked)
             }
+            // A seat host serves one profile; the box's default is someone else's.
+            None if self.seat.is_some() => {
+                let mine = file.profiles.iter().find(
+                    |p| matches!(&p.os_account, OsAccount::Seat { seat, .. } if seat == &self.seat),
+                );
+                // No profile names this seat any more: it plays for nobody.
+                (
+                    Some(mine.ok_or(ProfileError::SessionUnavailable)?),
+                    ResolveVia::Default,
+                )
+            }
             None => {
                 let legacy = fp
                     .and_then(|fp| state.legacy.get(&fp.to_ascii_lowercase()))
@@ -734,6 +767,7 @@ impl Profiles {
         let Some((ext, _)) = image_kind(bytes) else {
             bail!("avatar is not a PNG, JPEG or WebP image");
         };
+        self.writable()?;
         let dir = self.avatar_dir(id).context("unknown profile")?;
         let path = dir.join(format!("{id}.{ext}"));
         pf_paths::replace_file(&path, bytes)
@@ -786,6 +820,7 @@ impl Profiles {
 
     /// Applies `change` to a copy, saves it, then keeps it. Refused while the file is unparsed.
     fn mutate(&self, change: impl FnOnce(&mut ProfilesFile) -> Result<()>) -> Result<()> {
+        self.writable()?;
         let mut state = self.lock();
         if state.unparsed.is_some() {
             bail!(
@@ -804,9 +839,33 @@ impl Profiles {
         Ok(())
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    /// The box's own host writes profiles; a seat's copy is read only.
+    fn writable(&self) -> Result<()> {
+        if self.lock().read_only {
+            bail!("profiles are the box's; a seat host never edits them");
+        }
+        Ok(())
     }
+
+    /// The state, re-read first on a seat host when the box's file changed.
+    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.read_only {
+            let now = mtime(&state.path);
+            if now != state.stamp {
+                let (file, unparsed) = parse(&state.path, std::fs::read(&state.path).ok());
+                state.legacy = legacy_index(&file);
+                state.file = file;
+                state.unparsed = unparsed;
+                state.stamp = now;
+            }
+        }
+        state
+    }
+}
+
+fn mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// A missing file is empty. A planted or unparsable one is empty in memory, and an unparsable
@@ -815,7 +874,11 @@ fn read(path: &Path) -> (ProfilesFile, Option<Vec<u8>>) {
     if crate::planted::quarantine_planted_secret(path) {
         return (ProfilesFile::default(), None);
     }
-    let Ok(bytes) = std::fs::read(path) else {
+    parse(path, std::fs::read(path).ok())
+}
+
+fn parse(path: &Path, bytes: Option<Vec<u8>>) -> (ProfilesFile, Option<Vec<u8>>) {
+    let Some(bytes) = bytes else {
         return (ProfilesFile::default(), None);
     };
     match serde_json::from_slice::<ProfilesFile>(&bytes) {

@@ -96,6 +96,15 @@ impl Availability {
     }
 }
 
+/// What `verb` can do on this host. A seat host never does any of it: sleeping or restarting
+/// would take every other seat down, so the box's own host is the one executor.
+pub fn probe(verb: PowerVerb) -> Availability {
+    if pf_paths::seat::is_seat_host() {
+        return Availability::no("A seat can't sleep, restart or shut down the host.");
+    }
+    os_probe(verb)
+}
+
 /// The invoke route answers `501` when this is false.
 pub fn supported() -> bool {
     cfg!(any(target_os = "linux", target_os = "windows"))
@@ -139,7 +148,7 @@ where
 /// Only logind `"yes"` is available. `"challenge"` means polkit would prompt
 /// (host user not in group `punktfunk`, or a second local session).
 #[cfg(target_os = "linux")]
-pub fn probe(verb: PowerVerb) -> Availability {
+fn os_probe(verb: PowerVerb) -> Availability {
     let method = match verb {
         PowerVerb::Sleep => "CanSuspend",
         PowerVerb::Reboot => "CanReboot",
@@ -175,7 +184,7 @@ pub fn act(verb: PowerVerb) -> Result<(), String> {
 /// Reboot/shutdown skip a capability check: the interactive token holds
 /// `SeShutdownPrivilege` by default, and [`act`] enables it.
 #[cfg(target_os = "windows")]
-pub fn probe(verb: PowerVerb) -> Availability {
+fn os_probe(verb: PowerVerb) -> Availability {
     match verb {
         PowerVerb::Sleep => {
             // SAFETY: no arguments, no aliasing — a capability query.
@@ -249,7 +258,7 @@ pub fn act(verb: PowerVerb) -> Result<(), String> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub fn probe(_verb: PowerVerb) -> Availability {
+fn os_probe(_verb: PowerVerb) -> Availability {
     Availability::no("not supported on this host platform")
 }
 

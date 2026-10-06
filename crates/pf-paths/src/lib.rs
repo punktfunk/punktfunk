@@ -15,7 +15,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "windows")]
 pub mod seat;
 
 /// `$XDG_RUNTIME_DIR/punktfunk-gamescope-ei` (per-user 0700), or `/tmp/…`

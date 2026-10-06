@@ -4318,6 +4318,16 @@
               }
             }
           },
+          "409": {
+            "description": "A seat host: devices pair with the box",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Native host not available in this process",
             "content": {

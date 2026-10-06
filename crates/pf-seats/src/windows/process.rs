@@ -418,6 +418,13 @@ pub(super) fn seat_environment(host_root: &Path, seat: &Seat) -> WinResult<Vec<u
     entries.insert("RUST_LOG".into(), rust_log);
     let values = [
         ("PUNKTFUNK_CONFIG_DIR", host_root.as_os_str().to_owned()),
+        // The box's identity, pairing, profiles and overlays, read only: the service's own
+        // config dir is the box's.
+        (
+            "PUNKTFUNK_TRUST_DIR",
+            pf_paths::config_dir().into_os_string(),
+        ),
+        ("PUNKTFUNK_PAIRING", OsString::from("refused")),
         ("PUNKTFUNK_SEAT_ID", OsString::from(seat.id.as_str())),
         ("PUNKTFUNK_SEAT_SESSION", OsString::from("1")),
         (

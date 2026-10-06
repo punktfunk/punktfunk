@@ -214,19 +214,36 @@ pub fn serve(
     // Hand GameStream the grants registry so nvhttp launch and ENet resolve a Moonlight
     // fingerprint against the same mask the native plane enforces.
     let _ = state.access.set(np.clone());
-    let profiles = crate::profiles::Profiles::load_with(None, None);
-    if let Err(e) = profiles.ensure_owner(&state.host.hostname) {
-        tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
-    }
+    let profiles = match pf_paths::seat::trust_dir() {
+        // A seat host reads the box's profiles; the box creates the owner and migrates.
+        Some(dir) => {
+            let seat = pf_paths::seat::seat_id().map_err(anyhow::Error::msg)?;
+            crate::profiles::Profiles::load_box(dir.join("profiles.json"), seat)
+        }
+        None => {
+            let profiles = crate::profiles::Profiles::load_with(None, None);
+            if let Err(e) = profiles.ensure_owner(&state.host.hostname) {
+                tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
+            }
+            profiles
+        }
+    };
     #[cfg(target_os = "linux")]
     {
-        let paired: Vec<(String, String)> = np
-            .list()
-            .into_iter()
-            .map(|c| (c.name, c.fingerprint))
-            .collect();
-        profiles.migrate_device_seats(&pf_paths::seats_dir(), &paired);
+        if pf_paths::seat::trust_dir().is_none() {
+            let paired: Vec<(String, String)> = np
+                .list()
+                .into_iter()
+                .map(|c| (c.name, c.fingerprint))
+                .collect();
+            profiles.migrate_device_seats(&pf_paths::seats_dir(), &paired);
+        }
     }
+    // A seat host is pairing-required whatever its flags say.
+    let native = crate::native::NativeServe {
+        require_pairing: native.require_pairing || pf_paths::seat::is_seat_host(),
+        ..native
+    };
     let profiles = Arc::new(profiles);
     let _ = state.profiles.set(profiles.clone());
     let _ = state.native_port.set(native.port);

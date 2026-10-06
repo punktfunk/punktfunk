@@ -150,9 +150,11 @@ impl NativePairing {
         fixed_pin: Option<String>,
         arm_at_start: bool,
     ) -> Result<NativePairing> {
+        let store = store::TrustStore::open(store_path)?;
+        let refused = pf_paths::seat::pairing_refused() || store.read_only();
         let np = NativePairing {
-            arm: arming::ArmState::new(arm_at_start, fixed_pin),
-            store: store::TrustStore::open(store_path)?,
+            arm: arming::ArmState::new(arm_at_start && !refused, fixed_pin),
+            store,
             approval: approval::ApprovalQueue::new(),
             access_watch: Mutex::new(HashMap::new()),
             live: Mutex::new(Live {
@@ -169,6 +171,9 @@ impl NativePairing {
     /// counter is in memory only, so without this sweep those records would outlive the guest
     /// forever and the list would keep exactly the leftover the grant exists to prevent.
     fn drop_session_only_records(&self) {
+        if self.store.read_only() {
+            return;
+        }
         for client in self.store.list() {
             if !client.until_disconnect {
                 continue;
@@ -218,7 +223,15 @@ impl NativePairing {
     /// `UnboundForWan` both mean reject without consuming the window; `Disarmed` means none
     /// is armed.
     pub fn pin_for_attempt(&self, client_fp_hex: &str, source: KnockSource) -> PinAttempt {
+        if self.pairing_refused() {
+            return PinAttempt::Disarmed;
+        }
         self.arm.pin_for_attempt(client_fp_hex, source)
+    }
+
+    /// A seat host: devices pair with the box, so no PIN window opens and no knock parks.
+    pub fn pairing_refused(&self) -> bool {
+        pf_paths::seat::pairing_refused() || self.store.read_only()
     }
 
     pub fn disarm(&self) {

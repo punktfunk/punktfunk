@@ -1128,6 +1128,11 @@ pub(crate) async fn park_knock(
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<Result<tokio::sync::OwnedSemaphorePermit, punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
+    if np.pairing_refused() {
+        tracing::info!(name = %label, fingerprint = %fp_hex,
+            "unpaired device knocked on a seat — it pairs with the box");
+        return Ok(Err(RejectReason::PairingNotArmed));
+    }
     tracing::info!(name = %label, fingerprint = %fp_hex,
         "unpaired device knocked — parking connection for delegated approval in the console");
     // QUIC-validated source IP for the pending per-source cap. Knock generation makes
