@@ -229,6 +229,7 @@ impl PairScreen {
                             preset: None,
                             profile: None,
                             ask: None,
+                            seat: None,
                         });
                         fx.pop();
                     }

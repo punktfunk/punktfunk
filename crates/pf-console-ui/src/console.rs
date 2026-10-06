@@ -337,6 +337,7 @@ fn stream_intent(entry: &ConsoleEntry) -> Option<crate::screens::ConnectIntent> 
         preset: None,
         profile: host.profile.as_ref().map(|p| p.id.clone()),
         ask: crate::screens::ProfileAsk::of(host),
+        seat: None,
     })
 }
 

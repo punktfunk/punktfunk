@@ -20,11 +20,12 @@ use crate::platform::Platform;
 use crate::pointer::DRAG_TICK_DP;
 use crate::pointer::{Pointer, PointerKind, Touch};
 use crate::screens::home::HomeScreen;
-use crate::screens::{Bg, ConnectIntent, Ctx, Nav, Outbox, ProfileAsk, Screen};
+use crate::screens::{Bg, ConnectIntent, Ctx, Nav, Outbox, ProfileAsk, Screen, Seated};
 use crate::store::SettingsStore;
 use anyhow::{anyhow, Result};
 use pf_client_core::console::OverlayAction;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse, PadInfo};
+use pf_client_core::profiles::{seat_gate, SeatGate};
 use pf_client_core::start;
 use pf_client_core::trust;
 use skia_safe::{Canvas, Color4f, Data, Image, Paint, Rect, RuntimeEffect, Surface};
@@ -201,6 +202,25 @@ struct Asking {
 const PROFILES_WAIT: f64 = 3.0;
 /// A list slower than this puts the connect card up; a fast one shows nothing.
 const ASKING_CARD_AFTER: f64 = 0.25;
+
+/// A connect waiting for its profile's seat to come up (§9.2). There is no timeout: Back is
+/// the way out.
+struct SeatWait {
+    intent: ConnectIntent,
+    mgmt: u16,
+    /// The profile's id and name, for the poll and the title.
+    id: String,
+    name: String,
+    /// The progress line the host last gave.
+    detail: Option<String>,
+    /// When the list was last asked for.
+    polled: f64,
+    /// Takeover fade-in, 0 → 1.
+    appear: f64,
+}
+
+/// Seconds between asks for the profile list while a seat comes up.
+const SEAT_POLL: f64 = 2.0;
 
 struct Connecting {
     title: String,
@@ -431,6 +451,8 @@ pub(crate) struct Shell {
     launching: Option<Launching>,
     /// Input waits while this is up; Back drops it.
     asking: Option<Asking>,
+    /// Input waits while this is up; Back drops it.
+    seat_wait: Option<SeatWait>,
     /// Host title of the last connect. [`Self::session_reconnecting`] has no
     /// `Launch` of its own, so nothing else can name the host.
     last_connect_title: Option<String>,
@@ -574,6 +596,7 @@ impl Shell {
             connecting: None,
             launching: None,
             asking: None,
+            seat_wait: None,
             last_connect_title: None,
             wake: None,
             wake_optimistic: false,
@@ -686,6 +709,7 @@ impl Shell {
             && self.connecting.is_none()
             && self.launching.is_none()
             && self.asking.is_none()
+            && self.seat_wait.is_none()
             && self.wake.is_none()
             && self.speed.is_none()
     }
@@ -716,6 +740,7 @@ impl Shell {
             || self.holds_stream()
             || self.connecting.is_some()
             || self.asking.is_some()
+            || self.seat_wait.is_some()
             || self.wake.is_some()
             || self.speed.is_some()
         {
@@ -1007,6 +1032,7 @@ impl Shell {
         self.open_first_paired_library();
         self.sync_wake();
         self.tick_asking();
+        self.tick_seat_wait();
         self.home_shelf();
         self.tick_launch();
         self.tick_downloads();
@@ -1273,7 +1299,7 @@ impl Shell {
     /// ([`Self::tick_asking`]); the rest dial now.
     pub(crate) fn start_connect(&mut self, mut intent: ConnectIntent) {
         let Some(ask) = intent.ask.take().filter(|_| self.device.profiles) else {
-            return self.dial(intent);
+            return self.dial_when_seated(intent);
         };
         // An answer left from an earlier ask is not this one's.
         self.console.take_profiles(&intent.fp_hex);
@@ -1318,6 +1344,15 @@ impl Shell {
             .find(|h| h.host_key() == ask.key)
             .map_or_else(|| ask.saved.clone(), |h| h.profile.clone());
         let d = pf_client_core::profiles::picker_decision(listed.as_deref(), saved.as_ref(), None);
+        let seat = d
+            .send
+            .as_deref()
+            .zip(listed.as_deref())
+            .and_then(|(id, l)| l.iter().find(|p| p.id == id))
+            .map(|row| Seated {
+                row: row.clone(),
+                mgmt: ask.mgmt,
+            });
         if d.picker {
             let screen = crate::screens::profiles::ProfilesScreen::before(
                 intent,
@@ -1334,7 +1369,71 @@ impl Shell {
             });
         }
         intent.profile = d.send;
-        self.dial(intent);
+        intent.seat = seat;
+        self.dial_when_seated(intent);
+    }
+
+    /// The picked profile's seat decides the dial (§9.2): dial now, wake a stopped seat, or
+    /// wait for a starting one. An unavailable seat says why and does not dial.
+    fn dial_when_seated(&mut self, mut intent: ConnectIntent) {
+        let Some(Seated { row, mgmt }) = intent.seat.take() else {
+            return self.dial(intent);
+        };
+        let detail = match seat_gate(&row) {
+            SeatGate::Dial => return self.dial(intent),
+            SeatGate::Refuse(line) => return self.show_toast_kind(line, ToastKind::Error),
+            SeatGate::Wake => {
+                self.send_cmd(ConsoleCmd::WakeProfile {
+                    addr: intent.addr.clone(),
+                    mgmt,
+                    fp_hex: intent.fp_hex.clone(),
+                    id: row.id.clone(),
+                });
+                None
+            }
+            SeatGate::Wait { detail } => detail,
+        };
+        // An answer left from an earlier ask is not this wait's.
+        self.console.take_profiles(&intent.fp_hex);
+        self.seat_wait = Some(SeatWait {
+            intent,
+            mgmt,
+            id: row.id,
+            name: row.display_name,
+            detail,
+            polled: self.t(),
+            appear: 0.0,
+        });
+    }
+
+    /// While a seat comes up: read the profile list every [`SEAT_POLL`] seconds. `ready` or
+    /// `occupied` dials; `unavailable` says why and stops. A failed read waits for the next.
+    fn tick_seat_wait(&mut self) {
+        let Some(mut w) = self.seat_wait.take() else {
+            return;
+        };
+        if let Some(ProfilesAnswer::Listed(listed)) = self.console.take_profiles(&w.intent.fp_hex) {
+            // A profile the box no longer lists dials as it stands: the host answers for it.
+            let gate = listed.iter().find(|p| p.id == w.id).map(seat_gate);
+            match gate {
+                None | Some(SeatGate::Dial) => return self.dial(w.intent),
+                Some(SeatGate::Refuse(line)) => {
+                    return self.show_toast_kind(line, ToastKind::Error);
+                }
+                Some(SeatGate::Wait { detail }) => w.detail = detail,
+                Some(SeatGate::Wake) => {}
+            }
+        }
+        let now = self.t();
+        if now - w.polled >= SEAT_POLL {
+            w.polled = now;
+            self.send_cmd(ConsoleCmd::FetchProfiles {
+                addr: w.intent.addr.clone(),
+                mgmt: w.mgmt,
+                fp_hex: w.intent.fp_hex.clone(),
+            });
+        }
+        self.seat_wait = Some(w);
     }
 
     fn dial(&mut self, intent: ConnectIntent) {
@@ -1624,7 +1723,7 @@ impl Shell {
 
     /// OK went down on what has focus: its plate and the element dip.
     fn dip(&mut self) {
-        if self.connecting.is_some() || self.launching.is_some() {
+        if self.connecting.is_some() || self.launching.is_some() || self.seat_wait.is_some() {
             return;
         }
         if self.strip_focus && self.stack.len() == 1 {
@@ -1680,6 +1779,14 @@ impl Shell {
             // Nothing has dialed yet: no cancel to send.
             self.asking = None;
             self.connecting = None;
+            return Some(MenuPulse::Confirm);
+        }
+        if self.seat_wait.is_some() {
+            if ev != MenuEvent::Back {
+                return None;
+            }
+            // Nothing has dialed yet: no cancel to send.
+            self.seat_wait = None;
             return Some(MenuPulse::Confirm);
         }
         if self.connecting.is_some() {
@@ -1804,9 +1911,21 @@ impl Shell {
             if self.stack.len() > 1
                 || self.connecting.is_some()
                 || self.asking.is_some()
+                || self.seat_wait.is_some()
                 || self.wake.is_some()
                 || self.speed.is_some()
             {
+                self.handle_menu(MenuEvent::Back);
+            }
+            return true;
+        }
+        // Cancel is the one button on the seat wait; the rest of it is not clickable.
+        if self.seat_wait.is_some() {
+            let on_cancel = self
+                .hint_rects
+                .iter()
+                .any(|(key, r)| *key == crate::glyphs::HintKey::Back && p.hits(*r));
+            if p.press() && on_cancel {
                 self.handle_menu(MenuEvent::Back);
             }
             return true;

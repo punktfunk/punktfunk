@@ -1940,6 +1940,7 @@ mod launch_hold {
             preset: None,
             profile: None,
             ask: None,
+            seat: None,
         }
     }
 
@@ -2898,7 +2899,7 @@ fn an_explainer_reaches_the_shells_tray_in() {
 mod profile_gate {
     use super::*;
     use crate::model::ProfilesAnswer;
-    use pf_client_core::profiles::{ListedProfile, ProfilePick};
+    use pf_client_core::profiles::{ListedProfile, ProfilePick, Seat, SeatState};
 
     fn listed(ids: &[(&str, &str)]) -> ProfilesAnswer {
         ProfilesAnswer::Listed(
@@ -3074,6 +3075,171 @@ mod profile_gate {
             .drain()
             .iter()
             .any(|c| matches!(c, ConsoleCmd::FetchProfiles { .. })));
+    }
+
+    fn seated(state: SeatState, detail: Option<&str>) -> ProfilesAnswer {
+        let ProfilesAnswer::Listed(mut l) = listed(&[("own", "Ben"), ("kid", "Kid")]) else {
+            unreachable!()
+        };
+        l[1].seat = Some(Seat {
+            state,
+            detail: detail.map(Into::into),
+            ..Default::default()
+        });
+        ProfilesAnswer::Listed(l)
+    }
+
+    fn woke(row: &HostRow) -> ConsoleCmd {
+        ConsoleCmd::WakeProfile {
+            addr: row.addr.clone(),
+            mgmt: row.mgmt_port,
+            fp_hex: "aa11".into(),
+            id: "kid".into(),
+        }
+    }
+
+    fn polled(bus: &ConsoleBus) -> bool {
+        bus.drain()
+            .iter()
+            .any(|c| matches!(c, ConsoleCmd::FetchProfiles { fp_hex, .. } if fp_hex == "aa11"))
+    }
+
+    /// A stopped seat is woken, then the list is read every 2 s until it is ready.
+    #[test]
+    fn a_stopped_seat_is_woken_and_waited_for_before_the_dial() {
+        let (mut s, console, bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", seated(SeatState::Stopped, None));
+        bus.drain();
+        s.sync();
+        assert!(s.take_action().is_none(), "a stopped seat is not dialed");
+        assert!(bus.drain().contains(&woke(&row)));
+        assert!(!s.at_root(), "the wait holds input");
+
+        s.fake_clock = Some((10.0 + SEAT_POLL, 0.0));
+        s.sync();
+        assert!(polled(&bus));
+        console.set_profiles("aa11", seated(SeatState::Starting, Some("Signing in")));
+        s.sync();
+        assert!(s.take_action().is_none());
+        let wait = s.seat_wait.as_ref().expect("still waiting");
+        assert_eq!(wait.detail.as_deref(), Some("Signing in"));
+
+        s.fake_clock = Some((10.0 + 2.0 * SEAT_POLL, 0.0));
+        s.sync();
+        assert!(polled(&bus));
+        console.set_profiles("aa11", seated(SeatState::Ready, None));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+        assert!(s.seat_wait.is_none());
+    }
+
+    /// A starting seat is not woken again; an occupied one is dialed as it is.
+    #[test]
+    fn a_starting_seat_waits_and_an_occupied_one_dials() {
+        let (mut s, console, bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", seated(SeatState::Starting, Some("Setting up")));
+        bus.drain();
+        s.sync();
+        assert!(s.take_action().is_none());
+        assert!(!bus.drain().contains(&woke(&row)));
+        assert_eq!(
+            s.seat_wait.as_ref().and_then(|w| w.detail.as_deref()),
+            Some("Setting up")
+        );
+        s.fake_clock = Some((10.0 + SEAT_POLL, 0.0));
+        console.set_profiles("aa11", seated(SeatState::Occupied, None));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+    }
+
+    /// Cancel, by Back or by a click on the hint, drops the wait: nothing dials, nothing polls.
+    #[test]
+    fn cancel_leaves_the_wait_without_a_dial() {
+        for by_click in [false, true] {
+            let (mut s, console, bus, row) = asking(pick("kid", "Kid"));
+            s.start_connect(ConnectIntent::to_host(&row, None));
+            console.set_profiles("aa11", seated(SeatState::Stopped, None));
+            s.sync();
+            assert!(s.seat_wait.is_some());
+            if by_click {
+                let fonts = crate::theme::build_fonts().unwrap();
+                let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+                s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+                let (_, rect) = *s
+                    .hint_rects
+                    .iter()
+                    .find(|(key, _)| *key == crate::glyphs::HintKey::Back)
+                    .expect("the wait draws a Cancel");
+                assert!(s.pointer(crate::pointer::Pointer {
+                    x: f64::from(rect.center_x()),
+                    y: f64::from(rect.center_y()),
+                    kind: crate::pointer::PointerKind::Press,
+                }));
+            } else {
+                s.handle_menu(MenuEvent::Back);
+            }
+            assert!(s.seat_wait.is_none(), "by_click = {by_click}");
+            bus.drain();
+            s.fake_clock = Some((10.0 + 2.0 * SEAT_POLL, 0.0));
+            console.set_profiles("aa11", seated(SeatState::Ready, None));
+            s.sync();
+            assert!(s.take_action().is_none() && !polled(&bus));
+        }
+    }
+
+    /// A seat that can't play says why and does not dial, at the gate or mid-wait.
+    #[test]
+    fn an_unavailable_seat_shows_its_line_and_stops() {
+        let (mut s, console, _bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles(
+            "aa11",
+            seated(SeatState::Unavailable, Some("Seats are off.")),
+        );
+        s.sync();
+        assert!(s.take_action().is_none() && s.seat_wait.is_none());
+        assert_eq!(
+            s.toast.as_ref().map(|t| t.text.as_str()),
+            Some("Seats are off.")
+        );
+
+        let (mut s, console, _bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", seated(SeatState::Starting, None));
+        s.sync();
+        s.fake_clock = Some((10.0 + SEAT_POLL, 0.0));
+        console.set_profiles(
+            "aa11",
+            seated(SeatState::Unavailable, Some("Sign-in failed.")),
+        );
+        s.sync();
+        assert!(s.take_action().is_none() && s.seat_wait.is_none());
+        assert_eq!(
+            s.toast.as_ref().map(|t| t.text.as_str()),
+            Some("Sign-in failed.")
+        );
+    }
+
+    /// A pick made on the picker goes through the same gate.
+    #[test]
+    fn a_picked_stopped_seat_is_woken() {
+        let (mut s, console, bus, row) = asking(None);
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", seated(SeatState::Stopped, None));
+        s.sync();
+        assert!(matches!(s.stack.last(), Some(Screen::Profiles(_))));
+        finish_motion(&mut s);
+        let fonts = crate::theme::build_fonts().unwrap();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((1280, 800)).unwrap();
+        s.render(surface.canvas(), 1280, 800, &fonts, None, None, &[]);
+        bus.drain();
+        s.handle_menu(MenuEvent::Move(MenuDir::Right));
+        s.handle_menu(MenuEvent::Confirm);
+        assert!(s.take_action().is_none(), "the seat is not up yet");
+        assert!(bus.drain().contains(&woke(&row)));
+        assert!(s.seat_wait.is_some());
     }
 
     /// Switch profile's list arrives through the shell, keyed on the host.

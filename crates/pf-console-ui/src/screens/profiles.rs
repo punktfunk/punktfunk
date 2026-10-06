@@ -10,7 +10,7 @@ use crate::el::{Axis, El, Id, Tree};
 use crate::glyphs::{Hint, HintKey};
 use crate::model::{ConsoleCmd, HostRow, ProfilesAnswer};
 use crate::pointer::{Pointer, PointerKind};
-use crate::screens::{ConnectIntent, Ctx, Outbox, ProfileAsk};
+use crate::screens::{ConnectIntent, Ctx, Outbox, ProfileAsk, Seated};
 use crate::theme::{edge, fg, fill, Fonts, W};
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
 use pf_client_core::profiles::{initials, ListedProfile, ProfilePick};
@@ -142,7 +142,8 @@ impl ProfilesScreen {
 
     /// Save the focused profile; a waiting connect goes on as it.
     fn choose(&mut self, fx: &mut Outbox) -> Option<MenuPulse> {
-        let pick = self.listed().get(self.cursor).map(ListedProfile::pick)?;
+        let row = self.listed().get(self.cursor)?.clone();
+        let pick = row.pick();
         fx.cmds.push(ConsoleCmd::SetProfile {
             key: self.ask.key.clone(),
             profile: Some(pick.clone()),
@@ -152,6 +153,10 @@ impl ProfilesScreen {
                 fx.connect = Some(ConnectIntent {
                     profile: Some(pick.id),
                     ask: None,
+                    seat: Some(Seated {
+                        row,
+                        mgmt: self.ask.mgmt,
+                    }),
                     ..intent
                 })
             }

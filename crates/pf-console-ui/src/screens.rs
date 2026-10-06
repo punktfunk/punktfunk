@@ -176,6 +176,16 @@ pub(crate) struct ConnectIntent {
     pub profile: Option<String>,
     /// Check the box's profiles before the dial (§10.1). `None` dials as it stands.
     pub ask: Option<ProfileAsk>,
+    /// The picked profile's row, for the seat check before the dial (§9.2). `None` dials as it
+    /// stands.
+    pub seat: Option<Seated>,
+}
+
+/// A picked profile as the host last listed it, and where to reach the host's management lane.
+#[derive(Clone, Debug)]
+pub(crate) struct Seated {
+    pub row: pf_client_core::profiles::ListedProfile,
+    pub mgmt: u16,
 }
 
 /// What the profile check before a dial needs: the card's host and its saved pick.
@@ -223,6 +233,7 @@ impl ConnectIntent {
             preset: h.pin.as_ref().map(|p| p.id.clone()),
             profile: h.profile.as_ref().map(|p| p.id.clone()),
             ask: ProfileAsk::of(h),
+            seat: None,
         }
     }
 
