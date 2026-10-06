@@ -486,13 +486,27 @@ public final class Sc2Capture {
     /// success sends `gamepadArrival` (pref 9, or 10 for a Puck slot) — the declaration the
     /// host builds the virtual SC2 from — before any input can flow on that index.
     private func claimSlot(source: UInt64) {
-        // On the link queue: the host builds the virtual pad from this, so it is read before the
-        // arrival goes out. BLE sends none yet.
+        // The host builds the virtual pad from the identity, so it is read before the arrival.
+        readIdentity(source: source) { [weak self] identity in
+            self?.finishClaim(source: source, identity: identity)
+        }
+    }
+
+    /// `source`'s identity, read on the link queue: synchronously over USB, as a GATT exchange
+    /// over Bluetooth. `done` runs on the link queue.
+    private func readIdentity(
+        source: UInt64, _ done: @escaping (PunktfunkConnection.PadIdentity?) -> Void
+    ) {
         #if os(macOS)
-        let identity = source == Self.bleSource ? nil : usbLink.identity(source: source)
-        #else
-        let identity: PunktfunkConnection.PadIdentity? = nil
+        if source != Self.bleSource {
+            done(usbLink.identity(source: source))
+            return
+        }
         #endif
+        link.readIdentity(done)
+    }
+
+    private func finishClaim(source: UInt64, identity: PunktfunkConnection.PadIdentity?) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             MainActor.assumeIsolated {

@@ -55,7 +55,24 @@ final class Sc2BleLink: NSObject {
     /// re-acquiring by itself; this only tells the capture to release its slot.
     private let onClosed: () -> Void
 
+    /// One identity read in flight (`readIdentity`): the queries, where it is, what answered.
+    private final class IdentityJob {
+        let requests: [[UInt8]]
+        let done: (PunktfunkConnection.PadIdentity?) -> Void
+        var index = 0
+        var attempts = 0
+        var awaitingRead = false
+        var replies: [PunktfunkConnection.PadIdentity.Reply] = []
+        var timeout: DispatchWorkItem?
+
+        init(requests: [[UInt8]], done: @escaping (PunktfunkConnection.PadIdentity?) -> Void) {
+            self.requests = requests
+            self.done = done
+        }
+    }
+
     // All state below is touched ONLY on `queue`.
+    private var identityJob: IdentityJob?
     private var central: CBCentralManager?
     private var controller: CBPeripheral?
     private var inputChar: CBCharacteristic?
@@ -214,6 +231,68 @@ final class Sc2BleLink: NSObject {
             }
             controller.writeValue(Data(payload), for: target, type: type)
         }
+    }
+
+    /// Read the pad's identity for the host: each of core's feature queries written to the
+    /// report characteristic and read back, as SDL reads a feature over GATT. The serial is the
+    /// engraved one (`0xAE` attribute 1), which a cable shows as the USB serial. `done` runs on
+    /// `queue`; nil when the link is down.
+    func readIdentity(_ done: @escaping (PunktfunkConnection.PadIdentity?) -> Void) {
+        queue.async { [self] in
+            guard controller != nil, reportChar != nil, identityJob == nil else {
+                done(nil)
+                return
+            }
+            identityJob = IdentityJob(
+                requests: PunktfunkConnection.sc2IdentityRequests(puck: false), done: done)
+            sendIdentityQuery()
+        }
+    }
+
+    /// Write the current query; its reply is read once the write is acknowledged. A query that
+    /// gets no echo within a second is skipped. On `queue`.
+    private func sendIdentityQuery() {
+        guard let job = identityJob else { return }
+        guard job.index < job.requests.count, let controller, let reportChar else {
+            finishIdentity()
+            return
+        }
+        let request = job.requests[job.index]
+        let frame = request + [UInt8](repeating: 0, count: max(0, 64 - request.count))
+        guard let payload = Sc2Device.featurePayload(frame: frame) else {
+            nextIdentityQuery()
+            return
+        }
+        job.awaitingRead = false
+        job.timeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in self?.nextIdentityQuery() }
+        job.timeout = timeout
+        queue.asyncAfter(deadline: .now() + 1, execute: timeout)
+        let type: CBCharacteristicWriteType =
+            reportChar.properties.contains(.write) ? .withResponse : .withoutResponse
+        controller.writeValue(Data(payload), for: reportChar, type: type)
+        if type == .withoutResponse {
+            job.awaitingRead = true
+            controller.readValue(for: reportChar)
+        }
+    }
+
+    private func nextIdentityQuery() {
+        guard let job = identityJob else { return }
+        job.timeout?.cancel()
+        job.index += 1
+        job.attempts = 0
+        sendIdentityQuery()
+    }
+
+    private func finishIdentity() {
+        guard let job = identityJob else { return }
+        job.timeout?.cancel()
+        identityJob = nil
+        let unit = job.replies.first { $0.request == [0x01, 0xAE, 0x15, 0x01] }?.reply ?? []
+        let serial = String(decoding: unit.dropFirst(4).prefix { $0 != 0 }, as: UTF8.self)
+        log.info("SC2: identity \(serial, privacy: .public), \(job.replies.count)/\(job.requests.count) replies")
+        job.done(.init(serial: serial, replies: job.replies))
     }
 
     /// Firmware without a per-report characteristic at id+0x35: rotate through the writable
@@ -436,6 +515,14 @@ extension Sc2BleLink: CBPeripheralDelegate {
     }
 
     func peripheral(
+        _ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?
+    ) {
+        guard characteristic.uuid == reportCB, let job = identityJob, !job.awaitingRead else { return }
+        job.awaitingRead = true
+        peripheral.readValue(for: characteristic)
+    }
+
+    func peripheral(
         _ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic,
         error: Error?
     ) {
@@ -462,10 +549,21 @@ extension Sc2BleLink: CBPeripheralDelegate {
             }
             onReport(framed)
         } else if characteristic.uuid == reportCB {
-            // A feature reply. The HOST's virtual pad answers Steam's feature reads, and no
-            // client→host reply plane exists — log and drop. (A stack whose synthetic pad lives
-            // client-side would instead round-trip these to its own GET_FEATURE handler.)
-            log.info("SC2: feature reply (\(data.count) B) — dropped (host answers Steam)")
+            // A feature reply: the identity read's, or one the host's virtual pad already
+            // answered for Steam. A reply that does not echo the query (a keep-alive's slipped in)
+            // asks again, twice at most.
+            guard let job = identityJob, job.awaitingRead, job.index < job.requests.count else { return }
+            let request = job.requests[job.index]
+            let reply = [request[0]] + [UInt8](data)
+            if reply.count > 1, reply[1] == request[1] {
+                job.replies.append(.init(request: request, reply: reply))
+                nextIdentityQuery()
+            } else if job.attempts < 2 {
+                job.attempts += 1
+                sendIdentityQuery()
+            } else {
+                nextIdentityQuery()
+            }
         }
     }
 }
