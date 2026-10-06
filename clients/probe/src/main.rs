@@ -137,6 +137,9 @@ struct Args {
     link: trajectory::Link,
     /// `--profile NAME` — the row name the trajectory summary prints under.
     profile: String,
+    /// `--as ID` — play as this profile. A host that places it elsewhere answers with a
+    /// `Redirect`, which the probe prints and stops at.
+    as_profile: Option<String>,
     /// `--decoder-hold` — hold the picture after a lost frame until one that re-anchors it
     /// arrives, asking for a keyframe while held, as the shipped TV client does. Without it
     /// the rig resumes as soon as frame indexes line up, which no decoder can do.
@@ -348,6 +351,7 @@ fn parse_args() -> Args {
             },
         },
         profile: get("--profile").unwrap_or("rig").to_string(),
+        as_profile: get("--as").map(str::to_string),
         decoder_hold: argv.iter().any(|a| a == "--decoder-hold"),
         clock_resync: argv.iter().any(|a| a == "--clock-resync"),
         cursor_capture: argv.iter().any(|a| a == "--cursor-capture"),
@@ -833,14 +837,31 @@ async fn handshake(
         start_ext: extra.start_ext,
         resume: extra.resume,
         suites: extra.suites,
-        features: Default::default(),
-        profile: None,
+        // A host answers a `Redirect` only to a client that says it follows one.
+        features: {
+            let none = punktfunk_core::quic::v2::features::FeatureSet::default();
+            if args.as_profile.is_some() {
+                none.with(punktfunk_core::quic::v2::registry::FEATURE_PROFILES)
+            } else {
+                none
+            }
+        },
+        profile: args.as_profile.clone(),
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.
     let server = loop {
         let (ty, body) = recv.read_frame().await?;
         match ty {
+            punktfunk_core::quic::v2::msg::Redirect::TYPE => {
+                let to = punktfunk_core::quic::v2::msg::Redirect::from_body(&body)
+                    .map_err(|e| anyhow!("Redirect decode: {e:?}"))?;
+                println!(
+                    "redirect port={} profile={} seat_no={} seat_name={:?} occupant={:?}",
+                    to.port, to.profile, to.seat_no, to.seat_name, to.occupant
+                );
+                return Err(anyhow!("the host placed this profile on port {}", to.port));
+            }
             ServerHello::TYPE => {
                 break ServerHello::from_body(&body)
                     .map_err(|e| anyhow!("ServerHello decode: {e:?}"))?
