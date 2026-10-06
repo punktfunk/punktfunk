@@ -2326,9 +2326,16 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         // A managed emulator's program is what a plugin's launch template points at; installing is
         // the operator's, like every install.
         ("GET", "/api/v1/emulators", true, false),
+        ("GET", "/api/v1/emulators/catalog", true, false),
         ("POST", "/api/v1/emulators/{id}/install", false, false),
         ("POST", "/api/v1/emulators/{id}/prepare", true, false),
         ("POST", "/api/v1/emulators/{id}/remove", false, false),
+        ("POST", "/api/v1/emulators/{id}/adopt", false, false),
+        ("GET", "/api/v1/emulators/{id}/firmware", true, false),
+        ("POST", "/api/v1/emulators/{id}/content", true, false),
+        ("GET", "/api/v1/emulators/{id}/saves", true, false),
+        ("POST", "/api/v1/emulators/{id}/saves/export", true, false),
+        ("POST", "/api/v1/emulators/{id}/saves/import", true, false),
         (
             "POST",
             "/api/v1/plugin-access/{plugin}/decide",

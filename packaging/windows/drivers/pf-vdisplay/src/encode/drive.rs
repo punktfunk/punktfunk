@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use pf_driver_proto::encode::FrameToken;
 use pf_driver_proto::encode::au::{self, AuHeader, AuSlot, HeapRing};
-use pf_driver_proto::encode::pace::{FrameCredit, Restamp};
 use pf_encode_win::{AuChunk, Encoder};
+use pf_frame::pace::{FrameCredit, GapChange, Restamp};
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, INFINITE, SetWaitableTimer,
@@ -730,12 +730,7 @@ struct Report {
     enc_sum_us: u64,
     enc_max_us: u64,
     enc_over: u64,
-    /// The last composed frame's `(raw, pts)` stamps, and the gaps that led to them.
-    stamps: Option<(u64, u64)>,
-    gaps: Option<(u64, u64)>,
-    gap_n: u64,
-    raw_change: u64,
-    pts_change: u64,
+    gap_change: GapChange,
 }
 
 impl Report {
@@ -757,26 +752,13 @@ impl Report {
             enc_sum_us: 0,
             enc_max_us: 0,
             enc_over: 0,
-            stamps: None,
-            gaps: None,
-            gap_n: 0,
-            raw_change: 0,
-            pts_change: 0,
+            gap_change: GapChange::default(),
         }
     }
 
     /// One composed frame's compositor stamp and the stamp its access unit carries.
     fn note_stamps(&mut self, raw: u64, pts: u64) {
-        let gaps = match self.stamps.replace((raw, pts)) {
-            Some((r, p)) if raw > r && pts > p => Some((raw - r, pts - p)),
-            _ => None,
-        };
-        if let (Some((rg, pg)), Some((last_rg, last_pg))) = (gaps, self.gaps) {
-            self.gap_n += 1;
-            self.raw_change += rg.abs_diff(last_rg);
-            self.pts_change += pg.abs_diff(last_pg);
-        }
-        self.gaps = gaps;
+        self.gap_change.note(raw, pts);
     }
 
     /// One whole access unit, submitted at `submitted` and out at `now`.
@@ -804,6 +786,7 @@ impl Report {
         if window_ms < Self::EVERY_MS {
             return;
         }
+        let (raw, pts) = self.gap_change.take();
         dbglog!(
             "[pf-vd] drive: win_ms={window_ms} published={} submits={} parks={} shed={} aged={} au_age_us mean={} max={} enc_us mean={} max={} over={} gap_change_us raw={} pts={}",
             self.n,
@@ -816,10 +799,13 @@ impl Report {
             self.enc_sum_us / self.enc_n.max(1),
             self.enc_max_us,
             self.enc_over,
-            self.raw_change * 1_000_000 / self.hz / self.gap_n.max(1),
-            self.pts_change * 1_000_000 / self.hz / self.gap_n.max(1)
+            raw * 1_000_000 / self.hz,
+            pts * 1_000_000 / self.hz
         );
+        // The stamps carry across windows; only the counts start over.
+        let gap_change = core::mem::take(&mut self.gap_change);
         *self = Self::new(self.hz, self.period_us);
+        self.gap_change = gap_change;
         self.since = now;
     }
 }
