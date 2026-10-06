@@ -57,6 +57,10 @@ pub(crate) struct SeatPublic {
     /// The device playing on it while `occupied`.
     #[serde(skip_serializing_if = "Option::is_none")]
     occupant: Option<String>,
+    /// The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a
+    /// client dialing `port` directly pins it. Absent: the pin of this host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pin: Option<String>,
     /// Its Steam has no account yet: the first connect shows Steam's sign-in. `null` where the
     /// host can't tell.
     steam_sign_in: Option<bool>,
@@ -168,6 +172,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot) -> SeatPublic {
         detail: Some(why.to_string()),
         port,
         occupant: None,
+        pin: None,
         steam_sign_in: None,
         kind: SeatKind::Desktop,
     };
@@ -184,6 +189,7 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot) -> SeatPublic {
             detail: None,
             port,
             occupant: None,
+            pin: None,
             steam_sign_in: steam_sign_in(&p.id),
             kind: SeatKind::Desktop,
         },
@@ -193,13 +199,14 @@ fn seat_line(st: &MgmtState, p: &Profile, seats: &Snapshot) -> SeatPublic {
     }
 }
 
-/// A Windows seat's line: its ledger row, and who plays there.
+/// A seat's line: its ledger row, who plays there, and its host's pin.
 fn seated(seats: &Snapshot, id: &str) -> SeatPublic {
     let line = |state, port, detail: Option<&str>| SeatPublic {
         state,
         detail: detail.map(str::to_string),
         port,
         occupant: None,
+        pin: None,
         steam_sign_in: None,
         kind: SeatKind::Desktop,
     };
@@ -221,7 +228,7 @@ fn seated(seats: &Snapshot, id: &str) -> SeatPublic {
         return line(SeatState::Unavailable, port, Some(why));
     }
     let detail = seat.runtime.detail.as_deref();
-    match seat.runtime.state {
+    let mut out = match seat.runtime.state {
         RuntimeState::Running => match seats.occupants.get(id).and_then(|o| o.first()) {
             Some(o) => SeatPublic {
                 occupant: o.name.clone(),
@@ -238,7 +245,9 @@ fn seated(seats: &Snapshot, id: &str) -> SeatPublic {
         RuntimeState::Stopping | RuntimeState::Stopped | RuntimeState::Unknown => {
             line(SeatState::Stopped, port, None)
         }
-    }
+    };
+    out.pin = seat.fingerprint.clone();
+    out
 }
 
 /// The seats as they are now; the empty snapshot where the supervisor doesn't answer.

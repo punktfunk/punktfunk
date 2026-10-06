@@ -23,15 +23,16 @@ use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Box files a seat host reads. The identity pair is required; the rest may not exist yet.
-const TRUST_FILES: [&str; 5] = [
-    "native-cert.pem",
-    "native-key.pem",
+/// Box files a seat host reads; any may not exist yet. Never the box's identity: a seat host
+/// mints its own, and clients reach it through the pin the box's `Redirect` carries.
+const TRUST_FILES: [&str; 3] = [
     "punktfunk1-paired.json",
     "profiles.json",
     "display-settings.json",
 ];
-const REQUIRED: [&str; 2] = ["native-cert.pem", "native-key.pem"];
+
+/// The box's identity pair, which an older trust copy carried. Removed from every copy.
+const RETIRED: [&str; 2] = ["native-cert.pem", "native-key.pem"];
 
 /// Profile avatars, one flat directory beside `profiles.json`.
 const AVATARS: &str = "profiles";
@@ -306,8 +307,8 @@ fn sync_file(src: &Path, dst: &Path, reader: Reader) -> std::io::Result<bool> {
     Ok(true)
 }
 
-/// Brings the seat's trust copy level with the box. The identity pair must exist: a seat that
-/// minted its own would strand every client's pin. Returns whether anything changed.
+/// Brings the seat's trust copy level with the box, without the box's identity: a game on the
+/// seat could otherwise answer as the box. Returns whether anything changed.
 pub(super) fn refresh_trust(
     box_dir: &Path,
     id: &SeatId,
@@ -318,15 +319,14 @@ pub(super) fn refresh_trust(
     make_dir(&dst, reader.dir_mode()).map_err(|e| io("create the trust copy", e))?;
     std::os::unix::fs::chown(&dst, reader.uid, Some(reader.gid))
         .map_err(|e| io("own the trust copy", e))?;
-    for name in REQUIRED {
-        if !box_dir.join(name).is_file() {
-            return Err(err(
-                "trust_missing",
-                format!("the box has no {name} yet; start its host once first"),
-            ));
+    let mut changed = false;
+    for name in RETIRED {
+        match std::fs::remove_file(dst.join(name)) {
+            Ok(()) => changed = true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io(&format!("remove the old {name}"), e)),
         }
     }
-    let mut changed = false;
     for name in TRUST_FILES {
         changed |= sync_file(&box_dir.join(name), &dst.join(name), reader)
             .map_err(|e| io(&format!("copy {name}"), e))?;
@@ -560,35 +560,26 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let box_dir = temp.path();
         let gid = own_gid(box_dir);
-        assert_eq!(
-            refresh_trust(box_dir, &id(), Reader::group(gid))
-                .unwrap_err()
-                .code,
-            "trust_missing",
-            "no identity, no seat"
-        );
         box_with_identity(box_dir);
         std::fs::write(box_dir.join("profiles.json"), "{}").unwrap();
         std::fs::create_dir(box_dir.join("profiles")).unwrap();
         std::fs::write(box_dir.join("profiles/p1.png"), "png").unwrap();
         std::fs::write(box_dir.join("mgmt-token"), "secret").unwrap();
+        // A copy made before seat hosts minted their own identity.
+        let trust = trust_dir(box_dir, &id());
+        std::fs::create_dir_all(&trust).unwrap();
+        std::fs::write(trust.join("native-key.pem"), "key").unwrap();
 
         assert!(refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap());
-        let trust = trust_dir(box_dir, &id());
-        assert_eq!(
-            std::fs::read_to_string(trust.join("native-key.pem")).unwrap(),
-            "key"
-        );
         assert_eq!(
             std::fs::read_to_string(trust.join("profiles/p1.png")).unwrap(),
             "png"
         );
         assert_eq!(mode(&trust), 0o750);
-        assert_eq!(mode(&trust.join("native-key.pem")), 0o640);
-        assert!(
-            !trust.join("mgmt-token").exists(),
-            "only the listed files cross"
-        );
+        assert_eq!(mode(&trust.join("profiles.json")), 0o640);
+        for kept in ["mgmt-token", "native-key.pem", "native-cert.pem"] {
+            assert!(!trust.join(kept).exists(), "{kept} stays the box's");
+        }
         assert!(
             !refresh_trust(box_dir, &id(), Reader::group(gid)).unwrap(),
             "unchanged is a no-op"
@@ -626,7 +617,6 @@ mod tests {
         assert!(refresh_trust(box_dir, &id(), reader).is_ok());
         let trust = trust_dir(box_dir, &id());
         assert_eq!(mode(&trust), 0o700);
-        assert_eq!(mode(&trust.join("native-key.pem")), 0o600);
         assert_eq!(mode(&trust.join("profiles")), 0o700);
         assert_eq!(mode(&trust.join("profiles/a.png")), 0o600);
     }

@@ -178,6 +178,11 @@ fn host_dir(seat: &pf_seats::Seat) -> PathBuf {
         .join(seat.id.as_str())
 }
 
+/// The seat host's certificate pin from the ledger, `None` until the supervisor learned it.
+fn seat_pin(seat: &pf_seats::Seat) -> Option<[u8; 32]> {
+    punktfunk_core::fp::parse_hex32(seat.fingerprint.as_deref()?)
+}
+
 /// A device streaming on a seat host, as its `/status` lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Occupant {
@@ -193,7 +198,7 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 /// host does not answer.
 pub(crate) fn occupants(seat: &pf_seats::Seat) -> Option<Vec<Occupant>> {
     let client = crate::ctl::client::Client::seat(
-        &pf_paths::config_dir(),
+        seat_pin(seat)?,
         &host_dir(seat),
         seat.mgmt_port,
         Some(STATUS_TIMEOUT),
@@ -218,14 +223,12 @@ pub(crate) fn occupants(seat: &pf_seats::Seat) -> Option<Vec<Occupant>> {
 
 /// Ends every session on `seat` through its host's loopback API. `false` when it didn't answer.
 pub(crate) fn end_sessions(seat: &pf_seats::Seat) -> bool {
-    crate::ctl::client::Client::seat(
-        &pf_paths::config_dir(),
-        &host_dir(seat),
-        seat.mgmt_port,
-        Some(STATUS_TIMEOUT),
-    )
-    .and_then(|client| client.delete("/api/v1/session"))
-    .is_ok()
+    let Some(pin) = seat_pin(seat) else {
+        return false;
+    };
+    crate::ctl::client::Client::seat(pin, &host_dir(seat), seat.mgmt_port, Some(STATUS_TIMEOUT))
+        .and_then(|client| client.delete("/api/v1/session"))
+        .is_ok()
 }
 
 /// A seat host's API, for the console's proxy: `path_and_query` under `/api/v1/`. `None` when
@@ -238,7 +241,7 @@ pub(crate) fn forward(
     body: Vec<u8>,
 ) -> Option<(u16, Option<String>, Vec<u8>)> {
     let client = crate::ctl::client::Client::seat(
-        &pf_paths::config_dir(),
+        seat_pin(seat)?,
         &host_dir(seat),
         seat.mgmt_port,
         Some(PROXY_TIMEOUT),

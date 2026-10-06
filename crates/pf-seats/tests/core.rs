@@ -15,6 +15,7 @@ struct FakeBackend {
 struct FakeState {
     calls: Mutex<Vec<String>>,
     statuses: Mutex<HashMap<String, RuntimeStatus>>,
+    config_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl FakeBackend {
@@ -36,6 +37,10 @@ impl FakeBackend {
 }
 
 impl PlatformBackend for FakeBackend {
+    fn host_config_dir(&self, _seat: &Seat) -> Option<std::path::PathBuf> {
+        self.state.config_dir.lock().unwrap().clone()
+    }
+
     fn provision(&self, seat: &Seat) -> Result<(), BackendError> {
         self.record("provision", seat);
         self.state
@@ -165,6 +170,39 @@ fn command_dispatch_persists_runtime_and_calls_only_the_backend_seam() {
     assert!(calls.iter().any(|call| call.starts_with("start:")));
     assert!(calls.iter().any(|call| call.starts_with("stop:")));
     assert!(calls.iter().any(|call| call.starts_with("remove:")));
+}
+
+/// A running seat's row carries the pin of the certificate its host wrote, once it wrote one.
+#[test]
+fn a_running_seat_records_its_host_pin() {
+    let temp = tempfile::tempdir().unwrap();
+    let host = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::default();
+    *backend.state.config_dir.lock().unwrap() = Some(host.path().to_path_buf());
+    let service = SeatService::open(temp.path(), backend).unwrap();
+    let CommandResult::Created { seat } =
+        service.dispatch(create("Desk", "pf-desk", false)).unwrap()
+    else {
+        panic!("create answered something else");
+    };
+    let start = Command::Start {
+        id: seat.id.clone(),
+    };
+    service.dispatch(start).unwrap();
+    assert_eq!(
+        service.ledger().seats[0].fingerprint,
+        None,
+        "no identity yet"
+    );
+
+    let pem = "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+    std::fs::write(host.path().join("native-cert.pem"), pem).unwrap();
+    service.dispatch(Command::List).unwrap();
+    assert_eq!(
+        service.ledger().seats[0].fingerprint.as_deref(),
+        Some("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"),
+        "SHA-256 of the DER bytes 01 02 03"
+    );
 }
 
 #[test]

@@ -15319,6 +15319,13 @@
             ],
             "description": "The device playing on it while `occupied`."
           },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host."
+          },
           "port": {
             "type": "integer",
             "format": "int32",

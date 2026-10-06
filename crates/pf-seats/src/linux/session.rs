@@ -286,6 +286,7 @@ mod tests {
             autostart: false,
             runtime: RuntimeStatus::stopped(),
             owner: false,
+            fingerprint: None,
         }
     }
 

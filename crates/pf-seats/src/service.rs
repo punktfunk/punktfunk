@@ -14,7 +14,7 @@ use crate::ipc::{
     ApiError, Command, CommandResult, Diagnostic, DiagnosticLevel, DoctorReport, ErrorCode,
     SeatingStatus,
 };
-use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, SeatId};
+use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
 use crate::persistence::{LedgerStore, StoreError};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -74,6 +74,18 @@ impl<B: PlatformBackend> SeatService<B> {
         &self.backend
     }
 
+    /// Records the pin of `seat`'s host while it runs. A host that hasn't written its identity
+    /// yet leaves the last pin known.
+    fn learn_pin(&self, seat: &mut Seat) {
+        if seat.runtime.state != RuntimeState::Running {
+            return;
+        }
+        let dir = self.backend.host_config_dir(seat);
+        if let Some(pin) = dir.and_then(|dir| host_fingerprint(&dir)) {
+            seat.fingerprint = Some(pin);
+        }
+    }
+
     pub fn reconcile_startup(&self) -> Result<(), ApiError> {
         let mut current = self.lock();
         let mut next = current.clone();
@@ -84,6 +96,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 self.backend.status(seat)
             };
             seat.runtime = result.unwrap_or_else(|error| RuntimeStatus::failed(error.to_string()));
+            self.learn_pin(seat);
         }
         if next != *current {
             self.commit(&mut current, next)?;
@@ -107,6 +120,7 @@ impl<B: PlatformBackend> SeatService<B> {
                 .backend
                 .status(seat)
                 .unwrap_or_else(|error| RuntimeStatus::failed(error.to_string()));
+            self.learn_pin(seat);
         }
         if next != *current {
             self.commit(&mut current, next)?;
@@ -198,7 +212,10 @@ impl<B: PlatformBackend> SeatService<B> {
             .find(|seat| &seat.id == id)
             .expect("cloned ledger retains the selected seat");
         match result {
-            Ok(status) => seat.runtime = status,
+            Ok(status) => {
+                seat.runtime = status;
+                self.learn_pin(seat);
+            }
             Err(error) => {
                 seat.runtime = RuntimeStatus::failed(error.to_string());
                 self.commit(&mut current, next)?;
@@ -348,4 +365,13 @@ impl From<StoreError> for ApiError {
 
 fn not_found(id: &SeatId) -> ApiError {
     ApiError::new(ErrorCode::NotFound, format!("seat {id} does not exist"))
+}
+
+/// SHA-256 of the certificate DER in `dir`'s `native-cert.pem`, lowercase hex: the pin a client
+/// dials that host with.
+fn host_fingerprint(dir: &Path) -> Option<String> {
+    use rustls::pki_types::{pem::PemObject as _, CertificateDer};
+    let der = CertificateDer::from_pem_file(dir.join("native-cert.pem")).ok()?;
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, der.as_ref());
+    Some(hex::encode(digest.as_ref()))
 }

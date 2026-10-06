@@ -21,6 +21,11 @@ pub trait PlatformBackend: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
+    /// The config dir `seat`'s host runs with, where it keeps its own identity.
+    fn host_config_dir(&self, _seat: &Seat) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Check that `seat`, the owner's new row, names an ordinary account that already exists,
     /// and prepare what its host reads. Nothing is created: the account is the owner's own.
     fn adopt(&self, _seat: &Seat) -> Result<(), BackendError> {

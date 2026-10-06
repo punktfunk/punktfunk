@@ -24,14 +24,11 @@ pub struct NativeIdentity {
     pub key_pem: String,
 }
 
-/// Load the native identity, minting it on first run. A seat host presents the box's pair
-/// from its trust dir and never mints one: a pin made with the box must hold on every seat.
-/// Call once per process, before either plane starts: two concurrent
-/// callers can race the first-run file writes.
+/// Load the native identity, minting it on first run. A seat host keeps its own in its config
+/// dir, never the box's: clients reach it through the pin the box's `Redirect` carries, and a
+/// game on the seat can't answer as the box. Call once per process, before either plane
+/// starts: two concurrent callers can race the first-run file writes.
 pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<NativeIdentity> {
-    if let Some(dir) = pf_paths::seat::trust_dir() {
-        return load_box(&dir);
-    }
     let dir = config_dir();
     let cert_path = dir.join("native-cert.pem");
     let key_path = dir.join("native-key.pem");
@@ -55,7 +52,8 @@ pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<Native
             }
         }
     }
-    if !np.list().is_empty() {
+    // A seat's pairings are the box's, and no client pinned the seat before it had a key.
+    if !np.list().is_empty() && !pf_paths::seat::is_seat_host() {
         tracing::warn!(
             "native identity minted while native clients are paired — \
              those that pinned the legacy RSA cert must re-pair"
@@ -73,22 +71,6 @@ pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<Native
         "generated the native host identity (ECDSA P-256, SANs, key 0600)"
     );
     Ok(NativeIdentity { cert_pem, key_pem })
-}
-
-/// The box's identity, read from its config dir. Missing is an error: the box host has not
-/// run yet, and a seat that minted its own would strand every client's pin.
-fn load_box(dir: &std::path::Path) -> Result<NativeIdentity> {
-    let read = |name: &str| {
-        let path = dir.join(name);
-        fs::read_to_string(&path)
-            .ok()
-            .filter(|pem| !pem.trim().is_empty())
-            .with_context(|| format!("read the box identity {}", path.display()))
-    };
-    Ok(NativeIdentity {
-        cert_pem: read("native-cert.pem")?,
-        key_pem: read("native-key.pem")?,
-    })
 }
 
 /// In-memory identity for tests; does not touch the config dir.

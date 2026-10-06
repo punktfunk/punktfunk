@@ -516,6 +516,17 @@ impl PlatformBackend for LinuxBackend {
         Ok(state.runtime())
     }
 
+    /// `~/.config/punktfunk` of the seat's account: the `PUNKTFUNK_CONFIG_DIR` a seat host gets,
+    /// and the default the owner's own host keeps.
+    fn host_config_dir(&self, seat: &Seat) -> Option<PathBuf> {
+        let passwd = if seat.owner {
+            accounts::require_owner(&seat.account)
+        } else {
+            accounts::require(seat)
+        };
+        Some(passwd.ok()?.home.join(".config/punktfunk"))
+    }
+
     fn doctor(&self, ledger: &Ledger) -> Result<Vec<Diagnostic>, BackendError> {
         let mut out = self.prerequisites();
         for seat in &ledger.seats {

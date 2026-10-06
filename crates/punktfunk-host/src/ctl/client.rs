@@ -94,20 +94,15 @@ impl Client {
         Self::build(load_pin(dir)?, load_token(dir)?, port, global_timeout)
     }
 
-    /// A seat host's API on `port`: it presents the box's certificate, so `box_dir` holds the
-    /// pin; the token is the seat's own, in `seat_dir`.
+    /// A seat host's API on `port`, pinned to its own certificate (`pin`, from the ledger); the
+    /// token is the seat's, in `seat_dir`.
     pub fn seat(
-        box_dir: &Path,
+        pin: [u8; 32],
         seat_dir: &Path,
         port: u16,
         global_timeout: Option<Duration>,
     ) -> Result<Client> {
-        Self::build(
-            load_pin(box_dir)?,
-            load_token(seat_dir)?,
-            port,
-            global_timeout,
-        )
+        Self::build(pin, load_token(seat_dir)?, port, global_timeout)
     }
 
     fn build(

@@ -154,6 +154,11 @@ pub struct Seat {
     /// The box owner's row (Linux). Its account is never created or deleted by the ledger.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner: bool,
+    /// SHA-256 of the seat host's certificate DER, lowercase hex: the pin a client dials it
+    /// with, carried by the box's `Redirect`. Learned while the seat runs; `None` before its
+    /// host has minted an identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +292,7 @@ impl Ledger {
             autostart: request.autostart,
             runtime: RuntimeStatus::stopped(),
             owner,
+            fingerprint: None,
         };
         self.seats.push(seat.clone());
         if let Err(error) = self.validate() {
@@ -577,6 +583,7 @@ mod tests {
                 autostart: false,
                 runtime: RuntimeStatus::default(),
                 owner: false,
+                fingerprint: None,
             })
             .collect();
         assert!(matches!(

@@ -89,7 +89,8 @@ fn ledger_seat(account: &crate::profiles::OsAccount) -> Option<&str> {
 }
 
 /// The rule, without IO. `seat` is the profile's ledger row and its seat number, `occupants`
-/// who streams there, `held_by` a live reservation's device.
+/// who streams there, `held_by` a live reservation's device. A seat whose host pin the ledger
+/// doesn't hold yet is unavailable: a client sent there with the box's pin would fail.
 fn decide(
     profile_id: &str,
     asker: &Asker,
@@ -108,9 +109,13 @@ fn decide(
     let Some((seat, seat_no)) = seat else {
         return Placement::Refuse(RejectReason::SeatUnavailable);
     };
-    if seat.runtime.state != RuntimeState::Running {
+    let Some(pin) = seat
+        .fingerprint
+        .clone()
+        .filter(|_| seat.runtime.state == RuntimeState::Running)
+    else {
         return Placement::Refuse(RejectReason::SeatUnavailable);
-    }
+    };
     let mine =
         |client: &str| !client.is_empty() && asker.fp.is_some_and(|fp| fp.starts_with(client));
     let other = occupants.iter().find(|o| !mine(&o.client));
@@ -125,7 +130,7 @@ fn decide(
         seat_no,
         seat_name: seat.name.clone(),
         occupant: other.and_then(|o| o.name.clone()).unwrap_or_default(),
-        pin: String::new(),
+        pin,
     })
 }
 
@@ -145,8 +150,28 @@ mod tests {
             "native_port": 9778,
             "mgmt_port": 47991,
             "runtime": { "state": state },
+            "fingerprint": PIN,
         }))
         .unwrap()
+    }
+
+    const PIN: &str = "5eed5eed00000000000000000000000000000000000000000000000000005eed";
+
+    /// The redirect carries the seat host's own pin; a running seat whose pin the ledger doesn't
+    /// hold yet is unavailable rather than sent with the box's.
+    #[test]
+    fn a_redirect_pins_the_seat_host() {
+        let mut s = seat(RuntimeState::Running);
+        let Placement::Redirect(r) = decide("kid", &asker(true, false), true, on(&s), &[], None)
+        else {
+            panic!("a running seat is redirected to");
+        };
+        assert_eq!(r.pin, PIN);
+        s.fingerprint = None;
+        assert_eq!(
+            decide("kid", &asker(true, false), true, on(&s), &[], None),
+            Placement::Refuse(RejectReason::SeatUnavailable)
+        );
     }
 
     /// A door's owner row is the same row to `decide`: the redirect names its port and the

@@ -84,12 +84,12 @@ them together.
 | `PUNKTFUNK_SEAT_SESSION` | `1` | Marks a seat host. Unset or any other value is the console host. |
 | `PUNKTFUNK_SEAT_ID` | 32 lowercase hexadecimal characters | Required with `PUNKTFUNK_SEAT_SESSION=1`. Missing or any other form: the host mints no audio devices. |
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
-| `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's identity, pairing store, `profiles.json` and per-device display overlays from here, read only, and follows their changes. A relative path is ignored. |
+| `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json` and per-device display overlays from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. |
 | `PUNKTFUNK_LIBRARY_DIR` | the box's config directory (Windows only) | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and the plugin manifests and grants its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
 
 It also sets these ordinary [host settings](/docs/configuration), so seats don't collide. A seat
-presents the box's certificate and honours the box's pairings and grants.
+presents its own certificate and honours the box's pairings and grants.
 
 | Variable | Supervisor's value |
 |---|---|
@@ -106,9 +106,13 @@ session by design, and display activation fails while its session is inactive.
 
 ## What the host does differently on a seat
 
-- **The box's trust.** The seat never mints an identity or writes the pairing store or profiles. A
-  grant changed in the box console applies to the seat's next check. Sleep, restart and shut down
-  are refused: the box's own host is the one that does them.
+- **The box's trust, its own key.** The seat never writes the pairing store or profiles. A grant
+  changed in the box console applies to the seat's next check. It mints and keeps its own identity
+  in `PUNKTFUNK_CONFIG_DIR`, never the box's. The supervisor records its certificate's SHA-256 in
+  the ledger while it runs. The box's `Redirect` carries that pin (field 7) and `enumerate` lists
+  it as `seat.pin`, so a client pins the seat through the box it already trusts. A seat whose pin
+  the box doesn't hold yet is unavailable. Sleep, restart and shut down are refused: the box's own
+  host is the one that does them.
 - **The box's library, on Windows.** A Windows seat runs no plugins. It lists and launches the
   box's titles as its own user, and answers every library change with 409. Titles from sources
   that belong to one account (Playnite, Game Bar, Amazon, itch, Hydra) are left out.
@@ -217,10 +221,10 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   `PUNKTFUNK_MGMT_TOKEN` and writes the same line to `seats/hosts/<id>/mgmt-token`, owned by the
   `punktfunk` user (root without one), so the box host reaches the seat's loopback API. Every seat
   user shares `punktfunk-games`, so no secret relies on group read.
-- **The trust copy.** The seat reads `trust/<id>/`, not the box directory: `native-cert.pem`,
-  `native-key.pem`, `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` and
-  `profiles/`, `root:<seat user>` `0640`. The daemon recopies a file within 2 seconds of its
-  change while the seat runs. A seat can't start before the box host has made its identity.
+- **The trust copy.** The seat reads `trust/<id>/`, not the box directory:
+  `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` and `profiles/`,
+  `root:<seat user>` `0640`. The daemon recopies a file within 2 seconds of its change while the
+  seat runs. The box's key never crosses, and a copy left by an older install is removed.
 - **Games.** `games/steamapps/` is one library every seat writes (group `punktfunk`, setgid,
   default ACL). Each seat's own `compatdata`, `shadercache` and `downloading` under `seats/<id>/`
   are bind-mounted over the shared ones, so prefixes never cross. Everything that needs the
