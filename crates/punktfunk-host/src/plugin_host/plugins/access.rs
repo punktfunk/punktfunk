@@ -54,6 +54,9 @@ pub struct PendingRequest {
     /// A libretro core to install into `path` (RetroArch's cores folder) first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core: Option<String>,
+    /// The plugin asks to read and restore emulator saves; `path` is the folder that grant lands on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub saves: bool,
 }
 
 /// One plugin's entry in `plugin-grants.json`.
@@ -716,6 +719,7 @@ impl AccessStore {
             at: now_rfc3339(),
             emulator: None,
             core: None,
+            saves: false,
         });
         *changed = true;
         outcome(canon, "pending")
@@ -731,7 +735,7 @@ impl AccessStore {
         path: &Path,
         reason: Option<String>,
     ) -> io::Result<Mutation<RequestOutcome>> {
-        self.request_managed(id, path, reason, Some(emulator), None)
+        self.request_managed(id, path, reason, Some(emulator), None, false)
     }
 
     /// A plugin asks for a libretro core: the row's folder is RetroArch's cores folder.
@@ -742,7 +746,17 @@ impl AccessStore {
         path: &Path,
         reason: Option<String>,
     ) -> io::Result<Mutation<RequestOutcome>> {
-        self.request_managed(id, path, reason, None, Some(core))
+        self.request_managed(id, path, reason, None, Some(core), false)
+    }
+
+    /// A plugin asks to move emulator saves: one row on the folder the grant lands on.
+    pub fn request_saves(
+        &self,
+        id: &str,
+        path: &Path,
+        reason: Option<String>,
+    ) -> io::Result<Mutation<RequestOutcome>> {
+        self.request_managed(id, path, reason, None, None, true)
     }
 
     fn request_managed(
@@ -752,6 +766,7 @@ impl AccessStore {
         reason: Option<String>,
         emulator: Option<&str>,
         core: Option<&str>,
+        saves: bool,
     ) -> io::Result<Mutation<RequestOutcome>> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let access = self.load_access();
@@ -784,6 +799,7 @@ impl AccessStore {
                 at: now_rfc3339(),
                 emulator: emulator.map(str::to_string),
                 core: core.map(str::to_string),
+                saves,
             });
             pending_all.insert(id.to_string(), pending);
             self.write_pending(&pending_all)?;
@@ -1964,6 +1980,7 @@ mod tests {
                 at: "x".into(),
                 emulator: None,
                 core: None,
+                saves: false,
             })
             .collect();
         let s = write_state(&f, entry, pending);
@@ -1995,6 +2012,7 @@ mod tests {
                 at: "x".into(),
                 emulator: None,
                 core: None,
+                saves: false,
             }],
         );
         let acl_before = acl_calls();

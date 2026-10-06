@@ -92,6 +92,10 @@ pub(crate) fn prepare(
             plane: owner.plane,
             preset: owner.preset.clone(),
         });
+        // After the holds: they stage the firmware this places.
+        if let Some(id) = t.game.id.as_deref() {
+            crate::emulators::prepare_launch(id);
+        }
     }
     Prepared {
         claim,

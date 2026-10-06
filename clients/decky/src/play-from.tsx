@@ -7,8 +7,12 @@
 // at a menu built here from the same data with Steam's own Menu components, class names and
 // localization tokens, plus a row per Punktfunk host that has the title. The choice is kept per
 // title; while it stands, the Play button is re-dressed as Stream and launches ours.
+//
+// Steam draws the ▾ only while a second Steam client has the title, so where a Punktfunk host
+// has it and Steam left the ▾ out, it is drawn here. No ▾, no re-dressed button: the menu's
+// "This device" row is the only way back to Steam's Play.
 import { findClassModule, Menu, MenuItem, MenuSeparator, showContextMenu } from "@decky/ui";
-import { cloneElement } from "react";
+import { cloneElement, createElement } from "react";
 import { FaCheck } from "react-icons/fa";
 import { hostsForApp, subscribeCatalog } from "./catalog";
 import { diag } from "./diag";
@@ -129,6 +133,9 @@ interface MenuClasses {
   StreamingContextMenuItem?: string;
   CheckContainer?: string;
   StreamingTargetLabel?: string;
+  StreamingSelector?: string;
+  ButtonChild?: string;
+  ShowingStreaming?: string;
 }
 
 let menuClasses: MenuClasses | null = null;
@@ -198,8 +205,49 @@ export function openPlayFromMenu(overview: Overview, anchor?: EventTarget): void
 
 // ---- The Play button ------------------------------------------------------------------------
 
+const DROPDOWN_KEY = "punktfunk-play-from";
+
+/** Steam's ▾ where Steam left it out: the main button's own component in Steam's selector
+ *  classes, in Steam's place after the button and before the explainer. False when the output
+ *  has another shape. */
+function addDropdown(out: any, main: any, onClick: (e: any) => void): boolean {
+  const cls = classes();
+  const group = collectElements(
+    out,
+    (x) => Array.isArray(x?.props?.children) && x.props.children.includes(main),
+  )[0];
+  if (!group || !cls.StreamingSelector) {
+    return false;
+  }
+  const kids = group.props.children as any[];
+  if (kids.some((k) => k?.key === DROPDOWN_KEY)) {
+    return true;
+  }
+  kids.splice(
+    Math.max(kids.indexOf(main) + 1, kids.length - 1),
+    0,
+    createElement(
+      main.type,
+      {
+        key: DROPDOWN_KEY,
+        noFocusRing: true,
+        className: `${cls.StreamingSelector} ${cls.ButtonChild ?? ""}`,
+        onClick,
+        "aria-label": localize("#GameAction_PlayFrom", "Play from"),
+      },
+      // Steam's caret is not exported: the same triangle on its 36-unit grid, sized by its CSS.
+      <svg viewBox="0 0 36 36" aria-hidden="true">
+        <path d="M18 26.5 3.2 11.8h29.6z" fill="currentColor" />
+      </svg>,
+    ),
+  );
+  group.props.className = `${group.props.className ?? ""} ${cls.ShowingStreaming ?? ""}`;
+  return true;
+}
+
 /** Steam's Play button class renders [main button, ▾, explainer]. Re-point the ▾ at our menu,
- *  and while a Punktfunk host is chosen, re-dress the main button as our Stream. */
+ *  draw it where Steam left it out, and while a Punktfunk host is chosen, re-dress the main
+ *  button as our Stream. */
 const playButtonPatcher = createRenderPatcher((out, self) => {
   const overview = (self as any)?.props?.overview as Overview | undefined;
   if (!out || !overview || typeof overview.appid !== "number") {
@@ -209,20 +257,19 @@ const playButtonPatcher = createRenderPatcher((out, self) => {
   ensureWatching();
   const game = gameOf(overview);
 
+  // Only where we have a host to add. The rebuilt menu leaves out Steam's own "Play on another
+  // device" explainer, so a title no host carries keeps Steam's menu exactly as Steam drew it.
   const hosts = hostsForApp(game.appId, getHostStore().views);
+  if (hosts.length === 0) {
+    return out;
+  }
+  const open = (e: any) => openPlayFromMenu(overview, e?.currentTarget ?? undefined);
   const dropdown = collectElements(
     out,
     (x) => !!x?.props && "overview" in x.props && typeof x.props.onClick === "function" && !Array.isArray(x.props.children),
   )[0];
-  // Only where we have a host to add. The rebuilt menu leaves out Steam's own "Play on another
-  // device" explainer, so a title no host carries keeps Steam's menu exactly as Steam drew it.
-  if (dropdown && hosts.length > 0) {
-    dropdown.props.onClick = (e: any) => openPlayFromMenu(overview, e?.currentTarget ?? undefined);
-  }
-
-  const host = selectedHost(game.appId, hosts);
-  if (!host) {
-    return out;
+  if (dropdown) {
+    dropdown.props.onClick = open;
   }
   const main = collectElements(
     out,
@@ -230,6 +277,16 @@ const playButtonPatcher = createRenderPatcher((out, self) => {
   )[0];
   if (!main) {
     diag(`play-from ${game.appId}: main button not found in ${describe(out)}`);
+    return out;
+  }
+  // The ▾ is the only way back to "This device", so the button stays Steam's without one.
+  if (!dropdown && !addDropdown(out, main, open)) {
+    diag(`play-from ${game.appId}: no place for the ▾ in ${describe(out)}`);
+    return out;
+  }
+
+  const host = selectedHost(game.appId, hosts);
+  if (!host) {
     return out;
   }
   const streaming = isGameStreaming(game.appId);

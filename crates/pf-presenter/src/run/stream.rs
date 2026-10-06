@@ -89,6 +89,7 @@ impl StreamState {
             last_shown_pts_ns: 0,
             last_slot_ns: 0,
             busy_retry: false,
+            newest_turn: 0,
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             pyro_latency_forced: false,
             health: PresentHealth::default(),
