@@ -1201,5 +1201,10 @@
 	"profiles_seats_failed": "Die Seats ließen sich nicht ändern.",
 	"profiles_seats_healthy": "Seats in Ordnung",
 	"profiles_seats_doctor": "Prüfen",
-	"pairing_approve_profile": "Möchte als {name} spielen."
+	"pairing_approve_profile": "Möchte als {name} spielen.",
+	"seat_whose_library": "Wessen Bibliothek",
+	"seat_whose_plugins": "Wessen Plugins",
+	"seat_box": "Dieser Host",
+	"seat_note": "Bibliothek von {name}",
+	"seat_open_profiles": "Profile öffnen"
 }

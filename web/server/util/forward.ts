@@ -8,6 +8,7 @@ import {
 	setResponseStatus,
 } from "h3";
 import { loopbackTls, mgmtToken, mgmtUrl } from "./auth";
+import { seatPath } from "./seatProxy";
 
 /**
  * Every field of a host request model, each present and possibly `undefined`. A password route
@@ -74,22 +75,27 @@ export async function mgmtFetch(
 }
 
 /** Forward a JSON body to `path` on the management API and relay the upstream response verbatim.
- * Omit `body` for a bodiless method (GET) — a read whose RESPONSE we rewrite. */
+ * Omit `body` for a bodiless method (GET) — a read whose RESPONSE we rewrite. A request that
+ * came in for a seat (`event.context.seat`) goes to that seat's host. */
 export async function forwardJson(
 	event: H3Event,
 	path: string,
 	method: string,
 	body?: unknown,
 ): Promise<string> {
-	const upstream = await mgmtFetch(path, {
-		method,
-		...(body === undefined
-			? {}
-			: {
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify(body),
-				}),
-	});
+	const seat: string | undefined = event.context.seat;
+	const upstream = await mgmtFetch(
+		seat ? seatPath(seat, path.slice("/api/v1/".length)) : path,
+		{
+			method,
+			...(body === undefined
+				? {}
+				: {
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(body),
+					}),
+		},
+	);
 	setResponseStatus(event, upstream.status);
 	setResponseHeader(event, "content-type", "application/json");
 	return upstream.text();

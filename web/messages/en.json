@@ -1285,5 +1285,10 @@
 	"profiles_seats_failed": "Couldn't change seats.",
 	"profiles_seats_healthy": "Seats healthy",
 	"profiles_seats_doctor": "Doctor",
-	"pairing_approve_profile": "Asks to play as {name}."
+	"pairing_approve_profile": "Asks to play as {name}.",
+	"seat_whose_library": "Whose library",
+	"seat_whose_plugins": "Whose plugins",
+	"seat_box": "This host",
+	"seat_note": "{name}'s library",
+	"seat_open_profiles": "Open Profiles"
 }

@@ -17,6 +17,7 @@ import {
 } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
 import { usePasswordFailure } from "@/components/password-confirm";
+import { SeatChip, SeatScope } from "@/components/seat-scope";
 import { Stagger } from "@/components/stagger";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocale } from "@/lib/i18n";
@@ -57,7 +58,13 @@ interface UpdateRun {
  * install/uninstall mutations, the confirm dialogs their trust tier dictates, and the job the host
  * hands back (which must stay visible whichever tab you switch to while it runs).
  */
-export const SectionStore: FC = () => {
+export const SectionStore: FC = () => (
+	<SeatScope page="plugins">
+		<Store />
+	</SeatScope>
+);
+
+const Store: FC = () => {
 	useLocale();
 	const { confirm } = useDialogs();
 	const [tab, setTab] = useState<StoreTab>("browse");
@@ -237,9 +244,14 @@ export const SectionStore: FC = () => {
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
-				<div className="space-y-1">
-					<h1 className="text-2xl font-semibold">{m.store_title()}</h1>
-					<p className="text-sm text-muted-foreground">{m.store_subtitle()}</p>
+				<div className="flex flex-wrap items-start justify-between gap-4">
+					<div className="space-y-1">
+						<h1 className="text-2xl font-semibold">{m.store_title()}</h1>
+						<p className="text-sm text-muted-foreground">
+							{m.store_subtitle()}
+						</p>
+					</div>
+					<SeatChip />
 				</div>
 
 				{jobId ? (

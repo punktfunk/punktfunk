@@ -21,6 +21,7 @@ import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot"
 import type { ScannerInfo } from "@/api/gen/model/scannerInfo";
 import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { usePlugins } from "@/api/plugins";
+import { useSeat } from "@/api/seat";
 import { useInstallPlugin } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
 import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
@@ -381,6 +382,7 @@ const SourceRow: FC<{
 	onPurge,
 }) => {
 	const isPlugin = source.origin === "plugin";
+	const seat = useSeat();
 	const [accessOpen, setAccessOpen] = useState(accessInitiallyOpen);
 	return (
 		<motion.div
@@ -420,14 +422,17 @@ const SourceRow: FC<{
 								? m.library_provider_show_all()
 								: m.library_provider_filter()}
 						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							aria-label={m.library_source_settings()}
-							onClick={onSettings}
-						>
-							<Settings2 className="size-4" />
-						</Button>
+						{/* The form is the box's plugin; a seat has none to open. */}
+						{!seat && (
+							<Button
+								size="sm"
+								variant="outline"
+								aria-label={m.library_source_settings()}
+								onClick={onSettings}
+							>
+								<Settings2 className="size-4" />
+							</Button>
+						)}
 						<Button
 							size="sm"
 							variant="outline"

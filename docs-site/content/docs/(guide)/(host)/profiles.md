@@ -52,6 +52,9 @@ running. [**Seats kept warm**](/docs/configuration#what-some-settings-do) starts
 recently played profiles with the host, and a seat nobody plays on for 4 hours stops. **Remove**
 deletes the profile's Windows account and its files too.
 
+**Library**, **Game sources** and **Plugins** are per seat: once a seat exists, a chip (**Whose
+library**, **Whose plugins**) switches the page to that seat's own.
+
 ## How players pick
 
 On a host with two or more profiles, the Apple, Android, Linux and Windows apps ask **Who's playing

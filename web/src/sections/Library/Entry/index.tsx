@@ -21,6 +21,7 @@ import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
 import { useDialogs } from "@/components/dialogs";
 import { passwordFailure } from "@/components/password-confirm";
 import { QueryState } from "@/components/query-state";
+import { SeatScope } from "@/components/seat-scope";
 import { Card, CardContent } from "@/components/ui/card";
 import { carriesCommandExecution } from "@/lib/command-execution";
 import { apiErrorMessage } from "@/lib/errors";
@@ -47,7 +48,13 @@ import { EntryView } from "./view";
 const route = getRouteApi("/library_/$gameId");
 
 /** `/library/$gameId`: one library entry, or `new` to create a custom one. */
-export const SectionLibraryEntry: FC = () => {
+export const SectionLibraryEntry: FC = () => (
+	<SeatScope page="library">
+		<LibraryEntry />
+	</SeatScope>
+);
+
+const LibraryEntry: FC = () => {
 	useLocale();
 	const { gameId } = route.useParams();
 	const creating = gameId === "new";
