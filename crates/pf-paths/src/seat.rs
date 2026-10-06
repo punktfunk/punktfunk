@@ -59,6 +59,26 @@ pub fn pairing_refused() -> bool {
     std::env::var("PUNKTFUNK_PAIRING").as_deref() == Ok("refused")
 }
 
+/// `PUNKTFUNK_SEAT_OWNER=1`: this seat host is the box owner's own, behind the door. It serves
+/// the owner profile and the light-seat profiles that play inside the owner's host.
+pub fn is_owner_seat() -> bool {
+    is_seat_host() && std::env::var("PUNKTFUNK_SEAT_OWNER").as_deref() == Ok("1")
+}
+
+static DOOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Marks this process as the door (`serve --door`).
+pub fn set_door() {
+    DOOR.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether this host is the door: it advertises, pairs, serves the console and places every
+/// connect on a seat, and never streams itself. `serve --door` or `PUNKTFUNK_DOOR=1`.
+pub fn is_door() -> bool {
+    DOOR.load(std::sync::atomic::Ordering::Relaxed)
+        || std::env::var("PUNKTFUNK_DOOR").as_deref() == Ok("1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

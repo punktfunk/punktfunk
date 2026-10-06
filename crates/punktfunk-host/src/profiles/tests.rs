@@ -141,6 +141,39 @@ fn a_seat_host_refuses_another_seats_profile() {
     );
 }
 
+/// The owner's host, behind the door, plays the owner, the profiles that share the owner's
+/// desktop and the light seats, and still refuses a full seat that is another host's.
+#[test]
+fn the_owner_s_host_serves_the_owner_and_the_light_seats() {
+    let mut file = box_file();
+    file.profiles
+        .push(profile("cccccccccccc", "Sibling", OsAccount::Operator));
+    file.profiles
+        .push(seat("dddddddddddd", "Theirs", Some("seat-b")));
+    let (mut p, _) = store("owner-host", &file, Some("owner-row"));
+    p.owner_host = true;
+    // No ask: the owner, not a seat that names this row.
+    assert_eq!(p.resolve(None, None).unwrap().id, "4f1c3a9b0e27");
+    for id in [
+        "4f1c3a9b0e27",
+        "cccccccccccc",
+        "9a3f1c2b7e40",
+        "0123456789ab",
+    ] {
+        assert_eq!(p.resolve(None, Some(id)).unwrap().id, id);
+    }
+    assert_eq!(
+        p.resolve(None, Some("dddddddddddd")),
+        Err(ProfileError::NotThisSeat)
+    );
+    // An ordinary seat host still refuses a light seat.
+    p.owner_host = false;
+    assert_eq!(
+        p.resolve(None, Some("9a3f1c2b7e40")),
+        Err(ProfileError::NotThisSeat)
+    );
+}
+
 /// The box rewrites `path`; a later mtime than any earlier write, whatever the clock granularity.
 fn box_writes(path: &Path, file: &ProfilesFile) {
     std::fs::write(path, serde_json::to_vec(file).unwrap()).unwrap();

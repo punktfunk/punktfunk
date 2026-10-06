@@ -5243,7 +5243,7 @@
           "profiles"
         ],
         "summary": "Add a profile",
-        "description": "A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the\nbox's own session under its own name. On Windows a seat is a desktop of its own: its account\nis made here, and seats must be on.",
+        "description": "A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the\nbox's own session under its own name. On Windows a seat is a desktop of its own: its account\nis made here, and seats must be on. On Linux a seat is a Steam of its own in the owner's\nsession, or with `desktop` a desktop of its own, which needs the door.",
         "operationId": "createProfile",
         "requestBody": {
           "content": {
@@ -5287,7 +5287,7 @@
             }
           },
           "409": {
-            "description": "Another profile has that name, or seats are off (Windows)",
+            "description": "Another profile has that name, seats are off (Windows), or the door is off (a Linux desktop)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5297,7 +5297,7 @@
             }
           },
           "422": {
-            "description": "The box already has eight profiles, or four seats (Windows)",
+            "description": "The box already has eight profiles, or four seats",
             "content": {
               "application/json": {
                 "schema": {
@@ -5307,7 +5307,7 @@
             }
           },
           "503": {
-            "description": "The seat supervisor didn't answer (Windows)",
+            "description": "The seat supervisor didn't answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -5415,6 +5415,74 @@
         }
       }
     },
+    "/api/v1/profiles/door": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Turn Reachable without logging in on or off",
+        "description": "Linux. On moves the box's host to a system service that runs from boot, places every connect\non a seat of the box and keeps the box's files in `/var/lib/punktfunk`; the owner plays on a\nseat of their own. Off puts the files and the host back. The answer is 202 once the switch is\nqueued: the console reloads and polls `GET /host`, whose `door` says which host answers. The\nowner's user must be in the `punktfunk-update` group. Admin lane only.",
+        "operationId": "setDoor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoorChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The switch is under way; poll `GET /host` for `door`"
+          },
+          "204": {
+            "description": "The host is already so"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The owner's user isn't in the punktfunk-update group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not a Linux host, or this install lacks the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "systemd didn't take the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles/enumerate": {
       "get": {
         "tags": [
@@ -5466,7 +5534,7 @@
           "profiles"
         ],
         "summary": "Whether seats are on",
-        "description": "Windows reports whether the box's seats are on and what turning them on needs: Windows\nServer, the Remote Desktop Session Host role, licensing and a graphics card. Other\nplatforms answer `enabled: false` with `platform: other`. Admin lane only.",
+        "description": "Windows reports whether the box's seats are on and what turning them on needs: Windows\nServer, the Remote Desktop Session Host role, licensing and a graphics card. A Linux door\nreports its supervisor's checks with `platform: linux`. Other hosts answer `enabled: false`\nwith `platform: other`. Admin lane only.",
         "operationId": "getSeating",
         "responses": {
           "200": {
@@ -9884,6 +9952,19 @@
           }
         }
       },
+      "DoorChange": {
+        "type": "object",
+        "description": "`PUT /profiles/door`.",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "`true` makes the box reachable without anyone logging in; `false` hands it back."
+          }
+        }
+      },
       "Download": {
         "type": "object",
         "description": "One title's download as the host serves it.",
@@ -11606,6 +11687,7 @@
           "os_name",
           "codecs",
           "gamestream",
+          "door",
           "ports"
         ],
         "properties": {
@@ -11625,6 +11707,10 @@
               "$ref": "#/components/schemas/ApiCodec"
             },
             "description": "Codecs this host can encode (`host_wire_caps`, not the compile-time list)."
+          },
+          "door": {
+            "type": "boolean",
+            "description": "This host is the door (Linux, **Reachable without logging in**): a system service that\nplaces every connect on a seat and streams nothing itself."
           },
           "fingerprint": {
             "type": [
@@ -13658,6 +13744,10 @@
             ],
             "description": "`#RRGGBB`."
           },
+          "desktop": {
+            "type": "boolean",
+            "description": "With `seat`, a desktop of its own: a full seat. A Windows seat always is; on Linux it\nneeds the door, and without it a seat is a Steam of its own in the owner's session."
+          },
           "display_name": {
             "type": "string"
           },
@@ -14311,12 +14401,22 @@
           }
         }
       },
+      "SeatKind": {
+        "type": "string",
+        "description": "What a profile's seat is. A door places every profile on a seat, so a profile on the box's own\nsession has one too: the owner's.",
+        "enum": [
+          "shared",
+          "steam",
+          "desktop"
+        ]
+      },
       "SeatPublic": {
         "type": "object",
         "description": "A profile's seat right now.",
         "required": [
           "state",
-          "port"
+          "port",
+          "kind"
         ],
         "properties": {
           "detail": {
@@ -14325,6 +14425,10 @@
               "null"
             ],
             "description": "The progress line while `starting`, or why while `unavailable`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SeatKind",
+            "description": "Which kind of seat it is."
           },
           "occupant": {
             "type": [
@@ -14382,7 +14486,7 @@
           },
           "platform": {
             "$ref": "#/components/schemas/SeatingPlatform",
-            "description": "`other` has no seats to turn on."
+            "description": "`other` has no seats to turn on; `linux` has them while the door is on."
           }
         }
       },
@@ -14406,6 +14510,7 @@
         "type": "string",
         "enum": [
           "windows",
+          "linux",
           "other"
         ]
       },

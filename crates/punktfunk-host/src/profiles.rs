@@ -257,6 +257,11 @@ pub struct ProfileCreate {
     /// A seat of its own (the default), or the box's own session under another name.
     #[serde(default = "yes")]
     pub seat: bool,
+    /// With `seat`, a desktop of its own: a full seat. A Windows seat always is; on Linux it
+    /// needs the door, and without it a seat is a Steam of its own in the owner's session.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub desktop: bool,
 }
 
 fn yes() -> bool {
@@ -312,6 +317,9 @@ pub struct Profiles {
     state: Mutex<State>,
     /// This host's seat id when it is a seat host; `None` on the box's own host.
     seat: Option<String>,
+    /// This seat host is the box owner's, behind the door: it also serves the profiles that
+    /// play in the owner's host, the owner's own and the light seats.
+    owner_host: bool,
 }
 
 impl Profiles {
@@ -330,6 +338,7 @@ impl Profiles {
                 stamp: None,
             }),
             seat,
+            owner_host: false,
         }
     }
 
@@ -347,6 +356,7 @@ impl Profiles {
                 read_only: true,
             }),
             seat,
+            owner_host: pf_paths::seat::is_owner_seat(),
         }
     }
 
@@ -710,17 +720,22 @@ impl Profiles {
                     .ok_or(ProfileError::Unknown)?;
                 if let (Some(mine), OsAccount::Seat { seat, .. }) = (&self.seat, &found.os_account)
                 {
-                    if seat.as_ref() != Some(mine) {
+                    let light_here = self.owner_host && seat.is_none();
+                    if seat.as_ref() != Some(mine) && !light_here {
                         return Err(ProfileError::NotThisSeat);
                     }
                 }
                 (Some(found), ResolveVia::Asked)
             }
-            // A seat host serves one profile; the box's default is someone else's.
+            // A seat host serves one profile; the box's default is someone else's. The owner's
+            // host serves the owner.
             None if self.seat.is_some() => {
-                let mine = file.profiles.iter().find(
-                    |p| matches!(&p.os_account, OsAccount::Seat { seat, .. } if seat == &self.seat),
-                );
+                let mine = file.profiles.iter().find(|p| {
+                    if self.owner_host {
+                        return is_owner(p);
+                    }
+                    matches!(&p.os_account, OsAccount::Seat { seat, .. } if seat == &self.seat)
+                });
                 // No profile names this seat any more: it plays for nobody.
                 (
                     Some(mine.ok_or(ProfileError::SessionUnavailable)?),

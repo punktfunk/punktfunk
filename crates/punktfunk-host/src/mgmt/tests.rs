@@ -1190,6 +1190,7 @@ async fn host_info_reports_identity_and_ports() {
     assert_eq!(body["codecs"], serde_json::json!(expected));
     assert!(caps & CODEC_H264 != 0, "H.264 is always encodable");
     assert_eq!(body["gamestream"], false);
+    assert_eq!(body["door"], false, "a test host is no door");
 }
 
 /// A device sent a connect link has to be able to check what it reached, so the host publishes
@@ -2150,6 +2151,9 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/profiles/seating", false, false),
         ("PUT", "/api/v1/profiles/seating", false, false),
         ("GET", "/api/v1/profiles/doctor", false, false),
+        // Moving the box's host between the owner's session and a system service is root work
+        // the operator starts: neither lane.
+        ("PUT", "/api/v1/profiles/door", false, false),
         ("POST", "/api/v1/profiles", false, false),
         ("PUT", "/api/v1/profiles/default", false, false),
         ("PUT", "/api/v1/profiles/{id}", false, false),

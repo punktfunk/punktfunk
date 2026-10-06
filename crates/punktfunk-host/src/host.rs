@@ -230,7 +230,8 @@ pub fn serve(
     };
     #[cfg(target_os = "linux")]
     {
-        if pf_paths::seat::trust_dir().is_none() {
+        // The door keeps no seat homes of its own: they are the owner's host's, and move there.
+        if pf_paths::seat::trust_dir().is_none() && !pf_paths::seat::is_door() {
             let paired: Vec<(String, String)> = np
                 .list()
                 .into_iter()
@@ -254,10 +255,17 @@ pub fn serve(
         native_port = native.port,
         require_pairing = native.require_pairing,
         gamestream,
+        door = pf_paths::seat::is_door(),
         "punktfunk host"
     );
     crate::net_health::log_addresses();
     crate::net_health::spawn_route_watch();
+    // The door keeps the seats of recent players up and lets idle ones go, as the Windows service
+    // does for its own.
+    #[cfg(target_os = "linux")]
+    if pf_paths::seat::is_door() {
+        crate::seats::lifecycle::run_door();
+    }
     // Scan once (cached for `/local/summary`). Warn only when a clash is active;
     // a dormant leftover logs at INFO so every boot is not a warning.
     let conflicts = crate::detect::init();

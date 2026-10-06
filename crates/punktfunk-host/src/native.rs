@@ -322,17 +322,32 @@ pub(crate) async fn serve(
         }
     };
 
+    // The door places every connect and runs no session, so it opens no audio, input or display
+    // and the senders below reach nobody.
+    let door = pf_paths::seat::is_door();
     // Host-lifetime capturer: one PipeWire stream, handed session to session (`AudioCapSlot`).
     let audio_cap: AudioCapSlot = Arc::new(std::sync::Mutex::new(None));
     // Host-lifetime injector: one RemoteDesktop-portal grant. A CreateSession per session
     // races portal teardown on reconnect and wedges KWin EIS. Gamepads stay per-session.
-    let injector = crate::inject::InjectorService::start();
+    let injector = (!door).then(crate::inject::InjectorService::start);
+    let inj_sender = || {
+        injector
+            .as_ref()
+            .map_or_else(|| std::sync::mpsc::channel().0, |i| i.sender())
+    };
     // A crashed host's claims left the box's audio defaults on its own nodes. Off-thread: a
     // sick PipeWire must not hold up serving; a session's claim waits on the same lock.
-    std::thread::spawn(crate::audio::heal_audio_defaults);
+    if !door {
+        std::thread::spawn(crate::audio::heal_audio_defaults);
+    }
     // Host-lifetime virtual mic ([`crate::audio::MicPump`]): 0xCB Opus → a persistent source
     // games can bind before they launch. Opens eagerly; self-heals if the backend dies.
-    let mic_service = crate::audio::MicPump::start();
+    let mic_service = (!door).then(crate::audio::MicPump::start);
+    let mic_sender = || {
+        mic_service
+            .as_ref()
+            .map_or_else(|| std::sync::mpsc::sync_channel(1).0, |m| m.sender())
+    };
     // Windows (`PUNKTFUNK_PAD_AUDIO` / `_SLOTS`): pre-provision DualSense speaker endpoints
     // once. A stored-but-not-served stamp triggers one Audiosrv restart before any session.
     // Failure logs once and leaves pads working without pad audio.
@@ -343,16 +358,18 @@ pub(crate) async fn serve(
     #[cfg(target_os = "windows")]
     crate::audio::minted::provision_at_startup();
     // Debounced TV-session restore on idle, not per-disconnect. Dropping this stops it.
-    let _restore_worker = crate::vdisplay::start_restore_worker();
-    // Recover a takeover stranded by a crashed previous instance (`$XDG_RUNTIME_DIR`).
-    crate::vdisplay::restore_takeover_on_startup();
-    // Takeover needs the host user in `punktfunk`. Missing membership degrades to mirroring.
-    // No-op off Linux.
-    crate::vdisplay::preflight_takeover_privilege();
-    // Console registry after the probed subsystems are up, so a probe never names a node
-    // that was about to appear.
-    crate::diagnostics::preflight();
-    install_shutdown_restore();
+    let _restore_worker = (!door).then(crate::vdisplay::start_restore_worker);
+    if !door {
+        // Recover a takeover stranded by a crashed previous instance (`$XDG_RUNTIME_DIR`).
+        crate::vdisplay::restore_takeover_on_startup();
+        // Takeover needs the host user in `punktfunk`. Missing membership degrades to mirroring.
+        // No-op off Linux.
+        crate::vdisplay::preflight_takeover_privilege();
+        // Console registry after the probed subsystems are up, so a probe never names a node
+        // that was about to appear.
+        crate::diagnostics::preflight();
+        install_shutdown_restore();
+    }
     // Headless CLI: surface the PIN if armed at startup. The console arms on demand.
     let st = np.status();
     if let Some(pin) = &st.pin {
@@ -380,8 +397,8 @@ pub(crate) async fn serve(
         let host = SessionHost {
             opts: Arc::clone(&opts),
             audio_cap: audio_cap.clone(),
-            inj_tx: injector.sender(),
-            mic_tx: mic_service.sender(),
+            inj_tx: inj_sender(),
+            mic_tx: mic_sender(),
             np: np.clone(),
             profiles: profiles.clone(),
             stats: stats.clone(),
@@ -406,7 +423,9 @@ pub(crate) async fn serve(
     // Once the host serves: a seat's Steam takes half a minute to boot, and the point is that it
     // has already booted when its device connects.
     #[cfg(target_os = "linux")]
-    prewarm::spawn_run("host start");
+    if !door {
+        prewarm::spawn_run("host start");
+    }
 
     loop {
         // A finished task stays in the set until joined; a serving host never reaches the drain
@@ -433,8 +452,8 @@ pub(crate) async fn serve(
         let profiles = profiles.clone();
         let last_pairing = last_pairing.clone();
         let stats = stats.clone();
-        let inj_tx = injector.sender();
-        let mic_tx = mic_service.sender();
+        let inj_tx = inj_sender();
+        let mic_tx = mic_sender();
         let sem = sem.clone();
         let accepted = accepted.clone();
         let done = done.clone();
@@ -507,7 +526,9 @@ pub(crate) async fn serve(
             // After `serve_session` returns: the stream thread is joined and this session's
             // display lease is gone, so a pre-warm can adopt or replace what it left.
             #[cfg(target_os = "linux")]
-            prewarm::spawn_run("session end");
+            if !door {
+                prewarm::spawn_run("session end");
+            }
         });
     }
     // Drain in-flight sessions (max_sessions reached or endpoint closed).

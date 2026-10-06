@@ -107,14 +107,14 @@ mod linux {
     fn print_result(result: &CommandResult) -> Result<(), String> {
         let line = |seat: &pf_seats::Seat| {
             let detail = seat.runtime.detail.as_deref().unwrap_or("");
-            let owner = if seat.owner { " owner" } else { "" };
             println!(
-                "{} {:?} {} native={} mgmt={} {:?}{owner} {detail}",
+                "{} {:?} {} native={} mgmt={} owner={} {:?} {detail}",
                 seat.id,
                 seat.runtime.state,
                 seat.account,
                 seat.native_port,
                 seat.mgmt_port,
+                seat.owner,
                 seat.name,
             );
         };

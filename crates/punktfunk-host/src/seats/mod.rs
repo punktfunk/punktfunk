@@ -2,11 +2,15 @@
 //! on each seat host, and [`placement`], which host a profile's connect goes to.
 //!
 //! Windows runs the supervisor in the service (`windows/service/seats.rs`); Linux runs it as the
-//! root `punktfunk-seats` daemon behind a Unix socket. Elsewhere there is none, every call
-//! answers so, and no connect is placed.
+//! root `punktfunk-seats` daemon behind a Unix socket, which only the door (`serve --door`) can
+//! reach: a user's own host never lists seats. Elsewhere there is none, every call answers so,
+//! and no connect is placed.
 
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) mod lifecycle;
 pub(crate) mod placement;
 
+use crate::profiles::OsAccount;
 use pf_seats::ipc::{ApiError, Command, CommandResult, ErrorCode};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -93,6 +97,38 @@ impl Snapshot {
         let at = self.seats.iter().position(|s| s.id.as_str() == id)?;
         Some((&self.seats[at], at as u8 + 1))
     }
+
+    /// The box owner's row, on a door.
+    pub(crate) fn owner(&self) -> Option<&pf_seats::Seat> {
+        self.seats.iter().find(|s| s.owner)
+    }
+
+    /// The ledger row a profile plays on. A full seat names its own. On a door the owner, a
+    /// profile that shares the owner's desktop and a light seat all play in the owner's host, so
+    /// on the owner's row. Anywhere else the rest play on the host that was asked.
+    pub(crate) fn row_of<'a>(&'a self, account: &'a OsAccount) -> Option<&'a str> {
+        row_in(account, self.owner(), is_door())
+    }
+}
+
+/// [`Snapshot::row_of`] against a ledger's owner row and whether this is a door.
+pub(crate) fn row_in<'a>(
+    account: &'a OsAccount,
+    owner: Option<&'a pf_seats::Seat>,
+    door: bool,
+) -> Option<&'a str> {
+    match account {
+        OsAccount::Seat { seat: Some(id), .. } => Some(id),
+        OsAccount::Operator | OsAccount::Seat { seat: None, .. } if door => {
+            owner.map(|s| s.id.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// Whether this host is the door.
+pub(crate) fn is_door() -> bool {
+    pf_paths::seat::is_door()
 }
 
 /// How long a snapshot answers for the box: a picker polls every 2 s.
@@ -102,7 +138,7 @@ static LAST: Mutex<Option<(Instant, Arc<Snapshot>)>> = Mutex::new(None);
 
 /// The seats as they are now, at most [`FRESH`] old. Blocking: call it off the async workers.
 pub(crate) fn snapshot() -> Arc<Snapshot> {
-    if !cfg!(windows) {
+    if !(cfg!(windows) || is_door()) {
         return Arc::default();
     }
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());

@@ -2,7 +2,8 @@
 //! that profile's connect with a `Redirect` to the seat's port, or a refusal saying why.
 //!
 //! The box resolves the profile first (`profiles.rs`); placement only routes. The owner, a
-//! profile that shares the box's desktop and a Linux light seat play on the box. A device the
+//! profile that shares the box's desktop and a Linux light seat play on the box, or on the
+//! owner's row when the box is a door, which streams nothing itself. A device the
 //! box redirects holds its seat for [`RESERVE`], so a second device racing in finds the seat
 //! taken before the first lands. A device whose overlay says **A second device connects →
 //! Shares the screen** is redirected to an occupied seat too; the seat host's admission joins it.
@@ -38,11 +39,18 @@ pub(crate) struct Asker<'a> {
 
 /// Where `profile` plays for `asker`. Blocking (the supervisor's pipe and the seat's loopback
 /// API): call it off the async workers.
+///
+/// A door streams nothing itself, so it places every profile: the owner, a profile that shares
+/// the owner's desktop and a light seat on the owner's row, a full seat on its own. A profile no
+/// row serves, because the box has no owner row yet, is refused rather than played here.
 pub(crate) fn place(profile: &crate::profiles::Resolved, asker: &Asker) -> Placement {
-    let Some(seat_id) = windows_seat(&profile.os_account) else {
+    if !super::is_door() && ledger_seat(&profile.os_account).is_none() {
         return Placement::Here;
-    };
+    }
     let snap = super::snapshot();
+    let Some(seat_id) = snap.row_of(&profile.os_account) else {
+        return Placement::Refuse(RejectReason::SeatUnavailable);
+    };
     let occupants = snap.occupants.get(seat_id).map_or(&[][..], Vec::as_slice);
     let mut held = RESERVED.lock().unwrap_or_else(|e| e.into_inner());
     held.retain(|_, (_, until)| *until > Instant::now());
@@ -67,9 +75,9 @@ pub(crate) fn place(profile: &crate::profiles::Resolved, asker: &Asker) -> Place
 /// Seat id → the device redirected to it and until when it holds it.
 static RESERVED: Mutex<BTreeMap<String, (String, Instant)>> = Mutex::new(BTreeMap::new());
 
-/// A profile whose seat is a Windows ledger row. A Linux light seat names none and plays on
-/// the box's own host.
-fn windows_seat(account: &crate::profiles::OsAccount) -> Option<&str> {
+/// A profile whose seat is a ledger row of its own. A light seat names none and plays on the
+/// box's own host, or on the owner's behind a door.
+fn ledger_seat(account: &crate::profiles::OsAccount) -> Option<&str> {
     match account {
         crate::profiles::OsAccount::Seat { seat: Some(id), .. } => Some(id),
         _ => None,
@@ -134,6 +142,25 @@ mod tests {
             "runtime": { "state": state },
         }))
         .unwrap()
+    }
+
+    /// A door's owner row is the same row to `decide`: the redirect names its port and the
+    /// profile, and a stopped owner is `SeatUnavailable`, which a client answers with a wake.
+    #[test]
+    fn the_owner_row_is_placed_like_any_seat() {
+        let mut owner = seat(RuntimeState::Running);
+        owner.owner = true;
+        let Placement::Redirect(r) =
+            decide("owner", &asker(true, false), true, on(&owner), &[], None)
+        else {
+            panic!("the owner is redirected");
+        };
+        assert_eq!((r.port, r.profile.as_str()), (9778, "owner"));
+        owner.runtime = pf_seats::RuntimeStatus::stopped();
+        assert_eq!(
+            decide("owner", &asker(true, false), true, on(&owner), &[], None),
+            Placement::Refuse(RejectReason::SeatUnavailable)
+        );
     }
 
     fn asker(follows: bool, joins: bool) -> Asker<'static> {

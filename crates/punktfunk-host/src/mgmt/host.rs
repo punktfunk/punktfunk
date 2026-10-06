@@ -52,6 +52,9 @@ pub(crate) struct HostInfo {
     codecs: Vec<ApiCodec>,
     /// GameStream/Moonlight-compat planes are running (`--gamestream`). `false` is the default (native only).
     gamestream: bool,
+    /// This host is the door (Linux, **Reachable without logging in**): a system service that
+    /// places every connect on a seat and streams nothing itself.
+    door: bool,
     /// Hex SHA-256 of this host's leaf certificate — what a client pins. Public by
     /// construction: every client reads it off the handshake. Carried here so a connect link
     /// can name it, and a first connect over an untrusted path is verified rather than blind.
@@ -566,6 +569,7 @@ pub(crate) async fn get_host_info(State(st): State<Arc<MgmtState>>) -> Json<Host
             .collect()
         },
         gamestream: st.gamestream_enabled,
+        door: pf_paths::seat::is_door(),
         fingerprint: st.identity_fingerprint.map(hex::encode),
         ports: PortMap {
             mgmt: st.port,

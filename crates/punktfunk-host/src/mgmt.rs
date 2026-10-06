@@ -521,6 +521,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(profiles::enumerate_profiles))
         .routes(routes!(profiles::get_seating, profiles::put_seating))
         .routes(routes!(profiles::get_seats_doctor))
+        .routes(routes!(profiles::put_door))
         .routes(routes!(profiles::list_profiles, profiles::create_profile))
         .routes(routes!(profiles::set_default_profile))
         .routes(routes!(profiles::update_profile, profiles::delete_profile))

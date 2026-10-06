@@ -61,12 +61,12 @@ fn serve(service: Arc<SeatService<WindowsBackend>>, stop: &Arc<AtomicBool>) {
     if let Err(error) = service.reconcile_startup() {
         tracing::warn!(code = ?error.code, "seat autostart: {}", error.message);
     }
-    keep_warm(&service);
+    crate::seats::lifecycle::keep_warm(&*service);
     {
         let (service, stop) = (Arc::clone(&service), Arc::clone(stop));
         let spawned = std::thread::Builder::new()
             .name("seats-idle".into())
-            .spawn(move || stop_idle(&service, &stop));
+            .spawn(move || crate::seats::lifecycle::stop_idle(&*service, &stop));
         if let Err(error) = spawned {
             tracing::warn!("seat idle watch did not start: {error}");
         }
@@ -86,88 +86,6 @@ fn serve(service: Arc<SeatService<WindowsBackend>>, stop: &Arc<AtomicBool>) {
             server.serve_until(stop);
         }
         Err(error) => tracing::error!("seats pipe did not open: {error}"),
-    }
-}
-
-/// A profile played within this long gets its seat started at boot.
-const WARM_WITHIN_SECS: u64 = 14 * 24 * 3600;
-/// A seat with nobody on it this long is stopped: it holds a display slot, a GPU context and
-/// an RDP session for no one.
-const IDLE_STOP: std::time::Duration = std::time::Duration::from_secs(4 * 3600);
-const IDLE_CHECK_SECS: u64 = 300;
-
-/// Starts the seats of the most recent players, up to **Seats kept warm**, one at a time: a
-/// first logon is heavy, and several at once starve each other.
-fn keep_warm(service: &SeatService<WindowsBackend>) {
-    use crate::profiles::OsAccount;
-    let wanted = pf_host_config::config().steam_prewarm as usize;
-    if wanted == 0 || !pf_seats::windows::seats_enabled() {
-        return;
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let mut recent: Vec<(u64, String)> = crate::profiles::Profiles::load_with(None, None)
-        .list()
-        .into_iter()
-        .filter_map(|p| match p.os_account {
-            OsAccount::Seat { seat: Some(id), .. }
-                if p.last_used_unix > 0
-                    && now.saturating_sub(p.last_used_unix) < WARM_WITHIN_SECS =>
-            {
-                Some((p.last_used_unix, id))
-            }
-            _ => None,
-        })
-        .collect();
-    recent.sort_by_key(|r| std::cmp::Reverse(r.0));
-    for (_, id) in recent.into_iter().take(wanted) {
-        let Ok(id) = pf_seats::SeatId::parse(id) else {
-            continue;
-        };
-        let running = service
-            .ledger()
-            .seat(&id)
-            .is_some_and(|s| s.runtime.state == pf_seats::RuntimeState::Running);
-        if running {
-            continue;
-        }
-        if let Err(error) = service.dispatch(pf_seats::Command::Start { id }) {
-            tracing::warn!(code = ?error.code, "kept-warm seat did not start: {}", error.message);
-        }
-    }
-}
-
-/// Stops a running seat once nobody has played on it for [`IDLE_STOP`]. A seat whose host
-/// doesn't answer counts as busy: stopping it would be a guess.
-fn stop_idle(service: &SeatService<WindowsBackend>, stop: &AtomicBool) {
-    let mut busy_at: std::collections::HashMap<String, std::time::Instant> = Default::default();
-    while !stop.load(Ordering::SeqCst) {
-        for _ in 0..IDLE_CHECK_SECS {
-            if stop.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-        let now = std::time::Instant::now();
-        for seat in service.ledger().seats {
-            let id = seat.id.as_str().to_string();
-            if seat.runtime.state != pf_seats::RuntimeState::Running {
-                busy_at.remove(&id);
-                continue;
-            }
-            let busy = crate::seats::occupants(&seat).is_none_or(|o| !o.is_empty());
-            let since = busy_at.entry(id.clone()).or_insert(now);
-            if busy {
-                *since = now;
-            } else if now.duration_since(*since) >= IDLE_STOP {
-                tracing::info!(seat = %id, name = %seat.name, idle_hours = 4, "idle seat stopped");
-                if let Err(error) = service.dispatch(pf_seats::Command::Stop { id: seat.id }) {
-                    tracing::warn!(code = ?error.code, "idle seat did not stop: {}", error.message);
-                }
-                busy_at.remove(&id);
-            }
-        }
     }
 }
 
