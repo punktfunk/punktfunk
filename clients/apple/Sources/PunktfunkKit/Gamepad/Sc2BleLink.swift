@@ -73,6 +73,9 @@ final class Sc2BleLink: NSObject {
 
     // All state below is touched ONLY on `queue`.
     private var identityJob: IdentityJob?
+    /// The newest unacked write per characteristic that found the radio's buffer full, sent when
+    /// it drains. Rumble resends every ~40 ms, so only the latest matters.
+    private var pendingWrites: [CBUUID: (CBCharacteristic, Data)] = [:]
     private var central: CBCentralManager?
     private var controller: CBPeripheral?
     private var inputChar: CBCharacteristic?
@@ -176,6 +179,7 @@ final class Sc2BleLink: NSObject {
         reportChar = nil
         allChars.removeAll()
         candidateChars.removeAll()
+        pendingWrites.removeAll()
         scanning = false
         polling = false
         ready = false
@@ -228,6 +232,11 @@ final class Sc2BleLink: NSObject {
                 type = target.properties.contains(.write) ? .withResponse : .withoutResponse
             } else {
                 type = target.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+            }
+            // A full buffer drops an unacked write without a word: hold it for the drain.
+            if type == .withoutResponse, !controller.canSendWriteWithoutResponse {
+                pendingWrites[target.uuid] = (target, Data(payload))
+                return
             }
             controller.writeValue(Data(payload), for: target, type: type)
         }
@@ -450,7 +459,8 @@ extension Sc2BleLink: CBCentralManagerDelegate {
         reportChar = nil
         allChars.removeAll()
         candidateChars.removeAll()
-        onClosed() // the capture releases its wire slot + re-arms the IMU gate
+        pendingWrites.removeAll()
+        onClosed() // the capture releases its wire slot
         if central.state == .poweredOn {
             acquire() // pads power-cycle many times per session — keep polling
         }
@@ -511,6 +521,13 @@ extension Sc2BleLink: CBPeripheralDelegate {
             // READY enough to keep the firmware out of lizard mode; input flows once the
             // subscribe completes.
             startLizardTimer()
+        }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        while peripheral.canSendWriteWithoutResponse, let (uuid, (ch, data)) = pendingWrites.first {
+            pendingWrites.removeValue(forKey: uuid)
+            peripheral.writeValue(data, for: ch, type: .withoutResponse)
         }
     }
 
