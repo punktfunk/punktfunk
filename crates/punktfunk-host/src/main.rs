@@ -694,6 +694,7 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
         // An upgrade or a hand-edited grants file may have changed what the runner must see.
         crate::plugins::converge_runner_roots();
         crate::plugins::converge_runner_acls(&runner);
+        crate::plugins::converge_seat_denies();
     }
     // Default all-interfaces so paired clients browse over mTLS. Admin stays loopback in
     // `require_auth`. Packaged units ship a fixed ExecStart — `host.env` is the upgrade-safe pin;

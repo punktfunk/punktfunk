@@ -26,6 +26,7 @@ use crate::model::{
 };
 use crate::persistence::SecretRoot;
 use accounts::AccountManager;
+pub use accounts::{seats_group_sid, SEATS_GROUP};
 use credentials::CredentialStore;
 use std::path::{Path, PathBuf};
 use supervisor::Supervisor;
@@ -332,6 +333,7 @@ impl WindowsBackend {
                     seat,
                 ));
                 let policy_ok = inspection.rdp_member
+                    && inspection.seats_member
                     && !inspection.administrator
                     && inspection.deny_console
                     && !inspection.deny_remote;
@@ -343,8 +345,10 @@ impl WindowsBackend {
                     },
                     "account_policy",
                     format!(
-                        "rdp_member={} administrator={} deny_console={} deny_remote={}",
+                        "rdp_member={} seats_member={} administrator={} deny_console={} \
+                         deny_remote={}",
                         inspection.rdp_member,
+                        inspection.seats_member,
                         inspection.administrator,
                         inspection.deny_console,
                         inspection.deny_remote

@@ -277,7 +277,8 @@ fn seat_account(n: usize) -> String {
     }
 }
 
-/// A seat of its own for a new profile.
+/// A seat of its own for a new profile. Its account joins the seats group, so the host closes
+/// what that group may not reach.
 fn new_seat(name: &str) -> Result<String, Refusal> {
     if !crate::seats::enabled() {
         return Err((
@@ -306,7 +307,10 @@ fn new_seat(name: &str) -> Result<String, Refusal> {
     }));
     crate::seats::invalidate();
     match made.map_err(seat_error)? {
-        CommandResult::Created { seat } => Ok(seat.id.as_str().to_string()),
+        CommandResult::Created { seat } => {
+            crate::plugins::converge_seat_denies();
+            Ok(seat.id.as_str().to_string())
+        }
         other => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("seats create answered {other:?}"),

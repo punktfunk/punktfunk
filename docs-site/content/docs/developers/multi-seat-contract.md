@@ -24,6 +24,9 @@ host restart leaves them running; stopping the service logs every seat account o
   loopback RDP session open. The supervisor hands it the seat's credentials on stdin, never on the
   command line. Run `punktfunk-seat-keeper trust` from an elevated prompt once, before the first
   seat: it records the RDP certificate the keeper will accept. Turning seats on does this too.
+- **The seats group.** Every seat account is in the local group `punktfunk-seats`, rejoined at
+  each start. The host denies that group on `%ProgramData%\punktfunk\ingest`, so a seat can't
+  replace the owner's Playnite library. The doctor's `account_policy` row reports the membership.
 - **Seats on and off.** Without the reservation marker below the ledger is still listed, and
   every start answers `seats_off`. [Turn seats on and off](#turn-seats-on-and-off) writes the marker.
 

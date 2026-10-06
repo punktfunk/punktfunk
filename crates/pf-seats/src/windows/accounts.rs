@@ -3,7 +3,8 @@
 //! A managed account is identified only by its exact NetUser comment marker,
 //! which embeds the full seat ID. New accounts use a random persisted password,
 //! `USER_PRIV_USER`, direct membership in the localized Remote Desktop Users
-//! alias resolved from SID S-1-5-32-555, and `SeDenyInteractiveLogonRight`.
+//! alias resolved from SID S-1-5-32-555 and in [`SEATS_GROUP`], and
+//! `SeDenyInteractiveLogonRight`.
 //! Existing accounts are accepted only after marker and password verification.
 //! Administrator membership and remote-interactive denial make a seat unusable;
 //! deletion requires the same exact marker and an explicit caller action.
@@ -15,11 +16,14 @@ use crate::windows::util::{
 };
 use rand::RngCore as _;
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, NTSTATUS};
+use windows::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_ALIAS_EXISTS, HANDLE, HLOCAL, NTSTATUS,
+};
 use windows::Win32::NetworkManagement::NetManagement::{
-    NERR_Success, NERR_UserExists, NERR_UserInGroup, NERR_UserNotFound, NetApiBufferFree,
-    NetLocalGroupAddMembers, NetUserAdd, NetUserDel, NetUserGetInfo, NetUserGetLocalGroups,
-    LG_INCLUDE_INDIRECT, LOCALGROUP_MEMBERS_INFO_3, LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
+    NERR_GroupExists, NERR_Success, NERR_UserExists, NERR_UserInGroup, NERR_UserNotFound,
+    NetApiBufferFree, NetLocalGroupAdd, NetLocalGroupAddMembers, NetUserAdd, NetUserDel,
+    NetUserGetInfo, NetUserGetLocalGroups, LG_INCLUDE_INDIRECT, LOCALGROUP_INFO_1,
+    LOCALGROUP_MEMBERS_INFO_3, LOCALGROUP_USERS_INFO_0, MAX_PREFERRED_LENGTH,
     UF_DONT_EXPIRE_PASSWD, UF_NORMAL_ACCOUNT, UF_PASSWD_CANT_CHANGE, UF_SCRIPT, USER_ACCOUNT_FLAGS,
     USER_INFO_1, USER_INFO_10, USER_PRIV_USER,
 };
@@ -28,13 +32,16 @@ use windows::Win32::Security::Authentication::Identity::{
     LsaOpenPolicy, LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, POLICY_CREATE_ACCOUNT,
     POLICY_LOOKUP_NAMES,
 };
-use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows::Win32::Security::{
     LogonUserW, LookupAccountNameW, LookupAccountSidW, LOGON32_LOGON_NETWORK,
     LOGON32_PROVIDER_DEFAULT, PSID, SID_NAME_USE,
 };
 use zeroize::Zeroizing;
 
+/// The local group every seat account joins, so an ACL can refuse seat accounts by one name.
+/// A deny on it is the whole use: membership grants nothing.
+pub const SEATS_GROUP: &str = "punktfunk-seats";
 const RDP_USERS_SID: &str = "S-1-5-32-555";
 const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
 const DENY_CONSOLE: &str = "SeDenyInteractiveLogonRight";
@@ -54,6 +61,7 @@ pub(super) struct AccountInspection {
     pub administrator: bool,
     pub deny_console: bool,
     pub deny_remote: bool,
+    pub seats_member: bool,
 }
 
 impl AccountManager {
@@ -78,6 +86,7 @@ impl AccountManager {
                 let credential = self.credentials.load(&seat.id)?;
                 verify_password(&seat.account, &credential)?;
                 add_to_rdp_users(&seat.account)?;
+                join_seats_group(&seat.account)?;
                 ensure_safe_membership(&seat.account)?;
                 ensure_no_remote_deny(&seat.account)?;
                 add_account_right(&seat.account, DENY_CONSOLE)?;
@@ -118,16 +127,20 @@ impl AccountManager {
 
         verify_password(&seat.account, &credential)?;
         add_to_rdp_users(&seat.account)?;
+        join_seats_group(&seat.account)?;
         ensure_safe_membership(&seat.account)?;
         ensure_no_remote_deny(&seat.account)?;
         add_account_right(&seat.account, DENY_CONSOLE)
     }
 
+    /// Checks the account before a start, and puts it back in [`SEATS_GROUP`] if it is missing:
+    /// an account provisioned before the group existed joins on its next start.
     pub(super) fn credential_for_start(&self, seat: &Seat) -> WinResult<Credential> {
         require_local_system()?;
         require_marker(seat)?;
         let credential = self.credentials.load(&seat.id)?;
         verify_password(&seat.account, &credential)?;
+        join_seats_group(&seat.account)?;
         ensure_safe_membership(&seat.account)?;
         ensure_no_remote_deny(&seat.account)?;
         if !has_account_right(&seat.account, DENY_CONSOLE)? {
@@ -176,6 +189,7 @@ impl AccountManager {
             administrator: contains_name(&memberships, &admins),
             deny_console: has_account_right(&seat.account, DENY_CONSOLE).unwrap_or(false),
             deny_remote: has_account_right(&seat.account, DENY_REMOTE).unwrap_or(false),
+            seats_member: contains_name(&memberships, SEATS_GROUP),
         })
     }
 }
@@ -316,9 +330,49 @@ fn verify_password(account: &str, credential: &Credential) -> WinResult<()> {
 }
 
 fn add_to_rdp_users(account: &str) -> WinResult<()> {
-    let group = localized_alias(RDP_USERS_SID)?;
+    add_member(&localized_alias(RDP_USERS_SID)?, account)
+}
+
+/// Puts `account` in [`SEATS_GROUP`], creating the group the first time. Both steps are
+/// idempotent.
+fn join_seats_group(account: &str) -> WinResult<()> {
+    let mut name = wide(SEATS_GROUP, "seats group")?;
+    let mut comment = wide("Punktfunk seat accounts", "seats group comment")?;
+    let info = LOCALGROUP_INFO_1 {
+        lgrpi1_name: PWSTR(name.as_mut_ptr()),
+        lgrpi1_comment: PWSTR(comment.as_mut_ptr()),
+    };
+    // SAFETY: `info` and both UTF-16 buffers remain live for this synchronous call.
+    let status =
+        unsafe { NetLocalGroupAdd(PCWSTR::null(), 1, std::ptr::from_ref(&info).cast(), None) };
+    if status != NERR_Success && status != NERR_GroupExists && status != ERROR_ALIAS_EXISTS.0 {
+        return Err(status_error(
+            "account_group",
+            "NetLocalGroupAdd(punktfunk-seats) failed",
+            status,
+        ));
+    }
+    add_member(SEATS_GROUP, account)
+}
+
+/// [`SEATS_GROUP`]'s SID as text, or `None` on a box that never provisioned a seat.
+pub fn seats_group_sid() -> Option<String> {
+    let sid = account_sid(SEATS_GROUP).ok()?;
+    let mut text = PWSTR::null();
+    // SAFETY: `sid` holds the SID LookupAccountNameW wrote; `text` receives one LocalAlloc string.
+    unsafe { ConvertSidToStringSidW(sid.psid(), &mut text) }.ok()?;
+    let out = pwstr_to_string(text).ok();
+    // SAFETY: ConvertSidToStringSidW allocated `text` with LocalAlloc; it is freed once.
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+    }
+    out
+}
+
+/// Adds `account` to the local `group`. Already a member is success.
+fn add_member(group: &str, account: &str) -> WinResult<()> {
     let qualified = format!("{}\\{account}", computer_name()?);
-    let mut group_w = wide(group, "Remote Desktop Users alias")?;
+    let mut group_w = wide(group, "local group")?;
     let mut member_w = wide(qualified, "local account")?;
     let member = LOCALGROUP_MEMBERS_INFO_3 {
         lgrmi3_domainandname: PWSTR(member_w.as_mut_ptr()),
@@ -338,7 +392,7 @@ fn add_to_rdp_users(account: &str) -> WinResult<()> {
     } else {
         Err(status_error(
             "account_group",
-            "NetLocalGroupAddMembers(Remote Desktop Users) failed",
+            &format!("NetLocalGroupAddMembers({group}) failed"),
             status,
         ))
     }

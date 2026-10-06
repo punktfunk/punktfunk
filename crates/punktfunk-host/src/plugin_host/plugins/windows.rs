@@ -93,6 +93,7 @@ pub(super) fn converge_runner_acls(status: &RuntimeStatus) {
 
 /// Grant LocalService read on runner inputs. The data directory uses an inheritable ACE so atomic
 /// grant-file replacements stay readable; protected credential rewrites reapply a direct ACE.
+/// The ingest inbox opens to `BUILTIN\Users` and is closed to seat accounts.
 fn grant_runner_secret_reads() {
     let cfg = pf_paths::config_dir();
     for name in RUNNER_INPUT_DIRS {
@@ -184,6 +185,7 @@ fn grant_runner_secret_reads() {
             );
         }
     }
+    deny_seats_on_ingest();
     // `{app}\scripting` is not under the config dir. Same (RX,WA) as the unit
     // dirs: bun opens the entry script with FILE_WRITE_ATTRIBUTES, and the
     // install tree only carries Users:(RX). WA cannot change content.
@@ -201,6 +203,32 @@ fn grant_runner_secret_reads() {
                  start (bun exits EPERM on its own entry script)",
                 dir.display()
             );
+        }
+    }
+}
+
+/// Deny the seats group ([`pf_seats::windows::SEATS_GROUP`]) on the ingest inbox. A seat account
+/// is in `BUILTIN\Users`, whose Modify grant would let it replace the owner's Playnite titles; an
+/// explicit deny on the same object outranks that allow. Idempotent, and a box that never
+/// provisioned a seat has no group and nothing to deny.
+pub(super) fn deny_seats_on_ingest() {
+    let Some(sid) = pf_seats::windows::seats_group_sid() else {
+        return;
+    };
+    let cfg = pf_paths::config_dir();
+    for dir in RUNNER_INGEST_DIRS.map(|name| cfg.join(name)) {
+        if !dir.is_dir() {
+            continue;
+        }
+        let ok = Command::new(icacls_path())
+            .arg(&dir)
+            .args(["/deny", &format!("*{sid}:(OI)(CI)(M)")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            tracing::warn!(dir = %dir.display(), "ingest inbox still open to seat accounts");
         }
     }
 }
@@ -285,15 +313,19 @@ fn revoke_runner_secret_reads() {
             .status();
     }
     // Ingest was granted to Users, not LocalService. Removing that ACE leaves
-    // the inherited Users:RX, so the dir reverts to read-only.
+    // the inherited Users:RX, so the dir reverts to read-only. The seats deny goes with it.
+    let seats = pf_seats::windows::seats_group_sid().map(|sid| format!("*{sid}"));
     for name in RUNNER_INGEST_DIRS {
         let path = cfg.join(name);
         if !path.exists() {
             continue;
         }
-        let _ = Command::new(icacls_path())
-            .arg(&path)
-            .args(["/remove:g", USERS_SID])
+        let mut icacls = Command::new(icacls_path());
+        icacls.arg(&path).args(["/remove:g", USERS_SID]);
+        if let Some(seats) = &seats {
+            icacls.args(["/remove:d", seats]);
+        }
+        let _ = icacls
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();

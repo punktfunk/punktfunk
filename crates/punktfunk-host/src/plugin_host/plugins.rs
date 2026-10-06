@@ -386,6 +386,13 @@ pub(crate) fn converge_runner_acls(status: &RuntimeStatus) {
     plat::converge_runner_acls(status);
 }
 
+/// Windows: close the ingest inbox to seat accounts. `serve` calls this, and so does a seat's
+/// creation, which can make the group first. No-op off Windows.
+pub(crate) fn converge_seat_denies() {
+    #[cfg(target_os = "windows")]
+    plat::deny_seats_on_ingest();
+}
+
 /// Keep a rewritten runner credential readable by the enabled Windows service. POSIX runners
 /// inherit access from the operator and need no ACL adjustment.
 pub(crate) fn converge_runner_credential(path: &std::path::Path) -> Result<()> {
