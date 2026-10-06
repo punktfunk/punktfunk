@@ -135,6 +135,11 @@ final class Sc2UsbLink {
     /// ff00:01`) — with PRIMARY usage `0001:0002`, so a primary-usage match finds nothing. The
     /// pair keys match any declared pair: `ff00:01` selects exactly the four controller slots
     /// and still excludes the management interface, whose only pair is `ff00:02`.
+    /// An SC2 is attached and Input Monitoring lets this app open it. Safe from any thread.
+    static func canOpenAttached() -> Bool {
+        attached() && IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+    }
+
     private static func matchingCriteria() -> [CFDictionary] {
         Sc2Device.usbPIDs.map { pid in
             [

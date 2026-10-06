@@ -191,6 +191,17 @@ public final class Sc2Capture {
         #endif
     }
 
+    /// Hold the SC2 twins back before `GamepadCapture` starts forwarding. On a Mac that can open
+    /// an attached USB SC2 the claim lands within a second (the identity read included); its twin
+    /// would otherwise reach the host first as an Xbox pad and push the SC2 to the next pad index.
+    @MainActor
+    public static func holdTwins(manager: GamepadManager) {
+        #if os(macOS)
+        guard Sc2UsbLink.canOpenAttached() else { return }
+        manager.holdSteamController2Twins(for: 3)
+        #endif
+    }
+
     /// The one capture that holds the controller: a second would open the same link twice.
     @MainActor private static weak var running: Sc2Capture?
 

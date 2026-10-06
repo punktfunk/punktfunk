@@ -248,6 +248,20 @@ public final class GamepadManager: ObservableObject {
         didSet { if steamController2Claims != oldValue { rebuild() } }
     }
 
+    /// Until then every SC2 twin is held back, whatever the claim count: a capture about to claim
+    /// the pad must beat its twin to the wire, or the host builds the twin as an Xbox pad first.
+    private var steamController2HoldUntil = Date.distantPast
+
+    /// Hold every SC2 twin back for `seconds` (`Sc2Capture.holdTwins`). A twin the capture never
+    /// claims rejoins the ordinary path when the hold ends.
+    func holdSteamController2Twins(for seconds: TimeInterval) {
+        steamController2HoldUntil = Date().addingTimeInterval(seconds)
+        rebuild()
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.05) { [weak self] in
+            MainActor.assumeIsolated { self?.rebuild() }
+        }
+    }
+
     /// Whether a GameController device is the SC2 family's shadow. Keyed on the measured
     /// vendorName; GameController surfaced no Valve device before the SC2 family, so the prefix
     /// only matches hardware `Sc2Capture` captures.
@@ -278,8 +292,8 @@ public final class GamepadManager: ObservableObject {
     private func reselect() {
         // Suppress at most as many twins as the capture actually holds. They cannot be matched to
         // their captured device from here, so the most recently connected ones are dropped, and a
-        // pad beyond the claim count keeps the ordinary path.
-        var remaining = steamController2Claims
+        // pad beyond the claim count keeps the ordinary path. A hold drops them all.
+        var remaining = steamController2HoldUntil > Date() ? Int.max : steamController2Claims
         var suppressed: Set<ObjectIdentifier> = []
         for entry in controllers.reversed() where remaining > 0 {
             guard Self.isSteamController2(entry.controller) else { continue }

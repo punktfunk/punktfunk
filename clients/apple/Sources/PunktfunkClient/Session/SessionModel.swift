@@ -1231,6 +1231,9 @@ final class SessionModel: ObservableObject {
         // System-button routing: whether raw guide/share presses ride the wire, and whether
         // hold-Select arms as the alternate guide route (auto = on everywhere but macOS —
         // iOS reserves the physical Home press, tvOS never delivers it).
+        if settings.sc2Capture, settings.gamepadForwarding, conn.canSendGamepad {
+            Sc2Capture.holdTwins(manager: .shared)
+        }
         let capture = GamepadCapture(
             connection: conn, manager: .shared, forwarding: settings.gamepadForwarding,
             systemForward: settings.systemButtonsForward,
