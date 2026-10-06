@@ -959,6 +959,12 @@ impl NativeClient {
         self.shared.frames_dropped.load(Ordering::Relaxed)
     }
 
+    /// Whole AUs skipped because the decoder was still busy when newer ones arrived
+    /// (all-intra streams only). Monotonic; compare against the last observed value.
+    pub fn frames_behind(&self) -> u64 {
+        self.shared.frames.skipped_ever()
+    }
+
     /// The pinned bitrate (kbps) this client could not keep up with — it shed its receive
     /// backlog repeatedly and a pin leaves nothing else to give. `0` = not so far. Latches
     /// for the session; show it to the user once with the next move (Automatic, or lower).
@@ -1115,6 +1121,12 @@ impl NativeClient {
     /// Close the overlay window with everything the connector knows filled in: mode, codec,
     /// colour, audio format, counters. The caller adds the decoder, display HDR and extras.
     pub fn hud_snapshot(&self) -> crate::hud::StatsSnapshot {
+        // Whole AUs the all-intra drain dropped before the decoder: it fell behind.
+        let behind = self.shared.frames.take_skipped();
+        if behind > 0 {
+            self.hud
+                .note_skipped(0, behind.min(u64::from(u32::MAX)) as u32);
+        }
         let mut s = self.hud.drain(&self.hud_counters());
         let m = self.mode();
         (s.width, s.height, s.refresh_hz) = (m.width, m.height, m.refresh_hz);
