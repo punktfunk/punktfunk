@@ -27,7 +27,7 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
 | **RTSS Frame Cap** | Windows | Caps the game at the client's refresh rate through a [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) you install ([below](#rtss-frame-cap)). |
 | **itch.io** | Linux, Windows | Games installed by the itch app, with covers. |
 | **Waydroid** | Linux | The Android apps installed in Waydroid. |
-| **ROM Manager** | Linux, Windows | Your ROM folders, matched to installed emulators ([below](#rom-manager)). |
+| **ROM Manager** | Linux, Windows | Your ROM folders and RomM servers, each game in the host's best emulator for it ([below](#rom-manager)). |
 | **RomM** | Linux, Windows | The games on a [RomM](https://romm.app) server, played with RetroArch; each downloads on its first launch. |
 | **SteamGridDB** | Linux, Windows | Covers, heroes and logos for every game in the library. Needs a free API key. |
 | **Libretro** | Linux, Windows | Box art, developer, publisher, year and genres for ROM Manager's games. |
@@ -161,27 +161,34 @@ Program Files or ProgramData: every plugin runs as the same account there.
 
 ## ROM Manager
 
-Point it at your ROM folders. It matches each platform to an installed emulator (about 25
-built in) and adds the games to your library. Install **Libretro** for box art and details, and
-**SteamGridDB** with an API key for the games Libretro has no art for.
+Point it at your ROM folders or a [RomM](https://romm.app) server. Each game launches in the best
+emulator this host has for its system, after first-run setup and its firmware. A missing emulator
+is one **Ask to install** away; you allow it under **Library → Sources**. A RomM game downloads
+on its first launch with its updates and DLC, and its saves go back to the server. Install
+**Libretro** for box art and details, and **SteamGridDB** with an API key for the games Libretro
+has no art for.
 
 ```sh
 punktfunk-host plugins add rom-manager
 ```
 
-Add folders on the console's **ROM Manager** page, or in `plugin-state/rom-manager/config.json` in
-the config directory (`~/.config/punktfunk` or `%ProgramData%\punktfunk`):
+Add folders and servers on the console's **ROM Manager** page, under **Sources**. A server signs
+in with a code you approve in RomM. Without the console, write
+`plugin-state/rom-manager/config.json` in the config directory (`~/.config/punktfunk` or
+`%ProgramData%\punktfunk`):
 
 ```jsonc
 {
   "roots": [
-    { "dir": "/mnt/roms/snes", "platform": "snes" },
-    { "dir": "/mnt/roms/ps1", "platform": "ps1", "excludes": ["*.sav"] }
+    { "dir": "/mnt/roms" },
+    { "dir": "/mnt/more/ps1-games", "platform": "psx" }
   ]
 }
 ```
 
-On Windows, write paths as `D:\\roms\\snes`. Options and the platform list:
+A folder of system folders (`snes`, `psx`, `ps2`, …) needs nothing else; a folder of one system's
+games names it. Firmware goes in `bios/<system>/` beside the system folders. On Windows, write
+paths as `D:\\roms`. Options:
 [the plugin's repository](https://git.unom.io/unom/punktfunk-plugin-rom-manager).
 
 ## Playnite

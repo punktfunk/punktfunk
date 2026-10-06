@@ -9,12 +9,21 @@
 //! a non-Steam shortcut's appid is assigned at creation.
 //!
 //! Gaming Mode uses two Xwaylands; atoms live on the first, `$DISPLAY` is
-//! the second. Walk `$DISPLAY` then `/tmp/.X11-unix` and keep the first root
-//! that carries both. No cookie: gamescope Xwayland accepts local connections.
+//! the second. Candidates are `$DISPLAY`, the sockets in `/tmp/.X11-unix` and
+//! the abstract `@/tmp/.X11-unix/X<n>` sockets in `/proc/net/unix`; keep the
+//! first root that carries both atoms. No cookie: gamescope Xwayland accepts
+//! local connections.
 //!
-//! Best-effort: no gamescope, no X, or a sandbox that cannot see the socket
-//! all mean "no signal" and fail open (forward as before).
+//! A flatpak's `/tmp/.X11-unix` is a private tmpfs that no `--filesystem` grant
+//! fills, so there the abstract socket, open through `--share=network`, is the
+//! only way to the root ctx.
+//!
+//! Best-effort: no gamescope or no X means "no signal" and fails open (forward
+//! as before). A session that has gamescope but no reachable root says so once.
 
+use socket2::{Domain, SockAddr, Socket, Type};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,11 +32,14 @@ use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, EventMask, Window,
 };
 use x11rb::protocol::Event;
-use x11rb::rust_connection::RustConnection;
+use x11rb::rust_connection::{DefaultStream, RustConnection};
 
 /// After X drops. Gaming Mode recreates Xwayland on session restart; a hot
 /// retry loop is not worth it.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
+
+/// A local X server accepts in microseconds. 250 ms bounds one dead listener.
+const DIAL_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Overlay-owns-input flag from the watcher thread. Relaxed load: the
 /// presenter polls each frame and talks to the gamepad service on an edge.
@@ -70,8 +82,8 @@ pub fn gamescope_session() -> bool {
 }
 
 /// `$DISPLAY` first (single-server gamescope publishes on the app's display),
-/// then every socket in `/tmp/.X11-unix`. Do not probe `:0..:N` — that would
-/// connect to displays that are not there.
+/// then every X socket that exists, by path or abstract name. Do not probe
+/// `:0..:N` — that would connect to displays that are not there.
 fn candidate_displays() -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(d) = std::env::var("DISPLAY") {
@@ -79,23 +91,63 @@ fn candidate_displays() -> Vec<String> {
             out.push(d);
         }
     }
-    if let Ok(entries) = std::fs::read_dir("/tmp/.X11-unix") {
-        let mut found: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().into_string().ok()?;
-                let n = name.strip_prefix('X')?;
-                n.parse::<u32>().ok().map(|n| format!(":{n}"))
-            })
-            .collect();
-        found.sort();
-        for d in found {
-            if !out.contains(&d) {
-                out.push(d);
-            }
+    let mut found: Vec<u32> = std::fs::read_dir("/tmp/.X11-unix")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .into_string()
+                .ok()?
+                .strip_prefix('X')?
+                .parse()
+                .ok()
+        })
+        .collect();
+    found.extend(abstract_display_numbers(
+        &std::fs::read("/proc/net/unix").unwrap_or_default(),
+    ));
+    found.sort_unstable();
+    found.dedup();
+    for n in found {
+        let d = format!(":{n}");
+        if !out.contains(&d) {
+            out.push(d);
         }
     }
     out
+}
+
+/// Display numbers of the abstract `@/tmp/.X11-unix/X<n>` sockets in a
+/// `/proc/net/unix` table. The path is the last column; lines without one end
+/// in the inode and never match.
+fn abstract_display_numbers(table: &[u8]) -> Vec<u32> {
+    String::from_utf8_lossy(table)
+        .lines()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .next_back()?
+                .strip_prefix("@/tmp/.X11-unix/X")?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+/// The path socket first. A sandbox without it falls back to the abstract one:
+/// x11rb only dials paths, so the stream is opened here. The deadline is for a
+/// listener that never accepts, which a plain `connect` would wait on forever.
+fn open(dpy: &str) -> Option<(RustConnection, usize)> {
+    if let Ok(c) = RustConnection::connect(Some(dpy)) {
+        return Some(c);
+    }
+    let n: u32 = dpy.strip_prefix(':')?.split('.').next()?.parse().ok()?;
+    let addr = SockAddr::unix(format!("\0/tmp/.X11-unix/X{n}")).ok()?;
+    let sock = Socket::new(Domain::UNIX, Type::STREAM, None).ok()?;
+    sock.connect_timeout(&addr, DIAL_TIMEOUT).ok()?;
+    let stream = UnixStream::from(OwnedFd::from(sock));
+    let (stream, _) = DefaultStream::from_unix_stream(stream).ok()?;
+    Some((RustConnection::connect_to_stream(stream, 0).ok()?, 0))
 }
 
 /// `None` if this display is not the root ctx. `only_if_exists` so we do not
@@ -142,28 +194,35 @@ fn overlay_open(conn: &RustConnection, root: Window, app: Atom, gfx: Atom) -> bo
 /// Block on PropertyNotify for the two atoms. Any X error returns so the
 /// outer loop can rebuild after a session restart.
 fn watch(flag: &Arc<AtomicBool>) {
+    let mut warned = false;
     loop {
-        if let Some((conn, root, app, gfx)) = connect() {
-            // Seed before the first event: the overlay may already be up.
-            flag.store(overlay_open(&conn, root, app, gfx), Ordering::Relaxed);
-            loop {
-                match conn.wait_for_event() {
-                    Ok(Event::PropertyNotify(e)) if e.atom == app || e.atom == gfx => {
-                        let open = overlay_open(&conn, root, app, gfx);
-                        if flag.swap(open, Ordering::Relaxed) != open {
-                            tracing::debug!(open, "gamescope overlay focus changed");
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::info!(error = %e, "gamescope focus watcher disconnected");
-                        break;
+        let Some((conn, root, app, gfx)) = connect() else {
+            if !std::mem::replace(&mut warned, true) {
+                tracing::warn!(masking = false, "gamescope root display unreachable");
+            }
+            std::thread::sleep(RECONNECT_DELAY);
+            continue;
+        };
+        warned = false;
+        // Seed before the first event: the overlay may already be up.
+        flag.store(overlay_open(&conn, root, app, gfx), Ordering::Relaxed);
+        loop {
+            match conn.wait_for_event() {
+                Ok(Event::PropertyNotify(e)) if e.atom == app || e.atom == gfx => {
+                    let open = overlay_open(&conn, root, app, gfx);
+                    if flag.swap(open, Ordering::Relaxed) != open {
+                        tracing::info!(open, "gamescope overlay focus changed");
                     }
                 }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::info!(error = %e, "gamescope focus watcher disconnected");
+                    break;
+                }
             }
-            // Unmask: a restart mid-overlay would otherwise leave the pad dead.
-            flag.store(false, Ordering::Relaxed);
         }
+        // Unmask: a restart mid-overlay would otherwise leave the pad dead.
+        flag.store(false, Ordering::Relaxed);
         std::thread::sleep(RECONNECT_DELAY);
     }
 }
@@ -172,7 +231,7 @@ fn connect() -> Option<(RustConnection, Window, Atom, Atom)> {
     for dpy in candidate_displays() {
         // `dpy`, not `display`: tracing's value helper would steal a field named
         // `display` inside the macro.
-        let Ok((conn, screen_num)) = RustConnection::connect(Some(&dpy)) else {
+        let Some((conn, screen_num)) = open(&dpy) else {
             continue;
         };
         let Some((app, gfx)) = gamescope_atoms(&conn) else {
@@ -217,6 +276,18 @@ mod tests {
         assert!(!overlay_open_from(None, Some(3856846079)));
         assert!(!overlay_open_from(Some(769), None));
         assert!(!overlay_open_from(None, None));
+    }
+
+    #[test]
+    fn abstract_x_sockets_come_out_of_the_unix_table() {
+        let table = b"Num       RefCount Protocol Flags    Type St Inode Path\n\
+            0000: 00000003 00000000 00000000 0001 03 71204 /tmp/.X11-unix/X1\n\
+            0000: 00000002 00000000 00010000 0001 01 71205 @/tmp/.X11-unix/X3\n\
+            0000: 00000002 00000000 00010000 0001 01 71206 @/tmp/.X11-unix/X0\n\
+            0000: 00000003 00000000 00000000 0001 03 71207\n\
+            0000: 00000002 00000000 00010000 0001 01 71208 @/tmp/dbus-abc\n";
+        assert_eq!(abstract_display_numbers(table), vec![3, 0]);
+        assert!(abstract_display_numbers(b"").is_empty());
     }
 
     #[test]
