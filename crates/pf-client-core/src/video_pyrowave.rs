@@ -14,8 +14,9 @@
 //!
 //! The decoder object is fixed-size. [`au_dims`] sniffs each frame's sequence header
 //! and [`PyroWaveDecoder::reconfigure`] rebuilds decoder + plane ring in place; device,
-//! command pool and pinned create-infos survive. Superseded rings are retired, not
-//! destroyed — the presenter may still hold their views (see [`RETIRE_HANDOVERS`]).
+//! command pool and pinned create-infos survive. A frame holds its ring ([`PlaneRing`]);
+//! a superseded ring is also retired for consumers that sample without holding the frame
+//! (see [`RETIRE_HANDOVERS`]).
 //!
 //! Decoder invariants every method's SAFETY leans on: `device` is the presenter's live
 //! device, which outlives the decoder; `pw_dev`, `pw_dec`, the rings, `cmd` and `fence`
@@ -205,9 +206,11 @@ unsafe extern "C" fn queue_unlock_cb(ud: *mut c_void) {
     unsafe { (*(ud as *const QueueLock)).unlock() }
 }
 
-/// Fence-waited decode output on the presenter's device, GENERAL layout. Views live
-/// as long as the decoder.
+/// Fence-waited decode output on the presenter's device, GENERAL layout.
 pub struct PyroWavePlanarFrame {
+    /// Keeps the planes alive past a resize or the decoder's end. A consumer that may
+    /// sample the frame again holds the frame.
+    pub hold: Arc<PlaneRing>,
     /// Raw `VkImageView`s (Y, Cb, Cr) for planar CSC sampling.
     pub views: [u64; 3],
     /// Raw `VkImage` of the Y plane, for the native lane's copy.
@@ -222,20 +225,35 @@ pub struct PyroWavePlanarFrame {
     pub ten_bit: bool,
     /// Independently decodable — always a clean re-anchor.
     pub keyframe: bool,
+    /// This frame's present turn ([`QueueLock::offer_present_turn`]); the presenter ends it.
+    pub turn: u64,
 }
 
 struct PlaneSet {
     imgs: [vk::Image; 3],
     mems: [vk::DeviceMemory; 3],
     views: [vk::ImageView; 3],
-    /// First use transitions from UNDEFINED; afterwards GENERAL→GENERAL.
-    initialized: bool,
 }
 
-/// Plane ring superseded by a mid-stream resize, awaiting destruction
+/// A plane ring's images, views and memory. The decoder holds one and so does every
+/// frame cut from it; the last holder frees them, so each holder must outlive its own
+/// GPU use of the planes.
+pub struct PlaneRing {
+    device: ash::Device,
+    sets: Vec<PlaneSet>,
+}
+
+impl Drop for PlaneRing {
+    fn drop(&mut self) {
+        // SAFETY: made on the live `device`; no holder is left to use them.
+        unsafe { destroy_sets(&self.device, &self.sets) };
+    }
+}
+
+/// Plane ring superseded by a mid-stream resize, awaiting release
 /// (see [`RETIRE_HANDOVERS`]).
 struct RetiredRing {
-    sets: Vec<PlaneSet>,
+    _ring: Arc<PlaneRing>,
     handed_over: u32,
     retired_at: Instant,
 }
@@ -353,7 +371,7 @@ unsafe fn build_ring(
     height: u32,
     chroma444: bool,
     fmt: vk::Format,
-) -> Result<Vec<PlaneSet>> {
+) -> Result<Arc<PlaneRing>> {
     // Presenter planar CSC samples with normalized UVs; chroma resolution is transparent.
     let (cw, ch) = if chroma444 {
         (width, height)
@@ -367,7 +385,6 @@ unsafe fn build_ring(
             imgs: [vk::Image::null(); 3],
             mems: [vk::DeviceMemory::null(); 3],
             views: [vk::ImageView::null(); 3],
-            initialized: false,
         });
         let set = ring.last_mut().expect("pushed above");
         for (i, (w, h)) in [(width, height), (cw, ch), (cw, ch)]
@@ -385,7 +402,10 @@ unsafe fn build_ring(
             }
         }
     }
-    Ok(ring)
+    Ok(Arc::new(PlaneRing {
+        device: device.clone(),
+        sets: ring,
+    }))
 }
 
 pub struct PyroWaveDecoder {
@@ -397,7 +417,10 @@ pub struct PyroWaveDecoder {
     queue_lock: Arc<QueueLock>,
     pw_dev: pw::pyrowave_device,
     pw_dec: pw::pyrowave_decoder,
-    ring: Vec<PlaneSet>,
+    ring: Arc<PlaneRing>,
+    /// Per slot: written once. First use transitions from UNDEFINED, later ones
+    /// GENERAL→GENERAL.
+    initialized: [bool; RING],
     retired: Vec<RetiredRing>,
     next: usize,
     cmd_pool: vk::CommandPool,
@@ -417,6 +440,20 @@ pub struct PyroWaveDecoder {
     /// Shard payload: parse-window size for chunk-aligned AUs. Each window holds whole
     /// self-delimiting packets, zero-padded.
     wire_window: usize,
+    split: DecodeSplit,
+    /// Frames handed out: the present-turn number of the next one.
+    turn: u64,
+}
+
+/// Where the last decode's wall time went, in microseconds.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct DecodeSplit {
+    /// Packets into the decoder (CPU).
+    pub parse_us: u32,
+    /// Command recording, payload upload included (CPU).
+    pub record_us: u32,
+    /// Submit to fence: the GPU's own time plus whatever queued ahead of it.
+    pub gpu_us: u32,
 }
 
 // SAFETY: used only from the single decode thread; the shared-queue accesses go through
@@ -605,6 +642,7 @@ impl PyroWaveDecoder {
             pw_dev,
             pw_dec,
             ring,
+            initialized: [false; RING],
             retired: Vec::new(),
             next: 0,
             cmd_pool,
@@ -617,6 +655,8 @@ impl PyroWaveDecoder {
             color,
             hdr16,
             wire_window: shard_payload.max(64),
+            split: DecodeSplit::default(),
+            turn: 0,
         })
     }
 
@@ -673,10 +713,11 @@ impl PyroWaveDecoder {
         self.pw_dec = new_dec;
         let old = std::mem::replace(&mut self.ring, new_ring);
         self.retired.push(RetiredRing {
-            sets: old,
+            _ring: old,
             handed_over: 0,
             retired_at: Instant::now(),
         });
+        self.initialized = [false; RING];
         self.next = 0;
         tracing::info!(
             from = %format_args!("{}x{}", self.width, self.height),
@@ -688,8 +729,9 @@ impl PyroWaveDecoder {
         Ok(())
     }
 
-    /// Destroy retired rings that have enough new-ring handovers and have aged past
-    /// [`RETIRE_MIN_AGE`]. Queue idle bounds any still-submitted sampling of those views.
+    /// Let go of retired rings that have enough new-ring handovers and have aged past
+    /// [`RETIRE_MIN_AGE`]. Queue idle bounds any still-submitted sampling by a consumer
+    /// that holds no frame; one that does keeps its ring.
     fn reap_retired(&mut self) {
         let ripe = |r: &RetiredRing| {
             r.handed_over >= RETIRE_HANDOVERS && r.retired_at.elapsed() >= RETIRE_MIN_AGE
@@ -702,17 +744,7 @@ impl PyroWaveDecoder {
             // SAFETY: `queue` external sync is `queue_lock`, held above.
             let _ = unsafe { self.device.queue_wait_idle(self.queue) };
         }
-        let mut kept = Vec::new();
-        for r in self.retired.drain(..) {
-            if ripe(&r) {
-                // SAFETY: the ring is this decoder's. The queue idle above ended every
-                // submitted read; RETIRE_HANDOVERS/RETIRE_MIN_AGE outlast unsubmitted ones.
-                unsafe { destroy_sets(&self.device, &r.sets) };
-            } else {
-                kept.push(r);
-            }
-        }
-        self.retired = kept;
+        self.retired.retain(|r| !ripe(r));
     }
 
     /// Push one packet into the decoder.
@@ -775,6 +807,37 @@ impl PyroWaveDecoder {
         }
     }
 
+    /// The last [`Self::decode_frame`]'s wall split.
+    pub fn last_split(&self) -> DecodeSplit {
+        self.split
+    }
+
+    /// The vendored decoder's GPU time per stage, one line each. `reset` starts a new window.
+    pub fn gpu_stage_report(&self, reset: bool) -> Vec<String> {
+        unsafe extern "C" fn collect(ud: *mut c_void, msg: *const c_char) {
+            // SAFETY: `ud` is the `Vec` below, alive for the call; `msg` is a C string.
+            unsafe {
+                (*(ud as *mut Vec<String>)).push(
+                    std::ffi::CStr::from_ptr(msg)
+                        .to_string_lossy()
+                        .trim()
+                        .to_owned(),
+                );
+            }
+        }
+        let mut lines: Vec<String> = Vec::new();
+        // SAFETY: `pw_dev` is this decoder's; the callback only runs inside the call.
+        unsafe {
+            pw::pyrowave_device_report_performance_stats(
+                self.pw_dev,
+                Some(collect),
+                &mut lines as *mut Vec<String> as *mut c_void,
+                reset,
+            );
+        }
+        lines
+    }
+
     /// One AU in → one frame out. `aligned`: shard-window chunked (each `wire_window`
     /// holds whole self-delimiting packets, zero-padded). `complete`: every shard arrived;
     /// a partial still decodes — missing blocks are localized blur for this frame only.
@@ -792,6 +855,7 @@ impl PyroWaveDecoder {
                 self.reconfigure(dims.0, dims.1)?;
             }
         }
+        let parse_started = Instant::now();
         let mut push_err: Option<anyhow::Error> = None;
         if aligned {
             let mut frag: Vec<u8> = Vec::new();
@@ -804,6 +868,7 @@ impl PyroWaveDecoder {
         } else if let Err(e) = self.push_packet(au, "push_packet") {
             push_err = Some(e);
         }
+        self.split.parse_us = parse_started.elapsed().as_micros() as u32;
         if let Some(e) = push_err {
             // A partial straddling a resize can carry blocks the (possibly wrong-size)
             // decoder rejects — one lost frame, not a broken session. A complete frame
@@ -838,7 +903,7 @@ impl PyroWaveDecoder {
             }
             return Err(e);
         }
-        self.ring[slot].initialized = true;
+        self.initialized[slot] = true;
 
         for r in &mut self.retired {
             r.handed_over += 1;
@@ -846,25 +911,27 @@ impl PyroWaveDecoder {
         self.reap_retired();
 
         let (w, h) = (self.width, self.height);
+        self.turn += 1;
+        self.queue_lock.offer_present_turn(self.turn);
+        let set = &self.ring.sets[slot];
         Ok(Some(PyroWavePlanarFrame {
-            views: [
-                self.ring[slot].views[0].as_raw(),
-                self.ring[slot].views[1].as_raw(),
-                self.ring[slot].views[2].as_raw(),
-            ],
-            luma: self.ring[slot].imgs[0].as_raw(),
+            hold: self.ring.clone(),
+            views: set.views.map(|v| v.as_raw()),
+            luma: set.imgs[0].as_raw(),
             chroma444: self.chroma444,
             width: w,
             height: h,
             color: self.color,
             ten_bit: self.hdr16,
             keyframe: true,
+            turn: self.turn,
         }))
     }
 
     /// Record `slot`'s decode, submit it, and wait for its fence. On `Err` the command buffer
     /// may be recording or pending; the caller idles the queue before reusing it.
     fn record_and_wait(&mut self, slot: usize) -> Result<()> {
+        let record_started = Instant::now();
         let dev = self.device.clone();
         // SAFETY: `cmd` is this decoder's and idle: the last submit's fence was waited, or
         // a failed decode idled the queue and reset it.
@@ -875,7 +942,7 @@ impl PyroWaveDecoder {
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
         }?;
-        let old_layout = if self.ring[slot].initialized {
+        let old_layout = if self.initialized[slot] {
             vk::ImageLayout::GENERAL
         } else {
             vk::ImageLayout::UNDEFINED
@@ -904,7 +971,8 @@ impl PyroWaveDecoder {
                 .image(img)
                 .subresource_range(range)
         };
-        let pre: Vec<_> = self.ring[slot].imgs.iter().map(|&i| to_write(i)).collect();
+        let imgs = self.ring.sets[slot].imgs;
+        let pre: Vec<_> = imgs.iter().map(|&i| to_write(i)).collect();
         // SAFETY: `cmd` is recording (begun above); `pre` names this decoder's ring images.
         unsafe {
             dev.cmd_pipeline_barrier2(
@@ -941,9 +1009,9 @@ impl PyroWaveDecoder {
         };
         let buffers = pw::pyrowave_gpu_buffers {
             planes: [
-                plane(self.ring[slot].imgs[0], w, h),
-                plane(self.ring[slot].imgs[1], cw, ch),
-                plane(self.ring[slot].imgs[2], cw, ch),
+                plane(imgs[0], w, h),
+                plane(imgs[1], cw, ch),
+                plane(imgs[2], cw, ch),
             ],
         };
         // SAFETY: `pw_dev`/`pw_dec` are this decoder's; `cmd` is recording on this thread
@@ -978,7 +1046,7 @@ impl PyroWaveDecoder {
                 .image(img)
                 .subresource_range(range)
         };
-        let post: Vec<_> = self.ring[slot].imgs.iter().map(|&i| to_read(i)).collect();
+        let post: Vec<_> = imgs.iter().map(|&i| to_read(i)).collect();
         // SAFETY: `cmd` is still recording; `post` names this decoder's ring images. The
         // fence is not pending: the last submit's wait finished, or the queue was idled.
         unsafe {
@@ -989,6 +1057,10 @@ impl PyroWaveDecoder {
             dev.end_command_buffer(self.cmd)?;
             dev.reset_fences(&[self.fence])?;
         }
+        self.split.record_us = record_started.elapsed().as_micros() as u32;
+        // The frame before this one goes to the screen first.
+        self.queue_lock.yield_to_present();
+        let gpu_started = Instant::now();
         {
             let _guard = self.queue_lock.guard();
             let cmds = [self.cmd];
@@ -1005,6 +1077,7 @@ impl PyroWaveDecoder {
         // SAFETY: `fence` is this decoder's, named by the submit above.
         unsafe { dev.wait_for_fences(&[self.fence], true, 5_000_000_000) }
             .context("pyrowave decode fence")?;
+        self.split.gpu_us = gpu_started.elapsed().as_micros() as u32;
         Ok(())
     }
 }
@@ -1021,10 +1094,6 @@ impl Drop for PyroWaveDecoder {
             }
             pw::pyrowave_decoder_destroy(self.pw_dec);
             pw::pyrowave_device_destroy(self.pw_dev);
-            destroy_sets(&self.device, &self.ring);
-            for r in &self.retired {
-                destroy_sets(&self.device, &r.sets);
-            }
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.cmd_pool, None);
             // `self.device`/instance are the presenter's — never destroyed here.
