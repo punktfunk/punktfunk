@@ -446,6 +446,11 @@ impl Shell {
                         });
                     }
                     tracing::warn!(%msg, "connect failed — back to the console");
+                    if refused == Some(punktfunk_core::reject::RejectReason::ProfileUnknown)
+                        && let Some(o) = self.overlay.as_mut()
+                    {
+                        o.profile_gone();
+                    }
                     let phase = if st.canceled {
                         SessionPhase::Ended(None)
                     } else {

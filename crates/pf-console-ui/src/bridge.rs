@@ -389,13 +389,17 @@ pub fn key_code(code: u8) -> Option<Key> {
     })
 }
 
+/// A failed connect the host refused as `profile-unknown`: the host calls
+/// [`crate::console::Console::profile_gone`] before the phase.
+pub const PHASE_PROFILE_GONE: u8 = 5;
+
 /// 0 connecting, 1 streaming, 2 failed, 3 ended (an empty `message` is a clean end),
-/// 4 reconnecting.
+/// 4 reconnecting, [`PHASE_PROFILE_GONE`] failed as `profile-unknown`.
 pub fn phase_code(code: u8, message: &str) -> Option<SessionPhase<'_>> {
     Some(match code {
         0 => SessionPhase::Connecting,
         1 => SessionPhase::Streaming,
-        2 => SessionPhase::Failed(message),
+        2 | PHASE_PROFILE_GONE => SessionPhase::Failed(message),
         3 => SessionPhase::Ended((!message.is_empty()).then_some(message)),
         4 => SessionPhase::Reconnecting(message),
         _ => return None,
@@ -548,11 +552,15 @@ mod tests {
             );
             assert_eq!(pointer_code(code, x, y, dy).is_some(), known(pointer.len()));
             assert_eq!(key_code(code).is_some(), known(keys.len()), "key {code}");
-            assert_eq!(phase_code(code, "").is_some(), known(5), "phase {code}");
+            assert_eq!(phase_code(code, "").is_some(), known(6), "phase {code}");
         }
         assert!(matches!(
             phase_code(2, "lost"),
             Some(SessionPhase::Failed("lost"))
+        ));
+        assert!(matches!(
+            phase_code(PHASE_PROFILE_GONE, "gone"),
+            Some(SessionPhase::Failed("gone"))
         ));
         assert!(matches!(phase_code(3, ""), Some(SessionPhase::Ended(None))));
         assert!(matches!(

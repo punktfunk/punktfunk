@@ -453,6 +453,13 @@ pub(crate) struct Shell {
     asking: Option<Asking>,
     /// Input waits while this is up; Back drops it.
     seat_wait: Option<SeatWait>,
+    /// The dialed connect as it would ask again, while it might still come back
+    /// `profile-unknown`. `None` once it streams, fails otherwise, or is itself the second ask.
+    reask: Option<ConnectIntent>,
+    /// Set by [`Self::profile_gone`]; the failure that follows asks again instead of toasting.
+    reask_now: Option<ConnectIntent>,
+    /// The ask in flight is that second ask.
+    reasking: bool,
     /// Host title of the last connect. [`Self::session_reconnecting`] has no
     /// `Launch` of its own, so nothing else can name the host.
     last_connect_title: Option<String>,
@@ -597,6 +604,9 @@ impl Shell {
             launching: None,
             asking: None,
             seat_wait: None,
+            reask: None,
+            reask_now: None,
+            reasking: false,
             last_connect_title: None,
             wake: None,
             wake_optimistic: false,
@@ -801,11 +811,32 @@ impl Shell {
         self.connecting = None;
         self.launching = None;
         self.in_stream = false;
+        self.reask = None;
+        if let Some(intent) = self.reask_now.take() {
+            self.reasking = true;
+            return self.start_connect(intent);
+        }
         self.show_toast_kind(format!("Couldn't connect — {msg}"), ToastKind::Error);
+    }
+
+    /// The box no longer has the profile the last connect named: forget the card's pick and
+    /// ask its list once more. A second miss fails as any other refusal does.
+    pub(crate) fn profile_gone(&mut self) {
+        let Some(intent) = self.reask.take() else {
+            return;
+        };
+        if let Some(ask) = &intent.ask {
+            self.send_cmd(ConsoleCmd::SetProfile {
+                key: ask.key.clone(),
+                profile: None,
+            });
+        }
+        self.reask_now = Some(intent);
     }
 
     pub(crate) fn session_streaming(&mut self) {
         self.connecting = None;
+        self.reask = None;
         let t = self.t();
         let reads = self.library.status_gen();
         let Some(l) = &mut self.launching else {
@@ -1332,6 +1363,17 @@ impl Shell {
             return;
         };
         self.connecting = None;
+        // A first ask may come back `profile-unknown` and ask again; the second may not.
+        let first = !std::mem::take(&mut self.reasking);
+        self.reask = first.then(|| ConnectIntent {
+            profile: None,
+            seat: None,
+            ask: Some(ProfileAsk {
+                saved: None,
+                ..ask.clone()
+            }),
+            ..intent.clone()
+        });
         let listed = match answer {
             Some(ProfilesAnswer::Listed(l)) if !l.is_empty() => Some(l),
             Some(ProfilesAnswer::Listed(_) | ProfilesAnswer::NoProfiles) => None,

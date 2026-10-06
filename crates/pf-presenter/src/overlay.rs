@@ -122,6 +122,10 @@ pub trait Overlay {
     /// Browse-mode session lifecycle. OSD/HUD ignore this.
     fn session_phase(&mut self, _phase: SessionPhase) {}
 
+    /// The host no longer has the profile the connect named. Comes just before that
+    /// connect's [`SessionPhase::Failed`].
+    fn profile_gone(&mut self) {}
+
     /// A text field is being edited. The run loop starts and stops SDL text
     /// input (IME / `Event::TextInput`) from this.
     fn text_input_active(&self) -> bool {

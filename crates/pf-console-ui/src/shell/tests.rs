@@ -2991,6 +2991,40 @@ mod profile_gate {
         }));
     }
 
+    /// A pick the box drops between its list and the dial: the card forgets it and asks the
+    /// list once more. A second miss fails as any refusal does.
+    #[test]
+    fn a_profile_gone_at_the_dial_forgets_the_pick_and_asks_once_more() {
+        let (mut s, console, bus, row) = asking(pick("kid", "Kid"));
+        s.start_connect(ConnectIntent::to_host(&row, None));
+        console.set_profiles("aa11", listed(&[("own", "Ben"), ("kid", "Kid")]));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("kid".into())));
+        bus.drain();
+        s.profile_gone();
+        s.session_failed("That profile is gone from this host. Pick another one.");
+        let sent = bus.drain();
+        assert!(sent.contains(&ConsoleCmd::SetProfile {
+            key: "aa11".into(),
+            profile: None,
+        }));
+        assert!(sent
+            .iter()
+            .any(|c| matches!(c, ConsoleCmd::FetchProfiles { .. })));
+        console.set_profiles("aa11", listed(&[("own", "Ben")]));
+        s.sync();
+        assert_eq!(launched_as(&mut s), Some(Some("own".into())));
+        bus.drain();
+        s.profile_gone();
+        s.session_failed("gone again");
+        assert!(
+            !bus.drain()
+                .iter()
+                .any(|c| matches!(c, ConsoleCmd::FetchProfiles { .. })),
+            "the second miss does not ask again"
+        );
+    }
+
     /// A saved pick still listed dials as it; a single profile dials as that one.
     #[test]
     fn a_listed_pick_or_a_lone_profile_dials_at_once() {

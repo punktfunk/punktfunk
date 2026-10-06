@@ -811,8 +811,10 @@ object SkiaConsole {
                         knownHostStore.savePick(kh, null)
                         pushHosts(); pushKnownHosts()
                     }
+                    // 5: the console forgets the pick and asks the box's list once more.
                     NativeBridge.nativeConsoleSessionPhase(
-                        handle, 2, ConnectErrors.connectMessage(token, requestAccess),
+                        handle, if (token == "profile-unknown") 5 else 2,
+                        ConnectErrors.connectMessage(token, requestAccess),
                     )
                     resumeDiscovery()
                 }
