@@ -103,28 +103,28 @@ fn frame(rid: u8, cmd: &[u8]) -> [u8; 64] {
     f
 }
 
-/// SET the command, then GET until the reply echoes it (hid-steam retries a stale reply too).
+/// SET the command, then GET until the reply echoes it, for up to a second. A Puck fetches a
+/// pad's reply over the radio and stalls the GET until it has one.
 fn exchange(dev: &HidDevice, rid: u8, cmd: &[u8]) -> Result<Vec<u8>, String> {
     dev.send_feature_report(&frame(rid, cmd))
         .map_err(|e| format!("set: {e}"))?;
-    let mut last = Vec::new();
-    for _ in 0..5 {
+    let mut last = String::from("nothing read");
+    for tries in 1..=50 {
         std::thread::sleep(Duration::from_millis(20));
         let mut buf = [0u8; 65];
         buf[0] = rid;
-        let n = dev
-            .get_feature_report(&mut buf)
-            .map_err(|e| format!("get: {e}"))?;
-        last = buf[..n].to_vec();
-        if last.get(1) == cmd.first() {
-            return Ok(last);
+        match dev.get_feature_report(&mut buf) {
+            Ok(n) if buf[..n].get(1) == cmd.first() => {
+                if tries > 1 {
+                    println!("  (reply after {} ms)", tries * 20);
+                }
+                return Ok(buf[..n].to_vec());
+            }
+            Ok(n) => last = hex(&buf[..n]),
+            Err(e) => last = format!("get: {e}"),
         }
     }
-    Err(format!(
-        "no echo of {:02X} after 5 reads; last {}",
-        cmd[0],
-        hex(&last)
-    ))
+    Err(format!("no echo of {:02X} in 1 s; last {last}", cmd[0]))
 }
 
 /// Run every query this collection answers and print request, reply and any serial in it.
