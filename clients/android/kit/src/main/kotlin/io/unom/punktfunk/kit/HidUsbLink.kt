@@ -37,7 +37,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class HidUsbLink(
     private val context: Context,
     private val config: Config,
-    private val onReport: (report: ByteArray, len: Int) -> Unit,
+    /** One input report and the interface it came in on (a Puck's slots are interfaces 2–5). */
+    private val onReport: (report: ByteArray, len: Int, iface: Int) -> Unit,
     private val onClosed: () -> Unit,
 ) {
     /**
@@ -72,7 +73,14 @@ class HidUsbLink(
         var inReq: UsbRequest? = null
         var outReq: UsbRequest? = null
         var outBusy = false
-        var reports = 0L
+        /** Read by the keep-alive thread to find the interfaces that carry a pad. */
+        @Volatile var reports = 0L
+
+        /** Pending OUT reports, submitted by the reader thread — only one thread may drive a
+         *  connection's [UsbRequest]s ([UsbDeviceConnection.requestWait] returns ANY completed
+         *  request; a second waiter would steal the reader's completions). See [OutReportQueue]
+         *  for what gets discarded when it fills, and why that is not simply "the oldest". */
+        val outQueue = OutReportQueue<ByteArray>()
     }
 
     private var connection: UsbDeviceConnection? = null
@@ -82,12 +90,6 @@ class HidUsbLink(
     /** The claim whose IN endpoint last produced data — where output/feature writes go.
      *  Written by the reader thread, read by the feedback thread (feature control transfers). */
     @Volatile private var activeClaim: Claim? = null
-
-    /** Pending OUT reports, submitted by the reader thread — only one thread may drive a
-     *  connection's [UsbRequest]s ([UsbDeviceConnection.requestWait] returns ANY completed
-     *  request; a second waiter would steal the reader's completions). See [OutReportQueue] for
-     *  what gets discarded when it fills, and why that is not simply "the oldest". */
-    private val outQueue = OutReportQueue<ByteArray>()
 
     private var reader: Thread? = null
     private var keepAlive: Thread? = null
@@ -110,7 +112,7 @@ class HidUsbLink(
      * returns *any* completed request on that connection, and the same is true of the usbfs reap
      * ioctl underneath it: two independent transfer engines sharing one descriptor steal each
      * other's completions. This link's reader owns its connection exclusively (see the note on
-     * [outQueue]), so anything else driving transfers on this device — the isochronous audio
+     * [Claim.outQueue]), so anything else driving transfers on this device — the isochronous audio
      * renderer — must open its own.
      *
      * usbfs allows the same device to be opened many times, and claims are per (descriptor,
@@ -210,9 +212,10 @@ class HidUsbLink(
     }
 
     /**
-     * Re-send the keep-alive features every [Config.keepAliveMs] to the streaming interface (else
-     * every claimed one); replaying also repairs settings another consumer changed. Its own
-     * thread, because each EP0 transfer blocks up to [WRITE_TIMEOUT_MS] and the reader must not.
+     * Re-send the keep-alive features every [Config.keepAliveMs] to every interface that streams
+     * (else every claimed one) — each pad on a Puck has its own; replaying also repairs settings
+     * another consumer changed. Its own thread, because each EP0 transfer blocks up to
+     * [WRITE_TIMEOUT_MS] and the reader must not.
      */
     private fun keepAliveLoop(conn: UsbDeviceConnection, claims: List<Claim>) {
         while (running) {
@@ -222,9 +225,7 @@ class HidUsbLink(
                 return
             }
             if (!running) return
-            val target = activeClaim
-            if (target != null) sendKeepAlive(conn, target.iface.id)
-            else claims.forEach { sendKeepAlive(conn, it.iface.id) }
+            streaming(claims).forEach { sendKeepAlive(conn, it.iface.id) }
         }
     }
 
@@ -264,7 +265,7 @@ class HidUsbLink(
 
     /**
      * The multiplexed read loop: one IN request queued per claimed interface at all times, OUT
-     * writes submitted from [outQueue], completions routed via [UsbRequest.getClientData]. It
+     * writes submitted from each [Claim.outQueue], completions routed via [UsbRequest.getClientData]. It
      * never blocks on EP0, so input keeps flowing while a control transfer is in flight.
      */
     private fun readLoop(conn: UsbDeviceConnection, claims: List<Claim>) {
@@ -301,12 +302,11 @@ class HidUsbLink(
         try {
             while (running) {
                 val now = android.os.SystemClock.elapsedRealtime()
-                // Submit the next pending OUT report on the active (else first) interface.
-                val outTarget = (activeClaim ?: live.first()).takeIf { it.outReq != null && !it.outBusy }
-                if (outTarget != null) {
-                    outQueue.poll()?.let { data ->
-                        if (outTarget.outReq!!.queue(ByteBuffer.wrap(data))) outTarget.outBusy = true
-                    }
+                // Submit each interface's next pending OUT report.
+                for (c in live) {
+                    val req = c.outReq ?: continue
+                    if (c.outBusy) continue
+                    c.outQueue.poll()?.let { data -> if (req.queue(ByteBuffer.wrap(data))) c.outBusy = true }
                 }
                 val done = try {
                     conn.requestWait(READ_TIMEOUT_MS)
@@ -342,7 +342,7 @@ class HidUsbLink(
                             )
                         }
                         activeClaim = claim
-                        onReport(scratch, n)
+                        onReport(scratch, n, claim.iface.id)
                     }
                     claim.inBuf.clear()
                     if (!claim.inReq!!.queue(claim.inBuf)) {
@@ -397,25 +397,40 @@ class HidUsbLink(
      * a **stop** needs this: a discarded stop has nothing behind it, so it must not be mistaken
      * for one that landed.
      */
-    fun writeRaw(kind: Int, data: ByteArray, coalesce: Int = OutReportQueue.NO_COALESCE): Boolean {
+    fun writeRaw(
+        kind: Int,
+        data: ByteArray,
+        coalesce: Int = OutReportQueue.NO_COALESCE,
+        iface: Int = ANY_IFACE,
+    ): Boolean {
         if (data.isEmpty()) return false
+        val target = claimFor(iface) ?: return false
         return when (kind) {
             0 -> {
-                if ((activeClaim ?: claims.firstOrNull())?.outReq != null) {
+                if (target.outReq != null) {
                     // Interrupt-OUT rides UsbRequests submitted by the reader thread.
-                    outQueue.offer(data, coalesce)
+                    target.outQueue.offer(data, coalesce)
                 } else {
-                    setReport(REPORT_TYPE_OUTPUT, data)
+                    setReport(REPORT_TYPE_OUTPUT, data, iface)
                 }
             }
-            1 -> setReport(REPORT_TYPE_FEATURE, data)
+            1 -> setReport(REPORT_TYPE_FEATURE, data, iface)
             else -> false
         }
     }
 
-    private fun setReport(type: Int, data: ByteArray): Boolean {
+    /** The claim for [iface]; [ANY_IFACE] is the one that last reported, else the first. */
+    private fun claimFor(iface: Int): Claim? {
+        val named = if (iface == ANY_IFACE) null else claims.firstOrNull { it.iface.id == iface }
+        return named ?: activeClaim ?: claims.firstOrNull()
+    }
+
+    /** The claims that have carried a report, else all of them. */
+    private fun streaming(claims: List<Claim>): List<Claim> = claims.filter { it.reports > 0 }.ifEmpty { claims }
+
+    private fun setReport(type: Int, data: ByteArray, iface: Int = ANY_IFACE): Boolean {
         val conn = connection ?: return false
-        val ifId = (activeClaim ?: claims.firstOrNull())?.iface?.id ?: return false
+        val ifId = claimFor(iface)?.iface?.id ?: return false
         return sendReport(conn, ifId, type, data)
     }
 
@@ -425,8 +440,8 @@ class HidUsbLink(
      * queue would never drain (e.g. a rumble stop before the interfaces release). Safe from any
      * thread: EP0 control transfers are independent of the reader's `requestWait`.
      */
-    fun writeControl(data: ByteArray): Boolean =
-        data.isNotEmpty() && setReport(REPORT_TYPE_OUTPUT, data)
+    fun writeControl(data: ByteArray, iface: Int = ANY_IFACE): Boolean =
+        data.isNotEmpty() && setReport(REPORT_TYPE_OUTPUT, data, iface)
 
     private fun sendKeepAlive(conn: UsbDeviceConnection, ifaceId: Int) {
         for (f in config.keepAliveFeatures) sendReport(conn, ifaceId, REPORT_TYPE_FEATURE, f)
@@ -475,10 +490,10 @@ class HidUsbLink(
      * path would wreck capture latency. The one caller reads a Sony pad's fixed motion calibration
      * when the capture engages ([DsCapture]).
      */
-    fun getReport(type: Int, id: Int, len: Int): ByteArray? {
+    fun getReport(type: Int, id: Int, len: Int, iface: Int = ANY_IFACE): ByteArray? {
         if (len <= 0) return null
         val conn = connection ?: return null
-        val ifId = (activeClaim ?: claims.firstOrNull())?.iface?.id ?: return null
+        val ifId = claimFor(iface)?.iface?.id ?: return null
         val buf = ByteArray(len)
         val n = runCatching {
             conn.controlTransfer(
@@ -506,12 +521,12 @@ class HidUsbLink(
      * to a second — a Puck holds the GET while it relays the query over the radio. Blocks the
      * caller; never on the report path.
      */
-    fun exchange(request: ByteArray, len: Int = 64): ByteArray? {
+    fun exchange(request: ByteArray, len: Int = 64, iface: Int = ANY_IFACE): ByteArray? {
         if (request.isEmpty()) return null
         val frame = request.copyOf(len)
-        if (!setReport(REPORT_TYPE_FEATURE, frame)) return null
+        if (!setReport(REPORT_TYPE_FEATURE, frame, iface)) return null
         repeat(50) {
-            getReport(REPORT_TYPE_FEATURE, frame[0].toInt() and 0xFF, len)?.let { return it }
+            getReport(REPORT_TYPE_FEATURE, frame[0].toInt() and 0xFF, len, iface)?.let { return it }
             Thread.sleep(20)
         }
         return null
@@ -542,8 +557,10 @@ class HidUsbLink(
         // Hand the device back before the claim goes: both threads are joined, so EP0 is ours
         // alone and no keep-alive can follow. Best effort — a detached device answers an error,
         // which is exactly as much as this needs to do about it.
-        for (f in config.releaseFeatures) setReport(REPORT_TYPE_FEATURE, f)
-        outQueue.clear()
+        for (c in streaming(claims)) {
+            for (f in config.releaseFeatures) setReport(REPORT_TYPE_FEATURE, f, c.iface.id)
+            c.outQueue.clear()
+        }
         activeClaim = null
         for (c in claims) runCatching { connection?.releaseInterface(c.iface) }
         claims = emptyList()
@@ -560,5 +577,7 @@ class HidUsbLink(
         private const val REPORT_TYPE_OUTPUT = 0x02
         /** HID feature-report type — public for [getReport] callers ([writeRaw] takes a kind). */
         const val REPORT_TYPE_FEATURE = 0x03
+        /** No interface named: the one that last reported, else the first claimed. */
+        const val ANY_IFACE = -1
     }
 }

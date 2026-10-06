@@ -735,8 +735,10 @@ class GamepadRouter(
         }
 
         /** The pad's identity, for the host's virtual pad ([NativeBridge.nativeSendPadIdentity]). */
-        fun identity(serial: String, replies: ByteArray) {
-            if (slot != null && forwarding) NativeBridge.nativeSendPadIdentity(handle, index, serial, replies)
+        fun identity(puckSlot: Int, serial: String, replies: ByteArray) {
+            if (slot != null && forwarding) {
+                NativeBridge.nativeSendPadIdentity(handle, index, puckSlot, serial, replies)
+            }
         }
 
         /** One raw HID report, forwarded verbatim for the host's as-is virtual pad. */

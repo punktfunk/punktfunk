@@ -729,9 +729,10 @@ object NativeBridge {
      *  last. [puck] adds the dongle's own queries. */
     external fun nativeSc2IdentityRequest(puck: Boolean, index: Int): ByteArray?
 
-    /** A captured Steam Controller 2's identity for wire pad [pad]: its USB serial and its
-     *  replies, packed `[len][request][len][reply]…`. The host builds the virtual pad from it. */
-    external fun nativeSendPadIdentity(handle: Long, pad: Int, serial: String, replies: ByteArray)
+    /** A captured Steam Controller 2's identity for wire pad [pad]: its Puck [slot] (0 off a
+     *  Puck), its USB serial and its replies, packed `[len][request][len][reply]…`. The host
+     *  builds the virtual pad from it. */
+    external fun nativeSendPadIdentity(handle: Long, pad: Int, slot: Int, serial: String, replies: ByteArray)
 
     /**
      * One touchpad contact from a client-captured controller (the Sony USB capture), forwarded on

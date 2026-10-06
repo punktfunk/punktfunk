@@ -6,10 +6,12 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * One captured Steam Controller 2 — the glue between a transport link ([Sc2UsbLink] /
- * [Sc2BleLink]) and one of two consumers:
+ * The captured Steam Controller 2s of one transport link ([Sc2UsbLink] / [Sc2BleLink]) — a
+ * cable or Bluetooth link carries one pad, a Puck one per slot interface — and one of two
+ * consumers:
  *
  * **Stream mode** (`router != null`, owned by StreamScreen):
  * - **Raw plane (the point):** every input report goes to core
@@ -25,14 +27,15 @@ import java.nio.ByteBuffer
  *
  * **UI mode** (`router == null`, owned by MainActivity while NOT streaming): the lizard-mode
  * kb/mouse never produces gamepad events, so an uncaptured SC2 can't drive the console UI at
- * all. Here the parsed state is edge-detected into [onUiKey] navigation transitions instead
- * (D-pad + face buttons + Start/Select; the left stick synthesizes one D-pad step per push,
- * mirroring MainActivity's stick-to-focus behavior for ordinary pads).
+ * all. Here the first pad's parsed state is edge-detected into [onUiKey] navigation transitions
+ * instead (D-pad + face buttons + Start/Select; the left stick synthesizes one D-pad step per
+ * push, mirroring MainActivity's stick-to-focus behavior for ordinary pads).
  *
- * The wire slot is claimed lazily on the FIRST state report — a Puck with no controller powered
- * on stays invisible to the host — and released (with a wireless-disconnect event or on [stop])
- * so pad indices never leak. A dropped BLE link releases the slot but keeps its transport
- * SELECTED, because [Sc2BleLink] re-acquires by itself; the slot comes back with the reports.
+ * Each pad's wire slot is claimed lazily on its FIRST state report — a Puck slot with no
+ * controller powered on stays invisible to the host — and released (with a wireless-disconnect
+ * event or on [stop]) so pad indices never leak. A dropped BLE link releases the slot but keeps
+ * its transport SELECTED, because [Sc2BleLink] re-acquires by itself; the slot comes back with
+ * the reports.
  *
  * Report callbacks arrive on the link's own thread; the router's slot table and chord timer are
  * thread-safe for this (same contract as the feedback poll threads), and UI-mode consumers hop to
@@ -43,7 +46,7 @@ class Sc2Capture(
     private val router: GamepadRouter? = null,
 ) {
     private val usb = Sc2UsbLink(context, ::onReport, ::onLinkClosed)
-    private val ble = Sc2BleLink(context, ::onReport, ::onLinkClosed)
+    private val ble = Sc2BleLink(context, { report, len -> onReport(report, len, BLE_IFACE) }, ::onLinkClosed)
     @Volatile private var activeLink: Int = LINK_NONE
 
     /** True when the USB link is a Puck dongle — the only transport whose wireless-status
@@ -51,18 +54,23 @@ class Sc2Capture(
      *  link" — acting on that tore the slot down 255 ms after creation (first on-glass run). */
     @Volatile private var dongleLink = false
 
-    @Volatile private var pad: GamepadRouter.ExternalPad? = null
+    /** One pad the link carries, by the interface its reports come in on. */
+    private class Pad(val iface: Int) {
+        @Volatile var wire: GamepadRouter.ExternalPad? = null
 
-    /** Set while [claim] reads the pad's identity; reports until then are dropped. */
-    @Volatile private var claiming = false
+        /** Set while [claim] reads the pad's identity; reports until then are dropped. */
+        @Volatile var claiming = false
 
-    /** Bumped by [releaseSlot]: a claim that finishes after it opens no slot. */
-    @Volatile private var epoch = 0
+        /** Bumped by [releasePad]: a claim that finishes after it opens no slot. */
+        @Volatile var epoch = 0
+
+        // Typed-mirror diff state (wire units).
+        val state = Sc2Device.State()
+        var mirror = TypedMirror()
+    }
+
+    private val pads = ConcurrentHashMap<Int, Pad>()
     private val rawBuf: ByteBuffer = ByteBuffer.allocateDirect(64)
-
-    // Typed-mirror diff state (wire units).
-    private val state = Sc2Device.State()
-    private var mirror = TypedMirror()
 
     /** Report ids seen so far — each logged once, for remote diagnosis of what the pad emits. */
     private val seenIds = HashSet<Int>()
@@ -71,7 +79,9 @@ class Sc2Capture(
      *  LINK_NONE`: a BLE link stays selected while it re-acquires a pad that was switched off. */
     @Volatile private var reporting = false
 
-    // UI-mode state (router == null): held navigation keys + the stick's current synth direction.
+    // UI-mode state (router == null): the pad that drives the menu, its held navigation keys and
+    // the stick's current synth direction.
+    private var uiIface = NO_IFACE
     private var uiHeld = HashSet<Int>()
     private var uiStickDir = 0
 
@@ -127,42 +137,45 @@ class Sc2Capture(
 
     /** Replay a host raw write on the physical pad — wire to [GamepadFeedback.onHidRaw]. */
     fun onHidRaw(padIndex: Int, kind: Int, data: ByteArray) {
-        if (padIndex != pad?.index) return // addressed to some other controller
-        writeLink(kind, data)
+        val pad = pads.values.firstOrNull { it.wire?.index == padIndex } ?: return // another pad's
+        writeLink(kind, data, pad.iface)
     }
 
     /**
-     * Buzz both grip motors for [RUMBLE_MS] — the client's own rumble test, since a captured pad
-     * leaves the input stack and has no Android vibrator to pulse. False when no link is
-     * delivering reports. The stop frame is not optional: `0x80` carries a level the firmware
-     * holds until the next one.
+     * Buzz every pad's grip motors for [RUMBLE_MS] — the client's own rumble test, since a
+     * captured pad leaves the input stack and has no Android vibrator to pulse. False when no
+     * link is delivering reports. The stop frame is not optional: `0x80` carries a level the
+     * firmware holds until the next one.
      */
     fun testRumble(): Boolean {
         if (!reporting) return false
-        writeLink(HID_RAW_OUTPUT, Sc2Device.rumbleFrame(0xFFFF, 0xFFFF))
+        val ifaces = pads.keys.toList().ifEmpty { listOf(HidUsbLink.ANY_IFACE) }
+        for (iface in ifaces) writeLink(HID_RAW_OUTPUT, Sc2Device.rumbleFrame(0xFFFF, 0xFFFF), iface)
         Handler(Looper.getMainLooper()).postDelayed(
-            { writeLink(HID_RAW_OUTPUT, Sc2Device.rumbleFrame(0, 0)) },
+            { for (iface in ifaces) writeLink(HID_RAW_OUTPUT, RUMBLE_STOP, iface) },
             RUMBLE_MS,
         )
         return true
     }
 
-    /** Hand one id-first report to whichever transport is selected; no link, no write. */
-    private fun writeLink(kind: Int, data: ByteArray) {
+    /** Hand one id-first report to [iface] on whichever transport is selected; no link, no write. */
+    private fun writeLink(kind: Int, data: ByteArray, iface: Int) {
         when (activeLink) {
-            LINK_USB -> usb.writeRaw(kind, data)
+            LINK_USB -> usb.writeRaw(kind, data, iface)
             LINK_BLE -> ble.writeRaw(kind, data)
         }
     }
 
-    /** Stop the link and free the wire slot (host tears the virtual pad down). Idempotent. */
+    /** Stop the link and free every wire slot (host tears the virtual pads down). Idempotent. */
     fun stop() {
         val wasActive = activeLink != LINK_NONE
         // The firmware holds the last rumble level it got: put the motors down before letting go.
         // USB goes EP0-direct, since the interrupt queue stops draining with the reader.
-        when (activeLink) {
-            LINK_USB -> usb.writeControl(RUMBLE_STOP)
-            LINK_BLE -> ble.writeRaw(HID_RAW_OUTPUT, RUMBLE_STOP)
+        for (iface in pads.keys) {
+            when (activeLink) {
+                LINK_USB -> usb.writeControl(RUMBLE_STOP, iface)
+                LINK_BLE -> ble.writeRaw(HID_RAW_OUTPUT, RUMBLE_STOP)
+            }
         }
         when (activeLink) {
             LINK_USB -> usb.stop()
@@ -171,14 +184,13 @@ class Sc2Capture(
         activeLink = LINK_NONE
         dongleLink = false
         reporting = false
-        releaseSlot()
-        releaseUiKeys()
+        releaseAll()
         if (wasActive) onActiveChanged?.invoke(false)
     }
 
     // ---- link callbacks (link thread) ----
 
-    private fun onReport(report: ByteArray, len: Int) {
+    private fun onReport(report: ByteArray, len: Int, iface: Int) {
         if (len == 0) return // a zero-length BLE notification has no id to read
         if (!reporting) {
             reporting = true
@@ -191,50 +203,55 @@ class Sc2Capture(
         // saying "no radio link" — and must NOT tear the slot down (SDL's wired path likewise
         // marks the controller connected unconditionally and reconnects on any state report).
         if ((id == Sc2Device.ID_WIRELESS || id == Sc2Device.ID_WIRELESS_X) && len >= 2) {
-            if (dongleLink) {
-                if (report[1].toInt() and 0xFF == Sc2Device.WIRELESS_DISCONNECT) {
-                    Log.i(TAG, "Puck reports controller powered off — releasing wire slot")
-                    releaseSlot()
-                    releaseUiKeys()
-                }
+            if (dongleLink && report[1].toInt() and 0xFF == Sc2Device.WIRELESS_DISCONNECT) {
+                Log.i(TAG, "Puck reports the controller on interface $iface powered off — releasing its wire slot")
+                pads.remove(iface)?.let(::releasePad)
             }
             return
         }
-        if (!Sc2Device.parseState(report, len, state)) {
+        val pad = pads.getOrPut(iface) { Pad(iface) }
+        if (!Sc2Device.parseState(report, len, pad.state)) {
             // Battery/status and future report types still belong to the as-is stream.
-            forwardRaw(report, len)
+            forwardRaw(pad, report, len)
             return
         }
         if (router == null) {
-            mirrorUi()
+            if (uiIface == NO_IFACE) uiIface = iface
+            if (iface == uiIface) mirrorUi(pad.state)
             return
         }
-        val p = pad ?: return claim(router)
-        forwardRaw(report, len)
-        mirrorTyped(p)
+        val wire = pad.wire ?: return claim(router, pad)
+        forwardRaw(pad, report, len)
+        pad.mirror.push(
+            wire, Sc2Device.wireButtons(pad.state.buttons),
+            pad.state.lsX, pad.state.lsY, pad.state.rsX, pad.state.rsY, pad.state.lt, pad.state.rt,
+        )
     }
 
     /**
      * Read the pad's identity, then open its wire slot and send the identity: the host builds the
-     * virtual pad from it. On its own thread — a query through a Puck blocks up to a second, and a
-     * GATT read must not wait inside a GATT callback. A full slot table drops reports until one frees.
+     * virtual pad from it, and seats pads of one Puck on one virtual Puck. On its own thread — a
+     * query through a Puck blocks up to a second, and a GATT read must not wait inside a GATT
+     * callback. A full slot table drops reports until one frees.
      */
-    private fun claim(router: GamepadRouter) {
-        if (claiming) return
-        claiming = true
-        val (puck, link, started) = Triple(dongleLink, activeLink, epoch)
+    private fun claim(router: GamepadRouter, pad: Pad) {
+        if (pad.claiming) return
+        pad.claiming = true
+        val (puck, link, started) = Triple(dongleLink, activeLink, pad.epoch)
         Thread({
-            val identity = runCatching { readIdentity(link) }.getOrNull()
-            synchronized(this) {
-                if (started == epoch) {
+            val identity = runCatching { readIdentity(link, puck, pad.iface) }.getOrNull()
+            // A Puck's pad slots are its interfaces 2–5.
+            val slot = if (puck) (pad.iface - 2).coerceIn(0, 3) else 0
+            synchronized(pad) {
+                if (started == pad.epoch) {
                     val pref = if (puck) Gamepad.PREF_STEAMCONTROLLER2_PUCK else Gamepad.PREF_STEAMCONTROLLER2
-                    pad = router.openExternal(pref)?.also { p ->
-                        identity?.let { (serial, replies) -> p.identity(serial, replies) }
-                        val via = if (puck) "Puck" else "direct"
+                    pad.wire = router.openExternal(pref)?.also { p ->
+                        identity?.let { (serial, replies) -> p.identity(slot, serial, replies) }
+                        val via = if (puck) "Puck slot $slot" else "direct"
                         Log.i(TAG, "SC2 captured → wire pad ${p.index} ($via passthrough, serial ${identity?.first})")
                     }
                 }
-                claiming = false
+                pad.claiming = false
             }
         }, "pf-sc2-claim").start()
     }
@@ -243,16 +260,16 @@ class Sc2Capture(
      * The serial and packed replies the host mirrors: the USB serial over a cable or Puck, the
      * engraved serial (`0xAE` attribute 1) over Bluetooth. Null when the pad answered nothing.
      */
-    private fun readIdentity(link: Int): Pair<String, ByteArray>? {
+    private fun readIdentity(link: Int, puck: Boolean, iface: Int): Pair<String, ByteArray>? {
         val packed = java.io.ByteArrayOutputStream()
         var unitSerial = ""
         var answered = 0
         var asked = 0
         while (true) {
-            val request = NativeBridge.nativeSc2IdentityRequest(dongleLink, asked) ?: break
+            val request = NativeBridge.nativeSc2IdentityRequest(puck, asked) ?: break
             asked++
             val reply = when (link) {
-                LINK_USB -> usb.exchange(request)
+                LINK_USB -> usb.exchange(request, iface)
                 LINK_BLE -> ble.exchange(request)
                 else -> null
             } ?: continue
@@ -267,23 +284,17 @@ class Sc2Capture(
             }
         }
         val serial = (if (link == LINK_USB) usb.serialNumber() else null) ?: unitSerial
-        Log.i(TAG, "SC2 identity $serial, $answered/$asked replies")
+        Log.i(TAG, "SC2 identity $serial on interface $iface, $answered/$asked replies")
         return if (answered == 0 && serial.isEmpty()) null else serial to packed.toByteArray()
     }
 
-    private fun forwardRaw(report: ByteArray, len: Int) {
-        val p = pad ?: return
+    private fun forwardRaw(pad: Pad, report: ByteArray, len: Int) {
+        val wire = pad.wire ?: return
         val n = len.coerceAtMost(rawBuf.capacity())
         rawBuf.clear()
         rawBuf.put(report, 0, n)
-        p.hidReport(rawBuf, n)
+        wire.hidReport(rawBuf, n)
     }
-
-    /** Diff the parsed state onto the per-transition plane (buttons + axes, on change only). */
-    private fun mirrorTyped(p: GamepadRouter.ExternalPad) = mirror.push(
-        p, Sc2Device.wireButtons(state.buttons),
-        state.lsX, state.lsY, state.rsX, state.rsY, state.lt, state.rt,
-    )
 
     /**
      * UI mode: edge-detect the parsed state into navigation key transitions. Buttons map to
@@ -291,7 +302,7 @@ class Sc2Capture(
      * stick synthesizes ONE D-pad step per push past half deflection — the same single-move
      * behavior MainActivity gives ordinary pads' sticks.
      */
-    private fun mirrorUi() {
+    private fun mirrorUi(state: Sc2Device.State) {
         val sink = onUiKey ?: return
         val held = HashSet<Int>(8)
         var i = 0
@@ -331,12 +342,12 @@ class Sc2Capture(
         }
         uiHeld = HashSet()
         uiStickDir = 0
+        uiIface = NO_IFACE
     }
 
     private fun onLinkClosed() {
         Log.i(TAG, "SC2 link closed (unplug / power-off)")
-        releaseSlot()
-        releaseUiKeys()
+        releaseAll()
         reporting = false
         // BLE holds a standing connection request, so leave the transport selected: host raw
         // writes keep routing to it and the next state report re-opens the slot. USB has no such
@@ -350,11 +361,20 @@ class Sc2Capture(
         onActiveChanged?.invoke(false)
     }
 
-    private fun releaseSlot() = synchronized(this) {
-        epoch++
-        pad?.close()
-        pad = null
-        mirror = TypedMirror()
+    /** Free [pad]'s wire slot; the UI keys it held go up. */
+    private fun releasePad(pad: Pad) {
+        synchronized(pad) {
+            pad.epoch++
+            pad.wire?.close()
+            pad.wire = null
+            pad.mirror = TypedMirror()
+        }
+        if (pad.iface == uiIface) releaseUiKeys()
+    }
+
+    private fun releaseAll() {
+        for (iface in pads.keys.toList()) pads.remove(iface)?.let(::releasePad)
+        releaseUiKeys()
     }
 
     private companion object {
@@ -362,6 +382,10 @@ class Sc2Capture(
         const val LINK_NONE = 0
         const val LINK_USB = 1
         const val LINK_BLE = 2
+
+        /** A Bluetooth link carries one pad; this is its key. */
+        const val BLE_IFACE = 0
+        const val NO_IFACE = -2
 
         val RUMBLE_STOP = Sc2Device.rumbleFrame(0, 0)
 

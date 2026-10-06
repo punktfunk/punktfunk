@@ -627,15 +627,16 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSc2Identity
     .resolve::<LogErrorAndDefault>()
 }
 
-/// `NativeBridge.nativeSendPadIdentity(handle, pad, serial, replies)` — a captured Steam
-/// Controller 2's identity for wire pad `pad`: its USB serial (empty when unknown) and its replies
-/// to the identity queries, packed `[len][request][len][reply]…`.
+/// `NativeBridge.nativeSendPadIdentity(handle, pad, slot, serial, replies)` — a captured Steam
+/// Controller 2's identity for wire pad `pad`: its Puck slot (0 off a Puck), its USB serial (empty
+/// when unknown) and its replies to the identity queries, packed `[len][request][len][reply]…`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadIdentity(
     mut env: EnvUnowned,
     _this: JObject,
     handle: jlong,
     pad: jint,
+    slot: jint,
     serial: JString,
     replies: JByteArray,
 ) {
@@ -646,11 +647,12 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSendPadIden
         let serial = serial.try_to_string(env).unwrap_or_default();
         let replies = env.convert_byte_array(&replies)?;
         let pad = (pad as u32 & 0xF) as u8;
+        let slot = u8::try_from(slot).unwrap_or(0);
         let id = punktfunk_core::quic::PadIdentity {
             pad,
             serial,
             replies,
-            slot: 0,
+            slot,
         };
         if let Err(e) = h.client.send_pad_identity(id) {
             log::warn!("pad identity not sent: {e:#}");
