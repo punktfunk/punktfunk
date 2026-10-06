@@ -156,7 +156,9 @@ pub fn list_windows() -> Result<Vec<PhysicalMonitor>> {
 /// CCD inventory → [`PhysicalMonitor`]. Split from the OS call so tests can
 /// cover the pin mapping without touching the display database.
 #[cfg(windows)]
-fn from_inventory(inv: Vec<pf_win_display::win_display::TargetInventory>) -> Vec<PhysicalMonitor> {
+pub(crate) fn from_inventory(
+    inv: Vec<pf_win_display::win_display::TargetInventory>,
+) -> Vec<PhysicalMonitor> {
     inv.into_iter()
         .map(|t| {
             // GDI name is what capture pins on; inactive paths have none, so

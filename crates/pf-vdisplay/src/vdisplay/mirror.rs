@@ -1,5 +1,5 @@
 //! Stream a physical head the compositor already has, not a virtual output.
-//! See `design/per-monitor-portal-capture.md`.
+//! See `design/per-monitor-portal-capture.md`; Windows: `design/windows-wgc-capture.md` §4.6.
 //!
 //! Implements [`VirtualDisplay`] so it drops into the session machinery, but
 //! creates nothing. [`DisplayOwnership::External`] is the contract: no keep-alive,
@@ -21,6 +21,7 @@ use anyhow::{bail, Context, Result};
 /// `remote_fd` is `None` when KWin/Mutter publish on the user's daemon. Portal
 /// backends (sway/xdpw, Hyprland/xdph) hand back a sandboxed fd the capturer
 /// must connect through — the same split their virtual-output paths already make.
+#[cfg(target_os = "linux")]
 pub(crate) struct MirrorStream {
     pub node_id: u32,
     pub remote_fd: Option<std::os::fd::OwnedFd>,
@@ -31,6 +32,7 @@ pub(crate) struct MirrorStream {
     pub keepalive: Box<dyn Send>,
 }
 
+#[cfg(target_os = "linux")]
 impl MirrorStream {
     /// This stream as a session cast ([`VirtualDisplay::join_cast`]).
     pub(crate) fn into_cast(self) -> super::backend::SessionCastParts {
@@ -85,6 +87,54 @@ impl VirtualDisplay for MirrorDisplay {
     }
 
     fn create(&mut self, _mode: Mode) -> Result<VirtualOutput> {
+        #[cfg(target_os = "windows")]
+        return self.create_windows();
+        #[cfg(not(target_os = "windows"))]
+        self.create_cast()
+    }
+}
+
+impl MirrorDisplay {
+    /// Windows: the monitor itself is the output. Nothing is created and nothing is held; the
+    /// capture worker opens the monitor by the name resolved here, and the target carries no
+    /// driver process because no driver is involved.
+    #[cfg(target_os = "windows")]
+    fn create_windows(&mut self) -> Result<VirtualOutput> {
+        let inventory = pf_win_display::display_events::snapshot_or_query()
+            .targets
+            .to_vec();
+        let monitors = monitors::from_inventory(inventory.clone());
+        let target = monitors::resolve(&monitors, &self.connector)?;
+        check_mirrorable(target, self.compositor)?;
+        let head = inventory
+            .iter()
+            .find(|t| t.gdi_name == target.connector)
+            .with_context(|| {
+                format!("monitor {:?} left the display inventory", target.connector)
+            })?;
+        tracing::info!(
+            connector = %target.connector,
+            mode = %target.mode_label(),
+            at = %format!("+{}+{}", target.x, target.y),
+            target_id = head.target_id,
+            "mirroring an existing monitor (no virtual display created)"
+        );
+        let dims = (target.width, target.height, refresh_hz(target.refresh_mhz));
+        let mut out = VirtualOutput::owned(0, Some(dims), Box::new(()));
+        out.win_capture = Some(pf_frame::dxgi::WinCaptureTarget {
+            adapter_luid: head.key.adapter_luid,
+            gdi_name: head.gdi_name.clone(),
+            target_id: head.target_id,
+            wudf_pid: 0,
+            cursor_excluded: false,
+        });
+        out.ownership = DisplayOwnership::External;
+        Ok(out)
+    }
+
+    /// A compositor cast of the head: every backend but Windows.
+    #[cfg(not(target_os = "windows"))]
+    fn create_cast(&mut self) -> Result<VirtualOutput> {
         // Resolve first: geometry for the input anchor, and "that monitor is gone"
         // before any compositor call. `resolve` never substitutes another head.
         let monitors = monitors::list(self.compositor)
@@ -199,8 +249,18 @@ fn names_ours_conclusively(compositor: Compositor) -> bool {
         // Sway's `HEADLESS-N` includes its own; Mutter has no distinguishing name;
         // gamescope only reports the real DRM head. A hint at most.
         Compositor::Wlroots | Compositor::Mutter | Compositor::Gamescope => false,
-        Compositor::Windows => false,
+        // The inventory reads our EDID manufacturer id, which nothing else carries.
+        Compositor::Windows => true,
     }
+}
+
+/// Whether a capture of the desktop can start now. Windows Graphics Capture shows neither the
+/// lock screen nor the sign-in screen, and nobody signed in means no user to capture as, so a
+/// pinned session that starts on either opens the ordinary virtual display instead.
+#[cfg(target_os = "windows")]
+pub(crate) fn desktop_capturable() -> bool {
+    pf_win_display::refresh_secure_desktop();
+    !pf_win_display::secure_desktop()
 }
 
 /// mHz → whole Hz for [`VirtualOutput::preferred_mode`]. Negotiation treats 0 as
@@ -284,6 +344,7 @@ mod tests {
         assert!(!names_ours_conclusively(Compositor::Wlroots));
         assert!(!names_ours_conclusively(Compositor::Mutter));
         assert!(!names_ours_conclusively(Compositor::Gamescope));
+        assert!(names_ours_conclusively(Compositor::Windows));
     }
 
     /// `poolable_now` is asked before `create` reports ownership; both must say External.
