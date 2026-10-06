@@ -447,24 +447,54 @@ fn pfn_from_full(dir_name: &str, identity: &str) -> Option<String> {
 /// desktop app, so a URI cannot open fullscreen. `None` drops the tile.
 fn playnite_fullscreen_exe() -> Option<std::path::PathBuf> {
     const EXE: &str = "Playnite.FullscreenApp.exe";
-    playnite_install_dirs()
+    playnite_install_dirs(Whose::Player)
         .into_iter()
         .map(|dir| dir.join(EXE))
         .find(|p| p.is_file())
 }
 
+/// Whose registry and profile a launcher lookup reads besides the machine's.
+#[derive(Clone, Copy)]
+enum Whose {
+    /// The user signed in to this host's session. A launch runs as them, so another account on
+    /// the box must not choose the program.
+    Player,
+    /// Every loaded hive and every profile: art, which is only read and served.
+    Anyone,
+}
+
+/// The `HKEY_USERS` hive names and profile folders `whose` covers.
+fn user_scope(whose: Whose) -> (Vec<String>, Vec<std::path::PathBuf>) {
+    use winreg::enums::HKEY_USERS;
+    use winreg::RegKey;
+
+    if let Whose::Anyone = whose {
+        let users = RegKey::predef(HKEY_USERS).enum_keys().flatten().collect();
+        return (users, windows_user_profiles());
+    }
+    let Some(sid) = crate::windows::theme::session_sid() else {
+        return (Vec::new(), Vec::new());
+    };
+    let profile =
+        crate::windows::theme::read_string(&format!(r"{sid}\Volatile Environment"), "USERPROFILE")
+            .map(std::path::PathBuf::from);
+    (
+        vec![format!("{sid}_Classes"), sid],
+        profile.into_iter().collect(),
+    )
+}
+
 /// Candidate Playnite install dirs, best first. LocalSystem invalidates the
 /// obvious lookups:
 ///
-/// - HKCU is SYSTEM's hive (`S-1-5-18`); read loaded `HKEY_USERS` instead
-///   (logged-on streamers; same trade-off as [`crate::procscan::steam_running_hint`]).
+/// - HKCU is SYSTEM's hive (`S-1-5-18`); read `whose` hives under `HKEY_USERS` instead.
 /// - Match uninstall by `DisplayName`. Inno registers `<AppId>_is1`, not `Playnite`.
-/// - `%LOCALAPPDATA%` is SYSTEM's profile; enumerate users-base profiles instead.
+/// - `%LOCALAPPDATA%` is SYSTEM's profile; read `whose` profiles instead.
 ///
 /// Portable installs leave only the `playnite://` handler
 /// ([`uri_handler_dir`]). Registry `InstallLocation` before
 /// conventional paths; each candidate is an `is_file` probe.
-fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
+fn playnite_install_dirs(whose: Whose) -> Vec<std::path::PathBuf> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ};
     use winreg::RegKey;
 
@@ -483,7 +513,8 @@ fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
     uri_handler_dir(&hklm, CLASSES_URI_COMMAND, &mut dirs);
 
     let users = RegKey::predef(HKEY_USERS);
-    for sid in users.enum_keys().flatten() {
+    let (hives, profiles) = user_scope(whose);
+    for sid in hives {
         let Ok(hive) = users.open_subkey_with_flags(&sid, KEY_READ) else {
             continue;
         };
@@ -498,14 +529,14 @@ fn playnite_install_dirs() -> Vec<std::path::PathBuf> {
     }
 
     // Default per-user path, including profiles whose hive is not loaded.
-    for profile in windows_user_profiles() {
+    for profile in profiles {
         push_unique(&mut dirs, profile.join(r"AppData\Local\Playnite"));
     }
     dirs
 }
 
-/// Hydra's exe. Hydra registers `hydralauncher://` for its user on every start, wherever it is
-/// installed; the per-user installer default covers a profile whose hive is not loaded.
+/// Hydra's exe for the session's player. Hydra registers `hydralauncher://` for its user on
+/// every start, wherever it is installed; the per-user installer default is the fallback.
 fn hydra_exe() -> Option<std::path::PathBuf> {
     use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ};
     use winreg::RegKey;
@@ -520,7 +551,8 @@ fn hydra_exe() -> Option<std::path::PathBuf> {
         &mut dirs,
     );
     let users = RegKey::predef(HKEY_USERS);
-    for sid in users.enum_keys().flatten() {
+    let (hives, profiles) = user_scope(Whose::Player);
+    for sid in hives {
         if let Ok(hive) = users.open_subkey_with_flags(&sid, KEY_READ) {
             let path = if sid.ends_with("_Classes") {
                 URI_COMMAND
@@ -530,7 +562,7 @@ fn hydra_exe() -> Option<std::path::PathBuf> {
             uri_handler_dir(&hive, path, &mut dirs);
         }
     }
-    for profile in windows_user_profiles() {
+    for profile in profiles {
         push_unique(
             &mut dirs,
             profile.join(r"AppData\Local\Programs\hydralauncher"),
@@ -606,7 +638,7 @@ fn exe_from_shell_command(command: &str) -> Option<&str> {
 /// Same shape as [`super::art::steam_art_roots`]. Candidates come from host
 /// registry/fs probes, not the plugin lane that supplies the art path.
 pub(crate) fn playnite_art_roots() -> Vec<std::path::PathBuf> {
-    playnite_install_dirs()
+    playnite_install_dirs(Whose::Anyone)
         .into_iter()
         .filter(|d| d.is_dir())
         .collect()
@@ -721,7 +753,7 @@ fn gamebar_spawn_in(exe: &str, listed: &[String]) -> Option<WinRecipe> {
     if !listed.iter().any(|l| l.eq_ignore_ascii_case(exe)) {
         tracing::warn!(
             exe,
-            "gamebar launch: no signed-in user's Game Bar list names the exe — refusing it"
+            "gamebar launch: the player's Game Bar list doesn't name the exe — refusing it"
         );
         return None;
     }
@@ -737,16 +769,16 @@ fn user_sid(name: &str) -> bool {
     })
 }
 
-/// Every `MatchedExeFullPath` under each loaded user hive's `System\GameConfigStore\Children`:
-/// the exes Game Bar recorded as games. A signed-out user's hive is not loaded.
+/// Every `MatchedExeFullPath` under the session player's `System\GameConfigStore\Children`: the
+/// exes Game Bar recorded as their games. Another account's list never names what runs as them.
 fn gamebar_exes() -> Vec<String> {
     use winreg::enums::{HKEY_USERS, KEY_READ};
     use winreg::RegKey;
 
     let users = RegKey::predef(HKEY_USERS);
-    users
-        .enum_keys()
-        .flatten()
+    user_scope(Whose::Player)
+        .0
+        .into_iter()
         .filter(|sid| user_sid(sid))
         .filter_map(|sid| {
             users
