@@ -35,6 +35,8 @@ public final class ConsoleMetalView: ConsolePlatformView {
     private var link: CADisplayLink?
     /// Touch state: the console takes one finger, the first one down.
     private var tracked: ObjectIdentifier?
+    /// Where a trackpad scroll landed as a finger, while it drags.
+    private var scrollFrom: CGPoint?
     /// Where the remote's swipe last stepped from.
     private var swipeFrom: CGPoint?
     /// A held remote direction and the timer that repeats it.
@@ -51,6 +53,7 @@ public final class ConsoleMetalView: ConsolePlatformView {
         #if os(iOS) || os(visionOS)
         // The console takes one finger; a second would only fight the first for the cursor.
         isMultipleTouchEnabled = false
+        addPointerInput()
         #elseif canImport(AppKit)
         wantsLayer = true
         #endif
@@ -170,7 +173,7 @@ public final class ConsoleMetalView: ConsolePlatformView {
     // that start at the screen's centre, so on tvOS they are only a swipe's travel.
     #if os(iOS) || os(visionOS)
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard tracked == nil, let touch = touches.first else { return }
+        guard tracked == nil, scrollFrom == nil, let touch = touches.first else { return }
         tracked = ObjectIdentifier(touch)
         send(.touchDown, touch)
     }
@@ -193,9 +196,72 @@ public final class ConsoleMetalView: ConsolePlatformView {
     }
 
     private func send(_ kind: ConsoleBridge.Pointer, _ touch: UITouch) {
+        send(kind, at: touch.location(in: self))
+    }
+
+    private func send(_ kind: ConsoleBridge.Pointer, at p: CGPoint, wheel: Float = 0) {
         let scale = pixelScale
-        let p = touch.location(in: self)
-        bridge.pointer(kind, x: Float(p.x * scale), y: Float(p.y * scale))
+        bridge.pointer(kind, x: Float(p.x * scale), y: Float(p.y * scale), wheel: wheel)
+    }
+
+    // MARK: - mouse and trackpad
+
+    /// A pointer that has not clicked sends no touches: its movement is hover and its scroll
+    /// is a pan that takes no finger. One recognizer per scroll type, so UIKit names the device.
+    private func addPointerInput() {
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover)))
+        for (mask, action) in [
+            (UIScrollTypeMask.continuous, #selector(trackpadScroll)),
+            (UIScrollTypeMask.discrete, #selector(wheelScroll)),
+        ] {
+            let pan = UIPanGestureRecognizer(target: self, action: action)
+            pan.allowedScrollTypesMask = mask
+            pan.allowedTouchTypes = []
+            addGestureRecognizer(pan)
+        }
+    }
+
+    @objc private func hover(_ g: UIHoverGestureRecognizer) {
+        // While a finger or a scroll is down the shell reads a move as its drag.
+        guard tracked == nil, scrollFrom == nil, g.state == .began || g.state == .changed
+        else { return }
+        send(.move, at: g.location(in: self))
+    }
+
+    /// Each wheel report is one scroll step. UIKit has applied Natural Scrolling, so + is up.
+    @objc private func wheelScroll(_ g: UIPanGestureRecognizer) {
+        let t = g.translation(in: self)
+        g.setTranslation(.zero, in: self)
+        let step = abs(t.y) >= abs(t.x) ? t.y : t.x
+        if step != 0 { send(.wheel, at: g.location(in: self), wheel: Float(step)) }
+    }
+
+    /// A two-finger scroll drags the console as a finger on the glass does, so it tracks and
+    /// flings the same way. The finger lands once the scroll has left the shell's 12-unit tap
+    /// slop with room to spare: a finger that lifts inside it is a tap.
+    @objc private func trackpadScroll(_ g: UIPanGestureRecognizer) {
+        let t = g.translation(in: self)
+        switch g.state {
+        case .began, .changed:
+            if scrollFrom == nil {
+                guard tracked == nil, hypot(t.x, t.y) * pixelScale >= 16 * designScale
+                else { return }
+                let from = g.location(in: self)
+                scrollFrom = from
+                send(.touchDown, at: from)
+            }
+            if let from = scrollFrom { send(.move, at: CGPoint(x: from.x + t.x, y: from.y + t.y)) }
+        case .ended:
+            guard let from = scrollFrom else { return }
+            scrollFrom = nil
+            send(.up, at: CGPoint(x: from.x + t.x, y: from.y + t.y))
+        case .cancelled, .failed:
+            guard scrollFrom != nil else { return }
+            scrollFrom = nil
+            bridge.pointer(.cancel, x: 0, y: 0)
+        default:
+            break
+        }
     }
     #elseif os(tvOS)
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
