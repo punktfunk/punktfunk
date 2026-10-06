@@ -3188,6 +3188,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "bitflags 2.13.1",
+ "bytemuck",
  "libc",
  "pf-dmabuf",
  "pf-driver-proto",
