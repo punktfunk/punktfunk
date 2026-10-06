@@ -7,7 +7,8 @@
 //! `SeDenyInteractiveLogonRight`.
 //! Existing accounts are accepted only after marker and password verification.
 //! Administrator membership and remote-interactive denial make a seat unusable;
-//! deletion requires the same exact marker and an explicit caller action.
+//! deletion requires the same exact marker and an explicit caller action, and takes the
+//! account's profile with it.
 
 use crate::model::{Seat, SeatId};
 use crate::windows::credentials::{Credential, CredentialStore};
@@ -17,7 +18,7 @@ use crate::windows::util::{
 use rand::RngCore as _;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_ALIAS_EXISTS, HANDLE, HLOCAL, NTSTATUS,
+    CloseHandle, LocalFree, ERROR_ALIAS_EXISTS, ERROR_FILE_NOT_FOUND, HANDLE, HLOCAL, NTSTATUS,
 };
 use windows::Win32::NetworkManagement::NetManagement::{
     NERR_GroupExists, NERR_Success, NERR_UserExists, NERR_UserInGroup, NERR_UserNotFound,
@@ -37,6 +38,7 @@ use windows::Win32::Security::{
     LogonUserW, LookupAccountNameW, LookupAccountSidW, LOGON32_LOGON_NETWORK,
     LOGON32_PROVIDER_DEFAULT, PSID, SID_NAME_USE,
 };
+use windows::Win32::UI::Shell::DeleteProfileW;
 use zeroize::Zeroizing;
 
 /// The local group every seat account joins, so an ACL can refuse seat accounts by one name.
@@ -157,6 +159,9 @@ impl AccountManager {
         match account_comment(&seat.account)? {
             None => self.credentials.delete(&seat.id),
             Some(comment) if comment == marker(&seat.id) => {
+                if let Some(sid) = sid_string(&seat.account) {
+                    delete_profile(&sid);
+                }
                 let account = wide(&seat.account, "account")?;
                 // SAFETY: account is a live NUL-terminated local name; null server selects this machine.
                 let status = unsafe { NetUserDel(PCWSTR::null(), PCWSTR(account.as_ptr())) };
@@ -353,6 +358,22 @@ fn join_seats_group(account: &str) -> WinResult<()> {
         ));
     }
     add_member(SEATS_GROUP, account)
+}
+
+/// Removes the profile of the account `sid` names, and the seat's Steam copy inside it, as
+/// `userdel -r` takes a Linux seat's home. A failure is logged: the account goes regardless.
+fn delete_profile(sid: &str) {
+    let Ok(sid_w) = wide(sid, "account sid") else {
+        return;
+    };
+    // SAFETY: `sid_w` is a live NUL-terminated string; null path and computer name this machine.
+    let deleted = unsafe { DeleteProfileW(PCWSTR(sid_w.as_ptr()), PCWSTR::null(), PCWSTR::null()) };
+    match deleted {
+        Ok(()) => {}
+        // An account that never logged on has no profile.
+        Err(error) if error.code() == ERROR_FILE_NOT_FOUND.to_hresult() => {}
+        Err(error) => tracing::warn!(%error, "seat profile not deleted"),
+    }
 }
 
 /// [`SEATS_GROUP`]'s SID as text, or `None` on a box that never provisioned a seat.
