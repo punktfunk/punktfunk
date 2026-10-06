@@ -131,6 +131,47 @@ fn au_flags(
     flags
 }
 
+/// Source stamps on a display faster than the stream, moved onto the content's cadence
+/// ([`pf_frame::pace::Restamp`]). Every ten seconds it logs how far each frame's gap moved
+/// from the one before, on the producer's stamps and on the corrected ones.
+#[cfg(target_os = "linux")]
+pub(super) struct SourceStamps {
+    restamp: pf_frame::pace::Restamp,
+    change: pf_frame::pace::GapChange,
+    tick_ns: u64,
+    since: std::time::Instant,
+}
+
+#[cfg(target_os = "linux")]
+impl SourceStamps {
+    const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+    pub(super) fn new(tick_ns: u64) -> Self {
+        Self {
+            restamp: pf_frame::pace::Restamp::new(tick_ns),
+            change: pf_frame::pace::GapChange::default(),
+            tick_ns,
+            since: std::time::Instant::now(),
+        }
+    }
+
+    fn apply(&mut self, pts_ns: u64) -> u64 {
+        let out = self.restamp.apply(pts_ns);
+        self.change.note(pts_ns, out);
+        if self.since.elapsed() >= Self::REPORT_EVERY {
+            let (raw, corrected) = self.change.take();
+            tracing::info!(
+                tick_us = self.tick_ns / 1000,
+                raw_gap_change_us = raw / 1000,
+                pts_gap_change_us = corrected / 1000,
+                "source stamp cadence on a display faster than the stream"
+            );
+            self.since = std::time::Instant::now();
+        }
+        out
+    }
+}
+
 impl StreamState {
     /// Pull the newest frame, run any recovery rung the capturer's ladder chose, and on a
     /// capture error rebuild ([`Self::on_capture_lost`]). `Ok(None)` ends the session cleanly.
@@ -182,8 +223,9 @@ impl StreamState {
         }))
     }
 
-    /// A fresh frame from the capturer: provenance bookkeeping, the source-cadence estimate,
-    /// the phase-locked hold, and the park re-arm.
+    /// A fresh frame from the capturer: provenance bookkeeping, the stamp correction on a
+    /// display faster than the stream, the source-cadence estimate, the phase-locked hold, and
+    /// the park re-arm.
     fn on_frame(&mut self, f: crate::capture::CapturedFrame, t_cap: std::time::Instant) {
         // Only a real SOURCE frame is evidence of source progress: a cursor-only
         // regeneration re-encodes the previous desktop image at a new pointer
@@ -192,6 +234,10 @@ impl StreamState {
         // cursor over one stashed texture is how a dead path used to look healthy).
         let source = f.provenance.origin == pf_frame::FrameOrigin::Source;
         self.frame = f;
+        #[cfg(target_os = "linux")]
+        if source && let Some(s) = self.restamp.as_mut() {
+            self.frame.pts_ns = s.apply(self.frame.pts_ns);
+        }
         if source {
             self.diag_new += 1;
         } else {

@@ -401,10 +401,17 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         (&Method::DELETE, "/api/v1/stats/recordings/{}"),
         (&Method::GET, "/api/v1/plugins"),
         (&Method::POST, "/api/v1/plugins/logs"),
-        // Where a managed emulator's program is, for the plugin that launches it, and making it
-        // ready to: first-run answers, and firmware from that plugin's own state folder.
+        // What the emulators play and where their copies are, making one ready (firmware from the
+        // plugin's own state folder), its firmware status and a game's add-ons. The save routes
+        // also need the operator's save grant, checked in the handler.
         (&Method::GET, "/api/v1/emulators"),
+        (&Method::GET, "/api/v1/emulators/catalog"),
         (&Method::POST, "/api/v1/emulators/{}/prepare"),
+        (&Method::GET, "/api/v1/emulators/{}/firmware"),
+        (&Method::POST, "/api/v1/emulators/{}/content"),
+        (&Method::GET, "/api/v1/emulators/{}/saves"),
+        (&Method::POST, "/api/v1/emulators/{}/saves/export"),
+        (&Method::POST, "/api/v1/emulators/{}/saves/import"),
         // A plugin asks for a folder and reads its own rows; deciding is admin-only, so the
         // overview and `/plugin-access/{}/decide` are deliberately absent here.
         (&Method::GET, "/api/v1/plugin-access/requests"),
