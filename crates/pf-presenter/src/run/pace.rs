@@ -22,6 +22,7 @@ impl Shell {
             st.fold_glass(&samples, self.presenter.vblank_locked());
         }
         st.intake();
+        self.presenter.begin_present_turn(st.newest_turn);
         st.win.ticks += 1;
         if let Some(refresh_ns) = self.presenter.measured_refresh_ns() {
             if self.presenter.vblank_locked() {
@@ -96,6 +97,10 @@ impl Shell {
                     st.note_submitted(pts_ns, decoded_ns);
                 }
             }
+        }
+        // Nothing taken in is waiting on this pass any more, unless the presenter was busy.
+        if !st.busy_retry {
+            self.presenter.end_present_turn(st.newest_turn);
         }
         // Close the overlay window once per second.
         if st.win.start.elapsed() >= Duration::from_secs(1) {
@@ -358,6 +363,10 @@ impl StreamState {
         while let Ok(f) = self.frames.try_recv() {
             let repeat = f.repeat;
             self.win.repeats += u32::from(repeat);
+            #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
+            if let DecodedImage::PyroWave(p) = &f.image {
+                self.newest_turn = p.turn;
+            }
             #[cfg(all(any(target_os = "linux", windows), feature = "pyrowave"))]
             if self.store.is_smoothing() && matches!(f.image, DecodedImage::PyroWave(_)) {
                 self.store.force_latency();

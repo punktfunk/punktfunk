@@ -540,6 +540,13 @@ pub fn parse_steam_output(data: &[u8]) -> SteamFeedback {
         let left = le(6); // left_speed → low/strong
         let right = le(8); // right_speed → high/weak
         fb.rumble = Some((left, right));
+    } else if let [_, cmd, ..] = data {
+        // The only record of a haptic command this host does not turn into rumble.
+        tracing::debug!(
+            cmd = format_args!("{cmd:#04x}"),
+            len = data.len(),
+            "steam pad feature write not forwarded"
+        );
     }
     fb
 }

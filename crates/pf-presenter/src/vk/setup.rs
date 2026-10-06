@@ -851,6 +851,7 @@ impl Presenter {
         // creation: the pyrowave decoder replays them into its pinned create-info.
         // One `queue_lock` per device (decode + Skia + presenter; see its docs).
         let queue_lock = std::sync::Arc::new(pf_client_core::video::QueueLock::new());
+        queue_lock.take_turns();
         #[cfg(windows)]
         let export_worthy = video_ok || win_capable || pyrowave_ok;
         #[cfg(target_os = "linux")]
