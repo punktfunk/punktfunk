@@ -40,6 +40,17 @@ pub(crate) fn enabled() -> bool {
     }
 }
 
+fn desktop_edition() -> bool {
+    #[cfg(windows)]
+    {
+        pf_seats::windows::server_edition() == Some(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// The ledger: every seat, its ports and whether its host runs.
 pub(crate) fn list() -> Result<Vec<pf_seats::Seat>, ApiError> {
     match call(Command::List)? {
@@ -57,6 +68,8 @@ pub(crate) fn list() -> Result<Vec<pf_seats::Seat>, ApiError> {
 pub(crate) struct Snapshot {
     /// The operator turned seats on.
     pub on: bool,
+    /// A desktop edition of Windows, which serves one session and so no seat.
+    pub desktop_edition: bool,
     pub seats: Vec<pf_seats::Seat>,
     /// Seat id → who streams there, for each running seat whose host answered.
     pub occupants: BTreeMap<String, Vec<Occupant>>,
@@ -97,6 +110,7 @@ pub(crate) fn snapshot() -> Arc<Snapshot> {
         .collect();
     let snap = Arc::new(Snapshot {
         on: enabled(),
+        desktop_edition: desktop_edition(),
         seats,
         occupants,
     });

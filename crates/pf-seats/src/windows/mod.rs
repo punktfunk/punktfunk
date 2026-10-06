@@ -61,7 +61,7 @@ pub fn seats_enabled() -> bool {
 
 /// Whether this is a Windows Server edition (`ProductType` other than `WinNT`), which
 /// allows concurrent RDP sessions without a session provider. `None` when unreadable.
-fn server_edition() -> Option<bool> {
+pub fn server_edition() -> Option<bool> {
     let product: String = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey_with_flags(
             r"SYSTEM\CurrentControlSet\Control\ProductOptions",
