@@ -21,6 +21,16 @@ pub(in crate::native) struct Pipeline {
     /// capture cannot re-attach (a portal remote fd is spent on the first connect).
     #[cfg(target_os = "linux")]
     pub(super) lease: Option<OutputLease>,
+    /// The display's refresh period when it runs faster than the stream: its frames' stamps
+    /// sit on that finer tick and are corrected onto the content's cadence ([`panel_tick_ns`]).
+    #[cfg(target_os = "linux")]
+    pub(super) panel_tick_ns: Option<u64>,
+}
+
+/// The display's refresh period in ns when it runs faster than the `stream_hz` it serves.
+#[cfg(target_os = "linux")]
+pub(super) fn panel_tick_ns(display_hz: u32, stream_hz: u32) -> Option<u64> {
+    (display_hz > stream_hz).then(|| 1_000_000_000 / u64::from(display_hz))
 }
 
 /// Display + pipeline built on the prep thread while Start RTT and hole-punch are in flight.
@@ -140,7 +150,7 @@ pub(super) fn build_pipeline_with_retry(
     // IDD-push: hold one lease across attempts so a failed capturer drop does not Lingering-preempt.
     let _retry_hold = if matches!(plan.capture, crate::session_plan::CaptureBackend::IddPush) {
         Some(
-            vd.create(display_mode_for(mode, is_gamescope(vd.as_ref())))
+            vd.create(display_mode_for(mode, vd.name()))
                 .context("acquire virtual output for the session (retry-hold lease)")?,
         )
     } else {
@@ -274,19 +284,21 @@ pub(super) fn is_permanent_build_error(chain: &str) -> bool {
     PERMANENT.iter().any(|p| lower.contains(p))
 }
 
-/// Session mode with refresh × the display multiple ([`HostConfig::vdisplay_hz_mult_for`]).
-/// Wire rate is still [`pacing_hz`]. gamescope paints on the game's commit, so the multiplier
-/// would only raise its frame limit: ignored there.
+/// Session mode with refresh × the display multiple ([`HostConfig::vdisplay_hz_mult_for`]) for
+/// the `compositor` that creates the display. Wire rate is still [`pacing_hz`]. DWM composes on
+/// the display's own fixed tick, which the automatic multiple is for; KWin's unpaced cast records
+/// each commit, so it gets none. gamescope paints on the game's commit, so a multiple would only
+/// raise its frame limit: none there, set or not.
 ///
 /// [`HostConfig::vdisplay_hz_mult_for`]: pf_host_config::HostConfig::vdisplay_hz_mult_for
 pub(super) fn display_mode_for(
     session: punktfunk_core::Mode,
-    gamescope: bool,
+    compositor: &str,
 ) -> punktfunk_core::Mode {
-    let mult = if gamescope {
+    let mult = if compositor == pf_vdisplay::Compositor::Gamescope.id() {
         1
     } else {
-        pf_host_config::config().vdisplay_hz_mult_for(session.refresh_hz)
+        pf_host_config::config().vdisplay_hz_mult_for(session.refresh_hz, cfg!(windows))
     };
     punktfunk_core::Mode {
         refresh_hz: session.refresh_hz.saturating_mul(mult).min(0xffff),
@@ -386,7 +398,7 @@ pub(super) fn build_pipeline(
     client_hdr: Option<pf_frame::HdrMeta>,
     wire_seq_base: u32,
 ) -> Result<Pipeline> {
-    let display_mode = display_mode_for(mode, is_gamescope(vd.as_ref()));
+    let display_mode = display_mode_for(mode, vd.name());
     let vout = crate::vdisplay::registry::acquire(vd, display_mode, quit.clone(), supersedes)
         .context("create virtual output")?;
     if let Some(t) = trace {
@@ -431,7 +443,7 @@ pub(super) fn reattach_pipeline(
         vd,
         lease.into_output(keepalive),
         mode,
-        display_mode_for(mode, is_gamescope(vd.as_ref())),
+        display_mode_for(mode, vd.name()),
         bitrate_kbps,
         bitrate_auto,
         bit_depth,
@@ -504,6 +516,7 @@ fn attach_pipeline(
             capture: plan.capture,
             kwin: cursor_id0_hides,
             gamescope: producer_is_gamescope,
+            stream_hz: effective_hz,
         },
     )
     .context("capture virtual output")?;
@@ -597,6 +610,8 @@ fn attach_pipeline(
         reframe,
         #[cfg(target_os = "linux")]
         lease,
+        #[cfg(target_os = "linux")]
+        panel_tick_ns: panel_tick_ns(achieved_hz, effective_hz),
     })
 }
 
@@ -621,15 +636,20 @@ mod tests {
             height: 1440,
             refresh_hz: 60,
         };
-        let display = display_mode_for(session, false);
+        let cfg = pf_host_config::config();
+        let display = display_mode_for(session, "kwin");
         assert_eq!((display.width, display.height), (2560, 1440));
         assert_eq!(
             display.refresh_hz,
-            session.refresh_hz * pf_host_config::config().vdisplay_hz_mult_for(60)
+            60 * cfg.vdisplay_hz_mult_for(60, cfg!(windows))
         );
         assert_eq!(
-            display_mode_for(session, true).refresh_hz,
-            session.refresh_hz,
+            display_mode_for(session, "pf-vdisplay").refresh_hz,
+            60 * cfg.vdisplay_hz_mult_for(60, cfg!(windows))
+        );
+        assert_eq!(
+            display_mode_for(session, "gamescope").refresh_hz,
+            60,
             "gamescope paints on commit: no multiplier"
         );
     }

@@ -243,7 +243,7 @@ struct ConnectFlow {
         // The model latches the result for the whole session, so nothing downstream can end up
         // applying a preset to half of it.
         let effective = EffectiveSettings.resolve(
-            host: host, selection: preset, catalog: presets.catalog)
+            host: host, selection: preset, launch: launchID, catalog: presets.catalog)
         model.connect(
             to: host,
             effective: effective,
