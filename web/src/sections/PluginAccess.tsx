@@ -5,6 +5,7 @@ import {
 	Download,
 	FolderLock,
 	RotateCcw,
+	Save,
 	Trash2,
 } from "lucide-react";
 import { type FC, useState } from "react";
@@ -64,7 +65,9 @@ export const PendingAccess: FC<{
 }> = ({ access, busy, onDecide }) => {
 	const allowAll =
 		access.pending.length > 1 &&
-		access.pending.every((row) => !row.write && !row.emulator && !row.core);
+		access.pending.every(
+			(row) => !row.write && !row.emulator && !row.core && !row.saves,
+		);
 	// An emulator row names the catalog id; the list gives it its name.
 	const emulators = useGetEmulators({
 		query: { enabled: access.pending.some((row) => !!row.emulator) },
@@ -98,6 +101,8 @@ export const PendingAccess: FC<{
 						<div className="flex items-start gap-2">
 							{install ? (
 								<Download className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+							) : row.saves ? (
+								<Save className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 							) : row.write ? (
 								<AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-500" />
 							) : (
@@ -115,6 +120,18 @@ export const PendingAccess: FC<{
 														name: emulatorName(row.emulator ?? ""),
 													})}
 										</div>
+										<div className="break-all font-mono text-xs text-muted-foreground">
+											{row.path}
+										</div>
+									</>
+								) : row.saves ? (
+									<>
+										<div className="text-sm font-medium">
+											{m.plugin_access_saves()}
+										</div>
+										<p className="text-xs text-muted-foreground">
+											{m.plugin_access_saves_note()}
+										</p>
 										<div className="break-all font-mono text-xs text-muted-foreground">
 											{row.path}
 										</div>
