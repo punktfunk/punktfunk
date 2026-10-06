@@ -3865,6 +3865,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "punktfunk-capture-worker"
+version = "0.43.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "pf-driver-proto",
+ "pf-encode-session",
+ "pf-encode-win",
+ "pf-frame",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "punktfunk-cli"
 version = "0.43.1"
 dependencies = [

@@ -7,6 +7,9 @@ members = [
     # The capability-carrying PyroWave encode worker. A SEPARATE binary by design — never a
     # hardlink of, or a subcommand of, punktfunk-host (design/gpu-priority-capability-worker.md).
     "crates/punktfunk-encode-worker",
+    # The Windows capture worker: Windows Graphics Capture and the encoder, as the signed-in
+    # user. A separate binary by design (design/windows-wgc-capture.md §4.2).
+    "crates/punktfunk-capture-worker",
     "crates/punktfunk-tray",
     "crates/punktfunk-setup",
     # The Windows installer wizard (WinUI 3 over the same engine). Stub bin off-Windows.

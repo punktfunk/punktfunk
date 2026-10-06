@@ -1,0 +1,64 @@
+# The Windows capture worker (design/windows-wgc-capture.md): one per session that streams a
+# monitor the host did not create — a pinned physical monitor, or the display another session owns.
+#
+# A SEPARATE BINARY on purpose. Windows Graphics Capture does not activate for SYSTEM, so the
+# process that captures must be the signed-in user's, and the encoder runs beside the capture so
+# no pixels cross a process boundary. `punktfunk-host` links neither.
+[package]
+name = "punktfunk-capture-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+description = "punktfunk capture worker: Windows Graphics Capture and the encoder for one mirror or shared-screen session, as the signed-in user."
+publish = false
+
+[[bin]]
+name = "punktfunk-capture-worker"
+path = "src/main.rs"
+
+[dependencies]
+tracing = "0.1"
+# Stderr is a pipe the host relays into its own log; this process needs a subscriber to write it.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+anyhow = "1"
+# The protocol structs are Pod; pinned to pf-driver-proto's so the graph resolves one bytemuck.
+bytemuck = "1.19"
+pf-driver-proto = { path = "../pf-driver-proto" }
+# The session loop, the AU writer, the backend open and the slot targets — the driver's own.
+pf-encode-session = { path = "../pf-encode-session" }
+pf-encode-win = { path = "../pf-encode-win" }
+pf-frame = { path = "../pf-frame" }
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Metadata",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    # `GraphicsCaptureAccess::RequestAccessAsync` answers with this namespace's status enum.
+    "Security_Authorization_AppCapabilityAccess",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    # Per-monitor awareness, so the capture item and the output are both in real pixels.
+    "Win32_UI_HiDpi",
+] }
+
+# The x86-64-only backends, as the driver turns them on.
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+pf-encode-session = { path = "../pf-encode-session", features = ["nvenc", "qsv", "pyrowave"] }
+
+[lints]
+workspace = true
