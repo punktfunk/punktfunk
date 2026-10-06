@@ -486,6 +486,7 @@
 	"library_entry_prep_title": "Prep commands",
 	"library_entry_prep_help": "Run before launch and undone after. Set through the API.",
 	"library_entry_plugin_offline": "{plugin} isn't answering right now — {issue}",
+	"library_entry_plugin_open": "Open in {plugin}",
 	"library_entry_plugin_save_failed": "Couldn't save {plugin}'s settings for this title — {issue}",
 	"plugin_form_json_hint": "These settings don't fit a simple form, so edit them as JSON. They're checked before saving.",
 	"plugin_form_path_read": "Saving gives {plugin} read access to the folders entered here.",
