@@ -20,6 +20,8 @@ export interface SeatScopeValue {
 	seat: SeatChoice | null;
 	seats: SeatChoice[];
 	ownerName: string;
+	/** The box is a door: it has no library of its own, so every pick is a seat. */
+	door?: boolean;
 	pick: (id: string | null) => void;
 }
 
@@ -29,17 +31,28 @@ export const SeatScopeContext = createContext<SeatScopeValue | null>(null);
 export const useSeat = (): SeatChoice | null =>
 	useContext(SeatScopeContext)?.seat ?? null;
 
-/** True for a profile whose desktop runs its own host. Linux seats join here. */
-export function isFullSeat(p: ProfileAdmin, os: string | undefined): boolean {
+/**
+ * True for a profile whose desktop runs its own host. On a door every profile plays on a seat, and
+ * the owner's seat is one of those hosts: the owner and every seat of a desktop of its own count.
+ * A profile that shares the owner's desktop, or has its own Steam in it, plays in the owner's
+ * host, so it has no library of its own to choose.
+ */
+export function isFullSeat(
+	p: ProfileAdmin,
+	os: string | undefined,
+	door = false,
+): boolean {
+	if (door) return p.owner || p.seat?.kind === "desktop";
 	return !p.owner && p.seat != null && (os?.startsWith("windows") ?? false);
 }
 
 export function seatChoices(
 	profiles: ProfileAdmin[] | undefined,
 	os: string | undefined,
+	door = false,
 ): SeatChoice[] {
 	return (profiles ?? [])
-		.filter((p) => isFullSeat(p, os))
+		.filter((p) => isFullSeat(p, os, door))
 		.map((p) => ({ id: p.id, name: p.display_name }));
 }
 

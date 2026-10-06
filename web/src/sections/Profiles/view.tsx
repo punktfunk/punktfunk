@@ -14,6 +14,7 @@ import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
 import type { Seating } from "@/api/gen/model/seating";
 import type { SeatState } from "@/api/gen/model/seatState";
+import { DocsLink } from "@/components/docs-link";
 import {
 	PasswordConfirmField,
 	type PasswordFailure,
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { fmtDateTimeSecs } from "@/lib/format";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
@@ -74,14 +76,16 @@ export function playsLine(
 ): string {
 	if (p.owner) return m.profiles_plays_owner();
 	const seat = p.seat;
-	if (!seat) return m.profiles_plays_shared({ owner: ownerName });
+	// A door gives the profiles on the box's own session a seat too, the owner's.
+	if (!seat || seat.kind === "shared")
+		return m.profiles_plays_shared({ owner: ownerName });
 	if (seat.state === "occupied" && seat.occupant)
 		return m.profiles_occupied_by({ device: seat.occupant });
 	if (seat.state === "starting")
 		return seat.detail || m.profiles_seat_starting();
 	if (seat.state === "unavailable")
 		return seat.detail || STATE_WORD.unavailable();
-	if (windows) return m.profiles_outcome_desktop();
+	if (windows || seat.kind === "desktop") return m.profiles_outcome_desktop();
 	if (seatHome !== "on") return m.profiles_plays_steam_off();
 	if (seat.steam_sign_in === true) return m.profiles_plays_steam_sign_in();
 	if (seat.steam_sign_in === false) return m.profiles_plays_steam_signed_in();
@@ -95,14 +99,25 @@ export type DoctorLine = {
 	onRun: () => void;
 };
 
-/** What a Windows host adds to the page: **Seats**, a seat's buttons and the doctor's line. */
-export type WindowsSeats = {
-	onSeats: () => void;
+/** What a host with seats adds to the page: a seat's buttons and the doctor's line, and on
+ * Windows **Seats**. */
+export type SeatActions = {
+	/** Windows: opens **Seats**. A Linux door has its own switch instead. */
+	onSeats?: () => void;
 	onStart: (p: ProfileAdmin) => void;
 	onStop: (p: ProfileAdmin) => void;
 	onEnd: (p: ProfileAdmin) => void;
 	/** `null` until the doctor has answered. */
 	doctor: DoctorLine | null;
+};
+
+/** **Reachable without logging in**, the Linux switch that makes the box a door. */
+export type DoorControl = {
+	on: boolean;
+	/** The switch is under way: the host that answers is changing. */
+	changing: boolean;
+	/** Opens the confirmation. */
+	onChange: () => void;
 };
 
 /** The page: one card per profile, the owner first, and **Add profile**. */
@@ -118,7 +133,9 @@ export const ProfilesView: FC<{
 	/** The profile an edit is in flight for; its buttons wait. */
 	busyId: string | null;
 	seatHome?: SeatHome;
-	windows?: WindowsSeats;
+	seats?: SeatActions;
+	/** Linux: the door's switch. */
+	door?: DoorControl;
 }> = ({
 	profiles,
 	avatarVersions,
@@ -129,7 +146,8 @@ export const ProfilesView: FC<{
 	onRemove,
 	busyId,
 	seatHome = "on",
-	windows,
+	seats,
+	door,
 }) => {
 	const list = profiles.data ?? [];
 	const ownerName = list.find((p) => p.owner)?.display_name ?? "";
@@ -139,8 +157,8 @@ export const ProfilesView: FC<{
 				<div className="flex items-center justify-between gap-4">
 					<h1 className="text-2xl font-semibold">{m.profiles_title()}</h1>
 					<div className="flex gap-2">
-						{windows && (
-							<Button variant="outline" onClick={windows.onSeats}>
+						{seats?.onSeats && (
+							<Button variant="outline" onClick={seats.onSeats}>
 								{m.profiles_seats()}
 							</Button>
 						)}
@@ -150,6 +168,7 @@ export const ProfilesView: FC<{
 						</Button>
 					</div>
 				</div>
+				{door && <DoorRow door={door} />}
 				<QueryState
 					isLoading={profiles.isLoading}
 					error={profiles.error}
@@ -163,7 +182,7 @@ export const ProfilesView: FC<{
 									profile={p}
 									ownerName={ownerName}
 									seatHome={seatHome}
-									windows={windows}
+									seats={seats}
 									version={avatarVersions?.[p.id]}
 									busy={busyId === p.id}
 									onRename={() => onRename(p)}
@@ -174,10 +193,91 @@ export const ProfilesView: FC<{
 							))}
 						</CardContent>
 					</Card>
-					{windows?.doctor && <DoctorFooter line={windows.doctor} />}
+					{seats?.doctor && <DoctorFooter line={seats.doctor} />}
 				</QueryState>
 			</div>
 		</Section>
+	);
+};
+
+/** The door's switch and the one line of what it does. The change itself asks for the password. */
+const DoorRow: FC<{ door: DoorControl }> = ({ door }) => (
+	<div className="flex items-start justify-between gap-4 rounded-md border p-4">
+		<div className="space-y-1">
+			<Label htmlFor="door-switch" className="font-medium">
+				{m.profiles_door()}
+			</Label>
+			<p className="text-sm text-muted-foreground">
+				{m.profiles_door_hint()} <DocsLink path="profiles#on-linux" />
+			</p>
+		</div>
+		{door.changing ? (
+			<span className="flex items-center gap-2 text-sm text-muted-foreground">
+				<Spinner className="size-4" />
+				{m.profiles_door_switching()}
+			</span>
+		) : (
+			<Checkbox
+				id="door-switch"
+				className="mt-1"
+				checked={door.on}
+				onCheckedChange={() => door.onChange()}
+			/>
+		)}
+	</div>
+);
+
+/** The door's confirmation: what turning it on or off does, and the console password. */
+export const DoorDialog: FC<{
+	open: boolean;
+	/** The state the switch is asked to take. */
+	turningOn: boolean;
+	isPending: boolean;
+	failure: PasswordFailure;
+	onConfirm: (password: string) => void;
+	onCancel: () => void;
+}> = ({ open, turningOn, isPending, failure, onConfirm, onCancel }) => {
+	const [password, setPassword] = useState("");
+	useEffect(() => {
+		if (open) setPassword("");
+	}, [open]);
+	return (
+		<Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+			<DialogContent className="max-w-md">
+				<DialogHeader>
+					<DialogTitle>{m.profiles_door()}</DialogTitle>
+					<DialogDescription>
+						{turningOn ? m.profiles_door_hint() : m.profiles_door_off_hint()}{" "}
+						<DocsLink path="profiles#on-linux" />
+					</DialogDescription>
+				</DialogHeader>
+				<form
+					onSubmit={(e) => {
+						e.preventDefault();
+						if (!isPending && password) onConfirm(password);
+					}}
+				>
+					<PasswordConfirmField
+						id="door-password"
+						value={password}
+						onChange={setPassword}
+						failure={failure}
+						autoFocus
+					/>
+				</form>
+				<DialogFooter>
+					<Button variant="outline" onClick={onCancel} disabled={isPending}>
+						{m.common_cancel()}
+					</Button>
+					<Button
+						disabled={isPending || password.length === 0}
+						onClick={() => onConfirm(password)}
+					>
+						{turningOn ? m.profiles_door_on() : m.profiles_door_off()}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 	);
 };
 
@@ -185,7 +285,7 @@ const ProfileRow: FC<{
 	profile: ProfileAdmin;
 	ownerName: string;
 	seatHome: SeatHome;
-	windows?: WindowsSeats;
+	seats?: SeatActions;
 	version?: number;
 	busy: boolean;
 	onRename: () => void;
@@ -196,7 +296,7 @@ const ProfileRow: FC<{
 	profile: p,
 	ownerName,
 	seatHome,
-	windows,
+	seats,
 	version,
 	busy,
 	onRename,
@@ -207,7 +307,7 @@ const ProfileRow: FC<{
 	const file = useRef<HTMLInputElement>(null);
 	const state = p.seat?.state;
 	const facts = [
-		playsLine(p, ownerName, seatHome, windows != null),
+		playsLine(p, ownerName, seatHome),
 		p.home === "bigpicture"
 			? m.profiles_home_bigpicture()
 			: m.profiles_home_desktop(),
@@ -237,27 +337,27 @@ const ProfileRow: FC<{
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center justify-end gap-1">
-				{windows && state === "stopped" && (
+				{seats && state === "stopped" && (
 					<Button
 						variant="outline"
 						size="sm"
 						disabled={busy}
-						onClick={() => windows.onStart(p)}
+						onClick={() => seats.onStart(p)}
 					>
 						{m.profiles_seat_start()}
 					</Button>
 				)}
-				{windows && state === "occupied" && (
+				{seats && state === "occupied" && (
 					<Button
 						variant="outline"
 						size="sm"
 						disabled={busy}
-						onClick={() => windows.onEnd(p)}
+						onClick={() => seats.onEnd(p)}
 					>
 						{m.profiles_seat_end()}
 					</Button>
 				)}
-				{windows &&
+				{seats &&
 					(state === "ready" ||
 						state === "occupied" ||
 						state === "starting") && (
@@ -265,7 +365,7 @@ const ProfileRow: FC<{
 							variant="outline"
 							size="sm"
 							disabled={busy}
-							onClick={() => windows.onStop(p)}
+							onClick={() => seats.onStop(p)}
 						>
 							{m.profiles_seat_stop()}
 						</Button>
@@ -345,6 +445,8 @@ export const AddProfileDialog: FC<{
 	/** A desktop of its own is a Windows host's, once its seats are on. */
 	windows?: boolean;
 	seatsOn?: boolean;
+	/** ...or a Linux host's, once the door is on. */
+	door?: boolean;
 	seatHome?: SeatHome;
 	onCancel: () => void;
 	onCreate: (body: ProfileCreate, picture: File | null) => void;
@@ -355,6 +457,7 @@ export const AddProfileDialog: FC<{
 	linux,
 	windows = false,
 	seatsOn = false,
+	door = false,
 	seatHome = "on",
 	onCancel,
 	onCreate,
@@ -378,6 +481,8 @@ export const AddProfileDialog: FC<{
 				display_name: name.trim(),
 				accent,
 				seat: outcome === "steam" || outcome === "seats",
+				// A Windows seat is always a desktop; on Linux it is the door's.
+				desktop: outcome === "seats",
 			},
 			picture,
 		);
@@ -409,12 +514,16 @@ export const AddProfileDialog: FC<{
 		{
 			id: "seats",
 			label: m.profiles_outcome_desktop(),
-			hint: !windows
-				? m.profiles_outcome_needs_seats()
-				: seatsOn
+			hint: windows
+				? seatsOn
 					? m.profiles_outcome_desktop_hint()
-					: m.profiles_outcome_seats_off(),
-			disabled: !windows || !seatsOn,
+					: m.profiles_outcome_seats_off()
+				: linux
+					? door
+						? m.profiles_outcome_desktop_hint_linux()
+						: m.profiles_outcome_door_off()
+					: m.profiles_outcome_needs_seats(),
+			disabled: windows ? !seatsOn : !(linux && door),
 		},
 	];
 	return (
@@ -528,8 +637,8 @@ export const AddProfileDialog: FC<{
 };
 
 /**
- * **Remove**, behind the console password. `erase` is offered where a seat home can stay; a
- * Windows seat's account always goes with it.
+ * **Remove**, behind the console password. `erase` is offered where a seat home can stay; the
+ * account of a desktop of its own always goes with it.
  */
 export const RemoveProfileDialog: FC<{
 	profile: ProfileAdmin | null;
@@ -546,10 +655,12 @@ export const RemoveProfileDialog: FC<{
 		setErase(false);
 		setPassword("");
 	}, [profile]);
-	const windowsSeat = windows && profile?.seat != null;
+	// A Windows seat is always a desktop of its own; on Linux the kind says so.
+	const ownAccount =
+		profile?.seat != null && (windows || profile.seat.kind === "desktop");
 	const submit = () => {
 		if (profile && password)
-			onRemove(profile.id, erase || windowsSeat, password);
+			onRemove(profile.id, erase || ownAccount, password);
 	};
 	return (
 		<Dialog open={profile !== null} onOpenChange={(o) => !o && onCancel()}>
@@ -561,11 +672,11 @@ export const RemoveProfileDialog: FC<{
 						</DialogTitle>
 						<DialogDescription>
 							{m.profiles_remove_body({ name: profile.display_name })}
-							{windowsSeat &&
-								` ${m.profiles_remove_windows({ name: profile.display_name })}`}
+							{ownAccount &&
+								` ${(windows ? m.profiles_remove_windows : m.profiles_remove_linux)({ name: profile.display_name })}`}
 						</DialogDescription>
 					</DialogHeader>
-					{profile.seat && !windowsSeat && (
+					{profile.seat && !ownAccount && (
 						<div className="flex items-start gap-2">
 							<Checkbox
 								id="profile-erase"

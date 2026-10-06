@@ -1290,5 +1290,16 @@
 	"seat_whose_plugins": "Whose plugins",
 	"seat_box": "This host",
 	"seat_note": "{name}'s library",
-	"seat_open_profiles": "Open Profiles"
+	"seat_open_profiles": "Open Profiles",
+	"profiles_door": "Reachable without logging in",
+	"profiles_door_hint": "A paired device can start your session while the lock screen stays on your monitor.",
+	"profiles_door_off_hint": "Your own session serves the box again, and the box's files move back to it.",
+	"profiles_door_on": "Turn on",
+	"profiles_door_off": "Turn off",
+	"profiles_door_switching": "Switching…",
+	"profiles_door_failed": "Couldn't switch it. Check the host log.",
+	"profiles_door_slow": "Still switching. Reload this page in a minute.",
+	"profiles_outcome_door_off": "Turn on Reachable without logging in first",
+	"profiles_outcome_desktop_hint_linux": "A user of its own, with its own Steam and sign-ins.",
+	"profiles_remove_linux": "{name}'s user account and its files are removed too."
 }

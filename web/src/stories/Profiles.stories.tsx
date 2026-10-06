@@ -1,11 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
 	AddProfileDialog,
+	DoorDialog,
 	ProfilesView,
 	RemoveProfileDialog,
 	SeatsDialog,
 } from "@/sections/Profiles/view";
 import {
+	profilesDoor,
 	profilesEvery,
 	profilesOne,
 	profilesWindows,
@@ -101,7 +103,7 @@ export const RemoveSeat: Story = {
 	),
 };
 
-const windows = {
+const seats = {
 	onSeats: noop,
 	onStart: noop,
 	onStop: noop,
@@ -113,7 +115,7 @@ const windows = {
 export const WindowsEveryState: Story = {
 	args: {
 		profiles: { data: profilesWindows, isLoading: false, error: null },
-		windows,
+		seats,
 	},
 };
 
@@ -121,8 +123,8 @@ export const WindowsEveryState: Story = {
 export const WindowsDoctorError: Story = {
 	args: {
 		profiles: { data: profilesWindows, isLoading: false, error: null },
-		windows: {
-			...windows,
+		seats: {
+			...seats,
 			doctor: {
 				message: "Remote Desktop licensing has run out for this server.",
 				checking: false,
@@ -182,6 +184,68 @@ export const AddOnWindowsSeatsOff: Story = {
 			ownerName="Enrico"
 			linux={false}
 			windows
+			onCancel={noop}
+			onCreate={noop}
+			isPending={false}
+		/>
+	),
+};
+
+/** A Linux door: the switch is on, the owner's seat waits for a device, and seats of their own run. */
+export const LinuxDoorOn: Story = {
+	args: {
+		profiles: { data: profilesDoor, isLoading: false, error: null },
+		seats,
+		door: { on: true, changing: false, onChange: noop },
+	},
+};
+
+/** A Linux box without the door: the switch is off and nothing else changes. */
+export const LinuxDoorOff: Story = {
+	args: { door: { on: false, changing: false, onChange: noop } },
+};
+
+/** The switch under way: the host and the console restart, then the page answers from the other. */
+export const LinuxDoorSwitching: Story = {
+	args: { door: { on: false, changing: true, onChange: noop } },
+};
+
+/** Turning the door on asks for the console password. */
+export const DoorTurnOn: Story = {
+	render: () => (
+		<DoorDialog
+			open
+			turningOn
+			isPending={false}
+			failure={null}
+			onConfirm={noop}
+			onCancel={noop}
+		/>
+	),
+};
+
+/** Turning it off hands the box back to the owner's session. */
+export const DoorTurnOff: Story = {
+	render: () => (
+		<DoorDialog
+			open
+			turningOn={false}
+			isPending={false}
+			failure="wrong"
+			onConfirm={noop}
+			onCancel={noop}
+		/>
+	),
+};
+
+/** **Add profile** with the door on: **Own desktop** is a user of its own. */
+export const AddOnLinuxDoor: Story = {
+	render: () => (
+		<AddProfileDialog
+			open
+			ownerName="Enrico"
+			linux
+			door
 			onCancel={noop}
 			onCreate={noop}
 			isPending={false}

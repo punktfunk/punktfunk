@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { type FC, useState } from "react";
+import { type FC, useEffect, useState } from "react";
 import {
 	getGetHostSettingsQueryKey,
 	patchHostSettings,
 	useGetHostInfo,
 	useGetHostSettings,
 } from "@/api/gen/host/host";
+import type { DoorChange } from "@/api/gen/model/doorChange";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
 import {
@@ -15,6 +16,7 @@ import {
 	getGetSeatingQueryKey,
 	getGetSeatsDoctorQueryKey,
 	getListProfilesQueryKey,
+	setDoor,
 	setProfileAvatar,
 	startProfileSeat,
 	stopProfileSeat,
@@ -33,11 +35,15 @@ import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import {
 	AddProfileDialog,
+	DoorDialog,
 	ProfilesView,
 	RemoveProfileDialog,
 	type SeatHome,
 	SeatsDialog,
 } from "./view";
+
+/** How long a door switch may take before the page says so: it restarts the host and console. */
+const DOOR_SLOW_MS = 120_000;
 
 type SeatAct = "start" | "stop" | "end";
 const SEAT_ACT = {
@@ -60,14 +66,37 @@ export const SectionProfiles: FC = () => {
 					: 15_000,
 		},
 	});
-	const host = useGetHostInfo();
+	// The state a door switch was asked for, until the host that answers says it took.
+	const [switching, setSwitching] = useState<boolean | null>(null);
+	const host = useGetHostInfo({
+		query: { refetchInterval: switching === null ? false : 2_000 },
+	});
 	const linux = host.data?.os?.startsWith("linux") ?? false;
 	const windows = host.data?.os?.startsWith("windows") ?? false;
-	const seating = useGetSeating({ query: { enabled: windows } });
+	const door = host.data?.door === true;
+	// Seats are the box's own on Windows, and a Linux door's.
+	const seatHost = windows || door;
+	const seating = useGetSeating({ query: { enabled: seatHost } });
 	const seatsOn = seating.data?.enabled === true;
 	const doctor = useGetSeatsDoctor({
-		query: { enabled: windows && seatsOn, refetchInterval: 60_000 },
+		query: { enabled: seatHost && seatsOn, refetchInterval: 60_000 },
 	});
+	const [doorAsk, setDoorAsk] = useState<boolean | null>(null);
+	const doorFailure = usePasswordFailure();
+	useEffect(() => {
+		if (switching === null || host.data?.door !== switching) return;
+		setSwitching(null);
+		// Every list now answers from the other host.
+		void qc.invalidateQueries();
+	}, [host.data?.door, switching, qc]);
+	useEffect(() => {
+		if (switching === null) return;
+		const slow = setTimeout(() => {
+			toast.error(m.profiles_door_slow());
+			setSwitching(null);
+		}, DOOR_SLOW_MS);
+		return () => clearTimeout(slow);
+	}, [switching]);
 	const [seatsOpen, setSeatsOpen] = useState(false);
 	const settings = useGetHostSettings({ query: { enabled: linux } });
 	const seatRow = settings.data?.settings.find(
@@ -131,6 +160,19 @@ export const SectionProfiles: FC = () => {
 				refresh();
 			},
 			onError: failed(m.profiles_seats_failed()),
+		},
+	});
+	// The console password rides in the body; the console's server strips it before the host.
+	const changeDoor = useMutation({
+		mutationFn: (v: { on: boolean; password: string }) =>
+			setDoor({ on: v.on, password: v.password } as DoorChange),
+		onSuccess: (_done, v) => {
+			doorFailure.reset();
+			setDoorAsk(null);
+			setSwitching(v.on);
+		},
+		onError: (e) => {
+			if (!doorFailure.classify(e)) failed(m.profiles_door_failed())(e);
 		},
 	});
 	const act = (p: ProfileAdmin, a: SeatAct) =>
@@ -224,14 +266,26 @@ export const SectionProfiles: FC = () => {
 				profiles={profiles}
 				avatarVersions={versions}
 				seatHome={seatHome}
-				windows={
-					windows
+				seats={
+					seatHost
 						? {
-								onSeats: () => setSeatsOpen(true),
+								onSeats: windows ? () => setSeatsOpen(true) : undefined,
 								onStart: (p) => act(p, "start"),
 								onStop: (p) => act(p, "stop"),
 								onEnd: (p) => act(p, "end"),
 								doctor: doctorLine,
+							}
+						: undefined
+				}
+				door={
+					linux
+						? {
+								on: door,
+								changing: switching !== null,
+								onChange: () => {
+									doorFailure.reset();
+									setDoorAsk(!door);
+								},
 							}
 						: undefined
 				}
@@ -259,6 +313,7 @@ export const SectionProfiles: FC = () => {
 				linux={linux}
 				windows={windows}
 				seatsOn={seatsOn}
+				door={door}
 				seatHome={seatHome}
 				onCancel={() => setAdding(false)}
 				onCreate={onCreate}
@@ -277,6 +332,16 @@ export const SectionProfiles: FC = () => {
 					onClose={() => setSeatsOpen(false)}
 				/>
 			)}
+			<DoorDialog
+				open={doorAsk !== null}
+				turningOn={doorAsk === true}
+				isPending={changeDoor.isPending}
+				failure={doorFailure.failure}
+				onConfirm={(password) =>
+					doorAsk !== null && changeDoor.mutate({ on: doorAsk, password })
+				}
+				onCancel={() => setDoorAsk(null)}
+			/>
 			<RemoveProfileDialog
 				windows={windows}
 				profile={removing}

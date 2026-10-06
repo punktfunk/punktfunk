@@ -31,7 +31,11 @@ const profile = (over: Partial<ProfileAdmin>): ProfileAdmin =>
 		...over,
 	}) as ProfileAdmin;
 
-const seat = { port: 9778, state: "ready" } as ProfileAdmin["seat"];
+const seat = {
+	port: 9778,
+	state: "ready",
+	kind: "desktop",
+} as ProfileAdmin["seat"];
 
 test("a Windows host's profiles with a seat have a library of their own", () => {
 	const owner = profile({ id: "o".repeat(32), owner: true });
@@ -44,6 +48,33 @@ test("a Windows host's profiles with a seat have a library of their own", () => 
 	// A Linux host's seat shares the box's host until it has its own.
 	expect(seatChoices([owner, kid], "linux")).toEqual([]);
 	expect(seatChoices(undefined, undefined)).toEqual([]);
+});
+
+test("on a door the owner and the seats of their own have a library, the rest share the owner's", () => {
+	const owner = profile({
+		id: "o".repeat(32),
+		owner: true,
+		display_name: "Enrico",
+	});
+	const shared = profile({
+		id: "s".repeat(32),
+		display_name: "Guest",
+		seat: { port: 9778, state: "ready", kind: "shared" },
+	});
+	const steam = profile({
+		id: "t".repeat(32),
+		display_name: "Mia",
+		seat: { port: 9778, state: "ready", kind: "steam" },
+	});
+	const desktop = profile({
+		seat: { port: 9779, state: "ready", kind: "desktop" },
+	});
+	expect(seatChoices([owner, shared, steam, desktop], "linux", true)).toEqual([
+		{ id: "o".repeat(32), name: "Enrico" },
+		{ id: KID, name: "Kid" },
+	]);
+	// Off a door the owner is the box, and the same list offers nothing on Linux.
+	expect(seatChoices([owner, shared, steam, desktop], "linux")).toEqual([]);
 });
 
 test("a seat's cache asks the seat's host and the box's never does", async () => {

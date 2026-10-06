@@ -17,8 +17,13 @@ const card = (seat: SeatPublic): ProfileAdmin => ({
 	default: false,
 });
 
-const line = (seat: SeatPublic, windows = true) =>
-	playsLine(card(seat), "Enrico", "on", windows);
+const line = (seat: Omit<SeatPublic, "kind">, windows = true) =>
+	playsLine(
+		card({ ...seat, kind: windows ? "desktop" : "steam" }),
+		"Enrico",
+		"on",
+		windows,
+	);
 
 test("a Windows seat names its own desktop, never Steam", () => {
 	expect(line({ state: "ready", port: 1 })).toBe("Own desktop");
@@ -43,4 +48,11 @@ test("occupied names the device, unavailable the host's reason", () => {
 
 test("a Linux seat keeps its Steam line", () => {
 	expect(line({ state: "ready", port: 1 }, false)).toBe("Own Steam");
+});
+
+test("a door gives a desktop sharer the owner's seat and still calls it sharing", () => {
+	const shared = card({ state: "stopped", port: 9778, kind: "shared" });
+	expect(playsLine(shared, "Enrico")).toBe("Shares Enrico's desktop");
+	const own = card({ state: "ready", port: 9779, kind: "desktop" });
+	expect(playsLine(own, "Enrico", "on", false)).toBe("Own desktop");
 });

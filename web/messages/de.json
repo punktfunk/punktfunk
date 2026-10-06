@@ -1206,5 +1206,16 @@
 	"seat_whose_plugins": "Wessen Plugins",
 	"seat_box": "Dieser Host",
 	"seat_note": "Bibliothek von {name}",
-	"seat_open_profiles": "Profile öffnen"
+	"seat_open_profiles": "Profile öffnen",
+	"profiles_door": "Ohne Anmeldung erreichbar",
+	"profiles_door_hint": "Ein gekoppeltes Gerät kann deine Sitzung starten, während der Sperrbildschirm am Monitor bleibt.",
+	"profiles_door_off_hint": "Deine eigene Sitzung bedient den Rechner wieder, und seine Dateien ziehen dorthin zurück.",
+	"profiles_door_on": "Einschalten",
+	"profiles_door_off": "Ausschalten",
+	"profiles_door_switching": "Wird umgeschaltet…",
+	"profiles_door_failed": "Das Umschalten hat nicht geklappt. Prüfe das Host-Log.",
+	"profiles_door_slow": "Schaltet noch um. Lade diese Seite in einer Minute neu.",
+	"profiles_outcome_door_off": "Schalte zuerst „Ohne Anmeldung erreichbar“ ein",
+	"profiles_outcome_desktop_hint_linux": "Ein eigener Benutzer mit eigenem Steam und eigenen Anmeldungen.",
+	"profiles_remove_linux": "Auch das Benutzerkonto von {name} und seine Dateien werden entfernt."
 }

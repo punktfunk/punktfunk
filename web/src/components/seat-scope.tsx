@@ -1,5 +1,6 @@
 // The **Whose library** chip: Library, Game sources and Plugins are per seat, so on a host with a
 // seat of its own they show the box's by default and a seat's on request. Nothing else follows it.
+// A door has no library of its own: its pages show the owner's seat unless another is picked.
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { type FC, type ReactNode, useContext } from "react";
 import { useGetHostInfo } from "@/api/gen/host/host";
@@ -47,18 +48,28 @@ export const SeatScope: FC<{ page: SeatPage; children: ReactNode }> = ({
 		null,
 		isIdOrNull,
 	);
-	const seats = seatChoices(profiles.data, host.data?.os);
+	const door = host.data?.door === true;
+	const seats = seatChoices(profiles.data, host.data?.os, door);
 	const settled = !profiles.isPending && !host.isPending;
 	return (
-		// A remembered seat waits for the list that says it still is one.
-		<QueryState isLoading={stored !== null && !settled} error={null}>
+		// A remembered seat waits for the list that says it still is one, and a door for the
+		// host that says it is one: before that the page would ask the door for a library.
+		<QueryState
+			isLoading={(stored !== null || host.data?.door !== false) && !settled}
+			error={null}
+		>
 			<SeatScopeView
 				page={page}
 				seats={seats}
-				seat={seats.find((s) => s.id === stored) ?? null}
+				seat={
+					seats.find((s) => s.id === stored) ??
+					(door ? seats[0] : undefined) ??
+					null
+				}
 				ownerName={
 					profiles.data?.find((p) => p.owner)?.display_name ?? m.seat_box()
 				}
+				door={door}
 				pick={store}
 			>
 				{children}
@@ -90,6 +101,8 @@ export const SeatScopeView: FC<SeatScopeValue & { children: ReactNode }> = ({
 export const SeatChip: FC = () => {
 	const scope = useContext(SeatScopeContext);
 	if (!scope || scope.seats.length === 0) return null;
+	// A door with only the owner's seat has nothing to choose.
+	if (scope.door && scope.seats.length < 2) return null;
 	const label =
 		scope.page === "plugins" ? m.seat_whose_plugins() : m.seat_whose_library();
 	return (
@@ -102,7 +115,7 @@ export const SeatChip: FC = () => {
 				<SelectValue />
 			</SelectTrigger>
 			<SelectContent>
-				<SelectItem value={BOX}>{scope.ownerName}</SelectItem>
+				{!scope.door && <SelectItem value={BOX}>{scope.ownerName}</SelectItem>}
 				{scope.seats.map((s: SeatChoice) => (
 					<SelectItem key={s.id} value={s.id}>
 						{s.name}
@@ -115,8 +128,9 @@ export const SeatChip: FC = () => {
 
 /** Whose library an entry page edits, when it is a seat's. */
 export const SeatNote: FC = () => {
-	const seat = useContext(SeatScopeContext)?.seat;
-	return seat ? (
+	const scope = useContext(SeatScopeContext);
+	const seat = scope?.seat;
+	return seat && !(scope?.door && scope.seats.length < 2) ? (
 		<Badge variant="secondary" className="self-start">
 			{m.seat_note({ name: seat.name })}
 		</Badge>
