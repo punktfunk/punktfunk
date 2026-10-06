@@ -23,6 +23,7 @@ use parking_lot::Mutex;
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use usbip_sim::{
     Direction, SetupPacket, UsbDevice, UsbEndpoint, UsbInterface, UsbInterfaceHandler, UsbSpeed,
     Version,
@@ -63,12 +64,20 @@ impl Default for InputReport {
     }
 }
 
-/// Sparse reports (battery/RSSI/wireless) queue; `0x42`/`0x45`/`0x47` state is newest-wins.
-/// A single latest-report slot loses the sparse packet to the next 250 Hz state URB.
+/// How long a pad goes without state before it reads neutral once.
+const STALE: Duration = Duration::from_millis(500);
+
+/// Sparse reports (battery/RSSI/wireless) queue; `0x42`/`0x45` state is newest-wins and served
+/// once. An id the descriptor lacks (`0x47`) is dropped. A poll with nothing new waits, as on the real pad; after [`STALE`] without state
+/// the pad reads neutral once, so a stalled client does not hold a stick or a gyro rate.
 #[derive(Debug)]
 struct InputReports {
     latest_state: InputReport,
     pending: VecDeque<InputReport>,
+    /// `latest_state` has not been served.
+    fresh: bool,
+    /// When the last state arrived; `None` once the neutral read went out.
+    written: Option<Instant>,
 }
 
 impl InputReports {
@@ -76,6 +85,8 @@ impl InputReports {
         Self {
             latest_state,
             pending: VecDeque::new(),
+            fresh: true,
+            written: None,
         }
     }
 
@@ -87,8 +98,13 @@ impl InputReports {
 
     fn write(&mut self, report: InputReport) {
         match report.data[0] {
-            0x42 | 0x45 | 0x47 => self.latest_state = report,
-            // Battery 0x43, RSSI 0x44/0x7B, wireless 0x46/0x79: queue until a poll consumes them.
+            0x42 | 0x45 => {
+                self.latest_state = report;
+                self.fresh = true;
+                self.written = Some(Instant::now());
+            }
+            id if pf_driver_proto::triton::input_len(id).is_none() => {}
+            // Battery 0x43, RSSI 0x44/0x7B, wireless 0x79: queue until a poll consumes them.
             _ => {
                 if self.pending.len() >= 32 {
                     self.pending.pop_front();
@@ -98,8 +114,19 @@ impl InputReports {
         }
     }
 
-    fn read(&mut self) -> InputReport {
-        self.pending.pop_front().unwrap_or(self.latest_state)
+    /// What the next poll gets; `None` when nothing is new.
+    fn read(&mut self, now: Instant) -> Option<InputReport> {
+        if let Some(report) = self.pending.pop_front() {
+            return Some(report);
+        }
+        if std::mem::take(&mut self.fresh) {
+            return Some(self.latest_state);
+        }
+        if self.written.is_some_and(|t| now.duration_since(t) >= STALE) {
+            self.written = None;
+            return Some(neutral_report());
+        }
+        None
     }
 }
 
@@ -298,8 +325,10 @@ impl UsbInterfaceHandler for TritonHandler {
                 _ => vec![],
             })
         } else if let Direction::In = ep.direction() {
-            let r = self.reports.lock().read();
-            Ok(r.data[..r.len as usize].to_vec())
+            match self.reports.lock().read(Instant::now()) {
+                Some(r) => Ok(r.data[..r.len as usize].to_vec()),
+                None => Err(std::io::ErrorKind::WouldBlock.into()),
+            }
         } else {
             // Interrupt-OUT is already id-first (`SDL_hid_write`); EP0 SET_REPORT may not be.
             if !req.is_empty() {
@@ -723,9 +752,31 @@ mod tests {
         reports.write(signal);
         reports.write(next_state);
 
-        assert_eq!(reports.read().data[..3], [0x7B, 0xF8, 0x01]);
-        assert_eq!(reports.read().data[1], 9);
-        assert_eq!(reports.read().data[1], 9); // newest state replays after the sparse packet
+        let now = Instant::now();
+        assert_eq!(reports.read(now).unwrap().data[..3], [0x7B, 0xF8, 0x01]);
+        assert_eq!(reports.read(now).unwrap().data[1], 9);
+        assert!(reports.read(now).is_none(), "a state is served once");
+    }
+
+    /// A client that stops sending leaves the pad neutral once, then quiet.
+    #[test]
+    fn a_stalled_pad_reads_neutral_once() {
+        let mut reports = InputReports::new(neutral_report());
+        let now = Instant::now();
+        assert!(
+            reports.read(now).is_some(),
+            "the first poll gets the idle state"
+        );
+        let mut held = neutral_report();
+        held.data[10] = 0xFF;
+        reports.write(held);
+        assert_eq!(reports.read(now).unwrap().data[10], 0xFF);
+        assert!(reports.read(now + STALE / 2).is_none());
+        let neutral = reports
+            .read(now + STALE * 2)
+            .expect("neutral after the stall");
+        assert_eq!(neutral.data[10], 0);
+        assert!(reports.read(now + STALE * 4).is_none());
     }
 
     #[test]
