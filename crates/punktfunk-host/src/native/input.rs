@@ -81,6 +81,16 @@ mod backends {
 }
 use backends::PadBackends;
 
+/// How long a declared Steam Controller 2 waits for its identity ([`Pads::waits_for_identity`]).
+const IDENTITY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn is_sc2(kind: GamepadPref) -> bool {
+    matches!(
+        kind,
+        GamepadPref::SteamController2 | GamepadPref::SteamController2Puck
+    )
+}
+
 /// Per-pad virtual-gamepad router. Each index uses the kind declared in
 /// [`InputKind::GamepadArrival`]; undeclared pads keep the Hello session default.
 ///
@@ -110,6 +120,11 @@ struct Pads {
     /// What the client asked for, before [`resolve_pad_kind`] folded it. `None` until
     /// this pad declares. Reported by the Controllers feed, never used for routing.
     declared: [Option<GamepadPref>; MAX_WIRE_PADS],
+    /// What a captured Steam Controller 2 told us it is, by wire pad. Kept across a re-plug: a
+    /// new pad on the index sends its own before it arrives.
+    identities: [Option<std::sync::Arc<crate::inject::triton_proto::Sc2Identity>>; MAX_WIRE_PADS],
+    /// When each pad declared a Steam Controller 2 kind ([`Pads::waits_for_identity`]).
+    sc2_declared: [Option<std::time::Instant>; MAX_WIRE_PADS],
     /// Manager that holds a built device at this index (`None` = none). Stays put
     /// if `kinds[idx]` later changes (arrival-after-first-frame), so a pad is
     /// never duplicated and removal always hits the manager that owns it.
@@ -145,6 +160,8 @@ impl Pads {
             pending_release: [None; MAX_WIRE_PADS],
             kinds: [default; MAX_WIRE_PADS],
             declared: [None; MAX_WIRE_PADS],
+            identities: Default::default(),
+            sc2_declared: [None; MAX_WIRE_PADS],
             owner: [None; MAX_WIRE_PADS],
             xbox360: None,
             backends: {
@@ -177,8 +194,43 @@ impl Pads {
                 "gamepad kind declared (per-pad)"
             );
         }
+        match (is_sc2(self.kinds[idx]), is_sc2(resolved)) {
+            (false, true) => self.sc2_declared[idx] = Some(std::time::Instant::now()),
+            (_, false) => self.sc2_declared[idx] = None,
+            (true, true) => {}
+        }
         self.kinds[idx] = resolved;
         self.declared[idx] = Some(kind);
+    }
+
+    /// Who the Steam Controller 2 on wire pad `id.pad` is, for the virtual pad built next.
+    fn set_identity(&mut self, id: &punktfunk_core::quic::PadIdentity) {
+        let idx = usize::from(id.pad);
+        if idx >= MAX_WIRE_PADS {
+            return;
+        }
+        let identity = crate::inject::triton_proto::Sc2Identity::from_wire(id);
+        tracing::info!(
+            pad = idx,
+            serial = identity
+                .as_ref()
+                .and_then(|i| i.serial.as_deref())
+                .unwrap_or("-"),
+            replies = identity.as_ref().map_or(0, |i| i.replies.len()),
+            "pad identity received"
+        );
+        self.identities[idx] = identity.map(std::sync::Arc::new);
+    }
+
+    /// A client sends a pad's identity on the control stream and its arrival as a datagram, so
+    /// the arrival can land first. A Linux SC2 waits up to [`IDENTITY_WAIT`] for it: the virtual
+    /// pad is built once, as itself. A client that sends none gets the canned identity.
+    fn waits_for_identity(&self, idx: usize) -> bool {
+        cfg!(target_os = "linux")
+            && self.owner[idx].is_none()
+            && is_sc2(self.kinds[idx])
+            && self.identities[idx].is_none()
+            && self.sc2_declared[idx].is_some_and(|t| t.elapsed() < IDENTITY_WAIT)
     }
 
     /// This pad as the Controllers feed reports it: the device the host built, the
@@ -218,7 +270,7 @@ impl Pads {
             }
             GamepadEvent::Arrival { index, .. } => (*index as usize, true),
         };
-        if idx >= MAX_WIRE_PADS {
+        if idx >= MAX_WIRE_PADS || present && self.waits_for_identity(idx) {
             return;
         }
         // The only wire→OS slot translation. Claim on present; a removal must not
@@ -242,6 +294,9 @@ impl Pads {
             return;
         };
         let had_device = self.owner[idx].is_some();
+        if present && !had_device && is_sc2(self.kinds[idx]) {
+            crate::inject::triton_proto::stage_identity(slot, self.identities[idx].clone());
+        }
         let (kind, new_owner) = route_decision(self.owner[idx], self.kinds[idx], present);
         self.owner[idx] = new_owner;
         self.route_handle(kind, &self.re_index(ev, slot));
@@ -566,6 +621,8 @@ pub(super) enum ClientInput {
     /// 0xCC/0x05 stylus batches, diffed into a per-session virtual tablet
     /// (`design/pen-tablet-input.md`).
     Pen(punktfunk_core::quic::PenBatch),
+    /// A captured Steam Controller 2's serial and feature replies, off the control stream.
+    PadIdentity(punktfunk_core::quic::PadIdentity),
 }
 
 /// Per-session stylus ([`crate::pen_sink::PenSink`]) plus the stroke timeout this
@@ -1160,6 +1217,11 @@ pub(super) fn input_thread(
                 }
                 pads.apply_rich(rich);
             }
+            Ok(ClientInput::PadIdentity(id))
+                if grants.load(Ordering::Relaxed) & punktfunk_core::quic::GRANT_GAMEPAD != 0 =>
+            {
+                pads.set_identity(&id);
+            }
             // Pointer-class (`classify`). The guard is deny-at-setup: a session
             // that never passes it never creates the virtual tablet.
             Ok(ClientInput::Pen(batch))
@@ -1386,6 +1448,29 @@ mod tests {
         );
         // No slot = no device. Dropped, never folded onto slot 0.
         assert!(pads.rich_in_slot_space(report(2)).is_none());
+    }
+
+    /// A Steam Controller 2 is built once, as itself: it waits for the identity its client
+    /// sends, and nothing else waits.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_steam_controller_2_waits_for_its_identity() {
+        let mut pads = Pads::new(GamepadPref::Xbox360, PadIdentity::anonymous(), None);
+        // Set the resolved kind directly: a box without `/dev/uhid` folds an SC2 to Xbox 360.
+        pads.kinds[1] = GamepadPref::SteamController2;
+        pads.sc2_declared[1] = Some(std::time::Instant::now());
+        pads.sc2_declared[2] = Some(std::time::Instant::now());
+        assert!(pads.waits_for_identity(1));
+        assert!(!pads.waits_for_identity(2), "an Xbox pad never waits");
+        pads.set_identity(&punktfunk_core::quic::PadIdentity {
+            pad: 1,
+            serial: "FXA0000000001".into(),
+            replies: Vec::new(),
+        });
+        assert!(!pads.waits_for_identity(1));
+        pads.kinds[3] = GamepadPref::SteamController2;
+        pads.sc2_declared[3] = Some(std::time::Instant::now() - IDENTITY_WAIT);
+        assert!(!pads.waits_for_identity(3), "the wait ends");
     }
 
     /// The console and the client are told which players this session is, once per

@@ -485,6 +485,12 @@ pub(super) async fn run(task: Task) {
                     if ok && reconfig_tx.send(req.mode).is_err() {
                         break;
                     }
+                } else if let Ok(id) = v2msg::decode::<punktfunk_core::quic::PadIdentity>(ty, &body) {
+                    if session_grants.load(Ordering::Relaxed) & punktfunk_core::quic::GRANT_GAMEPAD != 0
+                        && input_tx.try_send(super::input::ClientInput::PadIdentity(id)).is_err()
+                    {
+                        tracing::warn!("pad identity dropped: input queue full");
+                    }
                 } else if v2msg::decode::<RequestKeyframe>(ty, &body).is_ok() {
                     // Encode loop coalesces: a wedge fires several requests
                     // before the IDR lands.

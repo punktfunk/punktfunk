@@ -324,8 +324,24 @@ impl Sc2Identity {
         Ok(id)
     }
 
-    /// `PUNKTFUNK_SC2_IDENTITY`: a capture to replay on every virtual SC2. A test knob until
-    /// clients send their pad's own.
+    /// What a client sent ([`punktfunk_core::quic::PadIdentity`]); `None` when it carries
+    /// neither a serial nor a reply, or the replies are torn.
+    pub fn from_wire(id: &punktfunk_core::quic::PadIdentity) -> Option<Sc2Identity> {
+        let replies: Vec<_> = punktfunk_core::quic::unpack_identity_replies(&id.replies)?
+            .into_iter()
+            .filter(|(_, rep)| !rep.is_empty())
+            .map(|(req, rep)| {
+                let mut reply = [0u8; 64];
+                reply[..rep.len()].copy_from_slice(&rep);
+                (req, reply)
+            })
+            .collect();
+        let serial = (!id.serial.is_empty()).then(|| id.serial.clone());
+        (serial.is_some() || !replies.is_empty()).then_some(Sc2Identity { serial, replies })
+    }
+
+    /// `PUNKTFUNK_SC2_IDENTITY`: a capture to replay on a virtual SC2 whose client sent no
+    /// identity of its own. A test knob.
     pub fn from_env() -> Option<Sc2Identity> {
         let path = std::env::var_os("PUNKTFUNK_SC2_IDENTITY")?;
         let parsed = std::fs::read_to_string(&path)
@@ -349,6 +365,29 @@ impl Sc2Identity {
     }
 }
 
+/// Identities for the virtual SC2s about to be built, by OS pad slot.
+static STAGED: std::sync::Mutex<std::collections::BTreeMap<u8, std::sync::Arc<Sc2Identity>>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The identity the next virtual SC2 on OS slot `slot` takes; `None` clears it.
+pub fn stage_identity(slot: u8, id: Option<std::sync::Arc<Sc2Identity>>) {
+    let mut staged = STAGED.lock().unwrap_or_else(|e| e.into_inner());
+    match id {
+        Some(id) => staged.insert(slot, id),
+        None => staged.remove(&slot),
+    };
+}
+
+/// What a virtual SC2 on `slot` answers as: the staged identity, else the test knob's.
+pub fn identity_for(slot: u8) -> Option<std::sync::Arc<Sc2Identity>> {
+    let staged = STAGED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&slot)
+        .cloned();
+    staged.or_else(|| Sc2Identity::from_env().map(std::sync::Arc::new))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +408,28 @@ mod tests {
         st.raw_len = 3;
         let (r, len) = st.report(&mut seq);
         assert_eq!((len, &r[..3], seq), (3, &[0x45, 0x11, 0x22][..], 8));
+    }
+
+    #[test]
+    fn a_sent_identity_becomes_the_pads_replies() {
+        use punktfunk_core::quic::{pack_identity_replies, PadIdentity};
+        let sent = PadIdentity {
+            pad: 1,
+            serial: "FXA0000000001".into(),
+            replies: pack_identity_replies([
+                (&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..]),
+                (&[0x01, 0xAE, 0x15, 0x02][..], &[][..]),
+            ]),
+        };
+        let id = Sc2Identity::from_wire(&sent).unwrap();
+        assert_eq!(id.serial.as_deref(), Some("FXA0000000001"));
+        assert_eq!(id.replies.len(), 1, "an unanswered query is dropped");
+        assert_eq!(id.reply(&[0x01, 0x83, 0x00]).unwrap()[2], 0x1E);
+        assert!(Sc2Identity::from_wire(&PadIdentity::default()).is_none());
+
+        stage_identity(201, Some(std::sync::Arc::new(id)));
+        assert!(identity_for(201).is_some());
+        stage_identity(201, None);
     }
 
     #[test]

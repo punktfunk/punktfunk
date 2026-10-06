@@ -15,7 +15,7 @@
 
 use super::steam_usbip::{attach_device, boxed, UsbipAttachment};
 use super::triton_proto::{
-    parse_triton_rumble, serialize_triton_state, triton_feature_reply, triton_serial,
+    identity_for, parse_triton_rumble, serialize_triton_state, triton_feature_reply, triton_serial,
     triton_unit_id, Sc2Identity, TritonState, TRITON_RDESC, TRITON_STATE_LEN,
 };
 use anyhow::Result;
@@ -635,7 +635,7 @@ impl TritonUsbip {
     pub fn open(index: u8) -> Result<TritonUsbip> {
         let reports = Arc::new(Mutex::new(InputReports::new(neutral_report())));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
-        let identity = Sc2Identity::from_env().map(Arc::new);
+        let identity = identity_for(index);
         let attach = attach_device(
             || build_triton_device(index, &reports, &feedback, identity.as_ref()),
             &format!("virtual Steam Controller 2 {index}"),
@@ -655,7 +655,7 @@ impl TritonUsbip {
             puck_connect_report(),
         )));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
-        let identity = Sc2Identity::from_env().map(Arc::new);
+        let identity = identity_for(index);
         let attach = attach_device(
             || build_puck_device(index, &reports, &feedback, identity.as_ref()),
             &format!("virtual Steam Controller 2 Puck {index}"),
