@@ -53,7 +53,7 @@ pub fn launch_is_resolvable(id: &str) -> bool {
     let Some(spec) = entry.launch.as_ref() else {
         return false;
     };
-    if spec.kind == "exec" {
+    if matches!(spec.kind.as_str(), "exec" | "emulator") {
         return exec_recipe(&entry).is_some();
     }
     command_for(spec).is_some()

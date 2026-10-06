@@ -305,7 +305,7 @@ pub(crate) async fn serve(
         }
     };
 
-    // Host-lifetime capturer: one PipeWire stream, handed session to session (`AudioCapSlot`).
+    // A sinkless capturer handed session to session (`AudioCapSlot`, `park_audio_capture`).
     let audio_cap: AudioCapSlot = Arc::new(std::sync::Mutex::new(None));
     // Host-lifetime injector: one RemoteDesktop-portal grant. A CreateSession per session
     // races portal teardown on reconnect and wedges KWin EIS. Gamepads stay per-session.
@@ -1540,11 +1540,7 @@ pub(crate) async fn run_admitted(
             .configured_effective()
             .is_some_and(|e| e.identity == crate::vdisplay::policy::Identity::PerClientMode);
         // Pin at bring-up; a console change mid-session must not change this session's answer.
-        // Linux-only: `vdisplay::open` only routes to the mirror there.
-        #[cfg(target_os = "linux")]
-        let mirrored = crate::vdisplay::capture_monitor().is_some();
-        #[cfg(not(target_os = "linux"))]
-        let mirrored = false;
+        let mirrored = crate::session_plan::mirrored();
         reconfig_allowed(compositor, per_client_mode_identity, mirrored || join_live)
     };
     // `Copy` so the control task's `async move` and SessionContext both keep it.
@@ -2620,6 +2616,11 @@ async fn teardown(
 
 /// Live sessions, on either plane, that may stream a gamescope the host took over.
 static LIVE_GAMESCOPE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether any session holds a [`GamescopeHold`]: a held takeover is then streaming, not kept.
+pub(crate) fn gamescope_sessions_live() -> bool {
+    LIVE_GAMESCOPE.load(Ordering::SeqCst) > 0
+}
 
 /// One count in [`LIVE_GAMESCOPE`], taken before the session resolves its compositor. Resolving
 /// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again.

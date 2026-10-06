@@ -66,6 +66,12 @@ declares its kind:
 No other value may start with `-`. The host drops a title whose values don't fit when the plugin
 publishes it.
 
+A ROM needs no template. `launch: { kind: "emulator", value: "pcsx2", args: [...] }` names a
+catalog emulator, and the arguments `platform`, `file`, and optionally `core` and `extra`. The host
+starts `file` in its best copy of that emulator, after first-run setup and the platform's firmware.
+`GET /api/v1/emulators/catalog` lists the platforms and emulators. A plugin that moves saves asks
+once with `saves: true` on `POST /api/v1/plugin-access/requests`.
+
 ## A minimal library plugin
 
 `@punktfunk/plugin-kit/library` supplies everything except the scan: the sync loop, file watching,

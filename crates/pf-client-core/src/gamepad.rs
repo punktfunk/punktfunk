@@ -16,6 +16,7 @@ use punktfunk_core::client::{ActuatorQuirks, NativeClient};
 use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::{gamepad as wire, InputEvent, InputKind};
 use punktfunk_core::quic::{HidOutput, RichInput};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -234,6 +235,8 @@ pub enum SelectChord {
 pub struct GamepadService {
     pads: Arc<Mutex<Vec<PadInfo>>>,
     active: Arc<Mutex<Option<PadInfo>>>,
+    /// The last [`Self::set_kind_override`], as [`GamepadPref::to_u8`].
+    kind: Arc<AtomicU8>,
     ctl: Sender<Ctl>,
     escape_rx: async_channel::Receiver<()>,
     disconnect_rx: async_channel::Receiver<()>,
@@ -274,6 +277,7 @@ impl GamepadService {
         GamepadService {
             pads,
             active,
+            kind: Arc::default(),
             ctl,
             escape_rx,
             disconnect_rx,
@@ -311,6 +315,7 @@ impl GamepadService {
             GamepadService {
                 pads,
                 active,
+                kind: Arc::default(),
                 ctl,
                 escape_rx,
                 disconnect_rx,
@@ -381,11 +386,17 @@ impl GamepadService {
         let _ = self.ctl.send(Ctl::Pin(key));
     }
 
-    /// Explicit controller-type for the session about to start (`Auto` = per pad).
-    /// Call before [`Self::attach`]: the host honors [`InputKind::GamepadArrival`] over
-    /// the Hello default and does not hot-swap a device that already exists.
+    /// Explicit controller-type (`Auto` = per pad). The host builds a pad from its
+    /// [`InputKind::GamepadArrival`] and never swaps a built one, so a change mid-session
+    /// re-plugs each forwarded pad whose declared kind moves.
     pub fn set_kind_override(&self, pref: GamepadPref) {
+        self.kind.store(pref.to_u8(), Ordering::Relaxed);
         let _ = self.ctl.send(Ctl::KindOverride(pref));
+    }
+
+    /// The controller-type [`Self::set_kind_override`] last asked for.
+    pub fn kind_override(&self) -> GamepadPref {
+        GamepadPref::from_u8(self.kind.load(Ordering::Relaxed))
     }
 
     /// Off holds no slot: no arrival and the hidraw node stays free for a passthrough
@@ -621,6 +632,21 @@ fn is_acting(s: &MenuSample) -> bool {
     s.buttons.iter().chain(&s.dpad).any(|&b| b) || ring_sector(s.lx, s.ly, None).is_some()
 }
 
+/// The pad an input transition came from. `None` for hotplug and everything else.
+fn input_pad(event: &sdl3::event::Event) -> Option<u32> {
+    use sdl3::event::Event;
+    match *event {
+        Event::ControllerButtonDown { which, .. }
+        | Event::ControllerButtonUp { which, .. }
+        | Event::ControllerAxisMotion { which, .. }
+        | Event::ControllerTouchpadDown { which, .. }
+        | Event::ControllerTouchpadMotion { which, .. }
+        | Event::ControllerTouchpadUp { which, .. }
+        | Event::ControllerSensorUpdated { which, .. } => Some(which),
+        _ => None,
+    }
+}
+
 /// SDL sticks are +y = down; the wire (XInput) is +y = up. Triggers 0..32767 → 0..255.
 fn axis_value(axis: sdl3::gamepad::Axis, v: i16) -> (u32, i32) {
     use sdl3::gamepad::Axis;
@@ -751,6 +777,9 @@ struct Slot {
     /// The button a Select chord took while Select was pending: neither press went out, so
     /// the release must not either.
     swallow_btn: Option<u32>,
+    /// Guide is down and stays local. It is the local shell's chord key (Steam: Guide+A
+    /// opens the QAM), so the rest of this pad stays off the wire until it lifts.
+    guide_local: bool,
     /// Per Steam surface (0 = left, 1 = right): last wire coords + finger-down. Clicks have no
     /// position, so the click forward reuses the live contact.
     surface_last: [(i16, i16, bool); 2],
@@ -792,6 +821,7 @@ impl Slot {
             held_buttons: Vec::new(),
             held_touches: std::collections::HashSet::new(),
             swallow_btn: None,
+            guide_local: false,
             surface_last: [(0, 0, false); 2],
             held_clicks: [false; 2],
             last_accel: [0; 3],
@@ -1120,6 +1150,27 @@ impl Worker {
         if changed {
             // Hot-plug under the launcher: adopt held state instead of firing it. No sensors.
             self.menu_nav.reset();
+        }
+    }
+
+    /// A controller-type change. In a session, each forwarded pad whose declared kind moves
+    /// is closed and reopened, a re-plug the host builds the new kind from.
+    fn set_kind_override(&mut self, pref: GamepadPref) {
+        self.kind_override = pref;
+        if self.attached.is_none() {
+            return;
+        }
+        let moved: Vec<u32> = self
+            .slots
+            .iter()
+            .filter(|s| declared_kind(pref, s.pref) != s.declared)
+            .map(|s| s.id)
+            .collect();
+        for id in moved {
+            if let Some(i) = self.slots.iter().position(|s| s.id == id) {
+                self.close_slot_at(i);
+                self.open_slot(id);
+            }
         }
     }
 
@@ -1454,11 +1505,20 @@ impl Worker {
         }
     }
 
-    /// Overlay mask lifts: adopt buttons into `held_buttons` without a wire press (an A
-    /// that picked a QAM row must not fire in the game). Axes are re-sent: the mask
-    /// flushed them to zero and SDL only speaks on change, so a still-held stick would
-    /// stay dead host-side.
+    /// Overlay mask lifts: every slot takes its pad back.
     fn readopt_held(&mut self) {
+        let attached = self.attached.clone();
+        for slot in &mut self.slots {
+            Self::readopt_slot(slot, attached.as_deref(), self.system_forward);
+        }
+        self.rearm_escape();
+    }
+
+    /// The pad is ours again: adopt buttons into `held_buttons` without a wire press (an A
+    /// that picked a QAM row must not fire in the game). Axes are re-sent: the flush
+    /// zeroed them and SDL only speaks on change, so a still-held stick would stay dead
+    /// host-side. A local Guide still down keeps the pad with the shell.
+    fn readopt_slot(slot: &mut Slot, c: Option<&NativeClient>, system_forward: bool) {
         use sdl3::gamepad::{Axis, Button};
         const BUTTONS: [Button; 21] = [
             Button::South,
@@ -1491,37 +1551,36 @@ impl Worker {
             Axis::TriggerLeft,
             Axis::TriggerRight,
         ];
-        let system_forward = self.system_forward;
-        let attached = self.attached.clone();
-        for slot in &mut self.slots {
-            slot.held_buttons.clear();
-            for b in BUTTONS {
-                let Some(bit) = button_bit(b) else {
-                    continue;
-                };
-                if !system_forward && matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1) {
-                    continue;
-                }
-                // A trackpad click forwards as a surface, and its release never clears a bit.
-                if Self::steam_click_surface(slot, b).is_some() {
-                    continue;
-                }
-                if slot.pad.button(b) {
-                    slot.held_buttons.push(bit);
-                }
-            }
-            let Some(c) = &attached else {
+        slot.held_buttons.clear();
+        slot.guide_local = !system_forward && slot.pad.button(Button::Guide);
+        if slot.guide_local {
+            return;
+        }
+        for b in BUTTONS {
+            let Some(bit) = button_bit(b) else {
                 continue;
             };
-            for a in AXES {
-                let (id, v) = axis_value(a, slot.pad.axis(a));
-                if slot.last_axis[id as usize] != v {
-                    slot.last_axis[id as usize] = v;
-                    send(c, InputKind::GamepadAxis, id, v, slot.index);
-                }
+            if !system_forward && matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1) {
+                continue;
+            }
+            // A trackpad click forwards as a surface, and its release never clears a bit.
+            if Self::steam_click_surface(slot, b).is_some() {
+                continue;
+            }
+            if slot.pad.button(b) {
+                slot.held_buttons.push(bit);
             }
         }
-        self.rearm_escape();
+        let Some(c) = c else {
+            return;
+        };
+        for a in AXES {
+            let (id, v) = axis_value(a, slot.pad.axis(a));
+            if slot.last_axis[id as usize] != v {
+                slot.last_axis[id as usize] = v;
+                send(c, InputKind::GamepadAxis, id, v, slot.index);
+            }
+        }
     }
 
     /// Read from the pads, not `held_buttons`: the mask drops button events, and a hold
@@ -1774,7 +1833,7 @@ impl Worker {
                     self.pinned = key;
                     self.refresh_active();
                 }
-                Ok(Ctl::KindOverride(pref)) => self.kind_override = pref,
+                Ok(Ctl::KindOverride(pref)) => self.set_kind_override(pref),
                 Ok(Ctl::ChordsLive(on)) => {
                     self.chords_live = on;
                     self.push_sc2_gate();
@@ -1887,21 +1946,25 @@ impl Worker {
 
     fn handle_event(&mut self, event: sdl3::event::Event) {
         use sdl3::event::Event;
-        // Overlay owns the pad: drop input transitions (flushed neutral when the mask went
-        // on). Add/remove still count — losing them would leave the slot table stale.
-        if self.masked
-            && matches!(
+        use sdl3::gamepad::Button;
+        // The overlay owns the pads, or a held local Guide owns this one: drop input
+        // transitions (flushed neutral when either began). Add/remove still count, or
+        // the slot table goes stale. Guide itself passes: its release ends the hold.
+        if let Some(which) = input_pad(&event) {
+            let guide = matches!(
                 event,
-                Event::ControllerButtonDown { .. }
-                    | Event::ControllerButtonUp { .. }
-                    | Event::ControllerAxisMotion { .. }
-                    | Event::ControllerTouchpadDown { .. }
-                    | Event::ControllerTouchpadMotion { .. }
-                    | Event::ControllerTouchpadUp { .. }
-                    | Event::ControllerSensorUpdated { .. }
-            )
-        {
-            return;
+                Event::ControllerButtonDown {
+                    button: Button::Guide,
+                    ..
+                } | Event::ControllerButtonUp {
+                    button: Button::Guide,
+                    ..
+                }
+            );
+            let held = self.slots.iter().any(|s| s.id == which && s.guide_local);
+            if self.masked || (held && !guide) {
+                return;
+            }
         }
         match event {
             Event::ControllerDeviceAdded { which, .. } => {
@@ -1994,6 +2057,12 @@ impl Worker {
         }
         if let Some(bit) = button_bit(button) {
             if !self.system_forward && matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1) {
+                // Neutral for the hold, as under the mask: what is pressed with Guide is
+                // the shell's chord, and one already held must not stay down host-side.
+                if bit == wire::BTN_GUIDE {
+                    slot.guide_local = true;
+                    Self::flush_slot(&c, slot);
+                }
                 return;
             }
             // Claimed only where the client can act on it: the ring withholds the press
@@ -2047,6 +2116,11 @@ impl Worker {
             return;
         }
         if let Some(bit) = button_bit(button) {
+            // The host never saw this Guide go down: its lift only hands the pad back.
+            if bit == wire::BTN_GUIDE && slot.guide_local {
+                Self::readopt_slot(slot, Some(&*c), self.system_forward);
+                return;
+            }
             if !self.system_forward && matches!(bit, wire::BTN_GUIDE | wire::BTN_MISC1) {
                 return;
             }

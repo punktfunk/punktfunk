@@ -306,6 +306,11 @@ discovery = ["dep:mdns-sd", "dep:async-channel"]
 # still strictly per-session opt-in (Settings codec pick / PUNKTFUNK_PREFER_PYROWAVE=1).
 pyrowave = ["dep:pyrowave-sys", "dep:ash"]
 
+# Headless wavelet decode bench over a `PUNKTFUNK_DUMP_VIDEO` capture.
+[[example]]
+name = "pyrowave_bench"
+required-features = ["pyrowave"]
+
 # build.rs names the `portable` and `desktop` module gates.
 [build-dependencies]
 cfg_aliases = "0.2"

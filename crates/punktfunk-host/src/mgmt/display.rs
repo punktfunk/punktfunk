@@ -2,8 +2,8 @@
 //! custom presets.
 //!
 //! A PUT stores the next-session policy; a running session keeps the display it opened on.
-//! `keep_alive: forever` pins until `POST /display/release`. Off Linux, `capture_monitor` is
-//! dropped on write — there is no mirror backend.
+//! `keep_alive: forever` pins until `POST /display/release`. A host with no mirror backend
+//! (neither Linux nor Windows) drops `capture_monitor` on write.
 //!
 //! See `design/display-management.md` and `design/per-monitor-portal-capture.md`.
 
@@ -163,9 +163,9 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if edid_lock_available() {
         enforced.push("edid_lock".into());
     }
-    // Linux-only: `capture_monitor` needs the MIRROR backend (`vdisplay::open`). Do not
-    // advertise it off Linux — a stored pin would never take effect.
-    if cfg!(target_os = "linux") {
+    // `capture_monitor` needs the mirror backend (`vdisplay::open`): Linux and Windows. Do not
+    // advertise it elsewhere — a stored pin would never take effect.
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
         enforced.push("capture_monitor".into());
     }
     // Hyprland and sway only. KWin is a later step, and Mutter/GNOME, gamescope and Windows
@@ -282,17 +282,17 @@ pub(crate) async fn set_display_settings(
 /// Store a host-wide policy, keeping the stored overlays, then re-aim absolute input at its
 /// pin (or clear the anchor) without a restart. The PUT and `display.next` both write here.
 ///
-/// Off Linux there is no mirror backend, so `capture_monitor` is dropped rather than refused:
-/// the PUT is whole-object, and a stored pin would reject every later save over a field the
-/// operator cannot see.
+/// A host with no mirror backend drops `capture_monitor` rather than refusing it: the PUT is
+/// whole-object, and a stored pin would reject every later save over a field the operator
+/// cannot see.
 pub(super) fn write(policy: crate::vdisplay::policy::DisplayPolicy) -> anyhow::Result<()> {
-    #[cfg_attr(target_os = "linux", allow(unused_mut))]
+    #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(unused_mut))]
     let mut policy = policy;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     if let Some(dropped) = policy.capture_monitor.take() {
         tracing::warn!(
-            "management API: ignoring capture_monitor={dropped:?} — streaming a chosen physical \
-             monitor is Linux-only (no Windows mirror backend); the pin was NOT stored"
+            "management API: ignoring capture_monitor={dropped:?} — this host cannot stream a \
+             chosen physical monitor; the pin was NOT stored"
         );
     }
     write_with(|stored| *stored = with_stored_overlays(policy, stored))
@@ -517,11 +517,10 @@ pub(crate) struct MonitorsResponse {
     monitors: Vec<ApiMonitorInfo>,
     /// Configured pin, even when it matches no head (console can show a dangling pin).
     pinned: Option<String>,
-    /// True when this build can stream a chosen physical head.
+    /// True when this build can stream a chosen physical head: Linux and Windows.
     ///
-    /// Enumeration and capture are separate. Off Linux, heads are listed but there is no
-    /// mirror backend (`vdisplay::open` has no Windows arm; `pf-capture` only has
-    /// `open_idd_push`). The console treats `false` as a read-only picker.
+    /// Enumeration and capture are separate, so a host can list heads it cannot stream. The
+    /// console treats `false` as a read-only picker.
     pin_supported: bool,
     /// Enumeration failure. `None` with an empty list means the host has no heads.
     error: Option<String>,
@@ -542,14 +541,13 @@ pub(crate) struct MonitorsResponse {
     )
 )]
 pub(crate) async fn get_display_monitors() -> Json<MonitorsResponse> {
+    let pin_supported = cfg!(any(target_os = "linux", target_os = "windows"));
     // Effective pin (env override, else stored policy): highlight what sessions will mirror.
-    #[cfg(target_os = "linux")]
-    let pinned = crate::vdisplay::capture_monitor();
-    // No mirror backend. Report `None` even if a pin is stored — highlighting a head nothing will
-    // capture is the false signal this field exists to avoid. `pin_supported: false` is the flag.
-    #[cfg(not(target_os = "linux"))]
-    let pinned: Option<String> = None;
-    let pin_supported = cfg!(target_os = "linux");
+    // With no mirror backend report `None` even if a pin is stored — highlighting a head
+    // nothing will capture is the false signal this field exists to avoid.
+    let pinned = pin_supported
+        .then(crate::vdisplay::capture_monitor)
+        .flatten();
     // Shells out / D-Bus / Wayland, and on Windows walks CCD (can serialize on the display-config
     // lock). Off the async worker.
     let (compositor, listed) = tokio::task::spawn_blocking(|| {
@@ -629,26 +627,59 @@ pub(crate) struct ReleaseDisplayResult {
 )]
 pub(crate) async fn get_display_state() -> Json<DisplayStateResponse> {
     let snap = crate::vdisplay::registry::snapshot();
+    let displays = snap.displays.into_iter().map(|d| ApiDisplayInfo {
+        slot: d.slot,
+        backend: d.backend,
+        mode: format!("{}x{}@{}", d.mode.0, d.mode.1, d.mode.2),
+        state: d.state,
+        expires_in_ms: d.expires_in_ms,
+        sessions: d.sessions,
+        client: d.client,
+        group: d.group,
+        display_index: d.display_index,
+        x: d.position.0,
+        y: d.position.1,
+        identity_slot: d.identity_slot,
+        topology: d.topology,
+    });
+    #[cfg(target_os = "linux")]
+    let displays = displays.chain(held_game_mode());
     Json(DisplayStateResponse {
-        displays: snap
-            .displays
-            .into_iter()
-            .map(|d| ApiDisplayInfo {
-                slot: d.slot,
-                backend: d.backend,
-                mode: format!("{}x{}@{}", d.mode.0, d.mode.1, d.mode.2),
-                state: d.state,
-                expires_in_ms: d.expires_in_ms,
-                sessions: d.sessions,
-                client: d.client,
-                group: d.group,
-                display_index: d.display_index,
-                x: d.position.0,
-                y: d.position.1,
-                identity_slot: d.identity_slot,
-                topology: d.topology,
-            })
-            .collect(),
+        displays: displays.collect(),
+    })
+}
+
+/// The `slot` of a held gamescope takeover. Not a pool generation, and safe as a JS number.
+#[cfg(target_os = "linux")]
+const GAME_MODE_SLOT: u64 = (1 << 53) - 1;
+
+/// The box's own Game Mode, held between sessions by a takeover: a kept row, so Release reaches it.
+#[cfg(target_os = "linux")]
+fn held_game_mode() -> Option<ApiDisplayInfo> {
+    if crate::native::gamescope_sessions_live() {
+        return None;
+    }
+    let held = crate::vdisplay::held_managed_session()?;
+    let (w, h, hz) = held.mode.unwrap_or_default();
+    Some(ApiDisplayInfo {
+        slot: GAME_MODE_SLOT,
+        backend: "gamescope".into(),
+        mode: format!("{w}x{h}@{hz}"),
+        state: if held.restore_in.is_some() {
+            "lingering"
+        } else {
+            "pinned"
+        }
+        .into(),
+        expires_in_ms: held.restore_in.map(|d| d.as_millis() as u64),
+        sessions: 0,
+        client: None,
+        group: 0,
+        display_index: 0,
+        x: 0,
+        y: 0,
+        identity_slot: None,
+        topology: crate::vdisplay::registry::topology_str(),
     })
 }
 
@@ -674,9 +705,19 @@ pub(crate) async fn release_display(
     // PowerShell shell-out — seconds of blocking work. Off the async worker, as the listing
     // above already does.
     let slot = req.slot;
-    let released = tokio::task::spawn_blocking(move || crate::vdisplay::registry::release(slot))
-        .await
-        .unwrap_or(0);
+    let released = tokio::task::spawn_blocking(move || {
+        let released = crate::vdisplay::registry::release(slot);
+        #[cfg(target_os = "linux")]
+        if slot.is_none_or(|s| s == GAME_MODE_SLOT)
+            && !crate::native::gamescope_sessions_live()
+            && crate::vdisplay::release_managed_session()
+        {
+            return released + 1;
+        }
+        released
+    })
+    .await
+    .unwrap_or(0);
     tracing::info!(slot = ?req.slot, released, "management API: display release");
     Json(ReleaseDisplayResult { released })
 }

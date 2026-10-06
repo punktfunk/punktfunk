@@ -714,6 +714,12 @@ object NativeBridge {
     external fun nativePadMotionReaches(handle: Long, declaredPref: Int): Boolean
 
     /**
+     * The console's outline for a GamepadPref wire byte's pad family, as 24-unit SVG path data,
+     * stroked at 1.5. Empty for Automatic, which keeps its generic gamepad icon.
+     */
+    external fun nativePadMark(pref: Int): String
+
+    /**
      * One raw HID input report from a client-captured controller (the as-is Steam Controller 2
      * passthrough), forwarded verbatim on the rich-input plane. [buf] is a DIRECT ByteBuffer whose
      * first [len] bytes are the report, id byte first (0x42/0x45/0x47 state, 0x43 battery, …);

@@ -76,7 +76,7 @@ fun ringNavForKey(keyCode: Int): RingNav? = when (keyCode) {
 class GamepadRouter(
     context: Context,
     private val handle: Long,
-    private val setting: Int,
+    setting: Int,
     /**
      * Forward this device's controllers to the host at all (`Settings.gamepadForwarding`,
      * default true). Off is for a couch whose controller reaches the host another way — USB
@@ -110,6 +110,12 @@ class GamepadRouter(
 
     /** The ctor's forwarding preference, fixed for the session — one term of [forwarding]. */
     private val forwardingSetting = forwarding
+
+    /** The controller type every controller declares (`Gamepad.PREF_*`, Auto = each as itself):
+     *  the ctor's setting until [setPadType] changes it for this stream. */
+    @Volatile
+    var padType: Int = setting
+        private set
 
     /**
      * Whether this session's access includes the GAMEPAD grant ([SessionAccess.GAMEPAD]) —
@@ -157,6 +163,8 @@ class GamepadRouter(
          * later through [PadSensors]; the on-screen pad never does.
          */
         val ownMotion: Boolean = false,
+        /** The kind this slot's Arrival declared; [setPadType] re-plugs the slots it moves. */
+        val declared: Int = Gamepad.PREF_AUTO,
     ) {
         /** Forwarded button bits currently held (Gamepad.BTN_*) — for release-on-close + chord detection. */
         var held = 0
@@ -820,6 +828,25 @@ class GamepadRouter(
     fun releaseDevice(deviceId: Int) = closeSlot(deviceId)
 
     /**
+     * Emulate [pref] for the rest of this stream. The host builds a pad from its Arrival and never
+     * swaps a built one, so each controller whose declared kind moves is closed and reopened. The
+     * capture links declare their own kind and are left alone. Main thread.
+     */
+    fun setPadType(pref: Int) {
+        padType = pref
+        for (id in forwardedDevices()) {
+            val dev = InputDevice.getDevice(id) ?: continue
+            if (slots[id]?.declared == declaredFor(dev)) continue
+            closeSlot(id)
+            openSlot(dev)
+        }
+    }
+
+    /** Automatic declares the pad's own type from its VID/PID; an explicit type covers every pad. */
+    private fun declaredFor(dev: InputDevice): Int =
+        if (padType == Gamepad.PREF_AUTO) Gamepad.prefFor(dev) else padType
+
+    /**
      * Flush + drop every slot and unregister the hot-plug listener. Call on session teardown, AFTER
      * the feedback poll threads are joined (they read [deviceForPad]).
      */
@@ -858,9 +885,7 @@ class GamepadRouter(
     private fun openSlot(dev: InputDevice): Slot? {
         slots[dev.id]?.let { return it }
         val index = lowestFreeIndex() ?: return null // 16 pads already forwarded — drop this one
-        // Automatic resolves the pad's type from its VID/PID; an explicit setting forces every pad
-        // to that type (a single global choice — matches the handshake's session-default pref).
-        val pref = if (setting == Gamepad.PREF_AUTO) Gamepad.prefFor(dev) else setting
+        val pref = declaredFor(dev)
         if (forwarding) NativeBridge.nativeSendGamepadArrival(handle, pref, index)
         // Asked here, off the kind this pad just DECLARED — not off the session's resolved backend,
         // which under Automatic answers for whichever pad happened to be active at dial time. Held
@@ -874,6 +899,7 @@ class GamepadRouter(
             // report order IS the answer — and unlike `pref` it survives the user pinning every
             // pad to one type, which would otherwise cost a DualSense its mute button.
             hasMuteButton = map.buttons == Gamepad.PadButtons.GENERIC_SONY,
+            declared = pref,
         )
         slots[dev.id] = slot
         // After the table holds the slot, so a listener that sends on this device the moment it is

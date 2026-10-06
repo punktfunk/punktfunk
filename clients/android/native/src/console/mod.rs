@@ -101,6 +101,24 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeConsoleCrea
     .resolve::<LogErrorAndDefault>()
 }
 
+/// `NativeBridge.nativePadMark(pref)` — the console's 24-unit outline for a `GamepadPref` wire
+/// byte's pad family ([`pf_console_ui::glyphs::pad_icon`]), as SVG path data; empty for Automatic.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativePadMark<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    pref: jint,
+) -> JString<'local> {
+    use punktfunk_core::config::GamepadPref;
+    let pref = GamepadPref::from_u8(pref.clamp(0, u8::MAX as jint) as u8);
+    let path = match pref {
+        GamepadPref::Auto => "",
+        other => pf_console_ui::glyphs::pad_icon(other).0,
+    };
+    env.with_env(|env| env.new_string(path))
+        .resolve::<LogErrorAndDefault>()
+}
+
 /// Remove one console key; the final retained call then stops and joins the render thread.
 /// Zero, stale, duplicate, and concurrent destroys are no-ops.
 #[unsafe(no_mangle)]

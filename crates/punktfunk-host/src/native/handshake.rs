@@ -243,6 +243,7 @@ pub(super) fn cursor_forward(
     codec: crate::encode::Codec,
     bit_depth: u8,
     hdr: bool,
+    joined: bool,
 ) -> bool {
     if client_caps & punktfunk_core::quic::CLIENT_CAP_CURSOR == 0 {
         return false;
@@ -251,6 +252,7 @@ pub(super) fn cursor_forward(
     {
         // Same CUDA prediction `SessionPlan` makes: NVENC blends a CUDA payload only.
         let cuda_planned = !crate::encode::linux_zero_copy_is_vaapi() && crate::zerocopy::enabled();
+        let _ = joined;
         compositor.is_some_and(|c| c != crate::vdisplay::Compositor::Gamescope)
             && crate::encode::cursor_blend_capable(codec, cuda_planned, bit_depth == 10, hdr)
     }
@@ -259,8 +261,10 @@ pub(super) fn cursor_forward(
         // Windows: the v5 IddCx hardware-cursor channel. Without it DWM paints the pointer
         // into the IDD frame and a second copy doubles it. The encoder is not consulted: the
         // IDD capturer composites on the capture-mouse flip; no Windows encode backend blends.
+        // A mirrored monitor's pointer, and a shared display's, is in the picture the capture
+        // worker takes.
         let _ = (compositor, codec, bit_depth, hdr);
-        crate::windows::idd::hw_cursor_capable()
+        !joined && !crate::session_plan::mirrored() && crate::windows::idd::hw_cursor_capable()
     }
 }
 
@@ -624,7 +628,14 @@ pub(super) async fn negotiate(
             }
             // Client turns its local renderer on only when it sees this bit; serve_session
             // wires forwarding by reading the bit back.
-            | if cursor_forward(hello.client_caps, compositor, codec, bit_depth, session_hdr) {
+            | if cursor_forward(
+                hello.client_caps,
+                compositor,
+                codec,
+                bit_depth,
+                session_hdr,
+                joined.is_some(),
+            ) {
                 punktfunk_core::quic::HOST_CAP_CURSOR
             } else {
                 0
@@ -764,6 +775,7 @@ pub(super) async fn negotiate(
                 identity: codec == crate::encode::Codec::PyroWave,
             };
             let trace = bringup.clone();
+            let join_live = joined.is_some();
             std::thread::Builder::new()
                 .name("punktfunk1-stream".into())
                 .spawn(move || -> Result<()> {
@@ -783,6 +795,7 @@ pub(super) async fn negotiate(
                         chroma,
                         codec,
                         shard_payload,
+                        join_live,
                         &quit,
                         &stop,
                         &trace,

@@ -501,12 +501,6 @@ impl DataPump {
         if lp.jump.take_resync() {
             let _ = self.ctrl_tx.try_send(CtrlRequest::ClockResync);
         }
-        // All-intra drain-to-newest skips are not losses (the wire
-        // delivered them). Debug only — do not alarm OSD loss.
-        let skipped = self.shared.frames.take_skipped();
-        if skipped > 0 {
-            tracing::debug!(skipped, "all-intra frame channel drained to newest");
-        }
         // Standing-latency window close. Escalation: re-sync (stale
         // offset), then bleed (flush+keyframe), then disarm (path
         // latency changed).

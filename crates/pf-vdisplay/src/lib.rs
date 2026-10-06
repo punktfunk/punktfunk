@@ -85,8 +85,9 @@ pub use routing::{
 #[cfg(target_os = "linux")]
 pub use routing::{
     claim_workspace, dedicated_game_exited, focus_streamed_output, gamescope_presenting,
-    gamescope_xwayland_cursor_targets, launch_into_gamescope_session, launch_is_nested,
-    launch_is_steam, steam_appid_from_launch, watch_steam_game_exit, WorkspaceClaim,
+    gamescope_xwayland_cursor_targets, held_managed_session, launch_into_gamescope_session,
+    launch_is_nested, launch_is_steam, release_managed_session, steam_appid_from_launch,
+    watch_steam_game_exit, WorkspaceClaim,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,6 +378,19 @@ pub fn capture_monitor() -> Option<String> {
     policy::prefs().get().capture_monitor
 }
 
+/// Whether a session opened now streams the pinned monitor instead of a virtual display: a
+/// [`capture_monitor`] pin, and on Windows a desktop that can be captured (see [`open`]).
+pub fn mirrors_pinned() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        capture_monitor().is_some() && mirror::desktop_capturable()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        capture_monitor().is_some()
+    }
+}
+
 /// Open the virtual-display driver for `compositor`.
 ///
 /// A [`capture_monitor`] pin routes to the mirror backend (physical head, no
@@ -413,8 +427,20 @@ pub fn open(compositor: Compositor) -> Result<Box<dyn VirtualDisplay>> {
         }
     }
     #[cfg(target_os = "windows")]
+    if let Some(connector) = capture_monitor() {
+        if mirror::desktop_capturable() {
+            return Ok(Box::new(mirror::MirrorDisplay::new(compositor, connector)?));
+        }
+        tracing::warn!(
+            pinned = %connector,
+            "the streamed-screen pin names a monitor but the host is locked or signed out, and \
+             that screen cannot be captured — creating a virtual display instead; the pin applies \
+             again at the next session"
+        );
+    }
+    #[cfg(target_os = "windows")]
     {
-        // Sole backend is the IddCx driver, whatever `compositor` says.
+        // The IddCx driver, whatever `compositor` says.
         let _ = compositor;
         // `ensure_available` waits out a D0 re-register (wake-from-sleep) and
         // reloads a hostless-zombie adapter (devnode present, interface gone).
@@ -546,7 +572,7 @@ impl DisplayAsleep {
 // Stream a head the compositor already has. `VirtualDisplay` so session
 // machinery is unchanged; `DisplayOwnership::External` so lifecycle policy
 // is not applied to someone else's monitor.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[path = "vdisplay/mirror.rs"]
 mod mirror;
 
