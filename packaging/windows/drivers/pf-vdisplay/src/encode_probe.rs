@@ -26,13 +26,15 @@ use windows::Win32::System::Threading::{SetEvent, WaitForMultipleObjects};
 use windows62::Win32::Graphics::Direct3D11 as d3d;
 
 use crate::direct_3d_device::{Direct3DDevice, pooled_device};
-use crate::encode::convert::{AdapterId, Fail, InputKind, Targets, bridge, source_format};
-use crate::encode::thread::{
-    OpenSpec, codec_from_wire, open_backend, qpc_frequency, qpc_now, qpc_to_ns,
+use crate::encode::convert::{
+    AdapterId, Fail, InputKind, Targets, adapter_of, bridge, source_format,
 };
 use crate::registry::lock;
 use crate::worker::{OwnedHandle, Worker};
 use crate::{STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
+use pf_encode_session::open::{
+    OpenSpec, codec_from_wire, open_backend, qpc_frequency, qpc_now, qpc_to_ns,
+};
 
 const STATUS_UNSUCCESSFUL: NTSTATUS = 0xC000_0001u32 as NTSTATUS;
 const STATUS_DEVICE_BUSY: NTSTATUS = 0x8000_0011u32 as NTSTATUS;
@@ -229,7 +231,7 @@ fn describe(device: &Direct3DDevice, tex: &ID3D11Texture2D) -> Option<Primed> {
         width: desc.Width,
         height: desc.Height,
         format: desc.Format,
-        adapter: AdapterId::of(device)?,
+        adapter: adapter_of(device)?,
     })
 }
 
@@ -351,7 +353,12 @@ fn drive(stop: HANDLE, req: &EncodeProbeRequest, shared: &Arc<Shared>) -> Result
         );
         return Err((-4, "fmt"));
     }
-    let dev = pooled_device(primed.adapter.luid).ok_or((-5, "device"))?;
+    // The adapter id carries the session's 0.62 LUID; the pooled device is keyed by ours.
+    let luid = windows::Win32::Foundation::LUID {
+        LowPart: primed.adapter.luid.LowPart,
+        HighPart: primed.adapter.luid.HighPart,
+    };
+    let dev = pooled_device(luid).ok_or((-5, "device"))?;
     shared.device_epoch.store(dev.epoch(), Ordering::Release);
     let slots = (0..SLOTS)
         .map(|_| make_slot(&dev, w, h, primed.format))
@@ -367,7 +374,7 @@ fn drive(stop: HANDLE, req: &EncodeProbeRequest, shared: &Arc<Shared>) -> Result
     let t0 = Instant::now();
     // `dev62` is the device the ring's slots live on, so NVENC opens its session against the
     // one it will encode from; `open_us` therefore covers that session, not just the handle.
-    let mut enc = open_backend(&spec, &primed.adapter, &dev62)?;
+    let mut enc = open_backend(&spec, &primed.adapter, &dev62, &crate::log::knob)?;
     let open_us = t0.elapsed().as_micros() as u32;
     // The opened chroma, not the requested one: an input that cannot carry 4:4:4 reads false
     // here, which is the whole point of running the probe at 10-bit.

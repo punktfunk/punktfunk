@@ -72,6 +72,9 @@ pub mod edid;
 pub mod encode;
 pub mod vdisplay;
 
+// The capture worker's control channel: the encode messages above, over a pipe.
+pub mod worker;
+
 // Input devices: the pad channel, per-pad HID tables and the virtual mouse.
 pub mod deck;
 pub mod dualsense;
