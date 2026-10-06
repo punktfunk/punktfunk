@@ -2,7 +2,8 @@
 //! Desktop listener and its firewall scope, and the pinned RDP certificate.
 //!
 //! [`checks`] only reads. [`turn_on`] creates the Seats key and records there what it changed
-//! (`ListenerWasOff`, `AllowRdpFromNetwork`); [`turn_off`] undoes exactly that and deletes the
+//! (`ListenerWasOff`, `AllowRdpFromNetwork`, `RdpRulesOpened`); [`turn_off`] undoes exactly
+//! that and deletes the
 //! key last, so a failed restore can be retried. A refusal carries one plain sentence for the
 //! operator; its cause goes to the log. The seat display driver stays in the driver store when
 //! seats go off.
@@ -22,6 +23,8 @@ const LISTENER_DENIED: &str = "fDenyTSConnections";
 /// Seats key values: the listener was off before [`turn_on`], and the firewall choice.
 const LISTENER_WAS_OFF: &str = "ListenerWasOff";
 const RDP_FROM_NETWORK: &str = "AllowRdpFromNetwork";
+/// The `Remote Desktop` rules [`turn_on`] enabled for the network, one name per line.
+const RDP_RULES_OPENED: &str = "RdpRulesOpened";
 /// The `Remote Desktop` firewall group by the resource id every Windows language shares.
 const RDP_RULE_GROUP: &str = "@FirewallAPI.dll,-28752";
 const LOOPBACK: &str = "127.0.0.0/8";
@@ -116,6 +119,7 @@ pub(super) fn turn_off() -> WinResult<()> {
     let Ok(seats) = hklm.open_subkey_with_flags(SEATS_KEY, KEY_READ | KEY_WOW64_64KEY) else {
         return Ok(());
     };
+    close_rdp_rules(&seats)?;
     if seats.get_value::<u32, _>(RDP_FROM_NETWORK).ok() == Some(0) {
         firewall_scope("Any").map_err(|cause| {
             refuse(
@@ -173,6 +177,11 @@ fn apply(host_path: &Path, allow_rdp_from_network: bool) -> WinResult<()> {
                 cause,
             )
         })?;
+    }
+    if allow_rdp_from_network {
+        open_rdp_rules(&seats)?;
+    } else {
+        close_rdp_rules(&seats)?;
     }
     seats
         .set_value(RDP_FROM_NETWORK, &u32::from(allow_rdp_from_network))
@@ -239,6 +248,102 @@ fn firewall_scope(remote: &str) -> Result<(), String> {
         Some(0) => Ok(()),
         code => Err(format!("Set-NetFirewallRule exited {code:?}")),
     }
+}
+
+/// Enable the `Remote Desktop` rules that are off, for an operator who lets the network reach
+/// Remote Desktop. Turning the listener on by registry enables none. The names are noted first,
+/// so a crash between the two still closes them.
+fn open_rdp_rules(seats: &RegKey) -> WinResult<()> {
+    let fail = |cause: String| {
+        refuse(
+            "rdp_firewall",
+            "Couldn't open Remote Desktop to the network.",
+            cause,
+        )
+    };
+    let off = powershell_lines(&format!(
+        "$ErrorActionPreference='Stop'; \
+         Get-NetFirewallRule -Group '{RDP_RULE_GROUP}' | \
+         Where-Object {{ $_.Enabled -eq 'False' }} | ForEach-Object {{ $_.Name }}"
+    ))
+    .map_err(fail)?;
+    if off.is_empty() {
+        return Ok(());
+    }
+    let mut opened = rules_opened(seats);
+    opened.extend(off.iter().cloned());
+    opened.sort();
+    opened.dedup();
+    seats
+        .set_value(RDP_RULES_OPENED, &opened.join("\n"))
+        .map_err(|cause| fail(cause.to_string()))?;
+    powershell_lines(&format!(
+        "$ErrorActionPreference='Stop'; Enable-NetFirewallRule -Name {}",
+        ps_list(&off)
+    ))
+    .map(drop)
+    .map_err(fail)
+}
+
+/// Disable the rules [`open_rdp_rules`] enabled, then forget them. A rule since removed is
+/// skipped.
+fn close_rdp_rules(seats: &RegKey) -> WinResult<()> {
+    let opened = rules_opened(seats);
+    if opened.is_empty() {
+        return Ok(());
+    }
+    let fail = |cause: String| {
+        refuse(
+            "rdp_firewall",
+            "Couldn't close Remote Desktop to the network.",
+            cause,
+        )
+    };
+    powershell_lines(&format!(
+        "$ErrorActionPreference='Stop'; \
+         Get-NetFirewallRule -Name {} -ErrorAction SilentlyContinue | Disable-NetFirewallRule",
+        ps_list(&opened)
+    ))
+    .map_err(fail)?;
+    match seats.delete_value(RDP_RULES_OPENED) {
+        Err(cause) if cause.kind() != std::io::ErrorKind::NotFound => Err(fail(cause.to_string())),
+        _ => Ok(()),
+    }
+}
+
+fn rules_opened(seats: &RegKey) -> Vec<String> {
+    seats
+        .get_value::<String, _>(RDP_RULES_OPENED)
+        .map(|names| names.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// `names` as a PowerShell string array, each single-quoted.
+fn ps_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("'{}'", name.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// A PowerShell script's non-empty output lines. `Err` when it fails or doesn't launch.
+fn powershell_lines(script: &str) -> Result<Vec<String>, String> {
+    let output = Command::new(pf_paths::system32(POWERSHELL))
+        .args(powershell_args(script))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!("powershell exited {:?}", output.status.code()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// Record the leaf TermService presents. The keeper observes it, since the handshake needs
@@ -338,5 +443,14 @@ mod tests {
         assert_eq!(parse_probe("noise\r\n0 0 0\r\n\r\n"), Some([false; 3]));
         assert_eq!(parse_probe("1 1"), None);
         assert_eq!(parse_probe(""), None);
+    }
+
+    #[test]
+    fn rule_names_reach_powershell_quoted() {
+        let names = [
+            "RemoteDesktop-UserMode-In-TCP".to_string(),
+            "it's".to_string(),
+        ];
+        assert_eq!(ps_list(&names), "'RemoteDesktop-UserMode-In-TCP','it''s'");
     }
 }
