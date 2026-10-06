@@ -38,7 +38,7 @@ fn query_process_session<E>(
 }
 
 /// The WTS session that contains this host process.
-fn current_process_session_id() -> Result<u32> {
+pub(super) fn current_process_session_id() -> Result<u32> {
     query_process_session(std::process::id(), |id, session| {
         // SAFETY: `id` names the live current process and `session` is a local out-parameter that
         // remains valid for this synchronous call.

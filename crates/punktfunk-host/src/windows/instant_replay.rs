@@ -66,10 +66,10 @@ struct State {
     chord: Vec<u16>,
 }
 
-/// The console user's `ShareSettings.json`. The host is SYSTEM, so `%LOCALAPPDATA%` is the
+/// The session user's `ShareSettings.json`. The host is SYSTEM, so `%LOCALAPPDATA%` is the
 /// service profile; the user's comes from their volatile environment under `HKEY_USERS`.
 fn settings_path() -> Option<PathBuf> {
-    let sid = super::theme::console_session_sid()?;
+    let sid = super::theme::session_sid()?;
     let env = format!("{sid}\\Volatile Environment");
     let local = super::theme::read_string(&env, "LOCALAPPDATA")
         .map(PathBuf::from)
