@@ -469,8 +469,8 @@ pub fn privileged_field(
 /// publishing plugin's manifest, which the host resolves ([`crate::library::exec`]).
 /// Fail closed: a kind added to `launch.rs` and forgotten here is operator-only.
 /// `gog` is listed because `launch::gog_spawn` confines the exe to a GOG install, `gamebar`
-/// because the exe must be on a signed-in user's Game Bar list;
-/// `command` is never listed (`cmd.exe /c` / `sh -c`).
+/// because the exe must be on a signed-in user's Game Bar list, `emulator` because hermir builds
+/// the command for a catalog emulator; `command` is never listed (`cmd.exe /c` / `sh -c`).
 const UNPRIVILEGED_LAUNCH_KINDS: &[&str] = &[
     "steam_appid",
     "steam_ui",
@@ -488,6 +488,7 @@ const UNPRIVILEGED_LAUNCH_KINDS: &[&str] = &[
     "ea",
     "rockstar",
     "exec",
+    "emulator",
     "desktop_id",
     "gamebar",
 ];
@@ -567,9 +568,11 @@ pub fn validate_provider_payload(
             ));
         }
     }
-    let exec = inputs
-        .iter()
-        .any(|e| e.launch.as_ref().is_some_and(|l| l.kind == "exec"));
+    let exec = inputs.iter().any(|e| {
+        e.launch
+            .as_ref()
+            .is_some_and(|l| matches!(l.kind.as_str(), "exec" | "emulator"))
+    });
     let manifest = exec
         .then(|| crate::plugins::manifest::for_provider(provider))
         .flatten();
@@ -650,6 +653,16 @@ fn entry_fault(
                 Some(m) => crate::library::exec_spec_is_valid(m, launch)
                     .err()
                     .map(|reason| format!("`launch` for kind `exec` is not resolvable: {reason}")),
+            },
+            // A catalog emulator and a file under the plugin's roots; the copy is found at launch.
+            "emulator" => match manifest {
+                None => Some(format!(
+                    "`launch` for kind `emulator` needs an installed plugin whose manifest \
+                     declares the provider id '{provider}'"
+                )),
+                Some(m) => crate::library::emulator_spec_is_valid(m, launch)
+                    .err()
+                    .map(|reason| format!("`launch` for kind `emulator` is not valid: {reason}")),
             },
             _ => None,
         };
@@ -1312,6 +1325,7 @@ mod tests {
                 "ea",
                 "rockstar",
                 "exec",
+                "emulator",
                 "desktop_id",
                 "gamebar",
             ],

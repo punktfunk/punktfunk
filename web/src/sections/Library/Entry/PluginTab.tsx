@@ -1,5 +1,7 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
+import { ExternalLink } from "lucide-react";
 import { type FC, useState } from "react";
 import type { PluginSummary } from "@/api/gen/model";
 import { gamePlugins, usePlugins } from "@/api/plugins";
@@ -22,7 +24,12 @@ interface Section {
 	schema: JsonSchemaDoc | null;
 	value: JsonObject | null;
 	status?: StatusLine[];
+	/** The entry's route in the plugin's own page. */
+	page?: string;
 }
+
+/** One segment the plugin route carries; the kit drops anything else, and so does this. */
+const PAGE_RE = /^[A-Za-z0-9._~-]{1,200}$/;
 
 type Loaded =
 	| { tag: "ready"; section: Section }
@@ -136,8 +143,22 @@ const PluginTab: FC<{
 	};
 
 	const status = loaded.section.status ?? [];
+	const page = loaded.section.page;
 	return (
 		<Group title={plugin.title}>
+			{page && PAGE_RE.test(page) && (
+				<div>
+					<Button asChild size="sm" variant="outline">
+						<Link
+							to="/plugins/$pluginId/$"
+							params={{ pluginId: plugin.id, _splat: page }}
+						>
+							<ExternalLink className="size-3.5" />
+							{m.library_entry_plugin_open({ plugin: plugin.title })}
+						</Link>
+					</Button>
+				</div>
+			)}
 			{status.length > 0 && (
 				<ul className="space-y-1">
 					{status.map((line) => (

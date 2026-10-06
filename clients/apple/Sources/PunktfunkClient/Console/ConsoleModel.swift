@@ -86,6 +86,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     var fetchSerial = 0
     /// The posters of the last list fetch; a new fetch cancels it.
     var artTask: Task<Void, Never>?
+    /// Titles the current list fetch already has a poster for.
+    var artShown = Set<String>()
 
     init?(entry: StoredHost?, pin: StreamPreset?, store: HostStore, discovery: HostDiscovery,
           presets: PresetStore, power: HostPowerStore, nowPlaying: NowPlayingStore,

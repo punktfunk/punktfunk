@@ -71,7 +71,9 @@ extension ConsoleModel {
                 store.setPinned(host.id, presetID: preset, pinned: a["pin"] as? Bool ?? false)
             }
         case "BindPreset":
-            bindPreset(key: a["key"] as? String ?? "", preset: a["preset_id"] as? String)
+            bindPreset(
+                key: a["key"] as? String ?? "", game: a["game"] as? String,
+                preset: a["preset_id"] as? String)
         case "FetchProfiles":
             fetchProfiles(
                 addr: a["addr"] as? String ?? "", mgmt: port(a["mgmt"]),
@@ -248,7 +250,8 @@ extension ConsoleModel {
             bridge.push(.libraryBegin, "{}")
             bridge.push(.libraryGames, ConsoleJSON.libraryGames(DemoMode.games))
             bridge.push(.libraryPhase, "\"Ready\"")
-            pushArt(DemoMode.games, from: DemoMode.art)
+            let art = DemoMode.art
+            pushArt(DemoMode.games) { try? await art.data(for: $0) }
             return
         }
         guard let identity = (try? ClientIdentityStore.shared.load())?.identity else {
@@ -263,14 +266,17 @@ extension ConsoleModel {
         if !refreshOnly {
             fetching?.cancel()
             artTask?.cancel()
+            artShown = []
             bridge.push(.libraryBegin, "{}")
         }
         let task = Task { [weak self] in
             guard let self else { return }
             var cached: CachedLibrary?
             if !refreshOnly { cached = await LibraryCache.shared?.load(hostID: host.id.uuidString) }
-            if let cached {
+            if let cached, serial == self.fetchSerial {
                 bridge.push(.libraryCached, ConsoleJSON.libraryGames(cached.games))
+                // The cached covers go up with the cached shelf, not after the host's answer.
+                loadArt(cached.games, host: host, identity: identity, mgmt: mgmt, cachedOnly: true)
             }
             let status = await LibraryClient.status(
                 address: addr, port: mgmt, certPEM: identity.certPEM, keyPEM: identity.keyPEM,
@@ -293,9 +299,8 @@ extension ConsoleModel {
             } catch {
                 // A newer fetch owns the shelf now.
                 if Task.isCancelled { return }
-                // The cached shelf stays up, marked offline; its covers come from the art cache.
-                if let cached {
-                    loadArt(cached.games, host: host, identity: identity, mgmt: mgmt)
+                // The cached shelf stays up, marked offline, with the covers the cache held.
+                if cached != nil {
                     bridge.push(.libraryStale, "2")
                     return
                 }
@@ -308,27 +313,37 @@ extension ConsoleModel {
         if !refreshOnly { fetching = task }
     }
 
-    /// Posters, as they arrive. The shell decodes each at the size it draws.
+    /// Posters, as they arrive. The shell decodes each at the size it draws. `cachedOnly`
+    /// asks the disk cache alone, for a shelf whose host has not answered.
     private func loadArt(
-        _ games: [GameEntry], host: StoredHost, identity: ClientIdentity, mgmt: UInt16
+        _ games: [GameEntry], host: StoredHost, identity: ClientIdentity, mgmt: UInt16,
+        cachedOnly: Bool = false
     ) {
         guard let loader = try? LibraryArtLoader(
             address: host.address, port: mgmt, certPEM: identity.certPEM,
             keyPEM: identity.keyPEM, hostFingerprint: host.pinnedSHA256)
         else { return }
-        pushArt(games, from: loader)
+        pushArt(games) { url in
+            if cachedOnly { return await loader.cached(for: url) }
+            return try? await loader.data(for: url)
+        }
     }
 
-    /// Each title's first poster that loads, in the order the touch grid takes them.
-    private func pushArt(_ games: [GameEntry], from loader: any LibraryArtSource) {
+    /// Each title's first poster that loads, in the order the touch grid takes them. A title
+    /// this fetch already has a poster for is skipped.
+    private func pushArt(_ games: [GameEntry], poster: @escaping @Sendable (URL) async -> Data?) {
         artTask?.cancel()
         artTask = Task { [weak self] in
             for game in games {
-                if Task.isCancelled { return }
+                guard let self, !Task.isCancelled else { return }
+                if artShown.contains(game.id) { continue }
                 // The capsule first, then the header: the same order the touch grid takes.
                 for url in game.art.posterCandidates {
-                    guard let bytes = try? await loader.data(for: url) else { continue }
-                    self?.bridge.art(id: game.id, bytes: bytes)
+                    guard let bytes = await poster(url) else { continue }
+                    // A newer fetch owns the shelf and its `artShown` by now.
+                    if Task.isCancelled { return }
+                    bridge.art(id: game.id, bytes: bytes)
+                    artShown.insert(game.id)
                     break
                 }
             }
@@ -382,9 +397,16 @@ extension ConsoleModel {
         store.update(host)
     }
 
-    private func bindPreset(key: String, preset: String?) {
+    /// The host's default binding, or with `game` that one title's. A nil `preset` clears either.
+    private func bindPreset(key: String, game: String?, preset: String?) {
         guard var host = host(key: key) else { return }
-        host.presetID = preset
+        if let game {
+            var bound = host.gamePresets ?? [:]
+            bound[game] = preset
+            host.gamePresets = bound.isEmpty ? nil : bound
+        } else {
+            host.presetID = preset
+        }
         store.update(host)
     }
 
