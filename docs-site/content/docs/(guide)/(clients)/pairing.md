@@ -47,11 +47,12 @@ PIN** on its row to make a PIN only that device can use, and pass the PIN on. Se
 
 ## Managing paired devices
 
-**Devices** lists every paired device with its access and any expiry countdown. A row's **⋯**
-changes its access or expiry; **Unpair** there cuts it off at once, even mid-stream.
+**Devices** lists every paired device with its access and any expiry countdown. **Edit access**
+in its row changes its access or expiry; **Unpair** cuts it off at once, even mid-stream. On a
+phone they sit in the row's **⋯**.
 
 Moonlight clients all report the same name. Name one as you enter its PIN, or later with
-**Rename** in its row's **⋯**.
+**Rename** in its row.
 
 Can't pair at all? See [Troubleshooting → Pairing is rejected](/docs/troubleshooting-connect#pairing-is-rejected--the-client-cant-connect).
 

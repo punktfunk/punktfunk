@@ -5,7 +5,14 @@
 // its source named, never as a control that saves and does nothing.
 import Section from "@unom/ui/section";
 import { Lock, RotateCcw, Search } from "lucide-react";
-import { type FC, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+	type FC,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	type HostSettingsState,
 	SettingGroup,
@@ -20,6 +27,7 @@ import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 import { Control, labelOf } from "./controls";
@@ -176,14 +184,50 @@ export const HostSettingsView: FC<{
 		return out.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
 	}, [state.data, q, advanced, extra]);
 
-	// The rail's anchors are the URL (`/host#session`). A link that lands before the groups have
-	// loaded scrolls once they have.
-	const loaded = groups.length > 0;
+	// One group at a time, named in the URL (`/host#session`). A search shows every match instead.
+	const [tab, setTab] = useState("");
+	useEffect(() => setTab(window.location.hash.slice(1)), []);
+	const active = groups.some((g) => g.group === tab)
+		? tab
+		: (groups[0]?.group ?? "");
+	const pick = (group: string) => {
+		setTab(group);
+		window.history.replaceState(window.history.state, "", `#${group}`);
+	};
+	// On a phone the strip scrolls: keep the open tab in sight, a deep link's too.
+	const strip = useRef<HTMLDivElement>(null);
 	useEffect(() => {
-		if (!loaded) return;
-		const id = window.location.hash.slice(1);
-		if (id) document.getElementById(id)?.scrollIntoView({ block: "start" });
-	}, [loaded]);
+		if (!active) return;
+		strip.current
+			?.querySelector('[data-state="active"]')
+			?.scrollIntoView({ block: "nearest", inline: "nearest" });
+	}, [active]);
+	// The tab names the group; a search stacks several, so then each card does.
+	const card = ({ group, rows }: (typeof groups)[number]) => (
+		<Card key={group} id={group}>
+			<CardContent className="space-y-2">
+				{q && (
+					<CardTitle>
+						<h2>{GROUP_LABEL[group]()}</h2>
+					</CardTitle>
+				)}
+				<ul className="divide-y">
+					{rows.map((row) => (
+						<SettingRow
+							key={row.id}
+							row={row}
+							busy={pending.has(row.id)}
+							onSet={onSet}
+							playingApps={
+								row.id === "audio_voice_apps" ? playingApps : undefined
+							}
+						/>
+					))}
+					{!q && extra[group]}
+				</ul>
+			</CardContent>
+		</Card>
+	);
 
 	return (
 		<Section maxWidth={false}>
@@ -232,60 +276,41 @@ export const HostSettingsView: FC<{
 					error={state.error}
 					refetch={state.refetch}
 				>
-					<div className="grid gap-card lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-start">
-						<nav
-							aria-label={m.host_settings_sections()}
-							className="sticky top-0 z-10 -mx-4 flex items-center gap-2 overflow-x-auto bg-background/95 px-4 py-2 lg:top-4 lg:mx-0 lg:flex-col lg:items-stretch lg:gap-1 lg:bg-transparent lg:p-0"
+					{groups.length === 0 ? (
+						<p className="text-sm text-muted-foreground">
+							{m.host_settings_no_match({ query: query.trim() })}
+						</p>
+					) : q ? (
+						<Stagger className="flex min-w-0 flex-col gap-card">
+							{groups.map(card)}
+						</Stagger>
+					) : (
+						<Tabs
+							value={active}
+							onValueChange={pick}
+							className="flex min-w-0 flex-col gap-card"
 						>
-							{groups.map(({ group }) => (
-								<a
-									key={group}
-									href={`#${group}`}
-									className="shrink-0 rounded-md border px-3 py-1 text-left text-sm hover:bg-primary/15 lg:border-transparent lg:px-2"
-								>
-									{GROUP_LABEL[group]()}
-								</a>
+							{/* Eight groups outgrow a phone: the strip scrolls, the page does not. */}
+							<div
+								ref={strip}
+								className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0"
+							>
+								<TabsList aria-label={m.host_settings_sections()}>
+									{groups.map(({ group }) => (
+										<TabsTrigger key={group} value={group}>
+											{GROUP_LABEL[group]()}
+										</TabsTrigger>
+									))}
+								</TabsList>
+							</div>
+							{groups.map((g) => (
+								<TabsContent key={g.group} value={g.group}>
+									{/* A panel mounts after the page animated: it runs its own. */}
+									<Stagger root>{card(g)}</Stagger>
+								</TabsContent>
 							))}
-						</nav>
-
-						{groups.length === 0 ? (
-							<p className="text-sm text-muted-foreground">
-								{m.host_settings_no_match({ query: query.trim() })}
-							</p>
-						) : (
-							<Stagger className="flex min-w-0 flex-col gap-card">
-								{groups.map(({ group, rows }) => (
-									<Card
-										key={group}
-										id={group}
-										className="scroll-mt-16 lg:scroll-mt-4"
-									>
-										<CardContent className="space-y-2">
-											<CardTitle>
-												<h2>{GROUP_LABEL[group]()}</h2>
-											</CardTitle>
-											<ul className="divide-y">
-												{rows.map((row) => (
-													<SettingRow
-														key={row.id}
-														row={row}
-														busy={pending.has(row.id)}
-														onSet={onSet}
-														playingApps={
-															row.id === "audio_voice_apps"
-																? playingApps
-																: undefined
-														}
-													/>
-												))}
-												{!q && extra[group]}
-											</ul>
-										</CardContent>
-									</Card>
-								))}
-							</Stagger>
-						)}
-					</div>
+						</Tabs>
+					)}
 				</QueryState>
 			</div>
 		</Section>

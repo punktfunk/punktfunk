@@ -27,8 +27,8 @@ Click one under **When a device connects**; hover a preset to preview it on the 
 Hot-desk remembers display settings per device and resolution; the others per device.
 
 **Save as preset…** stores the settings in force, including
-[Dedicated game sessions](#dedicated-game-sessions), beside the built-ins. Its **⋯** renames it,
-updates it to the current settings, or deletes it. The built-in presets leave Dedicated game
+[Dedicated game sessions](#dedicated-game-sessions), beside the built-ins. The buttons beside it
+rename it, update it to the current settings, or delete it. The built-in presets leave Dedicated game
 sessions as they are.
 
 ## Customise
@@ -77,7 +77,7 @@ On gamescope the game keeps running as long as its screen does.
 - **Gets its own screen**.
 - **Takes over**: the first device's stream ends.
 - **Shares the screen**: it joins the live screen at that screen's resolution. Both hear the same
-  audio; mute one from its row's **⋯** under **Now** on **Home**.
+  audio; mute one from its row under **Now** on **Home**.
 - **Is told it's busy**.
 
 On a Windows host a device that shares the screen sees the pointer as part of the picture. It
@@ -99,7 +99,7 @@ it. **Arrange automatically**, under **Advanced**, puts them back in a row.
 
 ## Per-device settings
 
-Open **Display settings…** from a device's **⋯** in **Devices**. Each question offers **Follow
+Open **Display settings…** from a device's row in **Devices**. Each question offers **Follow
 host** or an answer for this device only:
 
 - the keep-alive (including **Keep for** a number of seconds), second-device and remember
