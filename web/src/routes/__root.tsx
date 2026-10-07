@@ -16,7 +16,7 @@ import { useUiConfig } from "@/api/uiConfig";
 import { AppShell } from "@/components/app-shell";
 import { DialogsProvider } from "@/components/dialogs";
 import { currentAppearance } from "@/lib/appearanceRequest";
-import { useDensity } from "@/lib/density";
+import { DensitySwitch, useDensity } from "@/lib/density";
 import { adoptStoredLocale, useLocale } from "@/lib/i18n";
 import appCss from "@/styles.css?url";
 
@@ -97,7 +97,7 @@ function RootComponent() {
 	const accentChosen = appearance.accent !== "system";
 	const surfaces =
 		!modeOverridden && theme?.background && theme.foreground ? theme : null;
-	const density = useDensity();
+	const [density, setDensity] = useDensity();
 	const vars: Record<string, string> = {};
 	if (accent) vars["--pf-accent"] = accent;
 	if (surfaces) {
@@ -110,13 +110,14 @@ function RootComponent() {
 			className={mode === "light" ? undefined : "dark"}
 			data-accent={accent ? (accentChosen ? "custom" : "") : undefined}
 			data-omarchy={surfaces ? "" : undefined}
-			data-density={density}
+			data-density={density ?? "cards"}
 			style={Object.keys(vars).length > 0 ? (vars as CSSProperties) : undefined}
 		>
 			<head>
 				<HeadContent />
 			</head>
 			<body className="min-h-screen">
+				{density && <DensitySwitch density={density} onFlip={setDensity} />}
 				{/* Motion defaults to `reducedMotion: "never"`, so every card, nav item and button
 				    animated at full strength even for someone whose OS asks for less. "user" honours
 				    the OS setting. */}
