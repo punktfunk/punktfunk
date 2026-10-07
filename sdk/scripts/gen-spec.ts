@@ -29,8 +29,13 @@ export function normalize(node: unknown): unknown {
 if (import.meta.main) {
 	const [src, dst] = process.argv.slice(2);
 	if (!src || !dst) throw new Error("usage: bun scripts/gen-spec.ts <openapi.json> <out.json>");
-	// Components only: a parameter is sent as a string whatever its schema says.
 	const spec = await Bun.file(src).json();
 	spec.components = normalize(spec.components);
+	// A header travels as a string, and the generated `setHeaders` call only takes one.
+	for (const item of Object.values<any>(spec.paths ?? {})) {
+		for (const op of Object.values<any>(item)) {
+			for (const param of op?.parameters ?? []) if (param.in === "header") param.schema = { type: "string" };
+		}
+	}
 	await Bun.write(dst, JSON.stringify(spec));
 }
