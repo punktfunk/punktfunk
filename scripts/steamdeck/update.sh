@@ -57,6 +57,7 @@ fi
 # The version the console shows, in the same scheme as this channel's feed (build-version.sh).
 PF_BUILD_VERSION="$(bash "$SRC/scripts/steamdeck/build-version.sh" "$SRC")"
 
+bash "$SRC/scripts/steamdeck/heal-box.sh" "$BOX"
 log "Rebuilding host (release)"
 # nvenc,vulkan-encode matches the packaged builds (deb/arch) — see install.sh.
 # punktfunk-encode-worker rides along: host and worker version-check each other over their socket
