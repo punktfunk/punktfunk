@@ -205,20 +205,25 @@ export const SectionPlugin: FC = () => {
 	return (
 		<div className="flex h-[calc(100dvh-7rem)] min-h-[480px] flex-col gap-3 sm:h-[calc(100dvh-5rem)]">
 			{/* Header strip: identity + open-in-new-tab (the plugin stands alone full-window too). */}
-			<div className="flex items-center gap-3">
-				<Icon className="size-5 text-muted-foreground" />
-				<h1 className="text-lg font-semibold">{title}</h1>
+			{/* On a phone the title truncates and the two actions keep their icons only. */}
+			<div className="flex min-w-0 items-center gap-3">
+				<Icon className="size-5 shrink-0 text-muted-foreground" />
+				<h1 className="min-w-0 truncate text-lg font-semibold">{title}</h1>
 				{meta?.version && (
-					<span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+					<span className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground sm:inline">
 						v{meta.version}
 					</span>
 				)}
-				{provenance && <TierBadge tier={provenance.tier} />}
+				{provenance && (
+					<TierBadge tier={provenance.tier} className="shrink-0" />
+				)}
 				<Button
 					variant="ghost"
 					size="sm"
-					className="ml-auto"
+					className="ml-auto shrink-0"
 					aria-pressed={isPinned}
+					aria-label={isPinned ? m.nav_unpin() : m.nav_pin()}
+					title={isPinned ? m.nav_unpin() : m.nav_pin()}
 					onClick={() => setPins(togglePin(pins, pin))}
 				>
 					{isPinned ? (
@@ -226,7 +231,9 @@ export const SectionPlugin: FC = () => {
 					) : (
 						<Pin className="size-4" />
 					)}
-					{isPinned ? m.nav_unpin() : m.nav_pin()}
+					<span className="hidden sm:inline">
+						{isPinned ? m.nav_unpin() : m.nav_pin()}
+					</span>
 				</Button>
 				{/* Full-window, on the PLUGIN origin. This link used to be the same escalation as the
 				    iframe with no sandbox involved at all — a top-level document on the console origin,
@@ -237,10 +244,12 @@ export const SectionPlugin: FC = () => {
 						href={`${pluginOrigin}/plugin-ui/${pluginId}/`}
 						target="_blank"
 						rel="noreferrer"
-						className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+						aria-label={m.plugin_open_new_tab()}
+						title={m.plugin_open_new_tab()}
+						className="inline-flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
 					>
 						<ExternalLink className="size-4" />
-						{m.plugin_open_new_tab()}
+						<span className="hidden sm:inline">{m.plugin_open_new_tab()}</span>
 					</a>
 				)}
 			</div>
@@ -289,7 +298,7 @@ export const SectionPlugin: FC = () => {
  */
 const UnavailableCard: FC = () => (
 	<div className="flex flex-1 items-center justify-center rounded-lg border border-dashed">
-		<div className="flex max-w-md flex-col items-center gap-3 p-8 text-center">
+		<div className="flex min-w-0 max-w-md flex-col items-center gap-3 p-4 text-center sm:p-8">
 			<h2 className="text-base font-semibold">
 				{m.plugin_origin_unavailable_title()}
 			</h2>
@@ -311,7 +320,7 @@ const UntrustedOriginCard: FC<{ href: string; onRetry: () => void }> = ({
 	onRetry,
 }) => (
 	<div className="flex flex-1 items-center justify-center rounded-lg border border-dashed">
-		<div className="flex max-w-md flex-col items-center gap-3 p-8 text-center">
+		<div className="flex min-w-0 max-w-md flex-col items-center gap-3 p-4 text-center sm:p-8">
 			<h2 className="text-base font-semibold">
 				{m.plugin_origin_untrusted_title()}
 			</h2>
@@ -338,7 +347,7 @@ const OfflineCard: FC<{ title: string; onRetry: () => void }> = ({
 	onRetry,
 }) => (
 	<div className="flex flex-1 items-center justify-center rounded-lg border border-dashed">
-		<div className="flex max-w-md flex-col items-center gap-3 p-8 text-center">
+		<div className="flex min-w-0 max-w-md flex-col items-center gap-3 p-4 text-center sm:p-8">
 			<h2 className="text-base font-semibold">{m.plugin_offline_title()}</h2>
 			<p className="text-sm text-muted-foreground">
 				<span className="font-medium text-foreground">{title}</span> —{" "}

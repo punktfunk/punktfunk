@@ -76,6 +76,18 @@ describe("describePolicy (en)", () => {
 		);
 	});
 
+	test("a mirror pin is the screen, and dedicated game sessions are said", () => {
+		expect(describePolicy(base, { mirror: "DP-1" })).toStartWith(
+			"Each device sees DP-1.",
+		);
+		expect(describePolicy(base, { gameSession: "dedicated" })).toContain(
+			"Games open in their own session.",
+		);
+		expect(describePolicy(base, { gameSession: "auto" })).not.toContain(
+			"Games",
+		);
+	});
+
 	test("a named device speaks about that device", () => {
 		expect(describePolicy(base, { deviceName: "Living-room TV" })).toStartWith(
 			"Living-room TV gets",

@@ -27,6 +27,8 @@ pub(crate) struct DisplaySettingsState {
     /// True once `display-settings.json` exists.
     configured: bool,
     effective: crate::vdisplay::policy::EffectivePolicy,
+    /// What `topology: auto` resolves to on this host, never `auto` (`effective_topology`).
+    auto_topology: crate::vdisplay::policy::Topology,
     presets: Vec<PresetInfo>,
     /// Saved custom presets (`display-presets.json`). Apply via a `Custom` policy of their fields.
     custom_presets: Vec<crate::vdisplay::policy::CustomPreset>,
@@ -202,6 +204,12 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     if scale_available() {
         client_enforced.push("scale".into());
     }
+    // A contract seat has nothing to set: the contract fixes its desktop, and only a device's
+    // cap and scale follow the device here.
+    if store.follows_contract() {
+        enforced.clear();
+        client_enforced.retain(|f| f == "max_mode" || f == "scale");
+    }
     // Overlays ride their own field, never `settings`. The console PUTs `settings`
     // back whole, and the PUT refuses a body carrying `clients` — so leaving them
     // in here would make every host-wide save fail the moment one device had an
@@ -210,6 +218,12 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     let clients = std::mem::take(&mut settings.clients);
     DisplaySettingsState {
         effective: settings.effective(),
+        // Unconfigured, `effective_topology` honours the legacy `*_VIRTUAL_PRIMARY` pins first.
+        auto_topology: if configured {
+            crate::vdisplay::resolve_topology(policy::Topology::Auto)
+        } else {
+            crate::vdisplay::effective_topology(None)
+        },
         clients,
         client_enforced,
         settings,
@@ -258,6 +272,9 @@ pub(crate) async fn get_display_settings() -> Json<DisplaySettingsState> {
 pub(crate) async fn set_display_settings(
     ApiJson(policy): ApiJson<crate::vdisplay::policy::DisplayPolicy>,
 ) -> Response {
+    if let Some(refused) = refused_on_seat() {
+        return refused;
+    }
     // The overlay map never rides the policy object. A console that fetched
     // `/display/settings`, sat on it, and PUT it back would otherwise revert every
     // per-device change made in between — the class of bug `serverCaptureMonitor()`
@@ -277,6 +294,18 @@ pub(crate) async fn set_display_settings(
     }
     tracing::info!("management API: display policy updated");
     Json(display_settings_state()).into_response()
+}
+
+/// A contract seat has no display settings of its own: every write is the box's to make.
+fn refused_on_seat() -> Option<Response> {
+    crate::vdisplay::policy::prefs()
+        .follows_contract()
+        .then(|| {
+            api_error(
+                StatusCode::CONFLICT,
+                "A seat's display can't be changed here. Change display settings on the box.",
+            )
+        })
 }
 
 /// Store a host-wide policy, keeping the stored overlays, then re-aim absolute input at its
@@ -378,6 +407,9 @@ pub(crate) async fn set_display_client(
     Path(fingerprint): Path<String>,
     ApiJson(overlay): ApiJson<crate::vdisplay::policy::ClientOverlay>,
 ) -> Response {
+    if let Some(refused) = refused_on_seat() {
+        return refused;
+    }
     let key = fingerprint.trim().to_ascii_lowercase();
     if key.is_empty() {
         return api_error(StatusCode::BAD_REQUEST, "no device named");
@@ -421,6 +453,9 @@ pub(crate) async fn set_display_client(
     )
 )]
 pub(crate) async fn delete_display_client(Path(fingerprint): Path<String>) -> Response {
+    if let Some(refused) = refused_on_seat() {
+        return refused;
+    }
     let key = fingerprint.trim().to_ascii_lowercase();
     let store = crate::vdisplay::policy::prefs();
     // Already following the host: nothing to write, and a no-op write would
@@ -503,7 +538,8 @@ pub(crate) struct ApiMonitorInfo {
     primary: bool,
     /// Driven right now. Disabled heads stay listed so they are not missing from the picker.
     enabled: bool,
-    /// Best-effort: one of our virtual displays, not a real head. Reliable on KWin only.
+    /// One of our virtual displays, not a real head. Best-effort on Sway, whose
+    /// `HEADLESS-N` may be the operator's own.
     managed: bool,
     /// True when `PUNKTFUNK_CAPTURE_MONITOR` currently names this monitor.
     selected: bool,
@@ -749,6 +785,9 @@ pub(crate) struct DisplayLayoutRequest {
     )
 )]
 pub(crate) async fn set_display_layout(ApiJson(req): ApiJson<DisplayLayoutRequest>) -> Response {
+    if let Some(refused) = refused_on_seat() {
+        return refused;
+    }
     let store = crate::vdisplay::policy::prefs();
     let saved = store.update(|p| {
         *p = p.clone().with_manual_layout(req.positions);

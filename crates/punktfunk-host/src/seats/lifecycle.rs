@@ -1,5 +1,5 @@
 //! What keeps seats up and what lets them go: the seats of recent players start with the host,
-//! and a seat nobody plays on stops after [`IDLE_STOP`].
+//! and a seat nobody plays on stops after **Stop an idle seat after** (`seat_idle_stop`).
 //!
 //! The Windows service holds the supervisor in-process; the door on Linux reaches it over its
 //! socket. Both run this through [`Supervisor`].
@@ -13,10 +13,16 @@ use std::time::{Duration, Instant};
 
 /// A profile played within this long gets its seat started at boot.
 const WARM_WITHIN_SECS: u64 = 14 * 24 * 3600;
-/// A seat with nobody on it this long is stopped: it holds a display slot, a GPU context and
-/// a session for no one.
-const IDLE_STOP: Duration = Duration::from_secs(4 * 3600);
 const IDLE_CHECK: Duration = Duration::from_secs(300);
+
+/// How long a seat may sit with nobody on it before it is stopped: it holds a display slot, a
+/// GPU context and a session for no one. `None` never stops one.
+fn idle_stop() -> Option<Duration> {
+    match pf_host_config::config().seat_idle_stop_min {
+        0 => None,
+        min => Some(Duration::from_secs(u64::from(min) * 60)),
+    }
+}
 
 /// A seat supervisor as keep-warm and the idle stop see it.
 pub(crate) trait Supervisor {
@@ -122,9 +128,10 @@ pub(crate) fn keep_warm(sup: &dyn Supervisor) {
     }
 }
 
-/// Stops a running seat once nobody has played on it for [`IDLE_STOP`]. A seat whose host
+/// Stops a running seat once nobody has played on it for [`idle_stop`]. A seat whose host
 /// doesn't answer counts as busy: stopping it would be a guess.
 pub(crate) fn stop_idle(sup: &dyn Supervisor, stop: &AtomicBool) {
+    let Some(limit) = idle_stop() else { return };
     let mut busy_at: HashMap<String, Instant> = HashMap::new();
     while !stop.load(Ordering::SeqCst) {
         let mut waited = Duration::ZERO;
@@ -146,8 +153,8 @@ pub(crate) fn stop_idle(sup: &dyn Supervisor, stop: &AtomicBool) {
             let since = busy_at.entry(id.clone()).or_insert(now);
             if busy {
                 *since = now;
-            } else if now.duration_since(*since) >= IDLE_STOP {
-                tracing::info!(seat = %id, name = %seat.name, idle_hours = 4, "idle seat stopped");
+            } else if now.duration_since(*since) >= limit {
+                tracing::info!(seat = %id, name = %seat.name, idle_min = limit.as_secs() / 60, "idle seat stopped");
                 if let Err(error) = sup.stop(seat.id) {
                     tracing::warn!(code = ?error.code, "idle seat did not stop: {}", error.message);
                 }

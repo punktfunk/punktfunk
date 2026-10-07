@@ -7,7 +7,7 @@ Copy on your device and paste on the host, or the other way round, once three sw
 
 ## Turn it on
 
-1. **On the host:** in the web console, open **Host → Settings → Streaming** and set **Shared
+1. **On the host:** in the web console, open **Host → Streaming** and set **Shared
    clipboard** to **Text** or **Text and files**. It applies from the next stream.
 2. **For your device:** its [access level](/docs/access-levels) must include **Clipboard**.
    **Full control** does.

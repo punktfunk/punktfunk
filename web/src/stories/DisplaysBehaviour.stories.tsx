@@ -91,6 +91,13 @@ export const Customise: Story = {
 					onOpenChange={setOpen}
 					effective={displayEffective}
 					policy={displayPolicy}
+					enforced={[
+						"keep_alive",
+						"topology",
+						"mode_conflict",
+						"identity",
+						"game_session",
+					]}
 					onSetField={noop}
 				/>
 			</div>

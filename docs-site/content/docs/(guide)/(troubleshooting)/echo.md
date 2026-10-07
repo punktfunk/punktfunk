@@ -27,14 +27,14 @@ it back.
 
 ## The host's own speakers
 
-With **Host → Settings → Where audio plays** set to **Device and host**, your device's microphone
+With **Host → Where audio plays** set to **Device and host**, your device's microphone
 hears the host's speakers when you stream from the same room. Set it back to **Device only**, or
 turn the host down.
 
 ## Voice chat running on the host
 
 Friends streaming in hear themselves when a voice app runs on the host, because the stream carries
-its playback. Set **Host → Settings → Voice chat** to **On the host**:
+its playback. Set **Host → Voice chat** to **On the host**:
 [Voice chat while they play](/docs/friends-over-the-internet#voice-chat-while-they-play).
 
 ## Virtual mixers (VoiceMeeter and friends)

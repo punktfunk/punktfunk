@@ -124,7 +124,7 @@ never creates a token and takes none on the command line or from the environment
 punktfunk-host settings set gamestream true
 ```
 
-Writes one **Host → Settings** value to `host-settings.json`, as the console does, without a
+Writes one **Host** value to `host-settings.json`, as the console does, without a
 running host. Installers use it, so the console can still change what they chose. The value is
 JSON (`true`, `30`, `null` to clear) or a bare string. Restart the host to apply it.
 

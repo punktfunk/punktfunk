@@ -1,8 +1,8 @@
-// Container for Host → Settings: the settings query, one-setting writes, the restart flow, and
+// Container for Host's settings: the settings query, one-setting writes, the restart flow, and
 // the app list the voice-chat picker suggests from. Everything visual is in `view.tsx`.
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { type FC, useEffect, useState } from "react";
+import { type FC, type ReactNode, useEffect, useState } from "react";
 import { useListActions } from "@/api/gen/actions/actions";
 import {
 	getGetHostSettingsQueryKey,
@@ -13,15 +13,17 @@ import {
 import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
+import { GpuRow } from "../Host/GpuRow";
 import { ConfirmDialog } from "../Host/PowerCard";
 import { labelOf } from "./controls";
 import { RestartBanner } from "./RestartBanner";
+import { SessionGameRows } from "./SessionGameRows";
 import { HostSettingsView } from "./view";
 
 /** How long a restart may take before the page stops waiting and says so. */
 const RESTART_PATIENCE_MS = 90_000;
 
-export const SectionHostSettings: FC = () => {
+export const HostSettings: FC<{ top?: ReactNode }> = ({ top }) => {
 	useLocale();
 	const qc = useQueryClient();
 	// Set when a restart is accepted; the page polls until the new process answers.
@@ -99,6 +101,8 @@ export const SectionHostSettings: FC = () => {
 				pending={pending}
 				onSet={onSet}
 				playingApps={apps.data?.apps}
+				extra={{ video: <GpuRow />, session: <SessionGameRows /> }}
+				top={top}
 				banner={
 					<RestartBanner
 						names={waiting}

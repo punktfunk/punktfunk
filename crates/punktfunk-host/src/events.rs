@@ -129,6 +129,9 @@ pub struct SessionRef {
     /// See [`ClientRef::preset`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetRef>,
+    /// See [`ClientRef::profile`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileRef>,
 }
 
 /// Why a session ended, in the client's own words
@@ -304,6 +307,9 @@ pub struct StreamRef {
     /// See [`ClientRef::preset`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetRef>,
+    /// See [`ClientRef::profile`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileRef>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug)]
@@ -323,6 +329,9 @@ pub struct GameRefPayload {
     /// The preset of the session that launched it. See [`ClientRef::preset`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetRef>,
+    /// The profile of the session that launched it. See [`ClientRef::profile`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileRef>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, PartialEq, Eq)]
@@ -579,6 +588,25 @@ impl EventKind {
             | EventKind::GameRunning { game }
             | EventKind::GameWindow { game, .. }
             | EventKind::GameExited { game, .. } => game.fingerprint.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The profile played as, on the events that carry a client, session, stream or game.
+    pub fn profile(&self) -> Option<&ProfileRef> {
+        match self {
+            EventKind::ClientConnected { client }
+            | EventKind::ClientDisconnected { client, .. } => client.profile.as_ref(),
+            EventKind::SessionStarted { session } | EventKind::SessionEnded { session, .. } => {
+                session.profile.as_ref()
+            }
+            EventKind::StreamStarted { stream } | EventKind::StreamStopped { stream } => {
+                stream.profile.as_ref()
+            }
+            EventKind::GameLaunching { game }
+            | EventKind::GameRunning { game }
+            | EventKind::GameWindow { game, .. }
+            | EventKind::GameExited { game, .. } => game.profile.as_ref(),
             _ => None,
         }
     }
@@ -886,6 +914,7 @@ mod tests {
                     app: Some("steam:570".into()),
                     plane: Plane::Native,
                     preset: None,
+                    profile: None,
                 },
             },
         };
@@ -951,6 +980,7 @@ mod tests {
                     fingerprint: Some(FP_SNAPSHOT.into()),
                     plane: Plane::Native,
                     preset: None,
+                    profile: None,
                 },
             },
         };
@@ -976,6 +1006,7 @@ mod tests {
                         id: "3f9a0c11e2b4".into(),
                         name: "Docked".into(),
                     }),
+                    profile: None,
                 },
             },
         };
@@ -998,6 +1029,7 @@ mod tests {
                     fingerprint: None,
                     plane: Plane::Gamestream,
                     preset: None,
+                    profile: None,
                 },
                 reason: GameEndReason::Terminated,
             },
@@ -1022,6 +1054,7 @@ mod tests {
                     hdr: false,
                     plane: Plane::Native,
                     preset: None,
+                    profile: None,
                 },
                 summary: Box::new(SessionSummary {
                     id: 3,
@@ -1087,6 +1120,7 @@ mod tests {
                     hdr: false,
                     plane: Plane::Native,
                     preset: None,
+                    profile: None,
                 },
                 summary: Box::new(SessionSummary {
                     id: 4,
@@ -1233,6 +1267,7 @@ mod tests {
                 fingerprint: Some("ab12".into()),
                 plane: Plane::Native,
                 preset: None,
+                profile: None,
             },
         };
         assert_eq!(running.name(), "game.running");
@@ -1255,6 +1290,7 @@ mod tests {
                 fingerprint: None,
                 plane: Plane::Gamestream,
                 preset: None,
+                profile: None,
             },
             reason: GameEndReason::Exited,
         };

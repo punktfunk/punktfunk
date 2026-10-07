@@ -28,7 +28,7 @@ owner would.
 Adding the first one turns on **Steam per seat**
 ([what it does](/docs/configuration#what-some-settings-do)). If you set that off yourself, it stays
 off, the profile uses your Steam, and its card says **Own Steam · needs Steam per seat**. Turn it on
-under **Host** → **Settings** → **Show advanced**.
+under **Host** → **Show advanced**.
 
 The first connect as that profile opens Steam's sign-in. Sign in once; the profile keeps it. Until
 then the profile's card on the client says **Steam sign-in once**.
@@ -48,12 +48,24 @@ without sharing a desktop.
 
 A player who picks a stopped seat sees `Getting Kid's desk ready…` while it starts. A card's
 **Start**, **Stop** and **End session** do the same by hand; **End session** keeps the seat
-running. [**Seats kept warm**](/docs/configuration#what-some-settings-do) starts the seats of
-recently played profiles with the host, and a seat nobody plays on for 4 hours stops. **Remove**
-deletes the profile's Windows account and its files too.
+running. **Remove** deletes the profile's Windows account and its files too.
 
-**Library**, **Game sources** and **Plugins** are per seat: once a seat exists, a chip (**Whose
-library**, **Whose plugins**) switches the page to that seat's own.
+### What a seat can do
+
+A seat's desktop is one virtual screen at its player's resolution. It never shows, turns off or
+powers down a monitor of this machine, and a second device on the same seat shares the screen.
+Only the owner's desktop follows **Displays**; of a device's display settings, only **Largest
+screen this device gets** and the scale follow it onto a seat.
+
+Every seat shares one set of **Seats** settings on **Host**, shown while seats are on:
+
+- **Seats kept warm**: the seats of the most recent players start with the host.
+- **Stop an idle seat after**: 240 minutes by default; 0 never stops one.
+- **End a seat's stream when its game exits**: off keeps streaming the seat's desktop.
+- **Highest mode per seat**, such as `2560x1440@120`: a device's own cap outranks it.
+
+**Library**, **Game sources** and **Plugins** are per seat: once a seat exists, the page's title
+(**Anna's library ▾**) switches it to another seat's own.
 
 ## On Linux
 
@@ -79,7 +91,7 @@ What turning it on does:
   runs the host from then on. Paired clients keep working: the fingerprint is the same.
 - **You become a seat.** Your own `punktfunk-host` moves to the first seat's ports and serves
   your library, plugins and Steam from your own home. The console reaches it from **Library**,
-  **Game sources** and **Plugins**; a chip, **Whose library**, picks another seat's.
+  **Game sources** and **Plugins**; the page's title, **Anna's library ▾**, picks another seat's.
 - **The monitor wins.** When you log in at the machine, the background session ends within a few
   seconds and your own session hosts you. Streams on the background session end, and the client
   reconnects. Nothing on your monitor is closed.

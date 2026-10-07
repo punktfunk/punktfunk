@@ -46,7 +46,7 @@ your client all support it. The full breakdown is in the [Support matrix](/docs/
   port, with forward error correction on the video. The [native clients](/docs/clients) (Apple, Android, Linux,
   Windows) use it. It is always on.
 - **GameStream** — the protocol [Moonlight](/docs/moonlight) speaks, so any Moonlight client
-  connects. It is off until you turn on **GameStream** in **Host → Settings**, and it pairs over
+  connects. It is off until you turn on **GameStream** in **Host**, and it pairs over
   plain HTTP, so use it on a [trusted network](/docs/security#gamestream--moonlight-compatibility-is-the-weak-crypto-path)
   only.
 

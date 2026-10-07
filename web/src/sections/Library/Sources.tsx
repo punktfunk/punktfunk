@@ -1,15 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import {
-	Boxes,
-	Check,
-	Download,
-	PackagePlus,
-	Settings2,
-	Trash2,
-} from "lucide-react";
-import { motion } from "motion/react";
-import { type FC, useMemo, useState } from "react";
+import { Boxes, Download, PackagePlus, Settings2, Trash2 } from "lucide-react";
+import { type FC, type ReactNode, useMemo, useState } from "react";
 import {
 	getListLibraryScannersQueryKey,
 	useDeleteProviderEntries,
@@ -24,28 +16,32 @@ import { usePlugins } from "@/api/plugins";
 import { useSeat } from "@/api/seat";
 import { useInstallPlugin } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
-import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
-import { Badge } from "@/components/ui/badge";
+import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RowActions } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { EmulatorsCard } from "@/sections/Library/Emulators";
 import { PendingAccess, usePluginAccess } from "@/sections/PluginAccess";
+import { AddSourceRail, SourceGroup, SourceItem } from "./AddSource";
 import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 
 /**
- * Game sources: enablement, liveness, counts, actions, and pending folder access in one list.
- * A pending request appears here because this is where missing games are visible; decisions update
- * the shared access snapshot. N-1 hosts may still report built-in scanners, so migration controls
- * remain beside plugin sources until those hosts age out.
+ * The Sources tab: one card of sections — Game sources, Emulators, Art & metadata — with the
+ * migration banner above it. Game sources: enablement, liveness, counts, actions, and pending
+ * folder access in one list, because this is where missing games are visible. N-1 hosts may
+ * still report built-in scanners, so migration stays until those hosts age out.
  */
 export const SourcesSection: FC<{
 	/** The provider currently filtered to in the grid, or null for "everything". */
 	activeFilter: string | null;
 	onFilter: (provider: string | null) => void;
-}> = ({ activeFilter, onFilter }) => {
+	/** Art & metadata: the box's, absent on a seat. */
+	metadata?: ReactNode;
+}> = ({ activeFilter, onFilter, metadata }) => {
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
 	const scanners = useListLibraryScanners();
@@ -157,8 +153,10 @@ export const SourcesSection: FC<{
 			(r): r is { source: ScannerInfo; entry: CatalogEntry } => !!r.entry,
 		);
 
+	// A tab panel that mounts once the sources answer: the page's cascade is long over, so it
+	// runs its own (stagger.tsx, `root`).
 	return (
-		<>
+		<Stagger root className="flex flex-col gap-card">
 			{migratable.length > 0 && (
 				<MigrationBanner
 					rows={migratable}
@@ -166,30 +164,35 @@ export const SourcesSection: FC<{
 					onInstall={onInstall}
 				/>
 			)}
-			<SourcesCard
-				sources={sources}
-				available={available}
-				running={running}
-				busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
-				installBusy={catalog.data?.busy === true || install.isPending}
-				activeFilter={activeFilter}
-				onToggle={onToggle}
-				onFilter={onFilter}
-				onSettings={setSettingsFor}
-				onPurge={onPurge}
-				onInstall={onInstall}
-				access={access.access.data}
-				accessBusy={access.busy}
-				onAccessDecision={access.onDecide}
-			/>
-			<EmulatorsCard />
+			<Card>
+				<CardContent className="space-y-8">
+					<SourcesCard
+						sources={sources}
+						available={available}
+						running={running}
+						busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
+						installBusy={catalog.data?.busy === true || install.isPending}
+						activeFilter={activeFilter}
+						onToggle={onToggle}
+						onFilter={onFilter}
+						onSettings={setSettingsFor}
+						onPurge={onPurge}
+						onInstall={onInstall}
+						access={access.access.data}
+						accessBusy={access.busy}
+						onAccessDecision={access.onDecide}
+					/>
+					<EmulatorsCard />
+					{metadata}
+				</CardContent>
+			</Card>
 			{settingsFor && (
 				<SourceSettingsDialog
 					source={settingsFor}
 					onClose={() => setSettingsFor(null)}
 				/>
 			)}
-		</>
+		</Stagger>
 	);
 };
 
@@ -236,7 +239,8 @@ export const MigrationBanner: FC<{
 	</Card>
 );
 
-/** Presentational source list, including deterministic pending-access states for Storybook. */
+/** Presentational source list, including deterministic pending-access states for Storybook. A
+ * section of the Sources card, not a card of its own. */
 export const SourcesCard: FC<{
 	sources: ScannerInfo[];
 	/** Catalog rows offering a library source that isn't installed yet. */
@@ -277,15 +281,12 @@ export const SourcesCard: FC<{
 	accessInitiallyOpen = false,
 	onAccessDecision = () => {},
 }) => (
-	<Card>
-		<CardHeader className="pb-3">
-			<CardTitle className="flex items-center gap-2">
-				<Boxes className="size-4" />
-				{m.library_sources_title()}
-			</CardTitle>
-		</CardHeader>
-		<CardContent className="space-y-4">
-			<Stagger gap={ROW_GAP} className="flex flex-col gap-2">
+	<SourceGroup
+		icon={<Boxes className="size-4" />}
+		title={m.library_sources_title()}
+	>
+		<div className="space-y-4">
+			<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
 				{sources.map((source) => (
 					<SourceRow
 						key={source.id}
@@ -316,39 +317,19 @@ export const SourcesCard: FC<{
 				{m.library_sources_help()}
 			</p>
 
-			{available.length > 0 && (
-				<div className="space-y-2 border-t pt-4">
-					<p className="text-sm font-medium">{m.library_add_source()}</p>
-					<Stagger gap={ROW_GAP} className="flex flex-wrap gap-2">
-						{available.map((entry) => (
-							<Button
-								key={entry.pkg}
-								size="sm"
-								variant="outline"
-								disabled={installBusy}
-								title={entry.description}
-								onClick={() => onInstall(entry)}
-							>
-								<Download className="size-4" />
-								{entry.title}
-								{/* `detected` is tri-state: only badge a POSITIVE probe. An entry with
-								    no probes for this platform is "unknown", and labelling that "not
-								    installed" would be a lie. */}
-								{entry.detected === true && (
-									<Badge variant="secondary">
-										{m.library_source_detected()}
-									</Badge>
-								)}
-							</Button>
-						))}
-					</Stagger>
-				</div>
-			)}
-		</CardContent>
-	</Card>
+			<AddSourceRail
+				entries={available}
+				busy={installBusy}
+				onInstall={onInstall}
+			/>
+		</div>
+	</SourceGroup>
 );
 
-/** One source row with its controls and the expandable folder requests that explain missing games. */
+/**
+ * One source: on/off, its name over what it is doing, the rest in ⋯. The folder requests that
+ * explain missing games open below it.
+ */
 const SourceRow: FC<{
 	source: ScannerInfo;
 	/** The plugin backing this source is currently registered (its lease is live). */
@@ -384,68 +365,57 @@ const SourceRow: FC<{
 	const isPlugin = source.origin === "plugin";
 	const seat = useSeat();
 	const [accessOpen, setAccessOpen] = useState(accessInitiallyOpen);
+	const meta = [
+		isPlugin &&
+			(running ? m.library_source_running() : m.library_source_stopped()),
+		source.entries != null &&
+			m.library_provider_count({ count: source.entries }),
+	]
+		.filter(Boolean)
+		.join(" · ");
 	return (
-		<motion.div
-			variants={ROW}
-			className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+		<SourceItem
+			lead={
+				<Checkbox
+					checked={source.enabled}
+					disabled={busy}
+					aria-label={source.label}
+					onCheckedChange={onToggle}
+				/>
+			}
+			title={source.label}
+			meta={meta || undefined}
+			actions={
+				isPlugin && (
+					<RowActions
+						actions={[
+							{
+								label: filtered
+									? m.library_provider_show_all()
+									: m.library_provider_filter(),
+								onSelect: onFilter,
+							},
+							// The form is the box's plugin; a seat has none to open.
+							!seat && {
+								label: m.library_source_settings(),
+								icon: <Settings2 />,
+								iconOnly: true,
+								onSelect: onSettings,
+							},
+							{
+								label: m.library_provider_purge(),
+								icon: <Trash2 />,
+								iconOnly: true,
+								destructive: true,
+								onSelect: onPurge,
+							},
+						]}
+					/>
+				)
+			}
 		>
-			<Button
-				size="sm"
-				variant={source.enabled ? "default" : "outline"}
-				aria-pressed={source.enabled}
-				disabled={busy}
-				onClick={onToggle}
-			>
-				{source.enabled && <Check className="size-4" />}
-				{source.label}
-			</Button>
-			{isPlugin && (
-				<Badge variant={running ? "secondary" : "outline"}>
-					{running ? m.library_source_running() : m.library_source_stopped()}
-				</Badge>
-			)}
-			{source.entries != null && (
-				<Badge variant="secondary">
-					{m.library_provider_count({ count: source.entries })}
-				</Badge>
-			)}
-			<div className="ml-auto flex gap-2">
-				{isPlugin && (
-					<>
-						<Button
-							size="sm"
-							variant={filtered ? "default" : "outline"}
-							aria-pressed={filtered}
-							onClick={onFilter}
-						>
-							{filtered
-								? m.library_provider_show_all()
-								: m.library_provider_filter()}
-						</Button>
-						{/* The form is the box's plugin; a seat has none to open. */}
-						{!seat && (
-							<Button
-								size="sm"
-								variant="outline"
-								aria-label={m.library_source_settings()}
-								onClick={onSettings}
-							>
-								<Settings2 className="size-4" />
-							</Button>
-						)}
-						<Button
-							size="sm"
-							variant="outline"
-							aria-label={m.library_provider_purge()}
-							onClick={onPurge}
-						>
-							<Trash2 className="size-4 text-destructive" />
-						</Button>
-					</>
-				)}
-			</div>
 			{access && access.pending.length > 0 && (
-				<div className="basis-full border-t pt-2">
+				<div className="mt-2 pl-7">
 					<button
 						type="button"
 						className="text-left text-sm font-medium text-amber-600 hover:underline dark:text-amber-500"
@@ -467,7 +437,7 @@ const SourceRow: FC<{
 					)}
 				</div>
 			)}
-		</motion.div>
+		</SourceItem>
 	);
 };
 

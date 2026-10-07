@@ -141,7 +141,7 @@ export const MediaTab: FC<TabProps> = ({
 
 	return (
 		<>
-			<Group title={m.library_entry_tab_media()}>
+			<Group>
 				<div className="grid gap-6 @2xl:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
 					{SLOTS.map(({ kind, label, help, frame, cell }) => {
 						const own = previewSrc(
@@ -224,40 +224,46 @@ export const MediaTab: FC<TabProps> = ({
 					onClose={() => setChoosing(null)}
 				/>
 			)}
-			<Group title={m.library_entry_icon()} help={m.library_entry_icon_help()}>
-				<div className="flex items-center gap-4">
-					<div className="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground [&>svg]:size-8">
-						<LauncherIcon icon={draft.icon || null} />
-					</div>
-					{readOnly ? (
-						<ReadRow label={m.library_entry_icon()} value={draft.icon} />
-					) : (
-						<div className="w-full max-w-60 space-y-2">
-							<Label htmlFor="entry-icon" className="sr-only">
-								{m.library_entry_icon()}
-							</Label>
-							<Select
-								value={draft.icon || NO_ICON}
-								onValueChange={(v) => set("icon", v === NO_ICON ? "" : v)}
-							>
-								<SelectTrigger id="entry-icon" size="sm">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value={NO_ICON}>
-										{m.library_entry_icon_none()}
-									</SelectItem>
-									{Object.keys(LAUNCHER_ICONS).map((token) => (
-										<SelectItem key={token} value={token}>
-											{token.charAt(0).toUpperCase() + token.slice(1)}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
+			{/* A mark means something on a launcher tile; a game with none has nothing to show. */}
+			{(!readOnly || draft.icon || draft.isLauncher) && (
+				<Group
+					title={m.library_entry_icon()}
+					help={m.library_entry_icon_help()}
+				>
+					<div className="flex items-center gap-4">
+						<div className="flex size-14 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground [&>svg]:size-8">
+							<LauncherIcon icon={draft.icon || null} />
 						</div>
-					)}
-				</div>
-			</Group>
+						{readOnly ? (
+							<ReadRow label={m.library_entry_icon()} value={draft.icon} />
+						) : (
+							<div className="w-full max-w-60 space-y-2">
+								<Label htmlFor="entry-icon" className="sr-only">
+									{m.library_entry_icon()}
+								</Label>
+								<Select
+									value={draft.icon || NO_ICON}
+									onValueChange={(v) => set("icon", v === NO_ICON ? "" : v)}
+								>
+									<SelectTrigger id="entry-icon" size="sm">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value={NO_ICON}>
+											{m.library_entry_icon_none()}
+										</SelectItem>
+										{Object.keys(LAUNCHER_ICONS).map((token) => (
+											<SelectItem key={token} value={token}>
+												{token.charAt(0).toUpperCase() + token.slice(1)}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+						)}
+					</div>
+				</Group>
+			)}
 		</>
 	);
 };

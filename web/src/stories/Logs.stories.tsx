@@ -3,7 +3,7 @@ import { Download } from "lucide-react";
 import type { ClientLogMeta } from "@/api/gen/model/clientLogMeta";
 import type { LogEntry } from "@/api/gen/model/logEntry";
 import { Button } from "@/components/ui/button";
-import { LogsCard } from "@/sections/Logs/LogsCard";
+import { LogsCard } from "@/sections/Diagnostics/Logs/LogsCard";
 import {
 	bundleRows,
 	deviceSource,
@@ -11,8 +11,8 @@ import {
 	hostRows,
 	mergeRows,
 	PLUGINS_SOURCE,
-} from "@/sections/Logs/rows";
-import { LogsView } from "@/sections/Logs/view";
+} from "@/sections/Diagnostics/Logs/rows";
+import { LogsView } from "@/sections/Diagnostics/Logs/view";
 
 const noop = () => {};
 

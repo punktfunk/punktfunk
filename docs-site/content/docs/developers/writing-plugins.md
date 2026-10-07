@@ -241,7 +241,7 @@ export default plugin.def;
   image `fetch` found. `lookup <id>` on the plugin's CLI prints what it finds for one game.
 
 Add `"network": true` to the manifest. Register in the store's `metadata` category so the console
-offers it under **Library** → **Art & Metadata**.
+offers it under **Library** → **Sources** → **Art & Metadata**.
 
 ## Hold a launch
 

@@ -40,6 +40,8 @@ pub enum Group {
     Network,
     GameMode,
     Session,
+    /// The Seat defaults every seat shares; served only while seats are on.
+    Seats,
     System,
 }
 
@@ -53,6 +55,7 @@ impl Group {
             Group::Network => "network",
             Group::GameMode => "game_mode",
             Group::Session => "session",
+            Group::Seats => "seats",
             Group::System => "system",
         }
     }
@@ -420,7 +423,7 @@ impl Setting {
 
 use Apply::{NextSession, Now, Restart};
 use DefaultValue as D;
-use Group::{Audio, GameMode, Input, Network, Streaming, System, Video};
+use Group::{Audio, GameMode, Input, Network, Seats, Streaming, System, Video};
 
 /// Page order. Add a row where it reads best; ids are never reused.
 #[rustfmt::skip]
@@ -528,7 +531,6 @@ pub static SETTINGS: &[Setting] = &[
     row("gamescope_grab_cursor", "PUNKTFUNK_GAMESCOPE_GRAB_CURSOR", Kind::Bool, D::Bool(false), GameMode, NextSession, "Grab the cursor", "gamescope").advanced().only(LINUX),
     row("steam_seat_home", "PUNKTFUNK_STEAM_SEAT_HOME", Kind::Bool, D::Bool(false), GameMode, NextSession, "Steam per seat", "gamescope").advanced().only(LINUX),
     row("steam_seat_sandbox", "PUNKTFUNK_STEAM_SEAT_SANDBOX", Kind::Bool, D::Bool(false), GameMode, NextSession, "Pads per seat", "gamescope").advanced().only(LINUX),
-    row("steam_prewarm", "PUNKTFUNK_STEAM_PREWARM", Kind::Int { min: 0, max: 8, unit: "seats" }, D::Int(1), GameMode, Restart, "Seats kept warm", "profiles").advanced().only(LINUX_WINDOWS),
     row("gamescope_bind", "PUNKTFUNK_GAMESCOPE_BIND", TRI, D::Str("auto"), GameMode, NextSession, "Bind patched gamescope", "gamescope")
         .advanced()
         .only(LINUX)
@@ -540,6 +542,13 @@ pub static SETTINGS: &[Setting] = &[
     // --- Network
     row("mdns", "PUNKTFUNK_MDNS", Kind::Bool, D::Bool(true), Network, Restart, "Local discovery", "troubleshooting-connect").advanced(),
     row("idle_timeout_ms", "PUNKTFUNK_IDLE_TIMEOUT_MS", Kind::Int { min: 1_000, max: 120_000, unit: "ms" }, D::Int(8_000), Network, Restart, "Disconnect timeout", "configuration").advanced(),
+    // --- Seats: what every seat shares (design/web-console-structure-2026-10.md §2.1)
+    row("steam_prewarm", "PUNKTFUNK_STEAM_PREWARM", Kind::Int { min: 0, max: 8, unit: "seats" }, D::Int(1), Seats, Restart, "Seats kept warm", "profiles").only(LINUX_WINDOWS),
+    // 0 never stops one. The box's seat upkeep reads it once, at start.
+    row("seat_idle_stop", "PUNKTFUNK_SEAT_IDLE_STOP_MIN", Kind::Int { min: 0, max: 1_440, unit: "min" }, D::Int(240), Seats, Restart, "Stop idle seats", "profiles").only(LINUX_WINDOWS),
+    row("seat_end_on_game_exit", "PUNKTFUNK_SEAT_END_ON_GAME_EXIT", Kind::Bool, D::Bool(true), Seats, NextSession, "Seat game exit", "profiles").only(LINUX_WINDOWS),
+    // `WIDTHxHEIGHT@HZ`; empty is no cap. A device's own cap outranks it.
+    row("seat_max_mode", "PUNKTFUNK_SEAT_MAX_MODE", Kind::Text { max_len: 24 }, D::Str(""), Seats, NextSession, "Seat mode cap", "profiles").only(LINUX_WINDOWS),
     // --- System
     row("update_check", "PUNKTFUNK_UPDATE_CHECK", Kind::Bool, D::Bool(true), System, Now, "Check for updates", "updating"),
     row("update_apply", "PUNKTFUNK_UPDATE_APPLY", Kind::Bool, D::Bool(true), System, Now, "Console updates", "updating").advanced(),
@@ -673,6 +682,32 @@ mod tests {
             s.validate(&Value::Number(0.into())).is_ok(),
             "0 turns it off"
         );
+    }
+
+    /// Every Seat default is one group the console shows only while seats are on, and none of
+    /// them caps or stops anything until an operator asks.
+    #[test]
+    fn the_seat_defaults_share_one_group() {
+        for id in [
+            "steam_prewarm",
+            "seat_idle_stop",
+            "seat_end_on_game_exit",
+            "seat_max_mode",
+        ] {
+            assert_eq!(
+                find(id).expect("the row exists").group,
+                Group::Seats,
+                "{id}"
+            );
+        }
+        assert_eq!(
+            find("seat_max_mode").unwrap().default.to_value(),
+            Value::from("")
+        );
+        assert!(find("seat_idle_stop")
+            .unwrap()
+            .validate(&Value::from(0))
+            .is_ok());
     }
 
     /// A seat home costs a Steam sign-in per device, so it is never on by accident.

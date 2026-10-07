@@ -1,19 +1,15 @@
-// The **Displays** page (design/web-console-overhaul.md §5).
+// The **Displays** page (design/web-console-structure-2026-10.md §5.4): the owner's desktop, the
+// only one with monitors to answer for.
 //
-// State above configuration, no tabs: the map and the device rows say what is happening, the
-// sentence says what will happen next, and [ Change ] is the one way to change it. The five-
-// second test this page has to pass is "what happens to my monitors when a device connects" —
-// the map and the sentence ARE the answer, which is why the help text under every control
-// could go.
+// State above configuration: the map and the Screens rows say what is happening, the sentence and
+// the presets say what happens next. The five-second test is "what happens to my monitors when a
+// device connects" — the ghost on the idle map and the sentence ARE the answer.
 //
-// One persistence model: everything saves on change. The host applies at the next connect
-// either way, so there was never anything for a Save button to protect.
+// One persistence model: everything saves on change. The host applies at the next connect.
 
 import { useQueryClient } from "@tanstack/react-query";
 import Section from "@unom/ui/section";
 import { toast } from "@unom/ui/toast";
-import { MonitorSmartphone, SlidersHorizontal } from "lucide-react";
-import { motion } from "motion/react";
 import { type FC, useState } from "react";
 import {
 	getGetDisplayMonitorsQueryKey,
@@ -33,24 +29,25 @@ import type {
 	CustomPreset,
 	DisplayPolicy,
 	EffectivePolicy,
+	Topology,
 } from "@/api/gen/model";
 import { useListNativeClients } from "@/api/gen/native/native";
 import { usePlatform } from "@/api/platform";
 import { useDialogs } from "@/components/dialogs";
 import { DocsLink } from "@/components/docs-link";
 import { QueryState } from "@/components/query-state";
-import { ROW, ROW_GAP, Stagger, staggerProps } from "@/components/stagger";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Stagger } from "@/components/stagger";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import { RowActions } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
 import { BehaviourPicker, CustomiseDialog } from "./Behaviour";
-import { DesktopMap } from "./DesktopMap";
-import { AdvancedDisclosure, GameSessionDisclosure } from "./Disclosures";
+import { DesktopMap, ghostBox } from "./DesktopMap";
+import { AdvancedDisclosure } from "./Disclosures";
 import { describePolicy } from "./describePolicy";
-import { MonitorRows } from "./MonitorRows";
+import { OtherDesktops } from "./OtherDesktops";
+import { ScreenRows } from "./ScreenRows";
 
 export const SectionDisplays: FC = () => {
 	useLocale();
@@ -89,6 +86,13 @@ export const SectionDisplays: FC = () => {
 	const kept = displays.filter((d) => d.state !== "active");
 	const shown = preview ?? effective;
 	const busy = save.isPending;
+	const pinned = monitors.data?.pinned ?? null;
+	// `auto` is the host's call (extend under a compositor pin, else exclusive); the host says
+	// which, so the ghost and the dimming show the outcome rather than a guess.
+	const concrete = (t?: Topology) =>
+		t === "auto" ? settings.data?.auto_topology : t;
+	const topology = concrete(shown?.topology);
+	const ghost = topology ? ghostBox(heads, topology, !!pinned) : undefined;
 	// A box on the map is labelled with the device's name; an overlay is keyed by its
 	// fingerprint. The paired list is the only place both appear, so it is what turns one
 	// into the other (§6.2).
@@ -118,6 +122,14 @@ export const SectionDisplays: FC = () => {
 			},
 		);
 	};
+
+	/** A preset field switches the policy to Custom, pinning what is in effect around it. */
+	const writeField = (patch: Partial<DisplayPolicy>) =>
+		write(
+			policy?.preset === "custom"
+				? patch
+				: { preset: "custom", ...effective, ...patch },
+		);
 
 	const doRelease = (slot?: number) =>
 		release.mutate(
@@ -208,27 +220,28 @@ export const SectionDisplays: FC = () => {
 					<h1 className="text-2xl font-semibold">{m.nav_displays()}</h1>
 					<DocsLink path="virtual-displays" className="text-sm" />
 					{kept.length > 0 && (
-						<Button
-							size="sm"
-							variant="outline"
-							className="ml-auto"
-							disabled={release.isPending}
-							onClick={() => doRelease()}
-						>
-							{m.display_release_all()}
-						</Button>
+						<div className="ml-auto">
+							<RowActions
+								disabled={release.isPending}
+								actions={[
+									{
+										label: m.display_release_all(),
+										onSelect: () => doRelease(),
+									},
+								]}
+							/>
+						</div>
 					)}
 				</div>
 
-				{/* One group, mounted once both queries settle. Cards that arrived one by one after the
-				    page animated each landed on a single frame. Errors stay with each card. */}
+				{/* One group, mounted once both queries settle. Errors stay with each card. */}
 				<QueryState
 					isLoading={settings.isLoading || monitors.isLoading}
 					error={undefined}
 				>
 					<Stagger className="flex flex-col gap-card">
 						<Card>
-							<CardContent className="space-y-4">
+							<CardContent className="space-y-3">
 								<QueryState
 									isLoading={settings.isLoading || monitors.isLoading}
 									error={
@@ -236,20 +249,24 @@ export const SectionDisplays: FC = () => {
 									}
 									refetch={settings.refetch}
 								>
-									{heads.length + displays.length === 0 ? (
-										<p className="text-sm text-muted-foreground">
-											{m.display_map_empty()}
-										</p>
+									{/* The map's own height, so a preview that empties it cannot move the page. */}
+									{heads.length + displays.length === 0 && !ghost ? (
+										<div className="flex h-48 items-center justify-center sm:h-72">
+											<p className="text-sm text-muted-foreground">
+												{m.display_map_empty()}
+											</p>
+										</div>
 									) : (
 										<DesktopMap
 											monitors={heads}
 											displays={displays}
-											dimMonitors={shown?.topology === "exclusive"}
+											dimMonitors={topology === "exclusive"}
+											keepLit={policy?.keep_monitors}
+											ghost={ghost}
 											overlaid={overlaid}
-											captureMonitor={monitors.data?.pinned ?? null}
-											onRelease={doRelease}
+											captureMonitor={pinned}
 											onMove={moveDisplay}
-											busy={release.isPending || saveLayout.isPending}
+											busy={saveLayout.isPending}
 										/>
 									)}
 									{displays.length > 1 && (
@@ -262,29 +279,56 @@ export const SectionDisplays: FC = () => {
 							</CardContent>
 						</Card>
 
+						<ScreenRows
+							monitors={heads}
+							displays={displays}
+							pinned={pinned}
+							pinSupported={acts("display", "capture_monitor")}
+							policy={policy}
+							effective={effective}
+							overlaid={overlaid}
+							busy={busy}
+							releasing={release.isPending}
+							onPick={(connector) => write({ capture_monitor: connector })}
+							onRelease={doRelease}
+							// The host says which backends honour a keep-list.
+							onKeepLit={
+								acts("display", "keep_monitors")
+									? (connector, keep) => {
+											const current = policy?.keep_monitors ?? [];
+											write({
+												keep_monitors: keep
+													? [...current, connector]
+													: current.filter(
+															(c) =>
+																c.toLowerCase() !== connector.toLowerCase(),
+														),
+											});
+										}
+									: undefined
+							}
+						/>
+
 						{/* The page's central question, answered in the open. Under the map on purpose:
-				    hovering a preset redraws the map, and a picker in a modal covered the very
-				    thing it was previewing. */}
+						    hovering a preset redraws the map and its ghost. */}
 						{policy && effective && settings.data && (
 							<Card>
 								<CardContent className="space-y-4">
 									<CardTitle>
-										<h2 className="flex items-center gap-2">
-											<SlidersHorizontal className="size-4" />
-											{m.display_behaviour_title()}
-										</h2>
+										<h2>{m.display_when_connects()}</h2>
 									</CardTitle>
-									{effective && (
-										<p className="text-sm">
-											{/* The policy in effect: never a local draft, and never the hovered preview. This sits
-											    right above the preset grid, so text that followed the hover would move the grid under
-											    the cursor. The map and each card's caption show the preview instead. */}
-											{describePolicy(effective, { live })}
-											{effective.layout.mode === "manual" && (
-												<> {m.display_arranged_by_you()}</>
-											)}
-										</p>
-									)}
+									{/* The policy in effect, never the hovered preview: text that followed the hover
+									    would move the presets under the cursor. */}
+									<p className="text-sm">
+										{describePolicy(effective, {
+											live,
+											mirror: pinned,
+											gameSession: policy.game_session,
+										})}
+										{effective.layout.mode === "manual" && (
+											<> {m.display_arranged_by_you()}</>
+										)}
+									</p>
 									<BehaviourPicker
 										policy={policy}
 										presets={settings.data.presets}
@@ -314,89 +358,14 @@ export const SectionDisplays: FC = () => {
 							</Card>
 						)}
 
-						{/* The rows are the map in words: the keyboard and screen-reader path, and what a
-				    phone falls back to when a box would be under 44 px. */}
-						<Card>
-							<CardContent className="space-y-4">
-								<CardTitle>
-									<h2 className="flex items-center gap-2">
-										<MonitorSmartphone className="size-4" />
-										{m.display_devices()}
-									</h2>
-								</CardTitle>
-								{displays.length === 0 ? (
-									<p className="text-sm text-muted-foreground">
-										{m.display_no_devices()}
-									</p>
-								) : (
-									<motion.ul
-										{...staggerProps(ROW_GAP)}
-										className="divide-y rounded-md border"
-									>
-										{displays.map((d) => (
-											<motion.li
-												variants={ROW}
-												key={d.slot}
-												className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm"
-											>
-												<span className="min-w-0 flex-1 truncate font-medium">
-													{d.client ?? m.display_map_unnamed()}
-												</span>
-												<span className="text-muted-foreground">{d.mode}</span>
-												<Badge
-													variant={d.state === "active" ? "default" : "outline"}
-												>
-													{d.state === "active"
-														? m.display_state_streaming()
-														: d.state === "pinned"
-															? m.display_state_kept_until()
-															: m.display_state_kept()}
-												</Badge>
-												{d.state !== "active" && (
-													<Button
-														size="sm"
-														variant="ghost"
-														disabled={release.isPending}
-														onClick={() => doRelease(d.slot)}
-													>
-														{m.display_release()}
-													</Button>
-												)}
-											</motion.li>
-										))}
-									</motion.ul>
-								)}
-							</CardContent>
-						</Card>
-
-						<MonitorRows
-							monitors={heads}
-							pinned={monitors.data?.pinned ?? null}
-							pinSupported={acts("display", "capture_monitor")}
+						<AdvancedDisclosure
 							policy={policy}
 							effective={effective}
 							busy={busy}
-							onPick={(connector) => write({ capture_monitor: connector })}
-							// KWin is the only backend that honours a keep-list; the host says so.
-							onKeepLit={
-								acts("display", "keep_monitors")
-									? (connector, keep) => {
-											const current = policy?.keep_monitors ?? [];
-											write({
-												keep_monitors: keep
-													? [...current, connector]
-													: current.filter(
-															(c) =>
-																c.toLowerCase() !== connector.toLowerCase(),
-														),
-											});
-										}
-									: undefined
-							}
+							onSet={write}
+							onSetField={writeField}
 						/>
-
-						<GameSessionDisclosure policy={policy} busy={busy} onSet={write} />
-						<AdvancedDisclosure policy={policy} busy={busy} onSet={write} />
+						<OtherDesktops />
 					</Stagger>
 				</QueryState>
 			</div>
@@ -407,6 +376,7 @@ export const SectionDisplays: FC = () => {
 					onOpenChange={setCustomiseOpen}
 					effective={effective}
 					policy={policy}
+					enforced={settings.data?.enforced ?? []}
 					onSetField={write}
 					busy={busy}
 				/>

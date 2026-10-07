@@ -27,7 +27,15 @@ function ShellHarness({ initialPath }: { initialPath: string }) {
 		),
 	});
 
-	const navPaths = ["/", "/host", "/library", "/pairing", "/settings"];
+	const navPaths = [
+		"/",
+		"/host",
+		"/library",
+		"/devices",
+		"/profiles",
+		"/diagnostics/logs",
+		"/settings",
+	];
 	const navRoutes = navPaths.map((path) =>
 		createRoute({
 			getParentRoute: () => rootRoute,

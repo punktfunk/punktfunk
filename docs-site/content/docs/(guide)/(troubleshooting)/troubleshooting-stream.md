@@ -58,14 +58,14 @@ frames wait behind its frames. Any streamer stutters the same way. The console's
 page shows it under **Video encoder sharing**.
 
 - By default the host pauses Instant Replay once a stream falls behind while another app encodes,
-  and turns it back on when the last stream ends. **Host → Settings → Pause Instant Replay**: `on`
+  and turns it back on when the last stream ends. **Host → Pause Instant Replay**: `on`
   pauses it for every stream, `off` leaves it alone.
 - Or press Alt+Shift+F10 before you connect, or turn it off in the NVIDIA App overlay.
 
 ### The picture freezes for a moment, over and over (Windows)
 
 A freeze on a steady rhythm is a display or driver disturbance, not bandwidth. While it happens,
-**Home** → **Live status** → **Capture health** reads `stalled`.
+the session's row on **Home** → **Details** → **Capture health** reads `stalled`.
 
 Search the log on the console's **Troubleshooting** page for `METRONOMIC`. The line names the cause
 and its cures:

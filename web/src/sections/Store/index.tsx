@@ -17,7 +17,7 @@ import {
 } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
 import { usePasswordFailure } from "@/components/password-confirm";
-import { SeatChip, SeatScope } from "@/components/seat-scope";
+import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Stagger } from "@/components/stagger";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocale } from "@/lib/i18n";
@@ -30,7 +30,6 @@ import {
 } from "./InstallDialogs";
 import { InstalledTab } from "./Installed";
 import { BatchPendingCard, JobProgressSection } from "./JobProgress";
-import { PluginUis } from "./PluginUis";
 import { SourcesTab } from "./Sources";
 
 type StoreTab = "browse" | "installed" | "sources";
@@ -246,12 +245,11 @@ const Store: FC = () => {
 			<div className="flex flex-col gap-card">
 				<div className="flex flex-wrap items-start justify-between gap-4">
 					<div className="space-y-1">
-						<h1 className="text-2xl font-semibold">{m.store_title()}</h1>
+						<SeatTitle title={m.store_title()} />
 						<p className="text-sm text-muted-foreground">
 							{m.store_subtitle()}
 						</p>
 					</div>
-					<SeatChip />
 				</div>
 
 				{jobId ? (
@@ -266,8 +264,6 @@ const Store: FC = () => {
 					// back with one. Only reachable mid-run; a lone install has nothing to show here.
 					step && <BatchPendingCard step={step} />
 				)}
-
-				<PluginUis />
 
 				<Tabs value={tab} onValueChange={(v) => setTab(v as StoreTab)}>
 					<TabsList>

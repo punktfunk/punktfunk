@@ -43,6 +43,7 @@ fn stream_ref(info: &StreamInfo) -> crate::events::StreamRef {
         app: info.launch.clone(),
         plane: info.plane,
         preset: info.preset.clone(),
+        profile: info.profile.clone(),
     }
 }
 

@@ -31,26 +31,28 @@ export function describeLaunch(launch: LaunchSpec | null | undefined): string {
 export const LaunchTab: FC<TabProps> = ({ draft, set, readOnly, entry }) => {
 	if (readOnly) {
 		return (
-			<Group title={m.library_entry_launch_title()}>
-				<ReadRow
-					label={m.library_entry_launch_title()}
-					value={describeLaunch(entry?.launch)}
-				/>
-				<ReadRow
-					label={m.library_field_role()}
-					value={
-						entry?.role === "launcher"
-							? m.library_entry_role_launcher()
-							: m.library_entry_role_game()
-					}
-				/>
+			<Group>
+				<div className="grid gap-4 @md:grid-cols-2">
+					<ReadRow
+						label={m.library_entry_launch_title()}
+						value={describeLaunch(entry?.launch)}
+					/>
+					<ReadRow
+						label={m.library_entry_role()}
+						value={
+							entry?.role === "launcher"
+								? m.library_entry_role_launcher()
+								: m.library_entry_role_game()
+						}
+					/>
+				</div>
 			</Group>
 		);
 	}
 	const kept = !draft.command.trim() && draft.launch?.kind !== "command";
 	return (
 		<>
-			<Group title={m.library_entry_launch_title()}>
+			<Group>
 				{kept && draft.launch && (
 					<p className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
 						{describeLaunch(draft.launch)}{" "}

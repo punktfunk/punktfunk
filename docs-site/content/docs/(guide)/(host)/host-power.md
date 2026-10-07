@@ -6,7 +6,8 @@ description: Sleep, restart or shut down the host from the web console or a pair
 Sleep the host from the couch when you're done, and [wake it](/docs/wake-on-lan) tomorrow.
 **Sleep host**, **Restart host** and **Shut down host** work on Linux and Windows hosts.
 
-- **Web console:** **Host** → **Host power**. Each action asks for your console password.
+- **Web console:** **Host** → the **⋯** beside the host's name. Each action asks for your console
+  password.
 - **Paired client:** the host's menu, where **Wake host** appears when it sleeps. The rows appear
   only for a device with the **Host power** grant. Restart and shut down ask before they run.
 

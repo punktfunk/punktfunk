@@ -7,10 +7,11 @@ The web console tells you when a newer host is out, and on most installs updates
 
 ## The Updates card
 
-**Host → Updates** in the [web console](/docs/web-console) shows the version you run, the channel
-you follow, how the host was installed and, once a newer release exists, either an **Update now**
-button or the command that updates this install. The host checks a signed feed on `git.unom.io`
-while the console is open; **Check now** checks right away. The host also fires `update.available`
+The top of **Host** in the [web console](/docs/web-console) shows the version you run and whether
+it is current; **Check for update** checks right away. Once a newer release exists, the Updates
+card unfolds below it with the channel you follow, how the host was installed, and either an
+**Update now** button or the command that updates this install. The host checks a signed feed on
+`git.unom.io` while the console is open. The host also fires `update.available`
 and `update.applied` on the [event stream](/docs/automation).
 
 The channel comes from the repository you installed from (on a Steam Deck, the branch
@@ -92,7 +93,7 @@ A host left running on a replaced binary fails every new KDE desktop session wit
 
 ## Turn the check off
 
-Turn off **Check for updates** under **Host → Settings → System** (`PUNKTFUNK_UPDATE_CHECK=0` in
+Turn off **Check for updates** under **Host → System** (`PUNKTFUNK_UPDATE_CHECK=0` in
 `host.env`). To keep the check but drop the button, turn off **Console updates** under
 **Show advanced** (`PUNKTFUNK_UPDATE_APPLY=0`). The check contacts `git.unom.io` and nothing else.
 

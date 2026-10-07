@@ -220,7 +220,7 @@ const ListControl: FC<ControlProps> = ({
 				/>
 				<Button
 					type="submit"
-					size="sm"
+					size="input"
 					variant="outline"
 					disabled={disabled || !draft.trim()}
 				>

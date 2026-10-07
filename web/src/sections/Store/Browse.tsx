@@ -103,11 +103,13 @@ export const BrowseTab: FC<{
 						onChange={(e) => setQuery(e.target.value)}
 					/>
 				</div>
-				{/* One chip per source, so an operator can see a third-party catalog's entries alone. */}
+				{/* One chip per source, so an operator can see a third-party catalog's entries alone.
+				    Beside the search they take its height. */}
 				{sources.length > 1 && (
 					<div className="flex flex-wrap gap-2">
 						<Button
 							size="sm"
+							className="sm:h-input-height"
 							variant={source === null ? "default" : "outline"}
 							aria-pressed={source === null}
 							onClick={() => setSource(null)}
@@ -118,6 +120,7 @@ export const BrowseTab: FC<{
 							<Button
 								key={s.name}
 								size="sm"
+								className="sm:h-input-height"
 								variant={source === s.name ? "default" : "outline"}
 								aria-pressed={source === s.name}
 								onClick={() => setSource(s.name)}

@@ -322,5 +322,5 @@ so drawing apps on the host see a real pen.
 | Windows 10 1809 and newer | A system pen with pressure, tilt, rotation, barrel button and eraser |
 
 Without host support, the stylus works as a finger, without pressure or tilt. To turn pen off
-for every client, switch off **Pen input** in the web console under **Host → Settings → Input**,
+for every client, switch off **Pen input** in the web console under **Host → Input**,
 or set `PUNKTFUNK_PEN=0` in [`host.env`](/docs/configuration). It applies from the next session.

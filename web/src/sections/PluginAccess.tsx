@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
 import {
 	AlertTriangle,
+	ChevronRight,
 	Download,
 	FolderLock,
 	RotateCcw,
@@ -17,6 +18,7 @@ import {
 	useGetPluginAccess,
 } from "@/api/gen/plugin-access/plugin-access";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 
 export type AccessDecision = "allow" | "deny" | "forget";
@@ -206,44 +208,61 @@ export const RecordedAccess: FC<{
 	busy: boolean;
 	onDecide: DecideAccess;
 }> = ({ access, busy, onDecide }) => {
-	if (access.grants.length === 0 && access.denied.length === 0) return null;
+	const [open, setOpen] = useState(false);
+	const count = access.grants.length + access.denied.length;
+	if (count === 0) return null;
 	return (
-		<div className="mt-3 space-y-2 border-t pt-3">
-			<div className="text-xs font-medium">{m.plugin_access_title()}</div>
-			{access.grants.map((grant) => (
-				<div key={grant.path} className="flex items-start gap-2 text-xs">
-					<FolderLock className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-					<div className="min-w-0 flex-1">
-						<div className="break-all font-mono">{grant.path}</div>
-						<Mode write={grant.write} />
-					</div>
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label={m.common_remove()}
-						disabled={busy}
-						onClick={() => onDecide([grant.path], "forget")}
-					>
-						<Trash2 className="size-3.5 text-destructive" />
-					</Button>
+		<div className="mt-1">
+			<button
+				type="button"
+				aria-expanded={open}
+				onClick={() => setOpen((v) => !v)}
+				className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+			>
+				<ChevronRight
+					className={cn("size-3.5 transition-transform", open && "rotate-90")}
+				/>
+				{m.plugin_access_folders({ count })}
+			</button>
+			{open && (
+				<div className="mt-1 space-y-0.5 pl-5">
+					{access.grants.map((grant) => (
+						<div key={grant.path} className="flex items-center gap-2 text-xs">
+							<FolderLock className="size-3.5 shrink-0 text-muted-foreground" />
+							<div className="min-w-0 flex-1">
+								<span className="break-all font-mono">{grant.path}</span>{" "}
+								<Mode write={grant.write} />
+							</div>
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label={m.common_remove()}
+								title={m.common_remove()}
+								disabled={busy}
+								onClick={() => onDecide([grant.path], "forget")}
+							>
+								<Trash2 className="size-3.5 text-destructive" />
+							</Button>
+						</div>
+					))}
+					{access.denied.map((path) => (
+						<div key={path} className="flex items-center gap-2 text-xs">
+							<div className="min-w-0 flex-1 break-all font-mono text-muted-foreground">
+								{path}
+							</div>
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={busy}
+								onClick={() => onDecide([path], "forget")}
+							>
+								<RotateCcw className="size-3.5" />
+								{m.plugin_access_ask_again()}
+							</Button>
+						</div>
+					))}
 				</div>
-			))}
-			{access.denied.map((path) => (
-				<div key={path} className="flex items-start gap-2 text-xs">
-					<div className="min-w-0 flex-1 break-all font-mono text-muted-foreground">
-						{path}
-					</div>
-					<Button
-						size="sm"
-						variant="outline"
-						disabled={busy}
-						onClick={() => onDecide([path], "forget")}
-					>
-						<RotateCcw className="size-3.5" />
-						{m.plugin_access_ask_again()}
-					</Button>
-				</div>
-			))}
+			)}
 		</div>
 	);
 };

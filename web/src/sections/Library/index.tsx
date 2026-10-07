@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import { type FC, useState } from "react";
 import { useGetPluginAccess } from "@/api/gen/plugin-access/plugin-access";
 import { useSeat } from "@/api/seat";
-import { SeatChip, SeatScope } from "@/components/seat-scope";
+import { SeatScope, SeatTitle } from "@/components/seat-scope";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,12 +16,11 @@ import { SourcesSection, useSourceNames } from "./Sources";
 
 type Tab = "games" | "sources";
 
-/** The title, **Whose library** and **Add**. */
+/** The title, which is whose library it is, and **Add**. */
 export const LibraryHeader: FC = () => (
 	<div className="flex flex-wrap items-center justify-between gap-4">
-		<h1 className="text-2xl font-semibold">{m.library_title()}</h1>
+		<SeatTitle title={m.library_title()} />
 		<div className="flex items-center gap-3">
-			<SeatChip />
 			<Button asChild>
 				<Link to="/library/$gameId" params={{ gameId: "new" }}>
 					<Plus className="size-4" />
@@ -94,9 +93,9 @@ const Library: FC = () => {
 								// Narrowing is a question about the games: answer it where they are.
 								if (provider) setTab("games");
 							}}
+							// Art & Metadata sources are the box's plugins; a seat has no say in them.
+							metadata={seat ? undefined : <MetadataSourcesSection />}
 						/>
-						{/* Art & Metadata sources are the box's plugins, and a seat has no say in them. */}
-						{!seat && <MetadataSourcesSection />}
 					</TabsContent>
 				</Tabs>
 			</div>

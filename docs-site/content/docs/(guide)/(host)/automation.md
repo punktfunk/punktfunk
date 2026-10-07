@@ -21,10 +21,10 @@ run in the streaming path. The one exception is a launch: a hook with `hold` set
 | Kind | Fires when | Carries |
 |---|---|---|
 | `client.connected` / `client.disconnected` | a device connects / goes away | name, fingerprint, plane (`native`, `gamestream`, or `web` for a browser), the `profile` it plays as (`id`, `display_name`; not on `gamestream`); disconnect adds `reason`: `quit`, `timeout` or `error` |
-| `session.started` / `session.ended` | a session starts / ends | session id, client, fingerprint, plane, mode (`3840x2160@120`), HDR. `session.ended` adds a `summary` (duration, codec, bitrate span, frames, bring-up time, and `ended`: `local`, `game_exited`, `host_ended`, `host_error`, `lost` or `stopped_by_operator`), the same shape as `GET /api/v1/session/last` |
-| `stream.started` / `stream.stopped` | video starts / stops | mode, HDR, client, fingerprint, launched app, plane |
-| `game.launching` | the host is about to start a launched game; not when it picks up one still running | app id, title, store, client, fingerprint, plane, preset |
-| `game.running` | a launched game's own process runs (not just its launcher) | app id, title, store, client, fingerprint, plane |
+| `session.started` / `session.ended` | a session starts / ends | session id, client, fingerprint, plane, mode (`3840x2160@120`), HDR, `profile`. `session.ended` adds a `summary` (duration, codec, bitrate span, frames, bring-up time, and `ended`: `local`, `game_exited`, `host_ended`, `host_error`, `lost` or `stopped_by_operator`), the same shape as `GET /api/v1/session/last` |
+| `stream.started` / `stream.stopped` | video starts / stops | mode, HDR, client, fingerprint, launched app, plane, `profile` |
+| `game.launching` | the host is about to start a launched game; not when it picks up one still running | app id, title, store, client, fingerprint, plane, preset, `profile` |
+| `game.running` | a launched game's own process runs (not just its launcher) | app id, title, store, client, fingerprint, plane, `profile` |
 | `game.window` | the game's window reaches the screen, often 5–40 s after `game.running` | the same, plus the window's `title` and `app_id` |
 | `game.exited` | a launched game is gone | the same, plus `reason`: `exited` (the player quit) or `terminated` (the host closed it, per [these settings](/docs/virtual-displays#when-a-game-ends-and-when-a-session-does)) |
 | `pairing.pending` | an unpaired device knocks, once per device | name, fingerprint, plane (`native` for a browser too: it pairs into the same store) |
@@ -55,7 +55,8 @@ Fields are only ever added, never renamed.
 ```
 
 `preset` names the settings preset the device streamed with; it is absent when the device used
-its plain settings, and on Moonlight.
+its plain settings, and on Moonlight. `profile` names who plays (`id`, `display_name`); it is
+absent on Moonlight.
 
 ## Hooks
 
@@ -86,7 +87,7 @@ The console writes `~/.config/punktfunk/hooks.json` (Windows:
 | `on` | An event kind (`stream.started`) or a domain (`pairing.*`). Required, with `run`, `webhook` or both. |
 | `run` | A shell command. |
 | `webhook` | A URL the event JSON is POSTed to. |
-| `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native`, `gamestream`, `web`), `app`, `preset` (its name or id). |
+| `filter` | Optional exact matches, all of which must hold: `fingerprint` (the device), `client` (its name), `plane` (`native`, `gamestream`, `web`), `app`, `preset` (its name or id), `profile` (its id). |
 | `timeout_s` | Seconds before a command is killed with everything it started. 1–600, default 30. |
 | `debounce_ms` | Minimum gap between firings of this hook. Default 0. |
 | `hold` | Only with `on: game.launching`: the game waits for this hook, up to `timeout_s`. |

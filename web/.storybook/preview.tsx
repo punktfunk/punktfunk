@@ -36,10 +36,25 @@ export default definePreview({
 				dynamicTitle: true,
 			},
 		},
+		// The phone A/B (D-F): a page inside the shell's phone gutter, in either shape.
+		// `&globals=density:flush` at 390 px is the screenshot. Deleted with the pick.
+		density: {
+			description: "Phone density A/B",
+			toolbar: {
+				title: "Density",
+				items: [
+					{ value: "", title: "Off" },
+					{ value: "flush", title: "Flush lists" },
+					{ value: "cards", title: "Cards" },
+				],
+				dynamicTitle: true,
+			},
+		},
 	},
 	decorators: [
 		(Story, context) => {
 			const dark = (context.globals.theme as string) !== "light";
+			const density = (context.globals.density as string) || undefined;
 			// `layout: 'fullscreen'` stories (e.g. the AppShell) own their own padding;
 			// everything else gets a comfortable inset.
 			const fullscreen = context.parameters.layout === "fullscreen";
@@ -49,6 +64,10 @@ export default definePreview({
 			useEffect(() => {
 				document.documentElement.classList.toggle("dark", dark);
 			}, [dark]);
+			useEffect(() => {
+				if (density) document.documentElement.dataset.density = density;
+				else delete document.documentElement.dataset.density;
+			}, [density]);
 			return (
 				<QueryClientProvider client={queryClient}>
 					<MaterialProvider theme={defaultMaterialTheme}>
@@ -59,11 +78,18 @@ export default definePreview({
 						<DialogsProvider>
 							<div className={dark ? "dark" : ""}>
 								<Section maxWidth={false}>
-									<div
-										className={`min-h-screen bg-background text-foreground ${fullscreen ? "" : "p-6"}`}
-									>
-										<Story />
-									</div>
+									{density ? (
+										// -m-4 undoes the padded layout's inset: the gutter is the shell's.
+										<main className="-m-4 min-h-screen bg-background px-4 py-6 text-foreground">
+											<Story />
+										</main>
+									) : (
+										<div
+											className={`min-h-screen bg-background text-foreground ${fullscreen ? "" : "p-6"}`}
+										>
+											<Story />
+										</div>
+									)}
 								</Section>
 							</div>
 						</DialogsProvider>

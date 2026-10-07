@@ -57,7 +57,7 @@ export const InformationTab: FC<TabProps> = ({
 	};
 	if (readOnly && META.every((k) => draft[k] === "")) {
 		return (
-			<Group title={m.library_entry_tab_information()}>
+			<Group>
 				<p className="text-sm text-muted-foreground">
 					{m.library_entry_no_details()}
 				</p>
@@ -65,7 +65,7 @@ export const InformationTab: FC<TabProps> = ({
 		);
 	}
 	return (
-		<Group title={m.library_entry_tab_information()}>
+		<Group>
 			{!readOnly && (
 				<TextField {...field("title", m.library_field_title())} required />
 			)}
@@ -73,7 +73,14 @@ export const InformationTab: FC<TabProps> = ({
 				{...field("description", m.library_field_description())}
 				multiline
 			/>
-			<div className="grid gap-4 @lg:grid-cols-2">
+			{/* Read, the facts sit four across; typed, two fields share a line. */}
+			<div
+				className={
+					readOnly
+						? "grid gap-4 @md:grid-cols-2 @3xl:grid-cols-4"
+						: "grid gap-4 @lg:grid-cols-2"
+				}
+			>
 				<TextField {...field("developer", m.library_field_developer())} />
 				<TextField {...field("publisher", m.library_field_publisher())} />
 				{/* `type="number"` over a string: both are optional, and empty means unset. */}

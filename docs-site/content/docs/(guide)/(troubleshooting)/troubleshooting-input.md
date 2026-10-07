@@ -86,7 +86,7 @@ The trackpads don't move the pointer while Steam is closed. That's normal while 
 
 ### Copy and paste between host and client does nothing
 
-Sharing needs two switches: **Host → Settings → Shared clipboard** on the host, and the per-host
+Sharing needs two switches: **Host → Shared clipboard** on the host, and the per-host
 toggle in your client.
 [Why the toggle does nothing](/docs/clipboard#why-the-toggle-does-nothing-or-is-greyed-out) covers
 both, and the setups where nothing crosses.

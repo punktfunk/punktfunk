@@ -9,7 +9,7 @@ box.
 ## What the unit starts
 
 The service runs `punktfunk-host serve`: the Punktfunk plane (`punktfunk/2`) and the management
-API. Two more planes stay off until you turn them on under **Host → Settings** in the
+API. Two more planes stay off until you turn them on under **Host** in the
 [web console](/docs/web-console), or in `~/.config/punktfunk/host.env`:
 
 | Plane | Setting | `host.env` | Firewall |

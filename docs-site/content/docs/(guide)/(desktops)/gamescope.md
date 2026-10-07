@@ -47,7 +47,7 @@ The host picks one of three modes per session and logs it:
 | Mode | When | What happens |
 |---|---|---|
 | **Managed** | Default on a box with a gamescope session (Bazzite, SteamOS, Nobara). Force it with `PUNKTFUNK_GAMESCOPE_MANAGED=1`. | The host takes Gaming Mode over and relaunches it headless at the client's resolution and refresh. A Steam running on the desktop is shut down to free it. Your screens drop out; the box gets its session back after you disconnect. |
-| **Attach** | **Attach mode** on under **Host → Settings → Game Mode** (`PUNKTFUNK_GAMESCOPE_ATTACH=1`), or a gamescope already runs on a box without a gamescope session. | The host streams the running gamescope and never stops it. A box with a monitor serves a mirror of it at the monitor's resolution, not a display of the client's own; only a headless box on its own autologin session restarts at the client's resolution. |
+| **Attach** | **Attach mode** on under **Host → Game Mode** (`PUNKTFUNK_GAMESCOPE_ATTACH=1`), or a gamescope already runs on a box without a gamescope session. | The host streams the running gamescope and never stops it. A box with a monitor serves a mirror of it at the monitor's resolution, not a display of the client's own; only a headless box on its own autologin session restarts at the client's resolution. |
 | **Bare spawn** | No gamescope session and none running, or a [dedicated game session](/docs/virtual-displays#dedicated-game-sessions). | The host starts its own headless gamescope at the client's mode, running the launched game. Nothing on the box is touched. |
 
 ### Nobara and other autologin display managers
@@ -156,7 +156,7 @@ The hand-back failed. Join the [`punktfunk` group](#the-punktfunk-group), or set
 The session ran in attach mode, which streams the box's own screen at its own mode. Check
 `journalctl --user -u punktfunk-host | grep 'gamescope sub-mode'`.
 
-1. Turn off **Attach mode** under **Host → Settings → Game Mode**.
+1. Turn off **Attach mode** under **Host → Game Mode**.
 2. If the row reads **Set by PUNKTFUNK_GAMESCOPE_ATTACH in host.env**, a copied template put it
    there: delete that line, and any `PUNKTFUNK_GAMESCOPE_NODE` line, from
    `~/.config/punktfunk/host.env`, then `systemctl --user restart punktfunk-host`.

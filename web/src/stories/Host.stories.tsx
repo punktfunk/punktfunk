@@ -1,11 +1,38 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { HostView } from "@/sections/Host/view";
+import type { HostInfo } from "@/api/gen/model/hostInfo";
+import { HostStrip } from "@/sections/Host/Strip";
+import type { Update } from "@/sections/Host/UpdateCard";
 import { compositors, hostInfo } from "./lib/fixtures";
 import { Routed } from "./lib/routed";
 
+const noop = () => {};
+const current: Update = {
+	state: {
+		data: {
+			apply: "full",
+			available: false,
+			channel: "stable",
+			channel_hint: "",
+			check_disabled: false,
+			current_version: hostInfo.app_version,
+			install_kind: "rpm",
+			not_published: false,
+			manifest: { version: hostInfo.app_version, stale: false },
+		},
+		isLoading: false,
+		error: null,
+	},
+	onCheck: noop,
+	checkBusy: false,
+	applying: null,
+	onApplied: noop,
+	onGiveUp: noop,
+} as unknown as Update;
+
+/** The top of Host: who it is, how current, how a device reaches it; the facts fold. */
 const meta = {
 	title: "Pages/Host",
-	component: HostView,
+	component: HostStrip,
 	decorators: [
 		(Story) => (
 			<Routed>
@@ -13,66 +40,40 @@ const meta = {
 			</Routed>
 		),
 	],
-	args: {
-		host: { data: hostInfo, isLoading: false, error: null },
-		compositors: { data: compositors, isLoading: false, error: null },
-	},
-} satisfies Meta<typeof HostView>;
+	args: { host: hostInfo, compositors, update: current },
+} satisfies Meta<typeof HostStrip>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
 
-/** A non-Linux host has no compositor backends at all, so the card is absent rather than
- * reporting "none" at a card's worth of height (design/web-console-overhaul.md §3.3). */
-export const NoCompositors: Story = {
-	args: { compositors: { data: [], isLoading: false, error: null } },
-};
-
-/** A Windows host wears the Windows mark (and, correctly, shows no Compositors card). */
+/** A Windows host wears the Windows mark and lists no compositors. */
 export const WindowsHost: Story = {
 	args: {
-		host: {
-			data: { ...hostInfo, os: "windows", os_name: "Windows" },
-			isLoading: false,
-			error: null,
-		},
-		compositors: { data: [], isLoading: false, error: null },
+		host: { ...hostInfo, os: "windows", os_name: "Windows" } as HostInfo,
+		compositors: [],
 	},
 };
 
-/** A gaming distro wears its OWN mark, not its family's: `cachyos` is resolved before the
- * `arch` it descends from, which is the whole point of shipping art for the leaf. */
+/** A gaming distro wears its OWN mark, not its family's: `cachyos` resolves before `arch`. */
 export const CachyOsHost: Story = {
 	args: {
 		host: {
-			data: { ...hostInfo, os: "linux/arch/cachyos", os_name: "CachyOS Linux" },
-			isLoading: false,
-			error: null,
-		},
+			...hostInfo,
+			os: "linux/arch/cachyos",
+			os_name: "CachyOS Linux",
+		} as HostInfo,
 	},
 };
 
-/** An unrecognized distro chain walks up to its family mark — here neither `chimera` nor
- * `frontier` have art, so the icon degrades all the way to generic Tux. */
+/** An unrecognized distro walks up to its family mark, here all the way to generic Tux. */
 export const UnknownDistro: Story = {
 	args: {
 		host: {
-			data: {
-				...hostInfo,
-				os: "linux/frontier/chimera",
-				os_name: "Chimera Linux",
-			},
-			isLoading: false,
-			error: null,
-		},
-	},
-};
-
-export const Loading: Story = {
-	args: {
-		host: { data: undefined, isLoading: true, error: null },
-		compositors: { data: undefined, isLoading: true, error: null },
+			...hostInfo,
+			os: "linux/frontier/chimera",
+			os_name: "Chimera Linux",
+		} as HostInfo,
 	},
 };

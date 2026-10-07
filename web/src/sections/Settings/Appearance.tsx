@@ -121,7 +121,7 @@ export const AppearanceCard: FC = () => {
 					{/* Validated here as well as on read: this value ends up in a style attribute,
 					    which is the one security line on this panel. */}
 					<Button
-						size="sm"
+						size="input"
 						variant="outline"
 						disabled={!isSafeColor(custom)}
 						onClick={() => apply({ ...appearance, accent: custom })}

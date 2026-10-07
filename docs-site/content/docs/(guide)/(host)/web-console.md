@@ -59,21 +59,22 @@ covers access levels and removing devices.
 
 ## The pages
 
-The sidebar holds five pages, then a **Manage** group. On a phone, **More** holds the rest.
+The sidebar holds six pages, then a **Manage** group. On a phone the bar holds Home, Profiles,
+Devices and Library; **More** holds the rest, and a row's buttons fold into its **⋯**. Each page's
+address is its place in the sidebar:
+**Devices** is `/devices`, **Diagnostics → Performance** is `/diagnostics/performance`.
 
 ![Live status during a stream: video and audio streaming, the running game, the session's codec, resolution, frame rate and bitrate](/img/console-live-status.png)
 
 | Page | What you do there |
 |---|---|
-| **Home** | Health warnings, live status, the running game and the last session. The **Sessions** card has one row per connected device: change its [access level](/docs/access-levels) or player number, mute it, request a keyframe, or stop it. A Moonlight row offers only keyframe and stop. With more than one profile, a row starts with the player's picture and name. |
-| **Devices** | Arm a PIN, approve or deny waiting devices, edit a device's access or display settings, unpair. Approving shows the profile a device asks to play as. A second PIN box for [Moonlight](/docs/moonlight) appears when GameStream is on. |
-| **Displays** | What happens to your screens when a device connects. See [Virtual displays](/docs/virtual-displays). |
-| **Library** | Turn game sources on or off, add or edit a custom title. See [Your game library](/docs/game-library). |
-| **Host** | Address and deep link for a new device, identity, codecs, ports, GPU choice, [updates](/docs/updating), [host power](/docs/host-power), and **Settings** ([Configuration](/docs/configuration#settings-in-the-web-console)). A setting pinned in `host.env` shows as locked. |
+| **Home** | Three sections. **Attention**: health warnings, devices waiting for approval, an audio endpoint that isn't ready. **Now**: one row per session on every desktop, a seat that is starting, and a game left running without a stream; **Stop** ends a session; beside it, request a keyframe, mute it, or change its [access level](/docs/access-levels) or player number, and **Details** holds the stream's numbers. With nothing live, the last session in one line. **Recent**: what the host did lately; **Show all** expands it. With more than one profile, a row starts with the player's picture and name. |
 | **Profiles** | Who plays on this host: one card per profile with where it plays and when it last did. Add a profile that shares your desktop or, on Linux, has its own Steam. Rename, change the picture, or remove one; removing asks for the console password. |
-| **Controllers** | The controllers the host holds for a live session, lit by what it receives. |
-| **Performance** | Record a capture and read per-stage latency, throughput and drops. See [Recording a capture](/docs/stats#recording-a-capture-for-a-bug-report). |
-| **Troubleshooting** | Health checks above the live log of the host, your plugins and the logs clients sent. **Export all** saves one file for a [bug report](/docs/report-an-issue). |
-| **Automation** | Run a command or call a webhook when the host does something. See [Events & hooks](/docs/automation). |
+| **Devices** | One list: devices waiting for approval first, then every paired device with its access, display settings and whether it is streaming. **Pair a device** shows a PIN; with GameStream on, its second step takes a [Moonlight](/docs/moonlight) client's PIN. A row edits access or display settings, renames a Moonlight device, or unpairs. Approving shows the profile a device asks to play as. |
+| **Displays** | What happens to your screens when a device connects: the map with a ghost of the next device's screen, **Screens** (every monitor and streamed screen, with **Release** on a kept one), the presets, and **Advanced**. With seats on, **Other desktops** lists each seat's desktop. See [Virtual displays](/docs/virtual-displays). |
+| **Library** | Turn game sources on or off, add or edit a custom title. See [Your game library](/docs/game-library). |
+| **Host** | One page. On top, the host's name, version and whether it is current, with **Check for update** and power in **⋯**; the address and deep link for a new device; and **Details** (identity, codecs, ports, compositors, audio wiring). Below, the settings, one group per tab, with search across every group and **Advanced** ([Configuration](/docs/configuration#settings-in-the-web-console)): GPU choice is a row of **Video**, what a game's exit and a session's end do are rows of **Session**, and **Seats** holds what every seat shares. [Updates](/docs/updating) and [host power](/docs/host-power) unfold when there is one to act on. A setting pinned in `host.env` shows as locked. |
+| **Diagnostics** | Three tools for when something is off. **Troubleshooting**: health checks above the live log of the host, your plugins, each running seat and the logs clients sent; **Export all** saves one file for a [bug report](/docs/report-an-issue). **Performance**: record a capture and read per-stage latency, throughput and drops ([Recording a capture](/docs/stats#recording-a-capture-for-a-bug-report)). **Controllers**: the controllers the host holds for a live session, lit by what it receives. |
+| **Automation** | Run a command or call a webhook when the host does something, for every device or one device, game or profile. See [Events & hooks](/docs/automation). |
 | **Plugins** | **Browse**, **Installed** and **Sources**, plus the plugin runner switch. See [Plugins](/docs/plugins). |
 | **Settings** | Language, appearance, sign out, and which plugin pages get their own sidebar entry. |

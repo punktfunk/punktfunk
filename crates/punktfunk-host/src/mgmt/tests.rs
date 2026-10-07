@@ -4527,7 +4527,10 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
             fingerprint: None,
             preset: None,
             plane: crate::events::Plane::Native,
-            profile: Some("kid".into()),
+            profile: Some(crate::events::ProfileRef {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+            }),
             spec: crate::library::DetectSpec::dir(tmp.path()),
             nested: false,
             scope_pid: None,

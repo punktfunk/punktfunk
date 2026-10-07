@@ -86,7 +86,7 @@ art; a source below fills what they lack.
 Install an Art & Metadata source to give every game covers and details, whatever listed it:
 **SteamGridDB** (covers, heroes, logos; needs a free API key), **Libretro** (box art and details
 for ROMs) and **IGDB** (descriptions, credits, genres and covers; needs a free Twitch app). They
-appear under **Library** → **Art & Metadata**.
+appear under **Library** → **Sources** → **Art & Metadata**.
 
 - A source fills only what a game is missing. The first source in the list wins; reorder with the
   arrows.

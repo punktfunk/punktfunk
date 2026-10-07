@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { HostCheck } from "@/api/gen/model/hostCheck";
-import { ChecksCard } from "@/sections/Logs/ChecksCard";
+import { ChecksCard } from "@/sections/Diagnostics/Logs/ChecksCard";
 
 /**
  * The troubleshooting page's checks list.

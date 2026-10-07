@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
 // (enabled via UnomProviders). We keep the composed shadcn-style sub-component
 // API (CardHeader/Title/Description/Content/Footer own their own padding), so
 // the card defaults to `padding={false}` to avoid doubling it, and soften the
-// 2px ring to a subtle 1px brand tint.
+// 2px ring to a subtle 1px brand tint. `pf-card` lets the phone layout find a
+// page-level card (styles.css).
 type CardProps = ComponentProps<typeof AnimatedCard>;
 
 const Card = ({
@@ -19,7 +20,7 @@ const Card = ({
 }: CardProps) => (
 	<AnimatedCard
 		padding={padding}
-		className={cn("ring-1 ring-accent/40", className)}
+		className={cn("pf-card ring-1 ring-accent/40", className)}
 		{...props}
 	>
 		{children}

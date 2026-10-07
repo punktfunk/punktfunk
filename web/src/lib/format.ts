@@ -51,6 +51,36 @@ export function fmtClockDuration(
 	return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
 }
 
+const AGO_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
+	["day", 86_400],
+	["hour", 3_600],
+	["minute", 60],
+];
+
+/** Unix SECONDS → "2 hours ago", in the console's locale; under a minute is "now". */
+export function fmtAgo(unixSecs: number, nowSecs = Date.now() / 1000): string {
+	const rtf = new Intl.RelativeTimeFormat(getLocale(), { numeric: "auto" });
+	const secs = Math.max(0, nowSecs - unixSecs);
+	for (const [unit, size] of AGO_STEPS)
+		if (secs >= size) return rtf.format(-Math.floor(secs / size), unit);
+	return rtf.format(0, "second");
+}
+
+/** Seconds → "42 min", "1 hr 12 min": a span someone reads at a glance, minute-accurate. */
+export function fmtSpan(secs: number): string {
+	const unit = (unit: string, n: number) =>
+		new Intl.NumberFormat(getLocale(), {
+			style: "unit",
+			unit,
+			unitDisplay: "short",
+		}).format(n);
+	const mins = Math.max(0, Math.floor(secs / 60));
+	if (mins < 60) return unit("minute", mins);
+	const rest = mins % 60;
+	const hours = unit("hour", Math.floor(mins / 60));
+	return rest ? `${hours} ${unit("minute", rest)}` : hours;
+}
+
 /** A number with the console locale's separators — never a hand-rolled `toFixed`. */
 export function fmtNumber(value: number, digits = 0): string {
 	return new Intl.NumberFormat(getLocale(), {

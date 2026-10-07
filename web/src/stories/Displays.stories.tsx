@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { ApiDisplayInfo, ApiMonitorInfo } from "@/api/gen/model";
-import { DesktopMap } from "@/sections/Displays/DesktopMap";
+import { DesktopMap, ghostBox } from "@/sections/Displays/DesktopMap";
 import { describePolicy } from "@/sections/Displays/describePolicy";
+import { ScreenRows } from "@/sections/Displays/ScreenRows";
 import { displayEffective } from "./lib/fixtures";
 
 /**
@@ -70,8 +71,23 @@ const Harness = ({
 			monitors={monitors}
 			displays={displays}
 			dimMonitors={dimMonitors}
-			onRelease={() => {}}
+			// The idle map's ghost: where the next device's screen lands under Extend.
+			ghost={ghostBox(monitors, dimMonitors ? "exclusive" : "extend", false)}
 			onMove={() => {}}
+		/>
+		<ScreenRows
+			monitors={monitors}
+			displays={displays}
+			pinned={null}
+			pinSupported
+			effective={{
+				...displayEffective,
+				topology: dimMonitors ? "exclusive" : "extend",
+			}}
+			overlaid={[]}
+			onPick={() => {}}
+			onKeepLit={() => {}}
+			onRelease={() => {}}
 		/>
 		<p className="text-sm">{describePolicy(displayEffective, { live })}</p>
 	</div>
@@ -85,7 +101,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** An idle host: only the physical monitors, and the sentence in the future tense. */
+/** An idle host: the monitors, the ghost where the next device lands, and the sentence. */
 export const Idle: Story = {};
 
 /** One device streaming beside the desk — the shape the default preset produces. */
@@ -97,8 +113,8 @@ export const Streaming: Story = {
 };
 
 /**
- * A kept screen carries its own Release; an active one does not — tearing that down is session
- * control, not display management.
+ * A kept screen's row carries Release; an active one does not — tearing that down is session
+ * control, not display management. The map only shows state.
  */
 export const KeptAndActive: Story = {
 	args: {
@@ -115,6 +131,48 @@ export const KeptAndActive: Story = {
 				y: 0,
 			}),
 		],
+	},
+};
+
+/**
+ * Workstation on a box three devices used in the last minutes: each got an exclusive screen of
+ * its own, and every group reports itself at (0, 0). The live one sits over the desk; the kept
+ * ones stand apart instead of stacking on it.
+ */
+export const SeparateDesktops: Story = {
+	args: {
+		monitors: [mon({ primary: true })],
+		displays: [
+			disp({
+				slot: 1,
+				group: 0,
+				client: "Enrico's iPad",
+				mode: "2560x1600@120",
+				state: "lingering",
+				expires_in_ms: 120_000,
+				topology: "exclusive",
+				x: 0,
+			}),
+			disp({
+				slot: 2,
+				group: 1,
+				client: "Mac Studio",
+				mode: "2560x1440@120",
+				topology: "exclusive",
+				x: 0,
+			}),
+			disp({
+				slot: 3,
+				group: 2,
+				client: "Steam Deck",
+				mode: "1280x800@90",
+				state: "lingering",
+				expires_in_ms: 240_000,
+				topology: "exclusive",
+				x: 0,
+			}),
+		],
+		dimMonitors: true,
 	},
 };
 

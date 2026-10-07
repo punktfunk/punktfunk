@@ -3,7 +3,7 @@ title: Configuration
 description: Host settings in the web console, the host.env file that pins them, and the environment variables for everything else.
 ---
 
-Every host setting is on the web console's **Host → Settings** page; `host.env` pins those settings
+Every host setting is on the web console's **Host** page; `host.env` pins those settings
 and holds the environment-only variables below. The host detects the compositor, input backend and
 encoder on its own, so most variables here are overrides you rarely need.
 
@@ -22,7 +22,7 @@ Resolution and bitrate aren't host settings — the client picks them. See [Bitr
 
 ## Settings in the web console
 
-Each row is on **Host → Settings**; **Show advanced** reveals the rest, and searching for the
+Each row is on **Host**; **Show advanced** reveals the rest, and searching for the
 `host.env` name finds a row. A `host.env` line or a command-line flag wins and locks the row: remove
 it and restart to hand the setting back. **Restart Punktfunk** applies the rows marked *after a
 restart*.
@@ -73,11 +73,14 @@ restart*.
 | Grab the cursor (Linux) | `PUNKTFUNK_GAMESCOPE_GRAB_CURSOR` | `on` · `off` | `off` | next session |
 | Steam per seat (Linux) | `PUNKTFUNK_STEAM_SEAT_HOME` | `on` · `off` | `off` | next session |
 | Pads per seat (Linux) | `PUNKTFUNK_STEAM_SEAT_SANDBOX` | `on` · `off` | `off` | next session |
-| Seats kept warm (Linux, Windows) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
 | Bind patched gamescope (Linux) | `PUNKTFUNK_GAMESCOPE_BIND` | `auto` · `on` · `off` | `auto` | next session |
 | Follow mode switches (Linux) | `PUNKTFUNK_SESSION_WATCH` | `auto` · `on` · `off` | `auto` | next session |
 | Local discovery | `PUNKTFUNK_MDNS` | `on` · `off` | `on` | after a restart |
 | Disconnect timeout | `PUNKTFUNK_IDLE_TIMEOUT_MS` | 1000–120000 ms | `8000` | after a restart |
+| Seats kept warm (Linux, Windows) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
+| Stop idle seats (Linux, Windows) | `PUNKTFUNK_SEAT_IDLE_STOP_MIN` | 0–1440 min | `240` | after a restart |
+| Seat game exit (Linux, Windows) | `PUNKTFUNK_SEAT_END_ON_GAME_EXIT` | `on` · `off` | `on` | next session |
+| Seat mode cap (Linux, Windows) | `PUNKTFUNK_SEAT_MAX_MODE` | text, up to 24 characters | — | next session |
 | Check for updates | `PUNKTFUNK_UPDATE_CHECK` | `on` · `off` | `on` | at once |
 | Console updates | `PUNKTFUNK_UPDATE_APPLY` | `on` · `off` | `on` | at once |
 | Tray autostart (Linux, Windows) | `PUNKTFUNK_TRAY_AUTOSTART` | `on` · `off` | `on` | at once |

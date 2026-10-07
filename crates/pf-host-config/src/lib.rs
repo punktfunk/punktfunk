@@ -14,6 +14,7 @@
 pub mod layout;
 pub mod os_release;
 pub mod registry;
+pub mod seat_defaults;
 mod store;
 
 pub use store::{
@@ -294,6 +295,15 @@ pub struct HostConfig {
     /// (`design/steam-seats-warm-launch-implementation-plan.md` WP-S2). **Default 1**; `0` is
     /// off. Each parked seat costs about a gigabyte, and only a seat home can be pre-warmed.
     pub steam_prewarm: u32,
+    /// `PUNKTFUNK_SEAT_IDLE_STOP_MIN` — minutes a running seat may sit with nobody on it before
+    /// the box stops it. **Default 240**; `0` never stops one.
+    pub seat_idle_stop_min: u32,
+    /// `PUNKTFUNK_SEAT_END_ON_GAME_EXIT` — a seat's stream ends when its game exits. **Default
+    /// ON**. Handed to every seat in [`seat_defaults`].
+    pub seat_end_on_game_exit: bool,
+    /// `PUNKTFUNK_SEAT_MAX_MODE` — the highest mode a seat grants a device without a cap of its
+    /// own, `WIDTHxHEIGHT@HZ`. Handed to every seat in [`seat_defaults`].
+    pub seat_max_mode: Option<String>,
     /// `PUNKTFUNK_GAMESCOPE_HDR` — allow HDR on gamescope. The host probes the
     /// punktfunk build (`packaging/gamescope`) and stays SDR if missing; this only
     /// decides whether HDR is *attempted*. **Default ON**, matching `PUNKTFUNK_10BIT`.
@@ -404,6 +414,14 @@ impl HostConfig {
                 .and_then(|s| s.trim().parse::<u32>().ok())
                 .unwrap_or(1)
                 .min(8),
+            seat_idle_stop_min: val("PUNKTFUNK_SEAT_IDLE_STOP_MIN")
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(240)
+                .min(1_440),
+            seat_end_on_game_exit: row_bool("PUNKTFUNK_SEAT_END_ON_GAME_EXIT"),
+            seat_max_mode: val("PUNKTFUNK_SEAT_MAX_MODE")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             gamescope_hdr: row_bool("PUNKTFUNK_GAMESCOPE_HDR"),
             gamescope_sdr_nits: val("PUNKTFUNK_GAMESCOPE_SDR_NITS")
                 .and_then(|s| s.trim().parse::<u32>().ok())

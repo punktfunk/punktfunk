@@ -1,7 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { SectionHostSettings } from "@/sections/HostSettings";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-// `host_` keeps the page flat beside `/host` rather than nested inside its layout.
+// The settings moved onto Host. Kept for one release so bookmarks land; then delete.
 export const Route = createFileRoute("/host_/settings")({
-	component: SectionHostSettings,
+	beforeLoad: () => {
+		throw redirect({ to: "/host", replace: true });
+	},
 });

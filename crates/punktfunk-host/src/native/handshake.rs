@@ -418,9 +418,7 @@ pub(super) async fn negotiate(
     {
         let fp = crate::vdisplay::policy::fp_hex(conn.peer_fingerprint());
         let want = (hello.mode.width, hello.mode.height, hello.mode.refresh_hz);
-        let capped = crate::vdisplay::policy::prefs()
-            .get()
-            .cap_mode(fp.as_deref(), want);
+        let capped = crate::vdisplay::policy::prefs().cap_mode(fp.as_deref(), want);
         if capped != want {
             tracing::info!(
                 requested = %format_args!("{}x{}@{}", want.0, want.1, want.2),

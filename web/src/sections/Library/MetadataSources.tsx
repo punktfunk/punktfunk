@@ -1,14 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import {
-	ArrowDown,
-	ArrowUp,
-	Check,
-	Download,
-	Images,
-	Settings2,
-} from "lucide-react";
-import { motion } from "motion/react";
+import { ArrowDown, ArrowUp, Images, Settings2 } from "lucide-react";
 import { type FC, useState } from "react";
 import {
 	getListLibraryMetadataQueryKey,
@@ -21,13 +13,13 @@ import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { useSourceStatus } from "@/api/metadata";
 import { METADATA_CATEGORY, usePlugins } from "@/api/plugins";
 import { useInstallPlugin } from "@/api/store";
-import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
-import { Badge } from "@/components/ui/badge";
+import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { RowActions } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
+import { AddSourceRail, SourceGroup, SourceItem } from "./AddSource";
 import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 import { useSourceNames } from "./Sources";
@@ -111,15 +103,12 @@ export const MetadataSourcesSection: FC = () => {
 	const labelOf = (id: string) => nameOf(id) ?? id;
 	return (
 		<>
-			<Card>
-				<CardHeader className="pb-3">
-					<CardTitle className="flex items-center gap-2">
-						<Images className="size-4" />
-						{m.library_metadata_title()}
-					</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-4">
-					<Stagger gap={ROW_GAP} className="flex flex-col gap-2">
+			<SourceGroup
+				icon={<Images className="size-4" />}
+				title={m.library_metadata_title()}
+			>
+				<div className="space-y-4">
+					<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
 						{sources.map((source, i) => (
 							<MetadataSourceRow
 								key={source.id}
@@ -137,50 +126,28 @@ export const MetadataSourcesSection: FC = () => {
 							/>
 						))}
 						{silent.map((entry) => (
-							<motion.div
+							<SourceItem
 								key={entry.pkg}
-								variants={ROW}
-								className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
-							>
-								<span className="text-sm font-medium">{entry.title}</span>
-								<Badge
-									variant={running.has(entry.id) ? "secondary" : "outline"}
-								>
-									{running.has(entry.id)
+								title={entry.title}
+								meta={`${
+									running.has(entry.id)
 										? m.library_source_running()
-										: m.library_source_stopped()}
-								</Badge>
-								<span className="text-sm text-muted-foreground">
-									{m.library_metadata_silent()}
-								</span>
-							</motion.div>
+										: m.library_source_stopped()
+								} · ${m.library_metadata_silent()}`}
+								hint={m.library_metadata_silent()}
+							/>
 						))}
 					</Stagger>
 					<p className="max-w-prose text-xs text-muted-foreground">
 						{m.library_metadata_help()}
 					</p>
-					{available.length > 0 && (
-						<div className="space-y-2 border-t pt-4">
-							<p className="text-sm font-medium">{m.library_add_source()}</p>
-							<div className="flex flex-wrap gap-2">
-								{available.map((entry) => (
-									<Button
-										key={entry.pkg}
-										size="sm"
-										variant="outline"
-										disabled={catalog.data?.busy === true || install.isPending}
-										title={entry.description}
-										onClick={() => onInstall(entry)}
-									>
-										<Download className="size-4" />
-										{entry.title}
-									</Button>
-								))}
-							</div>
-						</div>
-					)}
-				</CardContent>
-			</Card>
+					<AddSourceRail
+						entries={available}
+						busy={catalog.data?.busy === true || install.isPending}
+						onInstall={onInstall}
+					/>
+				</div>
+			</SourceGroup>
 			{settingsFor && (
 				<SourceSettingsDialog
 					source={{ id: settingsFor, label: labelOf(settingsFor) }}
@@ -217,78 +184,85 @@ const MetadataSourceRow: FC<{
 	onSettings,
 }) => {
 	const status = useSourceStatus(source.id, running);
-	const replaceId = `metadata-replace-${source.id}`;
+	const found =
+		running && status.data
+			? status.data.ready
+				? m.library_metadata_found({
+						found: status.data.found,
+						wanted: status.data.wanted,
+					})
+				: status.data.reason
+			: null;
 	return (
-		<motion.div
-			variants={ROW}
-			className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
-		>
-			<Button
-				size="sm"
-				variant={source.enabled ? "default" : "outline"}
-				aria-pressed={source.enabled}
-				disabled={busy}
-				onClick={onToggle}
-			>
-				{source.enabled && <Check className="size-4" />}
-				{label}
-			</Button>
-			<Badge variant={running ? "secondary" : "outline"}>
-				{running ? m.library_source_running() : m.library_source_stopped()}
-			</Badge>
-			{running && status.data && (
-				<span
-					className={`text-sm ${status.data.ready ? "text-muted-foreground" : "text-amber-600 dark:text-amber-500"}`}
-				>
-					{status.data.ready
-						? m.library_metadata_found({
-								found: status.data.found,
-								wanted: status.data.wanted,
-							})
-						: status.data.reason}
-				</span>
-			)}
-			<div className="ml-auto flex flex-wrap items-center gap-2">
-				<label
-					htmlFor={replaceId}
-					className="flex items-center gap-2 text-sm"
-					title={m.library_metadata_replace_help()}
-				>
-					<Checkbox
-						id={replaceId}
-						checked={source.replace}
-						disabled={busy}
-						onCheckedChange={(v) => onReplace(v === true)}
+		<SourceItem
+			lead={
+				<Checkbox
+					checked={source.enabled}
+					disabled={busy}
+					aria-label={label}
+					onCheckedChange={onToggle}
+				/>
+			}
+			title={label}
+			meta={
+				<>
+					{running ? m.library_source_running() : m.library_source_stopped()}
+					{found && (
+						<span
+							className={
+								status.data?.ready
+									? undefined
+									: "text-amber-600 dark:text-amber-500"
+							}
+						>
+							{" "}
+							· {found}
+						</span>
+					)}
+				</>
+			}
+			actions={
+				<>
+					<Button
+						size="icon"
+						variant="ghost"
+						aria-label={m.library_metadata_up()}
+						title={m.library_metadata_up()}
+						disabled={busy || first}
+						onClick={onUp}
+					>
+						<ArrowUp className="size-4" />
+					</Button>
+					<Button
+						size="icon"
+						variant="ghost"
+						aria-label={m.library_metadata_down()}
+						title={m.library_metadata_down()}
+						disabled={busy || last}
+						onClick={onDown}
+					>
+						<ArrowDown className="size-4" />
+					</Button>
+					<RowActions
+						actions={[
+							{
+								kind: "check",
+								label: m.library_metadata_replace(),
+								hint: m.library_metadata_replace_help(),
+								checked: source.replace,
+								disabled: busy,
+								onChange: onReplace,
+							},
+							{
+								label: m.library_source_settings(),
+								icon: <Settings2 />,
+								iconOnly: true,
+								onSelect: onSettings,
+							},
+						]}
 					/>
-					{m.library_metadata_replace()}
-				</label>
-				<Button
-					size="sm"
-					variant="outline"
-					aria-label={m.library_metadata_up()}
-					disabled={busy || first}
-					onClick={onUp}
-				>
-					<ArrowUp className="size-4" />
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					aria-label={m.library_metadata_down()}
-					disabled={busy || last}
-					onClick={onDown}
-				>
-					<ArrowDown className="size-4" />
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					aria-label={m.library_source_settings()}
-					onClick={onSettings}
-				>
-					<Settings2 className="size-4" />
-				</Button>
-			</div>
-		</motion.div>
+				</>
+			}
+		/>
 	);
 };

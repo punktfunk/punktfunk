@@ -1,18 +1,23 @@
-import { ArrowUpCircle, Ban, Circle, Package, Trash2 } from "lucide-react";
-import type { FC } from "react";
+import { Link } from "@tanstack/react-router";
+import {
+	ArrowUpCircle,
+	BadgeCheck,
+	Ban,
+	Circle,
+	Package,
+	Trash2,
+} from "lucide-react";
+import { motion } from "motion/react";
+import type { FC, ReactNode } from "react";
 import type { InstalledView } from "@/api/gen/model";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
+import { uiPlugins, usePlugins } from "@/api/plugins";
 import { useInstalledPlugins } from "@/api/store";
 import { QueryState } from "@/components/query-state";
-import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-	MotionTableBody,
-	MotionTableRow,
-	Table,
-	TableCell,
-} from "@/components/ui/table";
+import { RowActions } from "@/components/ui/menu";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 import {
@@ -47,6 +52,7 @@ export const InstalledTab: FC<{
 }) => {
 	const installed = useInstalledPlugins();
 	const access = usePluginAccess();
+	const plugins = usePlugins();
 	return (
 		<div className="flex flex-col gap-card">
 			<RunnerCardSection />
@@ -61,6 +67,7 @@ export const InstalledTab: FC<{
 				access={access.access.data}
 				accessBusy={access.busy}
 				onAccessDecision={access.onDecide}
+				pages={new Set(uiPlugins(plugins.data).map((p) => p.id))}
 			/>
 		</div>
 	);
@@ -107,6 +114,8 @@ export const InstalledList: FC<{
 		paths: string[],
 		decision: AccessDecision,
 	) => void;
+	/** Plugin ids with a page of their own; their row's title opens it. */
+	pages?: Set<string>;
 }> = ({
 	installed,
 	onUpdate,
@@ -118,13 +127,14 @@ export const InstalledList: FC<{
 	access = [],
 	accessBusy = false,
 	onAccessDecision = () => {},
+	pages = new Set(),
 }) => {
 	const rows = installed.data ?? [];
 	return (
 		<Card>
 			<CardContent flush>
 				{/* The bulk action sits with the list it acts on, the way Sources' "Refresh all" does. */}
-				<CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
+				<CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0">
 					<CardTitle className="flex items-center gap-2">
 						<Package className="size-4" />
 						{m.store_installed_title()}
@@ -147,87 +157,119 @@ export const InstalledList: FC<{
 							{m.store_installed_empty()}
 						</p>
 					) : (
-						<Table>
-							<MotionTableBody {...staggerProps(ROW_GAP)}>
-								{rows.map((p) => (
-									<MotionTableRow
-										key={p.pkg}
-										variants={ROW}
-										className="align-top"
-									>
-										<TableCell className="py-4">
-											<div className="font-medium">{p.title ?? p.pkg}</div>
-											<div className="font-mono text-xs text-muted-foreground">
-												{p.pkg}
-											</div>
-											{p.blocked != null && (
-												<p className="mt-2 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">
-													<Ban className="mt-px size-3.5 shrink-0" />
-													<span>{m.store_blocked({ reason: p.blocked })}</span>
-												</p>
-											)}
-											<InstalledAccess
-												plugin={p}
-												access={access}
-												busy={accessBusy}
-												onDecision={onAccessDecision}
-											/>
-										</TableCell>
-										<TableCell className="py-4">
-											<div className="flex flex-col items-start gap-1">
-												<TierBadge tier={p.tier} />
-												{p.tier === "external" && p.source && (
-													<SourceChip source={p.source} />
-												)}
-											</div>
-										</TableCell>
-										<TableCell className="py-4 text-sm tabular-nums text-muted-foreground">
-											{p.version ? `v${p.version}` : m.store_version_unknown()}
-										</TableCell>
-										<TableCell className="py-4">
-											<span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-												<Circle
-													className={
-														p.running
-															? "size-2 fill-[var(--success)] text-[var(--success)]"
-															: "size-2 fill-muted-foreground text-muted-foreground"
-													}
-												/>
-												{p.running ? m.store_running() : m.store_stopped()}
-											</span>
-										</TableCell>
-										<TableCell className="py-4 text-right">
-											<div className="flex items-center justify-end gap-2">
-												{p.update_available != null && (
-													<Button
-														size="sm"
-														disabled={batchRunning || busyPkg === p.pkg}
-														onClick={() => onUpdate(p)}
-													>
-														<ArrowUpCircle className="size-4" />
-														{m.store_update_to({
-															version: p.update_available,
-														})}
-													</Button>
-												)}
-												<Button
-													variant="ghost"
-													size="icon"
-													aria-label={m.store_uninstall()}
-													disabled={batchRunning || busyPkg === p.pkg}
-													onClick={() => onUninstall(p)}
-												>
-													<Trash2 className="size-4 text-destructive" />
-												</Button>
-											</div>
-										</TableCell>
-									</MotionTableRow>
-								))}
-							</MotionTableBody>
-						</Table>
+						<Stagger gap={ROW_GAP} className="divide-y px-card pb-2">
+							{rows.map((p) => (
+								<InstalledRow
+									key={p.pkg}
+									plugin={p}
+									page={!!p.plugin_id && pages.has(p.plugin_id)}
+									busy={batchRunning || busyPkg === p.pkg}
+									onUpdate={() => onUpdate(p)}
+									onUninstall={() => onUninstall(p)}
+								>
+									<InstalledAccess
+										plugin={p}
+										access={access}
+										busy={accessBusy}
+										onDecision={onAccessDecision}
+									/>
+								</InstalledRow>
+							))}
+						</Stagger>
 					)}
 				</QueryState>
 			</CardContent>
 		</Card>
+	);
+};
+
+/**
+ * One installed plugin: its name (a link when it has a page), then whether it runs, its version
+ * and where it came from. Update shows when there is one; the rest is in ⋯. A verified package
+ * is the usual case, so it gets a tick rather than a badge.
+ */
+const InstalledRow: FC<{
+	plugin: InstalledView;
+	page: boolean;
+	busy: boolean;
+	onUpdate: () => void;
+	onUninstall: () => void;
+	children?: ReactNode;
+}> = ({ plugin: p, page, busy, onUpdate, onUninstall, children }) => {
+	const title = p.title ?? p.pkg;
+	return (
+		<motion.div variants={ROW} className="py-3">
+			<div className="flex items-center gap-3">
+				<div className="min-w-0 flex-1" title={p.pkg}>
+					<div className="flex min-w-0 items-center gap-2">
+						{page && p.plugin_id ? (
+							<Link
+								to="/plugins/$pluginId/$"
+								params={{ pluginId: p.plugin_id, _splat: "" }}
+								className="truncate font-medium hover:underline"
+							>
+								{title}
+							</Link>
+						) : (
+							<span className="truncate font-medium">{title}</span>
+						)}
+						{p.tier === "verified" ? (
+							<span className="shrink-0" title={m.store_tier_verified_hint()}>
+								<BadgeCheck
+									className="size-4 text-[var(--success)]"
+									aria-label={m.store_tier_verified()}
+								/>
+							</span>
+						) : (
+							<TierBadge tier={p.tier} className="shrink-0" />
+						)}
+					</div>
+					<div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+						<Circle
+							className={
+								p.running
+									? "size-2 shrink-0 fill-[var(--success)] text-[var(--success)]"
+									: "size-2 shrink-0 fill-muted-foreground text-muted-foreground"
+							}
+						/>
+						<span className="truncate">
+							{p.running ? m.store_running() : m.store_stopped()} ·{" "}
+							{p.version ? `v${p.version}` : m.store_version_unknown()}
+						</span>
+						{p.tier === "external" && p.source && (
+							<SourceChip source={p.source} />
+						)}
+					</div>
+				</div>
+				{p.update_available != null && (
+					<Button size="sm" disabled={busy} onClick={onUpdate}>
+						<ArrowUpCircle className="size-4" />
+						<span className="hidden sm:inline">
+							{m.store_update_to({ version: p.update_available })}
+						</span>
+						<span className="sm:hidden">{p.update_available}</span>
+					</Button>
+				)}
+				<RowActions
+					disabled={busy}
+					actions={[
+						{
+							label: m.store_uninstall(),
+							icon: <Trash2 />,
+							iconOnly: true,
+							destructive: true,
+							onSelect: onUninstall,
+						},
+					]}
+				/>
+			</div>
+			{p.blocked != null && (
+				<p className="mt-2 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">
+					<Ban className="mt-px size-3.5 shrink-0" />
+					<span>{m.store_blocked({ reason: p.blocked })}</span>
+				</p>
+			)}
+			{children}
+		</motion.div>
 	);
 };

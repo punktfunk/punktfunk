@@ -65,7 +65,7 @@ newer control encryption falls back to a legacy scheme that can reuse GCM nonces
 your network could intercept a pairing or recover input. The host logs a warning whenever the plane
 is on.
 
-GameStream is off on every install. Turn it on or off with **GameStream** in **Host → Settings**,
+GameStream is off on every install. Turn it on or off with **GameStream** in **Host**,
 then **Restart Punktfunk**. If the setting shows as locked, remove the pin where it was set:
 
 | Pinned by | Remove it |

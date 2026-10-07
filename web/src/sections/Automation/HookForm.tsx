@@ -4,6 +4,7 @@ import { useListPairedClients } from "@/api/gen/clients/clients";
 import { useGetLibraryPage } from "@/api/gen/library/library";
 import type { HookEntry } from "@/api/gen/model/hookEntry";
 import { useListNativeClients } from "@/api/gen/native/native";
+import { useListProfiles } from "@/api/gen/profiles/profiles";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -79,6 +80,11 @@ export const HookForm: FC<{
 		{ query: { enabled: filtered && typed.includes(":") } },
 	);
 	const clients = useListNativeClients({ query: { enabled: filtered } });
+	// One list of hooks for the box; a profile narrows one to that player (R9: one profile, none).
+	const profiles = useListProfiles({
+		query: { enabled: filtered, retry: false },
+	});
+	const players = profiles.data ?? [];
 	const moonlight = useListPairedClients({ query: { enabled: filtered } });
 	const appOptions: ComboboxOption[] = useMemo(
 		() =>
@@ -309,6 +315,38 @@ export const HookForm: FC<{
 								</SelectContent>
 							</Select>
 						</div>
+						{players.length > 1 && (
+							<div className="space-y-2">
+								<Label htmlFor="hook-profile">
+									{m.automation_filter_profile()}
+								</Label>
+								<Select
+									value={draft.filter?.profile ?? ANY_DEVICE}
+									onValueChange={(v) =>
+										set({
+											filter: {
+												...draft.filter,
+												profile: v === ANY_DEVICE ? undefined : v,
+											},
+										})
+									}
+								>
+									<SelectTrigger id="hook-profile">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value={ANY_DEVICE}>
+											{m.automation_filter_none()}
+										</SelectItem>
+										{players.map((p) => (
+											<SelectItem key={p.id} value={p.id}>
+												{p.display_name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+						)}
 						<div className="space-y-2">
 							<Label htmlFor="hook-app">{m.automation_filter_app()}</Label>
 							{/* The event carries the store-qualified id (`steam:570`), so that is what

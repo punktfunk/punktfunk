@@ -8958,7 +8958,7 @@
           },
           "managed": {
             "type": "boolean",
-            "description": "Best-effort: one of our virtual displays, not a real head. Reliable on KWin only."
+            "description": "One of our virtual displays, not a real head. Best-effort on Sway, whose\n`HEADLESS-N` may be the operator's own."
           },
           "mode": {
             "type": "string",
@@ -10554,6 +10554,7 @@
           "settings",
           "configured",
           "effective",
+          "auto_topology",
           "presets",
           "custom_presets",
           "enforced",
@@ -10561,6 +10562,10 @@
           "clients"
         ],
         "properties": {
+          "auto_topology": {
+            "$ref": "#/components/schemas/Topology",
+            "description": "What `topology: auto` resolves to on this host, never `auto` (`effective_topology`)."
+          },
           "client_enforced": {
             "type": "array",
             "items": {
@@ -12038,6 +12043,17 @@
               }
             ]
           },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile of the session that launched it. See [`ClientRef::profile`]."
+              }
+            ]
+          },
           "store": {
             "type": [
               "string",
@@ -12383,6 +12399,13 @@
               "null"
             ],
             "description": "The dialled settings preset, by id or name (`client.*`, `session.*`, `stream.*`, `game.*`)."
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile played as, by id (`client.*`, `session.*`, `stream.*`, `game.*`)."
           }
         }
       },
@@ -15681,6 +15704,17 @@
                 "description": "See [`ClientRef::preset`]."
               }
             ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "See [`ClientRef::profile`]."
+              }
+            ]
           }
         }
       },
@@ -16039,6 +16073,7 @@
           "network",
           "game_mode",
           "session",
+          "seats",
           "system"
         ]
       },
@@ -16551,6 +16586,17 @@
               {
                 "$ref": "#/components/schemas/PresetRef",
                 "description": "See [`ClientRef::preset`]."
+              }
+            ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "See [`ClientRef::profile`]."
               }
             ]
           }

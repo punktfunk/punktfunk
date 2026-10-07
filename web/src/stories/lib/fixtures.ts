@@ -16,6 +16,7 @@ import type { PendingDevice } from "@/api/gen/model/pendingDevice";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { Seating } from "@/api/gen/model/seating";
+import type { SessionSummary } from "@/api/gen/model/sessionSummary";
 import type { StatsSample } from "@/api/gen/model/statsSample";
 import type { StatsStatus } from "@/api/gen/model/statsStatus";
 
@@ -125,6 +126,32 @@ export const statusIdle: RuntimeStatus = {
 	session: null,
 	stream: null,
 	games: [],
+};
+
+/** The session that just ended: Home's one line when nothing is live. */
+export const lastSession: SessionSummary = {
+	id: 41,
+	client: "112233445566",
+	client_name: "Enrico's iPad",
+	mode: "2560x1600@120",
+	codec: "av1",
+	bit_depth: 10,
+	chroma: "4:2:0",
+	hdr: true,
+	join: false,
+	bitrate_kbps: 38_000,
+	bitrate: {
+		avg_kbps: 36_500,
+		min_kbps: 20_000,
+		max_kbps: 40_000,
+		adaptive_steps: 3,
+	},
+	bringup_ms: 420,
+	duration_s: 2_520,
+	started_unix: Math.floor(Date.now() / 1000) - 2 * 3600 - 2_520,
+	frames_dropped: 12,
+	input: { events: 18_000, dropped: 0, mic: 0, rich: 40 },
+	ended: "local",
 };
 
 /**
