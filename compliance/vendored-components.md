@@ -38,6 +38,9 @@ Not on this list on purpose:
   inside the `-sys` crates; cargo-audit tracks the crate advisories, and the upstream
   (Cisco openh264, memorysafety/rav1d) security feeds surface through RustSec. No
   separate manual watch needed unless we pin them to git.
+- **libopus** — the same shape: `opusic-sys` builds its bundled libopus static on every
+  platform, Linux packages included, so a libopus fix ships as an `opusic-sys` bump
+  rather than a distro update. Watch xiph/opus releases alongside RustSec.
 
 ## Security-update availability (CRA: ≥10 years)
 
