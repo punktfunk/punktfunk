@@ -157,9 +157,11 @@ export function ghostBox(
 	topology: Topology,
 	mirrored: boolean,
 ): MapBox | undefined {
-	if (mirrored || topology === "auto") return undefined;
+	if (mirrored) return undefined;
 	const heads = monitors.filter((mon) => !mon.managed && mon.enabled);
 	const main = heads.find((mon) => mon.primary) ?? heads[0];
+	// With no monitor the screen stands alone wherever `auto` lands; with one, `auto` decides.
+	if (topology === "auto" && main) return undefined;
 	const size = (main && parseMode(main.mode)) ?? { w: 1920, h: 1080 };
 	const base = {
 		key: "ghost",

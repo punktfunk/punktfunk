@@ -133,6 +133,9 @@ describe("ghostBox", () => {
 	test("a headless box gets the screen on its own", () => {
 		expect(ghostBox([], "exclusive", false)).toMatchObject({ x: 0, y: 0 });
 	});
+	test("an unresolved auto still draws the screen when no monitor is there", () => {
+		expect(ghostBox([], "auto", false)).toMatchObject({ x: 0, y: 0 });
+	});
 });
 
 describe("toBoxes keepLit", () => {

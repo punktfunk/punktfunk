@@ -249,10 +249,13 @@ export const SectionDisplays: FC = () => {
 									}
 									refetch={settings.refetch}
 								>
+									{/* The map's own height, so a preview that empties it cannot move the page. */}
 									{heads.length + displays.length === 0 && !ghost ? (
-										<p className="text-sm text-muted-foreground">
-											{m.display_map_empty()}
-										</p>
+										<div className="flex h-48 items-center justify-center sm:h-72">
+											<p className="text-sm text-muted-foreground">
+												{m.display_map_empty()}
+											</p>
+										</div>
 									) : (
 										<DesktopMap
 											monitors={heads}
