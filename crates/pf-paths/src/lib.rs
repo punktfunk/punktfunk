@@ -489,15 +489,26 @@ pub fn replace_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::
 /// `BUILTIN\Users:(R)` to the temp before the rename, so a reader sees the old file or the
 /// readable new one, never a locked one. Unix stays owner-only: the host's user is the reader.
 pub fn replace_users_readable_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    replace(path, contents, Temp::UsersReadable)
+    replace(path, contents, Temp::UsersReadable(None))
+}
+
+/// [`replace_users_readable_file`] that the accounts of `deny` (an icacls principal, `*<SID>`)
+/// may not read. Windows denies them on the temp beside the grant, so none of them ever sees
+/// the published file. Unix ignores `deny`: the file is owner-only there.
+pub fn replace_users_readable_file_denying(
+    path: &std::path::Path,
+    contents: &[u8],
+    deny: &str,
+) -> std::io::Result<()> {
+    replace(path, contents, Temp::UsersReadable(Some(deny)))
 }
 
 /// How [`replace`] makes its temp, and so the published file.
 #[derive(Clone, Copy, PartialEq)]
-enum Temp {
+enum Temp<'a> {
     Plain,
     Secret,
-    UsersReadable,
+    UsersReadable(Option<&'a str>),
 }
 
 /// The temp is removed on every error. A crash between write and rename leaves it behind:
@@ -520,20 +531,26 @@ fn replace(path: &std::path::Path, contents: &[u8], mode: Temp) -> std::io::Resu
         write_secret_file(tmp.path(), contents)?;
     }
     #[cfg(windows)]
-    if mode == Temp::UsersReadable {
-        grant_users_read(tmp.path())?;
+    if let Temp::UsersReadable(deny) = mode {
+        grant_users_read(tmp.path(), deny)?;
     }
     std::fs::rename(tmp.path(), path)?;
     tmp.published();
     Ok(())
 }
 
-/// `BUILTIN\Users:(R)` beside the SYSTEM/Administrators ACEs [`write_secret_file`] set.
+/// `BUILTIN\Users:(R)` beside the SYSTEM/Administrators ACEs [`write_secret_file`] set, and a
+/// read deny for `deny`, which outranks the grant.
 #[cfg(windows)]
-fn grant_users_read(path: &std::path::Path) -> std::io::Result<()> {
-    let status = std::process::Command::new(system32("icacls.exe"))
+fn grant_users_read(path: &std::path::Path, deny: Option<&str>) -> std::io::Result<()> {
+    let mut icacls = std::process::Command::new(system32("icacls.exe"));
+    icacls
         .arg(path.as_os_str())
-        .args(["/grant:r", "*S-1-5-32-545:(R)"])
+        .args(["/grant:r", "*S-1-5-32-545:(R)"]);
+    if let Some(principal) = deny {
+        icacls.args(["/deny", &format!("{principal}:(R)")]);
+    }
+    let status = icacls
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;

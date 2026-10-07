@@ -811,7 +811,7 @@ pub(crate) async fn get_status(
 
 /// Loopback tray summary
 ///
-/// Bearer: `<config>/tray-token`, which every local account may read; loopback only.
+/// Bearer: `<config>/tray-token`, which every local account but a seat's may read; loopback only.
 #[utoipa::path(
     get,
     path = "/local/summary",

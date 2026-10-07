@@ -3422,7 +3422,7 @@ readonly "listLibraryScanners": <Config extends OperationConfig>(options: { read
 */
 readonly "setLibraryScanner": <Config extends OperationConfig>(id: string, options: { readonly payload: typeof SetLibraryScannerRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof SetLibraryScanner200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"SetLibraryScanner401", typeof SetLibraryScanner401.Type> | PunktfunkError<"SetLibraryScanner403", typeof SetLibraryScanner403.Type> | PunktfunkError<"SetLibraryScanner404", typeof SetLibraryScanner404.Type> | PunktfunkError<"SetLibraryScanner500", typeof SetLibraryScanner500.Type>>
   /**
-* Bearer: `<config>/tray-token`, which every local account may read; loopback only.
+* Bearer: `<config>/tray-token`, which every local account but a seat's may read; loopback only.
 */
 readonly "getLocalSummary": <Config extends OperationConfig>(options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof GetLocalSummary200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetLocalSummary401", typeof GetLocalSummary401.Type> | PunktfunkError<"GetLocalSummary404", typeof GetLocalSummary404.Type>>
   /**
