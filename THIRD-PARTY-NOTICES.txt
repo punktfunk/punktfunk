@@ -31,10 +31,9 @@ MANIFEST (crate version — SPDX license — source)
 ----------------------------------------------------------------------------
   addchain 0.2.1 — MIT OR Apache-2.0 — https://github.com/str4d/addchain
   adler2 2.0.1 — 0BSD OR MIT OR Apache-2.0 — https://github.com/oyvindln/adler2
-  aead 0.6.0-rc.10 — MIT OR Apache-2.0 — https://github.com/RustCrypto/traits
   aead 0.6.1 — MIT OR Apache-2.0 — https://github.com/RustCrypto/traits
   aes 0.9.3 — MIT OR Apache-2.0 — https://github.com/RustCrypto/block-ciphers
-  aes-gcm 0.11.0-rc.3 — Apache-2.0 OR MIT — https://github.com/RustCrypto/AEADs
+  aes-gcm 0.11.0-rc.4 — Apache-2.0 OR MIT — https://github.com/RustCrypto/AEADs
   aes-gcm 0.11.1 — Apache-2.0 OR MIT — https://github.com/RustCrypto/AEADs
   aes-kw 0.3.1 — MIT OR Apache-2.0 — https://github.com/RustCrypto/key-wraps
   aho-corasick 1.1.5 — Unlicense OR MIT — https://github.com/BurntSushi/aho-corasick
@@ -155,7 +154,7 @@ MANIFEST (crate version — SPDX license — source)
   ctutils 0.4.3 — Apache-2.0 OR MIT — https://github.com/RustCrypto/utils
   cudarc 0.16.6 — MIT OR Apache-2.0 — https://github.com/coreylowman/cudarc
   curve25519-dalek 4.1.3 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek
-  curve25519-dalek 5.0.0-pre.6 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek
+  curve25519-dalek 5.0.0-rc.1 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek
   curve25519-dalek-derive 0.1.1 — MIT/Apache-2.0 — https://github.com/dalek-cryptography/curve25519-dalek
   data-encoding 2.11.1 — MIT — https://github.com/ia0/data-encoding
   defmt 1.1.1 — MIT OR Apache-2.0 — https://github.com/knurling-rs/defmt
@@ -174,11 +173,11 @@ MANIFEST (crate version — SPDX license — source)
   downcast-rs 1.2.1 — MIT/Apache-2.0 — https://github.com/marcianx/downcast-rs
   dunce 1.0.5 — CC0-1.0 OR MIT-0 OR Apache-2.0 — https://gitlab.com/kornelski/dunce
   dyn-clone 1.0.20 — MIT OR Apache-2.0 — https://github.com/dtolnay/dyn-clone
-  ecdsa 0.17.0-rc.17 — Apache-2.0 OR MIT — https://github.com/RustCrypto/signatures
-  ed25519 3.0.0-rc.4 — Apache-2.0 OR MIT — https://github.com/RustCrypto/signatures
-  ed25519-dalek 3.0.0-pre.6 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek
+  ecdsa 0.17.0-rc.22 — Apache-2.0 OR MIT — https://github.com/RustCrypto/signatures
+  ed25519 3.0.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/signatures
+  ed25519-dalek 3.0.0-rc.1 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek
   either 1.19.0 — MIT OR Apache-2.0 — https://github.com/rayon-rs/either
-  elliptic-curve 0.14.0-rc.31 — Apache-2.0 OR MIT — https://github.com/RustCrypto/traits
+  elliptic-curve 0.14.1 — Apache-2.0 OR MIT — https://github.com/RustCrypto/traits
   encode_unicode 1.0.0 — Apache-2.0 OR MIT — https://github.com/tormol/encode_unicode
   endi 1.1.1 — MIT — https://github.com/zeenix/endi
   enumflags2 0.7.12 — MIT OR Apache-2.0 — https://github.com/meithecatte/enumflags2
@@ -193,7 +192,7 @@ MANIFEST (crate version — SPDX license — source)
   fastbloom 0.17.0 — MIT OR Apache-2.0 — https://github.com/tomtomwombat/fastbloom/
   fastrand 2.5.0 — Apache-2.0 OR MIT — https://github.com/smol-rs/fastrand
   fdeflate 0.3.7 — MIT OR Apache-2.0 — https://github.com/image-rs/fdeflate
-  ff 0.14.0-pre.0 — MIT/Apache-2.0 — https://github.com/zkcrypto/ff
+  ff 0.14.0 — MIT/Apache-2.0 — https://github.com/zkcrypto/ff
   fiat-crypto 0.2.9 — MIT OR Apache-2.0 OR BSD-1-Clause — https://github.com/mit-plv/fiat-crypto
   fiat-crypto 0.3.0 — MIT OR Apache-2.0 OR BSD-1-Clause — https://github.com/mit-plv/fiat-crypto
   field-offset 0.3.6 — MIT OR Apache-2.0 — https://github.com/Diggsey/rust-field-offset
@@ -241,7 +240,7 @@ MANIFEST (crate version — SPDX license — source)
   gobject-sys 0.22.9 — MIT — https://github.com/gtk-rs/gtk-rs-core
   graphene-rs 0.22.8 — MIT — https://github.com/gtk-rs/gtk-rs-core
   graphene-sys 0.22.9 — MIT — https://github.com/gtk-rs/gtk-rs-core
-  group 0.14.0-pre.0 — MIT/Apache-2.0 — https://github.com/zkcrypto/group
+  group 0.14.0 — MIT/Apache-2.0 — https://github.com/zkcrypto/group
   gsk4 0.11.5 — MIT — https://github.com/gtk-rs/gtk4-rs
   gsk4-sys 0.11.5 — MIT — https://github.com/gtk-rs/gtk4-rs
   gtk4 0.11.5 — MIT — https://github.com/gtk-rs/gtk4-rs
@@ -282,18 +281,18 @@ MANIFEST (crate version — SPDX license — source)
   image 0.25.10 — MIT OR Apache-2.0 — https://github.com/image-rs/image
   indexmap 2.14.2 — Apache-2.0 OR MIT — https://github.com/indexmap-rs/indexmap
   inout 0.2.2 — MIT OR Apache-2.0 — https://github.com/RustCrypto/utils
-  ironrdp 0.16.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-blocking 0.9.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp 0.17.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-blocking 0.10.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
   ironrdp-bulk 0.1.1 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-connector 0.9.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-connector 0.10.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
   ironrdp-core 0.2.1 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-displaycontrol 0.7.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-dvc 0.7.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-displaycontrol 0.8.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-dvc 0.8.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
   ironrdp-error 0.2.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-graphics 0.8.1 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-pdu 0.8.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-session 0.10.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
-  ironrdp-svc 0.7.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-graphics 0.9.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-pdu 0.9.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-session 0.11.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
+  ironrdp-svc 0.8.0 — MIT OR Apache-2.0 — https://github.com/Devolutions/IronRDP
   is_terminal_polyfill 1.70.2 — MIT OR Apache-2.0 — https://github.com/polyfill-rs/is_terminal_polyfill
   iso7816 0.1.4 — Apache-2.0 OR MIT — https://github.com/trussed-dev/iso7816
   iso7816-tlv 0.4.4 — ISC — https://github.com/jkowalsk/iso7816-tlv
@@ -376,9 +375,9 @@ MANIFEST (crate version — SPDX license — source)
   openssl-probe 0.2.1 — MIT OR Apache-2.0 — https://github.com/rustls/openssl-probe
   opus 0.3.1 — MIT/Apache-2.0 — https://github.com/SpaceManiac/opus-rs
   ordered-stream 0.2.0 — MIT OR Apache-2.0 — https://github.com/danieldg/ordered-stream
-  p256 0.14.0-rc.9 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
-  p384 0.14.0-rc.9 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
-  p521 0.14.0-rc.9 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
+  p256 0.14.0-rc.14 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
+  p384 0.14.0-rc.14 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
+  p521 0.14.0-rc.14 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
   page_size 0.6.0 — MIT/Apache-2.0 — https://github.com/Elzair/page_size_rs
   pango 0.22.9 — MIT — https://github.com/gtk-rs/gtk-rs-core
   pango-sys 0.22.9 — MIT — https://github.com/gtk-rs/gtk-rs-core
@@ -387,17 +386,17 @@ MANIFEST (crate version — SPDX license — source)
   parking_lot_core 0.9.12 — MIT OR Apache-2.0 — https://github.com/Amanieu/parking_lot
   paste 1.0.15 — MIT OR Apache-2.0 — https://github.com/dtolnay/paste
   pastey 0.2.3 — MIT OR Apache-2.0 — https://github.com/as1100k/pastey
-  pbkdf2 0.13.0-rc.10 — MIT OR Apache-2.0 — https://github.com/RustCrypto/password-hashes
+  pbkdf2 0.13.0 — MIT OR Apache-2.0 — https://github.com/RustCrypto/password-hashes
   pem 3.0.6 — MIT — https://github.com/jcreekmore/pem-rs.git
   pem 4.0.0 — MIT — https://github.com/jcreekmore/pem-rs.git
   pem-rfc7468 0.7.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats/tree/master/pem-rfc7468
   pem-rfc7468 1.0.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats
   percent-encoding 2.3.2 — MIT OR Apache-2.0 — https://github.com/servo/rust-url/
-  picky 7.0.0-rc.23 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
+  picky 7.0.0-rc.25 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
   picky-asn1 0.10.1 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
   picky-asn1-der 0.5.7 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
   picky-asn1-x509 0.15.5 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
-  picky-krb 0.12.3 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
+  picky-krb 0.12.4 — MIT OR Apache-2.0 — https://github.com/Devolutions/picky-rs
   pin-project-lite 0.2.17 — Apache-2.0 OR MIT — https://github.com/taiki-e/pin-project-lite
   pin-utils 0.1.1 — MIT OR Apache-2.0 — https://github.com/rust-lang/pin-utils
   piper 0.2.5 — MIT OR Apache-2.0 — https://github.com/smol-rs/piper
@@ -406,7 +405,7 @@ MANIFEST (crate version — SPDX license — source)
   pkcs1 0.7.5 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats/tree/master/pkcs1
   pkcs1 0.8.0-rc.4 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats
   pkcs8 0.10.2 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats/tree/master/pkcs8
-  pkcs8 0.11.0-rc.11 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats
+  pkcs8 0.11.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats
   pkg-config 0.3.34 — MIT OR Apache-2.0 — https://github.com/rust-lang/pkg-config-rs
   png 0.18.1 — MIT OR Apache-2.0 — https://github.com/image-rs/image-png
   polling 3.11.0 — Apache-2.0 OR MIT — https://github.com/smol-rs/polling
@@ -420,8 +419,8 @@ MANIFEST (crate version — SPDX license — source)
   ppmd-rust 1.5.0 — CC0-1.0 OR MIT-0 — https://github.com/hasenbanck/ppmd-rust
   ppv-lite86 0.2.21 — MIT OR Apache-2.0 — https://github.com/cryptocorrosion/cryptocorrosion
   prettyplease 0.2.37 — MIT OR Apache-2.0 — https://github.com/dtolnay/prettyplease
-  primefield 0.14.0-rc.9 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
-  primeorder 0.14.0-rc.9 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
+  primefield 0.14.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
+  primeorder 0.14.0-rc.14 — Apache-2.0 OR MIT — https://github.com/RustCrypto/elliptic-curves
   proc-macro-crate 3.5.0 — MIT OR Apache-2.0 — https://github.com/bkchr/proc-macro-crate
   proc-macro2 1.0.107 — MIT OR Apache-2.0 — https://github.com/dtolnay/proc-macro2
   proptest 1.11.0 — MIT OR Apache-2.0 — https://github.com/proptest-rs/proptest
@@ -464,10 +463,10 @@ MANIFEST (crate version — SPDX license — source)
   relm4 0.11.0 — Apache-2.0 OR MIT — https://github.com/Relm4/Relm4
   relm4-css 0.11.0 — Apache-2.0 OR MIT — https://github.com/Relm4/Relm4
   relm4-macros 0.11.0 — Apache-2.0 OR MIT — https://github.com/Relm4/Relm4
-  rfc6979 0.5.0-rc.5 — Apache-2.0 OR MIT — https://github.com/RustCrypto/signatures
+  rfc6979 0.6.0-pre.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/signatures
   ring 0.17.14 — Apache-2.0 AND ISC — https://github.com/briansmith/ring
   rpkg-config 0.1.2 — Zlib OR MIT OR Apache-2.0 — https://github.com/maia-s/rpkg-config-rs
-  rsa 0.10.0-rc.17 — MIT OR Apache-2.0 — https://github.com/RustCrypto/RSA
+  rsa 0.10.0-rc.18 — MIT OR Apache-2.0 — https://github.com/RustCrypto/RSA
   rsa 0.9.10 — MIT OR Apache-2.0 — https://github.com/RustCrypto/RSA
   rustc-hash 2.1.3 — Apache-2.0 OR MIT — https://github.com/rust-lang/rustc-hash
   rustc_version 0.4.1 — MIT OR Apache-2.0 — https://github.com/djc/rustc-version-rs
@@ -526,7 +525,7 @@ MANIFEST (crate version — SPDX license — source)
   sha1 0.11.0 — MIT OR Apache-2.0 — https://github.com/RustCrypto/hashes
   sha2 0.10.9 — MIT OR Apache-2.0 — https://github.com/RustCrypto/hashes
   sha2 0.11.0 — MIT OR Apache-2.0 — https://github.com/RustCrypto/hashes
-  sha3 0.11.0 — MIT OR Apache-2.0 — https://github.com/RustCrypto/hashes
+  sha3 0.12.0 — MIT OR Apache-2.0 — https://github.com/RustCrypto/hashes
   sharded-slab 0.1.7 — MIT — https://github.com/hawkw/sharded-slab
   shared_library 0.1.9 — Apache-2.0/MIT — https://github.com/tomaka/shared_library/
   shell-words 1.1.1 — MIT/Apache-2.0 — https://github.com/tmiasko/shell-words
@@ -534,7 +533,7 @@ MANIFEST (crate version — SPDX license — source)
   shlex 2.0.1 — MIT OR Apache-2.0 — https://github.com/comex/rust-shlex
   signal-hook-registry 1.4.8 — MIT OR Apache-2.0 — https://github.com/vorner/signal-hook
   signature 2.2.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/traits/tree/master/signature
-  signature 3.0.0-rc.10 — Apache-2.0 OR MIT — https://github.com/RustCrypto/traits
+  signature 3.0.0 — Apache-2.0 OR MIT — https://github.com/RustCrypto/traits
   simd-adler32 0.3.10 — MIT — https://github.com/mcountryman/simd-adler32
   simd_cesu8 1.2.0 — Apache-2.0 OR MIT — https://github.com/seancroach/simd_cesu8
   simdutf8 0.1.5 — MIT OR Apache-2.0 — https://github.com/rusticstuff/simdutf8
@@ -550,7 +549,8 @@ MANIFEST (crate version — SPDX license — source)
   spin 0.9.9 — MIT — https://github.com/mvdnes/spin-rs.git
   spki 0.7.3 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats/tree/master/spki
   spki 0.8.1 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats
-  sspi 0.21.0 — MIT OR Apache-2.0 — https://github.com/devolutions/sspi-rs
+  sponge-cursor 0.1.0 — MIT OR Apache-2.0 — https://github.com/RustCrypto/utils
+  sspi 0.21.3 — MIT OR Apache-2.0 — https://github.com/devolutions/sspi-rs
   stable_deref_trait 1.2.1 — MIT OR Apache-2.0 — https://github.com/storyyeller/stable_deref_trait
   strsim 0.11.1 — MIT — https://github.com/rapidfuzz/strsim-rs
   strum 0.26.3 — MIT — https://github.com/Peternator7/strum
@@ -705,7 +705,7 @@ MANIFEST (crate version — SPDX license — source)
   winreg 0.10.1 — MIT — https://github.com/gentoo90/winreg-rs
   winreg 0.56.0 — MIT — https://github.com/gentoo90/winreg-rs
   winresource 0.1.31 — MIT — https://github.com/BenjaminRi/winresource
-  winscard 0.3.2 — MIT/Apache-2.0 — https://github.com/devolutions/sspi-rs
+  winscard 0.3.3 — MIT/Apache-2.0 — https://github.com/devolutions/sspi-rs
   wit-bindgen 0.57.1 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT — https://github.com/bytecodealliance/wit-bindgen
   writeable 0.6.4 — Unicode-3.0 — https://github.com/unicode-org/icu4x
   wtransport 0.7.2 — MIT OR Apache-2.0 — https://github.com/BiagioFesta/wtransport
@@ -713,7 +713,7 @@ MANIFEST (crate version — SPDX license — source)
   wyz 0.5.1 — MIT — https://github.com/myrrlyn/wyz
   x11rb 0.14.0 — MIT OR Apache-2.0 — https://github.com/psychon/x11rb
   x11rb-protocol 0.14.0 — MIT OR Apache-2.0 — https://github.com/psychon/x11rb
-  x25519-dalek 3.0.0-pre.6 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/x25519-dalek
+  x25519-dalek 3.0.0-rc.1 — BSD-3-Clause — https://github.com/dalek-cryptography/curve25519-dalek/tree/main/x25519-dalek
   x509-cert 0.2.5 — Apache-2.0 OR MIT — https://github.com/RustCrypto/formats/tree/master/x509-cert
   x509-parser 0.18.1 — MIT OR Apache-2.0 — https://github.com/rusticata/x509-parser.git
   xattr 1.6.1 — MIT OR Apache-2.0 — https://github.com/Stebalien/xattr
@@ -786,7 +786,7 @@ Crates whose package did not embed a license file (SPDX + source only)
   valuable 0.1.1 — MIT — https://github.com/tokio-rs/valuable
   winapi-i686-pc-windows-gnu 0.4.0 — MIT/Apache-2.0 — https://github.com/retep998/winapi-rs
   winapi-x86_64-pc-windows-gnu 0.4.0 — MIT/Apache-2.0 — https://github.com/retep998/winapi-rs
-  winscard 0.3.2 — MIT/Apache-2.0 — https://github.com/devolutions/sspi-rs
+  winscard 0.3.3 — MIT/Apache-2.0 — https://github.com/devolutions/sspi-rs
   wtransport 0.7.2 — MIT OR Apache-2.0 — https://github.com/BiagioFesta/wtransport
   wtransport-proto 0.7.2 — MIT OR Apache-2.0 — https://github.com/BiagioFesta/wtransport
 
@@ -795,7 +795,7 @@ FULL LICENSE TEXTS (deduplicated)
 ============================================================================
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-APACHE) applies to: addchain 0.2.1, arrayvec 0.7.8, asn1-rs 0.7.2, asn1-rs-derive 0.6.0, assert_matches 1.5.0, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-recursion 1.2.0, async-signal 0.2.14, async-task 4.7.1, atomic-polyfill 1.0.3, atomic-waker 1.1.2, autocfg 1.5.1, base64 0.22.1, base64 0.23.1, bitflags 1.3.2, bitflags 2.13.2, blocking 1.7.0, bumpalo 3.20.3, cast 0.3.0, cc 1.6.0, cexpr 0.6.0, cfg-if 1.0.5, cmake 0.1.58, concurrent-queue 2.5.0, core-foundation 0.10.1, core-foundation-sys 0.8.7, criterion 0.8.2, criterion-plot 0.8.2, critical-section 1.2.0, crossbeam-deque 0.8.8, crossbeam-epoch 0.9.21, crossbeam-utils 0.8.23, curve25519-dalek-derive 0.1.1, der-parser 10.0.0, displaydoc 0.2.7, either 1.19.0, equivalent 1.0.2, errno 0.3.14, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, ff 0.14.0-pre.0, filetime 0.2.29, find-msvc-tools 0.1.14, fixedbitset 0.5.7, flate2 1.1.10, fnv 1.0.7, form_urlencoded 1.2.2, futures-lite 2.6.1, gethostname 1.1.0, gif 0.14.2, glob 0.3.4, group 0.14.0-pre.0, hash32 0.2.1, hashbrown 0.17.1, heapless 0.7.17, heck 0.5.0, hermit-abi 0.5.3, httparse 1.10.1, idna 1.1.0, idna_adapter 1.2.2, indexmap 2.14.2, itertools 0.13.0, jobserver 0.1.35, js-sys 0.3.106, khronos-egl 6.0.0, lazy_static 1.5.1, libz-sys 1.1.29, linux-raw-sys 0.12.1, lock_api 0.4.14, log 0.4.34, lzma-sys 0.1.20, mime 0.3.17, nasm-rs 0.3.2, num-bigint 0.3.3, num-bigint 0.4.8, num-bigint-dig 0.8.6, num-derive 0.4.2, num-integer 0.1.47, num-iter 0.1.46, num-traits 0.2.19, oid 0.2.1, oid-registry 0.8.1, once_cell 1.21.4, openssl-probe 0.2.1, opus 0.3.1, ordered-stream 0.2.0, page_size 0.6.0, parking 2.2.1, parking_lot 0.12.5, parking_lot_core 0.9.12, percent-encoding 2.3.2, piper 0.2.5, pkg-config 0.3.34, png 0.18.1, polling 3.11.0, proptest 1.11.0, rayon 1.12.0, rayon-core 1.13.0, regex 1.13.1, regex-automata 0.4.18, regex-syntax 0.8.11, rsa 0.10.0-rc.17, rsa 0.9.10, rustc_version 0.4.1, rustcrypto-ff 0.14.0-rc.1, rustcrypto-group 0.14.0-rc.1, rusticata-macros 4.1.0, rustix 1.1.5, rustls 0.23.45, rustls-native-certs 0.8.4, rusty-fork 0.3.1, scoped-tls 1.0.1, scopeguard 1.2.0, security-framework 3.7.0, security-framework-sys 2.17.0, signal-hook-registry 1.4.8, simd_cesu8 1.2.0, smallvec 1.16.2, socket2 0.6.5, stable_deref_trait 1.2.1, syn 1.0.109, system-deps 7.0.8, system-deps 9.0.0, tar 0.4.46, tempfile 3.27.0, thread_local 1.1.10, tinytemplate 1.2.1, unicode-width 0.2.2, url 2.5.8, uuid 1.27.0, vcpkg 0.2.15, version_check 0.9.5, wait-timeout 0.2.1, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-bindgen 0.2.129, wasm-bindgen-macro 0.2.129, wasm-bindgen-macro-support 0.2.129, wasm-bindgen-shared 0.2.129, weezl 0.1.12, wit-bindgen 0.57.1, x509-parser 0.18.1, xattr 1.6.1, xz2 0.1.7, yasna 0.6.0
+The following license (LICENSE-APACHE) applies to: addchain 0.2.1, arrayvec 0.7.8, asn1-rs 0.7.2, asn1-rs-derive 0.6.0, assert_matches 1.5.0, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-recursion 1.2.0, async-signal 0.2.14, async-task 4.7.1, atomic-polyfill 1.0.3, atomic-waker 1.1.2, autocfg 1.5.1, base64 0.22.1, base64 0.23.1, bitflags 1.3.2, bitflags 2.13.2, blocking 1.7.0, bumpalo 3.20.3, cast 0.3.0, cc 1.6.0, cexpr 0.6.0, cfg-if 1.0.5, cmake 0.1.58, concurrent-queue 2.5.0, core-foundation 0.10.1, core-foundation-sys 0.8.7, criterion 0.8.2, criterion-plot 0.8.2, critical-section 1.2.0, crossbeam-deque 0.8.8, crossbeam-epoch 0.9.21, crossbeam-utils 0.8.23, curve25519-dalek-derive 0.1.1, der-parser 10.0.0, displaydoc 0.2.7, either 1.19.0, equivalent 1.0.2, errno 0.3.14, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, ff 0.14.0, filetime 0.2.29, find-msvc-tools 0.1.14, fixedbitset 0.5.7, flate2 1.1.10, fnv 1.0.7, form_urlencoded 1.2.2, futures-lite 2.6.1, gethostname 1.1.0, gif 0.14.2, glob 0.3.4, group 0.14.0, hash32 0.2.1, hashbrown 0.17.1, heapless 0.7.17, heck 0.5.0, hermit-abi 0.5.3, httparse 1.10.1, idna 1.1.0, idna_adapter 1.2.2, indexmap 2.14.2, itertools 0.13.0, jobserver 0.1.35, js-sys 0.3.106, khronos-egl 6.0.0, lazy_static 1.5.1, libz-sys 1.1.29, linux-raw-sys 0.12.1, lock_api 0.4.14, log 0.4.34, lzma-sys 0.1.20, mime 0.3.17, nasm-rs 0.3.2, num-bigint 0.3.3, num-bigint 0.4.8, num-bigint-dig 0.8.6, num-derive 0.4.2, num-integer 0.1.47, num-iter 0.1.46, num-traits 0.2.19, oid 0.2.1, oid-registry 0.8.1, once_cell 1.21.4, openssl-probe 0.2.1, opus 0.3.1, ordered-stream 0.2.0, page_size 0.6.0, parking 2.2.1, parking_lot 0.12.5, parking_lot_core 0.9.12, percent-encoding 2.3.2, piper 0.2.5, pkg-config 0.3.34, png 0.18.1, polling 3.11.0, proptest 1.11.0, rayon 1.12.0, rayon-core 1.13.0, regex 1.13.1, regex-automata 0.4.18, regex-syntax 0.8.11, rsa 0.10.0-rc.18, rsa 0.9.10, rustc_version 0.4.1, rustcrypto-ff 0.14.0-rc.1, rustcrypto-group 0.14.0-rc.1, rusticata-macros 4.1.0, rustix 1.1.5, rustls 0.23.45, rustls-native-certs 0.8.4, rusty-fork 0.3.1, scoped-tls 1.0.1, scopeguard 1.2.0, security-framework 3.7.0, security-framework-sys 2.17.0, signal-hook-registry 1.4.8, simd_cesu8 1.2.0, smallvec 1.16.2, socket2 0.6.5, stable_deref_trait 1.2.1, syn 1.0.109, system-deps 7.0.8, system-deps 9.0.0, tar 0.4.46, tempfile 3.27.0, thread_local 1.1.10, tinytemplate 1.2.1, unicode-width 0.2.2, url 2.5.8, uuid 1.27.0, vcpkg 0.2.15, version_check 0.9.5, wait-timeout 0.2.1, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-bindgen 0.2.129, wasm-bindgen-macro 0.2.129, wasm-bindgen-macro-support 0.2.129, wasm-bindgen-shared 0.2.129, weezl 0.1.12, wit-bindgen 0.57.1, x509-parser 0.18.1, xattr 1.6.1, xz2 0.1.7, yasna 0.6.0
 ----------------------------------------------------------------------------
 Apache License
                         Version 2.0, January 2004
@@ -1250,7 +1250,7 @@ limitations under the License.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: adler2 2.0.1, anyhow 1.0.104, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-recursion 1.2.0, async-signal 0.2.14, async-task 4.7.1, async-trait 0.1.92, atomic-waker 1.1.2, blocking 1.7.0, concurrent-queue 2.5.0, cudarc 0.16.6, curve25519-dalek-derive 0.1.1, displaydoc 0.2.7, dyn-clone 1.0.20, endi 1.1.1, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, flume 0.12.0, futures-lite 2.6.1, group 0.14.0-pre.0, hermit-abi 0.5.3, ironrdp 0.16.0, ironrdp-blocking 0.9.0, ironrdp-connector 0.9.0, ironrdp-core 0.2.1, ironrdp-displaycontrol 0.7.0, ironrdp-dvc 0.7.0, ironrdp-error 0.2.0, ironrdp-graphics 0.8.1, ironrdp-pdu 0.8.0, ironrdp-session 0.10.0, ironrdp-svc 0.7.0, itoa 1.0.18, khronos-egl 6.0.0, lazy_static 1.5.1, linux-raw-sys 0.12.1, minimal-lexical 0.2.1, num_enum 0.7.6, num_enum_derive 0.7.6, once_cell 1.21.4, ordered-stream 0.2.0, parking 2.2.1, paste 1.0.15, pastey 0.2.3, picky 7.0.0-rc.23, picky-asn1 0.10.1, picky-asn1-der 0.5.7, picky-asn1-x509 0.15.5, picky-krb 0.12.3, pin-project-lite 0.2.17, piper 0.2.5, polling 3.11.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, prettyplease 0.2.37, proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, ref-cast 1.0.27, ref-cast-impl 1.0.27, reis 0.7.1, relm4 0.11.0, relm4-css 0.11.0, relm4-macros 0.11.0, rsa 0.10.0-rc.17, rsa 0.9.10, rustc-hash 2.1.3, rustcrypto-group 0.14.0-rc.1, rustix 1.1.5, rustversion 1.0.23, semver 1.0.28, serde 1.0.229, serde_bytes 0.11.19, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.30.0, serde_json 1.0.151, serde_path_to_error 0.1.20, serde_repr 0.1.21, simd_cesu8 1.2.0, sspi 0.21.0, syn 1.0.109, syn 2.0.119, syn 3.0.6, system-deps 7.0.8, system-deps 9.0.0, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, typed-path 0.12.3, unicode-ident 1.0.26, utf8-zero 0.8.1, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wit-bindgen 0.57.1, zmij 1.0.23, zvariant_utils 4.2.0
+The following license (LICENSE-MIT) applies to: adler2 2.0.1, anyhow 1.0.104, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0, async-recursion 1.2.0, async-signal 0.2.14, async-task 4.7.1, async-trait 0.1.92, atomic-waker 1.1.2, blocking 1.7.0, concurrent-queue 2.5.0, cudarc 0.16.6, curve25519-dalek-derive 0.1.1, displaydoc 0.2.7, dyn-clone 1.0.20, endi 1.1.1, event-listener 5.4.2, event-listener-strategy 0.5.4, fastrand 2.5.0, flume 0.12.0, futures-lite 2.6.1, group 0.14.0, hermit-abi 0.5.3, ironrdp 0.17.0, ironrdp-blocking 0.10.0, ironrdp-connector 0.10.0, ironrdp-core 0.2.1, ironrdp-displaycontrol 0.8.0, ironrdp-dvc 0.8.0, ironrdp-error 0.2.0, ironrdp-graphics 0.9.0, ironrdp-pdu 0.9.0, ironrdp-session 0.11.0, ironrdp-svc 0.8.0, itoa 1.0.18, khronos-egl 6.0.0, lazy_static 1.5.1, linux-raw-sys 0.12.1, minimal-lexical 0.2.1, num_enum 0.7.6, num_enum_derive 0.7.6, once_cell 1.21.4, ordered-stream 0.2.0, parking 2.2.1, paste 1.0.15, pastey 0.2.3, picky 7.0.0-rc.25, picky-asn1 0.10.1, picky-asn1-der 0.5.7, picky-asn1-x509 0.15.5, picky-krb 0.12.4, pin-project-lite 0.2.17, piper 0.2.5, polling 3.11.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, prettyplease 0.2.37, proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, ref-cast 1.0.27, ref-cast-impl 1.0.27, reis 0.7.1, relm4 0.11.0, relm4-css 0.11.0, relm4-macros 0.11.0, rsa 0.10.0-rc.18, rsa 0.9.10, rustc-hash 2.1.3, rustcrypto-group 0.14.0-rc.1, rustix 1.1.5, rustversion 1.0.23, semver 1.0.28, serde 1.0.229, serde_bytes 0.11.19, serde_core 1.0.229, serde_derive 1.0.229, serde_derive_internals 0.30.0, serde_json 1.0.151, serde_path_to_error 0.1.20, serde_repr 0.1.21, simd_cesu8 1.2.0, sspi 0.21.3, syn 1.0.109, syn 2.0.119, syn 3.0.6, system-deps 7.0.8, system-deps 9.0.0, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, typed-path 0.12.3, unicode-ident 1.0.26, utf8-zero 0.8.1, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wit-bindgen 0.57.1, zmij 1.0.23, zvariant_utils 4.2.0
 ----------------------------------------------------------------------------
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -1278,7 +1278,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-APACHE) applies to: aead 0.6.0-rc.10, aead 0.6.1, aes 0.9.3, aes-gcm 0.11.0-rc.3, aes-gcm 0.11.1, aes-kw 0.3.1, base16ct 1.0.0, base64ct 1.8.3, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.4.2, cbc 0.2.1, chacha20 0.10.2, chacha20poly1305 0.11.0, cipher 0.5.2, const-oid 0.10.2, const-oid 0.9.6, cpubits 0.1.1, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-bigint 0.7.5, crypto-common 0.1.7, crypto-common 0.2.2, crypto-mac 0.11.0, ctr 0.10.1, der 0.7.10, der 0.8.2, der_derive 0.7.3, digest 0.10.7, digest 0.11.3, elliptic-curve 0.14.0-rc.31, ghash 0.6.0, hkdf 0.12.4, hkdf 0.13.0, hmac 0.12.1, hmac 0.13.0, hybrid-array 0.4.15, inout 0.2.2, keccak 0.2.2, md-5 0.10.6, md-5 0.11.0, md4 0.10.2, p256 0.14.0-rc.9, p384 0.14.0-rc.9, p521 0.14.0-rc.9, pbkdf2 0.13.0-rc.10, pem-rfc7468 0.7.0, pem-rfc7468 1.0.0, pkcs1 0.7.5, pkcs1 0.8.0-rc.4, pkcs8 0.10.2, pkcs8 0.11.0-rc.11, poly1305 0.9.1, polyval 0.7.3, primefield 0.14.0-rc.9, primeorder 0.14.0-rc.9, sec1 0.8.1, sha1 0.10.7, sha1 0.11.0, sha2 0.10.9, sha2 0.11.0, sha3 0.11.0, signature 2.2.0, signature 3.0.0-rc.10, spake2 0.4.0, spki 0.7.3, spki 0.8.1, tls_codec 0.4.2, tls_codec_derive 0.4.2, universal-hash 0.6.1, x509-cert 0.2.5
+The following license (LICENSE-APACHE) applies to: aead 0.6.1, aes 0.9.3, aes-gcm 0.11.0-rc.4, aes-gcm 0.11.1, aes-kw 0.3.1, base16ct 1.0.0, base64ct 1.8.3, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.4.2, cbc 0.2.1, chacha20 0.10.2, chacha20poly1305 0.11.0, cipher 0.5.2, const-oid 0.10.2, const-oid 0.9.6, cpubits 0.1.1, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-bigint 0.7.5, crypto-common 0.1.7, crypto-common 0.2.2, crypto-mac 0.11.0, ctr 0.10.1, der 0.7.10, der 0.8.2, der_derive 0.7.3, digest 0.10.7, digest 0.11.3, elliptic-curve 0.14.1, ghash 0.6.0, hkdf 0.12.4, hkdf 0.13.0, hmac 0.12.1, hmac 0.13.0, hybrid-array 0.4.15, inout 0.2.2, keccak 0.2.2, md-5 0.10.6, md-5 0.11.0, md4 0.10.2, p256 0.14.0-rc.14, p384 0.14.0-rc.14, p521 0.14.0-rc.14, pbkdf2 0.13.0, pem-rfc7468 0.7.0, pem-rfc7468 1.0.0, pkcs1 0.7.5, pkcs1 0.8.0-rc.4, pkcs8 0.10.2, pkcs8 0.11.0, poly1305 0.9.1, polyval 0.7.3, primefield 0.14.0, primeorder 0.14.0-rc.14, sec1 0.8.1, sha1 0.10.7, sha1 0.11.0, sha2 0.10.9, sha2 0.11.0, sha3 0.12.0, signature 2.2.0, signature 3.0.0, spake2 0.4.0, spki 0.7.3, spki 0.8.1, sponge-cursor 0.1.0, tls_codec 0.4.2, tls_codec_derive 0.4.2, universal-hash 0.6.1, x509-cert 0.2.5
 ----------------------------------------------------------------------------
 Apache License
                         Version 2.0, January 2004
@@ -1484,37 +1484,6 @@ limitations under the License.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: aead 0.6.0-rc.10
-----------------------------------------------------------------------------
-Copyright (c) 2019-2025 The RustCrypto Project Developers
-Copyright (c) 2019 MobileCoin, LLC
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-
-----------------------------------------------------------------------------
 The following license (LICENSE-MIT) applies to: aead 0.6.1
 ----------------------------------------------------------------------------
 Copyright (c) 2019-2026 The RustCrypto Project Developers
@@ -1577,7 +1546,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: aes-gcm 0.11.0-rc.3
+The following license (LICENSE-MIT) applies to: aes-gcm 0.11.0-rc.4
 ----------------------------------------------------------------------------
 Copyright (c) 2019 The RustCrypto Project Developers
 
@@ -5158,7 +5127,7 @@ The `cfg_aliases!` macro uses a lot of the code from [`tectonic_cfg_support::tar
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE) applies to: ciborium 0.2.2, ciborium-io 0.2.2, ciborium-ll 0.2.2, clang-sys 1.9.1, cmov 0.5.4, crypto-primes 0.7.2, cryptoki 0.12.1, cryptoki-sys 0.5.0, ctutils 0.4.3, encode_unicode 1.0.0, flagset 0.4.7, flume 0.12.0, fragile 2.1.0, ironrdp 0.16.0, ironrdp-blocking 0.9.0, ironrdp-connector 0.9.0, ironrdp-core 0.2.1, ironrdp-displaycontrol 0.7.0, ironrdp-dvc 0.7.0, ironrdp-error 0.2.0, ironrdp-graphics 0.8.1, ironrdp-pdu 0.8.0, ironrdp-session 0.10.0, ironrdp-svc 0.7.0, lru-slab 0.1.3, lzma-rust2 0.16.5, lzma-rust2 0.21.0, picky 7.0.0-rc.23, picky-asn1 0.10.1, picky-asn1-der 0.5.7, picky-asn1-x509 0.15.5, picky-krb 0.12.3, quinn 0.11.12, quinn-proto 0.11.19, quinn-udp 0.5.16, rpkg-config 0.1.2, rustls-platform-verifier 0.7.1, secrecy 0.10.3, serdect 0.4.3, sevenz-rust2 0.23.0, siphasher 1.0.4, sspi 0.21.0, tinyvec 1.13.3, unarray 0.1.4, ureq 3.4.2, ureq-proto 0.6.4, utf8_iter 1.0.4, utoipa 5.5.0, utoipa-axum 0.2.0, utoipa-gen 5.5.0, utoipa-scalar 0.3.0, x11rb 0.14.0, x11rb-protocol 0.14.0, zeroize 1.9.1, zeroize_derive 1.5.0, zune-core 0.5.3, zune-jpeg 0.5.15
+The following license (LICENSE) applies to: ciborium 0.2.2, ciborium-io 0.2.2, ciborium-ll 0.2.2, clang-sys 1.9.1, cmov 0.5.4, crypto-primes 0.7.2, cryptoki 0.12.1, cryptoki-sys 0.5.0, ctutils 0.4.3, encode_unicode 1.0.0, flagset 0.4.7, flume 0.12.0, fragile 2.1.0, ironrdp 0.17.0, ironrdp-blocking 0.10.0, ironrdp-connector 0.10.0, ironrdp-core 0.2.1, ironrdp-displaycontrol 0.8.0, ironrdp-dvc 0.8.0, ironrdp-error 0.2.0, ironrdp-graphics 0.9.0, ironrdp-pdu 0.9.0, ironrdp-session 0.11.0, ironrdp-svc 0.8.0, lru-slab 0.1.3, lzma-rust2 0.16.5, lzma-rust2 0.21.0, picky 7.0.0-rc.25, picky-asn1 0.10.1, picky-asn1-der 0.5.7, picky-asn1-x509 0.15.5, picky-krb 0.12.4, quinn 0.11.12, quinn-proto 0.11.19, quinn-udp 0.5.16, rpkg-config 0.1.2, rustls-platform-verifier 0.7.1, secrecy 0.10.3, serdect 0.4.3, sevenz-rust2 0.23.0, siphasher 1.0.4, sspi 0.21.3, tinyvec 1.13.3, unarray 0.1.4, ureq 3.4.2, ureq-proto 0.6.4, utf8_iter 1.0.4, utoipa 5.5.0, utoipa-axum 0.2.0, utoipa-gen 5.5.0, utoipa-scalar 0.3.0, x11rb 0.14.0, x11rb-protocol 0.14.0, zeroize 1.9.1, zeroize_derive 1.5.0, zune-core 0.5.3, zune-jpeg 0.5.15
 ----------------------------------------------------------------------------
 Apache License
                            Version 2.0, January 2004
@@ -5708,7 +5677,7 @@ SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: const-oid 0.10.2, cpufeatures 0.3.1, der 0.8.2
+The following license (LICENSE-MIT) applies to: const-oid 0.10.2, cpufeatures 0.3.1, der 0.8.2, pkcs8 0.11.0
 ----------------------------------------------------------------------------
 Copyright (c) 2020-2026 The RustCrypto Project Developers
 
@@ -5828,7 +5797,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: cpufeatures 0.2.17, pkcs8 0.11.0-rc.11
+The following license (LICENSE-MIT) applies to: cpufeatures 0.2.17
 ----------------------------------------------------------------------------
 Copyright (c) 2020-2025 The RustCrypto Project Developers
 
@@ -6234,7 +6203,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE) applies to: curve25519-dalek 5.0.0-pre.6
+The following license (LICENSE) applies to: curve25519-dalek 5.0.0-rc.1
 ----------------------------------------------------------------------------
 Copyright (c) 2016-2021 isis agora lovecruft. All rights reserved.
 Copyright (c) 2016-2021 Henry de Valence. All rights reserved.
@@ -7033,7 +7002,7 @@ express Statement of Purpose.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-APACHE) applies to: ecdsa 0.17.0-rc.17, ed25519 3.0.0-rc.4, rfc6979 0.5.0-rc.5
+The following license (LICENSE-APACHE) applies to: ecdsa 0.17.0-rc.22, ed25519 3.0.0, rfc6979 0.6.0-pre.0
 ----------------------------------------------------------------------------
 Apache License
                         Version 2.0, January 2004
@@ -7239,9 +7208,9 @@ limitations under the License.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: ecdsa 0.17.0-rc.17, rfc6979 0.5.0-rc.5
+The following license (LICENSE-MIT) applies to: ecdsa 0.17.0-rc.22, ed25519 3.0.0, rfc6979 0.6.0-pre.0, signature 3.0.0
 ----------------------------------------------------------------------------
-Copyright (c) 2018-2022 RustCrypto Developers
+Copyright (c) 2018-2026 RustCrypto Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -7269,37 +7238,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: ed25519 3.0.0-rc.4, signature 2.2.0
-----------------------------------------------------------------------------
-Copyright (c) 2018-2023 RustCrypto Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-
-----------------------------------------------------------------------------
-The following license (LICENSE) applies to: ed25519-dalek 3.0.0-pre.6
+The following license (LICENSE) applies to: ed25519-dalek 3.0.0-rc.1
 ----------------------------------------------------------------------------
 Copyright (c) 2017-2019 isis agora lovecruft. All rights reserved.
 
@@ -7362,9 +7301,9 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: elliptic-curve 0.14.0-rc.31
+The following license (LICENSE-MIT) applies to: elliptic-curve 0.14.1
 ----------------------------------------------------------------------------
-Copyright (c) 2020-2025 RustCrypto Developers
+Copyright (c) 2020-2026 RustCrypto Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -7921,7 +7860,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: ff 0.14.0-pre.0, rustcrypto-ff 0.14.0-rc.1
+The following license (LICENSE-MIT) applies to: ff 0.14.0, rustcrypto-ff 0.14.0-rc.1
 ----------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -8939,7 +8878,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (COPYRIGHT) applies to: group 0.14.0-pre.0, rustcrypto-group 0.14.0-rc.1
+The following license (COPYRIGHT) applies to: group 0.14.0, rustcrypto-group 0.14.0-rc.1
 ----------------------------------------------------------------------------
 Copyrights in the "group" library are retained by their contributors. No
 copyright assignment is required to contribute to the "group" library.
@@ -12630,7 +12569,7 @@ THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: p256 0.14.0-rc.9, primeorder 0.14.0-rc.9
+The following license (LICENSE-MIT) applies to: p256 0.14.0-rc.14, primeorder 0.14.0-rc.14
 ----------------------------------------------------------------------------
 Copyright (c) 2020-2023 RustCrypto Developers
 
@@ -12660,7 +12599,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: p384 0.14.0-rc.9
+The following license (LICENSE-MIT) applies to: p384 0.14.0-rc.14
 ----------------------------------------------------------------------------
 Copyright (c) 2020-2021 RustCrypto Developers
 
@@ -12690,7 +12629,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: p521 0.14.0-rc.9
+The following license (LICENSE-MIT) applies to: p521 0.14.0-rc.14
 ----------------------------------------------------------------------------
 Copyright (c) 2020-2022 RustCrypto Developers
 
@@ -12734,7 +12673,7 @@ copied, modified, or distributed except according to those terms.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: pbkdf2 0.13.0-rc.10
+The following license (LICENSE-MIT) applies to: pbkdf2 0.13.0
 ----------------------------------------------------------------------------
 Copyright (c) 2017 Artyom Pavlov
 Copyright (c) 2018-2023 The RustCrypto Project Developers
@@ -13822,9 +13761,9 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: primefield 0.14.0-rc.9
+The following license (LICENSE-MIT) applies to: primefield 0.14.0
 ----------------------------------------------------------------------------
-Copyright (c) 2024 RustCrypto Developers
+Copyright (c) 2024-2026 RustCrypto Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -16345,7 +16284,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: sha3 0.11.0
+The following license (LICENSE-MIT) applies to: sha3 0.12.0
 ----------------------------------------------------------------------------
 Copyright (c) 2020-2026 The RustCrypto Project Developers
 Copyright (c) 2016-2023 Artyom Pavlov, Marek Kotewicz
@@ -16743,9 +16682,9 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE-MIT) applies to: signature 3.0.0-rc.10
+The following license (LICENSE-MIT) applies to: signature 2.2.0
 ----------------------------------------------------------------------------
-Copyright (c) 2018-2025 RustCrypto Developers
+Copyright (c) 2018-2023 RustCrypto Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -17004,6 +16943,36 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+----------------------------------------------------------------------------
+The following license (LICENSE-MIT) applies to: sponge-cursor 0.1.0
+----------------------------------------------------------------------------
+Copyright (c) 2026 The RustCrypto Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
@@ -19799,7 +19768,7 @@ DEALINGS IN THE SOFTWARE.
 
 
 ----------------------------------------------------------------------------
-The following license (LICENSE) applies to: x25519-dalek 3.0.0-pre.6
+The following license (LICENSE) applies to: x25519-dalek 3.0.0-rc.1
 ----------------------------------------------------------------------------
 Copyright (c) 2017-2021 isis agora lovecruft. All rights reserved.
 Copyright (c) 2019-2021 DebugSteven. All rights reserved.
