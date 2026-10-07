@@ -14593,7 +14593,7 @@
               },
               {
                 "$ref": "#/components/schemas/Home",
-                "description": "Defaults to `bigpicture` for a seat profile, `desktop` otherwise."
+                "description": "Defaults to `bigpicture` for a seat on Linux and to `desktop` otherwise: a Windows seat is\na desktop of its own."
               }
             ]
           },

@@ -251,7 +251,8 @@ pub struct ProfileCreate {
     /// `#RRGGBB`.
     #[serde(default)]
     pub accent: Option<String>,
-    /// Defaults to `bigpicture` for a seat profile, `desktop` otherwise.
+    /// Defaults to `bigpicture` for a seat on Linux and to `desktop` otherwise: a Windows seat is
+    /// a desktop of its own.
     #[serde(default)]
     pub home: Option<Home>,
     /// A seat of its own (the default), or the box's own session under another name.
