@@ -2150,9 +2150,20 @@ async fn plugin_lane_cannot_set_command_execution_fields() {
     assert!(!crate::mgmt::auth::AuthLane::Cert.may_set_privileged_fields());
 }
 
-/// Every live route has an explicit plugin/cert classification. A new route fails until a
-/// row is added here; a removed route must not leave a stale row. The gates are allowlists:
-/// unclassified means denied.
+/// A page's root and its paths both reach the channel relay: a route miss would be an empty 404.
+#[tokio::test]
+async fn the_relay_takes_a_page_root_and_its_paths() {
+    let app = test_app(test_state(), None);
+    for path in ["/api/v1/plugins/demo/ui/", "/api/v1/plugins/demo/ui/app.js"] {
+        let (status, json) = send(&app, get_req(path)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            json["error"], "no live plugin UI channel with that id",
+            "{path}"
+        );
+    }
+}
+
 /// A plugin on its own pipe parks a connection with an upgrade; a request for its page goes down
 /// that connection as plain HTTP carrying the plugin's secret, and its answer comes back.
 #[tokio::test(flavor = "multi_thread")]
@@ -2222,6 +2233,9 @@ async fn a_plugin_page_is_reached_over_its_parked_channel() {
     let _ = served.await;
 }
 
+/// Every live route has an explicit plugin/cert classification. A new route fails until a
+/// row is added here; a removed route must not leave a stale row. The gates are allowlists:
+/// unclassified means denied.
 #[test]
 fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
     use axum::http::Method;

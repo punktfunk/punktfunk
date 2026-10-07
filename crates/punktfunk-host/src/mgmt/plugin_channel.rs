@@ -96,9 +96,17 @@ pub(crate) async fn attach(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+/// Where a page request is going: the plugin, and the path under its page (empty at the root).
+#[derive(serde::Deserialize)]
+pub(crate) struct PagePath {
+    id: String,
+    #[serde(default)]
+    rest: String,
+}
+
 /// The console's request to a plugin page, any method, under `/plugins/{id}/ui/`. Admin lane:
 /// the host adds the plugin's secret, so the console never holds it for a channel plugin.
-pub(crate) async fn proxy(Path((id, rest)): Path<(String, String)>, req: Request) -> Response {
+pub(crate) async fn proxy(Path(PagePath { id, rest }): Path<PagePath>, req: Request) -> Response {
     let Some(cred) = super::plugins::ui_credential(&id).filter(|c| c.port == 0) else {
         return api_error(
             StatusCode::NOT_FOUND,

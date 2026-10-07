@@ -556,12 +556,17 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1", api_v1)
         .split_for_parts();
-    // A plugin page's own paths, any method: the channel proxy. Not an API of its own, so not in
-    // the document; it is admin-lane because the plugin lane's allowlist never names it.
-    let router = router.route(
-        "/api/v1/plugins/{id}/ui/{*rest}",
-        axum::routing::any(plugin_channel::proxy),
-    );
+    // A plugin page's root and paths, any method: the channel proxy (a wildcard never matches an
+    // empty rest). Not an API, so not in the document; admin-lane, as no plugin allowlist names it.
+    let router = router
+        .route(
+            "/api/v1/plugins/{id}/ui/",
+            axum::routing::any(plugin_channel::proxy),
+        )
+        .route(
+            "/api/v1/plugins/{id}/ui/{*rest}",
+            axum::routing::any(plugin_channel::proxy),
+        );
     (router, api)
 }
 
