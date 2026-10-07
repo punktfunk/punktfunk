@@ -553,31 +553,32 @@ export const AddProfileDialog: FC<{
 					}}
 				>
 					<Stagger className="flex flex-col gap-5">
-						<motion.div variants={ROW} className="flex items-start gap-4">
+						<motion.div variants={ROW} className="flex items-center gap-4">
 							<PicturePicker
 								name={name}
 								accent={accent}
 								picture={picture}
 								onPick={setPicture}
 							/>
-							<div className="min-w-0 flex-1 space-y-4">
-								<div className="space-y-2">
-									<Label htmlFor="profile-name">{m.profiles_name()}</Label>
-									<Input
-										id="profile-name"
-										autoFocus
-										autoComplete="off"
-										maxLength={32}
-										value={name}
-										onChange={(e) => setName(e.target.value)}
-									/>
-								</div>
-								<AccentPicker
-									colours={ACCENTS}
-									value={accent}
-									onChange={setAccent}
+							<div className="min-w-0 flex-1 space-y-2">
+								<Label htmlFor="profile-name">{m.profiles_name()}</Label>
+								<Input
+									id="profile-name"
+									autoFocus
+									autoComplete="off"
+									maxLength={32}
+									value={name}
+									onChange={(e) => setName(e.target.value)}
 								/>
 							</div>
+						</motion.div>
+						{/* The whole width, so every swatch sits on one line. */}
+						<motion.div variants={ROW}>
+							<AccentPicker
+								colours={ACCENTS}
+								value={accent}
+								onChange={setAccent}
+							/>
 						</motion.div>
 						<motion.div variants={ROW}>
 							<ChoiceCards

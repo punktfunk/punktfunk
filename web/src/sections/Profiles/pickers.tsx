@@ -45,7 +45,7 @@ export const PicturePicker: FC<{
 		if (file && PICTURE_TYPES.includes(file.type)) onPick(file);
 	};
 	return (
-		<div className="flex w-24 shrink-0 flex-col items-center gap-1.5">
+		<div className="flex w-24 shrink-0 flex-col items-center gap-1.5 text-center">
 			<button
 				type="button"
 				aria-label={m.profiles_picture_set()}
@@ -127,7 +127,7 @@ export const AccentPicker: FC<{
 				<label
 					title={m.profiles_colour_custom()}
 					className={cn(
-						"relative flex size-8 cursor-pointer items-center justify-center rounded-full ring-offset-2 ring-offset-background focus-within:ring-2 focus-within:ring-primary",
+						"relative flex size-7 cursor-pointer items-center justify-center rounded-full ring-offset-2 ring-offset-background focus-within:ring-2 focus-within:ring-primary sm:size-8",
 						custom && "ring-2",
 					)}
 					style={
@@ -144,10 +144,11 @@ export const AccentPicker: FC<{
 					) : (
 						<Plus className="size-4 text-white drop-shadow" />
 					)}
+					{/* Over the swatch, not hidden: the system picker anchors to the input itself. */}
 					<input
 						type="color"
 						aria-label={m.profiles_colour_custom()}
-						className="sr-only"
+						className="absolute inset-0 size-full cursor-pointer opacity-0"
 						value={value}
 						onChange={(e) => onChange(e.target.value)}
 					/>
@@ -168,7 +169,7 @@ const Swatch: FC<{
 		aria-pressed={selected}
 		onClick={onClick}
 		className={cn(
-			"flex size-8 items-center justify-center rounded-full ring-offset-2 ring-offset-background outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-primary",
+			"flex size-7 items-center justify-center rounded-full ring-offset-2 ring-offset-background outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-primary sm:size-8",
 			selected && "ring-2",
 		)}
 		style={{
