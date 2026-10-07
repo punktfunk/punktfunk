@@ -88,7 +88,7 @@ moment and retry.
 ## Voice chat while they play
 
 With Discord on the host, friends who stream in hear their own voices a beat late, because the
-stream captures Discord's playback. In **Host** → **Settings** → **Audio**:
+stream captures Discord's playback. In **Host** → **Audio**:
 
 - **Where audio plays**: **Device and host**, so you hear the game too.
 - **Voice chat**: **On the host**. Discord, Vesktop, WebCord, ArmCord, Legcord, TeamSpeak and

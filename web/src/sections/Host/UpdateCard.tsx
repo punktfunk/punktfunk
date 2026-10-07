@@ -35,13 +35,13 @@ import { m } from "@/paraglide/messages";
 const APPLY_TIMEOUT_MS = 8 * 60 * 1000;
 
 /**
- * Container: the host update card. Check everywhere (U0) + one-click apply where the host
- * reports `apply: "full"` (U1 — Windows installer). The apply flow deliberately survives the
- * console's own backends dying: once an apply is accepted, the card renders from the LAST
- * status snapshot (React Query keeps data across failed polls) and treats poll errors as "the
- * host is restarting", not as failures — until the target version answers or a timeout.
+ * The host update: check everywhere (U0), one-click apply where the host reports `apply: "full"`
+ * (U1 — Windows installer). The apply flow survives the console's own backends dying: once an
+ * apply is accepted, the card renders from the LAST status snapshot (React Query keeps data
+ * across failed polls) and treats poll errors as "the host is restarting", until the target
+ * version answers or a timeout.
  */
-export const UpdateSection: FC = () => {
+export function useUpdate() {
 	const qc = useQueryClient();
 	const [applying, setApplying] = useState<{
 		target: string;
@@ -84,17 +84,44 @@ export const UpdateSection: FC = () => {
 				),
 		});
 
-	return (
-		<UpdateCard
-			state={status}
-			onCheck={checkNow}
-			checkBusy={check.isPending}
-			applying={applying}
-			onApplied={(target) => setApplying({ target, startedAt: Date.now() })}
-			onGiveUp={() => setApplying(null)}
-		/>
+	return {
+		state: status,
+		onCheck: checkNow,
+		checkBusy: check.isPending,
+		applying,
+		onApplied: (target: string) =>
+			setApplying({ target, startedAt: Date.now() }),
+		onGiveUp: () => setApplying(null),
+	};
+}
+
+export type Update = ReturnType<typeof useUpdate>;
+
+/**
+ * Whether the update needs more than the Host strip's line: one exists or is running, the
+ * check failed, or the last one did not simply succeed.
+ */
+export function updateNeedsCard(u: Update): boolean {
+	const s = u.state.data;
+	const r = s?.last_result;
+	return Boolean(
+		u.applying ||
+			s?.job ||
+			s?.available ||
+			s?.last_error ||
+			s?.manifest?.stale ||
+			(r && (!r.ok || r.staged)),
 	);
-};
+}
+
+/** The strip's line: whether this host is current. */
+export function updateLine(u: Update): string | undefined {
+	const s = u.state.data;
+	if (!s) return undefined;
+	if (u.applying || s.job) return m.host_updating();
+	if (s.available) return m.update_available_badge();
+	return s.manifest ? m.host_up_to_date() : undefined;
+}
 
 export const UpdateCard: FC<{
 	state: Loadable<UpdateStatus>;

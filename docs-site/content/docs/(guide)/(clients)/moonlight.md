@@ -9,7 +9,7 @@ exists, use it instead: it has lower latency and more features.
 
 ## 1. Turn on GameStream
 
-GameStream is off by default. In the [web console](/docs/web-console), open **Host → Settings**,
+GameStream is off by default. In the [web console](/docs/web-console), open **Host**,
 turn on **GameStream**, then click **Restart Punktfunk**. Or:
 
 | Where | How |

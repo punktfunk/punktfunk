@@ -14,7 +14,7 @@ same by hand.
 
 ## 1. Turn on browser streaming on the host
 
-1. In the host's [web console](/docs/web-console), open **Host → Settings** and turn on **Browser
+1. In the host's [web console](/docs/web-console), open **Host** and turn on **Browser
    streaming**.
 2. Leave **Browser origins** as it is. The list is a rule for browser pages; the TV app is not one
    and is admitted either way. Pairing is what lets it stream.

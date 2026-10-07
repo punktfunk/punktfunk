@@ -3,7 +3,7 @@ title: Configuration
 description: Host settings in the web console, the host.env file that pins them, and the environment variables for everything else.
 ---
 
-Every host setting is on the web console's **Host → Settings** page; `host.env` pins those settings
+Every host setting is on the web console's **Host** page; `host.env` pins those settings
 and holds the environment-only variables below. The host detects the compositor, input backend and
 encoder on its own, so most variables here are overrides you rarely need.
 
@@ -22,7 +22,7 @@ Resolution and bitrate aren't host settings — the client picks them. See [Bitr
 
 ## Settings in the web console
 
-Each row is on **Host → Settings**; **Show advanced** reveals the rest, and searching for the
+Each row is on **Host**; **Show advanced** reveals the rest, and searching for the
 `host.env` name finds a row. A `host.env` line or a command-line flag wins and locks the row: remove
 it and restart to hand the setting back. **Restart Punktfunk** applies the rows marked *after a
 restart*.

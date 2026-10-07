@@ -45,7 +45,7 @@ sessions as they are.
   **Release all kept**.
 
 Closing the client removes the screen at once. A dropped connection is noticed after the
-**Disconnect timeout** (8 s, an advanced setting in **Host → Settings**), then the window starts.
+**Disconnect timeout** (8 s, an advanced setting in **Host**), then the window starts.
 On gamescope the game keeps running as long as its screen does.
 
 > **Keeping a screen with Turn off keeps your monitors dark after you disconnect**, until the

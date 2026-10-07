@@ -9,7 +9,7 @@ anything on this page.
 
 ## The chain
 
-1. **The host allows it.** **Host → Settings → Video → 10-bit and HDR** (`PUNKTFUNK_10BIT`), on
+1. **The host allows it.** **Host → Video → 10-bit and HDR** (`PUNKTFUNK_10BIT`), on
    by default.
 2. **The source delivers 10-bit PQ.** This is the link that fails most — see [Per host](#per-host).
 3. **The codec has a 10-bit path:** HEVC, AV1 or [PyroWave](/docs/pyrowave). H.264 has none, so
@@ -42,13 +42,13 @@ The Linux route to HDR on KDE and GNOME, and in Game Mode everywhere.
    [HDR on gamescope](/docs/gamescope#hdr-on-gamescope) covers every distro.
 2. Restart the host. It reads what the gamescope build can do once, at startup.
 3. Let the host start the gamescope session, which is the default. A session it attaches to
-   instead streams SDR: turn off **Attach mode** under **Host → Settings → Game Mode**, or delete
+   instead streams SDR: turn off **Attach mode** under **Host → Game Mode**, or delete
    the `PUNKTFUNK_GAMESCOPE_ATTACH` line from `host.env` if the row says that file set it.
 4. For Steam's own HDR setting to be available, the build must be `+pfhdr14` or newer. Check with
    `punktfunk-gamescope --version`.
 
-SDR content in an HDR session (the desktop, the Steam UI, SDR games) starts at **Host → Settings
-→ Game Mode → SDR brightness** (advanced, `PUNKTFUNK_GAMESCOPE_SDR_NITS`): 203 nits, the level the
+SDR content in an HDR session (the desktop, the Steam UI, SDR games) starts at **Host → Game Mode
+→ SDR brightness** (advanced, `PUNKTFUNK_GAMESCOPE_SDR_NITS`): 203 nits, the level the
 clients expect. Steam's SDR brightness setting moves it during the session. Builds older than
 `+pfhdr16` ignore both and show SDR content oversaturated.
 
@@ -107,7 +107,7 @@ wherever a game or app renders them. Composing in wide colour costs some GPU tim
 
 Other desktops hand the host only 8 bits of SDR, so the host could only widen each frame:
 smoother gradients after the encoder, one more colour pass on the GPU, no detail the desktop
-didn't have. There the host streams 8-bit SDR unless **Host → Settings → Video → Allow 10-bit
+didn't have. There the host streams 8-bit SDR unless **Host → Video → Allow 10-bit
 SDR** (`PUNKTFUNK_10BIT_SDR_WIDEN`, advanced, off by default) is on.
 
 ## HDR and 4:4:4

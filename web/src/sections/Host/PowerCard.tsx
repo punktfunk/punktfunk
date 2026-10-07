@@ -1,15 +1,11 @@
-import { Power } from "lucide-react";
 import { type FC, useState } from "react";
 import { ApiError, apiFetch } from "@/api/fetcher";
-import { useListActions } from "@/api/gen/actions/actions";
 import type { ActionInfo } from "@/api/gen/model";
 import {
 	PasswordConfirmField,
 	usePasswordFailure,
 } from "@/components/password-confirm";
-import { QueryState } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
 	Dialog,
 	DialogContent,
@@ -36,73 +32,6 @@ export const actionTitle = (a: ActionInfo): string => {
 		default:
 			return a.title;
 	}
-};
-
-/**
- * Host power (design/host-actions.md §7, the admin lane's free win — also the "no restart
- * route" gap the update design named): the discovered host actions as password-confirmed
- * buttons. Unavailable actions render disabled with the host's honest reason instead of
- * being hidden.
- */
-export const PowerSection: FC = () => {
-	const actions = useListActions();
-	const [confirming, setConfirming] = useState<ActionInfo | null>(null);
-	const [sent, setSent] = useState<string | null>(null);
-	const list = actions.data?.actions ?? [];
-
-	return (
-		<Card>
-			<CardHeader>
-				<CardTitle className="flex items-center gap-2">
-					<Power className="size-4" />
-					{m.host_power_title()}
-				</CardTitle>
-			</CardHeader>
-			<CardContent className="space-y-3">
-				<QueryState
-					isLoading={actions.isLoading}
-					error={actions.error}
-					refetch={actions.refetch}
-				>
-					<div className="flex flex-wrap items-center gap-3">
-						{list.map((a) => (
-							<Button
-								key={a.id}
-								variant={a.danger ? "destructive" : "outline"}
-								size="sm"
-								disabled={!a.available}
-								title={a.unavailable_reason ?? undefined}
-								onClick={() => {
-									setSent(null);
-									setConfirming(a);
-								}}
-							>
-								{actionTitle(a)}
-							</Button>
-						))}
-					</div>
-					{list
-						.filter((a) => !a.available && a.unavailable_reason)
-						.map((a) => (
-							<p key={a.id} className="text-xs text-muted-foreground">
-								{actionTitle(a)}: {a.unavailable_reason}
-							</p>
-						))}
-					{sent && <p className="text-sm">{sent}</p>}
-				</QueryState>
-				{confirming && (
-					<ConfirmDialog
-						action={confirming}
-						onClose={() => setConfirming(null)}
-						onAccepted={(a) => {
-							setConfirming(null);
-							setSent(m.host_power_sent({ action: actionTitle(a) }));
-						}}
-					/>
-				)}
-			</CardContent>
-		</Card>
-	);
 };
 
 /** Runs a host action once the console password is re-entered; the BFF verifies it. */

@@ -28,7 +28,7 @@ Discovery uses mDNS on the local network, and anything that blocks it hides the 
 - Both devices are on the same subnet. mDNS doesn't cross routers or most VPNs; add the host by
   its IP address instead.
 - The host firewall lets discovery in: [Ports → Enable the profiles](/docs/ports#enable-the-profiles).
-- **Local discovery** is on under **Host → Settings** (an advanced setting).
+- **Local discovery** is on under **Host** (an advanced setting).
 
 ### The host is asleep and won't wake
 

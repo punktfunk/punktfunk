@@ -12,7 +12,7 @@ Samsung TV the same page installs as an app: [Samsung TV](/docs/samsung-tv).
 
 ## 1. Turn on browser streaming on the host
 
-1. In the host's [web console](/docs/web-console), open **Host → Settings** and turn on **Browser
+1. In the host's [web console](/docs/web-console), open **Host** and turn on **Browser
    streaming**.
 2. Click **Show advanced** and set **Browser origins** to the address you will open the page at,
    for example `https://192.168.1.10:8443`. Left empty, any page open in a browser on your network
