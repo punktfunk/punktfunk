@@ -231,24 +231,19 @@ jobs:
       - name: sccache (self-healing install)
         run: sh scripts/ci/ensure-sccache.sh
 
-      # `punktfunk-core` now decodes Opus in-core for the Apple client (surround), pulling
-      # `audiopus_sys`, which builds a vendored static libopus via CMake when pkg-config can't find a
-      # system Opus — so the xcframework is self-contained (no runtime libopus.dylib on end-user Macs).
-      # CMake must be on PATH; install it self-healing on a fresh runner.
-      - name: CMake (for the vendored libopus audiopus_sys builds)
+      # `punktfunk-core` decodes Opus in-core for the Apple client (surround), pulling `opusic-sys`,
+      # which always builds a static libopus via CMake — so the xcframework is self-contained (no
+      # runtime libopus.dylib on end-user Macs). CMake must be on PATH; install it self-healing.
+      - name: CMake (for the vendored libopus builds)
         run: |
           # Runner steps run with `bash --noprofile --norc`, so Homebrew's bin dir isn't on PATH —
           # locate brew explicitly, install cmake if missing, and export its bin dir to GITHUB_PATH so
-          # the xcframework build step (audiopus_sys → vendored libopus) finds `cmake`.
+          # the xcframework build step (opusic-sys → vendored libopus) finds `cmake`.
           for B in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$B" ] && BREW="$B" && break; done
           if [ -z "$BREW" ]; then echo "::error::Homebrew not found on the runner"; exit 1; fi
           BREW_BIN="$(dirname "$BREW")"; export PATH="$BREW_BIN:$PATH"
           command -v cmake >/dev/null || "$BREW" install cmake
           echo "$BREW_BIN" >> "$GITHUB_PATH"
-          # Homebrew's CMake 4 dropped compatibility with the vendored libopus's pre-3.5
-          # `cmake_minimum_required`; treat 3.5 as the policy minimum (the cmake crate's child cmake
-          # inherits this from the env during the xcframework build).
-          echo "CMAKE_POLICY_VERSION_MINIMUM=3.5" >> "$GITHUB_ENV"
 
       - name: Build PunktfunkCore.xcframework (mac + iOS + tvOS + visionOS slices)
         # iOS, tvOS and visionOS slices on purpose: the scheme builds below need them. A rebuild replaces
@@ -370,22 +365,18 @@ jobs:
           "$RUSTUP" toolchain install "$NIGHTLY" --profile minimal
           "$RUSTUP" component add rust-src --toolchain "$NIGHTLY"
 
-      # The in-core Opus decode (surround) pulls audiopus_sys, which builds a vendored static libopus
+      # The in-core Opus decode (surround) pulls opusic-sys, which builds a vendored static libopus
       # via CMake — keep the xcframework self-contained (no runtime libopus.dylib on end-user devices).
-      - name: CMake (for the vendored libopus audiopus_sys builds)
+      - name: CMake (for the vendored libopus builds)
         run: |
           # Runner steps run with `bash --noprofile --norc`, so Homebrew's bin dir isn't on PATH —
           # locate brew explicitly, install cmake if missing, and export its bin dir to GITHUB_PATH so
-          # the xcframework build step (audiopus_sys → vendored libopus) finds `cmake`.
+          # the xcframework build step (opusic-sys → vendored libopus) finds `cmake`.
           for B in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$B" ] && BREW="$B" && break; done
           if [ -z "$BREW" ]; then echo "::error::Homebrew not found on the runner"; exit 1; fi
           BREW_BIN="$(dirname "$BREW")"; export PATH="$BREW_BIN:$PATH"
           command -v cmake >/dev/null || "$BREW" install cmake
           echo "$BREW_BIN" >> "$GITHUB_PATH"
-          # Homebrew's CMake 4 dropped compatibility with the vendored libopus's pre-3.5
-          # `cmake_minimum_required`; treat 3.5 as the policy minimum (the cmake crate's child cmake
-          # inherits this from the env during the xcframework build).
-          echo "CMAKE_POLICY_VERSION_MINIMUM=3.5" >> "$GITHUB_ENV"
 
       # Shared compile cache. The script handles the macOS side — see scripts/ci/ensure-sccache.sh.
       - name: sccache (self-healing install)
@@ -902,21 +893,17 @@ jobs:
       - name: sccache (self-healing install)
         run: sh scripts/ci/ensure-sccache.sh
 
-      # See the swift job: audiopus_sys (via the in-core Opus decode) builds vendored libopus with CMake.
-      - name: CMake (for the vendored libopus audiopus_sys builds)
+      # See the swift job: opusic-sys (via the in-core Opus decode) builds vendored libopus with CMake.
+      - name: CMake (for the vendored libopus builds)
         run: |
           # Runner steps run with `bash --noprofile --norc`, so Homebrew's bin dir isn't on PATH —
           # locate brew explicitly, install cmake if missing, and export its bin dir to GITHUB_PATH so
-          # the xcframework build step (audiopus_sys → vendored libopus) finds `cmake`.
+          # the xcframework build step (opusic-sys → vendored libopus) finds `cmake`.
           for B in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$B" ] && BREW="$B" && break; done
           if [ -z "$BREW" ]; then echo "::error::Homebrew not found on the runner"; exit 1; fi
           BREW_BIN="$(dirname "$BREW")"; export PATH="$BREW_BIN:$PATH"
           command -v cmake >/dev/null || "$BREW" install cmake
           echo "$BREW_BIN" >> "$GITHUB_PATH"
-          # Homebrew's CMake 4 dropped compatibility with the vendored libopus's pre-3.5
-          # `cmake_minimum_required`; treat 3.5 as the policy minimum (the cmake crate's child cmake
-          # inherits this from the env during the xcframework build).
-          echo "CMAKE_POLICY_VERSION_MINIMUM=3.5" >> "$GITHUB_ENV"
 
       - name: Pin + prune DerivedData (same disease the distribute job already cures)
         # screenshots.sh builds into a throwaway mktemp DerivedData per invocation — two

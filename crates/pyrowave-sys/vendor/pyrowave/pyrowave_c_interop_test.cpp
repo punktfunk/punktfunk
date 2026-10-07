@@ -12,6 +12,9 @@
 #include <cstdlib>
 #include <exception>
 #include <vector>
+#include <cmath>
+
+#include "shaders/slangmosh_test.hpp"
 
 #ifdef _WIN32
 #include <d3d11_4.h>
@@ -312,14 +315,22 @@ static void send_image_to_encoder(pyrowave_image pyro_image,
 	pyrowave_gpu_sync_operation acquire = {};
 	pyrowave_gpu_sync_operation release = {};
 	pyrowave_gpu_buffers buffers = {};
+	pyrowave_image_view view = {};
 	pyrowave_rate_control rate_control = { BitstreamSize };
 
+	// Exercise the NV12 scaler path as well.
 	CHECKED(pyrowave_image_get_image_view(pyro_image,
 		VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &buffers.planes[0]));
 	CHECKED(pyrowave_image_get_image_view(pyro_image,
 		VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &buffers.planes[1]));
 	CHECKED(pyrowave_image_get_image_view(pyro_image,
 		VK_IMAGE_ASPECT_PLANE_2_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &buffers.planes[2]));
+
+	if (buffers.planes[0].image_format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM)
+	{
+		CHECKED(pyrowave_image_get_image_view(pyro_image,
+				VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &view));
+	}
 
 	acquire.num_images = 1;
 	acquire.images = &ref;
@@ -331,7 +342,19 @@ static void send_image_to_encoder(pyrowave_image pyro_image,
 	release.sync.semaphore = pyrowave_sync_object_get_semaphore(pyro_sync_release);
 	release.sync.value = release_value;
 
-	CHECKED(pyrowave_encoder_encode_gpu_synchronous(encoder, &acquire, &release, &buffers, &rate_control));
+	if (buffers.planes[0].image_format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM)
+	{
+		pyrowave_scaled_encode_info scaled_info = {};
+		scaled_info.view = view;
+		scaled_info.force_linear_filtering = true;
+		scaled_info.skip_dither = true;
+		scaled_info.input_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+		scaled_info.output_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+		scaled_info.intermediate_plane_format = VK_FORMAT_R8_UNORM;
+		CHECKED(pyrowave_encoder_encode_gpu_scaled_synchronous(encoder, &acquire, &release, &scaled_info, &rate_control));
+	}
+	else
+		CHECKED(pyrowave_encoder_encode_gpu_synchronous(encoder, &acquire, &release, &buffers, &rate_control));
 }
 
 static void send_granite_image_to_encoder(Device &device, Image &granite_image, pyrowave_image pyro_image,
@@ -668,6 +691,251 @@ static void test_direct_interop()
 	pyrowave_encoder_destroy(encoder);
 	pyrowave_decoder_destroy(decoder);
 	pyrowave_device_destroy(pyro_device);
+}
+
+static void test_direct_interop_scaling()
+{
+	ASSERT_THAT(Context::init_loader(nullptr));
+
+	Context ctx;
+	ctx.set_num_thread_indices(1);
+	ctx.set_system_handles({});
+
+	VkApplicationInfo app_info = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
+	app_info.apiVersion = VK_API_VERSION_1_3;
+	app_info.pApplicationName = "pyrowave-c-test";
+	app_info.pEngineName = "Granite";
+	ctx.set_application_info(&app_info);
+
+	ASSERT_THAT(ctx.init_instance_and_device(nullptr, 0, nullptr, 0));
+
+	Device device;
+	device.set_context(ctx);
+
+	bool has_rdoc = Device::init_renderdoc_capture();
+	if (has_rdoc)
+		device.begin_renderdoc_capture();
+
+	// Fill in a proxy instance create info.
+	VkInstanceCreateInfo instance_create_info = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+	instance_create_info.enabledExtensionCount = device.get_device_features().num_instance_extensions;
+	instance_create_info.ppEnabledExtensionNames = device.get_device_features().instance_extensions;
+	instance_create_info.pApplicationInfo = &ctx.get_application_info();
+
+	// Fill in a proxy device create info.
+	VkDeviceCreateInfo device_create_info = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+	VkDeviceQueueCreateInfo queue_info = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
+	queue_info.queueFamilyIndex = device.get_queue_info().family_indices[QUEUE_INDEX_GRAPHICS];
+	queue_info.queueCount = 1;
+	device_create_info.pNext = ctx.get_enabled_device_features().pdf2;
+	device_create_info.enabledExtensionCount = ctx.get_enabled_device_features().num_device_extensions;
+	device_create_info.ppEnabledExtensionNames = ctx.get_enabled_device_features().device_extensions;
+	device_create_info.queueCreateInfoCount = 1;
+	device_create_info.pQueueCreateInfos = &queue_info;
+
+	// Hand over a concrete VkQueue we want implementation to use.
+	pyrowave_device_create_queue_info device_queue_info = {};
+	device_queue_info.familyIndex = queue_info.queueFamilyIndex;
+	device_queue_info.index = 0;
+	device_queue_info.queue = device.get_queue_info().queues[QUEUE_INDEX_GRAPHICS];
+
+	pyrowave_device_create_info info = {};
+	info.GetInstanceProcAddr = vkGetInstanceProcAddr;
+	info.instance = ctx.get_instance();
+	info.physical_device = ctx.get_gpu();
+	info.device = ctx.get_device();
+	info.device_create_info = &device_create_info;
+	info.instance_create_info = &instance_create_info;
+	info.queue_info_count = 1;
+	info.queue_info = &device_queue_info;
+	info.userdata = &device;
+	info.queue_lock_callback = [](void *userdata) { static_cast<Device *>(userdata)->external_queue_lock(); };
+	info.queue_unlock_callback = [](void *userdata) { static_cast<Device *>(userdata)->external_queue_unlock(); };
+
+	pyrowave_encoder encoder;
+	pyrowave_decoder decoder;
+	pyrowave_device pyro_device;
+	CHECKED(pyrowave_create_device(&info, &pyro_device));
+
+	pyrowave_encoder_create_info encoder_info = {};
+	encoder_info.device = pyro_device;
+	encoder_info.chroma = PYROWAVE_CHROMA_SUBSAMPLING_444;
+	encoder_info.width = 64;
+	encoder_info.height = 64;
+	CHECKED(pyrowave_encoder_create(&encoder_info, &encoder));
+
+	pyrowave_decoder_create_info decoder_info = {};
+	decoder_info.device = pyro_device;
+	decoder_info.chroma = PYROWAVE_CHROMA_SUBSAMPLING_444;
+	decoder_info.width = 64;
+	decoder_info.height = 64;
+	CHECKED(pyrowave_decoder_create(&decoder_info, &decoder));
+
+	uint32_t plane_data[66][67];
+
+	for (int y = 0; y < 66; y++)
+	{
+		for (int x = 0; x < 67; x++)
+		{
+#if 1
+			int r = mirror(128 + y * 3 + x * 1);
+			int g = mirror(128 + y * 5 + x * 3);
+			int b = mirror(128 + y * 7 + x * 5);
+#else
+			int r = 128;
+			int g = 128;
+			int b = 128;
+#endif
+			plane_data[y][x] = r | (g << 8) | (b << 16);
+		}
+	}
+
+	auto image_info = ImageCreateInfo::immutable_2d_image(67, 66, VK_FORMAT_R8G8B8A8_SRGB);
+	image_info.initial_layout = VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+	image_info.misc = IMAGE_MISC_MUTABLE_SRGB_BIT;
+	ImageInitialData initial_data = { plane_data };
+	auto input_image = device.create_image(image_info, &initial_data);
+	ASSERT_THAT(input_image);
+
+	image_info.format = VK_FORMAT_R16_UNORM;
+	image_info.width = 64;
+	image_info.height = 64;
+	image_info.misc = 0;
+	image_info.layers = 3;
+	image_info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+	image_info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+	auto output_image = device.create_image(image_info);
+	ASSERT_THAT(output_image);
+
+	pyrowave_rate_control rate_control = { 500000 };
+	pyrowave_gpu_buffers gpu_buffers = {};
+
+	pyrowave_image_view view = {};
+
+	view.image = input_image->get_image();
+	view.width = input_image->get_width();
+	view.height = input_image->get_height();
+	view.image_format = input_image->get_format();
+	view.view_format = VK_FORMAT_R8G8B8A8_UNORM;
+	view.layer = 0;
+	view.layout = input_image->get_layout(VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL);
+	view.mip_level = 0;
+	view.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+
+	auto cmd = device.request_command_buffer();
+
+	// Encode to provided cmd.
+	// Redirect commands here.
+	pyrowave_scaled_encode_info scaling = {};
+	scaling.intermediate_plane_format = VK_FORMAT_R16_UNORM;
+	scaling.view = view;
+	scaling.input_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+	scaling.output_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+	scaling.ycbcr_chroma_midpoint = 130.0f / 255.0f;
+	scaling.force_linear_filtering = true;
+	VkRect2D crop_rect = { { 2, 1 }, { 64, 64 } };
+	scaling.crop_rect = &crop_rect;
+
+	pyrowave_device_set_command_buffer(pyro_device, cmd->get_command_buffer());
+	CHECKED(pyrowave_encoder_encode_gpu_scaled_synchronous(encoder, nullptr, nullptr, &scaling, &rate_control));
+	pyrowave_device_set_command_buffer(pyro_device, VK_NULL_HANDLE);
+
+	// Wait on CPU before we call packetization.
+	Fence fence;
+	device.submit(cmd, &fence);
+	fence->wait();
+
+	size_t num_packets;
+	CHECKED(pyrowave_encoder_compute_num_packets(encoder, rate_control.maximum_bitstream_size, &num_packets));
+	ASSERT_THAT(num_packets == 1);
+
+	std::unique_ptr<uint8_t[]> bitstream(new uint8_t[rate_control.maximum_bitstream_size]);
+	pyrowave_packet packet;
+	CHECKED(pyrowave_encoder_packetize(encoder, &packet, rate_control.maximum_bitstream_size, &num_packets,
+		bitstream.get(), rate_control.maximum_bitstream_size));
+
+	CHECKED(pyrowave_decoder_push_packet(decoder, bitstream.get() + packet.offset, packet.size));
+	ASSERT_THAT(pyrowave_decoder_decode_is_ready(decoder, false));
+
+	for (auto &plane : gpu_buffers.planes)
+	{
+		plane.image = output_image->get_image();
+		plane.layout = VK_IMAGE_LAYOUT_GENERAL;
+		plane.width = 64;
+		plane.height = 64;
+		plane.image_format = VK_FORMAT_R16_UNORM;
+		plane.view_format = VK_FORMAT_R16_UNORM;
+		plane.layer = &plane - gpu_buffers.planes;
+		plane.layout = input_image->get_layout(VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL);
+		plane.mip_level = 0;
+		plane.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+	}
+
+	cmd = device.request_command_buffer();
+	// Redirect commands here.
+	pyrowave_device_set_command_buffer(pyro_device, cmd->get_command_buffer());
+	CHECKED(pyrowave_decoder_decode_gpu_buffer(decoder, nullptr, nullptr, &gpu_buffers));
+	pyrowave_device_set_command_buffer(pyro_device, VK_NULL_HANDLE);
+
+	cmd->image_barrier(*output_image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+	                   VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+
+	BufferCreateInfo bufinfo = {};
+	bufinfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	bufinfo.size = 64 * 64 * 3 * sizeof(uint16_t);
+	bufinfo.domain = BufferDomain::CachedHost;
+
+	auto readback_buffer = device.create_buffer(bufinfo);
+	cmd->copy_image_to_buffer(*readback_buffer, *output_image, 0,  {}, { 64, 64, 1 }, 0, 0,
+		{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 3 });
+	cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+	             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+	fence.reset();
+	device.submit(cmd, &fence);
+	fence->wait();
+
+	auto *readback_ptr = static_cast<const uint16_t *>(device.map_host_buffer(*readback_buffer, MEMORY_ACCESS_READ_BIT));
+
+#if 1
+	for (int y = 0; y < 64; y++)
+	{
+		for (int x = 0; x < 64; x++)
+		{
+#if 1
+			auto r = float(mirror(128 + (y + 1) * 3 + (x + 2) * 1)) / 255.0f;
+			auto g = float(mirror(128 + (y + 1) * 5 + (x + 2) * 3)) / 255.0f;
+			auto b = float(mirror(128 + (y + 1) * 7 + (x + 2) * 5)) / 255.0f;
+#else
+			float r = 128.0f / 255.0f;
+			float g = 128.0f / 255.0f;
+			float b = 128.0f / 255.0f;
+#endif
+
+			auto Y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+			auto Cb = 130.0f / 255.0f - 0.114572f * r - 0.385428f * g + 0.5f * b;
+			auto Cr = 130.0f / 255.0f + 0.5f * r - 0.454153f * g - 0.0458471f * b;
+
+			float readback_y = float(readback_ptr[0 * 64 * 64 + y * 64 + x]) / float(0xffff);
+			float readback_cb = float(readback_ptr[1 * 64 * 64 + y * 64 + x]) / float(0xffff);
+			float readback_cr = float(readback_ptr[2 * 64 * 64 + y * 64 + x]) / float(0xffff);
+
+			float y_delta = std::abs(readback_y - Y);
+			float cb_delta = std::abs(readback_cb - Cb);
+			float cr_delta = std::abs(readback_cr - Cr);
+			ASSERT_THAT(y_delta <= 1.0f / 255.0f);
+			ASSERT_THAT(cb_delta <= 2.0f / 255.0f);
+			ASSERT_THAT(cr_delta <= 2.0f / 255.0f);
+		}
+	}
+#endif
+
+	pyrowave_encoder_destroy(encoder);
+	pyrowave_decoder_destroy(decoder);
+	pyrowave_device_destroy(pyro_device);
+
+	if (has_rdoc)
+		device.end_renderdoc_capture();
 }
 
 // Most basic interop scenario, OPAQUE_FD for everything.
@@ -1383,6 +1651,328 @@ static void test_d3d11_interop()
 	pyrowave_device_destroy(pyro_device);
 }
 
+static void test_d3d11_texture_layout()
+{
+	uint32_t index = 0;
+	if (const char *env = getenv("ADAPTER"))
+		index = strtoul(env, nullptr, 0);
+
+	bool validate = false;
+	if (const char *env = getenv("VALIDATE"))
+		validate = strtoul(env, nullptr, 0) != 0;
+
+	ComPtr<IDXGIFactory1> factory;
+	ComPtr<IDXGIAdapter> adapter;
+	ComPtr<ID3D11Device> device;
+	ComPtr<ID3D11Device5> device5;
+	ComPtr<ID3D11DeviceContext> context;
+	ComPtr<ID3D11DeviceContext4> context4;
+	ComPtr<ID3D11Fence> fence;
+	uint64_t timeline = 0;
+	CHECK_HRESULT(CreateDXGIFactory1(IID_IDXGIFactory, factory.ppv()));
+	CHECK_HRESULT(factory->EnumAdapters(index, (IDXGIAdapter **)adapter.ppv()));
+
+	HRESULT hr = D3D11CreateDevice(adapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, validate ? D3D11_CREATE_DEVICE_DEBUG : 0, nullptr, 0, D3D11_SDK_VERSION,
+		(ID3D11Device **)device.ppv(), nullptr, (ID3D11DeviceContext **)context.ppv());
+	ASSERT_THAT(SUCCEEDED(hr));
+	CHECK_HRESULT(device->QueryInterface(IID_ID3D11Device5, device5.ppv()));
+
+	DXGI_ADAPTER_DESC adapter_desc;
+	CHECK_HRESULT(adapter->GetDesc(&adapter_desc));
+	LUID luid = adapter_desc.AdapterLuid;
+
+	CHECK_HRESULT(device5->CreateFence(0, D3D11_FENCE_FLAG_NONE, IID_ID3D11Fence, fence.ppv()));
+	CHECK_HRESULT(context->QueryInterface(IID_ID3D11DeviceContext4, context4.ppv()));
+
+	ASSERT_THAT(Context::init_loader(nullptr));
+	Context ctx;
+	ctx.set_num_thread_indices(1);
+	ctx.set_system_handles({});
+	ASSERT_THAT(ctx.init_instance(nullptr, 0));
+
+	VkPhysicalDevice gpus[64];
+	uint32_t gpu_count = 64;
+	VkPhysicalDevice gpu = VK_NULL_HANDLE;
+	vkEnumeratePhysicalDevices(ctx.get_instance(), &gpu_count, gpus);
+	for (uint32_t i = 0; i < gpu_count; i++)
+	{
+		VkPhysicalDeviceIDProperties ids = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+		VkPhysicalDeviceProperties2 props2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &ids };
+		vkGetPhysicalDeviceProperties2(gpus[i], &props2);
+		if (memcmp(ids.deviceLUID, &luid, sizeof(luid)) == 0)
+		{
+			gpu = gpus[i];
+			break;
+		}
+	}
+
+	ASSERT_THAT(gpu);
+	ASSERT_THAT(ctx.init_device(gpu, VK_NULL_HANDLE, nullptr, 0));
+	Device vk_device;
+	vk_device.set_context(ctx);
+
+	bool has_failure = false;
+
+	for (uint32_t height = 32; height < 2048; height += 31)
+	{
+		for (uint32_t width = 32; width < 2048; width += 31)
+		{
+			D3D11_TEXTURE2D_DESC resource_desc = {};
+			resource_desc.Width = width;
+			resource_desc.Height = height;
+			resource_desc.ArraySize = 1;
+			resource_desc.Format = DXGI_FORMAT_R8_UNORM;
+			resource_desc.SampleDesc.Count = 1;
+			resource_desc.MipLevels = 1;
+			resource_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+			resource_desc.Usage = D3D11_USAGE_DEFAULT;
+			resource_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+
+			ComPtr<ID3D11Texture2D> img;
+
+			CHECK_HRESULT(device->CreateTexture2D(&resource_desc, nullptr, (ID3D11Texture2D **)img.ppv()));
+
+			HANDLE img_handle;
+			ComPtr<IDXGIResource1> res;
+			img->QueryInterface(IID_IDXGIResource1, res.ppv());
+			CHECK_HRESULT(res->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &img_handle));
+
+			std::unique_ptr<uint8_t[]> ptr(new uint8_t[width * height]);
+			for (uint32_t i = 0; i < width * height; i++)
+				ptr[i] = uint8_t(i * 15);
+			D3D11_BOX box = {};
+			box.right = width;
+			box.bottom = height;
+			box.back = 1;
+
+			context->UpdateSubresource(img.get(), 0, &box, ptr.get(), width, width * height);
+
+			auto info = ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8_UNORM);
+			info.misc |= IMAGE_MISC_EXTERNAL_MEMORY_BIT;
+			info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			info.external.memory_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+			info.external.handle = img_handle;
+			auto vk_img = vk_device.create_image(info);
+
+			context4->Signal(fence.get(), ++timeline);
+			fence->SetEventOnCompletion(timeline, nullptr);
+
+			BufferHandle readback_vk;
+
+			{
+				auto cmd = vk_device.request_command_buffer();
+				cmd->acquire_image_barrier(*vk_img, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+					VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+
+				BufferCreateInfo bufinfo = {};
+				bufinfo.size = width * height;
+				bufinfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+				bufinfo.domain = BufferDomain::CachedHost;
+				readback_vk = vk_device.create_buffer(bufinfo);
+				cmd->copy_image_to_buffer(*readback_vk, *vk_img, 0, {}, { width, height, 1 }, 0, 0, { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 });
+				cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+				Fence fence;
+				vk_device.submit(cmd, &fence);
+				vk_device.next_frame_context();
+				fence->wait();
+			}
+
+			const uint8_t *d3d11_ptr = ptr.get();
+			const uint8_t *vk_ptr;
+			vk_ptr = static_cast<const uint8_t *>(vk_device.map_host_buffer(*readback_vk, MEMORY_ACCESS_READ_BIT));
+
+			bool success = true;
+
+			for (uint32_t y = 0; y < height && success; y++)
+			{
+				if (memcmp(vk_ptr + y * width, d3d11_ptr + y * width, width) != 0)
+					success = false;
+			}
+
+			if (success)
+				printf("Succeeded %u x %u R8 test (D3D11)\n", width, height);
+			else
+			{
+				printf("Failed %u x %u R8 test (D3D11)\n", width, height);
+				has_failure = true;
+			}
+		}
+	}
+
+	ASSERT_THAT(!has_failure);
+}
+
+static void test_d3d12_texture_layout()
+{
+	ComPtr<ID3D12Device> device;
+	ComPtr<ID3D12CommandQueue> queue;
+	ComPtr<ID3D12Fence> fence;
+	ComPtr<ID3D12GraphicsCommandList> list;
+	ComPtr<ID3D12CommandAllocator> allocator;
+	uint64_t timeline = 0;
+
+	uint32_t index = 0;
+	if (const char *env = getenv("ADAPTER"))
+		index = strtoul(env, nullptr, 0);
+
+	ComPtr<IDXGIFactory1> factory;
+	ComPtr<IDXGIAdapter> adapter;
+	CHECK_HRESULT(CreateDXGIFactory1(IID_IDXGIFactory, factory.ppv()));
+	CHECK_HRESULT(factory->EnumAdapters(index, (IDXGIAdapter **)adapter.ppv()));
+
+	CHECK_HRESULT(D3D12CreateDevice(adapter.get(), D3D_FEATURE_LEVEL_11_0, IID_ID3D12Device, device.ppv()));
+	CHECK_HRESULT(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, allocator.ppv()));
+	CHECK_HRESULT(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), nullptr, IID_ID3D12GraphicsCommandList, list.ppv()));
+	// Base API create command list starts a new command list, which we usually need to close right away ...
+	CHECK_HRESULT(list->Close());
+	D3D12_COMMAND_QUEUE_DESC queue_desc = {};
+	queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+	CHECK_HRESULT(device->CreateCommandQueue(&queue_desc, IID_ID3D12CommandQueue, queue.ppv()));
+
+	CHECK_HRESULT(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_ID3D12Fence, fence.ppv()));
+	auto luid = device->GetAdapterLuid();
+
+	ASSERT_THAT(Context::init_loader(nullptr));
+	Context ctx;
+	ctx.set_num_thread_indices(1);
+	ctx.set_system_handles({});
+	ASSERT_THAT(ctx.init_instance(nullptr, 0));
+
+	VkPhysicalDevice gpus[64];
+	uint32_t gpu_count = 64;
+	VkPhysicalDevice gpu = VK_NULL_HANDLE;
+	vkEnumeratePhysicalDevices(ctx.get_instance(), &gpu_count, gpus);
+	for (uint32_t i = 0; i < gpu_count; i++)
+	{
+		VkPhysicalDeviceIDProperties ids = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+		VkPhysicalDeviceProperties2 props2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &ids };
+		vkGetPhysicalDeviceProperties2(gpus[i], &props2);
+		if (memcmp(ids.deviceLUID, &luid, sizeof(luid)) == 0)
+		{
+			gpu = gpus[i];
+			break;
+		}
+	}
+
+	ASSERT_THAT(gpu);
+	ASSERT_THAT(ctx.init_device(gpu, VK_NULL_HANDLE, nullptr, 0));
+	Device vk_device;
+	vk_device.set_context(ctx);
+
+	bool has_failure = false;
+
+	for (uint32_t height = 32; height < 2048; height += 31)
+	{
+		for (uint32_t width = 32; width < 2048; width += 31)
+		{
+			D3D12_RESOURCE_DESC resource_desc = {};
+			resource_desc.Width = width;
+			resource_desc.Height = height;
+			resource_desc.DepthOrArraySize = 1;
+			resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+			resource_desc.SampleDesc.Count = 1;
+			resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+			resource_desc.MipLevels = 1;
+			resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+			D3D12_HEAP_PROPERTIES heap_props = {};
+			heap_props.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+			ComPtr<ID3D12Resource> img;
+			resource_desc.Format = DXGI_FORMAT_R8_UNORM;
+			CHECK_HRESULT(device->CreateCommittedResource(&heap_props, D3D12_HEAP_FLAG_SHARED, &resource_desc,
+				D3D12_RESOURCE_STATE_COMMON, nullptr, IID_ID3D12Resource, img.ppv()));
+
+			HANDLE img_handle;
+			CHECK_HRESULT(device->CreateSharedHandle(img.get(), NULL, GENERIC_ALL, nullptr, &img_handle));
+
+			auto info = ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8_UNORM);
+			info.misc |= IMAGE_MISC_EXTERNAL_MEMORY_BIT;
+			info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			info.external.memory_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
+			info.external.handle = img_handle;
+			auto vk_img = vk_device.create_image(info);
+
+			// Upload frame to NV12 image async.
+			list->Reset(allocator.get(), nullptr);
+			ComPtr<ID3D12Resource> staging_buffer; // Verify that sync works somewhat so defer destroy these.
+			upload_mirror_image(device.get(), list.get(), img.get(), 0, staging_buffer, 1, 3, 0, 0);
+			D3D12_RESOURCE_BARRIER barrier = {};
+			barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+			barrier.Transition.pResource = img.get();
+			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+			list->ResourceBarrier(1, &barrier);
+			list->Close();
+
+			ID3D12CommandList *lists[] = { list.get() };
+			queue->ExecuteCommandLists(1, lists);
+			queue->Signal(fence.get(), ++timeline);
+			CHECK_HRESULT(fence->SetEventOnCompletion(timeline, nullptr));
+
+			BufferHandle readback_vk;
+
+			{
+				auto cmd = vk_device.request_command_buffer();
+				cmd->acquire_image_barrier(*vk_img, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+						VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+
+				BufferCreateInfo bufinfo = {};
+				bufinfo.size = width * height;
+				bufinfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+				bufinfo.domain = BufferDomain::CachedHost;
+				readback_vk = vk_device.create_buffer(bufinfo);
+				cmd->copy_image_to_buffer(*readback_vk, *vk_img, 0, {}, { width, height, 1 }, 0, 0, { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 });
+				cmd->barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+				Fence fence;
+				vk_device.submit(cmd, &fence);
+				vk_device.next_frame_context();
+				fence->wait();
+			}
+
+			allocator->Reset();
+			list->Reset(allocator.get(), nullptr);
+			ComPtr<ID3D12Resource> readback_buffer;
+			UINT64 row_pitch = 0;
+			readback_buffer = readback_image(device.get(), list.get(), img.get(), 0, &row_pitch);
+			CHECK_HRESULT(list->Close());
+			queue->ExecuteCommandLists(1, lists);
+
+			// Wait for device to go idle.
+			queue->Signal(fence.get(), ++timeline);
+			// null event handle blocks on CPU directly.
+			fence->SetEventOnCompletion(timeline, nullptr);
+
+			const uint8_t *d3d12_ptr;
+			const uint8_t *vk_ptr;
+			CHECK_HRESULT(readback_buffer->Map(0, nullptr, (void **)&d3d12_ptr));
+			vk_ptr = static_cast<const uint8_t *>(vk_device.map_host_buffer(*readback_vk, MEMORY_ACCESS_READ_BIT));
+
+			bool success = true;
+
+			for (uint32_t y = 0; y < height && success; y++)
+			{
+				if (memcmp(vk_ptr + y * width, d3d12_ptr + y * row_pitch, width) != 0)
+					success = false;
+			}
+
+			readback_buffer->Unmap(0, nullptr);
+
+			if (success)
+				printf("Succeeded %u x %u R8 test (D3D12)\n", width, height);
+			else
+			{
+				printf("Failed %u x %u R8 test (D3D12)\n", width, height);
+				has_failure = true;
+			}
+		}
+	}
+
+	ASSERT_THAT(!has_failure);
+}
+
 static void test_d3d12_interop()
 {
 	ComPtr<ID3D12Device> device;
@@ -1862,6 +2452,178 @@ static void test_child_interop()
 }
 #endif
 
+static void test_extended_ycbcr_interop()
+{
+	ASSERT_THAT(Context::init_loader(nullptr));
+
+	Context ctx;
+	ctx.set_num_thread_indices(1);
+	ctx.set_system_handles({});
+	ASSERT_THAT(ctx.init_instance_and_device(nullptr, 0, nullptr, 0));
+
+	Device device;
+	device.set_context(ctx);
+
+	// Tests that we can successfully write to YCbCr as storage image for various formats in decoder.
+
+	static const struct
+	{
+		const char *name;
+		VkFormat image_format;
+		VkFormat planar_format;
+		bool subsampled;
+	} configs[] = {
+		{ "yuv420p", VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, VK_FORMAT_R8_UNORM, true },
+		{ "yuv444p", VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM, VK_FORMAT_R8_UNORM, false },
+		{ "yuv420p16", VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM, VK_FORMAT_R16_UNORM, true },
+		{ "yuv444p16", VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM, VK_FORMAT_R16_UNORM, false },
+		{ "p010", VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_420_UNORM_3PACK16, VK_FORMAT_R10X6_UNORM_PACK16, true },
+		{ "p410", VK_FORMAT_G10X6_B10X6_R10X6_3PLANE_444_UNORM_3PACK16, VK_FORMAT_R10X6_UNORM_PACK16, false },
+	};
+
+	for (auto &config : configs)
+	{
+		VkFormatProperties3 props = { VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3 };
+		device.get_format_properties(config.image_format, &props);
+
+		const VkFormatFeatureFlags2 required_image =
+				VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT |
+				VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+				VK_FORMAT_FEATURE_2_COSITED_CHROMA_SAMPLES_BIT |
+				VK_FORMAT_FEATURE_2_MIDPOINT_CHROMA_SAMPLES_BIT |
+				(config.subsampled ? VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT : 0);
+
+		if ((props.optimalTilingFeatures & required_image) != required_image)
+		{
+			fprintf(stderr, "Format %s not supported for YCbCr sampling, skipping. optimalFeatures = #%llx\n",
+			        config.name, static_cast<unsigned long long>(props.optimalTilingFeatures));
+			continue;
+		}
+
+		const VkFormatFeatureFlags2 required_planar =
+				VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
+				VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
+
+		device.get_format_properties(config.planar_format, &props);
+		if ((props.optimalTilingFeatures & required_planar) != required_planar)
+		{
+			fprintf(stderr,
+			        "Planar format %s not supported for storage image without format, skipping. optimalFeatures = #%llx\n",
+			        config.name, static_cast<unsigned long long>(props.optimalTilingFeatures));
+			continue;
+		}
+
+		ResourceLayout layout;
+		ShaderBank::Shaders<> shaders(device, layout, 0);
+
+		VkSamplerYcbcrConversionCreateInfo ycbcr_info = { VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO };
+		ycbcr_info.chromaFilter = VK_FILTER_NEAREST;
+		ycbcr_info.format = config.image_format;
+		ycbcr_info.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
+		ycbcr_info.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+		ycbcr_info.xChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
+		ycbcr_info.yChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
+		auto *ycbcr_conv = device.request_immutable_ycbcr_conversion(ycbcr_info);
+
+		SamplerCreateInfo sampler_info = {};
+		sampler_info.address_mode_u = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler_info.address_mode_v = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler_info.address_mode_w = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler_info.min_filter = VK_FILTER_NEAREST;
+		sampler_info.mag_filter = VK_FILTER_NEAREST;
+		auto *sampler = device.request_immutable_sampler(sampler_info, ycbcr_conv);
+
+		auto image_info = ImageCreateInfo::immutable_2d_image(64, 64, config.image_format);
+		image_info.ycbcr_conversion = ycbcr_conv;
+		image_info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+		image_info.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+		image_info.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+		auto image = device.create_image(image_info);
+
+		ImageViewHandle planar_views[3];
+		for (int i = 0; i < 3; i++)
+		{
+			ImageViewCreateInfo view_info = {};
+			view_info.format = config.planar_format;
+			view_info.image = image.get();
+			view_info.aspect = VK_IMAGE_ASPECT_PLANE_0_BIT << i;
+			view_info.view_type = VK_IMAGE_VIEW_TYPE_2D;
+			planar_views[i] = device.create_image_view(view_info);
+		}
+
+		BufferCreateInfo bufinfo = {};
+		bufinfo.size = 64 * 64 * sizeof(uint32_t);
+		bufinfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		bufinfo.domain = BufferDomain::CachedHost;
+		auto readback = device.create_buffer(bufinfo);
+
+		auto cmd = device.request_command_buffer();
+
+		auto *shader = shaders.test_read_ycbcr->get_shader(ShaderStage::Compute);
+		ImmutableSamplerBank sampler_bank = {};
+		sampler_bank.samplers[0][0] = sampler;
+		auto *read_program = device.request_program(shader, &sampler_bank);
+
+		cmd->set_program(shaders.test_write_ycbcr);
+		cmd->image_barrier(*image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+		                   0, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+		for (int i = 0; i < 3; i++)
+			cmd->set_storage_texture(0, i, *planar_views[i]);
+		cmd->dispatch(64 / 8, 64 / 8, 1);
+
+		cmd->image_barrier(*image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
+						   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+						   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+		cmd->set_program(read_program);
+		cmd->set_texture(0, 0, image->get_view());
+		cmd->set_storage_buffer(0, 1, *readback);
+		cmd->dispatch(64 / 8, 64 / 8, 1);
+		cmd->barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+		             VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+
+		Fence fence;
+		device.submit(cmd, &fence);
+		fence->wait();
+
+		auto *ptr = static_cast<const uint32_t *>(device.map_host_buffer(*readback, MEMORY_ACCESS_READ_BIT));
+		for (int y = 0; y < 64; y++)
+		{
+			for (int x = 0; x < 64; x++)
+			{
+				uint32_t pix = ptr[y * 64 + x];
+				int r = int(pix >>  0) & 0xff;
+				int g = int(pix >>  8) & 0xff;
+				int b = int(pix >> 16) & 0xff;
+
+				int chroma_x = x >> int(config.subsampled);
+				int chroma_y = y >> int(config.subsampled);
+
+				float chroma_shift = config.planar_format == VK_FORMAT_R8_UNORM ? 128.0f / 255.0f : 512.0f / 1023.0f;
+
+				float Y = float(128 + ((x & 3) ^ (y & 7))) / 255.0f;
+				float Cb = float(128 + ((chroma_x & 7) ^ (chroma_y & 3))) / 255.0f - chroma_shift;
+				float Cr = float(128 + ((chroma_x & 7) ^ (chroma_y & 7))) / 255.0f - chroma_shift;
+
+				float R = Y + 1.5748f * Cr;
+				float G = Y - 0.13397432f / 0.7152f * Cb - 0.33480248f / 0.7152f * Cr;
+				float B = Y + 1.8556f * Cb;
+
+				auto intR = std::lround(float(R) * 255.0f);
+				auto intG = std::lround(float(G) * 255.0f);
+				auto intB = std::lround(float(B) * 255.0f);
+
+				// Allow maximum 1 ULP error in reconstruction.
+				ASSERT_THAT(std::abs(r - intR) <= 1);
+				ASSERT_THAT(std::abs(g - intG) <= 1);
+				ASSERT_THAT(std::abs(b - intB) <= 1);
+			}
+		}
+
+		fprintf(stderr, "Planar storage image test for %s succeeded!\n", config.name);
+	}
+}
+
 int main(int argc, char **argv)
 {
 #ifdef _WIN32
@@ -1878,6 +2640,12 @@ int main(int argc, char **argv)
 		return EXIT_SUCCESS;
 	}
 
+	printf("Running D3D12 texture layout test ...\n");
+	test_d3d11_texture_layout();
+
+	printf("Running D3D12 texture layout test ...\n");
+	test_d3d12_texture_layout();
+
 	test_d3d11_cross_process_encode();
 
 	printf("Running NV12 interop test ...\n");
@@ -1893,8 +2661,11 @@ int main(int argc, char **argv)
 	(void)argv;
 #endif
 
+	test_extended_ycbcr_interop();
+
 	printf("Running Vulkan <-> Vulkan interop test with direct device share ...\n");
 	test_direct_interop();
+	test_direct_interop_scaling();
 
 	printf("Running opaque Vulkan <-> Vulkan interop test ...\n");
 	test_opaque_interop(false);

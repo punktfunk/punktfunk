@@ -14,6 +14,18 @@ VkDeviceQueueGlobalPriorityCreateInfoKHR into every queue-create-info, and a cre
 VK_ERROR_NOT_PERMITTED_KHR so a refused class NEVER regresses the encoder. Gated on !inherit_info
 (only the fresh encoder device). This Granite copy is vendored solely for the PyroWave codec.
 
+UPSTREAM STATUS (pyrowave c0b997f8 / Granite 1b2d1801, "Add support for realtime compute queues").
+Upstream now offers pyrowave_create_device_by_compat2(.., global_priority, ..), which sets
+CONTEXT_CREATION_ENABLE_COMPUTE_{REALTIME,HIGH}_GLOBAL_PRIORITY_BIT. It is NOT a drop-in for this patch:
+it only elevates when the instance and device are Vulkan 1.4 (it reads globalPriorityQuery), it
+requests the class for the compute queue family only, it aliases the transfer queue onto the compute
+queue and it switches the encode to the async compute queue. The default entry, by_compat, passes
+MEDIUM, so dropping this patch would silently demote the Windows encoder from the realtime
+default. This block therefore stays, and stands down when the caller used the upstream flags.
+It also downgrades on VK_ERROR_INITIALIZATION_FAILED (a class the driver does not list), as
+upstream's own ladder does. Retire it when the Windows backend calls compat2 and the queue switch
+has been measured on-glass.
+
 NOTE: on an RTX 4090 / Windows / WDDM this did not reduce the spikes (the graphics-vs-compute
 preemption granularity is the wall) — kept because it is correct, harmless (graceful fallback), and
 may help other GPUs/drivers. Reduce the encode's GPU cost (4:2:0/8-bit) or use H.265 for a
@@ -51,10 +63,10 @@ implements the SAME env grammar and the SAME downgrade ladder so one knob means 
 platforms. If you change the grammar here, change it there in the same commit.
 
 diff --git a/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp b/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
-index 5257fc33..479eeded 100644
+index 1e81032..9bccdde 100644
 --- a/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
 +++ b/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
-@@ -2115,6 +2115,51 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
+@@ -2248,6 +2248,53 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
  		vpGetProfileProperties(profile.profile, &props);
  #endif
  
@@ -66,9 +78,11 @@ index 5257fc33..479eeded 100644
 +	// device-create loop below downgrades on NOT_PERMITTED, so a refused class NEVER fails the
 +	// encoder — it just runs at default priority. Only the fresh encoder device (no inherit_info)
 +	// is affected; this Granite copy is vendored solely for the PyroWave codec.
++	// Skipped when the caller asked for a class through upstream's own
++	// CONTEXT_CREATION_ENABLE_COMPUTE_*_GLOBAL_PRIORITY_BIT flags (pyrowave_create_device_by_compat2).
 +	Util::SmallVector<VkQueueGlobalPriorityKHR> pf_priority_candidates;
 +	Util::SmallVector<VkDeviceQueueGlobalPriorityCreateInfoKHR> pf_global_priority_infos;
-+	if (!inherit_info)
++	if (!inherit_info && (flags & CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT) == 0)
 +	{
 +		const char *pf_gp_ext = nullptr;
 +		if (has_extension(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME))
@@ -106,47 +120,47 @@ index 5257fc33..479eeded 100644
  	if (inherit_info)
  	{
  		device_info.enabledExtensionCount = inherit_info->enabledExtensionCount;
-@@ -2144,8 +2189,41 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
- 			if (device == VK_NULL_HANDLE)
- 				return false;
+@@ -2297,7 +2344,42 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
  		}
--		else if (vkCreateDevice(gpu, &device_info, nullptr, &device) != VK_SUCCESS)
--			return false;
-+		else
-+		{
+ 		else
+ 		{
+-			VkResult vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
 +			// PUNKTFUNK: try the requested global-priority class, downgrade through the
-+			// candidate list on NOT_PERMITTED, then finally create with no global priority.
-+			VkResult pf_res;
++			// candidate list when the driver refuses it, then finally create with none.
++			// Upstream's own ladder below handles only the flag-driven request.
++			VkResult vr;
 +			if (pf_priority_candidates.empty())
 +			{
-+				pf_res = vkCreateDevice(gpu, &device_info, nullptr, &device);
++				vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
 +			}
 +			else
 +			{
-+				pf_res = VK_ERROR_NOT_PERMITTED_KHR;
++				const auto pf_refused = [](VkResult r) {
++					return r == VK_ERROR_NOT_PERMITTED || r == VK_ERROR_INITIALIZATION_FAILED;
++				};
++				vr = VK_ERROR_NOT_PERMITTED;
 +				for (size_t pf_a = 0; pf_a < pf_priority_candidates.size(); pf_a++)
 +				{
 +					for (auto &pf_gp : pf_global_priority_infos)
 +						pf_gp.globalPriority = pf_priority_candidates[pf_a];
-+					pf_res = vkCreateDevice(gpu, &device_info, nullptr, &device);
-+					if (pf_res != VK_ERROR_NOT_PERMITTED_KHR)
++					device = VK_NULL_HANDLE;
++					vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
++					if (!pf_refused(vr))
 +						break;
 +					LOGW("PyroWave: global queue priority %u not permitted; downgrading.\n",
 +						unsigned(pf_priority_candidates[pf_a]));
 +				}
-+				if (pf_res == VK_ERROR_NOT_PERMITTED_KHR)
++				if (pf_refused(vr))
 +				{
 +					for (auto &pf_qi : queue_infos)
 +						pf_qi.pNext = nullptr;
-+					pf_res = vkCreateDevice(gpu, &device_info, nullptr, &device);
++					device = VK_NULL_HANDLE;
++					vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
 +					LOGW("PyroWave: all global queue priorities refused; default priority.\n");
 +				}
 +				else
 +					LOGI("PyroWave: encode device created with an elevated global queue priority.\n");
 +			}
-+			if (pf_res != VK_SUCCESS)
-+				return false;
-+		}
- 	}
  
- 	if (inherit_info)
+ 			if ((vr == VK_ERROR_INITIALIZATION_FAILED || vr == VK_ERROR_NOT_PERMITTED) &&
+ 			    global_prio_info.globalPriority == VK_QUEUE_GLOBAL_PRIORITY_REALTIME)

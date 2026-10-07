@@ -34,12 +34,13 @@ kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_21) } }
 dependencies {
     // mTLS HTTPS client for the host's management API (the game-library fetch + cover-art loads).
     // OkHttp lets us present the paired client cert and pin the host's self-signed cert by SHA-256.
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // `api`: the client type is in this module's signature, and Coil's POM pins 4.12.0 for :app.
+    api("com.squareup.okhttp3:okhttp:5.5.0")
     testImplementation("junit:junit:4.13.2") // JVM unit tests for the pure parsers/migrations
     // A REAL org.json on the unit-test classpath. android.jar's org.json is stubs that throw
     // "Stub!", so the host-store migration test — which asserts over the very JSON blobs the store
     // reads and writes — cannot run without it. Explicit test deps precede the mockable android.jar.
-    testImplementation("org.json:json:20250107")
+    testImplementation("org.json:json:20260814")
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -102,10 +103,6 @@ fun Exec.cargoNdkEnvironment() {
     // already the hard prerequisite here, its clang is the one the sysroot matches, and this
     // keeps a dev machine and the CI image (which carries no libclang-dev) on the same footing.
     ndkLibclangDir()?.let { environment("LIBCLANG_PATH", it) }
-    // audiopus_sys picks static-vs-dynamic by HOST not target — force the bundled static libopus
-    // (pure C) so the android .so links it instead of looking for the host's libopus.so.
-    environment("LIBOPUS_STATIC", "1")
-    environment("LIBOPUS_NO_PKG", "1")
     // A GNU build-id ties a tombstone to its symbols. Target-scoped, so host build scripts and
     // desktop builds keep their flags. A RUSTFLAGS env overrides it, and check-android-strip.sh
     // then fails the build.
@@ -141,19 +138,21 @@ fun Exec.cargoNdkEnvironment() {
 // SHA-256, and fails the build on any mismatch; the cargo-ndk tasks then read only the verified
 // local files (security-review 2026-08-31 H-2).
 //
-// The archives at rust-skia tag 0.99.0, key `<skia-hash>-<target>-gl-jpegd-jpege-pdf-textlayout`
-// (hash a25a0fdb7d90429aa2d1). Re-derive tag + hash + digests on every skia-safe bump.
-// armv7 provenance: FORCE_SKIA_BUILD=1 cargo ndk -t armeabi-v7a build -p pf-console-ui
-// --no-default-features, then OUT_DIR/skia/{libskia,libskshaper,libskparagraph,libskunicode_core,
-// libskunicode_icu,libskia-bindings}.a + bindings.rs + tag.txt + key.txt packed as skia-binaries/
-// in skia-binaries-<key>.tar.gz.
+// The archives at rust-skia tag 0.153.3, key `<skia-hash>-<target>-ganesh-gl-jpegd-jpege-pdf-textlayout`
+// (hash b7f043e0b1e2a850e702). Re-derive tag + hash + digests on every skia-safe bump.
+// armv7 provenance: SKIA_GN_ARGS='extra_cflags+=["-D__ANDROID_MIN_SDK_VERSION__=26"]'
+// FORCE_SKIA_BUILD=1 cargo ndk -t armeabi-v7a build -p pf-console-ui --no-default-features, then
+// OUT_DIR/skia/{libskia,libskshaper,libskparagraph,libskunicode_core,libskunicode_icu,
+// libskia-bindings}.a + bindings.rs + LICENSE_SKIA + tag.txt + key.txt packed as skia-binaries/ in
+// skia-binaries-<key>.tar.gz. The define is for ICU: skia-bindings passes an unversioned --target,
+// so NDK 28+ hides posix_madvise from umapfile.cpp.
 // ------------------------------------------------------------------------------------------------
-val skiaBinariesTag = "0.99.0"
-val skiaBinariesHash = "a25a0fdb7d90429aa2d1"
+val skiaBinariesTag = "0.153.3"
+val skiaBinariesHash = "b7f043e0b1e2a850e702"
 val skiaBinariesSha256 = mapOf(
-    "aarch64-linux-android" to "fdbb25dd2e4ff22ce663b38d368ea696c88a522c73f54010662046b26bcf362c",
-    "x86_64-linux-android" to "93c1eaf379f539565343e99fdac4414fa22e45daa04de689bb0db2ef9290523b",
-    "armv7-linux-androideabi" to "4867856bcd1f01c197f796346ba555cffddb5e151f6cd072663ec1a56983d685",
+    "aarch64-linux-android" to "adcadc1c7f4340bb68b15e48c008c423ac30f8b454c609d8a20c89c8d731890f",
+    "x86_64-linux-android" to "b9f6266160c2cacb2762233617592d8f0492ca824192df2f659c1c97196d6781",
+    "armv7-linux-androideabi" to "c099e9eed757ffb85b11a572373610e496ac5b72fb220d22c06f2caa1dcea083",
 )
 val skiaBinariesDir = layout.buildDirectory.dir("skia-binaries")
 
@@ -190,7 +189,7 @@ val fetchSkiaBinaries = tasks.register("fetchSkiaBinaries") {
         val template =
             "https://git.unom.io/unom/skia-binaries/releases/download/{tag}/skia-binaries-{key}.tar.gz"
         for ((target, expected) in skiaBinariesSha256) {
-            val key = "$skiaBinariesHash-$target-gl-jpegd-jpege-pdf-textlayout"
+            val key = "$skiaBinariesHash-$target-ganesh-gl-jpegd-jpege-pdf-textlayout"
             val dest = dir.resolve("skia-binaries-$key.tar.gz")
             if (!dest.exists() || sha256Of(dest) != expected) {
                 val url = template.replace("{tag}", skiaBinariesTag).replace("{key}", key)

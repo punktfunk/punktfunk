@@ -145,9 +145,6 @@ jobs:
           BREW_BIN="$(dirname "$BREW")"; export PATH="$BREW_BIN:$PATH"
           command -v cmake >/dev/null || "$BREW" install cmake
           echo "$BREW_BIN" >> "$GITHUB_PATH"
-          # Homebrew's CMake 4 dropped compatibility with the vendored libopus's pre-3.5
-          # `cmake_minimum_required`; treat 3.5 as the policy minimum.
-          echo "CMAKE_POLICY_VERSION_MINIMUM=3.5" >> "$GITHUB_ENV"
 
       # `check`, not `clippy`, and no `-D warnings`: the graph carries code that is dead on macOS
       # (`pf-encode::vbv_frames_env`, the `hidout` sink in `native/input.rs`). Failing the gate on

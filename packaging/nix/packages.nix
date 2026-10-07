@@ -40,7 +40,6 @@
   wrapGAppsHook4,
   # host + client shared libs
   pipewire,
-  libopus,
   wayland,
   libxkbcommon,
   libGL,
@@ -87,16 +86,10 @@ let
       outputHashes = {
         "git+https://github.com/microsoft/windows-rs?rev=acb5a1a7441033d9312b16842af02eb0c2b403dc#acb5a1a7441033d9312b16842af02eb0c2b403dc" =
           "sha256-i92qO/7YO4XB9LQ2w9etTAwGebM/SdwSi8hJaGoGq/Y=";
-        "git+https://github.com/unom-io/usbfs-iso?rev=f3de1fd62cec271d07f45664dc464f23e423e721#f3de1fd62cec271d07f45664dc464f23e423e721" =
-          "sha256-RWQgE6AHnvXKwbBRw0dVavZy0TLngCs3C+OZENqYG2c=";
+        "git+https://github.com/unom-io/usbfs-iso?rev=ff5468ac68cea3de64ecc4a1e16b4dbdba2f8b39#ff5468ac68cea3de64ecc4a1e16b4dbdba2f8b39" =
+          "sha256-4y84oeUPEXC3c/45X/sBIYjJwxID6XvZU283/dLgNKk=";
       };
     };
-
-    # nixpkgs ships CMake ≥ 4, which errors on `cmake_minimum_required(VERSION <3.5)`. Several
-    # vendored C libraries built through the `cmake` crate still declare a pre-3.5 minimum
-    # (audiopus_sys' libopus; belt-and-braces for pyrowave-sys / aws-lc-sys). CMake reads this env
-    # var as the floor policy version, letting those configure instead of aborting.
-    CMAKE_POLICY_VERSION_MINIMUM = "3.5";
 
     # crane's default is a two-derivation split (buildDepsOnly → buildPackage); disable it, because
     # the deps-only pass builds a "dummy" source tree that drops pyrowave-sys's `vendor/pyrowave`
@@ -109,7 +102,7 @@ let
 
     nativeBuildInputs = [
       pkg-config
-      cmake # pyrowave-sys (C++/Vulkan), the vendored libopus (opus crate), aws-lc-sys (rustls)
+      cmake # pyrowave-sys (C++/Vulkan), the vendored libopus (opusic-sys), aws-lc-sys (rustls)
       nasm # libopus SIMD + OpenH264 (openh264 `source` feature)
       perl # aws-lc-sys asm generation (rustls' aws-lc-rs crypto provider)
       rustPlatform.bindgenHook # LIBCLANG_PATH + clang args for pyrowave-sys bindgen
@@ -172,7 +165,6 @@ in
 
       buildInputs = [
         pipewire # libpipewire-0.3 + libspa-0.2 (portal capture + the `pipewire` crate)
-        libopus # audiopus_sys links system opus via pkg-config (else it vendors a static libopus that mis-links)
         wayland # libwayland-client (wlr / KWin fake_input backends)
         libxkbcommon # virtual-keyboard keymap build/validate
         libGL # src/linux/zerocopy/egl.rs `#[link(name = "GL")]`
@@ -327,7 +319,6 @@ in
       # / openh264 + rav1d, both built from vendored source).
       buildInputs = [
         pipewire # PipeWire audio playback + mic capture
-        libopus # audiopus_sys → system opus via pkg-config (Opus decode)
         sdl3 # window + gamepads (SDL3 HIDAPI: DualSense touchpad/motion/triggers)
         gtk4 # the GTK4 shell (clients/linux, relm4)
         libadwaita

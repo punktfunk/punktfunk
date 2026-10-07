@@ -13,7 +13,7 @@
 #     stock driver has HEVC and AV1 disabled.
 #
 # Bazzite already ships gamescope, PipeWire and the NVIDIA stack, so on Bazzite the
-# only new runtime bits are opus + libei.
+# only new runtime bit is libei.
 ################################################################################
 
 Name:           punktfunk
@@ -86,7 +86,6 @@ BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
 BuildRequires:  pkgconfig(wayland-client)
 BuildRequires:  pkgconfig(xkbcommon)
-BuildRequires:  pkgconfig(opus)
 # Zero-copy GPU path: src/zerocopy/ links libGL + libgbm (mesa) via hand-rolled FFI.
 BuildRequires:  pkgconfig(gl)
 BuildRequires:  pkgconfig(gbm)
@@ -119,7 +118,6 @@ Recommends:     pipewire-pulseaudio
 # Weak-dep: Fedora desktops ship rtkit anyway, and without it the user@.service.d LimitNICE
 # drop-in below still covers the direct path from the next login.
 Recommends:     rtkit
-Requires:       opus
 Requires:       libei
 # A compositor to drive. Bazzite ships gamescope; the others are user choice.
 Recommends:     gamescope

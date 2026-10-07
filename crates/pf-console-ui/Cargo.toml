@@ -12,13 +12,12 @@ repository.workspace = true
 # The Vulkan session's overlay (`SkiaOverlay` over pf-presenter's shared device + the SDL event
 # path). ON by default so `clients/session` is unchanged; the Android host turns it off
 # (`default-features = false`) and drives the portable `Console` over its own EGL surface.
-# ⚠ Also what puts `vulkan` on skia-safe: with it, the desktop's prebuilt key stays
-# `jpegd-jpege-pdf-textlayout-vulkan` (the flatpak pins that archive by hand — see below);
-# without it Android resolves `gl-jpegd-jpege-pdf-textlayout`, which rust-skia also prebuilds
-# for aarch64/x86_64/i686-linux-android. Neither key must drift or skia-bindings silently
-# builds Skia from source for hours.
+# ⚠ Also what puts `vulkan` (+ `ganesh`) on skia-safe: with it the desktop's prebuilt key is
+# `ganesh-jpegd-jpege-pdf-textlayout-vulkan`, which the flatpak pins by hand. Without it Android
+# resolves `ganesh-gl-jpegd-jpege-pdf-textlayout`. A key that drifts makes skia-bindings
+# build Skia from source for hours.
 default = ["vulkan-overlay"]
-vulkan-overlay = ["dep:pf-presenter", "dep:ash", "dep:sdl3", "skia-safe/vulkan", "desktop"]
+vulkan-overlay = ["dep:pf-presenter", "dep:ash", "dep:sdl3", "skia-safe/vulkan", "skia-safe/ganesh", "desktop"]
 
 # pf-client-core's desktop half, mirrored as a feature HERE so this crate's own sources can
 # test for it — `cfg(feature = "desktop")` in this crate means THIS feature, never the
@@ -33,14 +32,14 @@ desktop = ["pf-client-core/desktop"]
 # drawing on an EGL surface it owns (design/webos-skia-console-port.md §2.1). Android already
 # asks for `gl` from its own target block; this is the same ask spelled for Linux, where the
 # default is Vulkan and there was previously no way to request a GPU canvas at all.
-# ⚠ Changes the prebuilt key to `gl-jpegd-jpege-pdf-textlayout`, for which rust-skia publishes
-# NO armv7-unknown-linux-gnueabi archive — that one is ours to build and host, exactly as the
-# armeabi-v7a one is (see the provenance note in clients/android/kit/build.gradle.kts).
+# ⚠ Changes the prebuilt key to `ganesh-gl-jpegd-jpege-pdf-textlayout`. rust-skia publishes no
+# armv7-unknown-linux-gnueabi archive for it; ours is built and hosted like the armeabi-v7a one
+# (provenance in clients/android/kit/build.gradle.kts).
 gl = ["skia-safe/gl"]
 
 # Skia's Metal backend for an Apple host (`clients/apple/native`). Take it with
 # `default-features = false`: rust-skia publishes no archive that has both `metal` and `vulkan`.
-metal = ["skia-safe/metal"]
+metal = ["skia-safe/metal", "skia-safe/ganesh"]
 
 # Same Linux+Windows gating as the rest of the client stack.
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
@@ -52,67 +51,47 @@ pf-presenter = { path = "../pf-presenter", optional = true }
 # feature); this crate needs none of it, and taking defaults here quietly turned it on.
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
-# Skia on the presenter's VkDevice (`vulkan`); `textlayout` = skparagraph/harfbuzz for
-# the typography the console library needs (~15 MB stripped, prebuilt binaries exist for
-# this feature set on x86_64-unknown-linux-gnu AND x86_64-pc-windows-msvc — a source
-# build is never triggered on either).
+# Skia on the presenter's VkDevice (`vulkan`, which needs `ganesh`); `textlayout` = skparagraph
+# for the console's typography. rust-skia 0.153.3 (skia hash b7f043e0b1e2a850e702) prebuilds
+#   skia-binaries-b7f043e0b1e2a850e702-<target>-ganesh-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+# for x86_64/aarch64 linux and x86_64 windows. A missing asset does not fail the build.
+# 🛑 Check the log for `DOWNLOAD AND INSTALL SUCCEEDED` on every bump: the fallback is a
+# from-source Skia build that turns a 2-minute CI leg into hours.
 #
-# The prebuilt-binary claim is the whole reason this dep is affordable, so re-verify it on
-# EVERY bump: the build log must say `DOWNLOAD AND INSTALL SUCCEEDED`. skia-bindings does not
-# fail when no matching asset exists — it silently falls back to a gn/ninja build of Skia from
-# source, which turns a 2-minute CI leg into a multi-hour one. Verified at 0.99.0, both targets:
-#   skia-binaries-a25a0fdb7d90429aa2d1-<target>-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
-# The same 0.99.0 release also publishes, for x86_64-pc-windows-msvc, a `gl` archive and a
-# `d3d` archive (hash a25a0fdb7d90429aa2d1): `…-gl-jpegd-jpege-pdf-textlayout` and
-# `…-d3d-jpegd-jpege-pdf-textlayout`. This crate still takes `vulkan` on desktop.
-# This dependency does not select either key.
-# ⚠ The asset name CHANGED across this bump — at 0.87 it was `<target>-pdf-textlayout-vulkan`,
-# because `jpeg` was not yet in skia-safe's DEFAULT feature set (0.87: binary-cache, embed-icudtl,
-# pdf; 0.99: + jpeg). We take defaults, so the JPEG codecs came along with the bump. That is a
-# feature here rather than bloat: `screens/library.rs` feeds host poster art straight to
-# `Image::from_encoded`, which silently returned `None` for JPEG posters before.
-#
-# 🛑 BUMPING THIS LINE IS ONLY HALF THE BUMP. packaging/flatpak/io.unom.Punktfunk.yml pins the
-# archive above by URL + sha256 BY HAND (the offline sandbox can't fetch it) and nothing derives
-# that pin from this file. Leave it stale and the flatpak leg unpacks the OLD archive's
-# pre-generated bindings.rs under the NEW crate, failing with `no variant, associated function,
-# or constant named 'Default' found for enum SkPathFillType`. That is exactly how #193 shipped.
-skia-safe = { version = "0.99", features = ["textlayout"] }
+# 🛑 Half the bump is by hand: packaging/flatpak/io.unom.Punktfunk.yml pins the archives by
+# URL + sha256 (the sandbox is offline) and nothing derives them from this line. A stale pin
+# unpacks the old bindings.rs under the new crate and fails to compile (that is how #193 shipped).
+skia-safe = { version = "0.153", features = ["textlayout"] }
 ash = { workspace = true, features = ["loaded"], optional = true }
 
 # Android (design/android-skia-console-port.md D1): the same crate over Skia's GL backend on
 # the client's own EGL surface. `gl` not `vulkan` — universal on every Android device this
 # client ships to (GLES 2 boxes included) and the emulator, and prebuilt:
-#   skia-binaries-a25a0fdb7d90429aa2d1-{aarch64,x86_64,i686}-linux-android-gl-jpegd-jpege-pdf-textlayout.tar.gz
-# ⚠ armv7-linux-androideabi has NO published archive (rust-skia's CI does not build it) — the
-# 32-bit TV ABI is served from a self-hosted archive via `SKIA_BINARIES_URL` (WP6); until that
-# is hosted the Android client only enables its console feature on the 64-bit ABIs.
+#   skia-binaries-b7f043e0b1e2a850e702-{aarch64,x86_64}-linux-android-ganesh-gl-jpegd-jpege-pdf-textlayout.tar.gz
+# ⚠ armv7-linux-androideabi has no rust-skia archive; the 32-bit TV ABI is served from our own
+# release (kit/build.gradle.kts), as are byte-for-byte copies of the two 64-bit ones.
 [target.'cfg(target_os = "android")'.dependencies]
-skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
+skia-safe = { version = "0.153", features = ["gl", "textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
 # The web client (design/web-client-implementation-plan.md §1 R4): the same crate over Skia's GL
 # backend, this time on a WebGL2 canvas the JS glue owns. `gl` for the same reason Android has it
 # — and rust-skia publishes the key for this target too, so nothing builds Skia from source:
-#   skia-binaries-a25a0fdb7d90429aa2d1-wasm32-unknown-emscripten-gl-jpegd-jpege-pdf-textlayout.tar.gz
+#   skia-binaries-b7f043e0b1e2a850e702-wasm32-unknown-emscripten-ganesh-gl-jpegd-jpege-pdf-textlayout.tar.gz
 # ⚠ Emscripten's `gl` means GLES over WebGL2; a Ganesh context comes up on the canvas the
 # `-sOFFSCREEN_FRAMEBUFFER`-free default binds. The WebGPU swap replaces the VIDEO canvas only
 # (R1/R2), never this one.
 [target.'cfg(target_family = "wasm")'.dependencies]
-skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
+skia-safe = { version = "0.153", features = ["gl", "textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
-# Apple: the Mac runs the tests on CPU raster; an Apple host draws through `metal`. With this
-# crate's default features the darwin key is `jpegd-jpege-pdf-textlayout-vulkan`, and with
-# `default-features = false, features = ["metal"]` it is `jpegd-jpege-metal-pdf-textlayout`.
-# rust-skia publishes both for darwin and iOS at 0.99.0. tvOS and visionOS have no rust-skia
-# archive: their four are ours, built by `scripts/skia-apple/build.sh` (a patched
-# skia-bindings), fetched through `SKIA_BINARIES_URL` from
-# git.unom.io/unom/skia-binaries/releases/download/0.99.0/, and
-# `build.rs` names the system libraries skia-bindings does not link there. Their SHA-256s
-# are pinned in scripts/build-xcframework.sh, which fetches and verifies every Apple slice's.
+# Apple: the Mac runs the tests on CPU raster; an Apple host draws through `metal`. rust-skia
+# 0.153.3 publishes `ganesh-jpegd-jpege-metal-pdf-textlayout` for darwin and iOS. tvOS and
+# visionOS have none: our four come from `scripts/skia-apple/build.sh` and
+# git.unom.io/unom/skia-binaries/releases/download/0.153.3/, with `build.rs` naming the system
+# libraries skia-bindings does not link there. scripts/build-xcframework.sh pins their SHA-256s.
 [target.'cfg(target_vendor = "apple")'.dependencies]
-skia-safe = { version = "0.99", features = ["textlayout"] }
+skia-safe = { version = "0.153", features = ["textlayout"] }
 pf-client-core = { path = "../pf-client-core", default-features = false }
 
 # Everything the shell itself needs, on every platform it runs on.
@@ -134,10 +113,10 @@ taffy = { version = "0.14", default-features = false, features = ["std", "taffy_
 # Linux links the system SDL3; Windows builds it from source (same choice as the rest
 # of the workspace's Windows SDL consumers).
 [target.'cfg(target_os = "linux")'.dependencies]
-sdl3 = { version = "0.18", features = ["hidapi", "ash"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi", "ash"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-sdl3 = { version = "0.18", features = ["hidapi", "ash", "build-from-source"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi", "ash", "build-from-source"], optional = true }
 
 # The shared console parity vectors (`clients/shared/console-vectors.json`) are read by tests
 # here — the tab names and the transition motion — and the library

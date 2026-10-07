@@ -82,10 +82,11 @@ are now expressed properly rather than hardcoded:
 * **The prebuilt Skia archive** is per-target and pinned by sha256. There are now two `type: file`
   sources discriminated by `only-arches`, both landing on the same `dest-filename`, so
   `SKIA_BINARIES_URL` stays one literal path. Upstream publishes the aarch64 archive under the
-  same skia commit hash and the same resolved-feature key (at 0.99:
-  `jpegd-jpege-pdf-textlayout-vulkan`), so on a skia-safe bump update both URLs and both hashes
-  together. The feature key is **not** stable across bumps — 0.87 was `pdf-textlayout-vulkan`;
-  `jpeg` entering skia-safe's defaults at 0.99 renamed it.
+  same skia commit hash and the same resolved-feature key (at 0.153:
+  `ganesh-jpegd-jpege-pdf-textlayout-vulkan`), so on a skia-safe bump update both URLs and both
+  hashes together. The feature key is **not** stable across bumps — 0.87 was
+  `pdf-textlayout-vulkan`, `jpeg` entering skia-safe's defaults at 0.99 renamed it, and the
+  `ganesh` engine feature joining it at 0.153 renamed it again.
 
 ```sh
 ARCH=aarch64 bash packaging/flatpak/build-flatpak.sh
@@ -117,7 +118,7 @@ needed by bindgen in sdl3-sys / pyrowave-sys). **No libavcodec at any layer** �
 FFmpeg since M10, so neither the SDK's stripped build nor the runtime's `codecs-extra` shadow of it
 is involved; HEVC decodes on the GPU's own driver, and there is deliberately no software HEVC
 rung (see the manifest header). A bundled
-**SDL3 3.4.10** module (pinned to match `sdl3-sys 0.6.6+SDL-3.4.10`), and finish-args for Wayland +
+**SDL3 3.4.18** module (pinned to match `sdl3-sys 0.7.2+SDL-3.4.18`), and finish-args for Wayland +
 `--device=all` (GPU/VAAPI render node + evdev + the hidraw char-devices SDL3 needs for DualSense)
 + `--socket=pulseaudio` (PipeWire-pulse: playback + mic) + `--share=network`. Alongside it:
 `io.unom.Punktfunk.desktop`, `io.unom.Punktfunk.metainfo.xml`, `io.unom.Punktfunk.svg` (all

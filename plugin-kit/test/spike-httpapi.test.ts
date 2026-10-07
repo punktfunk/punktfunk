@@ -1,4 +1,4 @@
-// Spike 1 (plan Phase 0): prove that an `effect/unstable/httpapi` HttpApi can serve as the
+// Spike 1 (plan Phase 0): prove that an `effect/http-api` HttpApi can serve as the
 // plugin-local API behind the SDK's `servePluginUi` on Bun, using ONLY effect-core layers
 // (no @effect/platform-node / platform-bun) — the riskiest seam of the plugin-kit design.
 //
@@ -13,14 +13,14 @@ import type { Punktfunk } from "@punktfunk/host";
 import { servePluginUi } from "@punktfunk/host";
 import { Effect, Layer, Schema } from "effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { Etag, HttpPlatform, HttpRouter } from "effect/unstable/http";
+import { Etag, HttpPlatform, HttpRouter } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-} from "effect/unstable/httpapi";
+} from "effect/http-api";
+import * as Path from "effect/Path";
 
 const Pong = Schema.Struct({ ok: Schema.Boolean, source: Schema.String });
 const EchoIn = Schema.Struct({ msg: Schema.String });

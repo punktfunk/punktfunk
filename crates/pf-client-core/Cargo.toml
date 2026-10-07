@@ -30,7 +30,7 @@ serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
 # `profiles` mints profile ids.
-rand = "0.9"
+rand = "0.10"
 
 # The web client (design/web-client-implementation-plan.md WP0.1), `wasm32-unknown-emscripten`.
 # The same portable subset Android takes, minus `quic`: WebTransport IS the QUIC layer there, so
@@ -42,7 +42,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 tracing = "0.1"
-rand = "0.9"
+rand = "0.10"
 
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 punktfunk-core = { path = "../punktfunk-core", features = ["quic", "serde"] }
@@ -118,7 +118,7 @@ libc = { version = "0.2", optional = true }
 # rung is native (pf-vkdecode / pf-dxvadec / pf-vaapi / openh264+rav1d) and the codec
 # vocabulary is `punktfunk_core::quic`'s own `CODEC_*` wire bits. The HOST still encodes
 # with libavcodec (`pf-encode`); nothing in this crate does.
-opus = { version = "0.3", optional = true }
+opus = { version = "0.4", optional = true }
 
 mdns-sd = { version = "0.21", optional = true }
 
@@ -144,9 +144,9 @@ tracing = "0.1"
 # the desktop target block.
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 tracing-log = { version = "0.2", optional = true }
-# Stable ids for profiles and host records (profiles.rs) — the OS RNG only, same version the
-# workspace already resolves for punktfunk-core. No uuid crate: the v4 layout is four lines.
-rand = "0.9"
+# Stable ids for profiles and host records (profiles.rs) — the OS RNG only. No uuid crate: the
+# v4 layout is four lines.
+rand = "0.10"
 
 # Gamepads: capture + feedback (full DualSense fidelity — touchpad/motion/triggers/LEDs
 # need the hidapi driver). Linux links the system SDL3; Windows builds it from source
@@ -156,8 +156,8 @@ rand = "0.9"
 # playback callback can only size writes from the buffer CEILING (quantum-limit, ~170 ms).
 # Pure cfg gate; needs libpipewire ≥ 0.3.49 (2022-03) at runtime, which every ship target
 # (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
-pipewire = { version = "0.9", features = ["v0_3_49"], optional = true }
-sdl3 = { version = "0.18", features = ["hidapi"], optional = true }
+pipewire = { version = "0.10", features = ["v0_3_49"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi"], optional = true }
 # Audio-thread priority (`audio_rt`): one blocking D-Bus call per boosted thread — the Realtime
 # PORTAL (session bus) inside a flatpak, where the sandbox's PID namespace makes a direct rtkit
 # call unresolvable, and rtkit (system bus) outside one. The same zbus, features and backend
@@ -195,7 +195,7 @@ x11rb = { version = "0.14", default-features = false, optional = true }
 socket2 = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-wasapi = { version = "0.24", optional = true }
+wasapi = { version = "0.25", optional = true }
 # Native D3D11VA decode (M5 of the native-decode program): the hand-declared DXVA buffer
 # layouts and the AuPlan → picparams/qmatrix/slice-control conversion that video_d3d11_native
 # submits. Windows-only because the rung is; the crate itself is cross-platform CPU code so
@@ -206,7 +206,7 @@ pf-dxvadec = { path = "../pf-dxvadec", optional = true }
 # stamped PKEY_Device_ContainerId both live in the registry — read-only, which sidesteps COM
 # property stores entirely (the same version the host pins).
 winreg = { version = "0.56", optional = true }
-sdl3 = { version = "0.18", features = ["hidapi", "build-from-source"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi", "build-from-source"], optional = true }
 # D3D11 decode-device plumbing (video_d3d11.rs): device/adapter selection, DXVA probes, and
 # the shared NT-handle hand-off ring `video_d3d11_native` fills. The workspace entry's git rev,
 # so `windows-core` unifies with windows-reactor's. `wasapi` pulls the crates.io copy too;

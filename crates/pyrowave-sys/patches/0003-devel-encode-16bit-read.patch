@@ -1,5 +1,5 @@
 diff --git a/crates/pyrowave-sys/vendor/pyrowave/encode.cpp b/crates/pyrowave-sys/vendor/pyrowave/encode.cpp
-index 95725551..2e78fada 100644
+index 9572555..2e78fad 100644
 --- a/crates/pyrowave-sys/vendor/pyrowave/encode.cpp
 +++ b/crates/pyrowave-sys/vendor/pyrowave/encode.cpp
 @@ -201,7 +201,10 @@ static void run_encoder(Device &device, const char *out_path, const char *in_pat

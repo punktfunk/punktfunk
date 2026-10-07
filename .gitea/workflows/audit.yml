@@ -10,8 +10,8 @@
 #                   plugin-kit (@punktfunk/plugin-kit).
 #   * pnpm audit  → clients/decky (the Steam Deck plugin).
 #   * docs-site   → scanned NON-blocking. Its `overrides` lift the chains fumadocs and @unom/ui
-#                   pull in (next, sharp, fast-uri, immutable), as web's do; it carries web's
-#                   three ignores for the same reasons.
+#                   pull in (@ai-sdk/provider-utils, dompurify, undici), as web's do; it carries
+#                   web's two ignores for the same reasons.
 #   * vendored-inventory → every `vendor/` tree has a CVE-watch row in
 #                   compliance/vendored-components.md.
 #   * cargo-about → license-allowlist gate over the host, driver and seat-keeper workspaces (about.toml `accepted`);
@@ -141,34 +141,23 @@ jobs:
       # bumping the dep (or, if genuinely unfixable + inapplicable, pinning a resolution and
       # noting why here).
       #
-      # web carries five ignores, the ONLY ones in a blocking tree — two image-size advisories
-      # (GHSA-w3rx-r6r6-pgpr ICNS, GHSA-5p2g-fcmc-qvqq JXL/HEIF infinite-loop DoS), one in
-      # payload itself (GHSA-jg8r-5jh2-v2xj, account-unlock access), one in braces
-      # (GHSA-vfj7-8cjw-p6xm, nested-pattern DoS) and one in node-forge (GHSA-86w9-cpqp-85rv,
-      # PKCS#1 v1.5 signature check). All five are unfixable AND unreachable:
-      #   * unfixable — image-size's vulnerable range is `<= 2.0.2` and 2.0.2 IS latest; payload's
-      #     is `<= 3.88.0`, braces' `<= 3.0.3` and node-forge's `<= 1.4.0`, each the latest.
-      #     Upstream has published no patched release, so no override can clear them.
-      #   * unreachable — image-size and payload ride in under `@unom/ui ›
-      #     @payloadcms/richtext-lexical › … › payload`, and @payloadcms/richtext-lexical is a
-      #     PEER of @unom/ui that only its `./richtext` export needs. The console imports
-      #     section/toast/button/card/dialog/form/*/material/tabs — never `./richtext` — so
-      #     payload is auto-installed peer weight that no bundle, and no request path, ever
-      #     touches. Nothing here runs a CMS, so the account-unlock endpoint the payload
-      #     advisory names does not exist in this tree. braces comes through payload's
-      #     `sass@1.77.4` (chokidar 3) and nitropack's build-time `globby › … › micromatch`;
-      #     both expand only globs written in this repo, never a request. node-forge comes
-      #     through `nitropack › listhen`, called only by nitro's dev server to mint a
-      #     self-signed certificate; it verifies no signature and the built console lacks it.
-      # Drop these the moment upstream ships a fix, or @unom/ui marks that peer optional
-      # (peerDependenciesMeta) and the chain leaves web/bun.lock entirely — either one makes the
-      # bare `bun audit` green again. Scoped per-tree so sdk/plugin-kit stay strictly fail-on-any.
+      # web carries two ignores, the ONLY ones in a blocking tree: braces (GHSA-vfj7-8cjw-p6xm,
+      # nested-pattern DoS) and node-forge (GHSA-86w9-cpqp-85rv, PKCS#1 v1.5 signature check).
+      # Both are unfixable AND unreachable:
+      #   * unfixable — braces' vulnerable range is `<= 3.0.3` and node-forge's `<= 1.4.0`, each
+      #     the latest. Upstream has published no patched release, so no override can clear them.
+      #   * unreachable — braces comes through payload's `sass@1.77.4` (chokidar 3) and
+      #     nitropack's build-time `globby › … › micromatch`; both expand only globs written in
+      #     this repo, never a request. payload is a peer of @unom/ui that only its `./richtext`
+      #     export needs, which the console never imports. node-forge comes through
+      #     `nitropack › listhen`, called only by nitro's dev server to mint a self-signed
+      #     certificate; it verifies no signature and the built console lacks it.
+      # Drop these the moment upstream ships a fix — the bare `bun audit` is then green. Scoped
+      # per-tree so sdk/plugin-kit stay strictly fail-on-any.
       - name: bun audit
         run: |
           if [ "${{ matrix.tree }}" = "web" ]; then
-            bun audit --ignore=GHSA-w3rx-r6r6-pgpr --ignore=GHSA-5p2g-fcmc-qvqq \
-              --ignore=GHSA-jg8r-5jh2-v2xj --ignore=GHSA-vfj7-8cjw-p6xm \
-              --ignore=GHSA-86w9-cpqp-85rv
+            bun audit --ignore=GHSA-vfj7-8cjw-p6xm --ignore=GHSA-86w9-cpqp-85rv
           else
             bun audit
           fi
@@ -192,8 +181,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: bun audit (non-blocking)
         run: |
-          bun audit --ignore=GHSA-w3rx-r6r6-pgpr --ignore=GHSA-5p2g-fcmc-qvqq \
-            --ignore=GHSA-jg8r-5jh2-v2xj \
+          bun audit --ignore=GHSA-vfj7-8cjw-p6xm --ignore=GHSA-86w9-cpqp-85rv \
             || echo "::warning::docs-site has a new advisory — lift it with an override, as web does"
 
   pnpm-audit:

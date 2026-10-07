@@ -95,8 +95,6 @@ def scan_warnings(text: str) -> list[str]:
 
 def build_probe() -> None:
     env = dict(os.environ)
-    # audiopus_sys / opus vendored CMake needs this on recent CMake (see project memory).
-    env.setdefault("CMAKE_POLICY_VERSION_MINIMUM", "3.5")
     print("building punktfunk-probe (release)...", flush=True)
     subprocess.run(
         ["cargo", "build", "--release", "-p", "punktfunk-probe"],

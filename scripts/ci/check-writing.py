@@ -95,7 +95,8 @@ MESSAGE_EXTS = (".rs", ".swift", ".ts", ".tsx", ".kt")
 # trees carry an upstream style we do not own.
 DIFF_GLOBS = (
     "*.rs", "*.swift", "*.ts", "*.tsx", "*.kt",
-    ":!**/vendor/**", ":!web/src/api/gen/**", ":!**/node_modules/**", ":!**/dist/**",
+    ":!**/vendor/**", ":!web/src/api/gen/**", ":!sdk/src/gen/**",
+    ":!**/node_modules/**", ":!**/dist/**",
 )
 
 

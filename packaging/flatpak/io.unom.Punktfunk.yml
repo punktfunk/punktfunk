@@ -20,7 +20,7 @@
 # `org.freedesktop.Sdk.Extension.rust-stable` resolves to //25.08 (rustc 1.96 — the GTK4 dep
 # chain, e.g. pango-sys 0.22, needs >= 1.92, which the older GNOME-48/24.08 rust-stable at 1.89
 # could NOT satisfy). GNOME 50 is also a *supported* runtime (GNOME 48 went EOL in March 2026).
-# libopus and the PipeWire client lib are in the freedesktop base; SDL3 is NOT, so it is built
+# The PipeWire client lib is in the freedesktop base; SDL3 is NOT, so it is built
 # from source as a bundled module.
 #
 # HEVC decode needs NOTHING from the runtime since M10 (design/client-native-decode.md §6):
@@ -137,9 +137,8 @@ finish-args:
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
-  # The rust build resolves everything via pkg-config: gtk4/libadwaita/pipewire/opus AND a
-  # the SDK's own .pc files from the multiarch /usr dir (libopus for audiopus_sys, the
-  # PipeWire client lib, GTK4/libadwaita), plus the bundled SDL3's .pc from /app.
+  # The rust build resolves gtk4/libadwaita/pipewire via pkg-config: the SDK's own .pc files
+  # from the multiarch /usr dir, plus the bundled SDL3's .pc from /app.
   env:
     PKG_CONFIG_PATH: /app/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig
     # bindgen (sdl3-sys, pyrowave-sys) loads libclang from the llvm20 extension.
@@ -159,8 +158,8 @@ modules:
   # ---------------------------------------------------------------------------------------
   # SDL3 — NOT provided as a linkable libSDL3.so.0 by org.gnome.Platform/freedesktop-sdk
   # 25.08, and there is no SDL3 recipe in flathub/shared-modules. Build it from source.
-  # Pinned to 3.4.10 to match the crate exactly: sdl3-sys is `0.6.6+SDL-3.4.10`, i.e. its
-  # bindings target SDL 3.4.10 — building an older SDL risks missing symbols at link time.
+  # Pinned to 3.4.18 to match the crate exactly: sdl3-sys is `0.7.2+SDL-3.4.18`, i.e. its
+  # bindings target SDL 3.4.18 — building an older SDL risks missing symbols at link time.
   # HIDAPI is enabled (DualSense touchpad/motion/triggers/lightbar over hidraw).
   # ---------------------------------------------------------------------------------------
   - name: sdl3
@@ -174,9 +173,9 @@ modules:
       - -DSDL_EXAMPLES=OFF
     sources:
       - type: archive
-        url: https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz
-        # `sha256sum SDL3-3.4.10.tar.gz` (verified 2026-06-15). Bump url + sha together.
-        sha256: 12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785
+        url: https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
+        # `sha256sum SDL3-3.4.18.tar.gz` (verified 2026-10-07). Bump url + sha together.
+        sha256: 9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
         x-checker-data:
           type: anitya
           project-id: 4974
@@ -330,7 +329,7 @@ modules:
       # One cargo invocation for both binaries: the shell and the Vulkan session binary it
       # execs for --connect/--browse. Building them together keeps skia-bindings' feature
       # unification identical to a workspace build (the pinned skia-binaries archive's
-      # `pdf-textlayout-vulkan` key must match the resolved feature set).
+      # `ganesh-…-pdf-textlayout-vulkan` key must match the resolved feature set).
       - cargo --offline build --release -p punktfunk-client-linux -p punktfunk-client-session
           -p punktfunk-cli
       - install -Dm0755 target/release/punktfunk-client ${FLATPAK_DEST}/bin/punktfunk-client
@@ -365,7 +364,7 @@ modules:
         path: ../..
       # Generated offline crate cache (see the comment block above). Remove for --share=network.
       - cargo-sources.json
-      # Prebuilt Skia for skia-bindings 0.99.0 (SKIA_BINARIES_URL above). The key encodes the
+      # Prebuilt Skia for skia-bindings 0.153.3 (SKIA_BINARIES_URL above). The key encodes the
       # crate's pinned skia commit + target + resolved features — when bumping skia-safe, build
       # the workspace once locally and take the new name from
       # target/release/build/skia-bindings-*/out/.cache/, then update url + sha256 together.
@@ -387,11 +386,11 @@ modules:
       # is exactly how the 0.87 → 0.99 bump (#193) left it behind.
       - type: file
         only-arches: [x86_64]
-        url: https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-x86_64-unknown-linux-gnu-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
-        sha256: 158407a4b5ce8738431bb76498be3a44fda770e51d61aac18a0e0e97becdc1de
+        url: https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/skia-binaries-b7f043e0b1e2a850e702-x86_64-unknown-linux-gnu-ganesh-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+        sha256: 1620241c6f2247b6df21c6d201d5668693d2cf214f73dff06d66f40aa40f52b5
         dest-filename: skia-binaries.tar.gz
       - type: file
         only-arches: [aarch64]
-        url: https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-aarch64-unknown-linux-gnu-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
-        sha256: cf5469d1d963f704cc997f9b3342d11c49b917002361947e5c7bf7dcc3f13534
+        url: https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/skia-binaries-b7f043e0b1e2a850e702-aarch64-unknown-linux-gnu-ganesh-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+        sha256: cae319203264a497291c34b66831e0af724acecaaa407e2f45b6635daeca6f64
         dest-filename: skia-binaries.tar.gz

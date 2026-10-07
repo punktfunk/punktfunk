@@ -183,6 +183,7 @@ struct WaveletBuffers
 		int block_stride_8x8;
 		int block_offset_32x32;
 		int block_stride_32x32;
+		int block_count_32x32;
 	};
 	BlockInfo block_meta[NumComponents][DecompositionLevels][4] = {};
 

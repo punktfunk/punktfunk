@@ -16,7 +16,7 @@ use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::session::image::DecodedImage;
-use ironrdp::session::{ActiveStage, ActiveStageOutput};
+use ironrdp::session::{ActiveStageBuilder, ActiveStageOutput};
 use pf_seats::windows::keeper::{self, RdpBootstrap};
 use pf_seats::BackendError;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
@@ -273,7 +273,17 @@ fn active_loop(result: ConnectionResult, mut framed: RdpFramed) -> WinResult<()>
         result.desktop_size.width,
         result.desktop_size.height,
     );
-    let mut stage = ActiveStage::new(result);
+    let mut stage = ActiveStageBuilder {
+        static_channels: result.static_channels,
+        user_channel_id: result.user_channel_id,
+        io_channel_id: result.io_channel_id,
+        message_channel_id: result.message_channel_id,
+        share_id: result.share_id,
+        compression_type: result.compression_type,
+        enable_server_pointer: result.enable_server_pointer,
+        pointer_software_rendering: result.pointer_software_rendering,
+    }
+    .build();
     loop {
         let (action, payload) = match framed.read_pdu() {
             Ok(frame) => frame,
@@ -305,7 +315,7 @@ fn active_loop(result: ConnectionResult, mut framed: RdpFramed) -> WinResult<()>
                         format!("RDP server ended the managed session: {reason:?}"),
                     ));
                 }
-                ActiveStageOutput::DeactivateAll(_) => {
+                ActiveStageOutput::DeactivateAll => {
                     return Err(backend_error(
                         "rdp_deactivated",
                         "RDP server deactivated the managed session",

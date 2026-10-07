@@ -14,7 +14,7 @@ links = "vpl"
 # offline builds (CI, MSVC, flatpak) — no network, no system libvpl.
 cmake = "0.1"
 # Same bindgen configuration as pyrowave-sys (runtime = dlopen libclang).
-bindgen = { version = "0.72", features = ["runtime"], default-features = false }
+bindgen = { version = "0.73", features = ["runtime"], default-features = false }
 
 [lints]
 workspace = true

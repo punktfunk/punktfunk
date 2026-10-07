@@ -120,7 +120,7 @@ cbc = { version = "0.2", features = ["alloc"] }
 # it transitively through `num-bigint-dig`, so 0.8 only disappears from the native-only host
 # (`--no-default-features`, where `rsa` is absent). What it does buy everywhere is that OUR calls
 # all speak one rand major.
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
 # Cover-art delivery in the game library: encode Lutris's local JPEGs into `data:` URLs and decode
 # the Epic launcher's base64 `catcache.bin`. Cross-platform (Linux Lutris art + Windows Epic art).
@@ -220,7 +220,7 @@ punktfunk-ffi = { path = "../punktfunk-ffi", features = ["quic"] }
 # source — no system lib, no vcpkg), so it builds on Windows MSVC too (needs CMake + NASM, both on
 # the box) and on macOS, where `punktfunk-core` already vendors it for the client.
 [target.'cfg(any(unix, windows))'.dependencies]
-opus = "0.3"
+opus = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 # The POSIX calls behind the `#[cfg(unix)]` helpers in `hooks.rs` (kill) and the SIGTERM
@@ -343,7 +343,7 @@ windows-service = "0.8"
 winreg = "0.56"
 # The pad-audio capture thread's COM init and the `pad-endpoint reshape` devtest's sample types;
 # capture itself lives in pf-audio.
-wasapi = "0.24"
+wasapi = "0.25"
 # Shared host<->driver wire contract for the pf-vdisplay IddCx virtual-display backend: the
 # control-plane IOCTL codes + `#[repr(C)] Pod` request/reply structs, defined ONCE so host<->driver
 # ABI drift is a compile error (used from `capture.rs`). The `bytemuck` that serializes those

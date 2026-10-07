@@ -4,15 +4,10 @@
 # or an accepted, documented risk. Keep this list TIGHT and justify every entry — an ignore here
 # means the audit job stops flagging it, so the reasoning must hold up.
 #
-# The workflow's `--deny unsound` fails vulnerabilities and unsound advisories.
-# Unmaintained advisories stay visible without failing CI for the two crates below.
-#
-# The two unmaintained ones, both transitive with no successor to bump to, left visible on purpose
-# so we keep getting the maintenance signal:
-#   * audiopus_sys via opus (opus itself IS maintained; only its -sys layer is stuck).
-#   * paste via BOTH utoipa-axum (host) and rav1d (client decode path) — an earlier version of this
-#     note named only utoipa-axum, which would have made dropping utoipa-axum look like it cleared
-#     paste. It would not: every client pulls it through rav1d.
+# The workflow's `--deny unsound` fails vulnerabilities and unsound advisories. Unmaintained
+# advisories stay visible without failing CI, so we keep the maintenance signal. paste is the
+# root one: transitive with no successor, through BOTH utoipa-axum (host) and rav1d (every
+# client), so dropping utoipa-axum alone would not clear it.
 # (rustls-pemfile was dropped 2026-06-29 by removing axum-server's unused tls-rustls feature +
 # moving our own PEM parsing to rustls-pki-types; memmap2's unsoundness was fixed by the 0.9.11
 # bump.)

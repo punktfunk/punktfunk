@@ -164,6 +164,19 @@ private:
 };
 }
 
+struct ContextOptions
+{
+	// Enabled by default.
+	// Disabling may improve memory usage a bit since more allocations get to share the same
+	// VkDeviceMemory.
+	bool memory_priorities = true;
+
+	// In this mode, expect smaller and fewer allocations.
+	// Avoid allocating large blocks in the memory allocator.
+	// Used to save memory.
+	bool lean_memory_mode = false;
+};
+
 class Device
 	: public Util::IntrusivePtrEnabled<Device, std::default_delete<Device>, HandleCounter>
 #ifdef GRANITE_VULKAN_FOSSILIZE
@@ -223,6 +236,8 @@ public:
 
 	// Only called by main thread, during setup phase.
 	void set_context(const Context &context);
+	void set_context(const Context &context, const ContextOptions &options);
+	const ContextOptions &get_context_options() const { return context_options; }
 
 	// This is asynchronous in nature. See query_initialization_progress().
 	// Kicks off Fossilize and shader manager caching.
@@ -310,7 +325,7 @@ public:
 	void submit_discard(CommandBufferHandle &cmd);
 	QueueIndices get_physical_queue_type(CommandBuffer::Type queue_type) const;
 	void register_time_interval(std::string tid, QueryPoolHandle start_ts, QueryPoolHandle end_ts,
-	                            const std::string &tag);
+	                            const std::string &tag, uint64_t counter = 0);
 
 	// Request shaders and programs. These objects are owned by the Device.
 	Shader *request_shader(const uint32_t *code, size_t size, const ResourceLayout *layout = nullptr);
@@ -553,6 +568,7 @@ private:
 	VkDevice device = VK_NULL_HANDLE;
 	const VolkDeviceTable *table = nullptr;
 	const Context *ctx = nullptr;
+	ContextOptions context_options = {};
 	QueueInfo queue_info;
 	unsigned num_thread_indices = 1;
 
@@ -599,7 +615,7 @@ private:
 	QueryPoolHandle write_timestamp_nolock(VkCommandBuffer cmd, VkPipelineStageFlags2 stage);
 	QueryPoolHandle write_calibrated_timestamp_nolock();
 	void register_time_interval_nolock(std::string tid, QueryPoolHandle start_ts, QueryPoolHandle end_ts,
-	                                   const std::string &tag);
+	                                   const std::string &tag, uint64_t counter = 0);
 
 	// Make sure this is deleted last.
 	HandlePool handle_pool;
@@ -700,6 +716,7 @@ private:
 			QueryPoolHandle start_ts;
 			QueryPoolHandle end_ts;
 			TimestampInterval *timestamp_tag;
+			uint64_t counter;
 		};
 		std::vector<TimestampIntervalHandles> timestamp_intervals;
 

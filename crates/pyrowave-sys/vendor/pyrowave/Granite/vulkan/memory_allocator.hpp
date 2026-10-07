@@ -206,7 +206,7 @@ private:
 class Allocator
 {
 public:
-	explicit Allocator(Util::ObjectPool<MiniHeap> &object_pool);
+	Allocator(Util::ObjectPool<MiniHeap> &object_pool, bool lean_memory_config);
 	void operator=(const Allocator &) = delete;
 	Allocator(const Allocator &) = delete;
 
@@ -261,6 +261,8 @@ public:
 	                            VkBuffer buffer, DeviceAllocation *alloc, ExternalHandle *external);
 	bool allocate_image_memory(uint32_t size, uint32_t alignment, AllocationMode mode, uint32_t memory_type,
 	                           VkImage image, bool force_no_dedicated, DeviceAllocation *alloc, ExternalHandle *external);
+
+	static AllocationMode normalize_allocation_mode(AllocationMode mode);
 
 	void garbage_collect();
 	void *map_memory(const DeviceAllocation &alloc, MemoryAccessFlags flags, VkDeviceSize offset, VkDeviceSize length);
@@ -431,4 +433,7 @@ private:
 	uint32_t allocate_single_resource_heap_entry();
 	void free_single_resource_heap_entry(uint32_t index);
 };
+
+void take_ownership_imported_external_memory_handle(const ExternalHandle &handle);
+void take_ownership_imported_external_semaphore_handle(const ExternalHandle &handle);
 }

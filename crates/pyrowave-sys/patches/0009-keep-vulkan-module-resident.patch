@@ -24,7 +24,7 @@ libvulkan.so.1 can steer the hold via GRANITE_VULKAN_LIBRARY. libvulkan is a
 process-global loader — a permanent reference is the intended lifetime.
 
 diff --git a/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp b/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
-index 00000000..00000000 100644
+index e76839b..1e81032 100644
 --- a/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
 +++ b/crates/pyrowave-sys/vendor/pyrowave/Granite/vulkan/context.cpp
 @@ -215,29 +215,38 @@ bool Context::init_loader(PFN_vkGetInstanceProcAddr addr, bool force_reload)
@@ -70,12 +70,12 @@ index 00000000..00000000 100644
 +			module = dlopen("libvulkan.so.1", RTLD_LOCAL | RTLD_LAZY);
 +		if (!module)
 +			module = dlopen("libvulkan.so", RTLD_LOCAL | RTLD_LAZY);
-+#endif
-+	}
  #endif
 -			if (!module)
 -				return false;
 -		}
++	}
++#endif
 +
 +	if (!addr)
 +	{

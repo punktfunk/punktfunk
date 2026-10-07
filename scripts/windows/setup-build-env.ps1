@@ -12,11 +12,10 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
          ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 if (-not $admin) { throw "Run elevated (Machine-scope env requires Administrator)." }
 
-# libclang for bindgen; cmake policy floor for audiopus_sys. (NVENC needs no build-time env:
+# libclang for bindgen. (NVENC needs no build-time env:
 # its entry points are runtime-loaded from the driver's nvEncodeAPI64.dll.)
 $vars = [ordered]@{
   'LIBCLANG_PATH'               = 'C:\Program Files\LLVM\bin'
-  'CMAKE_POLICY_VERSION_MINIMUM' = '3.5'
 }
 foreach ($k in $vars.Keys) {
   [Environment]::SetEnvironmentVariable($k, $vars[$k], 'Machine')

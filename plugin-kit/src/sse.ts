@@ -1,9 +1,9 @@
-// SSE support. `effect/unstable/httpapi` has no event-stream media type (verified at
-// beta.99), so the status feed is a raw HttpRouter route beside the HttpApi contract —
+// SSE support. `effect/http-api` has no event-stream media type (verified at
+// 4.0.1), so the status feed is a raw HttpRouter route beside the HttpApi contract —
 // same wire shape the first-generation plugins used (`event: <name>` frames + comment
 // pings), which is already proven through the console's reverse proxy.
 import { Effect, type Layer, Schedule, Stream } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 
 const encoder = new TextEncoder();
 

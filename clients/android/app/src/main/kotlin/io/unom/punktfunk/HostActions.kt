@@ -62,7 +62,7 @@ object HostActions {
             val req = Request.Builder().url("${mgmtBase(addr, mgmtPort)}/api/v1/actions").get().build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@runCatching emptyList()
-                val arr = JSONObject(resp.body?.string().orEmpty()).optJSONArray("actions")
+                val arr = JSONObject(resp.body.string()).optJSONArray("actions")
                     ?: return@runCatching emptyList()
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
@@ -114,7 +114,7 @@ object HostActions {
                     // The `ApiError` envelope carries the host's sentence; fall back to the code
                     // only when there isn't one.
                     runCatching {
-                        JSONObject(resp.body?.string().orEmpty()).optString("error")
+                        JSONObject(resp.body.string()).optString("error")
                     }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "the host refused (${resp.code})"
                 }
             }

@@ -25,7 +25,7 @@ use punktfunk_core::quic::{
 };
 use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::shared::MediaSender;
-use rand::RngCore;
+use rand::Rng;
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

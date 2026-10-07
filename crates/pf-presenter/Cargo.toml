@@ -42,7 +42,7 @@ tracing = "0.1"
 # Linux links the system SDL3; Windows builds it from source (same choice as the rest
 # of the workspace's Windows SDL consumers).
 [target.'cfg(target_os = "linux")'.dependencies]
-sdl3 = { version = "0.18", features = ["hidapi", "ash"] }
+sdl3 = { version = "0.20", features = ["hidapi", "ash"] }
 # `fence::wait_sync_file`: the CPU fallback when the device cannot import a
 # sync_file as a semaphore.
 pf-dmabuf = { path = "../pf-dmabuf" }
@@ -58,7 +58,7 @@ wayland-protocols = { version = "0.32", features = ["client", "staging", "unstab
 rustix = { version = "1", features = ["time"] }
 
 [target.'cfg(windows)'.dependencies]
-sdl3 = { version = "0.18", features = ["hidapi", "ash", "build-from-source"] }
+sdl3 = { version = "0.20", features = ["hidapi", "ash", "build-from-source"] }
 # The vblank waiter (vk/vblank_timing.rs): DXGI output enumeration + WaitForVBlank, the
 # glass clock where the driver offers no VK_KHR_present_wait.
 windows = { workspace = true, features = ["dxgi", "windef", "minwindef"] }

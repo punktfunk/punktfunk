@@ -58,7 +58,7 @@ pub(super) fn token_line(token: &str) -> String {
 
 /// A fresh 32-byte token, hex-encoded.
 pub(super) fn mint_token() -> String {
-    use rand::RngCore as _;
+    use rand::Rng as _;
     let mut bytes = [0_u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)

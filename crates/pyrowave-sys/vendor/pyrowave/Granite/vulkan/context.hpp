@@ -115,8 +115,11 @@ struct DeviceFeatures
 	VkPhysicalDeviceAccelerationStructurePropertiesKHR rtas_properties = {};
 	VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {};
 	VkPhysicalDeviceShaderUntypedPointersFeaturesKHR untyped_pointers_features = {};
-	VkPhysicalDeviceFaultFeaturesKHR fault_features_khr = {};
+	VkPhysicalDeviceFaultFeaturesKHR fault_features = {};
 	VkPhysicalDeviceCooperativeMatrixFeaturesKHR cooperative_matrix_features = {};
+	VkPhysicalDeviceVideoEncodeIntraRefreshFeaturesKHR intra_refresh_features = {};
+	VkPhysicalDeviceShaderAbortFeaturesKHR shader_abort_features = {};
+	VkPhysicalDeviceShaderConstantDataFeaturesKHR shader_constant_data_features = {};
 
 	// EXT
 	VkPhysicalDeviceExternalMemoryHostPropertiesEXT host_memory_properties = {};
@@ -139,7 +142,7 @@ struct DeviceFeatures
 	VkPhysicalDevicePresentTimingFeaturesEXT present_timing_features = {};
 	VkPhysicalDeviceDescriptorHeapFeaturesEXT descriptor_heap_features = {};
 	VkPhysicalDeviceDescriptorHeapPropertiesEXT descriptor_heap_properties = {};
-	VkPhysicalDeviceFaultFeaturesEXT fault_features_ext = {};
+	VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT image_atomic_int64_features = {};
 
 	// Vendor
 	VkPhysicalDeviceDescriptorPoolOverallocationFeaturesNV descriptor_pool_overallocation_features = {};
@@ -168,6 +171,8 @@ struct DeviceFeatures
 
 	uint32_t instance_api_core_version = VK_API_VERSION_1_1;
 	uint32_t device_api_core_version = VK_API_VERSION_1_1;
+
+	VkQueueGlobalPriority global_compute_priority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
 };
 
 enum VendorID
@@ -194,6 +199,8 @@ enum ContextCreationFlagBits
 	CONTEXT_CREATION_ENABLE_DESCRIPTOR_HEAP_BIT = 1 << 10,
 	CONTEXT_CREATION_ENABLE_POST_MORTEM_BIT = 1 << 11,
 	CONTEXT_CREATION_ENABLE_VIDEO_FEATURE_ONLY_BIT = 1 << 12,
+	CONTEXT_CREATION_ENABLE_COMPUTE_REALTIME_GLOBAL_PRIORITY_BIT = 1 << 13,
+	CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT = 1 << 14
 };
 using ContextCreationFlags = uint32_t;
 

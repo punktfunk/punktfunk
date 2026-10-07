@@ -1370,7 +1370,7 @@ internal fun fetchArt(candidates: List<String>, client: OkHttpClient, offline: B
             // connect, and reports a miss on bytes that are sitting on disk.
             if (offline) req.cacheControl(CacheControl.FORCE_CACHE)
             client.newCall(req.build()).execute().use { resp ->
-                if (resp.code == 200) resp.body?.bytes()?.takeIf { it.isNotEmpty() && it.size <= 16 shl 20 } else null
+                if (resp.code == 200) resp.body.bytes().takeIf { it.isNotEmpty() && it.size <= 16 shl 20 } else null
             }
         }.getOrNull()
         if (bytes != null) return bytes

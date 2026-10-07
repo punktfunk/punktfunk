@@ -1,6 +1,6 @@
 // PyroWave decode compute kernels — the Metal port of the vendored Vulkan shaders
 // (crates/pyrowave-sys/vendor/pyrowave/shaders/wavelet_dequant.comp + idwt.comp, upstream pin
-// 509e4f88, MIT © 2025 Hans-Kristian Arntzen). Runtime-compiled Swift strings per client
+// c0b997f8, MIT © 2025 Hans-Kristian Arntzen). Runtime-compiled Swift strings per client
 // convention (no metallib build step — see GamepadChrome.swift's rationale); these are the
 // client's first compute pipelines.
 //

@@ -1,4 +1,4 @@
-// Minimal plugin CLI scaffold. Deliberately NOT `effect/unstable/cli`: its runner needs
+// Minimal plugin CLI scaffold. Deliberately NOT `effect/cli`: its runner needs
 // Stdio/Terminal/FileSystem service implementations that only ship in platform packages,
 // which would add a runtime dependency to every plugin for what is a five-verb ops tool.
 // A plugin CLI is `<bin> <command> [args...]` — this dispatcher gives that shape the same

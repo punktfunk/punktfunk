@@ -692,7 +692,7 @@ fn console_stub() -> Result<String> {
     })?;
     let ts = crate::clock::unix_secs_u64();
     let mut raw = [0u8; 16];
-    rand::RngCore::fill_bytes(&mut rand::rng(), &mut raw);
+    rand::Rng::fill_bytes(&mut rand::rng(), &mut raw);
     let nonce = hex::encode(raw);
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
         Failure::unreachable(

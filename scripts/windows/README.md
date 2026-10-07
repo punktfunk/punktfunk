@@ -15,7 +15,6 @@ points are runtime-loaded from the driver's `nvEncodeAPI64.dll`):
 | var | value | why |
 | --- | --- | --- |
 | `LIBCLANG_PATH` | `C:\Program Files\LLVM\bin` | bindgen (`libclang.dll`) |
-| `CMAKE_POLICY_VERSION_MINIMUM` | `3.5` | `audiopus_sys` / cmake crates |
 
 No `FFMPEG_DIR`: nothing in punktfunk links libavcodec. The VS C++ toolchain is loaded
 per-build via `vcvars64.bat` (auto-discovered with `vswhere`).
