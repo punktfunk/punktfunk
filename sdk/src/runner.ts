@@ -46,6 +46,7 @@ import {
 	sandboxProbe,
 } from "./sandbox.js";
 import { serveHostProxy } from "./host-proxy.js";
+import { hostExe } from "./sandbox.js";
 import { forwardUi, type UiForward } from "./ui-forward.js";
 import { defaultLog, type LogSink, type RunnerLogLevel } from "./runner-log.js";
 
@@ -108,7 +109,12 @@ export interface Unit {
  * will see it — never a silent downgrade because a box could not manage a namespace.
  */
 export const sandboxMode = (): "on" | "off" =>
-	/^(0|off|false)$/i.test(process.env.PUNKTFUNK_PLUGIN_SANDBOX ?? "") ? "off" : "on";
+	/^(0|off|false)$/i.test(process.env.PUNKTFUNK_PLUGIN_SANDBOX ?? "") ||
+	// The Windows host publishes `host.env`'s answer here; the runner's task never sees host.env.
+	(process.platform === "win32" &&
+		fs.existsSync(path.join(configDir(), "plugin-run", "sandbox-off")))
+		? "off"
+		: "on";
 
 /**
  * Move `<state>/<id>/` up into `<state>/`: 0.39 bound the state dir one level too high, so a
@@ -380,6 +386,57 @@ const runInOwnProcess = (unit: Unit, options: RunnerOptions): Effect.Effect<"plu
 	});
 
 /**
+ * Run one plugin in its own AppContainer: `punktfunk-host plugins spawn` creates the profile for
+ * this account and starts this runner's `--run-unit` child inside it, relaying its exit code
+ * and ending the child with itself. The child holds no token: its own pipe is its credential.
+ */
+const runInContainer = (
+	unit: Unit,
+	manifest: PluginManifest,
+	options: RunnerOptions,
+	log: LogSink,
+): Effect.Effect<"plugin", unknown> =>
+	Effect.callback<"plugin", unknown>((resume) => {
+		const id = manifest.id ?? unit.name;
+		const config = options.configDir ?? configDir();
+		adoptNestedState(path.join(config, "plugin-state", id), id, log);
+		const child = spawn(
+			hostExe(),
+			[
+				"plugins",
+				"spawn",
+				"--package",
+				id,
+				"--",
+				process.execPath,
+				runnerEntry(),
+				"--run-unit",
+				unit.file,
+				"--unit-name",
+				unit.name,
+			],
+			{
+				env: {
+					...process.env,
+					...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
+					...pipeEnv(unit),
+				},
+				stdio: ["ignore", "inherit", "pipe"],
+				windowsHide: true,
+			},
+		);
+		const lastLines = tailStderr(child);
+		child.on("error", (e) => resume(Effect.fail(e)));
+		child.on("exit", (code, signal) =>
+			resume(exitOutcome("sandboxed plugin", code, signal, lastLines())),
+		);
+		// Interruption (shutdown): the helper dies, and its job takes the plugin with it.
+		return Effect.sync(() => {
+			child.kill("SIGTERM");
+		});
+	});
+
+/**
  * Where a Windows plugin reaches the host: the pipe the host serves for its id, plain HTTP, no
  * port. A host without the pipe (before 0.44) leaves this empty and the child dials the port.
  */
@@ -413,7 +470,8 @@ const attemptUnit = (
 		// script is the operator's own code and stays here, as does everything on a box that
 		// cannot sandbox — with the reason said out loud at startup, never silently.
 		if (unit.manifest && options.sandbox !== "off") {
-			const run = options.sandboxRun ?? runSandboxed;
+			const run =
+				options.sandboxRun ?? (process.platform === "win32" ? runInContainer : runSandboxed);
 			return yield* run(unit, unit.manifest, options, log);
 		}
 		if (unit.manifest && (options.ownProcess ?? process.platform === "win32")) {
@@ -610,12 +668,12 @@ export const runner = (options: RunnerOptions = {}): Effect.Effect<void> => {
 	const log = options.log ?? defaultLog;
 	return Effect.scoped(
 		Effect.gen(function* () {
-			// bwrap is the Linux sandbox. Windows confines the whole runner with its own account.
-			const linux = process.platform === "linux";
-			const sandbox = options.sandbox ?? (linux ? sandboxMode() : "off");
-			if (sandbox === "off" && linux) {
+			// bwrap is the Linux sandbox, an AppContainer the Windows one; macOS has neither.
+			const confines = process.platform === "linux" || process.platform === "win32";
+			const sandbox = options.sandbox ?? (confines ? sandboxMode() : "off");
+			if (sandbox === "off" && confines) {
 				log(
-					"[runner] PUNKTFUNK_PLUGIN_SANDBOX=off — plugins run in this process, with your account's access",
+					"[runner] PUNKTFUNK_PLUGIN_SANDBOX=off — plugins run with the runner's whole access",
 					"warn",
 				);
 			} else if (sandbox === "on") {

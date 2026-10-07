@@ -30,7 +30,7 @@ export interface Signer {
 
 export interface Credential {
 	/** Which kind, for display and for deciding whether a 401 is worth a retry. */
-	readonly kind: "bearer" | "device";
+	readonly kind: "bearer" | "device" | "none";
 	/** The full `Authorization` value for the next request. May perform an exchange. */
 	readonly header: () => Promise<string>;
 	/**
@@ -41,10 +41,17 @@ export interface Credential {
 	readonly invalidate: () => void;
 }
 
-/** A token the caller already holds. Today's every credential. */
+/** A token the caller already holds. */
 export const staticBearer = (token: string): Credential => ({
 	kind: "bearer",
 	header: () => Promise.resolve(`Bearer ${token}`),
+	invalidate: () => {},
+});
+
+/** No token at all: a plugin on its own pipe, where the connection is the credential. */
+export const noCredential = (): Credential => ({
+	kind: "none",
+	header: () => Promise.resolve(""),
 	invalidate: () => {},
 });
 

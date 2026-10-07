@@ -412,6 +412,17 @@ const PROBE_BINDS: readonly string[] = [
 
 /** Host `true` as an absolute path. `/bin/true` is an FHS path NixOS does not have.
  *  Do not realpath: Nix `true` is a symlink onto the coreutils multicall binary. */
+/**
+ * The host binary beside the runner bundle: `<install>\scripting\runner-cli.js` and
+ * `<install>\punktfunk-host.exe`, which `plugins spawn` runs a plugin's AppContainer through.
+ */
+export const hostExe = (): string =>
+	path.resolve(
+		path.dirname(process.env.PUNKTFUNK_RUNNER_ENTRY ?? process.argv[1] ?? ""),
+		"..",
+		"punktfunk-host.exe",
+	);
+
 const whichTrue = (): string => {
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
 		if (!dir) continue;
@@ -446,6 +457,12 @@ export const sandboxProbe = (
 	},
 	platform: string = process.platform,
 ): { ok: true } | { ok: false; reason: string } => {
+	if (platform === "win32") {
+		// The host binary beside the runner is the AppContainer's door; the installer puts both.
+		return fs.existsSync(hostExe())
+			? { ok: true }
+			: { ok: false, reason: `${hostExe()} is missing — reinstall punktfunk, or set PUNKTFUNK_PLUGIN_SANDBOX=off` };
+	}
 	if (platform !== "linux") {
 		return { ok: false, reason: "sandboxing is Linux-only here" };
 	}

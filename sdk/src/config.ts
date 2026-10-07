@@ -20,7 +20,7 @@
 // Node (undici) takes a dispatcher with a CA-carrying TLS connector; anything else falls back
 // to plain fetch (document PUNKTFUNK_MGMT_CA + NODE_EXTRA_CA_CERTS there).
 import type { Connection } from "./connection.js";
-import { staticBearer } from "./credential.js";
+import { noCredential, staticBearer } from "./credential.js";
 import { socketFetch } from "./pipe-fetch.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -145,7 +145,8 @@ export const resolveConfig = async (
 		process.env.PUNKTFUNK_MGMT_TOKEN ??
 		process.env.PUNKTFUNK_PLUGIN_TOKEN ??
 		parseTokenFile(readIfExists(path.join(configDir(), "plugin-token")) ?? "");
-	if (!token) {
+	// On the host's own pipe the connection is the credential: an AppContainer holds no token.
+	if (!token && !isPipe(process.env.PUNKTFUNK_MGMT_UNIX)) {
 		throw new Error(
 			"no plugin token: the host writes one to " +
 				`${path.join(configDir(), "plugin-token")} once the runner is installed. Pass ` +
@@ -155,12 +156,16 @@ export const resolveConfig = async (
 	const ca = resolveCa(url, options);
 	return {
 		url,
-		token,
-		credential: staticBearer(token),
+		token: token ?? "",
+		credential: token ? staticBearer(token) : noCredential(),
 		ca,
 		fetch: await makeFetch(ca),
 	};
 };
+
+/** A Windows named pipe, which the host serves per plugin. */
+const isPipe = (socket: string | undefined): boolean =>
+	(socket ?? "").trim().startsWith("\\\\.\\pipe\\");
 
 /** The certificate to pin for `url`: explicit, then `PUNKTFUNK_MGMT_CA`, then the host's own. */
 const resolveCa = (url: string, options?: ConnectOptions): string | undefined => {
@@ -196,7 +201,7 @@ const makeFetch = async (ca: string | undefined): Promise<typeof fetch> => {
 	const unix = process.env.PUNKTFUNK_MGMT_UNIX?.trim();
 	if (unix) {
 		// A Windows pipe — the host's own, per plugin — is not a socket bun's fetch dials.
-		if (unix.startsWith("\\\\.\\pipe\\")) return socketFetch(unix);
+		if (isPipe(unix)) return socketFetch(unix);
 		return ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
 			fetch(input, { ...init, unix } as RequestInit)) as typeof fetch;
 	}

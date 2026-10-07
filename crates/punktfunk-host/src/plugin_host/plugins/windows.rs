@@ -483,11 +483,7 @@ pub(super) fn runner_command() -> Result<(std::path::PathBuf, Vec<String>)> {
 /// The ACE a grant carries: `(RX)` for read, `(M)` for write, both inheritable.
 /// Pure so a test pins the string without a real `icacls`.
 fn grant_permission(write: bool) -> &'static str {
-    if write {
-        "(OI)(CI)(M)"
-    } else {
-        "(OI)(CI)(RX)"
-    }
+    if write { Ace::Modify } else { Ace::Read }.icacls()
 }
 
 /// The runner's account may reach one directory the operator owns. LocalService holds no ACE
@@ -501,6 +497,11 @@ pub(super) fn grant(dir: &std::path::Path, write: bool) -> Result<()> {
 /// runs in its own AppContainer. One directory only: a service account bypasses traverse
 /// checks, so the locked parents above it stay shut.
 pub(super) fn grant_to(sid: &str, dir: &std::path::Path, write: bool) -> Result<()> {
+    grant_ace(sid, dir, if write { Ace::Modify } else { Ace::Read })
+}
+
+/// [`grant_to`] with the ACE spelled out: code dirs take `(RX,WA)`, which is neither.
+fn grant_ace(sid: &str, dir: &std::path::Path, ace: Ace) -> Result<()> {
     // A typo must not report success — the ACE would land on a name nothing ever reads.
     if !dir.is_dir() {
         bail!(
@@ -510,7 +511,7 @@ pub(super) fn grant_to(sid: &str, dir: &std::path::Path, write: bool) -> Result<
     }
     let ok = Command::new(icacls_path())
         .arg(dir)
-        .args(["/grant:r", &format!("{sid}:{}", grant_permission(write))])
+        .args(["/grant:r", &format!("{sid}:{}", ace.icacls())])
         .status()
         .context("run icacls")?
         .success();
@@ -611,18 +612,80 @@ pub(super) fn runtime_status() -> RuntimeStatus {
     }
 }
 
-/// Windows has no per-plugin sandbox to turn off; the diagnostic that asks is Linux's.
+/// The host's word to the runner that the operator turned the sandbox off: `host.env`'s
+/// `PUNKTFUNK_PLUGIN_SANDBOX`, which the runner's task never sees.
+const SANDBOX_OFF_MARKER: &str = "sandbox-off";
+
+/// Is `PUNKTFUNK_PLUGIN_SANDBOX` off in `host.env`? Read from the marker the host published,
+/// so a CLI process reads the host's answer and not its own environment.
 pub(super) fn runner_sandbox_off() -> bool {
-    false
+    pf_paths::config_dir()
+        .join(RUNNER_DATA_DIR)
+        .join(SANDBOX_OFF_MARKER)
+        .exists()
 }
 
-/// What this host placed for the runner's account: directories with their write bit, and
-/// registry keys as `SetNamedSecurityInfoW` spells them. A strip reads this, never a manifest
-/// that may have changed since the ACE was placed.
+/// Write or remove [`SANDBOX_OFF_MARKER`] from this process's environment. The serving host
+/// alone calls it: its environment is `host.env`.
+pub(super) fn publish_sandbox_override() {
+    let off = std::env::var("PUNKTFUNK_PLUGIN_SANDBOX").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false"
+        )
+    });
+    let marker = pf_paths::config_dir()
+        .join(RUNNER_DATA_DIR)
+        .join(SANDBOX_OFF_MARKER);
+    let result = if off {
+        tracing::warn!("PUNKTFUNK_PLUGIN_SANDBOX=off — plugins run outside their AppContainers");
+        std::fs::write(&marker, b"")
+    } else {
+        match std::fs::remove_file(&marker) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    };
+    if let Err(e) = result {
+        tracing::warn!(path = %marker.display(), error = %e, "sandbox marker not updated");
+    }
+}
+
+/// The ACE a placed directory carries.
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Ace {
+    /// `(RX)`: a declared read, or a read grant.
+    Read,
+    /// `(RX,WA)`: code bun loads — its loader opens files with `FILE_WRITE_ATTRIBUTES`.
+    Code,
+    /// `(M)`: a declared write, a write grant, or the plugin's own state.
+    Modify,
+}
+
+impl Ace {
+    fn icacls(self) -> &'static str {
+        match self {
+            Ace::Read => "(OI)(CI)(RX)",
+            Ace::Code => "(OI)(CI)(RX,WA)",
+            Ace::Modify => "(OI)(CI)(M)",
+        }
+    }
+}
+
+/// What this host placed, by grantee SID: directories with the ACE each carries, and registry
+/// keys as `SetNamedSecurityInfoW` spells them. A strip reads this, never a manifest that may
+/// have changed since the ACE was placed.
 #[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct PlacedAces {
     #[serde(default)]
-    paths: std::collections::BTreeMap<String, bool>,
+    grantees: std::collections::BTreeMap<String, Placed>,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Placed {
+    #[serde(default)]
+    paths: std::collections::BTreeMap<String, Ace>,
     #[serde(default)]
     keys: std::collections::BTreeSet<String>,
 }
@@ -630,27 +693,49 @@ struct PlacedAces {
 /// Under `plugin-run`, beside the grants it mirrors.
 const RUNNER_ACES_FILE: &str = "runner-aces.json";
 
-/// Every directory a plugin declared or was granted carries the runner's ACE, read or Modify,
-/// and every `HKLM` key it declared its read; what a gone plugin placed is stripped. A root
-/// under the host's own profile is nobody's `~` and gets nothing, and a directory that does
-/// not exist yet waits for the next start. Returns whether anything moved.
+/// Every directory a plugin declared or was granted carries an ACE for the account it runs as,
+/// read or Modify, every `HKLM` key it declared its read, and its package the code, state and
+/// inbox it needs; what a gone plugin placed is stripped. With the sandbox off the grantee is
+/// the runner's account for everything. A root under the host's own profile is nobody's `~`
+/// and gets nothing; a directory that does not exist yet waits for the next start.
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
     manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let want = PlacedAces {
-        paths: roots
-            .iter()
-            .filter(|r| !r.path.starts_with(&home) && r.path.is_dir())
-            .map(|r| (r.path.to_string_lossy().into_owned(), r.write))
-            .collect(),
-        keys: manifests
-            .values()
-            .flat_map(|m| m.registry.iter())
-            .filter_map(|k| named_key(k))
-            .collect(),
+    let want = if runner_sandbox_off() {
+        PlacedAces {
+            grantees: [(
+                LOCAL_SERVICE_SID.trim_start_matches('*').to_string(),
+                Placed {
+                    paths: root_aces(roots, &home),
+                    keys: manifests
+                        .values()
+                        .flat_map(|m| m.registry.iter())
+                        .filter_map(|k| named_key(k))
+                        .collect(),
+                },
+            )]
+            .into(),
+        }
+    } else {
+        let store = access::AccessStore::open(pf_paths::config_dir());
+        let mut want = PlacedAces::default();
+        for (id, m) in manifests {
+            let sid = match crate::windows::app_container::package_sid(id) {
+                Ok(sid) => sid,
+                Err(e) => {
+                    tracing::warn!(plugin = %id, error = %format!("{e:#}"), "no package SID");
+                    continue;
+                }
+            };
+            let mut paths = root_aces(&store.plugin_roots(id, m), &home);
+            paths.extend(package_dirs(id));
+            let keys = m.registry.iter().filter_map(|k| named_key(k)).collect();
+            want.grantees.insert(sid, Placed { paths, keys });
+        }
+        want
     };
     let file = pf_paths::config_dir()
         .join(RUNNER_DATA_DIR)
@@ -662,51 +747,128 @@ pub(super) fn converge_runner_roots(
     if want == had {
         return Ok(false);
     }
-    let sid = LOCAL_SERVICE_SID;
-    let bare_sid = sid.trim_start_matches('*');
     let mut placed = had.clone();
+    let empty = Placed::default();
     // Stale first: an ACE that outlives its plugin is the leak this file exists to close.
-    for path in had.paths.keys().filter(|p| !want.paths.contains_key(*p)) {
-        match revoke_from(sid, std::path::Path::new(path)) {
-            Ok(()) => {
-                placed.paths.remove(path);
+    for (sid, old) in &had.grantees {
+        let new = want.grantees.get(sid).unwrap_or(&empty);
+        let icacls_sid = format!("*{sid}");
+        for path in old.paths.keys().filter(|p| !new.paths.contains_key(*p)) {
+            match revoke_from(&icacls_sid, std::path::Path::new(path)) {
+                Ok(()) => {
+                    placed
+                        .grantees
+                        .entry(sid.clone())
+                        .or_default()
+                        .paths
+                        .remove(path);
+                }
+                Err(e) => tracing::warn!(%sid, %path, error = %e, "runner ACE not removed"),
             }
-            Err(e) => tracing::warn!(%path, error = %e, "runner ACE not removed"),
+        }
+        for key in old.keys.difference(&new.keys) {
+            match crate::windows::registry_ace::revoke(key, sid) {
+                Ok(()) => {
+                    placed
+                        .grantees
+                        .entry(sid.clone())
+                        .or_default()
+                        .keys
+                        .remove(key);
+                }
+                Err(e) => {
+                    tracing::warn!(%sid, %key, error = %format!("{e:#}"), "key ACE not removed")
+                }
+            }
         }
     }
-    for key in had.keys.difference(&want.keys) {
-        match crate::windows::registry_ace::revoke(key, bare_sid) {
-            Ok(()) => {
-                placed.keys.remove(key);
+    for (sid, new) in &want.grantees {
+        let old = had.grantees.get(sid).unwrap_or(&empty);
+        let icacls_sid = format!("*{sid}");
+        for (path, ace) in &new.paths {
+            if old.paths.get(path) == Some(ace) {
+                continue;
             }
-            Err(e) => tracing::warn!(%key, error = %format!("{e:#}"), "runner key ACE not removed"),
+            match grant_ace(&icacls_sid, std::path::Path::new(path), *ace) {
+                Ok(()) => {
+                    placed
+                        .grantees
+                        .entry(sid.clone())
+                        .or_default()
+                        .paths
+                        .insert(path.clone(), *ace);
+                }
+                Err(e) => tracing::warn!(%sid, %path, error = %e, "runner ACE not placed"),
+            }
+        }
+        for key in new.keys.difference(&old.keys) {
+            match crate::windows::registry_ace::grant_read(key, sid) {
+                Ok(()) => {
+                    placed
+                        .grantees
+                        .entry(sid.clone())
+                        .or_default()
+                        .keys
+                        .insert(key.clone());
+                }
+                Err(e) => {
+                    tracing::warn!(%sid, %key, error = %format!("{e:#}"), "key ACE not placed")
+                }
+            }
         }
     }
-    for (path, write) in &want.paths {
-        if had.paths.get(path) == Some(write) {
-            continue;
-        }
-        match grant_to(sid, std::path::Path::new(path), *write) {
-            Ok(()) => {
-                placed.paths.insert(path.clone(), *write);
-            }
-            Err(e) => tracing::warn!(%path, error = %e, "runner ACE not placed"),
-        }
-    }
-    for key in want.keys.difference(&had.keys) {
-        match crate::windows::registry_ace::grant_read(key, bare_sid) {
-            Ok(()) => {
-                placed.keys.insert(key.clone());
-            }
-            Err(e) => tracing::warn!(%key, error = %format!("{e:#}"), "runner key ACE not placed"),
-        }
-    }
+    placed
+        .grantees
+        .retain(|_, p| !p.paths.is_empty() || !p.keys.is_empty());
     if placed == had {
         return Ok(false);
     }
     pf_paths::replace_file(&file, serde_json::to_string_pretty(&placed)?.as_bytes())
         .with_context(|| format!("replace {}", file.display()))?;
     Ok(true)
+}
+
+/// The roots that get an ACE: existing directories outside the host's own profile.
+fn root_aces(
+    roots: &[access::RunnerRoot],
+    home: &std::path::Path,
+) -> std::collections::BTreeMap<String, Ace> {
+    roots
+        .iter()
+        .filter(|r| !r.path.starts_with(home) && r.path.is_dir())
+        .map(|r| {
+            let ace = if r.write { Ace::Modify } else { Ace::Read };
+            (r.path.to_string_lossy().into_owned(), ace)
+        })
+        .collect()
+}
+
+/// What a plugin's package needs beyond its roots: the runtime, the runner bundle and the
+/// plugin tree it loads code from, its own state, and its inbox when it has one.
+fn package_dirs(id: &str) -> std::collections::BTreeMap<String, Ace> {
+    let cfg = pf_paths::config_dir();
+    let mut dirs = std::collections::BTreeMap::new();
+    let mut code = |dir: Option<std::path::PathBuf>| {
+        if let Some(d) = dir.filter(|d| d.is_dir()) {
+            dirs.insert(d.to_string_lossy().into_owned(), Ace::Code);
+        }
+    };
+    code(
+        runner_command()
+            .ok()
+            .and_then(|(bun, _)| bun.parent().map(Into::into)),
+    );
+    code(runner_bundle_dir());
+    code(Some(cfg.join("plugins")));
+    let state = cfg.join("plugin-state").join(id);
+    if state.is_dir() || std::fs::create_dir_all(&state).is_ok() {
+        dirs.insert(state.to_string_lossy().into_owned(), Ace::Modify);
+    }
+    let inbox = cfg.join("ingest").join(id);
+    if inbox.is_dir() {
+        dirs.insert(inbox.to_string_lossy().into_owned(), Ace::Read);
+    }
+    dirs
 }
 
 /// `HKLM\SOFTWARE\…` as `SetNamedSecurityInfoW` names it: `MACHINE\SOFTWARE\…`. An `HKCU` key

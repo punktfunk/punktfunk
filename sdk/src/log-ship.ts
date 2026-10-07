@@ -217,12 +217,12 @@ export const installLogShipper = (
 		}
 
 		try {
+			const headers: Record<string, string> = { "content-type": "application/json" };
+			const auth = await resolved.credential.header();
+			if (auth) headers.authorization = auth;
 			const res = await resolved.fetch(`${resolved.url}/api/v1/plugins/logs`, {
 				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: await resolved.credential.header(),
-				},
+				headers,
 				body: JSON.stringify({ entries: batch }),
 			});
 			if (!res.ok) {

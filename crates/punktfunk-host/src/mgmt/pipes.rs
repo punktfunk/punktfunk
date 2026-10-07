@@ -1,22 +1,26 @@
 //! One named pipe per installed plugin, `\\.\pipe\punktfunk-plugin-<id>`, serving the
 //! management router over plain HTTP. A plugin process reaches the host here instead of on
 //! the loopback port, so the port can be closed to the runner's account. The DACL admits
-//! SYSTEM, Administrators and LocalService — the runner and, today, every plugin process; the
-//! bearer still names the plugin (`auth::PluginIdentity`) until a package SID can.
+//! SYSTEM, Administrators, LocalService and the plugin's own AppContainer package; a client
+//! whose token carries that package is the plugin, and the connection says so to the router.
+//! Any other client — the runner with the sandbox off — still speaks with a bearer.
 //!
 //! The set follows `plugin-run/plugin-tokens.json`. A store job rewrites it and calls
 //! [`changed`]; a CLI `plugins add` only rewrites it, so the set is re-read on a tick as well.
 
-use crate::gamestream::tls::{serve_conn, PeerAddr, PeerCertFingerprint};
+use crate::gamestream::tls::{serve_conn, PeerAddr, PeerCertFingerprint, PipePlugin};
+use crate::windows::app_container::{package_sid, pipe_client_package_sid};
 use crate::windows::plugin_pipe::create_plugin_pipe;
 use axum::Router;
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinHandle;
+use windows::Win32::Foundation::HANDLE;
 
 /// How long a CLI-driven change to the token file waits for its pipe.
 const RECONCILE_EVERY: Duration = Duration::from_secs(10);
@@ -89,11 +93,19 @@ fn installed_ids(tokens: &crate::mgmt::PluginTokens, config_dir: &Path) -> BTree
 /// instance is created before this one is handed to the router, as the port's accept does.
 async fn serve_one(app: Router, id: String) {
     let name = pipe_name(&id);
+    // Without a package SID the pipe is LocalService's alone and every client keeps its bearer.
+    let package = match package_sid(&id) {
+        Ok(sid) => Some(sid),
+        Err(e) => {
+            tracing::warn!(plugin = %id, error = %format!("{e:#}"), "plugin package SID not derived");
+            None
+        }
+    };
     let conns = Arc::new(Semaphore::new(MAX_CONNS_PER_PIPE));
     let mut first = true;
     let mut announced = false;
     loop {
-        let server = match create_plugin_pipe(&name, first) {
+        let server = match create_plugin_pipe(&name, first, package.as_deref()) {
             Ok(s) => s,
             Err(e) => {
                 // The first instance is refused while another process holds the name: a
@@ -112,8 +124,12 @@ async fn serve_one(app: Router, id: String) {
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         }
+        // The client's token names its package, or none: only the plugin's own package is
+        // the plugin. A runner-account client with no container keeps its bearer lane.
+        let client = pipe_client_package_sid(HANDLE(server.as_raw_handle()));
+        let stamped = client.is_some() && client == package;
         if !announced {
-            tracing::info!(plugin = %id, "plugin reached the host over its pipe");
+            tracing::info!(plugin = %id, container = stamped, "plugin reached the host over its pipe");
             announced = true;
         }
         // Over the ceiling: this instance closes unanswered, and the plugin's next dial waits.
@@ -122,6 +138,7 @@ async fn serve_one(app: Router, id: String) {
             continue;
         };
         let app = app.clone();
+        let plugin = stamped.then(|| PipePlugin(id.clone()));
         tokio::spawn(async move {
             let _permit = permit;
             serve_conn(
@@ -130,6 +147,7 @@ async fn serve_one(app: Router, id: String) {
                 PeerCertFingerprint(None),
                 PeerAddr(PIPE_PEER),
                 None,
+                plugin,
             )
             .await;
         });
