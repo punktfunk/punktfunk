@@ -52,6 +52,7 @@ class DeepLinkVectorTest {
             assertEquals("$name launch", want.optStringOrNull("launch"), link.launch)
             assertEquals("$name preset", want.optStringOrNull("preset"), link.preset)
             assertEquals("$name name", want.optStringOrNull("name"), link.name)
+            assertEquals("$name as", want.optStringOrNull("as"), link.asProfile)
             assertEquals("$name host_addr", want.optStringOrNull("host_addr"), link.host?.first)
             assertEquals(
                 "$name host_port",

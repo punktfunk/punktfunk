@@ -2014,7 +2014,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hermir"
 version = "0.1.0"
-source = "git+https://github.com/unom-io/hermir?rev=a7659cfab40398047db76e437e62ec34e85f8956#a7659cfab40398047db76e437e62ec34e85f8956"
+source = "git+https://github.com/unom-io/hermir?rev=b2c13da454c817c2e7ab892326b6e33cb06800d1#b2c13da454c817c2e7ab892326b6e33cb06800d1"
 dependencies = [
  "flate2",
  "md-5",
@@ -3513,6 +3513,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "pf-seats"
+version = "0.43.1"
+dependencies = [
+ "aws-lc-rs",
+ "hex",
+ "pf-paths",
+ "rand 0.9.5",
+ "rustix",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.62.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "windows-service",
+ "winreg 0.56.0",
+ "zeroize",
+]
+
+[[package]]
 name = "pf-update"
 version = "0.43.1"
 dependencies = [
@@ -4072,6 +4094,7 @@ dependencies = [
  "pf-inject",
  "pf-paths",
  "pf-paths-win",
+ "pf-seats",
  "pf-update-check",
  "pf-vdisplay",
  "pf-win-display",

@@ -145,6 +145,8 @@ const POWER_SENTINELS: [&str; 2] = [
 /// Steam starts inside that headless compositor.
 const STEAMOS_SESSION_BIN: &str = "/usr/lib/steamos/gamescope-session";
 const STEAMOS_SESSION_TARGET: &str = "gamescope-session.target";
+/// The unit under [`STEAMOS_SESSION_TARGET`] whose cgroup holds SteamOS's gamescope.
+const STEAMOS_SESSION_UNIT: &str = "gamescope-session.service";
 
 impl GamescopeDisplay {
     pub fn new() -> Result<Self> {
@@ -284,7 +286,7 @@ impl VirtualDisplay for GamescopeDisplay {
                 id.parse()
                     .context("PUNKTFUNK_GAMESCOPE_NODE must be a node id or 'auto'")?
             };
-            point_injector_at_eis();
+            point_injector_at_eis(Scope::Box);
             // Attach mirrors a gamescope that may be lighting the panel. Darkening it would
             // darken the picture being streamed. Exclusive cannot be served on this route.
             tracing::info!(node_id, "gamescope: attaching to existing PipeWire node");
@@ -317,6 +319,7 @@ impl VirtualDisplay for GamescopeDisplay {
             .and_then(|i| i.steam_home.as_deref())
             .and_then(seat::ensure_home);
         let box_steam = contends_for_box_steam(steam, seat_home.is_some());
+        let exclusive = seat_spawn_may_darken(exclusive, self.isolation.as_ref());
         if box_steam {
             // No attach degrade here: a box without takeover privilege fails with the actionable error.
             stop_autologin_sessions()
@@ -448,8 +451,8 @@ fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<Virtual
     if crate::rebuild_probe_active() {
         // Not held across `pw-dump` / file write — that pins the restore worker.
         if managed_session_matches(mode, hdr) {
-            if let Some(node_id) = find_gamescope_node() {
-                point_injector_at_eis();
+            if let Some(node_id) = find_gamescope_node(Scope::Unit(SESSION_UNIT)) {
+                point_injector_at_eis(Scope::Unit(SESSION_UNIT));
                 tracing::info!(
                     node_id,
                     "gamescope session: attach-only probe reusing live node"
@@ -471,7 +474,7 @@ fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<Virtual
              own game-mode session)"
         );
         let node_id = ensure_box_gamescope_mode(mode, hdr)?;
-        point_injector_at_eis();
+        point_injector_at_eis(Scope::Box);
         return Ok(VirtualOutput {
             node_id,
             remote_fd: None,
@@ -506,8 +509,8 @@ fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<Virtual
         same
     };
     if same_mode {
-        if let Some(node_id) = find_gamescope_node() {
-            point_injector_at_eis();
+        if let Some(node_id) = find_gamescope_node(Scope::Unit(SESSION_UNIT)) {
+            point_injector_at_eis(Scope::Unit(SESSION_UNIT));
             tracing::info!(
                 node_id,
                 w = mode.width,
@@ -531,7 +534,7 @@ fn create_managed_session(client: &str, mode: Mode, hdr: bool) -> Result<Virtual
     };
     // Only a write from inside this session should read as a switch, not the one that led here.
     record_session_select_baseline();
-    point_injector_at_eis();
+    point_injector_at_eis(Scope::Unit(SESSION_UNIT));
     takeover().managed = Some(SessionState {
         width: mode.width,
         height: mode.height,
@@ -647,8 +650,8 @@ fn create_managed_session_steamos(mode: Mode, hdr: bool) -> Result<VirtualOutput
     // the target again.
     let mut t = takeover();
     if t.managed.as_ref().is_some_and(|s| s.matches(mode, hdr)) {
-        if let Some(node_id) = find_gamescope_node() {
-            point_injector_at_eis();
+        if let Some(node_id) = find_gamescope_node(Scope::Unit(STEAMOS_SESSION_UNIT)) {
+            point_injector_at_eis(Scope::Unit(STEAMOS_SESSION_UNIT));
             tracing::info!(
                 node_id,
                 w = mode.width,
@@ -685,23 +688,23 @@ fn create_managed_session_steamos(mode: Mode, hdr: bool) -> Result<VirtualOutput
     forget_host_short_sessions();
     drop(t);
     // Takeover already happened; a bare `?` would leave the box headless with PENDING_RESTORE unset.
-    let node_id = match poll_managed_node(Duration::from_secs(30)) {
+    let node_id = match poll_managed_node(Duration::from_secs(30), STEAMOS_SESSION_UNIT) {
         Some(id) => id,
         None => {
             schedule_restore_tv_session();
             bail!(
                 "SteamOS headless gamescope node did not appear within 30s after restarting \
-                 {STEAMOS_SESSION_TARGET} — check `journalctl --user -u gamescope-session.service`"
+                 {STEAMOS_SESSION_TARGET} — check `journalctl --user -u {STEAMOS_SESSION_UNIT}`"
             );
         }
     };
     // Stock gamescope here means no HDR and a silently pointerless stream. Leave tracked state
     // unset on failure so the retry restarts rather than reusing what we rejected.
-    if let Err(e) = verify_managed_spawn_flags(hdr) {
+    if let Err(e) = verify_managed_spawn_flags(hdr, Scope::Unit(STEAMOS_SESSION_UNIT)) {
         schedule_restore_tv_session();
         return Err(e);
     }
-    point_injector_at_eis();
+    point_injector_at_eis(Scope::Unit(STEAMOS_SESSION_UNIT));
     takeover().managed = Some(SessionState {
         width: mode.width,
         height: mode.height,
@@ -724,9 +727,9 @@ fn create_managed_session_steamos(mode: Mode, hdr: bool) -> Result<VirtualOutput
 fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     let target = (mode.width, mode.height);
     // Three-state: collapsing unknown with a known size would restart the box's session.
-    let size = box_output_size();
+    let size = box_output_size(Scope::Box);
     if size == BoxOutputSize::Known(target) {
-        if let Some(node) = find_gamescope_node() {
+        if let Some(node) = find_gamescope_node(Scope::Box) {
             tracing::info!(
                 w = mode.width,
                 h = mode.height,
@@ -738,7 +741,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     }
     // Post-capture-loss detection can be stale; a restart would fight the session the user switched to.
     if crate::rebuild_probe_active() {
-        if let Some(node) = find_gamescope_node() {
+        if let Some(node) = find_gamescope_node(Scope::Box) {
             tracing::info!(
                 node,
                 "gamescope: attach-only rebuild probe — mirroring the live node at its own mode"
@@ -753,7 +756,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     // Physical display: mirror at its own mode. Guard the decision, not the node lookup — a
     // momentarily absent node must refuse, not fall through into `set-environment` + restart.
     if physical_display_connected() {
-        let node = find_gamescope_node().ok_or_else(|| {
+        let node = find_gamescope_node(Scope::Box).ok_or_else(|| {
             anyhow!(
                 "the box drives a physical display, so its game-mode session is mirrored at its \
                  OWN mode — and it publishes no gamescope Video/Source node right now. Refusing to \
@@ -774,7 +777,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     // Two gamescopes, different sizes: cannot say which the session unit owns. Restarting would
     // kill a nested per-title game that may already be at the client resolution. Mirror instead.
     if size == BoxOutputSize::Ambiguous {
-        let node = find_gamescope_node().ok_or_else(|| {
+        let node = find_gamescope_node(Scope::Box).ok_or_else(|| {
             anyhow!(
                 "two gamescopes are running at different output sizes and neither publishes a \
                  Video/Source node right now — refusing to re-mode the box's session to {}x{} \
@@ -794,7 +797,7 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
         return Ok(node);
     }
     let Some(unit) = running_autologin_gamescope_unit() else {
-        return find_gamescope_node().ok_or_else(|| {
+        return find_gamescope_node(Scope::Box).ok_or_else(|| {
             anyhow!(
                 "no running gamescope Video/Source node — is the headless game mode up? \
                  (put the box into Steam Game Mode)"
@@ -848,8 +851,8 @@ fn ensure_box_gamescope_mode(mode: Mode, hdr: bool) -> Result<u32> {
     systemctl_user(&["restart", &unit]);
     let mut deadline = Instant::now() + Duration::from_secs(45);
     loop {
-        if any_output_size_is(&gamescope_argvs(), target) {
-            if let Some(node) = find_gamescope_node() {
+        if any_output_size_is(&scoped_argvs(Scope::Unit(&unit)), target) {
+            if let Some(node) = find_gamescope_node(Scope::Unit(&unit)) {
                 tracing::info!(
                     node,
                     w = mode.width,
@@ -932,15 +935,15 @@ fn kill_unit(unit: &str) {
     );
 }
 
-/// Point the libei injector at the running gamescope's EIS socket (it reads the relay file
-/// [`ei_socket_file`]). Best-effort — video still works without it (input just won't reach the
-/// session). Shared by the attach and host-managed-session paths.
-fn point_injector_at_eis() {
-    match find_gamescope_eis_socket() {
+/// Point the libei injector at the EIS socket of the gamescope in `scope` (it reads the relay
+/// file [`ei_socket_file`]). Best-effort — video still works without it (input just won't reach
+/// the session). Shared by the attach and host-managed-session paths.
+fn point_injector_at_eis(scope: Scope<'_>) {
+    match find_gamescope_eis_socket(scope) {
         Some(sock) => {
             // Line 2 is WxH: EIS advertises INT32_MAX, so the injector cannot learn geometry.
             // Socket and size come from different sources; omit the hint unless every gamescope agrees.
-            let size = current_gamescope_output_size();
+            let size = current_gamescope_output_size(scope);
             let body = match size {
                 Some((w, h)) => format!("{sock}\n{w}x{h}"),
                 None => sock.clone(),
@@ -1034,14 +1037,14 @@ pub(crate) fn stream_existing_output(
     connector: &str,
     hw_cursor: bool,
 ) -> Result<crate::mirror::MirrorStream> {
-    let node_id = find_gamescope_node().ok_or_else(|| {
+    let node_id = find_gamescope_node(Scope::Box).ok_or_else(|| {
         anyhow!(
             "gamescope is driving {connector:?} but publishes no PipeWire Video/Source node — the \
              session may still be starting, or this gamescope was built without PipeWire support"
         )
     })?;
     // EIS advertises INT32_MAX; the output-size hint here is what scales client positions.
-    point_injector_at_eis();
+    point_injector_at_eis(Scope::Box);
     tracing::info!(
         connector,
         node_id,
@@ -1161,13 +1164,13 @@ fn launch_session(client: &str, unit_name: &str, mode: Mode, hdr: bool) -> Resul
     start_unit(bind.as_ref())?;
     let mut deadline = Instant::now() + Duration::from_secs(45);
     loop {
-        if let Some(id) = find_gamescope_node() {
+        if let Some(id) = find_gamescope_node(Scope::Unit(unit_name)) {
             // Convention, not a guarantee. Stop on rejection so the retry relaunches.
-            if let Err(e) = verify_managed_spawn_flags(hdr) {
+            if let Err(e) = verify_managed_spawn_flags(hdr, Scope::Unit(unit_name)) {
                 stop_session(unit_name);
                 return Err(e);
             }
-            warn_if_mode_lost(mode, game);
+            warn_if_mode_lost(mode, game, Scope::Unit(unit_name));
             return Ok(id);
         }
         if Instant::now() >= deadline {

@@ -52,6 +52,9 @@ pub(crate) struct HostInfo {
     codecs: Vec<ApiCodec>,
     /// GameStream/Moonlight-compat planes are running (`--gamestream`). `false` is the default (native only).
     gamestream: bool,
+    /// This host is the door (Linux, **Reachable without logging in**): a system service that
+    /// places every connect on a seat and streams nothing itself.
+    door: bool,
     /// Hex SHA-256 of this host's leaf certificate — what a client pins. Public by
     /// construction: every client reads it off the handshake. Carried here so a connect link
     /// can name it, and a first connect over an untrusted path is verified rather than blind.
@@ -406,6 +409,10 @@ pub(crate) struct SessionRow {
     /// Name of the settings preset the client dialled with. Absent for plain settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     preset_name: Option<String>,
+    /// The profile the session plays as. Blank, like `client_name`, for another device's
+    /// session on the cert lane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<crate::events::ProfileRef>,
     /// `WxH@Hz`.
     #[schema(example = "3840x2160@120")]
     mode: String,
@@ -547,8 +554,13 @@ pub(crate) async fn get_host_info(State(st): State<Arc<MgmtState>>) -> Json<Host
         os: h.os_chain.clone(),
         os_name: h.os_name.clone(),
         // Same mask as GameStream/QUIC negotiation (`host_wire_caps`), not the compile-time list.
+        // A door encodes nothing, so it names none and never probes the GPU.
         codecs: {
-            let caps = crate::encode::host_wire_caps();
+            let caps = if pf_paths::seat::is_door() {
+                0
+            } else {
+                crate::encode::host_wire_caps()
+            };
             use punktfunk_core::quic::{CODEC_AV1, CODEC_H264, CODEC_HEVC, CODEC_PYROWAVE};
             [
                 (CODEC_H264, ApiCodec::H264),
@@ -562,6 +574,7 @@ pub(crate) async fn get_host_info(State(st): State<Arc<MgmtState>>) -> Json<Host
             .collect()
         },
         gamestream: st.gamestream_enabled,
+        door: pf_paths::seat::is_door(),
         fingerprint: st.identity_fingerprint.map(hex::encode),
         ports: PortMap {
             mgmt: st.port,
@@ -673,6 +686,7 @@ pub(crate) async fn get_status(
                 client: if own { s.client.clone() } else { String::new() },
                 client_name: s.client_name.clone().filter(|_| own),
                 preset_name: s.preset_name.clone(),
+                profile: s.profile.clone().filter(|_| own),
                 mode: crate::events::mode_str(s.width, s.height, s.fps),
                 hdr: s.hdr,
                 join: s.join,
@@ -797,7 +811,7 @@ pub(crate) async fn get_status(
 
 /// Loopback tray summary
 ///
-/// Bearer: `<config>/tray-token`, which every local account may read; loopback only.
+/// Bearer: `<config>/tray-token`, which every local account but a seat's may read; loopback only.
 #[utoipa::path(
     get,
     path = "/local/summary",

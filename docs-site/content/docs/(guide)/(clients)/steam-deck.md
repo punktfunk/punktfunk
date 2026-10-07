@@ -46,6 +46,7 @@ Open the **Punktfunk** panel from the Quick Access Menu.
   client knows its MAC address.
 - **▸ Preset name** under a host streams it with that [preset](/docs/presets-and-links). Pin
   presets in the Punktfunk app; the panel only shows them.
+- **● Name** under a host with more than one profile streams as that profile, this time only.
 - **Open Punktfunk** opens the app's console: add a host by address, pair, browse a host's
   [library](/docs/game-library), and change [settings](/docs/client-settings).
 

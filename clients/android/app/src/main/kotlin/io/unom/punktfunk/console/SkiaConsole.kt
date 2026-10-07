@@ -16,6 +16,9 @@ import androidx.compose.runtime.setValue
 import io.unom.punktfunk.CONNECT_TIMEOUT_MS
 import io.unom.punktfunk.ConnectErrors
 import io.unom.punktfunk.HostActions
+import io.unom.punktfunk.HostProfiles
+import io.unom.punktfunk.ProfilesAnswer
+import io.unom.punktfunk.savePick
 import io.unom.punktfunk.PresetStore
 import io.unom.punktfunk.REQUEST_ACCESS_TIMEOUT_MS
 import io.unom.punktfunk.SessionFactory
@@ -31,6 +34,7 @@ import io.unom.punktfunk.posterHttp
 import io.unom.punktfunk.runSpeedTest
 import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.NativeBridge
+import io.unom.punktfunk.kit.ProfilePick
 import io.unom.punktfunk.kit.VideoDecoders
 import io.unom.punktfunk.kit.deviceBodyVibrator
 import io.unom.punktfunk.kit.discovery.DiscoveredHost
@@ -242,6 +246,8 @@ object SkiaConsole {
             // The same MediaCodec answer the Hello advertises by: without a real AV1
             // decoder the codec row marks AV1 unsupported instead of offering a dead pick.
             .put("av1_ok", VideoDecoders.decodableCodecBits() and 4 != 0)
+            // Answers `FetchProfiles`, so a connect checks the box's profiles first.
+            .put("profiles", true)
             .put("settings", ConsoleJson.settings(initial, base))
             .put("presets", JSONArray(ConsoleJson.presets(presets)))
             .put("known_hosts", JSONObject(ConsoleJson.knownHosts(knownHostStore.all())))
@@ -733,6 +739,7 @@ object SkiaConsole {
         val port = kh?.port ?: a.optInt("port")
         val launchId = a.optString("launch").takeIf { a.has("launch") && !a.isNull("launch") && it.isNotEmpty() }
         val presetId = a.optString("preset").takeIf { a.has("preset") && !a.isNull("preset") && it.isNotEmpty() }
+        val profile = a.optString("profile").takeIf { a.has("profile") && !a.isNull("profile") && it.isNotEmpty() }
         val requestAccess = a.optBoolean("request_access", false)
         val id = identity
         if (id == null) {
@@ -759,6 +766,7 @@ object SkiaConsole {
                     dialer = if (launchId != null) "console/library" else "console/desktop",
                     timeoutMs = timeout,
                     preset = preset,
+                    profile = profile,
                 )
             }
             main.post {
@@ -799,8 +807,14 @@ object SkiaConsole {
                     }
                 } else {
                     val token = NativeBridge.nativeTakeLastError()
+                    if (token == "profile-unknown" && kh != null) {
+                        knownHostStore.savePick(kh, null)
+                        pushHosts(); pushKnownHosts()
+                    }
+                    // 5: the console forgets the pick and asks the box's list once more.
                     NativeBridge.nativeConsoleSessionPhase(
-                        handle, 2, ConnectErrors.connectMessage(token, requestAccess),
+                        handle, if (token == "profile-unknown") 5 else 2,
+                        ConnectErrors.connectMessage(token, requestAccess),
                     )
                     resumeDiscovery()
                 }
@@ -853,6 +867,9 @@ object SkiaConsole {
                     }
                     c.optJSONObject("Wake")?.let(::wake)
                     c.optJSONObject("SetPin")?.let(::setPin)
+                    c.optJSONObject("FetchProfiles")?.let(::fetchProfiles)
+                    c.optJSONObject("WakeProfile")?.let(::wakeProfile)
+                    c.optJSONObject("SetProfile")?.let(::setProfile)
                     c.optJSONObject("BindPreset")?.let(::bindPreset)
                     c.optJSONObject("SetClipboard")?.let(::setClipboard)
                     c.optJSONObject("PadTest")?.let {
@@ -952,6 +969,41 @@ object SkiaConsole {
     private fun setClipboard(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
         knownHostStore.save(kh.copy(clipboardSync = c.optBoolean("on")))
+        pushHosts(); pushKnownHosts()
+    }
+
+    /** `ConsoleCmd::FetchProfiles`: ask the host who plays on it; the answer goes back keyed on its pin. */
+    private fun fetchProfiles(c: JSONObject) {
+        val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+        val id = identity
+        ioPool.execute {
+            val answer = if (id == null) {
+                ProfilesAnswer.Failed(identities.blockedMessage())
+            } else {
+                HostProfiles.fetch(id, addr, mgmt, fp)
+            }
+            val json = when (answer) {
+                is ProfilesAnswer.Listed -> JSONObject().put("Listed", JSONArray(answer.rows.map(ConsoleJson::profileRow))).toString()
+                ProfilesAnswer.NoProfiles -> "\"NoProfiles\""
+                is ProfilesAnswer.Failed -> JSONObject().put("Failed", answer.why).toString()
+            }
+            main.post { if (handle != 0L) NativeBridge.nativeConsoleSetProfiles(handle, fp, json) }
+        }
+    }
+
+    /** `ConsoleCmd::WakeProfile`: start a stopped seat. No answer: the shell polls `FetchProfiles`. */
+    private fun wakeProfile(c: JSONObject) {
+        val addr = c.optString("addr"); val mgmt = c.optInt("mgmt"); val fp = c.optString("fp_hex")
+        val profile = c.optString("id")
+        val id = identity ?: return
+        ioPool.execute { HostProfiles.wake(id, addr, mgmt, fp, profile) }
+    }
+
+    /** `ConsoleCmd::SetProfile`: save (or with no profile, clear) the pick on a host. */
+    private fun setProfile(c: JSONObject) {
+        val kh = hostForKey(c.optString("key")) ?: return
+        val p = c.optJSONObject("profile")
+        knownHostStore.savePick(kh, p?.let { ProfilePick(it.optString("id"), it.optString("display_name")) })
         pushHosts(); pushKnownHosts()
     }
 

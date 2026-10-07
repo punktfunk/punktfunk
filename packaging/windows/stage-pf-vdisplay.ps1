@@ -13,8 +13,8 @@
   SHA-256-verify it (it provides nefconc.exe, used to create the root-enumerated device node - pnputil
   can't).
 
-  Output (packed into the installer's staging tree): -OutDir gets pf_vdisplay.inf/.cat/.dll + punktfunk-driver.cer
-  and nefconc.exe (x64).
+  Output (packed into the installer's staging tree): -OutDir gets pf_vdisplay.inf/.cat/.dll,
+  pf_vdisplay_seats.inf/.cat + punktfunk-driver.cer and nefconc.exe (x64).
 
 .EXAMPLE
   pwsh -File stage-pf-vdisplay.ps1 -OutDir C:\t\out\stage
@@ -38,6 +38,10 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 # --- built pf-vdisplay driver -----------------------------------------------------------------
 $inf = Get-ChildItem -Path $VendorDir -Filter pf_vdisplay.inf -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $inf) { throw "no pf_vdisplay.inf under $VendorDir - did build-pf-vdisplay.ps1 run?" }
+# The seats package rides along: the console installs it when the operator turns seats on.
+foreach ($seats in 'pf_vdisplay_seats.inf', 'pf_vdisplay_seats.cat') {
+    if (-not (Test-Path (Join-Path $VendorDir $seats))) { throw "no $seats under $VendorDir - did build-pf-vdisplay.ps1 run?" }
+}
 Copy-Item (Join-Path $VendorDir '*') $OutDir -Force
 Write-Host "==> pf-vdisplay staged from $VendorDir"
 

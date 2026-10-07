@@ -58,7 +58,7 @@ changes per release: [`CHANGELOG.md`](https://git.unom.io/unom/punktfunk/src/bra
 
 - **Status.** Fallible calls return `PunktfunkStatus`: `PUNKTFUNK_STATUS_OK` is 0, errors are
   negative. In pull loops, `NO_FRAME` means nothing arrived before the timeout and `CLOSED` means
-  the session ended. `-20` to `-32` (`PUNKTFUNK_STATUS_REJECTED_*`) is the host refusing you; show
+  the session ended. `-20` to `-36` (`PUNKTFUNK_STATUS_REJECTED_*`) is the host refusing you; show
   each as its own sentence. A Rust panic never crosses the boundary; it returns `PANIC` (`-99`).
 - **One thread per plane.** Video, audio, rumble, HID output, HDR metadata, host timing, cursor,
   clipboard and pad audio are separate queues. Pull each from at most one thread; different planes
@@ -114,6 +114,7 @@ you set the bit. `video_codecs = 0` means HEVC only.
 | `preset_id`, `preset_name` | The settings preset this dial names; the host shows it and hands it to hooks. |
 | `pin_sha256`, `client_cert_pem`, `client_key_pem`, `device_name` | Trust and identity (above). |
 | `launch_id` | `steam:<appid>` or `custom:<id>` to start a library title. |
+| `profile_id` | The profile to play as; null lets the host choose. `punktfunk_connection_profile` reads which it resolved. |
 | `timeout_ms` | Bounds the whole connect, including a wait for approval. |
 
 The positional `punktfunk_connect` to `punktfunk_connect_ex12` stay for existing callers and are

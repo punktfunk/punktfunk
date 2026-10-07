@@ -141,6 +141,7 @@ mod tests {
                 ("app/punktfunk-host.exe", &[0x4d, 0x5a, 0, 1, 2, 3]),
                 ("app/web/.output/index.mjs", b"export {}"),
                 ("staging/pfvdisplay/pf_vdisplay.inf", b"[Version]"),
+                ("app/staging/pfvdisplay/pf_vdisplay_seats.inf", b"[Version]"),
             ],
         );
         let payload = build(
@@ -164,6 +165,7 @@ mod tests {
             ("runtime/en-us/microsoft.ui.xaml.dll.mui", b"mui"),
             ("app/web/.output/index.mjs", b"export {}"),
             ("staging/pfvdisplay/pf_vdisplay.inf", b"[Version]"),
+            ("app/staging/pfvdisplay/pf_vdisplay_seats.inf", b"[Version]"),
         ] {
             assert_eq!(std::fs::read(dst.path().join(rel)).unwrap(), bytes, "{rel}");
         }

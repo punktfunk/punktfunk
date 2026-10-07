@@ -4,7 +4,7 @@
 // connect path). Keeping every side on one type means the wire format can't drift.
 //
 //   punktfunk://connect/<host-ref>[?fp=<64-hex>][&host=<addr[:port]>][&launch=<id>]
-//                                 [&preset=<ref>][&name=<label>]
+//                                 [&preset=<ref>][&as=<profile>][&name=<label>]
 //
 // The invariant the grammar exists to keep: **a URL may only ever do what a click on an existing
 // card could do, minus trust decisions.** So it carries *references* to things that already exist
@@ -31,6 +31,7 @@ public enum DeepLinkLimits {
     public static let launch = 128
     public static let preset = 64
     public static let name = 64
+    public static let profile = 64
 }
 
 /// The default native port, as everywhere else in the clients.
@@ -131,6 +132,8 @@ public struct DeepLink: Equatable, Sendable {
     public var launch: String?
     /// A settings-preset reference (id, or a unique name) — one-off, never rebinding.
     public var preset: String?
+    /// The host profile to play as (id, or a unique name): this connect only, never saved.
+    public var asProfile: String?
     /// Display label for the unknown-host confirmation sheet (external emitters).
     public var name: String?
 
@@ -139,7 +142,7 @@ public struct DeepLink: Equatable, Sendable {
     public init(
         route: DeepLinkRoute = .connect, hostRef: String, fp: String? = nil,
         host: DeepLinkAddress? = nil, launch: String? = nil, preset: String? = nil,
-        name: String? = nil
+        asProfile: String? = nil, name: String? = nil
     ) {
         self.route = route
         self.hostRef = hostRef
@@ -147,6 +150,7 @@ public struct DeepLink: Equatable, Sendable {
         self.host = host
         self.launch = launch
         self.preset = preset
+        self.asProfile = asProfile
         self.name = name
     }
 
@@ -178,6 +182,7 @@ public struct DeepLink: Equatable, Sendable {
             push("preset", preset)
             push("profile", preset)
         }
+        if let asProfile { push("as", asProfile) }
         if let name { push("name", name) }
         return s
     }
@@ -316,6 +321,11 @@ public struct DeepLink: Equatable, Sendable {
                     throw DeepLinkError.paramTooLong("profile")
                 }
                 legacyPreset = value
+            case "as" where link.asProfile == nil:
+                guard value.unicodeScalars.count <= DeepLinkLimits.profile else {
+                    throw DeepLinkError.paramTooLong("as")
+                }
+                link.asProfile = value
             case "name" where link.name == nil:
                 guard value.unicodeScalars.count <= DeepLinkLimits.name else {
                     throw DeepLinkError.paramTooLong("name")

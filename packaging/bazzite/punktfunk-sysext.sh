@@ -216,6 +216,9 @@ post_merge() {
   for f in /usr/lib/sysctl.d/99-punktfunk-net.conf /usr/lib/sysctl.d/99-punktfunk-client-net.conf; do
     [ -f "$f" ] && sysctl -q -p "$f" 2>/dev/null || :
   done
+  # polkitd keeps the rules it read at boot and misses a merge swapping /usr under it, so a rule
+  # an update adds (the door switch's) refuses until reboot. Restarting it rereads them.
+  systemctl try-restart polkit.service 2>/dev/null || :
   # vhci-hcd: the usbip transport that makes the virtual Steam Deck pad a real USB device Steam
   # Input adopts. Without it the pad falls back to plain UHID hid-steam, which Steam Input won't
   # promote (Interface: -1) — so on a host in Game Mode the controller never appears and you can't
@@ -242,6 +245,11 @@ post_merge() {
   # 'input': writing 'attach' materialises an arbitrary emulated USB device (review 2026-08-05 M-4),
   # so it stays a group users join on purpose — see `ujust add-user-to-input-group` for the other one.
   getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || :
+  # The seat supervisor's directories and modes: the RPM's %post does this, and a sysext's
+  # tmpfiles.d only exists once merged. The daemon is not enabled here; the console turns seats on.
+  if [ -f /usr/lib/tmpfiles.d/punktfunk-seats.conf ]; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/punktfunk-seats.conf 2>/dev/null || :
+  fi
   # Creating the group is necessary but NOT sufficient, and the difference is invisible until a
   # stream fails: `pf-dm-helper` gates on MEMBERSHIP, so a host whose user never joined gets
   # "stopping the display manager needs privilege" on every managed takeover — sddm's autologin

@@ -87,6 +87,11 @@ fn shared_plugin_tokens(tokens: std::collections::BTreeMap<String, String>) -> s
 // `None` installs "test-secret" (`send` attaches the matching bearer). An explicit token
 // is for mismatch cases such as `bearer_token_is_enforced`.
 fn test_app(state: Arc<AppState>, token: Option<&str>) -> Router {
+    test_app_on(state, token, false)
+}
+
+/// `box_library`: the app of a seat host reading the box's library, which refuses its writes.
+fn test_app_on(state: Arc<AppState>, token: Option<&str>, box_library: bool) -> Router {
     let stats = state.stats.clone();
     app(
         state,
@@ -104,6 +109,7 @@ fn test_app(state: Arc<AppState>, token: Option<&str>) -> Router {
         None,
         // No browser plane: the default, and the one that must emit no CORS headers.
         false,
+        box_library,
     )
 }
 
@@ -124,6 +130,7 @@ fn test_app_browser(state: Arc<AppState>) -> Router {
         false,
         None,
         true,
+        false,
     )
 }
 
@@ -144,6 +151,7 @@ fn test_app_native(state: Arc<AppState>, np: Arc<crate::native_pairing::NativePa
         false,
         // A fixed binding, so a device test signs what the host will check.
         Some([0x5a; 32]),
+        false,
         false,
     )
 }
@@ -1223,6 +1231,7 @@ async fn host_info_reports_identity_and_ports() {
     assert_eq!(body["codecs"], serde_json::json!(expected));
     assert!(caps & CODEC_H264 != 0, "H.264 is always encodable");
     assert_eq!(body["gamestream"], false);
+    assert_eq!(body["door"], false, "a test host is no door");
 }
 
 /// A device sent a connect link has to be able to check what it reached, so the host publishes
@@ -1244,6 +1253,7 @@ async fn host_info_publishes_the_hosts_own_fingerprint() {
         test_access_dir(),
         false,
         Some([0xab; 32]),
+        false,
         false,
     );
     let (status, body) = send(&app, get_req("/api/v1/host")).await;
@@ -1310,26 +1320,48 @@ async fn status_reflects_runtime_state() {
 }
 
 /// Overrides `PUNKTFUNK_CONFIG_DIR` for one test and restores it on drop, even on panic.
+/// [`ConfigDirOverride::seat`] also points `PUNKTFUNK_LIBRARY_DIR` at a box's library.
 ///
 /// One helper for the whole file: `check-unsafe-hygiene.sh` greps this file for a fixed
-/// count of `set_var` sites (and prose mentions). The lock is a field so Drop restores
-/// the env while still holding it — fields drop after `Drop::drop`.
+/// count of `set_var` sites (and prose mentions), all in [`write_env`]. The lock is a field so
+/// Drop restores the env while still holding it — fields drop after `Drop::drop`.
 struct ConfigDirOverride {
     tmp: tempfile::TempDir,
-    prev: Option<std::ffi::OsString>,
+    prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
     _serial: std::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigDirOverride {
     fn new() -> ConfigDirOverride {
+        Self::with_library(None)
+    }
+
+    /// A Windows seat host's view: its own config dir, and the box's library in `library`.
+    fn seat(library: &std::path::Path) -> ConfigDirOverride {
+        Self::with_library(Some(library))
+    }
+
+    fn with_library(library: Option<&std::path::Path>) -> ConfigDirOverride {
         let _serial = crate::identity::CONFIG_DIR_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        let prev = std::env::var_os("PUNKTFUNK_CONFIG_DIR");
-        // SAFETY: `_serial` holds CONFIG_DIR_TEST_LOCK, which serializes every test in this binary
-        // that reads or writes this variable.
-        unsafe { std::env::set_var("PUNKTFUNK_CONFIG_DIR", tmp.path()) };
+        let vars = [
+            ("PUNKTFUNK_CONFIG_DIR", Some(tmp.path().as_os_str())),
+            (
+                "PUNKTFUNK_LIBRARY_DIR",
+                library.map(std::path::Path::as_os_str),
+            ),
+        ];
+        let prev = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var_os(k)))
+            .collect();
+        for (key, value) in vars {
+            // SAFETY: `_serial` holds CONFIG_DIR_TEST_LOCK, which serializes every test in this
+            // binary that reads or writes these variables.
+            unsafe { write_env(key, value) };
+        }
         ConfigDirOverride { tmp, prev, _serial }
     }
 
@@ -1341,13 +1373,23 @@ impl ConfigDirOverride {
 
 impl Drop for ConfigDirOverride {
     fn drop(&mut self) {
-        match self.prev.take() {
+        for (key, value) in self.prev.drain(..) {
             // SAFETY: `self._serial` is still alive here (fields drop after `Drop::drop`), so this
-            // runs under the same serialization as the `set_var` in `new`.
-            Some(v) => unsafe { std::env::set_var("PUNKTFUNK_CONFIG_DIR", v) },
-            // SAFETY: as above.
-            None => unsafe { std::env::remove_var("PUNKTFUNK_CONFIG_DIR") },
+            // runs under the same serialization as `with_library`.
+            unsafe { write_env(key, value.as_deref()) };
         }
+    }
+}
+
+/// # Safety
+/// The caller holds `CONFIG_DIR_TEST_LOCK`: the process environment is global, and unsound to
+/// change while another thread reads it.
+unsafe fn write_env(key: &str, value: Option<&std::ffi::OsStr>) {
+    match value {
+        // SAFETY: the caller's lock (this function's contract) serializes every reader and writer.
+        Some(v) => unsafe { std::env::set_var(key, v) },
+        // SAFETY: as above.
+        None => unsafe { std::env::remove_var(key) },
     }
 }
 
@@ -1725,6 +1767,7 @@ async fn a_refreshed_plugin_token_takes_effect_live() {
         test_access_dir(),
         false,
         None,
+        false,
         false,
     );
     *tokens
@@ -2258,6 +2301,28 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("GET", "/api/v1/status", true, true),
         ("GET", "/api/v1/local/summary", true, false), // loopback-only, handled before the gates
         ("GET", "/api/v1/compositors", true, true),
+        // A client's picker reads the profiles, their pictures, and wakes a seat. Every edit is
+        // the console's, and no plugin has a reason to name the people on the box.
+        ("GET", "/api/v1/profiles/enumerate", false, true),
+        ("GET", "/api/v1/profiles/{id}/avatar", false, true),
+        ("POST", "/api/v1/profiles/{id}/wake", false, true),
+        ("GET", "/api/v1/profiles", false, false),
+        // Turning seats on installs a driver and opens Remote Desktop: the operator's alone.
+        ("GET", "/api/v1/profiles/seating", false, false),
+        ("PUT", "/api/v1/profiles/seating", false, false),
+        ("GET", "/api/v1/profiles/doctor", false, false),
+        // Moving the box's host between the owner's session and a system service is root work
+        // the operator starts: neither lane.
+        ("PUT", "/api/v1/profiles/door", false, false),
+        ("POST", "/api/v1/profiles", false, false),
+        ("PUT", "/api/v1/profiles/default", false, false),
+        ("PUT", "/api/v1/profiles/{id}", false, false),
+        ("DELETE", "/api/v1/profiles/{id}", false, false),
+        ("PUT", "/api/v1/profiles/{id}/avatar", false, false),
+        ("DELETE", "/api/v1/profiles/{id}/avatar", false, false),
+        ("POST", "/api/v1/profiles/{id}/start", false, false),
+        ("POST", "/api/v1/profiles/{id}/stop", false, false),
+        ("POST", "/api/v1/profiles/{id}/end", false, false),
         // Mode + accent of the desktop, for a console that follows it. Operator
         // decoration, so it sits with the other host configuration rather than on
         // the cert lane — no streaming client asks what colour the desktop is.
@@ -2534,6 +2599,27 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
             "cert lane: {method} {path} should be {}",
             if *cert_ok { "reachable" } else { "denied" }
         );
+    }
+}
+
+/// The seat proxy is the operator's: no plugin and no paired device reaches a seat through it.
+#[test]
+fn the_seat_proxy_is_admin_only() {
+    use axum::http::Method;
+    for method in [Method::GET, Method::POST, Method::PUT, Method::DELETE] {
+        for path in [
+            "/api/v1/profiles/kid/proxy/library",
+            "/api/v1/profiles/kid/proxy/status",
+        ] {
+            assert!(
+                !auth::plugin_may_access(&method, path),
+                "plugin {method} {path}"
+            );
+            assert!(
+                !auth::cert_may_access(&method, path),
+                "cert {method} {path}"
+            );
+        }
     }
 }
 
@@ -3175,8 +3261,8 @@ async fn pending_devices_approve_and_deny() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(b.as_array().unwrap().len(), 0);
 
-    np.note_pending("Enrico's MacBook", "aa11", Some(LAN_KNOCK));
-    np.note_pending("device bb22cc33", "bb22", Some(LAN_KNOCK));
+    np.note_pending("Enrico's MacBook", "aa11", Some(LAN_KNOCK), None);
+    np.note_pending("device bb22cc33", "bb22", Some(LAN_KNOCK), None);
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     assert_eq!(b.as_array().unwrap().len(), 2);
     assert_eq!(b[0]["name"], "Enrico's MacBook");
@@ -3422,7 +3508,7 @@ async fn until_disconnect_alone_is_refused_rather_than_widening_access() {
         .unwrap(),
     );
     let app = test_app_native(test_state(), np.clone());
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK));
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None);
     let id = np.pending()[0].id;
 
     let (s, _) = send(
@@ -3479,8 +3565,8 @@ async fn a_wan_knock_is_listed_as_wan_and_refused_by_approve() {
     );
     let app = test_app_native(test_state(), np.clone());
     let wan = std::net::IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 5));
-    np.note_pending("Friend's Deck", "dd88", Some(wan));
-    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK));
+    np.note_pending("Friend's Deck", "dd88", Some(wan), None);
+    np.note_pending("Living Room", "ee99", Some(LAN_KNOCK), None);
 
     let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
     let rows = b.as_array().unwrap();
@@ -3542,7 +3628,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     );
     let app = test_app_native(test_state(), np.clone());
 
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK));
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     assert!(pend[0]["grants"].is_null());
     assert!(pend[0]["access_level"].is_null());
@@ -3583,7 +3669,7 @@ async fn approve_with_access_pins_the_chosen_mask() {
     assert_eq!(np.effective("cc33", now), Some(GRANT_GAMEPAD));
 
     // Re-knock surfaces the stored access for the approve dialog.
-    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK));
+    np.note_pending("Guest Phone", "cc33", Some(LAN_KNOCK), None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     assert_eq!(pend[0]["grants"], GRANT_GAMEPAD);
     assert_eq!(pend[0]["access_level"], "controller");
@@ -3668,7 +3754,7 @@ async fn approve_and_arm_without_access_fields_keep_todays_behavior() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(np.armed_access(), None, "no fields = no choice");
 
-    np.note_pending("Old Laptop", "ee55", Some(LAN_KNOCK));
+    np.note_pending("Old Laptop", "ee55", Some(LAN_KNOCK), None);
     let (_, pend) = send(&app, get_req("/api/v1/native/pending")).await;
     let id = pend[0]["id"].as_u64().unwrap();
     let (s, b) = send(
@@ -4276,6 +4362,47 @@ fn the_built_library_is_kept_until_an_input_moves() {
     assert!(!Arc::ptr_eq(&second, &crate::library::sorted_games()));
 }
 
+/// A Windows seat lists and resolves the box's titles from `PUNKTFUNK_LIBRARY_DIR`, leaves one
+/// account's sources out, rebuilds on its own play stats, and answers a library write with 409.
+#[tokio::test]
+async fn a_seat_plays_the_boxs_library_and_changes_none_of_it() {
+    let boxdir = tempfile::tempdir().unwrap();
+    let catalog = serde_json::json!({
+        "entries": [
+            {"id": "s1", "title": "Portal", "provider": "steam", "store": "steam",
+             "external_id": "400", "launch": {"kind": "steam_appid", "value": "400"}},
+            {"id": "p1", "title": "The owner's", "provider": "playnite", "external_id": "x1"},
+        ],
+        "claims": {"steam": "steam"},
+    });
+    std::fs::write(boxdir.path().join("library.json"), catalog.to_string()).unwrap();
+    let seat = ConfigDirOverride::seat(boxdir.path());
+    let app = test_app_on(test_state(), None, true);
+
+    let games = crate::library::sorted_games();
+    let ids: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
+    assert_eq!(ids, ["steam:400"]);
+    assert!(crate::library::resolve_launch("steam:400").is_some());
+    let sources: Vec<String> = crate::library::list_scanners()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(sources, ["steam"]);
+
+    std::fs::write(seat.path().join("library-stats.json"), r#"{"games":{}}"#).unwrap();
+    assert!(!Arc::ptr_eq(&games, &crate::library::sorted_games()));
+
+    let hide = put_json(
+        "/api/v1/library/hidden/steam:400",
+        serde_json::json!({"hidden": true}),
+    );
+    let (s, _) = send(&app, hide).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert!(!boxdir.path().join("library-hidden.json").exists());
+    let (s, _) = send(&app, get_req("/api/v1/library")).await;
+    assert_eq!(s, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn library_stats_ride_on_the_entry() {
     let _tmp = ConfigDirOverride::new();
@@ -4303,11 +4430,11 @@ async fn library_stats_ride_on_the_entry() {
         "a never-launched title carries no stats key: {json}"
     );
 
-    crate::library::record_launch(&id);
-    crate::library::record_run_time(&id, std::time::Duration::from_millis(1_500));
-    crate::library::record_run_time(&id, std::time::Duration::from_millis(500));
+    crate::library::record_launch(&id, Some("kid"));
+    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(1_500));
+    crate::library::record_run_time(&id, Some("kid"), std::time::Duration::from_millis(500));
     // A run credited to an id with no entry is kept but never surfaces.
-    crate::library::record_run_time("steam:404", std::time::Duration::from_secs(1));
+    crate::library::record_run_time("steam:404", None, std::time::Duration::from_secs(1));
 
     let (s, json) = send(&app, get_req("/api/v1/library")).await;
     assert_eq!(s, StatusCode::OK);
@@ -4319,6 +4446,22 @@ async fn library_stats_ride_on_the_entry() {
     assert!(stats["last_played_unix_ms"]
         .as_u64()
         .is_some_and(|ms| ms > 0));
+    assert!(stats.get("mine").is_none(), "no `as`, no `mine`: {json}");
+
+    // Another profile's launch moves the totals, not the kid's own numbers.
+    crate::library::record_launch(&id, Some("enrico"));
+    for path in ["/api/v1/library?as=kid", "/api/v1/library/page?as=kid"] {
+        let (s, json) = send(&app, get_req(path)).await;
+        assert_eq!(s, StatusCode::OK);
+        let stats = json
+            .get("items")
+            .map_or(&json[0]["stats"], |items| &items[0]["stats"]);
+        assert_eq!(stats["launch_count"], 2, "{path}: {json}");
+        assert_eq!(stats["mine"]["launch_count"], 1, "{path}: {json}");
+        assert_eq!(stats["mine"]["play_time_ms"], 2_000, "{path}: {json}");
+    }
+    let (_, json) = send(&app, get_req("/api/v1/library?as=nobody")).await;
+    assert!(json[0]["stats"].get("mine").is_none(), "{json}");
 }
 
 /// The lease watcher credits a recorded launch's run: seen running, then gone, lands on disk.
@@ -4349,6 +4492,7 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
             fingerprint: None,
             preset: None,
             plane: crate::events::Plane::Native,
+            profile: Some("kid".into()),
             spec: crate::library::DetectSpec::dir(tmp.path()),
             nested: false,
             scope_pid: None,
@@ -4379,7 +4523,9 @@ fn a_recorded_launch_credits_its_run_to_the_library_stats() {
     wait_for(crate::gamelease::GameState::Exited, 30);
 
     let stats = crate::library::game_stats();
-    let s = stats.get("custom:stats-run").expect("the run was credited");
+    let title = stats.get("custom:stats-run").expect("the run was credited");
+    assert_eq!(title.by_profile["kid"], title.totals, "one profile ran it");
+    let s = title.totals;
     assert!(s.play_time_ms >= 500, "seen running for a while: {s:?}");
     assert_eq!(s.last_run_ms, s.play_time_ms, "one run: {s:?}");
     assert_eq!(s.launch_count, 0, "the lease never counts launches: {s:?}");
@@ -5190,6 +5336,7 @@ fn test_app_access(state: Arc<AppState>, access_dir: &std::path::Path) -> Router
         false,
         None,
         false,
+        false,
     )
 }
 
@@ -5568,4 +5715,350 @@ async fn plugin_access_refusals_and_reason_sanitizing() {
         .filter_map(|p| p["reason"].as_str())
         .collect();
     assert!(reasons.iter().any(|r| r.chars().count() == 120));
+}
+
+/// A state whose profile store holds the owner, in a temp file.
+fn state_with_profiles(tag: &str) -> Arc<AppState> {
+    let state = test_state();
+    let path = std::env::temp_dir().join(format!(
+        "pf-mgmt-profiles-{tag}-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let profiles = crate::profiles::Profiles::load_with(Some(path), None);
+    profiles.ensure_owner("box").unwrap();
+    let _ = state.profiles.set(Arc::new(profiles));
+    let _ = state.native_port.set(9777);
+    state
+}
+
+/// A paired device reads the picker's list and a picture; the console's list and every edit
+/// stay the bearer's.
+#[tokio::test]
+async fn the_cert_lane_reads_profiles_but_never_edits_them() {
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(
+                std::env::temp_dir().join(format!("pf-mgmt-prof-cert-{}.json", std::process::id())),
+            ),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let fp = "deadbeefcafe";
+    np.add("couch", fp).unwrap();
+    let app = test_app_native(state_with_profiles("cert"), np);
+    assert_eq!(
+        send_cert(&app, get_req("/api/v1/profiles/enumerate"), fp).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send_cert(&app, get_req("/api/v1/profiles"), fp).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let create = axum::http::Request::post("/api/v1/profiles")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"display_name":"Kid"}"#))
+        .unwrap();
+    assert_eq!(send_cert(&app, create, fp).await, StatusCode::UNAUTHORIZED);
+}
+
+/// Where there are no seats the read says so and a change is a plain 409. The lanes are
+/// pinned by `every_route_is_classified_for_the_plugin_and_cert_lanes`.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn seating_off_windows_reads_off_and_refuses_a_change() {
+    let app = test_app(state_with_profiles("seating"), None);
+    let put = |body: &str| {
+        axum::http::Request::put("/api/v1/profiles/seating")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let (status, body) = send(&app, get_req("/api/v1/profiles/seating")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "enabled": false,
+            "platform": "other",
+            "checks": [],
+            "allow_rdp_from_network": false,
+        })
+    );
+    for body in [
+        r#"{"enabled":true,"allow_rdp_from_network":false}"#,
+        r#"{"enabled":false}"#,
+    ] {
+        let (status, answer) = send(&app, put(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(answer["error"], "Seats need Windows Server.");
+    }
+    assert_eq!(
+        send(&app, get_req("/api/v1/profiles/doctor")).await.0,
+        StatusCode::CONFLICT
+    );
+}
+
+/// Create, rename, a picture, the default, then removal; the owner can't be removed.
+#[tokio::test]
+async fn the_console_edits_profiles() {
+    let app = test_app(state_with_profiles("edit"), None);
+    let json = |method: &str, path: &str, body: &str| {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let (status, kid) = send(
+        &app,
+        json(
+            "POST",
+            "/api/v1/profiles",
+            r##"{"display_name":"Kid","accent":"#F97316"}"##,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = kid["id"].as_str().unwrap().to_string();
+    assert_eq!(kid["home"], "bigpicture");
+    assert_eq!(kid["accent"], "#f97316");
+    assert_eq!(kid["seat"]["port"], 9777);
+
+    let (status, sharer) = send(
+        &app,
+        json(
+            "POST",
+            "/api/v1/profiles",
+            r#"{"display_name":"Ben","seat":false}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(sharer["home"], "desktop");
+    assert!(sharer.get("seat").is_none(), "plays on the box: {sharer}");
+
+    let (status, _) = send(
+        &app,
+        json("POST", "/api/v1/profiles", r#"{"display_name":"kid"}"#),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "names are unique ignoring case"
+    );
+    let (status, _) = send(
+        &app,
+        json(
+            "POST",
+            "/api/v1/profiles",
+            r#"{"display_name":"Max","accent":"red"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, renamed) = send(
+        &app,
+        json(
+            "PUT",
+            &format!("/api/v1/profiles/{id}"),
+            r#"{"display_name":"Lea"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, renamed["display_name"].as_str()),
+        (StatusCode::OK, Some("Lea"))
+    );
+
+    let png = axum::http::Request::put(format!("/api/v1/profiles/{id}/avatar"))
+        .body(Body::from(b"\x89PNG\r\n\x1a\n picture".to_vec()))
+        .unwrap();
+    assert_eq!(send(&app, png).await.0, StatusCode::NO_CONTENT);
+    let resp = app
+        .clone()
+        .oneshot({
+            let mut r = get_req(&format!("/api/v1/profiles/{id}/avatar"));
+            r.headers_mut().insert(
+                axum::http::header::AUTHORIZATION,
+                axum::http::HeaderValue::from_static("Bearer test-secret"),
+            );
+            r
+        })
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "image/png");
+
+    let (status, _) = send(
+        &app,
+        json(
+            "PUT",
+            "/api/v1/profiles/default",
+            &format!(r#"{{"id":"{id}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = send(&app, get_req("/api/v1/profiles")).await;
+    let rows = list.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    let owner = rows.iter().find(|r| r["owner"] == true).unwrap();
+    assert!(owner.get("seat").is_none(), "the owner has no seat");
+    assert!(rows
+        .iter()
+        .any(|r| r["id"] == id.as_str() && r["default"] == true));
+
+    let owner_id = owner["id"].as_str().unwrap();
+    let del = |path: String| {
+        axum::http::Request::delete(path)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        send(&app, del(format!("/api/v1/profiles/{owner_id}")))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        send(&app, del(format!("/api/v1/profiles/{id}?erase=true")))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send(&app, del(format!("/api/v1/profiles/{id}"))).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// On the cert lane another device's session shows no profile, like its name; one's own does.
+#[tokio::test]
+async fn status_blanks_another_devices_profile() {
+    let _serial = crate::session_status::tests::REGISTRY.lock().await;
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(
+                std::env::temp_dir()
+                    .join(format!("pf-mgmt-prof-status-{}.json", std::process::id())),
+            ),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let fp = "deadbeefcafe";
+    np.add("couch", fp).unwrap();
+    let app = test_app_native(state_with_profiles("status"), np);
+    let profile = |name: &str| {
+        let mut controls = crate::session_status::SessionControls::open();
+        controls.profile = Some(crate::events::ProfileRef {
+            id: format!("{name}-id"),
+            display_name: name.to_string(),
+        });
+        controls
+    };
+    let _mine = crate::session_status::register(crate::session_status::Registration {
+        controls: profile("Kid"),
+        ..crate::session_status::Registration::fake("deadbeef")
+    });
+    let _theirs = crate::session_status::register(crate::session_status::Registration {
+        controls: profile("Ben"),
+        ..crate::session_status::Registration::fake("01234567")
+    });
+    let mut req = get_req("/api/v1/status");
+    req.extensions_mut()
+        .insert(PeerCertFingerprint(Some(fp.to_string())));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let rows = body["sessions"].as_array().unwrap();
+    let names: Vec<_> = rows
+        .iter()
+        .map(|r| r["profile"]["display_name"].as_str())
+        .collect();
+    assert!(names.contains(&Some("Kid")));
+    assert!(!names.contains(&Some("Ben")), "{body}");
+}
+
+/// A knock that names a profile shows it to the console; one this host doesn't know shows none.
+#[tokio::test]
+async fn a_knock_shows_the_profile_it_named() {
+    let state = state_with_profiles("knock");
+    let store = state.profiles.get().unwrap();
+    let owner = store.owner_id().unwrap();
+    let owner_name = store.get(&owner).unwrap().display_name;
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(std::env::temp_dir().join(format!("pf-mgmt-knock-{}.json", std::process::id()))),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let app = test_app_native(state, np.clone());
+    np.note_pending("Kid's iPad", "aa11", Some(LAN_KNOCK), Some(&owner));
+    np.note_pending("Stranger", "bb22", Some(LAN_KNOCK), Some("ffffffffffff"));
+    let (_, b) = send(&app, get_req("/api/v1/native/pending")).await;
+    assert_eq!(b[0]["profile"]["id"], owner.as_str(), "{b}");
+    assert_eq!(b[0]["profile"]["display_name"], owner_name.as_str());
+    assert!(b[1].get("profile").is_none(), "{b}");
+}
+
+/// Enumerate marks the profile the asking device's old seat became, and only for that device.
+#[tokio::test]
+async fn enumerate_marks_the_devices_old_seat() {
+    let path = std::env::temp_dir().join(format!("pf-mgmt-legacy-{}.json", std::process::id()));
+    std::fs::write(
+        &path,
+        r#"{"version":1,"profiles":[
+          {"id":"4f1c3a9b0e27","display_name":"Enrico","os_account":{"kind":"operator"},"home":"desktop","created_unix":1,"updated_unix":1},
+          {"id":"9a3f1c2b7e40","display_name":"Kid","os_account":{"kind":"seat"},"home":"bigpicture","legacy_device":"deadbeefcafe","created_unix":1,"updated_unix":1}
+        ]}"#,
+    )
+    .unwrap();
+    let state = test_state();
+    let _ = state
+        .profiles
+        .set(Arc::new(crate::profiles::Profiles::load_with(
+            Some(path),
+            None,
+        )));
+    let np = Arc::new(
+        crate::native_pairing::NativePairing::load_with(
+            Some(
+                std::env::temp_dir().join(format!("pf-mgmt-legacy-np-{}.json", std::process::id())),
+            ),
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    np.add("couch", "deadbeefcafe").unwrap();
+    np.add("phone", "0123456789ab").unwrap();
+    let app = test_app_native(state, np);
+    let list = |fp: &'static str| {
+        let app = app.clone();
+        async move {
+            let mut req = get_req("/api/v1/profiles/enumerate");
+            req.extensions_mut()
+                .insert(PeerCertFingerprint(Some(fp.to_string())));
+            let resp = app.oneshot(req).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        }
+    };
+    let couch = list("deadbeefcafe").await;
+    assert_eq!(couch[1]["legacy_seat"], true, "{couch}");
+    assert!(couch[0].get("legacy_seat").is_none(), "{couch}");
+    let phone = list("0123456789ab").await;
+    assert!(phone[1].get("legacy_seat").is_none(), "{phone}");
 }

@@ -28,6 +28,15 @@ pub(super) fn launch_target(
     })
 }
 
+/// The command a `steam_ui` tile with `value` runs, or `None` for a value outside the set.
+pub(super) fn steam_ui_command(value: &str) -> Option<String> {
+    command_for(&LaunchSpec {
+        kind: "steam_ui".into(),
+        value: value.into(),
+        ..Default::default()
+    })
+}
+
 /// Can this box open a known `launcher_ui` value now? Both Heroic tiles share
 /// `heroic_launch_prefix`. Plugin `detect` is only `~/.config/heroic`, which can survive
 /// uninstall — so probe the binary. Hydra needs a desktop entry that handles its link.

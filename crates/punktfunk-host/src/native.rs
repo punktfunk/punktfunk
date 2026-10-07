@@ -64,6 +64,7 @@ mod pad_uplink;
 use input::{input_thread, ClientInput};
 
 mod handshake;
+pub(crate) use handshake::redirect;
 /// `PUNKTFUNK_WIRE_MTU`, the control-connection path-MTU watch, and the per-peer shard clamp.
 mod wire_mtu;
 
@@ -166,8 +167,12 @@ pub fn run(opts: Punktfunk1Options) -> Result<()> {
     let stats = StatsRecorder::new(crate::stats_recorder::default_dir());
     // Standalone resolves identity itself; unified `serve` does it once for both planes.
     let ident = crate::identity::load_or_adopt(&np).context("native host identity")?;
+    let profiles = crate::profiles::Profiles::load_with(None, None);
+    if let Err(e) = profiles.ensure_owner(&crate::host::machine_hostname()) {
+        tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
+    }
     // No management API → advertise no `mgmt` port (0).
-    rt.block_on(serve(opts, 0, np, stats, ident, None))
+    rt.block_on(serve(opts, 0, np, Arc::new(profiles), stats, ident, None))
 }
 
 /// [`run`] with an in-memory identity. Tests must not mint `native-cert.pem` in the real
@@ -186,7 +191,18 @@ fn run_ephemeral(opts: Punktfunk1Options) -> Result<()> {
     )?);
     let stats = StatsRecorder::new(crate::stats_recorder::default_dir());
     let ident = crate::identity::ephemeral()?;
-    rt.block_on(serve(opts, 0, np, stats, ident, None))
+    rt.block_on(serve(opts, 0, np, test_profiles(), stats, ident, None))
+}
+
+/// A profile store in a temp file: tests never read or write the real `profiles.json`.
+#[cfg(test)]
+pub(crate) fn test_profiles() -> Arc<crate::profiles::Profiles> {
+    use std::sync::atomic::AtomicUsize;
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("pf-profiles-{}-{n}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    Arc::new(crate::profiles::Profiles::load_with(Some(path), None))
 }
 
 /// Native host config when unified `serve` runs it in-process.
@@ -246,6 +262,7 @@ pub(crate) async fn serve(
     opts: Punktfunk1Options,
     mgmt_port: u16,
     np: Arc<NativePairing>,
+    profiles: Arc<crate::profiles::Profiles>,
     stats: Arc<StatsRecorder>,
     // Caller-resolved so the planes cannot race the first-run mint.
     identity: crate::identity::NativeIdentity,
@@ -305,17 +322,32 @@ pub(crate) async fn serve(
         }
     };
 
+    // The door places every connect and runs no session, so it opens no audio, input or display
+    // and the senders below reach nobody.
+    let door = pf_paths::seat::is_door();
     // A sinkless capturer handed session to session (`AudioCapSlot`, `park_audio_capture`).
     let audio_cap: AudioCapSlot = Arc::new(std::sync::Mutex::new(None));
     // Host-lifetime injector: one RemoteDesktop-portal grant. A CreateSession per session
     // races portal teardown on reconnect and wedges KWin EIS. Gamepads stay per-session.
-    let injector = crate::inject::InjectorService::start();
+    let injector = (!door).then(crate::inject::InjectorService::start);
+    let inj_sender = || {
+        injector
+            .as_ref()
+            .map_or_else(|| std::sync::mpsc::channel().0, |i| i.sender())
+    };
     // A crashed host's claims left the box's audio defaults on its own nodes. Off-thread: a
     // sick PipeWire must not hold up serving; a session's claim waits on the same lock.
-    std::thread::spawn(crate::audio::heal_audio_defaults);
+    if !door {
+        std::thread::spawn(crate::audio::heal_audio_defaults);
+    }
     // Host-lifetime virtual mic ([`crate::audio::MicPump`]): 0xCB Opus → a persistent source
     // games can bind before they launch. Opens eagerly; self-heals if the backend dies.
-    let mic_service = crate::audio::MicPump::start();
+    let mic_service = (!door).then(crate::audio::MicPump::start);
+    let mic_sender = || {
+        mic_service
+            .as_ref()
+            .map_or_else(|| std::sync::mpsc::sync_channel(1).0, |m| m.sender())
+    };
     // Windows (`PUNKTFUNK_PAD_AUDIO` / `_SLOTS`): pre-provision DualSense speaker endpoints
     // once. A stored-but-not-served stamp triggers one Audiosrv restart before any session.
     // Failure logs once and leaves pads working without pad audio.
@@ -326,16 +358,18 @@ pub(crate) async fn serve(
     #[cfg(target_os = "windows")]
     crate::audio::minted::provision_at_startup();
     // Debounced TV-session restore on idle, not per-disconnect. Dropping this stops it.
-    let _restore_worker = crate::vdisplay::start_restore_worker();
-    // Recover a takeover stranded by a crashed previous instance (`$XDG_RUNTIME_DIR`).
-    crate::vdisplay::restore_takeover_on_startup();
-    // Takeover needs the host user in `punktfunk`. Missing membership degrades to mirroring.
-    // No-op off Linux.
-    crate::vdisplay::preflight_takeover_privilege();
-    // Console registry after the probed subsystems are up, so a probe never names a node
-    // that was about to appear.
-    crate::diagnostics::preflight();
-    install_shutdown_restore();
+    let _restore_worker = (!door).then(crate::vdisplay::start_restore_worker);
+    if !door {
+        // Recover a takeover stranded by a crashed previous instance (`$XDG_RUNTIME_DIR`).
+        crate::vdisplay::restore_takeover_on_startup();
+        // Takeover needs the host user in `punktfunk`. Missing membership degrades to mirroring.
+        // No-op off Linux.
+        crate::vdisplay::preflight_takeover_privilege();
+        // Console registry after the probed subsystems are up, so a probe never names a node
+        // that was about to appear.
+        crate::diagnostics::preflight();
+        install_shutdown_restore();
+    }
     // Headless CLI: surface the PIN if armed at startup. The console arms on demand.
     let st = np.status();
     if let Some(pin) = &st.pin {
@@ -363,9 +397,10 @@ pub(crate) async fn serve(
         let host = SessionHost {
             opts: Arc::clone(&opts),
             audio_cap: audio_cap.clone(),
-            inj_tx: injector.sender(),
-            mic_tx: mic_service.sender(),
+            inj_tx: inj_sender(),
+            mic_tx: mic_sender(),
             np: np.clone(),
+            profiles: profiles.clone(),
             stats: stats.clone(),
         };
         let (bind, sem) = (plane.bind, sem.clone());
@@ -388,7 +423,9 @@ pub(crate) async fn serve(
     // Once the host serves: a seat's Steam takes half a minute to boot, and the point is that it
     // has already booted when its device connects.
     #[cfg(target_os = "linux")]
-    prewarm::spawn_run("host start");
+    if !door {
+        prewarm::spawn_run("host start");
+    }
 
     loop {
         // A finished task stays in the set until joined; a serving host never reaches the drain
@@ -412,10 +449,11 @@ pub(crate) async fn serve(
         let opts = opts.clone();
         let audio_cap = audio_cap.clone();
         let np = np.clone();
+        let profiles = profiles.clone();
         let last_pairing = last_pairing.clone();
         let stats = stats.clone();
-        let inj_tx = injector.sender();
-        let mic_tx = mic_service.sender();
+        let inj_tx = inj_sender();
+        let mic_tx = mic_sender();
         let sem = sem.clone();
         let accepted = accepted.clone();
         let done = done.clone();
@@ -459,6 +497,7 @@ pub(crate) async fn serve(
                 mic_tx,
                 &fingerprint,
                 &np,
+                &profiles,
                 &last_pairing,
                 stats,
                 sem_session,
@@ -487,7 +526,9 @@ pub(crate) async fn serve(
             // After `serve_session` returns: the stream thread is joined and this session's
             // display lease is gone, so a pre-warm can adopt or replace what it left.
             #[cfg(target_os = "linux")]
-            prewarm::spawn_run("session end");
+            if !door {
+                prewarm::spawn_run("session end");
+            }
         });
     }
     // Drain in-flight sessions (max_sessions reached or endpoint closed).
@@ -570,6 +611,30 @@ const REJECT_BUSY_CODE: u32 = punktfunk_core::reject::REJECT_BUSY_CLOSE_CODE;
 
 /// Close with the typed reject code before the session task returns `Err`. A bare drop
 /// closes with code 0, which the client cannot tell from transport trouble.
+/// Ends the session when the console removes the profile it plays as.
+fn spawn_profile_watch(conn: link::SessionLink, profile: String) {
+    let mut removed = crate::profiles::removed();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = conn.closed() => return,
+                id = removed.recv() => match id {
+                    Ok(id) if id == profile => break,
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => return,
+                },
+            }
+        }
+        tracing::info!(%profile, "profile removed — closing its session");
+        let reason = punktfunk_core::reject::RejectReason::SeatUnavailable;
+        conn.refuse(
+            reason.close_code(),
+            "Your profile was removed by the host's owner.",
+        )
+        .await;
+    });
+}
+
 async fn close_rejected(conn: &link::SessionLink, reason: punktfunk_core::reject::RejectReason) {
     conn.refuse(reason.close_code(), &reason.to_string()).await;
 }
@@ -1079,14 +1144,20 @@ pub(crate) async fn park_knock(
     np: &NativePairing,
     label: &str,
     fp_hex: &str,
+    profile: Option<&str>,
     sem: &Arc<tokio::sync::Semaphore>,
 ) -> Result<Result<tokio::sync::OwnedSemaphorePermit, punktfunk_core::reject::RejectReason>> {
     use punktfunk_core::reject::RejectReason;
+    if np.pairing_refused() {
+        tracing::info!(name = %label, fingerprint = %fp_hex,
+            "unpaired device knocked on a seat — it pairs with the box");
+        return Ok(Err(RejectReason::PairingNotArmed));
+    }
     tracing::info!(name = %label, fingerprint = %fp_hex,
         "unpaired device knocked — parking connection for delegated approval in the console");
     // QUIC-validated source IP for the pending per-source cap. Knock generation makes
     // this connection the one an approval admits — siblings must not all start a session.
-    let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()));
+    let knock_seq = np.note_pending(label, fp_hex, Some(conn.remote_address().ip()), profile);
     let wait = np.wait_for_decision(fp_hex, knock_seq, PENDING_APPROVAL_WAIT);
     tokio::pin!(wait);
     let mut pending = tokio::time::interval(PENDING_EVERY);
@@ -1155,6 +1226,7 @@ async fn serve_session(
     mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     host_fp: &[u8; 32],
     np_arc: &Arc<NativePairing>,
+    profiles: &Arc<crate::profiles::Profiles>,
     last_pairing: &std::sync::Mutex<Option<std::time::Instant>>,
     stats: Arc<StatsRecorder>,
     // The session slots. An unpaired knock releases its slot while parked, re-acquires on approval.
@@ -1230,13 +1302,15 @@ async fn serve_session(
                 &fp_hex,
             );
             drop(permit);
-            permit = match park_knock(&conn, Some(&mut send), np, &label, &fp_hex, &sem).await? {
-                Ok(permit) => permit,
-                Err(reason) => {
-                    close_rejected(&conn, reason).await;
-                    anyhow::bail!("pairing request refused: {reason}");
-                }
-            };
+            let asked = first.profile.as_deref();
+            permit =
+                match park_knock(&conn, Some(&mut send), np, &label, &fp_hex, asked, &sem).await? {
+                    Ok(permit) => permit,
+                    Err(reason) => {
+                        close_rejected(&conn, reason).await;
+                        anyhow::bail!("pairing request refused: {reason}");
+                    }
+                };
         }
     }
     // Admitted. From here the session is the same on every carrier.
@@ -1246,6 +1320,7 @@ async fn serve_session(
         inj_tx,
         mic_tx,
         np: np_arc.clone(),
+        profiles: profiles.clone(),
         stats,
     };
     let data_plane = DataPlane::Shared(
@@ -1380,6 +1455,8 @@ pub(crate) struct SessionHost {
     pub(crate) inj_tx: std::sync::mpsc::Sender<InputEvent>,
     pub(crate) mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     pub(crate) np: Arc<NativePairing>,
+    /// Resolves each connect's profile before anything is built for it.
+    pub(crate) profiles: Arc<crate::profiles::Profiles>,
     pub(crate) stats: Arc<StatsRecorder>,
 }
 
@@ -1387,7 +1464,10 @@ impl SessionHost {
     /// A host with nothing behind it: every channel's receiver is dropped. For tests of the
     /// admission code, which never reach the pipeline.
     #[cfg(test)]
-    pub(crate) fn for_tests(np: Arc<NativePairing>) -> SessionHost {
+    pub(crate) fn for_tests(
+        np: Arc<NativePairing>,
+        profiles: Arc<crate::profiles::Profiles>,
+    ) -> SessionHost {
         SessionHost {
             opts: Arc::new(Punktfunk1Options {
                 port: 0,
@@ -1407,6 +1487,7 @@ impl SessionHost {
             inj_tx: std::sync::mpsc::channel().0,
             mic_tx: std::sync::mpsc::sync_channel(1).0,
             np,
+            profiles,
             stats: StatsRecorder::new(crate::stats_recorder::default_dir()),
         }
     }
@@ -1440,6 +1521,7 @@ pub(crate) async fn run_admitted(
         inj_tx,
         mic_tx,
         np,
+        profiles,
         stats,
     } = host;
     let (opts, np, stats) = (opts.as_ref(), np.as_ref(), stats.clone());
@@ -1456,6 +1538,64 @@ pub(crate) async fn run_admitted(
         at_unix: admit_unix,
         session: _session,
     } = admit(host, session_fp_hex.as_deref(), &conn, &first).await?;
+    // Before anything is built for it: an unknown profile closes with no display touched.
+    let resolved = match profiles.resolve(session_fp_hex.as_deref(), first.profile.as_deref()) {
+        Ok(r) => r,
+        Err(e) => {
+            use punktfunk_core::reject::RejectReason;
+            let reason = match e {
+                crate::profiles::ProfileError::Unknown
+                | crate::profiles::ProfileError::NotThisSeat => RejectReason::ProfileUnknown,
+                crate::profiles::ProfileError::SessionUnavailable => RejectReason::SeatUnavailable,
+            };
+            close_rejected(&conn, reason).await;
+            anyhow::bail!("profile refused: {e:?}");
+        }
+    };
+    tracing::info!(profile = %resolved.id, name = %resolved.display_name, via = ?resolved.via, "profile");
+    profiles.touch(&resolved.id);
+    // A seat profile plays on its seat's host: send the client there, or say why not.
+    {
+        use crate::seats::placement::{place, Asker, Placement};
+        let fp = session_fp_hex.clone();
+        let follows = first
+            .features
+            .has(punktfunk_core::quic::v2::registry::FEATURE_PROFILES);
+        let who = resolved.clone();
+        let placed = tokio::task::spawn_blocking(move || {
+            let joins = crate::vdisplay::policy::prefs()
+                .get()
+                .effective_for(fp.as_deref())
+                .mode_conflict
+                == crate::vdisplay::policy::ModeConflict::Join;
+            let asker = Asker {
+                fp: fp.as_deref(),
+                follows_redirects: follows,
+                joins,
+            };
+            place(&who, &asker)
+        })
+        .await
+        .context("placement task")?;
+        match placed {
+            Placement::Here => {}
+            Placement::Redirect(to) => {
+                tracing::info!(profile = %resolved.id, seat = %to.seat_name, port = to.port,
+                    "redirected to the profile's seat");
+                redirect(&conn, &mut send, &to).await?;
+                return Ok(Served::Session);
+            }
+            Placement::Refuse(reason) => {
+                close_rejected(&conn, reason).await;
+                anyhow::bail!("seat refused: {reason}");
+            }
+        }
+    }
+    spawn_profile_watch(conn.clone(), resolved.id.clone());
+    let profile_ref = crate::events::ProfileRef {
+        id: resolved.id.clone(),
+        display_name: resolved.display_name.clone(),
+    };
     // One relaxed load per event; the lifecycle task is the only writer after admission.
     let session_grants = Arc::new(AtomicU32::new(initial_grants));
     let expires_in_secs = remaining_secs_wire(deadline_unix, admit_unix);
@@ -1493,6 +1633,7 @@ pub(crate) async fn run_admitted(
         prep,
         joined,
         features,
+        resolved,
     } = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         handshake::negotiate(
@@ -1507,6 +1648,7 @@ pub(crate) async fn run_admitted(
             stop.clone(),
             initial_grants,
             expires_in_secs,
+            resolved,
         ),
     )
     .await
@@ -1636,6 +1778,7 @@ pub(crate) async fn run_admitted(
         pad_slots: pad_slots.clone(),
         fingerprint: session_fp_hex.clone(),
         preset: session_preset.clone(),
+        profile: Some(profile_ref.clone()),
         pad_owner: pad_id.owner,
         preferred_pad_slot: Arc::new(std::sync::atomic::AtomicU8::new(
             preferred_pad_slot.unwrap_or(crate::session_status::NO_PAD_SLOT),
@@ -1735,7 +1878,7 @@ pub(crate) async fn run_admitted(
         joined.as_ref().map(|(d, _)| d),
         compositor,
         gamescope_route.as_ref(),
-        session_fp_hex.as_deref(),
+        &resolved,
         &inj_tx,
         mic_tx,
     );
@@ -1797,6 +1940,7 @@ pub(crate) async fn run_admitted(
             fingerprint: session_fp_hex.clone(),
             plane: conn.plane(),
             preset: session_preset.clone(),
+            profile: Some(profile_ref.clone()),
         },
     );
 
@@ -1909,11 +2053,15 @@ pub(crate) async fn run_admitted(
         launch: hello.launch.clone(),
         plane: conn.plane(),
         preset: session_preset.clone(),
+        profile: Some(profile_ref.clone()),
     });
     // Linux `PUNKTFUNK_PIN_CLOCKS`: refcounted vendor clock floor while any session streams.
     #[cfg(target_os = "linux")]
     let _clock_pin = crate::gpuclocks::session_pin();
-    let launch_target = resolve_launch(hello.launch.as_deref(), &launch_outcome_tx).await?;
+    let launch_target = match resolve_launch(hello.launch.as_deref(), &launch_outcome_tx).await? {
+        Some(t) => Some(t),
+        None => home_launch(hello.launch.as_deref(), &resolved),
+    };
     #[cfg(target_os = "windows")]
     let launch_for_dp = launch_target.as_ref().and(hello.launch.clone());
     #[cfg(not(target_os = "windows"))]
@@ -1928,6 +2076,7 @@ pub(crate) async fn run_admitted(
         fingerprint: conn.peer_fingerprint().map(hex::encode),
         plane: conn.plane(),
         preset: session_preset.clone(),
+        profile: Some(resolved.id.clone()),
     };
     let (prep_cmds, prep_env) = launch_prep(&hello, &welcome, session_preset.as_ref());
     // Reprieve, claim, prep and the launch hold, before the display opens. `block_in_place`:
@@ -2326,6 +2475,9 @@ struct SessionPlanes {
     _mic_default: Option<crate::audio::DefaultMicClaim>,
     #[cfg(target_os = "linux")]
     _injector: Option<crate::inject::InjectorService>,
+    /// This session's hold on its isolation id.
+    #[cfg(target_os = "linux")]
+    _seat: Option<SeatClaim>,
 }
 
 impl SessionPlanes {
@@ -2334,12 +2486,13 @@ impl SessionPlanes {
         joined: Option<&crate::vdisplay::admission::LiveDisplay>,
         compositor: Option<crate::vdisplay::Compositor>,
         route: Option<&crate::vdisplay::GamescopeRoute>,
-        fp_hex: Option<&str>,
+        profile: &crate::profiles::Resolved,
         inj_tx: &std::sync::mpsc::Sender<InputEvent>,
         mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     ) -> SessionPlanes {
         #[cfg(target_os = "linux")]
         {
+            let mut seat = None;
             let isolation = match joined {
                 // A joiner uses the owner's planes: its input relay and sink. A second mic source
                 // of the same name would split the owner's, so its mic stays on the shared one.
@@ -2353,16 +2506,19 @@ impl SessionPlanes {
                 None => compositor
                     .filter(|c| crate::compositor_route::session_is_isolated(*c, route))
                     .map(|_| {
-                        // `--open` has no fingerprint; a per-accept sequence isolates at the cost
-                        // of keep-alive.
-                        static ANON_SEQ: AtomicU64 = AtomicU64::new(0);
-                        let paired = fp_hex.map(seat_id);
-                        let id = paired.clone().unwrap_or_else(|| {
-                            format!("anon{}", ANON_SEQ.fetch_add(1, Ordering::Relaxed))
-                        });
-                        let iso = session_isolation(&id, paired.is_some());
-                        tracing::info!(%id, sink = iso.sink.as_deref().unwrap_or("-"),
+                        // The profile is the seat: its first session takes the seat's id and
+                        // home, a concurrent second one `<seat>-2` and the box's Steam.
+                        let base = seat_id(&profile.id);
+                        let claim = SeatClaim::take(&base);
+                        let is_seat =
+                            matches!(profile.os_account, crate::profiles::OsAccount::Seat { .. });
+                        let home =
+                            (is_seat && claim.is_first(&base)).then_some(profile.id.as_str());
+                        let iso = session_isolation(&claim.0, home);
+                        tracing::info!(id = %claim.0, profile = %profile.id,
+                            sink = iso.sink.as_deref().unwrap_or("-"),
                             "isolated gamescope session — per-session input/audio/mic planes");
+                        seat = Some(claim);
                         iso
                     }),
             };
@@ -2390,11 +2546,12 @@ impl SessionPlanes {
                 _mic: mic,
                 _mic_default: mic_default,
                 _injector: injector,
+                _seat: seat,
             }
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (joined, compositor, route, fp_hex);
+            let _ = (joined, compositor, route, profile);
             SessionPlanes {
                 isolation: None,
                 seat_dev: None,
@@ -2507,6 +2664,27 @@ async fn resolve_launch(
         }
     }
     Ok(found)
+}
+
+/// What a bare connect opens: Big Picture for a seat profile whose home is `bigpicture`. A
+/// connect that named a title, or the owner's, opens nothing more.
+fn home_launch(
+    asked: Option<&str>,
+    profile: &crate::profiles::Resolved,
+) -> Option<crate::library::LaunchTarget> {
+    if asked.is_some() || !opens_big_picture(profile) {
+        return None;
+    }
+    #[cfg(not(windows))]
+    return crate::library::big_picture_launch();
+    #[cfg(windows)]
+    None
+}
+
+/// A seat profile whose bare connect opens Big Picture in its own gamescope.
+pub(crate) fn opens_big_picture(profile: &crate::profiles::Resolved) -> bool {
+    matches!(profile.os_account, crate::profiles::OsAccount::Seat { .. })
+        && profile.home == crate::profiles::Home::Bigpicture
 }
 
 /// The launched title's prep steps and their environment: `PF_APP_ID` and `PF_STREAM_*`, so a
@@ -2679,37 +2857,68 @@ fn delivered_mode(
     }
 }
 
-/// This session's Steam home, or `None` for the box's own.
-///
-/// A seat is a fingerprint: an `anon<seq>` id is minted per accept, so a Steam signed in under
-/// one would never be found again.
+/// A seat profile's Steam home while **Steam per seat** is on, or `None` for the box's own.
 #[cfg(target_os = "linux")]
-fn seat_home_for(paired: Option<&str>, on: bool) -> Option<std::path::PathBuf> {
-    paired.filter(|_| on).map(pf_paths::seat_home)
+fn seat_home_for(profile: Option<&str>, on: bool) -> Option<std::path::PathBuf> {
+    profile.filter(|_| on).map(pf_paths::seat_home)
 }
 
-/// The seat a device streams on: the head of its fingerprint. Short enough for a socket name,
-/// wide enough that two paired devices do not collide. One function, because the pre-warm has to
-/// name the same seat this session does or the registry hands its parked display to nobody.
+/// The seat a profile streams on: the head of its id. Short enough for a socket name. One
+/// function, because the pre-warm has to name the same seat a connect does or the registry
+/// hands its parked display to nobody.
 #[cfg(target_os = "linux")]
-fn seat_id(fp_hex: &str) -> String {
-    fp_hex[..fp_hex.len().min(8)].to_string()
+fn seat_id(profile_id: &str) -> String {
+    profile_id[..profile_id.len().min(8)].to_string()
 }
 
-/// The isolated planes `id` streams on. `paired` says the id is a seat rather than an
-/// `anon<seq>`, which is what earns a Steam home.
+/// Isolation ids of the sessions streaming now. A second session on one profile is
+/// `<seat>-2`: planes of its own, and no claim on the seat's home or its parked display.
+#[cfg(target_os = "linux")]
+static LIVE_SEATS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// An isolation id held for one session; dropping it frees the id.
+#[cfg(target_os = "linux")]
+struct SeatClaim(String);
+
+#[cfg(target_os = "linux")]
+impl SeatClaim {
+    /// `base`, or the first `base-<n>` no live session holds.
+    fn take(base: &str) -> SeatClaim {
+        let mut live = LIVE_SEATS.lock().unwrap_or_else(|e| e.into_inner());
+        let id = std::iter::once(base.to_string())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|id| !live.contains(id))
+            .unwrap_or_else(|| base.to_string());
+        live.push(id.clone());
+        SeatClaim(id)
+    }
+
+    fn is_first(&self, base: &str) -> bool {
+        self.0 == base
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for SeatClaim {
+    fn drop(&mut self) {
+        let mut live = LIVE_SEATS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(at) = live.iter().position(|id| id == &self.0) {
+            live.swap_remove(at);
+        }
+    }
+}
+
+/// The isolated planes `id` streams on. `home` is the seat profile whose Steam home it runs
+/// under; `None` keeps the box's own.
 ///
 /// The registry's reuse key is `id` plus that home, so [`prewarm`] builds this value for a seat
 /// before its client connects and the connect lands on the display already standing.
 #[cfg(target_os = "linux")]
-fn session_isolation(id: &str, paired: bool) -> crate::vdisplay::SessionIsolation {
+fn session_isolation(id: &str, home: Option<&str>) -> crate::vdisplay::SessionIsolation {
     // Monitor-mode has no per-session sink — audio stays shared; input/mic still isolate.
     let sink =
         crate::audio::per_session_sink_possible().then(|| format!("punktfunk-speaker-iso-{id}"));
-    let steam_home = seat_home_for(
-        paired.then_some(id),
-        pf_host_config::config().steam_seat_home,
-    );
+    let steam_home = seat_home_for(home, pf_host_config::config().steam_seat_home);
     crate::vdisplay::SessionIsolation::new(
         id.to_string(),
         sink,
@@ -2726,11 +2935,43 @@ mod tests {
     /// The knob is the only way in, and an unpaired session never gets a seat home.
     #[cfg(target_os = "linux")]
     #[test]
-    fn only_a_paired_client_with_the_knob_on_gets_a_seat_home() {
-        let seat = seat_home_for(Some("cafe0123"), true).expect("a paired seat has a home");
-        assert!(seat.ends_with("seats/cafe0123"), "{}", seat.display());
-        assert_eq!(seat_home_for(Some("cafe0123"), false), None, "knob off");
-        assert_eq!(seat_home_for(None, true), None, "anon<seq> has no identity");
+    fn only_a_seat_profile_with_the_knob_on_gets_a_seat_home() {
+        let seat = seat_home_for(Some("9a3f1c2b7e40"), true).expect("a seat profile has a home");
+        assert!(seat.ends_with("seats/9a3f1c2b7e40"), "{}", seat.display());
+        assert_eq!(seat_home_for(Some("9a3f1c2b7e40"), false), None, "knob off");
+        assert_eq!(
+            seat_home_for(None, true),
+            None,
+            "the owner keeps the box's Steam"
+        );
+    }
+
+    /// Two sessions on one profile at once: `<seat>` then `<seat>-2`, each with its own sink,
+    /// and the id frees when its session ends.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_session_on_a_profile_gets_planes_of_its_own() {
+        let base = seat_id("5e1f00d1e2a7");
+        assert_eq!(base, "5e1f00d1");
+        let first = SeatClaim::take(&base);
+        let second = SeatClaim::take(&base);
+        assert_eq!(
+            (first.0.as_str(), second.0.as_str()),
+            ("5e1f00d1", "5e1f00d1-2")
+        );
+        assert!(first.is_first(&base) && !second.is_first(&base));
+        let (a, b) = (
+            session_isolation(&first.0, Some("5e1f00d1e2a7")),
+            session_isolation(&second.0, None),
+        );
+        assert_ne!(a.ei_relay, b.ei_relay);
+        assert_ne!(a.mic_source, b.mic_source);
+        if a.sink.is_some() {
+            assert_ne!(a.sink, b.sink);
+        }
+        drop(first);
+        let again = SeatClaim::take(&base);
+        assert_eq!(again.0, "5e1f00d1", "a freed id is taken again");
     }
 
     /// Adaptive FEC is offered only to a source that can keep encoder and packetizer
@@ -3975,6 +4216,7 @@ mod tests {
                 },
                 0,
                 np_host,
+                test_profiles(),
                 StatsRecorder::new(
                     std::env::temp_dir().join(format!("pf-approval-stats-{}", std::process::id())),
                 ),
@@ -4216,6 +4458,16 @@ mod tests {
         max_sessions: u32,
         np: Arc<NativePairing>,
     ) -> std::thread::JoinHandle<Result<()>> {
+        spawn_profile_host(port, max_sessions, np, test_profiles())
+    }
+
+    /// [`spawn_access_host`] over the given profile store.
+    fn spawn_profile_host(
+        port: u16,
+        max_sessions: u32,
+        np: Arc<NativePairing>,
+        profiles: Arc<crate::profiles::Profiles>,
+    ) -> std::thread::JoinHandle<Result<()>> {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -4239,6 +4491,7 @@ mod tests {
                 },
                 0,
                 np,
+                profiles,
                 StatsRecorder::new(
                     std::env::temp_dir()
                         .join(format!("pf-access-stats-{port}-{}", std::process::id())),
@@ -4309,6 +4562,7 @@ mod tests {
             resume: None,
             suites: Vec::new(),
             features: Default::default(),
+            profile: None,
         };
         v2io::send(&mut send, &hello).await.expect("ClientHello");
         let welcome = loop {
@@ -4624,6 +4878,72 @@ mod tests {
         .expect("controller-only session without a launch must be admitted");
         drop(client);
         let _ = std::fs::remove_file(&store);
+        host.join().unwrap().unwrap();
+    }
+
+    /// The asked profile is echoed, no ask lands on the owner, and an unknown id is refused
+    /// before anything is built for it.
+    #[test]
+    fn a_profile_is_resolved_in_the_handshake() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use punktfunk_core::client::{ConnectParams, NativeClient};
+        use punktfunk_core::quic::endpoint;
+
+        let store = access_store_path("profiles");
+        let _ = std::fs::remove_file(&store);
+        let np = Arc::new(NativePairing::load_with(Some(store.clone()), None, false).unwrap());
+        let (cert, key) = endpoint::generate_identity().unwrap();
+        let fp_hex = hex::encode(endpoint::fingerprint_of_pem(&cert).unwrap());
+        np.add_with_access("Couch", &fp_hex, None).unwrap();
+        let file =
+            std::env::temp_dir().join(format!("pf-handshake-profiles-{}.json", std::process::id()));
+        std::fs::write(
+            &file,
+            br#"{"version":1,"profiles":[
+                {"id":"4f1c3a9b0e27","display_name":"Enrico","os_account":{"kind":"operator"}},
+                {"id":"9a3f1c2b7e40","display_name":"Kid","os_account":{"kind":"seat"}}]}"#,
+        )
+        .unwrap();
+        let profiles = Arc::new(crate::profiles::Profiles::load_with(
+            Some(file.clone()),
+            None,
+        ));
+        let host = spawn_profile_host(19794, 3, np, profiles);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let dial = |profile: Option<&str>| {
+            NativeClient::connect(ConnectParams {
+                name: Some("Couch".into()),
+                identity: Some((cert.clone(), key.clone())),
+                profile: profile.map(Into::into),
+                ..ConnectParams::new(
+                    "127.0.0.1",
+                    19794,
+                    punktfunk_core::Mode {
+                        width: 1280,
+                        height: 720,
+                        refresh_hz: 60,
+                    },
+                    std::time::Duration::from_secs(10),
+                )
+            })
+        };
+
+        let kid = dial(Some("9a3f1c2b7e40")).expect("a known profile is admitted");
+        assert_eq!(kid.profile(), Some("9a3f1c2b7e40"));
+        drop(kid);
+        let owner = dial(None).expect("no ask is admitted");
+        assert_eq!(owner.profile(), Some("4f1c3a9b0e27"));
+        drop(owner);
+        match dial(Some("ffffffffffff")) {
+            Ok(_) => panic!("an unknown profile must be refused"),
+            Err(punktfunk_core::PunktfunkError::Rejected(r)) => {
+                assert_eq!(r, punktfunk_core::reject::RejectReason::ProfileUnknown)
+            }
+            Err(other) => panic!("expected a typed rejection, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&store);
+        let _ = std::fs::remove_file(&file);
         host.join().unwrap().unwrap();
     }
 

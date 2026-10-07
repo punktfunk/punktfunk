@@ -52,6 +52,7 @@ mod licenses;
 mod lucide;
 mod os_icons;
 mod pair;
+mod profiles;
 /// The quick-action ring's editor — the ring itself, a section of the settings page.
 mod quick_actions;
 mod settings;
@@ -122,6 +123,9 @@ pub(crate) struct Target {
     /// survives a detour through the PIN ceremony (a deep link's `launch=` toward an unpaired
     /// host must still launch the game once pairing succeeds).
     pub(crate) launch: Option<String>,
+    /// A link's `as=`: the profile this connect plays as, an id or a name. It wins over the
+    /// saved pick for this connect only.
+    pub(crate) link_profile: Option<String>,
 }
 
 /// Stable app services handed to the page components as props. Each routed screen that uses
@@ -187,6 +191,11 @@ pub(crate) struct Shared {
     /// PIN-pairing generation (the same guard): bumped per attempt and by Cancel, so a
     /// ceremony the user left still saves its pin but neither connects nor navigates.
     pub(crate) pair_gen: std::sync::atomic::AtomicU64,
+    /// Opens the profile picker over whatever screen is up. Installed by root; a connect's worker
+    /// thread raises the picker through it ([`profiles::then_connect`]).
+    pub(crate) set_picker: Mutex<Option<AsyncSetState<Option<profiles::PickerAsk>>>>,
+    /// Opens the wait for a profile's seat the same way ([`profiles::seat_then`]).
+    pub(crate) set_seat: Mutex<Option<AsyncSetState<Option<profiles::SeatWait>>>>,
 }
 
 pub struct AppCtx {
@@ -338,6 +347,18 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
     // known-hosts store behind the tiles, and the bump is what makes the pinned tile appear
     // in the same gesture instead of on the next discovery tick.
     let (hosts_rev, set_hosts_rev) = cx.use_async_state(0u64);
+    // The profile picker's ask (root state: a worker thread raises it, see `profiles`).
+    let (picker, set_picker) = cx.use_async_state(Option::<profiles::PickerAsk>::None);
+    cx.use_effect((), {
+        let (ctx, set_picker) = (ctx.clone(), set_picker.clone());
+        move || *ctx.shared.set_picker.lock().unwrap() = Some(set_picker)
+    });
+    // The wait for a starting seat, raised the same way.
+    let (seat, set_seat) = cx.use_async_state(Option::<profiles::SeatWait>::None);
+    cx.use_effect((), {
+        let (ctx, set_seat) = (ctx.clone(), set_seat.clone());
+        move || *ctx.shared.set_seat.lock().unwrap() = Some(set_seat)
+    });
     // `punktfunk://` links: the receiver thread queues them (from this launch's argv, or from a
     // later instance over WM_COPYDATA) and this poll pulls them onto the UI thread. Thread-fed
     // state must be root state, like the pad count below.
@@ -471,7 +492,12 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             );
             use pf_client_core::orchestrate::PlanOutcome;
             match plan {
-                Ok(PlanOutcome::Connect(p)) => dial_link(&ctx, &p, &set_screen, &set_status),
+                Ok(PlanOutcome::Connect(mut p)) => {
+                    // The plan's profile is the link's `as=`, else the saved pick: only the
+                    // link's own wins over the picker.
+                    p.profile = link.as_profile.clone();
+                    dial_link(&ctx, &p, &set_screen, &set_status)
+                }
                 // The link named a saved, pinned host by its LABEL or its ADDRESS rather than
                 // by its record id. This app registers the `punktfunk` scheme (AppxManifest's
                 // windows.protocol / the installer's URL Protocol key), so any web page can
@@ -480,7 +506,10 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                 // very same plan, so the confirmed link and an id-referenced one are one code
                 // path. Deliberately NOT the PIN ceremony below: this host is already pinned,
                 // and re-pairing it would throw that pin away.
-                Ok(PlanOutcome::ConfirmConnect(p)) => set_link_confirm.call(Some(p)),
+                Ok(PlanOutcome::ConfirmConnect(mut p)) => {
+                    p.profile = link.as_profile.clone();
+                    set_link_confirm.call(Some(p))
+                }
                 // Known but never pinned, or unknown: a link may not pair or trust on its own,
                 // so it opens the PIN ceremony seeded with what it CLAIMED: the name as claimed,
                 // the fingerprint pre-filling the pin (verified, not blind TOFU), and the launch
@@ -499,6 +528,7 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
                         mgmt_port: None,
                         preset: u.preset.clone(),
                         launch: u.launch.clone(),
+                        link_profile: None,
                     };
                     set_status.call(format!(
                         "{name} isn't paired with this device yet \u{2014} pair it to continue."
@@ -844,7 +874,13 @@ fn root(cx: &mut RenderCx, ctx: &Arc<AppCtx>) -> Element {
             })
             .into()
     };
-    grid(vec![page, link_dialog]).into()
+    grid(vec![
+        page,
+        link_dialog,
+        profiles::picker_slot(&picker, &set_picker),
+        profiles::seat_slot(&seat, &set_seat),
+    ])
+    .into()
 }
 
 /// Run a resolved link plan: the same four calls a host tile's click makes, so a link gets the
@@ -868,6 +904,7 @@ fn dial_link(
         mgmt_port: plan.host.mgmt_port,
         preset: plan.preset_override.clone(),
         launch: None, // routed explicitly below (initiate_launch*)
+        link_profile: plan.profile.clone(),
     };
     // With a MAC it takes the dial first wake path, so a sleeping host wakes instead of
     // erroring — exactly what clicking its tile would do. The link's `launch=` id must reach

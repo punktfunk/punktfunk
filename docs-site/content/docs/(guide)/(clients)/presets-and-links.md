@@ -65,7 +65,7 @@ settings; nothing fails to connect.
 A link starts a stream on a host this device already trusts:
 
 ```text
-punktfunk://connect/<host-ref>[?fp=<64-hex>][&host=<addr[:port]>][&launch=<id>][&preset=<ref>][&name=<label>]
+punktfunk://connect/<host-ref>[?fp=<64-hex>][&host=<addr[:port]>][&launch=<id>][&preset=<ref>][&as=<profile>][&name=<label>]
 ```
 
 `<host-ref>` is a saved host's record id, its name (ignoring case), or `addr[:port]`, tried in that
@@ -77,11 +77,12 @@ order. A name that matches two hosts is refused.
 | `host` | `addr[:port]` to use when `<host-ref>` no longer matches; port defaults to `9777` |
 | `launch` | A [library](/docs/game-library) id such as `steam:570`, launched on arrival |
 | `preset` | A preset by id or unique name, for this connect only. `profile` is an alias. |
+| `as` | A host profile by id or name to play as, for this connect only. The saved pick stays. |
 | `name` | A label shown in the confirmation, never trusted |
 
 Scheme and route are case-insensitive, unknown parameters are ignored, and a repeated parameter's
 first value wins. Limits: 2048 characters for the URL, 128 for `<host-ref>` and `launch`, 64 for
-`preset` and `name`. `launch` must be printable ASCII without spaces, quotes, `\`, `$` or backticks.
+`preset`, `as` and `name`. `launch` must be printable ASCII without spaces, quotes, `\`, `$` or backticks.
 
 `browse` takes the same form and opens the host's game library instead. The Apple apps and the
 Linux app handle it; Apple's library widget and **Open Game Library** shortcut use it. Other apps

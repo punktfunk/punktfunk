@@ -243,7 +243,9 @@ DEPENDS="$SHDEPS, libei1, pipewire, wireplumber"
 # by default; its systemd --user unit ships disabled (inert until you add scripts/plugins).
 # punktfunk-gamescope = HDR, the real mode and the cursor in a gamescope session. Recommends because
 # the repo carries no build for Ubuntu 24.04; apt skips a recommend it can't find.
-RECOMMENDS="gamescope, punktfunk-gamescope, pipewire-pulse, mesa-va-drivers, intel-media-va-driver, punktfunk-web, punktfunk-scripting"
+# punktfunk-seats = the root supervisor behind profile seats (build-seats-deb.sh). Recommends: it
+# ships disabled, so a box without a second profile loses nothing by skipping it.
+RECOMMENDS="gamescope, punktfunk-gamescope, pipewire-pulse, mesa-va-drivers, intel-media-va-driver, punktfunk-web, punktfunk-scripting, punktfunk-seats"
 SUGGESTS="kwin-wayland, mutter"
 
 INSTALLED_KB="$(du -k -s "$STAGE" | cut -f1)"

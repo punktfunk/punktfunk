@@ -54,6 +54,23 @@ const STORE_LABELS: &[(&str, &str)] = &[
     ("xbox", "Xbox / Game Pass"),
 ];
 
+/// Providers whose titles belong to one Windows account. A seat host reading the box's library
+/// leaves them out: they are the owner's. Manifests that mark a per-account source replace this
+/// list (`windows-seat-trust-model.md` L1.1).
+const PER_ACCOUNT_PROVIDERS: &[&str] = &["playnite", "windows-games", "amazon", "itch", "hydra"];
+
+/// Whether this host leaves `provider`'s titles out of every surface.
+fn left_out_here(provider: &str) -> bool {
+    PER_ACCOUNT_PROVIDERS.contains(&provider) && pf_paths::seat::box_library_dir().is_some()
+}
+
+/// Whether `e` is out of every library surface: its source is switched off (`off` from
+/// [`disabled_scanners`]), or its provider's titles are one account's and this host is a seat.
+pub(crate) fn source_off(e: &CustomEntry, off: &HashSet<String>) -> bool {
+    source_id_for(e).is_some_and(|src| off.contains(src))
+        || e.provider.as_deref().is_some_and(left_out_here)
+}
+
 /// `library-scanners.json`: ids the operator turned off. Absent file = all on.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct ScannerSettings {
@@ -62,8 +79,8 @@ struct ScannerSettings {
 }
 
 fn settings_path() -> PathBuf {
-    // Same hardened config dir as library.json / hooks.json (see `custom_path` for the rationale).
-    pf_paths::config_dir().join("library-scanners.json")
+    // Beside library.json (see `custom_path` for the rationale).
+    pf_paths::seat::library_dir().join("library-scanners.json")
 }
 
 /// Absent or malformed file → all on (warn, do not fail the library read).
@@ -79,7 +96,8 @@ pub(crate) fn disabled_scanners() -> HashSet<String> {
 /// Every source on this host with its enable state: claimed stores, then
 /// providers that have entries but never claimed a store (rom-manager, playnite), then
 /// plugins with nothing published yet whose folder requests wait for the operator — the
-/// source line is where those requests are shown. Sorted by id for the console.
+/// source line is where those requests are shown. Sorted by id for the console. A seat lists no
+/// per-account source.
 pub fn list_scanners() -> Vec<ScannerInfo> {
     let off = disabled_scanners();
     let claims = crate::library::claimed_stores();
@@ -97,12 +115,13 @@ pub fn list_scanners() -> Vec<ScannerInfo> {
             plugin_ids.push((provider.to_string(), provider.to_string()));
         }
     }
-    let access = crate::plugins::access::AccessStore::open(pf_paths::config_dir());
+    let access = crate::plugins::access::AccessStore::open(pf_paths::seat::library_dir());
     for s in access.snapshot().unwrap_or_default() {
         if !s.pending.is_empty() && !plugin_ids.iter().any(|(_, p)| *p == s.plugin) {
             plugin_ids.push((s.plugin.clone(), s.plugin));
         }
     }
+    plugin_ids.retain(|(_, provider)| !left_out_here(provider));
     plugin_ids.sort();
     plugin_ids.dedup();
 

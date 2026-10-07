@@ -24,9 +24,10 @@ pub struct NativeIdentity {
     pub key_pem: String,
 }
 
-/// Load the native identity, minting it on first run.
-/// Call once per process, before either plane starts: two concurrent
-/// callers can race the first-run file writes.
+/// Load the native identity, minting it on first run. A seat host keeps its own in its config
+/// dir, never the box's: clients reach it through the pin the box's `Redirect` carries, and a
+/// game on the seat can't answer as the box. Call once per process, before either plane
+/// starts: two concurrent callers can race the first-run file writes.
 pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<NativeIdentity> {
     let dir = config_dir();
     let cert_path = dir.join("native-cert.pem");
@@ -51,7 +52,8 @@ pub fn load_or_adopt(np: &crate::native_pairing::NativePairing) -> Result<Native
             }
         }
     }
-    if !np.list().is_empty() {
+    // A seat's pairings are the box's, and no client pinned the seat before it had a key.
+    if !np.list().is_empty() && !pf_paths::seat::is_seat_host() {
         tracing::warn!(
             "native identity minted while native clients are paired — \
              those that pinned the legacy RSA cert must re-pair"

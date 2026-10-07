@@ -17,13 +17,14 @@ import SwiftUI
 final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
     /// What the console asks the app to do: connect, launch, wake, pair.
     struct Actions {
-        var connect: (StoredHost, PresetSelection) -> Void
+        /// The trailing `String?` is the profile id the console's picker chose.
+        var connect: (StoredHost, PresetSelection, String?) -> Void
         var connectDiscovered: (DiscoveredHost) -> Void
         /// The Pair screen's "Request access": the long approval dial. A discovered host is
         /// saved first.
         var requestAccess: (StoredHost) -> Void
         var requestAccessDiscovered: (DiscoveredHost) -> Void
-        var launchTitle: (LibraryTarget, String) -> Void
+        var launchTitle: (LibraryTarget, String, String?) -> Void
         var connectShelf: (LibraryTarget) -> Void
         var wakeOnly: (StoredHost) -> Void
         var cancelConnect: () -> Void
@@ -247,6 +248,8 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
             // tvOS types through its own keyboard, where iPhone typing and dictation live.
             "system_keyboard": isTV,
             "av1_ok": AV1.hardwareDecodeSupported,
+            // This app answers `FetchProfiles` and `SetProfile`.
+            "profiles": true,
             "pyrowave_ok": MetalWaveletDecoder.supported,
             "settings": settings(hosts),
             "presets": presets.map { ["id": $0.id, "name": $0.name, "overrides": [:] as [String: Any]] },
@@ -491,6 +494,7 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         let port = UInt16(a["port"] as? Int ?? 0)
         let preset: PresetSelection = (a["preset"] as? String).map { .preset($0) } ?? .inherit
         let requestAccess = a["request_access"] as? Bool ?? false
+        let profile = a["profile"] as? String
         guard let host = host(fp: fp, addr: addr, port: port) else {
             // Not saved yet: the row came from an advert, so dial it as a discovery does.
             if let found = discovery.hosts.first(where: { $0.host == addr && $0.port == port }) {
@@ -505,9 +509,9 @@ final class ConsoleModel: ObservableObject, ConsoleViewDelegate {
         if requestAccess {
             actions.requestAccess(host)
         } else if let title = a["launch"] as? String {
-            actions.launchTitle(LibraryTarget(host: host, preset: preset), title)
+            actions.launchTitle(LibraryTarget(host: host, preset: preset), title, profile)
         } else {
-            actions.connect(host, preset)
+            actions.connect(host, preset, profile)
         }
     }
 

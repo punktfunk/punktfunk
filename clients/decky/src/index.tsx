@@ -29,7 +29,14 @@ import {
   FaSyncAlt,
   FaTv,
 } from "react-icons/fa";
-import { endGame, hostAction, killStream, streamRunning } from "./backend";
+import {
+  endGame,
+  type HostProfile,
+  hostAction,
+  killStream,
+  profiles as fetchProfiles,
+  streamRunning,
+} from "./backend";
 import { PluginErrorBoundary } from "./boundary";
 import {
   applyUpdate,
@@ -149,8 +156,28 @@ function hostDescription(v: HostView): string {
   return `${v.addr}:${v.port} · ${v.online ? "online" : "offline"} · ${trust}`;
 }
 
+/** The profiles of a paired, online host. Empty for a host with one profile or none: no chips. */
+function useHostProfiles(host: HostView, gated: boolean): HostProfile[] {
+  const [list, setList] = useState<HostProfile[]>([]);
+  useEffect(() => {
+    if (gated || !host.online) {
+      setList([]);
+      return;
+    }
+    let live = true;
+    void fetchProfiles(host.ref)
+      .then((r) => live && setList(r.ok && (r.profiles?.length ?? 0) > 1 ? r.profiles! : []))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [host.ref, host.online, gated]);
+  return list;
+}
+
 const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh }) => {
   const gated = needsPair(host);
+  const people = useHostProfiles(host, gated);
   const stream = (opts: { requestAccess?: boolean } = {}) => void startStream(host, opts);
   return (
     <>
@@ -193,6 +220,20 @@ const HostRow: FC<{ host: HostView; refresh: () => void }> = ({ host, refresh })
             </ButtonItem>
           </PanelSectionRow>
         ))}
+      {/* One chip per profile on a box with several: streams as that player, this time only. */}
+      {people.map((p) => (
+        <PanelSectionRow key={`${host.ref}:as:${p.id}`}>
+          <ButtonItem
+            layout="below"
+            onClick={() => void startStream(host, { profileId: p.id }, p.display_name)}
+            label={`● ${p.display_name}`}
+            description={p.note ?? undefined}
+          >
+            <FaPlay style={{ marginRight: "0.5em" }} />
+            Stream
+          </ButtonItem>
+        </PanelSectionRow>
+      ))}
     </>
   );
 };

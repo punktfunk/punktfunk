@@ -88,7 +88,7 @@ impl std::fmt::Display for WindowsSlotError {
             ),
             Self::ReservationMissing => write!(
                 f,
-                "{SEAT_SLOT_ENV} requires the seats add-on reservation marker at {SEATS_REGISTRY_KEY}"
+                "{SEAT_SLOT_ENV} requires the seats reservation marker at {SEATS_REGISTRY_KEY}"
             ),
             Self::OrdinaryOutOfRange { slot, max } => write!(
                 f,

@@ -66,7 +66,8 @@ To add a second player to the game you're streaming:
 2. In its **Display settings…**, set **A second device connects** to **Shares the screen**
    ([Per-device settings](/docs/virtual-displays#per-device-settings)).
 3. The guest connects. The **Sessions** card on **Home** lists them as **Joined another session**,
-   and their pads arrive as extra controllers on your desktop.
+   and their pads arrive as extra controllers on your desktop. On a host with
+   [profiles](/docs/profiles), the guest picks theirs on connect and the row shows it.
 
 The **Sessions** card picks **Player 1–4** for each session, and the device keeps that player on
 its next connect. A pad that is already plugged in keeps its slot until it reconnects. A slot

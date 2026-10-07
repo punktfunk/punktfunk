@@ -89,6 +89,10 @@ pub struct AppState {
     /// Per-client access grants, keyed by certificate fingerprint hex. Same registry as the
     /// native trust store. Set once by [`serve`]; if unset, every paired peer is ungoverned.
     pub access: std::sync::OnceLock<Arc<crate::native_pairing::NativePairing>>,
+    /// The people on this box. Set once by [`serve`] with the owner ensured.
+    pub profiles: std::sync::OnceLock<Arc<crate::profiles::Profiles>>,
+    /// The native port clients dial, for the profile list's `seat.port`. Set once by [`serve`].
+    pub native_port: std::sync::OnceLock<u16>,
     #[cfg(feature = "gamestream")]
     pub gs: crate::gamestream::GsState,
 }
@@ -117,6 +121,8 @@ impl AppState {
             audio_cap: std::sync::Arc::new(std::sync::Mutex::new(None)),
             stats,
             access: std::sync::OnceLock::new(),
+            profiles: std::sync::OnceLock::new(),
+            native_port: std::sync::OnceLock::new(),
             #[cfg(feature = "gamestream")]
             gs,
         }
@@ -208,6 +214,40 @@ pub fn serve(
     // Hand GameStream the grants registry so nvhttp launch and ENet resolve a Moonlight
     // fingerprint against the same mask the native plane enforces.
     let _ = state.access.set(np.clone());
+    let profiles = match pf_paths::seat::trust_dir() {
+        // A seat host reads the box's profiles; the box creates the owner and migrates.
+        Some(dir) => {
+            let seat = pf_paths::seat::seat_id().map_err(anyhow::Error::msg)?;
+            crate::profiles::Profiles::load_box(dir.join("profiles.json"), seat)
+        }
+        None => {
+            let profiles = crate::profiles::Profiles::load_with(None, None);
+            if let Err(e) = profiles.ensure_owner(&state.host.hostname) {
+                tracing::warn!(error = %format!("{e:#}"), "owner profile not created");
+            }
+            profiles
+        }
+    };
+    #[cfg(target_os = "linux")]
+    {
+        // The door keeps no seat homes of its own: they are the owner's host's, and move there.
+        if pf_paths::seat::trust_dir().is_none() && !pf_paths::seat::is_door() {
+            let paired: Vec<(String, String)> = np
+                .list()
+                .into_iter()
+                .map(|c| (c.name, c.fingerprint))
+                .collect();
+            profiles.migrate_device_seats(&pf_paths::seats_dir(), &paired);
+        }
+    }
+    // A seat host is pairing-required whatever its flags say.
+    let native = crate::native::NativeServe {
+        require_pairing: native.require_pairing || pf_paths::seat::is_seat_host(),
+        ..native
+    };
+    let profiles = Arc::new(profiles);
+    let _ = state.profiles.set(profiles.clone());
+    let _ = state.native_port.set(native.port);
     tracing::info!(
         hostname = %state.host.hostname,
         uniqueid = %state.host.uniqueid,
@@ -215,10 +255,17 @@ pub fn serve(
         native_port = native.port,
         require_pairing = native.require_pairing,
         gamestream,
+        door = pf_paths::seat::is_door(),
         "punktfunk host"
     );
     crate::net_health::log_addresses();
     crate::net_health::spawn_route_watch();
+    // The door keeps the seats of recent players up and lets idle ones go, as the Windows service
+    // does for its own.
+    #[cfg(target_os = "linux")]
+    if pf_paths::seat::is_door() {
+        crate::seats::lifecycle::run_door();
+    }
     // Scan once (cached for `/local/summary`). Warn only when a clash is active;
     // a dormant leftover logs at INFO so every boot is not a warning.
     let conflicts = crate::detect::init();
@@ -318,6 +365,7 @@ pub fn serve(
                         native_opts,
                         native.mgmt_port,
                         np,
+                        profiles.clone(),
                         stats.clone(),
                         native_ident,
                         web,
@@ -345,6 +393,7 @@ pub fn serve(
                     native_opts,
                     native.mgmt_port,
                     np,
+                    profiles.clone(),
                     stats.clone(),
                     native_ident,
                     web,

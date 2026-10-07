@@ -302,6 +302,7 @@ mod tests {
             game_presets: Default::default(),
             id: None,
             prev_addrs: vec![],
+            profile: None,
         }
     }
 

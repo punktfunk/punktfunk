@@ -514,6 +514,7 @@ mod tests {
                 clock_origin_ns: 0,
                 suite: None,
                 features: Default::default(),
+                profile: None,
             };
             ServerHello::from_body(&sh.fields().into_body())
                 .unwrap()

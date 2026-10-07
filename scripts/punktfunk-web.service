@@ -16,6 +16,8 @@ Description=punktfunk management web console
 # because the host is Type=simple and systemd calls it started the moment it is spawned — seconds
 # before either file lands. Keep web-init in BOTH lists: the ordering is what makes it a gate.
 After=punktfunk-web-init.service punktfunk-host.service
+# Stands down while the door's own console (punktfunk-web-door.service) serves this port.
+ConditionPathExists=!/run/punktfunk-web-door
 # Wants, not Requires: if the pre-start unit itself fails, still try — the Restart backstop below
 # recovers, where a hard dependency would leave the console down.
 Wants=punktfunk-web-init.service

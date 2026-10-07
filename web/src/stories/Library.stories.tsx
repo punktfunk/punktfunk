@@ -1,5 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { ApiError } from "@/api/fetcher";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
+import type { SeatScopeValue } from "@/api/seat";
+import { QueryState } from "@/components/query-state";
+import { SeatScopeView } from "@/components/seat-scope";
+import { LibraryHeader } from "@/sections/Library";
 import { LibraryGrid } from "@/sections/Library/LibraryGrid";
 import { MigrationBanner, SourcesCard } from "@/sections/Library/Sources";
 import { library } from "./lib/fixtures";
@@ -52,6 +57,51 @@ const gridArgs = {
 	deletingId: null,
 	onToggleHidden: noop,
 	hidingId: null,
+};
+
+const SEATS = [
+	{ id: "a".repeat(32), name: "Ben" },
+	{ id: "b".repeat(32), name: "Guest room" },
+];
+
+/** A host with two seats of its own: the chip, on the box's library. */
+const scope = (seat: SeatScopeValue["seat"]): SeatScopeValue => ({
+	page: "library",
+	seat,
+	seats: SEATS,
+	ownerName: "Enrico",
+	pick: noop,
+});
+
+/** **Whose library** on the header: the box's own is the default. */
+export const WhoseLibrary: Story = {
+	render: () => (
+		<SeatScopeView {...scope(null)}>
+			<LibraryHeader />
+		</SeatScopeView>
+	),
+};
+
+/** A seat picked, whose host is not running. */
+export const SeatDown: Story = {
+	render: () => (
+		<SeatScopeView {...scope(SEATS[0] ?? null)}>
+			<div className="flex flex-col gap-card">
+				<LibraryHeader />
+				<QueryState
+					isLoading={false}
+					error={
+						new ApiError(502, {
+							error: "The seat didn't answer. Start it, then try again.",
+						})
+					}
+					refetch={noop}
+				>
+					{null}
+				</QueryState>
+			</div>
+		</SeatScopeView>
+	),
 };
 
 export const Populated: Story = {

@@ -6,6 +6,7 @@ use super::{saved_request, ConnectRequest};
 use crate::discovery::{self, DiscoveredHost};
 use crate::trust::{KnownHost, Settings};
 use pf_client_core::host_order::{self, Arrangeable};
+use pf_client_core::profiles::ProfilePick;
 use std::collections::HashMap;
 
 /// A preset as a card needs it: what to call it and the colour its chip carries.
@@ -100,6 +101,8 @@ pub enum CardKind {
         pinned: Option<(String, String)>,
         /// The record `Settings::default_host` names.
         is_default: bool,
+        /// The profile this device plays as on the host.
+        profile: Option<ProfilePick>,
     },
     /// Found on the network and not saved. `pair_optional`: the host offers trust on first use.
     Discovered { pair_optional: bool },
@@ -208,6 +211,7 @@ pub fn saved_bands(
                     paired: k.paired,
                     pinned: pinned.map(|p| (p.id.clone(), p.name.clone())),
                     is_default,
+                    profile: k.profile.clone(),
                 },
                 request,
                 last_used: k.last_used,
@@ -264,6 +268,7 @@ pub fn discovered_cards<'a>(
                 launch: None,
                 mac: a.mac.clone(),
                 preset: None,
+                profile: None,
             };
             let key = request.card_key();
             CardModel {

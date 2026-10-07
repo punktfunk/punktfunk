@@ -644,7 +644,7 @@ pub fn fill_free<'a>(games: impl IntoIterator<Item = &'a mut GameEntry>) {
             .entry((provider.clone(), target.clone()))
             .or_insert_with(|| {
                 let access = access.get_or_insert_with(|| {
-                    crate::plugins::access::AccessStore::open(pf_paths::config_dir())
+                    crate::plugins::access::AccessStore::open(pf_paths::seat::library_dir())
                 });
                 (!provider.is_empty() && access.may_write(&provider, Path::new(&target)))
                     .then(|| free_bytes(Path::new(&target)))

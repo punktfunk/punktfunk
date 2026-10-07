@@ -29,8 +29,8 @@ Send a bearer token as `Authorization: Bearer <token>`. Which token decides what
 | Admin token | `<config>/mgmt-token` | loopback | everything |
 | Plugin token | `<config>/plugin-token`, minted while the plugin runner is installed | loopback | the plugin allowlist: status, library, sessions, displays, events, plugin registration. Not hooks, pairing admin, host logs, the plugin store or updates |
 | Per-plugin token | handed to each plugin by the runner | loopback | the plugin allowlist, and only its own registration and library provider |
-| Tray token | `<config>/tray-token`, minted fresh at every start; every local account may read it | loopback | `GET /local/summary` and nothing else |
-| Paired device | a paired client certificate over mTLS, or a browser's device-key token | anywhere | `GET` host, status, compositors, actions and library; log upload; invoking an action it holds the grant for |
+| Tray token | `<config>/tray-token`, minted fresh at every start; every local account but a seat's may read it | loopback | `GET /local/summary` and nothing else |
+| Paired device | a paired client certificate over mTLS, or a browser's device-key token | anywhere | `GET` host, status, compositors, actions and library; the profile list and pictures, and waking a profile's seat; log upload; invoking an action it holds the grant for |
 
 The token files hold one `KEY=<hex>` line (`PUNKTFUNK_MGMT_TOKEN=…`, `PUNKTFUNK_TRAY_TOKEN=…`),
 so a shell or a systemd `EnvironmentFile` can source them. Send only the value after `=`. The

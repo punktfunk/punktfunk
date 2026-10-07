@@ -120,6 +120,7 @@ final class SharedFoundationTests: XCTestCase {
             let fp: String?
             let launch: String?
             let preset: String?
+            let `as`: String?
             let name: String?
             let host_addr: String?
             let host_port: Int?
@@ -168,6 +169,7 @@ final class SharedFoundationTests: XCTestCase {
             XCTAssertEqual(link.fp, want.fp, "\(testCase.name) fp")
             XCTAssertEqual(link.launch, want.launch, "\(testCase.name) launch")
             XCTAssertEqual(link.preset, want.preset, "\(testCase.name) preset")
+            XCTAssertEqual(link.asProfile, want.as, "\(testCase.name) as")
             XCTAssertEqual(link.name, want.name, "\(testCase.name) name")
             XCTAssertEqual(link.host?.address, want.host_addr, "\(testCase.name) host_addr")
             XCTAssertEqual(

@@ -123,6 +123,7 @@ internal object ConsoleJson {
                 // Ids, not chips: the bind screen only compares them. Pinned copies below
                 // inherit the map — a card is the same host's shelf.
                 .put("game_presets", JSONObject(h.gamePresets))
+                .put("profile", profileJson(h))
             out.put(base)
             // A pinned card shares the primary tile's live state under its own key.
             for (pid in h.pinnedPresetIds.distinct()) {
@@ -189,7 +190,31 @@ internal object ConsoleJson {
                     ?.let(::presetChip) ?: JSONObject.NULL,
             )
             .put("game_presets", JSONObject(h.gamePresets))
+            .put("profile", profileJson(h))
     }
+
+    /** One `enumerate` row, as the console's `ListedProfile` reads it. */
+    fun profileRow(p: io.unom.punktfunk.kit.ListedProfile): JSONObject = JSONObject()
+        .put("id", p.id)
+        .put("display_name", p.displayName)
+        .put("accent", p.accent ?: JSONObject.NULL)
+        .put("owner", p.owner)
+        .put("legacy_seat", p.legacySeat)
+        .put(
+            "seat",
+            p.seat?.let {
+                JSONObject()
+                    .put("state", it.state.name.lowercase())
+                    .put("detail", it.detail ?: JSONObject.NULL)
+                    .put("occupant", it.occupant ?: JSONObject.NULL)
+                    .put("steam_sign_in", it.steamSignIn ?: JSONObject.NULL)
+            } ?: JSONObject.NULL,
+        )
+
+    /** The saved profile pick as `{id, display_name}`, or `null`. */
+    private fun profileJson(h: KnownHost): Any = h.asProfile
+        ?.let { JSONObject().put("id", it.id).put("display_name", it.displayName) }
+        ?: JSONObject.NULL
 
     /** `KnownHosts` (Rust) — only what the console needs to build a link: id, address, fp. */
     fun knownHosts(saved: List<KnownHost>): String {

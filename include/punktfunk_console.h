@@ -75,6 +75,10 @@
 // `{"held": [..], "axes": [[name, v]]}` — the pad's reading while the `PadTest` command is on.
 #define PUNKTFUNK_CONSOLE_PUSH_PAD_TEST 18
 
+// `{"fp_hex": "…", "answer": ProfilesAnswer}` — the answer to the `FetchProfiles` command:
+// `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
+#define PUNKTFUNK_CONSOLE_PUSH_PROFILES 20
+
 // One console. Opaque to C.
 typedef struct PunktfunkConsole PunktfunkConsole;
 

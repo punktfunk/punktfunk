@@ -15,7 +15,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "windows")]
 pub mod seat;
 
 /// `$XDG_RUNTIME_DIR/punktfunk-gamescope-ei` (per-user 0700), or `/tmp/…`
@@ -75,17 +74,17 @@ pub fn seats_dir() -> PathBuf {
     data_dir().join("seats")
 }
 
-/// `$XDG_DATA_HOME/punktfunk/seats/<id>` — the `HOME` a seat's nested Steam runs
-/// under (`design/gamescope-multiuser.md` D1). `id` is `pf-vdisplay`'s
-/// `SessionIsolation`. Path only; the caller creates it 0700
+/// `$XDG_DATA_HOME/punktfunk/seats/<id>` — the `HOME` a seat profile's nested Steam runs
+/// under. `id` is the profile id. Path only; the caller creates it 0700
 /// ([`create_private_dir`]).
 #[cfg(target_os = "linux")]
 pub fn seat_home(id: &str) -> PathBuf {
     seats_dir().join(id)
 }
 
-/// `…/seats/<id>.json` — what pre-warming that seat needs, beside its home rather than inside
-/// it: the home is a `HOME` Steam owns, and a file of ours in it is one Steam may clean up.
+/// `…/seats/<id>.json` — what pre-warming that profile's seat needs, beside its home rather
+/// than inside it: the home is a `HOME` Steam owns, and a file of ours in it is one Steam may
+/// clean up.
 #[cfg(target_os = "linux")]
 pub fn seat_record(id: &str) -> PathBuf {
     seats_dir().join(format!("{id}.json"))
@@ -190,6 +189,18 @@ pub mod env_file {
     }
 }
 
+/// The mode [`create_private_dir`] gives `dir`: 0700, except the door's box directory
+/// (`config`), which every seat user walks to its own entry below it. Its files are 0600 and
+/// its subdirectories 0700, so execute-only shows names and no more.
+#[cfg(unix)]
+fn private_dir_mode(door: bool, dir: &std::path::Path, config: &std::path::Path) -> u32 {
+    if door && dir == config {
+        0o711
+    } else {
+        0o700
+    }
+}
+
 /// Tightens an already-existing dir. Windows refuses a reparse point
 /// ([`reject_reparse_point`]): hardening a junction would harden the
 /// attacker-chosen target while the link stays theirs. Default
@@ -198,13 +209,14 @@ pub fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let mode = private_dir_mode(seat::is_door(), dir, &config_dir());
         let r = std::fs::DirBuilder::new()
             .recursive(true)
-            .mode(0o700)
+            .mode(mode)
             .create(dir);
         // `recursive` does not re-chmod an existing dir.
         if dir.exists() {
-            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
         }
         r
     }
@@ -477,15 +489,26 @@ pub fn replace_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::
 /// `BUILTIN\Users:(R)` to the temp before the rename, so a reader sees the old file or the
 /// readable new one, never a locked one. Unix stays owner-only: the host's user is the reader.
 pub fn replace_users_readable_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    replace(path, contents, Temp::UsersReadable)
+    replace(path, contents, Temp::UsersReadable(None))
+}
+
+/// [`replace_users_readable_file`] that the accounts of `deny` (an icacls principal, `*<SID>`)
+/// may not read. Windows denies them on the temp beside the grant, so none of them ever sees
+/// the published file. Unix ignores `deny`: the file is owner-only there.
+pub fn replace_users_readable_file_denying(
+    path: &std::path::Path,
+    contents: &[u8],
+    deny: &str,
+) -> std::io::Result<()> {
+    replace(path, contents, Temp::UsersReadable(Some(deny)))
 }
 
 /// How [`replace`] makes its temp, and so the published file.
 #[derive(Clone, Copy, PartialEq)]
-enum Temp {
+enum Temp<'a> {
     Plain,
     Secret,
-    UsersReadable,
+    UsersReadable(Option<&'a str>),
 }
 
 /// The temp is removed on every error. A crash between write and rename leaves it behind:
@@ -508,20 +531,26 @@ fn replace(path: &std::path::Path, contents: &[u8], mode: Temp) -> std::io::Resu
         write_secret_file(tmp.path(), contents)?;
     }
     #[cfg(windows)]
-    if mode == Temp::UsersReadable {
-        grant_users_read(tmp.path())?;
+    if let Temp::UsersReadable(deny) = mode {
+        grant_users_read(tmp.path(), deny)?;
     }
     std::fs::rename(tmp.path(), path)?;
     tmp.published();
     Ok(())
 }
 
-/// `BUILTIN\Users:(R)` beside the SYSTEM/Administrators ACEs [`write_secret_file`] set.
+/// `BUILTIN\Users:(R)` beside the SYSTEM/Administrators ACEs [`write_secret_file`] set, and a
+/// read deny for `deny`, which outranks the grant.
 #[cfg(windows)]
-fn grant_users_read(path: &std::path::Path) -> std::io::Result<()> {
-    let status = std::process::Command::new(system32("icacls.exe"))
+fn grant_users_read(path: &std::path::Path, deny: Option<&str>) -> std::io::Result<()> {
+    let mut icacls = std::process::Command::new(system32("icacls.exe"));
+    icacls
         .arg(path.as_os_str())
-        .args(["/grant:r", "*S-1-5-32-545:(R)"])
+        .args(["/grant:r", "*S-1-5-32-545:(R)"]);
+    if let Some(principal) = deny {
+        icacls.args(["/deny", &format!("{principal}:(R)")]);
+    }
+    let status = icacls
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;
@@ -818,6 +847,20 @@ mod tests {
         let name = a.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("display-settings.json."), "{name}");
         assert!(name.ends_with(".tmp"), "{name}");
+    }
+
+    /// Only a door's own box directory is walkable by others; its subdirectories and every
+    /// other host's directory stay private.
+    #[cfg(unix)]
+    #[test]
+    fn the_door_s_box_directory_is_the_one_private_dir_others_may_walk() {
+        let box_dir = PathBuf::from("/var/lib/punktfunk");
+        assert_eq!(private_dir_mode(true, &box_dir, &box_dir), 0o711);
+        assert_eq!(private_dir_mode(false, &box_dir, &box_dir), 0o700);
+        assert_eq!(
+            private_dir_mode(true, &box_dir.join("seats"), &box_dir),
+            0o700
+        );
     }
 
     #[test]

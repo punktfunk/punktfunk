@@ -1,0 +1,7 @@
+# The directories punktfunk-seats and the seat units use. /var/lib/punktfunk itself belongs to the
+# box host's package. seats and trust are 0711: a seat user reaches its own entry and can't list
+# the others. The supervisor makes games, the shared Steam library, with its own group.
+d /run/punktfunk        0755 root root -
+d /run/punktfunk/seats  0755 root root -
+d /var/lib/punktfunk/seats 0711 root root -
+d /var/lib/punktfunk/trust 0711 root root -

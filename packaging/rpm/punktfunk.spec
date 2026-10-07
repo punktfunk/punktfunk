@@ -143,6 +143,9 @@ Recommends:     punktfunk-web
 # harmless where a `--with scripting`-less build didn't produce it. Its systemd --user unit ships
 # disabled — the runner is inert until you add scripts/plugins.
 Recommends:     punktfunk-scripting
+# One user, session and host per profile (a root supervisor). Weak: it ships nothing on, so a box
+# that never makes a second profile loses nothing by skipping it.
+Recommends:     punktfunk-seats
 
 %description
 punktfunk is a Linux-first, low-latency desktop and game streaming host. It speaks
@@ -169,6 +172,26 @@ video (GF(2^16) Leopard FEC + AES-GCM over UDP, QUIC control plane) with Opus
 audio, microphone passthrough, and full gamepad support including DualSense
 touchpad, motion, adaptive triggers and lightbar through SDL3. The host creates a
 virtual output at exactly this client's resolution and refresh rate — no scaling.
+
+%if %{with host}
+%package seats
+Summary:        punktfunk seat supervisor (a user, a session and a host per profile)
+# The supervisor and the host it starts per seat speak one socket protocol, so they move together.
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+# What the supervisor and the door helper run: useradd/groupadd/usermod, runuser and setpriv,
+# setfacl, loginctl/systemctl, pkill in seat-session.
+Requires:       shadow-utils
+Requires:       util-linux
+Requires:       acl
+Requires:       systemd
+Requires:       procps-ng
+
+%description seats
+The root daemon behind profile seats. Each seat is a system user with its own logind session,
+a headless desktop and a stock punktfunk host. The package also carries the door units, which
+keep the box reachable with nobody logged in. Installed but not enabled: the console turns seats
+and the door on. Stopping or restarting the daemon leaves running seats up.
+%endif
 
 %if %{with web}
 %package web
@@ -264,7 +287,7 @@ export PUNKTFUNK_BUILD_VERSION="%{version}-%{release}"
 cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
   -p punktfunk-host -p punktfunk-encode-worker \
   -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli \
-  -p pf-update
+  -p pf-update -p pf-seats
 %else
 # Client-only (aarch64): no host crate, so none of the encode features apply. pf-update still
 # builds — the client subpackage ships its own copy for `punktfunk-client --apply-update`.
@@ -381,6 +404,22 @@ install -Dm0755 target/release/pf-update %{buildroot}%{_libexecdir}/punktfunk/pf
 install -Dm0644 packaging/linux/punktfunk-update.service %{buildroot}%{_unitdir}/punktfunk-update.service
 install -Dm0644 packaging/linux/49-punktfunk-update.rules %{buildroot}%{_datadir}/polkit-1/rules.d/49-punktfunk-update.rules
 install -Dm0755 packaging/linux/restart-user-units.sh %{buildroot}%{_libexecdir}/punktfunk/restart-user-units
+
+# The seat supervisor: a root daemon and the helpers its units run. Installed, never enabled.
+install -Dm0755 target/release/punktfunk-seats %{buildroot}%{_libexecdir}/punktfunk/punktfunk-seats
+for f in seat-session seat-reap; do
+  install -Dm0755 packaging/linux/$f %{buildroot}%{_libexecdir}/punktfunk/$f
+done
+for f in punktfunk-seats.service punktfunk-seat@.service; do
+  install -Dm0644 packaging/linux/$f %{buildroot}%{_unitdir}/$f
+done
+install -Dm0644 packaging/linux/punktfunk-seats.tmpfiles %{buildroot}%{_tmpfilesdir}/punktfunk-seats.conf
+# The door: the box's host as a system service, and the root helper the console turns it on with.
+install -Dm0755 packaging/linux/door-helper %{buildroot}%{_libexecdir}/punktfunk/door-helper
+for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
+  install -Dm0644 packaging/linux/$f %{buildroot}%{_unitdir}/$f
+done
+install -Dm0644 packaging/linux/49-punktfunk-door.rules %{buildroot}%{_datadir}/polkit-1/rules.d/49-punktfunk-door.rules
 
 # systemd *user* unit (the host runs in the graphical session, not as root).
 install -Dm0644 scripts/punktfunk-host.service %{buildroot}%{_userunitdir}/punktfunk-host.service
@@ -658,6 +697,24 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_datadir}/%{name}/*
 %endif
 
+%if %{with host}
+%files seats
+%license LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.txt
+%dir %{_libexecdir}/punktfunk
+%{_libexecdir}/punktfunk/punktfunk-seats
+%{_libexecdir}/punktfunk/seat-session
+%{_libexecdir}/punktfunk/seat-reap
+%{_libexecdir}/punktfunk/door-helper
+%{_unitdir}/punktfunk-seats.service
+%{_unitdir}/punktfunk-seat@.service
+%{_unitdir}/punktfunk-door.service
+%{_unitdir}/punktfunk-web-door.service
+%{_unitdir}/punktfunk-door-on@.service
+%{_unitdir}/punktfunk-door-off@.service
+%{_datadir}/polkit-1/rules.d/49-punktfunk-door.rules
+%{_tmpfilesdir}/punktfunk-seats.conf
+%endif
+
 %files client
 # The CLIENT-scoped notices, not the workspace-wide root file: the root one covers the host's
 # dependency graph, which is a superset of this subpackage's. Same file the GTK shell shows on
@@ -803,6 +860,21 @@ fi
 # Any punktfunk server package update restarts the running services, once per transaction.
 %transfiletriggerin -- %{_bindir}/punktfunk-host %{_datadir}/punktfunk-web %{_datadir}/punktfunk-scripting %{_libexecdir}/punktfunk-bun
 %{_libexecdir}/punktfunk/restart-user-units
+%endif
+
+%if %{with host}
+%post seats
+# The seat users join it and tmpfiles.d names it; the host package creates it too.
+getent group punktfunk >/dev/null 2>&1 || groupadd --system punktfunk 2>/dev/null || :
+systemd-tmpfiles --create %{_tmpfilesdir}/punktfunk-seats.conf >/dev/null 2>&1 || :
+
+%preun seats
+# No %%systemd_post: nothing here enables the daemon. door-helper enables the door's units, so
+# removal disables them. A restart leaves running seats up.
+%systemd_preun punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service
+
+%postun seats
+%systemd_postun_with_restart punktfunk-seats.service punktfunk-door.service punktfunk-web-door.service
 %endif
 
 %if %{with web}

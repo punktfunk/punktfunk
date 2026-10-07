@@ -1,0 +1,11 @@
+# Turn off "Reachable without logging in" for the user named by the instance, as a root oneshot.
+# Started, never enabled, by the door (`systemctl start punktfunk-door-off@<user>`) or by a member
+# of the `punktfunk-update` group; see 49-punktfunk-door.rules. The helper refuses any user who
+# isn't one.
+[Unit]
+Description=punktfunk door: turn off for %i (root helper)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/punktfunk/door-helper off %i
+TimeoutStartSec=180

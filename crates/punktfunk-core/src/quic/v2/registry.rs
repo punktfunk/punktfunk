@@ -30,7 +30,8 @@ pub const MSG_SERVER_HELLO: u64 = 0x02;
 pub const MSG_READY: u64 = 0x03;
 /// `host → client`, before `ServerHello`: still deciding (console approval). Repeats.
 pub const MSG_PENDING: u64 = 0x04;
-/// `host → client`, instead of `ServerHello`: dial this address and port instead.
+/// `host → client`, instead of `ServerHello`: dial this address and port instead, pinned to
+/// the certificate it names.
 pub const MSG_REDIRECT: u64 = 0x05;
 /// `host → client`: why the close that follows happens, as a code and a sentence.
 pub const MSG_REFUSED: u64 = 0x06;
@@ -244,6 +245,9 @@ pub const FEATURE_STREAM_CONFIG: u32 = 32;
 /// Both ends: a feature report for a client's pad rides the control stream
 /// ([`MSG_PAD_FEATURE`]), where a lost one is resent; output reports stay datagrams.
 pub const FEATURE_PAD_WRITES: u32 = 33;
+/// Both ends: the client reads `ServerHello`'s profile echo and follows a `Redirect`, and the
+/// host resolves `ClientHello`'s profile. A host redirects only a client that sets it.
+pub const FEATURE_PROFILES: u32 = 34;
 
 #[cfg(test)]
 mod tests {
@@ -277,6 +281,7 @@ mod tests {
         ("FEATURE_V1_HOST_CAPS2", FEATURE_V1_HOST_CAPS2),
         ("FEATURE_STREAM_CONFIG", FEATURE_STREAM_CONFIG),
         ("FEATURE_PAD_WRITES", FEATURE_PAD_WRITES),
+        ("FEATURE_PROFILES", FEATURE_PROFILES),
     ];
 
     /// Every close and stop code either wire uses: v1's live on, and v2 adds its own.
@@ -334,6 +339,19 @@ mod tests {
         (
             "HOST_POWER_CLOSE_CODE",
             crate::reject::HOST_POWER_CLOSE_CODE,
+        ),
+        (
+            "PROFILE_UNKNOWN_CLOSE_CODE",
+            crate::reject::PROFILE_UNKNOWN_CLOSE_CODE,
+        ),
+        ("NO_SEAT_CLOSE_CODE", crate::reject::NO_SEAT_CLOSE_CODE),
+        (
+            "SEAT_OCCUPIED_CLOSE_CODE",
+            crate::reject::SEAT_OCCUPIED_CLOSE_CODE,
+        ),
+        (
+            "SEAT_UNAVAILABLE_CLOSE_CODE",
+            crate::reject::SEAT_UNAVAILABLE_CLOSE_CODE,
         ),
         ("CLIP_CANCELLED_CODE", 0x70),
         ("STOP_UNKNOWN_STREAM", STOP_UNKNOWN_STREAM),

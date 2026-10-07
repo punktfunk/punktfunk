@@ -1,0 +1,113 @@
+{
+  "$comment": "When a client shows the profile picker and which profile id it sends (design/profiles-and-seats.md §10.1). Every client's test replays these: pf-client-core profiles.rs, Swift, Kotlin. `listed` is GET /api/v1/profiles/enumerate in host order, or null when the route answers 404 or the host can't be asked. `remembered` is the pick this device saved for the box. `link` is a punktfunk:// link's `as=`, which wins for one connect and is never saved. `expect.send` is the id the ClientHello carries (null: none), `expect.gone` the name of a remembered profile the box no longer lists, and `expect.remember` what the saved pick is afterwards (null: none).",
+  "cases": [
+    {
+      "name": "one profile: no picker, its id goes anyway, nothing is saved",
+      "listed": [{"id": "own", "display_name": "Enrico", "owner": true}],
+      "remembered": null,
+      "link": null,
+      "expect": {"picker": false, "send": "own", "gone": null, "remember": null}
+    },
+    {
+      "name": "two profiles, nothing remembered: the picker",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false}
+      ],
+      "remembered": null,
+      "link": null,
+      "expect": {"picker": true, "send": null, "gone": null, "remember": null}
+    },
+    {
+      "name": "a remembered pick still listed: no picker",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false}
+      ],
+      "remembered": {"id": "kid", "display_name": "Kid"},
+      "link": null,
+      "expect": {"picker": false, "send": "kid", "gone": null, "remember": "kid"}
+    },
+    {
+      "name": "a remembered pick that is gone: the picker says so",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "ben", "display_name": "Ben", "owner": false}
+      ],
+      "remembered": {"id": "kid", "display_name": "Kid"},
+      "link": null,
+      "expect": {"picker": true, "send": null, "gone": "Kid", "remember": null}
+    },
+    {
+      "name": "the profile this device's old seat became: preselected and saved",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false, "legacy_seat": true}
+      ],
+      "remembered": null,
+      "link": null,
+      "expect": {"picker": false, "send": "kid", "gone": null, "remember": "kid"}
+    },
+    {
+      "name": "a remembered pick beats the old seat",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false, "legacy_seat": true}
+      ],
+      "remembered": {"id": "own", "display_name": "Enrico"},
+      "link": null,
+      "expect": {"picker": false, "send": "own", "gone": null, "remember": "own"}
+    },
+    {
+      "name": "a box without profiles: nothing is sent, the saved pick stays",
+      "listed": null,
+      "remembered": {"id": "kid", "display_name": "Kid"},
+      "link": null,
+      "expect": {"picker": false, "send": null, "gone": null, "remember": "kid"}
+    },
+    {
+      "name": "one profile left after the remembered one went: no picker, the pick is dropped",
+      "listed": [{"id": "own", "display_name": "Enrico", "owner": true}],
+      "remembered": {"id": "kid", "display_name": "Kid"},
+      "link": null,
+      "expect": {"picker": false, "send": "own", "gone": null, "remember": null}
+    },
+    {
+      "name": "a link's as= wins for this connect and leaves the saved pick alone",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false}
+      ],
+      "remembered": {"id": "own", "display_name": "Enrico"},
+      "link": "kid",
+      "expect": {"picker": false, "send": "kid", "gone": null, "remember": "own"}
+    },
+    {
+      "name": "a link's as= by name, any case",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false}
+      ],
+      "remembered": null,
+      "link": "KID",
+      "expect": {"picker": false, "send": "kid", "gone": null, "remember": null}
+    },
+    {
+      "name": "a link's as= the box doesn't list: the picker",
+      "listed": [
+        {"id": "own", "display_name": "Enrico", "owner": true},
+        {"id": "kid", "display_name": "Kid", "owner": false}
+      ],
+      "remembered": null,
+      "link": "nobody",
+      "expect": {"picker": true, "send": null, "gone": null, "remember": null}
+    },
+    {
+      "name": "a link's as= on a box without profiles is sent as given",
+      "listed": null,
+      "remembered": null,
+      "link": "kid",
+      "expect": {"picker": false, "send": "kid", "gone": null, "remember": null}
+    }
+  ]
+}

@@ -90,6 +90,7 @@ pub(crate) async fn run(
                 pairing,
                 &label,
                 &hex::encode(fp),
+                first.profile.as_deref(),
                 &sem,
             )
             .await?
@@ -347,7 +348,7 @@ mod tests {
             },
             cert_hash: [0x11; 32],
             last_pairing: std::sync::Mutex::new(None),
-            host: crate::native::SessionHost::for_tests(pairing),
+            host: crate::native::SessionHost::for_tests(pairing, crate::native::test_profiles()),
         }
     }
 
@@ -448,6 +449,7 @@ mod tests {
             resume: None,
             suites: Vec::new(),
             features: Default::default(),
+            profile: None,
         }
         .encode_v2()
     }
@@ -459,7 +461,11 @@ mod tests {
         s: &Serving,
         key: &KeyPair,
         first: &[u8],
-    ) -> (wtransport::Connection, Admitted) {
+    ) -> (
+        wtransport::Connection,
+        punktfunk_core::quic::v2::io::FrameReader<wtransport::RecvStream>,
+        Admitted,
+    ) {
         let identity = wtransport::Identity::self_signed(["localhost"]).unwrap();
         let cert = identity.certificate_chain().as_slice()[0].hash();
         let loopback: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -494,7 +500,7 @@ mod tests {
             io::send(&mut tx, &respond(key, &s.cert_hash, &nonce))
                 .await
                 .unwrap();
-            conn
+            (conn, rx)
         };
         let host = async {
             let conn = server.accept().await.await.unwrap().accept().await.unwrap();
@@ -503,7 +509,8 @@ mod tests {
                 .unwrap()
                 .expect("a session, not a pairing")
         };
-        tokio::join!(browser, host)
+        let ((conn, rx), admitted) = tokio::join!(browser, host);
+        (conn, rx, admitted)
     }
 
     /// An admitted browser is its device for the rest of the session, as a native client is its
@@ -517,7 +524,7 @@ mod tests {
         np.add("Enrico's browser", &hex::encode(fp)).unwrap();
 
         let first = hello("Safari on Mac", None);
-        let (_browser, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
         assert!(admitted.link.is_web());
         assert_eq!(admitted.link.peer_fingerprint(), Some(fp));
         assert!(admitted.knock.is_none(), "a paired device streams at once");
@@ -532,12 +539,13 @@ mod tests {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         let first = hello("Safari on Mac", None);
-        let (_browser, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (_browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
         let label = admitted.knock.expect("an unpaired device knocks");
         assert_eq!(label, "Safari on Mac");
 
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let park = crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, &sem);
+        let park =
+            crate::native::park_knock(&admitted.link, None, &np, &label, &fp_hex, None, &sem);
         let console = async {
             let pending = loop {
                 if let Some(p) = np.pending().into_iter().find(|p| p.fingerprint == fp_hex) {
@@ -569,7 +577,7 @@ mod tests {
         let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
         s.plane.pairing.add("Enrico's browser", &fp_hex).unwrap();
         let first = hello("Safari on Mac", None);
-        let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
         let quit = punktfunk_core::quic::QUIT_CLOSE_CODE;
         browser.close(wtransport::VarInt::from_u32(quit), b"");
         let closed =
@@ -598,7 +606,7 @@ mod tests {
         np.add_with_access("Enrico's browser", &fp_hex, Some(no_launch))
             .unwrap();
         let first = hello("Safari on Mac", Some("steam:570"));
-        let (browser, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let (browser, _rx, admitted) = admit_over_loopback(&s, &key, &first).await;
         let Admitted {
             link,
             tx,
@@ -630,5 +638,38 @@ mod tests {
         let why = RejectReason::LaunchNotPermitted;
         assert_eq!(said.code, why.close_code());
         assert_eq!(said.reason, why.to_string());
+    }
+
+    /// A `Redirect` reaches the browser before any `ServerHello`, and the host then closes.
+    #[tokio::test]
+    async fn a_redirect_reaches_the_client_before_the_server_hello() {
+        use punktfunk_core::quic::v2::msg::{Redirect, V2Message};
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let s = serving(store("redirect"));
+        let fp_hex = hex::encode(sha256(&key.subject_public_key_info()));
+        s.plane.pairing.add("Enrico's browser", &fp_hex).unwrap();
+        let first = hello("Safari on Mac", None);
+        let (browser, mut rx, admitted) = admit_over_loopback(&s, &key, &first).await;
+        let Admitted { link, mut tx, .. } = admitted;
+        let to = Redirect {
+            addr: "192.168.1.20".into(),
+            port: 9778,
+            profile: "9a3f1c2b7e40".into(),
+            seat_no: 1,
+            seat_name: "Seat 1".into(),
+            occupant: String::new(),
+            pin: String::new(),
+        };
+        let host = crate::native::redirect(&link, &mut tx, &to);
+        let read = async {
+            let (ty, body) = rx.read_frame().await.unwrap();
+            assert_eq!(ty, Redirect::TYPE);
+            let got = Redirect::from_body(&body).unwrap();
+            browser.close(wtransport::VarInt::from_u32(0), b"");
+            got
+        };
+        let (sent, got) = tokio::join!(host, read);
+        sent.unwrap();
+        assert_eq!(got, to);
     }
 }

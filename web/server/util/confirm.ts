@@ -15,6 +15,9 @@
 //                                            design/host-actions.md §7): ending the machine from
 //                                            a 7-day cookie alone is exactly what this gate exists
 //                                            to prevent
+//   - DELETE /api/v1/profiles/{id}        — with `erase` it deletes a player's Steam and saves
+//   - PUT  /api/v1/profiles/door          — moves the box's host between a user's session and a
+//                                            system service, and its identity and pairings with it
 //   - the PAIRING routes — arming a window, approving a knock, submitting a GameStream PIN. A
 //     paired device injects keyboard and mouse on the host desktop, so admitting one IS code
 //     execution, and it was the shortest path past this gate (security-review 2026-08-25).

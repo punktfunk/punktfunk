@@ -6,6 +6,7 @@
 //!
 //! Pin this via [`TrustStore`]. Grant masks are stored as written; readers AND
 //! with [`GRANT_ALL`]. Expiry is host wall clock, re-evaluated at each check.
+//! A seat host opens the box's store read-only and re-reads it when it changes.
 
 use anyhow::Result;
 use punktfunk_core::quic::GRANT_ALL;
@@ -70,6 +71,13 @@ impl PairedClients {
 struct PairedState {
     path: PathBuf,
     clients: PairedClients,
+    /// The box's store on a seat host: never written, re-read when its mtime moves.
+    read_only: bool,
+    stamp: Option<std::time::SystemTime>,
+}
+
+fn mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn default_path() -> Result<PathBuf> {
@@ -82,6 +90,10 @@ fn load(path: &Path) -> PairedClients {
     if crate::planted::quarantine_planted_secret(path) {
         return PairedClients::default();
     }
+    read_plain(path)
+}
+
+fn read_plain(path: &Path) -> PairedClients {
     std::fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -90,6 +102,9 @@ fn load(path: &Path) -> PairedClients {
 
 /// Owner-only so a local user cannot inject a fingerprint.
 fn save(state: &PairedState) -> Result<()> {
+    if state.read_only {
+        anyhow::bail!("the pairing store is the box's; a seat host never writes it");
+    }
     let bytes = serde_json::to_vec_pretty(&state.clients)?;
     pf_paths::replace_secret_file(&state.path, &bytes)?;
     Ok(())
@@ -101,19 +116,52 @@ pub(super) struct TrustStore {
 
 impl TrustStore {
     pub(super) fn open(store_path: Option<PathBuf>) -> Result<TrustStore> {
-        let path = match store_path {
-            Some(p) => p,
-            None => default_path()?,
+        let (path, read_only) = match (store_path, pf_paths::seat::trust_dir()) {
+            (Some(p), _) => (p, false),
+            (None, Some(dir)) => (dir.join("punktfunk1-paired.json"), true),
+            (None, None) => (default_path()?, false),
         };
-        let clients = load(&path);
-        Ok(TrustStore {
-            paired: Mutex::new(PairedState { path, clients }),
-        })
+        Ok(TrustStore::at(path, read_only))
+    }
+
+    fn at(path: PathBuf, read_only: bool) -> TrustStore {
+        // The box host owns its file's planted-secret check; a seat only reads it.
+        let clients = if read_only {
+            read_plain(&path)
+        } else {
+            load(&path)
+        };
+        TrustStore {
+            paired: Mutex::new(PairedState {
+                stamp: if read_only { mtime(&path) } else { None },
+                path,
+                clients,
+                read_only,
+            }),
+        }
+    }
+
+    pub(super) fn read_only(&self) -> bool {
+        self.paired.lock().unwrap().read_only
+    }
+
+    /// The state, re-read first on a seat host when the box's file changed, so a grant
+    /// edited in the box console applies to the seat's next check.
+    fn lock(&self) -> std::sync::MutexGuard<'_, PairedState> {
+        let mut p = self.paired.lock().unwrap();
+        if p.read_only {
+            let now = mtime(&p.path);
+            if now != p.stamp {
+                p.clients = read_plain(&p.path);
+                p.stamp = now;
+            }
+        }
+        p
     }
 
     /// Present in the store, including expired records. Use [`Self::effective`] for authorization.
     pub(super) fn is_paired(&self, fp_hex: &str) -> bool {
-        self.paired.lock().unwrap().clients.contains(fp_hex)
+        self.lock().clients.contains(fp_hex)
     }
 
     /// Authorized mask right now: `None` if unpaired or expired. Absent grants are
@@ -121,7 +169,7 @@ impl TrustStore {
     /// maps the old full-control value. `now_unix` is the caller's clock so expiry
     /// and the decision it feeds share one instant.
     pub(super) fn effective(&self, fp_hex: &str, now_unix: i64) -> Option<u32> {
-        let p = self.paired.lock().unwrap();
+        let p = self.lock();
         let c = p
             .clients
             .clients
@@ -135,9 +183,7 @@ impl TrustStore {
 
     /// Stored record, verbatim: no expiry check and no grant mask.
     pub(super) fn get(&self, fp_hex: &str) -> Option<PairedClient> {
-        self.paired
-            .lock()
-            .unwrap()
+        self.lock()
             .clients
             .clients
             .iter()
@@ -162,7 +208,7 @@ impl TrustStore {
         access: Option<Access>,
     ) -> Result<()> {
         let name = super::sanitize_device_name(name, fp_hex);
-        let mut p = self.paired.lock().unwrap();
+        let mut p = self.lock();
         let snapshot = p.clients.clients.clone(); // rollback if save fails
         match p
             .clients
@@ -199,7 +245,7 @@ impl TrustStore {
     /// Overwrite access on an existing record. Unknown fingerprint returns `false`
     /// and writes nothing — this is not a pairing path. Persist failure rolls back RAM.
     pub(super) fn set_access(&self, fp_hex: &str, access: Access) -> Result<bool> {
-        let mut p = self.paired.lock().unwrap();
+        let mut p = self.lock();
         let snapshot = p.clients.clients.clone();
         let Some(existing) = p
             .clients
@@ -224,7 +270,7 @@ impl TrustStore {
     /// `None`. Unknown fingerprint returns `false` and writes nothing — a player pick
     /// is not a pairing path. Persist failure rolls back RAM.
     pub(super) fn set_pad_slot(&self, fp_hex: &str, slot: Option<u8>) -> Result<bool> {
-        let mut p = self.paired.lock().unwrap();
+        let mut p = self.lock();
         let snapshot = p.clients.clients.clone();
         let Some(existing) = p
             .clients
@@ -243,12 +289,12 @@ impl TrustStore {
     }
 
     pub(super) fn list(&self) -> Vec<PairedClient> {
-        self.paired.lock().unwrap().clients.clients.clone()
+        self.lock().clients.clients.clone()
     }
 
     /// Drop this fingerprint. Persist failure rolls back RAM so it matches disk.
     pub(super) fn remove(&self, fp_hex: &str) -> Result<bool> {
-        let mut p = self.paired.lock().unwrap();
+        let mut p = self.lock();
         let before = p.clients.clients.len();
         let snapshot = p.clients.clients.clone();
         p.clients
@@ -268,7 +314,7 @@ impl TrustStore {
     /// sessions can be torn down. Not a loop over [`Self::remove`]: a mid-loop
     /// failure would leave a half-emptied store. Persist failure rolls back RAM.
     pub(super) fn remove_all(&self) -> Result<Vec<String>> {
-        let mut p = self.paired.lock().unwrap();
+        let mut p = self.lock();
         if p.clients.clients.is_empty() {
             return Ok(Vec::new());
         }
@@ -282,13 +328,40 @@ impl TrustStore {
     }
 
     pub(super) fn count(&self) -> u32 {
-        self.paired.lock().unwrap().clients.clients.len() as u32
+        self.lock().clients.clients.len() as u32
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A seat's copy follows the box's file and refuses every write.
+    #[test]
+    fn a_read_only_store_follows_the_box_and_never_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("punktfunk1-paired.json");
+        let box_store = TrustStore::at(path.clone(), false);
+        box_store.add("TV", "aa").unwrap();
+        let seat = TrustStore::at(path.clone(), true);
+        assert!(seat.is_paired("aa"));
+        assert!(seat.add("Phone", "bb").is_err());
+        assert!(seat.remove("aa").is_err());
+        assert!(
+            seat.is_paired("aa"),
+            "a refused write leaves memory as it was"
+        );
+
+        box_store.remove("aa").unwrap();
+        // A later stamp than the seat read, whatever the filesystem's clock granularity.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        let f = std::fs::File::options().write(true).open(&path).unwrap();
+        f.set_modified(later).unwrap();
+        assert!(
+            !seat.is_paired("aa"),
+            "a revoke on the box reaches the seat"
+        );
+    }
 
     #[test]
     fn corrupt_store_files_open_empty() {

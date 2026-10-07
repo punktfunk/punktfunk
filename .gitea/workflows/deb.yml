@@ -66,6 +66,7 @@ on:
       - 'crates/pf-paths-win/**'
       - 'crates/pf-portal/**'
       - 'crates/pf-presenter/**'
+      - 'crates/pf-seats/**'
       - 'crates/pf-update/**'
       - 'crates/pf-update-check/**'
       - 'crates/pf-vaapi/**'
@@ -97,6 +98,9 @@ on:
       - 'packaging/linux/*.rules'
       - 'packaging/linux/*.service'
       - 'packaging/linux/*.sh'
+      - 'packaging/linux/*.tmpfiles'
+      - 'packaging/linux/seat-*'
+      - 'packaging/linux/door-*'
       - 'packaging/linux/*.ufw'
       - 'packaging/linux/*.xml'
       - 'packaging/linux/icons/**'
@@ -486,12 +490,17 @@ jobs:
           # if the artifact is missing — building it here keeps it on the same sccache pass as the
           # host. Unlike the tray it shares the host's dependency graph by design (v1 accepts that
           # the worker shares the host dependency graph), so feature unification here is harmless.
+          #
+          # pf-seats is the seat supervisor's binary. punktfunk-host already links its library, so
+          # this adds no feature unification, only the one executable.
           cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
-            -p punktfunk-host -p punktfunk-encode-worker
+            -p punktfunk-host -p punktfunk-encode-worker -p pf-seats
 
       - name: Build host .deb
         run: |
           VERSION="$VERSION" bash packaging/debian/build-deb.sh
+          # The seat supervisor, a separate .deb the host Recommends.
+          VERSION="$VERSION" bash packaging/debian/build-seats-deb.sh
 
       # Visibility only — placed here, right after the last compile, rather than at the end of the
       # job: the gamescope gate below must stay the final step (see its own note).

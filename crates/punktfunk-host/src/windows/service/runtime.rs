@@ -194,8 +194,8 @@ pub(super) fn run_service() -> Result<()> {
 }
 
 /// Supervises the ordinary host in the active console session and the web console
-/// in session 0. Every wait passes through [`WebSlot::wait`] so both children
-/// remain covered while either supervision arm blocks.
+/// in session 0, with the seat supervisor beside them. Every wait passes through
+/// [`WebSlot::wait`] so both children remain covered while either arm blocks.
 pub(super) fn supervise(stop: HANDLE, session_ev: HANDLE) -> Result<()> {
     let exe = std::env::current_exe().context("current_exe")?;
     let host_cmd = std::env::var("PUNKTFUNK_HOST_CMD").unwrap_or_else(|_| DEFAULT_HOST_CMD.into());
@@ -213,6 +213,7 @@ pub(super) fn supervise(stop: HANDLE, session_ev: HANDLE) -> Result<()> {
     let job = make_job(JOB_OBJECT_LIMIT_BREAKAWAY_OK).context("create job object")?;
 
     let mut web = WebSlot::new(&exe);
+    let seats = SeatsSlot::start(&exe);
 
     let mut restarts: u32 = 0;
     // One-shot: a rollback that itself fails must not spawn installers in a loop.
@@ -327,6 +328,7 @@ pub(super) fn supervise(stop: HANDLE, session_ev: HANDLE) -> Result<()> {
         }
     }
 
+    drop(seats);
     tracing::info!("supervision loop ended");
     Ok(())
 }

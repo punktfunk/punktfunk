@@ -9,6 +9,7 @@ use super::style::*;
 use super::{Screen, Svc, Target};
 use crate::trust::{HostEdit, KnownHosts, Settings};
 use pf_client_core::discovery::DiscoveredHost;
+use pf_client_core::profiles::ProfilePick;
 use std::collections::HashMap;
 use windows_reactor::*;
 
@@ -44,6 +45,8 @@ fn host_action_label(a: &pf_client_core::host_actions::ActionInfo) -> String {
 /// Apple client's add/edit sheet. A menu item per field read as clutter and buried the ones
 /// that matter.
 const MENU_EDIT: &str = "Edit\u{2026}";
+/// Re-pick who plays on this host. Only where a pick is saved: a one-person box looks as before.
+const MENU_PROFILE: &str = "Switch profile\u{2026}";
 /// The per-preset families nest in submenus. Submenu LEAVES are what the shared click
 /// callback reports (the backend wires clicks recursively and hands back the leaf text):
 /// "Connect with"'s leaves are the bare preset names + [`SUB_WITH_DEFAULT`]; "Pin tiles"'s
@@ -245,7 +248,7 @@ pub(crate) struct Hover {
 /// dot + Online/Offline, plus a trust chip only where it says something (see
 /// [`status_row_with`]).
 fn status_row(online: Option<bool>, badge: Option<(&str, Pill)>) -> Element {
-    status_row_with(online, badge, None)
+    status_row_with(online, badge, None, None)
 }
 
 /// [`status_row`] plus the preset: what a plain click on THIS tile will use — its own
@@ -262,6 +265,7 @@ fn status_row_with(
     online: Option<bool>,
     badge: Option<(&str, Pill)>,
     preset: Option<(&str, Option<String>)>,
+    profile: Option<&ProfilePick>,
 ) -> Element {
     let mut items: Vec<Element> = Vec::new();
     // No OS mark here any more: it moved up into the avatar, where it is the tile's leading
@@ -318,6 +322,18 @@ fn status_row_with(
                 .foreground(ThemeRef::SecondaryText)
                 .vertical_alignment(VerticalAlignment::Center)
                 .into(),
+        );
+    }
+    // The saved profile: its initials on the app accent, the pick storing no colour.
+    if let Some(p) = profile {
+        items.push(
+            monogram(
+                &pf_client_core::profiles::initials(&p.display_name),
+                20.0,
+                None,
+            )
+            .vertical_alignment(VerticalAlignment::Center)
+            .into(),
         );
     }
     hstack(items)
@@ -551,6 +567,7 @@ pub(crate) fn saved_target(k: &pf_client_core::trust::KnownHost) -> Target {
         mgmt_port: k.mgmt_port,
         preset: None,
         launch: None,
+        link_profile: None,
     }
 }
 
@@ -795,6 +812,7 @@ fn saved_tiles(
                 .as_ref()
                 .and_then(|id| presets.iter().find(|(pid, _, _)| pid == id))
                 .map(|(_, name, accent)| (name.as_str(), accent.clone())),
+            k.profile.as_ref(),
         ),
         Some(menu),
         Some(Box::new(move || {
@@ -853,6 +871,7 @@ fn saved_menu(
     let (link_host, link_preset) = (k.clone(), None::<String>);
     let shortcut_host = k.clone();
     let record_id = k.id.clone();
+    let (saved_pick, pin) = (k.profile.clone(), crate::trust::parse_hex32(&k.fp_hex));
     let is_default = record_id.is_some() && *settings_default == record_id;
     button("")
         .icon(lucide::icon("ellipsis"))
@@ -931,6 +950,9 @@ fn saved_menu(
                     MENU_DEFAULT
                 }));
             }
+            if k.paired && k.profile.is_some() {
+                items.push(menu_item(MENU_PROFILE));
+            }
             items.push(menu_item(MENU_EDIT));
             items.push(menu_item(MENU_FORGET));
             items
@@ -1008,6 +1030,16 @@ fn saved_menu(
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 svc.set_speed.call(SpeedState::Running);
                 svc.set_screen.call(Screen::SpeedTest);
+            }
+            MENU_PROFILE => {
+                let bump = set_hosts_rev.clone();
+                super::profiles::switch(
+                    &svc.ctx,
+                    target.clone(),
+                    saved_pick.clone(),
+                    pin,
+                    move || bump.call(hosts_rev + 1),
+                );
             }
             MENU_EDIT => sr.call(Some(who.clone())),
             MENU_FORGET => sf.call(Some(who.clone())),
@@ -1188,6 +1220,7 @@ fn pinned_tile(
             Some(online),
             (!k.paired).then_some(("Trusted", Pill::Info)),
             Some((name.as_str(), accent.clone())),
+            None,
         ),
         Some(pinned_menu),
         Some(Box::new(move || {
@@ -1236,6 +1269,7 @@ fn discovered_tiles(props: &HostsProps, known: &KnownHosts, hover: &Hover, cols:
             mgmt_port: h.mgmt_port,
             preset: None,
             launch: None,
+            link_profile: None,
         };
         let (ctx2, ss, st) = (ctx.clone(), set_screen.clone(), set_status.clone());
         let (badge, kind) = if h.pair == "required" {
@@ -1343,6 +1377,7 @@ fn add_host_slot(
                     mgmt_port: None,
                     preset: None,
                     launch: None,
+                    link_profile: None,
                 },
                 &ss,
                 &st,

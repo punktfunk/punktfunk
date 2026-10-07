@@ -122,6 +122,7 @@ else
     distrobox create --yes --name "$BOX" --image "$BOX_IMAGE" --home "$HOME"
     ok "created '$BOX'"
 fi
+bash "$SRC/scripts/steamdeck/heal-box.sh" "$BOX"
 
 log "Provisioning build dependencies in '$BOX' (idempotent; apt + rustup + bun)"
 # One non-interactive provisioning pass. APT deps mirror the Linux host build (PipeWire/DRM/EGL/

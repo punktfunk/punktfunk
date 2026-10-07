@@ -199,6 +199,9 @@ pub(crate) struct PendingDevice {
     source: String,
     /// Stored "this session" setting if this fingerprint was paired before. `false` if unknown.
     until_disconnect: bool,
+    /// The profile the device asked to play as. Absent when it named none this host knows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<crate::events::ProfileRef>,
 }
 
 /// Approve body. `{}` keeps the knock name and, on re-approve, stored access
@@ -293,6 +296,7 @@ pub(crate) async fn get_native_pairing(State(st): State<Arc<MgmtState>>) -> Json
     responses(
         (status = OK, description = "Pairing armed; the response carries the PIN to display", body = NativePairStatus),
         (status = BAD_REQUEST, description = "Reserved grant bits set", body = ApiError),
+        (status = CONFLICT, description = "A seat host: devices pair with the box", body = ApiError),
         (status = SERVICE_UNAVAILABLE, description = "Native host not available in this process", body = ApiError),
         (status = UNAUTHORIZED, description = "Missing or invalid bearer token", body = ApiError),
     )
@@ -307,6 +311,12 @@ pub(crate) async fn arm_native_pairing(
             "native host not available in this process",
         );
     };
+    if np.pairing_refused() {
+        return api_error(
+            StatusCode::CONFLICT,
+            "This is a seat. Pair devices with the box in its console.",
+        );
+    }
     // 400 must not leave a window open — validate grants before `arm_for`.
     if let Some(resp) = req.grants.and_then(reject_reserved) {
         return resp;
@@ -637,6 +647,14 @@ pub(crate) async fn list_pending_devices(
                         crate::native_pairing::KnockSource::Lan => "lan".into(),
                         crate::native_pairing::KnockSource::Wan => "wan".into(),
                     },
+                    profile: p
+                        .profile
+                        .as_deref()
+                        .and_then(|id| st.app.profiles.get()?.get(id))
+                        .map(|p| crate::events::ProfileRef {
+                            id: p.id,
+                            display_name: p.display_name,
+                        }),
                 }
             })
             .collect(),

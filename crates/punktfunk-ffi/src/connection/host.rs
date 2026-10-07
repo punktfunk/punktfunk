@@ -112,6 +112,32 @@ pub unsafe extern "C" fn punktfunk_connection_end_reject_said(
     })
 }
 
+/// The profile the host resolved this session to, NUL-terminated, into the caller's buffer;
+/// empty from a host without profiles. A buffer of [`PUNKTFUNK_PROFILE_ID_MAX`] + 1 bytes fits
+/// every id.
+///
+/// # Safety
+/// `c` is a valid connection handle; `out` is writable for `cap` bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_profile(
+    c: *const PunktfunkConnection,
+    out: *mut c_char,
+    cap: usize,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        if out.is_null() || cap == 0 {
+            return PunktfunkStatus::NullPointer;
+        }
+        let profile = c.inner.profile().unwrap_or_default();
+        // SAFETY: `out` is writable for `cap` bytes, per this function's contract.
+        if !unsafe { write_cstr(out, cap, profile) } {
+            return PunktfunkStatus::InvalidArg;
+        }
+        PunktfunkStatus::Ok
+    })
+}
+
 /// The host's sentence when this session's launch did not give the player their game,
 /// NUL-terminated, into the caller's buffer; empty otherwise. The latest verdict wins, so
 /// poll it. A 256-byte buffer is ample: the wire caps this at 200.

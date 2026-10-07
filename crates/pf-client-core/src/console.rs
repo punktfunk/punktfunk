@@ -20,6 +20,9 @@ pub enum OverlayAction {
         /// Pin the advertised fingerprint and park the connect until the
         /// operator approves this device. `false` is an ordinary paired connect.
         request_access: bool,
+        /// The profile id to play as; `None` names none and the host picks.
+        #[serde(default)]
+        profile: Option<String>,
     },
     /// Browse continues. A dial that already won is quit-closed.
     CancelConnect,

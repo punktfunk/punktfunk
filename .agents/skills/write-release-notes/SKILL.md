@@ -29,7 +29,8 @@ Ordinary PRs do not run this and do not edit `CHANGELOG.md`.
 2. `docs/releases/whatsnew/vX.Y.Z.txt` — Android only, 500 **characters** (`len()`, not `wc -c`), `whatsnew/TEMPLATE.txt`.
 3. `CHANGELOG.md` card: lead, version table, Breaking, short **Knobs / embedder** list (env, JNI arity, CLI) for actions that do not move a version integer. No Added/Changed/Fixed diary.
 4. A `<release version="X.Y.Z" date="…">` on top of `packaging/flatpak/io.unom.Punktfunk.metainfo.xml`: one-sentence description, `details` URL to the release. Software centres show its version.
-5. Stop. A human reads the lead-in before the tag.
+5. The workspace version in `crates/pf-seat-keeper/Cargo.lock` too: `cargo update --manifest-path crates/pf-seat-keeper/Cargo.toml -p pf-seats -p pf-paths`. It is a separate lockfile, and CI's attribution gate fails while it names the old version.
+6. Stop. A human reads the lead-in before the tag.
 
 Voice: `docs/writing.md` §2. Name the thing, then what the reader gets. Do not paste `git log`. Do not invent version numbers.
 

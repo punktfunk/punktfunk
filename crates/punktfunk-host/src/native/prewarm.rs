@@ -1,9 +1,9 @@
 //! The pre-warmed seat Steam (`design/steam-seats-warm-launch-implementation-plan.md` WP-S2).
 //!
 //! Steam's cold boot is 13–30 s of a dedicated launch and nothing on our side shortens it, so the
-//! host stands a seat's gamescope and Big Picture up *before* that client asks and parks the
-//! display for its fingerprint ([`crate::vdisplay::registry::park`]). The connect then takes the
-//! ordinary keep-alive reuse path into a Steam that is already running.
+//! host stands a seat profile's gamescope and Big Picture up *before* anyone picks it and parks
+//! the display for that profile ([`crate::vdisplay::registry::park`]). The next connect to the
+//! profile, from any device, takes the keep-alive reuse path into a Steam already running.
 //!
 //! [`record`] is written whenever a Steam launch runs under a seat home; [`spawn_run`] reads
 //! those records at host start and at session end. A seat is only pre-warmed while its next
@@ -34,10 +34,11 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Colourimetry and cursor mode are the registry's reuse keys: a display parked without the ones
 /// that client asks for is never handed back, and the work is wasted. The mode is the best guess
 /// at what it will ask for — on a gamescope that can be resized it is only that.
+///
+/// The file name is the profile id; nothing in it names a device, so any device's connect to
+/// the profile takes the display it parks.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SeatRecord {
-    /// The device's full cert fingerprint, lowercase hex. The file name is only its seat id.
-    fingerprint: String,
     width: u32,
     height: u32,
     refresh_hz: u32,
@@ -59,11 +60,11 @@ impl SeatRecord {
     }
 }
 
-/// Remember what a Steam launch under a seat home streamed at, so the host can bring that seat
-/// back up before its next connect. Best-effort: a record that does not land costs a cold Steam.
-pub(crate) fn record(fp_hex: &str, mode: Mode, hdr: bool, hw_cursor: bool) {
+/// Remember what a Steam launch under `profile`'s seat home streamed at, so the host can bring
+/// that seat back up before its next connect. Best-effort: a record that does not land costs a
+/// cold Steam.
+pub(crate) fn record(profile: &str, mode: Mode, hdr: bool, hw_cursor: bool) {
     let rec = SeatRecord {
-        fingerprint: fp_hex.to_string(),
         width: mode.width,
         height: mode.height,
         refresh_hz: mode.refresh_hz,
@@ -71,7 +72,7 @@ pub(crate) fn record(fp_hex: &str, mode: Mode, hdr: bool, hw_cursor: bool) {
         hw_cursor,
         last_steam_launch: crate::clock::unix_secs(),
     };
-    if let Err(e) = write(&seat_id(fp_hex), &rec) {
+    if let Err(e) = write(profile, &rec) {
         tracing::warn!(error = %e, "seat record not written — this seat is not pre-warmed");
     }
 }
@@ -153,36 +154,27 @@ fn run(why: &'static str) {
     }
 }
 
-/// Stand this seat's gamescope + Steam up. `Ok(None)` when the seat is not one to pre-warm; the
-/// isolation key of the parked display otherwise.
+/// Stand this profile's gamescope + Steam up. `Ok(None)` when the seat is not one to pre-warm;
+/// the isolation key of the parked display otherwise. A seat whose session is live is the
+/// registry's to refuse ([`crate::vdisplay::registry::park`]).
 fn park_seat(
     id: &str,
     rec: &SeatRecord,
     route: Option<GamescopeRoute>,
     parked: &[String],
 ) -> anyhow::Result<Option<String>> {
-    let Some(fp) = fp_bytes(&rec.fingerprint).filter(|_| seat_id(&rec.fingerprint) == id) else {
-        tracing::info!(seat = %id, "seat pre-warm skipped — its record names no device");
-        return Ok(None);
-    };
-    if crate::vdisplay::admission::has_live_session(fp) {
-        tracing::info!(seat = %id, "seat pre-warm skipped — this device is streaming");
-        return Ok(None);
-    }
-    // The policy half of the route: `game_session` under this device's own overlay. A device
-    // whose launches land in the box's session has nothing of its own to warm.
-    if !crate::vdisplay::wants_dedicated_game_session(true, Some(fp)) {
-        tracing::info!(seat = %id, "seat pre-warm skipped — this device's launches do not get a session of their own");
+    // A seat profile always plays in a gamescope of its own; this asks only whether there is one.
+    if !crate::vdisplay::wants_dedicated_game_session(true, None, true) {
+        tracing::info!(seat = %id, "seat pre-warm skipped — this host runs no gamescope of its own");
         return Ok(None);
     }
     // Exclusive darkens the box's own panel for the length of the display, and a parked seat has
     // no stream to justify that. Its connect spawns cold and darkens then, as it does today.
-    if crate::vdisplay::effective_topology(Some(fp)) == crate::vdisplay::policy::Topology::Exclusive
-    {
-        tracing::info!(seat = %id, "seat pre-warm skipped — this device blanks the box's screen while it streams");
+    if crate::vdisplay::effective_topology(None) == crate::vdisplay::policy::Topology::Exclusive {
+        tracing::info!(seat = %id, "seat pre-warm skipped — this host blanks its screen while a seat streams");
         return Ok(None);
     }
-    let iso = session_isolation(id, true);
+    let iso = session_isolation(&seat_id(id), Some(id));
     // Only a seat home is pre-warmed: a Steam on the box's own home is the one the player uses.
     if iso.steam_home.is_none() {
         return Ok(None);
@@ -199,7 +191,7 @@ fn park_seat(
         tracing::info!(seat = %id, backend = vd.name(), "seat pre-warm skipped — this host streams a physical monitor");
         return Ok(None);
     }
-    vd.set_client_identity(Some(fp));
+    vd.set_client_identity(None);
     vd.set_hdr(rec.hdr);
     vd.set_hw_cursor(rec.hw_cursor);
     vd.set_launch_command(Some(PREWARM_LAUNCH.to_string()));
@@ -216,15 +208,18 @@ fn candidates(now: i64, mut seats: Vec<(String, SeatRecord)>) -> Vec<(String, Se
     seats
 }
 
-/// Every seat record on this host. A directory that is not there yet is a host with no seats.
+/// Every seat record on this host whose profile still has its home. A directory that is not
+/// there yet is a host with no seats.
 fn all_records() -> Vec<(String, SeatRecord)> {
-    let Ok(dir) = std::fs::read_dir(pf_paths::seats_dir()) else {
+    let seats = pf_paths::seats_dir();
+    let Ok(dir) = std::fs::read_dir(&seats) else {
         return Vec::new();
     };
     dir.flatten()
         .filter_map(|e| {
             let name = e.file_name();
             let id = name.to_str()?.strip_suffix(".json")?.to_string();
+            seats.join(&id).is_dir().then_some(())?;
             Some((id, read(&e.path())?))
         })
         .collect()
@@ -245,20 +240,12 @@ fn write(id: &str, rec: &SeatRecord) -> anyhow::Result<()> {
         .context("replace the seat record")
 }
 
-/// The 32-byte fingerprint a record names. `None` on anything that is not 64 hex digits.
-fn fp_bytes(hex: &str) -> Option<[u8; 32]> {
-    let mut out = [0u8; 32];
-    hex::decode_to_slice(hex, &mut out).ok()?;
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn rec(fp: &str, at: i64) -> SeatRecord {
+    fn rec(at: i64) -> SeatRecord {
         SeatRecord {
-            fingerprint: fp.to_string(),
             width: 1920,
             height: 1080,
             refresh_hz: 60,
@@ -276,11 +263,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cafe0123.json");
-        let written = rec(&"ab".repeat(32), 1_700_000_000);
+        let written = rec(1_700_000_000);
         std::fs::write(&path, serde_json::to_vec(&written).unwrap()).unwrap();
         assert_eq!(read(&path).as_ref(), Some(&written));
 
-        std::fs::write(&path, b"{\"fingerprint\":").unwrap();
+        std::fs::write(&path, b"{\"width\":").unwrap();
         assert_eq!(read(&path), None, "a torn record is no record");
         std::fs::write(&path, b"{}").unwrap();
         assert_eq!(read(&path), None, "a record with no mode is no record");
@@ -293,10 +280,10 @@ mod tests {
     fn candidates_are_recent_players_newest_first() {
         let now = 1_700_000_000;
         let seats = vec![
-            ("aaaa".into(), rec("aa", now - 3600)),
-            ("bbbb".into(), rec("bb", now - WINDOW_SECS - 1)),
-            ("cccc".into(), rec("cc", now - 60)),
-            ("dddd".into(), rec("dd", now + 600)),
+            ("aaaa".into(), rec(now - 3600)),
+            ("bbbb".into(), rec(now - WINDOW_SECS - 1)),
+            ("cccc".into(), rec(now - 60)),
+            ("dddd".into(), rec(now + 600)),
         ];
         let picked: Vec<String> = candidates(now, seats)
             .into_iter()
@@ -309,22 +296,22 @@ mod tests {
         );
     }
 
-    /// The parked display and that device's session must ask the registry for one reuse key, or
-    /// the pre-warm spawns a Steam nothing ever claims.
+    /// The parked display and a connect to that profile, from any device, ask the registry for
+    /// one reuse key, or the pre-warm spawns a Steam nothing ever claims.
     #[test]
     fn a_parked_seat_asks_for_the_same_display_its_session_will() {
-        let fp_hex = "ab".repeat(32);
-        let id = seat_id(&fp_hex);
-        assert_eq!(id, "abababab", "a seat is the first 8 digits of its device");
-        assert_eq!(session_isolation(&id, true), session_isolation(&id, true));
+        let profile = "9a3f1c2b7e40";
+        let id = seat_id(profile);
+        assert_eq!(
+            id, "9a3f1c2b",
+            "a seat is the first 8 digits of its profile"
+        );
+        assert_eq!(
+            session_isolation(&id, Some(profile)),
+            session_isolation(&id, Some(profile))
+        );
         // The pre-warm launches the Steam client, which is what puts the seat's home on the
         // spawn — a command that is not Steam's would get the box's home instead.
         assert!(crate::vdisplay::launch_is_steam(PREWARM_LAUNCH));
-        assert_eq!(
-            fp_bytes(&fp_hex),
-            Some([0xabu8; 32]),
-            "the record's own device"
-        );
-        assert_eq!(fp_bytes("abc"), None);
     }
 }

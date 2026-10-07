@@ -439,14 +439,21 @@ impl Shell {
                 SessionEvent::Failed {
                     msg,
                     trust_rejected,
+                    refused,
                 } => {
                     if !self.browse {
                         return ControlFlow::Break(Outcome::ConnectFailed {
                             msg,
                             trust_rejected,
+                            refused,
                         });
                     }
                     tracing::warn!(%msg, "connect failed — back to the console");
+                    if refused == Some(punktfunk_core::reject::RejectReason::ProfileUnknown)
+                        && let Some(o) = self.overlay.as_mut()
+                    {
+                        o.profile_gone();
+                    }
                     let phase = if st.canceled {
                         SessionPhase::Ended(None)
                     } else {

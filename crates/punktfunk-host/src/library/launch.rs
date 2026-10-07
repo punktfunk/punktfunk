@@ -18,6 +18,8 @@ pub use desktop::valid_desktop_id;
 mod emulator;
 mod exec;
 pub use emulator::spec_is_valid as emulator_spec_is_valid;
+#[cfg(windows)]
+pub(crate) use exec::win_quote;
 pub use exec::{spec_is_valid as exec_spec_is_valid, ExecRecipe};
 #[cfg(windows)]
 mod windows;
@@ -46,6 +48,24 @@ pub struct LaunchTarget {
     /// `own_workspace` above is the workspace key already resolved against the
     /// host policy; the rest is read when that window appears.
     pub on_window: crate::library::OnWindow,
+}
+
+/// Steam Big Picture as a Big Picture tile launches it: what a seat profile's bare connect opens
+/// when its home is `bigpicture`. A launcher, so no game exit ends the session.
+#[cfg(not(windows))]
+pub fn big_picture_launch() -> Option<LaunchTarget> {
+    Some(LaunchTarget {
+        game: crate::gamelease::GameRef {
+            id: None,
+            store: Some("steam".into()),
+            title: "Steam Big Picture".into(),
+        },
+        launcher: true,
+        detect: DetectSpec::default(),
+        command: Some(posix::steam_ui_command("bigpicture")?),
+        own_workspace: false,
+        on_window: crate::library::OnWindow::default(),
+    })
 }
 
 /// Map a store-qualified library id to a [`LaunchTarget`] from the host's library.

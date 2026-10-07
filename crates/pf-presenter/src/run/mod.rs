@@ -184,6 +184,8 @@ pub enum Outcome {
     ConnectFailed {
         msg: String,
         trust_rejected: bool,
+        /// The host's typed refusal, when it answered with one.
+        refused: Option<punktfunk_core::reject::RejectReason>,
     },
 }
 

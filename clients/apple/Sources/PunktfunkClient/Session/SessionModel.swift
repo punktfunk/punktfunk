@@ -424,6 +424,8 @@ final class SessionModel: ObservableObject {
     func connect(to host: StoredHost, effective: EffectiveSettings,
                  gamepad: PunktfunkConnection.GamepadType = .auto,
                  launchID: String? = nil,
+                 /// The host profile to play as; nil lets the host choose.
+                 profileID: String? = nil,
                  /// The library shelf this session started from, so its end can return there —
                  /// the title's shelf for a launch, and the shelf itself for a Resume, which
                  /// launches nothing. nil for a connect that did not come off one.
@@ -431,6 +433,9 @@ final class SessionModel: ObservableObject {
                  allowTofu: Bool = false,
                  autoTrust: Bool = false,
                  requestAccess: Bool = false,
+                 /// The host refused `profileID` as unknown. Return true to re-dial: the error
+                 /// is then not shown.
+                 onProfileUnknown: (@MainActor () -> Bool)? = nil,
                  onUnreachable: (@MainActor () -> Void)? = nil) {
         guard phase == .idle else { return }
         guard !Self.activeHosts.contains(where: { $0.key != ObjectIdentifier(self) && $0.value == host.id })
@@ -516,7 +521,7 @@ final class SessionModel: ObservableObject {
                 audioRateHz: offer.audioRateHz, audioBits: offer.audioBits,
                 videoCodecs: offer.videoCodecs, preferredCodec: offer.preferredCodec,
                 clientCaps: offer.clientCaps, videoFit: offer.videoFit,
-                launchID: launchID,
+                launchID: launchID, profileID: profileID,
                 // Delegated approval: the host holds this connect open until the operator approves
                 // it (~180 s) — outwait that window so a slow approval still lands here. Normal
                 // connects keep the snappy default.
@@ -555,6 +560,11 @@ final class SessionModel: ObservableObject {
                     // otherwise nothing here does. It would sit over the home screen until the
                     // next session, and on tvOS it makes the host grid unfocusable behind it.
                     self.revealStream()
+                    // true: the caller re-dials and says what it ends in.
+                    if case PunktfunkClientError.rejected(.profileUnknown) = error,
+                       onProfileUnknown?() == true {
+                        return
+                    }
                     if let message = ConnectOffer.failureMessage(
                         error, hostName: host.displayName, pinned: pin != nil,
                         requestAccess: requestAccess, callerRecovers: onUnreachable != nil)
