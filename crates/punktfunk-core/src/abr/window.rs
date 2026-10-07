@@ -44,6 +44,11 @@ pub(crate) struct WindowAccumulator {
     received: u64,
     dropped: u64,
     bytes: u64,
+    /// Loss by position drained this window, and the socket's drops at its start.
+    positions: crate::packet::LossPositions,
+    sock_drops_at: u64,
+    /// The socket's drops as last sampled ([`Self::on_sock_drops`]).
+    sock_drops: u64,
     /// Latest session snapshot. The pump samples once per iteration and every
     /// window number is differenced from it.
     stats: Stats,
@@ -80,6 +85,9 @@ impl WindowAccumulator {
             received: 0,
             dropped: 0,
             bytes: 0,
+            positions: Default::default(),
+            sock_drops_at: 0,
+            sock_drops: 0,
             stats: Stats::default(),
             owd_sum_ns: 0,
             owd_frames: 0,
@@ -109,6 +117,21 @@ impl WindowAccumulator {
     /// completes no frame but still moves them.
     pub(crate) fn on_stats(&mut self, st: &Stats) {
         self.stats = *st;
+    }
+
+    /// The data socket's drops since it opened, as the pump samples them.
+    pub(crate) fn on_sock_drops(&mut self, total: u64) {
+        self.sock_drops = total;
+    }
+
+    /// Loss by position the reassembler settled since the last drain.
+    pub(crate) fn on_loss_positions(&mut self, p: crate::packet::LossPositions) {
+        let q = &mut self.positions;
+        (q.head, q.mid, q.tail) = (
+            q.head.saturating_add(p.head),
+            q.mid.saturating_add(p.mid),
+            q.tail.saturating_add(p.tail),
+        );
     }
 
     /// One completed access unit. `repeat` is the host's idle keepalive mark:
@@ -194,6 +217,8 @@ impl WindowAccumulator {
         self.received = st.packets_received;
         self.dropped = st.frames_dropped;
         self.bytes = wire_bytes(&st);
+        self.positions = Default::default();
+        self.sock_drops_at = self.sock_drops;
         self.last_report = now;
         self.discard = true;
         self.aftermath_left = PROBE_AFTERMATH_WINDOWS;
@@ -259,6 +284,10 @@ impl WindowAccumulator {
             flushed: self.flushed,
             recovery_kf,
             activity: activity(self.marks_repeats, self.au_frames, self.au_repeats),
+            head: self.positions.head,
+            mid: self.positions.mid,
+            tail: self.positions.tail,
+            sock_drops: delta(self.sock_drops, self.sock_drops_at),
         };
         self.reset(now);
         Closed {
@@ -277,6 +306,8 @@ impl WindowAccumulator {
         self.received = st.packets_received;
         self.dropped = st.frames_dropped;
         self.bytes = wire_bytes(&st);
+        self.positions = Default::default();
+        self.sock_drops_at = self.sock_drops;
         self.last_report = now;
         self.owd_sum_ns = 0;
         self.owd_frames = 0;
@@ -351,6 +382,11 @@ fn fitted_rise_us(n: u32, sum_us: i64, xy_us: i64) -> i64 {
         return 0;
     }
     ((i128::from(xy_us) * n - sx * i128::from(sum_us)) * (n - 1) / den) as i64
+}
+
+/// A counter's growth since `anchor`, as a window field.
+fn delta(now: u64, anchor: u64) -> u32 {
+    now.saturating_sub(anchor).min(u64::from(u32::MAX)) as u32
 }
 
 /// Wire measure: every received media-plane byte (headers, seals and FEC

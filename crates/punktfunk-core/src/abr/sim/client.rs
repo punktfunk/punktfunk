@@ -90,6 +90,8 @@ pub(super) struct ClientCfg {
     /// every other outcome leaves it, and no controller runs either way.
     pub pin_kbps: Option<u32>,
     pub repair: Repair,
+    /// Both ends' Ethernet ports, Mbit/s, as the handshake would report them.
+    pub ports: Option<(u32, u32)>,
 }
 
 impl Default for ClientCfg {
@@ -110,6 +112,7 @@ impl Default for ClientCfg {
             automatic: true,
             pin_kbps: None,
             repair: Repair::Rfi,
+            ports: None,
         }
     }
 }
@@ -151,6 +154,8 @@ pub(super) struct WindowRec {
     pub link_cap: Option<u32>,
     /// The last delivered rate the link was marked at (`0` = none).
     pub link_mark_kbps: u32,
+    /// Shards lost at the frames' heads.
+    pub head: u32,
 }
 
 impl WindowRec {
@@ -236,11 +241,14 @@ pub(super) struct Client {
     /// record's `request_kbps` sees only asks that land on a close tick, so
     /// the ramp's own asks — the opening rate, the pin's verdict — live here.
     pub(super) set_asks: Vec<(u64, u32)>,
+    /// Every link rate and shape the driver told the host, when.
+    pub(super) links: Vec<(u64, u32)>,
+    pub(super) shapes: Vec<(u64, u8)>,
 }
 
 impl Client {
     pub(super) fn new(cfg: ClientCfg, seed: u64, base: Instant, joined: Instant) -> Self {
-        let abr = Driver::new(
+        let mut abr = Driver::new(
             DriverConfig {
                 // A pinned session opens at its pin, and the pin is the
                 // driver's own config — the controller stays off.
@@ -265,6 +273,13 @@ impl Client {
             },
             joined,
         );
+        if let Some((host, client)) = cfg.ports {
+            let eth = |mbps| crate::quic::LinkFacts {
+                kind: crate::transport::IFACE_KIND_ETHERNET,
+                mbps,
+            };
+            abr.set_ports(eth(host), eth(client));
+        }
         Client {
             rng: Rng::new(seed),
             base,
@@ -294,6 +309,8 @@ impl Client {
             ramp_asks: Vec::new(),
             ramp_done: None,
             set_asks: Vec::new(),
+            links: Vec::new(),
+            shapes: Vec::new(),
             cfg,
         }
     }
@@ -396,8 +413,15 @@ impl Client {
         self.lost_blocks.clear();
         self.lost_blocks.resize(f.shape.blocks as usize, 0);
         let mut lost = 0u32;
-        let mark = |shape: &FrameShape, blocks: &mut [u32], idx: u32| {
+        // Where each lost shard sat, as the reassembler counts it: parity is the tail.
+        let mut places = [0u64; 3];
+        let mut mark = |shape: &FrameShape, blocks: &mut [u32], idx: u32| {
             blocks[shape.block_of(idx) as usize] += 1;
+            places[if idx < shape.data {
+                crate::packet::loss_position(idx, shape.data)
+            } else {
+                2
+            }] += 1;
         };
         for i in 0..refused_shards {
             mark(&f.shape, &mut self.lost_blocks, shards - 1 - i);
@@ -414,6 +438,26 @@ impl Client {
             mark(&f.shape, &mut self.lost_blocks, idx);
             lost += 1;
         }
+        // These two processes model the reassembler exactly: parity a block never needed is
+        // no repair, only a shard its parity could have been spent on.
+        let mut spent_parity = vec![0u32; f.shape.blocks as usize];
+        let mut tail_parity = 0u64;
+        for idx in (0..draw.head.min(shards)).chain(shards - draw.tail.min(shards)..shards) {
+            if idx < f.shape.data {
+                mark(&f.shape, &mut self.lost_blocks, idx);
+            } else {
+                tail_parity += 1;
+                spent_parity[f.shape.block_of(idx) as usize] += 1;
+            }
+            lost += 1;
+        }
+        places[2] += tail_parity;
+        let n = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
+        self.abr.on_loss_positions(crate::packet::LossPositions {
+            head: n(places[0]),
+            mid: n(places[1]),
+            tail: n(places[2]),
+        });
         let mut repaired = 0u32;
         let mut beyond = 0u32;
         let mut unrecoverable = f.forced;
@@ -421,7 +465,7 @@ impl Client {
             if lost_b == 0 {
                 continue;
             }
-            let parity = f.shape.parity_of(b as u32);
+            let parity = f.shape.parity_of(b as u32).saturating_sub(spent_parity[b]);
             if lost_b <= parity {
                 repaired += lost_b;
             } else {
@@ -616,6 +660,7 @@ impl Client {
                 crate::abr::Action::Report {
                     loss_ppm,
                     packets_received,
+                    ..
                 } => {
                     out.push(Action::Loss {
                         ppm: loss_ppm,
@@ -659,8 +704,9 @@ impl Client {
                 // As the pump does: a burst nobody answered is let go, or the
                 // report tick stays suppressed for the rest of the session.
                 crate::abr::Action::AbandonProbe => self.probing = false,
-                // The simulated host has no pacer to hand a link rate to.
-                crate::abr::Action::LinkRate(_) => {}
+                // The simulated host has no pacer: the run only records what it was told.
+                crate::abr::Action::LinkRate(kbps) => self.links.push((now_ms, kbps)),
+                crate::abr::Action::Shape(s) => self.shapes.push((now_ms, s)),
             }
         }
         if self.ramp_done.is_none() {
@@ -684,6 +730,7 @@ impl Client {
             delay: w.sample.delay,
             link_cap: self.abr.abr.link_cap.kbps(),
             link_mark_kbps: self.abr.abr.link_mark_kbps,
+            head: w.sample.head,
         });
     }
 }
@@ -730,6 +777,7 @@ mod tests {
                 random: 0,
                 burst_at: 10,
                 burst_len: 4,
+                ..LossDraw::default()
             },
             10,
             0,
@@ -746,6 +794,7 @@ mod tests {
                 random: 0,
                 burst_at: 10,
                 burst_len: 5,
+                ..LossDraw::default()
             },
             10,
             0,
@@ -774,6 +823,7 @@ mod tests {
                 random: 0,
                 burst_at: 40,
                 burst_len: 22,
+                ..LossDraw::default()
             },
         ] {
             let mut c = client(Instant::now());
@@ -807,6 +857,7 @@ mod tests {
             random: 0,
             burst_at: 10,
             burst_len: 4 + beyond,
+            ..LossDraw::default()
         };
         let with = |repair: Repair| {
             Client::new(

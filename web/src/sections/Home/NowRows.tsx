@@ -22,7 +22,13 @@ import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RowActions } from "@/components/ui/menu";
-import { fmtAgo, fmtClockDuration, fmtNumber, fmtSpan } from "@/lib/format";
+import {
+	fmtAgo,
+	fmtClockDuration,
+	fmtLinkRate,
+	fmtNumber,
+	fmtSpan,
+} from "@/lib/format";
 import { m } from "@/paraglide/messages";
 import { levelLabel } from "@/sections/Devices/access";
 
@@ -152,7 +158,9 @@ export interface SessionActions {
 
 /**
  * A live session. `stream` is set only on the row the host reports numbers for. A seat's row
- * says so (`seat`), and its primary action ends the seat's session (`endLabel`).
+ * says so (`seat`), and its primary action ends the seat's session (`endLabel`). Its folded
+ * facts name the link rate every frame is paced at, the wake shape while it is on, and where
+ * the last minute's lost shards fell in their frames (`link`, absent in the first minute).
  *
  * Mute and the player slot ride native-only lanes; access is ungoverned on the compat plane, so
  * none of the three is offered there.
@@ -191,6 +199,8 @@ export const SessionRowView: FC<
 }) => {
 	const perSession = row.id != null;
 	const nativeLanes = row.plane !== "gamestream";
+	const link = row.link;
+	const lost = link ? link.loss_head + link.loss_mid + link.loss_tail : 0;
 	// With a game, the game is the title and the player drops to the facts line.
 	const who = [profile?.display_name, row.client_name || row.client]
 		.filter(Boolean)
@@ -212,6 +222,17 @@ export const SessionRowView: FC<
 			: undefined,
 		row.plane === "gamestream" ? "GameStream" : undefined,
 		row.plane === "web" ? m.sessions_plane_web() : undefined,
+		link && link.link_kbps > 0
+			? m.sessions_link({ rate: fmtLinkRate(link.link_kbps) })
+			: undefined,
+		link?.shape === "wake" ? m.sessions_link_wake() : undefined,
+		link && lost > 0
+			? m.sessions_link_lost({
+					head: link.loss_head,
+					mid: link.loss_mid,
+					tail: link.loss_tail,
+				})
+			: undefined,
 	].filter(Boolean);
 	return (
 		<Frame

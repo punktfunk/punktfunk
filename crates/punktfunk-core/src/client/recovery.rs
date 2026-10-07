@@ -239,6 +239,8 @@ pub(crate) struct FeedbackOut {
     ask: u16,
     open: Option<OpenAsk>,
     link_kbps: u32,
+    /// The shape every datagram asks for (`Feedback::shape`).
+    shape: u8,
     /// The newest frame handed on. An answer is a frame after the one the ask saw.
     newest: Option<u32>,
     interval: Duration,
@@ -251,6 +253,7 @@ impl Default for FeedbackOut {
             ask: 0,
             open: None,
             link_kbps: 0,
+            shape: 0,
             newest: None,
             interval: Duration::from_micros(1_000_000 / 60),
         }
@@ -288,6 +291,11 @@ impl FeedbackOut {
             self.link_kbps = kbps;
             self.stamp(Feedback::default())
         })
+    }
+
+    /// The shape the client asks for, a level the next datagram carries.
+    pub(crate) fn shape(&mut self, shape: u8) {
+        self.shape = shape;
     }
 
     /// A new ask under a new number. It replaces the open one.
@@ -342,6 +350,7 @@ impl FeedbackOut {
 
     fn stamp(&self, mut fb: Feedback) -> Feedback {
         fb.link_kbps = self.link_kbps;
+        fb.shape = self.shape;
         if let Some(o) = &self.open {
             fb.ask = self.ask;
             fb.invalidate = o.invalidate;

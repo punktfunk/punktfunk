@@ -1991,3 +1991,80 @@ mod geometry_proptests {
         }
     }
 }
+
+/// Missing shards are counted by where in the frame they fell, once the frame leaves the
+/// reorder window: a lost head is the head, parity that never came is the tail even on a
+/// frame that completed clean, and a restored shard that arrived late is no loss at all.
+#[test]
+fn loss_is_counted_by_its_place_in_the_frame() {
+    let cfg = e2e_config(FecScheme::Gf16, 50);
+    let coder = coder_for(FecScheme::Gf16);
+    let mut pk = Packetizer::new(&cfg);
+    let mut rig = Rig::new(&cfg);
+    // 640 B / 16 B = 40 data shards in ten blocks of 4 + 2: data 0..40, then parity 40..60.
+    let src = vec![7u8; 640];
+    let mut frame = |pts| pk.packetize(&src, pts, 0, coder.as_ref()).unwrap();
+
+    let a = frame(1_000_000);
+    assert_eq!(a.len(), 60);
+    rig.push_all(&a[2..])
+        .expect("two head shards are within parity");
+    let b = frame(2_000_000);
+    rig.push_all(&b[..58])
+        .expect("a frame short its last parity is whole");
+    let mut c = frame(3_000_000);
+    let late = c.remove(20);
+    c.push(late);
+    rig.push_all(&c)
+        .expect("a reordered shard is restored first");
+
+    for i in 0..70u64 {
+        rig.push_all(&frame(4_000_000 + i * 1_000_000)).unwrap();
+    }
+    let s = rig.stats.snapshot();
+    let p = rig.r.take_loss_positions();
+    assert_eq!((p.head, p.mid, p.tail), (2, 0, 2));
+    assert_eq!(
+        rig.r.take_loss_positions(),
+        LossPositions::default(),
+        "drained"
+    );
+    assert_eq!(s.fec_recovered_shards - s.fec_late_shards, 2);
+}
+
+/// What a frame still lacks: its data shards by AU index, then its parity numbered after
+/// all the data, capped; nothing for a frame that completed or was never seen.
+#[test]
+fn missing_shards_lists_data_then_parity() {
+    let cfg = e2e_config(FecScheme::Gf16, 50);
+    let coder = coder_for(FecScheme::Gf16);
+    let mut pk = Packetizer::new(&cfg);
+    let mut rig = Rig::new(&cfg);
+    // 640 B / 16 B = 40 data shards in ten blocks of 4 + 2: data 0..40 on the wire, then
+    // parity 40..60, block 0's at 40 and 41.
+    let a = pk
+        .packetize(&vec![7u8; 640], 1_000_000, 0, coder.as_ref())
+        .unwrap();
+    let kept: Vec<_> = a
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| ![1, 2, 3, 41].contains(i))
+        .map(|(_, p)| p.clone())
+        .collect();
+    assert!(rig.push_all(&kept).is_none());
+    // Block 0 lacks data 1, 2, 3 and parity 1 (AU parity index 40 + 1).
+    assert_eq!(rig.r.missing_shards(0, 16), Some(vec![1, 2, 3, 41]));
+    assert_eq!(rig.r.missing_shards(0, 2), Some(vec![1, 2]));
+    assert_eq!(rig.r.missing_shards(9, 16), None);
+    assert!(rig.push_all(&[a[1].clone(), a[2].clone()]).is_some());
+    assert_eq!(rig.r.missing_shards(0, 16), None, "complete");
+}
+
+/// A frame too small for a middle names no place: its lost data counts as the middle, so
+/// random loss at a low rate never reads as a waking receiver.
+#[test]
+fn a_frame_without_a_middle_counts_its_loss_as_the_middle() {
+    use super::reassemble::loss_position;
+    assert!((0..24).all(|i| loss_position(i, 24) == 1));
+    assert_eq!([0, 11, 12, 13].map(|i| loss_position(i, 25)), [0, 0, 1, 2]);
+}

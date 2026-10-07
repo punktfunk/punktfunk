@@ -30,16 +30,22 @@ pub mod governor;
 mod growth;
 #[cfg(test)]
 mod harness;
+mod link;
 pub mod metrics;
 pub(crate) mod probe;
 mod sample;
+mod shape;
 mod verdict;
 mod window;
 
 pub use cap::LearnedCap;
 use controller::BitrateController;
+pub use link::LinkSource;
+#[cfg(any(feature = "quic", test))]
+pub(crate) use link::LINK_FLOOR_KBPS;
 pub use probe::{ProbeReport, RampStep, RampStepEnd, RampSummary};
 pub use sample::{DelayTrend, WindowActivity, WindowSample, WINDOW};
+pub use shape::Shape;
 pub use verdict::Reason;
 
 use std::time::Instant;
@@ -91,16 +97,21 @@ pub struct DriverConfig {
 /// its own business.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// One window's report: shard loss in ppm, the host's adaptive-FEC input, and the
+    /// One window's report: shard loss in ppm, the host's adaptive-FEC input; the
     /// session's packets received, which tell "no loss" from "nothing arrives" and divide a
-    /// path two of the host's sessions share.
+    /// path two of the host's sessions share; and where the window's loss fell.
     Report {
         loss_ppm: u32,
         packets_received: u64,
+        head: u32,
+        mid: u32,
+        tail: u32,
+        sock_drops: u32,
     },
-    /// What the bring-up ramp proved the link carries, kbps. Once. The host
-    /// paces a pinned stream against it.
+    /// The link rate `L` the host paces at, kbps, whenever it changes.
     LinkRate(u32),
+    /// The shape the client asks the host for (`Shape as u8`).
+    Shape(u8),
     /// Ask the host for a new encoder rate.
     SetBitrate(u32),
     /// Ask for a capacity burst. `ramp` = a bring-up step, before any video
@@ -207,6 +218,14 @@ pub struct Driver {
     /// filler AUs too (`session.rs` completes an AU without asking whose
     /// index space it is in).
     video_aus: u64,
+    /// `L`, and the last one the host was told.
+    link: link::LinkRate,
+    link_sent: u32,
+    /// The controller's wall as last read; only a change moves `L`.
+    seen_wall: Option<u32>,
+    shape: shape::ShapeState,
+    /// Consecutive windows of tail loss with no frame lost.
+    tail_run: u8,
 }
 
 impl Driver {
@@ -255,7 +274,37 @@ impl Driver {
             pending: Vec::new(),
             acks: Vec::new(),
             video_aus: 0,
+            link: link::LinkRate::default(),
+            link_sent: 0,
+            seen_wall: None,
+            shape: shape::ShapeState::default(),
+            tail_run: 0,
         }
+    }
+
+    /// Both ends' ports: the host's from its `StreamConfig`, this device's from the dial.
+    pub fn set_ports(&mut self, host: crate::quic::LinkFacts, client: crate::quic::LinkFacts) {
+        self.link.set_ports(host, client);
+    }
+
+    /// The link rate `L`, kbps, and where it came from.
+    pub fn link(&self) -> (u32, LinkSource) {
+        (self.link.kbps(), self.link.source())
+    }
+
+    /// The wake shape is on.
+    pub fn wake(&self) -> bool {
+        self.shape.on()
+    }
+
+    /// Loss by position, as the session drains it ([`crate::session::Session::take_loss_positions`]).
+    pub fn on_loss_positions(&mut self, p: crate::packet::LossPositions) {
+        self.window.on_loss_positions(p);
+    }
+
+    /// The data socket's drops since it opened.
+    pub fn on_sock_drops(&mut self, total: u64) {
+        self.window.on_sock_drops(total);
     }
 
     /// The session counters, once per embedder iteration.
@@ -513,7 +562,13 @@ impl Driver {
                 return None;
             }
         };
-        let start = probe::ramp_start_kbps(proven_kbps, self.stream_cap_kbps);
+        // A ramp the first frame cut short proved only a floor; known ports say more.
+        let basis = if self.probe.ramp_cut_short() && self.link.wired() {
+            self.link.kbps()
+        } else {
+            proven_kbps
+        };
+        let start = probe::ramp_start_kbps(basis, self.stream_cap_kbps);
         self.abr.start_from_measurement(start, now)
     }
 
@@ -538,17 +593,15 @@ impl Driver {
         if self.probe.take_no_evidence() {
             self.abr.no_link_evidence(self.stream_cap_kbps);
         }
-        if let Some(ramped) = self.probe.take_ramped(now) {
+        if let Some(ramped) = self.probe.take_ramped(now, self.link.wired()) {
             // A cut-short ramp still proved a floor the link delivered.
-            let proven = ramped.proven_kbps();
-            if proven > 0 {
-                actions.push(Action::LinkRate(proven));
-            }
+            self.link.ramped(ramped);
             if let Some(kbps) = self.on_ramped(ramped, now) {
                 actions.push(Action::SetBitrate(kbps));
             }
         }
         if !self.window.due(now, self.probe.active()) {
+            self.tell_link(&mut actions);
             return Tick {
                 actions,
                 window: None,
@@ -574,6 +627,10 @@ impl Driver {
             actions.push(Action::Report {
                 loss_ppm: w.loss_ppm,
                 packets_received: closed.packets_received,
+                head: w.head,
+                mid: w.mid,
+                tail: w.tail,
+                sock_drops: w.sock_drops,
             });
             if let Some(kbps) = self.abr.on_window(w) {
                 // Log the window's signals with the decision, so decode- and
@@ -592,7 +649,9 @@ impl Driver {
                 );
                 actions.push(Action::SetBitrate(kbps));
             }
+            self.after_window(w, &mut actions);
         }
+        self.tell_link(&mut actions);
         Tick {
             actions,
             window: Some(ClosedWindow {
@@ -602,6 +661,58 @@ impl Driver {
                 sample: closed.sample,
                 discarded: closed.discarded,
             }),
+        }
+    }
+}
+
+impl Driver {
+    /// What a judged window says about the link and the receiver: tail loss two windows
+    /// running with no frame lost is a mark that takes `L` down a notch, without a cut;
+    /// head loss switches the wake shape; the controller's wall moves `L`.
+    fn after_window(&mut self, w: &WindowSample, actions: &mut Vec<Action>) {
+        if verdict::tail_mark(w) {
+            self.tail_run = self.tail_run.saturating_add(1);
+            if self.tail_run >= 2 {
+                self.tail_run = 0;
+                self.link.tail_mark();
+                tracing::info!(
+                    tail = w.tail,
+                    link_kbps = self.link.kbps(),
+                    "tail loss with every frame whole: the link rate comes down a notch"
+                );
+            }
+        } else {
+            self.tail_run = 0;
+            self.link.calm_window();
+        }
+        let calm = w.head <= w.mid.saturating_add(w.tail);
+        if let Some(s) = self.shape.note(verdict::head_signature(w), calm, w.now) {
+            tracing::info!(
+                head = w.head,
+                mid = w.mid,
+                tail = w.tail,
+                shape = ?s,
+                "delivery shape changed: loss at the frames' heads says the receiver wakes late"
+            );
+            actions.push(Action::Shape(s as u8));
+        }
+        let wall = self.abr.link_wall_kbps();
+        if wall != self.seen_wall {
+            match (self.seen_wall, wall) {
+                (Some(was), Some(k)) if k > was => self.link.lifted(k),
+                (_, Some(k)) => self.link.wall(k),
+                (_, None) => self.link.dropped_cap(),
+            }
+            self.seen_wall = wall;
+        }
+    }
+
+    /// `L` to the host whenever it moved, the first one before anything was measured.
+    fn tell_link(&mut self, actions: &mut Vec<Action>) {
+        let kbps = self.link.kbps();
+        if kbps != self.link_sent {
+            self.link_sent = kbps;
+            actions.push(Action::LinkRate(kbps));
         }
     }
 }
@@ -821,6 +932,122 @@ mod tests {
         assert!(
             link_rate.is_some_and(|k| k >= asked[0].1),
             "the ramp's proof goes to the host as a link rate: {link_rate:?}"
+        );
+    }
+
+    /// A session that runs no probe, for the link and shape tests below.
+    fn quiet_driver(at: Instant) -> Driver {
+        Driver::new(
+            DriverConfig {
+                start_kbps: 20_000,
+                ceiling_cap_kbps: None,
+                stream_cap_kbps: 200_000,
+                refresh_hz: 60,
+                codec: crate::quic::CODEC_HEVC,
+                bit_depth: 8,
+                chroma_format: crate::quic::CHROMA_IDC_420,
+                audio_reserved_kbps: 0,
+                marks_repeats: true,
+                probe: false,
+                probe_target_kbps: None,
+                ramp: false,
+                probe_only: false,
+                pin_kbps: None,
+            },
+            at,
+        )
+    }
+
+    /// `windows` report windows a millisecond at a time: 20 Mbit/s of video, an AU every
+    /// 16 ms, and `loss` (`[head, mid, tail]`) added once per window. Every action, in order.
+    fn drive(d: &mut Driver, at: Instant, windows: u64, loss: [u64; 3]) -> Vec<Action> {
+        let mut st = Stats::default();
+        let mut out = Vec::new();
+        for ms in 0..windows * 760 {
+            st.packets_received += 2;
+            st.bytes_received += 2_500;
+            if ms % 750 == 0 {
+                d.on_loss_positions(crate::packet::LossPositions {
+                    head: loss[0] as u32,
+                    mid: loss[1] as u32,
+                    tail: loss[2] as u32,
+                });
+            }
+            d.on_stats(&st);
+            if ms % 16 == 0 {
+                st.frames_completed += 1;
+                d.on_au(false);
+            }
+            out.extend(d.tick(at + std::time::Duration::from_millis(ms)).actions);
+        }
+        out
+    }
+
+    /// `L` goes out on the first tick, before anything is measured: both ports' speed when
+    /// both ends are wired, the floor when they are not. It does not repeat.
+    #[test]
+    fn the_link_rate_goes_out_first_from_the_ports() {
+        use crate::transport::IFACE_KIND_ETHERNET as ETH;
+        let at = Instant::now();
+        let mut d = quiet_driver(at);
+        let f = |kind, mbps| crate::quic::LinkFacts { kind, mbps };
+        d.set_ports(f(ETH, 2_500), f(ETH, 1_000));
+        let told: Vec<u32> = drive(&mut d, at, 2, [0; 3])
+            .into_iter()
+            .filter_map(|a| match a {
+                Action::LinkRate(k) => Some(k),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(told, [1_000_000]);
+        assert_eq!(d.link(), (1_000_000, LinkSource::Ports));
+
+        let mut d = quiet_driver(at);
+        let first = drive(&mut d, at, 1, [0; 3]);
+        assert!(first.contains(&Action::LinkRate(LINK_FLOOR_KBPS)));
+    }
+
+    /// Two windows running that lose the frames' heads turn the wake shape on; a window that
+    /// loses the tail as much does not.
+    #[test]
+    fn head_loss_two_windows_running_wakes_the_shape() {
+        let at = Instant::now();
+        let mut d = quiet_driver(at);
+        let wake = Action::Shape(Shape::Wake as u8);
+        assert!(!drive(&mut d, at, 3, [6, 1, 3]).contains(&wake));
+        let mut d = quiet_driver(at);
+        let acts = drive(&mut d, at, 3, [6, 0, 0]);
+        assert!(acts.contains(&wake), "{acts:?}");
+        assert!(d.wake());
+    }
+
+    /// Parity going missing at the frames' tails while every frame decodes takes `L` down a
+    /// notch every two windows, before a single frame is lost; the bitrate is not touched.
+    #[test]
+    fn tail_loss_without_a_lost_frame_lowers_the_link_rate() {
+        use crate::transport::IFACE_KIND_ETHERNET as ETH;
+        let at = Instant::now();
+        let mut d = quiet_driver(at);
+        let f = |kind, mbps| crate::quic::LinkFacts { kind, mbps };
+        d.set_ports(f(ETH, 1_000), f(ETH, 1_000));
+        let acts = drive(&mut d, at, 8, [0, 0, 3]);
+        let told: Vec<u32> = acts
+            .iter()
+            .filter_map(|a| match a {
+                Action::LinkRate(k) => Some(*k),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(told[..3], [1_000_000, 875_000, 765_625]);
+        assert_eq!(d.link().1, LinkSource::Measured);
+        let cut = acts
+            .iter()
+            .any(|a| matches!(a, Action::SetBitrate(k) if *k < 20_000));
+        assert!(!cut, "no cut");
+        assert_eq!(
+            d.target_kbps(),
+            20_000,
+            "the rate is the controller's own business"
         );
     }
 

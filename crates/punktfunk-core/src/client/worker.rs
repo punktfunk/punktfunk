@@ -62,6 +62,14 @@ pub(crate) struct ClientShared {
     pub(crate) feedback_tx: std::sync::OnceLock<FeedbackTx>,
     /// Keyframe asks sent; the pump drains them per report window as the ABR recovery signal.
     pub(crate) recovery_kf: AtomicU32,
+    /// This device's end of the path, as the dial read it.
+    pub(crate) client_link: Mutex<crate::quic::LinkFacts>,
+    /// The link rate the host paces at and where it came from, as last told.
+    pub(crate) link: Mutex<(u32, crate::abr::LinkSource)>,
+    /// The wake shape is on.
+    pub(crate) wake_shape: AtomicBool,
+    /// The last window's socket dropped packets: the drain signature holds.
+    pub(crate) draining: AtomicBool,
     /// This dial asked for probes only ([`crate::quic::EXT_DELIVERY_PROBE_ONLY`]).
     pub(crate) probe_only: AtomicBool,
     /// A clone of the data socket: the same socket as the pump's, so its receive drops and
@@ -133,6 +141,10 @@ impl ClientShared {
             feedback: Mutex::default(),
             feedback_tx: std::sync::OnceLock::new(),
             recovery_kf: AtomicU32::new(0),
+            client_link: Mutex::default(),
+            link: Mutex::new((crate::abr::LINK_FLOOR_KBPS, crate::abr::LinkSource::Floor)),
+            wake_shape: AtomicBool::new(false),
+            draining: AtomicBool::new(false),
             probe_only: AtomicBool::new(false),
             data_sock: Mutex::default(),
             local_ip: Mutex::default(),

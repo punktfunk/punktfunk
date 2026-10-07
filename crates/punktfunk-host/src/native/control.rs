@@ -105,6 +105,21 @@ fn take_newer(n: u32, last: &mut u32, max: u32) -> bool {
     true
 }
 
+/// The client's shape, for the send loop; logged when it moves. A client asks for the
+/// wake shape or nothing: line rate and the smooth spread are the operator's. Returns
+/// whether the wake shape is on.
+fn apply_shape(slot: &std::sync::atomic::AtomicU8, asked: u8) -> bool {
+    use crate::send_pacing::Shape;
+    let shape = match Shape::from_u8(asked) {
+        Shape::Wake => Shape::Wake,
+        _ => Shape::Auto,
+    };
+    if slot.swap(shape as u8, Ordering::Relaxed) != shape as u8 {
+        tracing::info!(?shape, "client changed the delivery shape");
+    }
+    shape == Shape::Wake
+}
+
 /// A probe's target, the bring-up ramp's steps included, under 0.9 `L_hard` when a port is
 /// known. The result reports what was offered, so a bounded round says so itself.
 fn probe_bound(target_kbps: u32, ports: crate::send_pacing::Ports) -> u32 {
@@ -354,7 +369,7 @@ pub(super) async fn run(task: Task) {
                 fec_target,
                 fec_requested,
                 link_kbps,
-                shape: _,
+                shape,
                 ports,
                 ramp_open,
                 cursor_client_draws,
@@ -441,6 +456,8 @@ pub(super) async fn run(task: Task) {
                 if fb.link_kbps != 0 && link_kbps.swap(fb.link_kbps, Ordering::Relaxed) != fb.link_kbps {
                     tracing::info!(link_kbps = fb.link_kbps, "client's link rate");
                 }
+                let wake = apply_shape(&shape, fb.shape);
+                link.note_link(fb.link_kbps, wake);
                 // The ask before the window: an RFI raised in a window counts in its report.
                 if take_newer(u32::from(fb.ask), &mut last_ask, u16::MAX.into()) {
                     if fb.keyframe {
@@ -469,6 +486,7 @@ pub(super) async fn run(task: Task) {
                 if take_newer(fb.window, &mut last_window, u32::MAX) {
                     let unrecovered_run = unrecovered.report(std::time::Instant::now());
                     link.note_loss(fb.loss_ppm, unrecovered_run);
+                    link.note_positions(fb.head, fb.mid, fb.tail, fb.sock_drops);
                     link.sample_bands(
                         fec_target.load(Ordering::Relaxed),
                         live_bitrate.load(Ordering::Relaxed),
@@ -1065,6 +1083,19 @@ mod tests {
         assert_eq!(probe_bound(1_200_000, gbe), 900_000);
         assert_eq!(probe_bound(50_000, gbe), 50_000);
         assert_eq!(probe_bound(1_200_000, Default::default()), 1_200_000);
+    }
+
+    /// A client gets the wake shape or the default, never the operator's line rate.
+    #[test]
+    fn a_client_asks_for_the_wake_shape_or_nothing() {
+        let slot = std::sync::atomic::AtomicU8::new(0);
+        assert!(apply_shape(&slot, 1));
+        assert!(!apply_shape(&slot, 2));
+        assert_eq!(
+            slot.load(Ordering::Relaxed),
+            0,
+            "burst is not the client's to ask"
+        );
     }
 
     /// A window or ask number is acted on once: a repeat, an older reordered copy and `0` are

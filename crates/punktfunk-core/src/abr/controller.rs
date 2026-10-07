@@ -1142,6 +1142,12 @@ impl BitrateController {
         }
     }
 
+    /// The link's wall as this controller holds it: the delivered mark that latched the cap,
+    /// or the cap once lifts carried it past the mark. `None` while no cap stands.
+    pub(crate) fn link_wall_kbps(&self) -> Option<u32> {
+        self.link_cap.kbps().map(|cap| cap.max(self.link_mark_kbps))
+    }
+
     /// What a link-attributed cut delivered: one mark toward the wall.
     ///
     /// Two marks at the same rate are a wall, and the bring-up ramp's own wall
@@ -1279,7 +1285,12 @@ impl BitrateController {
             // vouch for, and a decoder past its budget. Keyframe asks and one
             // lost frame behind a clean window are not.
             let repeated_drops = w.dropped > 1 || (w.dropped == 1 && self.clean_windows == 0);
-            let link = w.loss_ppm >= HEAVY_LOSS_PPM || v.owd_bad || w.flushed || repeated_drops;
+            let signature = super::verdict::link_signature(w);
+            let link = w.loss_ppm >= HEAVY_LOSS_PPM
+                || v.owd_bad
+                || w.flushed
+                || repeated_drops
+                || signature;
             // A decoder past its budget is a rate verdict but not a link one:
             // the link delivered, the client could not decode it. Host encode
             // says nothing until its notch is answered: the answer writes this.
@@ -1292,10 +1303,11 @@ impl BitrateController {
             // neither branch can fire where there is no wall (L2).
             let short = self.short_of_offered(w, v.owd_bad);
             self.link_evidence = link && (v.owd_bad || short);
-            // Only a shortfall makes what was delivered the number to land
-            // on. At the wall itself the session is already getting what it
-            // asks for, and the blind step is what drains the queue.
-            self.link_verdict = link && short;
+            // Only a shortfall, or a socket that could not keep up, makes what
+            // was delivered the number to land on. At the wall itself the
+            // session is already getting what it asks for, and the blind step
+            // is what drains the queue.
+            self.link_verdict = link && (short || signature);
             self.bad_windows += 1;
             self.streak_cut = Some(v.reason);
             if v.decode_bad {

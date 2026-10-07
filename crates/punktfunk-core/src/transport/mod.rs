@@ -31,7 +31,7 @@ pub mod shared;
 pub mod sockstat;
 mod udp;
 
-pub use loopback::{loopback_pair, LoopbackTransport};
+pub use loopback::{loopback_drop_head, loopback_drop_tail, loopback_pair, LoopbackTransport};
 pub use qos::{grow_socket_buffers, set_dscp_default, set_media_qos, MediaClass, QosFlow};
 /// Windows-only USO batch send for a caller that owns its connected socket (GameStream video).
 #[cfg(target_os = "windows")]

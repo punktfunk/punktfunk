@@ -28,6 +28,14 @@ pub(super) const RECOVERY_KF_SEVERE: u32 = 4;
 /// as a blip. 8 × 750 ms = 6 s: long enough that the rate it held is proven,
 /// short enough that a link dropping a frame every few seconds still cuts.
 pub(super) const BLIP_CLEAN_WINDOWS: u32 = 8;
+/// Tail loss in a window with no lost frame that takes a notch off `L` when two windows run.
+/// Parity leaves last, so a queue overflowing on the path drops it first.
+pub(super) const TAIL_MARK_MIN: u32 = 2;
+/// Head loss that names a waking receiver: at least this many shards from the frames'
+/// heads…
+pub(super) const HEAD_MIN: u32 = 4;
+/// …this many times everything else lost, with the socket dropping nothing.
+pub(super) const HEAD_RATIO: u32 = 3;
 /// One-way-delay rise above the rolling baseline that counts as queue growth.
 /// 25 ms is far beyond jitter at any streamable frame rate.
 const OWD_RISE_US: i64 = 25_000;
@@ -99,6 +107,26 @@ pub(crate) struct Verdict {
     pub encode_severe: bool,
     pub decode_mean_us: Option<i64>,
     pub reason: Reason,
+}
+
+/// This device's own socket dropped packets: the receiver could not drain the rate. The
+/// window is the link's whatever `loss_ppm` says.
+pub(super) fn link_signature(w: &WindowSample) -> bool {
+    w.sock_drops > 0
+}
+
+/// Parity going missing at the frames' tails while every frame still decodes: the queue
+/// is close to full, and a mark can go in before the picture breaks.
+pub(super) fn tail_mark(w: &WindowSample) -> bool {
+    w.tail >= TAIL_MARK_MIN && w.dropped == 0
+}
+
+/// Loss at the frames' heads, well past the rest, with the socket dropping nothing: a
+/// receiver whose adapter wakes late. The wake shape answers it, not the rate.
+pub(crate) fn head_signature(w: &WindowSample) -> bool {
+    w.head >= HEAD_MIN
+        && w.head >= HEAD_RATIO.saturating_mul(w.mid.saturating_add(w.tail))
+        && w.sock_drops == 0
 }
 
 /// Rolling-min baselines for the three relative signals.
@@ -214,12 +242,14 @@ impl Baselines {
         let path_noise = still && !owd_bad;
         let loss_ppm = if path_noise { 0 } else { w.loss_ppm };
         let dropped = if path_noise { 0 } else { w.dropped };
+        let link_sig = !path_noise && link_signature(w);
         // A lost frame and nothing else: the recovery plane's business (RFI,
         // FEC), not the rate's. A long clean run at this rate says so, and so
         // does a window whose wire and delay show a link with room — which a
         // session still climbing has instead of a run.
         let blip = dropped > 0
             && (clean_run >= BLIP_CLEAN_WINDOWS || link_vouches)
+            && !link_sig
             && loss_ppm < HEAVY_LOSS_PPM
             && !w.flushed
             && !owd_bad
@@ -237,6 +267,7 @@ impl Baselines {
         let bad = severe
             || (!blip
                 && (loss_ppm >= HEAVY_LOSS_PPM
+                    || link_sig
                     || owd_bad
                     || decode_bad
                     || encode_bad
@@ -290,7 +321,7 @@ fn reason(w: &WindowSample, owd_bad: bool, v: &Verdict) -> Reason {
         Reason::Encode
     } else if w.recovery_kf >= RECOVERY_KF_SEVERE {
         Reason::KeyframeAsks
-    } else if w.loss_ppm >= HEAVY_LOSS_PPM {
+    } else if w.loss_ppm >= HEAVY_LOSS_PPM || link_signature(w) {
         Reason::Loss
     } else if owd_bad {
         Reason::Owd
@@ -357,6 +388,34 @@ mod tests {
     use super::super::sample::WindowActivity;
     use super::*;
     use std::time::Instant;
+
+    /// Where a window's shards went missing names its cause: the socket's own drops a
+    /// receiver that could not drain, tail loss with every frame whole a filling queue, the
+    /// heads well past the rest a receiver waking late; a socket that drops vetoes the last.
+    #[test]
+    fn loss_positions_name_their_signature() {
+        let w = |head, mid, tail, sock_drops| WindowSample {
+            head,
+            mid,
+            tail,
+            sock_drops,
+            ..WindowSample::at(Instant::now())
+        };
+        assert!(link_signature(&w(0, 0, 0, 1)));
+        assert!(!link_signature(&w(0, 3, 9, 0)));
+        assert!(head_signature(&w(6, 1, 1, 0)));
+        assert!(
+            !head_signature(&w(6, 2, 1, 0)),
+            "the rest lost a third as much"
+        );
+        assert!(!head_signature(&w(9, 0, 0, 3)), "the socket dropped");
+        assert!(!head_signature(&w(3, 0, 0, 0)), "too few at the heads");
+        assert!(tail_mark(&w(0, 0, 2, 0)));
+        assert!(!tail_mark(&WindowSample {
+            dropped: 1,
+            ..w(0, 0, 2, 0)
+        }));
+    }
 
     #[test]
     fn owd_rise_alone_is_a_congestion_signal() {

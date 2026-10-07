@@ -82,6 +82,14 @@ pub struct WindowSample {
     pub flushed: bool,
     pub recovery_kf: u32,
     pub activity: WindowActivity,
+    /// Shards that never arrived, by their place in the frame: the first twelve data
+    /// shards, the middle, and the last twelve with all parity
+    /// ([`Stats::loss_head`](crate::stats::Stats::loss_head)).
+    pub head: u32,
+    pub mid: u32,
+    pub tail: u32,
+    /// Packets this device's own receive buffer dropped.
+    pub sock_drops: u32,
 }
 
 impl WindowSample {
@@ -101,6 +109,10 @@ impl WindowSample {
             flushed: false,
             recovery_kf: 0,
             activity: WindowActivity::Unmarked,
+            head: 0,
+            mid: 0,
+            tail: 0,
+            sock_drops: 0,
         }
     }
 }

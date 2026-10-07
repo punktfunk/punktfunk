@@ -24,6 +24,16 @@ pub const WARN_INTRA_REFRESH: u32 = 10;
 /// three distinct asks is a client that is not being repaired.
 pub const WARN_KEYFRAME_REQ: u32 = 3;
 
+/// How the client asked for its frames: paced, or the wake shape (a small first group and a
+/// gap on every frame).
+#[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkShape {
+    #[default]
+    Auto,
+    Wake,
+}
+
 /// One minute of link health for one session. Every field is a delta for the window except
 /// the bands, which are min..max over it.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +74,17 @@ pub struct LinkMinute {
     pub gaps: u32,
     /// Sealed wire throughput over the window.
     pub egress_kbps: u32,
+    /// The link rate the client last reported, which every frame is paced at. `0` = none.
+    pub link_kbps: u32,
+    /// The shape the client asked for.
+    pub shape: LinkShape,
+    /// Shards the client never got, by where in their frame they fell: the first twelve
+    /// data shards, the middle, and the last twelve with all parity.
+    pub loss_head: u32,
+    pub loss_mid: u32,
+    pub loss_tail: u32,
+    /// Packets the client's own receive buffer dropped.
+    pub sock_drops: u32,
 }
 
 impl LinkMinute {
@@ -106,6 +127,12 @@ pub fn emit(m: &LinkMinute, peer: std::net::IpAddr) {
                 retargets = m.retargets,
                 gaps = m.gaps,
                 egress_mbps = %format!("{:.1}", f64::from(m.egress_kbps) / 1000.0),
+                link_mbps = m.link_kbps / 1000,
+                shape = ?m.shape,
+                loss_head = m.loss_head,
+                loss_mid = m.loss_mid,
+                loss_tail = m.loss_tail,
+                sock_drops = m.sock_drops,
                 "link health"
             )
         };
@@ -225,6 +252,11 @@ pub struct LinkWindow {
     /// `None` until the first band sample, so a real 0 % never reads as "unset".
     fec: Option<(u8, u8)>,
     abr: Option<(u32, u32)>,
+    /// The client's link rate and shape as last reported; they carry across minutes.
+    link_kbps: u32,
+    shape: LinkShape,
+    /// `[head, mid, tail, socket]` loss over the minute.
+    positions: [u32; 4],
 }
 
 impl LinkWindow {
@@ -243,6 +275,28 @@ impl LinkWindow {
             gaps: 0,
             fec: None,
             abr: None,
+            link_kbps: 0,
+            shape: LinkShape::Auto,
+            positions: [0; 4],
+        }
+    }
+
+    /// One feedback datagram's levels: the link rate the pacer runs at and the shape.
+    pub fn note_link(&mut self, link_kbps: u32, wake: bool) {
+        if link_kbps != 0 {
+            self.link_kbps = link_kbps;
+        }
+        self.shape = if wake {
+            LinkShape::Wake
+        } else {
+            LinkShape::Auto
+        };
+    }
+
+    /// One report window's loss by position, and the client socket's own drops.
+    pub fn note_positions(&mut self, head: u32, mid: u32, tail: u32, sock_drops: u32) {
+        for (sum, n) in self.positions.iter_mut().zip([head, mid, tail, sock_drops]) {
+            *sum = sum.saturating_add(n);
         }
     }
 
@@ -313,10 +367,18 @@ impl LinkWindow {
             abr_min_kbps,
             abr_max_kbps,
             egress_kbps: (bytes as f64 * 8.0 / 1000.0 / elapsed) as u32,
+            link_kbps: self.link_kbps,
+            shape: self.shape,
+            loss_head: self.positions[0],
+            loss_mid: self.positions[1],
+            loss_tail: self.positions[2],
+            sock_drops: self.positions[3],
             ..LinkMinute::default()
         };
         counters.take(&mut m);
+        let (link_kbps, shape) = (self.link_kbps, self.shape);
         *self = LinkWindow::new(counters);
+        (self.link_kbps, self.shape) = (link_kbps, shape);
         m
     }
 }

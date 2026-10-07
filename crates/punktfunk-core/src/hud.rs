@@ -1003,6 +1003,61 @@ pub fn format(s: &StatsSnapshot, tier: StatsVerbosity, advanced: bool) -> Vec<Hu
     lines
 }
 
+/// The link every frame is paced at, in one line a player can read, with why: both ends'
+/// ports, a measurement, or nothing yet. `shape` names the wake shape when it is on;
+/// `small_buffer_kb` the receive buffer while the socket drops packets.
+pub fn link_line(
+    host: crate::quic::LinkFacts,
+    client: crate::quic::LinkFacts,
+    (link_kbps, source): (u32, crate::abr::LinkSource),
+    shape: crate::abr::Shape,
+    small_buffer_kb: Option<u32>,
+) -> String {
+    use crate::abr::LinkSource;
+    let rate = |kbps: u32| {
+        if kbps >= 1_000_000 {
+            format!("{} Gbit/s", trim(f64::from(kbps) / 1e6))
+        } else {
+            format!("{} Mbit/s", kbps / 1_000)
+        }
+    };
+    let port = |mbps: u32| {
+        if mbps >= 1_000 {
+            format!("{} GbE", trim(f64::from(mbps) / 1e3))
+        } else {
+            format!("{mbps} Mbit/s Ethernet")
+        }
+    };
+    let mut out = format!("Link {}", rate(link_kbps));
+    match source {
+        LinkSource::Ports => {
+            out += &format!(
+                " \u{2014} host {}, this device {}",
+                port(host.mbps),
+                port(client.mbps)
+            );
+        }
+        LinkSource::Measured if client.kind == crate::transport::IFACE_KIND_WIFI => {
+            out += ", Wi-Fi, measured";
+        }
+        LinkSource::Measured => out += ", measured",
+        LinkSource::Floor => out += ", not measured yet",
+    }
+    if shape == crate::abr::Shape::Wake {
+        out += " \u{00b7} paced for a receiver that loses frame heads";
+    }
+    if let Some(kb) = small_buffer_kb {
+        out += &format!(" \u{00b7} receive buffer {kb} KB \u{2014} raise net.core.rmem_max");
+    }
+    out
+}
+
+/// One decimal, none when it is zero: `2.5`, `1`, `10`.
+fn trim(v: f64) -> String {
+    let s = format!("{v:.1}");
+    s.strip_suffix(".0").map_or(s.clone(), str::to_string)
+}
+
 /// Lines as one string: `sep` between them.
 pub fn join(lines: &[HudLine], sep: &str) -> String {
     lines
@@ -2222,5 +2277,38 @@ mod tests {
             }
         }
         assert!(format(&s, StatsVerbosity::Off, false).is_empty());
+    }
+
+    /// The line names the link and why: the ports when they decided it, a measurement on
+    /// Wi-Fi, the wake shape and a small buffer when they apply.
+    #[test]
+    fn the_link_line_says_what_paces_and_why() {
+        use crate::abr::LinkSource::*;
+        use crate::abr::Shape::{Auto, Wake};
+        use crate::transport::{IFACE_KIND_ETHERNET as ETH, IFACE_KIND_WIFI as WIFI};
+        let f = |kind, mbps| crate::quic::LinkFacts { kind, mbps };
+        assert_eq!(
+            link_line(f(ETH, 2_500), f(ETH, 1_000), (1_000_000, Ports), Auto, None),
+            "Link 1 Gbit/s \u{2014} host 2.5 GbE, this device 1 GbE"
+        );
+        assert_eq!(
+            link_line(f(ETH, 1_000), f(ETH, 0), (940_000, Measured), Auto, None),
+            "Link 940 Mbit/s, measured"
+        );
+        assert_eq!(
+            link_line(
+                f(ETH, 1_000),
+                f(WIFI, 866),
+                (180_000, Measured),
+                Wake,
+                Some(208)
+            ),
+            "Link 180 Mbit/s, Wi-Fi, measured \u{00b7} paced for a receiver that loses frame \
+             heads \u{00b7} receive buffer 208 KB \u{2014} raise net.core.rmem_max"
+        );
+        assert_eq!(
+            link_line(f(0, 0), f(0, 0), (800_000, Floor), Auto, None),
+            "Link 800 Mbit/s, not measured yet"
+        );
     }
 }

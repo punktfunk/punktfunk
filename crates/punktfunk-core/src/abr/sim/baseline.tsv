@@ -1,6 +1,9 @@
 scenario	under5_pct	to90_s	cuts_10min	lost_10min	queue_p95_ms	over_cap_kb_10s	blip_recover_s	fairness_x1000	decisions_fnv1a
 lan_10g	0	7	0	10	1	0	0	1000	fad2f8fe
 lan_1g	0	7	10	20	7	0	28	1000	e38b3002
+lan_head_loss	0	7	0	0	7	0	0	1000	db37bad6
+lan_tail_parity_loss	0	7	0	0	7	0	0	1000	7423c704
+lan_1g_two_ports	0	8	0	10	1	0	0	1000	54bf5707
 wifi_good	0	1	0	8	4	0	0	1000	9decf792
 wifi_tv	0	3	0	0	4	0	0	1000	186b82ed
 wan_wg_12	0	3	0	0	31	0	0	1000	6edcf0ca

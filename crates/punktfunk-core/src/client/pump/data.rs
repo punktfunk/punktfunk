@@ -81,6 +81,10 @@ struct PumpLoop {
     seen_mode_gen: u32,
     /// Epoch of the last frame handed on; a new one may move the mode ([`super::anchor`]).
     last_epoch: Option<u8>,
+    /// When the socket's drop count was last read.
+    sock_read: Instant,
+    /// The host's facts the driver last had: its `StreamConfig` moves them.
+    host_link: crate::quic::HostLink,
     /// `PUNKTFUNK_PERF`: recv/decrypt/reassemble split plus AU inter-arrival
     /// jitter. Jump-to-live only fires after the stream is already behind.
     perf: Option<PerfWindow>,
@@ -182,6 +186,8 @@ impl DataPump {
             seen_clock_gen: self.clock_gen.load(Ordering::Relaxed),
             seen_mode_gen: self.mode_gen.load(Ordering::Relaxed),
             last_epoch: None,
+            sock_read: Instant::now(),
+            host_link: Default::default(),
             perf: std::env::var("PUNKTFUNK_PERF")
                 .is_ok_and(|v| v != "0")
                 .then(PerfWindow::default),
@@ -226,7 +232,7 @@ impl DataPump {
         let pin_kbps = (rate_pinned && self.bitrate_kbps == 0)
             .then_some(self.resolved_bitrate_kbps)
             .filter(|&pin| pin > 0);
-        crate::abr::Driver::new(
+        let mut driver = crate::abr::Driver::new(
             DriverConfig {
                 start_kbps: if self.bitrate_kbps == 0 && !rate_pinned {
                     self.resolved_bitrate_kbps
@@ -249,7 +255,12 @@ impl DataPump {
                 pin_kbps,
             },
             session_start,
-        )
+        );
+        driver.set_ports(
+            self.shared.host_link.lock().unwrap().facts(),
+            *self.shared.client_link.lock().unwrap(),
+        );
+        driver
     }
 
     /// Everything the driver hears before this iteration's tick, in the
@@ -275,6 +286,27 @@ impl DataPump {
         // produced frame — a total-loss drought completes no AU.
         let st = self.session.stats();
         lp.abr.on_stats(&st);
+        lp.abr.on_loss_positions(self.session.take_loss_positions());
+        let host = *self.shared.host_link.lock().unwrap();
+        if host != lp.host_link {
+            lp.host_link = host;
+            lp.abr
+                .set_ports(host.facts(), *self.shared.client_link.lock().unwrap());
+        }
+        // One syscall per sample: often enough for a window, rare enough for the hot loop.
+        if lp.sock_read.elapsed() >= Duration::from_millis(100) {
+            lp.sock_read = Instant::now();
+            let drops = self
+                .shared
+                .data_sock
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(crate::transport::sockstat::socket_drops);
+            if let Some(d) = drops {
+                lp.abr.on_sock_drops(d);
+            }
+        }
         // One delay sample per frame that opened since the last iteration,
         // whether or not it ever completed. Same offset and same sign test
         // as a completed AU's; without an offset there is no delay to read,
@@ -380,16 +412,30 @@ impl DataPump {
                 Action::Report {
                     loss_ppm,
                     packets_received,
+                    head,
+                    mid,
+                    tail,
+                    sock_drops,
                 } => {
                     let report = crate::quic::v2::dgram::Feedback {
                         loss_ppm,
                         packets_received,
+                        head,
+                        mid,
+                        tail,
+                        sock_drops,
                         ..Default::default()
                     };
                     let fb = self.shared.feedback.lock().unwrap().window(report);
                     self.shared.send_feedback(&fb);
                 }
+                Action::Shape(shape) => {
+                    let wake = shape == crate::abr::Shape::Wake as u8;
+                    self.shared.wake_shape.store(wake, Ordering::Relaxed);
+                    self.shared.feedback.lock().unwrap().shape(shape);
+                }
                 Action::LinkRate(kbps) => {
+                    *self.shared.link.lock().unwrap() = abr.link();
                     let fb = self.shared.feedback.lock().unwrap().link(kbps);
                     if let Some(fb) = fb {
                         self.shared.send_feedback(&fb);
@@ -460,6 +506,11 @@ impl DataPump {
         window: crate::abr::ClosedWindow,
         request_kbps: Option<u32>,
     ) {
+        if !window.discarded {
+            self.shared
+                .draining
+                .store(window.sample.sock_drops > 0, Ordering::Relaxed);
+        }
         let abr = &lp.abr;
         // Published at the first window, not the moment the ramp
         // stopped: the rate it opened at is the one the host acked,

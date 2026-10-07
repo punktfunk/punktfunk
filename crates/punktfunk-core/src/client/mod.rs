@@ -376,7 +376,7 @@ impl NativeClient {
 /// workers feed. Default-QoS producers invert priority. Android uses nice −8; no-op
 /// elsewhere (no QoS scheduler).
 #[cfg(target_vendor = "apple")]
-fn pin_thread_user_interactive() {
+pub(crate) fn pin_thread_user_interactive() {
     // SAFETY: sets only the current thread's QoS class — always valid to call.
     unsafe {
         libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
@@ -386,7 +386,7 @@ fn pin_thread_user_interactive() {
 /// delay overflows the socket recv buffer → wire loss the link never saw. Below decode's
 /// −10 so the display path still wins. Best-effort.
 #[cfg(target_os = "android")]
-fn pin_thread_user_interactive() {
+pub(crate) fn pin_thread_user_interactive() {
     // SAFETY: `gettid`/`setpriority` on the calling thread are always-safe syscalls; a refusal is
     // reported via the return value (ignored — a missed boost, not an error on the data path).
     unsafe {
@@ -397,7 +397,7 @@ fn pin_thread_user_interactive() {
 /// Desktop has no QoS class of its own; the embedder installs one with
 /// [`set_thread_boost`] (nice via rtkit, MMCSS on Windows).
 #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
-fn pin_thread_user_interactive() {
+pub(crate) fn pin_thread_user_interactive() {
     if let Some(boost) = THREAD_BOOST.get() {
         boost();
     }
@@ -1139,7 +1139,32 @@ impl NativeClient {
         s.audio_rate_hz = self.audio_sample_rate_hz;
         s.audio_bits = self.audio_bits;
         s.audio_channels = self.audio_channels;
+        s.extras.push(crate::hud::Extra {
+            role: crate::hud::Role::Muted,
+            ..crate::hud::Extra::detail(self.link_line())
+        });
         s
+    }
+
+    /// The link every frame is paced at and why, as the overlay shows it.
+    pub fn link_line(&self) -> String {
+        let host = self.shared.host_link.lock().unwrap().facts();
+        // The buffer is named while the socket drops packets and it is under what a 4K
+        // frame needs.
+        let small_buffer_kb = Some(self.recv_buffer_kb())
+            .filter(|&kb| kb > 0 && kb < 8 * 1024 && self.shared.draining.load(Ordering::Relaxed));
+        let shape = if self.shared.wake_shape.load(Ordering::Relaxed) {
+            crate::abr::Shape::Wake
+        } else {
+            crate::abr::Shape::Auto
+        };
+        crate::hud::link_line(
+            host,
+            *self.shared.client_link.lock().unwrap(),
+            *self.shared.link.lock().unwrap(),
+            shape,
+            small_buffer_kb,
+        )
     }
 
     pub fn audio_buffer_ms(&self) -> u32 {

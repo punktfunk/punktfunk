@@ -118,6 +118,15 @@ PROBE_DELAY|const PROBE_DELAY: Duration = Duration::from_secs(2);|const PROBE_DE
 PROBE_TIMEOUT|const PROBE_TIMEOUT: Duration = Duration::from_secs(15);|const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 STILL_FRAMES_DIV|const STILL_FRAMES_DIV: u64 = 4;|const STILL_FRAMES_DIV: u64 = 40;
 ACK_GIVE_UP|const ACK_GIVE_UP: Duration = Duration::from_secs(10);|const ACK_GIVE_UP: Duration = Duration::from_secs(300);
+HEAD_MIN|const HEAD_MIN: u32 = 4;|const HEAD_MIN: u32 = 40;
+HEAD_RATIO|const HEAD_RATIO: u32 = 3;|const HEAD_RATIO: u32 = 10;
+WAKE_WINDOWS|const WAKE_WINDOWS: u8 = 2;|const WAKE_WINDOWS: u8 = 5;
+WAKE_OFF_SECS|const WAKE_OFF_SECS: u64 = 60;|const WAKE_OFF_SECS: u64 = 5;
+TAIL_MARK_MIN|const TAIL_MARK_MIN: u32 = 2;|const TAIL_MARK_MIN: u32 = 4;
+LINK_FLOOR_KBPS|const LINK_FLOOR_KBPS: u32 = 800_000;|const LINK_FLOOR_KBPS: u32 = 500_000;
+NOTCH_DIV|const NOTCH_DIV: u32 = 8;|const NOTCH_DIV: u32 = 3;
+NOTCH_MAX|const NOTCH_MAX: u8 = 8;|const NOTCH_MAX: u8 = 2;
+NOTCH_CALM_WINDOWS|const NOTCH_CALM_WINDOWS: u32 = 40;|const NOTCH_CALM_WINDOWS: u32 = 4;
 EOF
 )
 

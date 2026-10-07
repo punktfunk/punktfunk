@@ -145,9 +145,13 @@ pub fn client_socket(bind: SocketAddr) -> std::io::Result<(Arc<ClientSocket>, Cl
         media: tx,
         stats: stats.clone(),
     };
+    // As urgent as the pump it feeds: a descheduled reader is socket drops the link never had.
     std::thread::Builder::new()
         .name("punktfunk-demux".into())
-        .spawn(move || reader.run())?;
+        .spawn(move || {
+            crate::client::pin_thread_user_interactive();
+            reader.run()
+        })?;
     Ok((
         Arc::new(ClientSocket {
             socket: socket.clone(),

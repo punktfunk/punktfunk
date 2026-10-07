@@ -289,6 +289,7 @@ async fn dial(
             *args.shared.data_sock.lock().unwrap() = Some(sock);
         }
         *args.shared.local_ip.lock().unwrap() = conn.local_ip();
+        *args.shared.client_link.lock().unwrap() = link;
         tracing::info!(kind = link.kind, mbps = link.mbps, "this end's link facts");
         *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
         args.shared.anchor.lock().unwrap().on =

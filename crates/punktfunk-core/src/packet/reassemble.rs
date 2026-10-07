@@ -135,13 +135,23 @@ impl ReassemblerLimits {
 struct ReassemblyWindow {
     frames: HashMap<u32, FrameBuf>,
     /// Terminated frame indices (emitted or abandoned) so a straggler cannot resurrect
-    /// them. Values are parity-restored shard indexes (`block × max_data_shards + shard`);
-    /// a later arrival nets `fec_recovered_shards` into `fec_late_shards`. Removal keeps
-    /// duplicates from counting twice. Pruned with `frames` to [`REORDER_WINDOW`].
-    completed: HashMap<u32, Vec<u32>>,
+    /// them, each with what it still lacked ([`Done`]). Pruned with `frames` to
+    /// [`REORDER_WINDOW`].
+    completed: HashMap<u32, Done>,
     /// Loss-window anchor `(frame_index, capture pts)`. Incomplete frames die once they
     /// sit [`LOSS_WINDOW_NS`] behind this pts or [`HARD_LOSS_WINDOW`] indices.
     newest_frame: Option<(u32, u64)>,
+    /// What terminated frames never got, by position, since the last drain.
+    positions: LossPositions,
+}
+
+/// Shards that never arrived, by where in their frame they fell: the first twelve data
+/// shards, the middle, and the last twelve with all parity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LossPositions {
+    pub head: u32,
+    pub mid: u32,
+    pub tail: u32,
 }
 
 /// Cap on in-flight `FrameBuf::buf` bytes (both index spaces): factor × `max_frame_bytes`.
@@ -265,6 +275,12 @@ impl Reassembler {
     /// the next frame's arrival shows the gap.
     pub fn take_short_tails(&mut self) -> std::vec::Drain<'_, u32> {
         self.short_tails.drain(..)
+    }
+
+    /// Video loss by position since the last call. A frame counts once it leaves the
+    /// reorder window, so a shard that only came late is not loss.
+    pub fn take_loss_positions(&mut self) -> LossPositions {
+        std::mem::take(&mut self.video.positions)
     }
 
     pub fn set_deliver_partial(&mut self, on: bool) {
@@ -405,18 +421,9 @@ impl Reassembler {
         );
 
         // Terminated (emitted or abandoned): drop. Recovery shards of an early-complete
-        // frame land here; a late original nets `fec_late_shards` below.
-        if let Some(reconstructed) = win.completed.get_mut(&hdr.frame_index) {
-            // A data shard parity already restored was late, not lost. Count it so
-            // loss windows net `recovered − late`; reordering must not look like loss.
-            // Remove the match so wire duplicates count nothing. No probe/video split.
-            if g.shard_index < g.data_shards {
-                let fw = g.block_idx as u32 * lim.max_data_shards as u32 + g.shard_index as u32;
-                if let Some(pos) = reconstructed.iter().position(|&s| s == fw) {
-                    reconstructed.swap_remove(pos);
-                    StatsCounters::add(&stats.fec_late_shards, 1);
-                }
-            }
+        // frame land here; a late original nets `fec_late_shards`.
+        if let Some(done) = win.completed.get_mut(&hdr.frame_index) {
+            done.straggler(&g, stats);
             return Err(Dropped);
         }
         if win.is_stale(hdr.frame_index, hdr.pts_ns) {
@@ -475,10 +482,8 @@ impl Reassembler {
                 // Remember the index (late-shard memory, like an aged-out frame) so
                 // stragglers cannot resurrect it. Count the drop: recovery-keyframe
                 // is the right outcome for a frame destroyed by a bad header.
-                win.completed.insert(
-                    hdr.frame_index,
-                    reconstructed_shards(&f.blocks, lim.max_data_shards),
-                );
+                win.completed
+                    .insert(hdr.frame_index, Done::of(&f, lim.max_data_shards));
                 for block in f.blocks.values_mut() {
                     reclaim_parity(block, recovery_pool, in_flight_bytes);
                 }
@@ -546,6 +551,9 @@ impl Reassembler {
                 {
                     block.have_data[g.shard_index] = true; // arrived — dedup a later re-dup
                     StatsCounters::add(&stats.fec_late_shards, 1);
+                } else if g.shard_index >= block.data_shards {
+                    // Parity the block no longer needs still arrived: not tail loss.
+                    block.recovery_received += 1;
                 }
                 return Ok(None);
             }
@@ -627,10 +635,8 @@ impl Reassembler {
         // after the final block pinned; it cannot complete before (`0 != blocks_ok`).
         if frame.block_count != 0 && frame.blocks_ok == frame.block_count {
             let done = win.frames.remove(&hdr.frame_index).unwrap();
-            win.completed.insert(
-                hdr.frame_index,
-                reconstructed_shards(&done.blocks, lim.max_data_shards),
-            );
+            win.completed
+                .insert(hdr.frame_index, Done::of(&done, lim.max_data_shards));
             *in_flight_bytes -= frame_cost(&done); // before `into_frame` truncates
 
             // The index is already in `completed`, so an untiled frame counts its drop.
@@ -678,6 +684,34 @@ impl Reassembler {
     /// what its parity can rebuild, and the parity shards it carries. A block with no
     /// shard in yet counts all its data as missing. `None` when no shard of the frame
     /// is in flight, or a streamed frame has not pinned its size.
+    /// The shards an in-flight video frame still lacks, at most `max`: its missing data
+    /// shards by AU index, then its missing parity, numbered after all the data in block
+    /// order. `None` for a frame not in flight, or when a block never showed a shard (its
+    /// geometry is unknown).
+    pub fn missing_shards(&self, frame_index: u32, max: usize) -> Option<Vec<u16>> {
+        let f = self.video.frames.get(&frame_index)?;
+        if f.frame_bytes == 0 || f.blocks.len() != f.block_count {
+            return None;
+        }
+        let mut blocks: Vec<&BlockState> = f.blocks.values().collect();
+        blocks.sort_by_key(|b| b.base_shard);
+        let total_data = f.frame_bytes.div_ceil(f.shard_bytes);
+        let (mut data, mut parity, mut parity_at) = (Vec::new(), Vec::new(), total_data);
+        for b in blocks {
+            if !b.done {
+                let lacks = |have: bool, i: usize| (!have).then_some(i);
+                let d = b.have_data.iter().enumerate();
+                data.extend(d.filter_map(|(i, &h)| lacks(h, b.base_shard + i)));
+                let p = b.recovery.iter().enumerate();
+                parity.extend(p.filter_map(|(j, r)| lacks(r.is_some(), parity_at + j)));
+            }
+            parity_at += b.recovery_shards;
+        }
+        data.extend(parity);
+        data.truncate(max);
+        data.into_iter().map(|i| u16::try_from(i).ok()).collect()
+    }
+
     pub fn missing_beyond_parity(&self, frame_index: u32) -> Option<(u32, u32)> {
         let f = self.video.frames.get(&frame_index)?;
         if f.frame_bytes == 0 {
@@ -699,22 +733,99 @@ impl Reassembler {
     }
 }
 
-/// Data shards of a terminating frame that exist only because parity restored them
-/// (`reconstructed` blocks' still-absent originals), as frame-wide indexes
-/// (`block × max_data_shards + shard`) for [`ReassemblyWindow::completed`]. Empty
-/// for a clean frame.
-fn reconstructed_shards(blocks: &HashMap<u16, BlockState>, max_data_shards: usize) -> Vec<u32> {
-    let mut v = Vec::new();
-    for (&bi, b) in blocks {
-        if b.reconstructed {
-            for (i, have) in b.have_data.iter().enumerate() {
-                if !have {
-                    v.push(bi as u32 * max_data_shards as u32 + i as u32);
+/// Data shards at each end of an AU that count as its head and its tail: about 16 KiB,
+/// the first group a paced sender puts on the wire.
+pub(crate) const LOSS_EDGE_SHARDS: u32 = 12;
+
+/// Where a missing data shard `i` of an AU with `total` data shards fell: `0` head, `1`
+/// middle, `2` tail. An AU too small to have a middle has no head or tail either: there
+/// random loss would read as a place.
+pub(crate) fn loss_position(i: u32, total: u32) -> usize {
+    if total <= 2 * LOSS_EDGE_SHARDS {
+        1
+    } else if i < LOSS_EDGE_SHARDS {
+        0
+    } else if i + LOSS_EDGE_SHARDS >= total {
+        2
+    } else {
+        1
+    }
+}
+
+/// A terminated frame: what it lacked when it terminated, settled as stragglers land, and
+/// counted by position once it leaves the reorder window ([`Self::settle`]).
+#[derive(Default)]
+struct Done {
+    /// AU data indexes parity restored. A later arrival was late, not lost: it nets
+    /// `fec_recovered_shards` into `fec_late_shards`, once.
+    restored: Vec<u32>,
+    total_data: u32,
+    /// Missing data shards by [`loss_position`].
+    missing: [u32; 3],
+    /// Parity not yet seen. Parity leaves last, so most of it lands after the frame is done.
+    parity_owed: u32,
+}
+
+impl Done {
+    /// `max_data_shards` is a uniform block's data width.
+    fn of(f: &FrameBuf, max_data_shards: usize) -> Done {
+        let mut d = Done::default();
+        let covered = f
+            .blocks
+            .values()
+            .map(|b| b.base_shard + b.data_shards)
+            .max();
+        d.total_data = match f.frame_bytes {
+            0 => covered.unwrap_or(0),
+            n => n.div_ceil(f.shard_bytes),
+        } as u32;
+        for b in f.blocks.values() {
+            d.parity_owed += b.recovery_shards.saturating_sub(b.recovery_received) as u32;
+            for (i, _) in b.have_data.iter().enumerate().filter(|(_, have)| !**have) {
+                let idx = (b.base_shard + i) as u32;
+                d.missing[loss_position(idx, d.total_data)] += 1;
+                if b.reconstructed {
+                    d.restored.push(idx);
                 }
             }
         }
+        // A uniform frame's blocks that never saw a shard are missing whole.
+        if f.user_flags & crate::packet::USER_FLAG_SLICE_STREAM == 0 && f.block_count > 1 {
+            let per = max_data_shards as u32;
+            for bi in 0..f.block_count as u32 {
+                if !f.blocks.contains_key(&(bi as u16)) {
+                    for idx in bi * per..((bi + 1) * per).min(d.total_data) {
+                        d.missing[loss_position(idx, d.total_data)] += 1;
+                    }
+                }
+            }
+        }
+        d
     }
-    v
+
+    /// A shard of this frame arrived after it terminated.
+    fn straggler(&mut self, g: &Geom, stats: &StatsCounters) {
+        if g.shard_index >= g.data_shards {
+            self.parity_owed = self.parity_owed.saturating_sub(1);
+            return;
+        }
+        // Remove the match so wire duplicates count nothing. No probe/video split.
+        let idx = (g.base_shard + g.shard_index) as u32;
+        if let Some(pos) = self.restored.iter().position(|&s| s == idx) {
+            self.restored.swap_remove(pos);
+            StatsCounters::add(&stats.fec_late_shards, 1);
+            let slot = &mut self.missing[loss_position(idx, self.total_data)];
+            *slot = slot.saturating_sub(1);
+        }
+    }
+
+    /// Out of the reorder window: what never arrived, by position. All parity is the tail.
+    fn settle(&self, p: &mut LossPositions) {
+        let [head, mid, tail] = self.missing;
+        p.head = p.head.saturating_add(head);
+        p.mid = p.mid.saturating_add(mid);
+        p.tail = p.tail.saturating_add(tail + self.parity_owed);
+    }
 }
 
 /// A packet [`Reassembler::push`] counts in `packets_dropped`.
@@ -1093,7 +1204,7 @@ impl ReassemblyWindow {
                 // Remember the index so a straggler cannot resurrect the frame
                 // (which would re-allocate and double-count the drop). Restored
                 // shards join late-shard memory exactly like an emitted frame.
-                completed.insert(idx, reconstructed_shards(&f.blocks, max_data_shards));
+                completed.insert(idx, Done::of(f, max_data_shards));
                 *in_flight_bytes -= frame_cost(f);
                 // Chunk-aligned: the buffer is already the consumer shape (received
                 // at final offsets, zeros in holes). Newest-wins. Still counted dropped.
@@ -1130,8 +1241,14 @@ impl ReassemblyWindow {
         if pruned > 0 && count_drops {
             StatsCounters::add(&stats.frames_dropped, pruned as u64);
         }
-        self.completed
-            .retain(|&idx, _| newest.wrapping_sub(idx) <= REORDER_WINDOW);
+        let positions = &mut self.positions;
+        self.completed.retain(|&idx, done| {
+            let keep = newest.wrapping_sub(idx) <= REORDER_WINDOW;
+            if !keep && count_drops {
+                done.settle(positions);
+            }
+            keep
+        });
     }
 
     /// Frame sits outside the loss window. Accepting a shard would only allocate a

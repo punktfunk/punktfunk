@@ -880,6 +880,16 @@ impl Session {
         self.reassembler.take_short_tails()
     }
 
+    /// See [`Reassembler::take_loss_positions`].
+    pub fn take_loss_positions(&mut self) -> crate::packet::LossPositions {
+        self.reassembler.take_loss_positions()
+    }
+
+    /// See [`Reassembler::missing_shards`].
+    pub fn missing_shards(&self, frame_index: u32, max: usize) -> Option<Vec<u16>> {
+        self.reassembler.missing_shards(frame_index, max)
+    }
+
     /// See [`Reassembler::missing_beyond_parity`].
     pub fn missing_beyond_parity(&self, frame_index: u32) -> Option<(u32, u32)> {
         self.reassembler.missing_beyond_parity(frame_index)
