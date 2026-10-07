@@ -59,7 +59,11 @@ const Adopt: FC<{ id: string; onDone: () => void }> = ({ id, onDone }) => {
 				aria-label={m.emulators_adopt_path()}
 				className="font-mono text-xs"
 			/>
-			<Button size="sm" type="submit" disabled={!exe.trim() || adopt.isPending}>
+			<Button
+				size="input"
+				type="submit"
+				disabled={!exe.trim() || adopt.isPending}
+			>
 				{m.emulators_adopt_add()}
 			</Button>
 		</form>

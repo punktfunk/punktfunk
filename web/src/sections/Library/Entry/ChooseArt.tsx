@@ -98,7 +98,11 @@ export const ChooseArtDialog: FC<{
 								placeholder="https://"
 								onChange={(e) => setPasted(e.target.value)}
 							/>
-							<Button type="submit" disabled={!isHttpUrl(pasted.trim())}>
+							<Button
+								size="input"
+								type="submit"
+								disabled={!isHttpUrl(pasted.trim())}
+							>
 								{m.library_media_use()}
 							</Button>
 						</div>
@@ -199,7 +203,7 @@ const SourcePanel: FC<{
 						value={term}
 						onChange={(e) => setTerm(e.target.value)}
 					/>
-					<Button type="submit" disabled={busy || !term.trim()}>
+					<Button size="input" type="submit" disabled={busy || !term.trim()}>
 						{m.library_media_search()}
 					</Button>
 				</form>
