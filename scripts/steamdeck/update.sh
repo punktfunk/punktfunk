@@ -103,6 +103,10 @@ sed 's|^ExecStart=.*|ExecStart=%h/.local/bin/punktfunk-scripting|' \
 systemctl --user daemon-reload
 ok "plugin runner rebuilt (opt-in service: systemctl --user enable --now punktfunk-scripting)"
 
+# Status tray: rebuilt with the host, and retrofitted onto installs that predate it.
+log "Rebuilding the status tray"
+PUNKTFUNK_SRC="$SRC" PUNKTFUNK_BOX="$BOX" bash "$SRC/scripts/steamdeck/install-tray.sh"
+
 # HDR gamescope (punktfunk-gamescope): rebuild when the packaging tree changed or the installed
 # binary stopped working — also RETROFITS it onto older installs that predate it (fast no-op
 # otherwise). Best-effort; on failure the host streams SDR (see build-gamescope.sh).

@@ -225,6 +225,10 @@ WRAP
 chmod 0755 "$HOME/.local/bin/punktfunk-scripting"
 ok "plugin runner: ~/.local/bin/punktfunk-scripting"
 
+# --- 2c. status tray (best-effort) -----------------------------------------
+log "Building the status tray"
+PUNKTFUNK_SRC="$SRC" PUNKTFUNK_BOX="$BOX" bash "$SRC/scripts/steamdeck/install-tray.sh"
+
 # --- 3. config -------------------------------------------------------------
 log "Configuration ($CONFIG)"
 mkdir -p "$CONFIG"
