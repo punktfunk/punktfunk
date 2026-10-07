@@ -27,9 +27,9 @@ export const httpRequest = async (
 	body?: unknown,
 	retryOn401 = cfg.credential.kind === "device",
 ): Promise<unknown> => {
-	const headers: Record<string, string> = {
-		authorization: await cfg.credential.header(),
-	};
+	const headers: Record<string, string> = {};
+	const auth = await cfg.credential.header();
+	if (auth) headers.authorization = auth;
 	if (body !== undefined) headers["content-type"] = "application/json";
 	const resp = await cfg.fetch(`${cfg.url}/api/v1${apiPath}`, {
 		method,

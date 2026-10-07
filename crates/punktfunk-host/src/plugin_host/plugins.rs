@@ -79,6 +79,7 @@ pub fn main(args: &[String]) -> Result<()> {
             plat::disable()
         }
         Some("status") => status(),
+        Some("spawn") => spawn(&args[1..]),
         Some("grant") => grant(
             args.get(1).map(String::as_str),
             args.get(2).map(String::as_str),
@@ -188,6 +189,36 @@ fn access_list(flags: &[String]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `plugins spawn --package <id> -- <exe> [args…]`: the runner's way into a plugin's
+/// AppContainer. Runs as the runner's account, which owns the profile; exits with the
+/// plugin's own code. The capabilities come from the installed manifest, never from argv.
+#[cfg(windows)]
+fn spawn(args: &[String]) -> Result<()> {
+    let (id, rest) = match args {
+        [flag, id, rest @ ..] if flag == "--package" => (id.as_str(), rest),
+        _ => bail!("usage: punktfunk-host plugins spawn --package <id> -- <exe> [args…]"),
+    };
+    let rest = rest.strip_prefix(&["--".to_string()][..]).unwrap_or(rest);
+    let Some((exe, exe_args)) = rest.split_first() else {
+        bail!("usage: punktfunk-host plugins spawn --package <id> -- <exe> [args…]");
+    };
+    let Some(manifest) = manifest::installed().remove(id) else {
+        bail!("{id} is not an installed plugin with a manifest");
+    };
+    let code = crate::windows::app_container::spawn(
+        id,
+        manifest.network,
+        std::path::Path::new(exe),
+        exe_args,
+    )?;
+    std::process::exit(i32::try_from(code).unwrap_or(1));
+}
+
+#[cfg(not(windows))]
+fn spawn(_args: &[String]) -> Result<()> {
+    bail!("`plugins spawn` is the Windows runner's AppContainer entry; Linux uses bubblewrap")
 }
 
 /// `plugins revoke <plugin> <dir>` — remove one grant by its recorded path.
@@ -469,6 +500,13 @@ pub(crate) fn restart_runtime() -> Result<bool> {
     }
     plat::restart_runtime()?;
     Ok(true)
+}
+
+/// Tell the runner whether `host.env` turned the sandbox off. The serving host calls this
+/// before it converges roots, because the grantee depends on the answer.
+#[cfg(windows)]
+pub(crate) fn publish_sandbox_override() {
+    plat::publish_sandbox_override();
 }
 
 /// Give the runner every root a plugin declared or was granted: on Linux the unit's drop-in,

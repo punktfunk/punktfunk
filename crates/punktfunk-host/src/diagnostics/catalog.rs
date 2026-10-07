@@ -218,12 +218,38 @@ fn bwrap_probe() -> Result<(), Option<String>> {
     }))
 }
 
-/// Windows de-privileges the runner with its own account instead.
-#[cfg(not(target_os = "linux"))]
+/// Each Windows plugin runs in its own AppContainer, unless `host.env` turned that off.
+#[cfg(windows)]
+fn plugin_sandbox() -> HostCheck {
+    let id = ids::PLUGIN_SANDBOX;
+    if !crate::plugins::runtime_status().installed {
+        return HostCheck::inapplicable(id, "The plugin runner is not installed on this host.");
+    }
+    if crate::plugins::runner_sandbox_off() {
+        return HostCheck::problem(
+            id,
+            CheckStatus::Warn,
+            Severity::Critical,
+            "Plugin sandboxing is turned off",
+            "Every installed plugin runs with the plugin runner's whole access: each other's \
+             files, the launchers' folders, and the loopback management port."
+                .to_string(),
+        )
+        .with_remedy(Remedy {
+            text: "Remove PUNKTFUNK_PLUGIN_SANDBOX from host.env, then restart the host.".into(),
+            command: None,
+            relogin_required: false,
+        });
+    }
+    HostCheck::ok(id, "Each plugin runs in its own AppContainer.")
+}
+
+/// macOS has no plugin runner.
+#[cfg(not(any(target_os = "linux", windows)))]
 fn plugin_sandbox() -> HostCheck {
     HostCheck::inapplicable(
         ids::PLUGIN_SANDBOX,
-        "The plugin runner here runs as its own low-privilege account rather than in a sandbox.",
+        "There is no plugin runner on this host.",
     )
 }
 

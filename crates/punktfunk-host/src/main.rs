@@ -707,6 +707,8 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
         // own registration and its own provider, and no other's.
         opts.plugin_tokens = crate::mgmt_token::load_or_generate_per_plugin()?;
         // An upgrade or a hand-edited grants file may have changed what the runner must see.
+        #[cfg(windows)]
+        crate::plugins::publish_sandbox_override();
         crate::plugins::converge_runner_roots();
         crate::plugins::converge_runner_acls(&runner);
         crate::plugins::converge_seat_denies();

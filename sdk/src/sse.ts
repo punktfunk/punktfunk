@@ -161,10 +161,9 @@ export async function* sseFrames(
 			const url = new URL(`${cfg.url}/api/v1/events`);
 			if (opts.kinds && opts.kinds.length > 0)
 				url.searchParams.set("kinds", opts.kinds.join(","));
-			const headers: Record<string, string> = {
-				authorization: await cfg.credential.header(),
-				accept: "text/event-stream",
-			};
+			const headers: Record<string, string> = { accept: "text/event-stream" };
+			const auth = await cfg.credential.header();
+			if (auth) headers.authorization = auth;
 			if (lastId !== 0) headers["last-event-id"] = String(lastId);
 
 			const connectedAt = Date.now();

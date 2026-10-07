@@ -1026,6 +1026,30 @@ impl AccessStore {
         let granted = access
             .values()
             .flat_map(|a| a.grants.iter().map(|g| (g.path.as_str(), g.write, true)));
+        self.resolve_roots(declared.chain(granted))
+    }
+
+    /// [`Self::runner_roots`] for one plugin: what its manifest declares plus its own grants,
+    /// which is what its own account or package gets an ACE for.
+    pub fn plugin_roots(&self, id: &str, manifest: &PluginManifest) -> Vec<RunnerRoot> {
+        let access = {
+            let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+            self.load_access()
+        };
+        let reads = manifest.reads.iter().map(|p| (p.as_str(), false, false));
+        let writes = manifest.writes.iter().map(|p| (p.as_str(), true, false));
+        let granted = access
+            .get(id)
+            .into_iter()
+            .flat_map(|a| a.grants.iter().map(|g| (g.path.as_str(), g.write, true)));
+        self.resolve_roots(reads.chain(writes).chain(granted))
+    }
+
+    /// `(spelled, write, operator)` entries into the real roots a runner may see.
+    fn resolve_roots<'a>(
+        &self,
+        entries: impl Iterator<Item = (&'a str, bool, bool)>,
+    ) -> Vec<RunnerRoot> {
         // A missing root is the drop-in's `-` prefix's business, and a root may be a file.
         let allowed = |spelled: &Path, real: &Path, write: bool, operator: bool| {
             let facts = PathFacts {
@@ -1035,7 +1059,7 @@ impl AccessStore {
             refusal_rule(spelled, real, write, operator, &self.policy, facts).is_none()
         };
         let mut roots = Vec::new();
-        for (p, write, operator) in declared.chain(granted) {
+        for (p, write, operator) in entries {
             let spelled = home_path(p, &self.policy);
             let real = spelled.canonicalize().unwrap_or_else(|_| spelled.clone());
             if !allowed(&spelled, &real, write, operator) {

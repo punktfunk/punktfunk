@@ -263,6 +263,7 @@ windows = { version = "0.62", features = [
     # ConvertStringSecurityDescriptorToSecurityDescriptorW — the SDDL on the virtual-DualSense
     # shared-memory section (inject/dualsense_windows.rs) so the UMDF host can open it.
     "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
     "Win32_Devices_DeviceAndDriverInstallation",
     # SwDeviceCreate/SwDeviceClose — the per-session virtual-DualSense devnode
     # (inject/dualsense_windows.rs).

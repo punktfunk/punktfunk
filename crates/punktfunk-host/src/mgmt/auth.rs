@@ -13,8 +13,8 @@
 //! The tray's `tray-token` (bearer, loopback) is not a lane: it opens `/local/summary` alone.
 
 use super::shared::*;
-use crate::gamestream::tls::PeerAddr;
 use crate::gamestream::tls::PeerCertFingerprint;
+use crate::gamestream::tls::{PeerAddr, PipePlugin};
 use axum::extract::{FromRequestParts, Request};
 use axum::http::header;
 use axum::http::request::Parts;
@@ -248,6 +248,12 @@ pub(crate) async fn require_auth(
                 return forward_device(req, next, fp).await;
             }
         }
+    }
+    // A plugin on its own pipe, from its own container: the pipe's DACL admitted it, and the
+    // token at the other end carried that package. No bearer needed, none read.
+    if let Some(PipePlugin(id)) = req.extensions().get::<PipePlugin>() {
+        let id = id.clone();
+        return forward_plugin(req, next, Some(PluginIdentity(id))).await;
     }
     // Full admin surface, so loopback only — the listener binds all interfaces so paired
     // clients can browse the library. No PeerAddr ⇒ unit test ⇒ treat as loopback. Canonical:

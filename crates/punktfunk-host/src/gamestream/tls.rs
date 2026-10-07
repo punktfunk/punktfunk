@@ -35,6 +35,11 @@ pub(crate) struct PeerAddr(pub SocketAddr);
 #[derive(Clone, Copy)]
 pub(crate) struct LocalAddr(pub SocketAddr);
 
+/// The plugin whose own pipe, and whose own AppContainer, a request came in through: the
+/// connection is the credential. Absent on every socket.
+#[derive(Clone, Debug)]
+pub(crate) struct PipePlugin(pub String);
+
 /// A listening socket nothing else on the box can bind beside.
 ///
 /// Windows lets a second socket bind a specific address on a port a wildcard socket holds,
@@ -217,6 +222,7 @@ async fn serve_listener(
                                     PeerCertFingerprint(None),
                                     PeerAddr(peer),
                                     local,
+                                    None,
                                 )
                                 .await;
                                 return;
@@ -252,11 +258,20 @@ async fn serve_listener(
                         PeerCertFingerprint(fp),
                         PeerAddr(peer),
                         local,
+                        None,
                     )
                     .await;
                 }
                 None => {
-                    serve_conn(tcp, app, PeerCertFingerprint(None), PeerAddr(peer), local).await
+                    serve_conn(
+                        tcp,
+                        app,
+                        PeerCertFingerprint(None),
+                        PeerAddr(peer),
+                        local,
+                        None,
+                    )
+                    .await
                 }
             }
         });
@@ -285,6 +300,7 @@ pub(crate) async fn serve_conn<S>(
     fp: PeerCertFingerprint,
     addr: PeerAddr,
     local: Option<LocalAddr>,
+    pipe_plugin: Option<PipePlugin>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -292,12 +308,16 @@ pub(crate) async fn serve_conn<S>(
     let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
         let app = app.clone();
         let fp = fp.clone();
+        let pipe_plugin = pipe_plugin.clone();
         async move {
             let mut req = req.map(axum::body::Body::new);
             req.extensions_mut().insert(fp);
             req.extensions_mut().insert(addr);
             if let Some(local) = local {
                 req.extensions_mut().insert(local);
+            }
+            if let Some(plugin) = pipe_plugin {
+                req.extensions_mut().insert(plugin);
             }
             app.oneshot(req).await
         }
@@ -329,7 +349,7 @@ mod governed_tests {
                 .await
                 .unwrap();
             let peer = PeerAddr("127.0.0.1:1".parse().unwrap());
-            serve_conn(tls, app, PeerCertFingerprint(None), peer, None).await;
+            serve_conn(tls, app, PeerCertFingerprint(None), peer, None, None).await;
         });
 
         let mut client = rustls::ClientConfig::builder()
@@ -440,6 +460,7 @@ mod governed_tests {
             app,
             PeerCertFingerprint(None),
             PeerAddr("127.0.0.1:1234".parse().unwrap()),
+            None,
             None,
         ));
         client

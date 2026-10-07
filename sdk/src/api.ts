@@ -71,7 +71,7 @@ export const httpClientFor = (
 						Effect.map((auth) =>
 							request.pipe(
 								HttpClientRequest.prependUrl(cfg.url),
-								HttpClientRequest.setHeader("authorization", auth),
+								HttpClientRequest.setHeaders(auth ? { authorization: auth } : {}),
 								HttpClientRequest.acceptJson,
 							),
 						),
@@ -88,7 +88,7 @@ export const httpClientFor = (
 											client.execute(
 												request.pipe(
 													HttpClientRequest.prependUrl(cfg.url),
-													HttpClientRequest.setHeader("authorization", auth),
+													HttpClientRequest.setHeaders(auth ? { authorization: auth } : {}),
 													HttpClientRequest.acceptJson,
 												),
 											),
