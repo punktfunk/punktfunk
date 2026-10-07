@@ -123,17 +123,18 @@ it:
 - **Declared programs only.** A package declares which programs the host may start for it and the
   shape of their arguments; a library entry only fills in values. Paths outside what the package
   declares or you allowed are refused, and folder grants are read-only unless you allow a write.
-- **A sandbox per plugin (Linux).** Each plugin runs in its own
+- **A sandbox per plugin.** On Linux each plugin runs in its own
   [bubblewrap](https://github.com/containers/bubblewrap) sandbox: an empty home, no network unless
   its manifest asks, read access to the paths it declared and you allowed, and its own PID namespace,
   so it can't reach the host process. Your `~/.ssh`, browser profile and the host's credentials
-  aren't in it. A box that can't build a sandbox runs no plugins and says so on the
-  **Troubleshooting** page.
+  aren't in it. On Windows each plugin runs in its own AppContainer under the runner's
+  `NT AUTHORITY\LocalService` account: it sees only the folders and registry keys its manifest
+  declared and you allowed, its own state, no other plugin's, and no network unless its manifest
+  asks. It reaches the host over a pipe of its own, not the management port. A box that can't
+  build a sandbox runs no plugins and says so on the **Troubleshooting** page.
 - **A token per plugin.** A plugin can register itself and manage its own library entries, nothing
-  more — never hooks or device admission.
-- **Windows: a separate account.** The plugin runner runs as `NT AUTHORITY\LocalService`, not
-  SYSTEM. Plugins share that account, so one can interfere with another's files; the per-plugin
-  sandbox is Linux-only.
+  more — never hooks or device admission. On Windows the pipe itself is the credential: a plugin
+  holds no token at all.
 
 ## Hardening checklist
 
