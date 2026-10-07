@@ -90,6 +90,39 @@ pub(super) fn group_gid(name: &str) -> Result<Option<u32>, BackendError> {
     Ok(getent("group", name)?.and_then(|line| line.split(':').nth(2)?.parse().ok()))
 }
 
+/// Fedora Atomic keeps system groups such as `render` in `/usr/lib/group`, which `getent` reads
+/// and `useradd -G` doesn't. Such a group's line is copied into `/etc/group`, as Bazzite's own
+/// `ujust add-user-to-input-group` does; one appended line, so no rewrite races shadow's.
+fn materialize_group(name: &str) -> Result<(), BackendError> {
+    use std::io::Write;
+    let etc = std::fs::read_to_string("/etc/group")
+        .map_err(|e| err("group_file", format!("read /etc/group: {e}")))?;
+    let lib = std::fs::read_to_string("/usr/lib/group").unwrap_or_default();
+    let Some(line) = altfiles_line(&etc, &lib, name) else {
+        return Ok(());
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open("/etc/group")
+        .map_err(|e| err("group_file", format!("open /etc/group: {e}")))?;
+    let text = if etc.is_empty() || etc.ends_with('\n') {
+        format!("{line}\n")
+    } else {
+        format!("\n{line}\n")
+    };
+    file.write_all(text.as_bytes())
+        .map_err(|e| err("group_file", format!("add {name} to /etc/group: {e}")))
+}
+
+/// `name`'s `/usr/lib/group` line when `/etc/group` lacks the group.
+fn altfiles_line(etc: &str, lib: &str, name: &str) -> Option<String> {
+    let named = |line: &&str| line.split(':').next() == Some(name);
+    if etc.lines().any(|line| named(&line)) {
+        return None;
+    }
+    lib.lines().find(named).map(str::to_string)
+}
+
 /// `name`'s gid, creating it as a system group first when it is missing.
 pub(super) fn ensure_group(name: &str) -> Result<u32, BackendError> {
     if let Some(gid) = group_gid(name)? {
@@ -140,6 +173,7 @@ pub(super) fn ensure(seat: &Seat, box_dir: &Path) -> Result<(Passwd, bool), Back
     let mut groups = Vec::new();
     for group in GROUPS {
         if group_gid(group)?.is_some() {
+            materialize_group(group)?;
             groups.push(group);
         }
     }
@@ -261,6 +295,18 @@ mod tests {
 
     fn id() -> SeatId {
         SeatId::parse("0123456789abcdef0123456789abcdef").unwrap()
+    }
+
+    /// A group only `/usr/lib/group` holds is copied once; a name that is only a prefix isn't it.
+    #[test]
+    fn a_group_only_altfiles_holds_is_copied_into_etc() {
+        let lib = "renderx:x:9:\nrender:x:105:\n";
+        assert_eq!(
+            altfiles_line("wheel:x:10:\n", lib, "render").as_deref(),
+            Some("render:x:105:")
+        );
+        assert_eq!(altfiles_line("render:x:105:\n", lib, "render"), None);
+        assert_eq!(altfiles_line("wheel:x:10:\n", "", "render"), None);
     }
 
     #[test]
