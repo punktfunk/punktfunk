@@ -45,9 +45,18 @@ export const DevicesView: FC<{
 									{m.pairing_native_empty()}
 								</p>
 							) : (
-								<motion.ul {...staggerProps(ROW_GAP)} className="divide-y">
-									{paired}
-								</motion.ul>
+								<>
+									<div className="mt-3 hidden gap-x-4 border-b pb-2 text-xs font-medium text-muted-foreground md:grid md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,0.6fr)_auto]">
+										<span>{m.devices_col_device()}</span>
+										<span>{m.devices_col_access()}</span>
+										<span>{m.devices_col_display()}</span>
+										<span />
+										<span className="w-9" />
+									</div>
+									<motion.ul {...staggerProps(ROW_GAP)} className="divide-y">
+										{paired}
+									</motion.ul>
+								</>
 							)}
 						</QueryState>
 					</Group>

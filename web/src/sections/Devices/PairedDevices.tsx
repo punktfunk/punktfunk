@@ -396,14 +396,18 @@ export const PairedRowView: FC<{
 						disabled={busy}
 						onClick={onDisplaySettings}
 					>
-						<span className="truncate text-sm text-muted-foreground">
-							{display ?? m.display_device_settings()}
-						</span>
+						<Badge variant="secondary" className="max-w-full">
+							<span className="truncate">
+								{display ?? m.display_device_settings()}
+							</span>
+						</Badge>
 					</Setting>
 				) : (
-					<div className="truncate text-sm text-muted-foreground">
-						{display}
-					</div>
+					display && (
+						<Badge variant="secondary" className="max-w-full">
+							<span className="truncate">{display}</span>
+						</Badge>
+					)
 				)}
 			</div>
 			<div className="md:order-4">
