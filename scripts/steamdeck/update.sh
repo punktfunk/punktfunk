@@ -211,7 +211,7 @@ if [ "$SUDO_OK" = 1 ]; then
         if id -nG "$USER" | grep -qw punktfunk; then :; else
             sudo usermod -aG punktfunk "$USER"
             warn "added $USER to the 'punktfunk' group (usbip vhci — the native Steam Deck pad needs it)"
-            warn "  — REBOOT (or log out/in) for it to apply. That group can emulate arbitrary USB"
+            warn "  — REBOOT for it to apply. That group can emulate arbitrary USB"
             warn "  devices; 'sudo gpasswd -d $USER punktfunk' drops it if you do not want the native pad."
         fi
     else

@@ -351,13 +351,13 @@ if [ "$SUDO_OK" = 1 ]; then
     # Nice-limit headroom for the host's data-plane threads (audio/send): without it (or rtkit,
     # which SteamOS does not guarantee) the per-thread renice silently no-ops and a busy game can
     # deschedule the 5 ms audio loop. SteamOS's /usr is read-only, so unlike the packaged installs
-    # this lands in /etc — same drop-in, same effect, from the next login. NEVER a file capability
+    # this lands in /etc — same drop-in, same effect, from the next boot. NEVER a file capability
     # on the host binary (see the setcap note above — KWin identification).
     if [ -f "$SRC/packaging/linux/50-punktfunk-nice.conf" ]; then
         sudo install -Dm644 "$SRC/packaging/linux/50-punktfunk-nice.conf" \
             /etc/systemd/system/user@.service.d/50-punktfunk-nice.conf
         sudo systemctl daemon-reload || true
-        ok "nice-limit drop-in installed (data-plane thread priority; applies from next login)"
+        ok "nice-limit drop-in installed (data-plane thread priority; applies after a reboot)"
     fi
     if [ -f "$SRC/scripts/60-punktfunk.rules" ]; then
         sudo install -m644 "$SRC/scripts/60-punktfunk.rules" /etc/udev/rules.d/60-punktfunk.rules
@@ -377,7 +377,7 @@ if [ "$SUDO_OK" = 1 ]; then
     else
         sudo usermod -aG input "$USER"
         NEED_RELOGIN=1
-        warn "added $USER to the 'input' group (applies on next login)"
+        warn "added $USER to the 'input' group (applies after a reboot)"
     fi
     # The 'punktfunk' group owns the usbip vhci attach/detach nodes (see 60-punktfunk.rules).
     # Deliberately NOT 'input': writing 'attach' hands the kernel a caller-supplied socket fd and
