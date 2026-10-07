@@ -73,11 +73,14 @@ restart*.
 | Grab the cursor (Linux) | `PUNKTFUNK_GAMESCOPE_GRAB_CURSOR` | `on` · `off` | `off` | next session |
 | Steam per seat (Linux) | `PUNKTFUNK_STEAM_SEAT_HOME` | `on` · `off` | `off` | next session |
 | Pads per seat (Linux) | `PUNKTFUNK_STEAM_SEAT_SANDBOX` | `on` · `off` | `off` | next session |
-| Seats kept warm (Linux, Windows) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
 | Bind patched gamescope (Linux) | `PUNKTFUNK_GAMESCOPE_BIND` | `auto` · `on` · `off` | `auto` | next session |
 | Follow mode switches (Linux) | `PUNKTFUNK_SESSION_WATCH` | `auto` · `on` · `off` | `auto` | next session |
 | Local discovery | `PUNKTFUNK_MDNS` | `on` · `off` | `on` | after a restart |
 | Disconnect timeout | `PUNKTFUNK_IDLE_TIMEOUT_MS` | 1000–120000 ms | `8000` | after a restart |
+| Seats kept warm (Linux, Windows) | `PUNKTFUNK_STEAM_PREWARM` | 0–8 seats | `1` | after a restart |
+| Stop idle seats (Linux, Windows) | `PUNKTFUNK_SEAT_IDLE_STOP_MIN` | 0–1440 min | `240` | after a restart |
+| Seat game exit (Linux, Windows) | `PUNKTFUNK_SEAT_END_ON_GAME_EXIT` | `on` · `off` | `on` | next session |
+| Seat mode cap (Linux, Windows) | `PUNKTFUNK_SEAT_MAX_MODE` | text, up to 24 characters | — | next session |
 | Check for updates | `PUNKTFUNK_UPDATE_CHECK` | `on` · `off` | `on` | at once |
 | Console updates | `PUNKTFUNK_UPDATE_APPLY` | `on` · `off` | `on` | at once |
 

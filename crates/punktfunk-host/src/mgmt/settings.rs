@@ -2,8 +2,9 @@
 //!
 //! GET carries everything the page renders: each row's kind and bounds, the value in
 //! force, the console's own value, and what set it. A row this host does not act on is
-//! left out, not flagged. PATCH merges into `host-settings.json`; a value an env var or
-//! CLI flag overrides is still stored, and takes effect once that override is gone.
+//! left out, not flagged — the Seat defaults while seats are off included. PATCH merges into
+//! `host-settings.json`; a value an env var or CLI flag overrides is still stored, and takes
+//! effect once that override is gone.
 
 use super::shared::*;
 use pf_host_config::registry::{Apply, Group, Kind};
@@ -31,6 +32,7 @@ pub(crate) enum SettingGroup {
     Network,
     GameMode,
     Session,
+    Seats,
     System,
 }
 
@@ -104,13 +106,38 @@ pub(crate) struct HostSettingsState {
 #[schema(example = json!({"clipboard": "text", "max_fps": null}))]
 pub(crate) struct HostSettingsPatch(BTreeMap<String, Value>);
 
-pub(crate) fn state() -> HostSettingsState {
+/// Which seats this box runs, for the Seat defaults: full seats, or (Linux) a Steam per seat,
+/// whose warm-up is the one default it uses. A seat host has none to set.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SeatsOn {
+    full: bool,
+    steam: bool,
+}
+
+pub(crate) async fn seats_on() -> SeatsOn {
+    if pf_paths::seat::is_seat_host() {
+        return SeatsOn::default();
+    }
+    let full = tokio::task::spawn_blocking(|| crate::seats::snapshot().on)
+        .await
+        .unwrap_or(false);
+    SeatsOn {
+        full,
+        steam: pf_host_config::config().steam_seat_home,
+    }
+}
+
+fn shown(id: &str, group: Group, seats: SeatsOn) -> bool {
+    group != Group::Seats || seats.full || (id == "steam_prewarm" && seats.steam)
+}
+
+pub(crate) fn state(seats: SeatsOn) -> HostSettingsState {
     let snap = pf_host_config::snapshot();
     let pending = pf_host_config::restart_pending();
     let settings = snap
         .settings
         .iter()
-        .filter(|r| r.setting.available())
+        .filter(|r| r.setting.available() && shown(r.setting.id, r.setting.group, seats))
         .map(|r| {
             let s = r.setting;
             let (kind, min, max, unit, options, max_len) = match s.kind {
@@ -159,6 +186,7 @@ pub(crate) fn state() -> HostSettingsState {
                     Group::Network => SettingGroup::Network,
                     Group::GameMode => SettingGroup::GameMode,
                     Group::Session => SettingGroup::Session,
+                    Group::Seats => SettingGroup::Seats,
                     Group::System => SettingGroup::System,
                 },
                 kind,
@@ -241,7 +269,7 @@ pub(crate) async fn get_playing_apps() -> Json<PlayingApps> {
     )
 )]
 pub(crate) async fn get_host_settings() -> Json<HostSettingsState> {
-    Json(state())
+    Json(state(seats_on().await))
 }
 
 /// Change host settings
@@ -287,5 +315,13 @@ pub(crate) async fn patch_host_settings(ApiJson(patch): ApiJson<HostSettingsPatc
     tracing::info!(settings = ?ids, "management API: host settings updated");
     crate::diagnostics::registry().set(crate::diagnostics::catalog::restart_pending());
     crate::events::emit(crate::events::EventKind::SettingsChanged { ids });
-    Json(state()).into_response()
+    write_seat_defaults();
+    Json(state(seats_on().await)).into_response()
+}
+
+/// Hands every seat the box's Seat defaults: at start, and after each settings write.
+pub(crate) fn write_seat_defaults() {
+    if let Err(error) = pf_host_config::seat_defaults::write(&pf_paths::config_dir()) {
+        tracing::warn!(%error, "seat defaults not written");
+    }
 }

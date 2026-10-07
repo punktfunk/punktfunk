@@ -25,10 +25,12 @@ use std::time::SystemTime;
 
 /// Box files a seat host reads; any may not exist yet. Never the box's identity: a seat host
 /// mints its own, and clients reach it through the pin the box's `Redirect` carries.
-const TRUST_FILES: [&str; 3] = [
+const TRUST_FILES: [&str; 4] = [
     "punktfunk1-paired.json",
     "profiles.json",
     "display-settings.json",
+    // `pf_host_config::seat_defaults::FILE`: the Seat defaults a seat applies itself.
+    "seat-defaults.json",
 ];
 
 /// The box's identity pair, which an older trust copy carried. Removed from every copy.

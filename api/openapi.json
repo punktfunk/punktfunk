@@ -16044,6 +16044,7 @@
           "network",
           "game_mode",
           "session",
+          "seats",
           "system"
         ]
       },

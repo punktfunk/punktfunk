@@ -340,6 +340,15 @@ impl ClientOverlay {
         *self == ClientOverlay::default()
     }
 
+    /// What follows this device onto a seat: its cap and its scale.
+    pub fn seat_part(self) -> ClientOverlay {
+        ClientOverlay {
+            max_mode: self.max_mode,
+            scale: self.scale,
+            ..ClientOverlay::default()
+        }
+    }
+
     /// Same clamps a host-wide write gets: an overlay must not be able to
     /// smuggle a linger window a direct PUT would refuse.
     pub fn sanitized(mut self) -> Self {
@@ -490,9 +499,20 @@ impl DisplayPolicy {
     /// 2560x1440@60 asking for 3840x2160@120 gets 2560x1440@60, and one asking for
     /// 1920x1080@120 keeps its size and loses only the refresh it cannot have.
     pub fn cap_mode(&self, fp: Option<&str>, want: (u32, u32, u32)) -> (u32, u32, u32) {
+        self.cap_mode_or(fp, want, None)
+    }
+
+    /// [`Self::cap_mode`], with `fallback` for a device without a cap of its own.
+    pub fn cap_mode_or(
+        &self,
+        fp: Option<&str>,
+        want: (u32, u32, u32),
+        fallback: Option<&str>,
+    ) -> (u32, u32, u32) {
         let Some(cap) = self
             .overlay_for(fp)
             .and_then(|o| o.max_mode.as_deref())
+            .or(fallback)
             .and_then(parse_mode)
         else {
             return want;
@@ -698,6 +718,8 @@ pub struct DisplayPolicyStore {
     write: Mutex<()>,
     /// A seat host's per-device overlays: the box's, never its own file's.
     box_overlays: Option<BoxOverlays>,
+    /// A seat that follows the contract: [`seat_contract`] instead of any stored policy.
+    contract: bool,
 }
 
 /// The box's `clients` map on a seat host. The box console writes it; the seat re-reads the
@@ -750,6 +772,7 @@ impl DisplayPolicyStore {
             cur: Mutex::new(cur),
             write: Mutex::new(()),
             box_overlays: None,
+            contract: false,
         }
     }
 
@@ -760,6 +783,26 @@ impl DisplayPolicyStore {
             cache: Mutex::new((None, BTreeMap::new())),
         });
         self
+    }
+
+    fn with_contract(mut self, on: bool) -> Self {
+        self.contract = on;
+        self
+    }
+
+    /// The contract with the box's per-device cap and scale: those follow a device onto any
+    /// desktop. The rest of an overlay is the owner's desktop's, and never reaches a seat.
+    fn contract_policy(&self) -> DisplayPolicy {
+        let mut policy = seat_contract();
+        if let Some(b) = &self.box_overlays {
+            policy.clients = b
+                .current()
+                .into_iter()
+                .map(|(fp, o)| (fp, o.seat_part()))
+                .filter(|(_, o)| !o.is_empty())
+                .collect();
+        }
+        policy
     }
 
     fn with_box_clients(&self, mut policy: DisplayPolicy) -> DisplayPolicy {
@@ -882,16 +925,35 @@ impl DisplayPolicyStore {
         }
     }
 
-    /// Stored policy, or [`DisplayPolicy::default`] when unconfigured (mgmt GET).
+    /// Stored policy, or [`DisplayPolicy::default`] when unconfigured (mgmt GET). A seat that
+    /// follows the contract gets the contract.
     pub fn get(&self) -> DisplayPolicy {
+        if self.contract {
+            return self.contract_policy();
+        }
         self.with_box_clients(self.cur.lock().unwrap().clone().unwrap_or_default())
     }
 
     /// Console-configured policy, or `None` if no file. `None` ⇒ leave
-    /// historical env/default behavior.
+    /// historical env/default behavior, which is what a contract seat keeps for linger,
+    /// topology and identity.
     pub fn configured(&self) -> Option<DisplayPolicy> {
+        if self.contract {
+            return None;
+        }
         let policy = self.cur.lock().unwrap().clone()?;
         Some(self.with_box_clients(policy))
+    }
+
+    /// A requested mode clamped to this device's cap, else on a contract seat to the box's
+    /// highest mode per seat (`seat_max_mode`).
+    pub fn cap_mode(&self, fp: Option<&str>, want: (u32, u32, u32)) -> (u32, u32, u32) {
+        let seat_cap = self
+            .contract
+            .then(pf_host_config::seat_defaults::current)
+            .flatten()
+            .and_then(|d| d.max_mode);
+        self.get().cap_mode_or(fp, want, seat_cap.as_deref())
     }
 
     pub fn configured_effective(&self) -> Option<EffectivePolicy> {
@@ -927,6 +989,7 @@ impl DisplayPolicyStore {
     /// Persist + adopt. Memory changes only after the disk write; the
     /// whole transaction holds [`Self::write`].
     pub fn set(&self, policy: DisplayPolicy) -> Result<()> {
+        self.refuse_on_contract()?;
         let _tx = self.write.lock().unwrap_or_else(|e| e.into_inner());
         self.store(policy)
     }
@@ -936,6 +999,7 @@ impl DisplayPolicyStore {
     /// whatever another writer saved in between. `edit` returning `false`
     /// writes nothing; so does the result.
     pub fn update(&self, edit: impl FnOnce(&mut DisplayPolicy) -> bool) -> Result<bool> {
+        self.refuse_on_contract()?;
         let _tx = self.write.lock().unwrap_or_else(|e| e.into_inner());
         let mut policy = self.get();
         if !edit(&mut policy) {
@@ -943,6 +1007,18 @@ impl DisplayPolicyStore {
         }
         self.store(policy)?;
         Ok(true)
+    }
+
+    /// Whether this store follows the seat contract, which nothing here can change.
+    pub fn follows_contract(&self) -> bool {
+        self.contract
+    }
+
+    fn refuse_on_contract(&self) -> Result<()> {
+        if self.contract {
+            anyhow::bail!("a seat's display follows the seat contract");
+        }
+        Ok(())
     }
 
     /// The write under [`Self::write`], which the caller holds.
@@ -968,7 +1044,25 @@ pub fn prefs() -> &'static DisplayPolicyStore {
             .with_box_overlays(
                 pf_paths::seat::trust_dir().map(|dir| dir.join("display-settings.json")),
             )
+            .with_contract(pf_paths::seat::follows_contract())
     })
+}
+
+/// A seat's desktop (`design/web-console-structure-2026-10.md` §2.1): one virtual screen, the
+/// seat's own. It never mirrors, keeps lit or powers off a real monitor, never routes a game to
+/// a session of its own, and a second device shares the occupant's screen. Linger, topology and
+/// identity stay the unconfigured host's, as they always were on a seat.
+pub fn seat_contract() -> DisplayPolicy {
+    DisplayPolicy {
+        mode_conflict: ModeConflict::Join,
+        game_session: GameSession::Auto,
+        ddc_power_off: false,
+        pnp_disable_monitors: false,
+        edid_lock: false,
+        capture_monitor: None,
+        keep_monitors: Vec::new(),
+        ..DisplayPolicy::default()
+    }
 }
 
 /// Operator-named bundle of the six axes plus game-session, stored in
@@ -1523,6 +1617,76 @@ mod tests {
         assert!(
             stored.clients.is_empty(),
             "the box's overlays stay the box's"
+        );
+    }
+
+    /// A contract seat never reads its own file, takes only a device's cap and scale from the
+    /// box, refuses every write, and stays unconfigured for linger, topology and identity.
+    #[test]
+    fn a_contract_seat_ignores_its_file_and_the_owners_policy() {
+        let dir = std::env::temp_dir().join(format!("pf-disp-contract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let box_file = dir.join("box.json");
+        let mut boxed = DisplayPolicy::default();
+        boxed.clients.insert(
+            "aa".into(),
+            ClientOverlay {
+                capture_monitor: Some("DP-1".into()),
+                topology: Some(Topology::Exclusive),
+                max_mode: Some("1920x1080@60".into()),
+                ..ClientOverlay::default()
+            },
+        );
+        std::fs::write(&box_file, serde_json::to_vec(&boxed).unwrap()).unwrap();
+        let own = dir.join("seat.json");
+        let leftover = DisplayPolicy {
+            capture_monitor: Some("HDMI-1".into()),
+            ddc_power_off: true,
+            ..DisplayPolicy::default()
+        };
+        std::fs::write(&own, serde_json::to_vec(&leftover).unwrap()).unwrap();
+
+        let seat = DisplayPolicyStore::load_from(own)
+            .with_box_overlays(Some(box_file))
+            .with_contract(true);
+        let p = seat.get();
+        assert_eq!(p.capture_monitor_for(Some("aa")), None);
+        assert!(!p.ddc_power_off && !p.pnp_disable_monitors && p.keep_monitors.is_empty());
+        assert_eq!(
+            p.effective_for(Some("aa")).mode_conflict,
+            ModeConflict::Join
+        );
+        assert_eq!(p.cap_mode(Some("aa"), (3840, 2160, 120)), (1920, 1080, 60));
+        assert!(seat.configured().is_none());
+        assert!(seat.set(DisplayPolicy::default()).is_err());
+        assert!(seat.update(|_| true).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A device's own cap outranks the seat's; a device without one takes the seat's.
+    #[test]
+    fn a_seat_cap_fills_in_for_a_device_without_one() {
+        let mut p = DisplayPolicy::default();
+        p.clients.insert(
+            "pad".into(),
+            ClientOverlay {
+                max_mode: Some("1280x720@60".into()),
+                ..ClientOverlay::default()
+            },
+        );
+        let seat = Some("2560x1440@120");
+        assert_eq!(
+            p.cap_mode_or(Some("pad"), (3840, 2160, 120), seat),
+            (1280, 720, 60)
+        );
+        assert_eq!(
+            p.cap_mode_or(Some("tv"), (3840, 2160, 144), seat),
+            (2560, 1440, 120)
+        );
+        assert_eq!(
+            p.cap_mode_or(Some("tv"), (3840, 2160, 144), None),
+            (3840, 2160, 144)
         );
     }
 

@@ -89,6 +89,13 @@ pub fn is_owner_seat() -> bool {
     is_seat_host() && std::env::var("PUNKTFUNK_SEAT_OWNER").as_deref() == Ok("1")
 }
 
+/// A seat host that is not the owner's: its desktop follows the seat contract — one virtual
+/// screen, never a real monitor, the box's Seat defaults and no settings of its own
+/// (`design/web-console-structure-2026-10.md` §2.1).
+pub fn follows_contract() -> bool {
+    is_seat_host() && !is_owner_seat()
+}
+
 static DOOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Marks this process as the door (`serve --door`).

@@ -84,7 +84,7 @@ them together.
 | `PUNKTFUNK_SEAT_SESSION` | `1` | Marks a seat host. Unset or any other value is the console host. |
 | `PUNKTFUNK_SEAT_ID` | 32 lowercase hexadecimal characters | Required with `PUNKTFUNK_SEAT_SESSION=1`. Missing or any other form: the host mints no audio devices. |
 | `PUNKTFUNK_SEAT_DISPLAY_SLOT` | `12`–`15` | The seat's connector. Not a number, out of range, or the marker absent: the host refuses every virtual-display session. |
-| `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json` and per-device display overlays from here, read only, and follows their changes. A relative path is ignored. |
+| `PUNKTFUNK_TRUST_DIR` | the box's config directory | The seat reads the box's pairing store, `profiles.json`, per-device display overlays and `seat-defaults.json` from here, read only, and follows their changes. A relative path is ignored. |
 | `PUNKTFUNK_PAIRING` | `refused` | Devices pair with the box. A knock is refused and no PIN window opens. |
 | `PUNKTFUNK_LIBRARY_DIR` | the box's config directory (Windows only) | The seat reads the box's library from here, read only: `library*.json`, `library-metadata/` and the plugin manifests and grants its entries launch through. Play stats stay in the seat's own directory. A relative path is ignored. |
 | `PUNKTFUNK_SEAT_STEAM` | the seat's own `steam.exe` (Windows only, when the box has Steam) | Steam runs once per IPC name per machine, so a seat starts Steam from here only, always with `-master_ipc_name_override pfseat<seat id>`. The supervisor copies the box's client into the seat account's profile at the seat's first start; until the file exists, the seat's Steam titles don't start. Unset or relative: no Steam on the seat. |
@@ -106,6 +106,19 @@ session by design, and display activation fails while its session is inactive.
 
 ## What the host does differently on a seat
 
+- **The seat contract, not a display policy.** A seat that is not the owner's own reads no
+  `display-settings.json` of its own. Its desktop is one virtual screen at the occupant's mode: it
+  never mirrors, keeps lit, powers off or PnP-disables a real monitor, never routes a game to a
+  session of its own, and a second device shares the occupant's screen. Of a device's display
+  settings in the box console only the largest mode and the scale follow it onto a seat. Linger,
+  topology and identity are the unconfigured host's. `GET /display/settings` lists nothing in
+  `enforced` and only `max_mode` and `scale` per device; every display or session settings write
+  answers 409.
+- **The Seat defaults.** The box writes `seat-defaults.json` into its config directory at start and
+  after each settings change: `end_on_game_exit` (a seat's stream ends when its game exits) and
+  `max_mode` (the largest mode a seat grants a device without a cap of its own). The seat re-reads
+  it when it changes, so a change reaches the seat's next session. The box itself applies the
+  other two: **Seats kept warm** and **Stop idle seats**.
 - **The box's trust, its own key.** The seat never writes the pairing store or profiles. A grant
   changed in the box console applies to the seat's next check. It mints and keeps its own identity
   in `PUNKTFUNK_CONFIG_DIR`, never the box's. The supervisor records its certificate's SHA-256 in
@@ -222,7 +235,8 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   `punktfunk` user (root without one), so the box host reaches the seat's loopback API. Every seat
   user shares `punktfunk-games`, so no secret relies on group read.
 - **The trust copy.** The seat reads `trust/<id>/`, not the box directory:
-  `punktfunk1-paired.json`, `profiles.json`, `display-settings.json` and `profiles/`,
+  `punktfunk1-paired.json`, `profiles.json`, `display-settings.json`, `seat-defaults.json` and
+  `profiles/`,
   `root:<seat user>` `0640`. The daemon recopies a file within 2 seconds of its change while the
   seat runs. The box's key never crosses, and a copy left by an older install is removed.
 - **Games.** `games/steamapps/` is one library every seat writes (group `punktfunk`, setgid,

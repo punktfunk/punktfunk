@@ -541,7 +541,8 @@ pub(crate) struct SessionSettingsState {
 fn session_settings_state() -> SessionSettingsState {
     let store = crate::session_settings::store();
     SessionSettingsState {
-        settings: store.get(),
+        // What is in force: on a contract seat that is not its own file.
+        settings: crate::session_settings::get(),
         configured: store.configured(),
         enforced: crate::session_settings::enforced(),
     }
@@ -581,6 +582,12 @@ pub(crate) async fn get_session_settings() -> Json<SessionSettingsState> {
 pub(crate) async fn set_session_settings(
     ApiJson(settings): ApiJson<crate::session_settings::SessionSettings>,
 ) -> Response {
+    if pf_paths::seat::follows_contract() {
+        return api_error(
+            StatusCode::CONFLICT,
+            "A seat's session settings can't be changed here. Change the Seat defaults on the box.",
+        );
+    }
     if let Err(e) = crate::session_settings::store().set(settings) {
         return api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
