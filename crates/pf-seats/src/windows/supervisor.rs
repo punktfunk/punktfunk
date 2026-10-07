@@ -463,6 +463,10 @@ fn run_cycle(
                 "configured host executable has no parent directory",
             )
         })?;
+        // The gate and the host write here, as the box host writes `logs\host.log`.
+        let log = host_root
+            .child_path("host.log")
+            .map_err(|error| io_error("seat_log", "resolve the seat log", error))?;
 
         if !*quality_done {
             run_quality_gate(
@@ -474,11 +478,12 @@ fn run_cycle(
                 &environment,
                 &temp_root,
                 seat,
+                &log,
             )?;
             *quality_done = true;
         }
 
-        let mut host = spawn_host(session.id, host_path, workdir, &environment)?;
+        let mut host = spawn_host(session.id, host_path, workdir, &environment, &log)?;
         runtime.update(|snapshot| snapshot.host_pid = Some(host.pid()));
         wait_host_ready(runtime, &keeper, &host, seat)?;
         runtime.update(|snapshot| {
@@ -520,7 +525,7 @@ fn run_cycle(
                     break;
                 }
                 host_delay = host_delay.saturating_mul(2).min(MAX_RESTART_DELAY);
-                host = spawn_host(session.id, host_path, workdir, &environment)?;
+                host = spawn_host(session.id, host_path, workdir, &environment, &log)?;
                 runtime.update(|snapshot| snapshot.host_pid = Some(host.pid()));
                 wait_host_ready(runtime, &keeper, &host, seat)?;
                 runtime.update(|snapshot| snapshot.status = RuntimeStatus::running());
@@ -548,6 +553,7 @@ fn run_quality_gate(
     environment: &[u16],
     temp_root: &SecretRoot,
     seat: &Seat,
+    log: &Path,
 ) -> WinResult<()> {
     let mut random = [0_u8; 8];
     rand::rng().fill_bytes(&mut random);
@@ -582,8 +588,14 @@ fn run_quality_gate(
     .chain(std::iter::once(output.as_os_str().to_owned()))
     .collect::<Vec<_>>();
     let result = (|| {
-        let quality =
-            process::spawn_in_session(session_id, host_path, &arguments, environment, workdir)?;
+        let quality = process::spawn_in_session(
+            session_id,
+            host_path,
+            &arguments,
+            environment,
+            workdir,
+            log,
+        )?;
         let code = quality.wait(QUALITY_TIMEOUT, || {
             runtime.stop.load(Ordering::Acquire) || keeper.exit_code().ok().flatten().is_some()
         })?;
@@ -623,6 +635,7 @@ fn spawn_host(
     host_path: &Path,
     workdir: &Path,
     environment: &[u16],
+    log: &Path,
 ) -> WinResult<ChildProcess> {
     process::spawn_in_session(
         session_id,
@@ -630,6 +643,7 @@ fn spawn_host(
         &[OsString::from("serve")],
         environment,
         workdir,
+        log,
     )
 }
 

@@ -31,7 +31,8 @@ use windows::Win32::Security::{
     TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
 };
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -274,14 +275,16 @@ fn finish_keeper_spawn(
     })
 }
 
-/// Start `executable` in session `session_id` as LocalSystem. It runs outside the cycle's job,
-/// which lives in session 0; the returned handle terminates it on drop.
+/// Start `executable` in session `session_id` as LocalSystem, its stdout and stderr appended to
+/// `log`. It runs outside the cycle's job, which lives in session 0; the returned handle
+/// terminates it on drop.
 pub(super) fn spawn_in_session(
     session_id: u32,
     executable: &Path,
     arguments: &[OsString],
     environment: &[u16],
     workdir: &Path,
+    log: &Path,
 ) -> WinResult<ChildProcess> {
     let token = session_system_token(session_id)?;
     let application = wide(executable.as_os_str(), "child executable")?;
@@ -292,13 +295,18 @@ pub(super) fn spawn_in_session(
     command_w.push(0);
     let workdir_w = wide(workdir.as_os_str(), "child working directory")?;
     let mut desktop = wide("winsta0\\default", "child desktop")?;
+    let log = open_log(log)?;
     let startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         lpDesktop: PWSTR(desktop.as_mut_ptr()),
+        dwFlags: STARTF_USESTDHANDLES,
+        hStdOutput: HANDLE(log.as_raw_handle()),
+        hStdError: HANDLE(log.as_raw_handle()),
         ..Default::default()
     };
     let mut info = PROCESS_INFORMATION::default();
-    // SAFETY: token is a live primary token for the target session; all buffers remain live.
+    // SAFETY: token is a live primary token for the target session; all buffers remain live, and
+    // the log handle is the inheritable one the child's stdout and stderr name.
     unsafe {
         CreateProcessAsUserW(
             Some(HANDLE(token.as_raw_handle())),
@@ -306,7 +314,7 @@ pub(super) fn spawn_in_session(
             Some(PWSTR(command_w.as_mut_ptr())),
             None,
             None,
-            false,
+            true,
             CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
             Some(environment.as_ptr().cast::<c_void>()),
             PCWSTR(workdir_w.as_ptr()),
@@ -316,6 +324,41 @@ pub(super) fn spawn_in_session(
     }
     .map_err(|error| io_error("process_spawn", "CreateProcessAsUserW failed", error))?;
     finish_suspended_spawn(info)
+}
+
+/// A log past this size moves to `<log>.old` at the next spawn, so a crash loop can't fill the disk.
+const LOG_ROTATE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// `path` opened for appending through an inheritable handle, rotated first when large.
+fn open_log(path: &Path) -> WinResult<OwnedHandle> {
+    if std::fs::metadata(path).is_ok_and(|meta| meta.len() >= LOG_ROTATE_BYTES) {
+        let mut old = path.as_os_str().to_owned();
+        old.push(".old");
+        let _ = std::fs::rename(path, Path::new(&old));
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: true.into(),
+    };
+    let path_w = wide(path.as_os_str(), "seat log")?;
+    // Append mask: bare `FILE_APPEND_DATA` gives a child handle that drops its writes.
+    let access = (FILE_GENERIC_WRITE.0 & !FILE_WRITE_DATA.0) | FILE_APPEND_DATA.0;
+    // SAFETY: `path_w` is NUL-terminated and `attributes` sized; both outlive the call.
+    let raw = unsafe {
+        CreateFileW(
+            PCWSTR(path_w.as_ptr()),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            Some(&attributes),
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    }
+    .map_err(|error| io_error("seat_log", "open the seat log", error))?;
+    // SAFETY: `raw` is a fresh handle with no other owner.
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw.0) })
 }
 
 fn finish_suspended_spawn(info: PROCESS_INFORMATION) -> WinResult<ChildProcess> {
