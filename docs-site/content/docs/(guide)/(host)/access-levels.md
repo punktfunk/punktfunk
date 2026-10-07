@@ -10,8 +10,8 @@ see [Friends over the internet](/docs/friends-over-the-internet).
 
 Pick the access when you
 [approve a device or arm a PIN](/docs/pairing#choosing-access-when-you-admit-a-device). Change it
-later in the console under **Devices** → **Paired devices** → **Edit access**; the **Access**
-column shows each device's level and time left.
+later in the console: **Devices** → the device's **⋯** → **Edit access**. Each row shows the
+device's level and time left.
 
 ## The three presets
 

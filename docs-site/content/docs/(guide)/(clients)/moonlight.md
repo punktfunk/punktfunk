@@ -53,8 +53,8 @@ More in [Troubleshooting](/docs/troubleshooting-connect#another-streaming-host-s
 
 1. In the web console, open **Devices**.
 2. In Moonlight, select the host. It shows a 4-digit PIN.
-3. In the console's **Moonlight (GameStream) pairing** card, type the PIN, name the device, enter
-   your console password and click **Submit PIN**.
+3. The console lists **A Moonlight client is waiting for its PIN**. Click **Enter PIN**, type the
+   PIN, name the device, enter your console password and click **Submit PIN**.
 
 The device appears under **Paired devices**. See [Pairing & Trust](/docs/pairing).
 

@@ -11,6 +11,7 @@ import {
 	GRANT_MIC,
 	GRANT_POINTER,
 	GRANT_POWER,
+	grantFields,
 	levelOfMask,
 	normalizeLegacyFull,
 } from "./access";
@@ -50,3 +51,27 @@ for (const c of vectors.masks) {
 		expect(levelOfMask(c.mask)).toBe(c.level);
 	});
 }
+
+test("grantFields omits the untouched default unless asked to be explicit", () => {
+	const full = {
+		grants: GRANT_ALL,
+		expiry: "forever" as const,
+		customHours: 4,
+	};
+	expect(grantFields(full)).toEqual({});
+	expect(grantFields(full, true)).toEqual({
+		grants: GRANT_ALL,
+		until_disconnect: false,
+	});
+	expect(
+		grantFields({ grants: GRANT_GAMEPAD, expiry: "4h", customHours: 4 }),
+	).toEqual({
+		grants: GRANT_GAMEPAD,
+		expires_in_secs: 4 * 3600,
+		until_disconnect: false,
+	});
+	expect(grantFields({ ...full, expiry: "session" })).toEqual({
+		grants: GRANT_ALL,
+		until_disconnect: true,
+	});
+});

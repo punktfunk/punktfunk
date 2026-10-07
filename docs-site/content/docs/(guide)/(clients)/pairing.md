@@ -17,8 +17,8 @@ its own after that. There are no accounts and nothing leaves your network.
 
 ## Pair with a PIN
 
-1. In the console, open **Devices**, click **Pair a device** and enter your console password. It
-   shows a 4-digit PIN for two minutes.
+1. In the console, open **Devices**, click **Pair a device**, enter your console password and
+   click **Show PIN**. It shows a 4-digit PIN for two minutes.
 2. On the device, pick the host, choose **Pair with PIN…** or **Use a PIN instead…**, and type
    the PIN.
 
@@ -36,7 +36,7 @@ See [Connect with Moonlight → Pair](/docs/moonlight#3-pair).
 - **Access expires**: **Never**, **Until they disconnect**, 1, 4 or 8 hours, or **Custom…**.
 - **Approve as guest**: Controller only, for 4 hours. Use it for a friend's device.
 
-The **Pair a device** card has the same two controls; they apply to whichever device uses the PIN.
+**Pair a device** has the same two controls; they apply to whichever device uses the PIN.
 
 **Until they disconnect** removes the device a minute after its last session ends. To come back, it
 pairs again.
@@ -47,12 +47,11 @@ PIN** on its row to make a PIN only that device can use, and pass the PIN on. Se
 
 ## Managing paired devices
 
-**Devices → Paired devices** lists every device with its access and any expiry countdown. From
-there you can change a device's access or expiry, or **Unpair** it, which cuts it off at once, even
-mid-stream.
+**Devices** lists every paired device with its access and any expiry countdown. A row's **⋯**
+changes its access or expiry; **Unpair** there cuts it off at once, even mid-stream.
 
-Moonlight clients all report the same name. Name one in the PIN card as you pair it, or later with
-the pencil on its row.
+Moonlight clients all report the same name. Name one as you enter its PIN, or later with
+**Rename** in its row's **⋯**.
 
 Can't pair at all? See [Troubleshooting → Pairing is rejected](/docs/troubleshooting-connect#pairing-is-rejected--the-client-cant-connect).
 

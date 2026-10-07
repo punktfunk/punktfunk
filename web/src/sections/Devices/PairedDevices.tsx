@@ -1,12 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import {
-	MonitorPlay,
-	MonitorSmartphone,
-	Pencil,
-	SlidersHorizontal,
-	Trash2,
-} from "lucide-react";
 import { type FC, useState } from "react";
 import {
 	getListPairedClientsQueryKey,
@@ -16,7 +9,6 @@ import {
 	useUnpairClient,
 } from "@/api/gen/clients/clients";
 import { useGetDisplaySettings } from "@/api/gen/display/display";
-import type { DisplaySettingsState } from "@/api/gen/model";
 import type { UpdateNativeAccess } from "@/api/gen/model/updateNativeAccess";
 import {
 	getListNativeClientsQueryKey,
@@ -26,23 +18,8 @@ import {
 	useUpdateNativeClientAccess,
 } from "@/api/gen/native/native";
 import { useDialogs } from "@/components/dialogs";
-import { QueryState } from "@/components/query-state";
-import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-	MotionTableBody,
-	MotionTableRow,
-	RowDetails,
-	Table,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-	WIDE,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import { m } from "@/paraglide/messages";
 import {
 	ClientPolicySheet,
@@ -91,11 +68,11 @@ const hasAccess = (r: PairedRow): boolean =>
 	(r.accessLevel != null || r.grants != null || r.expiresUnix != null);
 
 /**
- * Container: ALL paired devices in one list. Merges the native (punktfunk/1) clients and the
- * GameStream/Moonlight clients — two separate host endpoints — into a single table tagged by
- * protocol, and routes each unpair back to the right endpoint.
+ * ALL paired devices in one list: the native (punktfunk/1) clients and the GameStream/Moonlight
+ * clients — two host endpoints — merged and tagged by protocol, each unpair routed back to its
+ * own endpoint. `dialogs` are the access, display and rename sheets, mounted once by the page.
  */
-export const PairedDevicesSection: FC = () => {
+export function usePairedDevices() {
 	const qc = useQueryClient();
 	const { confirm, promptText } = useDialogs();
 	const native = useListNativeClients();
@@ -107,8 +84,11 @@ export const PairedDevicesSection: FC = () => {
 	const renameMoonlight = useRenameClient();
 	const patchAccess = useUpdateNativeClientAccess();
 	const displaySettings = useGetDisplaySettings();
+	// Whether this host acts on ANY per-device field: an older host has no `/display/clients`, and
+	// a sheet with no questions in it is a dead control.
+	const perDevice = (displaySettings.data?.client_enforced ?? []).length > 0;
 	const [displayTarget, setDisplayTarget] = useState<PairedRow | null>(null);
-	// One clock for every countdown in the card AND the sheet — recomputed client-side from
+	// One clock for every countdown in the list AND the sheet — recomputed client-side from
 	// `expires_unix`, so the tick never refetches anything.
 	const nowUnix = useNowUnix();
 	// The row whose access is being edited — a snapshot, so a background refetch can't yank the
@@ -260,296 +240,154 @@ export const PairedDevicesSection: FC = () => {
 	const isUnpairingAll =
 		unpairAllNative.isPending || unpairAllMoonlight.isPending;
 
-	return (
-		<>
-			<PairedDevices
-				rows={rows}
-				isLoading={native.isLoading || moonlight.isLoading}
-				error={native.error ?? moonlight.error}
-				refetch={() => {
-					native.refetch();
-					moonlight.refetch();
-				}}
-				nowUnix={nowUnix}
-				onEditAccess={(r) =>
-					setEditing({
-						fingerprint: r.fingerprint,
-						name: r.name,
-						grants: r.grants,
-						expiresUnix: r.expiresUnix,
-						untilDisconnect: r.untilDisconnect,
-					})
-				}
-				onRename={onRename}
-				onUnpair={onUnpair}
-				onUnpairAll={onUnpairAll}
-				onDisplaySettings={setDisplayTarget}
-				settings={displaySettings.data}
-				perDevice={(displaySettings.data?.client_enforced ?? []).length > 0}
-				pendingFingerprint={pendingFingerprint}
-				isUnpairingAll={isUnpairingAll}
-			/>
-			{displayTarget && (
-				<ClientPolicySheet
-					open
-					onOpenChange={(open) => !open && setDisplayTarget(null)}
-					fingerprint={displayTarget.fingerprint}
-					deviceName={
-						displayTarget.name || displayTarget.fingerprint.slice(0, 12)
-					}
+	const busy = (r: PairedRow) =>
+		isUnpairingAll || pendingFingerprint === r.fingerprint;
+	return {
+		rows,
+		isLoading: native.isLoading || moonlight.isLoading,
+		error: native.error ?? moonlight.error,
+		refetch: () => {
+			native.refetch();
+			moonlight.refetch();
+		},
+		onUnpairAll,
+		isUnpairingAll,
+		/** What one row needs. */
+		rowProps: (r: PairedRow) => ({
+			row: r,
+			nowUnix,
+			display:
+				perDevice && r.protocol === "native"
+					? overlaySummary(displaySettings.data?.clients?.[r.fingerprint])
+					: undefined,
+			busy: busy(r),
+			onEditAccess: hasAccess(r)
+				? () =>
+						setEditing({
+							fingerprint: r.fingerprint,
+							name: r.name,
+							grants: r.grants,
+							expiresUnix: r.expiresUnix,
+							untilDisconnect: r.untilDisconnect,
+						})
+				: undefined,
+			onDisplaySettings:
+				perDevice && r.protocol === "native"
+					? () => setDisplayTarget(r)
+					: undefined,
+			onRename: r.protocol === "moonlight" ? () => onRename(r) : undefined,
+			onUnpair: () => onUnpair(r.protocol, r.fingerprint),
+		}),
+		dialogs: (
+			<>
+				{displayTarget && (
+					<ClientPolicySheet
+						open
+						onOpenChange={(open) => !open && setDisplayTarget(null)}
+						fingerprint={displayTarget.fingerprint}
+						deviceName={
+							displayTarget.name || displayTarget.fingerprint.slice(0, 12)
+						}
+					/>
+				)}
+				<EditAccessSheet
+					target={editing}
+					nowUnix={nowUnix}
+					onCancel={() => setEditing(null)}
+					onSave={onSaveAccess}
+					onExpireNow={onExpireNow}
+					onRemove={onRemoveFromSheet}
+					isPending={patchAccess.isPending}
 				/>
-			)}
-			<EditAccessSheet
-				target={editing}
-				nowUnix={nowUnix}
-				onCancel={() => setEditing(null)}
-				onSave={onSaveAccess}
-				onExpireNow={onExpireNow}
-				onRemove={onRemoveFromSheet}
-				isPending={patchAccess.isPending}
-			/>
-		</>
-	);
-};
-
-/** All paired devices (native + Moonlight) in one table, differentiated by a protocol badge. */
-export const PairedDevices: FC<{
-	rows: PairedRow[];
-	isLoading: boolean;
-	error: unknown;
-	refetch: () => void;
-	/** Wall clock (unix secs) for the countdown chips — ONE ticking value for the whole table. */
+			</>
+		),
+	};
+}
+/**
+ * One paired device. Its protocol and fingerprint ride the details line; Access, Display and the
+ * session it is streaming sit beside it; Access · Display · Rename · Unpair live in ⋯ (R6).
+ *
+ * A Moonlight device has full control and says so: the GameStream plane is not governed by
+ * grants. Rename is a Moonlight verb — its certificate carries nothing that names the device.
+ */
+export const PairedRowView: FC<{
+	row: PairedRow;
 	nowUnix: number;
-	/** Open the access editor for a native row (only offered where `hasAccess`). */
-	onEditAccess: (row: PairedRow) => void;
-	/** Open this device's display settings. Native only — the overlay is keyed by the
-	 * pairing fingerprint the native plane presents, which a GameStream cert is not. */
-	onDisplaySettings: (row: PairedRow) => void;
-	/** Display policy + stored overlays, so the Display column can be rendered without a
-	 * second fetch per row. */
-	settings?: DisplaySettingsState;
-	/** Whether this host acts on ANY per-device field. False hides the column and its
-	 * control — an older host has no `/display/clients` at all, and a sheet with no
-	 * questions in it is the dead control D1 exists to prevent. */
-	perDevice: boolean;
-	/**
-	 * Name a Moonlight row. Offered only on those: a native device already carries the name it gave
-	 * at pairing, while a Moonlight certificate carries nothing that identifies the device at all.
-	 */
-	onRename: (row: PairedRow) => void;
-	onUnpair: (protocol: PairedProtocol, fingerprint: string) => void;
-	/** Unpair every row, behind one confirmation. */
-	onUnpairAll: () => void;
-	/** Fingerprint of the row whose unpair is in flight, or null — only that row disables. */
-	pendingFingerprint: string | null;
-	/** A bulk unpair is walking the list — every control in the card disables until it finishes. */
-	isUnpairingAll: boolean;
+	/** The device's display overlay in words; absent where the host has no per-device policy. */
+	display?: string;
+	streaming?: boolean;
+	busy: boolean;
+	onEditAccess?: () => void;
+	onDisplaySettings?: () => void;
+	onRename?: () => void;
+	onUnpair: () => void;
 }> = ({
-	rows,
-	isLoading,
-	error,
-	refetch,
+	row: r,
 	nowUnix,
+	display,
+	streaming,
+	busy,
 	onEditAccess,
+	onDisplaySettings,
 	onRename,
 	onUnpair,
-	onUnpairAll,
-	onDisplaySettings,
-	settings,
-	perDevice,
-	pendingFingerprint,
-	isUnpairingAll,
 }) => (
-	<Card>
-		{/* flex-row: CardHeader stacks by default, and this one carries a trailing action. */}
-		<CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
-			<CardTitle>
-				<h2 className="flex items-center gap-2">
-					<MonitorSmartphone className="size-4" />
-					{m.pairing_native_devices()}
-				</h2>
-			</CardTitle>
-			{/* Nothing to unpair in bulk when the list is empty (or still loading) — an enabled
-			    button there would open a confirmation reading "Unpair all 0 devices?". */}
-			{rows.length > 0 && (
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={isUnpairingAll}
-					onClick={onUnpairAll}
-				>
-					<Trash2 className="size-4 text-destructive" />
-					{m.action_unpair_all()}
-				</Button>
-			)}
-		</CardHeader>
-
-		<CardContent>
-			<QueryState isLoading={isLoading} error={error} refetch={refetch}>
-				{rows.length === 0 ? (
-					m.pairing_native_empty()
-				) : (
-					<Table>
-						<TableHeader>
-							<TableRow>
-								<TableHead>{m.clients_name()}</TableHead>
-								<TableHead className={WIDE}>{m.pairing_protocol()}</TableHead>
-								<TableHead>{m.pairing_access()}</TableHead>
-								{perDevice && (
-									<TableHead className={WIDE}>
-										{m.display_device_column()}
-									</TableHead>
-								)}
-								<TableHead className={WIDE}>
-									{m.clients_fingerprint()}
-								</TableHead>
-								<TableHead className="w-20" />
-							</TableRow>
-						</TableHeader>
-						<MotionTableBody {...staggerProps(ROW_GAP)}>
-							{rows.map((r) => (
-								<MotionTableRow
-									key={`${r.protocol}:${r.fingerprint}`}
-									variants={ROW}
-								>
-									<TableCell className="font-medium">
-										{r.name || "—"}
-										<RowDetails>
-											{r.protocol === "native"
-												? m.pairing_protocol_native()
-												: m.pairing_protocol_moonlight()}{" "}
-											·{" "}
-											<span className="font-mono">
-												{r.fingerprint.slice(0, 16)}…
-											</span>
-										</RowDetails>
-									</TableCell>
-									<TableCell className={WIDE}>
-										<Badge
-											variant={
-												r.protocol === "native" ? "default" : "secondary"
-											}
-										>
-											{r.protocol === "native"
-												? m.pairing_protocol_native()
-												: m.pairing_protocol_moonlight()}
-										</Badge>
-									</TableCell>
-									<TableCell>
-										{r.protocol === "moonlight" ? (
-											// Honest: the GameStream plane isn't governed by grants
-											// (yet) — a Moonlight device has full control, and this
-											// chip says so instead of offering a fake editor.
-											<Badge
-												variant="outline"
-												className="whitespace-nowrap text-muted-foreground"
-											>
-												{m.access_ungoverned()}
-											</Badge>
-										) : hasAccess(r) ? (
-											<AccessChip
-												grants={r.grants}
-												expiresUnix={r.expiresUnix}
-												untilDisconnect={r.untilDisconnect}
-												nowUnix={nowUnix}
-											/>
-										) : (
-											// A host older than per-client access reports nothing —
-											// say nothing rather than guessing.
-											<span className="text-muted-foreground">—</span>
-										)}
-									</TableCell>
-									{perDevice && (
-										<TableCell
-											className={cn(
-												WIDE,
-												"max-w-[22rem] text-sm text-muted-foreground",
-											)}
-										>
-											{/* Only a native device has an overlay: the map is keyed by
-											    the pairing fingerprint the native plane presents, and a
-											    GameStream client's cert is not that. */}
-											{r.protocol === "native" ? (
-												<span>
-													{overlaySummary(settings?.clients?.[r.fingerprint])}
-												</span>
-											) : (
-												<span>—</span>
-											)}
-										</TableCell>
-									)}
-									<TableCell
-										className={cn(
-											WIDE,
-											"font-mono text-xs text-muted-foreground",
-										)}
-									>
-										{r.fingerprint.slice(0, 16)}…
-									</TableCell>
-									<TableCell>
-										<div className="flex justify-end">
-											{r.protocol === "moonlight" && (
-												<Button
-													variant="ghost"
-													size="icon"
-													aria-label={m.action_rename()}
-													disabled={
-														isUnpairingAll ||
-														pendingFingerprint === r.fingerprint
-													}
-													onClick={() => onRename(r)}
-												>
-													<Pencil className="size-4" />
-												</Button>
-											)}
-											{perDevice && r.protocol === "native" && (
-												<Button
-													variant="ghost"
-													size="icon"
-													aria-label={m.display_device_settings()}
-													title={m.display_device_settings()}
-													disabled={
-														isUnpairingAll ||
-														pendingFingerprint === r.fingerprint
-													}
-													onClick={() => onDisplaySettings(r)}
-												>
-													<MonitorPlay className="size-4" />
-												</Button>
-											)}
-											{hasAccess(r) && (
-												<Button
-													variant="ghost"
-													size="icon"
-													aria-label={m.access_edit_title()}
-													disabled={
-														isUnpairingAll ||
-														pendingFingerprint === r.fingerprint
-													}
-													onClick={() => onEditAccess(r)}
-												>
-													<SlidersHorizontal className="size-4" />
-												</Button>
-											)}
-											<Button
-												variant="ghost"
-												size="icon"
-												aria-label={m.action_unpair()}
-												disabled={
-													isUnpairingAll || pendingFingerprint === r.fingerprint
-												}
-												onClick={() => onUnpair(r.protocol, r.fingerprint)}
-											>
-												<Trash2 className="size-4 text-destructive" />
-											</Button>
-										</div>
-									</TableCell>
-								</MotionTableRow>
-							))}
-						</MotionTableBody>
-					</Table>
+	<li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 py-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,0.6fr)_auto]">
+		<div className="order-1 min-w-0">
+			<div className="truncate font-medium">{r.name || "—"}</div>
+			<div className="truncate text-xs text-muted-foreground">
+				{r.protocol === "native"
+					? m.pairing_protocol_native()
+					: m.pairing_protocol_moonlight()}{" "}
+				· <span className="font-mono">{r.fingerprint.slice(0, 16)}…</span>
+			</div>
+		</div>
+		<div className="order-2 justify-self-end md:order-5">
+			<RowMenu label={m.common_more_actions()} disabled={busy}>
+				{onEditAccess && (
+					<MenuItem onSelect={onEditAccess}>{m.access_edit_title()}</MenuItem>
 				)}
-			</QueryState>
-		</CardContent>
-	</Card>
+				{onDisplaySettings && (
+					<MenuItem onSelect={onDisplaySettings}>
+						{m.display_device_settings()}
+					</MenuItem>
+				)}
+				{onRename && (
+					<MenuItem onSelect={onRename}>{m.action_rename()}</MenuItem>
+				)}
+				{(onEditAccess || onDisplaySettings || onRename) && <MenuSeparator />}
+				<MenuItem destructive onSelect={onUnpair}>
+					{m.action_unpair()}
+				</MenuItem>
+			</RowMenu>
+		</div>
+		<div className="order-3 col-span-1 flex flex-wrap items-center gap-2 md:contents">
+			<div className="md:order-2">
+				{r.protocol === "moonlight" ? (
+					<Badge
+						variant="outline"
+						className="whitespace-nowrap text-muted-foreground"
+					>
+						{m.access_ungoverned()}
+					</Badge>
+				) : hasAccess(r) ? (
+					<AccessChip
+						grants={r.grants}
+						expiresUnix={r.expiresUnix}
+						untilDisconnect={r.untilDisconnect}
+						nowUnix={nowUnix}
+					/>
+				) : (
+					// A host older than per-client access reports nothing; say nothing.
+					<span className="text-muted-foreground">—</span>
+				)}
+			</div>
+			<div className="truncate text-sm text-muted-foreground md:order-3">
+				{display}
+			</div>
+			<div className="md:order-4">
+				{streaming && <Badge variant="success">{m.devices_streaming()}</Badge>}
+			</div>
+		</div>
+	</li>
 );

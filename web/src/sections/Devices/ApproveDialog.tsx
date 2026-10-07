@@ -20,13 +20,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { m } from "@/paraglide/messages";
 import {
-	AccessControls,
 	type AccessDraft,
-	draftExpirySecs,
+	AccessPicker,
 	draftFromStored,
-	draftUntilDisconnect,
-	GRANT_ALL,
 	GUEST_EXPIRES_SECS,
+	grantFields,
 	PRESET_CONTROLLER,
 } from "./access";
 
@@ -87,21 +85,13 @@ export const ApproveDialog: FC<{
 
 	const submit = () => {
 		if (!device) return;
-		const body: ApprovePending = { name: trimmedName() };
-		const secs = draftExpirySecs(draft);
-		// A device with a stored record gets the dialog's state EXPLICITLY (what you see is what
-		// is granted — omitting both fields would silently keep the stored access instead). For an
-		// unknown device the untouched Full · Forever default is omitted: identical semantics, and
-		// an older host that predates the fields sees exactly yesterday's request.
-		const session = draftUntilDisconnect(draft);
-		if (known || draft.grants !== GRANT_ALL || secs != null || session) {
-			body.grants = draft.grants;
-			if (secs != null) body.expires_in_secs = secs;
-			// Sent whenever the access half is sent at all, so clearing the choice on a
-			// re-approve reaches the host as `false` rather than as silence.
-			body.until_disconnect = session;
-		}
-		onApprove(device.id, body, password);
+		// A device with a stored record gets the dialog's state explicitly: omitting the fields
+		// would silently keep the stored access instead.
+		onApprove(
+			device.id,
+			{ name: trimmedName(), ...grantFields(draft, known) },
+			password,
+		);
 	};
 
 	const approveAsGuest = () => {
@@ -169,11 +159,7 @@ export const ApproveDialog: FC<{
 						</p>
 					)}
 
-					<AccessControls
-						value={draft}
-						onChange={setDraft}
-						idPrefix="approve"
-					/>
+					<AccessPicker value={draft} onChange={setDraft} idPrefix="approve" />
 
 					{/* Approving pairs the device outright — no PIN — so it re-confirms the console
 					    password, which the BFF verifies and strips (util/confirm.ts). Both approve

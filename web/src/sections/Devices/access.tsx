@@ -14,8 +14,8 @@ import {
 import { m } from "@/paraglide/messages";
 
 /**
- * The access-control vocabulary + the ONE control family for all three grant moments — the
- * approve dialog, the arm card, and the paired-row edit sheet (design: per-client-access.md §6).
+ * The access-control vocabulary + the ONE picker for all three grant moments — the approve
+ * dialog, the Pair sheet, and the paired-row edit sheet (design: per-client-access.md §6).
  *
  * Grant bits mirror `punktfunk-core` `quic/access.rs` (wire == store; reserved bits must be
  * zero). The preset label is DERIVED from the mask, never stored — no drift, and a mask the
@@ -110,6 +110,31 @@ export interface AccessDraft {
  */
 export const draftUntilDisconnect = (draft: AccessDraft): boolean =>
 	draft.expiry === "session";
+
+/**
+ * The grant fields an arm or an approve sends. The untouched Full · Forever default is omitted
+ * unless `explicit`: a re-pairing device then keeps the access it has, and an older host sees
+ * yesterday's request. A re-approve is explicit — what the dialog shows is what is granted.
+ */
+export const grantFields = (
+	draft: AccessDraft,
+	explicit = false,
+): {
+	grants?: number;
+	expires_in_secs?: number;
+	until_disconnect?: boolean;
+} => {
+	const secs = draftExpirySecs(draft);
+	const session = draftUntilDisconnect(draft);
+	if (!explicit && draft.grants === GRANT_ALL && secs == null && !session)
+		return {};
+	return {
+		grants: draft.grants,
+		...(secs != null ? { expires_in_secs: secs } : {}),
+		// Sent whenever the access half is, so clearing it reaches the host as `false`.
+		until_disconnect: session,
+	};
+};
 
 /** Relative seconds for the drafted expiry, or null for forever/keep/session (field omitted). */
 export const draftExpirySecs = (draft: AccessDraft): number | null => {
@@ -240,14 +265,12 @@ const GRANT_TOGGLES: {
 ];
 
 /**
- * The shared access controls: Access level (three presets + an Advanced expander with the
- * grant toggles) and Access expires (Forever / 1 h / 4 h / 8 h / custom). Three grant moments,
- * one component — approve dialog, arm card, edit sheet.
- *
- * The two sit side by side in an `@container` with room for both (the arm card alone on its row)
- * and stack everywhere else. The dialogs declare no container, so they always stack.
+ * The access picker: Access level (three presets + an Advanced expander with the grant toggles)
+ * and Access expires (Forever / 1 h / 4 h / 8 h / custom). Three grant moments, one component —
+ * approve dialog, Pair sheet, edit sheet. The two stack; an `@container` with room puts them side
+ * by side.
  */
-export const AccessControls: FC<{
+export const AccessPicker: FC<{
 	value: AccessDraft;
 	onChange: (next: AccessDraft) => void;
 	/** Distinct control ids when two instances could mount at once. */
