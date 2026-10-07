@@ -92,6 +92,8 @@ pub(super) struct ClientCfg {
     pub repair: Repair,
     /// Both ends' Ethernet ports, Mbit/s, as the handshake would report them.
     pub ports: Option<(u32, u32)>,
+    /// After the scenario's injected lost frame, another this often. `0` = once.
+    pub dead_every_ms: u64,
 }
 
 impl Default for ClientCfg {
@@ -113,6 +115,7 @@ impl Default for ClientCfg {
             pin_kbps: None,
             repair: Repair::Rfi,
             ports: None,
+            dead_every_ms: 0,
         }
     }
 }
@@ -351,7 +354,8 @@ impl Client {
     pub(super) fn expect(&mut self, f: &Frame, now_ms: u64) {
         let forced = matches!(self.force_loss_at_ms, Some(t) if now_ms >= t);
         if forced {
-            self.force_loss_at_ms = None;
+            let every = self.cfg.dead_every_ms;
+            self.force_loss_at_ms = (every > 0).then_some(now_ms + every);
         }
         self.flight.push_back(InFlight {
             id: f.id,

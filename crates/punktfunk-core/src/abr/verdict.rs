@@ -28,6 +28,9 @@ pub(super) const RECOVERY_KF_SEVERE: u32 = 4;
 /// as a blip. 8 × 750 ms = 6 s: long enough that the rate it held is proven,
 /// short enough that a link dropping a frame every few seconds still cuts.
 pub(super) const BLIP_CLEAN_WINDOWS: u32 = 8;
+/// Lone dead frames a flat link may lose as blips in a minute, in percent of the frames
+/// it carried: 36 at 60 Hz, a frame every two seconds.
+pub(super) const LONE_DEAD_PER_MIN_PCT: u64 = 1;
 /// Tail loss in a window with no lost frame that takes a notch off `L` when two windows run.
 /// Parity leaves last, so a queue overflowing on the path drops it first.
 pub(super) const TAIL_MARK_MIN: u32 = 2;
@@ -135,6 +138,10 @@ pub(crate) struct Baselines {
     owd: VecDeque<i64>,
     decode: VecDeque<i64>,
     encode: VecDeque<i64>,
+    /// Windows of the last minute that lost frames: when, and how many.
+    dead: VecDeque<(std::time::Instant, u64)>,
+    /// The last window was a blip: the next one is judged without the lone-frame rule.
+    last_blip: bool,
 }
 
 impl Baselines {
@@ -143,7 +150,33 @@ impl Baselines {
             owd: VecDeque::with_capacity(BASELINE_WINDOWS),
             decode: VecDeque::with_capacity(BASELINE_WINDOWS),
             encode: VecDeque::with_capacity(BASELINE_WINDOWS),
+            dead: VecDeque::new(),
+            last_blip: false,
         }
+    }
+
+    /// A lone dead frame on a flat link, within the minute's budget: frames lost over the
+    /// last minute, this one included, stay under [`LONE_DEAD_PER_MIN_PCT`] of the frames
+    /// the minute carries at this refresh. Not in the window right after a blip, and not
+    /// one that died at its tail.
+    fn lone_dead(&self, w: &WindowSample, dropped: u64, frame_budget_us: Option<i64>) -> bool {
+        let Some(budget_us) = frame_budget_us.filter(|&b| b > 0) else {
+            return false;
+        };
+        let minute = std::time::Duration::from_secs(60);
+        let recent: u64 = self
+            .dead
+            .iter()
+            .filter(|(t, _)| w.now.duration_since(*t) < minute)
+            .map(|(_, n)| n)
+            .sum();
+        let frames = minute.as_micros() as u64 / budget_us as u64;
+        dropped == 1
+            && !self.last_blip
+            && w.tail < TAIL_MARK_MIN
+            && w.delay
+                .is_some_and(|d| d.rise_us < super::controller::DRAIN_FALL_US)
+            && (recent + 1) * 100 < frames * LONE_DEAD_PER_MIN_PCT
     }
 
     /// Every signal is a property of the mode that produced it.
@@ -243,14 +276,16 @@ impl Baselines {
         let loss_ppm = if path_noise { 0 } else { w.loss_ppm };
         let dropped = if path_noise { 0 } else { w.dropped };
         let link_sig = !path_noise && link_signature(w);
-        // A lost frame and nothing else: the recovery plane's business (RFI,
-        // FEC), not the rate's. A long clean run at this rate says so, and so
-        // does a window whose wire and delay show a link with room — which a
-        // session still climbing has instead of a run.
+        // A lost frame and nothing else is the recovery plane's, not the rate's:
+        // after a long clean run, on a wire and delay with room, or lone on a flat
+        // link within the minute's budget. Frames dying at their heads are a waking
+        // receiver's, which the wake shape answers, however heavy.
+        let head = head_signature(w);
+        let lone = self.lone_dead(w, dropped, frame_budget_us);
         let blip = dropped > 0
-            && (clean_run >= BLIP_CLEAN_WINDOWS || link_vouches)
+            && (clean_run >= BLIP_CLEAN_WINDOWS || link_vouches || lone || head)
             && !link_sig
-            && loss_ppm < HEAVY_LOSS_PPM
+            && (loss_ppm < HEAVY_LOSS_PPM || head)
             && !w.flushed
             && !owd_bad
             && !decode_bad
@@ -295,6 +330,17 @@ impl Baselines {
             };
             reason(&seen, owd_bad, &v)
         };
+        self.last_blip = blip;
+        if dropped > 0 {
+            self.dead.push_back((w.now, dropped));
+        }
+        while self
+            .dead
+            .front()
+            .is_some_and(|(t, _)| w.now.duration_since(*t) >= std::time::Duration::from_secs(60))
+        {
+            self.dead.pop_front();
+        }
         v
     }
 }
@@ -415,6 +461,66 @@ mod tests {
             dropped: 1,
             ..w(0, 0, 2, 0)
         }));
+    }
+
+    /// A lone dead frame on a flat link is a blip while the minute's dead frames stay
+    /// under [`LONE_DEAD_PER_MIN_PCT`] of the refresh. Two windows running, a frame dying at
+    /// its tail, or the budget spent is damage the rate answers; frames dying at their
+    /// heads are a waking receiver's, however heavy.
+    #[test]
+    fn lone_dead_frames_are_blips_within_the_minutes_budget() {
+        let start = Instant::now();
+        let level = crate::abr::DelayTrend {
+            samples: 20,
+            mean_us: 10_000,
+            rise_us: 0,
+            last_us: 10_000,
+        };
+        let flat = |at: u32, dropped: u64, tail: u32| WindowSample {
+            owd_mean_us: Some(10_000),
+            delay: Some(level),
+            dropped,
+            tail,
+            actual_kbps: 20_000,
+            ..WindowSample::at(ticks(start, at))
+        };
+        let fresh = || {
+            let mut c = BitrateController::new(20_000, None);
+            c.set_frame_budget(60);
+            c
+        };
+        // One every other window: 40 a minute against the 36 allowed at 60 Hz.
+        let mut c = fresh();
+        for n in 0..35u32 {
+            assert_eq!(c.on_window(&flat(2 * n, 1, 0)), None, "dead frame {n}");
+            assert_eq!(c.last_reason(), Reason::Blip);
+            assert_eq!(c.on_window(&flat(2 * n + 1, 0, 0)), None);
+        }
+        assert!(
+            c.on_window(&flat(70, 1, 0)).is_some(),
+            "the budget is spent"
+        );
+
+        let mut c = fresh();
+        assert_eq!(c.on_window(&flat(0, 1, 0)), None);
+        assert!(c.on_window(&flat(1, 1, 0)).is_some(), "two windows running");
+
+        let mut c = fresh();
+        assert_eq!(c.on_window(&flat(0, 1, 0)), None);
+        assert_eq!(c.on_window(&flat(1, 0, 0)), None);
+        assert!(
+            c.on_window(&flat(2, 1, TAIL_MARK_MIN)).is_some(),
+            "a frame dying at its tail"
+        );
+
+        let mut c = fresh();
+        let heads = WindowSample {
+            head: 10,
+            loss_ppm: 30_000,
+            ..flat(0, 3, 0)
+        };
+        assert_eq!(c.on_window(&heads), None);
+        assert_eq!(c.last_reason(), Reason::Blip);
     }
 
     #[test]

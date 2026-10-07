@@ -686,6 +686,15 @@ pub(super) fn lan_tail_parity_loss() -> Scenario {
     s
 }
 
+/// 1 GbE that loses one whole frame every two seconds and nothing else: no queue, no
+/// tail, flat delay. Each is the recovery plane's to answer, not the rate's.
+pub(super) fn lan_lone_dead_frame() -> Scenario {
+    let mut s = lan("lan_lone_dead_frame", 1_000_000, 120);
+    s.sessions[0].client.dead_every_ms = 2_000;
+    s.blip_at_ms = Some(2_000);
+    s
+}
+
 /// 1 GbE at both ports under a 1080p60 stream: the ramp stops at what the stream needs,
 /// and the ports say the link is 1 Gbit/s before and after it.
 pub(super) fn lan_1g_two_ports() -> Scenario {
@@ -1427,6 +1436,7 @@ pub(super) fn all() -> Vec<Scenario> {
         lan_head_loss(),
         lan_tail_parity_loss(),
         lan_1g_two_ports(),
+        lan_lone_dead_frame(),
         wifi_good(),
         wifi_tv(),
         wan_wg_12(0x7A_5500, 180_000),
@@ -2462,6 +2472,7 @@ mod tests {
             "wave" => host_rebuild_wave(),
             "weak" => encoder_weak(),
             "calm" => calm_desktop_lossy(),
+            "lone" => lan_lone_dead_frame(),
             _ => wifi_tv(),
         };
         // As the table has it. `SIM_LEGACY=1` reads the calibration instead.

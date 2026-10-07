@@ -101,7 +101,7 @@ pub(super) const LINK_DRAIN_WINDOWS: u32 = 6;
 /// Delay fall across a window that counts as a queue emptying. 5 ms over
 /// 750 ms is past the fit's own noise on a jittery link and well under one
 /// frame period at any refresh.
-const DRAIN_FALL_US: i64 = 5_000;
+pub(super) const DRAIN_FALL_US: i64 = 5_000;
 /// How far under the wall it measured the link cap sits, as a divisor. A
 /// tenth is the room a link that moves by a few percent needs to move in
 /// without the queue answering; climbs stop at the cap, so this is also where
