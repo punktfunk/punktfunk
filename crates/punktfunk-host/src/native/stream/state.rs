@@ -43,9 +43,7 @@ pub(super) struct StreamState {
     pub(super) deadline: std::time::Instant,
     pub(super) next: std::time::Instant,
     pub(super) sent: u64,
-    /// Survives in-loop rebuilds so a mid-stream rebuild keeps the acquired lock.
-    pub(super) phase_ctl: PhaseController,
-    /// Same: a rebuild must not reopen the overshoot.
+    /// Survives in-loop rebuilds: a rebuild must not reopen the overshoot.
     pub(super) pace: CaptureCredit,
     /// Predicted as `au_seq + inflight.len()`. Encoder-internal counters desync on the first ABR rebuild.
     pub(super) au_seq: u32,
@@ -182,7 +180,6 @@ pub(super) struct StreamState {
     pub(super) bringup: Arc<crate::bringup::Trace>,
     pub(super) resize_ms: Arc<AtomicU32>,
     pub(super) stats: Arc<StatsRecorder>,
-    pub(super) phase: Arc<PhaseCtl>,
     /// Applied FEC: what the packetizer and [`Self::enc_now`] run at.
     pub(super) fec_target: Arc<AtomicU8>,
     /// Control task's proposal; applied only after the encoder takes its rate.
@@ -440,7 +437,6 @@ impl StreamState {
                             fec_requested,
                             link_kbps,
                             delivery,
-                            phase,
                             ramp_open,
                             cursor_client_draws,
                         },
@@ -886,7 +882,6 @@ impl StreamState {
             .name("punktfunk-send".into())
             .spawn({
                 let stop = stop.clone();
-                let phase_send = phase.clone();
                 let fec_target_send = fec_target.clone();
                 move || {
                     send_loop(
@@ -904,7 +899,6 @@ impl StreamState {
                         shard_rx,
                         send_stats,
                         timing_conn,
-                        phase_send,
                         probe_seq,
                     )
                 }
@@ -965,7 +959,6 @@ impl StreamState {
             bringup,
             resize_ms,
             stats,
-            phase,
             fec_target: fec_target.clone(),
             fec_requested: fec_requested.clone(),
             live_bitrate,
@@ -1031,7 +1024,6 @@ impl StreamState {
             deadline: now + std::time::Duration::from_secs(seconds as u64),
             next: now,
             sent: 0,
-            phase_ctl: PhaseController::new(),
             pace: CaptureCredit::new(now),
             au_seq: 0,
             wire_frame_open: false,

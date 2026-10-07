@@ -194,9 +194,6 @@ v2_message!(ProbeShaped = reg::MSG_PROBE_REQUEST,
 v2_message!(ProbeResult = reg::MSG_PROBE_RESULT,
     { 1 => bytes_sent, 2 => packets_sent, 3 => duration_ms, 4 => wire_packets_sent,
       5 => send_dropped });
-v2_message!(PhaseReport = reg::MSG_PHASE_REPORT,
-    { 1 => next_latch_host_ns, 2 => latch_period_ns, 3 => uncertainty_ns, 4 => arrival_lead_ns,
-      5 => coherence_milli });
 v2_message!(CursorShape = reg::MSG_CURSOR_SHAPE,
     { 1 => serial, 2 => w, 3 => h, 4 => hot_x, 5 => hot_y, 6 => rgba },
     check |m| m.w > 0 && m.h > 0 && m.w <= CURSOR_SHAPE_MAX_SIDE && m.h <= CURSOR_SHAPE_MAX_SIDE
@@ -552,13 +549,6 @@ mod tests {
             duration_ms: 500,
             wire_packets_sent: 9,
             send_dropped: 0,
-        });
-        round_trip(PhaseReport {
-            next_latch_host_ns: 1_700_000_000_000_000_000,
-            latch_period_ns: 8_333_333,
-            uncertainty_ns: 400_000,
-            arrival_lead_ns: 2_000_000,
-            coherence_milli: 950,
         });
         round_trip(CursorShape {
             serial: 3,

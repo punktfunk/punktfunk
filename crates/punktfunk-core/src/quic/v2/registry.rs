@@ -75,7 +75,7 @@ pub const MSG_HOST_FACTS: u64 = 0x2A;
 pub const MSG_PROBE_REQUEST: u64 = 0x2B;
 /// `host → client`: the probe's counts.
 pub const MSG_PROBE_RESULT: u64 = 0x2C;
-/// `client → host`: the display-latch grid for phase lock.
+/// `client → host`, retired: an older client's display-latch report. Hosts skip it.
 pub const MSG_PHASE_REPORT: u64 = 0x2D;
 /// `client → host`: shard loss parity repaired over a report window (`LossReport`).
 pub const MSG_LOSS_REPORT: u64 = 0x2E;

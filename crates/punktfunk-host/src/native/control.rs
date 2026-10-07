@@ -15,7 +15,7 @@
 //! on `None` or a closed mpsc busy-spins.
 //!
 //! Evidence: `design/shard-payload-reneg.md`, `design/per-client-access.md`,
-//! `design/clipboard-and-file-transfer.md`, `design/phase-locked-capture.md`.
+//! `design/clipboard-and-file-transfer.md`.
 
 use super::*;
 use pf_clipboard::ClipCoordCmd;
@@ -208,8 +208,7 @@ impl PyroWavePin {
 pub(super) struct Task {
     pub(super) ctrl_send: super::link::CtlSend,
     pub(super) ctrl_recv: super::link::CtlReader,
-    /// The session's media clock: clock echoes leave in its time, and a phase report's latch
-    /// arrives in it.
+    /// The session's media clock: clock echoes leave in its time.
     pub(super) clock: std::sync::Arc<punktfunk_core::quic::v2::clock::SessionClock>,
     /// The input thread's queue, shared with the datagram loop: a key edge off the
     /// control stream lands in the same order-preserving line as the pointer.
@@ -356,7 +355,6 @@ pub(super) async fn run(task: Task) {
                 fec_requested,
                 link_kbps,
                 delivery,
-                phase: phase_ctl,
                 ramp_open,
                 cursor_client_draws,
             },
@@ -727,11 +725,6 @@ pub(super) async fn run(task: Task) {
                     if v2io::send(&mut ctrl_send, &echo).await.is_err() {
                         break;
                     }
-                } else if let Ok(mut pr) = v2msg::decode::<punktfunk_core::quic::PhaseReport>(ty, &body) {
-                    // The latch arrives in wire time. Inert when `PUNKTFUNK_PHASE_LOCK=0`
-                    // (stored, never drained).
-                    pr.next_latch_host_ns = clock.to_host(pr.next_latch_host_ns);
-                    phase_ctl.store(pr);
                 } else if let Ok(m) = v2msg::decode::<punktfunk_core::quic::CursorRenderMode>(ty, &body) {
                     // Data-plane edge-detects per tick (forward+exclude vs
                     // composite). Inert without the cursor cap.

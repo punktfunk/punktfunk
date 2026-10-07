@@ -41,7 +41,7 @@ final class ConnectOfferTests: XCTestCase {
         XCTAssertEqual(o.videoCodecs, PunktfunkConnection.codecH264 | PunktfunkConnection.codecHEVC)
         XCTAssertEqual(o.preferredCodec, 0)
         XCTAssertEqual(o.videoFit, VideoFit.fit.wire)
-        XCTAssertEqual(o.clientCaps, PunktfunkConnection.clientCapPhaseLock)
+        XCTAssertEqual(o.clientCaps, 0)
     }
 
     /// HDR waits for a display that can show it; the depth rides along with it.
@@ -122,18 +122,16 @@ final class ConnectOfferTests: XCTestCase {
         XCTAssertEqual(failed.videoCaps, 0)
     }
 
-    /// The Mac draws the host cursor only in the desktop mouse model; iOS and tvOS report the
-    /// latch phase. Keeping host audio is a request on every platform.
+    /// Only the Mac draws the host cursor, and only in the desktop mouse model. Keeping host audio
+    /// is a request on every platform.
     func testClientCapsFollowThePlatform() {
         var s = EffectiveSettings()
         XCTAssertEqual(offer(s, mac: true).clientCaps, 0)
         s.mouseMode = MouseInputMode.desktop.rawValue
         XCTAssertEqual(offer(s, mac: true).clientCaps, PunktfunkConnection.clientCapCursor)
-        XCTAssertEqual(offer(s, mac: false).clientCaps, PunktfunkConnection.clientCapPhaseLock)
+        XCTAssertEqual(offer(s, mac: false).clientCaps, 0)
         s.keepHostAudio = true
-        XCTAssertEqual(
-            offer(s, mac: false).clientCaps,
-            PunktfunkConnection.clientCapPhaseLock | PunktfunkConnection.clientCapKeepHostAudio)
+        XCTAssertEqual(offer(s, mac: false).clientCaps, PunktfunkConnection.clientCapKeepHostAudio)
     }
 
     // MARK: - Failure wording

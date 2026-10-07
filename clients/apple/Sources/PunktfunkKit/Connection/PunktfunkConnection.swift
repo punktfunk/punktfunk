@@ -1407,20 +1407,6 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
-    /// Report the display-latch grid + circular arrival-phase statistic so the host can
-    /// phase-lock its capture tick (design/phase-locked-capture.md). Fire-and-forget; call
-    /// ~1 Hz from a vsync-aware presenter. `nextLatchHostNs` must already be HOST clock —
-    /// convert with `clockOffsetNs` (host − client). No-op toward a host that never armed.
-    public func reportPhase(
-        nextLatchHostNs: UInt64, latchPeriodNs: UInt32, uncertaintyNs: UInt32,
-        arrivalLeadNs: UInt32, coherenceMilli: UInt16
-    ) {
-        withLiveHandle(or: ()) { h in
-            _ = punktfunk_connection_report_phase(
-                h, nextLatchHostNs, latchPeriodNs, uncertaintyNs, arrivalLeadNs, coherenceMilli)
-        }
-    }
-
     /// The currently active session mode (updated by accepted `requestMode` switches).
     public func currentMode() -> (width: UInt32, height: UInt32, refreshHz: UInt32) {
         withLiveHandle(or: (0, 0, 0)) { hd in
@@ -1667,8 +1653,6 @@ public final class PunktfunkConnection: @unchecked Sendable {
     public static let clientCapKeepHostAudio: UInt8 = UInt8(PUNKTFUNK_CLIENT_CAP_KEEP_HOST_AUDIO)
     /// `clientCaps` bit: this client draws the host cursor locally.
     public static let clientCapCursor = UInt8(PUNKTFUNK_CLIENT_CAP_CURSOR)
-    /// `clientCaps` bit: this client's presenter reports its latch phase (vsync-aware pacing).
-    public static let clientCapPhaseLock = UInt8(PUNKTFUNK_CLIENT_CAP_PHASE_LOCK)
 
     /// The `codec` SETTING (a `DefaultsKey.codec` / preset-overlay string) as a soft-preference
     /// byte; `0` = Automatic, i.e. the host decides. Lives here beside the bits so the settings

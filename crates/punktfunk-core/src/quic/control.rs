@@ -2,7 +2,7 @@
 //! peer skips a frame type it does not know.
 //!
 //! Clipboard: `design/clipboard-and-file-transfer.md`. Shard grow/shrink:
-//! `design/shard-payload-reneg.md`. Phase lock: `design/phase-locked-capture.md`.
+//! `design/shard-payload-reneg.md`.
 
 #[cfg(doc)]
 use super::{clock_offset_ns, Hello};
@@ -296,29 +296,6 @@ pub struct ClockEcho {
     pub t1_ns: u64,
     pub t2_ns: u64,
     pub t3_ns: u64,
-}
-
-/// `client → host`, ~1 Hz: display-latch grid so the host can phase-lock
-/// capture (`design/phase-locked-capture.md`). Gated on
-/// [`CLIENT_CAP_PHASE_LOCK`](crate::quic::CLIENT_CAP_PHASE_LOCK).
-///
-/// Timestamps are host `CLOCK_REALTIME`: the client converts before send
-/// (`T_host = T_client + offset`). The offset lives only client-side.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PhaseReport {
-    /// Next display latch, host clock. Host extrapolates by `latch_period_ns`.
-    pub next_latch_host_ns: u64,
-    /// Panel refresh period (true latch grid, not a down-rated callback).
-    pub latch_period_ns: u32,
-    /// Skew residual + latch jitter p95. Host widens its margin by this,
-    /// never narrows below its floor.
-    pub uncertainty_ns: u32,
-    /// Arrival-before-latch lead, ns, clamped ≥ 0: the circular mean mod period.
-    /// Error signal toward the target lead.
-    pub arrival_lead_ns: u32,
-    /// Arrival-phase coherence, ‰ (0 = smeared, 1000 = locked). [`u16::MAX`]
-    /// skips the host's coherence gate; it then uses its travel cap only.
-    pub coherence_milli: u16,
 }
 
 /// [`LossReport`] `loss_ppm` from one window's session-stat deltas: the

@@ -6,9 +6,8 @@
 //! The virtual-display loop itself is [`state::StreamState`]: bring-up in `new`, the tick loop
 //! in `run`, one file per concern under `stream/`.
 //!
-//! Pin `PUNKTFUNK_PHASE_LOCK=0`, `PUNKTFUNK_IDD_ADAPTIVE=0`, `PUNKTFUNK_PACE_FACTOR=0`,
-//! `PUNKTFUNK_STREAMED_AU=0` for the rebuild-free A/B levers. Evidence:
-//! `design/phase-locked-capture.md`, `design/midstream-resolution-resize.md`.
+//! Pin `PUNKTFUNK_IDD_ADAPTIVE=0`, `PUNKTFUNK_PACE_FACTOR=0`, `PUNKTFUNK_STREAMED_AU=0` for the
+//! rebuild-free A/B levers. Evidence: `design/midstream-resolution-resize.md`.
 
 use super::wiring::{SessionShared, StreamEnds};
 use super::*;
@@ -16,7 +15,6 @@ use crate::send_pacing::{frame_driven_enabled, CaptureCredit};
 
 mod cursor;
 mod encode;
-mod phase_lock;
 mod pipeline;
 mod ramp;
 mod rebuild;
@@ -27,9 +25,6 @@ mod send;
 mod session_watch;
 mod state;
 mod synth_abr;
-use self::phase_lock::{phase_lock_enabled, PhaseController};
-// `native.rs` builds it and `control.rs` holds it: the 0xCF ACK hold crosses the module.
-pub(crate) use self::phase_lock::PhaseCtl;
 pub(super) use self::pipeline::{prepare_display, PrepHandle, PreparedDisplay};
 // `control.rs` bounds its spacing exemption by the same step length.
 pub(crate) use self::ramp::RAMP_STEP_MAX_MS;
@@ -83,7 +78,6 @@ pub(super) fn synthetic_stream(
                 pts_ns,
                 host_us: (now_ns().saturating_sub(pts_ns) / 1000).min(u32::MAX as u64) as u32,
                 stages: None,
-                applied_phase_ns: None,
             };
             let _ = tc.send_datagram(punktfunk_core::quic::encode_host_timing_datagram(&t));
         }

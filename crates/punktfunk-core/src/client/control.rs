@@ -36,9 +36,6 @@ pub(crate) enum CtrlRequest {
     /// Who draws the pointer. Client-local = host excludes and forwards; host-composite = baked
     /// into the video. Latest-wins.
     CursorRender(crate::quic::CursorRenderMode),
-    /// ~1 Hz latch grid in host-clock time (`design/phase-locked-capture.md`). Latest-wins;
-    /// old hosts ignore it.
-    Phase(crate::quic::PhaseReport),
     /// A key press or release, toward a host that reads them off the control stream
     /// (`HOST_CAP2_INPUT_EDGES`): QUIC resends what the datagram plane would lose.
     InputEdge(crate::input::InputEvent),

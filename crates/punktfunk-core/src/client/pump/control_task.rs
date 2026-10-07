@@ -127,7 +127,6 @@ impl ControlTask {
                         CtrlRequest::ClipControl(c) => c.encode_v2(),
                         CtrlRequest::ClipOffer(o) => o.encode_v2(),
                         CtrlRequest::CursorRender(m) => m.encode_v2(),
-                        CtrlRequest::Phase(p) => p.encode_v2(),
                         CtrlRequest::InputEdge(ev) => v2msg::encode_input_event(&ev),
                         CtrlRequest::PadIdentity(id) => id.encode_v2(),
                     };

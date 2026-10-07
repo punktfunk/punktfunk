@@ -148,8 +148,7 @@ impl<T> FrameStore<T> {
 /// [`grid_snap_ns`] of it. Present-wait stamps carry milliseconds of wake jitter; the
 /// min of a run reads that as a faster panel and every slot it predicts is phantom.
 /// A stream below panel rate lands at k×period and stays as measured: any multiple
-/// is a real latch. Same grid the host-facing `LatchGrid` publish reads, so the
-/// phase-lock report and the local scheduler cannot disagree.
+/// is a real latch.
 pub(crate) struct LatchClock {
     anchor_ns: u64,
     /// Previous stamp, kept across calls. The run loop drains one present-wait sample

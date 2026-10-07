@@ -563,15 +563,11 @@ fn connect(req: ConnectRequest) -> jlong {
         display_hdr: None,
         // No CLIENT_CAP_CURSOR: this client does not render the host cursor locally (no
         // shape/state planes in the jni surface) — advertising it would stream cursor-less.
-        // CLIENT_CAP_PHASE_LOCK is honest: the async decode loop's presenter feeds
-        // report_phase (advisory in v1 — the host arms on report receipt — but the Hello
-        // should say what the client does).
         // CLIENT_CAP_PAD_AUDIO is the SESSION-level negotiation, separate from the per-pad
         // arrival bits: without it the host never sets HOST_CAP_PAD_AUDIO and never emits 0xD1,
         // so declaring a pad's render caps later would have nothing to gate. Gated on the
         // settings so a user with pad audio off does not make the host provision endpoints.
-        client_caps: punktfunk_core::quic::CLIENT_CAP_PHASE_LOCK
-            | if pad_audio_ok {
+        client_caps: if pad_audio_ok {
                 punktfunk_core::quic::CLIENT_CAP_PAD_AUDIO
             } else {
                 0

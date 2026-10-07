@@ -402,33 +402,6 @@ pub unsafe extern "C" fn punktfunk_connection_report_decode_us(
     })
 }
 
-/// Report the display-latch grid (`design/phase-locked-capture.md`).
-/// `next_latch_host_ns` is already host clock. ~1 Hz; no-op if unnegotiated.
-///
-/// # Safety
-/// `c` is a caller handle or null (error, not UB).
-#[cfg(feature = "quic")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn punktfunk_connection_report_phase(
-    c: *const PunktfunkConnection,
-    next_latch_host_ns: u64,
-    latch_period_ns: u32,
-    uncertainty_ns: u32,
-    arrival_lead_ns: u32,
-    coherence_milli: u16,
-) -> PunktfunkStatus {
-    with_conn!(c => {
-        c.inner.report_phase(
-            next_latch_host_ns,
-            latch_period_ns,
-            uncertainty_ns,
-            arrival_lead_ns,
-            coherence_milli,
-        );
-        PunktfunkStatus::Ok
-    })
-}
-
 /// Whether [`punktfunk_connection_report_decode_us`] is worth calling: writes true
 /// only when Automatic bitrate is armed (non-PyroWave). Skip the per-frame
 /// measurement otherwise. Constant for the session. Writes false on a NULL connection.

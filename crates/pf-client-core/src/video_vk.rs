@@ -171,9 +171,6 @@ pub struct VulkanDecodeDevice {
     /// Vulkan Video decode is usable (queue + extensions + features). The bundle
     /// exists without it; gate the Vulkan rung on this, not on `Some`.
     pub video_decode: bool,
-    /// Real present timing (`VK_KHR_present_wait`): the presenter has on-glass latch
-    /// stamps. A client may claim `CLIENT_CAP_PHASE_LOCK` only with this set.
-    pub present_timing: bool,
     /// PyroWave decode is usable (Vulkan 1.3 + `shaderInt16` / 8-bit storage /
     /// subgroup size control). Gates the `CODEC_PYROWAVE` advertisement.
     pub pyrowave_decode: bool,

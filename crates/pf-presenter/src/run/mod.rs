@@ -356,9 +356,6 @@ struct StreamState {
     mode_line: String,
     /// Settings preset this session resolved; `None` = global defaults, nothing shown.
     preset: Option<String>,
-    /// Latch grid the pump's PhaseReports read, written by the 1 Hz present-timing fold.
-    /// `None` = the session did not advertise phase lock.
-    latch_grid: Option<Arc<session::LatchGrid>>,
     /// Host↔client clock offset (`None` until Connected). Loaded per present so a
     /// mid-stream re-sync keeps e2e honest after an NTP step.
     clock_offset: Option<Arc<std::sync::atomic::AtomicI64>>,
@@ -385,7 +382,7 @@ struct StreamState {
     /// stalled two frame intervals). Drained into `skipped` once a second.
     forwarder_drops: Arc<std::sync::atomic::AtomicU32>,
     /// Panel latch grid (present-wait glass stamps; submit-anchored fallback). Smoothness
-    /// slot clock, and the values published to the host-facing `latch_grid`.
+    /// slot clock.
     clock: LatchClock,
     /// Plays smoothness frames on the source's cadence, not on arrival. Inert under
     /// latency, which never folds a frame into it.
@@ -404,9 +401,6 @@ struct StreamState {
     /// Smoothness slot-pick margin: starts 0 (a fixed lead is display tax), widens
     /// +500 µs per >2-miss window toward 2.5 ms.
     margin_ns: u64,
-    /// Hand-over to latch, learned from this stream's misses and published to the
-    /// host-facing `latch_grid`. Latency intent on a stream at panel rate only.
-    need: punktfunk_core::phase::LatchNeed,
     /// What the held frame waits on. The fence paces the loop itself (the presenter waits
     /// it for a millisecond per pass), so the pass turns straight around and drains the
     /// channel first: a newer frame replaces the held one instead of queuing behind it.

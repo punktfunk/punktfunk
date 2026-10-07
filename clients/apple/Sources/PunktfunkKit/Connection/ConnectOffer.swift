@@ -35,8 +35,7 @@ public struct ConnectOffer: Equatable, Sendable {
     /// The offer for `effective` at `mode`. The decoder probes are lazy: PyroWave's runs only for
     /// the PyroWave codec, the 10-bit 4:4:4 one only for a 10-bit offer. The caller keeps them off
     /// the main actor. `mac` picks the client caps: the Mac draws the host cursor itself in the
-    /// desktop mouse model; iOS and tvOS run the deadline presenter, whose link reports the latch
-    /// phase.
+    /// desktop mouse model.
     public static func resolve(
         _ effective: EffectiveSettings,
         mode: (width: UInt32, height: UInt32, hz: UInt32),
@@ -63,10 +62,7 @@ public struct ConnectOffer: Equatable, Sendable {
         if av1() { videoCodecs |= PunktfunkConnection.codecAV1 }
         if pyroWave { videoCodecs |= PunktfunkConnection.codecPyroWave }
         let desktopMouse = (MouseInputMode(rawValue: effective.mouseMode) ?? .capture) == .desktop
-        let presentCaps: UInt8 =
-            mac
-            ? (desktopMouse ? PunktfunkConnection.clientCapCursor : 0)
-            : PunktfunkConnection.clientCapPhaseLock
+        let presentCaps: UInt8 = mac && desktopMouse ? PunktfunkConnection.clientCapCursor : 0
         let (audioRateHz, audioBits) = effective.audioFormatChoice.wire
         return ConnectOffer(
             width: mode.width, height: mode.height, hz: mode.hz,

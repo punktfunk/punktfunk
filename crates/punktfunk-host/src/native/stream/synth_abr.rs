@@ -262,7 +262,6 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                         live_bitrate,
                         fec_target,
                         delivery,
-                        phase,
                         ramp_open,
                         ..
                     },
@@ -360,7 +359,6 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                     shard_rx,
                     send_stats,
                     timing_conn,
-                    phase,
                     probe_seq,
                 )
             }

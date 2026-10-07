@@ -2092,7 +2092,6 @@ mod tests {
                     encode_us: 500,
                     pace_us: 100,
                 }),
-                applied_phase_ns: None,
             });
         }
         let s = st.drain_at(
@@ -2149,7 +2148,6 @@ mod tests {
             pts_ns: 100 * S,
             host_us: 1500,
             stages: None,
-            applied_phase_ns: None,
         });
         let s = st.drain(&Counters::default());
         assert_eq!((s.host.p50_us, s.net.p50_us), (1500, 500));

@@ -224,8 +224,7 @@ impl StreamState {
     }
 
     /// A fresh frame from the capturer: provenance bookkeeping, the stamp correction on a
-    /// display faster than the stream, the source-cadence estimate, the phase-locked hold, and
-    /// the park re-arm.
+    /// display faster than the stream, the source-cadence estimate, and the park re-arm.
     fn on_frame(&mut self, f: crate::capture::CapturedFrame, t_cap: std::time::Instant) {
         // Only a real SOURCE frame is evidence of source progress: a cursor-only
         // regeneration re-encodes the previous desktop image at a new pointer
@@ -257,31 +256,6 @@ impl StreamState {
                 }
             }
             self.last_real_cap = Some(t_cap);
-        }
-        // Phase-locked capture: hold the fresh frame so its ARRIVAL at the client lands a
-        // constant small lead before the client's display latch (§3 hold-then-submit; the
-        // capture slot is newest-wins, so a long hold samples fresher content next tick,
-        // never staler). Adjusted ~1 Hz from the client's PhaseReports; 0 until a report
-        // arrives or when PUNKTFUNK_PHASE_LOCK=0.
-        if phase_lock_enabled() {
-            let interval_ns = self.interval.as_nanos() as i64;
-            if self.phase_ctl.due() {
-                if let Some(r) = self.phase.take() {
-                    self.phase_ctl.adjust(&r, interval_ns);
-                } else {
-                    self.phase_ctl.last_adjust = std::time::Instant::now();
-                }
-                self.phase.set_applied(self.phase_ctl.applied_readout());
-            }
-            if let Some(t) = self
-                .phase_ctl
-                .next_submit_target(std::time::Instant::now(), interval_ns)
-            {
-                let now = std::time::Instant::now();
-                if t > now {
-                    std::thread::sleep(t.duration_since(now));
-                }
-            }
         }
         if source {
             self.capture_rebuilds = 0; // a delivered SOURCE frame clears the loss counter

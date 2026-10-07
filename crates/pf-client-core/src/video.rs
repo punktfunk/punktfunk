@@ -2348,7 +2348,6 @@ mod tests {
             queue_families: Vec::new(),
             pyrowave_decode: false,
             video_decode: true,
-            present_timing: false,
             d3d11_import: false,
             dmabuf_import: true,
             vaapi_av1_decode: false,

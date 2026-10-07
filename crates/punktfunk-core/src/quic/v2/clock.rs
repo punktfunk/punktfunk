@@ -82,13 +82,6 @@ impl SessionClock {
         wire
     }
 
-    /// A wire stamp back to host Unix ns: as far from now as it is on the wire.
-    pub fn to_host(&self, wire_ns: u64) -> u64 {
-        let ahead =
-            wire_ns as i128 - self.origin_ns as i128 - self.start.elapsed().as_nanos() as i128;
-        (wall_clock_ns() as i128 + ahead).max(0) as u64
-    }
-
     /// Rewrites the host stamp in an outgoing `punktfunk/1`-encoded datagram to wire form:
     /// desktop and pad audio, and `HostTiming`, which names its frame by the video pts.
     pub fn retime_datagram(&self, d: &mut [u8]) {
@@ -129,8 +122,6 @@ mod tests {
         let age = wire_now as i64 - wire as i64;
         assert!((4_000_000..7_000_000).contains(&age), "age {age}");
         assert_eq!((wire - c.origin_ns()) % 1000, 0, "whole microseconds");
-        let back = c.to_host(wire) as i64 - (now as i64 - 5_000_000);
-        assert!(back.abs() < 2_000_000, "round trip off by {back}");
     }
 
     #[test]
@@ -161,7 +152,6 @@ mod tests {
             pts_ns: now,
             host_us: 3,
             stages: None,
-            applied_phase_ns: None,
         });
         c.retime_datagram(&mut d);
         assert_eq!(decode_host_timing_datagram(&d).unwrap().pts_ns, a);

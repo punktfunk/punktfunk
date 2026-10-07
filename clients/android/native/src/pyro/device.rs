@@ -263,9 +263,6 @@ impl PyroDevice {
             f_timeline_semaphore: true,
             f_synchronization2: true,
             video_decode: false,
-            // No `VK_KHR_present_wait` on this path — Android's latch stamps come from the
-            // ASurfaceControl backend, which the wavelet lane does not use.
-            present_timing: false,
             pyrowave_decode: true,
             f_shader_int16: true,
             f_storage_buffer8: true,

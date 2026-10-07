@@ -908,8 +908,6 @@ impl Presenter {
                 queue_families: queue_info.iter().map(|q| q.queue_family_index).collect(),
                 pyrowave_decode: pyrowave_ok,
                 video_decode: video_ok,
-                // On-glass latch stamps exist only while PresentTimer (present-wait) runs.
-                present_timing: present_timer.is_some(),
                 #[cfg(windows)]
                 d3d11_import: win_capable,
                 #[cfg(not(windows))]

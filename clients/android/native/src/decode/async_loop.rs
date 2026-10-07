@@ -739,8 +739,6 @@ struct State {
     presenter: Option<Presenter>,
     free_inputs: VecDeque<usize>,
     pending_aus: VecDeque<Frame>,
-    /// Phase-lock v3: per-AU arrival stamps for the circular arrival-lead report (drained 1 Hz).
-    arrival_stamps: Vec<i128>,
     ready: Vec<OutputReady>,
     applied_ds: Option<DataSpace>,
     fed: u64,
@@ -815,7 +813,6 @@ impl State {
             presenter,
             free_inputs: VecDeque::new(),
             pending_aus: VecDeque::new(),
-            arrival_stamps: Vec::new(),
             ready: Vec::new(),
             applied_ds: None,
             fed: 0,
@@ -859,20 +856,10 @@ impl State {
                     self.await_keyframe = false;
                 }
                 // One entry per AU (parts share the pts): the completing delivery carries it.
-                // Its arrival stamp is the phase the host's hold actually moves — prefix parts
-                // would smear the phase toward the first slice's landing.
                 if f.complete {
                     self.recovery_flags.push_back((f.pts_ns / 1000, f.flags));
                     if self.recovery_flags.len() > IN_FLIGHT_CAP {
                         self.recovery_flags.pop_front();
-                    }
-                    self.arrival_stamps.push(if f.received_ns > 0 {
-                        f.received_ns as i128
-                    } else {
-                        now_realtime_ns()
-                    });
-                    if self.arrival_stamps.len() > 256 {
-                        self.arrival_stamps.remove(0);
                     }
                 }
                 self.pending_aus.push_back(f);
@@ -1291,10 +1278,7 @@ impl State {
             if p.pump(&ctx.codec, clock, &ctx.tracker, &ctx.meter, now) {
                 self.rendered += 1;
             }
-            // The 1 Hz window flush doubles as the phase-lock report tick.
-            if let (Some(_), Some(c)) = (p.flush_log(&ctx.meter, clock), clock) {
-                report_arrival_phase(ctx, c, &mut self.arrival_stamps);
-            }
+            p.flush_log(&ctx.meter, clock);
         }
         if let Some(a) = self.asc.as_mut() {
             if let Some(tx) = ctx.present_tx.as_ref() {
@@ -1355,50 +1339,6 @@ impl State {
     }
 }
 
-/// Phase-lock v3 sensor: the CIRCULAR mean + coherence of the ARRIVAL lead — each AU's reassembly
-/// stamp against the panel's latch grid — because arrival is the phase the host actually
-/// controls (the v2 latch statistic measured downstream of the decoder pipeline, which absorbed
-/// the actuation). Timestamps convert monotonic→realtime→host; the skew offset lives client-side.
-/// `stamps` is drained.
-fn report_arrival_phase(ctx: &Ctx, clock: &VsyncShared, stamps: &mut Vec<i128>) {
-    let period = clock.panel_period_ns().max(clock.period_ns());
-    if period <= 0 {
-        return;
-    }
-    let Some(t) = clock.next_target(now_monotonic_ns()) else {
-        return;
-    };
-    let mono_now = now_monotonic_ns();
-    let real_now = now_realtime_ns();
-    let leads_us: Vec<u64> = stamps
-        .drain(..)
-        .map(|r_ns| {
-            let arrival_mono = mono_now as i128 - (real_now - r_ns);
-            ((t.expected_present_ns as i128 - arrival_mono).rem_euclid(period as i128) / 1000)
-                as u64
-        })
-        .collect();
-    let Some((lead_mean_ns, coherence)) = punktfunk_core::phase::circular_latch(&leads_us, period)
-    else {
-        return;
-    };
-    log::info!(
-        target: "pf.phase",
-        "arrival lead circ={:.2}ms coh={}",
-        lead_mean_ns as f64 / 1e6,
-        coherence
-    );
-    let latch_real_ns = real_now + (t.expected_present_ns - mono_now) as i128;
-    let latch_host_ns = (latch_real_ns + ctx.offset() as i128).max(0) as u64;
-    ctx.client.report_phase(
-        latch_host_ns,
-        period.clamp(0, u32::MAX as i64) as u32,
-        1_000_000, // skew residual — conservative 1 ms
-        lead_mean_ns.min(u32::MAX as u64) as u32,
-        coherence,
-    );
-}
-
 /// The `pf-decode-feed` thread ([`feeder_loop`]): it blocks on the network so the loop doesn't,
 /// and an AU's arrival becomes an event that wakes the loop at once. `stop` ends it with this
 /// run; the session's `shutdown` would end every later run too.
@@ -1450,8 +1390,6 @@ fn feeder_loop(
     shutdown: Arc<AtomicBool>,
     ev_tx: mpsc::Sender<DecodeEvent>,
 ) {
-    // Last logged phase-lock ACK (the host's applied capture hold, from the 0xCF tail).
-    let mut last_phase_ack: Option<i32> = None;
     while !shutdown.load(Ordering::Relaxed) {
         match client.next_frame(Duration::from_millis(5)) {
             Ok(frame) => {
@@ -1468,7 +1406,7 @@ fn feeder_loop(
                 // Park the receipt stamp whenever the `decode` stage is consumed: the HUD, or the
                 // ABR decode signal (`measure_decode`).
                 if (stats.enabled() || measure_decode) && frame.complete {
-                    let received_ns = note_received_frame(&client, &frame, &mut last_phase_ack);
+                    let received_ns = note_received_frame(&client, &frame);
                     let mut g = in_flight
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -647,8 +647,6 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
     private let renderSignal: DispatchSemaphore
     private let hint: FrameRateHint
     private let stats: PresentDebugStats?
-    /// Phase-locked capture's grid feed — this link IS the latch grid presents pace against.
-    private let phase: PhaseReporter?
     /// Every update's vend→glass lead goes to the overlay as an OS-floor sample; its p50 is the
     /// floor iOS and tvOS take off the shown display and end-to-end. ~1 refresh is the goal; ~2
     /// means the compositor runs a frame ahead of us. Tracks VRR rate changes.
@@ -672,7 +670,7 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
         presenter: MetalVideoPresenter,
         stash: LatestBox<VendedDrawable>, renderSignal: DispatchSemaphore,
         hint: FrameRateHint, stats: PresentDebugStats?, hud: HudSink?,
-        phase: PhaseReporter?, drawableCount: Int, latencyAsk: Float, latch: LatchBudget?
+        drawableCount: Int, latencyAsk: Float, latch: LatchBudget?
     ) {
         self.presenter = presenter
         self.stash = stash
@@ -680,7 +678,6 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
         self.hint = hint
         self.stats = stats
         self.hud = hud
-        self.phase = phase
         self.drawableCount = drawableCount
         self.latencyAsk = latencyAsk
         self.latch = latch
@@ -721,16 +718,6 @@ private final class DeadlineLinkDelegate: NSObject, CAMetalDisplayLinkDelegate {
         // the late-latch budget, else the whole lead.
         let floorS = latch?.presentFloor(lead: leadS) ?? leadS
         if floorS > 0 { hud?.floor(ns: Int64(floorS * 1_000_000_000)) }
-        // Phase-locked capture: this update's target present, converted into the arrival
-        // stamps' CLOCK_REALTIME domain, and how far before it this drawable renders — so the
-        // host aims frames at the latch point, not the refresh. One clock read per update; the
-        // reporter itself flushes ~1 Hz.
-        if let phase {
-            let nowNs = realtimeNowNs()
-            phase.noteGrid(
-                targetRealNs: nowNs + Int64(leadS * 1_000_000_000),
-                latchLeadNs: Int64(floorS * 1_000_000_000))
-        }
         stash.put(VendedDrawable(
             drawable: update.drawable, vendAt: vendAt, target: update.targetPresentationTimestamp))
         renderSignal.signal()
@@ -803,7 +790,6 @@ public final class Stage2Pipeline {
     /// binds the live connection + arming flag (see DecodeReport).
     private let decodeReport = DecodeReport()
     private let frameHDR = FrameHDRReporter()
-    private let phaseReporter = PhaseReporter()
     /// Post-loss freeze-until-reanchor gate (shared core policy via the C ABI). Created here seeded 0;
     /// `start` reseeds it to the live connection's drop count. Captured by the decoder callbacks
     /// (which withhold concealed frames) and driven by the pump (arm on a gap, poll per iteration).
@@ -893,7 +879,6 @@ public final class Stage2Pipeline {
         let decodeReport = decodeReport
         let frameHDR = frameHDR
         let hud = hud
-        let phaseReporter = phaseReporter
         let cadence = cadence
         let rateHint = frameRateHint
         let vsyncClock = vsyncClock
@@ -915,12 +900,6 @@ public final class Stage2Pipeline {
                 // device's real decode limit instead of the network link ceiling. Every decoded
                 // frame (not just presented ones), so a newest-wins drop can't hide the backlog.
                 decodeReport.record(receivedNs: frame.receivedNs, decodedNs: frame.decodedNs)
-                // The decoded video plane reanchors independently of host submit phase. Feeding
-                // it to the phase controller adds a standing grid period without moving display.
-                if pacing != .decoded {
-                    phaseReporter.noteArrival(
-                        receivedNs: frame.receivedNs, decodedNs: frame.decodedNs)
-                }
                 // Freeze-until-reanchor: WITHHOLD a decoder-concealed post-loss frame (the gray/
                 // garbage VideoToolbox returns Ok for a reference-missing delta) — don't submit it,
                 // so the CAMetalLayer keeps its last good drawable on glass. The gate lifts (returns
@@ -977,7 +956,6 @@ public final class Stage2Pipeline {
         recovery.bind(connection) // arm host-keyframe recovery for this session
         decodeReport.bind(connection) // arm the Automatic-bitrate decode signal for this session
         hud.bind(connection) // the overlay's decode, display and floor stamps
-        phaseReporter.bind(pacing == .decoded ? nil : connection)
         gate.reseed(framesDropped: connection.framesDropped()) // baseline the freeze to this session
         // A fresh session is a fresh source clock: re-anchor on its first frame rather than slew
         // for seconds off the previous host's offset. (Mid-session discontinuities — background
@@ -1249,7 +1227,6 @@ public final class Stage2Pipeline {
             cadence != nil || latchEnv == "off" ? nil
             : LatchBudget(fixedDelay: latchEnv.flatMap(Double.init).map { min(max($0, 0), 50) / 1000 })
 
-        let phaseReporter = phaseReporter
         // The link starts LAZILY — the render thread triggers this after the FIRST decoded
         // frame's reconcileLayer. Started eagerly it vends into the layer's initial 0×0
         // drawableSize for the whole connect window: every vend fails allocation and the system
@@ -1264,7 +1241,7 @@ public final class Stage2Pipeline {
                 let delegate = DeadlineLinkDelegate(
                     presenter: presenter,
                     stash: stash, renderSignal: renderSignal, hint: hint, stats: debugStats,
-                    hud: hud, phase: phaseReporter,
+                    hud: hud,
                     drawableCount: drawableCount, latencyAsk: latencyAsk, latch: latch)
                 let link = CAMetalDisplayLink(metalLayer: layer)
                 link.preferredFrameLatency = latencyAsk // see the ladder note above
@@ -1546,7 +1523,6 @@ public final class Stage2Pipeline {
         }
         decoder.reset()
         recovery.bind(nil) // stop requesting keyframes once the session is torn down
-        phaseReporter.bind(nil) // and stop phase reports toward the dead connection
     }
 
     deinit {

@@ -1210,28 +1210,6 @@ impl NativeClient {
         self.shared.live_bitrate_kbps.load(Ordering::Relaxed)
     }
 
-    /// Display-latch grid for host capture phase-lock (~1 Hz). `next_latch_host_ns` must
-    /// already be host clock (`T_host = T_client +` [`clock_offset_now_ns`](Self::clock_offset_now_ns)).
-    /// Fire-and-forget; a full queue drops (next report supersedes).
-    pub fn report_phase(
-        &self,
-        next_latch_host_ns: u64,
-        latch_period_ns: u32,
-        uncertainty_ns: u32,
-        arrival_lead_ns: u32,
-        coherence_milli: u16,
-    ) {
-        let _ = self
-            .ctrl_tx
-            .try_send(CtrlRequest::Phase(crate::quic::PhaseReport {
-                next_latch_host_ns,
-                latch_period_ns,
-                uncertainty_ns,
-                arrival_lead_ns,
-                coherence_milli,
-            }));
-    }
-
     /// Burst filler at `target_kbps` for `duration_ms` beside the video. Non-blocking; poll
     /// [`NativeClient::probe_result`] until `done`. Resets any prior measurement. Host clamps
     /// ≤ 10 Gbps, ≤ 5 s.

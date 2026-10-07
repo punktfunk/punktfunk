@@ -41,9 +41,6 @@ pub(crate) struct SessionShared {
     /// The delivery profile the client asked for (`DeliveryProfile as u8`), written by the
     /// control task and read per frame by the send loop. `PUNKTFUNK_DELIVERY` overrides it.
     pub(crate) delivery: Arc<AtomicU8>,
-    /// PhaseReports from the control task; the encode loop drains them at its own cadence
-    /// (`design/phase-locked-capture.md`). Inert until a vsync-aware client.
-    pub(crate) phase: Arc<stream::PhaseCtl>,
     /// The bring-up ramp's window: probe requests are served on the punched data plane without
     /// the control task's spacing until the send thread takes the session (`stream::ramp`).
     /// Open from the handshake, because the client asks as soon as it has punched.
@@ -179,7 +176,6 @@ impl SessionWiring {
                 fec_requested,
                 link_kbps: Arc::new(AtomicU32::new(0)),
                 delivery: Arc::new(AtomicU8::new(0)),
-                phase: Arc::new(stream::PhaseCtl::new()),
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,
                 )),

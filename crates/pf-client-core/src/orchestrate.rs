@@ -1592,7 +1592,6 @@ mod tests {
             clipboard: true,
         };
         let force_software = Arc::new(AtomicBool::new(false));
-        let latch_grid = Arc::new(crate::session::LatchGrid::default());
         let probes = |hdr_enabled: bool, hevc_444_hardware: bool| Probes {
             mode: Mode {
                 width: 2560,
@@ -1607,7 +1606,6 @@ mod tests {
             display_hdr: Some(HdrMeta::default()),
             hevc_444_hardware,
             stats_verbosity: StatsVerbosity::Detailed,
-            latch_grid: Arc::clone(&latch_grid),
         };
         let params = plan.session_params([9; 32], probes(false, false));
         assert_eq!(params.host, plan.host.addr);
@@ -1626,7 +1624,6 @@ mod tests {
         assert_eq!(params.want_444, plan.settings.enable_444);
         assert!(params.vulkan.is_none());
         assert!(params.display_hdr.is_none());
-        assert!(!params.phase_lock);
         assert_eq!(
             params.video_caps,
             punktfunk_core::quic::VIDEO_CAP_MULTI_SLICE
@@ -1644,7 +1641,6 @@ mod tests {
         assert_eq!(params.gamepad, GamepadPref::Xbox360);
         assert_eq!(params.stats_verbosity, StatsVerbosity::Detailed);
         assert!(Arc::ptr_eq(&params.force_software, &force_software));
-        assert!(Arc::ptr_eq(&params.latch_grid, &latch_grid));
         // A setup refusal reads as a waking host until the settle window shuts.
         assert!(params.auto_wake && params.settle_until.is_none() && params.waking());
         let mut settling = params.clone();

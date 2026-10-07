@@ -109,8 +109,7 @@ impl Shell {
         Ok(presented)
     }
 
-    /// The 1 Hz close: the HUD window, the adaptive slot margin, the latch need, and the
-    /// presenter line.
+    /// The 1 Hz close: the HUD window, the adaptive slot margin, and the presenter line.
     fn close_present_window(&mut self, st: &mut StreamState) {
         let [import, submit, fence, acquire, queue_present] = st.win.take_timings();
         // Drained once per window and shared by the HUD and the log line — a
@@ -165,18 +164,6 @@ impl Shell {
                 "smoothness slot margin widened (measured latch misses)"
             );
         }
-        // The need never shrinks: a smaller picture mid-stream keeps the larger one's.
-        let missed = st.win.leads.iter().filter(|(_, missed)| *missed).count();
-        if st.need.observe(&st.win.leads, st.clock.period_ns() as i64) {
-            tracing::info!(
-                need_us = st.need.need_ns() / 1000,
-                missed,
-                shown = st.win.leads.len(),
-                "latch need changed (frames landed one latch late)"
-            );
-        }
-        st.win.leads.sort_unstable();
-        let lead_us = st.win.leads.get(st.win.leads.len() / 2).map_or(0, |l| l.0) / 1000;
         // The 1 Hz presenter line, always: the field bundle's only record of where a
         // frame went after decode and how evenly the glass stepped.
         if self.pacing_active {
@@ -237,11 +224,6 @@ impl Shell {
                 // The output's own vblank spacing where a waiter measures it; 0 elsewhere.
                 refresh_us = self.presenter.measured_refresh_ns().unwrap_or(0) / 1000,
                 margin_us = st.margin_ns / 1000,
-                // Hand-over to first latch: what it takes, the window's median,
-                // and the frames that landed a latch later all the same.
-                need_us = st.need.need_ns() / 1000,
-                lead_us,
-                missed,
                 // Cadence loop's current hold and the jitter it is sized from,
                 // plus frames whose due time had already passed when they arrived.
                 // Cumulative/instantaneous, not window sums like the counters above.
@@ -256,9 +238,9 @@ impl Shell {
 }
 
 impl StreamState {
-    /// Fold present-wait completions into the latch clock, the VRR probe, this window's
-    /// misses, steps and latch leads, and the host-facing grid. `vblank_locked`: the present
-    /// mode waits for vblank, which the VRR probe needs.
+    /// Fold present-wait completions into the latch clock, the VRR probe, and this window's
+    /// misses and steps. `vblank_locked`: the present mode waits for vblank, which the VRR
+    /// probe needs.
     pub(super) fn fold_glass(
         &mut self,
         samples: &[crate::vk::PresentedSample],
@@ -266,11 +248,6 @@ impl StreamState {
     ) {
         let clock_offset_ns = self.clock_offset_ns();
         let period = self.clock.period_ns();
-        // A queue holds frames on purpose and a stream off the panel's rate
-        // replaces them on purpose: neither miss says anything about lead.
-        let learn_need = self.latch_grid.is_some()
-            && !self.store.is_smoothing()
-            && self.source_interval_ns.abs_diff(period as i64) < period / 10;
         let mut stamps = Vec::with_capacity(samples.len());
         let mut glass = Vec::with_capacity(samples.len());
         for s in samples {
@@ -281,14 +258,6 @@ impl StreamState {
                 self.win
                     .grid_err_us
                     .push((off / 1000).min(u64::from(u32::MAX)) as u32);
-            }
-            if learn_need {
-                self.win.leads.extend(punktfunk_core::phase::latch_lead(
-                    self.clock.anchor_ns(),
-                    period as i64,
-                    s.decoded_ns,
-                    s.displayed_ns,
-                ));
             }
             // Hand the audio plane the figure it has to hit: the on-glass branch.
             self.publish_e2e(clock_offset_ns, s.displayed_ns, s.pts_ns);
@@ -338,22 +307,6 @@ impl StreamState {
         // learned one adopts a slow stream's cadence as "the grid").
         let healthy = self.last_forced == 0;
         self.cadence.note(&glass, self.mode_period_ns, healthy);
-        // Phase-locked capture, the presenter's half: publish the grid the
-        // local clock just learned, so the report and the scheduler cannot
-        // disagree.
-        if let Some(grid) = &self.latch_grid {
-            // Under measured variable refresh the learned period is our own cadence, not
-            // a grid the host may lock to: publish none.
-            let period = match self.cadence.verdict() {
-                Cadence::Variable => 0,
-                _ => self.clock.period_ns(),
-            };
-            grid.period_ns.store(period, Ordering::Relaxed);
-            grid.anchor_ns
-                .store(self.clock.anchor_ns(), Ordering::Relaxed);
-            grid.need_ns
-                .store(self.need.need_ns() as u64, Ordering::Relaxed);
-        }
     }
 
     /// Intake into the intent store. PyroWave collapses smoothness to latency: its
@@ -656,9 +609,6 @@ pub(super) struct PresentWindow {
     /// Per shown frame: how far its on-glass spacing sat from a whole number of
     /// refreshes, µs.
     grid_err_us: Vec<u32>,
-    /// This window's on-glass frames: the lead each had to its first latch, and whether
-    /// it landed on a later one.
-    leads: Vec<(i64, bool)>,
 }
 
 impl PresentWindow {
@@ -679,7 +629,6 @@ impl PresentWindow {
             cadence_err_us: Vec::with_capacity(256),
             exact: 0,
             grid_err_us: Vec::with_capacity(256),
-            leads: Vec::with_capacity(256),
         }
     }
 
@@ -718,7 +667,6 @@ impl PresentWindow {
         self.repeats = 0;
         self.ticks = 0;
         self.exact = 0;
-        self.leads.clear();
     }
 }
 
@@ -916,10 +864,9 @@ impl StreamState {
         }
         self.cadence.reset();
         self.pacer.reset();
-        // The slot margin and the latch need were sized by the old panel's misses.
+        // The slot margin was sized by the old panel's misses.
         self.margin_ns = 0;
         self.win.misses = 0;
-        self.need = punktfunk_core::phase::LatchNeed::default();
         tracing::info!(
             refresh_hz = hz,
             "display changed — relearning the latch grid"

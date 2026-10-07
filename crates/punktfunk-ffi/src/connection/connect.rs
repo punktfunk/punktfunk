@@ -676,11 +676,6 @@ pub const PUNKTFUNK_VIDEO_FIT_STRETCH: u8 = 2;
 /// (`design/remote-desktop-sweep.md`).
 pub const PUNKTFUNK_CLIENT_CAP_CURSOR: u8 = 0x01;
 
-/// [`punktfunk_connect_ex9`] `client_caps` bit: presenter is vsync-aware and
-/// feeds [`punktfunk_connection_report_phase`] (`design/phase-locked-capture.md`).
-/// Advisory: the host arms on report receipt.
-pub const PUNKTFUNK_CLIENT_CAP_PHASE_LOCK: u8 = 0x02;
-
 /// [`punktfunk_connect_ex9`] `client_caps` bit: pad-audio plane (0xD1 — DualSense
 /// voice-coil + speaker). Drain [`punktfunk_connection_next_pad_audio`] and declare
 /// pads via [`punktfunk_connection_set_pad_audio_caps`]. Host emits only with

@@ -82,13 +82,8 @@ pub(super) fn p50_max_ms(mut v: Vec<u64>) -> (f64, f64) {
 
 /// The `received` point for one arriving AU: the core's reassembly stamp, which keys the
 /// in-flight map the decode stage pairs against. The connector already noted receipt for the
-/// overlay and matches each 0xCF to its frame; draining the timings here logs the host's
-/// phase-lock ACK when it changes.
-pub(super) fn note_received_frame(
-    client: &NativeClient,
-    frame: &Frame,
-    last_phase_ack: &mut Option<i32>,
-) -> i128 {
+/// overlay; draining the timings here matches each 0xCF to its frame.
+pub(super) fn note_received_frame(client: &NativeClient, frame: &Frame) -> i128 {
     // Reassembly completion, NOT the pull instant: stamping at the pull would fold the hand-off
     // queue wait into the network figure. 0 = older core.
     let received_ns = if frame.received_ns > 0 {
@@ -96,16 +91,7 @@ pub(super) fn note_received_frame(
     } else {
         now_realtime_ns()
     };
-    while let Ok(t) = client.next_host_timing(Duration::ZERO) {
-        if t.applied_phase_ns != *last_phase_ack {
-            log::info!(
-                target: "pf.phase",
-                "host applied_phase={:?}us",
-                t.applied_phase_ns.map(|n| n / 1000)
-            );
-            *last_phase_ack = t.applied_phase_ns;
-        }
-    }
+    while client.next_host_timing(Duration::ZERO).is_ok() {}
     received_ns
 }
 

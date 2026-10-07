@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// `Clone` exists so a [`SessionEvent::CodecFallback`] retry can re-dial with one field
-/// changed while sharing the presenter-owned `force_software` and `latch_grid` Arcs.
+/// changed while sharing the presenter-owned `force_software` Arc.
 #[derive(Clone)]
 pub struct SessionParams {
     pub host: String,
@@ -120,27 +120,6 @@ pub struct SessionParams {
     pub stats_scale: f32,
     /// Show how to leave when this stream starts.
     pub exit_hint: bool,
-    /// Advertise `CLIENT_CAP_PHASE_LOCK` and feed [`latch_grid`](Self::latch_grid). The
-    /// desktop leaves it off: the lock moves the wait for the latch into the host's hold
-    /// and costs 3–4 ms end to end on an iGPU at 4K. Never set without present timing.
-    pub phase_lock: bool,
-    pub latch_grid: Arc<LatchGrid>,
-}
-
-/// Presenter → pump latch grid (the `force_software` pattern the other way). The
-/// presenter writes an on-glass latch, the panel period and what a frame needs before
-/// its latch; the pump folds AU arrivals against them into the ~1 Hz `PhaseReport`.
-/// All zeros until the first fold — and forever without present timing — so the pump
-/// stays quiet then.
-#[derive(Default)]
-pub struct LatchGrid {
-    /// Recent on-glass latch (client `CLOCK_REALTIME` ns — same domain as AU arrivals).
-    /// Any grid point works; the report extrapolates forward.
-    pub anchor_ns: std::sync::atomic::AtomicU64,
-    /// Panel latch period (ns). `0` = no grid yet.
-    pub period_ns: std::sync::atomic::AtomicU64,
-    /// Hand-over to latch, as the presenter learned it (ns). `0` = the host's lead covers it.
-    pub need_ns: std::sync::atomic::AtomicU64,
 }
 
 /// Host, pin, launch, and budget for one dial.
@@ -169,7 +148,6 @@ pub struct Probes {
     pub identity: (String, String),
     pub gamepad: GamepadPref,
     pub force_software: Arc<AtomicBool>,
-    pub latch_grid: Arc<LatchGrid>,
     pub stats_verbosity: crate::trust::StatsVerbosity,
     /// This device decodes HEVC 4:4:4. Caps AND this with the Full chroma switch.
     pub hevc_444_hardware: bool,
@@ -182,7 +160,7 @@ impl SessionParams {
     /// `mode.refresh_hz.max(30)`. `exclude_codecs` stays 0. `want_444` is the
     /// switch; caps carry 4:4:4 only when `hevc_444_hardware` is set too.
     /// HDR caps need the setting and [`Probes::hdr_enabled`]. The panel volume
-    /// follows the probe alone. The caller builds [`Probes::latch_grid`].
+    /// follows the probe alone.
     pub fn from_plan(
         settings: &crate::trust::Settings,
         clipboard: bool,
@@ -219,9 +197,6 @@ impl SessionParams {
             height,
             ..mode
         };
-        // Off on the desktop (see the field). `PUNKTFUNK_CLIENT_PHASE_LOCK=1` asks for it: the
-        // A/B for the host hold's cost against the free-running floor's drift.
-        let phase_lock = std::env::var("PUNKTFUNK_CLIENT_PHASE_LOCK").is_ok_and(|v| v == "1");
         let caps_444 = settings.enable_444 && probes.hevc_444_hardware;
         // The CPU rung is 8-bit: without a hardware 10-bit path the host would
         // build a stream this client tears down.
@@ -282,8 +257,6 @@ impl SessionParams {
             stats_corner: settings.hud_corner(crate::trust::HudCorner::TopLeft),
             stats_scale: punktfunk_core::hud::stats_scale(settings.stats_scale_pct),
             exit_hint: settings.exit_hint,
-            phase_lock,
-            latch_grid: probes.latch_grid,
         }
     }
 
@@ -622,11 +595,10 @@ fn connect_plan(params: &SessionParams) -> ConnectPlan {
 /// lossless askable.
 fn client_caps(params: &SessionParams, pad_audio_on: bool) -> u8 {
     use punktfunk_core::quic::{
-        CLIENT_CAP_CURSOR, CLIENT_CAP_KEEP_HOST_AUDIO, CLIENT_CAP_PAD_AUDIO, CLIENT_CAP_PHASE_LOCK,
+        CLIENT_CAP_CURSOR, CLIENT_CAP_KEEP_HOST_AUDIO, CLIENT_CAP_PAD_AUDIO,
     };
     let bit = |on: bool, cap: u8| if on { cap } else { 0 };
     bit(params.cursor_forward, CLIENT_CAP_CURSOR)
-        | bit(params.phase_lock, CLIENT_CAP_PHASE_LOCK)
         | bit(pad_audio_on, CLIENT_CAP_PAD_AUDIO)
         | bit(params.keep_host_audio, CLIENT_CAP_KEEP_HOST_AUDIO)
 }
@@ -939,21 +911,17 @@ fn wait_hw_done(decoder: &mut crate::video::Decoder, hw: &HwDone) {
 }
 
 /// Hand one decoded picture on, its pixels done: stamp `decoded`, send it (newest wins),
-/// report received → pixels done to the HUD, the ABR and the phase report.
+/// report received → pixels done to the HUD and the ABR.
 fn hand_on(
     p: InFlight,
     frame_tx: &async_channel::Sender<DecodedFrame>,
     connector: &NativeClient,
     wants_decode: bool,
-    phase_decodes: Option<&mut Vec<u64>>,
 ) {
     // Travels with the frame so the presenter can measure `display`.
     let decoded_ns = now_ns();
     connector.hud().note_decoded(p.pts_ns, decoded_ns);
     let span_ns = decoded_ns.saturating_sub(p.received_ns);
-    if let Some(v) = phase_decodes.filter(|v| v.len() < 256) {
-        v.push(span_ns);
-    }
     match p.image {
         Some(image) => {
             let sent = frame_tx.force_send(DecodedFrame {
@@ -1100,15 +1068,6 @@ fn pump(
         },
     );
 
-    // Live host↔client clock offset, loaded per frame so mid-stream re-syncs keep
-    // capture-clock latency honest — never cached at session start.
-    let clock_offset_live = connector.clock_offset_shared();
-    // Every received AU's arrival stamp and decode time, folded per stats window against
-    // the latch grid into the ~1 Hz PhaseReport. 256 ≈ 2 s at 120 Hz.
-    let latch_grid = params.latch_grid.clone();
-    let mut phase_arrivals: Vec<u64> = Vec::new();
-    let mut phase_decodes: Vec<u64> = Vec::new();
-    let mut last_applied_phase: Option<i32> = None;
     // `PUNKTFUNK_DEBUG_RECONFIGURE=WxH@HZ:SECS` — request one mid-stream mode
     // switch N seconds in, so a headless session can exercise the resize path.
     let pump_start = Instant::now();
@@ -1215,8 +1174,7 @@ fn pump(
             hw_done_now(&mut decoder, &p.hw) || now_ns().saturating_sub(p.received_ns) > 50_000_000
         });
         if let Some(p) = done {
-            let phase = params.phase_lock.then_some(&mut phase_decodes);
-            hand_on(p, &frame_tx, &connector, wants_decode, phase);
+            hand_on(p, &frame_tx, &connector, wants_decode);
         }
         // Otherwise 20 ms: audio has its own thread, so this only bounds stop-flag
         // responsiveness and the per-iteration recovery check.
@@ -1236,9 +1194,6 @@ fn pump(
                 } else {
                     now_ns()
                 };
-                if params.phase_lock && phase_arrivals.len() < 256 {
-                    phase_arrivals.push(received_ns);
-                }
                 // Host numbers frames consecutively, so a jump means a frame is missing
                 // and this AU references a picture we never decoded. Arm the freeze at
                 // the first such frame — ~120 ms before `frames_dropped` — so concealment
@@ -1392,15 +1347,13 @@ fn pump(
                         // This AU is submitted; the one before it goes on first, in order.
                         if let Some(prev) = in_flight.take() {
                             wait_hw_done(&mut decoder, &prev.hw);
-                            let phase = params.phase_lock.then_some(&mut phase_decodes);
-                            hand_on(prev, &frame_tx, &connector, wants_decode, phase);
+                            hand_on(prev, &frame_tx, &connector, wants_decode);
                         }
                         // A CPU decode is done already. Intel on i915 waits at once: that
                         // wait is the media clock boost, and its GEM wait covers the ring.
                         if matches!(next.hw, HwDone::Cpu) || decoder.hw_wait_boosted() {
                             wait_hw_done(&mut decoder, &next.hw);
-                            let phase = params.phase_lock.then_some(&mut phase_decodes);
-                            hand_on(next, &frame_tx, &connector, wants_decode, phase);
+                            hand_on(next, &frame_tx, &connector, wants_decode);
                         } else {
                             in_flight = Some(next);
                         }
@@ -1504,20 +1457,7 @@ fn pump(
         }
 
         // Drain per-AU 0xCF timings; the connector matches each to its frame for the overlay.
-        while let Ok(t) = connector.next_host_timing(Duration::ZERO) {
-            // Host's applied grid offset rides the 0xCF tail. Log transitions so an
-            // on-glass run can watch the controller engage.
-            if params.phase_lock
-                && t.applied_phase_ns.is_some()
-                && t.applied_phase_ns != last_applied_phase
-            {
-                last_applied_phase = t.applied_phase_ns;
-                tracing::info!(
-                    applied_phase_ns = t.applied_phase_ns.unwrap_or(0),
-                    "host phase-lock: applied capture-grid offset"
-                );
-            }
-        }
+        while connector.next_host_timing(Duration::ZERO).is_ok() {}
 
         // Loss recovery + overdue backstop through the shared gate. A drop-count
         // climb arms the freeze (decoder conceals and returns Ok). Overdue freeze
@@ -1571,46 +1511,6 @@ fn pump(
                     }
                     launch_told = Some(outcome);
                 }
-            }
-            // ~1 Hz phase-lock report, riding the stats window. Quiet until the
-            // presenter has a grid (period 0) or the window is thin (< 8 arrivals).
-            // 1 ms uncertainty.
-            if params.phase_lock {
-                let period = latch_grid.period_ns.load(Ordering::Relaxed);
-                let anchor = latch_grid.anchor_ns.load(Ordering::Relaxed);
-                if period > 0 && anchor > 0 {
-                    // The instant an arrival must beat: the latch less the window's p75
-                    // decode and what the presenter needs. The host aims its lead at it.
-                    phase_decodes.sort_unstable();
-                    let decode = phase_decodes
-                        .get(phase_decodes.len() * 3 / 4)
-                        .copied()
-                        .unwrap_or(0);
-                    let need = latch_grid.need_ns.load(Ordering::Relaxed);
-                    let ready_by = anchor as i128 - phase_shift_ns(need, decode, period) as i128;
-                    let leads_us: Vec<u64> = phase_arrivals
-                        .iter()
-                        .map(|a| ((ready_by - *a as i128).rem_euclid(period as i128) / 1000) as u64)
-                        .collect();
-                    if let Some((lead_ns, coherence)) =
-                        punktfunk_core::phase::circular_latch(&leads_us, period as i64)
-                    {
-                        // Extrapolate the (possibly ~1 s old) instant to the next one
-                        // at or after now, then express it on the host clock.
-                        let (now, p, a) = (now_ns() as i128, period as i128, ready_by);
-                        let k = ((now - a).max(0) + p - 1) / p;
-                        let offset = clock_offset_live.load(Ordering::Relaxed) as i128;
-                        connector.report_phase(
-                            (a + k * p + offset).max(0) as u64,
-                            period.min(u32::MAX as u64) as u32,
-                            1_000_000,
-                            lead_ns.min(u32::MAX as u64) as u32,
-                            coherence,
-                        );
-                    }
-                }
-                phase_arrivals.clear();
-                phase_decodes.clear();
             }
             let _ = ev_tx.try_send(SessionEvent::DecodeFacts(DecodeFacts {
                 decoder: dec_path,
@@ -1922,25 +1822,9 @@ fn parse_debug_reconfigure(s: &str) -> Option<(Mode, Duration)> {
     Some((mode, Duration::from_secs(secs_s.trim().parse().ok()?)))
 }
 
-/// How far before its latch an arrival has to land: decode plus what the presenter needs.
-/// Held 3 ms under a period, the room the host's own lead takes.
-fn phase_shift_ns(need_ns: u64, decode_ns: u64, period_ns: u64) -> u64 {
-    need_ns
-        .saturating_add(decode_ns)
-        .min(period_ns.saturating_sub(3_000_000))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_phase_shift_adds_decode_to_the_need_below_a_period() {
-        assert_eq!(phase_shift_ns(0, 0, 16_666_666), 0);
-        assert_eq!(phase_shift_ns(6_000_000, 500_000, 16_666_666), 6_500_000);
-        assert_eq!(phase_shift_ns(6_000_000, 9_000_000, 8_333_333), 5_333_333);
-        assert_eq!(phase_shift_ns(1_000_000, 0, 2_000_000), 0);
-    }
 
     /// Every spelling the env-var doc promises has to land on the right side of
     /// `CLIENT_CAP_AUDIO_HIRES`.

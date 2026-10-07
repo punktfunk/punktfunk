@@ -333,7 +333,6 @@ mod bench {
             f_timeline_semaphore: true,
             f_synchronization2: true,
             video_decode: false,
-            present_timing: false,
             pyrowave_decode: true,
             f_shader_int16: true,
             f_storage_buffer8: true,

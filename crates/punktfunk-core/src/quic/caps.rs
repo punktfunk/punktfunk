@@ -75,11 +75,6 @@ pub const HOST_CAP_TEXT_INPUT: u8 = 0x04;
 /// (`SessionPlan.cursor_blend = false`) or the user sees it twice.
 pub const CLIENT_CAP_CURSOR: u8 = 0x01;
 
-/// [`Hello::client_caps`]: the presenter is vsync-aware and will send
-/// [`PhaseReport`](super::control::PhaseReport)s so the host can phase-lock capture
-/// (`design/phase-locked-capture.md`). Without the bit the host never arms the controller.
-pub const CLIENT_CAP_PHASE_LOCK: u8 = 0x02;
-
 /// [`Hello::client_caps`]: the client can decode the redundant desktop-audio plane
 /// ([`AUDIO_RED_MAGIC`](super::datagram::AUDIO_RED_MAGIC), `0xD2`). Active only when the
 /// host answers [`HOST_CAP_AUDIO_RED`]. A client may always set this bit: a host that
@@ -357,7 +352,8 @@ mod tests {
             "client_caps",
             &[
                 ("CLIENT_CAP_CURSOR", CLIENT_CAP_CURSOR),
-                ("CLIENT_CAP_PHASE_LOCK", CLIENT_CAP_PHASE_LOCK),
+                // Retired: older clients still set it, so the bit stays spent.
+                ("retired CLIENT_CAP_PHASE_LOCK", 0x02),
                 ("CLIENT_CAP_AUDIO_RED", CLIENT_CAP_AUDIO_RED),
                 ("CLIENT_CAP_PAD_AUDIO", CLIENT_CAP_PAD_AUDIO),
                 ("CLIENT_CAP_AUDIO_HIRES", CLIENT_CAP_AUDIO_HIRES),
@@ -532,10 +528,7 @@ mod tests {
 
     #[test]
     fn pad_audio_cap_bits_are_distinct() {
-        assert_eq!(
-            CLIENT_CAP_PAD_AUDIO & (CLIENT_CAP_CURSOR | CLIENT_CAP_PHASE_LOCK),
-            0
-        );
+        assert_eq!(CLIENT_CAP_PAD_AUDIO & CLIENT_CAP_CURSOR, 0);
         assert_eq!(
             HOST_CAP_PAD_AUDIO
                 & (HOST_CAP_GAMEPAD_STATE
@@ -554,7 +547,6 @@ mod tests {
         assert_eq!(
             CLIENT_CAP_KEEP_HOST_AUDIO
                 & (CLIENT_CAP_CURSOR
-                    | CLIENT_CAP_PHASE_LOCK
                     | CLIENT_CAP_AUDIO_RED
                     | CLIENT_CAP_PAD_AUDIO
                     | CLIENT_CAP_AUDIO_HIRES),

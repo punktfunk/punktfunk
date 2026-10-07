@@ -7,7 +7,7 @@
 //!
 //! Unknown tags and short buffers decode to `None`. Length-tolerant tails (rumble,
 //! host timing, cursor) take the prefix the peer knows. Evidence:
-//! `design/trigger-rumble-plane.md`, `design/phase-locked-capture.md`.
+//! `design/trigger-rumble-plane.md`.
 
 use super::wire::{Rd, Wr};
 
@@ -750,9 +750,6 @@ pub struct HostTiming {
     /// Decode reads the 13-byte prefix and takes stages only when present — no
     /// capability bit: old client + new host reads the prefix.
     pub stages: Option<HostStages>,
-    /// Capture-tick hold currently applied, ns. Rides after the stages block.
-    /// `None` from a pre-phase-lock host or a shorter datagram.
-    pub applied_phase_ns: Option<i32>,
 }
 
 /// Per-stage split of [`HostTiming::host_us`], all µs from the same capture anchor.
@@ -769,14 +766,12 @@ pub struct HostStages {
 }
 
 const HOST_TIMING_LEN: usize = 1 + 8 + 4;
-/// With [`HostStages`] tail: + 3 × u32 = 25.
+/// With [`HostStages`] tail: + 3 × u32 = 25. Older hosts append 4 more bytes; decode skips them.
 const HOST_TIMING_STAGES_LEN: usize = HOST_TIMING_LEN + 12;
-/// With phase-lock ACK after stages: + i32 = 29. Each form is a strict prefix of the next.
-const HOST_TIMING_PHASE_LEN: usize = HOST_TIMING_STAGES_LEN + 4;
 
 /// Extended form when `stages` is set — an older client parses the prefix and ignores the tail.
 pub fn encode_host_timing_datagram(t: &HostTiming) -> Vec<u8> {
-    let mut b = Vec::with_capacity(HOST_TIMING_PHASE_LEN);
+    let mut b = Vec::with_capacity(HOST_TIMING_STAGES_LEN);
     b.push(HOST_TIMING_MAGIC);
     b.extend_from_slice(&t.pts_ns.to_le_bytes());
     b.extend_from_slice(&t.host_us.to_le_bytes());
@@ -784,11 +779,6 @@ pub fn encode_host_timing_datagram(t: &HostTiming) -> Vec<u8> {
         b.extend_from_slice(&s.queue_us.to_le_bytes());
         b.extend_from_slice(&s.encode_us.to_le_bytes());
         b.extend_from_slice(&s.pace_us.to_le_bytes());
-        // Phase ACK only after a stages tail: the prefix wire cannot express
-        // "phase but no stages", and every host that phase-locks sends stages.
-        if let Some(p) = t.applied_phase_ns {
-            b.extend_from_slice(&p.to_le_bytes());
-        }
     }
     b
 }
@@ -803,13 +793,10 @@ pub fn decode_host_timing_datagram(b: &[u8]) -> Option<HostTiming> {
         encode_us: u32::from_le_bytes(b[17..21].try_into().unwrap()),
         pace_us: u32::from_le_bytes(b[21..25].try_into().unwrap()),
     });
-    let applied_phase_ns = (b.len() >= HOST_TIMING_PHASE_LEN)
-        .then(|| i32::from_le_bytes(b[25..29].try_into().unwrap()));
     Some(HostTiming {
         pts_ns: u64::from_le_bytes(b[1..9].try_into().unwrap()),
         host_us: u32::from_le_bytes(b[9..13].try_into().unwrap()),
         stages,
-        applied_phase_ns,
     })
 }
 
@@ -959,7 +946,6 @@ mod tests {
             pts_ns: 1_751_500_000_123_456_789, // CLOCK_REALTIME-scale capture stamp
             host_us: 4_321,
             stages: None,
-            applied_phase_ns: None,
         };
         let d = encode_host_timing_datagram(&t);
         assert_eq!(d[0], HOST_TIMING_MAGIC);
@@ -998,33 +984,10 @@ mod tests {
             );
         }
 
-        // Phase-ACK: 29 B roundtrips; 25..28 degrade to stages; a phase without
-        // stages is unencodable (prefix discipline).
-        let tp = HostTiming {
-            applied_phase_ns: Some(-2_750_000),
-            ..ts
-        };
-        let dp = encode_host_timing_datagram(&tp);
-        assert_eq!(dp.len(), 29);
-        assert_eq!(&dp[..25], &ds[..25], "stages form is a strict prefix");
-        assert_eq!(decode_host_timing_datagram(&dp), Some(tp));
-        for n in 25..dp.len() {
-            assert_eq!(
-                decode_host_timing_datagram(&dp[..n]),
-                Some(ts),
-                "partial phase tail ({n} B) must degrade to the stages decode"
-            );
-        }
-        let no_stages = HostTiming {
-            stages: None,
-            applied_phase_ns: Some(1),
-            ..t
-        };
-        assert_eq!(
-            encode_host_timing_datagram(&no_stages).len(),
-            13,
-            "phase without stages must encode as the legacy form (prefix discipline)"
-        );
+        // An older host's 29-byte form carries a trailing i32; it decodes as the stages form.
+        let mut old = ds.clone();
+        old.extend_from_slice(&(-2_750_000i32).to_le_bytes());
+        assert_eq!(decode_host_timing_datagram(&old), Some(ts));
     }
 
     /// `[tag][u32 seq][u64 pts][payload]`, written out for the three planes that share it.

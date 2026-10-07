@@ -655,30 +655,19 @@ impl Presenter {
     /// the cushion is too small, and WP8's acceptance criterion), `jitter` (the loop residual's
     /// mean absolute deviation, our first honest per-stream jitter number), `cushion` and
     /// `reanchors`. Absent under latency, where there is no loop.
-    ///
-    /// Returns this window's CIRCULAR latch statistics `(vector-mean latch ns mod panel period,
-    /// coherence ‰)` when a window actually flushed — the phase-lock reporter's v2 error signal
-    /// (design/phase-locked-capture.md §6; the v1 median was immovable under jitter).
-    pub(super) fn flush_log(
-        &mut self,
-        meter: &PresentMeter,
-        clock: Option<&VsyncShared>,
-    ) -> Option<(u64, u16)> {
+    pub(super) fn flush_log(&mut self, meter: &PresentMeter, clock: Option<&VsyncShared>) {
         if self.last_flush.elapsed() < std::time::Duration::from_secs(1) {
-            return None;
+            return;
         }
         self.last_flush = Instant::now();
         let (latch, displays, feed, codec, e2e) = meter.drain();
         if self.released == 0 && displays == 0 {
-            return None; // idle stream — nothing worth a line
+            return; // idle stream — nothing worth a line
         }
         let (pace_p50, pace_max) = p50_max_ms(std::mem::take(&mut self.pace_us));
         let (feed_p50, feed_max) = p50_max_ms(feed);
         let (codec_p50, codec_max) = p50_max_ms(codec);
         let (e2e_p50, e2e_max) = p50_max_ms(e2e);
-        let circ = clock.and_then(|c| {
-            punktfunk_core::phase::circular_latch(&latch, c.panel_period_ns().max(c.period_ns()))
-        });
         let latch_samples = latch.len();
         let (latch_p50, latch_max) = p50_max_ms(latch);
         let period_ms = clock.map(|c| c.period_ns() as f64 / 1e6).unwrap_or(0.0);
@@ -694,7 +683,7 @@ impl Presenter {
              qWait={} unconfirmed={} \
              paceMs p50={:.2} max={:.2} latchMs p50={:.2} max={:.2} \
              feedMs p50={:.2} max={:.2} codecMs p50={:.2} max={:.2} \
-             e2eMs p50={:.2} max={:.2} circ={:.2}ms coh={} \
+             e2eMs p50={:.2} max={:.2} \
              vsyncMs={:.2} panelMs={:.2}{}",
             self.released,
             displays,
@@ -714,8 +703,6 @@ impl Presenter {
             codec_max,
             e2e_p50,
             e2e_max,
-            circ.map(|(m, _)| m as f64 / 1e6).unwrap_or(0.0),
-            circ.map(|(_, c)| c).unwrap_or(0),
             period_ms,
             panel_ns as f64 / 1e6,
             cadence,
@@ -760,7 +747,6 @@ impl Presenter {
         self.forced = 0;
         self.dry = 0;
         self.queue_waits = 0;
-        circ
     }
 }
 

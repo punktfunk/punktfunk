@@ -287,11 +287,6 @@
 // (`design/remote-desktop-sweep.md`).
 #define PUNKTFUNK_CLIENT_CAP_CURSOR 1
 
-// [`punktfunk_connect_ex9`] `client_caps` bit: presenter is vsync-aware and
-// feeds [`punktfunk_connection_report_phase`] (`design/phase-locked-capture.md`).
-// Advisory: the host arms on report receipt.
-#define PUNKTFUNK_CLIENT_CAP_PHASE_LOCK 2
-
 // [`punktfunk_connect_ex9`] `client_caps` bit: pad-audio plane (0xD1 — DualSense
 // voice-coil + speaker). Drain [`punktfunk_connection_next_pad_audio`] and declare
 // pads via [`punktfunk_connection_set_pad_audio_caps`]. Host emits only with
@@ -374,7 +369,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 46
+#define PUNKTFUNK_ABI_VERSION 47
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -727,11 +722,6 @@
 // [`HOST_CAP_CURSOR`], it must stop blending the cursor into the video
 // (`SessionPlan.cursor_blend = false`) or the user sees it twice.
 #define PUNKTFUNK_CLIENT_CAP_CURSOR 1
-
-// [`Hello::client_caps`]: the presenter is vsync-aware and will send
-// [`PhaseReport`](super::control::PhaseReport)s so the host can phase-lock capture
-// (`design/phase-locked-capture.md`). Without the bit the host never arms the controller.
-#define PUNKTFUNK_CLIENT_CAP_PHASE_LOCK 2
 
 // [`Hello::client_caps`]: the client can decode the redundant desktop-audio plane
 // ([`AUDIO_RED_MAGIC`](super::datagram::AUDIO_RED_MAGIC), `0xD2`). Active only when the
@@ -3494,20 +3484,6 @@ PunktfunkStatus punktfunk_connection_hud_text(const PunktfunkConnection *c,
 // # Safety
 // `c` is a valid connection handle.
 PunktfunkStatus punktfunk_connection_report_decode_us(const PunktfunkConnection *c, uint32_t us);
-#endif
-
-#if defined(PUNKTFUNK_FEATURE_QUIC)
-// Report the display-latch grid (`design/phase-locked-capture.md`).
-// `next_latch_host_ns` is already host clock. ~1 Hz; no-op if unnegotiated.
-//
-// # Safety
-// `c` is a caller handle or null (error, not UB).
-PunktfunkStatus punktfunk_connection_report_phase(const PunktfunkConnection *c,
-                                                  uint64_t next_latch_host_ns,
-                                                  uint32_t latch_period_ns,
-                                                  uint32_t uncertainty_ns,
-                                                  uint32_t arrival_lead_ns,
-                                                  uint16_t coherence_milli);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

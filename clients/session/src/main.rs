@@ -442,7 +442,6 @@ mod session_main {
                 display_hdr,
                 hevc_444_hardware,
                 stats_verbosity: stats_tier(settings),
-                latch_grid: std::sync::Arc::new(pf_client_core::session::LatchGrid::default()),
             },
         )
     }

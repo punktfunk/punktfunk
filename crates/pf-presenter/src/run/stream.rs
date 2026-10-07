@@ -20,9 +20,6 @@ impl StreamState {
         // Rate we asked for, until Welcome resolves it. No frames flow before that,
         // so this only has to be sane, not right.
         let source_interval_ns = frame_interval_ns(params.mode.refresh_hz, native_refresh_hz);
-        // Presenter's half of phase-locked capture: keep the Arc before the params move.
-        // `None` when the session did not advertise the cap — the 1 Hz fold then skips it.
-        let latch_grid = params.phase_lock.then(|| params.latch_grid.clone());
         let retry_params = params.clone();
         let handle = session::start(params);
         let (wake_tx, wake_rx) = async_channel::bounded(2);
@@ -64,7 +61,6 @@ impl StreamState {
             fp_hex: String::new(),
             native_mode: (0, 0, 0),
             preset,
-            latch_grid,
             clock_offset: None,
             video_e2e: None,
             hdr: false,
@@ -83,7 +79,6 @@ impl StreamState {
             cadence: CadenceProbe::new(),
             mode_period_ns: 1_000_000_000 / u64::from(native_refresh_hz.max(1)),
             margin_ns: 0,
-            need: punktfunk_core::phase::LatchNeed::default(),
             busy_on: crate::vk::BusyOn::Fence,
             last_displayed_ns: 0,
             last_shown_pts_ns: 0,

@@ -241,7 +241,6 @@ fn send_host_timing(
     m: &AuMeta,
     stat: &PaceStat,
     host_us: u32,
-    phase: &PhaseCtl,
 ) {
     let t = punktfunk_core::quic::HostTiming {
         pts_ns: m.capture_ns,
@@ -251,7 +250,6 @@ fn send_host_timing(
             encode_us: m.encode_us,
             pace_us: stat.spread_us,
         }),
-        applied_phase_ns: Some(phase.applied_ns().clamp(i32::MIN as i64, i32::MAX as i64) as i32),
     };
     let _ = tc.send_datagram(punktfunk_core::quic::encode_host_timing_datagram(&t));
 }
@@ -335,7 +333,6 @@ pub(super) fn send_loop(
     shard_rx: std::sync::mpsc::Receiver<usize>,
     stats: SendStats,
     timing_conn: Option<crate::native::link::SessionLink>,
-    phase: Arc<PhaseCtl>,
     probe_seq: bool,
 ) {
     boost_thread_priority(false);
@@ -467,7 +464,7 @@ pub(super) fn send_loop(
                         let host_us = (now_ns().saturating_sub(m.capture_ns) / 1000)
                             .min(u32::MAX as u64) as u32;
                         if let Some(tc) = timing_conn.as_ref().filter(|_| !probe) {
-                            send_host_timing(tc, &m, &stat, host_us, &phase);
+                            send_host_timing(tc, &m, &stat, host_us);
                         }
                         // EWMA (3:1): a single AU's spread must not flip the split-arbiter verdict.
                         {
