@@ -146,9 +146,23 @@ impl PlatformBackend for WindowsBackend {
         self.supervisor.stop(seat)
     }
 
+    /// The seat host's own directories go with the seat: its identity key, token and logs, as a
+    /// Linux seat's directory does. A directory that won't go is logged; the seat is gone anyway.
     fn remove(&self, seat: &Seat) -> Result<(), BackendError> {
         let _ = self.supervisor.stop(seat)?;
-        self.accounts.delete(seat)
+        self.accounts.delete(seat)?;
+        for parent in ["hosts", "temp"] {
+            let dir = self
+                .root
+                .open_child_dir(parent)
+                .and_then(|root| root.child_path(seat.id.as_str()));
+            match dir.and_then(std::fs::remove_dir_all) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => tracing::warn!(%error, parent, "seat directory not removed"),
+            }
+        }
+        Ok(())
     }
 
     fn status(&self, seat: &Seat) -> Result<RuntimeStatus, BackendError> {
