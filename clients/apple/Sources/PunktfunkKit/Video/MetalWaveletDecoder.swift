@@ -135,7 +135,7 @@ enum WaveletBitstream {
     /// Parse one AU into the dequant kernel's inputs. `windowSize` > 0 with `chunkAligned`
     /// walks the Phase-4 shard-window framing first; otherwise the AU is one packet stream.
     /// nil = drop the frame (malformed, no SOF, or not enough blocks survived loss to be worth
-    /// decoding — upstream's `decoded_blocks > total/2` partial rule).
+    /// decoding — the old upstream `decoded_blocks > total/2` partial rule, kept on purpose).
     static func parse(au: Data, chunkAligned: Bool, windowSize: Int) -> ParsedWaveletFrame? {
         var state = ParseState()
         // Reserve the coefficient buffer ONCE, up front. Every packet's payload is a slice of the
@@ -197,8 +197,8 @@ enum WaveletBitstream {
             return state.pushPackets(UnsafeBufferPointer(start: base, count: count))
         }
         guard ok, let frame = state.finish() else { return nil }
-        // Upstream decode_is_ready(allow_partial=true): with no SOF the frame is undecodable;
-        // at half the blocks or fewer it is presumed garbage.
+        // The old upstream partial rule: with no SOF the frame is undecodable; at half the
+        // blocks or fewer it is presumed garbage.
         guard frame.totalBlocks > 0, frame.decodedBlocks > frame.totalBlocks / 2 else {
             return nil
         }

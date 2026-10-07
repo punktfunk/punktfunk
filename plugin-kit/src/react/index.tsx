@@ -9,7 +9,7 @@
 // own URL (replace: true; the iframe src stays pinned — no reload loop).
 
 import { Option, Schema } from "effect";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { type ReactNode, useEffect, useState } from "react";
 
 /** `/plugin-ui/<id>` when served through the console proxy, "" in dev/standalone. */

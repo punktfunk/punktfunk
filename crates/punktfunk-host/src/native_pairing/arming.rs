@@ -34,7 +34,7 @@ pub enum PinAttempt {
 }
 
 fn random_pin() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     format!("{:04}", rand::rng().random_range(0..10_000u32))
 }
 

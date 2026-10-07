@@ -27,16 +27,16 @@ Linux and `%ProgramData%\punktfunk` on Windows.
 
 | | Linux | Windows |
 |---|---|---|
-| Isolation | One bubblewrap sandbox per plugin, with its own PID namespace | All plugins share the runner's `NT AUTHORITY\LocalService` account |
-| Files | `/usr`, its own code, its state dir, the manifest's paths and the operator's grants | The config dir is read-only except `plugin-state`; the user's profile is closed |
-| Network | None unless the manifest sets `network` | Unrestricted |
-| Host API | A socket the runner forwards; `connect()` finds it | Loopback HTTPS |
+| Isolation | One bubblewrap sandbox per plugin, with its own PID namespace | One AppContainer per plugin, `punktfunk.plugin.<id>`, under the runner's `NT AUTHORITY\LocalService` account |
+| Files | `/usr`, its own code, its state dir, the manifest's paths and the operator's grants | Program Files, its own code, its state dir, the manifest's paths and the operator's grants; user profiles are closed |
+| Network | None unless the manifest sets `network` | None unless the manifest sets `network`; never loopback |
+| Host API | A socket the runner forwards; `connect()` finds it | A named pipe per plugin; `connect()` finds it |
 
 ## The manifest
 
 Declare what the plugin needs in a `punktfunk` block in its `package.json`; the
 [minimal plugin](#a-minimal-library-plugin) below has one. It ships inside the reviewed tarball, so
-nothing the plugin does at runtime widens it. Without it, a plugin does not start on Linux.
+nothing the plugin does at runtime widens it. Without it, a plugin does not start.
 
 | Field | Meaning |
 |---|---|
@@ -93,7 +93,7 @@ the console settings form and the CLI. Four files:
   "dependencies": {
     "@punktfunk/host": "^0.3.0",
     "@punktfunk/plugin-kit": "^0.9.0",
-    "effect": "4.0.0-beta.99"
+    "effect": "4.0.1"
   },
   "punktfunk": {
     "schema": 1,

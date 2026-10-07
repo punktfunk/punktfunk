@@ -21,7 +21,7 @@ serde_json = "1"
 # NLA network categories for the D12 probe — the one question no locale-safe exe can answer.
 # Target-gated: the static musl build never sees it, so D8's tiny-dep promise holds.
 [target.'cfg(windows)'.dependencies]
-getrandom = "0.3"
+getrandom = "0.4"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Networking_NetworkListManager",

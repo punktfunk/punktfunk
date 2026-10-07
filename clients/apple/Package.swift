@@ -18,10 +18,8 @@ let package = Package(
     ],
     dependencies: [
         // Progressive backdrop blur with no material tint; `pf-console-ui`'s `blur.rs` follows it.
-        // Pinned by revision: GlurBackdrop exists only on main, and no tagged release carries it.
-        .package(
-            url: "https://github.com/joogps/Glur.git",
-            revision: "ba4f05d3c9a608ec773b9305f2af6089390de68a"),
+        // GlurBackdrop first ships in 2.0.
+        .package(url: "https://github.com/joogps/Glur.git", from: "2.0.0"),
     ],
     targets: [
         .binaryTarget(name: "PunktfunkCore", path: "PunktfunkCore.xcframework"),

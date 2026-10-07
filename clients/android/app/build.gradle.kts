@@ -118,16 +118,16 @@ androidComponents {
 dependencies {
     implementation(project(":kit"))
 
-    val composeBom = platform("androidx.compose:compose-bom:2026.05.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
 
     // Fold posture for the tabletop split (FoldSplit.kt) — there is no framework API for a hinge,
     // WindowInfoTracker is the platform's only source for one.
-    implementation("androidx.window:window:1.5.0")
+    implementation("androidx.window:window:1.5.1")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -137,13 +137,14 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended") // settings-category icons
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    // Cover-art loading for the game-library coverflow. Coil 2.x uses OkHttp under the hood, so we
-    // feed it the same mTLS OkHttpClient the library fetch uses (reaching the host's own art proxy).
-    implementation("io.coil-kt:coil-compose:2.7.0")
+    // Cover-art loading for the game-library coverflow. Coil's OkHttp fetcher is fed the same mTLS
+    // OkHttpClient the library fetch uses (reaching the host's own art proxy).
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
 
     // Real backdrop blur for the floating console legends (RenderEffect on API 31+, a translucent
     // scrim below). The gamepad UI's frosted pills sample + blur whatever scrolls behind them.
-    implementation("dev.chrisbanes.haze:haze:1.6.0")
+    implementation("dev.chrisbanes.haze:haze:2.0.1")
 
     // Android TV components (we target phone + TV) land in the TV-UI milestone:
     //   implementation("androidx.tv:tv-material:1.1.0")
@@ -157,30 +158,33 @@ dependencies {
     // Deterministic cover art for the library scene: FakeImageLoaderEngine answers the coverflow's
     // AsyncImage synchronously with generated posters — no network, no async race under the frozen
     // animation clock.
-    testImplementation("io.coil-kt:coil-test:2.7.0")
+    testImplementation("io.coil-kt.coil3:coil-test:3.6.3")
     debugImplementation("androidx.compose.ui:ui-test-manifest") // the ComponentActivity test host
     testImplementation("junit:junit:4.13.2")
     // Real `org.json` for the shared-vectors test: the `org.json` inside `android.jar` is a stub
     // set whose every method throws "Stub!", so a plain JVM unit test cannot parse with it. Same
     // dependency, same reason, as the kit module's deeplink-vectors test.
-    testImplementation("org.json:json:20250107")
-    testImplementation("org.robolectric:robolectric:4.16.1")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.64.0")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.64.0")
+    testImplementation("org.json:json:20260814")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.76.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.76.0")
 
     // --- On-device tests (`:app:connectedDebugAndroidTest` against an emulator or a phone). The
     // stream screen needs the real JNI core underneath it — its native calls run against a zero
     // session handle — so its tests cannot be Robolectric ones. ---
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }
 
 // Record (write) the screenshots when the unit tests run. These tests exist to GENERATE marketing
 // images, not to diff goldens, so always capture rather than verify.
 tasks.withType<Test>().configureEach {
     systemProperty("roborazzi.test.record", "true")
+    // Robolectric 4.17's FileDescriptor shadow reads the JDK's SharedSecrets, which java.base does
+    // not export to the unnamed module.
+    jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
     // -PexcludeScreenshots drops the Roborazzi scenes so the PR gate can run the whole suite.
     // They share this source set but are a release-artifact job (android-screenshots.yml, v* tags):
     // 24 @Test that write PNGs and assert nothing, and a minute nobody owes on every push.

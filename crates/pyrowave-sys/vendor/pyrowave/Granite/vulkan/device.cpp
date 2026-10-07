@@ -953,7 +953,13 @@ void Device::init_workarounds()
 
 void Device::set_context(const Context &context)
 {
+	set_context(context, {});
+}
+
+void Device::set_context(const Context &context, const ContextOptions &context_options_)
+{
 	ctx = &context;
+	context_options = context_options_;
 	table = &context.get_device_table();
 
 	register_thread_index(0);
@@ -2612,6 +2618,9 @@ void Device::wait_idle_nolock()
 		LOCK_MEMORY();
 		managers.memory.garbage_collect();
 	}
+
+	if (ext.fault_features.deviceFaultReportMasked)
+		managers.breadcrumbs.poll_device_faults(stderr, 0);
 }
 
 void Device::promote_read_write_caches_to_read_only()
@@ -2701,6 +2710,9 @@ void Device::next_frame_context()
 	frame().begin();
 	recalibrate_timestamps();
 	frame_context_begin_ts = write_calibrated_timestamp_nolock();
+
+	if (ext.fault_features.deviceFaultReportMasked)
+		managers.breadcrumbs.poll_device_faults(stderr, 0);
 }
 
 QueryPoolHandle Device::write_timestamp(VkCommandBuffer cmd, VkPipelineStageFlags2 stage)
@@ -2827,14 +2839,14 @@ void Device::recalibrate_timestamps()
 }
 
 void Device::register_time_interval(std::string tid, QueryPoolHandle start_ts, QueryPoolHandle end_ts,
-                                    const std::string &tag)
+                                    const std::string &tag, uint64_t counter)
 {
 	LOCK();
-	register_time_interval_nolock(std::move(tid), std::move(start_ts), std::move(end_ts), tag);
+	register_time_interval_nolock(std::move(tid), std::move(start_ts), std::move(end_ts), tag, counter);
 }
 
 void Device::register_time_interval_nolock(std::string tid, QueryPoolHandle start_ts, QueryPoolHandle end_ts,
-                                           const std::string &tag)
+                                           const std::string &tag, uint64_t counter)
 {
 	if (start_ts && end_ts)
 	{
@@ -2843,7 +2855,7 @@ void Device::register_time_interval_nolock(std::string tid, QueryPoolHandle star
 		if (start_ts->is_signalled() && end_ts->is_signalled())
 			VK_ASSERT(end_ts->get_timestamp_ticks() >= start_ts->get_timestamp_ticks());
 #endif
-		frame().timestamp_intervals.push_back({ std::move(tid), std::move(start_ts), std::move(end_ts), timestamp_tag });
+		frame().timestamp_intervals.push_back({ std::move(tid), std::move(start_ts), std::move(end_ts), timestamp_tag, counter });
 	}
 }
 
@@ -2965,6 +2977,13 @@ void Device::PerFrame::begin()
 
 	wait(UINT64_MAX);
 
+	if (!in_destructor)
+	{
+		auto end_ts = device.write_calibrated_timestamp_nolock();
+		device.register_time_interval_nolock("CPU", std::move(wait_fence_ts), end_ts, "fence");
+		wait_fence_ts = std::move(end_ts);
+	}
+
 	for (auto &cmd_pool : cmd_pools)
 		for (auto &pool : cmd_pool)
 			pool.begin();
@@ -3047,7 +3066,7 @@ void Device::PerFrame::begin()
 	breadcrumbs.clear();
 
 	if (!in_destructor)
-		device.register_time_interval_nolock("CPU", std::move(wait_fence_ts), device.write_calibrated_timestamp_nolock(), "fence + recycle");
+		device.register_time_interval_nolock("CPU", std::move(wait_fence_ts), device.write_calibrated_timestamp_nolock(), "recycle");
 
 	int64_t min_timestamp_us = std::numeric_limits<int64_t>::max();
 	int64_t max_timestamp_us = 0;
@@ -3075,6 +3094,7 @@ void Device::PerFrame::begin()
 				auto *e = device.system_handles.timeline_trace_file->allocate_event();
 				e->set_desc(ts.timestamp_tag->get_tag().c_str());
 				e->set_tid(ts.tid.c_str());
+				e->counter = ts.counter;
 				e->pid = frame_index + 1;
 				e->start_ns = start_ts;
 				e->end_ns = end_ts;
@@ -3415,6 +3435,10 @@ public:
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
 				VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
 				image_usage_video_flags;
+
+		// Don't include video usage for views that aren't planar.
+		if (format_ycbcr_num_planes(create_info.format) == 1)
+			view_usage &= ~image_usage_video_flags;
 
 		if (view_usage & VK_IMAGE_USAGE_STORAGE_BIT)
 		{
@@ -3844,10 +3868,14 @@ DeviceAllocationOwnerHandle Device::allocate_memory(const MemoryAllocateInfo &in
 	if (index == UINT32_MAX)
 		return {};
 
+	auto mode = info.mode;
+	if (!context_options.memory_priorities || !ext.supports_memory_budget)
+		mode = DeviceAllocator::normalize_allocation_mode(mode);
+
 	DeviceAllocation alloc = {};
 	{
 		LOCK_MEMORY();
-		if (!managers.memory.allocate_generic_memory(info.requirements.size, info.requirements.alignment, info.mode,
+		if (!managers.memory.allocate_generic_memory(info.requirements.size, info.requirements.alignment, mode,
 		                                             index, &alloc))
 		{
 			return {};
@@ -3996,16 +4024,19 @@ bool Device::allocate_image_memory(DeviceAllocation *allocation, const ImageCrea
 		{
 			mode = AllocationMode::External;
 		}
-		else if (tiling == VK_IMAGE_TILING_OPTIMAL &&
+		else if ((tiling == VK_IMAGE_TILING_OPTIMAL || tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) &&
 		         (info.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT)) != 0)
 		{
 			mode = AllocationMode::OptimalRenderTarget;
 		}
 		else
 		{
-			mode = tiling == VK_IMAGE_TILING_OPTIMAL || info.domain == ImageDomain::LinearDevice ?
+			mode = tiling == VK_IMAGE_TILING_OPTIMAL || tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT || info.domain == ImageDomain::LinearDevice ?
 			       AllocationMode::OptimalResource : AllocationMode::LinearHostMappable;
 		}
+
+		if (!context_options.memory_priorities || !ext.supports_memory_budget)
+			mode = DeviceAllocator::normalize_allocation_mode(mode);
 
 		{
 			LOCK_MEMORY();
@@ -4585,6 +4616,10 @@ ImageHandle Device::create_image_from_staging_buffer(const ImageCreateInfo &crea
 
 		submit_and_sync_to_queues(transition_cmd, sync_queues);
 	}
+
+	// If we're importing, make sure we consume the native handle.
+	if (use_external)
+		take_ownership_imported_external_memory_handle(create_info.external);
 
 	return handle;
 }
@@ -5176,6 +5211,9 @@ BufferHandle Device::create_buffer(const BufferCreateInfo &create_info, const vo
 	else
 		mode = AllocationMode::LinearHostMappable;
 
+	if (!context_options.memory_priorities || !ext.supports_memory_budget)
+		mode = DeviceAllocator::normalize_allocation_mode(mode);
+
 	auto external = create_info.external;
 
 	{
@@ -5361,7 +5399,8 @@ bool Device::image_format_is_supported(VkFormat format, VkFormatFeatureFlags2 re
 {
 	VkFormatProperties3 props3 = { VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3 };
 	get_format_properties(format, &props3);
-	auto flags = tiling == VK_IMAGE_TILING_OPTIMAL ? props3.optimalTilingFeatures : props3.linearTilingFeatures;
+	auto flags = tiling == VK_IMAGE_TILING_OPTIMAL || tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT ?
+		props3.optimalTilingFeatures : props3.linearTilingFeatures;
 	return (flags & required) == required;
 }
 

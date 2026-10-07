@@ -19,7 +19,7 @@ extern "C" {
 // API and ABI is not considered stable until MAJOR version hits 1!
 
 #define PYROWAVE_API_VERSION_MAJOR 0
-#define PYROWAVE_API_VERSION_MINOR 4
+#define PYROWAVE_API_VERSION_MINOR 6
 #define PYROWAVE_API_VERSION_PATCH 0
 
 #if !defined(PYROWAVE_PUBLIC_API)
@@ -161,6 +161,24 @@ PYROWAVE_PUBLIC_API pyrowave_result pyrowave_create_device_by_compat(
 	const pyrowave_uuid *driver_uuid, // If non-NULL, needs to match VkPhysicalDeviceIDProperties::driverUUID
 	const pyrowave_luid *device_luid, // If non-NULL, needs to match VkPhysicalDeviceIDProperties::deviceLUID
 	pyrowave_device *device);
+
+PYROWAVE_PUBLIC_API pyrowave_result pyrowave_create_device_by_compat2(
+	// If non-zero, needs to match VkPhysicalDeviceProperties::vendorID/deviceID.
+	// Risks picking the wrong device if there are multiple ICDs for the same GPU.
+	uint32_t vid, uint32_t pid,
+	const pyrowave_uuid *device_uuid, // If non-NULL, needs to match VkPhysicalDeviceIDProperties::deviceUUID
+	const pyrowave_uuid *driver_uuid, // If non-NULL, needs to match VkPhysicalDeviceIDProperties::driverUUID
+	const pyrowave_luid *device_luid, // If non-NULL, needs to match VkPhysicalDeviceIDProperties::deviceLUID
+	// Intended to request HIGH or REALTIME global queue priorities.
+	// Only affects the compute queue. If HIGH or REALTIME is used,
+	// the device is automatically set to use async compute queues as per pyrowave_device_set_queue_type.
+	VkQueueGlobalPriority global_priority,
+	pyrowave_device *device);
+
+// Even if HIGH or REALTIME is requested, the system may not allow it.
+// On Linux at least, the process needs either root or CAP_SYS_NICE permissions to request > MEDIUM.
+// MEDIUM is the normal default.
+PYROWAVE_PUBLIC_API VkQueueGlobalPriority pyrowave_device_get_global_priority(pyrowave_device device);
 
 // For performance debugging, reports GPU timestamps.
 PYROWAVE_PUBLIC_API void
@@ -334,10 +352,14 @@ PYROWAVE_PUBLIC_API VkImage
 pyrowave_image_get_handle(pyrowave_image image);
 
 // Generates an image view from an (imported) image automatically for convenience.
-// - Aspect must be VK_IMAGE_ASPECT_PLANE_0_BIT, PLANE_1_BIT or PLANE_2_BIT.
+// - Aspect must be VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_PLANE_0_BIT, PLANE_1_BIT or PLANE_2_BIT.
 // - For 2-plane YCbCr image formats or two component image formats, image view swizzles are used to synthesize 3 planes.
 // - For single component image formats, the aspect is ignored (the image is the plane itself).
 // - For 3-component image formats, the aspect selects the component index through image swizzle.
+// - If COLOR_BIT aspect is used, the image format is used as-is as the view format, with exception
+//   for sRGB. The equivalent UNORM format is used as view format, and image must be created with compatible casting.
+// - COLOR_BIT aspect can be used with YCbCr, but it's only supported by the scaling path, and only NV12 format.
+//   Very special case for pipewire interop. Don't use unless you know what you're doing.
 //
 // Some validation rules:
 // - For 2-plane YCbCr image formats, usage must not be STORAGE_BIT.
@@ -461,6 +483,59 @@ pyrowave_encoder_encode_gpu_synchronous(pyrowave_encoder encoder,
                                         const pyrowave_gpu_buffers *buffers,
                                         const pyrowave_rate_control *rate_control);
 
+typedef struct pyrowave_scaled_encode_info
+{
+	// Input view must be some RGB(A) UNORM format.
+	// Alternatively, as a special case, NV12 (G8_B8R8_2PLANE_420) is allowed here with COLOR_ASPECT.
+	// This is only intended to be used with pipewire dmabuf screen capture path.
+	// If scaling NV12, the crop-rect (if any) must be aligned to 2 pixel offset and extent.
+	// The crop rect will be scaled accordingly for chroma plane.
+	pyrowave_image_view view;
+
+	// For SDR, use VK_COLOR_SPACE_SRGB_NONLINEAR.
+	// SPACE_EXTENDED_SRGB_LINEAR_EXT (80 nits normalized) and HDR10_ST2084 is supported as well.
+	VkColorSpaceKHR input_color_space;
+
+	// Use VK_COLOR_SPACE_SRGB_NONLINEAR or HDR10_ST2084.
+	// HDR10 is *not* tonemapped.
+	VkColorSpaceKHR output_color_space;
+
+	// YCbCr transform is always full-range, center chroma siting.
+	// If output color space is HDR10_ST2084, BT.2020 NCL transform is used,
+	// otherwise, BT.701 coefficients are used.
+
+	// Intermediate format used for planes. Should be R8_UNORM or R16_UNORM.
+	// R16_UNORM is more or less required for HDR10, but can be used for SDR too
+	// to avoid some potential banding, especially for 10-bit SDR swapchains.
+	// R8_UNORM intermediate format will receive dithering to avoid some banding artifacts.
+	// The dither will smooth out nicely when encoding.
+	VkFormat intermediate_plane_format;
+
+	// In YCbCr, the center point for chroma may depend on bit depth in some cases.
+	// Since Pyrowave is a floating point codec, this is mostly irrelevant for us,
+	// but provided here for compatibility. Consumer of the final image is expected
+	// to know which encoding for pure gray was used.
+	// Common values would be 0.5 (bit-depth agnostic default),
+	// 128.0 / 255.0 (8-bit BT) or 512.0 / 1023.0 (10-bit BT).
+	float ycbcr_chroma_midpoint;
+
+	// Instead of sinc, force plain LINEAR scaling filter.
+	bool force_linear_filtering;
+
+	// Skip any dithering for 8-bit outputs.
+	bool skip_dither;
+
+	// Optional.
+	const VkRect2D *crop_rect;
+} pyrowave_scaled_encode_info;
+
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_encode_gpu_scaled_synchronous(pyrowave_encoder encoder,
+                                               const pyrowave_gpu_sync_operation *acquire,
+                                               const pyrowave_gpu_sync_operation *release,
+                                               const pyrowave_scaled_encode_info *scaling_info,
+                                               const pyrowave_rate_control *rate_control);
+
 // A command buffer must not be set on pyrowave_device.
 PYROWAVE_PUBLIC_API pyrowave_result
 pyrowave_encoder_encode_cpu_synchronous(pyrowave_encoder encoder, const pyrowave_cpu_buffer *buffers,
@@ -470,11 +545,36 @@ pyrowave_encoder_encode_cpu_synchronous(pyrowave_encoder encoder, const pyrowave
 // Computes the number of network packets required if each packet can consume a provided number of bytes.
 PYROWAVE_PUBLIC_API pyrowave_result
 pyrowave_encoder_compute_num_packets(pyrowave_encoder encoder, size_t packet_boundary, size_t *num_packets);
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_compute_num_packets_with_padding(
+		pyrowave_encoder encoder, size_t packet_boundary, size_t padding_size, size_t *num_packets);
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_compute_num_critical_packets(
+		pyrowave_encoder encoder, int bands, size_t packet_boundary, size_t padding_size, size_t *num_packets);
 
 // Number of packets is implied to be greater-than-equal to num_packets as returned earlier.
 PYROWAVE_PUBLIC_API pyrowave_result
 pyrowave_encoder_packetize(pyrowave_encoder encoder, pyrowave_packet *packets, size_t packet_boundary,
                            size_t *out_packets, void *bitstream, size_t size);
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_packetize_with_padding(
+		pyrowave_encoder encoder, pyrowave_packet *packets, size_t packet_boundary, size_t padding_size,
+		size_t *out_packets, void *bitstream, size_t size);
+
+// Special purpose for manual packetization.
+// Client is expected to understand the pyrowave bitstream format.
+// Don't use if you don't know what you're doing.
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_get_mapped_raw_bitstream(
+		pyrowave_encoder encoder, const void **mapped_bitstream, size_t *mapped_bitstream_size,
+		const void **mapped_metadata, size_t *mapped_metadata_size);
+
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_get_num_active_blocks(pyrowave_encoder encoder, int bands, size_t *num_active_blocks);
+
+PYROWAVE_PUBLIC_API pyrowave_result
+pyrowave_encoder_compute_block_active_words(pyrowave_encoder encoder,
+		int bands, uint32_t *words, size_t word_count);
 
 // PUNKTFUNK LOCAL EXTENSION (patches/0007-encoder-sequence-override.patch), not upstream.
 // The wire sequence counter is 3 bits (PyroWave::SequenceCountMask, pyrowave_common.hpp);
@@ -527,6 +627,11 @@ pyrowave_decoder_push_packet(pyrowave_decoder decoder, const void *data, size_t 
 // For error correction purposes, it may be okay to decode a frame which dropped some packets.
 PYROWAVE_PUBLIC_API bool
 pyrowave_decoder_decode_is_ready(pyrowave_decoder decoder, bool allow_partial_frame);
+
+PYROWAVE_PUBLIC_API bool
+pyrowave_decoder_decode_is_ready_with_sideband(pyrowave_decoder decoder, bool allow_partial_frame,
+		int num_pristine_bands, float minimum_packet_ratio,
+		const uint32_t *active_block_mask, size_t word_count);
 
 // Decoding can be done at any time, leading to potentially corrupt/incomplete results if packets are missing.
 // Missing wavelet weights are assumed to be 0 which can lead to extra blurring.

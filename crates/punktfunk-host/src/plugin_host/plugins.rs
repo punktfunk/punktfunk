@@ -502,6 +502,12 @@ pub(crate) fn restart_runtime() -> Result<bool> {
     Ok(true)
 }
 
+/// The serving host's first converge places every runner ACE again, not only the changed ones.
+#[cfg(windows)]
+pub(crate) fn recheck_runner_roots() {
+    plat::recheck_next();
+}
+
 /// Tell the runner whether `host.env` turned the sandbox off. The serving host calls this
 /// before it converges roots, because the grantee depends on the answer.
 #[cfg(windows)]

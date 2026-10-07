@@ -15,7 +15,7 @@ use crate::windows::credentials::{Credential, CredentialStore};
 use crate::windows::util::{
     backend_error, computer_name, io_error, require_local_system, status_error, wide, WinResult,
 };
-use rand::RngCore as _;
+use rand::Rng as _;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_ALIAS_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_MEMBER_IN_ALIAS,

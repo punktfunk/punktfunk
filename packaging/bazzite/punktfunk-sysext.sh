@@ -5,9 +5,9 @@
 # transaction, needs no reboot, and is trivially removable).
 #
 # The image overlays /usr from /var/lib/extensions/punktfunk.raw with the host, tray and web
-# console + their udev/sysctl/systemd-user payload; the RPMs' two /etc files (gamescope
-# session drop-in, tray autostart) ride inside at /usr/share/punktfunk/etc/ and are copied
-# into the real /etc here (a sysext can only carry /usr).
+# console + their udev/sysctl/systemd-user payload; the RPMs' /etc file (the gamescope
+# session drop-in) rides inside at /usr/share/punktfunk/etc/ and is copied into the real /etc
+# here (a sysext can only carry /usr).
 #
 # Bootstrap (the script also ships inside the image as /usr/bin/punktfunk-sysext):
 #   curl -fsSLO https://git.unom.io/unom/punktfunk/raw/branch/main/packaging/bazzite/punktfunk-sysext.sh
@@ -292,16 +292,14 @@ post_merge() {
       || echo "!! semodule -i failed — the ds_inhibit audit flood stays live; see packaging/bazzite/README.md" >&2
   fi
   # The /etc payload a sysext can't carry. The gamescope-session drop-in is %config(noreplace):
-  # only seed it, never clobber a local edit. The tray autostart entry is not user config.
+  # only seed it, never clobber a local edit. Older images also copied a global tray autostart
+  # entry; the host now writes a per-user one.
   if [ -f "$ETC_SRC/gamescope-session-plus/sessions.d/steam" ] \
      && [ ! -e /etc/gamescope-session-plus/sessions.d/steam ]; then
     install -Dm0644 "$ETC_SRC/gamescope-session-plus/sessions.d/steam" \
       /etc/gamescope-session-plus/sessions.d/steam
   fi
-  if [ -f "$ETC_SRC/xdg/autostart/io.unom.Punktfunk.Tray.desktop" ]; then
-    install -Dm0644 "$ETC_SRC/xdg/autostart/io.unom.Punktfunk.Tray.desktop" \
-      /etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop
-  fi
+  rm -f /etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop
 }
 
 # do_install VERSION FILENAME SHA256 | do_install --from-file X.raw

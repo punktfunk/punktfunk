@@ -282,9 +282,15 @@ bool Allocator::allocate(uint32_t size, uint32_t alignment, AllocationMode mode,
 	return true;
 }
 
-Allocator::Allocator(Util::ObjectPool<MiniHeap> &object_pool)
+Allocator::Allocator(Util::ObjectPool<MiniHeap> &object_pool, bool lean_memory_config)
 {
-	for (int i = 0; i < Util::ecast(MemoryClass::Count) - 1; i++)
+	int num_memory_classes = Util::ecast(MemoryClass::Count);
+
+	// Skip the largest chunk, and limit chunk allocator to 4 MiB.
+	if (lean_memory_config)
+		num_memory_classes--;
+
+	for (int i = 0; i < num_memory_classes - 1; i++)
 		for (int j = 0; j < Util::ecast(AllocationMode::Count); j++)
 			classes[i][j].set_parent(&classes[i + 1][j]);
 
@@ -305,10 +311,14 @@ Allocator::Allocator(Util::ObjectPool<MiniHeap> &object_pool)
 		get_class_allocator(MemoryClass::Large, mode).set_sub_block_size(
 			128 * Util::LegionAllocator::NumSubBlocks *
 			Util::LegionAllocator::NumSubBlocks);
-		// 2M chunk
-		get_class_allocator(MemoryClass::Huge, mode).set_sub_block_size(
-			64 * Util::LegionAllocator::NumSubBlocks * Util::LegionAllocator::NumSubBlocks *
-			Util::LegionAllocator::NumSubBlocks);
+
+		if (!lean_memory_config)
+		{
+			// 2M chunk
+			get_class_allocator(MemoryClass::Huge, mode).set_sub_block_size(
+				64 * Util::LegionAllocator::NumSubBlocks * Util::LegionAllocator::NumSubBlocks *
+				Util::LegionAllocator::NumSubBlocks);
+		}
 	}
 }
 
@@ -327,7 +337,7 @@ void DeviceAllocator::init(Device *device_)
 	allocators.reserve(mem_props.memoryTypeCount);
 	for (unsigned i = 0; i < mem_props.memoryTypeCount; i++)
 	{
-		allocators.emplace_back(new Allocator(object_pool));
+		allocators.emplace_back(new Allocator(object_pool, device->get_context_options().lean_memory_mode));
 		allocators.back()->set_global_allocator(this, i);
 	}
 
@@ -402,6 +412,23 @@ bool DeviceAllocator::allocate_buffer_memory(uint32_t size, uint32_t alignment, 
 	}
 }
 
+AllocationMode DeviceAllocator::normalize_allocation_mode(AllocationMode mode)
+{
+	switch (mode)
+	{
+	case AllocationMode::LinearDevice:
+	case AllocationMode::LinearDeviceHighPriority:
+		return AllocationMode::LinearDevice;
+
+	case AllocationMode::OptimalRenderTarget:
+	case AllocationMode::OptimalResource:
+		return AllocationMode::OptimalResource;
+
+	default:
+		return mode;
+	}
+}
+
 bool DeviceAllocator::allocate_image_memory(uint32_t size, uint32_t alignment, AllocationMode mode, uint32_t memory_type,
                                             VkImage image, bool force_no_dedicated, DeviceAllocation *alloc,
                                             ExternalHandle *external)
@@ -419,6 +446,10 @@ bool DeviceAllocator::allocate_image_memory(uint32_t size, uint32_t alignment, A
 	VkMemoryRequirements2 mem_req = { VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2 };
 	mem_req.pNext = &dedicated_req;
 	table->vkGetImageMemoryRequirements2(device->get_device(), &info, &mem_req);
+
+	// Don't try to suballocate for large images in lean mode.
+	if (mem_req.memoryRequirements.size >= 2 * 1024 * 1024 && device->get_context_options().lean_memory_mode)
+		dedicated_req.prefersDedicatedAllocation = VK_TRUE;
 
 	if (dedicated_req.prefersDedicatedAllocation ||
 	    dedicated_req.requiresDedicatedAllocation ||
@@ -613,9 +644,9 @@ bool DeviceAllocator::internal_allocate(
 		HeapBudget budgets[VK_MAX_MEMORY_HEAPS];
 		get_memory_budget_nolock(budgets);
 
-#ifdef VULKAN_DEBUG
-		LOGI("Allocating %.1f MiB on heap #%u (mode #%u), before allocating budget: (%.1f MiB / %.1f MiB) [%.1f / %.1f].\n",
-		     double(size) / double(1024 * 1024), heap_index, unsigned(mode),
+#if defined(VULKAN_DEBUG)
+		LOGI("Allocating %.1f MiB on heap #%u (mode #%u) (type %u), before allocating budget: (%.1f MiB / %.1f MiB) [%.1f / %.1f].\n",
+		     double(size) / double(1024 * 1024), heap_index, unsigned(mode), memory_type,
 		     double(budgets[heap_index].device_usage) / double(1024 * 1024),
 		     double(budgets[heap_index].budget_size) / double(1024 * 1024),
 		     double(budgets[heap_index].tracked_usage) / double(1024 * 1024),
@@ -694,7 +725,8 @@ bool DeviceAllocator::internal_allocate(
 	}
 
 	// Don't bother with memory priority on external objects.
-	if (device->get_device_features().memory_priority_features.memoryPriority && !external)
+	if (device->get_device_features().memory_priority_features.memoryPriority &&
+	    device->get_context_options().memory_priorities && !external)
 	{
 		switch (mode)
 		{
@@ -731,16 +763,6 @@ bool DeviceAllocator::internal_allocate(
 		GRANITE_SCOPED_TIMELINE_EVENT_FILE(device->get_system_handles().timeline_trace_file, "vkAllocateMemory");
 		res = table->vkAllocateMemory(device->get_device(), &info, nullptr, &device_memory);
 	}
-
-	// PUNKTFUNK (patch 0006): the consume of by-reference native handles used to happen HERE,
-	// unconditionally — success AND failure of the first vkAllocateMemory. That made the caller's
-	// failure contract ambiguous (an allocate-stage failure had already closed the handle while a
-	// create/find_memory_type failure had not), and the block-recycling retry loop below re-ran
-	// vkAllocateMemory with import_info still pointing at the just-closed handle. The consume now
-	// lives at the API commit point (pyrowave_c.cpp: pyrowave_image_create's success return), so
-	// the allocator never closes a caller's handle and retries import a still-open handle.
-	// (fd-type imports were never affected: memory_handle_type_imports_by_reference excludes
-	// OPAQUE_FD/DMA_BUF, whose ownership vkAllocateMemory itself transfers on success.)
 
 	if (res == VK_SUCCESS)
 	{
@@ -1330,6 +1352,9 @@ bool DescriptorBufferAllocator::create_image_view(const VkImageViewCreateInfo &i
 		VkHostAddressRangeEXT addrs[4];
 		uint32_t count = 0;
 
+		// Shouldn't be needed, but VVL seems to complain if it's not there.
+		view_usage_create_info.usage = usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+
 		if (usage & VK_IMAGE_USAGE_SAMPLED_BIT)
 		{
 			view.sampled = alloc_sampled_image();
@@ -1342,7 +1367,7 @@ bool DescriptorBufferAllocator::create_image_view(const VkImageViewCreateInfo &i
 			infos[count].data.pImage = &images[count];
 
 			images[count] = { VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT };
-			images[count].pView = &info;
+			images[count].pView = &tmpinfo;
 			images[count].layout = layout == ImageLayout::Optimal ? VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
 
 			addrs[count].address = view.sampled.ptr;
@@ -1362,7 +1387,7 @@ bool DescriptorBufferAllocator::create_image_view(const VkImageViewCreateInfo &i
 			infos[count].data.pImage = &images[count];
 
 			images[count] = { VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT };
-			images[count].pView = &info;
+			images[count].pView = &tmpinfo;
 			images[count].layout = VK_IMAGE_LAYOUT_GENERAL;
 
 			addrs[count].address = view.storage.ptr;
@@ -1389,7 +1414,7 @@ bool DescriptorBufferAllocator::create_image_view(const VkImageViewCreateInfo &i
 				infos[count].data.pImage = &images[count];
 
 				images[count] = { VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT };
-				images[count].pView = &info;
+				images[count].pView = &tmpinfo;
 				images[count].layout = i == 0 && layout == ImageLayout::Optimal
 					                       ? VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL
 					                       : VK_IMAGE_LAYOUT_GENERAL;
@@ -1597,5 +1622,29 @@ void DescriptorBufferAllocator::free_buffer_view(const CachedBufferView &view)
 
 	free_cached_descriptors(&view.uniform, 1);
 	free_cached_descriptors(&view.storage, 1);
+}
+
+void take_ownership_imported_external_memory_handle(const ExternalHandle &handle)
+{
+	if (bool(handle) && ExternalHandle::memory_handle_type_imports_by_reference(handle.memory_handle_type))
+	{
+#ifdef _WIN32
+		::CloseHandle(handle.handle);
+#else
+		::close(handle.handle);
+#endif
+	}
+}
+
+void take_ownership_imported_external_semaphore_handle(const ExternalHandle &handle)
+{
+	if (bool(handle) && ExternalHandle::semaphore_handle_type_imports_by_reference(handle.semaphore_handle_type))
+	{
+#ifdef _WIN32
+		::CloseHandle(handle.handle);
+#else
+		::close(handle.handle);
+#endif
+	}
 }
 }

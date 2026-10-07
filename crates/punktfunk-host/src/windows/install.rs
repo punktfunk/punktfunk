@@ -797,7 +797,7 @@ fn set_web_password(pw_path: &Path, pw_file: Option<&str>) {
 /// 20 chars, URL/shell-safe (no `/ + =`).
 fn random_password() -> String {
     use base64::Engine;
-    use rand::RngCore;
+    use rand::Rng;
     let mut b = [0u8; 24];
     rand::rng().fill_bytes(&mut b);
     base64::engine::general_purpose::STANDARD

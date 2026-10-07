@@ -10,7 +10,7 @@
 //! On Linux one row may be the box owner's: an account that already exists,
 //! adopted rather than created. It takes a slot and ports like any seat.
 
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::fmt;

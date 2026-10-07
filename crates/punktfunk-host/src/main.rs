@@ -176,6 +176,7 @@ mod slug;
 mod spike;
 // Session status, stats and log capture; the flat names keep `crate::session_status::*`.
 mod telemetry;
+mod tray_autostart;
 use telemetry::{
     client_logs, encoder_sessions, link_health, log_capture, net_health, session_status,
     stats_recorder,
@@ -589,7 +590,7 @@ fn real_main() -> Result<()> {
 
 /// `settings set <id> <value>` writes the console's settings store without a running host, so an
 /// installer's choice stays the console's to change. The value is JSON (`true`, `30`; `null`
-/// clears), else a bare string.
+/// clears), else a bare string. `tray_autostart` also updates the tray's entry at once.
 fn settings_cli(args: &[String]) -> Result<()> {
     let [verb, id, raw] = args else {
         bail!("usage: punktfunk-host settings set <id> <value>");
@@ -600,6 +601,9 @@ fn settings_cli(args: &[String]) -> Result<()> {
     let value = serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::from(raw.as_str()));
     let patch = serde_json::Map::from_iter([(id.clone(), value.clone())]);
     pf_host_config::save(&patch).context("save host settings")?;
+    if id == "tray_autostart" {
+        tray_autostart::apply();
+    }
     println!("{id}={value} → {}", pf_host_config::store_path().display());
     Ok(())
 }
@@ -696,6 +700,7 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
             Ok(t) => opts.tray_token = Some(t),
             Err(e) => tracing::warn!(error = %format!("{e:#}"), "tray token not written"),
         }
+        crate::tray_autostart::converge();
     }
     // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
     // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.
@@ -708,8 +713,20 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
         opts.plugin_tokens = crate::mgmt_token::load_or_generate_per_plugin()?;
         // An upgrade or a hand-edited grants file may have changed what the runner must see.
         #[cfg(windows)]
-        crate::plugins::publish_sandbox_override();
+        {
+            crate::plugins::publish_sandbox_override();
+            crate::plugins::recheck_runner_roots();
+        }
         crate::plugins::converge_runner_roots();
+        // A launcher installed after the host started brings a declared folder with no ACE; the
+        // converge places it within a minute, while the plugin keeps running.
+        #[cfg(windows)]
+        let _ = std::thread::Builder::new()
+            .name("plugin-roots".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                crate::plugins::converge_runner_roots();
+            });
         crate::plugins::converge_runner_acls(&runner);
         crate::plugins::converge_seat_denies();
     }

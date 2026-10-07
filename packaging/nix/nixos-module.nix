@@ -508,10 +508,6 @@ in
         ];
       });
 
-      # Status-tray autostart entry (self-gating: `--autostart` exits unless this user runs a host).
-      environment.etc."xdg/autostart/io.unom.Punktfunk.Tray.desktop".source =
-        "${cfg.host.package}/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop";
-
       networking.firewall = mkIf cfg.host.openFirewall {
         allowedTCPPorts = nativeTCP ++ optionals cfg.host.gamestream gamestreamTCP;
         allowedUDPPorts = nativeUDP ++ optionals cfg.host.gamestream gamestreamUDP;

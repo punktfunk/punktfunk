@@ -108,11 +108,11 @@ describe("S2 — JSON Schema derivation for __config", () => {
 		// field shows the form no placeholder at all. Annotate every field.
 		expect(p.enabled.default).toBe(true);
 		expect(p.artSource.default).toBe("both");
-		// A CHECKED schema (Int is String-plus-a-check) nests its annotations under `allOf`, so a
-		// form reading `default` must merge allOf branches rather than only looking at the top level.
-		expect(p.pollMinutes.allOf).toEqual([
-			{ default: 15, title: "Poll interval (minutes)" },
-		]);
+		// A CHECKED schema (Int is String-plus-a-check) keeps its annotations on the property itself.
+		expect(p.pollMinutes).toMatchObject({
+			default: 15,
+			title: "Poll interval (minutes)",
+		});
 	});
 
 	test("a decoding default is an Effect, not a thunk — and it actually applies", () => {

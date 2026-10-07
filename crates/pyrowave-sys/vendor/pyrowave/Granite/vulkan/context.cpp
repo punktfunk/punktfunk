@@ -379,6 +379,20 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_messenger_cb(
 	case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
 		if (messageType == VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT)
 		{
+			// FFmpeg triggers this when decoding. Nothing we can do about it for now.
+			static const char *known_failures[] = {
+				"VUID-VkVideoBeginCodingInfoKHR-slotIndex-07245",
+			};
+
+			if (pCallbackData->pMessageIdName)
+			{
+				for (auto *failure : known_failures)
+				{
+					if (strcmp(failure, pCallbackData->pMessageIdName) == 0)
+						return VK_FALSE;
+				}
+			}
+
 			LOGE("[Vulkan]: Validation Error: %s - %s\n", pCallbackData->pMessageIdName, pCallbackData->pMessage);
 			context->notify_validation_error(pCallbackData->pMessage);
 		}
@@ -393,15 +407,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_messenger_cb(
 			LOGW("[Vulkan]: Other Warning: %s\n", pCallbackData->pMessage);
 		break;
 
-#if 0
-	case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
 	case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
 		if (messageType == VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT)
 			LOGI("[Vulkan]: Validation Info: %s\n", pCallbackData->pMessage);
-		else
-			LOGI("[Vulkan]: Other Info: %s\n", pCallbackData->pMessage);
 		break;
-#endif
 
 	default:
 		return VK_FALSE;
@@ -612,12 +621,14 @@ bool Context::create_instance(const char * const *instance_ext, uint32_t instanc
 	if (layer_count && !inherit_info)
 		vkEnumerateInstanceLayerProperties(&layer_count, queried_layers.data());
 
+#if defined(VULKAN_DEBUG)
 	if (!inherit_info)
 	{
 		LOGI("Layer count: %u\n", layer_count);
 		for (auto &layer: queried_layers)
 			LOGI("Found layer: %s.\n", layer.layerName);
 	}
+#endif
 
 	const auto has_extension = [&](const char *name) -> bool {
 		if (inherit_info)
@@ -682,6 +693,7 @@ bool Context::create_instance(const char * const *instance_ext, uint32_t instanc
 
 	force_no_validation = Util::get_environment_bool("GRANITE_VULKAN_NO_VALIDATION", false);
 	VkValidationFeaturesEXT validation_features = { VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
+	VkValidationFeatureEnableEXT validate_features_enable[4];
 
 	if (!force_no_validation && has_layer("VK_LAYER_KHRONOS_validation"))
 	{
@@ -693,22 +705,39 @@ bool Context::create_instance(const char * const *instance_ext, uint32_t instanc
 		std::vector<VkExtensionProperties> layer_exts(layer_ext_count);
 		vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &layer_ext_count, layer_exts.data());
 
-		if (Util::get_environment_bool("GRANITE_VULKAN_SYNC_VALIDATION", false))
+		bool has_validation_features = find_if(begin(layer_exts), end(layer_exts), [](const VkExtensionProperties &e)
 		{
-			// Tons of false positives around timeline semaphores atm, so don't bother.
-			if (find_if(begin(layer_exts), end(layer_exts), [](const VkExtensionProperties &e)
+			return strcmp(e.extensionName, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) == 0;
+		}) != end(layer_exts);
+
+		if (has_validation_features)
+		{
+			instance_exts.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+			validation_features.pEnabledValidationFeatures = validate_features_enable;
+			validation_features.pNext = info.pNext;
+			info.pNext = &validation_features;
+
+			if (Util::get_environment_bool("GRANITE_VULKAN_PRINTF", false))
 			{
-				return strcmp(e.extensionName, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) == 0;
-			}) != end(layer_exts))
+				LOGI("Enabling VK_EXT_validation_features for printf.\n");
+				validate_features_enable[validation_features.enabledValidationFeatureCount++] =
+					VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT;
+			}
+
+			if (Util::get_environment_bool("GRANITE_VULKAN_SYNC_VALIDATION", false))
 			{
-				instance_exts.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
-				static const VkValidationFeatureEnableEXT validation_sync_features[1] = {
-					VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
-				};
 				LOGI("Enabling VK_EXT_validation_features for synchronization validation.\n");
-				validation_features.enabledValidationFeatureCount = 1;
-				validation_features.pEnabledValidationFeatures = validation_sync_features;
-				info.pNext = &validation_features;
+				validate_features_enable[validation_features.enabledValidationFeatureCount++] =
+					VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+			}
+
+			if (Util::get_environment_bool("GRANITE_VULKAN_GPU_VALIDATION", false))
+			{
+				LOGI("Enabling VK_EXT_validation_features for GPU validation.\n");
+				validate_features_enable[validation_features.enabledValidationFeatureCount++] =
+					VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT;
+				validate_features_enable[validation_features.enabledValidationFeatureCount++] =
+					VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT;
 			}
 		}
 
@@ -763,8 +792,10 @@ bool Context::create_instance(const char * const *instance_ext, uint32_t instanc
 		info.ppEnabledLayerNames = instance_layers.empty() ? nullptr : instance_layers.data();
 	}
 
+#if defined(VULKAN_DEBUG)
 	for (uint32_t i = 0; i < info.enabledExtensionCount; i++)
 		LOGI("Enabling instance extension: %s.\n", info.ppEnabledExtensionNames[i]);
+#endif
 
 #ifdef GRANITE_VULKAN_PROFILES
 	if (!init_profile())
@@ -1042,7 +1073,9 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	// We can use core device functionality if enabled VkInstance apiVersion and physical device supports it.
 	ext.device_api_core_version = std::min(ext.instance_api_core_version, gpu_props.apiVersion);
 
+#if defined(VULKAN_DEBUG)
 	LOGI("Using Vulkan GPU: %s\n", gpu_props.deviceName);
+#endif
 
 	// FFmpeg integration requires Vulkan 1.3 core for physical device.
 	uint32_t minimum_api_version = (flags & video_context_flags) ? VK_API_VERSION_1_3 : VK_API_VERSION_1_1;
@@ -1066,23 +1099,48 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	vkGetPhysicalDeviceQueueFamilyProperties2(gpu, &queue_family_count, nullptr);
 	Util::SmallVector<VkQueueFamilyProperties2> queue_props(queue_family_count);
 	Util::SmallVector<VkQueueFamilyVideoPropertiesKHR> video_queue_props2(queue_family_count);
+	Util::SmallVector<VkQueueFamilyGlobalPriorityProperties> global_prio_support(queue_family_count);
 
 	if ((flags & video_context_flags) != 0 && has_extension(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME))
 		ext.supports_video_queue = true;
+
+	if (ext.device_api_core_version >= VK_API_VERSION_1_4)
+	{
+		VkPhysicalDeviceFeatures2 features2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &ext.vk14_features };
+		ext.vk14_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+		vkGetPhysicalDeviceFeatures2(gpu, &features2);
+	}
 
 	for (uint32_t i = 0; i < queue_family_count; i++)
 	{
 		queue_props[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
 		if (ext.supports_video_queue)
 		{
+			video_queue_props2[i].pNext = queue_props[i].pNext;
 			queue_props[i].pNext = &video_queue_props2[i];
+
 			video_queue_props2[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+		}
+
+		if (ext.vk14_features.globalPriorityQuery)
+		{
+			global_prio_support[i].pNext = queue_props[i].pNext;
+			queue_props[i].pNext = &global_prio_support[i];
+
+			global_prio_support[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES;
 		}
 	}
 
 	Util::SmallVector<uint32_t> queue_offsets(queue_family_count);
 	Util::SmallVector<Util::SmallVector<float, QUEUE_INDEX_COUNT>> queue_priorities(queue_family_count);
 	vkGetPhysicalDeviceQueueFamilyProperties2(gpu, &queue_family_count, queue_props.data());
+
+#ifdef VULKAN_DEBUG
+	if (ext.vk14_features.globalPriorityQuery)
+		for (uint32_t i = 0; i < queue_family_count; i++)
+			for (uint32_t j = 0; j < global_prio_support[i].priorityCount; j++)
+				LOGI("Queue family %u supports global priority %u.\n", i, global_prio_support[i].priorities[j]);
+#endif
 
 	if (inherit_info)
 	{
@@ -1155,16 +1213,27 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 		queue_indices[QUEUE_INDEX_COMPUTE] = queue_indices[QUEUE_INDEX_GRAPHICS];
 	}
 
-	// For transfer, try to find a queue which only supports transfer, e.g. DMA queue.
-	// If not, fallback to a dedicated compute queue.
-	// Finally, fallback to same queue as compute.
-	if (!find_vacant_queue(queue_info.family_indices[QUEUE_INDEX_TRANSFER], queue_indices[QUEUE_INDEX_TRANSFER],
-	                       VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 0.5f) &&
-	    !find_vacant_queue(queue_info.family_indices[QUEUE_INDEX_TRANSFER], queue_indices[QUEUE_INDEX_TRANSFER],
-	                       VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, 0.5f))
+	if ((flags & (CONTEXT_CREATION_ENABLE_COMPUTE_REALTIME_GLOBAL_PRIORITY_BIT |
+	              CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT)) != 0)
 	{
+		// If we're requesting high-prio compute queue, alias transfer on top of that.
+		// We don't want to risk failing realtime request due to requesting too many queues.
 		queue_info.family_indices[QUEUE_INDEX_TRANSFER] = queue_info.family_indices[QUEUE_INDEX_COMPUTE];
 		queue_indices[QUEUE_INDEX_TRANSFER] = queue_indices[QUEUE_INDEX_COMPUTE];
+	}
+	else
+	{
+		// For transfer, try to find a queue which only supports transfer, e.g. DMA queue.
+		// If not, fallback to a dedicated compute queue.
+		// Finally, fallback to same queue as compute.
+		if (!find_vacant_queue(queue_info.family_indices[QUEUE_INDEX_TRANSFER], queue_indices[QUEUE_INDEX_TRANSFER],
+							   VK_QUEUE_TRANSFER_BIT, VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 0.5f) &&
+			!find_vacant_queue(queue_info.family_indices[QUEUE_INDEX_TRANSFER], queue_indices[QUEUE_INDEX_TRANSFER],
+							   VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, 0.5f))
+		{
+			queue_info.family_indices[QUEUE_INDEX_TRANSFER] = queue_info.family_indices[QUEUE_INDEX_COMPUTE];
+			queue_indices[QUEUE_INDEX_TRANSFER] = queue_indices[QUEUE_INDEX_COMPUTE];
+		}
 	}
 
 	if (ext.supports_video_queue)
@@ -1195,6 +1264,13 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	VkDeviceCreateInfo device_info = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 
 	Util::SmallVector<VkDeviceQueueCreateInfo> queue_infos;
+	VkDeviceQueueGlobalPriorityCreateInfo global_prio_info =
+		{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO };
+	global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+
+	if (flags & CONTEXT_CREATION_ENABLE_COMPUTE_REALTIME_GLOBAL_PRIORITY_BIT)
+		flags |= CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT;
+
 	for (uint32_t family_index = 0; family_index < queue_family_count; family_index++)
 	{
 		if (queue_offsets[family_index] == 0)
@@ -1204,6 +1280,36 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 		info.queueFamilyIndex = family_index;
 		info.queueCount = queue_offsets[family_index];
 		info.pQueuePriorities = queue_priorities[family_index].data();
+
+		const auto supports_prio = [](const VkQueueFamilyGlobalPriorityProperties &props,
+		                              VkQueueGlobalPriority prio)
+		{
+			for (uint32_t i = 0; i < props.priorityCount; i++)
+				if (props.priorities[i] == prio)
+					return true;
+			return false;
+		};
+
+		if (family_index == queue_info.family_indices[QUEUE_INDEX_COMPUTE])
+		{
+			if ((flags & CONTEXT_CREATION_ENABLE_COMPUTE_REALTIME_GLOBAL_PRIORITY_BIT) != 0 &&
+			    supports_prio(global_prio_support[family_index], VK_QUEUE_GLOBAL_PRIORITY_REALTIME))
+			{
+				global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_REALTIME;
+			}
+			else if ((flags & CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT) != 0 &&
+			         supports_prio(global_prio_support[family_index], VK_QUEUE_GLOBAL_PRIORITY_HIGH))
+			{
+				global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH;
+			}
+
+			if (global_prio_info.globalPriority != VK_QUEUE_GLOBAL_PRIORITY_MEDIUM)
+			{
+				global_prio_info.pNext = info.pNext;
+				info.pNext = &global_prio_info;
+			}
+		}
+
 		queue_infos.push_back(info);
 	}
 
@@ -1479,6 +1585,13 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	if (ext.supports_video_encode_av1)
 		ADD_CHAIN(ext.av1_features, VIDEO_ENCODE_AV1_FEATURES_KHR);
 
+	if ((flags & CONTEXT_CREATION_ENABLE_VIDEO_ENCODE_BIT) != 0 &&
+	    has_extension(VK_KHR_VIDEO_ENCODE_INTRA_REFRESH_EXTENSION_NAME))
+	{
+		enabled_extensions.push_back(VK_KHR_VIDEO_ENCODE_INTRA_REFRESH_EXTENSION_NAME);
+		ADD_CHAIN(ext.intra_refresh_features, VIDEO_ENCODE_INTRA_REFRESH_FEATURES_KHR);
+	}
+
 	if (ext.device_api_core_version >= VK_API_VERSION_1_2)
 	{
 		ADD_CHAIN(ext.vk11_features, VULKAN_1_1_FEATURES);
@@ -1653,7 +1766,8 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 		ADD_CHAIN(ext.image_compression_control_swapchain_features, IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_FEATURES_EXT);
 	}
 
-	if (has_extension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME))
+	if ((flags & CONTEXT_CREATION_ENABLE_ADVANCED_WSI_BIT) != 0 && requires_swapchain &&
+	    has_extension(VK_NV_LOW_LATENCY_2_EXTENSION_NAME))
 	{
 		enabled_extensions.push_back(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
 		ext.supports_low_latency2_nv = true;
@@ -1795,16 +1909,18 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 			ext.supports_nv_checkpoints = true;
 		}
 
-		// The KHR is quite new and not all relevant drivers support the KHR yet.
 		if (has_extension(VK_KHR_DEVICE_FAULT_EXTENSION_NAME))
 		{
 			enabled_extensions.push_back(VK_KHR_DEVICE_FAULT_EXTENSION_NAME);
-			ADD_CHAIN(ext.fault_features_khr, FAULT_FEATURES_KHR);
+			ADD_CHAIN(ext.fault_features, FAULT_FEATURES_KHR);
 		}
-		else if (has_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME))
+
+		if (has_extension(VK_KHR_SHADER_ABORT_EXTENSION_NAME))
 		{
-			enabled_extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
-			ADD_CHAIN(ext.fault_features_ext, FAULT_FEATURES_EXT);
+			enabled_extensions.push_back(VK_KHR_SHADER_ABORT_EXTENSION_NAME);
+			ADD_CHAIN(ext.shader_abort_features, SHADER_ABORT_FEATURES_KHR);
+			enabled_extensions.push_back(VK_KHR_SHADER_CONSTANT_DATA_EXTENSION_NAME);
+			ADD_CHAIN(ext.shader_constant_data_features, SHADER_CONSTANT_DATA_FEATURES_KHR);
 		}
 
 		ext.supports_post_mortem = true;
@@ -1820,6 +1936,12 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	{
 		enabled_extensions.push_back(VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME);
 		ADD_CHAIN(ext.shader_mixed_float_dot_product_features, SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE);
+	}
+
+	if (has_extension(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME))
+	{
+		enabled_extensions.push_back(VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME);
+		ADD_CHAIN(ext.image_atomic_int64_features, SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT);
 	}
 
 #ifdef GRANITE_VULKAN_PROFILES
@@ -1905,9 +2027,11 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	ext.vk14_features.dynamicRenderingLocalRead = VK_FALSE;
 	ext.vk14_features.globalPriorityQuery = VK_FALSE;
 	ext.vk14_features.pipelineProtectedAccess = VK_FALSE;
-	ext.vk14_features.pipelineRobustness = VK_FALSE;
 	ext.vk14_features.vertexAttributeInstanceRateDivisor = VK_FALSE;
 	ext.vk14_features.vertexAttributeInstanceRateZeroDivisor = VK_FALSE;
+	// Enabling state-based robustness uses robustness2.
+	if (!has_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) && !has_extension(VK_KHR_ROBUSTNESS_2_EXTENSION_NAME))
+		ext.vk14_features.pipelineRobustness = VK_FALSE;
 	ext.vk14_features.stippledBresenhamLines = VK_FALSE;
 	ext.vk14_features.stippledRectangularLines = VK_FALSE;
 	ext.vk14_features.stippledSmoothLines = VK_FALSE;
@@ -2132,9 +2256,11 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 	// device-create loop below downgrades on NOT_PERMITTED, so a refused class NEVER fails the
 	// encoder — it just runs at default priority. Only the fresh encoder device (no inherit_info)
 	// is affected; this Granite copy is vendored solely for the PyroWave codec.
+	// Skipped when the caller asked for a class through upstream's own
+	// CONTEXT_CREATION_ENABLE_COMPUTE_*_GLOBAL_PRIORITY_BIT flags (pyrowave_create_device_by_compat2).
 	Util::SmallVector<VkQueueGlobalPriorityKHR> pf_priority_candidates;
 	Util::SmallVector<VkDeviceQueueGlobalPriorityCreateInfoKHR> pf_global_priority_infos;
-	if (!inherit_info)
+	if (!inherit_info && (flags & CONTEXT_CREATION_ENABLE_COMPUTE_HIGH_GLOBAL_PRIORITY_BIT) == 0)
 	{
 		const char *pf_gp_ext = nullptr;
 		if (has_extension(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME))
@@ -2180,8 +2306,10 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 		device_info.ppEnabledExtensionNames = enabled_extensions.empty() ? nullptr : enabled_extensions.data();
 	}
 
+#if defined(VULKAN_DEBUG)
 	for (uint32_t i = 0; i < device_info.enabledExtensionCount; i++)
 		LOGI("Enabling device extension: %s.\n", device_info.ppEnabledExtensionNames[i]);
+#endif
 
 #ifdef GRANITE_VULKAN_PROFILES
 	if (!required_profile.empty())
@@ -2195,45 +2323,91 @@ bool Context::create_device(VkPhysicalDevice gpu_, VkSurfaceKHR surface,
 		if (device_factory)
 		{
 			device = device_factory->create_device(gpu, &device_info);
+
+			// Driver is allowed to fail device creation if the priority is not supported.
+			if (device == VK_NULL_HANDLE && global_prio_info.globalPriority == VK_QUEUE_GLOBAL_PRIORITY_REALTIME)
+			{
+				// Driver must fail the call if the priority is not marked as supported.
+				global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH;
+				device = device_factory->create_device(gpu, &device_info);
+			}
+
+			if (device == VK_NULL_HANDLE && global_prio_info.globalPriority == VK_QUEUE_GLOBAL_PRIORITY_HIGH)
+			{
+				// This must be supported (or everything is broken).
+				global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+				device = device_factory->create_device(gpu, &device_info);
+			}
+
 			if (device == VK_NULL_HANDLE)
 				return false;
 		}
 		else
 		{
 			// PUNKTFUNK: try the requested global-priority class, downgrade through the
-			// candidate list on NOT_PERMITTED, then finally create with no global priority.
-			VkResult pf_res;
+			// candidate list when the driver refuses it, then finally create with none.
+			// Upstream's own ladder below handles only the flag-driven request.
+			VkResult vr;
 			if (pf_priority_candidates.empty())
 			{
-				pf_res = vkCreateDevice(gpu, &device_info, nullptr, &device);
+				vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
 			}
 			else
 			{
-				pf_res = VK_ERROR_NOT_PERMITTED_KHR;
+				const auto pf_refused = [](VkResult r) {
+					return r == VK_ERROR_NOT_PERMITTED || r == VK_ERROR_INITIALIZATION_FAILED;
+				};
+				vr = VK_ERROR_NOT_PERMITTED;
 				for (size_t pf_a = 0; pf_a < pf_priority_candidates.size(); pf_a++)
 				{
 					for (auto &pf_gp : pf_global_priority_infos)
 						pf_gp.globalPriority = pf_priority_candidates[pf_a];
-					pf_res = vkCreateDevice(gpu, &device_info, nullptr, &device);
-					if (pf_res != VK_ERROR_NOT_PERMITTED_KHR)
+					device = VK_NULL_HANDLE;
+					vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
+					if (!pf_refused(vr))
 						break;
 					LOGW("PyroWave: global queue priority %u not permitted; downgrading.\n",
 						unsigned(pf_priority_candidates[pf_a]));
 				}
-				if (pf_res == VK_ERROR_NOT_PERMITTED_KHR)
+				if (pf_refused(vr))
 				{
 					for (auto &pf_qi : queue_infos)
 						pf_qi.pNext = nullptr;
-					pf_res = vkCreateDevice(gpu, &device_info, nullptr, &device);
+					device = VK_NULL_HANDLE;
+					vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
 					LOGW("PyroWave: all global queue priorities refused; default priority.\n");
 				}
 				else
 					LOGI("PyroWave: encode device created with an elevated global queue priority.\n");
 			}
-			if (pf_res != VK_SUCCESS)
+
+			if ((vr == VK_ERROR_INITIALIZATION_FAILED || vr == VK_ERROR_NOT_PERMITTED) &&
+			    global_prio_info.globalPriority == VK_QUEUE_GLOBAL_PRIORITY_REALTIME)
+			{
+				// Driver must fail the call if the priority is not marked as supported.
+				device = VK_NULL_HANDLE;
+				global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH;
+				vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
+			}
+
+			if ((vr == VK_ERROR_INITIALIZATION_FAILED || vr == VK_ERROR_NOT_PERMITTED) &&
+			    global_prio_info.globalPriority == VK_QUEUE_GLOBAL_PRIORITY_HIGH)
+			{
+				// Driver must fail the call if the priority is not marked as supported.
+				device = VK_NULL_HANDLE;
+				global_prio_info.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+				vr = vkCreateDevice(gpu, &device_info, nullptr, &device);
+			}
+
+			if (vr != VK_SUCCESS)
+			{
+				device = VK_NULL_HANDLE;
 				return false;
+			}
 		}
 	}
+
+	ext.global_compute_priority = global_prio_info.globalPriority;
 
 	if (inherit_info)
 	{

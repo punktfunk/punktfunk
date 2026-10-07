@@ -45,6 +45,7 @@ serving HTTPS (HTTP/1.1 over TLS) with the host's identity cert), so its service
 | `update.sh` | Rebuild everything from the current source and restart the services (config + pairings persist). `--pull` does `git pull` first, on the branch the checkout follows: `stable` (releases, the default) or `main` (canary). Also retrofits anything a newer install.sh writes (runner, HDR gamescope, keep-list registration, rebuild check) onto older installs. |
 | `build-version.sh` | The version a build reports: a release tag's `X.Y.Z`, else the canary base (`scripts/ci/pf-version.sh`) plus the commit, so the console and the channel's feed agree. |
 | `heal-box.sh` | Run by `install.sh` and `update.sh` before they enter the box: if its `fuse-overlayfs` helper died, podman reuses the dead mount on every start (`transport endpoint is not connected`). This detaches it so the next start remounts. A no-op on a healthy box. |
+| `install-tray.sh` | Run by `install.sh` and `update.sh`: build the status tray (`punktfunk-tray`) in its own cargo run and install it user-scoped. The host writes its autostart entry, so it shows in the Desktop-mode panel from the next login. Best-effort: a failure warns and the host runs without it. |
 | `build-gamescope.sh` | Build gamescope + the `pipewire-hdr` patches (`packaging/gamescope`) in the same distrobox and install it as `~/.local/bin/punktfunk-gamescope`, wiring `PUNKTFUNK_GAMESCOPE_BIN` into `host.env` — what lets Game Mode stream **10-bit BT.2020 PQ (HDR)** instead of 8-bit SDR. Best-effort: a failure warns and the host streams SDR. Content-stamped — a no-op unless `packaging/gamescope/` changed or the binary broke. |
 | `rebuild-check.sh` | The post-OS-update self-heal (run by `punktfunk-rebuild-check.service` before the host at session start): `ldd`-probes the host binary **and the HDR gamescope** — milliseconds when healthy, a full `update.sh` rebuild only when a SteamOS update actually broke library links. |
 
@@ -78,6 +79,10 @@ default `pf2`), `PUNKTFUNK_MGMT_PORT` (47990), `PUNKTFUNK_WEB_PORT` (47992).
 - **Plugin runner:** the deb's payload laid out user-scoped (read-only `/usr` can't take the
   package): wrapper `~/.local/bin/punktfunk-scripting`, pinned `bun` in
   `~/.local/lib/punktfunk-scripting/`, bundle in `~/.local/share/punktfunk-scripting/`.
+- **Status tray:** `~/.local/bin/punktfunk-tray`, started at login by
+  `~/.config/autostart/io.unom.Punktfunk.Tray.desktop`, which the host writes from its **Tray
+  autostart** setting; the **Punktfunk Host** launcher in
+  `~/.local/share/applications/`, and its icons under `~/.local/share/icons/hicolor/`.
 - **HDR gamescope:** `~/.local/bin/punktfunk-gamescope` (gamescope + the `pipewire-hdr` patches,
   built in `pf2`, run natively — it does **not** replace the system gamescope; only the sessions
   the host spawns use it). `host.env` gains `PUNKTFUNK_GAMESCOPE_BIN=` pointing at it — a line

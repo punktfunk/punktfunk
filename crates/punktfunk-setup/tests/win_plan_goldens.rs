@@ -468,16 +468,18 @@ fn an_upgrade_keeps_a_switched_off_runner_off() {
     assert!(!text.contains("schtasks /Run /TN PunktfunkScripting"));
 }
 
-// Unchecking a row on upgrade deletes it. Inno's unchecked box is a no-op; do not copy that.
+// Unchecking a row on upgrade turns it off. Inno's unchecked box is a no-op; do not copy that.
+// The host's `settings set` deletes the Run value.
 #[test]
-fn deselecting_tray_on_an_upgrade_deletes_the_run_key() {
+fn deselecting_tray_on_an_upgrade_turns_tray_autostart_off() {
     let facts = upgrade();
     let mut choices = WinChoices::derive(&facts, Artifact::Host);
     choices.tray_autostart = false;
     let cmds = host_plan(&facts, &choices).commands();
     assert!(cmds
         .iter()
-        .any(|c| c.starts_with("reg delete") && c.contains("PunktfunkTray")));
+        .any(|c| c.ends_with("settings set tray_autostart false")));
+    assert!(!cmds.iter().any(|c| c.contains("PunktfunkTray")));
 }
 
 #[test]

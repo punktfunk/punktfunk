@@ -409,9 +409,6 @@ pub const UNITS: [(&str, &str); 3] = [
     ("punktfunk-scripting.service", "Plugin runner"),
 ];
 
-#[cfg(target_os = "linux")]
-pub const UNIT_NAME: &str = UNITS[0].0;
-
 /// The host's state and its companions', from one `systemctl show` over [`UNITS`].
 #[cfg(target_os = "linux")]
 fn probe_services() -> (ServiceState, Vec<ServiceState>) {

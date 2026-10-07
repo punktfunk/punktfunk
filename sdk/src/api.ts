@@ -9,9 +9,10 @@
 // Effect's `HttpClient` via the overridable `FetchHttpClient.Fetch` reference — so the loopback
 // pin is preserved and there is still exactly one place that knows how to reach the host.
 import { Effect } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import type { HttpClientResponse } from "effect/http/HttpClientResponse";
 import type { Connection } from "./connection.js";
 import * as gen from "./gen/punktfunk.js";
 
@@ -30,11 +31,17 @@ type OptionalizeTail<A extends readonly unknown[]> = A extends readonly [
 		: A
 	: A;
 
-/** Each generated method returns an Effect; expose it as a Promise of the decoded success value. */
+/**
+ * Each generated method returns an Effect; expose it as a Promise of the decoded success value.
+ * A call without `config` returns the bare value, so the `[value, response]` arm that the
+ * generated signature adds for `includeResponse` is dropped.
+ */
 type Promiseify<T> = T extends (
 	...args: infer A
 ) => Effect.Effect<infer Success, infer _E, infer _R>
-	? (...args: OptionalizeTail<A>) => Promise<Success>
+	? (
+			...args: OptionalizeTail<A>
+		) => Promise<Exclude<Success, readonly [unknown, HttpClientResponse]>>
 	: never;
 
 /** The event stream (an Effect `Stream`) and the void catch-all — served by `pf.events` instead. */

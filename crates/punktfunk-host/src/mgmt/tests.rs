@@ -2207,33 +2207,55 @@ async fn the_relay_takes_a_page_root_and_its_paths() {
     }
 }
 
-/// A plugin on its own pipe parks a connection with an upgrade; a request for its page goes down
-/// that connection as plain HTTP carrying the plugin's secret, and its answer comes back.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_plugin_page_is_reached_over_its_parked_channel() {
+/// The plugin end of a connection that `id` has parked at the host with an upgrade.
+async fn attach_channel(app: Router, id: &str) -> tokio::io::DuplexStream {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let app = test_app(test_state(), None);
     let (mut plugin, host_io) = tokio::io::duplex(1 << 16);
-    let served = tokio::spawn(crate::gamestream::tls::serve_conn(
+    tokio::spawn(crate::gamestream::tls::serve_conn(
         host_io,
         app,
         PeerCertFingerprint(None),
         PeerAddr("127.0.0.1:1".parse().unwrap()),
         None,
-        Some(crate::gamestream::tls::PipePlugin("demo".into())),
+        Some(crate::gamestream::tls::PipePlugin(id.into())),
     ));
+    let attach = format!(
+        "GET /api/v1/plugins/{id}/ui/attach HTTP/1.1\r\nhost: punktfunk.host\r\n\
+         connection: upgrade\r\nupgrade: punktfunk-ui\r\n\r\n"
+    );
+    plugin.write_all(attach.as_bytes()).await.unwrap();
+    let mut buf = [0u8; 4096];
+    let n = plugin.read(&mut buf).await.unwrap();
+    let head = String::from_utf8_lossy(&buf[..n]);
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    plugin
+}
+
+/// Read one request head off a parked connection and answer it with a small JSON body.
+async fn answer_one(plugin: &mut tokio::io::DuplexStream) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = [0u8; 4096];
+    let mut request = Vec::new();
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = plugin.read(&mut buf).await.unwrap();
+        assert!(n > 0, "the channel closed before a request came down it");
+        request.extend_from_slice(&buf[..n]);
+    }
     plugin
         .write_all(
-            b"GET /api/v1/plugins/demo/ui/attach HTTP/1.1\r\nhost: punktfunk.host\r\n\
-              connection: upgrade\r\nupgrade: punktfunk-ui\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\
+              connection: close\r\n\r\n{\"ok\":true}",
         )
         .await
         .unwrap();
-    let mut buf = vec![0u8; 4096];
-    let n = plugin.read(&mut buf).await.unwrap();
-    let head = String::from_utf8_lossy(&buf[..n]).into_owned();
-    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    String::from_utf8_lossy(&request).to_ascii_lowercase()
+}
 
+/// A plugin on its own pipe parks a connection with an upgrade; a request for its page goes down
+/// that connection as plain HTTP carrying the plugin's secret, and its answer comes back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plugin_page_is_reached_over_its_parked_channel() {
+    let mut plugin = attach_channel(test_app(test_state(), None), "demo").await;
     let sent = tokio::spawn(async move {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("x-forwarded-prefix", "/plugin-ui/demo".parse().unwrap());
@@ -2247,13 +2269,7 @@ async fn a_plugin_page_is_reached_over_its_parked_channel() {
         )
         .await
     });
-    let mut request = Vec::new();
-    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-        let n = plugin.read(&mut buf).await.unwrap();
-        assert!(n > 0, "the channel closed before a request came down it");
-        request.extend_from_slice(&buf[..n]);
-    }
-    let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+    let text = answer_one(&mut plugin).await;
     assert!(text.starts_with("get /__health http/1.1\r\n"), "{text}");
     assert!(text.contains("authorization: bearer s3cret"), "{text}");
     assert!(
@@ -2261,19 +2277,38 @@ async fn a_plugin_page_is_reached_over_its_parked_channel() {
         "{text}"
     );
     assert!(!text.contains("upgrade:"), "{text}");
-    plugin
-        .write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\
-              connection: close\r\n\r\n{\"ok\":true}",
-        )
-        .await
-        .unwrap();
     let resp = sent.await.unwrap().expect("the page answered");
     assert_eq!(resp.status(), 200);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"{\"ok\":true}");
-    drop(plugin);
-    let _ = served.await;
+}
+
+/// A restarted plugin leaves its old connections parked; the page is served by the new one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_plugins_old_channel_is_skipped() {
+    let app = test_app(test_state(), None);
+    let gone = attach_channel(app.clone(), "restarted").await;
+    // Let the upgrade task park it before its plugin goes away.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(gone);
+    let mut plugin = attach_channel(app, "restarted").await;
+    let sent = tokio::spawn(async move {
+        super::plugin_channel::send(
+            "restarted",
+            "s3cret",
+            axum::http::Method::GET,
+            "/__health",
+            &axum::http::HeaderMap::new(),
+            Body::empty(),
+        )
+        .await
+    });
+    let text = tokio::time::timeout(std::time::Duration::from_secs(5), answer_one(&mut plugin))
+        .await
+        .expect("the request went to the plugin that is gone");
+    assert!(text.starts_with("get /__health http/1.1\r\n"), "{text}");
+    let resp = sent.await.unwrap().expect("the live connection answered");
+    assert_eq!(resp.status(), 200);
 }
 
 /// Every live route has an explicit plugin/cert classification. A new route fails until a

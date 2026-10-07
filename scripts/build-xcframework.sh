@@ -74,32 +74,23 @@ fi
 export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$HOST_LINKER"
 export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$HOST_LINKER"
 
-# Hermetic Opus: never let audiopus_sys link a Homebrew libopus via pkg-config. A brew lib
-# is built for the RUNNING macOS (its objects carry that minos, tripping the version guard
-# below) and only exists for the host arch — the other slice silently falls back to the
-# vendored build, so the two slices ship different libopus builds. Force the vendored CMake
-# build everywhere; the policy floor keeps modern CMake (≥4) accepting libopus's old
-# `cmake_minimum_required`.
-export OPUS_NO_PKG_CONFIG=1
-export CMAKE_POLICY_VERSION_MINIMUM=3.5
-
 # Skia for the console comes as prebuilt archives keyed by target + features. skia-bindings
 # downloads with no content check and, when no archive matches, builds Skia from source for
 # hours without failing. So it only ever reads files verified here against these digests.
 # The tvOS and visionOS archives are ours (scripts/skia-apple/), the rest rust-skia's; re-derive
 # all seven on every skia-safe bump. A SKIA_BINARIES_URL from the caller skips the check.
-SKIA_TAG=0.99.0
-SKIA_HASH=a25a0fdb7d90429aa2d1
-SKIA_FEATURES=jpegd-jpege-metal-pdf-textlayout
+SKIA_TAG=0.153.3
+SKIA_HASH=b7f043e0b1e2a850e702
+SKIA_FEATURES=ganesh-jpegd-jpege-metal-pdf-textlayout
 skia_sha256() {
     case "$1" in
-    aarch64-apple-darwin) echo 93b7fcb4918c8c258319d8f9ace47ff452470d69c5099753503b617dcd528211 ;;
-    aarch64-apple-ios) echo a1cb20dc79be99540ab5e75f78fb6c3e9b6f43fe496d5650b815d44301a20f31 ;;
-    aarch64-apple-ios-sim) echo a33fdbebfec3d3e57cd2ba6d4490bec2407199c50328c48f5810bf9a81189f7a ;;
-    aarch64-apple-tvos) echo 904aedec99d84fe65c76f7d435642b5cadcee2290284a8ebe3b5a9383e6cfb78 ;;
-    aarch64-apple-tvos-sim) echo f664eb840eed925dc55071a07a4a542e63a4fd5f7cba41d667b1c6d4ad593c72 ;;
-    aarch64-apple-visionos) echo 48776b3dafb7e42c7086c72b62fca3781b113592ced3aff9289cfa92729d231f ;;
-    aarch64-apple-visionos-sim) echo fdb1509131de74383e9807c6f2f0b76c1dc56dfe83ba4e4384c6f34cfd50885a ;;
+    aarch64-apple-darwin) echo 04b8e665ed7d5ff2de4e40579a361b3cb81cd196fea8b32064ab155371214512 ;;
+    aarch64-apple-ios) echo 1b78ad184fb7b40e39feda07181b9cce68b44082704462bee5f0a21a23b7292a ;;
+    aarch64-apple-ios-sim) echo e31ff85415b55781922d105aa944211828d5eb7dc42ddae5190cc65d672647e7 ;;
+    aarch64-apple-tvos) echo 3d1d23719ffde658d3dc25f3ca52f9cf2f0de104c3ed7f6f7bf860832b558dd3 ;;
+    aarch64-apple-tvos-sim) echo ace50a9f8ccc21de357768132a0a6935ccab3d6afea3a3f1efbbd06e14ff8076 ;;
+    aarch64-apple-visionos) echo 1821c7a6ac699e3c0265774ae5759333fadbd6bcef4cdaf51217171e51c06836 ;;
+    aarch64-apple-visionos-sim) echo 58684503632cc5b86c0e81aae52addb5a371fb1b89c4c61507f881647595bf76 ;;
     esac
 }
 SKIA_DIR="$(cd "$TARGET_DIR" && pwd)/skia-binaries"

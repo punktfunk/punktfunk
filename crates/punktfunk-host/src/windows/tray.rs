@@ -95,15 +95,12 @@ pub fn is_running() -> bool {
 /// Two misses restart the tray, so this is half the grace window.
 const WATCH_TICK: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Reads the console install's HKLM `Run` opt-in for tray supervision.
+/// The `tray_autostart` setting, read each tick so a console change stops or resumes the watch.
 fn wanted() -> bool {
-    winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
-        .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run")
-        .and_then(|k| k.get_value::<String, _>("PunktfunkTray"))
-        .is_ok()
+    pf_host_config::row_bool("PUNKTFUNK_TRAY_AUTOSTART")
 }
 
-/// Keeps the console status tray alive while the ordinary host runs.
+/// Keeps the console status tray alive while the ordinary host runs and Tray autostart is on.
 ///
 /// Seat hosts return before spawning the watcher because their manager is the
 /// control surface. On the console, two misses trigger [`ensure`]; one miss is
@@ -114,15 +111,13 @@ pub fn supervise() {
         return;
     }
     std::thread::spawn(|| {
-        if !wanted() {
-            tracing::debug!("no HKLM Run entry for the status tray — not supervising it");
-            return;
+        if wanted() {
+            ensure();
         }
-        ensure();
         let mut missed = false;
         loop {
             std::thread::sleep(WATCH_TICK);
-            let absent = !is_running();
+            let absent = wanted() && !is_running();
             if absent && missed {
                 ensure();
             }

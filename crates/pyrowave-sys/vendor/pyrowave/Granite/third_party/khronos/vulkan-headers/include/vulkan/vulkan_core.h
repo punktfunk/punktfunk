@@ -4,7 +4,7 @@
 /*
 ** Copyright 2015-2026 The Khronos Group Inc.
 **
-** SPDX-License-Identifier: Apache-2.0
+** SPDX-License-Identifier: Apache-2.0 OR MIT
 */
 
 /*
@@ -66,7 +66,7 @@ extern "C" {
 //#define VK_API_VERSION VK_MAKE_API_VERSION(0, 1, 0, 0) // Patch version should always be set to 0
 
 // Version of this file
-#define VK_HEADER_VERSION 352
+#define VK_HEADER_VERSION 363
 
 // Complete version of this file
 #define VK_HEADER_VERSION_COMPLETE VK_MAKE_API_VERSION(0, 1, 4, VK_HEADER_VERSION)
@@ -1215,7 +1215,6 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT = 1000496000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_BUILTINS_FEATURES_ARM = 1000497000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_BUILTINS_PROPERTIES_ARM = 1000497001,
-    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT = 1000498000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT = 1000499000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR = 1000504000,
     VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV = 1000505000,
@@ -1343,6 +1342,8 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LAYERED_API_VULKAN_PROPERTIES_KHR = 1000562004,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT16_VECTOR_FEATURES_NV = 1000563000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_REPLICATED_COMPOSITES_FEATURES_EXT = 1000564000,
+    VK_STRUCTURE_TYPE_TENSOR_EXPLICIT_TILING_FORMAT_PROPERTIES_ARM = 1000565000,
+    VK_STRUCTURE_TYPE_TENSOR_ROLLING_BACKING_CREATE_INFO_ARM = 1000565001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT = 1000567000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_VALIDATION_FEATURES_NV = 1000568000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV = 1000569000,
@@ -1404,6 +1405,9 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_FLEXIBLE_DIMENSIONS_PROPERTIES_NV = 1000593001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_PROPERTIES_NV = 1000593002,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_OPACITY_MICROMAP_FEATURES_ARM = 1000596000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_FEEDBACK_2_FEATURES_KHR = 1000598000,
+    VK_STRUCTURE_TYPE_VIDEO_ENCODE_FEEDBACK_2_CAPABILITIES_KHR = 1000598001,
+    VK_STRUCTURE_TYPE_QUERY_POOL_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_CREATE_INFO_KHR = 1000598002,
     VK_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT = 1000602000,
     VK_STRUCTURE_TYPE_MEMORY_METAL_HANDLE_PROPERTIES_EXT = 1000602001,
     VK_STRUCTURE_TYPE_MEMORY_GET_METAL_HANDLE_INFO_EXT = 1000602002,
@@ -1426,6 +1430,8 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_PROPERTIES_KHR = 1000286001,
     VK_STRUCTURE_TYPE_SET_PRESENT_CONFIG_NV = 1000613000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_METERING_FEATURES_NV = 1000613001,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SWAPCHAIN_FEATURES_EXT = 1000616000,
+    VK_STRUCTURE_TYPE_SWAPCHAIN_FLAGS_SURFACE_CAPABILITIES_EXT = 1000616001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_OFFSET_FEATURES_EXT = 1000425000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_OFFSET_PROPERTIES_EXT = 1000425001,
     VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_OFFSET_END_INFO_EXT = 1000425002,
@@ -1461,10 +1467,22 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_FEATURES_EXT = 1000642000,
     VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV = 1000645000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_OCCUPANCY_PRIORITY_FEATURES_NV = 1000645001,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_KHR = 1000498000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_11_FEATURES_KHR = 1000657000,
     VK_STRUCTURE_TYPE_QUEUE_FAMILY_OPTIMAL_IMAGE_TRANSFER_GRANULARITY_PROPERTIES_KHR = 1000657001,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT = 1000659000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_INFO_2_EXT = 1000659001,
+    VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_2_EXT = 1000659002,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_PARTITIONED_FEATURES_EXT = 1000662000,
     VK_STRUCTURE_TYPE_UBM_SURFACE_CREATE_INFO_SEC = 1000664000,
+    VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_4_KHR = 1000668000,
+    VK_STRUCTURE_TYPE_IMAGE_CREATE_FLAGS_2_CREATE_INFO_KHR = 1000668001,
+    VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR = 1000668002,
+    VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_2_CREATE_INFO_KHR = 1000668003,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_FLAGS_FEATURES_KHR = 1000668004,
+    VK_STRUCTURE_TYPE_IMAGE_STENCIL_USAGE_2_CREATE_INFO_KHR = 1000668005,
+    VK_STRUCTURE_TYPE_SHARED_PRESENT_SURFACE_CAPABILITIES_2_KHR = 1000668006,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OCP_MICROSCALING_TYPES_FEATURES_EXT = 1000672000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE = 1000673000,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_THROTTLE_HINT_FEATURES_SEC = 1000674000,
     VK_STRUCTURE_TYPE_THROTTLE_HINT_SUBMIT_INFO_SEC = 1000674001,
@@ -1472,7 +1490,14 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_NEURAL_STATISTICS_CREATE_INFO_ARM = 1000676001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_NEURAL_ACCELERATOR_STATISTICS_FEATURES_ARM = 1000676002,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_RESTART_INDEX_FEATURES_EXT = 1000678000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_TILING_CONTROL_FEATURES_EXT = 1000687000,
+    VK_STRUCTURE_TYPE_IMAGE_TILING_CONTROL_CREATE_INFO_EXT = 1000687001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_DECODE_VECTOR_FEATURES_NV = 1000689000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_BASE_HANDLE_FEATURES_NV = 1000707000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INFO_PROPERTIES_INTEL = 1000708000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_FEATURES_VALVE = 1000709000,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_PROPERTIES_VALVE = 1000709001,
+    VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_ALIGNMENT_ALLOCATE_INFO_VALVE = 1000709002,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTER_FEATURES = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETER_FEATURES = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES,
   // VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT is a legacy alias
@@ -1711,6 +1736,7 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO_KHR = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
     VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO_KHR = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
     VK_STRUCTURE_TYPE_SHADER_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_KHR,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES_KHR = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES,
     VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_KHR = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_KHR = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES,
@@ -1811,6 +1837,7 @@ typedef enum VkVendorId {
     VK_VENDOR_ID_MESA = 0x10005,
     VK_VENDOR_ID_POCL = 0x10006,
     VK_VENDOR_ID_MOBILEYE = 0x10007,
+    VK_VENDOR_ID_APE = 0x10008,
     VK_VENDOR_ID_MAX_ENUM = 0x7FFFFFFF
 } VkVendorId;
 
@@ -6354,6 +6381,8 @@ typedef enum VkDriverId {
     VK_DRIVER_ID_VULKAN_SC_EMULATION_ON_VULKAN = 27,
     VK_DRIVER_ID_MESA_KOSMICKRISP = 28,
     VK_DRIVER_ID_MESA_GFXSTREAM = 29,
+    VK_DRIVER_ID_APE_SOFT = 30,
+    VK_DRIVER_ID_RESERVED_31 = 31,
     VK_DRIVER_ID_AMD_PROPRIETARY_KHR = VK_DRIVER_ID_AMD_PROPRIETARY,
     VK_DRIVER_ID_AMD_OPEN_SOURCE_KHR = VK_DRIVER_ID_AMD_OPEN_SOURCE,
     VK_DRIVER_ID_MESA_RADV_KHR = VK_DRIVER_ID_MESA_RADV,
@@ -7104,6 +7133,11 @@ typedef enum VkToolPurposeFlagBits {
     VK_TOOL_PURPOSE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
 } VkToolPurposeFlagBits;
 typedef VkFlags VkToolPurposeFlags;
+
+typedef enum VkPrivateDataSlotCreateFlagBits {
+    VK_PRIVATE_DATA_SLOT_CREATE_BASE_OBJECT_HANDLE_BIT_NV = 0x00000001,
+    VK_PRIVATE_DATA_SLOT_CREATE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+} VkPrivateDataSlotCreateFlagBits;
 typedef VkFlags VkPrivateDataSlotCreateFlags;
 typedef VkFlags64 VkPipelineStageFlags2;
 
@@ -7363,6 +7397,7 @@ static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_TENSOR_DATA_GRAPH_BIT_
 static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_COPY_IMAGE_INDIRECT_DST_BIT_KHR = 0x800000000000000ULL;
 static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR = 0x2000000000000ULL;
 static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_VIDEO_ENCODE_EMPHASIS_MAP_BIT_KHR = 0x4000000000000ULL;
+static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_2D_BIT_IMG = 0x200000000000ULL;
 static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_DEPTH_COPY_ON_COMPUTE_QUEUE_BIT_KHR = 0x10000000000000ULL;
 static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_DEPTH_COPY_ON_TRANSFER_QUEUE_BIT_KHR = 0x20000000000000ULL;
 static const VkFormatFeatureFlagBits2 VK_FORMAT_FEATURE_2_STENCIL_COPY_ON_COMPUTE_QUEUE_BIT_KHR = 0x40000000000000ULL;
@@ -9043,6 +9078,7 @@ typedef enum VkSwapchainCreateFlagBitsKHR {
     VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR = 0x00000040,
     VK_SWAPCHAIN_CREATE_PRESENT_WAIT_2_BIT_KHR = 0x00000080,
     VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR = 0x00000008,
+    VK_SWAPCHAIN_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT = 0x00000100,
     VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT = VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR,
     VK_SWAPCHAIN_CREATE_FLAG_BITS_MAX_ENUM_KHR = 0x7FFFFFFF
 } VkSwapchainCreateFlagBitsKHR;
@@ -12214,6 +12250,13 @@ typedef enum VkVideoEncodeFeedbackFlagBitsKHR {
     VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_BUFFER_OFFSET_BIT_KHR = 0x00000001,
     VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_BYTES_WRITTEN_BIT_KHR = 0x00000002,
     VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_HAS_OVERRIDES_BIT_KHR = 0x00000004,
+    VK_VIDEO_ENCODE_FEEDBACK_AVERAGE_QUANTIZATION_BIT_KHR = 0x00000008,
+    VK_VIDEO_ENCODE_FEEDBACK_MIN_QUANTIZATION_BIT_KHR = 0x00000010,
+    VK_VIDEO_ENCODE_FEEDBACK_MAX_QUANTIZATION_BIT_KHR = 0x00000020,
+    VK_VIDEO_ENCODE_FEEDBACK_INTRA_PIXELS_BIT_KHR = 0x00000040,
+    VK_VIDEO_ENCODE_FEEDBACK_INTER_PIXELS_BIT_KHR = 0x00000080,
+    VK_VIDEO_ENCODE_FEEDBACK_SKIPPED_PIXELS_BIT_KHR = 0x00000100,
+    VK_VIDEO_ENCODE_FEEDBACK_PICTURE_PARTITION_COUNT_BIT_KHR = 0x00000200,
     VK_VIDEO_ENCODE_FEEDBACK_FLAG_BITS_MAX_ENUM_KHR = 0x7FFFFFFF
 } VkVideoEncodeFeedbackFlagBitsKHR;
 typedef VkFlags VkVideoEncodeFeedbackFlagsKHR;
@@ -13483,6 +13526,11 @@ typedef enum VkComponentTypeKHR {
     VK_COMPONENT_TYPE_UINT8_PACKED_NV = 1000491001,
     VK_COMPONENT_TYPE_FLOAT8_E4M3_EXT = 1000491002,
     VK_COMPONENT_TYPE_FLOAT8_E5M2_EXT = 1000491003,
+    VK_COMPONENT_TYPE_FLOAT6_E2M3_EXT = 1000672000,
+    VK_COMPONENT_TYPE_FLOAT6_E3M2_EXT = 1000672001,
+    VK_COMPONENT_TYPE_FLOAT4_E2M1_EXT = 1000672002,
+    VK_COMPONENT_TYPE_FLOAT8_UNSIGNED_E8M0_EXT = 1000672003,
+    VK_COMPONENT_TYPE_MXINT8_EXT = 1000672004,
     VK_COMPONENT_TYPE_FLOAT16_NV = VK_COMPONENT_TYPE_FLOAT16_KHR,
     VK_COMPONENT_TYPE_FLOAT32_NV = VK_COMPONENT_TYPE_FLOAT32_KHR,
     VK_COMPONENT_TYPE_FLOAT64_NV = VK_COMPONENT_TYPE_FLOAT64_KHR,
@@ -14569,6 +14617,40 @@ typedef struct VkVideoDecodeAV1InlineSessionParametersInfoKHR {
 
 
 
+// VK_KHR_video_encode_feedback2 is a preprocessor guard. Do not pass it to API calls.
+#define VK_KHR_video_encode_feedback2 1
+#define VK_KHR_VIDEO_ENCODE_FEEDBACK_2_SPEC_VERSION 1
+#define VK_KHR_VIDEO_ENCODE_FEEDBACK_2_EXTENSION_NAME "VK_KHR_video_encode_feedback2"
+
+typedef enum VkVideoEncodePerPartitionFeedbackFlagBitsKHR {
+    VK_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_STATUS_BIT_KHR = 0x00000001,
+    VK_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_BITSTREAM_BUFFER_OFFSET_BIT_KHR = 0x00000002,
+    VK_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_BITSTREAM_BYTES_WRITTEN_BIT_KHR = 0x00000004,
+    VK_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_FLAG_BITS_MAX_ENUM_KHR = 0x7FFFFFFF
+} VkVideoEncodePerPartitionFeedbackFlagBitsKHR;
+typedef VkFlags VkVideoEncodePerPartitionFeedbackFlagsKHR;
+typedef struct VkPhysicalDeviceVideoEncodeFeedback2FeaturesKHR {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           videoEncodeFeedback2;
+} VkPhysicalDeviceVideoEncodeFeedback2FeaturesKHR;
+
+typedef struct VkVideoEncodeFeedback2CapabilitiesKHR {
+    VkStructureType                              sType;
+    void*                                        pNext;
+    uint32_t                                     maxPerPartitionFeedbackEntries;
+    VkVideoEncodePerPartitionFeedbackFlagsKHR    supportedPerPartitionEncodeFeedbackFlags;
+} VkVideoEncodeFeedback2CapabilitiesKHR;
+
+typedef struct VkQueryPoolVideoEncodePerPartitionFeedbackCreateInfoKHR {
+    VkStructureType                              sType;
+    const void*                                  pNext;
+    uint32_t                                     maxPerPartitionFeedbackEntries;
+    VkVideoEncodePerPartitionFeedbackFlagsKHR    perPartitionEncodeFeedbackFlags;
+} VkQueryPoolVideoEncodePerPartitionFeedbackCreateInfoKHR;
+
+
+
 // VK_KHR_depth_clamp_zero_one is a preprocessor guard. Do not pass it to API calls.
 #define VK_KHR_depth_clamp_zero_one 1
 #define VK_KHR_DEPTH_CLAMP_ZERO_ONE_SPEC_VERSION 1
@@ -14757,6 +14839,18 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndRendering2KHR(
 #endif
 
 
+// VK_KHR_pipeline_library_group_handles is a preprocessor guard. Do not pass it to API calls.
+#define VK_KHR_pipeline_library_group_handles 1
+#define VK_KHR_PIPELINE_LIBRARY_GROUP_HANDLES_SPEC_VERSION 1
+#define VK_KHR_PIPELINE_LIBRARY_GROUP_HANDLES_EXTENSION_NAME "VK_KHR_pipeline_library_group_handles"
+typedef struct VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           pipelineLibraryGroupHandles;
+} VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR;
+
+
+
 // VK_KHR_maintenance11 is a preprocessor guard. Do not pass it to API calls.
 #define VK_KHR_maintenance11 1
 #define VK_KHR_MAINTENANCE_11_SPEC_VERSION 1
@@ -14772,6 +14866,117 @@ typedef struct VkQueueFamilyOptimalImageTransferGranularityPropertiesKHR {
     void*              pNext;
     VkExtent3D         optimalImageTransferGranularity;
 } VkQueueFamilyOptimalImageTransferGranularityPropertiesKHR;
+
+
+
+// VK_KHR_extended_flags is a preprocessor guard. Do not pass it to API calls.
+#define VK_KHR_extended_flags 1
+#define VK_KHR_EXTENDED_FLAGS_SPEC_VERSION 1
+#define VK_KHR_EXTENDED_FLAGS_EXTENSION_NAME "VK_KHR_extended_flags"
+typedef VkFlags64 VkFormatFeatureFlags4KHR;
+
+// Flag bits for VkFormatFeatureFlagBits4KHR
+typedef VkFlags64 VkFormatFeatureFlagBits4KHR;
+
+typedef VkFlags64 VkImageUsageFlags2KHR;
+
+// Flag bits for VkImageUsageFlagBits2KHR
+typedef VkFlags64 VkImageUsageFlagBits2KHR;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_TRANSFER_SRC_BIT_KHR = 0x00000001ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_TRANSFER_DST_BIT_KHR = 0x00000002ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_SAMPLED_BIT_KHR = 0x00000004ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_STORAGE_BIT_KHR = 0x00000008ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_COLOR_ATTACHMENT_BIT_KHR = 0x00000010ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_DEPTH_STENCIL_ATTACHMENT_BIT_KHR = 0x00000020ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_TRANSIENT_ATTACHMENT_BIT_KHR = 0x00000040ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_INPUT_ATTACHMENT_BIT_KHR = 0x00000080ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR = 0x00000100ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_FRAGMENT_DENSITY_MAP_BIT_EXT = 0x00000200ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_DECODE_DST_BIT_KHR = 0x00000400ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_DECODE_SRC_BIT_KHR = 0x00000800ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_DECODE_DPB_BIT_KHR = 0x00001000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_ENCODE_DST_BIT_KHR = 0x00002000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_ENCODE_SRC_BIT_KHR = 0x00004000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_ENCODE_DPB_BIT_KHR = 0x00008000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_INVOCATION_MASK_BIT_HUAWEI = 0x00040000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT = 0x00080000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_SAMPLE_WEIGHT_BIT_QCOM = 0x00100000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_SAMPLE_BLOCK_MATCH_BIT_QCOM = 0x00200000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_HOST_TRANSFER_BIT_KHR = 0x00400000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_TENSOR_ALIASING_BIT_ARM = 0x00800000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR = 0x02000000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_VIDEO_ENCODE_EMPHASIS_MAP_BIT_KHR = 0x04000000ULL;
+static const VkImageUsageFlagBits2KHR VK_IMAGE_USAGE_2_TILE_MEMORY_BIT_QCOM = 0x08000000ULL;
+
+typedef VkFlags64 VkImageCreateFlags2KHR;
+
+// Flag bits for VkImageCreateFlagBits2KHR
+typedef VkFlags64 VkImageCreateFlagBits2KHR;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_SPARSE_BINDING_BIT_KHR = 0x00000001ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_SPARSE_RESIDENCY_BIT_KHR = 0x00000002ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_SPARSE_ALIASED_BIT_KHR = 0x00000004ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_MUTABLE_FORMAT_BIT_KHR = 0x00000008ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_CUBE_COMPATIBLE_BIT_KHR = 0x00000010ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_ALIAS_SINGLE_LAYER_DESCRIPTOR_BIT_KHR = 0x00400000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_2D_ARRAY_COMPATIBLE_BIT_KHR = 0x00000020ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_SPLIT_INSTANCE_BIND_REGIONS_BIT_KHR = 0x00000040ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT_KHR = 0x00000080ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_EXTENDED_USAGE_BIT_KHR = 0x00000100ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_DISJOINT_BIT_KHR = 0x00000200ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_ALIAS_BIT_KHR = 0x00000400ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_PROTECTED_BIT_KHR = 0x00000800ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT = 0x00001000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_CORNER_SAMPLED_BIT_NV = 0x00002000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_SUBSAMPLED_BIT_EXT = 0x00004000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_FRAGMENT_DENSITY_MAP_OFFSET_BIT_EXT = 0x00008000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT = 0x00010000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_2D_VIEW_COMPATIBLE_BIT_EXT = 0x00020000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT = 0x00040000ULL;
+static const VkImageCreateFlagBits2KHR VK_IMAGE_CREATE_2_VIDEO_PROFILE_INDEPENDENT_BIT_KHR = 0x00100000ULL;
+
+typedef struct VkFormatProperties4KHR {
+    VkStructureType             sType;
+    void*                       pNext;
+    VkFormatFeatureFlags4KHR    linearTilingFeatures;
+    VkFormatFeatureFlags4KHR    optimalTilingFeatures;
+    VkFormatFeatureFlags4KHR    bufferFeatures;
+} VkFormatProperties4KHR;
+
+typedef struct VkImageUsageFlags2CreateInfoKHR {
+    VkStructureType          sType;
+    void*                    pNext;
+    VkImageUsageFlags2KHR    usage;
+} VkImageUsageFlags2CreateInfoKHR;
+
+typedef struct VkImageCreateFlags2CreateInfoKHR {
+    VkStructureType           sType;
+    void*                     pNext;
+    VkImageCreateFlags2KHR    flags;
+} VkImageCreateFlags2CreateInfoKHR;
+
+typedef struct VkImageViewUsage2CreateInfoKHR {
+    VkStructureType          sType;
+    void*                    pNext;
+    VkImageUsageFlags2KHR    usage;
+} VkImageViewUsage2CreateInfoKHR;
+
+typedef struct VkPhysicalDeviceExtendedFlagsFeaturesKHR {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           extendedFlags;
+} VkPhysicalDeviceExtendedFlagsFeaturesKHR;
+
+typedef struct VkImageStencilUsage2CreateInfoKHR {
+    VkStructureType          sType;
+    void*                    pNext;
+    VkImageUsageFlags2KHR    stencilUsage;
+} VkImageStencilUsage2CreateInfoKHR;
+
+typedef struct VkSharedPresentSurfaceCapabilities2KHR {
+    VkStructureType          sType;
+    void*                    pNext;
+    VkImageUsageFlags2KHR    sharedPresentSupportedUsageFlags;
+} VkSharedPresentSurfaceCapabilities2KHR;
 
 
 
@@ -16431,7 +16636,7 @@ typedef VkResult (VKAPI_PTR *PFN_vkCmdEndGpaSessionAMD)(VkCommandBuffer commandB
 typedef VkResult (VKAPI_PTR *PFN_vkCmdBeginGpaSampleAMD)(VkCommandBuffer commandBuffer, VkGpaSessionAMD                   gpaSession, const VkGpaSampleBeginInfoAMD*    pGpaSampleBeginInfo, uint32_t*                         pSampleID);
 typedef void (VKAPI_PTR *PFN_vkCmdEndGpaSampleAMD)(VkCommandBuffer commandBuffer, VkGpaSessionAMD                   gpaSession, uint32_t                          sampleID);
 typedef VkResult (VKAPI_PTR *PFN_vkGetGpaSessionStatusAMD)(VkDevice        device, VkGpaSessionAMD gpaSession);
-typedef VkResult (VKAPI_PTR *PFN_vkGetGpaSessionResultsAMD)(VkDevice                                 device, VkGpaSessionAMD                          gpaSession, uint32_t                                 sampleID, size_t*                                  pSizeInBytes, void* pData);
+typedef VkResult (VKAPI_PTR *PFN_vkGetGpaSessionResultsAMD)(VkDevice                                 device, VkGpaSessionAMD                          gpaSession, uint32_t                                 sampleID, size_t*            pSizeInBytes, void* pData);
 typedef VkResult (VKAPI_PTR *PFN_vkResetGpaSessionAMD)(VkDevice        device, VkGpaSessionAMD gpaSession);
 typedef void (VKAPI_PTR *PFN_vkCmdCopyGpaSessionResultsAMD)(VkCommandBuffer commandBuffer, VkGpaSessionAMD                   gpaSession);
 
@@ -19888,6 +20093,8 @@ typedef VkPrivateDataSlot VkPrivateDataSlotEXT;
 #define VK_EXT_PRIVATE_DATA_EXTENSION_NAME "VK_EXT_private_data"
 typedef VkPrivateDataSlotCreateFlags VkPrivateDataSlotCreateFlagsEXT;
 
+typedef VkPrivateDataSlotCreateFlagBits VkPrivateDataSlotCreateFlagBitsEXT;
+
 typedef VkPhysicalDevicePrivateDataFeatures VkPhysicalDevicePrivateDataFeaturesEXT;
 
 typedef VkDevicePrivateDataCreateInfo VkDevicePrivateDataCreateInfoEXT;
@@ -20156,7 +20363,7 @@ VKAPI_ATTR void VKAPI_CALL vkCmdEndPerTileExecutionQCOM(
 
 // VK_NV_low_latency is a preprocessor guard. Do not pass it to API calls.
 #define VK_NV_low_latency 1
-#define VK_NV_LOW_LATENCY_SPEC_VERSION    1
+#define VK_NV_LOW_LATENCY_SPEC_VERSION    2
 #define VK_NV_LOW_LATENCY_EXTENSION_NAME  "VK_NV_low_latency"
 typedef struct VkQueryLowLatencySupportNV {
     VkStructureType    sType;
@@ -20164,6 +20371,60 @@ typedef struct VkQueryLowLatencySupportNV {
     void*              pQueriedLowLatencyData;
 } VkQueryLowLatencySupportNV;
 
+typedef void (VKAPI_PTR *PFN_vkSetLatencySleepModeLegacyNV)(VkDevice device, VkBool32 lowLatencyMode, VkBool32 lowLatencyBoost, uint32_t minimumIntervalUs);
+typedef void (VKAPI_PTR *PFN_vkLatencySleepLegacyNV)(VkDevice device, VkSemaphore signalSemaphore, uint64_t value);
+typedef void (VKAPI_PTR *PFN_vkSetLatencyMarkerLegacyNV)(VkDevice device, uint64_t frameID, uint32_t marker);
+typedef void (VKAPI_PTR *PFN_vkGetLatencyTimingsLegacyNV)(VkDevice device, void* pTimings);
+typedef void (VKAPI_PTR *PFN_vkQueueNotifyOutOfBandLegacyNV)(VkQueue queue, uint32_t queueType);
+typedef void (VKAPI_PTR *PFN_vkGetSleepStatusLegacyNV)(VkDevice device, VkBool32* pLowLatencyMode);
+typedef void (VKAPI_PTR *PFN_vkShutdownLatencyDeviceLegacyNV)(VkDevice device);
+
+#ifndef VK_NO_PROTOTYPES
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkSetLatencySleepModeLegacyNV(
+    VkDevice                                    device,
+    VkBool32                                    lowLatencyMode,
+    VkBool32                                    lowLatencyBoost,
+    uint32_t                                    minimumIntervalUs);
+#endif
+
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkLatencySleepLegacyNV(
+    VkDevice                                    device,
+    VkSemaphore                                 signalSemaphore,
+    uint64_t                                    value);
+#endif
+
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkSetLatencyMarkerLegacyNV(
+    VkDevice                                    device,
+    uint64_t                                    frameID,
+    uint32_t                                    marker);
+#endif
+
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkGetLatencyTimingsLegacyNV(
+    VkDevice                                    device,
+    void*                                       pTimings);
+#endif
+
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkQueueNotifyOutOfBandLegacyNV(
+    VkQueue                                     queue,
+    uint32_t                                    queueType);
+#endif
+
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkGetSleepStatusLegacyNV(
+    VkDevice                                    device,
+    VkBool32*                                   pLowLatencyMode);
+#endif
+
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR void VKAPI_CALL vkShutdownLatencyDeviceLegacyNV(
+    VkDevice                                    device);
+#endif
+#endif
 
 
 // VK_EXT_descriptor_buffer is a preprocessor guard. Do not pass it to API calls.
@@ -21532,6 +21793,7 @@ typedef struct VkPhysicalDeviceOpacityMicromapFeaturesEXT {
     void*              pNext;
     VkBool32           micromap;
     VkBool32           micromapCaptureReplay;
+    // micromapHostCommands is legacy, but no reason was given in the API XML
     VkBool32           micromapHostCommands;
 } VkPhysicalDeviceOpacityMicromapFeaturesEXT;
 
@@ -22740,6 +23002,11 @@ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkTensorViewARM)
 typedef enum VkTensorTilingARM {
     VK_TENSOR_TILING_OPTIMAL_ARM = 0,
     VK_TENSOR_TILING_LINEAR_ARM = 1,
+    VK_TENSOR_TILING_BRICK_16_WIDE_ARM = 1000565000,
+    VK_TENSOR_TILING_BRICK_8_WIDE_ARM = 1000565001,
+    VK_TENSOR_TILING_BRICK_4_WIDE_ARM = 1000565002,
+    VK_TENSOR_TILING_BLOCK_U_INTERLEAVED_ARM = 1000565003,
+    VK_TENSOR_TILING_BLOCK_U_INTERLEAVED_64K_ARM = 1000565004,
     VK_TENSOR_TILING_MAX_ENUM_ARM = 0x7FFFFFFF
 } VkTensorTilingARM;
 typedef VkFlags64 VkTensorCreateFlagsARM;
@@ -23743,11 +24010,7 @@ typedef struct VkPhysicalDeviceShaderCoreBuiltinsPropertiesARM {
 #define VK_EXT_pipeline_library_group_handles 1
 #define VK_EXT_PIPELINE_LIBRARY_GROUP_HANDLES_SPEC_VERSION 1
 #define VK_EXT_PIPELINE_LIBRARY_GROUP_HANDLES_EXTENSION_NAME "VK_EXT_pipeline_library_group_handles"
-typedef struct VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT {
-    VkStructureType    sType;
-    void*              pNext;
-    VkBool32           pipelineLibraryGroupHandles;
-} VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT;
+typedef VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT;
 
 
 
@@ -23765,7 +24028,7 @@ typedef struct VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT {
 
 // VK_NV_low_latency2 is a preprocessor guard. Do not pass it to API calls.
 #define VK_NV_low_latency2 1
-#define VK_NV_LOW_LATENCY_2_SPEC_VERSION  2
+#define VK_NV_LOW_LATENCY_2_SPEC_VERSION  3
 #define VK_NV_LOW_LATENCY_2_EXTENSION_NAME "VK_NV_low_latency2"
 
 typedef enum VkLatencyMarkerNV {
@@ -24669,6 +24932,29 @@ typedef struct VkPhysicalDeviceShaderReplicatedCompositesFeaturesEXT {
 
 
 
+// VK_ARM_tensor_controls is a preprocessor guard. Do not pass it to API calls.
+#define VK_ARM_tensor_controls 1
+#define VK_MAX_TENSOR_CREATE_INFO_ROLLING_BACKING_WRAP_COUNT_ARM 4U
+#define VK_ARM_TENSOR_CONTROLS_SPEC_VERSION 1
+#define VK_ARM_TENSOR_CONTROLS_EXTENSION_NAME "VK_ARM_tensor_controls"
+typedef struct VkTensorRollingBackingCreateInfoARM {
+    VkStructureType    sType;
+    const void*        pNext;
+    uint32_t           wraps[VK_MAX_TENSOR_CREATE_INFO_ROLLING_BACKING_WRAP_COUNT_ARM];
+} VkTensorRollingBackingCreateInfoARM;
+
+typedef struct VkTensorExplicitTilingFormatPropertiesARM {
+    VkStructureType          sType;
+    void*                    pNext;
+    VkFormatFeatureFlags2    brick16TilingTensorFeatures;
+    VkFormatFeatureFlags2    brick8TilingTensorFeatures;
+    VkFormatFeatureFlags2    brick4TilingTensorFeatures;
+    VkFormatFeatureFlags2    blockUTilingTensorFeatures;
+    VkFormatFeatureFlags2    blockU64kTilingTensorFeatures;
+} VkTensorExplicitTilingFormatPropertiesARM;
+
+
+
 // VK_EXT_shader_float8 is a preprocessor guard. Do not pass it to API calls.
 #define VK_EXT_shader_float8 1
 #define VK_EXT_SHADER_FLOAT8_SPEC_VERSION 1
@@ -25532,6 +25818,12 @@ typedef struct VkPhysicalDevicePipelineOpacityMicromapFeaturesARM {
 
 
 
+// VK_IMG_filter_linear_2d is a preprocessor guard. Do not pass it to API calls.
+#define VK_IMG_filter_linear_2d 1
+#define VK_IMG_FILTER_LINEAR_2D_SPEC_VERSION 1
+#define VK_IMG_FILTER_LINEAR_2D_EXTENSION_NAME "VK_IMG_filter_linear_2d"
+
+
 // VK_ARM_performance_counters_by_region is a preprocessor guard. Do not pass it to API calls.
 #define VK_ARM_performance_counters_by_region 1
 #define VK_ARM_PERFORMANCE_COUNTERS_BY_REGION_SPEC_VERSION 1
@@ -25751,6 +26043,24 @@ typedef struct VkPhysicalDevicePresentMeteringFeaturesNV {
     void*              pNext;
     VkBool32           presentMetering;
 } VkPhysicalDevicePresentMeteringFeaturesNV;
+
+
+
+// VK_EXT_multisampled_render_to_swapchain is a preprocessor guard. Do not pass it to API calls.
+#define VK_EXT_multisampled_render_to_swapchain 1
+#define VK_EXT_MULTISAMPLED_RENDER_TO_SWAPCHAIN_SPEC_VERSION 1
+#define VK_EXT_MULTISAMPLED_RENDER_TO_SWAPCHAIN_EXTENSION_NAME "VK_EXT_multisampled_render_to_swapchain"
+typedef struct VkPhysicalDeviceMultisampledRenderToSwapchainFeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           multisampledRenderToSwapchain;
+} VkPhysicalDeviceMultisampledRenderToSwapchainFeaturesEXT;
+
+typedef struct VkSwapchainFlagsSurfaceCapabilitiesEXT {
+    VkStructureType              sType;
+    void*                        pNext;
+    VkSwapchainCreateFlagsKHR    swapchainSupportedFlags;
+} VkSwapchainFlagsSurfaceCapabilitiesEXT;
 
 
 
@@ -26089,6 +26399,60 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetComputeOccupancyPriorityNV(
 #endif
 
 
+// VK_EXT_cooperative_matrix_maintenance1 is a preprocessor guard. Do not pass it to API calls.
+#define VK_EXT_cooperative_matrix_maintenance1 1
+#define VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_SPEC_VERSION 1
+#define VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_EXTENSION_NAME "VK_EXT_cooperative_matrix_maintenance1"
+
+typedef enum VkCooperativeMatrixFlagBitsEXT {
+    VK_COOPERATIVE_MATRIX_SATURATING_ACCUMULATION_BIT_EXT = 0x00000001,
+    VK_COOPERATIVE_MATRIX_FLAG_BITS_MAX_ENUM_EXT = 0x7FFFFFFF
+} VkCooperativeMatrixFlagBitsEXT;
+typedef VkFlags VkCooperativeMatrixFlagsEXT;
+typedef struct VkCooperativeMatrixProperties2EXT {
+    VkStructureType       sType;
+    void*                 pNext;
+    uint32_t              MGranularity;
+    uint32_t              NGranularity;
+    uint32_t              KGranularity;
+    VkComponentTypeKHR    AType;
+    VkComponentTypeKHR    BType;
+    VkComponentTypeKHR    CType;
+    VkComponentTypeKHR    ResultType;
+} VkCooperativeMatrixProperties2EXT;
+
+typedef struct VkPhysicalDeviceCooperativeMatrixInfo2EXT {
+    VkStructureType                sType;
+    const void*                    pNext;
+    VkScopeKHR                     scope;
+    uint32_t                       invocations;
+    uint32_t                       subgroupSize;
+    VkCooperativeMatrixFlagsEXT    flags;
+} VkPhysicalDeviceCooperativeMatrixInfo2EXT;
+
+typedef struct VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           cooperativeMatrixProperties2;
+    VkBool32           cooperativeMatrixReductions;
+    VkBool32           cooperativeMatrixConversions;
+    VkBool32           cooperativeMatrixPerElementOperations;
+    VkBool32           cooperativeMatrixGetCoordinate;
+} VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT;
+
+typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceCooperativeMatrixProperties2EXT)(VkPhysicalDevice physicalDevice, const VkPhysicalDeviceCooperativeMatrixInfo2EXT* pCooperativeMatrixInfo, uint32_t* pPropertyCount, VkCooperativeMatrixProperties2EXT* pProperties);
+
+#ifndef VK_NO_PROTOTYPES
+#ifndef VK_ONLY_EXPORTED_PROTOTYPES
+VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceCooperativeMatrixProperties2EXT(
+    VkPhysicalDevice                            physicalDevice,
+    const VkPhysicalDeviceCooperativeMatrixInfo2EXT* pCooperativeMatrixInfo,
+    uint32_t*                                   pPropertyCount,
+    VkCooperativeMatrixProperties2EXT*          pProperties);
+#endif
+#endif
+
+
 // VK_EXT_shader_subgroup_partitioned is a preprocessor guard. Do not pass it to API calls.
 #define VK_EXT_shader_subgroup_partitioned 1
 #define VK_EXT_SHADER_SUBGROUP_PARTITIONED_SPEC_VERSION 1
@@ -26098,6 +26462,21 @@ typedef struct VkPhysicalDeviceShaderSubgroupPartitionedFeaturesEXT {
     void*              pNext;
     VkBool32           shaderSubgroupPartitioned;
 } VkPhysicalDeviceShaderSubgroupPartitionedFeaturesEXT;
+
+
+
+// VK_EXT_shader_ocp_microscaling_types is a preprocessor guard. Do not pass it to API calls.
+#define VK_EXT_shader_ocp_microscaling_types 1
+#define VK_EXT_SHADER_OCP_MICROSCALING_TYPES_SPEC_VERSION 1
+#define VK_EXT_SHADER_OCP_MICROSCALING_TYPES_EXTENSION_NAME "VK_EXT_shader_ocp_microscaling_types"
+typedef struct VkPhysicalDeviceShaderOCPMicroscalingTypesFeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           shaderFloat4;
+    VkBool32           shaderFloat6;
+    VkBool32           shaderFloat8UnsignedE8M0;
+    VkBool32           shaderMXInt8;
+} VkPhysicalDeviceShaderOCPMicroscalingTypesFeaturesEXT;
 
 
 
@@ -26193,6 +26572,31 @@ VKAPI_ATTR void VKAPI_CALL vkCmdSetPrimitiveRestartIndexEXT(
 #endif
 
 
+// VK_EXT_image_tiling_control is a preprocessor guard. Do not pass it to API calls.
+#define VK_EXT_image_tiling_control 1
+#define VK_EXT_IMAGE_TILING_CONTROL_SPEC_VERSION 1
+#define VK_EXT_IMAGE_TILING_CONTROL_EXTENSION_NAME "VK_EXT_image_tiling_control"
+
+typedef enum VkImageTilingControlEXT {
+    VK_IMAGE_TILING_CONTROL_DEFAULT_EXT = 0,
+    VK_IMAGE_TILING_CONTROL_MIN_SIZE_EXT = 1,
+    VK_IMAGE_TILING_CONTROL_MAX_PERFORMANCE_EXT = 2,
+    VK_IMAGE_TILING_CONTROL_MAX_ENUM_EXT = 0x7FFFFFFF
+} VkImageTilingControlEXT;
+typedef struct VkPhysicalDeviceImageTilingControlFeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           imageTilingControl;
+} VkPhysicalDeviceImageTilingControlFeaturesEXT;
+
+typedef struct VkImageTilingControlCreateInfoEXT {
+    VkStructureType            sType;
+    const void*                pNext;
+    VkImageTilingControlEXT    tilingControl;
+} VkImageTilingControlCreateInfoEXT;
+
+
+
 // VK_NV_cooperative_matrix_decode_vector is a preprocessor guard. Do not pass it to API calls.
 #define VK_NV_cooperative_matrix_decode_vector 1
 #define VK_NV_COOPERATIVE_MATRIX_DECODE_VECTOR_SPEC_VERSION 1
@@ -26202,6 +26606,56 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
     void*              pNext;
     VkBool32           cooperativeMatrixDecodeVector;
 } VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV;
+
+
+
+// VK_NV_private_data_base_handle is a preprocessor guard. Do not pass it to API calls.
+#define VK_NV_private_data_base_handle 1
+#define VK_NV_PRIVATE_DATA_BASE_HANDLE_SPEC_VERSION 1
+#define VK_NV_PRIVATE_DATA_BASE_HANDLE_EXTENSION_NAME "VK_NV_private_data_base_handle"
+typedef struct VkPhysicalDevicePrivateDataBaseHandleFeaturesNV {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           privateDataBaseHandle;
+} VkPhysicalDevicePrivateDataBaseHandleFeaturesNV;
+
+
+
+// VK_INTEL_device_info is a preprocessor guard. Do not pass it to API calls.
+#define VK_INTEL_device_info 1
+#define VK_INTEL_DEVICE_INFO_SPEC_VERSION 1
+#define VK_INTEL_DEVICE_INFO_EXTENSION_NAME "VK_INTEL_device_info"
+typedef struct VkPhysicalDeviceInfoPropertiesINTEL {
+    VkStructureType    sType;
+    void*              pNext;
+    uint32_t           deviceIpVersionArch;
+    uint32_t           deviceIpVersionRelease;
+    uint32_t           deviceIpVersionRevision;
+} VkPhysicalDeviceInfoPropertiesINTEL;
+
+
+
+// VK_VALVE_buffer_device_address_allocation_alignment is a preprocessor guard. Do not pass it to API calls.
+#define VK_VALVE_buffer_device_address_allocation_alignment 1
+#define VK_VALVE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_SPEC_VERSION 1
+#define VK_VALVE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_EXTENSION_NAME "VK_VALVE_buffer_device_address_allocation_alignment"
+typedef struct VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           bufferDeviceAddressAllocationAlignment;
+} VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE;
+
+typedef struct VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE {
+    VkStructureType    sType;
+    void*              pNext;
+    uint32_t           maxBufferDeviceAddressAllocationAlignment;
+} VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE;
+
+typedef struct VkBufferDeviceAddressAlignmentAllocateInfoVALVE {
+    VkStructureType    sType;
+    void*              pNext;
+    uint32_t           alignment;
+} VkBufferDeviceAddressAlignmentAllocateInfoVALVE;
 
 
 
@@ -26300,6 +26754,7 @@ typedef struct VkPhysicalDeviceAccelerationStructureFeaturesKHR {
     VkBool32           accelerationStructure;
     VkBool32           accelerationStructureCaptureReplay;
     VkBool32           accelerationStructureIndirectBuild;
+    // accelerationStructureHostCommands is legacy, but no reason was given in the API XML
     VkBool32           accelerationStructureHostCommands;
     VkBool32           descriptorBindingAccelerationStructureUpdateAfterBind;
 } VkPhysicalDeviceAccelerationStructureFeaturesKHR;

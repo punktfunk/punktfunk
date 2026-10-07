@@ -41,6 +41,9 @@ struct Decoder::Impl final : public WaveletBuffers
 	bool push_packet(const void *data, size_t size);
 	bool decode(CommandBuffer &cmd, const ViewBuffers &views);
 	bool decode_is_ready(bool allow_partial_frame) const;
+	bool decode_is_ready(bool allow_partial_frame, int pristine_bands, float received_ratio,
+	                     const uint32_t *active_block_mask, size_t word_count) const;
+	bool has_pristine_bands(int bands, const uint32_t *active_block_mask, size_t word_count) const;
 
 	bool decode_packet(const BitstreamHeader *header);
 
@@ -788,7 +791,62 @@ bool Decoder::Impl::idwt(CommandBuffer &cmd, const ViewBuffers &views)
 	return true;
 }
 
-bool Decoder::Impl::decode_is_ready(bool allow_partial_frame) const
+bool Decoder::Impl::has_pristine_bands(int bands, const uint32_t *active_block_mask, size_t word_count) const
+{
+	// Account for 4:2:0 where level0 will not have packets.
+	// It's somewhat meaningless to ask for pristine bands all the way up to that point though.
+	assert(bands < DecompositionLevels);
+
+	// This analysis assumes that there are no "null" blocks present.
+	// For the lowest frequency bands, that is vanishingly unlikely to happen,
+	// and worst case we get a false positive rejection.
+	// TODO: It's possible to improve this by sending the "active block mask"
+	// as sideband data from encoder if need be.
+
+	const auto block_is_missing = [&](uint32_t block_index)
+	{
+		if (dequant_offset_buffer_cpu[block_index] != UINT32_MAX)
+			return false;
+
+		uint32_t word_index = block_index / 32;
+
+		if (!active_block_mask || word_index >= word_count)
+			return true;
+
+		// If the block wasn't expected to be active anyway, just pass it through.
+		return ((active_block_mask[word_index] >> (block_index % 32)) & 1) != 0;
+	};
+
+	for (int band = 0; band < bands; band++)
+	{
+		for (auto &component : block_meta)
+		{
+			if (band == 0)
+			{
+				auto &meta = component[DecompositionLevels - 1][0];
+				for (int i = 0; i < meta.block_count_32x32; i++)
+					if (block_is_missing(meta.block_offset_32x32 + i))
+						return false;
+			}
+			else
+			{
+				// If we can reconstruct the LH, HL, HH bands, we can generate the higher-resolution LL band.
+				for (int high_freq_bands = 1; high_freq_bands < 4; high_freq_bands++)
+				{
+					auto &meta = component[DecompositionLevels - band][high_freq_bands];
+					for (int i = 0; i < meta.block_count_32x32; i++)
+						if (block_is_missing(meta.block_offset_32x32 + i))
+							return false;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
+bool Decoder::Impl::decode_is_ready(bool allow_partial_frame, int pristine_bands, float received_ratio,
+                                    const uint32_t *active_block_mask, size_t word_count) const
 {
 	if (decoded_frame_for_current_sequence)
 		return false;
@@ -796,12 +854,25 @@ bool Decoder::Impl::decode_is_ready(bool allow_partial_frame) const
 	if (last_seq == UINT32_MAX)
 		return false;
 
-	// Need at least half of the frame decoded to accept, otherwise we assume the frame is complete garbage.
 	if (decoded_blocks < total_blocks_in_sequence)
-		if (!allow_partial_frame || decoded_blocks <= total_blocks_in_sequence / 2)
+	{
+		if (!allow_partial_frame)
 			return false;
 
+		if (!has_pristine_bands(pristine_bands, active_block_mask, word_count))
+			return false;
+		if (float(decoded_blocks) <= float(total_blocks_in_sequence) * received_ratio)
+			return false;
+	}
+
 	return true;
+}
+
+bool Decoder::Impl::decode_is_ready(bool allow_partial_frame) const
+{
+	// At the very least, we want some LL bands to be received properly,
+	// otherwise we get extreme artifacts.
+	return decode_is_ready(allow_partial_frame, 2, 0.9f, nullptr, 0);
 }
 
 bool Decoder::Impl::decode(CommandBuffer &cmd, const ViewBuffers &views)
@@ -993,5 +1064,11 @@ bool Decoder::decode(Vulkan::CommandBuffer &cmd, const ViewBuffers &views)
 bool Decoder::decode_is_ready(bool allow_partial_frame) const
 {
 	return impl->decode_is_ready(allow_partial_frame);
+}
+
+bool Decoder::decode_is_ready(bool allow_partial_frame, int num_pristine_bands, float minimum_packet_ratio,
+                              const uint32_t *active_block_mask, size_t word_count) const
+{
+	return impl->decode_is_ready(allow_partial_frame, num_pristine_bands, minimum_packet_ratio, active_block_mask, word_count);
 }
 }

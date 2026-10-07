@@ -197,6 +197,8 @@ public final class StreamLayerView: NSView {
     /// The screen, its parameters or the backing scale changed since the screen's values were
     /// read. Main-thread only.
     private var screenValuesStale = true
+    /// The view's screen in panel pixels per point (`NSScreen.panelScale`). Main-thread only.
+    private var panelScale: Double = 1
     private let cursorCapture = CursorCapture()
     private var inputCapture: InputCapture?
     private var appObservers: [NSObjectProtocol] = []
@@ -1119,22 +1121,24 @@ public final class StreamLayerView: NSView {
 
     /// Aspect-fit the stage-2 metal sublayer to the view; refresh contentsScale on a
     /// retina↔non-retina move (see SessionPresenter.layout). Also feeds the Match-window follower
-    /// the view's physical-pixel size (bounds → backing), so a resize / retina move follows. A
-    /// screen-change observer re-runs this so the display-link range follows the view.
+    /// the view's size in panel pixels, so a resize / retina move follows. A screen-change
+    /// observer re-runs this so the display-link range follows the view.
     private func layoutPresenter() {
         // Only when the screen can have changed: a live resize lays out twice per step.
         if screenValuesStale {
             screenValuesStale = window == nil // a view with no window has no screen to keep
-            presenter.setPanel(Self.panelInfo(window?.screen ?? NSScreen.main))
+            let screen = window?.screen ?? NSScreen.main
+            presenter.setPanel(Self.panelInfo(screen))
+            panelScale = screen?.panelScale ?? window?.backingScaleFactor ?? 1
         }
         presenter.layout(in: bounds, contentsScale: window?.backingScaleFactor ?? 1)
         displayLayer.videoGravity = SessionPresenter.gravity(VideoFit(name: connection?.settings.videoFit))
-        // Feed the follower only once in a window (backing scale is real then) and with real
-        // bounds — a pre-window layout would report point-sized dimensions.
+        // Feed the follower only once in a window (the screen is real then) and with real bounds.
+        // Panel pixels, not backing: a scaled mode's framebuffer outsizes the panel.
         if window != nil, bounds.width > 0, bounds.height > 0 {
-            let px = convertToBacking(bounds).size
             matchFollower?.noteSize(
-                widthPx: Int(px.width.rounded()), heightPx: Int(px.height.rounded()))
+                widthPx: Int((bounds.width * panelScale).rounded()),
+                heightPx: Int((bounds.height * panelScale).rounded()))
         }
         // The video-fit scale just changed (resize / retina move); rebuild the worn host pointer at
         // the new scale so it tracks the video instead of freezing at its build-time size.

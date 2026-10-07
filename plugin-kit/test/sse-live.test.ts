@@ -3,7 +3,7 @@
 // finite, self-driving stream, which hid the fact that nothing ever reached the wire.
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, PubSub, Stream } from "effect";
-import { HttpRouter } from "effect/unstable/http";
+import { HttpRouter } from "effect/http";
 import { httpApiEnv, sseRoute } from "../src/index.js";
 
 /**

@@ -11,6 +11,7 @@ class YUV4MPEGFile
 {
 public:
 	bool open_read(const std::string &path);
+	bool rewind();
 	bool open_write(const std::string &path, const std::string &params);
 	const std::string &get_params() const;
 
@@ -31,6 +32,7 @@ public:
 
 	Format get_format() const;
 	bool is_full_range() const;
+	bool is_center_chroma() const;
 
 	static int format_to_bytes_per_component(Format format);
 	static bool format_has_subsampling(Format format);
@@ -49,5 +51,7 @@ private:
 	Mode mode = {};
 	Format format = {};
 	bool full_range = false;
+	bool center_chroma = false;
 	float unorm_scale = 1.0f;
+	long initial_position = -1;
 };

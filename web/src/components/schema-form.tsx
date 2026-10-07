@@ -34,7 +34,7 @@ export interface JsonSchemaDoc {
 	schema?: JsonSchemaNode;
 }
 
-/** A checked schema (effect's `Schema.Int`, `.check(...)`) nests its annotations under `allOf`. */
+/** Plugins built on an effect 4 beta nest a checked field's annotations (`Schema.Int`, `.check(...)`) under `allOf`. */
 const flatten = (node: JsonSchemaNode): JsonSchemaNode =>
 	(node.allOf ?? []).reduce<JsonSchemaNode>(
 		(acc, branch) => Object.assign(acc, branch),

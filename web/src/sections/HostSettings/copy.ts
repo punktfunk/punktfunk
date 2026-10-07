@@ -295,6 +295,10 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_seat_max_mode,
 		hint: m.setting_seat_max_mode_hint,
 	},
+	tray_autostart: {
+		label: m.setting_tray_autostart,
+		hint: m.setting_tray_autostart_hint,
+	},
 };
 
 export const GROUP_LABEL: Record<SettingGroup, () => string> = {

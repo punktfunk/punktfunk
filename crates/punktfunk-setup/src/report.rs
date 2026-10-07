@@ -217,7 +217,7 @@ fn next_steps(
         ));
     }
     if outcome.relogin {
-        ui.line("  Group changes apply after you log out and back in (controllers won't work until then).");
+        ui.line("  Group changes apply after a restart of this computer (controllers won't work until then).");
     }
     if choices.move_mgmt_port || facts.sunshine_active {
         ui.line(&format!(

@@ -438,34 +438,15 @@ fn enabled(state: TaskState) -> Option<bool> {
 }
 
 fn registry_steps(facts: &WinFacts, choices: &WinChoices, app: &str) -> Vec<WinAction> {
-    let mut steps = vec![];
-    let run_key = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    if choices.tray_autostart {
-        steps.push(run(&[
-            "reg",
-            "add",
-            run_key,
-            "/v",
-            "PunktfunkTray",
-            "/t",
-            "REG_SZ",
-            "/d",
-            // Quoted: an unquoted Run value with a space in the path lets Windows try each
-            // prefix in turn, so `C:\Program Files\…` first looks for `C:\Program.exe`.
-            &format!("\"{app}\\punktfunk-tray.exe\""),
-            "/f",
-        ]));
-    } else if facts.tray_autostart {
-        // Turning the row off deletes the value. Leaving it would keep a stale autostart.
-        steps.push(run(&[
-            "reg",
-            "delete",
-            run_key,
-            "/v",
-            "PunktfunkTray",
-            "/f",
-        ]));
-    }
+    // The host owns the tray's `Run` value: its `settings set` stores the choice, where the
+    // console can change it, and writes or deletes the value to match.
+    let mut steps = vec![run_lenient(&[
+        &format!("{app}\\punktfunk-host.exe"),
+        "settings",
+        "set",
+        "tray_autostart",
+        &choices.tray_autostart.to_string(),
+    ])];
     // Toast AUMID; must stay in lockstep with `punktfunk-tray/src/win.rs`.
     let aumid = r"HKLM\SOFTWARE\Classes\AppUserModelId\unom.punktfunk.tray";
     steps.push(run(&[

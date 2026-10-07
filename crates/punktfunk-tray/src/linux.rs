@@ -6,6 +6,9 @@
 //! start all three. KDE renders SNI natively; GNOME needs the AppIndicator extension
 //! or the icon is missing. `--autostart` then exits silently instead of failing every login.
 //!
+//! "Start at log-in" edits the per-user autostart entry the host writes from its
+//! `tray_autostart` setting ([`pf_paths::tray_autostart`]); the host records the change.
+//!
 //! One instance per session (`flock` on `$XDG_RUNTIME_DIR/punktfunk-tray.lock`).
 //! Status model and poller: `status.rs`. Service-vs-machine restart wording:
 //! `design/host-actions.md`.
@@ -149,6 +152,13 @@ impl ksni::Tray for HostTray {
         }
         items.extend([
             MenuItem::Separator,
+            CheckmarkItem {
+                label: "Start at log-in".into(),
+                checked: pf_paths::tray_autostart::read() == Some(true),
+                activate: Box::new(|_: &mut Self| toggle_autostart()),
+                ..Default::default()
+            }
+            .into(),
             StandardItem {
                 label: "Exit tray".into(),
                 activate: Box::new(|_: &mut Self| std::process::exit(0)),
@@ -218,15 +228,13 @@ fn dot_icon(size: i32, (r, g, b): (u8, u8, u8)) -> ksni::Icon {
     }
 }
 
-/// `--autostart` skip: the packaged autostart file is installed for every desktop user.
-fn host_present() -> bool {
-    if status::punktfunk_config_dir().is_some_and(|d| d.exists()) {
-        return true;
+/// "Start at log-in": flips the per-user entry the host also writes, naming this binary.
+fn toggle_autostart() {
+    let on = pf_paths::tray_autostart::read() != Some(true);
+    let written = std::env::current_exe().and_then(|exe| pf_paths::tray_autostart::write(on, &exe));
+    if let Err(e) = written {
+        eprintln!("punktfunk-tray: autostart entry not written: {e}");
     }
-    std::process::Command::new("systemctl")
-        .args(["--user", "--quiet", "is-enabled", status::UNIT_NAME])
-        .status()
-        .is_ok_and(|s| s.success())
 }
 
 /// One tray per session. The `flock` is held for the process lifetime.
@@ -256,9 +264,6 @@ pub fn run(args: crate::Args) -> anyhow::Result<()> {
             .args(["--user", "start", "--no-block"])
             .args(status::UNITS.map(|(unit, _)| unit))
             .status();
-    }
-    if args.autostart && !host_present() {
-        return Ok(());
     }
     let Some(_lock) = acquire_instance_lock() else {
         return Ok(()); // another instance already runs in this session

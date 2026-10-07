@@ -2733,7 +2733,7 @@
           "host"
         ],
         "summary": "Change host settings",
-        "description": "Partial: only the named settings change, and `null` resets one. Every value is checked\nbefore anything is written. Applies per setting's `apply`: the next session, or a restart.",
+        "description": "Partial: only the named settings change, and `null` resets one. Every value is checked\nbefore anything is written. Applies per setting's `apply`: at once, the next session, or a\nrestart. `tray_autostart` rewrites the tray's autostart entry here.",
         "operationId": "patchHostSettings",
         "requestBody": {
           "content": {

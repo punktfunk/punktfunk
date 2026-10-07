@@ -22,12 +22,12 @@ tracing = "0.1"
 # Opus encode for both audio planes — stereo (`opus::Encoder`) and 5.1/7.1 (`opus::MSEncoder`) —
 # and the mic pump's decode. The crate vendors libopus (cmake-built from source), so it builds on
 # Windows MSVC and macOS too.
-opus = "0.3"
+opus = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Must match the pipewire crate ashpd 0.13 links (libspa/pipewire-sys `links` key is unique per
 # build), i.e. 0.9.
-pipewire = "0.9"
+pipewire = "0.10"
 # `pwinit::ensure_init`: the one process-wide PipeWire init capture and audio share.
 pf-capture = { path = "../pf-capture" }
 # The USB/IP DualSense's audio channel, and its pairing reply for the `{mac}` sink template.
@@ -41,7 +41,7 @@ pf-paths = { path = "../pf-paths" }
 # `multi_sz` for the minted devnodes' hardware id.
 pf-win-display = { path = "../pf-win-display" }
 # WASAPI loopback capture and the virtual-mic render.
-wasapi = "0.24"
+wasapi = "0.25"
 # Device-parameter reads and the uninstall sweep of minted devnodes.
 winreg = "0.56"
 # The seat marker on minted devnodes is a SHA-256 of the seat id (minted.rs).

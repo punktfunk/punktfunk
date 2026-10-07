@@ -46,8 +46,6 @@ impl RawTimer {
         // SAFETY: `utils` is the loop's utils interface and `source` a live timer source of
         // that loop; `update_timer` reads the two timespecs for the duration of the call.
         unsafe {
-            // The macro names the sys crate by this alias.
-            use spa::sys as spa_sys;
             let mut iface = (*self.utils).iface;
             spa::spa_interface_call_method!(
                 &mut iface as *mut spa::sys::spa_interface,

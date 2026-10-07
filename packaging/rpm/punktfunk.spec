@@ -13,7 +13,7 @@
 #     stock driver has HEVC and AV1 disabled.
 #
 # Bazzite already ships gamescope, PipeWire and the NVIDIA stack, so on Bazzite the
-# only new runtime bits are opus + libei.
+# only new runtime bit is libei.
 ################################################################################
 
 Name:           punktfunk
@@ -86,7 +86,6 @@ BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
 BuildRequires:  pkgconfig(wayland-client)
 BuildRequires:  pkgconfig(xkbcommon)
-BuildRequires:  pkgconfig(opus)
 # Zero-copy GPU path: src/zerocopy/ links libGL + libgbm (mesa) via hand-rolled FFI.
 BuildRequires:  pkgconfig(gl)
 BuildRequires:  pkgconfig(gbm)
@@ -119,7 +118,6 @@ Recommends:     pipewire-pulseaudio
 # Weak-dep: Fedora desktops ship rtkit anyway, and without it the user@.service.d LimitNICE
 # drop-in below still covers the direct path from the next login.
 Recommends:     rtkit
-Requires:       opus
 Requires:       libei
 # A compositor to drive. Bazzite ships gamescope; the others are user choice.
 Recommends:     gamescope
@@ -458,11 +456,9 @@ install -Dm0644 packaging/linux/io.unom.Punktfunk.Host.desktop \
 install -Dm0644 packaging/linux/50-punktfunk-nice.conf \
                 %{buildroot}%{_unitdir}/user@.service.d/50-punktfunk-nice.conf
 
-# Status tray: the per-user SNI icon + its XDG autostart entry (self-gating: --autostart exits
-# silently for users who don't run a host) + the hicolor status icons it names.
+# Status tray: the per-user SNI icon + the hicolor status icons it names. Its autostart entry is
+# per user, written by the host from the tray_autostart setting.
 install -Dm0755 target/release/punktfunk-tray %{buildroot}%{_bindir}/punktfunk-tray
-install -Dm0644 packaging/linux/io.unom.Punktfunk.Tray.desktop \
-                %{buildroot}%{_sysconfdir}/xdg/autostart/io.unom.Punktfunk.Tray.desktop
 install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
                 %{buildroot}%{_datadir}/applications/io.unom.Punktfunk.StartHost.desktop
 for sz in 22x22 48x48; do
@@ -687,7 +683,6 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_userunitdir}/punktfunk-host.service
 %{_userunitdir}/punktfunk-kde-session.service
 %{_datadir}/applications/io.unom.Punktfunk.Host.desktop
-%{_sysconfdir}/xdg/autostart/io.unom.Punktfunk.Tray.desktop
 %{_datadir}/applications/io.unom.Punktfunk.StartHost.desktop
 %{_datadir}/icons/hicolor/*/apps/punktfunk-tray*.png
 %dir /etc/gamescope-session-plus

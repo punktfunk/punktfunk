@@ -90,8 +90,8 @@ if [ -e "$STAGE/usr/bin/punktfunk-web-server" ] || [ -e "$STAGE/usr/bin/punktfun
     echo "the punktfunk-bun RPM must be among the inputs — web and scripting run on it" >&2; exit 1; }
 fi
 
-# A sysext carries only /usr. Relocate the RPMs' /etc payload (gamescope-session drop-in, tray
-# autostart entry) under /usr/share/punktfunk/etc/ — punktfunk-sysext copies it into /etc.
+# A sysext carries only /usr. Relocate the RPMs' /etc payload (the gamescope-session drop-in)
+# under /usr/share/punktfunk/etc/ — punktfunk-sysext copies it into /etc.
 if [ -d "$STAGE/etc" ]; then
   mkdir -p "$STAGE/usr/share/punktfunk/etc"
   cp -a "$STAGE/etc/." "$STAGE/usr/share/punktfunk/etc/"

@@ -113,7 +113,7 @@ fn log_joysticks(subsystem: &sdl3::GamepadSubsystem) {
     if list.is_empty() {
         tracing::info!("no controller seen at session start");
     }
-    for id in list {
+    for id in list.into_iter().map(sdl3::joystick::JoystickId::from) {
         tracing::info!(
             id = format_args!(
                 "{:04x}:{:04x}",
@@ -636,13 +636,13 @@ fn is_acting(s: &MenuSample) -> bool {
 fn input_pad(event: &sdl3::event::Event) -> Option<u32> {
     use sdl3::event::Event;
     match *event {
-        Event::ControllerButtonDown { which, .. }
-        | Event::ControllerButtonUp { which, .. }
-        | Event::ControllerAxisMotion { which, .. }
-        | Event::ControllerTouchpadDown { which, .. }
-        | Event::ControllerTouchpadMotion { which, .. }
-        | Event::ControllerTouchpadUp { which, .. }
-        | Event::ControllerSensorUpdated { which, .. } => Some(which),
+        Event::GamepadButtonDown { which, .. }
+        | Event::GamepadButtonUp { which, .. }
+        | Event::GamepadAxisMotion { which, .. }
+        | Event::GamepadTouchpadDown { which, .. }
+        | Event::GamepadTouchpadMotion { which, .. }
+        | Event::GamepadTouchpadUp { which, .. }
+        | Event::GamepadSensorUpdated { which, .. } => Some(which.raw()),
         _ => None,
     }
 }
@@ -1039,7 +1039,7 @@ impl Worker {
         if !self.order.contains(&id) {
             return None;
         }
-        let jid = sdl3::sys::joystick::SDL_JoystickID(id);
+        let jid = sdl3::joystick::JoystickId::new(id);
         let mut pref = pref_for_type(self.subsystem.type_for_id(jid));
         let (vid, pid) = (
             self.subsystem.vendor_for_id(jid).unwrap_or(0),
@@ -1139,7 +1139,7 @@ impl Worker {
             if self.menu_open.iter().any(|(open, _)| *open == id) {
                 continue;
             }
-            match self.subsystem.open(sdl3::sys::joystick::SDL_JoystickID(id)) {
+            match self.subsystem.open(sdl3::joystick::JoystickId::new(id)) {
                 Ok(pad) => {
                     self.menu_open.push((id, pad));
                     changed = true;
@@ -1206,7 +1206,7 @@ impl Worker {
         };
         let pref = self.pad_info(id).map_or(GamepadPref::Xbox360, |p| p.pref);
         let declared = declared_kind(self.kind_override, pref);
-        match self.subsystem.open(sdl3::sys::joystick::SDL_JoystickID(id)) {
+        match self.subsystem.open(sdl3::joystick::JoystickId::new(id)) {
             Ok(pad) => {
                 let mut slot = Slot::new(id, index, pref, declared, pad);
                 let raw_sc2 =
@@ -1321,7 +1321,7 @@ impl Worker {
         if self.pad_audio_prefs == 0 {
             return (0, false);
         }
-        let jid = sdl3::sys::joystick::SDL_JoystickID(id);
+        let jid = sdl3::joystick::JoystickId::new(id);
         let vid = self.subsystem.vendor_for_id(jid).unwrap_or(0);
         let pid = self.subsystem.product_for_id(jid).unwrap_or(0);
         if !crate::pad_audio::is_tier_a_ds5(vid, pid) {
@@ -1953,10 +1953,10 @@ impl Worker {
         if let Some(which) = input_pad(&event) {
             let guide = matches!(
                 event,
-                Event::ControllerButtonDown {
+                Event::GamepadButtonDown {
                     button: Button::Guide,
                     ..
-                } | Event::ControllerButtonUp {
+                } | Event::GamepadButtonUp {
                     button: Button::Guide,
                     ..
                 }
@@ -1967,7 +1967,8 @@ impl Worker {
             }
         }
         match event {
-            Event::ControllerDeviceAdded { which, .. } => {
+            Event::GamepadAdded { which, .. } => {
+                let which = which.raw();
                 if !self.order.contains(&which) {
                     self.order.push(which);
                     if let Some(p) = self.pad_info(which) {
@@ -1982,19 +1983,23 @@ impl Worker {
                     self.refresh_active();
                 }
             }
-            Event::ControllerDeviceRemoved { which, .. } => {
+            Event::GamepadRemoved { which, .. } => {
+                let which = which.raw();
                 if self.order.contains(&which) {
                     self.order.retain(|&id| id != which);
                     tracing::info!("gamepad detached");
                     self.refresh_active();
                 }
             }
-            Event::ControllerButtonDown { which, button, .. } => self.on_button_down(which, button),
-            Event::ControllerButtonUp { which, button, .. } => self.on_button_up(which, button),
-            Event::ControllerAxisMotion {
+            Event::GamepadButtonDown { which, button, .. } => {
+                self.on_button_down(which.raw(), button)
+            }
+            Event::GamepadButtonUp { which, button, .. } => self.on_button_up(which.raw(), button),
+            Event::GamepadAxisMotion {
                 which, axis, value, ..
             } => {
-                let Some((c, slot)) = attached_slot(&self.attached, &mut self.slots, which) else {
+                let Some((c, slot)) = attached_slot(&self.attached, &mut self.slots, which.raw())
+                else {
                     return;
                 };
                 let (id, v) = axis_value(axis, value);
@@ -2003,7 +2008,7 @@ impl Worker {
                     send(&c, InputKind::GamepadAxis, id, v, slot.index);
                 }
             }
-            Event::ControllerTouchpadDown {
+            Event::GamepadTouchpadDown {
                 which,
                 touchpad,
                 finger,
@@ -2011,7 +2016,7 @@ impl Worker {
                 y,
                 ..
             }
-            | Event::ControllerTouchpadMotion {
+            | Event::GamepadTouchpadMotion {
                 which,
                 touchpad,
                 finger,
@@ -2019,11 +2024,12 @@ impl Worker {
                 y,
                 ..
             } => {
-                if let Some((c, slot)) = attached_slot(&self.attached, &mut self.slots, which) {
+                if let Some((c, slot)) = attached_slot(&self.attached, &mut self.slots, which.raw())
+                {
                     Self::forward_touch(&c, slot, touchpad as u32, finger as u8, x, y, true);
                 }
             }
-            Event::ControllerTouchpadUp {
+            Event::GamepadTouchpadUp {
                 which,
                 touchpad,
                 finger,
@@ -2031,16 +2037,17 @@ impl Worker {
                 y,
                 ..
             } => {
-                if let Some((c, slot)) = attached_slot(&self.attached, &mut self.slots, which) {
+                if let Some((c, slot)) = attached_slot(&self.attached, &mut self.slots, which.raw())
+                {
                     Self::forward_touch(&c, slot, touchpad as u32, finger as u8, x, y, false);
                 }
             }
-            Event::ControllerSensorUpdated {
+            Event::GamepadSensorUpdated {
                 which,
                 sensor,
                 data,
                 ..
-            } => self.on_sensor(which, sensor, data),
+            } => self.on_sensor(which.raw(), sensor, data),
             _ => {}
         }
     }

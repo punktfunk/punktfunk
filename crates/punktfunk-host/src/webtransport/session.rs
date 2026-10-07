@@ -22,7 +22,7 @@ use punktfunk_core::quic::v2::io as v2io;
 use punktfunk_core::quic::v2::msg::decode;
 use punktfunk_core::quic::{auth_signed_message, AuthChallenge, AuthResponse, PairRequest};
 use punktfunk_core::reject::RejectReason;
-use rand::RngCore;
+use rand::Rng;
 use std::sync::Arc;
 use wtransport::Connection;
 

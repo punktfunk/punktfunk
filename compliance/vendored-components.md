@@ -24,7 +24,7 @@ watch feeds below.
 | **ndk** 0.9.0, patched | `clients/android/native/vendor/ndk`, wired in by `[patch.crates-io]` in the root `Cargo.toml`, which lists the patch set | Copy the new published crate and re-apply the patches. Only `as_ptr` carries the `punktfunk vendored patch` marker; diff against published 0.9.0 for the rest | rust-mobile/ndk releases + RustSec `ndk` |
 | **windows-drivers-rs** `wdk-sys` / `wdk-build` 0.5.1 | `packaging/windows/drivers/vendor/wdk-sys` and `packaging/windows/drivers/vendor/wdk-build`, wired in by `[patch.crates-io]` in `packaging/windows/drivers/Cargo.toml`, plus an added `iddcx` ApiSubset | Re-vendor the published crates at the new version and re-apply the `iddcx` subset; the pin is deliberate | microsoft/windows-drivers-rs releases + GitHub security advisories |
 | **windows-rs** git pin | `rev = acb5a1a7…` on microsoft/windows-rs (git entries in the root `[workspace.dependencies]`: `windows`, `windows-reactor`, …) | Move the rev / return to crates.io once the needed fixes are released. Note: cargo-audit matches these by name+version from Cargo.lock, but a pre-release rev may not map cleanly onto RustSec advisories — treat the pin itself as the thing to retire. | RustSec (already weekly) + microsoft/windows-rs releases |
-| **usbfs-iso / uac-host** git pin | `rev = f3de1fd…` on unom-io/usbfs-iso | First-party fork — we are upstream; fix in the fork, move the rev | Own repo (issues land in our tracker) |
+| **usbfs-iso / uac-host** git pin | `rev = ff5468a…` on unom-io/usbfs-iso | First-party fork — we are upstream; fix in the fork, move the rev | Own repo (issues land in our tracker) |
 | **SDL3** | Desktop clients, dynamically linked; system-provided or bundled per platform package | Bump the bundled copy in the affected package; system copies are distro-updated | libsdl-org/SDL GitHub security advisories + releases |
 | **gamescope** + patch series | Pin in `packaging/nix/gamescope.nix` / built by `packaging/gamescope/build-punktfunk-gamescope.sh`; local patches in `packaging/gamescope/patches/` | Bump the pin, re-rebase the patch series, rebuild sysext/Arch/nix + .deb channels. ⚠️ the gamescope CI legs are best-effort: a broken patch shows up as a *missing package*, not a red build | ValveSoftware/gamescope releases + security advisories |
 | **wayland, libdrm, xkbcommon, pixman** | Debian 13 `punktfunk-gamescope` (.deb, SteamOS box) only: pinned wraps in `packaging/gamescope/subprojects/`, linked static into the compositor where the system is below wlroots' floors | Move the wrap to the fixed release's commit; rebuild the .deb and the SteamOS gamescope | freedesktop.org GitLab releases (wayland, mesa/drm, pixman), xkbcommon GitHub releases; Debian security tracker for the same CVEs |
@@ -38,6 +38,9 @@ Not on this list on purpose:
   inside the `-sys` crates; cargo-audit tracks the crate advisories, and the upstream
   (Cisco openh264, memorysafety/rav1d) security feeds surface through RustSec. No
   separate manual watch needed unless we pin them to git.
+- **libopus** — the same shape: `opusic-sys` builds its bundled libopus static on every
+  platform, Linux packages included, so a libopus fix ships as an `opusic-sys` bump
+  rather than a distro update. Watch xiph/opus releases alongside RustSec.
 
 ## Security-update availability (CRA: ≥10 years)
 

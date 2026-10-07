@@ -1,6 +1,7 @@
-//! System libraries skia-bindings leaves out. It has no tvOS or visionOS platform, so there it
-//! links nothing: these are the ones its iOS platform names. Skia's Metal backend also calls
-//! Foundation, which an app links anyway and a bare binary does not. Elsewhere this does nothing.
+//! System libraries skia-bindings leaves out. It has no tvOS platform, so there it links nothing,
+//! and its visionOS platform omits MobileCoreServices: these are the ones its iOS platform names.
+//! Skia's Metal backend also calls Foundation, which an app links anyway and a bare binary does
+//! not. Elsewhere this does nothing.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

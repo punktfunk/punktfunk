@@ -10,17 +10,9 @@
 // Config service relies on.
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer, Schema } from "effect";
-import {
-	HttpClient,
-	HttpClientRequest,
-	HttpClientResponse,
-} from "effect/unstable/http";
-import {
-	HttpApi,
-	HttpApiEndpoint,
-	HttpApiGroup,
-} from "effect/unstable/httpapi";
-import { AtomHttpApi, AtomRegistry } from "effect/unstable/reactivity";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
+import { AtomHttpApi, AtomRegistry } from "effect/reactivity";
 
 const Pong = Schema.Struct({ ok: Schema.Boolean });
 

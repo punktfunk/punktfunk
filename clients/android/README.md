@@ -27,9 +27,9 @@ version.
 
 ## Build
 
-Pinned toolchain — AGP 9.2 · Gradle 9.4.1 · Kotlin 2.3.21 · Compose BOM 2026.05.01 · compileSdk 37 ·
+Pinned toolchain — AGP 9.4 · Gradle 9.8.0 · Kotlin 2.4.20 · Compose BOM 2026.09.00 · compileSdk 37 ·
 minSdk 28. You need the Android SDK plus **NDK r30** (`30.0.14904198`), `platforms;android-37.0`,
-`build-tools;37.0.0`, `cmake;3.22.1` (builds libopus), **JDK 21** (AGP 9.2 runs on 17–21, not a
+`build-tools;37.0.0`, `cmake;3.22.1` (builds libopus), **JDK 21** (AGP 9.4 runs on 17–21, not a
 newer default), and `cargo install cargo-ndk` with the three Android Rust targets added.
 
 Android Studio: open `clients/android` — it uses its bundled JBR 21 and the `cargoNdk*` task builds

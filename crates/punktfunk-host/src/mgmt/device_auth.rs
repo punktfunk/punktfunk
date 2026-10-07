@@ -16,7 +16,7 @@
 
 use super::shared::*;
 use base64::Engine as _;
-use rand::RngCore;
+use rand::Rng;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
