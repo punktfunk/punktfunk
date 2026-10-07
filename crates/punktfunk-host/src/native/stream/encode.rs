@@ -104,9 +104,10 @@ fn au_flags(
     recovery_close: bool,
     recovery_anchor: bool,
     chunk_aligned: bool,
+    acked: bool,
     link: &crate::link_health::LinkCounters,
 ) -> u32 {
-    link.note_recovery_au(recovery_anchor, recovery_point && !recovery_close);
+    link.note_recovery_au(recovery_anchor, acked, recovery_point && !recovery_close);
     let mut flags = if keyframe {
         (FLAG_PIC | FLAG_SOF) as u32
     } else {
@@ -365,7 +366,16 @@ impl StreamState {
         let depth = if owed.is_some() { 1 } else { depth };
         let submitted = match owed {
             Some(_) => Ok(()),
-            None => self.enc.submit_indexed(&self.frame, wire_index),
+            None => {
+                let floor = self.loss_mode.floor(
+                    self.lossy_window.swap(false, Ordering::Relaxed),
+                    self.acked.load(Ordering::Relaxed),
+                    wire_index,
+                    t_submit,
+                );
+                self.enc.set_reference_floor(floor);
+                self.enc.submit_indexed(&self.frame, wire_index)
+            }
         };
         if let Err(e) = submitted {
             if e.downcast_ref::<crate::encode::TerminalEncoderError>()
@@ -553,6 +563,7 @@ impl StreamState {
                     c.recovery_close,
                     c.recovery_anchor,
                     c.chunk_aligned,
+                    self.loss_mode.is_on(),
                     &self.counters.link,
                 );
                 self.send_hdr_meta(c.keyframe, resend_meta);
@@ -623,6 +634,7 @@ impl StreamState {
             au.recovery_close,
             au.recovery_anchor,
             au.chunk_aligned,
+            self.loss_mode.is_on(),
             &self.counters.link,
         );
         self.send_hdr_meta(au.keyframe, resend_meta);

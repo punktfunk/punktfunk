@@ -71,6 +71,10 @@ pub(super) struct StreamState {
     pub(super) last_forced_idr: Option<std::time::Instant>,
     /// Never re-anchors the IDR cooldown: sustained loss + RFI would swallow IDR pleas forever.
     pub(super) last_rfi: Option<std::time::Instant>,
+    pub(super) loss_mode: super::recovery::LossMode,
+    /// [`crate::native::wiring::SessionShared::acked`] and `lossy_window`.
+    pub(super) acked: Arc<AtomicU64>,
+    pub(super) lossy_window: Arc<AtomicBool>,
     pub(super) kf_gate: super::recovery::KeyframeGate,
     pub(super) recovery_cadence: pf_frame::metronome::Metronome,
     pub(super) ir_wave_pos: u32,
@@ -441,6 +445,8 @@ impl StreamState {
                             shape,
                             ports,
                             resend,
+                            acked,
+                            lossy_window,
                             ramp_open,
                             cursor_client_draws,
                         },
@@ -1053,6 +1059,9 @@ impl StreamState {
             // Pipeline opened on an IDR — start the clock so the cold-GOP keyframe storm coalesces.
             last_forced_idr: Some(now),
             last_rfi: None,
+            loss_mode: Default::default(),
+            acked,
+            lossy_window,
             kf_gate: super::recovery::KeyframeGate::default(),
             recovery_cadence: pf_frame::metronome::Metronome::new(),
             ir_wave_pos: 0,

@@ -372,6 +372,8 @@ pub(super) async fn run(task: Task) {
                 shape,
                 ports,
                 resend,
+                acked,
+                lossy_window,
                 ramp_open,
                 cursor_client_draws,
             },
@@ -457,6 +459,9 @@ pub(super) async fn run(task: Task) {
                 if fb.link_kbps != 0 && link_kbps.swap(fb.link_kbps, Ordering::Relaxed) != fb.link_kbps {
                     tracing::info!(link_kbps = fb.link_kbps, "client's link rate");
                 }
+                if let Some((last, mask)) = fb.acked {
+                    acked.store(u64::from(last) << 16 | u64::from(mask), Ordering::Relaxed);
+                }
                 let wake = apply_shape(&shape, fb.shape);
                 link.note_link(fb.link_kbps, wake);
                 // The ask before the window: an RFI raised in a window counts in its report.
@@ -495,6 +500,11 @@ pub(super) async fn run(task: Task) {
                 }
                 if take_newer(fb.window, &mut last_window, u32::MAX) {
                     let unrecovered_run = unrecovered.report(std::time::Instant::now());
+                    if unrecovered_run > 0
+                        || punktfunk_core::abr::shows_loss_shape(fb.head, fb.mid, fb.tail, fb.sock_drops)
+                    {
+                        lossy_window.store(true, Ordering::Relaxed);
+                    }
                     link.note_loss(fb.loss_ppm, unrecovered_run);
                     link.note_positions(fb.head, fb.mid, fb.tail, fb.sock_drops);
                     link.sample_bands(

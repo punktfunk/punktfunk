@@ -508,7 +508,7 @@ impl Encoder for NativeVaapiEncoder {
             .into_iter()
             .map(|(slot, wire)| (slot, wire + self.wire_offset))
             .collect();
-        let plan = plan_slot_recovery(&refs, first);
+        let plan = plan_slot_recovery(&refs, first, None);
         session.distrust(plan.tainted);
         self.anchor = plan.anchor.map(|(slot, _)| slot);
         if self.anchor.is_some() {

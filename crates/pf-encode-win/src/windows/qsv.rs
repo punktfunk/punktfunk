@@ -1720,7 +1720,7 @@ impl Encoder for QsvEncoder {
             .filter(|&(slot, _)| !self.ltr_tainted[slot])
             .filter_map(|(s, m)| m.map(|w| (s, w)))
             .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first);
+        let plan = super::rfi::plan_slot_recovery(&view, first, None);
         for (slot, tainted) in self.ltr_tainted.iter_mut().enumerate() {
             if plan.tainted & (1 << slot) != 0 {
                 *tainted = true;

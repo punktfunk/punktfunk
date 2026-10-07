@@ -4048,7 +4048,8 @@ impl Encoder for VulkanVideoEncoder {
         // resident DPB picture for `build_h265_rps_s0`, or a conforming decoder evicts them.
         // "Resident and older than this loss" is not "the client decoded it" — after an earlier
         // loss recovered at wire r, wires in [a, r-1] stay candidates until the ring rolls them.
-        let plan = crate::rfi::plan_slot_recovery(&trusted_refs(&self.slot_wire), first_frame);
+        let plan =
+            crate::rfi::plan_slot_recovery(&trusted_refs(&self.slot_wire), first_frame, None);
         for (s, w) in self.slot_wire.iter_mut().enumerate() {
             if plan.tainted & (1 << s) != 0 {
                 *w = -1;

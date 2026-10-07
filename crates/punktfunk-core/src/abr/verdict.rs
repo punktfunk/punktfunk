@@ -127,9 +127,20 @@ pub(super) fn tail_mark(w: &WindowSample) -> bool {
 /// Loss at the frames' heads, well past the rest, with the socket dropping nothing: a
 /// receiver whose adapter wakes late. The wake shape answers it, not the rate.
 pub(crate) fn head_signature(w: &WindowSample) -> bool {
-    w.head >= HEAD_MIN
-        && w.head >= HEAD_RATIO.saturating_mul(w.mid.saturating_add(w.tail))
-        && w.sock_drops == 0
+    heads(w.head, w.mid, w.tail, w.sock_drops)
+}
+
+fn heads(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
+    head >= HEAD_MIN
+        && head >= HEAD_RATIO.saturating_mul(mid.saturating_add(tail))
+        && sock_drops == 0
+}
+
+/// A report window's lost shards fell at its frames' heads or tails: a waking receiver or
+/// a filling queue. A host that sees one keeps its encoder on the frames the client
+/// confirmed.
+pub fn shows_loss_shape(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
+    heads(head, mid, tail, sock_drops) || tail >= TAIL_MARK_MIN
 }
 
 /// Rolling-min baselines for the three relative signals.
@@ -461,6 +472,8 @@ mod tests {
             dropped: 1,
             ..w(0, 0, 2, 0)
         }));
+        assert!(shows_loss_shape(6, 1, 1, 0) && shows_loss_shape(0, 0, 2, 0));
+        assert!(!shows_loss_shape(0, 9, 1, 0), "mid-frame loss is neither");
     }
 
     /// A lone dead frame on a flat link is a blip while the minute's dead frames stay

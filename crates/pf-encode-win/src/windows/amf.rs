@@ -1963,7 +1963,7 @@ impl Encoder for AmfEncoder {
             .enumerate()
             .filter_map(|(s, m)| m.map(|w| (s, w)))
             .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first);
+        let plan = super::rfi::plan_slot_recovery(&view, first, None);
         for (slot, marked) in self.ltr_slots.iter_mut().enumerate() {
             if plan.tainted & (1 << slot) != 0 {
                 *marked = None;

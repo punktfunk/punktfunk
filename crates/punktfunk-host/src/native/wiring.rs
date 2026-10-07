@@ -47,6 +47,12 @@ pub(crate) struct SessionShared {
     /// Queues a resend of `(frame, shards)` beside the frames on the send thread; `false`
     /// when its queue is full. `None` until the send thread exists.
     pub(crate) resend: Arc<std::sync::Mutex<Option<ResendFn>>>,
+    /// The newest frame the client confirmed it decoded and the sixteen before it,
+    /// `last << 16 | mask`; [`NONE_ACKED`] until the first.
+    pub(crate) acked: Arc<AtomicU64>,
+    /// A report window showed loss. The stream loop takes it and holds the encoder on
+    /// confirmed references until ten seconds past the last.
+    pub(crate) lossy_window: Arc<AtomicBool>,
     /// The bring-up ramp's window: probe requests are served on the punched data plane without
     /// the control task's spacing until the send thread takes the session (`stream::ramp`).
     /// Open from the handshake, because the client asks as soon as it has punched.
@@ -55,6 +61,9 @@ pub(crate) struct SessionShared {
     /// Stays `true`, and inert, for a session without the cursor cap.
     pub(crate) cursor_client_draws: Arc<AtomicBool>,
 }
+
+/// [`SessionShared::acked`] before the client confirmed a frame.
+pub(crate) const NONE_ACKED: u64 = u64::MAX;
 
 /// [`SessionShared::resend`].
 pub(crate) type ResendFn = Box<dyn Fn(u32, Vec<u16>) -> bool + Send>;
@@ -191,6 +200,8 @@ impl SessionWiring {
                 shape: Arc::new(AtomicU8::new(0)),
                 ports,
                 resend: Arc::default(),
+                acked: Arc::new(AtomicU64::new(NONE_ACKED)),
+                lossy_window: Arc::default(),
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,
                 )),

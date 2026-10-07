@@ -670,6 +670,78 @@ pub(super) enum KeyframeVerdict {
     },
 }
 
+/// How long the encoder stays on confirmed references past the last window that showed loss.
+const LOSS_MODE_HOLD: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `PUNKTFUNK_ACKED_REFS`: `on` holds confirmed references all session, `off` never takes
+/// them, unset follows the link.
+fn acked_refs_forced() -> Option<bool> {
+    crate::send_pacing::env_once!(
+        Option<bool>,
+        match std::env::var("PUNKTFUNK_ACKED_REFS").as_deref() {
+            Ok("on") => Some(true),
+            Ok("off") => Some(false),
+            _ => None,
+        }
+    )
+}
+
+/// While the link loses packets the encoder references only frames the client confirmed
+/// ([`crate::encode::Encoder::set_reference_floor`]), so a lost frame is skipped, not
+/// repaired. On with a lossy report window, off [`LOSS_MODE_HOLD`] past the last. Each
+/// switch is logged, with the mean reference distance on the way off.
+#[derive(Default)]
+pub(super) struct LossMode {
+    seen: Option<std::time::Instant>,
+    on: bool,
+    frames: u64,
+    distance: u64,
+}
+
+impl LossMode {
+    pub(super) fn is_on(&self) -> bool {
+        self.on
+    }
+
+    /// The reference floor for frame `wire`, given whether a lossy window arrived since the
+    /// last frame and the client's newest confirmed frame (`last << 16 | mask`).
+    pub(super) fn floor(
+        &mut self,
+        lossy: bool,
+        acked: u64,
+        wire: u32,
+        now: std::time::Instant,
+    ) -> Option<i64> {
+        if lossy {
+            self.seen = Some(now);
+        }
+        let on = acked_refs_forced().unwrap_or_else(|| {
+            self.seen
+                .is_some_and(|t| now.duration_since(t) < LOSS_MODE_HOLD)
+        });
+        if on != self.on {
+            self.on = on;
+            if on {
+                tracing::info!("acked references engaged: the link shows loss");
+            } else {
+                tracing::info!(
+                    frames = self.frames,
+                    mean_distance = self.distance.checked_div(self.frames),
+                    "acked references released"
+                );
+                (self.frames, self.distance) = (0, 0);
+            }
+        }
+        if !on || acked == crate::native::wiring::NONE_ACKED {
+            return None;
+        }
+        let last = (acked >> 16) as u32;
+        self.frames += 1;
+        self.distance += u64::from(wire.wrapping_sub(last));
+        Some(i64::from(last))
+    }
+}
+
 /// Frames whose plaintext a NACK can still reach.
 const RESEND_FRAMES: usize = 3;
 /// Bytes the ring holds at most; the oldest frames go first, never the one in progress.
@@ -1207,6 +1279,32 @@ mod tests {
         // A real periodic disturbance still reaches that branch.
         assert!(!matches_client_recovery_cooldown(flush * 3));
         assert!(!matches_client_recovery_cooldown(std::time::Duration::ZERO));
+    }
+}
+
+#[cfg(test)]
+mod loss_mode_tests {
+    use super::*;
+
+    /// A lossy window turns confirmed references on, with the newest confirmed frame as the
+    /// floor once there is one, and they hold ten seconds past the last such window.
+    #[test]
+    fn loss_mode_holds_ten_seconds_past_the_last_lossy_window() {
+        let t0 = std::time::Instant::now();
+        let s = std::time::Duration::from_secs;
+        let acked = 40u64 << 16 | 0b11;
+        let mut m = LossMode::default();
+        assert_eq!(
+            m.floor(false, acked, 42, t0),
+            None,
+            "a clean link keeps the chain"
+        );
+        let none = crate::native::wiring::NONE_ACKED;
+        assert_eq!(m.floor(true, none, 42, t0), None, "nothing confirmed yet");
+        assert!(m.is_on());
+        assert_eq!(m.floor(false, acked, 43, t0 + s(9)), Some(40));
+        assert_eq!(m.floor(false, acked, 44, t0 + s(10)), None);
+        assert!(!m.is_on());
     }
 }
 

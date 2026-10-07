@@ -23,11 +23,20 @@ pub struct SlotPlan {
     pub anchor: Option<(usize, i64)>,
 }
 
+/// The newest trusted `(slot, wire)` at or below `floor`, the newest frame the client
+/// confirmed: what a frame references while the link loses packets
+/// ([`crate::codec::Encoder::set_reference_floor`]). `None` when none is resident; the
+/// caller keeps its ordinary chain, never an IDR.
+pub fn pick_acked(refs: &[(usize, i64)], floor: i64) -> Option<(usize, i64)> {
+    pick_anchor(refs, floor.saturating_add(1))
+}
+
 /// Taint and pick from one snapshot of currently-trusted `(slot, wire)` pairs
 /// (caller already dropped previously-distrusted entries). `wire >= loss_first`
 /// taints; `wire < loss_first` is the only eligible anchor, so this call cannot
-/// pick a slot it just tainted.
-pub fn plan_slot_recovery(refs: &[(usize, i64)], loss_first: i64) -> SlotPlan {
+/// pick a slot it just tainted. A `floor` also bounds the anchor to `wire <= floor`,
+/// the frames the client confirmed; the taint still covers every slot from the loss on.
+pub fn plan_slot_recovery(refs: &[(usize, i64)], loss_first: i64, floor: Option<i64>) -> SlotPlan {
     // Callers gate `first < 0` before they get here; `-1`/`None` sentinels are
     // "untrusted". Plain `assert`: `--release` lint runs, and a compiled-out
     // check would drop taints instead of failing.
@@ -44,8 +53,21 @@ pub fn plan_slot_recovery(refs: &[(usize, i64)], loss_first: i64) -> SlotPlan {
     }
     SlotPlan {
         tainted,
-        anchor: pick_anchor(refs, loss_first),
+        anchor: pick_recovery(refs, loss_first, floor),
     }
+}
+
+/// The anchor for a loss from `loss_first`: the newest trusted frame before it, and at or
+/// below `floor` while the encoder holds confirmed references.
+pub fn pick_recovery(
+    refs: &[(usize, i64)],
+    loss_first: i64,
+    floor: Option<i64>,
+) -> Option<(usize, i64)> {
+    pick_anchor(
+        refs,
+        floor.map_or(loss_first, |f| loss_first.min(f.saturating_add(1))),
+    )
 }
 
 /// Newest trusted `wire` strictly older than the loss. Ties keep the first
@@ -185,21 +207,21 @@ pub fn pinned_cycle() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mark_slot, pick_anchor, plan_slot_recovery, wave_cycle, Wave};
+    use super::{mark_slot, pick_acked, pick_anchor, plan_slot_recovery, wave_cycle, Wave};
 
     /// Two LTR slots marked at 840 and 870. A loss at 869 anchors on 840 and empties 870's
     /// slot, so the mark at 900 lands there and a loss at 900 still anchors on 840.
     #[test]
     fn a_mark_refills_the_slot_a_loss_emptied() {
         let mut wires = [840i64, 870];
-        let plan = plan_slot_recovery(&view(&wires), 869);
+        let plan = plan_slot_recovery(&view(&wires), 869, None);
         assert_eq!(plan.anchor, Some((0, 840)));
         apply(&mut wires, plan.tainted);
         let slot = mark_slot(&wires.map(|w| w >= 0), 0);
         assert_eq!(slot, 1, "the round robin would overwrite 840");
         wires[slot] = 900;
         assert_eq!(
-            plan_slot_recovery(&view(&wires), 900).anchor,
+            plan_slot_recovery(&view(&wires), 900, None).anchor,
             Some((0, 840))
         );
         assert_eq!(
@@ -288,6 +310,33 @@ mod tests {
         }
     }
 
+    /// Under a floor the reference is the newest resident frame the client confirmed,
+    /// and a loss's anchor is one too, while the taint still covers the loss.
+    #[test]
+    fn a_floor_picks_the_newest_confirmed_frame() {
+        // Slots hold 15..=22; 21 and 22 are in flight, 20 is the newest confirmed.
+        let wires = [15i64, 16, 17, 18, 19, 20, 21, 22];
+        assert_eq!(pick_acked(&view(&wires), 20), Some((5, 20)));
+        let tainted = [15i64, 16, 17, 18, 19, -1, 21, 22];
+        assert_eq!(pick_acked(&view(&tainted), 20), Some((4, 19)));
+        assert_eq!(
+            pick_acked(&view(&[30, 31]), 20),
+            None,
+            "nothing confirmed resident"
+        );
+        let plan = plan_slot_recovery(&view(&wires), 19, Some(17));
+        assert_eq!(
+            plan.anchor,
+            Some((2, 17)),
+            "older than the loss and confirmed"
+        );
+        assert_eq!(plan.tainted, 0b1111_0000);
+        assert_eq!(
+            plan_slot_recovery(&view(&wires), 19, Some(25)).anchor,
+            Some((3, 18))
+        );
+    }
+
     #[test]
     fn picks_newest_pre_loss() {
         let wires = [8i64, 9, 10, 11, 12, 5, 6, 7];
@@ -318,7 +367,7 @@ mod tests {
         );
 
         let mut wires = unswept;
-        let plan = plan_slot_recovery(&view(&wires), 4);
+        let plan = plan_slot_recovery(&view(&wires), 4, None);
         assert_eq!(plan.tainted, 0b1111_0000);
         assert_eq!(plan.anchor, Some((3, 3)));
         apply(&mut wires, plan.tainted);
@@ -331,12 +380,12 @@ mod tests {
         wires[5] = 9;
         wires[6] = 10;
         wires[7] = 11;
-        let plan = plan_slot_recovery(&view(&wires), 10);
+        let plan = plan_slot_recovery(&view(&wires), 10, None);
         assert_eq!(plan.anchor, Some((5, 9)), "wire 9 is post-recovery, clean");
         apply(&mut wires, plan.tainted);
 
         let mut all = [5i64, 6, 7, 8, 9, 10, 11, 12];
-        let plan = plan_slot_recovery(&view(&all), 5);
+        let plan = plan_slot_recovery(&view(&all), 5, None);
         assert_eq!(plan.tainted, 0b1111_1111);
         assert_eq!(plan.anchor, None);
         apply(&mut all, plan.tainted);

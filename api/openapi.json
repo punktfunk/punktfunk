@@ -13182,6 +13182,7 @@
           "rfi_declined",
           "anchor_p",
           "intra_refresh",
+          "acked_p",
           "keyframe_req",
           "idr",
           "fec_min_pct",
@@ -13215,6 +13216,12 @@
           "abr_min_kbps": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "acked_p": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Frames encoded against one the client confirmed, while the link showed loss.",
             "minimum": 0
           },
           "anchor_p": {

@@ -58,6 +58,8 @@ pub struct LinkMinute {
     /// wave that recodes the picture over ~0.5 s.
     pub anchor_p: u32,
     pub intra_refresh: u32,
+    /// Frames encoded against one the client confirmed, while the link showed loss.
+    pub acked_p: u32,
     /// Client decode-recovery asks, and the IDRs actually forced (the cooldown coalesces).
     pub keyframe_req: u32,
     pub idr: u32,
@@ -121,6 +123,7 @@ pub fn emit(m: &LinkMinute, peer: std::net::IpAddr) {
                 rfi_declined = m.rfi_declined,
                 anchor_p = m.anchor_p,
                 intra_refresh = m.intra_refresh,
+                acked_p = m.acked_p,
                 keyframe_req = m.keyframe_req,
                 idr = m.idr,
                 fec_pct = %format!("{}..{}", m.fec_min_pct, m.fec_max_pct),
@@ -158,6 +161,7 @@ pub struct LinkCounters {
     session_id: AtomicU64,
     anchor_p: AtomicU32,
     intra_refresh: AtomicU32,
+    acked_p: AtomicU32,
     rfi_declined: AtomicU32,
     idr: AtomicU32,
     retargets: AtomicU32,
@@ -180,12 +184,15 @@ impl LinkCounters {
         self.session_id.load(Ordering::Relaxed)
     }
 
-    /// One recovery AU the encoder produced for an RFI: a clean anchor P, or the start of an
-    /// intra refresh wave. Called from [`crate::native::stream::encode`] per AU.
-    pub fn note_recovery_au(&self, anchor_p: bool, wave_start: bool) {
-        if anchor_p {
-            self.anchor_p.fetch_add(1, Ordering::Relaxed);
-        }
+    /// One recovery AU the encoder produced: a clean anchor P, or the start of an intra
+    /// refresh wave. An anchor while the encoder holds `acked` references counts there, not
+    /// as an RFI's answer. Called from [`crate::native::stream::encode`] per AU.
+    pub fn note_recovery_au(&self, anchor_p: bool, acked: bool, wave_start: bool) {
+        match (anchor_p, acked) {
+            (true, true) => self.acked_p.fetch_add(1, Ordering::Relaxed),
+            (true, false) => self.anchor_p.fetch_add(1, Ordering::Relaxed),
+            _ => 0,
+        };
         if wave_start {
             self.intra_refresh.fetch_add(1, Ordering::Relaxed);
         }
@@ -229,6 +236,7 @@ impl LinkCounters {
         m.session_id = self.session_id.load(Ordering::Relaxed);
         m.anchor_p = self.anchor_p.swap(0, Ordering::Relaxed);
         m.intra_refresh = self.intra_refresh.swap(0, Ordering::Relaxed);
+        m.acked_p = self.acked_p.swap(0, Ordering::Relaxed);
         m.rfi_declined = self.rfi_declined.swap(0, Ordering::Relaxed);
         m.idr = self.idr.swap(0, Ordering::Relaxed);
         m.retargets = self.retargets.swap(0, Ordering::Relaxed);
@@ -444,8 +452,8 @@ mod tests {
     fn counters_reset_per_minute() {
         let c = LinkCounters::default();
         c.set_session_id(10);
-        c.note_recovery_au(true, false);
-        c.note_recovery_au(false, true);
+        c.note_recovery_au(true, false, false);
+        c.note_recovery_au(false, false, true);
         c.note_rfi_declined();
         c.note_idr();
         c.note_retarget();

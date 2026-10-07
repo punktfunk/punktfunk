@@ -252,6 +252,12 @@ pub trait Encoder: Send {
     /// unusable: ordinary prediction uses the backend's slot index. A re-mark
     /// or an IDR that flushes the DPB restores trust. Default: no-op.
     fn distrust_references(&mut self) {}
+    /// Reference only frames at or below `acked_wire`, the newest the client confirmed it
+    /// decoded, while the link loses packets; `None` restores the ordinary chain. A lost
+    /// frame is then never referenced, and the client skips it. A frame that references a
+    /// confirmed one carries `recovery_anchor`. With none resident the backend keeps its
+    /// chain, never an IDR. Set before each submit. Default: no-op.
+    fn set_reference_floor(&mut self, _acked_wire: Option<i64>) {}
     /// Escalate to pipelined retrieve under GPU contention: `poll` stops waiting
     /// on the newest in-flight AU (a retrieve thread on NVENC, a completion probe
     /// on Vulkan/VA-API), so AUs may ride ~one loop tick behind their submit.
