@@ -365,7 +365,8 @@ pub struct StreamConfig {
     pub host_link_mbps: u32,
     /// The host data socket's granted send buffer.
     pub host_sndbuf_kb: u32,
-    /// The shape the host's operator forced (`PUNKTFUNK_DELIVERY`); `0` = none.
+    /// What the host's operator pinned with `PUNKTFUNK_DELIVERY`: `0` nothing, then auto,
+    /// wake, burst, smooth, capped.
     pub host_forced_shape: u8,
 }
 

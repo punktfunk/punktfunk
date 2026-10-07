@@ -42,8 +42,10 @@ fn mark_recovery_boundary(ir_wave_pos: &mut u32, is_keyframe: bool, period: u32)
 /// Escalate to the capturer's max only when cadence cannot hold at depth-1 (GPU contention).
 /// `PUNKTFUNK_IDD_ADAPTIVE=0` pins the capturer's full depth. Off when max depth is already 1.
 fn idd_adaptive_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| pf_host_config::env_on("PUNKTFUNK_IDD_ADAPTIVE").unwrap_or(true))
+    crate::send_pacing::env_once!(
+        bool,
+        pf_host_config::env_on("PUNKTFUNK_IDD_ADAPTIVE").unwrap_or(true)
+    )
 }
 
 /// Escalated sessions flag on any net behind-frame; being escalated alone does not latch a cap.
@@ -410,7 +412,7 @@ impl StreamState {
             self.next + self.interval
         };
         for _ in 0..owed.unwrap_or(1) {
-            self.inflight.push_back((capture_ns, submit_ns, self.next));
+            self.inflight.push_back((capture_ns, submit_ns));
         }
         let stamps = Stamps {
             queue_us,
@@ -479,13 +481,13 @@ impl StreamState {
     }
 
     /// The AU-level fields for the AU just taken, from its `inflight` stamps
-    /// `(capture, submit, deadline)`. On the driver the host submits nothing: the stages are
+    /// `(capture, submit)`. On the driver the host submits nothing: the stages are
     /// the driver's own, and its per-AU present time (`pts_ns`) beats the tick's clock, which
     /// would give every AU of a burst the same one.
     fn au_meta(
         &self,
         st: &Stamps,
-        (cap_ns, sub_ns, deadline): (u64, u64, std::time::Instant),
+        (cap_ns, sub_ns): (u64, u64),
         pts_ns: u64,
         flags: u32,
         wait_us: u32,
@@ -504,7 +506,6 @@ impl StreamState {
             epoch: self.epoch,
             flags,
             frame_index: self.au_seq,
-            deadline,
             encode_us: d.encode_us,
             queue_us: d.queue_us,
             cap_us: st.cap_us,
@@ -847,7 +848,7 @@ impl StreamState {
     /// return `None` on the first in-flight AU and strand the tail.
     pub(super) fn drain(&mut self) {
         self.enc.set_pipelined(false);
-        while let Some((cap_ns, sub_ns, deadline)) = self.inflight.pop_front() {
+        while let Some((cap_ns, sub_ns)) = self.inflight.pop_front() {
             let Ok(Some(au)) = self.enc.poll() else { break };
             let flags = if au.keyframe {
                 (FLAG_PIC | FLAG_SOF) as u32
@@ -862,7 +863,6 @@ impl StreamState {
                     epoch: self.epoch,
                     flags,
                     frame_index: self.au_seq,
-                    deadline,
                     encode_us,
                     queue_us: 0,
                     cap_us: 0,

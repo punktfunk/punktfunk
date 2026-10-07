@@ -105,6 +105,15 @@ fn take_newer(n: u32, last: &mut u32, max: u32) -> bool {
     true
 }
 
+/// A probe's target, the bring-up ramp's steps included, under 0.9 `L_hard` when a port is
+/// known. The result reports what was offered, so a bounded round says so itself.
+fn probe_bound(target_kbps: u32, ports: crate::send_pacing::Ports) -> u32 {
+    match ports.hard_kbps() {
+        0 => target_kbps,
+        p => target_kbps.min(p / 10 * 9),
+    }
+}
+
 /// Whether this probe request is as short as a bring-up ramp step.
 ///
 /// The length bound is the ramp's exemption from the spacing. Without it a
@@ -345,7 +354,8 @@ pub(super) async fn run(task: Task) {
                 fec_target,
                 fec_requested,
                 link_kbps,
-                delivery: _,
+                shape: _,
+                ports,
                 ramp_open,
                 cursor_client_draws,
             },
@@ -676,7 +686,9 @@ pub(super) async fn run(task: Task) {
                         "client acked shard-payload change"
                     );
                     let _ = shard_ack_tx.send(ack.shard_payload);
-                } else if let Ok(req) = v2msg::decode::<ProbeShaped>(ty, &body) {
+                } else if let Ok(mut req) = v2msg::decode::<ProbeShaped>(ty, &body) {
+                    // Nothing a port cannot carry: what the burst learns past it is loss.
+                    req.target_kbps = probe_bound(req.target_kbps, ports);
                     let open = ramp_open.load(Ordering::SeqCst);
                     if !probe_only
                         && !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open)
@@ -1044,6 +1056,16 @@ mod tests {
         CLIP_REASON_NOT_PERMITTED, CLIP_REASON_NO_FILES, CLIP_REASON_OK,
         CLIP_REASON_POLICY_DISABLED, GRANT_ALL, GRANT_CLIPBOARD,
     };
+
+    /// A probe into a 1 GbE port is served at 900 Mbit/s at most; unknown ports bound nothing.
+    #[test]
+    fn a_probe_never_asks_more_than_the_ports_carry() {
+        let eth = punktfunk_core::transport::IFACE_KIND_ETHERNET;
+        let gbe = crate::send_pacing::Ports::of((eth, 2_500), (eth, 1_000));
+        assert_eq!(probe_bound(1_200_000, gbe), 900_000);
+        assert_eq!(probe_bound(50_000, gbe), 50_000);
+        assert_eq!(probe_bound(1_200_000, Default::default()), 1_200_000);
+    }
 
     /// A window or ask number is acted on once: a repeat, an older reordered copy and `0` are
     /// skipped, and the client's wrap past the top (which skips `0`) still reads as newer.

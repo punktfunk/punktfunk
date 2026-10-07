@@ -126,7 +126,7 @@ pub fn host_link(
         iface_kind: link.kind,
         link_mbps: link.mbps,
         sndbuf_kb,
-        forced_shape: 0,
+        forced_shape: crate::send_pacing::Forced::wire(crate::send_pacing::forced()),
     }
 }
 

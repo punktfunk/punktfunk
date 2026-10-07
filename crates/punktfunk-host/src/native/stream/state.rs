@@ -18,8 +18,8 @@ use super::cursor::settle_portal_cursor;
 use super::pipeline::{build_pipeline_with_retry, Pipeline};
 use super::*;
 
-/// (capture_ns, submit_ns, send deadline) per frame handed to the encoder and not yet polled.
-pub(super) type Inflight = std::collections::VecDeque<(u64, u64, std::time::Instant)>;
+/// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
+pub(super) type Inflight = std::collections::VecDeque<(u64, u64)>;
 
 /// What one tick's capture phase hands to its encode phase.
 #[derive(Clone, Copy)]
@@ -436,7 +436,8 @@ impl StreamState {
                             fec_target,
                             fec_requested,
                             link_kbps,
-                            delivery,
+                            shape,
+                            ports,
                             ramp_open,
                             cursor_client_draws,
                         },
@@ -840,10 +841,6 @@ impl StreamState {
         });
 
         let perf = pf_host_config::config().perf;
-        let burst_cap: Option<usize> = std::env::var("PUNKTFUNK_PACE_BURST_KB")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .map(|kb| kb * 1024);
 
         // Depth 3: encode blocks if send falls behind, rather than drop a frame (infinite GOP freeze).
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<SendMsg>(3);
@@ -868,8 +865,9 @@ impl StreamState {
             plane: conn.plane(),
             bitrate_kbps: live_bitrate.clone(),
             link_kbps,
+            ports,
             link_paced: budget_identity,
-            delivery,
+            shape,
             bringup: bringup.clone(),
             wire_sock,
             driver_dropped: driver_dropped.clone(),
@@ -894,7 +892,6 @@ impl StreamState {
                         send_spread_send,
                         wire_rekeys_send,
                         slice_wire,
-                        burst_cap,
                         fec_target_send,
                         shard_rx,
                         send_stats,

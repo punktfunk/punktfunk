@@ -1707,7 +1707,14 @@ pub(crate) async fn run_admitted(
         stream: stream_ends,
         shard,
         shared,
-    } = SessionWiring::new(&welcome, source);
+    } = SessionWiring::new(
+        &welcome,
+        source,
+        crate::send_pacing::Ports::of(
+            (host_link.iface_kind, host_link.link_mbps),
+            client_link.map_or((0, 0), |l| (l.kind, l.mbps)),
+        ),
+    );
     // Shard renegotiation only if `Hello::max_shard_payload` and not PyroWave (PyroWave pins
     // the Welcome value for the session; a mid-stream re-key would desync). Not for a browser
     // either: the driver's targets are UDP-over-IP maths, and a WebTransport datagram also

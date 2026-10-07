@@ -62,8 +62,8 @@ profile() {
       MODE=3840x2160x120; ACHIEVABLE_KBPS=150000
       ;;
     # The 2.5 G host → 1 G client hop: a 1 Gbit/s link whose queue is one switch's SRAM
-    # (1 ms ≈ 125 KB). A line-rate burst overruns it on IDRs; `PUNKTFUNK_DELIVERY=capped`
-    # does not.
+    # (1 ms ≈ 125 KB). A line-rate burst (`PUNKTFUNK_DELIVERY=burst`) overruns it on IDRs;
+    # a frame paced at the link rate does not.
     lan_1g_switch)
       RATE_KBIT=1000000; DELAY_MS=1; BUFFER_MS=1
       MODE=3840x2160x120; ACHIEVABLE_KBPS=150000

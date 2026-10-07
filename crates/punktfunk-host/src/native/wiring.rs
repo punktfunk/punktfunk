@@ -38,9 +38,12 @@ pub(crate) struct SessionShared {
     /// The client's link rate (kbps) from its feedback, `0` until its ramp proved one. The
     /// send loop paces a pinned stream against it.
     pub(crate) link_kbps: Arc<AtomicU32>,
-    /// The delivery profile (`DeliveryProfile as u8`) the send loop reads per frame:
-    /// `PUNKTFUNK_DELIVERY`, else burst.
-    pub(crate) delivery: Arc<AtomicU8>,
+    /// The shape the client asked for (`Shape as u8`), read per frame by the send loop.
+    /// `PUNKTFUNK_DELIVERY` overrides it.
+    pub(crate) shape: Arc<AtomicU8>,
+    /// Both ends' ports, from the handshake: the pacer's floor and hard ceiling, and the
+    /// bound on every probe.
+    pub(crate) ports: crate::send_pacing::Ports,
     /// The bring-up ramp's window: probe requests are served on the punched data plane without
     /// the control task's spacing until the send thread takes the session (`stream::ramp`).
     /// Open from the handshake, because the client asks as soon as it has punched.
@@ -114,7 +117,11 @@ impl SessionWiring {
     /// Seeded from what Welcome promised. Synthetic-abr aliases `fec_requested` to
     /// `fec_target`: it re-derives frame bytes from FEC every frame and has no retarget to
     /// coordinate.
-    pub(crate) fn new(welcome: &Welcome, source: Punktfunk1Source) -> SessionWiring {
+    pub(crate) fn new(
+        welcome: &Welcome,
+        source: Punktfunk1Source,
+        ports: crate::send_pacing::Ports,
+    ) -> SessionWiring {
         let (reconfig_tx, reconfig) = std::sync::mpsc::channel();
         let (keyframe_tx, keyframe) = std::sync::mpsc::channel();
         let (rfi_tx, rfi) = std::sync::mpsc::channel();
@@ -175,9 +182,8 @@ impl SessionWiring {
                 fec_target,
                 fec_requested,
                 link_kbps: Arc::new(AtomicU32::new(0)),
-                delivery: Arc::new(AtomicU8::new(
-                    crate::send_pacing::forced_delivery().map_or(0, |p| p as u8),
-                )),
+                shape: Arc::new(AtomicU8::new(0)),
+                ports,
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,
                 )),

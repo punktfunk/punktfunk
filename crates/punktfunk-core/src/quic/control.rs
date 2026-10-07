@@ -55,7 +55,7 @@ pub struct HostLink {
     pub link_mbps: u32,
     /// The data socket's granted send buffer.
     pub sndbuf_kb: u32,
-    /// The shape the host's operator forced; `0` = none.
+    /// What the host's operator pinned ([`StreamConfig::host_forced_shape`](crate::quic::v2::msg::StreamConfig::host_forced_shape)).
     pub forced_shape: u8,
 }
 
