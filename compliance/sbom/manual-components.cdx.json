@@ -6,7 +6,7 @@
     {
       "type": "library",
       "name": "pyrowave",
-      "version": "509e4f887b585a3f97471fcc804e9de649f2c16f",
+      "version": "c0b997f84ced7bd827ca737aa5145f4ec811de8d",
       "description": "GPU wavelet codec, vendored at crates/pyrowave-sys/vendor/pyrowave (pruned tree) with local patches from crates/pyrowave-sys/patches/; commits recorded in vendor/pyrowave/PUNKTFUNK-VENDOR.txt",
       "licenses": [
         {
@@ -25,7 +25,7 @@
     {
       "type": "library",
       "name": "Granite",
-      "version": "44362775d36e0c4139352f83efd96bab4e239f66",
+      "version": "1b2d1801d2910fb09ebcded2f0bb3a3a781103b5",
       "description": "Vulkan backend subset vendored inside the pyrowave tree",
       "licenses": [
         {
@@ -63,7 +63,7 @@
     {
       "type": "library",
       "name": "Vulkan-Headers",
-      "version": "015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9",
+      "version": "6802bb4733b63ed5efd3adb308a6c885ef180ea1",
       "description": "Vulkan API headers vendored inside the pyrowave tree",
       "licenses": [
         {

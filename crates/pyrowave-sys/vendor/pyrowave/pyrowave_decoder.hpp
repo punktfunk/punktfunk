@@ -40,6 +40,15 @@ public:
 
 	bool decode_is_ready(bool allow_partial_frame) const;
 
+	// A more refined version of decode_is_ready() that allows a bit more control.
+	// The default is num_pristine_bands = 2 (the next-to-final LL band) and minimum_packet_ratio = 0.9.
+	// active_block_mask is an optional pointer.
+	// If bit i % 32 of active_block_mask[i / 32] is not set, then a missing block for that block index
+	// is ignored. This is intended to cover advanced cases for error correction.
+	// If the pointer is null, it is implied that all blocks are active for purposes of this call.
+	bool decode_is_ready(bool allow_partial_frame, int num_pristine_bands, float minimum_packet_ratio,
+	                     const uint32_t *active_block_mask, size_t word_count) const;
+
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl;

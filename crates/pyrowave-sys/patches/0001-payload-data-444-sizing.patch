@@ -1,8 +1,8 @@
 diff --git a/crates/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp b/crates/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
-index f5ac6dcc..ad4e9746 100644
+index 1f84184..8b5d7a9 100644
 --- a/crates/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
 +++ b/crates/pyrowave-sys/vendor/pyrowave/pyrowave_encoder.cpp
-@@ -187,8 +187,13 @@ void Encoder::Impl::init_block_meta()
+@@ -191,8 +191,13 @@ void Encoder::Impl::init_block_meta()
  	meta_buffer = device->create_buffer(info);
  	device->set_name(*meta_buffer, "meta-buffer");
  

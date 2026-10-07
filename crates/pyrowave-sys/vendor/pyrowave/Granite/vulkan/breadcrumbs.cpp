@@ -25,6 +25,8 @@
 #include "device.hpp"
 #include "timer.hpp"
 #include <time.h>
+#include <sstream>
+#include <iomanip>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -329,6 +331,194 @@ void BreadcrumbsTracker::report_command_list_amd(FILE *file, uint32_t index)
 	reported = true;
 }
 
+void BreadcrumbsTracker::poll_device_faults(FILE *file, uint64_t timeout)
+{
+	if (!device)
+		return;
+
+	// Need to observe the device lost properly first before we can query fault information.
+	auto &table = device->get_device_table();
+
+	const auto addr_type_to_str = [](VkDeviceFaultAddressTypeKHR type)
+	{
+		switch (type)
+		{
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_KHR: return "None";
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_KHR: return "ReadInvalid";
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_KHR: return "WriteInvalid";
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_EXECUTE_INVALID_KHR: return "ExecuteInvalid";
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_KHR: return "IPUnknown";
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_INVALID_KHR: return "IPInvalid";
+		case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_FAULT_KHR: return "IPFault";
+		default: return "???";
+		}
+	};
+
+	const auto report_address = [&](const char *tag, const VkDeviceFaultAddressInfoKHR &info)
+	{
+		fprintf(file, "  %s fault: %s\n", tag, addr_type_to_str(info.addressType));
+		fprintf(file, "  %s address: #%016llx\n", tag,
+				static_cast<unsigned long long>(info.reportedAddress));
+		fprintf(file, "  %s precision: #%016llx\n", tag,
+				static_cast<unsigned long long>(info.addressPrecision));
+	};
+
+	const auto report_vendor = [&](const VkDeviceFaultVendorInfoKHR &info)
+	{
+		fprintf(file, "  Vendor desc: %s\n", info.description);
+		fprintf(file, "  Vendor fault code: %llu\n",
+				static_cast<unsigned long long>(info.vendorFaultCode));
+		fprintf(file, "  Vendor fault data: %llu\n",
+				static_cast<unsigned long long>(info.vendorFaultData));
+	};
+
+	if (device->get_device_features().fault_features.deviceFault)
+	{
+		std::vector<VkDeviceFaultInfoKHR> faults;
+		uint32_t count;
+
+		VkResult vr = table.vkGetDeviceFaultReportsKHR(device->get_device(), timeout, &count, nullptr);
+
+		if (vr < 0)
+		{
+			fprintf(file, "Failed to get fault reports.\n");
+			return;
+		}
+
+		if (vr > 0)
+			return;
+
+		faults.resize(count);
+		for (auto &fault : faults)
+			fault.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR;
+
+		vr = table.vkGetDeviceFaultReportsKHR(device->get_device(), 0, &count, faults.data());
+
+		if (vr != VK_SUCCESS && vr != VK_INCOMPLETE)
+		{
+			fprintf(file, "Failed to get fault reports.\n");
+			return;
+		}
+
+		for (auto &fault : faults)
+		{
+			fprintf(file, "=== Fault ===\n");
+			fprintf(file, "  Desc: %s\n", fault.description);
+			fprintf(file, "  groupID: %llu\n", static_cast<unsigned long long>(fault.groupId));
+
+			if (fault.flags & VK_DEVICE_FAULT_FLAG_DEVICE_LOST_KHR)
+				fprintf(file, "  Fault caused DEVICE_LOST\n");
+			if (fault.flags & VK_DEVICE_FAULT_FLAG_WATCHDOG_TIMEOUT_KHR)
+				fprintf(file, "  GPU Timeout\n");
+			if (fault.flags & VK_DEVICE_FAULT_FLAG_OVERFLOW_KHR)
+				fprintf(file, "  Fault buffer overflowed\n");
+
+			if (fault.flags & VK_DEVICE_FAULT_FLAG_VENDOR_KHR)
+				report_vendor(fault.vendorInfo);
+			if (fault.flags & VK_DEVICE_FAULT_FLAG_MEMORY_ADDRESS_KHR)
+				report_address("Memory", fault.faultAddressInfo);
+			if (fault.flags & VK_DEVICE_FAULT_FLAG_INSTRUCTION_ADDRESS_KHR)
+				report_address("Instruction ", fault.instructionAddressInfo);
+		}
+	}
+}
+
+// Reused from my vkd3d-proton impl.
+static uint64_t align(uint64_t value, uint64_t alignment)
+{
+	return (value + alignment - 1) & ~(alignment - 1);
+}
+
+template <typename T, bool Hex = false>
+static void check_format_string(std::string &formatted_str,
+                                const char *shader_fmt_str, const char *msg,
+                                size_t &format_offset, size_t format_length,
+                                size_t &argument_offset, size_t argument_length)
+{
+	if (format_offset + strlen(shader_fmt_str) <= format_length &&
+	    strncmp(msg + format_offset, shader_fmt_str, strlen(shader_fmt_str)) == 0)
+	{
+		T arg = 0;
+		argument_offset = align(argument_offset, sizeof(T));
+		if (argument_offset + sizeof(T) <= argument_length)
+			memcpy(&arg, msg + argument_offset, sizeof(T));
+		argument_offset += sizeof(T);
+		std::stringstream ss;
+		if (Hex)
+			ss << std::hex;
+		ss << arg;
+		formatted_str += ss.str();
+		format_offset += strlen(shader_fmt_str);
+	}
+}
+
+static void shader_abort_print_message(FILE *file, const char *msg, size_t length)
+{
+    const char *term = static_cast<const char *>(memchr(msg, '\0', length));
+
+    if (term && term != msg)
+    {
+		size_t argument_offset = align(term + 1 - msg, sizeof(uint32_t));
+		size_t format_length = term - msg;
+		size_t format_offset = 0;
+		std::string buf;
+
+		// Very basic formatting support. Enough to report what we care about.
+		while (format_offset < format_length)
+		{
+			if (format_offset + 2 <= format_length && strncmp(msg + format_offset, "%%", 2) == 0)
+			{
+				buf.push_back('%');
+				format_offset += 2;
+			}
+
+			check_format_string<uint32_t>(buf, "%u", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<uint32_t, true>(buf, "%x", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<int32_t>(buf, "%x", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<uint64_t>(buf, "%lu", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<uint64_t, true>(buf, "%lx", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<int64_t>(buf, "%ld", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<float>(buf, "%f", msg, format_offset, format_length, argument_offset, length);
+			check_format_string<float>(buf, "%g", msg, format_offset, format_length, argument_offset, length);
+
+			if (format_offset < format_length)
+				buf.push_back(msg[format_offset++]);
+		}
+
+		fprintf(file, "ShaderAbort payload: %s\n", buf.c_str());
+    }
+    else
+    {
+        fprintf(file, "Message does not look like a printf.\n");
+    }
+}
+
+static void shader_abort_print_message_sequence(FILE *file, const uint64_t *tokens, size_t length)
+{
+    // The buffer is laid out as raw length + payload pairs. Pairs are aligned to 64-bit.
+    while (length >= sizeof(uint64_t))
+    {
+        uint64_t msg_length = tokens[0];
+        uint64_t aligned_msg_length;
+        length -= sizeof(uint64_t);
+        tokens++;
+
+        if (msg_length > length)
+        {
+            LOGE("Invalid message length.\n");
+            return;
+        }
+
+        aligned_msg_length = align(msg_length, sizeof(*tokens));
+
+        shader_abort_print_message(file, reinterpret_cast<const char *>(tokens), msg_length);
+        tokens += aligned_msg_length / sizeof(*tokens);
+
+        // The total length of buffer doesn't have to be aligned to 8 bytes.
+        length -= std::min<uint64_t>(aligned_msg_length, length);
+    }
+}
+
 void BreadcrumbsTracker::notify_device_hung()
 {
 	if (!active)
@@ -357,6 +547,13 @@ void BreadcrumbsTracker::notify_device_hung()
 	auto start_time = Util::get_current_time_nsecs();
 	auto end_time = start_time + 5ll * 1000 * 1000 * 1000;
 
+	FILE *file = fopen(path, "w");
+	if (!file)
+	{
+		LOGE("Failed to open \"%s\", dumping to stderr instead.\n", path);
+		file = stderr;
+	}
+
 	// Try to observe device lost properly.
 	VkResult vr = VK_SUCCESS;
 	while (vr != VK_ERROR_DEVICE_LOST && Util::get_current_time_nsecs() < end_time)
@@ -364,13 +561,6 @@ void BreadcrumbsTracker::notify_device_hung()
 
 	if (vr == VK_ERROR_DEVICE_LOST)
 		LOGE("Observed device lost after %.3f seconds of blocking.\n", 1e-9 * (Util::get_current_time_nsecs() - start_time));
-
-	FILE *file = fopen(path, "w");
-	if (!file)
-	{
-		LOGE("Failed to open \"%s\", dumping to stderr instead.\n", path);
-		file = stderr;
-	}
 
 	if (vr != VK_ERROR_DEVICE_LOST)
 	{
@@ -440,115 +630,71 @@ void BreadcrumbsTracker::notify_device_hung()
 			report_command_list_amd(file, i);
 	}
 
-	// Need to observe the device lost properly first before we can query fault information.
-	auto &table = device->get_device_table();
+	poll_device_faults(file, UINT64_MAX);
 
-	const auto addr_type_to_str = [](VkDeviceFaultAddressTypeKHR type)
+	if (device->get_device_features().shader_abort_features.shaderAbort)
 	{
-		switch (type)
+		VkDeviceFaultShaderAbortMessageInfoKHR message_info = { VK_STRUCTURE_TYPE_DEVICE_FAULT_SHADER_ABORT_MESSAGE_INFO_KHR };
+		VkDeviceFaultDebugInfoKHR vendor_info = { VK_STRUCTURE_TYPE_DEVICE_FAULT_DEBUG_INFO_KHR, &message_info };
+		if (device->get_device_table().vkGetDeviceFaultDebugInfoKHR(device->get_device(), &vendor_info) == VK_SUCCESS &&
+			message_info.messageDataSize)
 		{
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_KHR: return "None";
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_KHR: return "ReadInvalid";
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_KHR: return "WriteInvalid";
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_EXECUTE_INVALID_KHR: return "ExecuteInvalid";
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_KHR: return "IPUnknown";
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_INVALID_KHR: return "IPInvalid";
-		case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_FAULT_KHR: return "IPFault";
-		default: return "???";
-		}
-	};
-
-	const auto report_address = [&](const char *tag, const VkDeviceFaultAddressInfoKHR &info)
-	{
-		fprintf(file, "  %s fault: %s\n", tag, addr_type_to_str(info.addressType));
-		fprintf(file, "  %s address: #%016llx\n", tag,
-				static_cast<unsigned long long>(info.reportedAddress));
-		fprintf(file, "  %s precision: #%016llx\n", tag,
-				static_cast<unsigned long long>(info.addressPrecision));
-	};
-
-	const auto report_vendor = [&](const VkDeviceFaultVendorInfoKHR &info)
-	{
-		fprintf(file, "  Vendor desc: %s\n", info.description);
-		fprintf(file, "  Vendor fault code: %llu\n",
-				static_cast<unsigned long long>(info.vendorFaultCode));
-		fprintf(file, "  Vendor fault data: %llu\n",
-				static_cast<unsigned long long>(info.vendorFaultData));
-	};
-
-	if (device->get_device_features().fault_features_khr.deviceFault)
-	{
-		std::vector<VkDeviceFaultInfoKHR> faults;
-		uint32_t count;
-
-		if (table.vkGetDeviceFaultReportsKHR(device->get_device(), UINT64_MAX, &count, nullptr) != VK_SUCCESS)
-		{
-			fprintf(file, "Failed to get fault reports.\n");
-			return;
-		}
-
-		faults.resize(count);
-		for (auto &fault : faults)
-			fault.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR;
-
-		if (table.vkGetDeviceFaultReportsKHR(device->get_device(), UINT64_MAX, &count, faults.data()) != VK_SUCCESS)
-		{
-			fprintf(file, "Failed to get fault reports.\n");
-			return;
-		}
-
-		for (auto &fault : faults)
-		{
-			fprintf(file, "=== Fault ===\n");
-			fprintf(file, "  Desc: %s\n", fault.description);
-			fprintf(file, "  groupID: %llu\n", static_cast<unsigned long long>(fault.groupId));
-
-			if (fault.flags & VK_DEVICE_FAULT_FLAG_DEVICE_LOST_KHR)
-				fprintf(file, "  Fault caused DEVICE_LOST\n");
-			if (fault.flags & VK_DEVICE_FAULT_FLAG_WATCHDOG_TIMEOUT_KHR)
-				fprintf(file, "  GPU Timeout\n");
-			if (fault.flags & VK_DEVICE_FAULT_FLAG_OVERFLOW_KHR)
-				fprintf(file, "  Fault buffer overflowed\n");
-
-			if (fault.flags & VK_DEVICE_FAULT_FLAG_VENDOR_KHR)
-				report_vendor(fault.vendorInfo);
-			if (fault.flags & VK_DEVICE_FAULT_FLAG_MEMORY_ADDRESS_KHR)
-				report_address("Memory", fault.faultAddressInfo);
-			if (fault.flags & VK_DEVICE_FAULT_FLAG_INSTRUCTION_ADDRESS_KHR)
-				report_address("Instruction ", fault.instructionAddressInfo);
+			std::unique_ptr<uint64_t []> message_data(new uint64_t[align(message_info.messageDataSize, 8) / 8]);
+			message_info.pMessageData = message_data.get();
+			if (device->get_device_table().vkGetDeviceFaultDebugInfoKHR(device->get_device(), &vendor_info) == VK_SUCCESS)
+				shader_abort_print_message_sequence(file, message_data.get(), message_info.messageDataSize);
 		}
 	}
-	else
+
+	if (device->get_device_features().fault_features.deviceFaultVendorBinary)
 	{
-		VkDeviceFaultCountsEXT counts = { VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT };
-		VkDeviceFaultInfoEXT fault = { VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT };
-
-		if (table.vkGetDeviceFaultInfoEXT(device->get_device(), &counts, nullptr) != VK_SUCCESS)
+		VkDeviceFaultDebugInfoKHR vendor_info = { VK_STRUCTURE_TYPE_DEVICE_FAULT_DEBUG_INFO_KHR };
+		if (device->get_device_table().vkGetDeviceFaultDebugInfoKHR(device->get_device(), &vendor_info) == VK_SUCCESS &&
+			vendor_info.vendorBinarySize)
 		{
-			fprintf(file, "Failed to get fault reports.\n");
-			return;
+			std::unique_ptr<char []> vendor_data(new char[vendor_info.vendorBinarySize]);
+			vendor_info.pVendorBinaryData = vendor_data.get();
+
+			if (device->get_device_table().vkGetDeviceFaultDebugInfoKHR(device->get_device(), &vendor_info) == VK_SUCCESS)
+			{
+				if (vendor_info.vendorBinarySize >= sizeof(VkDeviceFaultVendorBinaryHeaderVersionOneKHR))
+				{
+					const auto *header = static_cast<const VkDeviceFaultVendorBinaryHeaderVersionOneKHR *>(
+						vendor_info.pVendorBinaryData);
+
+					if (header->headerVersion == VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_ONE_KHR &&
+						header->headerSize <= vendor_info.vendorBinarySize)
+					{
+						fprintf(file, "\n\nVENDOR BINARY DUMP follows newline\n");
+						fprintf(file, "vendorID: #%x\n", header->vendorID);
+						fprintf(file, "driverVersion: #%x\n", header->driverVersion);
+						fprintf(file, "deviceID: #%x\n", header->deviceID);
+						fprintf(file, "apiVersion: #%x\n", header->apiVersion);
+
+						if (header->applicationNameOffset)
+						{
+							fprintf(file, "applicationName: %s\n", vendor_data.get() + header->applicationNameOffset);
+							fprintf(file, "applicationVersion: #%x\n", header->applicationVersion);
+						}
+
+						if (header->engineNameOffset)
+						{
+							fprintf(file, "engineName: %s\n", vendor_data.get() + header->engineNameOffset);
+							fprintf(file, "engineVersion: #%x\n", header->engineVersion);
+						}
+
+						char cache_uuid[2 * VK_UUID_SIZE + 1];
+						for (unsigned i = 0; i < VK_UUID_SIZE; i++)
+							sprintf(cache_uuid + i * 2, "%02x", header->pipelineCacheUUID[i]);
+						fprintf(file, "pipelineCacheUUID: %s\n", cache_uuid);
+
+						size_t write_size = vendor_info.vendorBinarySize - header->headerSize;
+						if (fwrite(vendor_data.get() + header->headerSize, 1, write_size, file) != write_size)
+							LOGE("Failed to write fault file.\n");
+					}
+				}
+			}
 		}
-
-		std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
-		std::vector<VkDeviceFaultVendorInfoEXT> vendor_infos(counts.vendorInfoCount);
-		uint8_t *vendor_data = counts.vendorBinarySize ? new uint8_t[counts.vendorBinarySize] : nullptr;
-
-		fault.pAddressInfos = addresses.data();
-		fault.pVendorInfos = vendor_infos.data();
-		fault.pVendorBinaryData = vendor_data;
-
-		if (table.vkGetDeviceFaultInfoEXT(device->get_device(), &counts, &fault) != VK_SUCCESS)
-		{
-			fprintf(file, "Failed to get fault reports.\n");
-			return;
-		}
-
-		for (uint32_t i = 0; i < counts.addressInfoCount; i++)
-			report_address("Memory", addresses[i]);
-		for (uint32_t i = 0; i < counts.vendorInfoCount; i++)
-			report_vendor(vendor_infos[i]);
-
-		delete[] vendor_data;
 	}
 
 	fprintf(file, "... DONE\n");

@@ -228,10 +228,12 @@ void WaveletBuffers::init_block_meta()
 				int blocks_x_8x8 = (level_width + 7) / 8;
 				int blocks_y_8x8 = (level_height + 7) / 8;
 				int blocks_x_32x32 = (level_width + 31) / 32;
+				int blocks_y_32x32 = (level_height + 31) / 32;
 
 				block_meta[component][level][band] = {
 					block_count_8x8, blocks_x_8x8,
 					block_count_32x32, blocks_x_32x32,
+					blocks_x_32x32 * blocks_y_32x32
 				};
 
 				accumulate_block_mapping(blocks_x_8x8, blocks_y_8x8);

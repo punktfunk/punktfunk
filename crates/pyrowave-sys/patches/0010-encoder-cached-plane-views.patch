@@ -13,10 +13,10 @@ next_frame_context() from recycling a view the next encode still binds. A
 caller that alternates images every frame re-wraps every frame, as before.
 
 diff --git a/crates/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp b/crates/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-index fcd7d6f8a..27e4273de 100644
+index 8dc897d..04bfb08 100644
 --- a/crates/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
 +++ b/crates/pyrowave-sys/vendor/pyrowave/pyrowave_c.cpp
-@@ -818,6 +818,12 @@ struct pyrowave_encoder_opaque
+@@ -883,6 +883,12 @@ struct pyrowave_encoder_opaque
  	// the encode path reuses them across frames instead of allocating four buffers per frame.
  	BufferHandle queued_meta_gpu;
  	BufferHandle queued_bitstream_gpu;
@@ -29,10 +29,10 @@ index fcd7d6f8a..27e4273de 100644
  	ChromaSubsampling chroma = {};
  	int width = 0;
  	int height = 0;
-@@ -907,6 +913,41 @@ bool WrappedViewBuffers::wrap(Device *device, const pyrowave_gpu_buffers *buffer
+@@ -988,6 +994,41 @@ bool WrappedViewBuffers::wrap(Device *device, const pyrowave_gpu_buffers *buffer
  	return true;
  }
-
+ 
 +static bool same_plane(const pyrowave_image_view &a, const pyrowave_image_view &b)
 +{
 +	return a.image == b.image && a.width == b.width && a.height == b.height &&
@@ -71,14 +71,14 @@ index fcd7d6f8a..27e4273de 100644
  static void pyrowave_device_wait_semaphore(Device *device, CommandBuffer::Type queue_type, const pyrowave_gpu_sync_operation *acquire, VkPipelineStageFlags2 stages)
  {
  	if (acquire && acquire->sync.semaphore != VK_NULL_HANDLE)
-@@ -1002,8 +1043,8 @@ pyrowave_encoder_encode_gpu_synchronous(pyrowave_encoder encoder,
-
- 	Encoder::BitstreamBuffers bitstream_buffers = {};
-
+@@ -1160,8 +1201,8 @@ pyrowave_encoder_encode_gpu_synchronous(pyrowave_encoder encoder,
+                                         const pyrowave_rate_control *rate_control)
+ {
+ 	auto *device = encoder->device;
 -	WrappedViewBuffers views = {};
 -	if (!views.wrap(device, buffers, VK_IMAGE_USAGE_SAMPLED_BIT))
 +	ViewBuffers views = {};
 +	if (!cached_plane_views(encoder, buffers, views))
  		return PYROWAVE_ERROR_OUT_OF_HOST_MEMORY;
-
- 	bitstream_buffers.meta.buffer = queued_meta_gpu.get();
+ 	device->next_frame_context();
+ 	pyrowave_device_wait_semaphore(device, encoder->pyro_device->queue_type, acquire, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);

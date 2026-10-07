@@ -24,6 +24,7 @@
 #include "wsi.hpp"
 #include "environment.hpp"
 #include <algorithm>
+#include "timeline_trace_file.hpp"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -352,7 +353,8 @@ bool WSI::init_simple(unsigned num_thread_indices, const Context::SystemHandles 
 	return true;
 }
 
-bool WSI::init_context_from_platform(unsigned num_thread_indices, const Context::SystemHandles &system_handles)
+bool WSI::init_context_from_platform(unsigned num_thread_indices, const Context::SystemHandles &system_handles,
+                                     ContextCreationFlags enable_flags, ContextCreationFlags disable_flags)
 {
 	VK_ASSERT(platform);
 	auto instance_ext = platform->get_instance_extensions();
@@ -364,7 +366,8 @@ bool WSI::init_context_from_platform(unsigned num_thread_indices, const Context:
 			CONTEXT_CREATION_ENABLE_VIDEO_DECODE_BIT |
 			CONTEXT_CREATION_ENABLE_VIDEO_ENCODE_BIT |
 			CONTEXT_CREATION_ENABLE_VIDEO_H264_BIT |
-			CONTEXT_CREATION_ENABLE_VIDEO_H265_BIT;
+			CONTEXT_CREATION_ENABLE_VIDEO_H265_BIT |
+			CONTEXT_CREATION_ENABLE_VIDEO_AV1_BIT;
 #else
 	constexpr ContextCreationFlags video_context_flags = 0;
 #endif
@@ -373,7 +376,7 @@ bool WSI::init_context_from_platform(unsigned num_thread_indices, const Context:
 	new_context->set_num_thread_indices(num_thread_indices);
 	new_context->set_system_handles(system_handles);
 
-	constexpr ContextCreationFlags context_flags =
+	ContextCreationFlags context_flags =
 			CONTEXT_CREATION_ENABLE_ADVANCED_WSI_BIT |
 			CONTEXT_CREATION_ENABLE_PUSH_DESCRIPTOR_BIT |
 			CONTEXT_CREATION_ENABLE_DESCRIPTOR_BUFFER_BIT |
@@ -382,6 +385,9 @@ bool WSI::init_context_from_platform(unsigned num_thread_indices, const Context:
 			//CONTEXT_CREATION_ENABLE_PIPELINE_BINARY_BIT |
 #endif
 			video_context_flags;
+
+	context_flags |= enable_flags;
+	context_flags &= ~disable_flags;
 
 	if (!new_context->init_instance(
 			instance_ext.data(), instance_ext.size(),
@@ -1214,6 +1220,19 @@ void WSI::poll_present_timing_feedback()
 		{
 			frr_pacer.update_feedback(present_timing.present_id, present_timing.gpu_done_host_time,
 			                          present_timing.present_done_host_time);
+
+			if (auto *timeline = device->get_system_handles().timeline_trace_file)
+			{
+				auto wrapped_id = present_timing.present_id % (present_frame_latency + 1);
+				auto *e = timeline->allocate_event();
+				e->set_desc("flip-gap");
+				e->set_tid(("WSI flipgap" + std::to_string(wrapped_id)).c_str());
+				e->pid = 0;
+				e->counter = present_timing.present_id;
+				e->start_ns = present_timing.gpu_done_host_time;
+				e->end_ns = present_timing.present_done_host_time;
+				timeline->submit_event(e);
+			}
 		}
 	}
 }
@@ -1771,6 +1790,12 @@ bool WSI::end_frame()
 			timings_info.pNext = info.pNext;
 			info.pNext = &timings_info;
 		}
+		else
+		{
+			// Clear out state so that we don't risk a massive stall after timing re-enabled.
+			present_timing.present_done_host_time = 0;
+			present_timing.present_id = 0;
+		}
 
 #ifdef VULKAN_WSI_TIMING_DEBUG
 		auto present_start = Util::get_current_time_nsecs();
@@ -1788,7 +1813,8 @@ bool WSI::end_frame()
 		emit_marker_post_present();
 		device->external_queue_unlock();
 
-		device->register_time_interval("WSI", std::move(present_ts), device->write_calibrated_timestamp(), "present");
+		device->register_time_interval("WSI", std::move(present_ts), device->write_calibrated_timestamp(),
+			"present", next_present_id);
 
 #if defined(ANDROID)
 		// Android 10 can return suboptimal here, only because of pre-transform.
@@ -2453,6 +2479,10 @@ static bool init_surface_info(Device &device, WSIPlatform &platform,
 			}
 		}
 	}
+
+	// We want IMMEDIATE to come before MAILBOX if both are supported.
+	std::sort(info.present_mode_compat_group.begin(), info.present_mode_compat_group.end(),
+	          [](VkPresentModeKHR a, VkPresentModeKHR b) { return a < b; });
 
 	uint32_t format_count = 0;
 	if (ext.supports_surface_capabilities2)

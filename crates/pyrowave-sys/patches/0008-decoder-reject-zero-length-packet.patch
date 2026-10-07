@@ -26,13 +26,13 @@ already guards this in MetalWaveletDecoder.swift. security-review 2026-08-15
 finding 9.
 
 diff --git a/crates/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp b/crates/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
-index 64958bd0..a41243ad 100644
+index f300dc2..45cc9bc 100644
 --- a/crates/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
 +++ b/crates/pyrowave-sys/vendor/pyrowave/pyrowave_decoder.cpp
-@@ -211,6 +211,17 @@ bool Decoder::Impl::push_packet(const void *data_, size_t size)
-
+@@ -214,6 +214,17 @@ bool Decoder::Impl::push_packet(const void *data_, size_t size)
+ 
  		size_t packet_size = header->payload_words * sizeof(uint32_t);
-
+ 
 +		// PUNKTFUNK: a packet must be at least its own header, so this parse cursor ALWAYS advances.
 +		// payload_words is a 12-bit wire field that may be 0, and decode_packet's duplicate-block
 +		// early return fires BEFORE its own payload_words minimum check — so a duplicate block_index

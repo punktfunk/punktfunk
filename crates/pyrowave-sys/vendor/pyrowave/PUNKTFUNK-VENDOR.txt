@@ -1,17 +1,19 @@
 Vendored by scripts/vendor-pyrowave.sh — do not edit by hand.
 
-pyrowave:        509e4f887b585a3f97471fcc804e9de649f2c16f
-Granite:         44362775d36e0c4139352f83efd96bab4e239f66
+pyrowave:        c0b997f84ced7bd827ca737aa5145f4ec811de8d
+Granite:         1b2d1801d2910fb09ebcded2f0bb3a3a781103b5
 volk:            47cddf7ed97b94118a08aacb548a411188e016cc
-vulkan-headers:  015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9
+vulkan-headers:  6802bb4733b63ed5efd3adb308a6c885ef180ea1
 
-Tree is pruned to what the pyrowave-sys standalone build needs
-(see the rm -rf list in the script). All parts are MIT-licensed
-(pyrowave, Granite) or Apache-2.0/MIT (volk, Vulkan-Headers).
+Tree is pruned to what the pyrowave-sys standalone build needs (see the
+rm -rf list in the script; Granite/video keeps only scaler.cpp and .hpp).
+All parts are MIT-licensed (pyrowave, Granite) or Apache-2.0/MIT (volk,
+Vulkan-Headers).
 
 Local patches (crates/pyrowave-sys/patches/, re-applied on re-vendor).
 These are OUR fixes — kept local by decision (we vendor anyway), not filed
-upstream:
+upstream. The numbers are stable names that code and tests cite; a retired
+number is never reused.
   0001-payload-data-444-sizing.patch — encoder payload_data worst-case buffer
     was sized for 4:2:0's 1.5 samples/px; busy 4:4:4 (3 samples/px) overran it
     on the GPU → nondeterministic corrupt bitstreams/crashes at any bitrate.
@@ -22,9 +24,10 @@ upstream:
     the resolve pass over-credits applied ops and the bitstream can overshoot
     the hard rate target (the same overrun class as 0001). Clamped to the
     packed width (conservative direction). Includes the regenerated
-    shaders/slangmosh.hpp (built with the pinned Granite slangmosh, -O --strip
-    per upstream's slangmosh.sh); behavior-neutral at our operating points
-    (byte-identical outputs, validated on the RTX 5070 Ti).
+    shaders/slangmosh.hpp: built with the slangmosh of the Granite pin that
+    preceded 1b2d1801 (44362775 and its glslang/spirv-tools), -O --strip per
+    upstream's slangmosh.sh. That toolchain reproduces upstream's committed
+    bank byte-for-byte, so analyze_rate_control is the only changed program.
     NOTE the related UNPATCHED limit: the packed 16-bit block_index wraps when
     block_count_32x32 > 65535 (~8K 4:4:4) — guarded host-side instead
     (pf-encode rejects such modes for PyroWave).
@@ -32,23 +35,44 @@ upstream:
     with texel-count math (bytes for 8-bit): 16-bit inputs got half-plane
     reads and a desynced stream after frame 1. Tool-only (our build never
     compiles the devel tools; kept so the vendored source is honest).
-
-  0004-encoder-buffer-pool.patch — pyrowave_c.cpp allocated four Vulkan buffers
-    (meta + bitstream, Device + CachedHost) on EVERY encode. At 240 fps with
-    MB-scale bitstreams that per-frame churn stalled the encode itself: on an
+  0004-encoder-buffer-pool.patch — the encode body allocated four Vulkan
+    buffers (meta + bitstream, Device + CachedHost) on EVERY encode. At 240 fps
+    with MB-scale bitstreams that churn stalled the encode itself: on an
     RTX 4090 the 5120x1440 submit+fence-wait was ~15 ms (~64 fps ceiling) and
     dropped to ~1 ms (~1025 fps) once the buffers are pooled on the encoder and
-    reused. Safe under the synchronous encode model; re-validated by
-    pyrowave_win_smoke. Perf fix, not a correctness fix.
+    reused. Safe under the synchronous encode model. Perf fix, not correctness.
+  0005-global-priority-queue.patch — Context::create_device requests a global-
+    priority Vulkan compute queue (VK_KHR_global_priority,
+    PYROWAVE_QUEUE_PRIORITY=off|high|realtime, default realtime) so the
+    wavelet encode can preempt a GPU-bound game on the shared shader cores. A
+    create loop downgrades on NOT_PERMITTED / INITIALIZATION_FAILED so a refused
+    class never regresses the encoder. Gated on !inherit_info, so it is live
+    only on the Windows path (pyrowave_create_device_by_compat, where Granite
+    builds its own device); Linux passes its own create-infos and the same
+    request lives in crates/pf-encode/src/enc/linux/pyrowave.rs
+    (queue_priority_candidates). Change one, change both. Upstream's compat2
+    request (c0b997f8) is opt-in, needs Vulkan 1.4 and moves the encode to the
+    async compute queue, so it does not replace this; the patch stands down
+    when the caller uses upstream's flags.
+  0007-encoder-sequence-override.patch — pyrowave_encoder_set_next_sequence()
+    stamps the 3-bit wire sequence from the caller, so two alternating encoder
+    handles emit 1,2,3... instead of 1,1,2,2... (the decoder swallows a
+    repeated value as more blocks of the same frame). Inert when unused.
+  0008-decoder-reject-zero-length-packet.patch — push_packet rejects a packet
+    smaller than its own header before decode_packet's duplicate-block early
+    return, so the parse cursor always advances (a payload_words == 0 duplicate
+    block otherwise spun the decode thread forever).
+  0009-keep-vulkan-module-resident.patch — init_loader keeps a dlopen
+    reference to libvulkan on every path, so the embedder dropping its handle
+    cannot unmap the loader under Granite's global procs.
+  0010-encoder-cached-plane-views.patch — the encoder keeps its three plane
+    views while the caller passes the same images, instead of wrapping and
+    destroying them every frame (0.15-0.25 ms of CPU per frame).
 
-  0005-global-priority-queue.patch — Context::create_device requests a global-priority Vulkan
-    compute queue (VK_KHR_global_priority, PYROWAVE_QUEUE_PRIORITY=off|high|realtime, default
-    realtime) so the wavelet encode can preempt a GPU-bound game on the shared shader cores. A
-    create loop downgrades on NOT_PERMITTED so a refused class never regresses the encoder. Did
-    not overcome the graphics-vs-compute preemption wall on an RTX 4090 (kept: correct + harmless,
-    may help other HW/drivers) — that measurement is Windows/WDDM and does not transfer to Linux.
-    GATED ON !inherit_info, so it is LIVE ONLY ON THE WINDOWS PATH (pyrowave_create_device_by_compat,
-    where Granite builds its own device). Linux passes its own create-infos and takes the inherit
-    branch, so this patch is inert there; the Linux request lives natively in
-    crates/pf-encode/src/enc/linux/pyrowave.rs (queue_priority_candidates), with the same grammar
-    and the same downgrade ladder. Change one, change both.
+Retired (upstream carries the fix):
+  0006 external-memory consume-on-success-only — Granite b6cffd5c (2026-09-23)
+    closes an imported by-reference handle after Device::create_image
+    succeeds and not inside the allocator; semaphore import follows the same
+    rule.
+  0009-granite-android-null-platform — Granite db34ed01 (2026-09-07) tests
+    GRANITE_PLATFORM=null before ANDROID in application/platforms.
