@@ -1,6 +1,6 @@
 // The captured SC2's local-chord + ring state machine (`Sc2RingGate`), driven report by report
 // the way the capture drives it — `read`, then `apply`. Nothing here needs a radio or a
-// connection, which is the point of the type existing (the `Sc2ImuGateTests` precedent).
+// connection, which is the point of the type existing.
 //
 // What the tests pin: the ring's Select-first ordering, that a chord the client consumed never
 // reaches the game, and that a swallowed button's release is swallowed too — the failure of the
@@ -25,9 +25,7 @@ final class Sc2RingGateTests: XCTestCase {
     ) -> (events: [Sc2RingGate.Event], forwarded: Sc2Device.State) {
         var s = state(buttons, lsX: lsX, lsY: lsY)
         let events = gate.read(s)
-        var report = [UInt8](repeating: 0, count: 46)
-        report[0] = Sc2Device.idStateBLE
-        gate.apply(&report, &s)
+        gate.apply(&s)
         return (events, s)
     }
 

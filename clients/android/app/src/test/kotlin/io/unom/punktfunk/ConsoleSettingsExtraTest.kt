@@ -73,7 +73,6 @@ class ConsoleSettingsExtraTest {
             lowLatencyMode = false,
             rumbleOnPhone = true,
             gyroOnPhone = true,
-            sc2Capture = false,
             dsCapture = false,
         )
         val got = ConsoleJson.applySettings(Settings(), ConsoleJson.settings(want, null))
@@ -82,7 +81,6 @@ class ConsoleSettingsExtraTest {
         assertEquals(want.lowLatencyMode, got.lowLatencyMode)
         assertEquals(want.rumbleOnPhone, got.rumbleOnPhone)
         assertEquals(want.gyroOnPhone, got.gyroOnPhone)
-        assertEquals(want.sc2Capture, got.sc2Capture)
         assertEquals(want.dsCapture, got.dsCapture)
     }
 }

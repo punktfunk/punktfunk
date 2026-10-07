@@ -186,8 +186,9 @@ public final class GamepadManager: ObservableObject {
     }
 
     /// The user's controller-type choice AS CHOSEN (not resolved) for the session being dialed —
-    /// adopted by `resolveType` and read back by `declaredKind(for:)`. `.auto` = detect per pad.
-    public private(set) var typeSetting: PunktfunkConnection.GamepadType = .auto
+    /// adopted by `resolveType`, changed mid-stream by `GamepadCapture.setPadType`, and read back
+    /// by `declaredKind(for:)`. `.auto` = detect per pad.
+    public internal(set) var typeSetting: PunktfunkConnection.GamepadType = .auto
 
     /// The kind to DECLARE to the host for one forwarded controller (its `GamepadArrival`).
     /// An explicit setting wins for every pad — the handshake's session default alone does NOT
@@ -248,6 +249,23 @@ public final class GamepadManager: ObservableObject {
         didSet { if steamController2Claims != oldValue { rebuild() } }
     }
 
+    /// Until then every SC2 twin is held back, whatever the claim count: a capture about to claim
+    /// the pad must beat its twin to the wire, or the host builds the twin as an Xbox pad first.
+    private var steamController2HoldUntil = Date.distantPast
+
+    /// Hold every SC2 twin back for `seconds` (`Sc2Capture.holdTwins`). A twin the capture never
+    /// claims rejoins the ordinary path when the hold ends.
+    func holdSteamController2Twins(for seconds: TimeInterval) {
+        steamController2HoldUntil = Date().addingTimeInterval(seconds)
+        rebuild()
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + 0.05) { [weak self] in
+            MainActor.assumeIsolated { self?.rebuild() }
+        }
+    }
+
+    /// Suppressed twins whose system gestures `reselect` holds; released when they rejoin.
+    private var gestureClaimedTwins: Set<ObjectIdentifier> = []
+
     /// Whether a GameController device is the SC2 family's shadow. Keyed on the measured
     /// vendorName; GameController surfaced no Valve device before the SC2 family, so the prefix
     /// only matches hardware `Sc2Capture` captures.
@@ -278,14 +296,25 @@ public final class GamepadManager: ObservableObject {
     private func reselect() {
         // Suppress at most as many twins as the capture actually holds. They cannot be matched to
         // their captured device from here, so the most recently connected ones are dropped, and a
-        // pad beyond the claim count keeps the ordinary path.
-        var remaining = steamController2Claims
+        // pad beyond the claim count keeps the ordinary path. A hold drops them all.
+        var remaining = steamController2HoldUntil > Date() ? Int.max : steamController2Claims
         var suppressed: Set<ObjectIdentifier> = []
         for entry in controllers.reversed() where remaining > 0 {
             guard Self.isSteamController2(entry.controller) else { continue }
             suppressed.insert(ObjectIdentifier(entry.controller))
             remaining -= 1
         }
+        // The passthrough forwards a twin's Steam and share presses, so the OS must not act on
+        // them too. `GamepadCapture` claims only forwarded pads; a suppressed twin is claimed here.
+        for entry in controllers {
+            let key = ObjectIdentifier(entry.controller)
+            let claim = suppressed.contains(key)
+            guard claim != gestureClaimedTwins.contains(key) else { continue }
+            for element in entry.controller.physicalInputProfile.elements.values {
+                element.preferredSystemGestureState = claim ? .disabled : .enabled
+            }
+        }
+        gestureClaimedTwins = suppressed
         let candidates = controllers.filter {
             $0.isExtended && !suppressed.contains(ObjectIdentifier($0.controller))
         }

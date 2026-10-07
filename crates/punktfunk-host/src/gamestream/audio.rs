@@ -295,7 +295,7 @@ fn run(
     cap.idle(); // release the Linux stream-sink routing claim between sessions
                 // A failed body may mean a dead capture thread; parked, every later session would reuse it.
     if result.is_ok() {
-        audio::park_audio_capture(audio_cap, cap); // drop on Windows (restores default); keep on Linux
+        audio::park_audio_capture(audio_cap, cap); // keeps only a sinkless Linux capturer
     }
     result
 }

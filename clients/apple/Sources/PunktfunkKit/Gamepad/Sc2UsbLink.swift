@@ -1,40 +1,18 @@
-// IOKit HID transport for a Steam Controller 2 attached over USB — wired (`28DE:1302`) or
-// through the wireless Puck dongle (`1304`/`1305`). The macOS sibling of Android's
-// `Sc2UsbLink.kt` + `HidUsbLink.kt`, and the USB half of `Sc2Capture`'s two transports; it
-// presents the SAME surface as `Sc2BleLink` (`start` / `stop` / `writeRaw`) so the capture holds
-// either without caring which.
+// IOKit HID transport for a Steam Controller 2 over USB: wired (`28DE:1302`) or through the
+// Puck dongle (`1304`/`1305`). Same surface as `Sc2BleLink` (`start` / `stop` / `writeRaw`), so
+// `Sc2Capture` holds either. macOS only: iOS and tvOS apps get no IOKit HID device access.
 //
-// **Why this is so much smaller than the Android pair (~200 lines against ~580).** IOKit absorbs
-// nearly everything `HidUsbLink` hand-rolls: there is no runtime permission to request (the
-// sandbox's `device.usb` entitlement covers it), no interface to claim, no `UsbRequest` read loop
-// to multiplex, and no EP0 fallback — `IOHIDDeviceRegisterInputReportCallback` delivers reports
-// on a dispatch queue and `IOHIDDeviceSetReport` performs both output and feature writes.
+// The match is the DEVICE usage pair FF00:01 (`Sc2Device.usagePageVendor`/`usageController`).
+// Each controller interface is one `IOHIDDevice` with all its collections (the lizard mouse and
+// keyboard too, so opening can need Input Monitoring); the pair selects the four Puck slots and
+// never the management interface (FF00:02), which must stay closed.
 //
-// **The match dictionary is the load-bearing design decision.** On-glass (Puck `1304`, macOS 27,
-// 2026-08-31): each controller INTERFACE is one `IOHIDDevice` carrying all of its top-level
-// collections — lizard mouse (01:02, report 0x40), pointer (01:01), lizard keyboard (01:06,
-// report 0x41), and the controller (vendor page FF00:01, reports 0x42/0x43/0x45/0x79 and
-// outputs 0x80…0x89) — and the dongle surfaces four of them plus a management interface whose
-// only pair is FF00:02. Matching the DEVICE usage pair `Sc2Device.usagePageVendor`/
-// `usageController` selects exactly the four controller slots and never the management
-// interface (feature-report-2 queries; opening it is actively wrong — pf_driver_proto). The
-// opened devices DO carry keyboard/mouse collections, so an Input Monitoring (TCC) prompt is a
-// live possibility; `adopt()` names it when open fails with kIOReturnNotPermitted.
+// Every matched collection opens as its own source, keyed by IOKit registry entry id: a Puck does
+// not say which slot a pad bonded to, and host writes must reach the pad that claimed them.
 //
-// **The Puck opens every match, not one.** The dongle hosts up to four pads on interfaces 2…5
-// and nothing says which slot a controller bonded to — Android's first on-glass run claimed only
-// interface 2 and read silence. So every matched collection is opened, each as its OWN source
-// (keyed by IOKit registry entry id): its reports carry its key up to `Sc2Capture`, which gives
-// every powered-on pad its own wire slot, and host writes come back addressed to the source that
-// claimed them — rumble for pad B never lands on pad A.
-//
-// **Keep-alive.** The firmware watchdog re-enables lizard mode after a few seconds of silence, so
-// `disableLizard` + `normalizeJoysticks` are re-sent on SDL's ~3 s cadence — the same contract
-// the BLE link keeps, plus the joystick normalization a USB host's leftover raw mode requires.
-// The client NEVER self-enables the gyro: Steam's own forwarded write is what opens `Sc2ImuGate`.
-//
-// macOS-only: IOKit HID device access is not available to apps on iOS/tvOS, which is why the SC2
-// over USB is a Mac capability and BLE remains the only iOS transport.
+// The firmware re-enables lizard mode after a few seconds of silence, so `disableLizard` and
+// `normalizeJoysticks` repeat every ~3 s. The client never enables the gyro itself; Steam's
+// forwarded write does.
 
 #if os(macOS)
 
@@ -157,6 +135,11 @@ final class Sc2UsbLink {
     /// ff00:01`) — with PRIMARY usage `0001:0002`, so a primary-usage match finds nothing. The
     /// pair keys match any declared pair: `ff00:01` selects exactly the four controller slots
     /// and still excludes the management interface, whose only pair is `ff00:02`.
+    /// An SC2 is attached and Input Monitoring lets this app open it. Safe from any thread.
+    static func canOpenAttached() -> Bool {
+        attached() && IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+    }
+
     private static func matchingCriteria() -> [CFDictionary] {
         Sc2Device.usbPIDs.map { pid in
             [
@@ -388,7 +371,7 @@ final class Sc2UsbLink {
 
     /// One input report from IOKit. USB delivers the id out of band (`reportID`) and the payload
     /// without it, so the id is prepended here: the punktfunk wire — and `Sc2Device.parseState`,
-    /// and `Sc2ImuGate` — are id-first on every transport.
+    /// and core's gate — are id-first on every transport.
     private func handle(
         device: IOHIDDevice, reportID: UInt32, report: UnsafeMutablePointer<UInt8>, len: CFIndex
     ) {
@@ -473,6 +456,57 @@ final class Sc2UsbLink {
         serials[id] = serial
         dongleLock.unlock()
         log.info("SC2 USB: slot serial \(serial)")
+    }
+
+    /// `source`'s identity for the host: its USB serial, its replies to core's feature queries,
+    /// and on a Puck its slot (interface 2–5), so the host seats pads of one Puck together. A Puck
+    /// stalls each GET until its pad answers over the radio (~40 ms), so each is retried for up
+    /// to a second. On `queue`, which it blocks for the reads.
+    func identity(source: UInt64) -> PunktfunkConnection.PadIdentity? {
+        guard let dev = open[source] else { return nil }
+        let serial = (IOHIDDeviceGetProperty(dev, kIOHIDSerialNumberKey as CFString) as? String) ?? ""
+        let puck = isDongle(source: source)
+        let requests = PunktfunkConnection.sc2IdentityRequests(puck: puck)
+        let replies = requests.compactMap { request in
+            exchange(dev, request).map { PunktfunkConnection.PadIdentity.Reply(request: request, reply: $0) }
+        }
+        let slot = puck ? UInt8(clamping: min(max((Self.interfaceNumber(dev) ?? 2) - 2, 0), 3)) : 0
+        log.info("SC2 USB: identity \(serial, privacy: .public) slot \(slot), \(replies.count, privacy: .public)/\(requests.count, privacy: .public) replies")
+        return .init(serial: serial, replies: replies, slot: slot)
+    }
+
+    /// The USB interface `device` is: `bInterfaceNumber` on its nearest IOKit ancestor.
+    private static func interfaceNumber(_ device: IOHIDDevice) -> Int? {
+        let service = IOHIDDeviceGetService(device)
+        guard service != MACH_PORT_NULL else { return nil }
+        let value = IORegistryEntrySearchCFProperty(
+            service, kIOServicePlane, "bInterfaceNumber" as CFString, kCFAllocatorDefault,
+            IOOptionBits(kIORegistryIterateRecursively | kIORegistryIterateParents))
+        return (value as? NSNumber)?.intValue
+    }
+
+    /// SET one feature query, then GET until the reply echoes its command. Id-first both ways.
+    private func exchange(_ dev: IOHIDDevice, _ request: [UInt8]) -> [UInt8]? {
+        guard request.count >= 2 else { return nil }
+        let id = request[0]
+        let frame = request + [UInt8](repeating: 0, count: max(0, 64 - request.count))
+        let set = frame.withUnsafeBufferPointer { buf in
+            IOHIDDeviceSetReport(dev, kIOHIDReportTypeFeature, CFIndex(id), buf.baseAddress!, buf.count)
+        }
+        guard set == kIOReturnSuccess else { return nil }
+        for _ in 0..<50 {
+            usleep(20_000)
+            var buf = [UInt8](repeating: 0, count: 64)
+            buf[0] = id
+            var len: CFIndex = buf.count
+            let rc = buf.withUnsafeMutableBufferPointer { p in
+                IOHIDDeviceGetReport(dev, kIOHIDReportTypeFeature, CFIndex(id), p.baseAddress!, &len)
+            }
+            if rc == kIOReturnSuccess, len > 1, buf[1] == request[1] {
+                return Array(buf[..<min(Int(len), buf.count)])
+            }
+        }
+        return nil
     }
 
     // MARK: - Lizard keep-alive

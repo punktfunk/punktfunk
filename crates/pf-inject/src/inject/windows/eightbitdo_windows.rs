@@ -51,6 +51,7 @@ impl EightBitDoWinPad {
                 bluetooth: model.bluetooth(),
                 description: &format!("Punktfunk Virtual {}", model.name()),
                 enumerator: &vid_pid,
+                property: None,
             },
         )?;
         Ok(EightBitDoWinPad { shm })

@@ -4,8 +4,8 @@
 //! The client captures the physical pad and forwards raw input reports
 //! ([`RichInput::HidReport`](punktfunk_core::quic::RichInput)); the host mirrors them unchanged.
 //! Host hidraw writes (lizard-off / IMU-enable features, `0x80` rumble) go back as
-//! [`HidOutput::HidRaw`](punktfunk_core::quic::HidOutput). Mainline `hid-steam` does not bind this
-//! PID, so Steam Input drives hidraw as it would a physical pad.
+//! [`HidOutput::HidRaw`](punktfunk_core::quic::HidOutput). Steam Input drives the hidraw as it
+//! would a physical pad; from kernel 7.3 `hid-steam` binds this PID too (#1368).
 //!
 //! Ground truth: SDL `SDL_hidapi_steam_triton.c` + `steam/controller_structs.h`. Input ids
 //! `0x42`/`0x45` (`TritonMTUNoQuat_t`, 46 bytes with id), `0x47` (trackpad timestamp), `0x43`
@@ -44,6 +44,7 @@ pub const TRITON_STATE_LEN: usize = 54;
 pub const TRITON_RDESC: &[u8] = &pf_driver_proto::triton::RDESC;
 
 /// SDL `TritonButtons`. Only the bits the typed fallback synthesizes; the raw path carries the rest.
+/// SDL's enum swaps the View and Menu names; its mapping and hid-steam agree with these values.
 pub mod tbtn {
     pub const A: u32 = 0x0000_0001;
     pub const B: u32 = 0x0000_0002;
@@ -51,7 +52,7 @@ pub mod tbtn {
     pub const Y: u32 = 0x0000_0008;
     pub const QAM: u32 = 0x0000_0010;
     pub const R3: u32 = 0x0000_0020;
-    pub const VIEW: u32 = 0x0000_0040;
+    pub const MENU: u32 = 0x0000_0040;
     pub const R4: u32 = 0x0000_0080;
     pub const R5: u32 = 0x0000_0100;
     pub const RB: u32 = 0x0000_0200;
@@ -59,7 +60,7 @@ pub mod tbtn {
     pub const DPAD_RIGHT: u32 = 0x0000_0800;
     pub const DPAD_LEFT: u32 = 0x0000_1000;
     pub const DPAD_UP: u32 = 0x0000_2000;
-    pub const MENU: u32 = 0x0000_4000;
+    pub const VIEW: u32 = 0x0000_4000;
     pub const L3: u32 = 0x0000_8000;
     pub const STEAM: u32 = 0x0001_0000;
     pub const L4: u32 = 0x0002_0000;
@@ -268,6 +269,79 @@ pub fn triton_feature_reply(last_set: &[u8], serial: &str, unit_id: u32) -> [u8;
     pf_driver_proto::triton::feature_reply(last_set, serial, unit_id)
 }
 
+/// A real pad's identity: its USB serial and its replies to Steam's feature queries, as its
+/// client read them. The virtual pad answers with these before the canned table, so Steam sees
+/// the controller it knows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sc2Identity {
+    pub serial: Option<String>,
+    /// `(SET frame, GET reply)`, both id-first.
+    pub replies: Vec<(Vec<u8>, [u8; 64])>,
+    /// A Puck pad's slot, 0–3.
+    pub slot: u8,
+}
+
+impl Sc2Identity {
+    /// The recorded reply to the request `last_set` makes. `0xB4` is the slot's live state,
+    /// so it is never replayed.
+    pub fn reply(&self, last_set: &[u8]) -> Option<[u8; 64]> {
+        pf_driver_proto::triton::recorded_reply(self.pairs(), last_set)
+    }
+
+    fn pairs(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
+        self.replies
+            .iter()
+            .map(|(q, r)| (q.as_slice(), r.as_slice()))
+    }
+
+    /// The devnode property a Windows virtual SC2 reads this from.
+    pub fn blob(&self) -> Vec<u8> {
+        pf_driver_proto::triton::identity_blob(self.serial.as_deref().unwrap_or(""), self.pairs())
+    }
+
+    /// What a client sent ([`punktfunk_core::quic::PadIdentity`]); `None` when it carries
+    /// neither a serial nor a reply, or the replies are torn.
+    pub fn from_wire(id: &punktfunk_core::quic::PadIdentity) -> Option<Sc2Identity> {
+        let replies: Vec<_> = punktfunk_core::quic::unpack_identity_replies(&id.replies)?
+            .into_iter()
+            .filter(|(_, rep)| !rep.is_empty())
+            .map(|(req, rep)| {
+                let mut reply = [0u8; 64];
+                reply[..rep.len()].copy_from_slice(&rep);
+                (req, reply)
+            })
+            .collect();
+        let serial = (!id.serial.is_empty()).then(|| id.serial.clone());
+        (serial.is_some() || !replies.is_empty()).then_some(Sc2Identity {
+            serial,
+            replies,
+            slot: id.slot,
+        })
+    }
+}
+
+/// Identities for the virtual SC2s about to be built, by OS pad slot.
+static STAGED: std::sync::Mutex<std::collections::BTreeMap<u8, std::sync::Arc<Sc2Identity>>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The identity the next virtual SC2 on OS slot `slot` takes; `None` clears it.
+pub fn stage_identity(slot: u8, id: Option<std::sync::Arc<Sc2Identity>>) {
+    let mut staged = STAGED.lock().unwrap_or_else(|e| e.into_inner());
+    match id {
+        Some(id) => staged.insert(slot, id),
+        None => staged.remove(&slot),
+    };
+}
+
+/// What a virtual SC2 on `slot` answers as; `None` keeps the canned identity.
+pub fn identity_for(slot: u8) -> Option<std::sync::Arc<Sc2Identity>> {
+    STAGED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&slot)
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +362,77 @@ mod tests {
         st.raw_len = 3;
         let (r, len) = st.report(&mut seq);
         assert_eq!((len, &r[..3], seq), (3, &[0x45, 0x11, 0x22][..], 8));
+    }
+
+    #[test]
+    fn a_sent_identity_becomes_the_pads_replies() {
+        use punktfunk_core::quic::{pack_identity_replies, PadIdentity};
+        let sent = PadIdentity {
+            pad: 1,
+            serial: "FXA0000000001".into(),
+            replies: pack_identity_replies([
+                (&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..]),
+                (&[0x01, 0xAE, 0x15, 0x02][..], &[][..]),
+            ]),
+            slot: 1,
+        };
+        let id = Sc2Identity::from_wire(&sent).unwrap();
+        assert_eq!(id.serial.as_deref(), Some("FXA0000000001"));
+        assert_eq!(id.replies.len(), 1, "an unanswered query is dropped");
+        assert_eq!(id.reply(&[0x01, 0x83, 0x00]).unwrap()[2], 0x1E);
+        assert!(Sc2Identity::from_wire(&PadIdentity::default()).is_none());
+
+        stage_identity(201, Some(std::sync::Arc::new(id)));
+        assert!(identity_for(201).is_some());
+        stage_identity(201, None);
+    }
+
+    #[test]
+    fn a_recorded_identity_answers_by_request_and_never_replays_slot_state() {
+        let pad = |b: &[u8]| {
+            let mut r = [0u8; 64];
+            r[..b.len()].copy_from_slice(b);
+            r
+        };
+        let id = Sc2Identity {
+            serial: Some("FXA0000000001".into()),
+            replies: vec![
+                (vec![0x01, 0x83, 0x00], pad(&[0x01, 0x83, 0x1E, 0x01, 0x02])),
+                (
+                    vec![0x01, 0xAE, 0x15, 0x01],
+                    pad(&[0x01, 0xAE, 0x14, 0x01, 0x46, 0x58, 0x41]),
+                ),
+                (vec![0x02, 0xB4], pad(&[0x02, 0xB4, 0x01, 0x02])),
+            ],
+            slot: 0,
+        };
+        // Steam's own length byte differs from the capture's; the attribute picks the reply.
+        let r = id.reply(&[0x01, 0xAE, 0x14, 0x01]).unwrap();
+        assert_eq!(&r[..7], &[0x01, 0xAE, 0x14, 0x01, 0x46, 0x58, 0x41]);
+        assert_eq!(id.reply(&[0x01, 0x83, 0x00]).unwrap()[2], 0x1E);
+        assert!(
+            id.reply(&[0x01, 0xAE, 0x15, 0x00]).is_none(),
+            "unrecorded attribute"
+        );
+        assert!(id.reply(&[0x02, 0xB4]).is_none(), "slot state stays live");
+    }
+
+    /// `clients/shared/sc2-vectors.json` `buttons`: the Swift and Kotlin wire maps read the same
+    /// rows in the other direction.
+    #[test]
+    fn fallback_buttons_match_the_shared_vectors() {
+        let raw = include_str!("../../../../../clients/shared/sc2-vectors.json");
+        let file: serde_json::Value = serde_json::from_str(raw).expect("vector file parses");
+        for row in file["buttons"].as_array().expect("buttons") {
+            let wire = row["wire"].as_u64().unwrap() as u32;
+            let st = TritonState::from_gamepad(wire, 0, 0, 0, 0, 0, 0);
+            assert_eq!(
+                u64::from(st.buttons),
+                row["sc2"].as_u64().unwrap(),
+                "{}",
+                row["name"]
+            );
+        }
     }
 
     #[test]

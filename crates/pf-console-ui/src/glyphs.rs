@@ -71,6 +71,11 @@ pub fn device_icon(pref: Option<GamepadPref>, platform: Platform) -> Icon {
             _ => icons::KEYBOARD,
         };
     };
+    pad_icon(pref)
+}
+
+/// A pad kind's family silhouette; `Auto` draws the Xbox 360 fallback.
+pub fn pad_icon(pref: GamepadPref) -> Icon {
     match pref {
         GamepadPref::Auto | GamepadPref::Xbox360 => icons::PAD_XBOX_360,
         // No mark of their own: the nearest silhouette.

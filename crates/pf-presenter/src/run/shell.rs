@@ -392,6 +392,7 @@ impl Shell {
                         self.stats_verbosity,
                         mic_muted,
                         self.ring_opener,
+                        self.gamepad.kind_override(),
                     )
                 });
             let ctx = FrameCtx {

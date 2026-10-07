@@ -8,11 +8,13 @@
 //! anything can inherit them: hooks, games and the plugin runner are our
 //! children, and none of them has business with the admin API.
 //!
-//! Two tokens:
+//! Three tokens:
 //! - **`mgmt-token`** (`PUNKTFUNK_MGMT_TOKEN`) — full admin.
 //! - **`plugin-token`** (`PUNKTFUNK_PLUGIN_TOKEN`) — `mgmt::auth::plugin_may_access`.
 //!   The SDK `connect()` prefers this file so a plugin cannot rewrite
 //!   `hooks.json` or admit devices.
+//! - **`tray-token`** (`PUNKTFUNK_TRAY_TOKEN`) — `GET /local/summary` only. Fresh per
+//!   start, readable by every local account ([`mint_tray_token`]).
 
 use anyhow::{Context, Result};
 use rand::RngCore;
@@ -48,6 +50,38 @@ const PLUGIN_ENV_VAR: &str = "PUNKTFUNK_PLUGIN_TOKEN";
 const PLUGIN_FILE: &str = "plugin-token";
 /// `{ "<plugin id>": "<token>" }` — see [`load_or_generate_per_plugin`].
 const PER_PLUGIN_FILE: &str = "plugin-tokens.json";
+const TRAY_ENV_VAR: &str = "PUNKTFUNK_TRAY_TOKEN";
+pub(crate) const TRAY_FILE: &str = "tray-token";
+
+/// 32 random bytes as hex: safe in `KEY=VALUE` and in a bearer header.
+fn random_token() -> String {
+    let mut buf = [0u8; 32];
+    rand::rng().fill_bytes(&mut buf);
+    hex::encode(buf)
+}
+
+/// The tray's bearer for `GET /local/summary`, minted fresh at every start and never read
+/// back by the host. The file is the one credential a standard account may read
+/// (`replace_users_readable_file`); on a box with other accounts it buys the summary alone.
+/// Seat accounts may not read it: a seat's player is not the box's.
+pub fn mint_tray_token() -> Result<String> {
+    let token = random_token();
+    let path = pf_paths::config_dir().join(TRAY_FILE);
+    let line = format!("{TRAY_ENV_VAR}={token}\n");
+    #[cfg(windows)]
+    let written = match pf_seats::windows::seats_group_sid() {
+        Some(sid) => pf_paths::replace_users_readable_file_denying(
+            &path,
+            line.as_bytes(),
+            &format!("*{sid}"),
+        ),
+        None => pf_paths::replace_users_readable_file(&path, line.as_bytes()),
+    };
+    #[cfg(not(windows))]
+    let written = pf_paths::replace_users_readable_file(&path, line.as_bytes());
+    written.with_context(|| format!("write {}", path.display()))?;
+    Ok(token)
+}
 
 /// Admin token: env > file > generate+persist. Hex so `KEY=VALUE` is safe
 /// to source from a shell or systemd `EnvironmentFile`.
@@ -81,7 +115,7 @@ fn load_or_generate_per_plugin_in(
     let dir = config_dir.join(crate::plugins::RUNNER_DATA_DIR);
     let path = dir.join(PER_PLUGIN_FILE);
     let planted = crate::planted::quarantine_planted_secret(&path);
-    pf_paths::create_secret_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+    pf_paths::create_private_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
     let current = (!planted).then(|| fs::read_to_string(&path).ok()).flatten();
     let legacy = config_dir.join(PER_PLUGIN_FILE);
     let migrated =
@@ -94,11 +128,7 @@ fn load_or_generate_per_plugin_in(
     let before = tokens.clone();
     tokens.retain(|id, _| ids.contains(id));
     for id in ids {
-        tokens.entry(id.clone()).or_insert_with(|| {
-            let mut buf = [0u8; 32];
-            rand::rng().fill_bytes(&mut buf);
-            hex::encode(buf)
-        });
+        tokens.entry(id.clone()).or_insert_with(random_token);
     }
     if tokens != before || migrated || !path.exists() {
         let body = serde_json::to_string_pretty(&tokens)?;
@@ -110,7 +140,7 @@ fn load_or_generate_per_plugin_in(
             "minted per-plugin API tokens (owner-only)"
         );
     }
-    // Unconditional: `create_secret_dir` above resets the directory ACL on Windows even when
+    // Unconditional: `create_private_dir` above resets the directory ACL on Windows even when
     // the file is unchanged. A failure costs the runner, never `serve`.
     if let Err(e) = crate::plugins::converge_runner_credential(&path) {
         tracing::warn!(path = %path.display(), error = %format!("{e:#}"), "runner token grant did not apply");
@@ -164,9 +194,7 @@ fn load_or_generate_impl(env_var: &str, file: &str) -> Result<String> {
             }
         }
     }
-    let mut buf = [0u8; 32];
-    rand::rng().fill_bytes(&mut buf);
-    let token = hex::encode(buf);
+    let token = random_token();
     write_token(&path, env_var, &token)?;
     tracing::info!(path = %path.display(), "generated and persisted API token (owner-only)");
     Ok(token)

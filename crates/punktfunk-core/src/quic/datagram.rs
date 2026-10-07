@@ -472,7 +472,8 @@ pub enum HidOutput {
     /// Raw report for as-is passthrough (reverse of [`RichInput::HidReport`]).
     /// `kind` is [`HID_RAW_OUTPUT`] or [`HID_RAW_FEATURE`]; `data` is the full report,
     /// id first, ≤ [`HID_REPORT_MAX`]. Triton rumble re-sends every ~40 ms against a
-    /// ~50 ms hardware timeout; settings refresh every ~3 s — a lost datagram heals.
+    /// ~50 ms hardware timeout, so a lost one heals. A feature report goes on the control
+    /// stream instead ([`PadFeature`](super::PadFeature)) toward a client that reads it there.
     HidRaw {
         pad: u8,
         kind: u8,

@@ -103,8 +103,6 @@ internal object SettingsFields {
             prefsKey = "rumble_on_phone"),
         field("gyroOnPhone", "android.gyro_on_phone", BoolKind, { it.gyroOnPhone }, { s, v -> s.copy(gyroOnPhone = v) },
             prefsKey = "gyro_on_phone"),
-        field("sc2Capture", "android.sc2_capture", BoolKind, { it.sc2Capture }, { s, v -> s.copy(sc2Capture = v) },
-            prefsKey = "sc2_capture"),
         field("dsCapture", "android.ds_capture", BoolKind, { it.dsCapture }, { s, v -> s.copy(dsCapture = v) },
             prefsKey = "ds_capture"),
         field("padHaptics", "pad_haptics", BoolKind, { it.padHaptics }, { s, v -> s.copy(padHaptics = v) }),

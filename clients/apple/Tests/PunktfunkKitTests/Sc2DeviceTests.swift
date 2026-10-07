@@ -31,15 +31,7 @@ final class Sc2DeviceTests: XCTestCase {
     /// `clients/shared/sc2-vectors.json`: the host's id-INCLUDED lengths, which
     /// `pf_driver_proto::triton::out_report_len` and the Kotlin table replay too.
     func testStrippedLenPlusOneMatchesTheSharedVectors() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // PunktfunkKitTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // apple
-            .deletingLastPathComponent() // clients
-            .appendingPathComponent("shared/sc2-vectors.json")
-        let root = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        for row in try XCTUnwrap(root["out_report_len"] as? [[String: Any]]) {
+        for row in try sharedRows("out_report_len") {
             let id = try UInt8(XCTUnwrap(row["id"] as? Int))
             // Undeclared ids answer nil: clamp to what arrived, never guess a length.
             let want = (row["len"] as? Int).map { $0 - 1 }
@@ -108,18 +100,6 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertNil(Sc2Device.parseSerial([]))
         // Ties keep the FIRST longest run.
         XCTAssertEqual(Sc2Device.parseSerial(Array("ABCDEFGH:IJKLMNOP".utf8)), "ABCDEFGH")
-    }
-
-    func testWirelessReplayNormalizesEitherIdTo0x79() {
-        // The replay must carry 0x79 whichever wireless id the Puck emitted: 0x46 is not in the
-        // virtual identity's report descriptor, and the Windows driver drops undeclared ids.
-        XCTAssertEqual(
-            Sc2Device.wirelessReplay([Sc2Device.idWirelessX, Sc2Device.wirelessConnect]),
-            [Sc2Device.idWireless, Sc2Device.wirelessConnect])
-        XCTAssertEqual(
-            Sc2Device.wirelessReplay([Sc2Device.idWireless, Sc2Device.wirelessConnect]),
-            [Sc2Device.idWireless, Sc2Device.wirelessConnect])
-        XCTAssertEqual(Sc2Device.wirelessReplay([Sc2Device.idWireless]).count, 2)
     }
 
     func testFeatureCommandBytesVerbatim() {
@@ -199,32 +179,14 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertFalse(Sc2Device.parseState(short, into: &out))
     }
 
-    func testWireMapMatchesAndroidPairForPair() {
-        // The full SC2-bit → GamepadWire-bit table (Sc2Device.kt WIRE_MAP): paddles R4/L4/R5/L5
-        // = PADDLE1..4, QAM = MISC1, right-pad click = the touchpad wire bit.
-        let expected: [(UInt32, UInt32)] = [
-            (Sc2Device.btnA, GamepadWire.a),
-            (Sc2Device.btnB, GamepadWire.b),
-            (Sc2Device.btnX, GamepadWire.x),
-            (Sc2Device.btnY, GamepadWire.y),
-            (Sc2Device.btnLB, GamepadWire.leftShoulder),
-            (Sc2Device.btnRB, GamepadWire.rightShoulder),
-            (Sc2Device.btnView, GamepadWire.back),
-            (Sc2Device.btnMenu, GamepadWire.start),
-            (Sc2Device.btnSteam, GamepadWire.guide),
-            (Sc2Device.btnL3, GamepadWire.leftStickClick),
-            (Sc2Device.btnR3, GamepadWire.rightStickClick),
-            (Sc2Device.btnDpadUp, GamepadWire.dpadUp),
-            (Sc2Device.btnDpadDown, GamepadWire.dpadDown),
-            (Sc2Device.btnDpadLeft, GamepadWire.dpadLeft),
-            (Sc2Device.btnDpadRight, GamepadWire.dpadRight),
-            (Sc2Device.btnQAM, GamepadWire.misc1),
-            (Sc2Device.btnR4, GamepadWire.paddle1),
-            (Sc2Device.btnL4, GamepadWire.paddle2),
-            (Sc2Device.btnR5, GamepadWire.paddle3),
-            (Sc2Device.btnL5, GamepadWire.paddle4),
-            (Sc2Device.btnRPadClick, GamepadWire.touchpadClick),
-        ]
+    /// `clients/shared/sc2-vectors.json` `buttons`: Kotlin's `WIRE_MAP` and the host's typed
+    /// fallback replay the same rows.
+    func testWireMapMatchesTheSharedVectors() throws {
+        let expected = try sharedRows("buttons").map { row -> (UInt32, UInt32) in
+            let sc2 = try XCTUnwrap(row["sc2"] as? Int)
+            let wire = try XCTUnwrap(row["wire"] as? Int)
+            return (UInt32(sc2), UInt32(wire))
+        }
         XCTAssertEqual(Sc2Device.wireMap.count, expected.count)
         for (sc2, wire) in expected {
             XCTAssertEqual(Sc2Device.wireButtons(sc2), wire, "sc2 bit 0x\(String(sc2, radix: 16))")
@@ -238,9 +200,38 @@ final class Sc2DeviceTests: XCTestCase {
         XCTAssertEqual(Sc2Device.wireButtons(0), 0)
     }
 
+    /// The identity rides core's `[len][request][len][reply]` packing, and core lists the queries.
+    func testPadIdentityPacksAsCoreReadsIt() {
+        let id = PunktfunkConnection.PadIdentity(serial: "FXA0000000001", replies: [
+            .init(request: [0x01, 0x83, 0x00], reply: [0x01, 0x83, 0x1E]),
+            .init(request: [0x01, 0xAE, 0x15, 0x01], reply: Array(repeating: 0x46, count: 70)),
+        ])
+        let packed = id.packedReplies
+        XCTAssertEqual(Array(packed[..<8]), [3, 0x01, 0x83, 0x00, 3, 0x01, 0x83, 0x1E])
+        XCTAssertEqual(packed[8], 4)
+        XCTAssertEqual(packed[13], 64, "a part is cut at 64 bytes")
+        XCTAssertEqual(packed.count, 8 + 5 + 65)
+        XCTAssertEqual(PunktfunkConnection.sc2IdentityRequests(puck: false).count, 8)
+        XCTAssertEqual(PunktfunkConnection.sc2IdentityRequests(puck: true).count, 12)
+        XCTAssertEqual(PunktfunkConnection.sc2IdentityRequests(puck: false).first, [0x01, 0x83, 0x00])
+    }
+
+    /// One section of `clients/shared/sc2-vectors.json`.
+    private func sharedRows(_ key: String) throws -> [[String: Any]] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // PunktfunkKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // apple
+            .deletingLastPathComponent() // clients
+            .appendingPathComponent("shared/sc2-vectors.json")
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try XCTUnwrap(root[key] as? [[String: Any]])
+    }
+
     func testSc2ButtonsInvertsTheWireMap() {
-        // A chord is written in wire bits; the raw report and the parsed state speak the
-        // device's layout, so the ring's swallow needs the map read backwards.
+        // A chord is written in wire bits; the parsed state speaks the device's layout, so the
+        // ring's swallow needs the map read backwards.
         XCTAssertEqual(
             Sc2Device.sc2Buttons(forWire: GamepadWire.back | GamepadWire.a),
             Sc2Device.btnView | Sc2Device.btnA)
@@ -250,42 +241,6 @@ final class Sc2DeviceTests: XCTestCase {
             XCTAssertEqual(Sc2Device.sc2Buttons(forWire: wire), sc2)
             XCTAssertEqual(Sc2Device.wireButtons(Sc2Device.sc2Buttons(forWire: wire)), wire)
         }
-    }
-
-    func testMaskInputsClearsOnlyWhatTheRingConsumes() {
-        var report = stateReport(
-            buttons: Sc2Device.btnA | Sc2Device.btnView | Sc2Device.btnY,
-            lt: 200, lsX: 32767, rsY: -4000)
-        report[30] = 0xAB // an IMU byte: the gate above this one owns that block, not this
-        Sc2Device.maskInputs(&report, clear: Sc2Device.btnA | Sc2Device.btnView, zeroAxes: false)
-        var out = Sc2Device.State()
-        XCTAssertTrue(Sc2Device.parseState(report, into: &out))
-        XCTAssertEqual(out.buttons, Sc2Device.btnY) // the chord's two are gone, the third stays
-        XCTAssertEqual(out.lsX, 32767) // axes untouched while the ring is closed
-        XCTAssertEqual(out.rsY, -4000)
-        XCTAssertEqual(report[0], Sc2Device.idStateBLE) // still a well-formed state report
-        XCTAssertEqual(report[30], 0xAB)
-
-        // Ring open: every stick and trigger reads neutral, at the same cadence.
-        Sc2Device.maskInputs(&report, clear: Sc2Device.btnY, zeroAxes: true)
-        XCTAssertTrue(Sc2Device.parseState(report, into: &out))
-        XCTAssertEqual(out.buttons, 0)
-        XCTAssertEqual(out.lsX, 0)
-        XCTAssertEqual(out.rsY, 0)
-        XCTAssertEqual(out.lt, 0)
-        XCTAssertEqual(report[30], 0xAB)
-
-        // Non-state and short reports are left exactly as they are.
-        var battery: [UInt8] = [Sc2Device.idBattery, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-                                10, 11, 12, 13, 14, 15, 16, 17, 18]
-        let untouched = battery
-        Sc2Device.maskInputs(&battery, clear: .max, zeroAxes: true)
-        XCTAssertEqual(battery, untouched)
-        var short = stateReport(buttons: Sc2Device.btnA)
-        short.removeSubrange(17...)
-        let shortUntouched = short
-        Sc2Device.maskInputs(&short, clear: .max, zeroAxes: true)
-        XCTAssertEqual(short, shortUntouched)
     }
 }
 

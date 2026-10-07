@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.VideogameAsset
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -69,8 +70,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -243,6 +248,11 @@ class RingActions(
     val screenLayouts: () -> List<ScreenLayout> = { emptyList() },
     val screenLayout: () -> ScreenLayout = { ScreenLayout.PANEL },
     val cycleScreens: () -> Unit = {},
+    /** Controller type: the GamepadPref every controller declares, whether one is forwarded, and
+     *  the step to the next type ([nextPadType]) for this stream. */
+    val padType: () -> Int = { Gamepad.PREF_AUTO },
+    val padTypeAvailable: () -> Boolean = { false },
+    val cyclePadType: () -> Unit = {},
 )
 
 /**
@@ -272,6 +282,24 @@ internal fun padMouseState(mode: Int): String = when (mode) {
     1 -> "Touchpad"
     2 -> "Full"
     else -> "Off"
+}
+
+private val padMarks = HashMap<Int, ImageVector?>()
+
+/** The console's outline for a GamepadPref wire byte, stroked at its 1.5 weight; null for
+ *  Automatic, or off-device where the native library is absent. Built once per type. */
+internal fun padMark(pref: Int): ImageVector? = padMarks.getOrPut(pref) {
+    val d = runCatching { NativeBridge.nativePadMark(pref) }.getOrDefault("")
+    if (d.isEmpty()) return@getOrPut null
+    ImageVector.Builder(
+        defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
+    ).addPath(
+        pathData = PathParser().parsePathString(d).toNodes(),
+        stroke = SolidColor(Color.White),
+        strokeLineWidth = 1.5f,
+        strokeLineCap = StrokeCap.Round,
+        strokeLineJoin = StrokeJoin.Round,
+    ).build()
 }
 
 internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions): SlotSpec = when (slot) {
@@ -332,6 +360,12 @@ internal fun spec(slot: SlotId, cfg: OverlayConfig, a: RingActions): SlotSpec = 
         enabled = a.pointerGranted() && a.padMouseTarget() != 0,
         reason = if (a.pointerGranted()) "No controller is connected" else "This host only allows controller input",
         toggle = true, state = padMouseState(a.padMouseMode()),
+    )
+    // Automatic keeps a plain gamepad; a picked type shows its outline.
+    SlotId.PadType -> SlotSpec(
+        "pad_type", "Controller type", padMark(a.padType()) ?: Icons.Filled.VideogameAsset,
+        enabled = a.padTypeAvailable(), reason = "No controller is connected",
+        toggle = true, state = padTypeLabel(a.padType()),
     )
     SlotId.StreamMute -> SlotSpec(
         "stream_mute", "Mute this stream",
@@ -603,6 +637,7 @@ internal fun fireSlot(
         SlotId.Guide -> { state.close(); actions.tapPadButton(Gamepad.BTN_GUIDE) }
         SlotId.Qam -> { state.close(); actions.tapPadButton(Gamepad.BTN_MISC1) }
         SlotId.PadMouse -> actions.cyclePadMouse()
+        SlotId.PadType -> actions.cyclePadType()
         SlotId.StreamMute -> actions.toggleStreamMute()
         // The ring lives on the picture, which is about to change screens.
         SlotId.SwapScreens -> { state.close(); actions.cycleScreens() }
@@ -903,6 +938,8 @@ private fun sheetRows(
     }
     val pm = spec(SlotId.PadMouse, cfg, actions)
     rows += SheetRowSpec(null, pm.label, if (pm.enabled) pm.state else pm.reason, pm.enabled) { if (pm.enabled) actions.cyclePadMouse() }
+    val pt = spec(SlotId.PadType, cfg, actions)
+    rows += SheetRowSpec(null, pt.label, if (pt.enabled) pt.state else pt.reason, pt.enabled) { if (pt.enabled) actions.cyclePadType() }
     rows += SheetRowSpec("View", "Statistics", actions.stats().label) { actions.cycleStats() }
     if (actions.screenLayouts().size > 1) {
         rows += SheetRowSpec(null, "Screens", actions.screenLayout().label) { state.close(); actions.cycleScreens() }
