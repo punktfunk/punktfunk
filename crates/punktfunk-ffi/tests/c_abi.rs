@@ -9,10 +9,9 @@ use std::process::Command;
 /// links them and duplicates warn. See `rustc --print native-static-libs`.
 fn native_libs() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
-        // Workspace `quic` pulls rustls's platform verifier (Security/CoreFoundation)
-        // and in-core Opus decode (`next_audio_pcm`), whose symbols the ABI references.
+        // Workspace `quic` pulls rustls's platform verifier (Security/CoreFoundation). libopus
+        // is bundled into the staticlib.
         &[
-            "-lopus",
             "-liconv",
             "-lm",
             "-framework",
@@ -21,16 +20,8 @@ fn native_libs() -> &'static [&'static str] {
             "CoreFoundation",
         ]
     } else if cfg!(target_os = "linux") {
-        // Opus before `-lm` (libopus needs libm). `quic` pulls in-core `next_audio_pcm`.
-        &[
-            "-lopus",
-            "-lgcc_s",
-            "-lutil",
-            "-lrt",
-            "-lpthread",
-            "-lm",
-            "-ldl",
-        ]
+        // libopus is bundled into the staticlib and needs `-lm`.
+        &["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]
     } else {
         &[]
     }
@@ -93,10 +84,6 @@ fn c_abi_harness_round_trips() {
             "-I",
         ])
         .arg(&include);
-    // Homebrew on Apple Silicon: `cc` does not search `/opt/homebrew/lib` for `-lopus`.
-    if cfg!(target_os = "macos") && Path::new("/opt/homebrew/lib").is_dir() {
-        compile.arg("-L/opt/homebrew/lib");
-    }
     compile
         .arg(&harness)
         .arg(&staticlib)

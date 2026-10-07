@@ -40,7 +40,7 @@
 #   - CARGO_TARGET_DIR=C:\t…  the runner's host workdir is buried deep under
 #                          C:\Windows\System32\config\systemprofile\.cache\act\<hash>\hostexecutor\,
 #                          so the default target\ path blows past Windows' MAX_PATH (260) inside the
-#                          CMake-from-source builds (audiopus_sys / SDL3) — MSBuild's tracker then
+#                          CMake-from-source builds (opusic-sys / SDL3) — MSBuild's tracker then
 #                          can't create its .tlog (DirectoryNotFoundException -> MSB6003). A short
 #                          root keeps every nested path well under the limit (per-arch so the two
 #                          matrix legs don't share a target dir).

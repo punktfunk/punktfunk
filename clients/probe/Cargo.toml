@@ -24,7 +24,7 @@ mdns-sd = "0.21"
 # Opus: multistream DECODE of the host's audio plane (the surround validator) + `--mic-test`'s
 # encoder. libopus is already in the graph via `punktfunk-core`'s quic feature; this exposes the
 # name directly. Cross-platform (cmake-vendored), so the probe builds + validates everywhere.
-opus = "0.3"
+opus = "0.4"
 
 [lints]
 workspace = true

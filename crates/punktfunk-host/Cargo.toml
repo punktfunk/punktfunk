@@ -220,7 +220,7 @@ punktfunk-ffi = { path = "../punktfunk-ffi", features = ["quic"] }
 # source — no system lib, no vcpkg), so it builds on Windows MSVC too (needs CMake + NASM, both on
 # the box) and on macOS, where `punktfunk-core` already vendors it for the client.
 [target.'cfg(any(unix, windows))'.dependencies]
-opus = "0.3"
+opus = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 # The POSIX calls behind the `#[cfg(unix)]` helpers in `hooks.rs` (kill) and the SIGTERM

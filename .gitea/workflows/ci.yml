@@ -30,7 +30,7 @@ on:
 # never collide; every Rust job on every host feeds and reads one warm cache.
 #
 # RUSTC_WRAPPER covers RUST compilations and nothing else. The C/C++ half of this workspace —
-# aws-lc-sys, openh264-sys2's vendored C++, the CMake-built libopus behind audiopus_sys, pyrowave —
+# aws-lc-sys, openh264-sys2's vendored C++, the CMake-built libopus behind opusic-sys, pyrowave —
 # was paid in full on every run until the CMAKE_*_COMPILER_LAUNCHER / CC_* wiring below existed.
 # Linking is the third phase and is cacheable by nothing: that one is addressed in the builder
 # images with mold (ci/cargo-config-mold.toml).

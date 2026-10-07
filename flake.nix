@@ -207,7 +207,6 @@
             buildInputs = [
               # host
                 pkgs.pipewire
-              pkgs.libopus
               pkgs.wayland
               pkgs.libxkbcommon
               pkgs.libGL
@@ -222,8 +221,6 @@
               pkgs.gsettings-desktop-schemas
               pkgs.adwaita-icon-theme
             ];
-            # CMake ≥ 4 rejects the pre-3.5 minimums some vendored C libs (libopus) still declare.
-            CMAKE_POLICY_VERSION_MINIMUM = "3.5";
             LD_LIBRARY_PATH = "/run/opengl-driver/lib:${
               pkgs.lib.makeLibraryPath [
                 pkgs.vulkan-loader

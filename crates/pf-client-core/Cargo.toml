@@ -118,7 +118,7 @@ libc = { version = "0.2", optional = true }
 # rung is native (pf-vkdecode / pf-dxvadec / pf-vaapi / openh264+rav1d) and the codec
 # vocabulary is `punktfunk_core::quic`'s own `CODEC_*` wire bits. The HOST still encodes
 # with libavcodec (`pf-encode`); nothing in this crate does.
-opus = { version = "0.3", optional = true }
+opus = { version = "0.4", optional = true }
 
 mdns-sd = { version = "0.21", optional = true }
 

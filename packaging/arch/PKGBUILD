@@ -50,7 +50,7 @@ options=('!lto' '!debug')
 # nothing in the workspace compiles against the system Vulkan headers any more (pyrowave-sys builds
 # against its own vendored copy, and both binaries reach Vulkan through ash, which dlopens it).
 makedepends=('rust' 'cargo' 'clang' 'cmake' 'nasm' 'pkgconf' 'git'
-             'gtk4' 'libadwaita' 'sdl3' 'pipewire' 'wayland' 'libxkbcommon' 'opus' 'libei')
+             'gtk4' 'libadwaita' 'sdl3' 'pipewire' 'wayland' 'libxkbcommon' 'libei')
 
 # Opt-in punktfunk-web / punktfunk-scripting: only then is bun (the build tool AND the vendored
 # runtime) required. Adding bun twice is harmless (makepkg dedups makedepends). Either one also
@@ -169,7 +169,7 @@ package_punktfunk-host() {
   # pacman file conflict the moment both land on one box (found exactly that way).
   # punktfunk-gamescope: HDR, the real mode and the cursor in every gamescope session. A depend,
   # not an optdepend: pacman has no weak deps, and apt/dnf pull it as a Recommends.
-  depends=('pipewire' 'wireplumber' 'opus' 'libei'
+  depends=('pipewire' 'wireplumber' 'libei'
            'mesa' 'libglvnd' 'libxkbcommon' 'wayland' 'punktfunk-icons' 'punktfunk-gamescope')
   optdepends=('rtkit: data-plane thread priority without a relogin (else the shipped LimitNICE drop-in applies from next login)'
               'pipewire-pulse: PulseAudio-API audio from games/apps (real `pulseaudio` also works)'
@@ -364,7 +364,7 @@ package_punktfunk-client() {
   # (Recommends) and the RPM (Recommends, "degrade gracefully without it").
   # punktfunk-icons: the shared brand mark — see the host's depends note.
   depends=('gtk4' 'libadwaita' 'sdl3' 'pipewire' 'wireplumber'
-           'opus' 'libglvnd' 'vulkan-icd-loader' 'punktfunk-icons')
+           'libglvnd' 'vulkan-icd-loader' 'punktfunk-icons')
   optdepends=('libva-mesa-driver: VAAPI hardware decode on AMD (incl. Steam Deck); software fallback otherwise'
               'intel-media-driver: VAAPI hardware decode on Intel'
               'vulkan-radeon: Vulkan Video decode + presenter on AMD'

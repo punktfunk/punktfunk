@@ -74,15 +74,6 @@ fi
 export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$HOST_LINKER"
 export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="$HOST_LINKER"
 
-# Hermetic Opus: never let audiopus_sys link a Homebrew libopus via pkg-config. A brew lib
-# is built for the RUNNING macOS (its objects carry that minos, tripping the version guard
-# below) and only exists for the host arch — the other slice silently falls back to the
-# vendored build, so the two slices ship different libopus builds. Force the vendored CMake
-# build everywhere; the policy floor keeps modern CMake (≥4) accepting libopus's old
-# `cmake_minimum_required`.
-export OPUS_NO_PKG_CONFIG=1
-export CMAKE_POLICY_VERSION_MINIMUM=3.5
-
 # Skia for the console comes as prebuilt archives keyed by target + features. skia-bindings
 # downloads with no content check and, when no archive matches, builds Skia from source for
 # hours without failing. So it only ever reads files verified here against these digests.

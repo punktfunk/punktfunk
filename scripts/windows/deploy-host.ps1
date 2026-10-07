@@ -35,7 +35,7 @@ Set-Location $repo
 
 # Load the persisted build env (Machine scope) into THIS process, so the build sees it even
 # if this shell was started before setup-build-env.ps1 ran (env is inherited at spawn time).
-foreach ($k in 'LIBCLANG_PATH','CMAKE_POLICY_VERSION_MINIMUM') {
+foreach ($k in 'LIBCLANG_PATH') {
   $v = [Environment]::GetEnvironmentVariable($k, 'Machine')
   if ($v) { [Environment]::SetEnvironmentVariable($k, $v, 'Process'); Write-Host "env    : $k=$v" }
   else { Write-Warning "env $k not set (run setup-build-env.ps1)" }

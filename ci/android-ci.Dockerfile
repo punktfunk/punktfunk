@@ -6,9 +6,9 @@
 #
 #   docker build -f ci/android-ci.Dockerfile -t punktfunk-android-ci ci
 #
-# Version pins mirror what android.yml installed via sdkmanager: AGP 9.3 wants JDK 17–21;
+# Version pins mirror what android.yml installed via sdkmanager: AGP 9.4 wants JDK 17–21;
 # cmake;3.22.1 because kit/build.gradle.kts prepends $ANDROID_SDK/cmake/3.22.1/bin to PATH
-# for cargo-ndk's audiopus_sys (libopus) CMake build; platforms;android-37 is deliberately
+# for cargo-ndk's opusic-sys (libopus) CMake build; platforms;android-37 is deliberately
 # absent (AGP auto-downloads it if a build ever needs it — same note as the old workflow).
 FROM ubuntu:26.04
 

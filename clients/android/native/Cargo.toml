@@ -90,9 +90,8 @@ ndk-sys = { version = "0.6", features = ["media"] }
 # setpriority/gettid to raise the decode thread toward URGENT_DISPLAY (see decode::boost_thread_priority).
 libc = "0.2"
 # Opus decode for pad audio (0xD1); the main audio plane and the mic uplink run in core. Same
-# crate the host + Linux client use. audiopus_sys vendors libopus (pure C) and builds it static via cmake —
-# the cargo-ndk build sets LIBOPUS_STATIC=1/LIBOPUS_NO_PKG=1 so it links the bundled lib, not the host's.
-opus = "0.3"
+# crate the host + Linux client use; opusic-sys builds its bundled libopus static via cmake.
+opus = "0.4"
 # Tier-A pad audio (WP9). Android's audio framework denylists the DualSense's output by VID/PID,
 # so the pad's isochronous endpoint is driven directly on the fd `UsbDeviceConnection` hands over.
 # Our own crates, developed openly because the hole they fill — isochronous USB in Rust — is an

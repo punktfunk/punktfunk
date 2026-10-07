@@ -89,7 +89,7 @@ tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", 
 # `punktfunk_connection_next_audio_pcm` (Apple's AudioToolbox is stereo-only), and `audio::mic`
 # the Rust clients' mic uplink encoder. Only built with the connection API (quic). Same libopus
 # the host vendors; cargo unifies the build.
-opus = { version = "0.3", optional = true }
+opus = { version = "0.4", optional = true }
 
 # `libc` for batched UDP syscalls: `sendmmsg`/`recvmmsg` on Linux (the 1 Gbps+ lever) and the
 # `recv(MSG_DONTWAIT)` drain on the other unix (Apple/BSD) targets, which have no `recvmmsg`

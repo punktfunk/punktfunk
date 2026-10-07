@@ -10,7 +10,7 @@ repository.workspace = true
 links = "pyrowave"
 
 [build-dependencies]
-# Same CMake-from-vendored-source model as opus/audiopus_sys: reproducible
+# Same CMake-from-vendored-source model as opus/opusic-sys: reproducible
 # offline builds (CI, MSVC, flatpak — the flatpak builder has no network).
 cmake = "0.1"
 # `runtime` (rather than the default static link) makes bindgen dlopen libclang at build time, so

@@ -187,14 +187,12 @@ jobs:
         run: ./scripts/ci/ensure-windows-toolchain.ps1
 
       - name: Configure
-        # Same two knobs the package job sets, and for the same reasons: CARGO_TARGET_DIR=C:\t
-        # dodges the MAX_PATH wall in the CMake-from-source crates, and CMake 4.x refuses the
-        # vendored opus' `cmake_minimum_required < 3.5` without the policy floor. Reusing C:\t
+        # Same knob the package job sets, for the same reason: CARGO_TARGET_DIR=C:\t dodges the
+        # MAX_PATH wall in the CMake-from-source crates. Reusing C:\t
         # rather than a lint-only tree is deliberate — a second dep tree on this runner is the
         # C1069 disk-exhaustion trigger, and cargo's own lock serialises us against a `main` build.
         run: |
           "CARGO_TARGET_DIR=C:\t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CMAKE_POLICY_VERSION_MINIMUM=3.5" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Carry source mtimes (unchanged crates stay fresh)
         shell: pwsh
@@ -315,12 +313,6 @@ jobs:
           # opus) the host pulls; via GITHUB_ENV (pwsh Out-File utf8 = no BOM, unlike Windows
           # PowerShell 5.1 — keeps the first line clean).
           "CARGO_TARGET_DIR=${{ matrix.td }}" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          # audiopus_sys' vendored opus declares cmake_minimum_required < 3.5, which CMake 4.x
-          # refuses outright. Green runs today only survive on the cached configure output — a
-          # target-dir purge (the runner's disk-cleanup task) would fail the fresh configure, as
-          # observed on a clean build on this very runner (2026-07-17). No-op for compliant
-          # projects (libvpl-sys pins 3.13+).
-          "CMAKE_POLICY_VERSION_MINIMUM=3.5" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           # No FFMPEG_DIR: neither the host nor the client links libav* any more. A runner
           # provisioned before that still has the tree and the daemon env var; both are inert.
           # LIBCLANG_PATH is in the runner daemon env.

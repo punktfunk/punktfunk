@@ -30,7 +30,7 @@ log = "0.4"
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
 # The demo host: a quinn endpoint on its own runtime and a fresh self-signed certificate,
 # Opus silence on the audio plane.
-opus = { version = "0.3", optional = true }
+opus = { version = "0.4", optional = true }
 quinn = { workspace = true, optional = true }
 rand = { version = "0.10", optional = true }
 rcgen = { workspace = true, optional = true }

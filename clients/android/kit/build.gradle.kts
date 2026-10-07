@@ -103,10 +103,6 @@ fun Exec.cargoNdkEnvironment() {
     // already the hard prerequisite here, its clang is the one the sysroot matches, and this
     // keeps a dev machine and the CI image (which carries no libclang-dev) on the same footing.
     ndkLibclangDir()?.let { environment("LIBCLANG_PATH", it) }
-    // audiopus_sys picks static-vs-dynamic by HOST not target — force the bundled static libopus
-    // (pure C) so the android .so links it instead of looking for the host's libopus.so.
-    environment("LIBOPUS_STATIC", "1")
-    environment("LIBOPUS_NO_PKG", "1")
     // A GNU build-id ties a tombstone to its symbols. Target-scoped, so host build scripts and
     // desktop builds keep their flags. A RUSTFLAGS env overrides it, and check-android-strip.sh
     // then fails the build.

@@ -20,7 +20,7 @@
 # `org.freedesktop.Sdk.Extension.rust-stable` resolves to //25.08 (rustc 1.96 — the GTK4 dep
 # chain, e.g. pango-sys 0.22, needs >= 1.92, which the older GNOME-48/24.08 rust-stable at 1.89
 # could NOT satisfy). GNOME 50 is also a *supported* runtime (GNOME 48 went EOL in March 2026).
-# libopus and the PipeWire client lib are in the freedesktop base; SDL3 is NOT, so it is built
+# The PipeWire client lib is in the freedesktop base; SDL3 is NOT, so it is built
 # from source as a bundled module.
 #
 # HEVC decode needs NOTHING from the runtime since M10 (design/client-native-decode.md §6):
@@ -137,9 +137,8 @@ finish-args:
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
-  # The rust build resolves everything via pkg-config: gtk4/libadwaita/pipewire/opus AND a
-  # the SDK's own .pc files from the multiarch /usr dir (libopus for audiopus_sys, the
-  # PipeWire client lib, GTK4/libadwaita), plus the bundled SDL3's .pc from /app.
+  # The rust build resolves gtk4/libadwaita/pipewire via pkg-config: the SDK's own .pc files
+  # from the multiarch /usr dir, plus the bundled SDL3's .pc from /app.
   env:
     PKG_CONFIG_PATH: /app/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig
     # bindgen (sdl3-sys, pyrowave-sys) loads libclang from the llvm20 extension.

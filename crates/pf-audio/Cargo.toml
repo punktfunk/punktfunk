@@ -22,7 +22,7 @@ tracing = "0.1"
 # Opus encode for both audio planes — stereo (`opus::Encoder`) and 5.1/7.1 (`opus::MSEncoder`) —
 # and the mic pump's decode. The crate vendors libopus (cmake-built from source), so it builds on
 # Windows MSVC and macOS too.
-opus = "0.3"
+opus = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Must match the pipewire crate ashpd 0.13 links (libspa/pipewire-sys `links` key is unique per
