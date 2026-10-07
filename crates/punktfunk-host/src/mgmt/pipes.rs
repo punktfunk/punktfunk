@@ -103,7 +103,8 @@ async fn serve_one(app: Router, id: String) {
     };
     let conns = Arc::new(Semaphore::new(MAX_CONNS_PER_PIPE));
     let mut first = true;
-    let mut announced = false;
+    // Once per kind: the runner's own existence check opens the pipe first, from no container.
+    let mut announced = [false, false];
     loop {
         let server = match create_plugin_pipe(&name, first, package.as_deref()) {
             Ok(s) => s,
@@ -128,9 +129,9 @@ async fn serve_one(app: Router, id: String) {
         // the plugin. A runner-account client with no container keeps its bearer lane.
         let client = pipe_client_package_sid(HANDLE(server.as_raw_handle()));
         let stamped = client.is_some() && client == package;
-        if !announced {
+        if !announced[usize::from(stamped)] {
             tracing::info!(plugin = %id, container = stamped, "plugin reached the host over its pipe");
-            announced = true;
+            announced[usize::from(stamped)] = true;
         }
         // Over the ceiling: this instance closes unanswered, and the plugin's next dial waits.
         let Ok(permit) = conns.clone().try_acquire_owned() else {

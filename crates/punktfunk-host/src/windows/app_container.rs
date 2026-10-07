@@ -18,7 +18,7 @@ use windows::Win32::Security::Isolation::{
 };
 use windows::Win32::Security::{
     FreeSid, GetTokenInformation, TokenAppContainerSid, PSID, SECURITY_CAPABILITIES,
-    SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY,
+    SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY,
 };
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -108,9 +108,14 @@ pub(crate) fn spawn(id: &str, network: bool, program: &Path, args: &[String]) ->
             Attributes: CAPABILITY_ENABLED,
         });
     }
+    // A zero-length array must be a null pointer: a dangling one is ERROR_INVALID_PARAMETER.
     let mut sc = SECURITY_CAPABILITIES {
         AppContainerSid: package,
-        Capabilities: caps.as_mut_ptr(),
+        Capabilities: if caps.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            caps.as_mut_ptr()
+        },
         CapabilityCount: caps.len() as u32,
         Reserved: 0,
     };
@@ -216,20 +221,31 @@ pub(crate) fn pipe_client_package_sid(pipe: HANDLE) -> Option<String> {
     unsafe { OpenProcessToken(HANDLE(process.as_raw_handle()), TOKEN_QUERY, &mut token) }.ok()?;
     // SAFETY: the open succeeded, so this frame alone owns the token.
     let token = unsafe { OwnedHandle::from_raw_handle(token.0) };
-    let mut info = TOKEN_APPCONTAINER_INFORMATION::default();
+    // The class fills the struct and lays the SID it points at right behind it, in this buffer.
+    let mut buf = vec![
+        0u8;
+        std::mem::size_of::<TOKEN_APPCONTAINER_INFORMATION>()
+            + SECURITY_MAX_SID_SIZE as usize
+    ];
     let mut len = 0u32;
-    // SAFETY: `info` is the struct `TokenAppContainerSid` fills and the size is its own; the
-    // SID it points at belongs to the token's own storage for the life of `token`.
+    // SAFETY: `buf` is as long as the call is told; the struct and its SID stay in it below.
     unsafe {
         GetTokenInformation(
             HANDLE(token.as_raw_handle()),
             TokenAppContainerSid,
-            Some((&raw mut info).cast()),
-            std::mem::size_of::<TOKEN_APPCONTAINER_INFORMATION>() as u32,
+            Some(buf.as_mut_ptr().cast()),
+            buf.len() as u32,
             &mut len,
         )
     }
     .ok()?;
+    // SAFETY: the call filled the struct at the buffer's start; its SID pointer points into
+    // `buf`, which outlives the read below.
+    let info = unsafe {
+        buf.as_ptr()
+            .cast::<TOKEN_APPCONTAINER_INFORMATION>()
+            .read_unaligned()
+    };
     if info.TokenAppContainer.is_invalid() {
         return None;
     }
