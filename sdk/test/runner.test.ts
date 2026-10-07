@@ -492,7 +492,8 @@ describe("supervision", () => {
 		expect(failed).toContain("plugin process exited with 3");
 		expect(failed).toContain("lonely run 0 pid");
 		expect(logs.some((l) => l.includes("restarting (attempt 2)"))).toBe(true);
-	});
+		// Two cold re-execs of the CLI source on a loaded runner outrun the 5 s default.
+	}, 30000);
 
 	test("a grants change restarts only the affected sandboxed plugin", async () => {
 		const d = mkdirs("grant-restart");
