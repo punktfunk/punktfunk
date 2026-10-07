@@ -23,7 +23,7 @@ export interface GrantOutcome {
 	refused: { path: string; error: string }[];
 }
 
-// A checked schema nests its annotations under `allOf`.
+// Plugins built on an effect 4 beta nest a checked field's annotations under `allOf`.
 const flatten = (n: Node): Node =>
 	(n.allOf ?? []).reduce<Node>((acc, b) => Object.assign(acc, b), { ...n });
 
