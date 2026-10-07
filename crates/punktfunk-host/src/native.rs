@@ -325,7 +325,7 @@ pub(crate) async fn serve(
     // The door places every connect and runs no session, so it opens no audio, input or display
     // and the senders below reach nobody.
     let door = pf_paths::seat::is_door();
-    // Host-lifetime capturer: one PipeWire stream, handed session to session (`AudioCapSlot`).
+    // A sinkless capturer handed session to session (`AudioCapSlot`, `park_audio_capture`).
     let audio_cap: AudioCapSlot = Arc::new(std::sync::Mutex::new(None));
     // Host-lifetime injector: one RemoteDesktop-portal grant. A CreateSession per session
     // races portal teardown on reconnect and wedges KWin EIS. Gamepads stay per-session.
@@ -1751,8 +1751,8 @@ pub(crate) async fn run_admitted(
     let (audio_tx, audio_rx) =
         tokio::sync::mpsc::unbounded_channel::<punktfunk_core::quic::AudioState>();
     // Input thread → client: which player each of this session's pads is.
-    let (pad_slots_tx, pad_slots_rx) =
-        tokio::sync::mpsc::unbounded_channel::<punktfunk_core::quic::PadSlots>();
+    let (pad_tx, pad_rx) = tokio::sync::mpsc::unbounded_channel::<input::PadToClient>();
+    let pad_writes = features.has(punktfunk_core::quic::v2::registry::FEATURE_PAD_WRITES);
     // The device's stored player pick. Keyed by the pairing fingerprint, never by
     // an address: the same device reconnecting is the same player.
     let preferred_pad_slot = session_fp_hex.as_deref().and_then(|fp| np.pad_slot_of(fp));
@@ -1837,7 +1837,7 @@ pub(crate) async fn run_admitted(
         session_grants: session_grants.clone(),
         access_rx,
         audio_rx,
-        pad_slots_rx,
+        pad_rx,
         launch_outcome_rx,
         peer: peer.ip(),
         plane: conn.plane(),
@@ -1911,7 +1911,8 @@ pub(crate) async fn run_admitted(
                         pad_audio_on,
                         pad_id,
                         pad_slots,
-                        Some(pad_slots_tx),
+                        Some(pad_tx),
+                        pad_writes,
                         grants,
                         frame_map,
                         pad_feed,
@@ -2793,6 +2794,11 @@ async fn teardown(
 
 /// Live sessions, on either plane, that may stream a gamescope the host took over.
 static LIVE_GAMESCOPE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether any session holds a [`GamescopeHold`]: a held takeover is then streaming, not kept.
+pub(crate) fn gamescope_sessions_live() -> bool {
+    LIVE_GAMESCOPE.load(Ordering::SeqCst) > 0
+}
 
 /// One count in [`LIVE_GAMESCOPE`], taken before the session resolves its compositor. Resolving
 /// cancels a pending Game Mode hand-back; the last hold dropped, on any path, schedules it again.

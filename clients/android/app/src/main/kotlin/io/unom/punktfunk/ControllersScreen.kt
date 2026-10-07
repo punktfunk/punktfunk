@@ -441,8 +441,6 @@ private fun Sc2BluetoothRow(
     activity: MainActivity?,
     onGranted: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val settingOn = remember { SettingsStore(context).load().sc2Capture }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -463,9 +461,6 @@ private fun Sc2BluetoothRow(
             )
             Text(
                 when {
-                    !settingOn ->
-                        "Passthrough is disabled in Settings — enable \"Steam Controller 2 " +
-                            "passthrough\" to capture it."
                     attached ->
                         "Paired over Bluetooth. Punktfunk needs Bluetooth access to capture it — " +
                             "until then it stays in its built-in keyboard/mouse mode and no game " +
@@ -478,10 +473,8 @@ private fun Sc2BluetoothRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (settingOn) {
-                OutlinedButton(onClick = { launcher.launch(permission) }) {
-                    Text("Grant Bluetooth access")
-                }
+            OutlinedButton(onClick = { launcher.launch(permission) }) {
+                Text("Grant Bluetooth access")
             }
         }
     }
@@ -496,7 +489,6 @@ private fun Sc2BluetoothRow(
 @Composable
 private fun Sc2Row(usbDev: android.hardware.usb.UsbDevice?, activity: MainActivity?) {
     val context = LocalContext.current
-    val settingOn = remember { SettingsStore(context).load().sc2Capture }
     val active = activity?.sc2MenuActive == true
     val usbManager = context.getSystemService(Context.USB_SERVICE) as android.hardware.usb.UsbManager
     val permitted = usbDev != null && usbManager.hasPermission(usbDev)
@@ -529,12 +521,6 @@ private fun Sc2Row(usbDev: android.hardware.usb.UsbDevice?, activity: MainActivi
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             when {
-                !settingOn -> Text(
-                    "Passthrough is disabled in Settings — enable \"Steam Controller 2 " +
-                        "passthrough\" to capture it.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 active -> {
                     Text(
                         "Captured — streams as-is: the host presents a real Steam Controller 2 " +

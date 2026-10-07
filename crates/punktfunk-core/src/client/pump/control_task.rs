@@ -39,6 +39,8 @@ pub(super) struct ControlTask {
     /// Access updates → [`NativeClient::next_access_update`]. try_send: a
     /// lagging embedder drops the oldest; the two live slots already hold truth.
     pub(super) access_tx: std::sync::mpsc::SyncSender<crate::quic::AccessUpdate>,
+    /// Feature reports for a pad ([`crate::quic::PadFeature`]) → the datagram plane's queue.
+    pub(super) hidout_tx: std::sync::mpsc::SyncSender<crate::quic::HidOutput>,
 }
 
 impl ControlTask {
@@ -57,6 +59,7 @@ impl ControlTask {
             cursor_shape_tx,
             mode_gen,
             access_tx,
+            hidout_tx,
         } = self;
         let ClientShared {
             mode: mode_slot,
@@ -126,6 +129,7 @@ impl ControlTask {
                         CtrlRequest::CursorRender(m) => m.encode_v2(),
                         CtrlRequest::Phase(p) => p.encode_v2(),
                         CtrlRequest::InputEdge(ev) => v2msg::encode_input_event(&ev),
+                        CtrlRequest::PadIdentity(id) => id.encode_v2(),
                     };
                     if v2io::write_frame(&mut ctrl_send, &frame).await.is_err() {
                         break;
@@ -350,6 +354,14 @@ impl ControlTask {
                             crate::client::AUDIO_MUTE_HOST,
                             st.muted,
                         );
+                    } else if let Ok(f) = decode::<crate::quic::PadFeature>(ty, &body) {
+                        // Same queue as the datagram plane: the embedder's feedback drain
+                        // writes it to the physical pad.
+                        let _ = hidout_tx.try_send(crate::quic::HidOutput::HidRaw {
+                            pad: f.pad,
+                            kind: crate::quic::HID_RAW_FEATURE,
+                            data: f.data,
+                        });
                     } else if let Ok(p) = decode::<crate::quic::PadSlots>(ty, &body) {
                         // Which players this session's pads are. The host decides it —
                         // wire indices are per client, the OS slots are host-wide.

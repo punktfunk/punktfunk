@@ -85,8 +85,9 @@ pub use routing::{
 #[cfg(target_os = "linux")]
 pub use routing::{
     claim_workspace, dedicated_game_exited, focus_streamed_output, gamescope_presenting,
-    gamescope_xwayland_cursor_targets, launch_into_gamescope_session, launch_is_nested,
-    launch_is_steam, steam_appid_from_launch, watch_steam_game_exit, WorkspaceClaim,
+    gamescope_xwayland_cursor_targets, held_managed_session, launch_into_gamescope_session,
+    launch_is_nested, launch_is_steam, release_managed_session, steam_appid_from_launch,
+    watch_steam_game_exit, WorkspaceClaim,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

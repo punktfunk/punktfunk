@@ -46,6 +46,7 @@ impl Ds4WinPad {
                 bluetooth: false,
                 description: "Punktfunk Virtual DualShock 4",
                 enumerator: "VID_054C&PID_09CC&MI_03",
+                property: None,
             },
         )?;
         Ok(Ds4WinPad {

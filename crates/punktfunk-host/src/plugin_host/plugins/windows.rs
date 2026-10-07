@@ -34,18 +34,55 @@ const RUNNER_UNIT_DIRS: [&str; 2] = ["plugins", "scripts"];
 
 /// Writable state: `<config_dir>\plugin-state`. Plugins persist under
 /// `plugin-state\<name>`, so LocalService needs Modify here — code dirs are
-/// (RX,WA), secrets are (R). Inheritable onto per-plugin subdirs. Users stay
-/// read-only (config-dir default).
+/// (RX,WA), secrets are (R). Inheritable onto per-plugin subdirs. A plugin keeps
+/// its settings here, so no other account holds an ACE.
 const RUNNER_STATE_DIRS: [&str; 1] = ["plugin-state"];
 
 /// Ingest inbox: `<config_dir>\ingest`. Inverse of `plugin-state`: `BUILTIN\Users`
 /// gets Modify so an interactive-user app can drop `ingest\<plugin>\…` for the
-/// LocalService runner to read. The rest of the config tree stays Users-read-only.
-/// Any local user can drop a file here (trusted-single-user; the reader is LocalService).
+/// LocalService runner to read. The one place in the config tree a local account
+/// may write (trusted-single-user; the reader is LocalService).
 const RUNNER_INGEST_DIRS: [&str; 1] = ["ingest"];
 
 /// `BUILTIN\Users` (S-1-5-32-545) in icacls SID form — the ingest inbox's writer.
 const USERS_SID: &str = "*S-1-5-32-545";
+
+/// Present once [`strip_users_read_once`] has run on this install.
+const USERS_STRIP_MARKER: &str = "users-read-stripped";
+
+/// Installs before 0.44 made every config subdirectory with an explicit, inheritable
+/// `Users:(RX)`; the root's own re-ACL at start does not reach a protected child. Walk the
+/// children once. `ingest` keeps its `Users:(M)`, and `emulators\<id>` keeps the Modify the
+/// player's session runs on, so that one is not walked.
+pub(super) fn strip_users_read_once() {
+    let cfg = pf_paths::config_dir();
+    let marker = cfg.join(USERS_STRIP_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&cfg) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !entry.path().is_dir() || name == "ingest" {
+            continue;
+        }
+        let mut cmd = Command::new(icacls_path());
+        cmd.arg(entry.path()).args(["/remove:g", USERS_SID]);
+        if name != "emulators" {
+            cmd.arg("/T");
+        }
+        let _ = cmd
+            .args(["/C", "/Q"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    if let Err(e) = std::fs::write(&marker, b"") {
+        tracing::warn!(path = %marker.display(), error = %e, "users-read strip marker not written");
+    }
+}
 
 pub(super) fn enable() -> Result<()> {
     // Converge the principal before start: an older task may still be SYSTEM.
@@ -185,7 +222,7 @@ fn grant_runner_secret_reads() {
             );
         }
     }
-    deny_seats_on_ingest();
+    deny_seats();
     // `{app}\scripting` is not under the config dir. Same (RX,WA) as the unit
     // dirs: bun opens the entry script with FILE_WRITE_ATTRIBUTES, and the
     // install tree only carries Users:(RX). WA cannot change content.
@@ -207,33 +244,40 @@ fn grant_runner_secret_reads() {
     }
 }
 
-/// Deny the seats group ([`pf_seats::windows::SEATS_GROUP`]) on the ingest inbox. A seat account
-/// is in `BUILTIN\Users`, whose Modify grant would let it replace the owner's Playnite titles; an
-/// explicit deny on the same object outranks that allow. A deny already there is left alone:
-/// `icacls /deny` adds another ACE on every call. A box that never provisioned a seat has no group.
-pub(super) fn deny_seats_on_ingest() {
+/// Deny the seats group ([`pf_seats::windows::SEATS_GROUP`]) on the ingest inbox and on
+/// `tray-token`. A seat account is in `BUILTIN\Users`, whose grants would let it replace the
+/// owner's Playnite titles and read the box's summary; an explicit deny on the same object
+/// outranks that allow. A token minted before the group existed is covered here, a later one at
+/// its mint. A deny already there is left alone: `icacls /deny` adds another ACE on every call.
+/// A box that never provisioned a seat has no group.
+pub(super) fn deny_seats() {
     let Some(sid) = pf_seats::windows::seats_group_sid() else {
         return;
     };
-    let ace = format!("\\{}:(OI)(CI)(DENY)(M)", pf_seats::windows::SEATS_GROUP);
     let cfg = pf_paths::config_dir();
-    for dir in RUNNER_INGEST_DIRS.map(|name| cfg.join(name)) {
-        if !dir.is_dir() {
+    let inbox = RUNNER_INGEST_DIRS.map(|name| (cfg.join(name), "(OI)(CI)", "M"));
+    let token = (cfg.join(crate::mgmt_token::TRAY_FILE), "", "R");
+    for (path, inherit, rights) in inbox.into_iter().chain([token]) {
+        if !path.exists() {
             continue;
         }
-        let listed = Command::new(icacls_path()).arg(&dir).output();
+        let ace = format!(
+            "\\{}:{inherit}(DENY)({rights})",
+            pf_seats::windows::SEATS_GROUP
+        );
+        let listed = Command::new(icacls_path()).arg(&path).output();
         if listed.is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(&ace)) {
             continue;
         }
         let ok = Command::new(icacls_path())
-            .arg(&dir)
-            .args(["/deny", &format!("*{sid}:(OI)(CI)(M)")])
+            .arg(&path)
+            .args(["/deny", &format!("*{sid}:{inherit}({rights})")])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
         if !ok {
-            tracing::warn!(dir = %dir.display(), "ingest inbox still open to seat accounts");
+            tracing::warn!(path = %path.display(), "still open to seat accounts");
         }
     }
 }
@@ -318,7 +362,8 @@ fn revoke_runner_secret_reads() {
             .status();
     }
     // Ingest was granted to Users, not LocalService. Removing that ACE leaves
-    // the inherited Users:RX, so the dir reverts to read-only. The seats deny goes with it.
+    // SYSTEM/Administrators alone: nothing drops into the inbox until `enable`. The seats deny
+    // goes with it.
     let seats = pf_seats::windows::seats_group_sid().map(|sid| format!("*{sid}"));
     for name in RUNNER_INGEST_DIRS {
         let path = cfg.join(name);

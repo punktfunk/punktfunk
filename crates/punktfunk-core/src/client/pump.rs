@@ -283,6 +283,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
             cursor_shape_tx,
             mode_gen: mode_gen.clone(),
             access_tx,
+            hidout_tx: hidout_tx.clone(),
         }
         .run(),
     );

@@ -82,7 +82,6 @@ class PresetsTest {
         assertEquals(base.gamepadUiEnabled, out.gamepadUiEnabled)
         assertEquals(base.gamepadUiMode, out.gamepadUiMode)
         assertEquals(base.autoWakeEnabled, out.autoWakeEnabled)
-        assertEquals(base.sc2Capture, out.sc2Capture)
     }
 
     @Test

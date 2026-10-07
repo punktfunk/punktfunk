@@ -230,6 +230,54 @@ pub unsafe fn query_location_index(device: WDFDEVICE) -> u32 {
     if any { idx } else { 0 }
 }
 
+/// Read a binary device property the host set at `SwDeviceCreate`; `None` when it is absent.
+///
+/// # Safety
+/// `device` must be a live `WDFDEVICE`.
+pub unsafe fn query_binary_property(device: WDFDEVICE, fmtid: u128, pid: u32) -> Option<Vec<u8>> {
+    let key = wdk_sys::DEVPROPKEY {
+        fmtid: wdk_sys::GUID {
+            Data1: (fmtid >> 96) as _,
+            Data2: (fmtid >> 80) as _,
+            Data3: (fmtid >> 64) as _,
+            Data4: (fmtid as u64).to_be_bytes(),
+        },
+        pid,
+    };
+    let mut data = wdk_sys::WDF_DEVICE_PROPERTY_DATA {
+        Size: core::mem::size_of::<wdk_sys::WDF_DEVICE_PROPERTY_DATA>() as _,
+        PropertyKey: &key,
+        ..Default::default()
+    };
+    let mut mem: wdk_sys::WDFMEMORY = core::ptr::null_mut();
+    let mut ty: wdk_sys::DEVPROPTYPE = 0;
+    // SAFETY: `device` is live per this fn's contract; `data` points at `key`, both outliving the
+    // call; pool ignored in UMDF; `mem` receives a device-parented handle the framework frees.
+    let st = unsafe {
+        call_unsafe_wdf_function_binding!(
+            WdfDeviceAllocAndQueryPropertyEx,
+            device,
+            &mut data,
+            0,
+            WDF_NO_OBJECT_ATTRIBUTES,
+            &mut mem,
+            &mut ty
+        )
+    };
+    if !nt_success(st) || mem.is_null() {
+        return None;
+    }
+    let mut len: usize = 0;
+    // SAFETY: `mem` is the valid memory object just allocated; `len` receives its size.
+    let buf = unsafe { call_unsafe_wdf_function_binding!(WdfMemoryGetBuffer, mem, &mut len) }
+        as *const u8;
+    if buf.is_null() {
+        return None;
+    }
+    // SAFETY: `buf` is valid for `len` bytes per `WdfMemoryGetBuffer`.
+    Some(unsafe { core::slice::from_raw_parts(buf, len) }.to_vec())
+}
+
 /// Read the devnode's hardware-id list (`pszzHardwareIds`) as one lowercase ASCII string, ids
 /// separated by `;` (e.g. `"pf_steamdeck;usb\\vid_28de&pid_1205&rev_0100&mi_02;…"`). Empty if the
 /// property is absent.

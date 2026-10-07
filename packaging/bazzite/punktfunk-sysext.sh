@@ -210,7 +210,7 @@ post_merge() {
     return 1
   fi
   # What the RPM scriptlets would have done: pick up the uinput/uhid rule + the UDP buffer
-  # sysctl now, no reboot (both also auto-apply at boot once merged — the files live in /usr/lib).
+  # sysctl now, no reboot. At boot the image's punktfunk-sysctl.service re-applies the sysctl.
   udevadm control --reload 2>/dev/null || :
   udevadm trigger --subsystem-match=misc 2>/dev/null || :
   for f in /usr/lib/sysctl.d/99-punktfunk-net.conf /usr/lib/sysctl.d/99-punktfunk-client-net.conf; do

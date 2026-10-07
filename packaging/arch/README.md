@@ -99,8 +99,9 @@ sudo cp punktfunk-host.raw /var/lib/extensions/
 sudo systemctl enable --now systemd-sysext      # merges it
 systemctl --user enable --now punktfunk-host     # the user unit is now under /usr/lib
 ```
-The udev rule, sysctl, and systemd **user** unit all live under `/usr/lib`, so the merged sysext
-exposes them. `systemd-sysext refresh` re-merges after a reboot. (One HDR nuance of the sysext
+The udev rule and systemd **user** unit live under `/usr/lib`, so the merged sysext exposes them.
+The UDP buffer sysctl does too, but systemd applies sysctl files before the merge, so the image
+carries `punktfunk-sysctl.service` to apply it afterwards. `systemd-sysext refresh` re-merges after a reboot. (One HDR nuance of the sysext
 path: the image ships gamescope without `CAP_SYS_NICE`, so its frame pacing is marginally worse —
 everything works. Capabilities inside the image: `punktfunk-host` carries **none**, on *either*
 path, deliberately — one would make it unidentifiable to KWin and break desktop streaming;

@@ -175,7 +175,7 @@ internal data class PanelHeader(val title: String, val detail: String = "")
  * window cannot take.
  */
 private val SESSION_SLOTS = listOf(
-    SlotId.Guide, SlotId.Qam, SlotId.TouchMode, SlotId.PadMouse, SlotId.Pad,
+    SlotId.Guide, SlotId.Qam, SlotId.TouchMode, SlotId.PadMouse, SlotId.PadType, SlotId.Pad,
     SlotId.SwapScreens, SlotId.Mic, SlotId.StreamMute,
 )
 private val EXIT_SLOTS = listOf(SlotId.DisconnectLinger, SlotId.EndStream)

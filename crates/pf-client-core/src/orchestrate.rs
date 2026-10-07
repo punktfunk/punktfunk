@@ -1645,6 +1645,18 @@ mod tests {
         assert_eq!(params.stats_verbosity, StatsVerbosity::Detailed);
         assert!(Arc::ptr_eq(&params.force_software, &force_software));
         assert!(Arc::ptr_eq(&params.latch_grid, &latch_grid));
+        // A setup refusal reads as a waking host until the settle window shuts.
+        assert!(params.auto_wake && params.settle_until.is_none() && params.waking());
+        let mut settling = params.clone();
+        settling.settle_until = Some(std::time::Instant::now() + Duration::from_secs(5));
+        assert!(settling.waking());
+        settling.settle_until = Some(std::time::Instant::now());
+        assert!(!settling.waking(), "the window shut");
+        let mut no_wake = plan.clone();
+        no_wake.settings.auto_wake = false;
+        assert!(!no_wake
+            .session_params([9; 32], probes(false, false))
+            .waking());
 
         let hdr = plan.session_params([9; 32], probes(true, false));
         assert_eq!(

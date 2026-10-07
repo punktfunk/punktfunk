@@ -89,6 +89,7 @@ impl DsWinPad {
                 bluetooth: false,
                 description: id.description,
                 enumerator: id.enumerator,
+                property: None,
             },
         )?;
         Ok(DsWinPad {
@@ -199,6 +200,7 @@ pub fn deck_spike_hold(index: u8, secs: u64) -> Result<()> {
         bluetooth: false,
         description: "Punktfunk Virtual Steam Deck (spike)",
         enumerator: "punktfunk",
+        property: None,
     })?;
     // Same devnode-proved delivery as a session pad — a bring-up tool must not fall back
     // to the mailbox.
