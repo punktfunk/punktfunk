@@ -5740,6 +5740,62 @@
         }
       }
     },
+    "/api/v1/plugins/{id}/ui/attach": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Attach a plugin UI channel",
+        "description": "`Upgrade: punktfunk-ui` from the plugin, on its own pipe. The connection is kept for the\nconsole's next request to the plugin's page, which the host sends down it as plain HTTP.",
+        "operationId": "attachPluginUi",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The plugin id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "The connection is parked for the plugin's page"
+          },
+          "400": {
+            "description": "Not an `Upgrade: punktfunk-ui` request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not this plugin's own identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/session": {
       "delete": {
         "tags": [
