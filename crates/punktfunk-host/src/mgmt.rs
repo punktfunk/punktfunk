@@ -41,6 +41,8 @@ mod hooks;
 mod host;
 mod library;
 mod native;
+#[cfg(windows)]
+pub(crate) mod pipes;
 mod plugin_access;
 pub(crate) mod plugins;
 mod session;
@@ -239,11 +241,12 @@ pub async fn run(
     if identity_fingerprint.is_none() {
         tracing::warn!("the host identity did not parse — browsers cannot use the device lane");
     }
+    let plugin_tokens: PluginTokens = Arc::new(RwLock::new(opts.plugin_tokens));
     let app = app(
         state,
         Some(token),
         opts.plugin_token.filter(|t| !t.trim().is_empty()),
-        Arc::new(RwLock::new(opts.plugin_tokens)),
+        plugin_tokens.clone(),
         opts.tray_token,
         opts.bind.port(),
         native,
@@ -257,6 +260,15 @@ pub async fn run(
     // The plane's `/mgmt` tunnel dispatches into this very router. A second `app()` would mint
     // its own `DeviceAuth`, and a token earned on one would be refused by the other.
     crate::webtransport::mgmt::publish_router(app.clone());
+    // Each Windows plugin reaches this same router over a pipe of its own (`mgmt::pipes`).
+    #[cfg(windows)]
+    tokio::spawn(pipes::serve(
+        app.clone(),
+        plugin_tokens,
+        pf_paths::config_dir(),
+    ));
+    #[cfg(not(windows))]
+    drop(plugin_tokens);
     // Plain HTTP answers only while the plane runs: a host serving no browsers listens exactly
     // as it did before.
     let plain = browser_plane.then(bootstrap_app);
