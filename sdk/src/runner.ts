@@ -362,6 +362,7 @@ const runInOwnProcess = (unit: Unit, options: RunnerOptions): Effect.Effect<"plu
 				env: {
 					...process.env,
 					...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
+					...pipeEnv(unit),
 				},
 				stdio: ["ignore", "inherit", "pipe"],
 				windowsHide: true,
@@ -377,6 +378,18 @@ const runInOwnProcess = (unit: Unit, options: RunnerOptions): Effect.Effect<"plu
 			child.kill("SIGTERM");
 		});
 	});
+
+/**
+ * Where a Windows plugin reaches the host: the pipe the host serves for its id, plain HTTP, no
+ * port. A host without the pipe (before 0.44) leaves this empty and the child dials the port.
+ */
+const pipeEnv = (unit: Unit): Record<string, string> => {
+	const id = unit.manifest?.id;
+	if (process.platform !== "win32" || !id) return {};
+	const pipe = `\\\\.\\pipe\\punktfunk-plugin-${id}`;
+	if (!fs.existsSync(pipe)) return {};
+	return { PUNKTFUNK_MGMT_URL: "http://punktfunk.host", PUNKTFUNK_MGMT_UNIX: pipe };
+};
 
 /** The runner bundle this process is running, which each sandbox re-execs. */
 const runnerEntry = (): string =>

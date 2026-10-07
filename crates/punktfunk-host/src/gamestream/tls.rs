@@ -277,7 +277,9 @@ fn connection_builder() -> hyper_util::server::conn::auto::Builder<hyper_util::r
     builder
 }
 
-async fn serve_conn<S>(
+/// Drive one accepted stream — a socket, a TLS stream or a pipe — through `app`, with the
+/// peer facts the handlers read as request extensions.
+pub(crate) async fn serve_conn<S>(
     stream: S,
     app: Router,
     fp: PeerCertFingerprint,

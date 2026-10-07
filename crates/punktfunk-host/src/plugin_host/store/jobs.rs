@@ -484,6 +484,8 @@ fn refresh_plugin_tokens(id: &str, plugin_tokens: &crate::mgmt::PluginTokens) ->
     *plugin_tokens
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = refreshed;
+    #[cfg(windows)]
+    crate::mgmt::pipes::changed();
     Ok(())
 }
 
