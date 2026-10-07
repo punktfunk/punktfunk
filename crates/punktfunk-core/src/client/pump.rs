@@ -8,9 +8,8 @@ use super::*;
 use crate::config::Role;
 use crate::packet::FLAG_PROBE;
 use crate::quic::{
-    wall_clock_ns, BitrateChanged, ClipState, ClockEcho, ClockResync, DeliveryReport, Hello,
-    LinkReport, LossReport, ProbeResult, Reconfigure, Reconfigured, RequestKeyframe, ResyncAdmit,
-    ResyncGuard, ResyncStep, SetBitrate,
+    wall_clock_ns, BitrateChanged, ClipState, ClockEcho, ClockResync, Hello, ProbeResult,
+    Reconfigure, Reconfigured, ResyncAdmit, ResyncGuard, ResyncStep, SetBitrate,
 };
 use crate::session::Session;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -54,6 +53,14 @@ impl ClientConn {
         match crate::quic::v2::dgram::wrap(&data) {
             Some(w) => self.conn.send_datagram(w.into()),
             None => Ok(()),
+        }
+    }
+
+    /// One feedback datagram. A send that fails is lost like any datagram; the window after
+    /// it, or the ask's next copy, says it again.
+    pub(super) fn send_feedback(&self, fb: &crate::quic::v2::dgram::Feedback) {
+        if let Err(e) = self.conn.send_datagram(fb.encode().into()) {
+            tracing::debug!(error = %e, "feedback datagram not sent");
         }
     }
 
@@ -129,9 +136,6 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Host serves probe requests during its own bring-up: measure the link
     // before the first frame instead of bursting beside it.
     let serves_ramp = negotiated.host_caps2 & crate::quic::HOST_CAP2_RAMP != 0;
-    // Host divides a path its sessions share, and a delivery count every window
-    // is the only thing it can divide by.
-    let reads_delivery = negotiated.host_caps2 & crate::quic::HOST_CAP2_DELIVERY != 0;
     // Wire budgets: `actual` is wire bytes plus this audio reservation, spent
     // whether video flows or not. PCM is exact; Opus uses the default-tier ladder
     // (a pinned tier skews a few hundred kbps, inside the ¾ utilization gate).
@@ -167,6 +171,14 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // ABR encode-threshold unit ([`BitrateController::encode_thresholds`]). Negotiated
     // refresh, not the request still sitting in `shared.mode` (60-for-120 must score at 60).
     let refresh_hz = negotiated.mode.refresh_hz;
+    // Feedback datagrams leave on this connection from any thread that asks.
+    shared.feedback.lock().unwrap().set_refresh(refresh_hz);
+    {
+        let conn = conn.clone();
+        let _ = shared
+            .feedback_tx
+            .set(Box::new(move |fb| conn.send_feedback(fb)));
+    }
     // Seed before `ready_tx`: `clock_offset_now_ns` must not read a pre-handshake 0.
     shared
         .clock_offset
@@ -256,8 +268,6 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // BitrateChanged queue, drained in order. Not latest-wins: host-cap learning
     // needs two consecutive short acks in the same 750 ms window.
     let bitrate_ack: Arc<Mutex<AckQueue>> = Arc::new(Mutex::new(AckQueue::new()));
-    // Outbound `CtrlRequest::Keyframe` count (the one choke point). Pump drains per report window.
-    let recovery_kf = Arc::new(AtomicU32::new(0));
     // Host `PipelineGap` length. A local rebuild starves a window without the
     // link failing; drain and discard the in-flight report or ABR sees congestion.
     let pipeline_gap = Arc::new(AtomicU32::new(0));
@@ -276,7 +286,6 @@ pub(super) async fn run_pump(args: WorkerArgs) {
             clock_rtt_ns,
             shared: shared.clone(),
             bitrate_ack: bitrate_ack.clone(),
-            recovery_kf: recovery_kf.clone(),
             pipeline_gap: pipeline_gap.clone(),
             clock_gen: clock_gen.clone(),
             clip_event_tx: clip_event_tx.clone(),
@@ -347,7 +356,6 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         encode_lat,
         mode_gen,
         bitrate_ack,
-        recovery_kf,
         pipeline_gap,
         bitrate_kbps,
         resolved_bitrate_kbps,
@@ -356,7 +364,6 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         chroma_format,
         marks_repeats,
         serves_ramp,
-        reads_delivery,
         audio_reserved_kbps,
         stream_cap_kbps,
         refresh_hz,

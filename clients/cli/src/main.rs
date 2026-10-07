@@ -267,8 +267,7 @@ Opens a diagnostic session that streams nothing, runs the speed test, two
 bursty legs at the clean round's rate and a slow round, reads both ends'
 network facts, and names what it found: a faster host port, a receiver that
 drops line-rate bursts, a small receive buffer, a link fault, a queue, Wi-Fi.
-Each finding says which delivery profile helps, if one does. Exit 0 when the
-check ran, whatever it found."
+Exit 0 when the check ran, whatever it found."
             }
             "speed-test" => {
                 "\
@@ -1495,10 +1494,9 @@ from the config directory for a true factory reset."
     }
 
     /// `network-check <host-ref>` — the speed test and the shaped legs over a probe-only
-    /// session, then every finding by id with its figures and the profile it offers.
+    /// session, then every finding by id with its figures.
     fn network_check(args: &[String]) -> u8 {
         use punktfunk_core::client::health::{self, FindingId, LegShape};
-        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, EXT_DELIVERY_PROBE_ONLY};
         let Some(reference) = positional(args, 0) else {
             eprintln!("usage: punktfunk network-check <host-ref>");
             return UNRESOLVED;
@@ -1528,10 +1526,7 @@ from the config directory for a true factory reset."
             name: Some(punktfunk_core::client::device_name()),
             pin: Some(pin),
             identity: Some(identity),
-            delivery: Some(DeliveryAsk {
-                profile: 0,
-                flags: EXT_DELIVERY_FACTS | EXT_DELIVERY_PROBE_ONLY,
-            }),
+            probe_only: true,
             ..punktfunk_core::client::ConnectParams::new(
                 &host.addr,
                 host.port,
@@ -1583,12 +1578,11 @@ from the config directory for a true factory reset."
                         "link_mbps": r.client.link.mbps,
                         "rcvbuf_kb": r.client.rcvbuf_kb,
                     },
-                    "host": r.host.map(|h| serde_json::json!({
-                        "iface_kind": h.iface_kind,
-                        "link_mbps": h.link_mbps,
-                        "sndbuf_kb": h.sndbuf_kb,
-                        "forced_profile": h.forced_profile,
-                    })),
+                    "host": {
+                        "iface_kind": r.host.iface_kind,
+                        "link_mbps": r.host.link_mbps,
+                        "sndbuf_kb": r.host.sndbuf_kb,
+                    },
                     "legs": r.legs.iter().map(|l| serde_json::json!({
                         "shape": leg_name(l.shape),
                         "loss_pct": l.outcome.loss_pct,
@@ -1604,7 +1598,6 @@ from the config directory for a true factory reset."
                         "label": label(f.id),
                         "severity": f.severity as u8,
                         "numbers": f.numbers,
-                        "profile": f.profile,
                     })).collect::<Vec<_>>(),
                 })
             );
@@ -1636,15 +1629,7 @@ from the config directory for a true factory reset."
                 println!("Nothing to fix.");
             }
             for f in &r.findings {
-                println!(
-                    "- {}{}",
-                    label(f.id),
-                    match f.profile {
-                        Some(1) => " — paced delivery (capped) would help",
-                        Some(2) => " — paced delivery (smooth) would help",
-                        _ => "",
-                    }
-                );
+                println!("- {}", label(f.id));
             }
         }
         OK

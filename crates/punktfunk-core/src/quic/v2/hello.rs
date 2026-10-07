@@ -20,11 +20,12 @@ use crate::error::Result;
 use crate::quic::*;
 
 /// `Start` extension tags and the `ClientHello` tags their values ride under, unchanged.
-const START_EXT: [(u16, u64); 4] = [
+const START_EXT: [(u16, u64); 5] = [
     (EXT_TAG_CLIENT, 19),
     (EXT_TAG_ABR, 20),
     (EXT_TAG_PRESET, 21),
-    (EXT_TAG_DELIVERY, 22),
+    (EXT_TAG_LINK_FACTS, 22),
+    (EXT_TAG_PROBE_ONLY, 24),
 ];
 
 /// Wire id of a media suite in `ClientHello` and `ServerHello`.
@@ -646,14 +647,15 @@ mod tests {
                 (EXT_TAG_ABR, vec![EXT_ABR_ACK_REASON]),
                 (EXT_TAG_PRESET, preset.clone()),
                 (
-                    EXT_TAG_DELIVERY,
-                    DeliveryAsk {
-                        profile: 2,
-                        flags: EXT_DELIVERY_FACTS,
+                    EXT_TAG_LINK_FACTS,
+                    LinkFacts {
+                        kind: IFACE_KIND_ETHERNET,
+                        mbps: 2_500,
                     }
                     .encode()
                     .to_vec(),
                 ),
+                (EXT_TAG_PROBE_ONLY, vec![1]),
             ],
             resume: Some([3; 16]),
             suites: vec![MediaSuite::ChaCha20Poly1305, MediaSuite::Aes128Gcm],
@@ -665,7 +667,14 @@ mod tests {
         let entries = back.ext_entries();
         assert_eq!(ext_abr_features(&entries), EXT_ABR_ACK_REASON);
         assert_eq!(SessionPreset::from_ext(&entries).unwrap().name, "Couch");
-        assert_eq!(DeliveryAsk::from_ext(&entries).unwrap().profile, 2);
+        assert_eq!(
+            LinkFacts::from_ext(&entries).unwrap(),
+            LinkFacts {
+                kind: IFACE_KIND_ETHERNET,
+                mbps: 2_500,
+            }
+        );
+        assert!(ext_probe_only(&entries));
 
         let sh = ServerHello {
             welcome: ServerHello::from_body(&Fields::new().bytes(1, &[0; 16]).into_body())

@@ -54,13 +54,16 @@ pub(crate) struct ClientShared {
     pub(crate) abr_windows: Mutex<std::collections::VecDeque<crate::abr::WindowRecord>>,
     /// What the bring-up ramp measured, once it stopped.
     pub(crate) abr_ramp: Mutex<Option<crate::abr::RampRecord>>,
-    /// The host's latest answer about the delivery profile; `None` until one arrives, which
-    /// toward an older host is for ever.
-    pub(crate) delivery: Mutex<Option<crate::quic::DeliveryChanged>>,
-    /// What the host said about its end of the path, when the dial asked.
-    pub(crate) host_facts: Mutex<Option<crate::quic::HostFacts>>,
-    /// What this dial asked about delivery, so a routine knows the session's kind.
-    pub(crate) delivery_ask: Mutex<Option<crate::quic::DeliveryAsk>>,
+    /// What the host said about its end of the path in its latest `StreamConfig`.
+    pub(crate) host_link: Mutex<crate::quic::HostLink>,
+    /// The feedback datagram's numbering, its open ask and the levels it carries.
+    pub(crate) feedback: Mutex<super::recovery::FeedbackOut>,
+    /// Where feedback datagrams leave: the session's connection, from when the pump has one.
+    pub(crate) feedback_tx: std::sync::OnceLock<FeedbackTx>,
+    /// Keyframe asks sent; the pump drains them per report window as the ABR recovery signal.
+    pub(crate) recovery_kf: AtomicU32,
+    /// This dial asked for probes only ([`crate::quic::EXT_DELIVERY_PROBE_ONLY`]).
+    pub(crate) probe_only: AtomicBool,
     /// A clone of the data socket: the same socket as the pump's, so its receive drops and
     /// buffer grant can be read on demand without touching the pump.
     pub(crate) data_sock: Mutex<Option<std::net::UdpSocket>>,
@@ -126,9 +129,11 @@ impl ClientShared {
             decode_lat: Mutex::default(),
             abr_windows: Mutex::default(),
             abr_ramp: Mutex::default(),
-            delivery: Mutex::default(),
-            host_facts: Mutex::default(),
-            delivery_ask: Mutex::default(),
+            host_link: Mutex::default(),
+            feedback: Mutex::default(),
+            feedback_tx: std::sync::OnceLock::new(),
+            recovery_kf: AtomicU32::new(0),
+            probe_only: AtomicBool::new(false),
             data_sock: Mutex::default(),
             local_ip: Mutex::default(),
             v2_session: Mutex::default(),
@@ -153,12 +158,41 @@ impl ClientShared {
 
     /// A diagnostic session: the dial asked for probes only, so no video ever comes.
     pub(crate) fn probe_only(&self) -> bool {
-        self.delivery_ask
+        self.probe_only.load(Ordering::Relaxed)
+    }
+
+    /// Send `fb` on the session's connection; nothing goes before the pump has one.
+    pub(crate) fn send_feedback(&self, fb: &crate::quic::v2::dgram::Feedback) {
+        if let Some(tx) = self.feedback_tx.get() {
+            tx(fb);
+        }
+    }
+
+    /// Ask for a keyframe. Every keyframe ask leaves here, so here it is counted.
+    pub(crate) fn ask_keyframe(&self) {
+        self.recovery_kf.fetch_add(1, Ordering::Relaxed);
+        let fb = self
+            .feedback
             .lock()
             .unwrap()
-            .is_some_and(|a| a.flags & crate::quic::EXT_DELIVERY_PROBE_ONLY != 0)
+            .ask(None, true, Instant::now());
+        self.send_feedback(&fb);
+    }
+
+    /// Ask the host to stop referencing frames `first..=last`.
+    pub(crate) fn ask_rfi(&self, first: u32, last: u32) {
+        self.recent_rfis.lock().unwrap().note(Instant::now());
+        let ask = self
+            .feedback
+            .lock()
+            .unwrap()
+            .ask(Some((first, last)), false, Instant::now());
+        self.send_feedback(&ask);
     }
 }
+
+/// Sends one feedback datagram ([`ClientShared::feedback_tx`]).
+pub(crate) type FeedbackTx = Box<dyn Fn(&crate::quic::v2::dgram::Feedback) + Send + Sync>;
 
 pub(crate) struct WorkerArgs {
     /// The dial's ask. `client_caps` already carries the bits core adds

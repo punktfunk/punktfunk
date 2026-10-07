@@ -880,7 +880,7 @@ pub struct AbrShare {
     automatic: AtomicBool,
     /// Wire rate the host put out for this session over the last window.
     offered_kbps: AtomicU32,
-    /// What the client's last `DeliveryReport` came to. `0` = none yet.
+    /// What the client's last report window came to. `0` = none yet.
     delivered_kbps: AtomicU32,
     /// The session was already streaming when that window opened, so the two
     /// rates above are a reading of the path (`governor::Member::streaming`).

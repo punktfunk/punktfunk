@@ -121,12 +121,23 @@ impl V2Session {
     }
 }
 
-/// The `punktfunk/1` datagram inside a client's `punktfunk/2` one, or `None` for a kind the
-/// session takes nothing from.
-fn incoming(b: &[u8]) -> Option<Vec<u8>> {
+/// One client datagram the session reads.
+pub(crate) enum Incoming {
+    /// Audio, input or a host-event kind: the `punktfunk/1` datagram inside.
+    Plain(Vec<u8>),
+    /// The client's receive state.
+    Feedback(punktfunk_core::quic::v2::dgram::Feedback),
+}
+
+/// What a client's `punktfunk/2` datagram carries, or `None` for a kind the session takes
+/// nothing from.
+fn incoming(b: &[u8]) -> Option<Incoming> {
     use punktfunk_core::quic::v2::dgram::{decode, Dgram};
     match decode(b) {
-        Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) => Some(p.to_vec()),
+        Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) => {
+            Some(Incoming::Plain(p.to_vec()))
+        }
+        Some(Dgram::Feedback(fb)) => Some(Incoming::Feedback(fb)),
         _ => None,
     }
 }
@@ -214,7 +225,7 @@ impl SessionLink {
     }
 
     /// The next datagram from the peer — mic, rich input, pen. `Err` once the peer is gone.
-    pub(crate) async fn read_datagram(&self) -> Result<Vec<u8>, LinkClosed> {
+    pub(crate) async fn read_datagram(&self) -> Result<Incoming, LinkClosed> {
         match self {
             // The payload is the datagram the session logic already reads. A kind it does not
             // take from a client is skipped.

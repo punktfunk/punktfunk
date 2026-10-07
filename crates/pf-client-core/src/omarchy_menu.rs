@@ -297,7 +297,6 @@ mod tests {
             mgmt_port: None,
             clipboard_sync: false,
             preset_id: None,
-            delivery: None,
             pinned_presets: vec![],
             game_presets: Default::default(),
             id: None,

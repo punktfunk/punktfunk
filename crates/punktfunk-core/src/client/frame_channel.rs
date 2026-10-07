@@ -63,12 +63,12 @@ pub const FLUSH_COOLDOWN: Duration = Duration::from_secs(2);
 /// Keyframe re-ask spacing while no video has arrived — the opposite of
 /// [`FLUSH_COOLDOWN`] (nothing vs too much). Public and 2600 ms (not 2000) so
 /// the host recovery-cadence detector can tell the two faults apart; embedders
-/// own this timer and must use this constant. [`crate::quic::LossReport`]
-/// delivery counts settle it for clients new enough to send one.
+/// own this timer and must use this constant. The delivery count in each feedback
+/// window settles it.
 pub const NO_VIDEO_RETRY: Duration = Duration::from_millis(2600);
 
 /// One adaptive-FEC / ABR report window. A window the client discards (probe
-/// tail, host pipeline gap) sends no [`crate::quic::LossReport`], so the host
+/// tail, host pipeline gap) sends no report, so the host
 /// reads a report later than this by a window as a discard, not jitter.
 pub const ADAPT_REPORT_INTERVAL: Duration = crate::abr::WINDOW;
 

@@ -1090,8 +1090,7 @@ object SkiaConsole {
                                     JSONObject()
                                         .put("id", f.id)
                                         .put("severity", f.severity)
-                                        .put("numbers", org.json.JSONArray(f.numbers))
-                                        .put("profile", if (f.profile == 0) JSONObject.NULL else f.profile),
+                                        .put("numbers", org.json.JSONArray(f.numbers)),
                                 )
                             }
                         },

@@ -165,12 +165,11 @@ extension ConsoleModel {
         Task.detached(priority: .userInitiated) { [weak self] in
             let conn: PunktfunkConnection
             do {
-                // A diagnostic session: probes only, the host's facts asked for.
+                // A diagnostic session: probes only.
                 conn = try PunktfunkConnection(
                     host: addr, port: port, width: 1280, height: 720, refreshHz: 60,
                     pinSHA256: pin, identity: identity,
-                    deliveryFlags: PunktfunkConnection.deliveryFacts
-                        | PunktfunkConnection.deliveryProbeOnly)
+                    deliveryFlags: PunktfunkConnection.deliveryProbeOnly)
             } catch {
                 await self?.pushSpeed(key, ["Failed": "Couldn't reach \(addr) — it may be asleep."])
                 return
@@ -190,7 +189,6 @@ extension ConsoleModel {
                 "findings": r.findings.map { f -> [String: Any] in
                     [
                         "id": f.id, "severity": f.severity, "numbers": f.numbers,
-                        "profile": f.profile == 0 ? NSNull() : f.profile,
                     ]
                 },
             ]

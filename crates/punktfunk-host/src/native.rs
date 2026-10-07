@@ -24,9 +24,8 @@ use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::msg as v2msg;
 use punktfunk_core::quic::{
     classify, endpoint, pkf1, AccessUpdate, AckReason, BitrateChanged, ClockEcho, ClockProbe,
-    ColorInfo, GrantClass, Hello, LinkReport, LossReport, PairRequest, PipelineGap, ProbeResult,
-    ProbeShaped, Reconfigure, Reconfigured, RequestKeyframe, RfiRequest, SetBitrate, Welcome,
-    GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
+    ColorInfo, GrantClass, Hello, PairRequest, PipelineGap, ProbeResult, ProbeShaped, Reconfigure,
+    Reconfigured, SetBitrate, Welcome, GRANT_ALL, GRANT_CLIPBOARD, GRANT_LAUNCH,
 };
 use punktfunk_core::Session;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -1085,7 +1084,7 @@ fn adaptive_fec_for(source: Punktfunk1Source, static_override: bool) -> bool {
 }
 
 /// Consecutive report windows an RFI ask landed in — frames parity could not repair. The
-/// client sends no [`LossReport`] for a window it discards (probe tail, host pipeline gap),
+/// client sends no report for a window it discards (probe tail, host pipeline gap),
 /// so a report a window late says the asks before it belong to a window nobody may price.
 #[derive(Default)]
 struct UnrecoveredRun {
@@ -1627,7 +1626,9 @@ pub(crate) async fn run_admitted(
         client_label,
         preset: session_preset,
         abr_features,
-        delivery_ask,
+        client_link,
+        probe_only,
+        host_link,
         compositor,
         gamescope_route,
         prep,
@@ -1654,14 +1655,15 @@ pub(crate) async fn run_admitted(
     .await
     .map_err(|_| anyhow!("handshake timed out after {HANDSHAKE_TIMEOUT:?}"))??;
     let (ctrl_send, ctrl_recv) = (send, recv);
-    // The host's half of the path, for a client that asked: media leaves from the endpoint's
-    // socket.
-    let host_facts = delivery_ask
-        .filter(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_FACTS != 0)
-        .map(|_| crate::telemetry::net_health::host_facts(conn.v2().map(|v2| &*v2.media_socket)));
-    // A diagnostic session: the stream thread serves probes and builds nothing.
-    let probe_only =
-        delivery_ask.is_some_and(|a| a.flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0);
+    if let Some(link) = client_link {
+        tracing::info!(
+            client_kind = link.kind,
+            client_mbps = link.mbps,
+            host_kind = host_link.iface_kind,
+            host_mbps = host_link.link_mbps,
+            "link facts of both ends"
+        );
+    }
     let join_live = joined.is_some();
     let reframe_to = joined.as_ref().map(|(_, view)| {
         (
@@ -1792,27 +1794,33 @@ pub(crate) async fn run_admitted(
     // the injector re-syncs from the next event.
     const INPUT_QUEUE_DEPTH: usize = 1024;
     let (input_tx, input_rx) = std::sync::mpsc::sync_channel::<ClientInput>(INPUT_QUEUE_DEPTH);
+    // The client's feedback datagrams, datagram reader → control task. Unbounded: a client sends
+    // a few per report window.
+    let (feedback_tx, feedback_rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(control::run(control::Task {
         ctrl_send,
         ctrl_recv,
         clock: conn.v2_session().clock.clone(),
         input_tx: input_tx.clone(),
         initial_mode: hello.mode,
-        stream_config: features
-            .has(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG)
-            .then_some(v2msg::StreamConfig {
-                epoch: 0,
-                mode: welcome.mode,
-                codec: welcome.codec,
-                bit_depth: welcome.bit_depth,
-                color: [
-                    welcome.color.primaries,
-                    welcome.color.transfer,
-                    welcome.color.matrix,
-                    welcome.color.full_range,
-                ],
-                chroma_format: welcome.chroma_format,
-            }),
+        stream_config: v2msg::StreamConfig {
+            epoch: 0,
+            mode: welcome.mode,
+            codec: welcome.codec,
+            bit_depth: welcome.bit_depth,
+            color: [
+                welcome.color.primaries,
+                welcome.color.transfer,
+                welcome.color.matrix,
+                welcome.color.full_range,
+            ],
+            chroma_format: welcome.chroma_format,
+            host_iface_kind: host_link.iface_kind,
+            host_link_mbps: host_link.link_mbps,
+            host_sndbuf_kb: host_link.sndbuf_kb,
+            host_forced_shape: host_link.forced_shape,
+        },
+        anchored: features.has(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG),
         codec,
         live_reconfig_ok,
         adaptive_fec,
@@ -1827,8 +1835,7 @@ pub(crate) async fn run_admitted(
             + punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
         audio_kbps: audio_reserved_kbps(&welcome),
         ack_reason: abr_features & punktfunk_core::quic::EXT_ABR_ACK_REASON != 0,
-        delivery_ask,
-        host_facts,
+        feedback_rx,
         probe_only,
         ends: control_ends,
         shared: shared.clone(),
@@ -1930,6 +1937,7 @@ pub(crate) async fn run_admitted(
         counters.clone(),
         planes.mic_tx.clone(),
         input_tx,
+        feedback_tx,
     );
 
     // Handshake complete: CONNECTED. A client rejected earlier never emits either.
@@ -3871,37 +3879,53 @@ mod tests {
         false
     }
 
-    /// `EXT_TAG_DELIVERY` on `Start` is answered with the profile the session streams
-    /// under and, when asked, the host's facts; a later `SetDelivery` is answered too.
+    /// The first `StreamConfig` carries the host's end of the path: the data socket's send
+    /// buffer at least, and the interface's kind and speed where the OS says.
     #[test]
-    fn a_client_that_asks_for_a_profile_is_answered() {
+    fn the_stream_config_carries_the_hosts_link_facts() {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, FORCED_PROFILE_NONE};
-        let (client, host) = synthetic_session(19783, Punktfunk1Source::Synthetic, |p| {
-            punktfunk_core::client::ConnectParams {
-                delivery: Some(DeliveryAsk {
-                    profile: 1,
-                    flags: EXT_DELIVERY_FACTS,
-                }),
-                ..p
-            }
-        });
+        let (client, host) = synthetic_session(19783, Punktfunk1Source::Synthetic, |p| p);
         assert!(
-            wait_for(|| client.delivery().is_some()),
-            "the host answers the tag"
+            wait_for(|| client.host_link().sndbuf_kb > 0),
+            "the data socket has a send buffer"
         );
-        let answer = client.delivery().unwrap();
-        assert_eq!((answer.profile, answer.forced), (1, false));
-        let facts = client
-            .host_facts()
-            .expect("facts follow the answer when asked");
-        assert!(facts.sndbuf_kb > 0, "the data socket has a send buffer");
-        assert_eq!(facts.forced_profile, FORCED_PROFILE_NONE);
-        client.set_delivery(2).unwrap();
+        drop(client);
+        host.join().unwrap().unwrap();
+    }
+
+    /// A keyframe ask leaves as a feedback datagram and the host answers it: the synthetic
+    /// source's IDR is ten ordinary frames.
+    #[test]
+    fn a_keyframe_ask_rides_the_feedback_datagram() {
+        let _registry = crate::session_status::tests::registry_lock();
+        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let source = Punktfunk1Source::SyntheticAbr(SynthAbrShape {
+            content: Content::Steady { fill_pct: 100 },
+            recovery: std::time::Duration::ZERO,
+            answer: KeyframeAnswer::Idr,
+            idr_pct: DEFAULT_IDR_PCT,
+            bringup: std::time::Duration::ZERO,
+            serve_ramp: false,
+        });
+        let (client, host) =
+            synthetic_session(19784, source, |p| punktfunk_core::client::ConnectParams {
+                bitrate_kbps: 10_000,
+                ..p
+            });
+        let next_len = || {
+            client
+                .next_frame(std::time::Duration::from_secs(2))
+                .map(|f| f.data.len())
+        };
+        let mut sizes: Vec<usize> = (0..40).filter_map(|_| next_len().ok()).collect();
+        sizes.sort_unstable();
+        let ordinary = sizes[sizes.len() / 2];
+        client.request_keyframe().unwrap();
+        let answered = (0..120).any(|_| next_len().is_ok_and(|n| n > ordinary * 5));
         assert!(
-            wait_for(|| client.delivery().map(|d| d.profile) == Some(2)),
-            "SetDelivery is answered"
+            answered,
+            "no IDR followed the ask (ordinary frame {ordinary} B)"
         );
         drop(client);
         host.join().unwrap().unwrap();
@@ -3974,16 +3998,7 @@ mod tests {
     fn a_punktfunk_2_session_streams_end_to_end() {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        use punktfunk_core::quic::DeliveryAsk;
-        let (client, host) = synthetic_session(19791, Punktfunk1Source::Synthetic, |p| {
-            punktfunk_core::client::ConnectParams {
-                delivery: Some(DeliveryAsk {
-                    profile: 1,
-                    flags: 0,
-                }),
-                ..p
-            }
-        });
+        let (client, host) = synthetic_session(19791, Punktfunk1Source::Synthetic, |p| p);
         let mut got = 0;
         let mut pts = std::collections::HashSet::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -4001,33 +4016,11 @@ mod tests {
             named += usize::from(pts.contains(&t.pts_ns));
         }
         assert!(named >= 50, "HostTiming names its frames: {named} of 60");
+        client.request_probe(5_000, 200).unwrap();
         assert!(
-            wait_for(|| client.delivery().map(|d| d.profile) == Some(1)),
-            "the host answers the delivery entry the ClientHello carried"
-        );
-        client.set_delivery(2).unwrap();
-        assert!(
-            wait_for(|| client.delivery().map(|d| d.profile) == Some(2)),
+            wait_for(|| client.probe_result().done),
             "a control round trip crosses the translated stream"
         );
-        drop(client);
-        host.join().unwrap().unwrap();
-    }
-
-    /// A client that asks nothing hears nothing and may send nothing: the session streams
-    /// as every shipped client's does.
-    #[test]
-    fn a_client_that_asks_nothing_streams_burst() {
-        let _registry = crate::session_status::tests::registry_lock();
-        let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let (client, host) = synthetic_session(19784, Punktfunk1Source::Synthetic, |p| p);
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        assert!(client.delivery().is_none(), "no tag, no answer");
-        assert!(client.host_facts().is_none());
-        assert!(matches!(
-            client.set_delivery(1),
-            Err(punktfunk_core::PunktfunkError::Unsupported(_))
-        ));
         drop(client);
         host.join().unwrap().unwrap();
     }
@@ -4038,21 +4031,13 @@ mod tests {
     fn a_probe_only_start_serves_probes_without_a_pipeline() {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_PROBE_ONLY};
         let (client, host) = synthetic_session(19787, Punktfunk1Source::Synthetic, |p| {
             punktfunk_core::client::ConnectParams {
-                delivery: Some(DeliveryAsk {
-                    profile: 0,
-                    flags: EXT_DELIVERY_PROBE_ONLY,
-                }),
+                probe_only: true,
                 ..p
             }
         });
         assert!(client.probe_only());
-        assert!(
-            wait_for(|| client.delivery().is_some()),
-            "the tag is answered"
-        );
         // Two long rounds back to back: a streaming session would clamp neither and
         // refuse the second for ten seconds.
         for _ in 0..2 {
@@ -4081,7 +4066,6 @@ mod tests {
         let _registry = crate::session_status::tests::registry_lock();
         let _serial = SESSION_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use punktfunk_core::client::health::{self, LegShape};
-        use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, EXT_DELIVERY_PROBE_ONLY};
         let source = Punktfunk1Source::SyntheticAbr(SynthAbrShape {
             content: Content::Steady { fill_pct: 100 },
             recovery: std::time::Duration::ZERO,
@@ -4092,10 +4076,7 @@ mod tests {
         });
         let (client, host) =
             synthetic_session(19788, source, |p| punktfunk_core::client::ConnectParams {
-                delivery: Some(DeliveryAsk {
-                    profile: 0,
-                    flags: EXT_DELIVERY_FACTS | EXT_DELIVERY_PROBE_ONLY,
-                }),
+                probe_only: true,
                 ..p
             });
         let r = health::health_check(&client, |_| {}).expect("the check reports");
@@ -4110,8 +4091,7 @@ mod tests {
                 "{leg:?}"
             );
         }
-        let facts = r.host.expect("the host's facts arrived");
-        assert!(facts.sndbuf_kb > 0);
+        assert!(r.host.sndbuf_kb > 0, "the host's facts arrived");
         assert!(r.client.rcvbuf_kb > 0, "the client read its own grant");
         drop(client);
         host.join().unwrap().unwrap();
@@ -4755,6 +4735,16 @@ mod tests {
                 raw_session(19783, (cert.as_str(), key.as_str())).await;
             assert_eq!(welcome.grants, GRANT_ALL);
             assert_eq!(welcome.expires_in_secs, 0, "permanent access advertises 0");
+            // The control task opens with the session's first config.
+            let (ty, body) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), recv.read_frame())
+                    .await
+                    .expect("the first StreamConfig owed")
+                    .expect("control stream open");
+            punktfunk_core::quic::v2::msg::decode::<punktfunk_core::quic::v2::msg::StreamConfig>(
+                ty, &body,
+            )
+            .expect("a StreamConfig");
 
             // Controller-only, 62 s out (inside T−5 m, outside T−1 m): one warning, ~2 s later.
             let now = crate::clock::unix_secs();

@@ -47,10 +47,8 @@ struct SpeedTestView: View {
     @State private var token = ProbeToken()
     /// What the last Apply changed, said under the buttons.
     @State private var applied: String?
-    /// The check's report behind `phase == .done`: the findings and the offered profile.
+    /// The check's report behind `phase == .done`: the findings.
     @State private var report: PunktfunkConnection.HealthReport?
-    /// Where an offered profile is remembered, on this host's record.
-    @ObservedObject private var hostStore = HostStore.shared
 
     #if os(tvOS)
     private let chartHeight: CGFloat = 360
@@ -212,21 +210,13 @@ struct SpeedTestView: View {
         }
     }
 
-    /// What the check found, one line each, and the offer when a finding names a profile.
+    /// What the check found, one line each.
     private func findings(_ r: PunktfunkConnection.HealthReport) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(r.findings.enumerated()), id: \.offset) { _, f in
                 Text(Self.findingText(f))
                     .font(.geist(13, relativeTo: .footnote))
                     .foregroundStyle(.secondary)
-            }
-            if let profile = r.offeredProfile {
-                Button("Use paced delivery (\(Self.profileName(profile)))") {
-                    var updated = host
-                    updated.delivery = Int(profile)
-                    hostStore.update(updated)
-                    applied = "Paced delivery is on for \(host.displayName) from the next session."
-                }
             }
         }
     }
@@ -243,7 +233,7 @@ struct SpeedTestView: View {
     }
 
     /// A finding in words — what did not happen, then the next move — the same sentences every
-    /// shell shows. The offered profile is the button, not a sentence here.
+    /// shell shows.
     static func findingText(_ f: PunktfunkConnection.HealthFinding) -> String {
         let a = Int(f.numbers.first ?? 0)
         let b = Int(f.numbers.dropFirst().first ?? 0)
@@ -280,14 +270,6 @@ struct SpeedTestView: View {
                 : "This device is on Wi-Fi."
         default:
             return "Finding \(f.id)."
-        }
-    }
-
-    static func profileName(_ profile: UInt8) -> String {
-        switch profile {
-        case 1: "capped"
-        case 2: "smooth"
-        default: "none"
         }
     }
 
@@ -422,12 +404,11 @@ struct SpeedTestView: View {
             let identity = (try? ClientIdentityStore.shared.load())?.identity
             let conn: PunktfunkConnection
             do {
-                // A diagnostic session: probes only, the host's facts asked for.
+                // A diagnostic session: probes only.
                 conn = try PunktfunkConnection(
                     host: address, port: port, width: w, height: h, refreshHz: fps,
                     pinSHA256: pin, identity: identity,
-                    deliveryFlags: PunktfunkConnection.deliveryFacts
-                        | PunktfunkConnection.deliveryProbeOnly)
+                    deliveryFlags: PunktfunkConnection.deliveryProbeOnly)
             } catch {
                 await MainActor.run {
                     guard !token.cancelled else { return }

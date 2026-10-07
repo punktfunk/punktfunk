@@ -127,7 +127,7 @@ impl ShareWindow {
 /// One session of a group, as the host knows it.
 ///
 /// Every field is something the host has without asking the client: the
-/// encoder target it set, the delivered rate its `DeliveryReport`s come to,
+/// encoder target it set, the delivered rate its report windows come to,
 /// and whether it is repeating a keepalive instead of encoding motion.
 #[derive(Clone, Copy, Debug)]
 pub struct Member {
@@ -289,10 +289,10 @@ pub fn crowded(members: &[Member]) -> bool {
 /// yet to say what reaches it.
 ///
 /// A member that says nothing is not a member delivering nothing: a client
-/// whose host never asked for a count per window ([`crate::quic`]'s
-/// `HOST_CAP2_DELIVERY`) never sends one, and reading its silence as zero would
-/// halve its sibling's share to cover a session nobody can see. So the group is
-/// left alone until every one of them has reported.
+/// that has not closed its first report window has sent no count, and reading
+/// its silence as zero would halve its sibling's share to cover a session
+/// nobody can see. So the group is left alone until every one of them has
+/// reported.
 ///
 /// The caller keeps the last one: a session left alone on the path is told it,
 /// because the wall it measured beside a sibling was that sibling's residual
@@ -342,7 +342,7 @@ mod tests {
     /// Every delivery count a real [`Driver`] asks the host for over `windows`
     /// report windows, and the millisecond of the ask. Driven as the pump drives
     /// it: session counters in, actions out, a packet a millisecond arriving.
-    fn delivery_reports(windows: u64, reads_delivery: bool) -> Vec<(u64, u64)> {
+    fn delivery_reports(windows: u64) -> Vec<(u64, u64)> {
         let base = Instant::now();
         let mut d = Driver::new(
             DriverConfig {
@@ -359,7 +359,6 @@ mod tests {
                 probe_target_kbps: None,
                 ramp: false,
                 probe_only: false,
-                reads_delivery,
                 pin_kbps: None,
             },
             base,
@@ -375,30 +374,28 @@ mod tests {
                 d.on_au(false);
             }
             for a in d.tick(base + Duration::from_millis(ms)).actions {
-                if let Action::Delivery(packets) = a {
-                    out.push((ms, packets));
+                if let Action::Report {
+                    packets_received, ..
+                } = a
+                {
+                    out.push((ms, packets_received));
                 }
             }
         }
         out
     }
 
-    /// The governor's own input, from the client that has to produce it: a
-    /// session on a governing host closes the host's share window
-    /// ([`ShareWindow`]) every report window, so the path is re-read and the
-    /// group re-divided every window. Toward every other host the count goes out
-    /// once and the group can never be divided again.
+    /// The governor's own input, from the client that has to produce it: every
+    /// report window closes the host's share window ([`ShareWindow`]), so the
+    /// path is re-read and the group re-divided every window.
     #[test]
     fn a_governing_host_is_told_what_arrived_every_window() {
-        let told = delivery_reports(12, true);
+        let told = delivery_reports(12);
         assert_eq!(told.len(), 12, "a window each: {told:?}");
         assert!(
             told.windows(2).all(|p| p[1].1 > p[0].1),
             "every count is this window's own: {told:?}"
         );
-        let quiet = delivery_reports(12, false);
-        assert_eq!(quiet.len(), 1, "twelve windows, one report: {quiet:?}");
-        assert!(quiet[0].0 < 1_600, "and it is the first window's");
     }
 
     /// A group with no history behind it, which is how most cases below open.

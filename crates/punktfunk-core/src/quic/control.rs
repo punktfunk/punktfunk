@@ -26,23 +26,6 @@ pub struct Reconfigured {
     pub mode: Mode,
 }
 
-/// `client → host`: force the next frame to an IDR with
-/// in-band parameter sets. Infinite GOP is one opening IDR then P-frames, so
-/// a wedged decoder stays frozen until the next loss-triggered keyframe.
-/// Fire-and-forget — the recovered IDR is the ack.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RequestKeyframe;
-
-/// `client → host`: invalidate `[first_frame, last_frame]` instead of a full
-/// IDR (a 20–40× spike). A host that can RFI re-references a picture before
-/// `first_frame` and tags the P-frame [`crate::packet::USER_FLAG_RECOVERY_ANCHOR`].
-/// Else it forces an IDR, as for [`RequestKeyframe`]. Fire-and-forget.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RfiRequest {
-    pub first_frame: u32,
-    pub last_frame: u32,
-}
-
 /// `host → client`: sealed shard payload changes mid-session
 /// (`design/shard-payload-reneg.md`). Only to a client whose
 /// [`Hello::max_shard_payload`] advertised per-frame geometry, never above that
@@ -63,76 +46,41 @@ pub struct ShardPayloadAck {
     pub shard_payload: u16,
 }
 
-/// `client → host`, periodic: observed data-plane loss so the host can size
-/// FEC to the link. `loss_ppm` is parts-per-million of shards missing-but-
-/// recovered (plus a bump when frames went unrecoverable). Fire-and-forget.
-/// An older host ignores the unknown type and keeps static FEC.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LossReport {
-    pub loss_ppm: u32,
-}
-
-/// `client → host`, right after each [`LossReport`]: cumulative data-plane
-/// packets received this session.
-///
-/// `loss_ppm` is a ratio over arrived packets, so a silent client and a
-/// flawless client both report 0. `packets_received == 0` while the host has
-/// sent frames is the unambiguous "video is not reaching me" (the control
-/// plane carrying this is healthy).
-///
-/// Cumulative `u64` so one message is self-contained with no saturation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeliveryReport {
-    pub packets_received: u64,
-}
-
-/// `client → host`, once, after the bring-up ramp: the rate the ramp proved
-/// the link carries, kbps. The host paces a pinned stream against it instead
-/// of a multiple of the stream rate. Fire-and-forget; an older host ignores
-/// the unknown type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LinkReport {
-    pub proven_kbps: u32,
-}
-
-/// `client → host` mid-session: stream under this delivery profile (`0` burst, `1` capped,
-/// `2` smooth) from the next frame. Answered by [`DeliveryChanged`]. Sent only after the
-/// host answered the `Start` tag ([`EXT_TAG_DELIVERY`](super::EXT_TAG_DELIVERY)): an older
-/// host logs every type it does not know.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SetDelivery {
-    pub profile: u8,
-}
-
-/// `host → client`: the profile this session now streams under — once after a `Start` that
-/// carried the tag, and after every [`SetDelivery`]. `forced` = the host pins one for every
-/// session (`PUNKTFUNK_DELIVERY`) and the ask changed nothing. Its arrival is what tells the
-/// client the host reads delivery messages at all.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeliveryChanged {
-    pub profile: u8,
-    pub forced: bool,
-}
-
-/// `host → client`, once after `Start`, toward a tag that set
-/// [`EXT_DELIVERY_FACTS`](super::EXT_DELIVERY_FACTS): what the host knows about its own end
-/// of the path. `link_mbps` `0` and `iface_kind` `0` mean the OS did not say, never "none".
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HostFacts {
+/// What the host knows about its end of the path, from its `StreamConfig`. `0` means the OS
+/// did not say, never "none".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostLink {
     /// `0` unknown, `1` Ethernet, `2` Wi-Fi, `3` other.
     pub iface_kind: u8,
     pub link_mbps: u32,
     /// The data socket's granted send buffer.
     pub sndbuf_kb: u32,
-    /// `PUNKTFUNK_DELIVERY` as a profile byte, `0xFF` when unset.
-    pub forced_profile: u8,
+    /// The shape the host's operator forced; `0` = none.
+    pub forced_shape: u8,
+}
+
+impl HostLink {
+    pub fn of(cfg: &crate::quic::v2::msg::StreamConfig) -> HostLink {
+        HostLink {
+            iface_kind: cfg.host_iface_kind,
+            link_mbps: cfg.host_link_mbps,
+            sndbuf_kb: cfg.host_sndbuf_kb,
+            forced_shape: cfg.host_forced_shape,
+        }
+    }
+
+    /// The host's port as [`LinkFacts`](crate::quic::LinkFacts).
+    pub fn facts(&self) -> crate::quic::LinkFacts {
+        crate::quic::LinkFacts {
+            kind: self.iface_kind,
+            mbps: self.link_mbps,
+        }
+    }
 }
 
 pub use crate::transport::{
     IFACE_KIND_ETHERNET, IFACE_KIND_OTHER, IFACE_KIND_UNKNOWN, IFACE_KIND_WIFI,
 };
-/// [`HostFacts::forced_profile`] when nothing is pinned.
-pub const FORCED_PROFILE_NONE: u8 = 0xFF;
 
 /// `client → host`: retarget encoder bitrate without
 /// reconnecting. Host clamps like [`Hello::bitrate_kbps`] (`0` → default),
@@ -254,9 +202,8 @@ pub struct ProbeResult {
 /// `client → host`: a [`ProbeRequest`] with a shape. `burst_hz` `0` is the smooth train a
 /// plain request sends; otherwise every `1/burst_hz` the host releases `rate/burst_hz`
 /// bytes in `group_bytes` groups on a `group_rate_kbps` clock (`0` = line rate) — what
-/// video does, or what a capped profile would. Same clamps and spacing as the plain
-/// request, answered by the same [`ProbeResult`]. Sent only toward a host that answered
-/// the delivery tag.
+/// video does, or what a paced clock would. Same clamps and spacing as the plain
+/// request, answered by the same [`ProbeResult`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProbeShaped {
     pub target_kbps: u32,
@@ -298,7 +245,8 @@ pub struct ClockEcho {
     pub t3_ns: u64,
 }
 
-/// [`LossReport`] `loss_ppm` from one window's session-stat deltas: the
+/// A window's `loss_ppm` ([`v2::dgram::Feedback`](super::v2::dgram::Feedback)) from its
+/// session-stat deltas: the
 /// shard loss parity repaired, and nothing else.
 ///
 /// Loss ≈ (recovered − late) / (received + recovered − late): late shards

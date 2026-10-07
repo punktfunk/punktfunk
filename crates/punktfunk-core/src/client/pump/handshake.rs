@@ -165,13 +165,17 @@ async fn dial(
         // answer two ways.
         let abr = [crate::quic::EXT_ABR_ACK_REASON];
         let preset = p.preset.as_ref().map(|s| s.encode()).unwrap_or_default();
-        // The delivery ask rides only when the dial made one; a host that reads it answers.
-        let delivery: Vec<u8> = p.delivery.map(|d| d.encode().to_vec()).unwrap_or_default();
+        // Every dial says what its OS knows about this end of the path.
+        let link = conn
+            .local_ip()
+            .map(crate::transport::ifinfo::link_facts)
+            .unwrap_or_default();
+        let link_facts = link.encode();
         use crate::quic::v2::features::FeatureSet;
         use crate::quic::v2::hello::{ClientHello, Ready, ServerHello};
         use crate::quic::v2::{io as v2io, msg::V2Message, registry};
         v2io::write_stream_type(&mut send, registry::STREAM_CONTROL).await?;
-        let entries = crate::quic::start_ext(&label, &abr, &preset, &delivery);
+        let entries = crate::quic::start_ext(&label, &abr, &preset, &link_facts, p.probe_only);
         let wants_chacha = p.video_caps & crate::quic::VIDEO_CAP_CHACHA20 != 0;
         // Resumable reader: `select!` and the clock-sync timeout can both interrupt a
         // read; a lost partial frame would misalign the stream for the session.
@@ -285,6 +289,7 @@ async fn dial(
             *args.shared.data_sock.lock().unwrap() = Some(sock);
         }
         *args.shared.local_ip.lock().unwrap() = conn.local_ip();
+        tracing::info!(kind = link.kind, mbps = link.mbps, "this end's link facts");
         *args.shared.v2_session.lock().unwrap() = Some(server.session_id);
         args.shared.anchor.lock().unwrap().on =
             server.features.has(registry::FEATURE_STREAM_CONFIG);

@@ -20,10 +20,6 @@ pub(super) struct ControlTask {
     /// Latest host `BitrateChanged` ack with its reason; the pump ABR drains it on the
     /// report tick.
     pub(super) bitrate_ack: Arc<Mutex<AckQueue>>,
-    /// Outbound KEYFRAME asks. Counted here: every emitter (embedder,
-    /// `note_frame_index`, pump) funnels through this choke point. The pump
-    /// drains the count per report window as the ABR recovery signal.
-    pub(super) recovery_kf: Arc<AtomicU32>,
     /// Last host pipeline gap in ms ([`crate::quic::PipelineGap`]); `0` = none.
     /// Pump drains it and discards the in-flight report window — a host-local
     /// rebuild is not congestion. Atomic because the pump only ever swaps it.
@@ -52,7 +48,6 @@ impl ControlTask {
             clock_rtt_ns,
             shared,
             bitrate_ack,
-            recovery_kf,
             pipeline_gap,
             clock_gen,
             clip_event_tx,
@@ -65,15 +60,12 @@ impl ControlTask {
             mode: mode_slot,
             probe,
             live_bitrate_kbps: live_bitrate,
-            recent_rfis,
             clock_offset,
             access_grants,
             access_deadline_unix,
             audio_mute,
             pad_slots,
             launch_outcome,
-            delivery,
-            host_facts,
             anchor,
             ..
         } = &*shared;
@@ -102,20 +94,6 @@ impl ControlTask {
                         CtrlRequest::Mode(m) => Reconfigure { mode: m }.encode_v2(),
                         CtrlRequest::Probe(p) => crate::quic::ProbeShaped::from(p).encode_v2(),
                         CtrlRequest::ProbeShaped(p) => p.encode_v2(),
-                        CtrlRequest::SetDelivery(profile) => {
-                            crate::quic::SetDelivery { profile }.encode_v2()
-                        }
-                        CtrlRequest::Keyframe => {
-                            recovery_kf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            RequestKeyframe.encode_v2()
-                        }
-                        CtrlRequest::Rfi(r) => {
-                            recent_rfis.lock().unwrap().note(std::time::Instant::now());
-                            r.encode_v2()
-                        }
-                        CtrlRequest::Loss(r) => r.encode_v2(),
-                        CtrlRequest::Delivery(r) => r.encode_v2(),
-                        CtrlRequest::LinkRate(k) => LinkReport { proven_kbps: k }.encode_v2(),
                         CtrlRequest::SetBitrate(k) => SetBitrate { bitrate_kbps: k }.encode_v2(),
                         CtrlRequest::ClockResync => {
                             if clock_rtt_ns.is_none() {
@@ -164,6 +142,16 @@ impl ControlTask {
                             tracing::warn!(active = ?ack.mode, "host rejected mode switch");
                         }
                     } else if let Ok(cfg) = decode::<v2msg::StreamConfig>(ty, &body) {
+                        let host = crate::quic::HostLink::of(&cfg);
+                        if std::mem::replace(&mut *shared.host_link.lock().unwrap(), host) != host {
+                            tracing::info!(
+                                kind = host.iface_kind,
+                                mbps = host.link_mbps,
+                                sndbuf_kb = host.sndbuf_kb,
+                                forced_shape = host.forced_shape,
+                                "host's link facts"
+                            );
+                        }
                         let delivered = anchor.lock().unwrap().config(cfg);
                         if let Some(mode) = delivered {
                             super::anchor::apply(mode_slot, &mode_gen, mode);
@@ -206,15 +194,6 @@ impl ControlTask {
                             client_interval_ms = p.client_interval_ms,
                             "speed-test probe result"
                         );
-                    } else if let Ok(ack) = decode::<crate::quic::DeliveryChanged>(ty, &body) {
-                        *delivery.lock().unwrap() = Some(ack);
-                        tracing::info!(
-                            profile = ack.profile,
-                            forced = ack.forced,
-                            "host set the delivery profile"
-                        );
-                    } else if let Ok(facts) = decode::<crate::quic::HostFacts>(ty, &body) {
-                        *host_facts.lock().unwrap() = Some(facts);
                     } else if let Ok(ack) = decode::<BitrateChanged>(ty, &body) {
                         // Host clamp is authoritative. Park it for the pump
                         // controller; any ack also means this host renegotiates.

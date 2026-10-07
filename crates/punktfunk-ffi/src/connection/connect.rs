@@ -776,11 +776,10 @@ pub struct PunktfunkConnectOpts {
     pub preset_id: *const std::os::raw::c_char,
     /// The preset's display name, or null. Read only beside a non-null `preset_id`.
     pub preset_name: *const std::os::raw::c_char,
-    /// The delivery ask (`EXT_TAG_DELIVERY`): the profile on the host's record (`1` capped,
-    /// `2` smooth) and the flags a network check sets (`1` facts, `2` probes only). Both `0`
-    /// asks nothing, which is what a shorter prefix defaults to.
-    pub delivery_profile: u8,
-    /// See `delivery_profile`.
+    /// Always `0`.
+    pub reserved3: u8,
+    /// `2` dials a network check's probes-only session (`EXT_TAG_PROBE_ONLY`). `0` streams,
+    /// which is what a shorter prefix defaults to.
     pub delivery_flags: u8,
     /// Always `0`. Fills what would otherwise be padding, as `reserved0` does.
     pub reserved2: [u8; 6],
@@ -798,14 +797,14 @@ const _: () = {
     assert!(
         size_of::<PunktfunkConnectOpts>() == 136
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
-            && offset_of!(PunktfunkConnectOpts, delivery_profile) == 120
+            && offset_of!(PunktfunkConnectOpts, delivery_flags) == 121
             && offset_of!(PunktfunkConnectOpts, profile_id) == 128
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
         size_of::<PunktfunkConnectOpts>() == 96
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
-            && offset_of!(PunktfunkConnectOpts, delivery_profile) == 84
+            && offset_of!(PunktfunkConnectOpts, delivery_flags) == 85
             && offset_of!(PunktfunkConnectOpts, profile_id) == 92
     );
 };
@@ -842,7 +841,7 @@ impl Default for PunktfunkConnectOpts {
             reserved0: [0; 3],
             preset_id: ptr::null(),
             preset_name: ptr::null(),
-            delivery_profile: 0,
+            reserved3: 0,
             delivery_flags: 0,
             reserved2: [0; 6],
             profile_id: ptr::null(),
@@ -1090,12 +1089,7 @@ unsafe fn connect_params(
         identity,
         preset,
         profile,
-        delivery: (o.delivery_profile != 0 || o.delivery_flags != 0).then_some(
-            punktfunk_core::quic::DeliveryAsk {
-                profile: o.delivery_profile,
-                flags: o.delivery_flags,
-            },
-        ),
+        probe_only: o.delivery_flags & punktfunk_core::quic::EXT_DELIVERY_PROBE_ONLY != 0,
         // The rest stays default: Legacy coupling (embedders decode what the host answers),
         // no display volume, whole AUs (`PunktfunkFrame` cannot tell a part), no abort.
         ..punktfunk_core::client::ConnectParams::new(

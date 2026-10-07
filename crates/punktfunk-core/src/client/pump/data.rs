@@ -28,8 +28,6 @@ pub(super) struct DataPump {
     /// corrective short retarget cannot be clobbered by a full resolve ack
     /// in the same window (host-cap learning needs two consecutive shorts).
     pub(super) bitrate_ack: Arc<Mutex<AckQueue>>,
-    /// Decode-recovery keyframe asks, counted at the control-task send choke.
-    pub(super) recovery_kf: Arc<AtomicU32>,
     /// Host pipeline-rebuild gap in ms ([`crate::quic::PipelineGap`]); `0` =
     /// none. Drained each iteration — see [`take_pipeline_gap`].
     pub(super) pipeline_gap: Arc<AtomicU32>,
@@ -49,9 +47,6 @@ pub(super) struct DataPump {
     /// ([`crate::quic::HOST_CAP2_RAMP`]): the link is measured before the
     /// first frame instead of burst at beside it.
     pub(super) serves_ramp: bool,
-    /// Host reads a delivery count every window
-    /// ([`crate::quic::HOST_CAP2_DELIVERY`]) to divide a shared path.
-    pub(super) reads_delivery: bool,
     /// Audio-plane wire reservation, spent whether video flows or not.
     pub(super) audio_reserved_kbps: u32,
     /// Mode+codec ceiling ([`crate::abr::stream_ceiling_kbps`]) for the
@@ -203,6 +198,10 @@ impl DataPump {
             }
             let polled = self.session.poll_frame();
             self.ask_for_short_tails();
+            let resend = self.shared.feedback.lock().unwrap().resend(Instant::now());
+            if let Some(fb) = resend {
+                self.shared.send_feedback(&fb);
+            }
             match polled {
                 Ok(frame) => self.on_frame(&mut lp, frame, clock_offset_ns, probe_active),
                 Err(PunktfunkError::NoFrame) => std::thread::sleep(Duration::from_micros(300)),
@@ -247,7 +246,6 @@ impl DataPump {
                 probe_target_kbps: env_u32("PUNKTFUNK_ABR_PROBE_KBPS"),
                 ramp: self.serves_ramp,
                 probe_only: self.shared.probe_only(),
-                reads_delivery: self.reads_delivery,
                 pin_kbps,
             },
             session_start,
@@ -305,6 +303,11 @@ impl DataPump {
             lp.seen_mode_gen = mg;
             let m = *self.shared.mode.lock().unwrap();
             lp.abr.on_mode_switch(m.width, m.height, m.refresh_hz);
+            self.shared
+                .feedback
+                .lock()
+                .unwrap()
+                .set_refresh(m.refresh_hz);
         }
         for (acked, why) in self.bitrate_ack.lock().unwrap().drain(..) {
             lp.abr.on_ack(acked, why);
@@ -316,7 +319,7 @@ impl DataPump {
         let enc = std::mem::take(&mut *self.encode_lat.lock().unwrap());
         lp.abr.on_encode_latency(enc.sum_us, enc.count);
         lp.abr
-            .on_keyframe_asks(self.recovery_kf.swap(0, Ordering::Relaxed));
+            .on_keyframe_asks(self.shared.recovery_kf.swap(0, Ordering::Relaxed));
         probe_active
     }
 
@@ -374,18 +377,23 @@ impl DataPump {
         let mut request_kbps = None;
         for action in actions {
             match action {
-                Action::Loss(loss_ppm) => {
-                    let _ = self
-                        .ctrl_tx
-                        .try_send(CtrlRequest::Loss(LossReport { loss_ppm }));
-                }
-                Action::Delivery(packets_received) => {
-                    let _ = self
-                        .ctrl_tx
-                        .try_send(CtrlRequest::Delivery(DeliveryReport { packets_received }));
+                Action::Report {
+                    loss_ppm,
+                    packets_received,
+                } => {
+                    let report = crate::quic::v2::dgram::Feedback {
+                        loss_ppm,
+                        packets_received,
+                        ..Default::default()
+                    };
+                    let fb = self.shared.feedback.lock().unwrap().window(report);
+                    self.shared.send_feedback(&fb);
                 }
                 Action::LinkRate(kbps) => {
-                    let _ = self.ctrl_tx.try_send(CtrlRequest::LinkRate(kbps));
+                    let fb = self.shared.feedback.lock().unwrap().link(kbps);
+                    if let Some(fb) = fb {
+                        self.shared.send_feedback(&fb);
+                    }
                 }
                 Action::SetBitrate(kbps) => {
                     request_kbps = Some(kbps);
@@ -399,9 +407,7 @@ impl DataPump {
                         abr.on_request_dropped(kbps);
                     }
                 }
-                Action::Keyframe => {
-                    let _ = self.ctrl_tx.try_send(CtrlRequest::Keyframe);
-                }
+                Action::Keyframe => self.shared.ask_keyframe(),
                 Action::Probe {
                     target_kbps,
                     duration_ms,
@@ -592,7 +598,7 @@ impl DataPump {
                     .note(idx, missing, recovery);
             }
             let ask = self.shared.rfi.lock().unwrap().tail_short(idx, now);
-            super::super::send_recovery(&self.shared, &self.ctrl_tx, ask);
+            super::super::send_recovery(&self.shared, ask);
         }
     }
 
@@ -608,6 +614,11 @@ impl DataPump {
         if frame.flags & FLAG_PROBE as u32 != 0 {
             return; // speed-test filler, not video — measured via the counters above
         }
+        self.shared
+            .feedback
+            .lock()
+            .unwrap()
+            .on_frame(frame.frame_index, frame.flags);
         if lp.last_epoch != Some(frame.epoch) {
             lp.last_epoch = Some(frame.epoch);
             let delivered = self.shared.anchor.lock().unwrap().frame(frame.epoch);
@@ -657,7 +668,7 @@ impl DataPump {
                 "decoder attached after the stream started — asking for a keyframe"
             );
             lp.unconsumed_aus = 0;
-            let _ = self.ctrl_tx.try_send(CtrlRequest::Keyframe);
+            self.shared.ask_keyframe();
         }
         if probe_active {
             // Probe measures a saturated queue; a primed run would fire the
@@ -735,7 +746,7 @@ impl DataPump {
     fn shed_backlog(&mut self) -> (u64, usize) {
         let flushed = self.session.flush_backlog().unwrap_or(0);
         let dropped = self.shared.frames.clear();
-        let _ = self.ctrl_tx.try_send(CtrlRequest::Keyframe);
+        self.shared.ask_keyframe();
         (flushed, dropped)
     }
 }
@@ -811,13 +822,24 @@ mod tests {
         (host_tp, session)
     }
 
-    /// A pump on an idle loopback with an explicit rate, so no controller or probe runs.
+    type FeedbackRx = std::sync::mpsc::Receiver<crate::quic::v2::dgram::Feedback>;
+
+    /// A pump on an idle loopback with an explicit rate, so no controller or probe runs. Its
+    /// feedback datagrams land on the returned receiver.
     fn test_pump(
         session: Session,
         shared: Arc<ClientShared>,
         codec: u8,
-    ) -> (DataPump, tokio::sync::mpsc::Receiver<CtrlRequest>) {
+    ) -> (
+        DataPump,
+        tokio::sync::mpsc::Receiver<CtrlRequest>,
+        FeedbackRx,
+    ) {
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::channel::<CtrlRequest>(8);
+        let (fb_tx, fb_rx) = std::sync::mpsc::channel();
+        let _ = shared.feedback_tx.set(Box::new(move |fb| {
+            let _ = fb_tx.send(*fb);
+        }));
         let pump = DataPump {
             session,
             shared,
@@ -826,7 +848,6 @@ mod tests {
             encode_lat: Arc::new(Mutex::new(Default::default())),
             mode_gen: Arc::new(AtomicU32::new(0)),
             bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
-            recovery_kf: Arc::new(AtomicU32::new(0)),
             pipeline_gap: Arc::new(AtomicU32::new(0)),
             bitrate_kbps: 20_000,
             resolved_bitrate_kbps: 20_000,
@@ -835,23 +856,19 @@ mod tests {
             chroma_format: 0,
             marks_repeats: false,
             serves_ramp: false,
-            reads_delivery: false,
             audio_reserved_kbps: 256,
             stream_cap_kbps: 100_000,
             refresh_hz: 60,
         };
-        (pump, ctrl_rx)
+        (pump, ctrl_rx, fb_rx)
     }
 
     /// The first RFI the pump sends within `wait`, skipping its reports.
-    fn first_rfi(
-        rx: &mut tokio::sync::mpsc::Receiver<CtrlRequest>,
-        wait: Duration,
-    ) -> Option<(u32, u32)> {
+    fn first_rfi(rx: &FeedbackRx, wait: Duration) -> Option<(u32, u32)> {
         let deadline = Instant::now() + wait;
         loop {
             match rx.try_recv() {
-                Ok(CtrlRequest::Rfi(r)) => return Some((r.first_frame, r.last_frame)),
+                Ok(fb) if fb.ask != 0 && fb.invalidate.is_some() => return fb.invalidate,
                 Ok(_) => {}
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
                 Err(_) => return None,
@@ -878,7 +895,7 @@ mod tests {
             let (host_tp, session) = idle_client_session(origin);
             let shared = Arc::new(ClientShared::new(mode));
             let _ = shared.frames.pop(Duration::ZERO); // a decoder is attached
-            let (pump, mut ctrl_rx) = test_pump(session, shared.clone(), codec);
+            let (pump, _ctrl_rx, fb_rx) = test_pump(session, shared.clone(), codec);
             let pump_thread = std::thread::spawn(move || pump.run());
 
             // The host's packets, sealed by a host session and sent here by hand.
@@ -901,7 +918,7 @@ mod tests {
                 host_tp.send(p).unwrap();
             }
             assert_eq!(
-                first_rfi(&mut ctrl_rx, Duration::from_millis(500)),
+                first_rfi(&fb_rx, Duration::from_millis(500)),
                 expect,
                 "codec {codec}"
             );
@@ -915,7 +932,7 @@ mod tests {
     /// control stream, the control task parks it, the pump discards the
     /// window it landed in.
     ///
-    /// Assertions watch the window's LossReport — the discarded window's
+    /// Assertions watch the window's report — the discarded window's
     /// only externally visible product on an idle session. A near-zero
     /// denominator would have the host raise FEC against a link that
     /// never dropped. The next window must report: discard is one wide.
@@ -936,7 +953,7 @@ mod tests {
         let accept_ctrl = tokio::spawn(async move { client_conn.accept_bi().await.unwrap() });
         let (mut host_send, _host_recv) = host_conn.open_bi().await.unwrap();
         use crate::quic::v2::io as v2io;
-        v2io::send(&mut host_send, &crate::quic::RequestKeyframe)
+        v2io::send(&mut host_send, &crate::quic::SetBitrate { bitrate_kbps: 1 })
             .await
             .expect("open the stream with a message the client ignores");
         let (ctrl_send, ctrl_recv) = accept_ctrl.await.unwrap();
@@ -961,7 +978,6 @@ mod tests {
                 clock_rtt_ns: None, // no connect handshake ⇒ no re-sync batches to interleave
                 shared: Arc::new(ClientShared::new(mode)),
                 bitrate_ack: Arc::new(Mutex::new(AckQueue::new())),
-                recovery_kf: Arc::new(AtomicU32::new(0)),
                 pipeline_gap: pipeline_gap.clone(),
                 clock_gen: Arc::new(AtomicU32::new(0)),
                 clip_event_tx,
@@ -977,7 +993,7 @@ mod tests {
         // startup probe out. The probe would discard a window of its own.
         let pump_shared = Arc::new(ClientShared::new(mode));
         let (_host_tp, session) = idle_client_session(crate::quic::wall_clock_ns());
-        let (mut pump, mut pump_ctrl_rx) =
+        let (mut pump, _pump_ctrl_rx, fb_rx) =
             test_pump(session, pump_shared.clone(), crate::quic::CODEC_HEVC);
         pump.pipeline_gap = pipeline_gap.clone();
         let started = Instant::now();
@@ -995,7 +1011,7 @@ mod tests {
         )
         .await;
         assert!(
-            pump_ctrl_rx.try_recv().is_err(),
+            fb_rx.try_iter().all(|fb| fb.window == 0),
             "the window the host's rebuild landed in must be discarded, not reported"
         );
         assert_eq!(
@@ -1006,13 +1022,21 @@ mod tests {
 
         // Next window must report. A wedged pump would fail here rather
         // than pass the discard assert above.
-        let reported = tokio::time::timeout(Duration::from_millis(1_500), pump_ctrl_rx.recv())
-            .await
-            .expect("the window after the gap reports on schedule");
+        let reported = tokio::task::spawn_blocking(move || {
+            let deadline = Instant::now() + Duration::from_millis(1_500);
+            loop {
+                match fb_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(fb) if fb.window != 0 => return Some(fb),
+                    Ok(_) => {}
+                    Err(_) => return None,
+                }
+            }
+        })
+        .await
+        .unwrap();
         assert!(
-            matches!(reported, Some(CtrlRequest::Loss(_))),
-            "the window after the gap must produce a loss report — the first of the two requests \
-             an idle session makes (the delivery count follows it)"
+            reported.is_some(),
+            "the window after the gap must produce its report on schedule"
         );
         assert!(
             started.elapsed() >= Duration::from_millis(1_400),

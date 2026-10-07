@@ -3,7 +3,7 @@
 //! [`Driver`] is the whole of it: events in — a completed AU, a stats
 //! snapshot, a latency sample, an ack — and actions out of [`Driver::tick`].
 //! An embedder owns no policy, so two clients cannot drift apart. The pump
-//! runs it on the 750 ms cadence it shares with [`crate::quic::LossReport`];
+//! runs it on the 750 ms cadence of the client's feedback window;
 //! FEC absorbs short random loss, and the controller asks the host for a
 //! different encoder rate via [`crate::quic::SetBitrate`] when congestion
 //! persists.
@@ -67,10 +67,6 @@ pub struct DriverConfig {
     pub audio_reserved_kbps: u32,
     /// Host marks idle-keepalive repeats (`HOST_CAP2_REPEAT_MARK`).
     pub marks_repeats: bool,
-    /// Host reads a [`crate::quic::DeliveryReport`] every window
-    /// ([`HOST_CAP2_DELIVERY`](crate::quic::HOST_CAP2_DELIVERY)): it divides a
-    /// path two of its sessions share, and that is the only figure it has.
-    pub reads_delivery: bool,
     /// Run the startup capacity probe (`PUNKTFUNK_ABR_PROBE`).
     pub probe: bool,
     /// `PUNKTFUNK_ABR_PROBE_KBPS`. `None` = twice the stream-shape cap; with
@@ -95,11 +91,13 @@ pub struct DriverConfig {
 /// its own business.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Shard loss this window, ppm: the host's adaptive-FEC input.
-    Loss(u32),
-    /// Session total packets received. The host escalates on a dead plane, and
-    /// divides a path two of its sessions share by these.
-    Delivery(u64),
+    /// One window's report: shard loss in ppm, the host's adaptive-FEC input, and the
+    /// session's packets received, which tell "no loss" from "nothing arrives" and divide a
+    /// path two of the host's sessions share.
+    Report {
+        loss_ppm: u32,
+        packets_received: u64,
+    },
     /// What the bring-up ramp proved the link carries, kbps. Once. The host
     /// paces a pinned stream against it.
     LinkRate(u32),
@@ -229,12 +227,7 @@ impl Driver {
         }
         Driver {
             abr,
-            window: window::WindowAccumulator::new(
-                cfg.audio_reserved_kbps,
-                cfg.marks_repeats,
-                cfg.reads_delivery,
-                now,
-            ),
+            window: window::WindowAccumulator::new(cfg.audio_reserved_kbps, cfg.marks_repeats, now),
             // A pinned or explicit rate has nothing to measure for — except
             // a PyroWave pin, which the ramp checks once before the first
             // frame. The pinned probe never arms the beside-video burst.
@@ -578,12 +571,10 @@ impl Driver {
                 "discarding this ABR window (probe tail or a host pipeline gap)"
             );
         } else {
-            actions.push(Action::Loss(w.loss_ppm));
-            // Delivery rides the loss report so `loss_ppm = 0` is readable:
-            // flawless, or delivering nothing.
-            if let Some(packets_received) = closed.delivery {
-                actions.push(Action::Delivery(packets_received));
-            }
+            actions.push(Action::Report {
+                loss_ppm: w.loss_ppm,
+                packets_received: closed.packets_received,
+            });
             if let Some(kbps) = self.abr.on_window(w) {
                 // Log the window's signals with the decision, so decode- and
                 // encode-driven retargets are separable from network ones.
@@ -710,7 +701,6 @@ mod tests {
                 probe_target_kbps: None,
                 ramp: true,
                 probe_only: false,
-                reads_delivery: true,
                 pin_kbps: None,
             },
             base,
@@ -869,7 +859,6 @@ mod tests {
                 probe_target_kbps: Some(400_000),
                 ramp: false,
                 probe_only: false,
-                reads_delivery: true,
                 pin_kbps: None,
             },
             base,

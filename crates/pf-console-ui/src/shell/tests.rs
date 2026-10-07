@@ -2213,47 +2213,6 @@ mod launch_hold {
     }
 }
 
-/// A finding that names a profile is what offers paced delivery, for the tested host and
-/// that profile; a clean check, or one whose findings name none, offers nothing.
-#[test]
-fn a_finding_offers_paced_delivery_for_the_host() {
-    let done = |findings| SpeedPhase::Done {
-        throughput_kbps: 940_000,
-        wall: true,
-        clean: Some(crate::model::CleanRound {
-            rate_kbps: 470_000,
-            loss_pct: 0.0,
-            jitter_us: 300,
-        }),
-        recommended_kbps: 658_000,
-        findings,
-    };
-    let row = |id, profile| crate::model::FindingRow {
-        id,
-        severity: 2,
-        numbers: [2500, 1000, 200],
-        profile,
-    };
-    for (findings, want) in [
-        (vec![], None),
-        (vec![row(7, None)], None),
-        (
-            vec![row(7, None), row(1, Some(1))],
-            Some(("aa11".to_string(), "Living Room PC".to_string(), 1)),
-        ),
-    ] {
-        let (mut s, console, _library) = shell(vec![Screen::Home(HomeScreen::new())]);
-        console.set_hosts(hosts());
-        console.set_speed(Some(SpeedStatus::new(
-            "aa11".into(),
-            "Living Room PC".into(),
-        )));
-        console.advance_speed("aa11", done(findings));
-        s.sync();
-        assert_eq!(s.speed_offered_profile(), want);
-    }
-}
-
 /// The console writes the GLOBAL bitrate and has no preset editor, so a measurement is only
 /// applicable when the tested host actually resolves bitrate from that layer. A preset that
 /// PINS one makes the answer read-only; a preset that inherits does not.

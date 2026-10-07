@@ -25,9 +25,8 @@ pub(crate) struct Closed {
     /// The window describes a burst tail or a rebuild, not the link. No
     /// report goes out and the controller never sees it.
     pub discarded: bool,
-    /// Session total for the [`crate::quic::DeliveryReport`] this window owes,
-    /// if any.
-    pub delivery: Option<u64>,
+    /// Session total of media packets received, for the window's report.
+    pub packets_received: u64,
 }
 
 /// What the pump measures between report ticks.
@@ -68,24 +67,13 @@ pub(crate) struct WindowAccumulator {
     aftermath_left: u32,
     flushed: bool,
     discard: bool,
-    /// The host reads a delivery count every window
-    /// ([`crate::quic::HOST_CAP2_DELIVERY`]), and what the last window said
-    /// about a plane that had not carried anything yet.
-    reads_delivery: bool,
-    delivery_confirmed: bool,
 }
 
 impl WindowAccumulator {
-    pub(crate) fn new(
-        audio_reserved_kbps: u32,
-        marks_repeats: bool,
-        reads_delivery: bool,
-        now: Instant,
-    ) -> Self {
+    pub(crate) fn new(audio_reserved_kbps: u32, marks_repeats: bool, now: Instant) -> Self {
         WindowAccumulator {
             audio_reserved_kbps,
             marks_repeats,
-            reads_delivery,
             last_report: now,
             recovered: 0,
             late: 0,
@@ -109,7 +97,6 @@ impl WindowAccumulator {
             aftermath_left: 0,
             flushed: false,
             discard: false,
-            delivery_confirmed: false,
         }
     }
 
@@ -273,28 +260,12 @@ impl WindowAccumulator {
             recovery_kf,
             activity: activity(self.marks_repeats, self.au_frames, self.au_repeats),
         };
-        // A discarded window stays silent, so it also owes no delivery count.
-        let delivery =
-            (!discarded && self.owes_delivery(st.packets_received)).then_some(st.packets_received);
         self.reset(now);
         Closed {
             sample,
             discarded,
-            delivery,
+            packets_received: st.packets_received,
         }
-    }
-
-    /// Whether this window owes the host a [`crate::quic::DeliveryReport`].
-    ///
-    /// A host that divides a shared path is told every window: it has no other
-    /// measure of what reaches this session, and the report is 13 bytes against
-    /// 750 ms. Any other host gets one every window while `packets_received` is
-    /// 0 — it escalates a dead plane on that — then one when the first packets
-    /// land, then silence, because an older host logs every unknown message.
-    fn owes_delivery(&mut self, packets_received: u64) -> bool {
-        let owed = self.reads_delivery || packets_received == 0 || !self.delivery_confirmed;
-        self.delivery_confirmed = packets_received > 0;
-        owed
     }
 
     /// Anchors forward, accumulators empty. A discarded window's counts must
@@ -391,48 +362,6 @@ fn wire_bytes(st: &Stats) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A host that reads a count every window is sent one every window, dead
-    /// plane or not: it divides a shared path by nothing else.
-    #[test]
-    fn a_governing_host_is_told_what_arrived_every_window() {
-        let mut w = WindowAccumulator::new(0, true, true, Instant::now());
-        assert!(w.owes_delivery(0));
-        for n in [500, 900, 1_200, 90_000] {
-            assert!(w.owes_delivery(n), "a share needs this window's count");
-        }
-    }
-
-    /// DeliveryReport toward every other host: "zero" while true, one
-    /// confirmation when video starts, then silence (older hosts warn per
-    /// unknown message).
-    #[test]
-    fn the_delivery_count_is_reported_while_zero_then_once_more_and_never_again() {
-        let mut w = WindowAccumulator::new(0, true, false, Instant::now());
-        for _ in 0..5 {
-            assert!(
-                w.owes_delivery(0),
-                "a dead data plane must be re-reported every window"
-            );
-        }
-        assert!(w.owes_delivery(500));
-        for n in [900, 1_200, 90_000] {
-            assert!(
-                !w.owes_delivery(n),
-                "a healthy session must not stream delivery reports"
-            );
-        }
-    }
-
-    /// A session that never receives must never look confirmed.
-    #[test]
-    fn a_session_that_receives_nothing_never_reports_itself_healthy() {
-        let mut w = WindowAccumulator::new(0, true, false, Instant::now());
-        for _ in 0..100 {
-            assert!(w.owes_delivery(0));
-            assert!(!w.delivery_confirmed);
-        }
-    }
 
     /// The burst's keyframe asks are disowned until a window has none, never
     /// past the budget.

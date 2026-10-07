@@ -21,13 +21,13 @@ use punktfunk_core::config::Role;
 use punktfunk_core::fp::{hex, parse_hex32};
 use punktfunk_core::input::{InputEvent, InputKind};
 use punktfunk_core::packet::FLAG_PROBE;
+use punktfunk_core::quic::v2::dgram::Feedback;
 use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::io as v2io;
 use punktfunk_core::quic::v2::msg::{decode, V2Message};
 use punktfunk_core::quic::{
-    endpoint, window_loss_ppm, BitrateChanged, CursorRenderMode, DeliveryReport, Hello, LinkReport,
-    LossReport, ProbeRequest, ProbeResult, Reconfigure, Reconfigured, RequestKeyframe, SetBitrate,
-    Welcome,
+    endpoint, window_loss_ppm, BitrateChanged, CursorRenderMode, Hello, ProbeRequest, ProbeResult,
+    Reconfigure, Reconfigured, SetBitrate, Welcome,
 };
 use punktfunk_core::{CompositorPref, Mode, PunktfunkError, Session};
 use std::io::Write;
@@ -65,7 +65,7 @@ struct Args {
     /// encoder rate retarget (Phase 3.2) / rebuild fallback. Wiggles the cursor around the switch
     /// so a damage-driven idle desktop actually publishes frames through it.
     rebitrate: Option<(u32, u32)>,
-    /// `--link-kbps N` — send the [`LinkReport`] a real client's bring-up ramp would, so the
+    /// `--link-kbps N` — send the link rate a real client's bring-up ramp would, so the
     /// host paces a pinned stream at that link rate. The probe runs no ramp of its own.
     link_kbps: Option<u32>,
     /// `--pair -` — run the pairing ceremony instead of a session.
@@ -532,8 +532,8 @@ struct Counters {
     /// throughput and loss count every delivered wire packet, not just reassembled probe AUs.
     rx_wire_packets: AtomicU64,
     rx_wire_bytes: AtomicU64,
-    /// The windowed loss estimate the loss relay sends as a LossReport, so the host sizes FEC to
-    /// the link. `u32::MAX` = no fresh sample this window.
+    /// The windowed loss estimate the loss relay sends in its feedback window, so the host sizes
+    /// FEC to the link. `u32::MAX` = no fresh sample this window.
     loss_ppm: AtomicU32,
     /// The session's cumulative unrecoverable-frame count. The loss relay requests a keyframe
     /// when it grows, the loss trigger under infinite GOP (see `NativeClient::frames_dropped`).
@@ -1001,15 +1001,20 @@ async fn clock(send: &mut CtlTx, recv: &mut CtlRx, resync: bool) -> Result<Optio
 async fn control_plane(
     args: &Args,
     conn: &Wire,
-    mut send: CtlTx,
+    send: CtlTx,
     recv: CtlRx,
     counters: &Arc<Counters>,
 ) -> Result<()> {
-    if let Some(proven_kbps) = args.link_kbps {
-        v2io::send(&mut send, &LinkReport { proven_kbps })
-            .await
-            .map_err(|e| anyhow!("LinkReport write: {e}"))?;
-        tracing::info!(proven_kbps, "sent the link report");
+    let link_kbps = args.link_kbps.unwrap_or(0);
+    if link_kbps != 0 {
+        let fb = Feedback {
+            link_kbps,
+            ..Default::default()
+        };
+        conn.conn
+            .send_datagram(fb.encode().into())
+            .map_err(|e| anyhow!("link rate datagram: {e}"))?;
+        tracing::info!(link_kbps, "sent the link rate");
     }
     if let Some((new_mode, after_secs)) = args.remode {
         spawn_remode(send, recv, new_mode, after_secs);
@@ -1020,7 +1025,7 @@ async fn control_plane(
     } else if args.cursor_capture || args.cursor_nochannel || args.cursor_channel {
         spawn_cursor_test(conn, send, recv, args.cursor_capture, args.cursor_channel);
     } else {
-        spawn_loss_relay(send, counters);
+        spawn_loss_relay(conn.conn.clone(), send, counters, link_kbps);
     }
     Ok(())
 }
@@ -1028,6 +1033,17 @@ async fn control_plane(
 /// `--remode`: after a delay, ask the host to switch modes on the still-open control stream.
 /// The stream then carries new-mode AUs (IDR + in-band parameter sets); ffprobe the `--out`
 /// file to see both resolutions.
+/// The next control frame of type `M`. The host also sends a `StreamConfig` and its notices
+/// unasked, so an answer is not always the next frame.
+async fn next_of<M: V2Message>(r: &mut CtlRx) -> std::io::Result<M> {
+    loop {
+        let (ty, body) = r.read_frame().await?;
+        if let Ok(m) = decode::<M>(ty, &body) {
+            return Ok(m);
+        }
+    }
+}
+
 fn spawn_remode(mut rs: CtlTx, mut rr: CtlRx, new_mode: Mode, after_secs: u32) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(after_secs as u64)).await;
@@ -1039,15 +1055,11 @@ fn spawn_remode(mut rs: CtlTx, mut rr: CtlRx, new_mode: Mode, after_secs: u32) {
             tracing::error!("Reconfigure write failed");
             return;
         }
-        match rr
-            .read_frame()
-            .await
-            .map(|(ty, b)| decode::<Reconfigured>(ty, &b))
-        {
-            Ok(Ok(ack)) if ack.accepted => {
+        match next_of::<Reconfigured>(&mut rr).await {
+            Ok(ack) if ack.accepted => {
                 tracing::info!(mode = ?ack.mode, "mode switch ACCEPTED")
             }
-            Ok(Ok(ack)) => tracing::warn!(active = ?ack.mode, "mode switch REJECTED"),
+            Ok(ack) => tracing::warn!(active = ?ack.mode, "mode switch REJECTED"),
             other => tracing::error!(?other, "bad Reconfigured"),
         }
     });
@@ -1094,12 +1106,8 @@ fn spawn_rebitrate(conn: &Wire, mut rs: CtlTx, mut rr: CtlRx, new_kbps: u32, aft
                     tracing::error!("SetBitrate write failed");
                     return;
                 }
-                match rr
-                    .read_frame()
-                    .await
-                    .map(|(ty, b)| decode::<BitrateChanged>(ty, &b))
-                {
-                    Ok(Ok(ack)) => tracing::info!(
+                match next_of::<BitrateChanged>(&mut rr).await {
+                    Ok(ack) => tracing::info!(
                         applied_kbps = ack.bitrate_kbps,
                         "BITRATE CHANGE acked by host"
                     ),
@@ -1157,12 +1165,8 @@ fn spawn_speed_test(
             tracing::error!("ProbeRequest write failed");
             return;
         }
-        let res = match sr
-            .read_frame()
-            .await
-            .map(|(ty, b)| decode::<ProbeResult>(ty, &b))
-        {
-            Ok(Ok(r)) => r,
+        let res = match next_of::<ProbeResult>(&mut sr).await {
+            Ok(r) => r,
             other => {
                 tracing::error!(?other, "bad ProbeResult");
                 return;
@@ -1291,62 +1295,57 @@ fn spawn_cursor_test(
     });
 }
 
-/// Normal stream mode: relay the data loop's windowed loss estimate to the host as periodic
-/// LossReports, so it can size FEC to the link (adaptive FEC), and — like the real clients —
-/// request a keyframe whenever the unrecoverable-frame count grows (100 ms poll = a natural
-/// throttle; several drops in a burst coalesce into one request). The control stream is
-/// otherwise idle here (remode/speed-test own it in their modes).
-///
-/// Delivery truth for the host's dead-data-plane check: report what actually landed on the
-/// wire, so the probe reproduces a real client's answer rather than the "cannot answer"
-/// sentinel — which is exactly what makes it usable for testing that path.
-fn spawn_loss_relay(mut ls: CtlTx, counters: &Arc<Counters>) {
+/// Normal stream mode: relay the data loop's windowed loss estimate and what landed on the
+/// wire to the host as numbered feedback windows, so it sizes FEC to the link and can tell a
+/// dead data plane, and — like the real clients — ask for a keyframe whenever the
+/// unrecoverable-frame count grows (100 ms poll = a natural throttle; several drops in a
+/// burst coalesce into one ask). Each ask goes out twice: a datagram can be lost. The control
+/// stream stays open and idle here (remode/speed-test own it in their modes).
+fn spawn_loss_relay(conn: quinn::Connection, ls: CtlTx, counters: &Arc<Counters>, link_kbps: u32) {
     let c = counters.clone();
     tokio::spawn(async move {
         use std::sync::atomic::Ordering::Relaxed;
+        let _control = ls; // a dropped send half would finish the stream and end the session
+        let send = |fb: Feedback| conn.send_datagram(fb.encode().into()).is_ok();
         let mut last_report = std::time::Instant::now();
         let mut last_dropped = 0u64;
-        // Mirrors the real clients' rule (see `pump/data.rs`): report the delivery count every
-        // window while it is zero, once when the first packets land, then stop — so a host that
-        // predates the message is not flooded with "unknown control message" on a good session.
-        let mut delivery_confirmed = false;
+        let mut loss_ppm = 0u32;
+        let (mut window, mut ask) = (0u32, 0u16);
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let d = c.dropped_frames.load(Relaxed);
             if d > last_dropped {
                 last_dropped = d;
-                if v2io::send(&mut ls, &RequestKeyframe).await.is_err() {
-                    break; // control stream gone
+                ask = ask.wrapping_add(1).max(1);
+                let fb = Feedback {
+                    ask,
+                    keyframe: true,
+                    link_kbps,
+                    ..Default::default()
+                };
+                if !(send(fb) && send(fb)) {
+                    break; // connection gone
                 }
                 tracing::debug!(dropped = d, "unrecoverable frame — requested keyframe");
             }
             if last_report.elapsed() >= std::time::Duration::from_millis(750) {
                 last_report = std::time::Instant::now();
+                // A window without a fresh loss sample repeats the last: what a dead data
+                // plane looks like is the delivery count standing still, not a silent window.
                 let v = c.loss_ppm.swap(u32::MAX, Relaxed);
-                // Independent of whether there is a fresh loss sample: "no fresh sample" is
-                // exactly the shape a dead data plane has, so gating it on one would silence
-                // it in the state it exists to report.
-                let received = c.rx_wire_packets.load(Relaxed);
-                if received == 0 || !delivery_confirmed {
-                    delivery_confirmed = received > 0;
-                    if v2io::send(
-                        &mut ls,
-                        &DeliveryReport {
-                            packets_received: received,
-                        },
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break; // control stream gone
-                    }
+                if v != u32::MAX {
+                    loss_ppm = v;
                 }
-                if v != u32::MAX
-                    && v2io::send(&mut ls, &LossReport { loss_ppm: v })
-                        .await
-                        .is_err()
-                {
-                    break; // control stream gone
+                window = window.wrapping_add(1).max(1);
+                let fb = Feedback {
+                    window,
+                    loss_ppm,
+                    packets_received: c.rx_wire_packets.load(Relaxed),
+                    link_kbps,
+                    ..Default::default()
+                };
+                if !send(fb) {
+                    break; // connection gone
                 }
             }
         }
@@ -1781,12 +1780,12 @@ fn data_plane(
     // Stream-duration cap: `--seconds N`, else the 120s default. Ending the loop here reaches the
     // graceful `conn.close` below (with the deliberate-quit code if `--quit`).
     let cap_secs = seconds.unwrap_or(120);
-    // Adaptive-FEC loss window: publish a fresh estimate every 750 ms for the LossReport task.
+    // Adaptive-FEC loss window: publish a fresh estimate every 750 ms for the loss relay.
     let mut last_loss_report = std::time::Instant::now();
     let (mut last_recovered, mut last_late, mut last_received) = (0u64, 0u64, 0u64);
     loop {
         // Mirror packet-level receive counters for the speed-test reporter (reads their delta),
-        // and publish a windowed loss estimate for the adaptive-FEC LossReport task.
+        // and publish a windowed loss estimate for the loss relay.
         {
             use std::sync::atomic::Ordering::Relaxed;
             let s = session.stats();

@@ -27,19 +27,19 @@ pub(crate) struct SessionShared {
     pub(crate) cadence_degraded: Arc<AtomicBool>,
     /// Behind-cadence score for the climb-refusal log (the flag alone has no evidence).
     pub(crate) cadence_behind_score: Arc<AtomicU32>,
-    /// Client-received packet count, `u32::MAX` until a `DeliveryReport` (an old client never
-    /// sends one). Tells a clean link from a dead one: `loss_ppm = 0` means both.
+    /// Client-received packet count, `u32::MAX` until the first feedback window. Tells a clean
+    /// link from a dead one: `loss_ppm = 0` means both.
     pub(crate) client_packets_received: Arc<AtomicU32>,
     /// FEC in force: what the packetizer runs. Only the stream loop writes it.
     pub(crate) fec_target: Arc<AtomicU8>,
     /// Adaptive-FEC proposals, published to `fec_target` only once the encoder accepts the
     /// matching rate.
     pub(crate) fec_requested: Arc<AtomicU8>,
-    /// The client's proven link rate (kbps), `0` until its `LinkReport`. The send loop paces a
-    /// pinned stream against it.
+    /// The client's link rate (kbps) from its feedback, `0` until its ramp proved one. The
+    /// send loop paces a pinned stream against it.
     pub(crate) link_kbps: Arc<AtomicU32>,
-    /// The delivery profile the client asked for (`DeliveryProfile as u8`), written by the
-    /// control task and read per frame by the send loop. `PUNKTFUNK_DELIVERY` overrides it.
+    /// The delivery profile (`DeliveryProfile as u8`) the send loop reads per frame:
+    /// `PUNKTFUNK_DELIVERY`, else burst.
     pub(crate) delivery: Arc<AtomicU8>,
     /// The bring-up ramp's window: probe requests are served on the punched data plane without
     /// the control task's spacing until the send thread takes the session (`stream::ramp`).
@@ -175,7 +175,9 @@ impl SessionWiring {
                 fec_target,
                 fec_requested,
                 link_kbps: Arc::new(AtomicU32::new(0)),
-                delivery: Arc::new(AtomicU8::new(0)),
+                delivery: Arc::new(AtomicU8::new(
+                    crate::send_pacing::forced_delivery().map_or(0, |p| p as u8),
+                )),
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,
                 )),

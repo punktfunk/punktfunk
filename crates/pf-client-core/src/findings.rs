@@ -1,7 +1,6 @@
 //! A network check's finding in words, from its id and figures
 //! ([`punktfunk_core::client::health::FindingId`] as a byte). Every shell shows the same
-//! sentence: what did not happen, then the next move. The offered profile is the shell's
-//! button, not a sentence here.
+//! sentence: what did not happen, then the next move.
 
 /// The sentence for finding `id` with its three figures.
 pub fn text(id: u8, numbers: [u32; 3]) -> String {
@@ -64,15 +63,6 @@ pub fn text(id: u8, numbers: [u32; 3]) -> String {
     }
 }
 
-/// What the offered profile is called on a button: `1` capped, `2` smooth.
-pub fn profile_name(profile: u8) -> &'static str {
-    match profile {
-        1 => "capped",
-        2 => "smooth",
-        _ => "none",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +81,5 @@ mod tests {
         assert!(text(3, [40, 208, 0]).contains("40 packets"));
         assert!(text(7, [0, 0, 0]).ends_with("Wi-Fi."));
         assert!(text(9, [1, 2, 3]).starts_with("Finding 9"));
-        assert_eq!(profile_name(1), "capped");
     }
 }

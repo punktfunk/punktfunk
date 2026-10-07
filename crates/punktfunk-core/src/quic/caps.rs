@@ -168,13 +168,8 @@ pub const HOST_CAP2_SCROLL: u8 = 0x08;
 /// client that does not see the bit bursts beside live video as before.
 pub const HOST_CAP2_RAMP: u8 = 0x10;
 
-/// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads a
-/// [`DeliveryReport`](super::control::DeliveryReport) every report window and divides a path
-/// two sessions share by them (`abr::governor`). Toward this bit the client sends one per
-/// window — 13 bytes against 750 ms; toward every other host it sends one while nothing is
-/// arriving and one when the first packets land, because an older host logs each unknown
-/// message. A host that leaves the bit clear therefore learns nothing about a session's air
-/// after its first window, and its groups are left alone.
+/// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2), reserved: every feedback window
+/// carries the delivery count, so no end reads this bit.
 pub const HOST_CAP2_DELIVERY: u8 = 0x20;
 
 /// [`Welcome::host_caps2`](crate::quic::Welcome::host_caps2): the host reads
@@ -401,7 +396,8 @@ mod tests {
     const EXT_TAGS: &[(&str, u16)] = &[
         ("EXT_TAG_CLIENT", EXT_TAG_CLIENT),
         ("EXT_TAG_ABR", EXT_TAG_ABR),
-        ("EXT_TAG_DELIVERY", EXT_TAG_DELIVERY),
+        ("EXT_TAG_LINK_FACTS", EXT_TAG_LINK_FACTS),
+        ("EXT_TAG_PROBE_ONLY", EXT_TAG_PROBE_ONLY),
         ("EXT_TAG_PRESET", EXT_TAG_PRESET),
     ];
 

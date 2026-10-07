@@ -76,8 +76,6 @@ pub(super) struct ClientCfg {
     pub probe_target_kbps: Option<u32>,
     /// Host advertises `HOST_CAP2_RAMP`: measure the link during bring-up.
     pub ramp: bool,
-    /// Host advertises `HOST_CAP2_DELIVERY`: report what arrived every window.
-    pub reads_delivery: bool,
     /// Ceiling injected directly, for a scenario that replays a host which
     /// paused video for the burst. The window it lands in is discarded, as
     /// the probe tail is.
@@ -107,7 +105,6 @@ impl Default for ClientCfg {
             probe: true,
             probe_target_kbps: None,
             ramp: false,
-            reads_delivery: true,
             ceiling_at: None,
             rebuild_at_ms: None,
             automatic: true,
@@ -122,8 +119,8 @@ impl Default for ClientCfg {
 /// model knows and the real wire carries as a keyframe ask.
 ///
 /// `Delivery` is the session's total packets received, and the only thing that
-/// tells the host what is arriving. It goes out when the driver asks, which is
-/// what makes the host's view of a shared path as thin here as on a wire.
+/// tells the host what is arriving. It rides each window's report, as on the wire,
+/// so the host's view of a shared path is as thin here as there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     SetBitrate(u32),
@@ -264,7 +261,6 @@ impl Client {
                 probe_target_kbps: cfg.probe_target_kbps,
                 ramp: cfg.ramp,
                 probe_only: false,
-                reads_delivery: cfg.reads_delivery,
                 pin_kbps: cfg.pin_kbps,
             },
             joined,
@@ -617,7 +613,16 @@ impl Client {
         let mut request = None;
         for action in tick.actions {
             match action {
-                crate::abr::Action::Loss(ppm) => out.push(Action::Loss { ppm, unrecovered }),
+                crate::abr::Action::Report {
+                    loss_ppm,
+                    packets_received,
+                } => {
+                    out.push(Action::Loss {
+                        ppm: loss_ppm,
+                        unrecovered,
+                    });
+                    out.push(Action::Delivery(packets_received));
+                }
                 crate::abr::Action::SetBitrate(kbps) => {
                     request = Some(kbps);
                     self.set_asks.push((now_ms, kbps));
@@ -654,7 +659,6 @@ impl Client {
                 // As the pump does: a burst nobody answered is let go, or the
                 // report tick stays suppressed for the rest of the session.
                 crate::abr::Action::AbandonProbe => self.probing = false,
-                crate::abr::Action::Delivery(packets) => out.push(Action::Delivery(packets)),
                 // The simulated host has no pacer to hand a link rate to.
                 crate::abr::Action::LinkRate(_) => {}
             }

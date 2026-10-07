@@ -57,10 +57,6 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
     /// Tailscale address anywhere — so when `address` goes silent the sweep asks these too.
     /// Optional and appended last for the same widget-contract reason; nil until the first move.
     public var previousAddresses: [String]?
-    /// The delivery profile to ask this host for (1 capped, 2 smooth), set from a network check's
-    /// finding. Per host: a Wi-Fi TV and a wired desk differ. nil asks nothing, and nil is what an
-    /// older saved record decodes to.
-    public var delivery: Int?
     /// The host profile this device plays as on this box, picked in the profile picker. nil: no
     /// pick yet, or a box without profiles. Not `presetID` (a settings preset). Optional for the
     /// same forward-compat reason as `mgmtPort`.
@@ -101,7 +97,7 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         case id, name, address, port, pinnedSHA256, lastConnected, mgmtPort, macAddresses
         case clipboardSync, presetID, pinnedPresetIDs, addedAt, osChain, previousAddresses
         case pickedProfile
-        case gamePresets, delivery
+        case gamePresets
         /// Pre-rename keys (design/preset-rename.md): read when the new key is absent, and
         /// written beside it so an older build keeps the bindings.
         case profileID, pinnedProfileIDs
@@ -127,7 +123,6 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         previousAddresses = try c.decodeIfPresent([String].self, forKey: .previousAddresses)
         pickedProfile = try c.decodeIfPresent(ProfilePick.self, forKey: .pickedProfile)
         gamePresets = try c.decodeIfPresent([String: String].self, forKey: .gamePresets)
-        delivery = try c.decodeIfPresent(Int.self, forKey: .delivery)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -150,7 +145,6 @@ public struct StoredHost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(previousAddresses, forKey: .previousAddresses)
         try c.encodeIfPresent(pickedProfile, forKey: .pickedProfile)
         try c.encodeIfPresent(gamePresets, forKey: .gamePresets)
-        try c.encodeIfPresent(delivery, forKey: .delivery)
     }
 
     public var displayName: String { name.isEmpty ? address : name }
