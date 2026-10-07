@@ -150,7 +150,7 @@ pub(super) fn steam_pid_in_unit(unit: &str) -> Option<u32> {
 }
 
 /// Does a `/proc/<pid>/cgroup` body place the process inside `unit`? A bare name is a service.
-fn cgroup_names_unit(cgroup: &str, unit: &str) -> bool {
+pub(super) fn cgroup_names_unit(cgroup: &str, unit: &str) -> bool {
     let name = if unit.contains('.') {
         unit.to_string()
     } else {
