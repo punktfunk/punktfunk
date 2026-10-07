@@ -1066,6 +1066,8 @@ pub struct AmfEncoder {
     ltr_mark_interval: i64,
     /// LTR slot the next submit must force-reference. Consumed on that submit.
     pending_force: Option<usize>,
+    /// The newest frame the client confirmed, while the host holds confirmed references.
+    reference_floor: Option<i64>,
     /// `PUNKTFUNK_LTR_FORCE_AT=N`: self-trigger [`Encoder::invalidate_ref_frames`] at that index.
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface creation would.
@@ -1153,6 +1155,7 @@ impl AmfEncoder {
             next_ltr_slot: 0,
             ltr_mark_interval: ltr_mark_interval(fps),
             pending_force: None,
+            reference_floor: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
             fail_submit_at: None,
@@ -1696,6 +1699,7 @@ impl AmfEncoder {
         let LtrStep {
             mark_slot,
             force_slot,
+            acked,
         } = if self.ltr_active {
             ltr_step(
                 &mut self.ltr_slots,
@@ -1704,6 +1708,7 @@ impl AmfEncoder {
                 forced,
                 cur_idx,
                 self.ltr_mark_interval,
+                self.reference_floor,
             )
         } else {
             LtrStep::default()
@@ -1818,7 +1823,7 @@ impl AmfEncoder {
             }
             if let Some(slot) = force_slot {
                 let r = surf.set_property(force_name, AmfVariant::from_i64(1_i64 << slot));
-                if r == sys::AMF_OK {
+                if r == sys::AMF_OK && !acked {
                     tracing::info!(
                         slot,
                         frame = cur_idx,
@@ -1880,13 +1885,18 @@ struct LtrStep {
     mark_slot: Option<usize>,
     /// Force-reference the slot; the AU is a recovery anchor.
     force_slot: Option<usize>,
+    /// The force follows the client's confirmations, not an RFI.
+    acked: bool,
 }
 
 /// This frame's LTR mark and force over the slot mirror. An IDR empties the mirror and drops a
 /// queued force. A queued force needs its slot still marked: the taint sweep empties a slot
 /// whose tainted mark the hardware still holds, and forcing it would re-reference the loss. A
 /// force clears every other slot (`LTR_MODE_RESET_UNUSED`, the default: referencing one slot
-/// discards the rest) and takes the frame's mark, which would overwrite it.
+/// discards the rest) and takes the frame's mark, which would overwrite it. Under a `floor`
+/// each frame forces the newest confirmed slot and marks into the one the force
+/// cleared ([`super::rfi::ltr_acked_step`]).
+#[allow(clippy::too_many_arguments)]
 fn ltr_step(
     slots: &mut [Option<i64>; NUM_LTR_SLOTS],
     next_slot: &mut usize,
@@ -1894,6 +1904,7 @@ fn ltr_step(
     forced: bool,
     cur_idx: i64,
     mark_interval: i64,
+    floor: Option<i64>,
 ) -> LtrStep {
     let mut step = LtrStep::default();
     if forced {
@@ -1910,6 +1921,30 @@ fn ltr_step(
                 }
             }
         }
+    }
+    if let Some(floor) = floor.filter(|_| step.force_slot.is_none() && !forced) {
+        let (mark, force) = super::rfi::ltr_acked_step(slots, floor, cur_idx, *next_slot);
+        // A force clears every other slot, so the slot it frees takes this frame.
+        let mark = match force {
+            Some((f, _)) => {
+                for (s, marked) in slots.iter_mut().enumerate() {
+                    if s != f {
+                        *marked = None;
+                    }
+                }
+                Some((f + 1) % NUM_LTR_SLOTS)
+            }
+            None => mark,
+        };
+        if let Some(m) = mark {
+            slots[m] = Some(cur_idx);
+            *next_slot = (m + 1) % NUM_LTR_SLOTS;
+        }
+        return LtrStep {
+            mark_slot: mark,
+            force_slot: force.map(|(f, _)| f),
+            acked: true,
+        };
     }
     if step.force_slot.is_none() && (forced || cur_idx % mark_interval == 0) {
         let trusted = slots.map(|m| m.is_some());
@@ -1963,7 +1998,7 @@ impl Encoder for AmfEncoder {
             .enumerate()
             .filter_map(|(s, m)| m.map(|w| (s, w)))
             .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first, None);
+        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor);
         for (slot, marked) in self.ltr_slots.iter_mut().enumerate() {
             if plan.tainted & (1 << slot) != 0 {
                 *marked = None;
@@ -1996,6 +2031,10 @@ impl Encoder for AmfEncoder {
     }
 
     /// Clear every LTR mirror slot and any queued force (would otherwise re-reference the taint).
+    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
+        self.reference_floor = acked_wire;
+    }
+
     fn distrust_references(&mut self) {
         let live = self.ltr_slots.iter().filter(|m| m.is_some()).count();
         if live == 0 && self.pending_force.is_none() {
@@ -2251,12 +2290,12 @@ mod tests {
     #[test]
     fn an_idr_resets_the_ltr_mirror_and_marks_slot_zero() {
         let (mut slots, mut next, mut pending) = ([Some(3), Some(5)], 1, Some(1));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, true, 9, 8);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, true, 9, 8, None);
         assert_eq!(
             step,
             LtrStep {
                 mark_slot: Some(0),
-                force_slot: None
+                ..LtrStep::default()
             }
         );
         assert_eq!((slots, next, pending), ([Some(9), None], 1, None));
@@ -2267,30 +2306,49 @@ mod tests {
     #[test]
     fn a_queued_force_needs_a_marked_slot() {
         let (mut slots, mut next, mut pending) = ([Some(0), Some(8)], 0, Some(0));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 16, 8);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 16, 8, None);
         assert_eq!(
             step,
             LtrStep {
-                mark_slot: None,
-                force_slot: Some(0)
+                force_slot: Some(0),
+                ..LtrStep::default()
             }
         );
         assert_eq!((slots, pending), ([Some(0), None], None));
         let (mut slots, mut pending) = ([None, Some(8)], Some(0));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 17, 8);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 17, 8, None);
         assert_eq!(step, LtrStep::default());
         assert_eq!(pending, None, "a force is consumed either way");
+    }
+
+    /// Under confirmed references a frame forces the newest confirmed slot, which clears
+    /// the other, and marks into it. With none confirmed and both awaiting it, nothing.
+    #[test]
+    fn confirmed_references_force_the_newest_confirmed_slot() {
+        let (mut slots, mut next, mut pending) = ([Some(9), Some(10)], 0, None);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 11, 8, Some(10));
+        assert_eq!(
+            step,
+            LtrStep {
+                mark_slot: Some(0),
+                force_slot: Some(1),
+                acked: true
+            }
+        );
+        assert_eq!((slots, next), ([Some(11), Some(10)], 1));
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 12, 8, Some(9));
+        assert_eq!((step.mark_slot, step.force_slot), (None, None));
     }
 
     /// Marks land on the interval, first on an empty slot, else round robin.
     #[test]
     fn a_mark_prefers_an_empty_slot() {
         let (mut slots, mut next, mut pending) = ([Some(0), None], 0, None);
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 15, 8);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 15, 8, None);
         assert_eq!(step, LtrStep::default(), "off the interval");
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 16, 8);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 16, 8, None);
         assert_eq!(step.mark_slot, Some(1));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 24, 8);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 24, 8, None);
         assert_eq!(step.mark_slot, Some(0), "both marked: the round robin");
         assert_eq!(slots, [Some(24), Some(16)]);
     }
