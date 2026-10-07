@@ -132,7 +132,7 @@ export async function callPlugin(
 	const attempt = async (bustCache: boolean): Promise<Response | null> => {
 		const cred = await fetchUiCredential(id, { bustCache });
 		if (!cred) return null;
-		const headers =
+		const headers: Record<string, string> =
 			method !== "GET" ? { "content-type": "application/json" } : {};
 		try {
 			if (viaHost(cred)) {
