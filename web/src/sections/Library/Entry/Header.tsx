@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Eye, EyeOff, Trash2 } from "lucide-react";
-import { type FC, useState } from "react";
+import { type FC, type ReactNode, useState } from "react";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
 import { LauncherIcon } from "@/components/launcher-icon";
 import {
@@ -39,14 +39,26 @@ export interface EntryHeaderProps {
 	error?: string | null;
 }
 
-/** The wide banner as a band across the top; the poster and title stand on its lower edge. */
-const Hero: FC<{ src: string; onFail: () => void }> = ({ src, onFail }) => (
-	<div
-		aria-hidden
-		className="relative h-40 overflow-hidden rounded-xl @md:h-56"
-	>
-		<img src={src} alt="" className="size-full object-cover" onError={onFail} />
-		<div className="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent" />
+/** The page's inset (the main's padding plus the section's), for a band that runs past it. */
+const BLEED =
+	"-mx-[calc(1rem+var(--spacing-main))] -mt-[calc(1.5rem+var(--spacing-main))] sm:-mx-[calc(2.5rem+var(--spacing-main))] sm:-mt-[calc(2.5rem+var(--spacing-main))]";
+
+/** The wide banner across the whole top of the page; the poster and title stand on its lower edge. */
+const Hero: FC<{ src: string; onFail: () => void; children: ReactNode }> = ({
+	src,
+	onFail,
+	children,
+}) => (
+	<div className={cn("relative h-52 overflow-hidden @md:h-72", BLEED)}>
+		<img
+			src={src}
+			alt=""
+			aria-hidden
+			className="size-full object-cover"
+			onError={onFail}
+		/>
+		<div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-background/10" />
+		<div className="absolute top-4 left-4 sm:top-6 sm:left-10">{children}</div>
 	</div>
 );
 
@@ -57,7 +69,7 @@ const Poster: FC<{ entry: OperatorGameEntry | null }> = ({ entry }) => {
 		(u): u is string => !!u && !failed[u],
 	);
 	return (
-		<div className="flex aspect-[2/3] w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground shadow-xl ring-1 ring-border @md:w-36">
+		<div className="relative z-10 flex aspect-[2/3] w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground shadow-xl ring-1 ring-border @md:w-36">
 			{src ? (
 				<img
 					src={src}
@@ -125,21 +137,32 @@ export const EntryHeader: FC<EntryHeaderProps> = ({
 		.filter(Boolean)
 		.join(" · ");
 	const stats = statsLine(entry);
+	// On the banner the link gets a backing, so it reads over any picture.
+	const back = (
+		<Link
+			to="/library"
+			className={cn(
+				"inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground",
+				hero && "rounded-full bg-background/60 px-2.5 py-1 backdrop-blur",
+			)}
+		>
+			<ArrowLeft className="size-3.5" />
+			{m.library_title()}
+		</Link>
+	);
 	return (
 		<div className="flex flex-col gap-4">
-			<Link
-				to="/library"
-				className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-			>
-				<ArrowLeft className="size-3.5" />
-				{m.library_title()}
-			</Link>
+			{!hero && back}
 			<div className="@container">
-				{hero && <Hero src={hero} onFail={() => setHeroFailed(true)} />}
+				{hero && (
+					<Hero src={hero} onFail={() => setHeroFailed(true)}>
+						{back}
+					</Hero>
+				)}
 				<div
 					className={cn(
 						"flex flex-wrap items-end gap-4",
-						hero && "-mt-12 px-3 @md:-mt-20 @md:px-6",
+						hero && "-mt-14 @md:-mt-24",
 					)}
 				>
 					<Poster entry={entry} />
