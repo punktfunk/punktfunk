@@ -151,7 +151,7 @@ impl std::fmt::Display for Unreached {
 }
 
 /// One request down one parked connection, with the plugin's secret as the bearer.
-async fn send(
+pub(crate) async fn send(
     id: &str,
     secret: &str,
     method: Method,
