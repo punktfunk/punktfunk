@@ -9,6 +9,8 @@
 //! - **plugin token** (bearer, loopback) — [`plugin_may_access`]: admin minus hooks, pairing
 //!   admin, host logs, store, and update.
 //! - **admin token** (bearer, loopback) — everything.
+//!
+//! The tray's `tray-token` (bearer, loopback) is not a lane: it opens `/local/summary` alone.
 
 use super::shared::*;
 use crate::gamestream::tls::PeerAddr;
@@ -119,7 +121,7 @@ pub(crate) enum AuthLane {
     /// A paired device: the [`cert_may_access`] set. Its fingerprint is stamped as
     /// [`PairedDevice`], whichever way it was proven.
     Cert,
-    /// Open route (`/health`) or loopback-only tray summary — no credential.
+    /// Open route (`/health`), or the tray summary on the token every local account may read.
     Public,
 }
 
@@ -142,8 +144,8 @@ impl AuthLane {
 }
 
 /// Paired client cert (mTLS, from anywhere) or a bearer token from a loopback peer.
-/// `/health` is always open; `/local/summary` is loopback-only (the tray cannot read the
-/// token file). Cert: [`cert_may_access`]. Bearer: full admin, confined to loopback because
+/// `/health` is always open; `/local/summary` takes the tray token from loopback, else the
+/// lanes below. Cert: [`cert_may_access`]. Bearer: full admin, confined to loopback because
 /// the listener binds all interfaces by default.
 pub(crate) async fn require_auth(
     State(st): State<Arc<MgmtState>>,
@@ -199,22 +201,21 @@ pub(crate) async fn require_auth(
     ) {
         return forward(req, next, AuthLane::Public).await;
     }
-    // Tray status: unauthenticated, loopback only. On Windows the token file is
-    // SYSTEM/Administrators-DACL'd, so the per-user tray cannot authenticate. Not on the
-    // cert allowlist — LAN clients already have `/status`. No PeerAddr ⇒ test ⇒ loopback.
+    // Tray status: the tray token from loopback. A loopback peer is nobody on a box with
+    // several accounts, so position alone admits nothing. A host that minted no token (a
+    // seat) serves no summary. Any other bearer falls through to its own lane: `ctl` holds
+    // the admin token, a plugin its own. No PeerAddr ⇒ test ⇒ loopback.
     if req.uri().path() == "/api/v1/local/summary" {
+        let Some(expected) = st.tray_token.as_deref() else {
+            return api_error(StatusCode::NOT_FOUND, "this host serves no local summary");
+        };
         let from_loopback = req
             .extensions()
             .get::<PeerAddr>()
             .is_none_or(|a| a.0.ip().to_canonical().is_loopback());
-        return if from_loopback {
-            forward(req, next, AuthLane::Public).await
-        } else {
-            api_error(
-                StatusCode::UNAUTHORIZED,
-                "the local summary is loopback-only",
-            )
-        };
+        if from_loopback && bearer(&req).is_some_and(|t| token_eq(t, expected)) {
+            return forward(req, next, AuthLane::Public).await;
+        }
     }
     // Fingerprint is attached by `serve_https` from the verified peer cert. Paired-to-stream
     // is not paired-to-administer: only [`cert_may_access`]; everything else needs the bearer.

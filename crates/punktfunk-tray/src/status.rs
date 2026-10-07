@@ -3,7 +3,9 @@
 //! Service-manager state is first: SCM (Windows) / systemd user unit (Linux)
 //! decides stopped-vs-running. A listener on the mgmt port while the service is
 //! down cannot make the tray say Running. After Running, the poller reads
-//! loopback `GET /api/v1/local/summary` for streaming detail.
+//! loopback `GET /api/v1/local/summary` for streaming detail, with the bearer
+//! the host leaves in `<config_dir>/tray-token` for every local account. A
+//! denied read means this account is not the host's: the tray exits.
 //!
 //! Linux pins the mgmt agent to the host identity cert when the same-user file
 //! is readable. Windows cannot: the cert is SYSTEM/Admins-DACL'd. Platform
@@ -246,7 +248,7 @@ fn poll_loop(
         }
         let (svc, companions) = probe_services();
         let summary = if svc == ServiceState::Running {
-            let s = fetch_summary(&mgmt_agent, &summary_url());
+            let s = fetch_summary(&mgmt_agent, &summary_url(), tray_token().as_deref());
             match s {
                 Some(_) => unreachable_since = None,
                 None if unreachable_since.is_none() => unreachable_since = Some(Instant::now()),
@@ -298,14 +300,24 @@ fn probe_console(agent: &ureq::Agent, url: &str) -> bool {
     }
 }
 
-fn fetch_summary(agent: &ureq::Agent, url: &str) -> Option<Summary> {
-    let body = agent
-        .get(url)
-        .call()
-        .ok()?
-        .body_mut()
-        .read_to_string()
-        .ok()?;
+/// Per poll, like the endpoint: the host mints a new token at every start. `None` is a host
+/// that has not written one yet, or one older than the token; the request then goes bare.
+/// A denied read is another account's host, so the tray has nothing to show and exits.
+fn tray_token() -> Option<String> {
+    let path = pf_paths::config_dir().join("tray-token");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => pf_paths::env_file::get(&text, "PUNKTFUNK_TRAY_TOKEN").map(str::to_owned),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => std::process::exit(0),
+        Err(_) => None,
+    }
+}
+
+fn fetch_summary(agent: &ureq::Agent, url: &str, token: Option<&str>) -> Option<Summary> {
+    let mut req = agent.get(url);
+    if let Some(token) = token {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let body = req.call().ok()?.body_mut().read_to_string().ok()?;
     serde_json::from_str(&body).ok()
 }
 

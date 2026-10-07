@@ -665,6 +665,21 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
     if opts.token.is_none() {
         opts.token = Some(crate::mgmt_token::load_or_generate()?);
     }
+    // Installs before this build granted every local account read on the config tree.
+    #[cfg(windows)]
+    crate::plugins::converge_config_dir_acls();
+    // The tray's bearer. A seat host has no tray and serves no summary. Not fatal: the tray
+    // then shows the host as running without detail.
+    #[cfg(target_os = "windows")]
+    let seat_host = seat::is_seat_host();
+    #[cfg(not(target_os = "windows"))]
+    let seat_host = false;
+    if !seat_host {
+        match crate::mgmt_token::mint_tray_token() {
+            Ok(t) => opts.tray_token = Some(t),
+            Err(e) => tracing::warn!(error = %format!("{e:#}"), "tray token not written"),
+        }
+    }
     // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
     // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.
     let runner = crate::plugins::runtime_status();

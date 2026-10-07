@@ -5,12 +5,12 @@
 //!
 //! [`config_dir`] is XDG / `%ProgramData%`, overridable with `PUNKTFUNK_CONFIG_DIR`.
 //! [`seat_home`] is the XDG data dir a seat's nested Steam runs under.
-//! [`create_private_dir`] / [`create_secret_dir`] / [`write_secret_file`] apply
-//! 0700 / 0600 on Unix and a restrictive DACL on Windows. Secret dirs omit the
-//! `BUILTIN\Users` read grant the config dir needs for the tray. [`replace_file`] /
-//! [`replace_secret_file`] are the one temp-and-rename writer for stores. [`system32`] is how a
-//! privileged process names a Windows system tool; [`remove_device`] runs one. [`seat`] is the
-//! Windows multi-seat marker.
+//! [`create_private_dir`] / [`write_secret_file`] apply 0700 / 0600 on Unix and a
+//! SYSTEM/Administrators DACL on Windows. [`replace_file`] / [`replace_secret_file`] /
+//! [`replace_users_readable_file`] are the one temp-and-rename writer for stores; the last
+//! is for the two files every local account may read, `mgmt-endpoint` and `tray-token`.
+//! [`system32`] is how a privileged process names a Windows system tool; [`remove_device`]
+//! runs one. [`seat`] is the Windows multi-seat marker.
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -216,28 +216,10 @@ pub fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
         #[cfg(windows)]
         if r.is_ok() {
             let _hold = hold_plain_directory(dir)?;
-            restrict_dir_to_system_admins(dir, first_hardening_of(dir), true);
+            restrict_dir_to_system_admins(dir, first_hardening_of(dir));
         }
         r
     }
-}
-
-/// [`create_private_dir`] without the Windows `BUILTIN\Users` read grant.
-///
-/// The config dir's `Users:(OI)(CI)(RX)` is for the tray's `mgmt-endpoint`
-/// read. `(OI)` would otherwise make every file under it (logs, uploaded
-/// client bundles) Users-readable. Unix is already 0700.
-pub fn create_secret_dir(dir: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        reject_reparse_point(dir)?;
-        std::fs::create_dir_all(dir)?;
-        let _hold = hold_plain_directory(dir)?;
-        restrict_dir_to_system_admins(dir, first_hardening_of(dir), false);
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    create_private_dir(dir)
 }
 
 #[cfg(windows)]
@@ -369,10 +351,10 @@ pub fn remove_device(instance_id: &str) -> std::io::Result<()> {
 
 /// Default `%ProgramData%` lets `BUILTIN\Users` create and become
 /// `CREATOR OWNER`. Re-owns to Administrators, resets the dir's own ACL, strips
-/// inheritance, grants SYSTEM/Administrators `(OI)(CI)(F)`. `users_read` adds Users
-/// `(OI)(CI)(RX)` so the tray can read non-secret config. Hard-coded SIDs; never fatal.
+/// inheritance, grants SYSTEM/Administrators `(OI)(CI)(F)` and nobody else: a
+/// file a local account may read carries its own ACE. Hard-coded SIDs; never fatal.
 #[cfg(windows)]
-fn restrict_dir_to_system_admins(dir: &std::path::Path, deep: bool, users_read: bool) {
+fn restrict_dir_to_system_admins(dir: &std::path::Path, deep: bool) {
     let icacls = system32("icacls.exe");
     // Re-own to Administrators first: an owner keeps WRITE_DAC.
     // `deep` (once per dir per process) also re-owns contents; directory-only
@@ -398,19 +380,15 @@ fn restrict_dir_to_system_admins(dir: &std::path::Path, deep: bool, users_read: 
         .status();
     // Do not grant OWNER `(OI)(CI)(F)` — WRITE_DAC comes back on every child
     // the attacker already owned. SYSTEM and Administrators cover writers here.
-    let mut acl = std::process::Command::new(&icacls);
-    acl.arg(dir.as_os_str()).args([
-        "/inheritance:r",
-        "/grant:r",
-        "*S-1-5-18:(OI)(CI)(F)", // NT AUTHORITY\SYSTEM
-        "/grant:r",
-        "*S-1-5-32-544:(OI)(CI)(F)", // BUILTIN\Administrators
-    ]);
-    if users_read {
-        // Users read-only. `(OI)` hits every file born here — secret dirs omit this ACE.
-        acl.args(["/grant:r", "*S-1-5-32-545:(OI)(CI)(RX)"]);
-    }
-    let status = acl
+    let status = std::process::Command::new(&icacls)
+        .arg(dir.as_os_str())
+        .args([
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)(F)", // NT AUTHORITY\SYSTEM
+            "/grant:r",
+            "*S-1-5-32-544:(OI)(CI)(F)", // BUILTIN\Administrators
+        ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -426,11 +404,10 @@ fn restrict_dir_to_system_admins(dir: &std::path::Path, deep: bool, users_read: 
 /// Unix: create and re-chmod 0600 so it is never group/world-readable.
 /// Windows: `OpenOptions` cannot pass `SECURITY_ATTRIBUTES` and this crate
 /// forbids `unsafe`, so the file is created empty, `icacls`'d, then written.
-/// The DACL step is fatal; a failure unlinks the still-empty file. The config
-/// dir grants `Users (OI)(CI)(RX)`, and Windows checks access only at open, so
-/// the file is held unshared: no reader can open it while that DACL stands and
-/// keep the handle for the bytes. `icacls` opens for the DACL alone, which
-/// sharing does not gate.
+/// The DACL step is fatal; a failure unlinks the still-empty file. Windows
+/// checks access only at open, so the file is held unshared until its own DACL
+/// stands: a reader admitted by the inherited one cannot keep a handle for the
+/// bytes. `icacls` opens for the DACL alone, which sharing does not gate.
 /// The bytes reach the disk before return, so a rename after it never publishes an empty file.
 pub fn write_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
@@ -487,37 +464,74 @@ pub fn write_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::Re
 /// power cut sees the old file or the new one, never half of either. Default permissions; the
 /// parent is made with `create_dir_all`.
 pub fn replace_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    replace(path, contents, false)
+    replace(path, contents, Temp::Plain)
 }
 
 /// [`replace_file`] for an owner-only file: the parent is a [`create_private_dir`] and the temp
 /// a [`write_secret_file`], whose mode or DACL the rename carries to `path`.
 pub fn replace_secret_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    replace(path, contents, true)
+    replace(path, contents, Temp::Secret)
+}
+
+/// [`replace_secret_file`] whose result every local account may read. Windows adds
+/// `BUILTIN\Users:(R)` to the temp before the rename, so a reader sees the old file or the
+/// readable new one, never a locked one. Unix stays owner-only: the host's user is the reader.
+pub fn replace_users_readable_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    replace(path, contents, Temp::UsersReadable)
+}
+
+/// How [`replace`] makes its temp, and so the published file.
+#[derive(Clone, Copy, PartialEq)]
+enum Temp {
+    Plain,
+    Secret,
+    UsersReadable,
 }
 
 /// The temp is removed on every error. A crash between write and rename leaves it behind:
 /// nothing reaps `*.tmp`, since another writer may own an in-flight one.
-fn replace(path: &std::path::Path, contents: &[u8], secret: bool) -> std::io::Result<()> {
+fn replace(path: &std::path::Path, contents: &[u8], mode: Temp) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
-        if secret {
-            create_private_dir(dir)?;
-        } else {
+        if mode == Temp::Plain {
             std::fs::create_dir_all(dir)?;
+        } else {
+            create_private_dir(dir)?;
         }
     }
     let tmp = TmpFile(Some(unique_tmp_path(path)));
-    if secret {
-        write_secret_file(tmp.path(), contents)?;
-    } else {
+    if mode == Temp::Plain {
         use std::io::Write;
         let mut f = std::fs::File::create(tmp.path())?;
         f.write_all(contents)?;
         f.sync_all()?;
+    } else {
+        write_secret_file(tmp.path(), contents)?;
+    }
+    #[cfg(windows)]
+    if mode == Temp::UsersReadable {
+        grant_users_read(tmp.path())?;
     }
     std::fs::rename(tmp.path(), path)?;
     tmp.published();
     Ok(())
+}
+
+/// `BUILTIN\Users:(R)` beside the SYSTEM/Administrators ACEs [`write_secret_file`] set.
+#[cfg(windows)]
+fn grant_users_read(path: &std::path::Path) -> std::io::Result<()> {
+    let status = std::process::Command::new(system32("icacls.exe"))
+        .arg(path.as_os_str())
+        .args(["/grant:r", "*S-1-5-32-545:(R)"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "icacls grant Users read on {} ({status})",
+        path.display()
+    )))
 }
 
 /// `<name>.<pid>.<n>.tmp`. The pid keeps the CLI and the service apart; `n` keeps threads
@@ -745,9 +759,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pf-paths-secret-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
 
-        create_secret_dir(&dir).unwrap();
+        create_private_dir(&dir).unwrap();
         let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir), 0o700, "a secrets dir is owner-only");
+
+        let shared = dir.join("tray-token");
+        replace_users_readable_file(&shared, b"PUNKTFUNK_TRAY_TOKEN=abc\n").unwrap();
+        assert_eq!(
+            mode(&shared),
+            0o600,
+            "Unix has no Users ACE: the dir is the boundary"
+        );
+        assert_eq!(
+            env_file::get(
+                &std::fs::read_to_string(&shared).unwrap(),
+                "PUNKTFUNK_TRAY_TOKEN"
+            ),
+            Some("abc")
+        );
 
         let key = dir.join("key.pem");
         write_secret_file(&key, b"-----BEGIN PRIVATE KEY-----\n").unwrap();

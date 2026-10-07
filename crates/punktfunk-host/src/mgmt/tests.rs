@@ -93,6 +93,7 @@ fn test_app(state: Arc<AppState>, token: Option<&str>) -> Router {
         Some(token.unwrap_or("test-secret").to_string()),
         Some("plugin-secret".to_string()),
         shared_plugin_tokens(test_plugin_tokens()),
+        Some(TRAY_TOKEN.to_string()),
         DEFAULT_PORT,
         None,
         stats,
@@ -114,6 +115,7 @@ fn test_app_browser(state: Arc<AppState>) -> Router {
         Some("test-secret".to_string()),
         Some("plugin-secret".to_string()),
         shared_plugin_tokens(test_plugin_tokens()),
+        Some(TRAY_TOKEN.to_string()),
         DEFAULT_PORT,
         None,
         stats,
@@ -133,6 +135,7 @@ fn test_app_native(state: Arc<AppState>, np: Arc<crate::native_pairing::NativePa
         Some("test-secret".to_string()),
         Some("plugin-secret".to_string()),
         shared_plugin_tokens(test_plugin_tokens()),
+        Some(TRAY_TOKEN.to_string()),
         DEFAULT_PORT,
         Some(np),
         stats,
@@ -603,10 +606,21 @@ async fn health_is_open_and_versioned() {
     assert_eq!(body["abi_version"], punktfunk_core::ABI_VERSION);
 }
 
+/// The bearer every test app mints for `/local/summary`; distinct from the admin and plugin ones.
+const TRAY_TOKEN: &str = "tray-secret";
+
+/// The tray's own call: its token, from loopback.
 fn summary_req() -> axum::http::Request<Body> {
+    summary_req_from("127.0.0.1:40000")
+}
+
+fn summary_req_from(peer: &str) -> axum::http::Request<Body> {
     let mut req = get_req("/api/v1/local/summary");
-    req.extensions_mut()
-        .insert(PeerAddr("127.0.0.1:40000".parse().unwrap()));
+    req.extensions_mut().insert(PeerAddr(peer.parse().unwrap()));
+    req.headers_mut().insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_static("Bearer tray-secret"),
+    );
     req
 }
 
@@ -989,11 +1003,12 @@ async fn local_summary_reports_a_native_session_as_streaming() {
     );
 }
 
-/// `/local/summary` is unauthenticated for loopback only. The body must not carry PINs,
-/// fingerprints, or a paired-but-idle device's name. This test pairs a device and registers
-/// no session so `client_name` stays absent.
+/// `/local/summary` takes the tray token from loopback: position alone is nobody on a box
+/// with several accounts, and a LAN peer is refused with the token. The body must not carry
+/// PINs, fingerprints, or a paired-but-idle device's name. This test pairs a device and
+/// registers no session so `client_name` stays absent.
 #[tokio::test]
-async fn local_summary_is_loopback_only_and_non_sensitive() {
+async fn local_summary_takes_the_tray_token_from_loopback_only_and_is_non_sensitive() {
     let _serial = crate::session_status::tests::REGISTRY.lock().await;
     let np = Arc::new(
         crate::native_pairing::NativePairing::load_with(
@@ -1006,10 +1021,7 @@ async fn local_summary_is_loopback_only_and_non_sensitive() {
     np.add("secret-device-name", "deadbeefcafe0123").unwrap();
     let app = test_app_native(test_state(), np);
 
-    let mut req = get_req("/api/v1/local/summary");
-    req.extensions_mut()
-        .insert(PeerAddr("127.0.0.1:40000".parse().unwrap()));
-    let (status, body) = send(&app, req).await;
+    let (status, body) = send(&app, summary_req()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["video_streaming"], false);
     assert_eq!(body["native_paired_clients"], 1);
@@ -1021,21 +1033,42 @@ async fn local_summary_is_loopback_only_and_non_sensitive() {
         "summary must not leak fingerprints or device names: {raw}"
     );
 
-    let mut req = get_req("/api/v1/local/summary");
-    req.extensions_mut()
-        .insert(PeerAddr("192.168.1.50:40000".parse().unwrap()));
-    let (status, _) = send(&app, req).await;
+    let (status, _) = send(&app, summary_req_from("192.168.1.50:40000")).await;
     assert_eq!(
         status,
         StatusCode::UNAUTHORIZED,
-        "the local summary must be rejected for a LAN peer"
+        "the local summary must be rejected for a LAN peer, token or not"
     );
 
-    let mut req = get_req("/api/v1/local/summary");
-    req.extensions_mut()
-        .insert(PeerAddr("[::1]:40000".parse().unwrap()));
-    let (status, _) = send(&app, req).await;
+    let (status, _) = send(&app, summary_req_from("[::1]:40000")).await;
     assert_eq!(status, StatusCode::OK, "::1 is a loopback peer");
+
+    // Loopback with no bearer at all: a `send` without one is the bare tray of an older build.
+    let mut bare = get_req("/api/v1/local/summary");
+    bare.extensions_mut()
+        .insert(PeerAddr("127.0.0.1:40000".parse().unwrap()));
+    bare.headers_mut().insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_static("Bearer not-the-tray-token"),
+    );
+    let (status, _) = send(&app, bare).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "loopback is not a credential: a wrong bearer is refused"
+    );
+
+    // `ctl summary` presents the admin token and reaches it through its own lane.
+    let mut admin = get_req("/api/v1/local/summary");
+    admin
+        .extensions_mut()
+        .insert(PeerAddr("127.0.0.1:40000".parse().unwrap()));
+    let (status, _) = send(&app, admin).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the admin bearer still reads the summary"
+    );
 }
 
 #[tokio::test]
@@ -1203,6 +1236,7 @@ async fn host_info_publishes_the_hosts_own_fingerprint() {
         Some("test-secret".to_string()),
         Some("plugin-secret".to_string()),
         shared_plugin_tokens(test_plugin_tokens()),
+        Some(TRAY_TOKEN.to_string()),
         DEFAULT_PORT,
         None,
         stats,
@@ -1683,6 +1717,7 @@ async fn a_refreshed_plugin_token_takes_effect_live() {
         Some("test-secret".to_string()),
         Some("plugin-secret".to_string()),
         tokens.clone(),
+        Some(TRAY_TOKEN.to_string()),
         DEFAULT_PORT,
         None,
         stats,
@@ -4938,11 +4973,11 @@ async fn the_loopback_lane_is_never_readable_cross_origin() {
         "a preflight here would tell a page it is welcome to try"
     );
 
-    let mut req = get_req("/api/v1/local/summary");
+    let mut req = summary_req();
     req.headers_mut()
         .insert(header::ORIGIN, origin.parse().unwrap());
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "loopback still reads it");
+    assert_eq!(res.status(), StatusCode::OK, "the tray still reads it");
     assert!(
         res.headers()
             .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
@@ -5061,6 +5096,7 @@ fn test_app_access(state: Arc<AppState>, access_dir: &std::path::Path) -> Router
             ("demo".to_string(), "demo-secret".to_string()),
             ("other".to_string(), "other-secret".to_string()),
         ])),
+        Some(TRAY_TOKEN.to_string()),
         DEFAULT_PORT,
         None,
         stats,
