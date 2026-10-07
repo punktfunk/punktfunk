@@ -31,6 +31,17 @@ import { levelLabel } from "@/sections/Devices/access";
  * running without a stream. The shapes are shared by the box's rows and a seat's (`index.tsx`).
  */
 
+/** A game's cover at the head of its row, or a pad where the library has none. */
+const Cover: FC<{ art?: string }> = ({ art }) => (
+	<div className="flex h-14 w-10 items-center justify-center overflow-hidden rounded-md bg-muted shadow-sm ring-1 ring-border">
+		{art ? (
+			<img src={art} alt="" loading="lazy" className="size-full object-cover" />
+		) : (
+			<Gamepad2 className="size-4 text-muted-foreground/60" />
+		)}
+	</div>
+);
+
 /** The row frame: who, what, the facts line, then its actions. Rows rise in one after another. */
 const Frame: FC<{
 	lead: ReactNode;
@@ -41,11 +52,9 @@ const Frame: FC<{
 }> = ({ lead, title, facts, details, actions }) => (
 	<motion.li
 		variants={ROW}
-		className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"
+		className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
 	>
-		<div className="flex h-8 w-8 shrink-0 items-center justify-center">
-			{lead}
-		</div>
+		<div className="flex w-10 shrink-0 items-center justify-center">{lead}</div>
 		<div className="min-w-0 flex-1">
 			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">{title}</div>
 			<p className="mt-0.5 text-xs text-muted-foreground">{facts}</p>
@@ -160,6 +169,8 @@ export const SessionRowView: FC<
 		seat?: boolean;
 		/** The primary action, when it is not this session's Stop. */
 		end?: { label: string; onEnd: () => void };
+		/** The streamed game's cover, when the library has one. */
+		art?: string;
 	}
 > = ({
 	row,
@@ -170,6 +181,7 @@ export const SessionRowView: FC<
 	sharedWith,
 	seat,
 	end,
+	art,
 	onStop,
 	onIdr,
 	onMute,
@@ -179,8 +191,12 @@ export const SessionRowView: FC<
 }) => {
 	const perSession = row.id != null;
 	const nativeLanes = row.plane !== "gamestream";
+	// With a game, the game is the title and the player drops to the facts line.
+	const who = [profile?.display_name, row.client_name || row.client]
+		.filter(Boolean)
+		.join(" · ");
 	const facts = [
-		game?.title,
+		game ? who : undefined,
 		seat ? m.home_own_desktop() : undefined,
 		row.mode,
 		stream
@@ -200,7 +216,9 @@ export const SessionRowView: FC<
 	return (
 		<Frame
 			lead={
-				profile ? (
+				game ? (
+					<Cover art={art} />
+				) : profile ? (
 					<ProfileAvatar profile={profile} className="size-7 text-xs" />
 				) : (
 					<MonitorPlay className="size-4 text-muted-foreground" />
@@ -209,7 +227,11 @@ export const SessionRowView: FC<
 			title={
 				<>
 					<span className="size-2 rounded-full bg-[var(--success)]" />
-					<Who profile={profile} device={row.client_name || row.client} />
+					{game ? (
+						<span className="truncate font-medium">{game.title}</span>
+					) : (
+						<Who profile={profile} device={row.client_name || row.client} />
+					)}
 					{row.muted && <Badge variant="secondary">{m.sessions_muted()}</Badge>}
 					{row.pads.map((slot) => (
 						<Badge key={slot} variant="outline" className="tabular-nums">
@@ -318,20 +340,7 @@ export const GameRowView: FC<{
 	const waiting = game.state === "grace";
 	return (
 		<Frame
-			lead={
-				<div className="flex h-8 w-6 items-center justify-center overflow-hidden rounded bg-muted">
-					{art ? (
-						<img
-							src={art}
-							alt=""
-							loading="lazy"
-							className="size-full object-cover"
-						/>
-					) : (
-						<Gamepad2 className="size-4 text-muted-foreground/60" />
-					)}
-				</div>
-			}
+			lead={<Cover art={art} />}
 			title={
 				<>
 					<span className="truncate font-medium">{game.title}</span>
@@ -429,15 +438,13 @@ function endedLabel(s: SessionSummary): string {
 }
 
 /**
- * With nothing live, the last session in one line; its numbers fold under it. Copy hands over
- * the API's own answer, so what is pasted into an issue is what the host said.
+ * One past session: the device, how long, when; its numbers fold under it. Copy hands over the
+ * API's own answer, so what is pasted into an issue is what the host said.
  */
-export const LastLine: FC<{ session?: SessionSummary }> = ({ session }) => {
+export const RecentSessionRow: FC<{ session: SessionSummary }> = ({
+	session,
+}) => {
 	const [copied, setCopied] = useState(false);
-	if (!session)
-		return (
-			<p className="text-sm text-muted-foreground">{m.home_now_empty()}</p>
-		);
 	const span = session.bitrate;
 	const facts = [
 		session.mode,
@@ -468,14 +475,17 @@ export const LastLine: FC<{ session?: SessionSummary }> = ({ session }) => {
 		}
 	};
 	return (
-		<div className="text-sm">
-			<p className="text-muted-foreground">
-				{m.home_last({
-					device: session.client_name || session.client,
-					duration: fmtSpan(session.duration_s),
-					ago: fmtAgo(session.started_unix + session.duration_s),
-				})}
-			</p>
+		<motion.li variants={ROW} className="py-3 first:pt-0 last:pb-0">
+			<div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
+				<span className="font-medium">
+					{session.client_name || session.client}
+				</span>
+				<span className="text-muted-foreground">
+					{fmtSpan(session.duration_s)} ·{" "}
+					{fmtAgo(session.started_unix + session.duration_s)} · {session.mode} ·{" "}
+					{session.codec.toUpperCase()}
+				</span>
+			</div>
 			<Details>
 				<p className="text-xs text-muted-foreground tabular-nums">
 					{facts.join(" · ")}
@@ -489,7 +499,7 @@ export const LastLine: FC<{ session?: SessionSummary }> = ({ session }) => {
 					{copied ? m.status_last_copied() : m.status_last_copy()}
 				</Button>
 			</Details>
-		</div>
+		</motion.li>
 	);
 };
 

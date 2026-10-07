@@ -5,6 +5,8 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
+import { History } from "lucide-react";
+import { motion } from "motion/react";
 import type { FC } from "react";
 import {
 	getGetStatusQueryKey,
@@ -19,6 +21,7 @@ import type { ActiveGame } from "@/api/gen/model/activeGame";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
+import type { SessionSummary } from "@/api/gen/model/sessionSummary";
 import {
 	endProfileSession,
 	getListProfilesQueryKey,
@@ -39,6 +42,8 @@ import {
 import { isFullSeat, seatClient } from "@/api/seat";
 import { useDialogs } from "@/components/dialogs";
 import type { AvatarProfile } from "@/components/profile-avatar";
+import { ROW_GAP, staggerProps } from "@/components/stagger";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
@@ -46,7 +51,7 @@ import { ActivityCard } from "@/sections/Activity";
 import { Attention } from "./Attention";
 import {
 	GameRowView,
-	LastLine,
+	RecentSessionRow,
 	SeatRowView,
 	type SessionActions,
 	SessionRowView,
@@ -55,6 +60,30 @@ import { HomeView } from "./view";
 
 const failed = (fallback: string) => (e: unknown) =>
 	toast.error(apiErrorMessage(e) ?? fallback);
+
+/** How many past sessions Home shows; the host keeps only a handful anyway. */
+const RECENT_MAX = 5;
+
+/** The last few sessions, newest first. */
+export const RecentSessionsCard: FC<{ sessions: SessionSummary[] }> = ({
+	sessions,
+}) => (
+	<Card>
+		<CardHeader>
+			<CardTitle className="flex items-center gap-2">
+				<History className="size-4" />
+				{m.home_recent_sessions()}
+			</CardTitle>
+		</CardHeader>
+		<CardContent>
+			<motion.ul {...staggerProps(ROW_GAP)} className="flex flex-col divide-y">
+				{sessions.slice(0, RECENT_MAX).map((s) => (
+					<RecentSessionRow key={`${s.id}:${s.started_unix}`} session={s} />
+				))}
+			</motion.ul>
+		</CardContent>
+	</Card>
+);
 
 /**
  * The per-session verbs, against whichever host the surrounding query client reaches: the box's,
@@ -154,18 +183,21 @@ const SessionRows: FC<{
 	status: RuntimeStatus;
 	actions: SessionActions;
 	profileOf: (row: SessionRow) => AvatarProfile | undefined;
+	coverOf?: (game: ActiveGame) => string | undefined;
 	seat?: boolean;
 	end?: { label: string; onEnd: () => void };
-}> = ({ status: s, actions, profileOf, seat, end }) => (
+}> = ({ status: s, actions, profileOf, coverOf, seat, end }) => (
 	<>
 		{s.sessions.map((row, i) => {
 			const lead = representative(s, row);
+			const game = gameOf(s, row);
 			return (
 				<SessionRowView
 					key={`${row.plane}:${row.id ?? "compat"}:${i}`}
 					row={row}
 					profile={profileOf(row)}
-					game={gameOf(s, row)}
+					game={game}
+					art={game && coverOf ? coverOf(game) : undefined}
 					stream={lead ? s.stream : undefined}
 					info={lead ? s.session : undefined}
 					sharedWith={(row.shared_path_with ?? []).map((id) => {
@@ -341,7 +373,12 @@ export const SectionHome: FC = () => {
 			now={
 				s && (
 					<>
-						<SessionRows status={s} actions={actions} profileOf={profileOf} />
+						<SessionRows
+							status={s}
+							actions={actions}
+							profileOf={profileOf}
+							coverOf={coverOf}
+						/>
 						{seats.map((p) =>
 							p.seat?.state === "starting" ? (
 								<SeatRowView
@@ -381,7 +418,11 @@ export const SectionHome: FC = () => {
 					</>
 				)
 			}
-			last={<LastLine session={recent.data?.sessions?.[0]} />}
+			sessions={
+				recent.data && recent.data.sessions.length > 0 ? (
+					<RecentSessionsCard sessions={recent.data.sessions} />
+				) : null
+			}
 			recent={<ActivityCard />}
 		/>
 	);

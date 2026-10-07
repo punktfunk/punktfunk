@@ -82,6 +82,7 @@
 	"home_now": "Now",
 	"home_now_empty": "Nothing is streaming.",
 	"home_last": "Last: {device}, {duration}, {ago}",
+	"home_recent_sessions": "Recent sessions",
 	"home_attention_pending": "Waiting for approval: {names}",
 	"home_attention_audio": "Audio endpoint not ready: {state}",
 	"home_own_desktop": "Own desktop",

@@ -78,6 +78,7 @@
 	"home_now": "Jetzt",
 	"home_now_empty": "Gerade streamt nichts.",
 	"home_last": "Zuletzt: {device}, {duration}, {ago}",
+	"home_recent_sessions": "Letzte Sitzungen",
 	"home_attention_pending": "Wartet auf Freigabe: {names}",
 	"home_attention_audio": "Audio-Endpunkt nicht bereit: {state}",
 	"home_own_desktop": "Eigener Desktop",

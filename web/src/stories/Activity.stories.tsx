@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useEffect, useState } from "react";
 import type { ActivityEntry } from "@/api/events";
-import { ActivityCardView, ActivityList } from "@/sections/Activity";
+import { ActivityCardView, ActivityList, collapse } from "@/sections/Activity";
 
 /**
  * The activity feed (design/web-console-overhaul.md §4).
@@ -68,7 +68,7 @@ export const Card: Story = {
 export const Rows: Story = {
 	render: () => (
 		<div className="max-w-3xl">
-			<ActivityList entries={entries} />
+			<ActivityList entries={collapse(entries)} />
 		</div>
 	),
 };

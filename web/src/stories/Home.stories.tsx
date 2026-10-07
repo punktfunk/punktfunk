@@ -2,10 +2,10 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { HostCheck } from "@/api/gen/model/hostCheck";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { AvatarProfile } from "@/components/profile-avatar";
+import { RecentSessionsCard } from "@/sections/Home";
 import { AttentionStrip } from "@/sections/Home/Attention";
 import {
 	GameRowView,
-	LastLine,
 	SeatRowView,
 	SessionRowView,
 } from "@/sections/Home/NowRows";
@@ -66,7 +66,7 @@ const meta = {
 		status: loaded(statusActive),
 		live: true,
 		now: boxRows(statusActive),
-		last: <LastLine session={lastSession} />,
+		sessions: <RecentSessionsCard sessions={[lastSession]} />,
 	},
 } satisfies Meta<typeof HomeView>;
 

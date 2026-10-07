@@ -78,7 +78,25 @@ const ROW_EXIT = { opacity: 0, y: 6 };
  * (`useActivityReady`). A row mounting into a list already on screen animates by itself, at once,
  * which is what a live arrival should do.
  */
-export const ActivityList: FC<{ entries: ActivityEntry[] }> = ({ entries }) => (
+/** An entry, with how many identical ones followed it in a row. */
+export type ActivityRow = ActivityEntry & { count: number };
+
+/**
+ * Consecutive events of one kind that say the same thing fold into one row: a sync that fires
+ * `library.changed` six times in a second is one line, not six.
+ */
+export function collapse(entries: ActivityEntry[]): ActivityRow[] {
+	const out: ActivityRow[] = [];
+	for (const e of entries) {
+		const last = out[out.length - 1];
+		if (last && last.kind === e.kind && describe(last) === describe(e))
+			last.count += 1;
+		else out.push({ ...e, count: 1 });
+	}
+	return out;
+}
+
+export const ActivityList: FC<{ entries: ActivityRow[] }> = ({ entries }) => (
 	<motion.ul
 		variants={{ from: {}, enter: {} }}
 		transition={{ delayChildren: rowDelay }}
@@ -94,6 +112,11 @@ export const ActivityList: FC<{ entries: ActivityEntry[] }> = ({ entries }) => (
 					className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0"
 				>
 					<Badge variant={toneFor(e.kind)}>{eventKindLabel(e.kind)}</Badge>
+					{e.count > 1 && (
+						<span className="text-xs tabular-nums text-muted-foreground">
+							×{e.count}
+						</span>
+					)}
 					<span className="min-w-0 flex-1 truncate text-sm">{describe(e)}</span>
 					<time
 						dateTime={new Date(e.ts_ms).toISOString()}
@@ -123,6 +146,7 @@ export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 	entries,
 }) => {
 	const [all, setAll] = useState(false);
+	const rows = collapse(entries);
 	return (
 		<Card>
 			<CardHeader>
@@ -136,16 +160,14 @@ export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 					<p className="text-sm text-muted-foreground">{m.activity_empty()}</p>
 				) : (
 					<>
-						<ActivityList
-							entries={all ? entries : entries.slice(0, CARD_MAX)}
-						/>
+						<ActivityList entries={all ? rows : rows.slice(0, CARD_MAX)} />
 						{all ? (
 							// The ring is per page load; a reader at its bottom has earned that fact.
 							<p className="border-t pt-3 text-xs text-muted-foreground">
 								{m.activity_ring_note()}
 							</p>
 						) : (
-							entries.length > CARD_MAX && (
+							rows.length > CARD_MAX && (
 								<div className="flex justify-end border-t pt-3">
 									<Button
 										variant="ghost"
