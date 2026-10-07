@@ -331,13 +331,23 @@ async fn serve<R: AsyncReadExt + Unpin>(
                                 Some(due) => tokio::time::sleep_until(due).await,
                                 None => tokio::time::sleep(period).await,
                             }
-                            let resp = intf.handler.lock().unwrap().handle_urb(
-                                &intf,
-                                ep,
-                                transfer_buffer_length,
-                                setup,
-                                &[],
-                            );
+                            // `WouldBlock` is a NAK (punktfunk addition): the poll stays
+                            // pending and asks again each period, as a device with nothing new.
+                            let resp = loop {
+                                let resp = intf.handler.lock().unwrap().handle_urb(
+                                    &intf,
+                                    ep,
+                                    transfer_buffer_length,
+                                    setup,
+                                    &[],
+                                );
+                                match resp {
+                                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                        tokio::time::sleep(period).await
+                                    }
+                                    resp => break resp,
+                                }
+                            };
                             let res =
                                 submit_reply(&header, real_ep, resp, transfer_buffer_length, None);
                             // Send under the lock: CMD_UNLINK either cancels this URB or queues after it.

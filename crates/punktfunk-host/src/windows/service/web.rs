@@ -7,7 +7,7 @@ use super::*;
 
 pub(super) fn web_log_path() -> PathBuf {
     let dir = pf_paths::config_dir().join("logs");
-    let _ = pf_paths::create_secret_dir(&dir);
+    let _ = pf_paths::create_private_dir(&dir);
     dir.join("web.log")
 }
 

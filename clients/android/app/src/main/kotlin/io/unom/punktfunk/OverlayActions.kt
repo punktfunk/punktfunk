@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.Gamepad
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -38,6 +39,9 @@ sealed class SlotId {
     /** Controller mouse: the pad drives the host pointer instead of its virtual pad. */
     object PadMouse : SlotId()
 
+    /** Step the controller type the host emulates, live ([nextPadType]). */
+    object PadType : SlotId()
+
     /** Silence this device's speakers. Local: the host keeps playing for anyone joined to it. */
     object StreamMute : SlotId()
 
@@ -61,6 +65,7 @@ sealed class SlotId {
             Guide -> "guide"
             Qam -> "qam"
             PadMouse -> "pad_mouse"
+            PadType -> "pad_type"
             StreamMute -> "stream_mute"
             SwapScreens -> "swap_screens"
             is Host -> "host:$actionId"
@@ -82,6 +87,7 @@ sealed class SlotId {
             "guide" -> Guide
             "qam" -> Qam
             "pad_mouse" -> PadMouse
+            "pad_type" -> PadType
             "stream_mute" -> StreamMute
             "swap_screens" -> SwapScreens
             else -> when {
@@ -91,6 +97,30 @@ sealed class SlotId {
             }
         }
     }
+}
+
+/** What the Controller type slot steps through, as GamepadPref wire bytes: Automatic, then the
+ *  pads every host builds. Twin of the Rust `PAD_TYPE_CYCLE`. */
+val PAD_TYPE_CYCLE = intArrayOf(
+    Gamepad.PREF_AUTO, Gamepad.PREF_XBOX360, Gamepad.PREF_XBOXONE,
+    Gamepad.PREF_DUALSENSE, Gamepad.PREF_DUALSHOCK4, Gamepad.PREF_STEAMDECK,
+)
+
+/** The type after [current]; one outside the cycle (picked in Settings) steps to Automatic. */
+fun nextPadType(current: Int): Int {
+    val at = PAD_TYPE_CYCLE.indexOf(current)
+    return if (at < 0) Gamepad.PREF_AUTO else PAD_TYPE_CYCLE[(at + 1) % PAD_TYPE_CYCLE.size]
+}
+
+/** The Controller type slot's state word. */
+fun padTypeLabel(pref: Int): String = when (pref) {
+    Gamepad.PREF_AUTO -> "Automatic"
+    Gamepad.PREF_XBOX360 -> "Xbox 360"
+    Gamepad.PREF_XBOXONE -> "Xbox One"
+    Gamepad.PREF_DUALSENSE -> "DualSense"
+    Gamepad.PREF_DUALSHOCK4 -> "DualShock 4"
+    Gamepad.PREF_STEAMDECK -> "Steam Deck"
+    else -> "Other"
 }
 
 /** A custom key chord. [keys] are names from the shared keymap tables, never raw key codes. */

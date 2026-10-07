@@ -9,20 +9,25 @@
 //! that owned those bytes. Interrupt-OUT and SET_REPORT traffic is returned
 //! to the physical-device owner.
 //!
+//! Pads behind one physical Puck share one virtual Puck ([`PuckHub`]) at their
+//! own slots, as the client names them in its identity.
+//!
 //! Pin the topologies with [`tests::device_matches_wired_capture`] and
 //! [`tests::device_matches_puck_capture`]. Attach is
 //! [`super::steam_usbip::attach_device`].
 
 use super::steam_usbip::{attach_device, boxed, UsbipAttachment};
 use super::triton_proto::{
-    parse_triton_rumble, serialize_triton_state, triton_feature_reply, triton_serial,
-    triton_unit_id, TritonState, TRITON_RDESC, TRITON_STATE_LEN,
+    identity_for, parse_triton_rumble, serialize_triton_state, triton_feature_reply, triton_serial,
+    triton_unit_id, Sc2Identity, TritonState, TRITON_RDESC, TRITON_STATE_LEN,
 };
 use anyhow::Result;
 use parking_lot::Mutex;
 use std::any::Any;
+use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 use usbip_sim::{
     Direction, SetupPacket, UsbDevice, UsbEndpoint, UsbInterface, UsbInterfaceHandler, UsbSpeed,
     Version,
@@ -63,12 +68,20 @@ impl Default for InputReport {
     }
 }
 
-/// Sparse reports (battery/RSSI/wireless) queue; `0x42`/`0x45`/`0x47` state is newest-wins.
-/// A single latest-report slot loses the sparse packet to the next 250 Hz state URB.
+/// How long a pad goes without state before it reads neutral once.
+const STALE: Duration = Duration::from_millis(500);
+
+/// Sparse reports (battery/RSSI/wireless) queue; `0x42`/`0x45` state is newest-wins and served
+/// once. An id the descriptor lacks (`0x47`) is dropped. A poll with nothing new waits, as on the real pad; after [`STALE`] without state
+/// the pad reads neutral once, so a stalled client does not hold a stick or a gyro rate.
 #[derive(Debug)]
 struct InputReports {
     latest_state: InputReport,
     pending: VecDeque<InputReport>,
+    /// `latest_state` has not been served.
+    fresh: bool,
+    /// When the last state arrived; `None` once the neutral read went out.
+    written: Option<Instant>,
 }
 
 impl InputReports {
@@ -76,6 +89,16 @@ impl InputReports {
         Self {
             latest_state,
             pending: VecDeque::new(),
+            fresh: true,
+            written: None,
+        }
+    }
+
+    /// An empty Puck slot: nothing to serve.
+    fn quiet() -> Self {
+        Self {
+            fresh: false,
+            ..Self::new(InputReport::default())
         }
     }
 
@@ -87,8 +110,13 @@ impl InputReports {
 
     fn write(&mut self, report: InputReport) {
         match report.data[0] {
-            0x42 | 0x45 | 0x47 => self.latest_state = report,
-            // Battery 0x43, RSSI 0x44/0x7B, wireless 0x46/0x79: queue until a poll consumes them.
+            0x42 | 0x45 => {
+                self.latest_state = report;
+                self.fresh = true;
+                self.written = Some(Instant::now());
+            }
+            id if pf_driver_proto::triton::input_len(id).is_none() => {}
+            // Battery 0x43, RSSI 0x44/0x7B, wireless 0x79: queue until a poll consumes them.
             _ => {
                 if self.pending.len() >= 32 {
                     self.pending.pop_front();
@@ -98,8 +126,19 @@ impl InputReports {
         }
     }
 
-    fn read(&mut self) -> InputReport {
-        self.pending.pop_front().unwrap_or(self.latest_state)
+    /// What the next poll gets; `None` when nothing is new.
+    fn read(&mut self, now: Instant) -> Option<InputReport> {
+        if let Some(report) = self.pending.pop_front() {
+            return Some(report);
+        }
+        if std::mem::take(&mut self.fresh) {
+            return Some(self.latest_state);
+        }
+        if self.written.is_some_and(|t| now.duration_since(t) >= STALE) {
+            self.written = None;
+            return Some(neutral_report());
+        }
+        None
     }
 }
 
@@ -190,15 +229,35 @@ fn write_puck_bond(out: &mut [u8], serial: &str, unit_id: u32) {
     out[8..8 + len].copy_from_slice(&serial[..len]);
 }
 
+/// Who one interface answers as. Shared with its handler: a Puck slot changes hands as pads
+/// come and go.
+#[derive(Debug, Default)]
+struct SlotPad {
+    serial: String,
+    unit_id: u32,
+    /// `None` wired; Puck `0xB4` is 2 (connected) or 1 (empty).
+    puck_status: Option<u8>,
+    /// A real pad's recorded replies, answered before the canned table.
+    identity: Option<Arc<Sc2Identity>>,
+}
+
+impl SlotPad {
+    fn new(index: u8, puck_status: Option<u8>, identity: Option<Arc<Sc2Identity>>) -> SlotPad {
+        SlotPad {
+            serial: triton_serial(index),
+            unit_id: triton_unit_id(index),
+            puck_status,
+            identity,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TritonHandler {
     /// Shared with [`TritonUsbip::write_state`].
     reports: Arc<Mutex<InputReports>>,
-    feedback: Option<Arc<Mutex<TritonUsbFeedback>>>,
-    serial: String,
-    unit_id: u32,
-    /// `None` wired; Puck `0xB4` is 2 (connected) or 1 (disconnected).
-    puck_status: Option<u8>,
+    feedback: Arc<Mutex<TritonUsbFeedback>>,
+    pad: Arc<Mutex<SlotPad>>,
     /// Last feature SET_REPORT, id-first. GET echoes this command.
     last_set: Vec<u8>,
     last_get_logged: u8,
@@ -209,10 +268,7 @@ impl TritonHandler {
         if data.is_empty() {
             return;
         }
-        let Some(feedback) = &self.feedback else {
-            return;
-        };
-        let mut fb = feedback.lock();
+        let mut fb = self.feedback.lock();
         if fb.raw.len() >= 32 {
             fb.raw.remove(0);
         }
@@ -237,19 +293,19 @@ impl UsbInterfaceHandler for TritonHandler {
         if ep.is_ep0() {
             Ok(match (setup.request_type, setup.request) {
                 (0x81, 0x06) if (setup.value >> 8) == 0x22 => TRITON_RDESC.to_vec(),
-                // Feature GET: echo last SET's command. Wrong type → Steam drops the pad.
-                // Cannot round-trip to the physical device on this URB.
+                // Feature GET: the real pad's recorded reply to the last SET, else a canned one
+                // echoing its command. A wrong command byte makes Steam drop the pad.
                 (0xA1, 0x01) => {
-                    let reply = if let Some(status) = self.puck_status {
-                        triton_puck_feature_reply(
-                            &self.last_set,
-                            &self.serial,
-                            self.unit_id,
-                            status,
-                        )
+                    let pad = self.pad.lock();
+                    let recorded = pad.identity.as_ref().and_then(|i| i.reply(&self.last_set));
+                    let reply = if let Some(reply) = recorded {
+                        reply
+                    } else if let Some(status) = pad.puck_status {
+                        triton_puck_feature_reply(&self.last_set, &pad.serial, pad.unit_id, status)
                     } else {
-                        triton_feature_reply(&self.last_set, &self.serial, self.unit_id)
+                        triton_feature_reply(&self.last_set, &pad.serial, pad.unit_id)
                     };
+                    drop(pad);
                     if reply[1] != self.last_get_logged {
                         self.last_get_logged = reply[1];
                         tracing::debug!(
@@ -274,16 +330,16 @@ impl UsbInterfaceHandler for TritonHandler {
                     };
                     match report_type {
                         2 => {
-                            if let (Some(r), Some(feedback)) =
-                                (parse_triton_rumble(&framed), self.feedback.as_ref())
-                            {
-                                feedback.lock().rumble = Some(r);
+                            if let Some(r) = parse_triton_rumble(&framed) {
+                                self.feedback.lock().rumble = Some(r);
                             }
                             self.queue_raw(HID_RAW_OUTPUT, framed);
                         }
                         3 => {
                             self.last_set = framed.clone();
-                            self.queue_raw(HID_RAW_FEATURE, framed);
+                            if pf_driver_proto::triton::forwards_to_pad(&framed) {
+                                self.queue_raw(HID_RAW_FEATURE, framed);
+                            }
                         }
                         _ => {}
                     }
@@ -293,15 +349,15 @@ impl UsbInterfaceHandler for TritonHandler {
                 _ => vec![],
             })
         } else if let Direction::In = ep.direction() {
-            let r = self.reports.lock().read();
-            Ok(r.data[..r.len as usize].to_vec())
+            match self.reports.lock().read(Instant::now()) {
+                Some(r) => Ok(r.data[..r.len as usize].to_vec()),
+                None => Err(std::io::ErrorKind::WouldBlock.into()),
+            }
         } else {
             // Interrupt-OUT is already id-first (`SDL_hid_write`); EP0 SET_REPORT may not be.
             if !req.is_empty() {
-                if let (Some(r), Some(feedback)) =
-                    (parse_triton_rumble(req), self.feedback.as_ref())
-                {
-                    feedback.lock().rumble = Some(r);
+                if let Some(r) = parse_triton_rumble(req) {
+                    self.feedback.lock().rumble = Some(r);
                 }
                 self.queue_raw(HID_RAW_OUTPUT, req.to_vec());
             }
@@ -454,6 +510,7 @@ fn build_triton_device(
     index: u8,
     reports: &Arc<Mutex<InputReports>>,
     feedback: &Arc<Mutex<TritonUsbFeedback>>,
+    identity: Option<&Arc<Sc2Identity>>,
 ) -> UsbDevice {
     let ep = |addr: u8| UsbEndpoint {
         address: addr,
@@ -474,7 +531,11 @@ fn build_triton_device(
     dev.speed = UsbSpeed::Full as u32;
     dev.set_manufacturer_name("Valve Software");
     dev.set_product_name("Steam Controller");
-    dev.set_serial_number(&triton_serial(index));
+    dev.set_serial_number(
+        &identity
+            .and_then(|i| i.serial.clone())
+            .unwrap_or_else(|| triton_serial(index)),
+    );
     dev.unset_configuration_name(); // iConfiguration = 0
     dev.configuration_attributes = 0xA0; // bus powered + remote wakeup
     dev.configuration_max_power = 250; // 500 mA in 2 mA units
@@ -486,22 +547,16 @@ fn build_triton_device(
         vec![ep(0x81), ep(0x01)],
         boxed(TritonHandler {
             reports: reports.clone(),
-            feedback: Some(feedback.clone()),
-            serial: triton_serial(index),
-            unit_id: triton_unit_id(index),
-            puck_status: None,
+            feedback: feedback.clone(),
+            pad: Arc::new(Mutex::new(SlotPad::new(index, None, identity.cloned()))),
             last_set: Vec::new(),
             last_get_logged: 0,
         }),
     )
 }
 
-/// Puck `28DE:1304`. The forwarded pad is slot 0 (interface 2); slots 1–3 stay disconnected.
-fn build_puck_device(
-    index: u8,
-    reports: &Arc<Mutex<InputReports>>,
-    feedback: &Arc<Mutex<TritonUsbFeedback>>,
-) -> UsbDevice {
+/// Puck `28DE:1304`: slot `n` is interface `n + 2`, each driven by its [`PuckSlot`].
+fn build_puck_device(serial: &str, slots: &[PuckSlot; 4]) -> UsbDevice {
     let interrupt = |addr: u8, interval: u8| UsbEndpoint {
         address: addr,
         attributes: 0x03,
@@ -533,7 +588,7 @@ fn build_puck_device(
     ]);
     dev.set_manufacturer_name("Valve Software");
     dev.set_product_name("Steam Controller Puck");
-    dev.set_serial_number(&format!("FVPFPUCK{index:04}"));
+    dev.set_serial_number(serial);
     dev.unset_configuration_name();
 
     dev = dev.with_interface(
@@ -562,24 +617,11 @@ fn build_puck_device(
         }),
     );
 
-    for slot in 0u8..4 {
-        let (slot_reports, slot_feedback, puck_status) = if slot == 0 {
-            (reports.clone(), Some(feedback.clone()), 0x02)
-        } else {
-            // Unpaired slot: complete interrupt-IN empty. NAK/defer stalls the USB/IP stream.
-            // Do not replay 0x79/0x01 — Steam re-probes the slot every 2 ms.
-            (
-                Arc::new(Mutex::new(InputReports::new(InputReport::default()))),
-                None,
-                0x01,
-            )
-        };
+    for (n, slot) in (0u8..).zip(slots) {
         let handler = boxed(TritonHandler {
-            reports: slot_reports,
-            feedback: slot_feedback,
-            serial: triton_serial(index),
-            unit_id: triton_unit_id(index),
-            puck_status: Some(puck_status),
+            reports: slot.reports.clone(),
+            feedback: slot.feedback.clone(),
+            pad: slot.pad.clone(),
             last_set: Vec::new(),
             last_get_logged: 0,
         });
@@ -588,7 +630,7 @@ fn build_puck_device(
             0x00,
             0x00,
             None,
-            vec![interrupt(0x83 + slot, 2), interrupt(0x02 + slot, 2)],
+            vec![interrupt(0x83 + n, 2), interrupt(0x02 + n, 2)],
             handler,
         );
     }
@@ -603,12 +645,109 @@ fn build_puck_device(
     )
 }
 
-/// Drop detaches the `vhci_hcd` port and stops the emulation server.
+/// One Puck slot: its interface's reports, Steam's writes to it, and who it answers as.
+#[derive(Clone, Debug)]
+struct PuckSlot {
+    reports: Arc<Mutex<InputReports>>,
+    feedback: Arc<Mutex<TritonUsbFeedback>>,
+    pad: Arc<Mutex<SlotPad>>,
+}
+
+impl PuckSlot {
+    fn empty(index: u8) -> PuckSlot {
+        PuckSlot {
+            reports: Arc::new(Mutex::new(InputReports::quiet())),
+            feedback: Arc::default(),
+            pad: Arc::new(Mutex::new(SlotPad::new(index, Some(0x01), None))),
+        }
+    }
+}
+
+/// A virtual Puck. Pads from one physical Puck each sit at their own slot; the last to leave
+/// detaches it.
+pub struct PuckHub {
+    slots: [PuckSlot; 4],
+    taken: Mutex<[bool; 4]>,
+    attach: Mutex<Option<UsbipAttachment>>,
+}
+
+impl PuckHub {
+    fn new(index: u8) -> PuckHub {
+        PuckHub {
+            slots: std::array::from_fn(|_| PuckSlot::empty(index)),
+            taken: Mutex::new([false; 4]),
+            attach: Mutex::new(None),
+        }
+    }
+
+    /// Seat a pad on `slot`: it reports connected and answers as `identity`. False when taken.
+    fn seat(&self, slot: usize, index: u8, identity: Option<Arc<Sc2Identity>>) -> bool {
+        let mut taken = self.taken.lock();
+        if taken[slot] {
+            return false;
+        }
+        taken[slot] = true;
+        let s = &self.slots[slot];
+        // Identity before the connect edge, so Steam's first query after it sees the pad.
+        *s.pad.lock() = SlotPad::new(index, Some(0x02), identity);
+        *s.feedback.lock() = TritonUsbFeedback::default();
+        *s.reports.lock() = InputReports::with_pending(neutral_report(), puck_connect_report());
+        true
+    }
+
+    /// The pad on `slot` left: one disconnect edge, then the slot is quiet.
+    fn vacate(&self, slot: usize) {
+        let s = &self.slots[slot];
+        let mut reports = InputReports::quiet();
+        reports.pending.push_back(puck_disconnect_report());
+        *s.reports.lock() = reports;
+        let mut pad = s.pad.lock();
+        pad.puck_status = Some(0x01);
+        pad.identity = None;
+        drop(pad);
+        self.taken.lock()[slot] = false;
+    }
+}
+
+/// This session's virtual Pucks, by the physical Puck's USB serial.
+#[derive(Default)]
+pub struct PuckHubs(HashMap<String, Weak<PuckHub>>);
+
+impl PuckHubs {
+    /// Seat a pad on the live Puck `serial` names; `None` when there is none or `slot` is taken.
+    fn join(
+        &mut self,
+        serial: &str,
+        slot: usize,
+        index: u8,
+        identity: Option<Arc<Sc2Identity>>,
+    ) -> Option<Arc<PuckHub>> {
+        self.0.retain(|_, hub| hub.strong_count() > 0);
+        let hub = self.0.get(serial)?.upgrade()?;
+        hub.seat(slot, index, identity).then_some(hub)
+    }
+}
+
+enum Owner {
+    Wired { _attach: UsbipAttachment },
+    Puck { hub: Arc<PuckHub>, slot: usize },
+}
+
+/// Drop detaches a wired pad's `vhci_hcd` port, or vacates a Puck pad's slot; the Puck goes
+/// with its last pad.
 pub struct TritonUsbip {
     reports: Arc<Mutex<InputReports>>,
     feedback: Arc<Mutex<TritonUsbFeedback>>,
-    _attach: UsbipAttachment,
+    owner: Owner,
     seq: u8,
+}
+
+impl Drop for TritonUsbip {
+    fn drop(&mut self) {
+        if let Owner::Puck { hub, slot } = &self.owner {
+            hub.vacate(*slot);
+        }
+    }
 }
 
 impl TritonUsbip {
@@ -617,35 +756,61 @@ impl TritonUsbip {
     pub fn open(index: u8) -> Result<TritonUsbip> {
         let reports = Arc::new(Mutex::new(InputReports::new(neutral_report())));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
+        let identity = identity_for(index);
         let attach = attach_device(
-            || build_triton_device(index, &reports, &feedback),
+            || build_triton_device(index, &reports, &feedback, identity.as_ref()),
             &format!("virtual Steam Controller 2 {index}"),
         )?;
         Ok(TritonUsbip {
             reports,
             feedback,
-            _attach: attach,
+            owner: Owner::Wired { _attach: attach },
             seq: 0,
         })
     }
 
-    /// Attach the seven-interface Puck. Forwarded pad is slot 0; slots 1–3 stay disconnected.
-    pub fn open_puck(index: u8) -> Result<TritonUsbip> {
-        let reports = Arc::new(Mutex::new(InputReports::with_pending(
-            neutral_report(),
-            puck_connect_report(),
-        )));
-        let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
+    /// Seat a Puck pad at the slot its client named. It joins the virtual Puck of the same
+    /// physical Puck when that slot is free; otherwise it gets a Puck of its own, attached with
+    /// the pad already seated.
+    pub fn open_puck(index: u8, hubs: &mut PuckHubs) -> Result<TritonUsbip> {
+        let identity = identity_for(index);
+        let serial = identity.as_ref().and_then(|i| i.serial.clone());
+        let slot = identity.as_ref().map_or(0, |i| usize::from(i.slot.min(3)));
+        if let Some(hub) = serial
+            .as_deref()
+            .and_then(|s| hubs.join(s, slot, index, identity.clone()))
+        {
+            tracing::info!(index, slot, "virtual Steam Controller 2 joined its Puck");
+            return Ok(TritonUsbip::on_hub(hub, slot));
+        }
+        let hub = Arc::new(PuckHub::new(index));
+        hub.seat(slot, index, identity);
+        let usb_serial = serial
+            .clone()
+            .unwrap_or_else(|| format!("FVPFPUCK{index:04}"));
         let attach = attach_device(
-            || build_puck_device(index, &reports, &feedback),
+            || build_puck_device(&usb_serial, &hub.slots),
             &format!("virtual Steam Controller 2 Puck {index}"),
         )?;
-        Ok(TritonUsbip {
-            reports,
-            feedback,
-            _attach: attach,
+        *hub.attach.lock() = Some(attach);
+        // A taken slot on a live Puck leaves that Puck registered; this one stays private.
+        if let Some(serial) = serial {
+            hubs.0.entry(serial).or_insert_with(|| Arc::downgrade(&hub));
+        }
+        Ok(TritonUsbip::on_hub(hub, slot))
+    }
+
+    fn on_hub(hub: Arc<PuckHub>, slot: usize) -> TritonUsbip {
+        let s = &hub.slots[slot];
+        TritonUsbip {
+            reports: s.reports.clone(),
+            feedback: s.feedback.clone(),
+            owner: Owner::Puck {
+                hub: hub.clone(),
+                slot,
+            },
             seq: 0,
-        })
+        }
     }
 
     /// Push one interrupt-IN report. Continuous state newest-wins; sparse reports queue.
@@ -676,11 +841,21 @@ fn neutral_report() -> InputReport {
 
 /// Puck wireless-connect edge (`0x79 0x02`), queued before the first state packet.
 fn puck_connect_report() -> InputReport {
+    wireless_report(0x02)
+}
+
+/// Puck wireless-disconnect edge (`0x79 0x01`): sent once as a pad leaves its slot. Steam
+/// re-probes a slot that keeps sending it.
+fn puck_disconnect_report() -> InputReport {
+    wireless_report(0x01)
+}
+
+fn wireless_report(status: u8) -> InputReport {
     let mut report = InputReport {
         len: 2,
         ..InputReport::default()
     };
-    report.data[..2].copy_from_slice(&[0x79, 0x02]);
+    report.data[..2].copy_from_slice(&[0x79, status]);
     report
 }
 
@@ -703,16 +878,38 @@ mod tests {
         reports.write(signal);
         reports.write(next_state);
 
-        assert_eq!(reports.read().data[..3], [0x7B, 0xF8, 0x01]);
-        assert_eq!(reports.read().data[1], 9);
-        assert_eq!(reports.read().data[1], 9); // newest state replays after the sparse packet
+        let now = Instant::now();
+        assert_eq!(reports.read(now).unwrap().data[..3], [0x7B, 0xF8, 0x01]);
+        assert_eq!(reports.read(now).unwrap().data[1], 9);
+        assert!(reports.read(now).is_none(), "a state is served once");
+    }
+
+    /// A client that stops sending leaves the pad neutral once, then quiet.
+    #[test]
+    fn a_stalled_pad_reads_neutral_once() {
+        let mut reports = InputReports::new(neutral_report());
+        let now = Instant::now();
+        assert!(
+            reports.read(now).is_some(),
+            "the first poll gets the idle state"
+        );
+        let mut held = neutral_report();
+        held.data[10] = 0xFF;
+        reports.write(held);
+        assert_eq!(reports.read(now).unwrap().data[10], 0xFF);
+        assert!(reports.read(now + STALE / 2).is_none());
+        let neutral = reports
+            .read(now + STALE * 2)
+            .expect("neutral after the stall");
+        assert_eq!(neutral.data[10], 0);
+        assert!(reports.read(now + STALE * 4).is_none());
     }
 
     #[test]
     fn device_matches_wired_capture() {
         let reports = Arc::new(Mutex::new(InputReports::new(InputReport::default())));
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
-        let dev = build_triton_device(3, &reports, &feedback);
+        let dev = build_triton_device(3, &reports, &feedback, None);
         assert_eq!((dev.vendor_id, dev.product_id), (0x28DE, 0x1302));
         assert_eq!(
             (dev.device_class, dev.device_subclass, dev.device_protocol),
@@ -744,14 +941,59 @@ mod tests {
         assert!(triton_serial(3).starts_with("FVPF")); // conflict-gate exclusion prefix
     }
 
+    /// Two pads from one Puck share it at their own slots; a taken slot is refused, and a
+    /// pad that leaves sends one disconnect edge and goes quiet.
+    #[test]
+    fn pads_from_one_puck_share_it_at_their_slots() {
+        let mut hubs = PuckHubs::default();
+        let hub = Arc::new(PuckHub::new(0));
+        assert!(hub.seat(2, 0, None));
+        hubs.0.insert("PUCK1".into(), Arc::downgrade(&hub));
+
+        let joined = hubs
+            .join("PUCK1", 0, 1, None)
+            .expect("a free slot on a live Puck");
+        assert!(Arc::ptr_eq(&joined, &hub));
+        assert!(hubs.join("PUCK1", 2, 3, None).is_none(), "slot 2 is taken");
+        assert!(hubs.join("PUCK2", 1, 3, None).is_none(), "another Puck");
+
+        let now = Instant::now();
+        let slot0 = &hub.slots[0];
+        assert_eq!(slot0.pad.lock().puck_status, Some(0x02));
+        assert_eq!(slot0.pad.lock().serial, triton_serial(1));
+        assert_eq!(
+            slot0.reports.lock().read(now).unwrap().data[..2],
+            [0x79, 0x02]
+        );
+        assert!(
+            hub.slots[1].reports.lock().read(now).is_none(),
+            "an empty slot is quiet"
+        );
+
+        hub.vacate(0);
+        assert_eq!(slot0.pad.lock().puck_status, Some(0x01));
+        assert_eq!(
+            slot0.reports.lock().read(now).unwrap().data[..2],
+            [0x79, 0x01]
+        );
+        assert!(slot0.reports.lock().read(now + STALE * 2).is_none());
+        assert!(
+            hubs.join("PUCK1", 0, 4, None).is_some(),
+            "a vacated slot is free again"
+        );
+
+        drop((joined, hub));
+        assert!(
+            hubs.join("PUCK1", 1, 5, None).is_none(),
+            "the Puck went with its pads"
+        );
+    }
+
     #[test]
     fn device_matches_puck_capture() {
-        let reports = Arc::new(Mutex::new(InputReports::with_pending(
-            neutral_report(),
-            puck_connect_report(),
-        )));
-        let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
-        let dev = build_puck_device(1, &reports, &feedback);
+        let hub = PuckHub::new(1);
+        assert!(hub.seat(0, 1, None));
+        let dev = build_puck_device("FVPFPUCK0001", &hub.slots);
         assert_eq!((dev.vendor_id, dev.product_id), (0x28DE, 0x1304));
         assert_eq!(
             (
@@ -886,16 +1128,17 @@ mod tests {
         for interface in 3..=5 {
             assert_eq!(slot_status(interface), [0x02, 0xB4, 0x01, 0x01]);
         }
-        // Disconnected slot: empty interrupt-IN. Never 0x79/0x01 on every 2 ms poll.
+        // An empty slot NAKs its polls, as the real Puck's does: never 0x79/0x01 every 2 ms.
         let iface = dev.interfaces[3].clone();
         let interrupt_in = iface.endpoints[0];
-        assert!(iface
-            .handler
-            .lock()
-            .unwrap()
-            .handle_urb(&iface, interrupt_in, 64, SetupPacket::default(), &[],)
-            .unwrap()
-            .is_empty());
+        let polled = iface.handler.lock().unwrap().handle_urb(
+            &iface,
+            interrupt_in,
+            64,
+            SetupPacket::default(),
+            &[],
+        );
+        assert_eq!(polled.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     }
 
     /// A stale tag-4 build time makes Steam offer to flash the Puck's pad on every stream.
@@ -920,10 +1163,8 @@ mod tests {
         let feedback = Arc::new(Mutex::new(TritonUsbFeedback::default()));
         let mut h = TritonHandler {
             reports,
-            feedback: Some(feedback.clone()),
-            serial: triton_serial(0),
-            unit_id: triton_unit_id(0),
-            puck_status: None,
+            feedback: feedback.clone(),
+            pad: Arc::new(Mutex::new(SlotPad::new(0, None, None))),
             last_set: Vec::new(),
             last_get_logged: 0,
         };
@@ -975,6 +1216,9 @@ mod tests {
             length: 5,
         };
         h.handle_urb(&iface_dummy, ep0, 5, setup, &[0x87, 3, 9, 0, 0])
+            .unwrap();
+        // hid-steam's lizard-on stays here.
+        h.handle_urb(&iface_dummy, ep0, 2, setup, &[0x85, 0])
             .unwrap();
         let fb = feedback.lock();
         assert_eq!(fb.rumble, Some((0x2000, 0x4000)));

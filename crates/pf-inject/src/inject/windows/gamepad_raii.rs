@@ -33,7 +33,8 @@ use windows::Win32::Devices::Enumeration::Pnp::{
     SwDeviceClose, SwDeviceCreate, HSWDEVICE, SW_DEVICE_CREATE_INFO,
 };
 use windows::Win32::Devices::Properties::{
-    DEVPKEY_Device_HardwareIds, DEVPROPTYPE, DEVPROP_TYPE_STRING_LIST,
+    DEVPKEY_Device_HardwareIds, DEVPROPCOMPKEY, DEVPROPERTY, DEVPROPTYPE, DEVPROP_STORE_SYSTEM,
+    DEVPROP_TYPE_BINARY, DEVPROP_TYPE_STRING_LIST,
 };
 use windows::Win32::Foundation::{
     CloseHandle, DuplicateHandle, GetLastError, LocalFree, SetLastError, DUPLICATE_HANDLE_OPTIONS,
@@ -747,6 +748,8 @@ pub(super) struct SwDeviceProfile<'a> {
     /// `VID_045E&PID_0B13`): Steam merges a pad's views by that token in the path, and under
     /// `punktfunk` it listed the same pad twice.
     pub enumerator: &'a str,
+    /// A binary device property the driver reads at `EvtDeviceAdd`: `(fmtid, pid, bytes)`.
+    pub property: Option<(u128, u32, &'a [u8])>,
 }
 
 /// The Bluetooth HID service every classic-Bluetooth pad enumerates under.
@@ -826,6 +829,21 @@ pub(super) fn create_swdevice(p: &SwDeviceProfile) -> Result<(SwDevice, Option<S
         ..Default::default()
     };
 
+    // `bytes` outlives the call; SwDeviceCreate only reads `Buffer`.
+    let property = p.property.map(|(fmtid, pid, bytes)| DEVPROPERTY {
+        CompKey: DEVPROPCOMPKEY {
+            Key: windows::Win32::Foundation::DEVPROPKEY {
+                fmtid: GUID::from_u128(fmtid),
+                pid,
+            },
+            Store: DEVPROP_STORE_SYSTEM,
+            LocaleName: PCWSTR::null(),
+        },
+        Type: DEVPROP_TYPE_BINARY,
+        BufferSize: bytes.len() as u32,
+        Buffer: bytes.as_ptr() as *mut c_void,
+    });
+
     // SAFETY: a manual-reset, initially-unsignaled, unnamed event.
     let event = unsafe { CreateEventW(None, true, false, PCWSTR::null())? };
     // `result` starts as E_FAIL: a timeout must not read a zeroed HRESULT as success.
@@ -845,7 +863,7 @@ pub(super) fn create_swdevice(p: &SwDeviceProfile) -> Result<(SwDevice, Option<S
             PCWSTR(enumerator.as_ptr()),
             w!("HTREE\\ROOT\\0"),
             &info,
-            None,
+            property.as_ref().map(core::slice::from_ref),
             Some(sw_create_cb),
             Some(ctx as *const c_void),
         )

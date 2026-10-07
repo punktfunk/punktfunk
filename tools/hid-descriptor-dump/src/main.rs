@@ -31,6 +31,7 @@
 //! This tool is deliberately not a workspace member; see its `Cargo.toml`.
 
 mod decode;
+mod sc2;
 
 use std::process::ExitCode;
 
@@ -43,6 +44,8 @@ struct Args {
     read: Option<usize>,
     rust_source: Option<String>,
     symbol: Option<String>,
+    sc2: bool,
+    sc2_watch: Option<u64>,
 }
 
 /// Pull a `static NAME: [u8; N] = [ 0x.., ... ];` out of a Rust source file.
@@ -103,6 +106,8 @@ fn parse_args() -> Result<Args, String> {
         read: None,
         rust_source: None,
         symbol: None,
+        sc2: false,
+        sc2_watch: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -127,6 +132,14 @@ fn parse_args() -> Result<Args, String> {
             }
             "--rust-source" => a.rust_source = Some(it.next().ok_or("--rust-source wants a path")?),
             "--symbol" => a.symbol = Some(it.next().ok_or("--symbol wants an identifier")?),
+            "--sc2" => a.sc2 = true,
+            "--sc2-watch" => {
+                let v = it.next().ok_or("--sc2-watch wants seconds")?;
+                a.sc2_watch = Some(
+                    v.parse()
+                        .map_err(|_| format!("--sc2-watch: {v} is not seconds"))?,
+                );
+            }
             "--help" | "-h" => {
                 println!("{}", HELP);
                 std::process::exit(0);
@@ -154,6 +167,8 @@ hid-descriptor-dump — capture a real HID device's report descriptor
   --read <n>             after dumping, read n live input reports and show which bytes move
   --rust-source <file>   decode a blob we already ship instead of a device (no hardware needed)
   --symbol <IDENT>       which `static IDENT: [u8; N]` in that file to decode
+  --sc2                  Steam Controller 2: print the pad's (and Puck's) feature replies
+  --sc2-watch <secs>     Steam Controller 2: print each button edge by bit and name
 
 With --vid/--pid every matching collection is dumped: a real Xbox pad presents two (a game
 controller and a keyboard), and they are separate devices to hidapi.
@@ -421,6 +436,16 @@ fn main() -> ExitCode {
 
         if let Some(count) = args.read {
             watch(&dev, count);
+        }
+        // Only the vendor collections take Valve's feature reports: FF00:01 is a pad, FF00:02
+        // the Puck's management interface.
+        if d.usage_page() == 0xFF00 {
+            if args.sc2 {
+                sc2::query(&dev, d.product_id(), d.usage());
+            }
+            if let (Some(secs), 0x01) = (args.sc2_watch, d.usage()) {
+                sc2::watch_buttons(&dev, secs);
+            }
         }
     }
 

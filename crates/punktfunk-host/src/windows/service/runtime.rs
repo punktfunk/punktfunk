@@ -16,15 +16,14 @@ pub(super) fn event_handle(ev: &OnceLock<OwnedHandle>) -> Option<HANDLE> {
 
 pub fn service_log_path() -> PathBuf {
     let dir = pf_paths::config_dir().join("logs");
-    // `create_secret_dir`, not `create_private_dir`: Users:(RX) inherited from the config dir would
-    // let a local user pre-plant reparse points on SYSTEM log files. Logs carry webhook URLs.
-    let _ = pf_paths::create_secret_dir(&dir);
+    // Logs carry webhook URLs: SYSTEM/Administrators only.
+    let _ = pf_paths::create_private_dir(&dir);
     dir.join("service.log")
 }
 
 pub(super) fn host_log_path() -> PathBuf {
     let dir = pf_paths::config_dir().join("logs");
-    let _ = pf_paths::create_secret_dir(&dir);
+    let _ = pf_paths::create_private_dir(&dir);
     dir.join("host.log")
 }
 

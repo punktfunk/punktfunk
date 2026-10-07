@@ -76,12 +76,16 @@ if [ -n "$GAMESCOPE" ]; then
   echo "folded in $("$STAGE/usr/bin/punktfunk-gamescope" --version 2>&1 | head -1) + its WSI layer"
 fi
 
+pf_stage_sysctl_unit "$STAGE"
+
 # The marker systemd-sysext requires to merge the image. ID=_any merges onto ANY host os-release
 # (SteamOS, Arch, Bazzite); ARCHITECTURE pins it to x86-64 so it's never merged on the wrong arch.
+# EXTENSION_RELOAD_MANAGER makes systemd load the image's sysctl unit after the merge.
 install -d "$STAGE/usr/lib/extension-release.d"
 cat > "$STAGE/usr/lib/extension-release.d/extension-release.$NAME" <<EOF
 ID=_any
 ARCHITECTURE=x86-64
+EXTENSION_RELOAD_MANAGER=1
 EOF
 
 # CAP_SYS_NICE on the encode worker, never the host, then both halves of the matrix (see the

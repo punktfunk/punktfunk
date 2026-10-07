@@ -1263,7 +1263,6 @@ private fun ControllerSettings(s: Settings, update: (Settings) -> Unit, onOpenCo
             s.gamepadForwarding != d.gamepadForwarding,
             s.systemButtons != d.systemButtons,
             s.guideGesture != d.guideGesture,
-            s.sc2Capture != d.sc2Capture,
             s.dsCapture != d.dsCapture,
             s.padHaptics != d.padHaptics,
             s.padSpeaker != d.padSpeaker,
@@ -1301,17 +1300,7 @@ private fun ControllerSettings(s: Settings, update: (Settings) -> Unit, onOpenCo
                 "slightly delayed. For devices that intercept the real guide button.",
         ) { v -> update(s.copy(guideGesture = v)) }
         DeviceScopeOnly {
-            // NOT gated on the vibrator: SC2 passthrough is a USB/BLE capture, and TV boxes are
-            // where a Steam Controller 2 is the whole input story.
-            ToggleRow(
-                title = "Steam Controller 2 passthrough",
-                subtitle = "Stream a Steam Controller 2 as-is — Steam on the host drives its " +
-                    "trackpads, gyro and haptics directly",
-                checked = s.sc2Capture,
-                enabled = s.gamepadForwarding,
-                onCheckedChange = { on -> update(s.copy(sc2Capture = on)) },
-            )
-            // Feedback lands on the CONTROLLER's own motors and LEDs, so no vibrator gate either.
+            // Feedback lands on the CONTROLLER's own motors and LEDs, so no vibrator gate.
             ToggleRow(
                 title = "DualSense over USB",
                 subtitle = "Drive a USB-connected Sony pad directly — rumble on any phone, " +

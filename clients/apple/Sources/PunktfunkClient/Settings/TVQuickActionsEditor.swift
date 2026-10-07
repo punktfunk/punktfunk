@@ -205,6 +205,8 @@ private struct DiscFace: View {
                 lineWidth: lifted || isFocused ? 4 : 1.5)
             if let keys = spec?.keys {
                 ChordKeycap(keys: keys).scaleEffect(1.8)
+            } else if let mark = spec?.mark {
+                mark.resizable().scaledToFit().frame(width: 60, height: 60)
             } else {
                 Image(systemName: spec?.icon ?? "circle.dashed")
                     .font(.system(size: 44, weight: .semibold))

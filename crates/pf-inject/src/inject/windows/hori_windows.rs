@@ -38,6 +38,7 @@ impl HoriWinPad {
                 bluetooth: false,
                 description: "Punktfunk Virtual Wireless HORIPAD For Steam",
                 enumerator: "VID_0F0D&PID_01AB",
+                property: None,
             },
         )?;
         Ok(HoriWinPad {

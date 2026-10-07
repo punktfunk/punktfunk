@@ -1267,7 +1267,10 @@ struct ContentView: View {
             scrollInverted: { [model] in model.settings.invertScroll },
             toggleScrollInversion: { [model] in model.setInvertScroll(!model.settings.invertScroll) },
             streamedGame: { [model] in model.streamedGame },
-            endGame: { [weak model] in model?.endStreamedGame() })
+            endGame: { [weak model] in model?.endStreamedGame() },
+            padType: { [model] in model.padType },
+            padTypeAvailable: { [model] in model.padTypeAvailable },
+            cyclePadType: { [weak model] in model?.cyclePadType() })
     }
     #endif
     #if os(iOS) || os(visionOS) || os(tvOS) || os(macOS)

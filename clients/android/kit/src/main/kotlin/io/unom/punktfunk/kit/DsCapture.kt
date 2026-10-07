@@ -50,7 +50,7 @@ class DsCapture(
             // class check already leaves them (and the pad's headset routing) to Android; the
             // single HID interface is the only claim.
         ),
-        ::onReport,
+        { report, len, _ -> onReport(report, len) },
         ::onLinkClosed,
     )
 

@@ -447,7 +447,6 @@ class MainActivity : ComponentActivity() {
         }
         if (streamHandle != 0L) return // StreamScreen owns the pad while streaming
         if (sc2Menu?.isActive == true) return
-        if (!SettingsStore(this).load().sc2Capture) return
         val cap = sc2Menu ?: io.unom.punktfunk.kit.Sc2Capture(this).also { c ->
             c.onUiKey = { key, down -> runOnUiThread { sc2NavKey(key, down) } }
             c.onActiveChanged = { on -> runOnUiThread { sc2MenuActive = on } }

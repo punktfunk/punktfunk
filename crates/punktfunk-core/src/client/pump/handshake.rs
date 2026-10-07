@@ -224,6 +224,7 @@ async fn dial(
             },
             features: FeatureSet::default()
                 .with(registry::FEATURE_STREAM_CONFIG)
+                .with(registry::FEATURE_PAD_WRITES)
                 .with(registry::FEATURE_PROFILES),
             profile: p.profile.clone(),
         };

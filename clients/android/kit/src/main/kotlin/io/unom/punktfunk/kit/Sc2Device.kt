@@ -150,14 +150,15 @@ object Sc2Device {
     const val WIRELESS_DISCONNECT = 1
     const val WIRELESS_CONNECT = 2
 
-    // Button bits in the state report's u32 (SDL `TritonButtons`).
+    // Button bits in the state report's u32 (SDL `TritonButtons`). SDL's enum swaps the View and
+    // Menu names; its mapping and hid-steam agree with these values.
     const val A = 0x00000001
     const val B = 0x00000002
     const val X = 0x00000004
     const val Y = 0x00000008
     const val QAM = 0x00000010
     const val R3 = 0x00000020
-    const val VIEW = 0x00000040
+    const val MENU = 0x00000040
     const val R4 = 0x00000080
     const val R5 = 0x00000100
     const val RB = 0x00000200
@@ -165,7 +166,7 @@ object Sc2Device {
     const val DPAD_RIGHT = 0x00000800
     const val DPAD_LEFT = 0x00001000
     const val DPAD_UP = 0x00002000
-    const val MENU = 0x00004000
+    const val VIEW = 0x00004000
     const val L3 = 0x00008000
     const val STEAM = 0x00010000
     const val L4 = 0x00020000

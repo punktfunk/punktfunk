@@ -16,8 +16,11 @@ use crate::theme::{fill, glow_ring, rim_light, ring_scrim, soft_shadow, stroke, 
 use crate::widgets::{ListMsg, MenuList, RowSpec};
 use pf_client_core::host_actions::ActionInfo;
 use pf_client_core::menu_nav::{MenuDir, MenuEvent, MenuPulse};
-use pf_client_core::overlay_actions::{chord_chip, key_vk, OverlayConfig, RingPlatform, SlotId};
+use pf_client_core::overlay_actions::{
+    chord_chip, key_vk, pad_type_label, OverlayConfig, RingPlatform, SlotId,
+};
 use pf_client_core::ring::{RingCommand, RingFacts, RingInput};
+use punktfunk_core::config::GamepadPref;
 use punktfunk_core::input::gamepad as wire;
 use punktfunk_core::input::PadMouseMode;
 use skia_safe::{Canvas, Color4f, Point, RRect, Rect};
@@ -53,6 +56,8 @@ struct Spec {
     /// Leave the ring open so the new state is visible.
     toggle: bool,
     state: String,
+    /// A device mark drawn in place of the slot's Lucide icon.
+    glyph: Option<crate::icons::Icon>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -416,6 +421,7 @@ impl Ring {
             armed: false,
             toggle: false,
             state: String::new(),
+            glyph: None,
         };
         let f = &self.facts;
         match slot {
@@ -513,6 +519,19 @@ impl Ring {
                     },
                 )
             },
+            SlotId::PadType => {
+                let (name, short) = pad_type_label(f.pad_type);
+                Spec {
+                    enabled: f.pad_mouse_target != 0,
+                    reason: "No controller is connected".into(),
+                    toggle: true,
+                    state: name.into(),
+                    // Automatic keeps the plain gamepad; a picked type shows its silhouette.
+                    glyph: (f.pad_type != GamepadPref::Auto)
+                        .then(|| crate::glyphs::pad_icon(f.pad_type)),
+                    ..plain("pad_type", "Controller type", short)
+                }
+            }
             SlotId::StreamMute => Spec {
                 toggle: true,
                 // The state describes the mute: `Off` while audible, else the shared
@@ -610,6 +629,7 @@ impl Ring {
             SlotId::Stats => self.pending.push_back(RingCommand::CycleStats),
             SlotId::Mic => self.pending.push_back(RingCommand::ToggleMic),
             SlotId::PadMouse => self.pending.push_back(RingCommand::CyclePadMouse),
+            SlotId::PadType => self.pending.push_back(RingCommand::CyclePadType),
             SlotId::StreamMute => self.pending.push_back(RingCommand::ToggleStreamMute),
             SlotId::Pad | SlotId::SendText | SlotId::SwapScreens => {}
             // The host's own overlay is about to take the screen: close first, like End stream.
@@ -663,6 +683,7 @@ impl Ring {
             SheetRow::Slot(SlotId::Guide),
             SheetRow::Slot(SlotId::Qam),
             SheetRow::Slot(SlotId::PadMouse),
+            SheetRow::Slot(SlotId::PadType),
             SheetRow::Slot(SlotId::Stats),
             SheetRow::Slot(SlotId::Mic),
             SheetRow::Slot(SlotId::StreamMute),
@@ -1231,6 +1252,7 @@ impl Ring {
                 armed: false,
                 toggle: false,
                 state: String::new(),
+                glyph: None,
             };
             canvas.draw_circle(
                 Point::new(cx, cy + 3.0 * scale),
@@ -1423,6 +1445,11 @@ fn draw_disc(
     // Shortcut: stacked keycap. One line ran to the disc's edge and past it.
     if spec.id.starts_with("shortcut:") && spec.short.contains('+') {
         keycap_text(canvas, fonts, x, y, r, size, &spec.short, color);
+        return;
+    }
+    // Device marks are drawn at their own 1.5-unit weight (`glyphs::pad_mark`).
+    if let Some(mark) = spec.glyph {
+        crate::icons::draw_icon_weight(canvas, mark, x, y, r * 1.05, 1.5 * scale, color);
         return;
     }
     if let Some(icon) = slot_icon(&spec.id, &spec.state) {
@@ -1846,6 +1873,38 @@ mod tests {
             ..facts()
         });
         r.fire(&SlotId::PadMouse);
+        assert_eq!(r.take_command(), None);
+        assert!(r
+            .hint
+            .as_deref()
+            .is_some_and(|h| h.contains("No controller")));
+    }
+
+    #[test]
+    fn controller_type_cycles_in_place_and_needs_a_pad() {
+        let mut r = Ring::new();
+        r.set_facts(&RingFacts {
+            pad_mouse_target: 0b1,
+            pad_type: GamepadPref::DualSense,
+            ..facts()
+        });
+        r.input(RingInput::Toggle { x: 1.0, y: 1.0 });
+        assert_eq!(r.spec(&SlotId::PadType).state, "DualSense");
+        assert!(
+            r.spec(&SlotId::PadType).glyph.is_some(),
+            "a picked type shows its mark"
+        );
+        r.fire(&SlotId::PadType);
+        assert_eq!(r.take_command(), Some(RingCommand::CyclePadType));
+        assert!(r.open(), "a toggle leaves the ring open");
+
+        let mut r = Ring::new();
+        r.set_facts(&facts());
+        assert!(
+            r.spec(&SlotId::PadType).glyph.is_none(),
+            "Automatic keeps the gamepad icon"
+        );
+        r.fire(&SlotId::PadType);
         assert_eq!(r.take_command(), None);
         assert!(r
             .hint

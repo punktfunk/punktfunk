@@ -40,7 +40,7 @@ class SettingsFieldsTest {
         reduceUiResolution = true, gamepadUiMode = GAMEPAD_UI_ALWAYS, uiPalette = "crimson",
         lowLatencyMode = false, presentPriority = "smooth", smoothBuffer = 2, autoWakeEnabled = false,
         backgroundKeepAlive = true, backgroundTimeoutMinutes = 30, padRumble = false,
-        rumbleOnPhone = true, gyroOnPhone = true, sc2Capture = false, dsCapture = false,
+        rumbleOnPhone = true, gyroOnPhone = true, dsCapture = false,
         padHaptics = false, padSpeaker = true, mouseMode = MouseMode.CAPTURE, invertScroll = true,
         overlayActions = "{\"ring\":[]}", backOpensRing = false, startIn = "library", defaultHost = "desk",
     )

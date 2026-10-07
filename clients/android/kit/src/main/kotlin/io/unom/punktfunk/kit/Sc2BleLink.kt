@@ -15,6 +15,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import java.util.UUID
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -57,7 +59,12 @@ class Sc2BleLink(
         val ch: BluetoothGattCharacteristic,
         val payload: ByteArray,
         val acked: Boolean,
+        /** A read of [ch] instead: its value lands in [reads]. */
+        val read: Boolean = false,
     )
+
+    /** Values of the feature characteristic read by [exchange]. */
+    private val reads = LinkedBlockingQueue<ByteArray>()
 
     /** Writes waiting for the link. Rumble supersedes rumble; the rest are never dropped. */
     private val writes = OutReportQueue<GattWrite>()
@@ -143,6 +150,26 @@ class Sc2BleLink(
     }
 
     /**
+     * One feature query: written to the feature characteristic, then read back, as SDL reads a
+     * feature over GATT. A reply that does not echo the query (a keep-alive slipped in) asks again,
+     * twice at most. Blocks up to a second per try; never call it from a GATT callback.
+     */
+    fun exchange(request: ByteArray): ByteArray? {
+        val ch = featureChar ?: return null
+        val payload = Sc2Device.featurePayload(request.copyOf(64)) ?: return null
+        repeat(3) {
+            reads.clear()
+            writes.offer(GattWrite(ch, payload, acked = true), OutReportQueue.NO_COALESCE)
+            writes.offer(GattWrite(ch, ByteArray(0), acked = true, read = true), OutReportQueue.NO_COALESCE)
+            pump()
+            val value = reads.poll(1, TimeUnit.SECONDS) ?: return null
+            val reply = byteArrayOf(request[0]) + value
+            if (reply.size > 1 && reply[1] == request[1]) return reply
+        }
+        return null
+    }
+
+    /**
      * Queue one GATT write, honouring what the characteristic offers — output prefers unacked,
      * feature prefers acked — and send it when the link is free.
      */
@@ -179,6 +206,9 @@ class Sc2BleLink(
     private enum class Sent { OK, BUSY, FAILED }
 
     private fun send(g: BluetoothGatt, w: GattWrite): Sent {
+        if (w.read) {
+            return if (runCatching { g.readCharacteristic(w.ch) }.getOrDefault(false)) Sent.OK else Sent.FAILED
+        }
         val type = if (w.acked) {
             BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         } else {
@@ -336,6 +366,28 @@ class Sc2BleLink(
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            inFlight.set(false)
+            pump()
+        }
+
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            ch: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int,
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS) reads.offer(value)
+            inFlight.set(false)
+            pump()
+        }
+
+        /** Below 33 only; from 33 the stack calls the overload above. */
+        @Deprecated("Replaced at API 33 by the overload that carries the value")
+        override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            if (Build.VERSION.SDK_INT >= 33) return
+            @Suppress("DEPRECATION")
+            val value = ch.value
+            if (status == BluetoothGatt.GATT_SUCCESS && value != null) reads.offer(value)
             inFlight.set(false)
             pump()
         }

@@ -760,6 +760,7 @@ pub(super) async fn negotiate(
     let features = first.features.intersect(
         punktfunk_core::quic::v2::features::FeatureSet::default()
             .with(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG)
+            .with(punktfunk_core::quic::v2::registry::FEATURE_PAD_WRITES)
             .with(punktfunk_core::quic::v2::registry::FEATURE_PROFILES),
     );
     let server_hello = ServerHello {

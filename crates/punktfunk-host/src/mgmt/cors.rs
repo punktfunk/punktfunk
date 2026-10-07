@@ -27,9 +27,9 @@ use axum::response::Response;
 /// it is not on the CORS safelist, so every authenticated call is preceded by an `OPTIONS`.
 const ALLOW_HEADERS: &str = "authorization, content-type";
 
-/// Routes whose only credential is where the caller connected from: `mgmt::auth` admits these
-/// from loopback with nothing presented. A page on a machine that trusts the host certificate
-/// reaches loopback too, so without this the browser would be allowed to read one.
+/// Routes whose credential every local account holds: `mgmt::auth` admits these from loopback
+/// on the tray token. A page on a machine that trusts the host certificate reaches loopback
+/// too, so without this the browser would be allowed to read one.
 const POSITION_AUTHENTICATED: &[&str] = &["/api/v1/local/summary"];
 
 /// Should this host stamp cross-origin headers at all?

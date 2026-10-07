@@ -132,6 +132,8 @@ fi
 
 # Self-update: the helper rides inside the image.
 install -Dm0755 "$HERE/punktfunk-sysext.sh" "$STAGE/usr/bin/punktfunk-sysext"
+# The UDP buffer sysctl at every boot. Image-borne, so the first update to it fixes the box.
+pf_stage_sysctl_unit "$STAGE"
 
 # Compatibility marker. ID=fedora matches Bazzite & friends through os-release ID_LIKE;
 # VERSION_ID makes a major-rebased host refuse the old ABI instead of merging it.
