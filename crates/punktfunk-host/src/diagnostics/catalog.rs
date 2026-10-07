@@ -7,7 +7,8 @@
 //!
 //! * User-database membership (`id -nG <user>`) and this process's groups (`id -nG`) are
 //!   different questions. `usermod -aG` updates the first immediately and the second only
-//!   after the next login, so they need different remedies.
+//!   after a restart (a lingering `systemd --user` outlives a log-out), so they need
+//!   different remedies.
 //! * `usermod` does not persist on an atomic OS. Universal Blue images want
 //!   `ujust add-user-to-input-group`; everywhere else, `usermod -aG input`.
 
@@ -611,13 +612,13 @@ fn takeover_privilege() -> HostCheck {
         )
         .with_remedy(Remedy {
             text: format!(
-                "Add the user to the “{group}” group, then log out and back in. The same group \
+                "Add the user to the “{group}” group, then restart the computer. The same group \
                  gates the virtual Steam Deck pad's usbip nodes, which can present arbitrary \
                  emulated USB devices — join it only on a machine you trust."
             ),
             command: Some(format!("sudo usermod -aG {group} {user}")),
             // Helper reads the user database and is satisfied at once; this process keeps the
-            // group set it started with. One re-login covers both.
+            // group set it started with. One restart covers both.
             relogin_required: true,
         })
         .with_param("user", user)
@@ -692,20 +693,9 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
                       it — in Game Mode that means nothing can be navigated with a pad.";
 
     match (in_userdb, in_process) {
-        // Granted in the user database, not in this process. `systemd --user` keeps the group
-        // set it started with; only a re-login updates it.
-        (Some(true), Some(false)) => base(
-            &format!("The group “{group}” was granted but this session predates it"),
-            pad_impact,
-        )
-        .with_remedy(Remedy {
-            text: "Log out and back in. The membership is already recorded — this session just \
-                   started before it was granted, and a session keeps the group set it began with."
-                .to_string(),
-            command: None,
-            relogin_required: true,
-        })
-        .with_param("user", user.unwrap_or_default()),
+        (Some(true), Some(false)) => {
+            session_predates(id, group, &path, Severity::Warning, pad_impact)
+        }
 
         (Some(false), _) => {
             let user = user.unwrap_or_default();
@@ -715,7 +705,7 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
             )
             .with_remedy(Remedy {
                 text: format!(
-                    "Add the user to the “{group}” group, then log out and back in. This group \
+                    "Add the user to the “{group}” group, then restart the computer. This group \
                      can present arbitrary emulated USB devices — join it only on a machine you \
                      trust."
                 ),
@@ -750,12 +740,41 @@ fn not_writable_check(id: &str, group: &str, path: String) -> HostCheck {
         .with_remedy(Remedy {
             text: format!(
                 "Check that this machine's user is in the “{group}” group and that the udev rule \
-                 granting it access to the vhci nodes is installed, then log out and back in."
+                 granting it access to the vhci nodes is installed, then restart the computer."
             ),
             command: None,
             relogin_required: true,
         }),
     }
+}
+
+/// Granted in the user database, not in this process: `systemd --user` keeps the group set it
+/// started with, and under linger it outlives a log-out. Only a restart applies the grant.
+fn session_predates(
+    id: &str,
+    group: &str,
+    path: &str,
+    severity: Severity,
+    impact: &str,
+) -> HostCheck {
+    HostCheck::problem(
+        id,
+        CheckStatus::Fail,
+        severity,
+        format!("The group “{group}” was granted but this session predates it"),
+        impact,
+    )
+    .with_remedy(Remedy {
+        text: "Restart the computer. The membership is already recorded, but the host's services \
+               started before it and keep their old groups until a restart — logging out is not \
+               enough."
+            .to_string(),
+        command: None,
+        relogin_required: true,
+    })
+    .with_param("group", group)
+    .with_param("path", path)
+    .with_param("user", current_user().unwrap_or_default())
 }
 
 fn uinput_access() -> HostCheck {
@@ -768,19 +787,28 @@ fn uinput_access() -> HostCheck {
         ),
         UinputVerdict::Ok => HostCheck::ok(id, "The input device nodes are reachable."),
 
-        // Node exists, open denied. Remedy depends on whether this OS persists `usermod`.
-        UinputVerdict::PermissionDenied { path } => HostCheck::problem(
-            id,
-            CheckStatus::Fail,
-            Severity::Critical,
-            format!("No permission to open {path}"),
-            "Every virtual controller fails to be created, so games see no gamepad at all — and \
-             the pen and tablet input paths are dead with it."
-                .to_string(),
-        )
-        .with_remedy(input_group_remedy())
-        .with_param("path", path)
-        .with_param("group", INPUT_GROUP),
+        // Node exists, open denied. Already granted → restart; else the remedy depends on
+        // whether this OS persists `usermod`.
+        UinputVerdict::PermissionDenied { path } => {
+            let impact = "Every virtual controller fails to be created, so games see no gamepad \
+                          at all — and the pen and tablet input paths are dead with it.";
+            let in_userdb = current_user()
+                .as_deref()
+                .and_then(|u| user_in_group_userdb(u, INPUT_GROUP));
+            if in_userdb == Some(true) && process_in_group(INPUT_GROUP) == Some(false) {
+                return session_predates(id, INPUT_GROUP, path, Severity::Critical, impact);
+            }
+            HostCheck::problem(
+                id,
+                CheckStatus::Fail,
+                Severity::Critical,
+                format!("No permission to open {path}"),
+                impact,
+            )
+            .with_remedy(input_group_remedy())
+            .with_param("path", path)
+            .with_param("group", INPUT_GROUP)
+        }
 
         // Node missing: a group-membership remedy is the wrong turn.
         UinputVerdict::Missing { path } => HostCheck::problem(
@@ -826,7 +854,7 @@ fn input_group_remedy() -> Remedy {
     if is_universal_blue() {
         Remedy {
             text:
-                "Add the user to the “input” group with ujust, then log out and back in. On this \
+                "Add the user to the “input” group with ujust, then restart the computer. On this \
                    OS a plain `usermod` does not persist."
                     .to_string(),
             command: Some("ujust add-user-to-input-group".to_string()),
@@ -834,7 +862,7 @@ fn input_group_remedy() -> Remedy {
         }
     } else {
         Remedy {
-            text: "Add the user to the “input” group, then log out and back in. If the group \
+            text: "Add the user to the “input” group, then restart the computer. If the group \
                    already lists the user, the udev rule granting it access may be missing \
                    (scripts/60-punktfunk.rules)."
                 .to_string(),
@@ -897,7 +925,7 @@ fn user_in_group_userdb(user: &str, group: &str) -> Option<bool> {
 }
 
 /// This process's supplementary groups (`id -nG`, no operand). Frozen at `systemd --user`
-/// start; a fresh `usermod` is invisible until the next login.
+/// start; a fresh `usermod` is invisible until that manager restarts.
 fn process_in_group(group: &str) -> Option<bool> {
     let groups = capture(Command::new("id").arg("-nG"))?;
     Some(groups.split_whitespace().any(|g| g == group))
@@ -951,6 +979,22 @@ mod tests {
         );
     }
 
+    /// Already granted: re-running `usermod` changes nothing, so the remedy is a restart only.
+    #[test]
+    fn session_predates_asks_for_a_restart_not_usermod() {
+        let check = session_predates(
+            ids::UINPUT_ACCESS,
+            INPUT_GROUP,
+            "/dev/uhid",
+            Severity::Critical,
+            "impact",
+        );
+        let remedy = check.remedy.expect("a predates row carries a remedy");
+        assert!(remedy.command.is_none());
+        assert!(remedy.relogin_required);
+        assert!(remedy.text.starts_with("Restart the computer"));
+    }
+
     #[test]
     fn takeover_inapplicable_reasons_are_all_populated() {
         for why in [
@@ -975,7 +1019,7 @@ mod tests {
         let command = remedy
             .command
             .expect("the input remedy is always pasteable");
-        assert!(remedy.relogin_required, "a group change needs a re-login");
+        assert!(remedy.relogin_required, "a group change needs a restart");
         if is_universal_blue() {
             assert_eq!(command, "ujust add-user-to-input-group");
         } else {

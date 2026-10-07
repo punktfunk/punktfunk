@@ -193,7 +193,7 @@ if [ "$SUDO_OK" = 1 ]; then
     fi
     if id -nG "$USER" | grep -qw input; then :; else
         sudo usermod -aG input "$USER"
-        warn "added $USER to the 'input' group — REBOOT (or log out/in) for it to apply"
+        warn "added $USER to the 'input' group — REBOOT for it to apply"
     fi
     # 'punktfunk' owns the usbip vhci attach/detach nodes (60-punktfunk.rules), deliberately NOT
     # 'input' — writing 'attach' materialises an arbitrary emulated USB device, a root-only kernel
@@ -253,7 +253,7 @@ else
 fi
 echo
 warn "If the controller still shows as an Xbox 360 pad, REBOOT the Deck once — the 'input' group and the"
-warn "vhci-hcd module only become live for the host service on a fresh login."
+warn "vhci-hcd module only become live for the host service after a reboot."
 GRANT_SRC="$SRC/scripts/headless/kde-authorized"
 GRANT_DST="$HOME/.local/share/flatpak/db/kde-authorized"
 if [ ! -s "$GRANT_DST" ] && [ -s "$GRANT_SRC" ]; then

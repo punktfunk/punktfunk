@@ -591,8 +591,8 @@ fi
 echo "  • Update later:  bash $SRC/scripts/steamdeck/update.sh --pull"
 if [ "$NEED_RELOGIN" = 1 ]; then
     echo
-    warn "ONE MORE STEP before streaming — reboot the Deck (or fully log out and back in)."
+    warn "ONE MORE STEP before streaming — reboot the Deck."
     echo "     KWin only authorizes Desktop-mode screen capture on a fresh session, and the new 'input'"
-    echo "     group (native Steam Deck controller passthrough) only applies to a new login. Streaming"
+    echo "     group (native Steam Deck controller passthrough) only applies after a reboot. Streaming"
     echo "     Game Mode with a generic Xbox pad works now; Desktop capture + the native Deck pad need the reboot."
 fi

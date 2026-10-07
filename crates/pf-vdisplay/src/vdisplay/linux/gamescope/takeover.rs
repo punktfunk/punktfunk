@@ -652,8 +652,8 @@ pub fn preflight_takeover_privilege() {
          through {helper} — and that helper only serves members of the '{group}' group, which \
          '{user}' is not in. Every takeover will degrade silently: the stream mirrors the box's \
          own session instead, which with the panel off looks like a black screen on every \
-         connect. Fix it once with `sudo usermod -aG {group} {user}`, then log out and back in — \
-         a `systemd --user` session keeps the group set it started with, and the same group gates \
+         connect. Fix it once with `sudo usermod -aG {group} {user}`, then restart the computer — \
+         a lingering `systemd --user` keeps the group set it started with, and the same group gates \
          the virtual Steam Deck pad's usbip nodes. It can present arbitrary emulated USB devices, \
          so join it only on a machine you trust."
     );

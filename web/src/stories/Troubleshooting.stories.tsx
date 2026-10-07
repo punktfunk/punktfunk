@@ -31,7 +31,7 @@ const TAKEOVER_FAIL = check({
 	impact:
 		"Streams that need the managed takeover cannot stop sddm.service, so every one of them degrades to mirroring this machine's own session instead. With the panel off that looks like a black screen on every connect, and nothing else reports it.",
 	remedy: {
-		text: "Add the user to the “punktfunk” group, then log out and back in. The same group gates the virtual Steam Deck pad's usbip nodes, which can present arbitrary emulated USB devices — join it only on a machine you trust.",
+		text: "Add the user to the “punktfunk” group, then restart the computer. The same group gates the virtual Steam Deck pad's usbip nodes, which can present arbitrary emulated USB devices — join it only on a machine you trust.",
 		command: "sudo usermod -aG punktfunk enrico",
 		relogin_required: true,
 	},
@@ -48,7 +48,7 @@ const VHCI_RELOGIN = check({
 	impact:
 		"The virtual Steam Deck controller cannot attach, so Steam Input never sees it — in Game Mode that means nothing can be navigated with a pad.",
 	remedy: {
-		text: "Log out and back in. The membership is already recorded — this session just started before it was granted, and a session keeps the group set it began with.",
+		text: "Restart the computer. The membership is already recorded, but the host's services started before it and keep their old groups until a restart — logging out is not enough.",
 		relogin_required: true,
 	},
 	params: { group: "punktfunk", user: "enrico" },
