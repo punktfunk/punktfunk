@@ -236,6 +236,15 @@ pub(super) fn free_box_session_for_exclusive(box_steam: bool, exclusive: bool) -
     !box_steam && exclusive
 }
 
+/// A seat (an isolated spawn with its own Steam home) streams beside the box's own session, so it
+/// never frees that session or darkens the box's panels, whatever the topology says.
+pub(super) fn seat_spawn_may_darken(
+    exclusive: bool,
+    isolation: Option<&crate::SessionIsolation>,
+) -> bool {
+    exclusive && isolation.is_none_or(|i| i.steam_home.is_none())
+}
+
 /// Steam URI → insert `-gamepadui` so nested Steam is Big Picture. Idempotent. Custom cmds unchanged.
 pub(super) fn shape_dedicated_command(app: &str) -> String {
     let mut it = app.split_whitespace();
@@ -431,6 +440,23 @@ fn hold_launch_until_steam_up(uri: &str, log: &std::path::Path, from: u64) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_seat_never_darkens_the_box() {
+        let iso = |home: Option<&str>| crate::SessionIsolation {
+            id: "ab12cd34".into(),
+            ei_relay: "/run/user/1000/pf-ei".into(),
+            sink: None,
+            mic_source: None,
+            steam_home: home.map(Into::into),
+        };
+        let seat = iso(Some("/var/lib/punktfunk/seats/ab12cd34"));
+        assert!(!seat_spawn_may_darken(true, Some(&seat)));
+        // A lone isolated spawn on the box's own home keeps the topology it was given.
+        assert!(seat_spawn_may_darken(true, Some(&iso(None))));
+        assert!(seat_spawn_may_darken(true, None));
+        assert!(!seat_spawn_may_darken(false, None));
+    }
 
     #[test]
     fn a_steam_is_matched_to_its_own_unit_only() {

@@ -319,6 +319,7 @@ impl VirtualDisplay for GamescopeDisplay {
             .and_then(|i| i.steam_home.as_deref())
             .and_then(seat::ensure_home);
         let box_steam = contends_for_box_steam(steam, seat_home.is_some());
+        let exclusive = seat_spawn_may_darken(exclusive, self.isolation.as_ref());
         if box_steam {
             // No attach degrade here: a box without takeover privilege fails with the actionable error.
             stop_autologin_sessions()
