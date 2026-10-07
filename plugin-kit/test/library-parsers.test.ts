@@ -33,6 +33,7 @@ import {
 	steamCdnUrl,
 	steamLibraryDirs,
 	steamListedLibraries,
+	validRegKey,
 	vdfPaths,
 	vdfValue,
 	withReadOnlyDb,
@@ -501,8 +502,51 @@ describe("openReadOnly", () => {
 // scanner found IRON NEST, the plugin found nothing.
 //
 // The fixture is the verbatim output from .173 (a blank line, then one subkey row).
+// A service account's HKCU is its own empty hive, so a read there would report no games where
+// the user has many. The home path is what tells a service from a signed-in user.
+describe("validRegKey", () => {
+	const USER = "C:\\Users\\enrico";
+	const LOCAL_SERVICE = "C:\\WINDOWS\\ServiceProfiles\\LocalService";
+	const SYSTEM = "C:\\WINDOWS\\system32\\config\\systemprofile";
+
+	test("HKLM reads under any account", () => {
+		expect(validRegKey("HKLM\\SOFTWARE\\Valve\\Steam", USER)).toBe(true);
+		expect(validRegKey("HKLM\\SOFTWARE\\Valve\\Steam", LOCAL_SERVICE)).toBe(
+			true,
+		);
+		expect(validRegKey("HKLM\\SOFTWARE\\Valve\\Steam", SYSTEM)).toBe(true);
+	});
+
+	test("HKCU reads under a user's profile and nowhere else", () => {
+		expect(validRegKey("HKCU\\System\\GameConfigStore", USER)).toBe(true);
+		expect(validRegKey("HKCU\\System\\GameConfigStore", LOCAL_SERVICE)).toBe(
+			false,
+		);
+		expect(validRegKey("HKCU\\System\\GameConfigStore", SYSTEM)).toBe(false);
+	});
+
+	test("other hives and malformed keys are refused", () => {
+		expect(validRegKey("HKU\\S-1-5-21-1\\Software", USER)).toBe(false);
+		expect(validRegKey("HKCU\\", USER)).toBe(false);
+		expect(validRegKey("HKCU\\Software\\..\\Other", USER)).toBe(false);
+	});
+});
+
 describe("parseRegSubKeys", () => {
 	const KEY = "HKLM\\SOFTWARE\\WOW6432Node\\GOG.com\\Games";
+
+	test("an HKCU key matches the full hive name reg.exe prints", () => {
+		const stdout = [
+			"",
+			"HKEY_CURRENT_USER\\System\\GameConfigStore\\Children",
+			"HKEY_CURRENT_USER\\System\\GameConfigStore\\Parents",
+			"",
+		].join("\r\n");
+		expect(parseRegSubKeys(stdout, "HKCU\\System\\GameConfigStore")).toEqual([
+			"Children",
+			"Parents",
+		]);
+	});
 
 	test("returns subkey NAMES from real reg.exe output", () => {
 		const stdout = [

@@ -21,6 +21,7 @@
 // to plain fetch (document PUNKTFUNK_MGMT_CA + NODE_EXTRA_CA_CERTS there).
 import type { Connection } from "./connection.js";
 import { staticBearer } from "./credential.js";
+import { socketFetch } from "./pipe-fetch.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -194,6 +195,8 @@ const makeFetch = async (ca: string | undefined): Promise<typeof fetch> => {
 	// socket and forwards over its own pinned connection, so there is nothing to pin in here.
 	const unix = process.env.PUNKTFUNK_MGMT_UNIX?.trim();
 	if (unix) {
+		// A Windows pipe — the host's own, per plugin — is not a socket bun's fetch dials.
+		if (unix.startsWith("\\\\.\\pipe\\")) return socketFetch(unix);
 		return ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
 			fetch(input, { ...init, unix } as RequestInit)) as typeof fetch;
 	}

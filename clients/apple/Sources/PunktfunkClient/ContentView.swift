@@ -677,12 +677,10 @@ struct ContentView: View {
     private var connectionErrorReady: Bool {
         guard model.errorMessage != nil else { return false }
         #if os(macOS)
-        // Defer the alert while a forced-fullscreen exit is still pending: a sheet attached to a
-        // fullscreen window makes AppKit drop `-toggleFullScreen:`, so presenting it now strands
-        // the window fullscreen on the home screen after a session error. Gated on a fullscreen
-        // WE drove, never on the setting: a window the user fullscreened themselves is never
-        // going to flip back, so the same gate would swallow the failure forever.
-        if appDrivenFullscreen && isFullscreen { return false }
+        // Hold the alert while a fullscreen we drove is still leaving: a sheet on a fullscreen
+        // window makes AppKit drop `-toggleFullScreen:` and strands it there. Under Always, or in
+        // a fullscreen the user chose, nothing leaves, so holding it would swallow the error.
+        if appDrivenFullscreen && isFullscreen && !fullscreenAlways { return false }
         #endif
         return true
     }
