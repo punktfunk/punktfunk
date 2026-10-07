@@ -425,6 +425,7 @@ pub(crate) fn plugin_may_access(method: &Method, path: &str) -> bool {
         (&Method::POST, "/api/v1/plugin-access/requests"),
         (&Method::PUT, "/api/v1/plugins/{}"),
         (&Method::DELETE, "/api/v1/plugins/{}"),
+        (&Method::GET, "/api/v1/plugins/{}/ui/attach"),
     ];
     ALLOWED
         .iter()

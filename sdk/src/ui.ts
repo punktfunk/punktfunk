@@ -25,6 +25,7 @@
 //     `/plugins` endpoints; the untyped request seam has existed since 0.1.0 and is skew-proof.
 //   - **The host only ever dials 127.0.0.1:<port>** — we register a port, never an address (D5).
 import { createHash, timingSafeEqual } from "node:crypto";
+import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Punktfunk } from "./index.js";
@@ -103,6 +104,171 @@ export interface PluginUiHandle {
 
 const warn = (m: string) => console.warn(`[punktfunk] servePluginUi: ${m}`);
 
+/** What serves the page: a bound port, or 0 for the host's channel. */
+interface UiServer {
+	readonly port: number;
+	stop(force: boolean): void;
+}
+
+/** A loopback ephemeral port — nothing off-box can reach it, and nothing to configure. */
+const loopbackServer = (handle: (req: Request) => Promise<Response>): UiServer => {
+	const bun = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handle });
+	if (bun.port == null) throw new Error("Bun.serve did not report a bound port");
+	return { port: bun.port, stop: (force) => bun.stop(force) };
+};
+
+/** Connections a plugin keeps parked at the host; each one used is dialed again. */
+const PARKED = 4;
+
+/**
+ * The reverse tunnel: dial the plugin's own pipe, ask the host to keep the connection, and serve
+ * one HTTP/1.1 request on it. The host closes each connection after its response, so a page that
+ * takes its time never holds the next one; bun's `node:http` server takes no socket it did not
+ * accept, so the request is read and the response written here.
+ */
+export const attachOverPipe = (
+	pipe: string,
+	id: string,
+	handle: (req: Request) => Promise<Response>,
+): UiServer => {
+	const live = new Set<net.Socket>();
+	let closed = false;
+	let parked = 0;
+	// The handshake by hand on a raw socket: bun's HTTP client hands no upgraded socket back.
+	const dial = (): void => {
+		if (closed || parked >= PARKED) return;
+		parked++;
+		const socket = net.connect({ path: pipe });
+		let head = Buffer.alloc(0);
+		let attached = false;
+		socket.on("connect", () => {
+			socket.write(
+				`GET /api/v1/plugins/${id}/ui/attach HTTP/1.1\r\nhost: punktfunk.host\r\n` +
+					"connection: Upgrade\r\nupgrade: punktfunk-ui\r\n\r\n",
+			);
+		});
+		const onHead = (chunk: Buffer): void => {
+			head = Buffer.concat([head, chunk]);
+			const split = head.indexOf("\r\n\r\n");
+			if (split < 0) return;
+			socket.off("data", onHead);
+			const status = head.subarray(0, split).toString("latin1").split(" ")[1];
+			if (status !== "101") {
+				warn(`the host refused the UI channel: ${status}`);
+				socket.destroy();
+				return;
+			}
+			attached = true;
+			live.add(socket);
+			serveOne(socket, handle, head.subarray(split + 4));
+		};
+		socket.on("data", onHead);
+		socket.on("error", (e) => {
+			if (!attached) warn(`the UI channel did not attach: ${e.message}`);
+		});
+		socket.on("close", () => {
+			live.delete(socket);
+			parked--;
+			if (!closed) setTimeout(dial, attached ? 50 : 2000).unref();
+		});
+	};
+	for (let i = 0; i < PARKED; i++) dial();
+	return {
+		port: 0,
+		stop: () => {
+			closed = true;
+			for (const socket of live) socket.destroy();
+		},
+	};
+};
+
+/** Statuses that carry no body. */
+const BODYLESS = new Set([204, 304]);
+
+/**
+ * One request off a parked connection: head and `content-length` body read whole (a page's
+ * requests are small), the response written chunked so a stream reaches the console as it is
+ * made, then the connection closed.
+ */
+const serveOne = (
+	socket: net.Socket,
+	handle: (req: Request) => Promise<Response>,
+	initial: Buffer,
+): void => {
+	const chunks: Buffer[] = [];
+	const onData = (chunk: Buffer): void => {
+		chunks.push(chunk);
+		const raw = Buffer.concat(chunks);
+		const split = raw.indexOf("\r\n\r\n");
+		if (split < 0) return;
+		const lines = raw.subarray(0, split).toString("latin1").split("\r\n");
+		const [method = "GET", target = "/"] = lines[0]?.split(" ") ?? [];
+		const headers = new Headers();
+		for (const line of lines.slice(1)) {
+			const colon = line.indexOf(":");
+			if (colon > 0) headers.append(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+		}
+		const length = Number(headers.get("content-length") ?? 0);
+		if (raw.length < split + 4 + length) return;
+		socket.off("data", onData);
+		const body = raw.subarray(split + 4, split + 4 + length);
+		void respond(socket, method, target, headers, body, handle);
+	};
+	socket.on("data", onData);
+	socket.on("error", () => {});
+	if (initial.length > 0) onData(initial);
+};
+
+const respond = async (
+	socket: net.Socket,
+	method: string,
+	target: string,
+	headers: Headers,
+	body: Buffer,
+	handle: (req: Request) => Promise<Response>,
+): Promise<void> => {
+	let response: Response;
+	try {
+		response = await handle(
+			new Request(new URL(target, "http://punktfunk.plugin"), {
+				method,
+				headers,
+				body: body.length > 0 ? new Uint8Array(body) : undefined,
+			}),
+		);
+	} catch (e) {
+		warn(`page request failed: ${e}`);
+		response = new Response("plugin error", { status: 500 });
+	}
+	const bodyless = BODYLESS.has(response.status) || method === "HEAD";
+	const head = [`HTTP/1.1 ${response.status} ${response.statusText || "OK"}`];
+	response.headers.forEach((v, k) => {
+		if (!["content-length", "transfer-encoding", "connection"].includes(k)) head.push(`${k}: ${v}`);
+	});
+	head.push("connection: close");
+	if (!bodyless) head.push("transfer-encoding: chunked");
+	socket.write(`${head.join("\r\n")}\r\n\r\n`);
+	if (bodyless || !response.body) {
+		socket.end(bodyless ? "" : "0\r\n\r\n");
+		return;
+	}
+	try {
+		const reader = response.body.getReader();
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value && value.length > 0) {
+				socket.write(`${value.length.toString(16)}\r\n`);
+				socket.write(value);
+				socket.write("\r\n");
+			}
+		}
+	} catch {
+		// The console went away mid-stream; the close below is all that is left to do.
+	}
+	socket.end("0\r\n\r\n");
+};
+
 /** A fresh per-boot secret: 32 random bytes as base64url (43 chars, `[A-Za-z0-9_-]`). */
 const mintSecret = (): string => {
 	const bytes = new Uint8Array(32);
@@ -164,10 +330,7 @@ export const servePluginUi = async (
 		return timingSafeEqual(presentedHash, secretHash);
 	};
 
-	const server = Bun.serve({
-		hostname: "127.0.0.1", // loopback only — nothing off-box can reach it
-		port: 0, // ephemeral: no port to configure or collide
-		async fetch(req) {
+	const handle = async (req: Request): Promise<Response> => {
 			if (!authorized(req)) {
 				return new Response("unauthorized", { status: 401 });
 			}
@@ -199,12 +362,17 @@ export const servePluginUi = async (
 				if (await index.exists()) return new Response(index);
 			}
 			return new Response("not found", { status: 404 });
-		},
-	});
+	};
 
+	// Inside a Windows AppContainer nothing can be bound: the page is served over the host's
+	// channel instead, and registers port 0. Everywhere else, a loopback ephemeral port.
+	const pipe = process.env.PUNKTFUNK_MGMT_UNIX?.trim() ?? "";
+	const server: UiServer =
+		process.platform === "win32" && pipe.startsWith("\\\\.\\pipe\\")
+			? attachOverPipe(pipe, opts.id, handle)
+			: loopbackServer(handle);
 	const port = server.port;
-	if (port == null) throw new Error("Bun.serve did not report a bound port");
-	const url = `http://127.0.0.1:${port}`;
+	const url = port === 0 ? "" : `http://127.0.0.1:${port}`;
 	const body = {
 		title: opts.title,
 		...(opts.version !== undefined ? { version: opts.version } : {}),

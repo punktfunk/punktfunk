@@ -44,6 +44,7 @@ mod native;
 #[cfg(windows)]
 pub(crate) mod pipes;
 mod plugin_access;
+pub(crate) mod plugin_channel;
 pub(crate) mod plugins;
 mod session;
 mod settings;
@@ -209,6 +210,7 @@ pub async fn run(
     // Close a leftover apply-intent from the previous boot (`update/jobs.rs`).
     // Once per process, before serving.
     crate::update::reconcile_at_boot();
+    plugin_channel::remember_runtime();
     // The tray has no supervisor — HKLM `Run` is a sign-in trigger — so
     // `StopTrays` and a crash leave no icon until the next logon.
     #[cfg(target_os = "windows")]
@@ -514,6 +516,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(plugins::list_plugins))
         .routes(routes!(plugins::register_plugin, plugins::delete_plugin))
         .routes(routes!(plugins::get_ui_credential))
+        .routes(routes!(plugin_channel::attach))
         .routes(routes!(plugins::ingest_plugin_logs))
         // GET and POST share the path — one `routes!` (same-path merge). The plugin lane
         // reaches these two only; the overview and the decision stay admin by allowlist.
@@ -550,9 +553,16 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(update::apply_update))
         .routes(routes!(actions::list_actions))
         .routes(routes!(actions::invoke_action));
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1", api_v1)
-        .split_for_parts()
+        .split_for_parts();
+    // A plugin page's own paths, any method: the channel proxy. Not an API of its own, so not in
+    // the document; it is admin-lane because the plugin lane's allowlist never names it.
+    let router = router.route(
+        "/api/v1/plugins/{id}/ui/{*rest}",
+        axum::routing::any(plugin_channel::proxy),
+    );
+    (router, api)
 }
 
 /// `punktfunk-host openapi`; checked in at `api/openapi.json`.

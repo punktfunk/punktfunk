@@ -43,8 +43,29 @@ pub fn launching(game: GameRefPayload) {
     );
 }
 
-/// One plugin's hold: `POST /__hold` with the event, 2xx means done.
+/// One plugin's hold: `POST /__hold` with the event, 2xx means done. A plugin on the host's
+/// channel (port 0) is reached through it instead of a port.
 fn hold_plugin(p: &crate::mgmt::plugins::Holder, json: &str) {
+    let timeout_ms = p.timeout.as_millis() as u64;
+    if p.port == 0 {
+        use crate::mgmt::plugin_channel::{request_blocking, Unreached};
+        match request_blocking(&p.id, "/__hold", json, p.timeout) {
+            Ok((200..=299, _)) => tracing::debug!(plugin = %p.id, "plugin released the launch"),
+            Ok((status, _)) => tracing::warn!(
+                plugin = %p.id, status,
+                "plugin launch hold refused — launching anyway"
+            ),
+            Err(Unreached::Io(e)) if e == "timed out" => tracing::warn!(
+                plugin = %p.id, timeout_ms,
+                "plugin launch hold ran past its deadline — launching anyway"
+            ),
+            Err(e) => tracing::warn!(
+                plugin = %p.id, error = %e,
+                "plugin launch hold unanswered — launching anyway"
+            ),
+        }
+        return;
+    }
     // No proxy: the secret must never leave loopback. No redirects, as for webhooks.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .proxy(None)
@@ -58,7 +79,6 @@ fn hold_plugin(p: &crate::mgmt::plugins::Holder, json: &str) {
         .header("Authorization", &format!("Bearer {}", p.secret))
         .header("Content-Type", "application/json")
         .send(json);
-    let timeout_ms = p.timeout.as_millis() as u64;
     match res {
         Ok(_) => tracing::debug!(plugin = %p.id, "plugin released the launch"),
         Err(ureq::Error::Timeout(_)) => tracing::warn!(

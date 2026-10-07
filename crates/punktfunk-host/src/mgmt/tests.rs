@@ -2329,6 +2329,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/plugins/{id}", true, false),
         ("DELETE", "/api/v1/plugins/{id}", true, false),
         ("GET", "/api/v1/plugins/{id}/ui-credential", false, false),
+        // A plugin parks a connection for its own page; the handler checks the identity is its own.
+        ("GET", "/api/v1/plugins/{id}/ui/attach", true, false),
         // A plugin asks for a folder and reads its own rows (its own token, not the shared
         // runner's — the handler 403s without a PluginIdentity). Deciding is operator-only,
         // so the overview and decide routes admit neither lane.
