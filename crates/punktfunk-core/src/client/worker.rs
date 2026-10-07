@@ -197,6 +197,21 @@ impl ClientShared {
         self.send_feedback(&ask);
     }
 
+    /// The decoder took frame `index`. A whole AU decoded clean is acknowledged; an anchor
+    /// ends its gap without an ask.
+    pub(crate) fn decoder_took(&self, index: u32, flags: u32, whole: bool) {
+        if flags & crate::packet::USER_FLAG_RECOVERY_ANCHOR != 0 {
+            self.rfi.lock().unwrap().anchored(index);
+        }
+        if !whole {
+            return;
+        }
+        let ack = self.feedback.lock().unwrap().decoded(index, flags);
+        if let Some(fb) = ack {
+            self.send_feedback(&fb);
+        }
+    }
+
     /// Ask the host to stop referencing frames `first..=last`.
     pub(crate) fn ask_rfi(&self, first: u32, last: u32) {
         self.recent_rfis.lock().unwrap().note(Instant::now());

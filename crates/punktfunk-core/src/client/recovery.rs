@@ -26,6 +26,9 @@ pub(crate) struct RfiRecovery {
     pending: Option<(u32, u32)>,
     /// Frames already asked for at their tail, newest last.
     asked: std::collections::VecDeque<u32>,
+    /// The newest anchor the decoder took. It references only frames this client holds, so
+    /// the gap it ends asks nothing.
+    anchored: Option<u32>,
 }
 
 /// `a` is ahead of `b` in half-space wrap order.
@@ -72,7 +75,8 @@ impl RfiRecovery {
                     // Advance past this frame so the same gap cannot re-fire. The oldest
                     // unsent loss stays `first`: the host invalidates everything since it.
                     self.next_expected = Some(frame_index.wrapping_add(1));
-                    if let Some(lost) = self.unasked(exp, frame_index.wrapping_sub(1)) {
+                    let lost = self.unasked(exp, frame_index.wrapping_sub(1));
+                    if let Some(lost) = lost.filter(|_| self.anchored != Some(frame_index)) {
                         self.widen(lost);
                     }
                     FrameOrder::Gap(ahead)
@@ -133,6 +137,11 @@ impl RfiRecovery {
         });
     }
 
+    /// The decoder took `frame_index`, an anchor: the gap it ends needs no ask.
+    pub(crate) fn anchored(&mut self, frame_index: u32) {
+        self.anchored = Some(frame_index);
+    }
+
     /// An IDR was asked for: it repairs every frame the pending range names. The RFI
     /// throttle keeps its own window; an IDR ask does not hold back the next RFI.
     pub(crate) fn keyframe_requested(&mut self) {
@@ -154,6 +163,41 @@ impl RfiRecovery {
         } else {
             RecoveryAsk::Rfi(first, last)
         }
+    }
+}
+
+/// The frames the decoder took clean, in its order: an IDR, an anchor, or the frame right
+/// after a clean one. The newest and the sixteen before it ride
+/// [`Feedback::acked`]; while its link loses packets the host references only these.
+#[derive(Default)]
+pub(crate) struct AckChain {
+    prev: Option<u32>,
+    clean: bool,
+    last: Option<u32>,
+    mask: u16,
+}
+
+impl AckChain {
+    /// Fold one whole AU as the decoder takes it; `Some` when it decodes clean.
+    pub(crate) fn decoded(&mut self, index: u32, flags: u32) -> Option<(u32, u16)> {
+        if self.prev.is_some_and(|p| !ahead_of(index, p)) {
+            return None;
+        }
+        let follows = self.prev.is_some_and(|p| p.wrapping_add(1) == index);
+        self.prev = Some(index);
+        let fresh = flags
+            & (u32::from(crate::packet::FLAG_SOF) | crate::packet::USER_FLAG_RECOVERY_ANCHOR)
+            != 0;
+        self.clean = fresh || (follows && self.clean);
+        if !self.clean {
+            return None;
+        }
+        self.mask = match self.last.map(|l| index.wrapping_sub(l)) {
+            Some(d @ 1..=16) => ((u32::from(self.mask) << d) | 1 << (d - 1)) as u16,
+            _ => 0,
+        };
+        self.last = Some(index);
+        Some((index, self.mask))
     }
 }
 
@@ -244,6 +288,7 @@ pub(crate) struct FeedbackOut {
     /// The newest frame handed on. An answer is a frame after the one the ask saw.
     newest: Option<u32>,
     interval: Duration,
+    acks: AckChain,
 }
 
 impl Default for FeedbackOut {
@@ -256,6 +301,7 @@ impl Default for FeedbackOut {
             shape: 0,
             newest: None,
             interval: Duration::from_micros(1_000_000 / 60),
+            acks: AckChain::default(),
         }
     }
 }
@@ -355,6 +401,18 @@ impl FeedbackOut {
         if after && (key || (anchor && !o.keyframe)) {
             self.open = None;
         }
+    }
+
+    /// The decoder took a whole AU: its acknowledgement when it decodes clean
+    /// ([`AckChain`]). Carries the levels, never a window or an ask.
+    pub(crate) fn decoded(&mut self, index: u32, flags: u32) -> Option<Feedback> {
+        let acked = self.acks.decoded(index, flags)?;
+        Some(Feedback {
+            acked: Some(acked),
+            link_kbps: self.link_kbps,
+            shape: self.shape,
+            ..Feedback::default()
+        })
     }
 
     /// The open ask's next copy, when one is due. An ask nothing answered closes at
@@ -555,6 +613,21 @@ mod rfi_recovery_tests {
         assert_eq!(r.next_expected, Some(2));
     }
 
+    /// A gap an anchor ends asks nothing: the anchor references only frames this client
+    /// holds. The same gap ended by a plain frame asks as before.
+    #[test]
+    fn a_gap_an_anchor_ends_asks_nothing() {
+        let mut r = RfiRecovery::default();
+        let t = base();
+        r.observe(10, t);
+        r.anchored(12);
+        assert_eq!(r.observe(12, t), (Gap(1), RecoveryAsk::None));
+        assert_eq!(
+            r.observe(15, t + Duration::from_millis(200)),
+            (Gap(2), RecoveryAsk::Rfi(13, 14))
+        );
+    }
+
     #[test]
     fn huge_gap_resyncs_via_keyframe_not_rfi() {
         let mut r = RfiRecovery::default();
@@ -737,6 +810,25 @@ mod feedback_out_tests {
 
     /// A NACK repeats like any ask until its own frame arrives; frames after it answer
     /// nothing. The RFI after it replaces it whole.
+    /// The decoder's clean frames are acknowledged with the sixteen before them; a gap
+    /// stops them until an anchor or an IDR, and a straggler never counts.
+    #[test]
+    fn a_clean_chain_is_acknowledged_and_a_gap_breaks_it_until_an_anchor() {
+        use crate::packet::FLAG_SOF;
+        let mut out = FeedbackOut::default();
+        let mut acked = |i, f| out.decoded(i, f).and_then(|fb| fb.acked);
+        assert_eq!(acked(5, 0), None, "nothing clean before an IDR");
+        assert_eq!(acked(6, FLAG_SOF as u32), Some((6, 0)));
+        assert_eq!(acked(7, 0), Some((7, 0b1)));
+        assert_eq!(acked(8, 0), Some((8, 0b11)));
+        assert_eq!(acked(10, 0), None, "9 never came");
+        assert_eq!(acked(9, 0), None, "a straggler");
+        assert_eq!(acked(11, 0), None, "still on the broken chain");
+        assert_eq!(acked(13, USER_FLAG_RECOVERY_ANCHOR), Some((13, 0b111_0000)));
+        assert_eq!(acked(14, 0), Some((14, 0b1110_0001)));
+        assert_eq!(acked(40, USER_FLAG_RECOVERY_ANCHOR), Some((40, 0)));
+    }
+
     #[test]
     fn a_nack_repeats_until_its_frame_arrives() {
         let t0 = Instant::now();

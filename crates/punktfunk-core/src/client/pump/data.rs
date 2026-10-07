@@ -57,6 +57,9 @@ pub(super) struct DataPump {
     /// A short frame may ask for its missing shards: whole AUs only, so not under
     /// slice-progressive delivery.
     pub(super) nack: bool,
+    /// The newest whole frame was an anchor: the host references only frames this client
+    /// confirmed, so the next frame skips a lost one and its tail asks nothing.
+    pub(super) on_anchors: bool,
 }
 
 /// Most shards past its parity a frame may lack and still ask for them; more is
@@ -671,6 +674,9 @@ impl DataPump {
                     continue;
                 }
             }
+            if self.on_anchors {
+                continue;
+            }
             let ask = self.shared.rfi.lock().unwrap().tail_short(idx, now);
             super::super::send_recovery(&self.shared, ask);
         }
@@ -745,6 +751,7 @@ impl DataPump {
         // detector are per-AU; parts would bias OWD low and reset the staleness run.
         let is_au = frame.complete;
         if is_au {
+            self.on_anchors = frame.flags & crate::packet::USER_FLAG_RECOVERY_ANCHOR != 0;
             // Repeats are the host's idle keepalive, not new content.
             lp.abr
                 .on_au(frame.flags & crate::packet::USER_FLAG_REPEAT != 0);
@@ -963,6 +970,7 @@ mod tests {
             stream_cap_kbps: 100_000,
             refresh_hz: 60,
             nack: false,
+            on_anchors: false,
         };
         (pump, ctrl_rx, fb_rx)
     }
@@ -982,7 +990,8 @@ mod tests {
 
     /// A frame whose head is lost asks for recovery when its own tail lands, before any
     /// later frame could show the gap. No decode loop runs here, so only the pump can ask.
-    /// A PyroWave stream references nothing and asks nothing.
+    /// A PyroWave stream references nothing and asks nothing, nor does a frame after an
+    /// anchor: the host references only confirmed frames, so the next one skips it.
     #[test]
     fn a_frame_whose_head_is_lost_asks_for_recovery_at_its_tail() {
         use crate::transport::Transport;
@@ -991,9 +1000,11 @@ mod tests {
             height: 1080,
             refresh_hz: 60,
         };
-        for (codec, expect) in [
-            (crate::quic::CODEC_HEVC, Some((1, 1))),
-            (crate::quic::CODEC_PYROWAVE, None),
+        let anchor = crate::packet::USER_FLAG_RECOVERY_ANCHOR;
+        for (codec, flags, expect) in [
+            (crate::quic::CODEC_HEVC, 0, Some((1, 1))),
+            (crate::quic::CODEC_PYROWAVE, 0, None),
+            (crate::quic::CODEC_HEVC, anchor, None),
         ] {
             let origin = crate::quic::wall_clock_ns();
             let (host_tp, session) = idle_client_session(origin);
@@ -1013,10 +1024,10 @@ mod tests {
             // 8 data shards, 2 parity: three lost at the head cannot be rebuilt.
             let frame = vec![7u8; 8 * 1024];
             let pts = crate::quic::wall_clock_ns();
-            for p in host.seal_frame(&frame, pts, 0).unwrap() {
+            for p in host.seal_frame(&frame, pts, flags).unwrap() {
                 host_tp.send(&p).unwrap();
             }
-            let lossy = host.seal_frame(&frame, pts + 10_000_000, 0).unwrap();
+            let lossy = host.seal_frame(&frame, pts + 10_000_000, flags).unwrap();
             assert_eq!(lossy.len(), 10);
             for p in &lossy[3..] {
                 host_tp.send(p).unwrap();

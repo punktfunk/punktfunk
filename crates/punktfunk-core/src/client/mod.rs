@@ -1360,6 +1360,8 @@ impl NativeClient {
                 let completes_au = f.part.as_ref().is_none_or(|p| p.last);
                 self.hud
                     .note_received(f.pts_ns, f.received_ns, f.data.len(), completes_au);
+                self.shared
+                    .decoder_took(f.frame_index, f.flags, completes_au && f.complete);
                 Ok(f)
             }
             FramePop::Timeout => Err(PunktfunkError::NoFrame),
