@@ -10,9 +10,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import coil.ImageLoader
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import coil3.ImageLoader
+import coil3.compose.AsyncImage
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.ImageRequest
 import io.unom.punktfunk.kit.library.GameEntry
 import io.unom.punktfunk.kit.library.mtlsHttpClient
 import io.unom.punktfunk.kit.security.ClientIdentity
@@ -53,7 +54,10 @@ fun posterHttp(context: Context, id: ClientIdentity, address: String, fpHex: Str
 
 /** A Coil loader over [posterHttp]. Coil's own disk cache stays off: OkHttp's is the one. */
 fun posterLoader(context: Context, id: ClientIdentity, address: String, fpHex: String): ImageLoader =
-    ImageLoader.Builder(context).okHttpClient(posterHttp(context, id, address, fpHex)).diskCache(null).build()
+    ImageLoader.Builder(context)
+        .components { add(OkHttpNetworkFetcherFactory(posterHttp(context, id, address, fpHex))) }
+        .diskCache(null)
+        .build()
 
 /**
  * One [Cache] for the process: OkHttp forbids two on a directory. The first open deletes Coil's

@@ -81,7 +81,7 @@ object HostProfiles {
                 when {
                     resp.code == 404 -> ProfilesAnswer.NoProfiles
                     !resp.isSuccessful -> ProfilesAnswer.Failed("the host answered ${resp.code}")
-                    else -> ListedProfile.parseList(resp.body?.string().orEmpty())
+                    else -> ListedProfile.parseList(resp.body.string())
                         ?.let { ProfilesAnswer.Listed(it) } ?: ProfilesAnswer.Failed("bad answer")
                 }
             }

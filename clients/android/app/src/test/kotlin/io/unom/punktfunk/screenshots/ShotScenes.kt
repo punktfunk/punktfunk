@@ -61,8 +61,9 @@ import io.unom.punktfunk.BrandDark
 import io.unom.punktfunk.ConnectModal
 import io.unom.punktfunk.ConnectPhase
 import io.unom.punktfunk.OsdScaled
-import coil.ImageLoader
-import coil.test.FakeImageLoaderEngine
+import coil3.ImageLoader
+import coil3.asImage
+import coil3.test.FakeImageLoaderEngine
 import io.unom.punktfunk.AddHostSheet
 import io.unom.punktfunk.ControllersScreen
 import io.unom.punktfunk.TouchGrid
@@ -684,11 +685,11 @@ private fun shotGames() = listOf(
 
 private fun shotLibraryLoader(context: Context): ImageLoader {
     val engine = FakeImageLoaderEngine.Builder()
-        .intercept("shot://art/aurora", poster(context, "AURORA DRIFT", ::drawAurora))
-        .intercept("shot://art/starfall", poster(context, "STARFALL VALE", ::drawStarfall))
-        .intercept("shot://art/neon", poster(context, "NEON CIRCUIT", ::drawNeon))
-        .intercept("shot://art/ember", poster(context, "EMBER PEAKS", ::drawEmber))
-        .default(ColorDrawable(0xFF221E44.toInt()))
+        .intercept("shot://art/aurora", poster(context, "AURORA DRIFT", ::drawAurora).asImage())
+        .intercept("shot://art/starfall", poster(context, "STARFALL VALE", ::drawStarfall).asImage())
+        .intercept("shot://art/neon", poster(context, "NEON CIRCUIT", ::drawNeon).asImage())
+        .intercept("shot://art/ember", poster(context, "EMBER PEAKS", ::drawEmber).asImage())
+        .default(ColorDrawable(0xFF221E44.toInt()).asImage())
         .build()
     return ImageLoader.Builder(context).components { add(engine) }.build()
 }

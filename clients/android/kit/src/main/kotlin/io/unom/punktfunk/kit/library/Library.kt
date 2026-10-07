@@ -537,7 +537,7 @@ object LibraryClient {
         val base = mgmtBase(address, mgmtPort)
         val get = { path: String ->
             client.newCall(Request.Builder().url(base + path).build()).execute()
-                .use { it.code to it.body?.string().orEmpty() }
+                .use { it.code to it.body.string() }
         }
         return try {
             when (val walked = walkPages(base) { cursor -> get(pagePath(cursor)) }) {
@@ -593,7 +593,7 @@ object LibraryClient {
             val req = Request.Builder().url("${mgmtBase(address, mgmtPort)}/api/v1/status").build()
             client.newCall(req).execute().use { resp ->
                 if (resp.code != 200) return HostStatus()
-                parseStatus(resp.body?.string().orEmpty())
+                parseStatus(resp.body.string())
             }
         } catch (_: Exception) {
             HostStatus()
@@ -652,7 +652,7 @@ object LibraryClient {
             }.build()
             mtlsHttpClient(certPem, keyPem, address, fpHex).newCall(req).execute().use { resp ->
                 val message = runCatching {
-                    str(JSONObject(resp.body?.string().orEmpty()), "message")
+                    str(JSONObject(resp.body.string()), "message")
                 }.getOrNull()
                 InstallOutcome.fromReply(resp.code, message)
             }
