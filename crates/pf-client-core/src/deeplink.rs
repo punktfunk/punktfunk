@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! punktfunk://connect/<host-ref>[?fp=<64-hex>][&host=<addr[:port]>][&launch=<id>]
-//!                               [&preset=<ref>][&name=<label>]
+//!                               [&preset=<ref>][&as=<profile>][&name=<label>]
 //! ```
 //!
 //! A URL may only do what a click on an existing card could do, minus trust
@@ -23,6 +23,8 @@ pub const MAX_HOST_REF_LEN: usize = 128;
 pub const MAX_LAUNCH_LEN: usize = 128;
 pub const MAX_PRESET_LEN: usize = 64;
 pub const MAX_NAME_LEN: usize = 64;
+/// A profile id or name; ids are at most 64 bytes on the wire.
+pub const MAX_PROFILE_LEN: usize = 64;
 
 /// Native control port; same default as every other client.
 pub const DEFAULT_PORT: u16 = 9777;
@@ -60,6 +62,9 @@ pub struct DeepLink {
     pub launch: Option<String>,
     /// Preset id or unique name; one-off, never rebinding.
     pub preset: Option<String>,
+    /// Profile id or name to play as (`as=`): skips the picker for this connect and leaves
+    /// the saved pick alone. Not `profile=`, which is the old spelling of `preset=`.
+    pub as_profile: Option<String>,
     /// Label for the unknown-host confirmation sheet (external emitters).
     pub name: Option<String>,
 }
@@ -222,6 +227,12 @@ pub fn parse(url: &str) -> Result<DeepLink, ParseError> {
                 }
                 legacy_preset = Some(value);
             }
+            "as" if link.as_profile.is_none() => {
+                if value.chars().count() > MAX_PROFILE_LEN {
+                    return Err(ParseError::ParamTooLong("as"));
+                }
+                link.as_profile = Some(value);
+            }
             "name" if link.name.is_none() => {
                 if value.chars().count() > MAX_NAME_LEN {
                     return Err(ParseError::ParamTooLong("name"));
@@ -273,6 +284,9 @@ impl DeepLink {
             push(&mut s, "preset", preset);
             push(&mut s, "profile", preset);
         }
+        if let Some(profile) = &self.as_profile {
+            push(&mut s, "as", profile);
+        }
         if let Some(name) = &self.name {
             push(&mut s, "name", name);
         }
@@ -291,6 +305,7 @@ impl DeepLink {
             host: Some((host.addr.clone(), host.port)),
             launch: launch.map(str::to_string),
             preset: preset.map(str::to_string),
+            as_profile: None,
             name: None,
         }
     }
@@ -559,6 +574,7 @@ mod tests {
                     assert_eq!(link.launch, opt("launch"), "{name} launch");
                     assert_eq!(link.preset, opt("preset"), "{name} preset");
                     assert_eq!(link.name, opt("name"), "{name} name");
+                    assert_eq!(link.as_profile, opt("as"), "{name} as");
                     let (addr, port) = match &link.host {
                         Some((a, p)) => (Some(a.clone()), Some(u64::from(*p))),
                         None => (None, None),
@@ -817,6 +833,7 @@ mod tests {
         let link = DeepLink {
             host_ref: "Wohnzimmer PC".into(),
             name: Some("Büro · Mac".into()),
+            as_profile: Some("Kid".into()),
             ..Default::default()
         };
         assert!(link

@@ -1,0 +1,29 @@
+# punktfunk door: the box's host as a system service, reachable without anyone logged in.
+#
+# It advertises, pairs, serves the console's API and places every connect on a seat of the box
+# (punktfunk-seats), the owner's included. It never opens a display or captures: the box's files
+# live in /var/lib/punktfunk, owned by the punktfunk user. Turned on and off with
+# `door-helper on|off <user>` (punktfunk-door-on@.service); not enabled by the package.
+[Unit]
+Description=punktfunk door (the box's host, reachable without logging in)
+After=network-online.target punktfunk-seats.service
+Wants=network-online.target punktfunk-seats.service
+
+[Service]
+Type=simple
+User=punktfunk
+Group=punktfunk
+Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk
+ExecStart=/usr/bin/punktfunk-host serve --door
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

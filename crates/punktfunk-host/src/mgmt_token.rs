@@ -51,7 +51,7 @@ const PLUGIN_FILE: &str = "plugin-token";
 /// `{ "<plugin id>": "<token>" }` — see [`load_or_generate_per_plugin`].
 const PER_PLUGIN_FILE: &str = "plugin-tokens.json";
 const TRAY_ENV_VAR: &str = "PUNKTFUNK_TRAY_TOKEN";
-const TRAY_FILE: &str = "tray-token";
+pub(crate) const TRAY_FILE: &str = "tray-token";
 
 /// 32 random bytes as hex: safe in `KEY=VALUE` and in a bearer header.
 fn random_token() -> String {
@@ -63,12 +63,23 @@ fn random_token() -> String {
 /// The tray's bearer for `GET /local/summary`, minted fresh at every start and never read
 /// back by the host. The file is the one credential a standard account may read
 /// (`replace_users_readable_file`); on a box with other accounts it buys the summary alone.
+/// Seat accounts may not read it: a seat's player is not the box's.
 pub fn mint_tray_token() -> Result<String> {
     let token = random_token();
     let path = pf_paths::config_dir().join(TRAY_FILE);
     let line = format!("{TRAY_ENV_VAR}={token}\n");
-    pf_paths::replace_users_readable_file(&path, line.as_bytes())
-        .with_context(|| format!("write {}", path.display()))?;
+    #[cfg(windows)]
+    let written = match pf_seats::windows::seats_group_sid() {
+        Some(sid) => pf_paths::replace_users_readable_file_denying(
+            &path,
+            line.as_bytes(),
+            &format!("*{sid}"),
+        ),
+        None => pf_paths::replace_users_readable_file(&path, line.as_bytes()),
+    };
+    #[cfg(not(windows))]
+    let written = pf_paths::replace_users_readable_file(&path, line.as_bytes());
+    written.with_context(|| format!("write {}", path.display()))?;
     Ok(token)
 }
 
@@ -164,6 +175,9 @@ fn load_or_generate_impl(env_var: &str, file: &str) -> Result<String> {
         if parse_token(&fs::read_to_string(&path).unwrap_or_default(), env_var).as_deref()
             != Some(pinned.as_str())
         {
+            // A seat's config directory doesn't exist before its host's first start.
+            pf_paths::create_private_dir(&dir)
+                .with_context(|| format!("create {}", dir.display()))?;
             write_token(&path, env_var, &pinned)?;
         }
         return Ok(pinned);

@@ -50,6 +50,7 @@ let
       "punktfunk-client"
       "punktfunk-web"
       "punktfunk-scripting"
+      "punktfunk-seats"
       "punktfunk-gamescope"
     ] (name: fakeDrv "${prefix}${name}");
 
@@ -127,10 +128,31 @@ let
 
   clientOnly = evalWith { services.punktfunk.client.enable = true; };
 
+  # The seat supervisor, on a host. The other two are the refusals: no host to run in each seat,
+  # and users the supervisor could not create with useradd.
+  seats = evalWith {
+    services.punktfunk.host = {
+      enable = true;
+      openFirewall = true;
+      gamescopeHdr = false;
+    };
+    services.punktfunk.seats.enable = true;
+  };
+  seatsWithoutHost = evalWith { services.punktfunk.seats.enable = true; };
+  seatsImmutableUsers = evalWith {
+    services.punktfunk.host.enable = true;
+    services.punktfunk.seats.enable = true;
+    users.mutableUsers = false;
+  };
+
   unit = cfg: name: cfg.systemd.user.units."${name}.service".text;
   has =
     cfg: name: infix:
     lib.hasInfix infix (unit cfg name);
+  # The same for a system unit, which a `systemd.services` entry renders under `systemd.units`.
+  hasSys =
+    cfg: name: infix:
+    lib.hasInfix infix cfg.systemd.units."${name}".text;
   # A module's own failed assertions, as messages.
   failedAssertions = cfg: map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
 
@@ -377,6 +399,131 @@ let
         && lib.hasInfix "restart-user-units" u.serviceConfig.ExecReload;
     }
 
+    # --- the seat supervisor -------------------------------------------------------------------
+    {
+      name = "the seat scenario has no failing assertions";
+      ok = failedAssertions seats == [ ];
+    }
+    {
+      # Both units and the tmpfiles rules come from the package; the module only adds what a
+      # packaged unit lacks.
+      name = "seats installs the package's units and tmpfiles rules";
+      ok =
+        lib.elem seats.services.punktfunk.seats.package seats.systemd.packages
+        && lib.elem seats.services.punktfunk.seats.package seats.systemd.tmpfiles.packages;
+    }
+    {
+      # `enable` is the operator's decision here, so the daemon starts at boot. The packaged
+      # distros ship it disabled and let the console turn it on.
+      name = "seats starts the supervisor at boot";
+      ok = hasSys seats "punktfunk-seats.service" "WantedBy=multi-user.target";
+    }
+    {
+      # A unit from `systemd.packages` has no PATH of its own, and useradd, setfacl and
+      # loginctl are all looked up on it.
+      name = "seats gives both units a PATH with the account tools";
+      ok =
+        let
+          onPath = name: hasSys seats name "-shadow-" && hasSys seats name "-acl-";
+        in
+        onPath "punktfunk-seats.service" && onPath "punktfunk-seat@.service";
+    }
+    {
+      # seat-session defaults to /usr/bin/punktfunk-host, which NixOS has not got.
+      name = "seats points seat-session at the system's host build";
+      ok =
+        hasSys seats "punktfunk-seat@.service"
+          "PUNKTFUNK_HOST_BIN=/pf-stub/system-punktfunk-host/bin/punktfunk-host";
+    }
+    {
+      name = "a switch leaves running seats up";
+      ok = hasSys seats "punktfunk-seat@.service" "X-RestartIfChanged=false";
+    }
+    {
+      name = "seats refuses a box with no host";
+      ok = lib.any (lib.hasInfix "seats needs services.punktfunk.host.enable") (
+        failedAssertions seatsWithoutHost
+      );
+    }
+    {
+      name = "seats refuses immutable users";
+      ok = lib.any (lib.hasInfix "seats needs users.mutableUsers = true") (
+        failedAssertions seatsImmutableUsers
+      );
+    }
+    {
+      name = "a host without seats defines neither seat unit";
+      ok =
+        !(desktop.systemd.services ? punktfunk-seats) && !(desktop.systemd.services ? "punktfunk-seat@");
+    }
+
+    # --- the door: the box's host as a system service ------------------------------------------
+    {
+      # The packaged unit names /usr/bin/punktfunk-host. The empty line first clears it: a second
+      # ExecStart on a simple service is an error.
+      name = "the door runs the system's host build";
+      ok =
+        hasSys seats "punktfunk-door.service"
+          "ExecStart=\nExecStart=/pf-stub/system-punktfunk-host/bin/punktfunk-host serve --door";
+    }
+    {
+      name = "the door's console runs the module's web package";
+      ok =
+        hasSys seats "punktfunk-web-door.service"
+          "ExecStart=\nExecStart=/pf-stub/punktfunk-web/bin/punktfunk-web-server";
+    }
+    {
+      # The helper calls useradd, runuser, flock and awk by name.
+      name = "the door's helpers have a PATH with the account tools";
+      ok =
+        let
+          onPath =
+            name:
+            hasSys seats name "-shadow-"
+            && hasSys seats name "-util-linux-"
+            && hasSys seats name "-gawk-";
+        in
+        onPath "punktfunk-door-on@.service" && onPath "punktfunk-door-off@.service";
+    }
+    {
+      # polkit reads /etc/polkit-1/rules.d; the rule is the package's file, not a copy.
+      name = "the door's polkit rule is the package's file";
+      ok =
+        seats.security.polkit.enable
+        && seats.environment.etc."polkit-1/rules.d/49-punktfunk-door.rules".source
+          == "/pf-stub/punktfunk-seats/share/polkit-1/rules.d/49-punktfunk-door.rules";
+    }
+    {
+      # The rule and the helper both name this group.
+      name = "the door's group exists";
+      ok = seats.users.groups ? punktfunk-update;
+    }
+    {
+      name = "seats open the seat ports with the host's";
+      ok = lib.elem {
+        from = 9779;
+        to = 9782;
+      } seats.networking.firewall.allowedUDPPortRanges;
+    }
+    {
+      # The owner's own host and console stand down while the door serves the box's ports.
+      name = "seats make the user host and console stand down for the door";
+      ok =
+        has seats "punktfunk-host" "ConditionPathExists=!/run/punktfunk-seat-%u\n"
+        && has seats "punktfunk-host" "EnvironmentFile=-/run/punktfunk/seats/%u.env\n"
+        && has seats "punktfunk-web" "ConditionPathExists=!/run/punktfunk-web-door\n";
+    }
+    {
+      name = "a host without seats keeps its user units and ports as they were";
+      ok =
+        !(has appliance "punktfunk-host" "/run/punktfunk-seat")
+        && !(has appliance "punktfunk-host" "/run/punktfunk/seats")
+        && !(has appliance "punktfunk-web" "punktfunk-web-door")
+        && appliance.networking.firewall.allowedUDPPortRanges == [ ]
+        && !(desktop.systemd.services ? punktfunk-door)
+        && !(desktop.users.groups ? punktfunk-update);
+    }
+
     # --- the client half must not drag the host's system wiring in -----------------------------
     {
       name = "a client-only machine defines no host/web/scripting units";
@@ -398,7 +545,8 @@ let
         && p.host.gamescopePackage.name == "system-punktfunk-gamescope"
         && clientOnly.services.punktfunk.client.package.name == "system-punktfunk-client"
         && p.web.package.name == "punktfunk-web"
-        && p.scripting.package.name == "punktfunk-scripting";
+        && p.scripting.package.name == "punktfunk-scripting"
+        && p.seats.package.name == "punktfunk-seats";
     }
   ];
 

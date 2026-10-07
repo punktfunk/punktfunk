@@ -4,12 +4,14 @@
 //! (delegated-approval) flow parks an identified connect until the operator approves it.
 
 use super::lucide;
+use super::profiles;
 use super::style::*;
 use super::{AppCtx, Screen, Svc, Target};
 use crate::trust::{self, KnownHosts};
 use pf_client_core::orchestrate::{
     trust_route, CancelHandle, ConnectOutcome, TrustRoute, WakeOutcome, WakeWait,
 };
+use punktfunk_core::reject::RejectReason;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,8 +78,86 @@ fn initiate_opts(
         wake_on_fail,
         ..ConnectOpts::default()
     };
-    // `None` is TOFU: the spawn pins the advertised fingerprint.
-    connect_with(ctx, &target, pin, set_screen, set_status, opts);
+    ask_then_connect(ctx, target, pin, set_screen, set_status, opts);
+}
+
+/// A paired host is asked who plays first; its pick (or the link's `as=`) rides the connect.
+/// Any other host dials at once, with the link's `as=`.
+fn ask_then_connect(
+    ctx: &Arc<AppCtx>,
+    target: Target,
+    pin: Option<[u8; 32]>,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+    mut opts: ConnectOpts,
+) {
+    let fp = pin
+        .map(|p| trust::hex(&p))
+        .or_else(|| target.fp_hex.clone());
+    let saved = KnownHosts::load()
+        .resolve(fp.as_deref(), &target.addr, target.port)
+        .filter(|h| h.paired)
+        .map(|h| h.profile.clone());
+    let Some(saved) = saved else {
+        opts.profile = target.link_profile.clone();
+        // `None` is TOFU: the spawn pins the advertised fingerprint.
+        return connect_with(ctx, &target, pin, set_screen, set_status, opts);
+    };
+    let (ctx2, t, ss, st) = (
+        ctx.clone(),
+        target.clone(),
+        set_screen.clone(),
+        set_status.clone(),
+    );
+    profiles::then_connect(
+        ctx,
+        target,
+        saved,
+        pin,
+        set_screen,
+        set_status,
+        move |profile| {
+            let opts = ConnectOpts { profile, ..opts };
+            connect_with(&ctx2, &t, pin, &ss, &st, opts)
+        },
+    );
+}
+
+/// The host refused `id` as unknown. A seat host says so for a seat that went stale too, so its
+/// list is read again: while it still lists the profile, one more dial goes through the seat
+/// gate. Otherwise `give_up` shows the refusal.
+fn redial_profile(
+    ctx: &Arc<AppCtx>,
+    target: Target,
+    pin: Option<[u8; 32]>,
+    id: String,
+    set_screen: &AsyncSetState<Screen>,
+    set_status: &AsyncSetState<String>,
+    give_up: impl FnOnce() + Send + 'static,
+) {
+    let (ctx, ss, st) = (ctx.clone(), set_screen.clone(), set_status.clone());
+    let _ = std::thread::Builder::new()
+        .name("pf-profiles".into())
+        .spawn(move || {
+            let Some(row) = profiles::relisted(&ctx, &target, pin, &id) else {
+                return give_up();
+            };
+            let (ctx2, t, ss2, st2, id) = (
+                ctx.clone(),
+                target.clone(),
+                ss.clone(),
+                st.clone(),
+                row.id.clone(),
+            );
+            profiles::seat_then(&ctx, target, pin, &ss, &st, Some(row), move || {
+                let opts = ConnectOpts {
+                    profile: Some(id),
+                    retried: true,
+                    ..ConnectOpts::default()
+                };
+                connect_with(&ctx2, &t, pin, &ss2, &st2, opts)
+            });
+        });
 }
 
 /// Start a stream that launches a library title on connect (`--launch id`): the library page's
@@ -137,6 +217,10 @@ pub(crate) struct ConnectOpts {
     /// A library title id (`steam:570`, …) the host launches during the connect handshake —
     /// the library page's tap-to-play, passed to the spawned session child as `--launch`.
     launch: Option<String>,
+    /// The profile id the session names: the picker's answer, or a link's `as=`. `None` names none.
+    profile: Option<String>,
+    /// This dial is the one retry after the host refused the profile as unknown.
+    retried: bool,
 }
 
 impl Default for ConnectOpts {
@@ -148,10 +232,13 @@ impl Default for ConnectOpts {
             cancel: None,
             wake_on_fail: false,
             launch: None,
+            profile: None,
+            retried: false,
         }
     }
 }
 
+/// A fresh pairing's first connect: it asks who plays, as any connect to a paired host does.
 pub(crate) fn connect(
     ctx: &Arc<AppCtx>,
     target: &Target,
@@ -159,9 +246,9 @@ pub(crate) fn connect(
     set_screen: &AsyncSetState<Screen>,
     set_status: &AsyncSetState<String>,
 ) {
-    connect_with(
+    ask_then_connect(
         ctx,
-        target,
+        target.clone(),
         pin,
         set_screen,
         set_status,
@@ -230,9 +317,15 @@ fn connect_spawn(
     // The closure owns `target`/`fp_hex`; the call itself borrows copies.
     let (addr, port, fp_arg) = (target.addr.clone(), target.port, fp_hex.clone());
     let preset_arg = target.preset.clone();
+    let profile_arg = opts.profile.clone();
     // The launch id: an explicit opts pick (the library's tap-to-play), else one riding
     // the target — a deep link's `launch=` that detoured through the PIN ceremony.
     let launch_arg = opts.launch.clone().or_else(|| target.launch.clone());
+    // What a `PROFILE_UNKNOWN` refusal may dial again: never the retry itself.
+    let (retry, retry_launch) = (
+        opts.profile.clone().filter(|_| !opts.retried),
+        launch_arg.clone(),
+    );
     let spawned = crate::spawn::spawn_session(
         &addr,
         port,
@@ -240,6 +333,7 @@ fn connect_spawn(
         opts.connect_timeout.as_secs(),
         launch_arg.as_deref(),
         preset_arg.as_deref(),
+        profile_arg.as_deref(),
         child,
         move |event| {
             use crate::spawn::SpawnEvent;
@@ -286,6 +380,37 @@ fn connect_spawn(
                         st.call(msg);
                         *shared.target.lock().unwrap() = target.clone();
                         ss.call(Screen::Pair);
+                    }
+                    // The host answered and refused: never a wake. A profile it no longer has is
+                    // forgotten, after one more look at its list.
+                    ConnectOutcome::Refused { msg, reason } => {
+                        let unknown = reason == RejectReason::ProfileUnknown;
+                        let give_up = {
+                            let (fp_hex, target) = (fp_hex.clone(), target.clone());
+                            let (ss, st) = (ss.clone(), st.clone());
+                            move || {
+                                if unknown {
+                                    profiles::save_pick(
+                                        Some(&fp_hex),
+                                        &target.addr,
+                                        target.port,
+                                        None,
+                                    );
+                                }
+                                st.call(msg);
+                                ss.call(Screen::Hosts);
+                            }
+                        };
+                        match retry.clone().filter(|_| unknown) {
+                            Some(id) => {
+                                let target = Target {
+                                    launch: retry_launch.clone(),
+                                    ..target.clone()
+                                };
+                                redial_profile(&ctx2, target, pin, id, &ss, &st, give_up);
+                            }
+                            None => give_up(),
+                        }
                     }
                     // The dial-first attempt to a non-advertising host failed — it may
                     // genuinely be asleep. Only with auto-wake on: the wait is worth showing
@@ -357,6 +482,7 @@ pub(crate) fn open_console(
                 match outcome {
                     ConnectOutcome::TrustRejected(msg)
                     | ConnectOutcome::ConnectFailed(msg)
+                    | ConnectOutcome::Refused { msg, .. }
                     | ConnectOutcome::Ended(Some(msg)) => st.call(msg),
                     ConnectOutcome::RendererFailed { code } => {
                         st.call(crate::spawn::renderer_failed_banner(code))

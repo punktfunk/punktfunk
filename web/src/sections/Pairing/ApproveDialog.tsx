@@ -6,6 +6,7 @@ import {
 	PasswordConfirmField,
 	type PasswordFailure,
 } from "@/components/password-confirm";
+import { ProfileAvatar } from "@/components/profile-avatar";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -136,6 +137,18 @@ export const ApproveDialog: FC<{
 							{m.pairing_approve_desc()}
 						</DialogDescription>
 					</DialogHeader>
+
+					{device.profile && (
+						<p className="flex items-center gap-2 text-sm">
+							<ProfileAvatar
+								profile={device.profile}
+								className="size-6 text-xs"
+							/>
+							{m.pairing_approve_profile({
+								name: device.profile.display_name,
+							})}
+						</p>
+					)}
 
 					<div className="space-y-2">
 						<Label htmlFor="approve-name">

@@ -787,8 +787,11 @@ pub struct PunktfunkConnectOpts {
     pub delivery_profile: u8,
     /// See `delivery_profile`.
     pub delivery_flags: u8,
-    /// Always `0`. Fills what would otherwise be tail padding, as `reserved0` does.
+    /// Always `0`. Fills what would otherwise be padding, as `reserved0` does.
     pub reserved2: [u8; 6],
+    /// The profile to play as: a host profile id (at most 64 bytes), or null to let the host
+    /// choose. [`punktfunk_connection_profile`] reads which it resolved.
+    pub profile_id: *const std::os::raw::c_char,
 }
 
 // No tail padding (append contract). On grow: freeze `CONNECT_OPTS_MIN_SIZE`, update these sizes.
@@ -798,15 +801,17 @@ const _: () = {
     use core::mem::{offset_of, size_of};
     #[cfg(target_pointer_width = "64")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 128
+        size_of::<PunktfunkConnectOpts>() == 136
             && offset_of!(PunktfunkConnectOpts, video_fit) == 100
             && offset_of!(PunktfunkConnectOpts, delivery_profile) == 120
+            && offset_of!(PunktfunkConnectOpts, profile_id) == 128
     );
     #[cfg(target_pointer_width = "32")]
     assert!(
-        size_of::<PunktfunkConnectOpts>() == 92
+        size_of::<PunktfunkConnectOpts>() == 96
             && offset_of!(PunktfunkConnectOpts, video_fit) == 72
             && offset_of!(PunktfunkConnectOpts, delivery_profile) == 84
+            && offset_of!(PunktfunkConnectOpts, profile_id) == 92
     );
 };
 
@@ -845,6 +850,7 @@ impl Default for PunktfunkConnectOpts {
             delivery_profile: 0,
             delivery_flags: 0,
             reserved2: [0; 6],
+            profile_id: ptr::null(),
         }
     }
 }
@@ -1056,6 +1062,14 @@ unsafe fn connect_params(
         }
         Err(()) => None,
     };
+    // An id the host can't hold is no ask: the host then picks, as it does for null.
+    // SAFETY: as above.
+    let profile = match unsafe { opt_cstr(o.profile_id) } {
+        Ok(Some(id)) if !id.is_empty() && id.len() <= PUNKTFUNK_PROFILE_ID_MAX => {
+            Some(id.to_string())
+        }
+        _ => None,
+    };
     let mode = punktfunk_core::config::Mode {
         width: o.width,
         height: o.height,
@@ -1080,6 +1094,7 @@ unsafe fn connect_params(
         pin,
         identity,
         preset,
+        profile,
         delivery: (o.delivery_profile != 0 || o.delivery_flags != 0).then_some(
             punktfunk_core::quic::DeliveryAsk {
                 profile: o.delivery_profile,
@@ -1263,6 +1278,26 @@ mod tests {
         );
         // SAFETY: null `id` clears the fallback.
         unsafe { punktfunk_set_session_preset(std::ptr::null(), std::ptr::null()) };
+    }
+
+    /// `profile_id` reaches the dial; one longer than the wire carries is no ask.
+    #[test]
+    fn connect_opts_carry_the_profile() {
+        let long = format!("{}\0", "9".repeat(PUNKTFUNK_PROFILE_ID_MAX + 1));
+        let mut o = PunktfunkConnectOpts {
+            host: c"127.0.0.1".as_ptr(),
+            profile_id: c"9a3f1c2b7e40".as_ptr(),
+            ..Default::default()
+        };
+        // SAFETY: every pointer field is null or a live C-string literal.
+        let p = unsafe { connect_params(&o) }.unwrap();
+        assert_eq!(p.profile.as_deref(), Some("9a3f1c2b7e40"));
+        o.profile_id = long.as_ptr().cast();
+        // SAFETY: `long` is NUL-terminated and outlives the call.
+        assert_eq!(unsafe { connect_params(&o) }.unwrap().profile, None);
+        o.profile_id = std::ptr::null();
+        // SAFETY: as above.
+        assert_eq!(unsafe { connect_params(&o) }.unwrap().profile, None);
     }
 
     /// Size-prefix guard: null/undersized is a status, not a read.

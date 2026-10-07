@@ -100,6 +100,16 @@ pub struct ClientRef {
     /// The preset the client dialled with. Absent for plain settings and on GameStream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<PresetRef>,
+    /// The profile the session plays as. Absent on GameStream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileRef>,
+}
+
+/// A profile as events, status and hooks name it.
+#[derive(Serialize, Deserialize, ToSchema, Clone, Debug, PartialEq, Eq)]
+pub struct ProfileRef {
+    pub id: String,
+    pub display_name: String,
 }
 
 /// Plane-neutral A/V session (distinct from a video [`StreamRef`]).
@@ -894,6 +904,7 @@ mod tests {
                     fingerprint: Some("b1c2".into()),
                     plane: Plane::Gamestream,
                     preset: None,
+                    profile: None,
                 },
                 reason: DisconnectReason::Timeout,
             },

@@ -228,18 +228,23 @@ pub fn resolve_gamescope_route(
     None
 }
 
-/// Dedicated headless gamescope for this launch (`game_session=dedicated`).
+/// Dedicated headless gamescope for this session.
 ///
-/// True only with a launch, dedicated policy for this `client` (its overlay
-/// over the host's), and gamescope actually available — else it degrades to
-/// `auto`. `None` is the host policy. Handshake value, threaded into
-/// [`resolve_gamescope_route`] / [`resolve_compositor`]; no new env knob.
-pub fn wants_dedicated_game_session(has_launch: bool, client: Option<[u8; 32]>) -> bool {
+/// A seat profile always gets one, launch or not: a second person never takes the box's own
+/// session. Otherwise it needs a launch and dedicated policy for this `client` (its overlay
+/// over the host's; `None` is the host policy). Either way gamescope must be available, else
+/// it degrades to `auto`. Handshake value, threaded into [`resolve_gamescope_route`] /
+/// [`resolve_compositor`]; no new env knob.
+pub fn wants_dedicated_game_session(
+    has_launch: bool,
+    client: Option<[u8; 32]>,
+    seat_profile: bool,
+) -> bool {
     use policy::GameSession;
     let session = policy::prefs()
         .get()
         .game_session_for(policy::fp_hex(client).as_deref());
-    if !has_launch || session != GameSession::Dedicated {
+    if !seat_profile && (!has_launch || session != GameSession::Dedicated) {
         return false;
     }
     #[cfg(target_os = "linux")]
@@ -248,7 +253,8 @@ pub fn wants_dedicated_game_session(has_launch: bool, client: Option<[u8; 32]>) 
             true
         } else {
             tracing::warn!(
-                "game_session=dedicated but gamescope is unavailable — falling back to auto routing"
+                seat_profile,
+                "a dedicated game session needs gamescope, which is unavailable; using auto routing"
             );
             false
         }

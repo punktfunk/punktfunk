@@ -1,5 +1,6 @@
 import Section from "@unom/ui/section";
 import type { FC, ReactNode } from "react";
+import { SeatNote } from "@/components/seat-scope";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { m } from "@/paraglide/messages";
 import { InstallPanel } from "../Install";
@@ -41,6 +42,7 @@ export const EntryView: FC<EntryViewProps> = ({
 	return (
 		<Section maxWidth={false}>
 			<div className="flex flex-col gap-card">
+				<SeatNote />
 				<EntryHeader
 					{...header}
 					entry={tabProps.entry}

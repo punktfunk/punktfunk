@@ -417,6 +417,13 @@ pub(crate) fn converge_runner_acls(status: &RuntimeStatus) {
     plat::converge_runner_acls(status);
 }
 
+/// Windows: close the ingest inbox and the tray token to seat accounts. `serve` calls this, and
+/// so does a seat's creation, which can make the group first. No-op off Windows.
+pub(crate) fn converge_seat_denies() {
+    #[cfg(target_os = "windows")]
+    plat::deny_seats();
+}
+
 /// Windows: installs before 0.44 granted `BUILTIN\Users` read on every config subdirectory.
 /// `serve` strips it once per install. POSIX dirs are 0700 from birth.
 #[cfg(windows)]

@@ -10,15 +10,15 @@ impl AppModel {
         if self.busy {
             return;
         }
-        let known = self.store.hosts();
-        let fp = req.fp_hex.as_deref();
-        match trust_route(&known, fp, &req.addr, req.port, req.pair_optional) {
-            TrustRoute::Pinned(fp_hex) => sender.input(AppMsg::StartSession {
-                req,
-                fp_hex,
-                tofu: false,
-                opts: SpawnOpts::default(),
-            }),
+        let route = trust_route(
+            &self.store.hosts(),
+            req.fp_hex.as_deref(),
+            &req.addr,
+            req.port,
+            req.pair_optional,
+        );
+        match route {
+            TrustRoute::Pinned(fp_hex) => self.ask_profile(req, fp_hex, false, sender),
             TrustRoute::FingerprintChanged => {
                 self.toast("Host fingerprint changed — re-pair with a PIN to continue");
                 crate::app::gate::pin_dialog(&self.window, sender, self.identity.clone(), req);
@@ -47,6 +47,7 @@ impl AppModel {
             }
             return;
         }
+        self.retry_profile = opts.profile.clone().flatten().filter(|_| !opts.redial);
         self.hosts.emit(HostsMsg::ClearError);
         self.hosts.emit(HostsMsg::SetSession(Some((
             req.card_key(),
@@ -119,7 +120,7 @@ impl AppModel {
         &mut self,
         req: ConnectRequest,
         code: i32,
-        error: Option<(String, bool)>,
+        error: Option<pf_client_core::orchestrate::SessionError>,
         ended: Option<String>,
         tofu: bool,
         sender: &ComponentSender<Self>,
@@ -134,6 +135,7 @@ impl AppModel {
         // visible wake-and-wait instead of an error alert. Matched by fingerprint (else
         // address) so a stale armed request can never redirect another host's failure.
         let cancelled = std::mem::take(&mut self.session_cancelled);
+        let retry = self.retry_profile.take();
         let wake_fb = self
             .wake_fallback
             .take()
@@ -146,6 +148,18 @@ impl AppModel {
             // already said so.
             ConnectOutcome::Ended(None) | ConnectOutcome::Cancelled => {}
             ConnectOutcome::Ended(Some(reason)) => self.hosts.emit(HostsMsg::ShowError(reason)),
+            // The host answered and refused: never a wake. A profile it no longer has is
+            // forgotten, after one more look at its list.
+            ConnectOutcome::Refused { msg, reason } => {
+                let unknown = reason == punktfunk_core::reject::RejectReason::ProfileUnknown;
+                if let (true, Some(id), Some(fp_hex)) = (unknown, retry, req.fp_hex.clone()) {
+                    return self.reask_profile(req, fp_hex, id, msg, sender);
+                }
+                if unknown {
+                    self.forget_profile(&req);
+                }
+                self.hosts.emit(HostsMsg::ShowError(msg));
+            }
             o if wake_fb.is_some() && o.warrants_wake() => {
                 crate::app::gate::wake_and_connect(&self.window, sender, req)
             }
@@ -261,6 +275,7 @@ impl AppModel {
                     // `preset=` in a URL is a one-off, exactly like "Connect with ▸": it
                     // shapes this session and leaves the host's binding alone.
                     preset: plan.preset_override.clone(),
+                    profile: link.as_profile.clone(),
                 };
                 // A link is a launch like any other: with a MAC it takes the dial-first wake
                 // path, so a sleeping host wakes instead of erroring.
@@ -288,6 +303,7 @@ impl AppModel {
                     launch: plan.launch.clone(),
                     mac: plan.host.mac.clone(),
                     preset: plan.preset_override.clone(),
+                    profile: link.as_profile.clone(),
                 };
                 let mut body = format!("A link asks to connect to {} ({}).", req.name, req.addr);
                 if let Some(id) = &req.launch {
@@ -332,6 +348,7 @@ impl AppModel {
                     launch: unknown.launch.clone(),
                     mac: Vec::new(),
                     preset: None,
+                    profile: None,
                 };
                 self.toast(&format!(
                     "{} isn't paired with this device yet — pair it to continue.",

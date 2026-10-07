@@ -84,4 +84,4 @@ pub use stats::Stats;
 ///
 /// The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 /// (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-pub const ABI_VERSION: u32 = 45;
+pub const ABI_VERSION: u32 = 46;

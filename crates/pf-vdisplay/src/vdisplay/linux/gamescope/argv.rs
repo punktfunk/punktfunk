@@ -8,8 +8,17 @@ use super::*;
 /// Compositor argv from `/proc/<pid>/cmdline`. Basename `ends_with("gamescope")` — `/proc/…/exe`
 /// is often unreadable, and `==` would miss `punktfunk-gamescope` while still excluding helpers.
 pub(super) fn gamescope_argvs() -> Vec<Vec<String>> {
+    argvs_where(|_| true)
+}
+
+/// [`gamescope_argvs`] of the processes `scope` admits.
+pub(super) fn scoped_argvs(scope: Scope<'_>) -> Vec<Vec<String>> {
+    argvs_where(|pid| scope.rank(Some(pid)).is_some())
+}
+
+fn argvs_where(keep: impl Fn(u32) -> bool) -> Vec<Vec<String>> {
     crate::proc::pids()
-        .filter_map(|(_, path)| {
+        .filter_map(|(pid, path)| {
             let raw = std::fs::read(path.join("cmdline")).ok()?;
             let args: Vec<String> = raw
                 .split(|&b| b == 0)
@@ -17,11 +26,8 @@ pub(super) fn gamescope_argvs() -> Vec<Vec<String>> {
                 .map(|s| String::from_utf8_lossy(s).into_owned())
                 .collect();
             let a0 = args.first()?;
-            a0.rsplit('/')
-                .next()
-                .unwrap_or(a0)
-                .ends_with("gamescope")
-                .then_some(args)
+            let gamescope = a0.rsplit('/').next().unwrap_or(a0).ends_with("gamescope");
+            (gamescope && keep(pid)).then_some(args)
         })
         .collect()
 }
@@ -68,14 +74,14 @@ pub(super) enum BoxOutputSize {
     Ambiguous,
 }
 
-pub(super) fn box_output_size() -> BoxOutputSize {
-    classify_output_size(&gamescope_argvs())
+pub(super) fn box_output_size(scope: Scope<'_>) -> BoxOutputSize {
+    classify_output_size(&scoped_argvs(scope))
 }
 
 /// Agreed size, or `None`. Sound only for the libei hint (unknown → raw client pixels). Anything
 /// that would act on Unreported vs Ambiguous must call [`box_output_size`].
-pub(super) fn current_gamescope_output_size() -> Option<(u32, u32)> {
-    match box_output_size() {
+pub(super) fn current_gamescope_output_size(scope: Scope<'_>) -> Option<(u32, u32)> {
+    match box_output_size(scope) {
         BoxOutputSize::Known(size) => Some(size),
         BoxOutputSize::Unreported | BoxOutputSize::Ambiguous => None,
     }
@@ -117,8 +123,8 @@ pub(super) fn any_output_size_is(argvs: &[Vec<String>], target: (u32, u32)) -> b
 
 /// Headless `--nested-refresh` is the session's only refresh (defaults to 60 Hz). The wrapper can
 /// lose it; refusing would loop (same env). Warn and carry on. Silent when `/proc` cannot be read.
-pub(super) fn warn_if_mode_lost(mode: Mode, want_hz: u32) {
-    let argvs = gamescope_argvs();
+pub(super) fn warn_if_mode_lost(mode: Mode, want_hz: u32, scope: Scope<'_>) {
+    let argvs = scoped_argvs(scope);
     let lost = mode_mismatch(mode.width, mode.height, want_hz, &argvs);
     if lost.is_empty() {
         return;
@@ -183,7 +189,7 @@ fn mode_mismatch(want_w: u32, want_h: u32, want_hz: u32, argvs: &[Vec<String>]) 
 /// host was told the compositor would paint the pointer. Latch off ([`note_spawn_flags_lost`]) and
 /// refuse; the retry plans host-composited SDR. Fail open if we cannot look. Any one gamescope
 /// carrying the flags is enough — demanding every one would reject a good session beside a nested.
-pub(super) fn verify_managed_spawn_flags(hdr: bool) -> Result<()> {
+pub(super) fn verify_managed_spawn_flags(hdr: bool, scope: Scope<'_>) -> Result<()> {
     // The rate is a placeholder: only flag NAMES are kept, and `--adaptive-sync` is what proves
     // the VRR half of the plan reached the compositor.
     let expected: Vec<String> = our_flags(hdr, 1)
@@ -193,7 +199,7 @@ pub(super) fn verify_managed_spawn_flags(hdr: bool) -> Result<()> {
     if expected.is_empty() {
         return Ok(());
     }
-    let missing = missing_flags(&expected, &gamescope_argvs());
+    let missing = missing_flags(&expected, &scoped_argvs(scope));
     if missing.is_empty() {
         tracing::debug!(flags = ?expected, "gamescope: the session's compositor carries our flags");
         return Ok(());

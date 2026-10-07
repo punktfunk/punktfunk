@@ -236,6 +236,22 @@ fun LibraryScreen(
     }
     val streamSettings = remember(settings, preset) { settings.effectiveFor(preset) }
     val knownHostStore = remember { KnownHostStore(context) }
+    // The profile picker a launch waits on.
+    var profileAsk by remember { mutableStateOf<ProfileAsk?>(null) }
+    profileAsk?.let { ask ->
+        ProfilePickerDialog(
+            hostName = host.name.ifBlank { host.address },
+            answer = ProfilesAnswer.Listed(ask.listed),
+            saved = ask.host.asProfile,
+            gone = ask.gone,
+            onPick = { ask.answer.complete(it) },
+            onDismiss = { ask.answer.complete(null) },
+        )
+    }
+    var seatWait by remember { mutableStateOf<ProfileWait?>(null) }
+    seatWait?.let { w ->
+        SeatWaitDialog(w, onCancel = { w.cancelled.complete(Unit); seatWait = null })
+    }
 
     // Keyed on the mgmt port too: a discovery tick can learn it after this screen is composed, and
     // the fetch must redo itself against the real port rather than stay on a stale 47990 failure.
@@ -254,8 +270,9 @@ fun LibraryScreen(
     // Dial the host over the same pinned mTLS trust, booting straight into this title (the host
     // resolves `launch` = its library id). Shared by both presentations: a tap on a grid tile and A
     // on a centred cover are the same act, and a launch that behaved differently between them would
-    // be a bug nobody could see until they switched input device.
-    fun launch(identity: ClientIdentity, game: GameEntry) {
+    // be a bug nobody could see until they switched input device. [link] names the profile to
+    // play as: the one dial a `profile-unknown` refusal of a still-listed profile earns.
+    fun launch(identity: ClientIdentity, game: GameEntry, link: String? = null) {
         if (launching) return
         launching = true
         // The desktop tile is the host, not one of its titles: it streams with no launch id, and
@@ -269,12 +286,24 @@ fun LibraryScreen(
             LibraryPosition.remember(context, host.id, game.id)
         }
         scope.launch {
+            val choice = chooseProfile(knownHostStore, identity, host, link, wait = { seatWait = it }) {
+                profileAsk = it
+            }
+            profileAsk = null
+            if (choice !is ProfileChoice.Dial) {
+                launching = false
+                if (choice is ProfileChoice.Refused) {
+                    Toast.makeText(context, choice.line, Toast.LENGTH_LONG).show()
+                }
+                return@launch
+            }
             val handle = connectToHost(
                 context, streamSettings, identity,
                 host.address, host.port, host.fpHex,
                 launch = game.id.takeUnless { game.isDesktop },
                 dialer = "touch/library",
                 preset = preset,
+                profile = choice.id,
             )
             launching = false
             if (handle != 0L) {
@@ -295,9 +324,18 @@ fun LibraryScreen(
                     ),
                 )
             } else {
+                val token = NativeBridge.nativeTakeLastError()
+                if (token == "profile-unknown" && link == null && choice.id != null &&
+                    stillListed(identity, host, choice.id)
+                ) {
+                    // A seat host refused a stale seat: dial the same profile once more.
+                    launch(identity, game, choice.id)
+                    return@launch
+                }
+                if (token == "profile-unknown") knownHostStore.savePick(host, null)
                 Toast.makeText(
                     context,
-                    ConnectErrors.connectMessage(NativeBridge.nativeTakeLastError(), requestAccess = false),
+                    ConnectErrors.connectMessage(token, requestAccess = false),
                     Toast.LENGTH_LONG,
                 ).show()
             }

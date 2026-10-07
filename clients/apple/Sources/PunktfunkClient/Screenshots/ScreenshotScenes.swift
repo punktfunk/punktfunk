@@ -675,9 +675,9 @@ private struct ShotConsole: View {
                     store: store, model: model, discovery: discovery, waker: waker,
                     entry: .constant(nil), notice: .constant(nil), pairing: .constant(nil),
                     linkConfirm: .constant(nil), runLink: { _ in }, onFailed: {},
-                    onPaired: { _, _ in }, connect: { _, _ in }, connectDiscovered: { _ in },
+                    onPaired: { _, _ in }, connect: { _, _, _ in }, connectDiscovered: { _ in },
                     requestAccess: { _ in }, requestAccessDiscovered: { _ in },
-                    launchTitle: { _, _ in }, connectShelf: { _ in }, wakeOnly: { _ in })
+                    launchTitle: { _, _, _ in }, connectShelf: { _ in }, wakeOnly: { _ in })
             }
         }
         .task {

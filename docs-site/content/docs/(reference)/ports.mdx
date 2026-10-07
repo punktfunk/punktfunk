@@ -18,6 +18,8 @@ Linux packages install firewalld services and ufw profiles but never enable them
   [Browser Client](/docs/browser-client). A rule from before
   0.41 lacks it: `sudo ufw app update punktfunk-native && sudo ufw reload`, or `sudo firewall-cmd
   --reload`.
+- **Seats** use UDP 9779–9782, in `punktfunk-native` too: a host that places a profile on a seat
+  redirects the client to that seat's port.
 
 ## Enable the profiles
 

@@ -49,6 +49,7 @@ punktfunk-host serve
 | `--webtransport-bind <IP>` | `PUNKTFUNK_WEBTRANSPORT_BIND` | Its interface (default: all). |
 | `--open` | — | Serve unpaired devices. Trusted single-user setups only. With the browser client on, it also needs `PUNKTFUNK_WEBTRANSPORT_ORIGINS`, or the host refuses to start. |
 | `--no-mdns` | `PUNKTFUNK_MDNS=0` | Skip the mDNS adverts; add the host on the client by address. |
+| `--door` | `PUNKTFUNK_DOOR=1` | Linux: the box's host as a system service. It advertises, pairs, serves the console and places every connect on a seat, and opens no display. The [**Reachable without logging in**](/docs/profiles#on-linux) switch runs it. |
 | `--native` | — | No-op. |
 
 Pairing is required unless `--open`: arm it from the web console — see

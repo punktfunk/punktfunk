@@ -1,25 +1,22 @@
-//! The Win32 half of `mgmt::theme`: the console session user's SID, and a DWORD or string
-//! out of their hive. It lives here because `mgmt` forbids `unsafe`, and each of these reads
-//! is a Win32 call.
+//! The Win32 half of `mgmt::theme`: the SID of the user signed in to this host's session, and a
+//! DWORD or string out of their hive. It lives here because `mgmt` forbids `unsafe`, and each of
+//! these reads is a Win32 call.
 
 use windows::core::{Owned, HSTRING, PWSTR};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_USERS, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
-use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
+use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
 
-/// The console session user's SID, as the string `HKEY_USERS` is keyed by.
+/// The SID of the user signed in to this host's own session, as the string `HKEY_USERS` is keyed
+/// by: the console user for the box host, the seat's user for a seat host.
 ///
-/// The host is SYSTEM in session 0, so `HKEY_CURRENT_USER` is the service account's empty
-/// profile — the operator's hive is only reachable through their SID. A locked or signed-out
-/// session has no token, and reporting nothing is then correct.
-pub(crate) fn console_session_sid() -> Option<String> {
-    // SAFETY: no arguments; returns 0xFFFFFFFF when no console session is attached.
-    let session = unsafe { WTSGetActiveConsoleSessionId() };
-    if session == u32::MAX {
-        return None;
-    }
+/// The host is SYSTEM, so `HKEY_CURRENT_USER` is the service account's empty profile; the
+/// player's hive is only reachable through their SID. A signed-out session has no token, and a
+/// host that isn't SYSTEM can't ask for one: both report nothing.
+pub(crate) fn session_sid() -> Option<String> {
+    let session = super::interactive::current_process_session_id().ok()?;
     let mut token = HANDLE::default();
     // SAFETY: `token` is a live out-param; needs SE_TCB, which SYSTEM has.
     unsafe { WTSQueryUserToken(session, &mut token) }.ok()?;

@@ -137,6 +137,12 @@ struct Args {
     link: trajectory::Link,
     /// `--profile NAME` — the row name the trajectory summary prints under.
     profile: String,
+    /// `--as ID` — play as this profile. A host that places it elsewhere answers with a
+    /// `Redirect`, which the probe follows once, as the client pump does: the address it names
+    /// (else the same), its port, pinned to the certificate it names (else the same pin).
+    as_profile: Option<String>,
+    /// Set once a `Redirect` was followed; a second one on the same connect ends the run.
+    redirected: bool,
     /// `--decoder-hold` — hold the picture after a lost frame until one that re-anchors it
     /// arrives, asking for a keyframe while held, as the shipped TV client does. Without it
     /// the rig resumes as soon as frame indexes line up, which no decoder can do.
@@ -201,7 +207,10 @@ fn load_or_create_identity() -> Result<(String, String)> {
 }
 
 fn parse_args() -> Args {
-    let argv: Vec<String> = std::env::args().collect();
+    parse_argv(std::env::args().collect())
+}
+
+fn parse_argv(argv: Vec<String>) -> Args {
     let get = |flag: &str| {
         argv.iter()
             .skip_while(|a| *a != flag)
@@ -348,6 +357,8 @@ fn parse_args() -> Args {
             },
         },
         profile: get("--profile").unwrap_or("rig").to_string(),
+        as_profile: get("--as").map(str::to_string),
+        redirected: false,
         decoder_hold: argv.iter().any(|a| a == "--decoder-hold"),
         clock_resync: argv.iter().any(|a| a == "--clock-resync"),
         cursor_capture: argv.iter().any(|a| a == "--cursor-capture"),
@@ -538,7 +549,35 @@ struct Counters {
     closed: AtomicBool,
 }
 
-async fn session(args: Args) -> Result<()> {
+/// The host placed this profile on another host of the box.
+#[derive(Debug)]
+struct Redirected(punktfunk_core::quic::v2::msg::Redirect);
+
+impl std::fmt::Display for Redirected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the host placed this profile on port {}", self.0.port)
+    }
+}
+
+impl std::error::Error for Redirected {}
+
+/// Points `args` at the host a `Redirect` names, once per connect.
+fn follow(args: &mut Args, to: &punktfunk_core::quic::v2::msg::Redirect) -> Result<()> {
+    anyhow::ensure!(!args.redirected, "redirected twice on one connect");
+    let mut remote: std::net::SocketAddr = args.connect.parse().context("--connect host:port")?;
+    if !to.addr.is_empty() {
+        remote.set_ip(to.addr.parse().context("the Redirect's address")?);
+    }
+    remote.set_port(to.port);
+    args.connect = remote.to_string();
+    if !to.pin.is_empty() {
+        args.pin = punktfunk_core::fp::parse_hex32(&to.pin);
+    }
+    args.redirected = true;
+    Ok(())
+}
+
+async fn session(mut args: Args) -> Result<()> {
     let (ep, quic, shared) = connect(&args).await?;
     let conn = Wire { conn: quic.clone() };
     let (mut send, recv) = conn.open_bi().await.context("open control stream")?;
@@ -569,7 +608,17 @@ async fn session(args: Args) -> Result<()> {
             vec![punktfunk_core::crypto::MediaSuite::Aes128Gcm]
         },
     };
-    let server = handshake(&mut send, &mut recv, &args, extra).await?;
+    let server = match handshake(&mut send, &mut recv, &args, extra).await {
+        Ok(server) => server,
+        Err(e) => match e.downcast::<Redirected>() {
+            Ok(Redirected(to)) => {
+                follow(&mut args, &to)?;
+                quic.close(0u32.into(), b"redirected");
+                return Box::pin(session(args)).await;
+            }
+            Err(e) => return Err(e),
+        },
+    };
     let welcome = server.welcome;
     // Media on the dialing socket, under keys from the connection's exporter.
     let suite = server.suite.context("unsealed native media")?;
@@ -833,13 +882,31 @@ async fn handshake(
         start_ext: extra.start_ext,
         resume: extra.resume,
         suites: extra.suites,
-        features: Default::default(),
+        // A host answers a `Redirect` only to a client that says it follows one.
+        features: {
+            let none = punktfunk_core::quic::v2::features::FeatureSet::default();
+            if args.as_profile.is_some() {
+                none.with(punktfunk_core::quic::v2::registry::FEATURE_PROFILES)
+            } else {
+                none
+            }
+        },
+        profile: args.as_profile.clone(),
     };
     v2io::send(send, &hello).await?;
     // `Pending` repeats while the host asks its console about this probe.
     let server = loop {
         let (ty, body) = recv.read_frame().await?;
         match ty {
+            punktfunk_core::quic::v2::msg::Redirect::TYPE => {
+                let to = punktfunk_core::quic::v2::msg::Redirect::from_body(&body)
+                    .map_err(|e| anyhow!("Redirect decode: {e:?}"))?;
+                println!(
+                    "redirect addr={:?} port={} profile={} seat_no={} seat_name={:?} occupant={:?} pin={}",
+                    to.addr, to.port, to.profile, to.seat_no, to.seat_name, to.occupant, to.pin
+                );
+                return Err(anyhow::Error::new(Redirected(to)));
+            }
             ServerHello::TYPE => {
                 break ServerHello::from_body(&body)
                     .map_err(|e| anyhow!("ServerHello decode: {e:?}"))?
@@ -1933,4 +2000,49 @@ fn test_frame(idx: u32, len: usize) -> Vec<u8> {
         *b = (idx as u8).wrapping_add(i as u8);
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(flags: &[&str]) -> Args {
+        parse_argv(
+            std::iter::once("punktfunk-probe")
+                .chain(flags.iter().copied())
+                .map(String::from)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_redirect_is_followed_once_pinned_to_the_seat() {
+        let mut a = args(&["--connect", "192.168.1.213:9777", "--as", "ada"]);
+        let to = punktfunk_core::quic::v2::msg::Redirect {
+            port: 9779,
+            pin: "ab".repeat(32),
+            ..Default::default()
+        };
+        follow(&mut a, &to).unwrap();
+        assert_eq!(a.connect, "192.168.1.213:9779");
+        assert_eq!(a.pin, Some([0xab; 32]));
+        assert!(
+            follow(&mut a, &to).is_err(),
+            "a second Redirect ends the run"
+        );
+    }
+
+    #[test]
+    fn an_empty_pin_keeps_the_one_dialed_with() {
+        let pin = "cd".repeat(32);
+        let mut a = args(&["--connect", "10.0.0.2:9777", "--pin", &pin]);
+        let to = punktfunk_core::quic::v2::msg::Redirect {
+            addr: "10.0.0.3".into(),
+            port: 9780,
+            ..Default::default()
+        };
+        follow(&mut a, &to).unwrap();
+        assert_eq!(a.connect, "10.0.0.3:9780");
+        assert_eq!(a.pin, Some([0xcd; 32]));
+    }
 }

@@ -7,6 +7,7 @@ import { Link } from "@tanstack/react-router";
 import { Pin, PinOff } from "lucide-react";
 import type { FC } from "react";
 import { pluginIcon, uiPlugins, usePlugins } from "@/api/plugins";
+import { useSeat } from "@/api/seat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { pluginPin, togglePin, usePins } from "@/lib/nav";
@@ -15,9 +16,11 @@ import { m } from "@/paraglide/messages";
 /** Renders nothing when no plugin surfaces a UI — a host with none sees no empty shelf. */
 export const PluginUis: FC = () => {
 	const { data } = usePlugins();
+	const seat = useSeat();
 	const [pins, setPins] = usePins();
 	const plugins = uiPlugins(data);
-	if (plugins.length === 0) return null;
+	// A plugin's page opens on the box's own runner.
+	if (plugins.length === 0 || seat) return null;
 	return (
 		<div className="space-y-2">
 			<h2 className="text-sm font-medium">{m.plugin_uis_title()}</h2>

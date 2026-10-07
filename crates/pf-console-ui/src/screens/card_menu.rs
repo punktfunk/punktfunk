@@ -3,7 +3,7 @@
 //! offers lives in section tabs. One screen in three modes; the subject names the object and
 //! [`CardMenu::actions`] owns the verbs.
 //!
-//! A host card's menu is five rows at most, a pinned card's three, a discovered one's two,
+//! A host card's menu is six rows at most, a pinned card's three, a discovered one's two,
 //! a poster's four, plus its files and End game; a poster's Details is its card, cover and
 //! facts beside its verbs. Every
 //! row carries an icon; Back leaves any of them. Tests in this module pin each menu's rows,
@@ -28,6 +28,8 @@ enum Action {
     ConnectWith,
     /// The Games tab on this card's shelf.
     Browse,
+    /// Who plays on this host: offered once the card carries a saved pick (§10.1).
+    SwitchProfile,
     Wake,
     CopyLink,
     Details,
@@ -289,6 +291,9 @@ impl CardMenu {
         let mut a = Vec::new();
         if host.paired {
             a.extend([Action::ConnectWith, Action::Browse]);
+            if host.profile.is_some() {
+                a.push(Action::SwitchProfile);
+            }
         } else {
             a.push(Action::Pair);
         }
@@ -353,6 +358,7 @@ impl CardMenu {
             Action::Favorite => "check",
             Action::TitleDetails => "info",
             Action::Browse => "gamepad-2",
+            Action::SwitchProfile => "refresh-cw",
             Action::Wake => "power",
             Action::CopyLink => "link",
             Action::Clipboard => "copy",
@@ -400,6 +406,7 @@ impl CardMenu {
         match a {
             Action::ConnectWith => "Connect with\u{2026}".into(),
             Action::Browse => "Browse games".into(),
+            Action::SwitchProfile => "Switch profile\u{2026}".into(),
             Action::Wake => "Wake host".into(),
             Action::CopyLink => "Copy link".into(),
             Action::Details => "Host details\u{2026}".into(),
@@ -623,6 +630,13 @@ impl CardMenu {
                 });
                 if self.mode == Mode::Menu {
                     fx.pop();
+                }
+            }
+            Action::SwitchProfile => {
+                let host = self.host();
+                if let Some(screen) = super::profiles::ProfilesScreen::switch(host) {
+                    fx.cmds.push(super::profiles::ProfilesScreen::fetch(host));
+                    fx.replace(Screen::Profiles(screen));
                 }
             }
             // The games under the row; the shell falls back to the Games tab.
@@ -918,10 +932,14 @@ impl CardMenu {
             .map(|&a| {
                 let row =
                     RowSpec::action(self.label(a, ctx), self.enabled(a)).with_icon(self.icon(a));
-                // The address sits on the row that edits it.
+                // The address sits on the row that edits it; the pick on the row that changes it.
                 match (a, &self.subject) {
                     (Action::Edit, Subject::Host(h)) => RowSpec {
                         value: Some(format!("{}:{}", h.addr, h.port)),
+                        ..row
+                    },
+                    (Action::SwitchProfile, Subject::Host(h)) => RowSpec {
+                        value: h.profile.as_ref().map(|p| p.display_name.clone()),
                         ..row
                     },
                     _ => row,
@@ -1117,7 +1135,7 @@ mod tests {
         }
     }
 
-    /// The design's three card menus: five rows at most, three on a pin, two on a find.
+    /// The design's three card menus: six rows at most, three on a pin, two on a find.
     #[test]
     fn each_card_gets_its_own_short_menu() {
         use Action::*;
@@ -1129,6 +1147,18 @@ mod tests {
         assert_eq!(
             rows(&CardMenu::for_host(&asleep)),
             vec![ConnectWith, Browse, Wake, CopyLink, Details]
+        );
+        let picked = HostRow {
+            profile: Some(pf_client_core::profiles::ProfilePick {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+            }),
+            ..asleep.clone()
+        };
+        assert_eq!(
+            rows(&CardMenu::for_host(&picked)),
+            vec![ConnectWith, Browse, SwitchProfile, Wake, CopyLink, Details],
+            "a saved pick is one press away from changing"
         );
         assert_eq!(
             rows(&CardMenu::for_host(&host())),
@@ -1152,6 +1182,34 @@ mod tests {
         assert_eq!(rows(&CardMenu::for_host(&unpaired)), vec![Pair, Details]);
         // Commands address the host, not the pin's composite key.
         assert_eq!(CardMenu::for_host(&pinned()).host_key(), "aa");
+    }
+
+    /// Switch profile opens the picker over the menu's place and asks the host for its list.
+    #[test]
+    fn switch_profile_asks_for_the_list() {
+        let h = HostRow {
+            profile: Some(pf_client_core::profiles::ProfilePick {
+                id: "kid".into(),
+                display_name: "Kid".into(),
+            }),
+            ..host()
+        };
+        let mut s = CardMenu::for_host(&h);
+        let mut fx = Outbox::default();
+        run_action(&mut s, Action::SwitchProfile, &mut fx);
+        assert!(matches!(
+            fx.nav,
+            Some(Nav::Replace(ref sc)) if matches!(**sc, Screen::Profiles(_))
+        ));
+        assert_eq!(
+            fx.cmds,
+            vec![ConsoleCmd::FetchProfiles {
+                addr: "10.0.0.5".into(),
+                mgmt: 9778,
+                fp_hex: "aa".into(),
+            }]
+        );
+        assert_eq!(label(&s, Action::SwitchProfile), "Switch profile\u{2026}");
     }
 
     #[test]

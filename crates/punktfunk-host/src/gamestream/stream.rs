@@ -134,12 +134,14 @@ pub fn start(
                 launch: app.as_ref().map(|a| a.title.clone()),
                 plane: crate::events::Plane::Gamestream,
                 preset: None,
+                profile: None,
             });
             let event_client = crate::events::ClientRef {
                 name: client_label.clone(),
                 fingerprint: life.fingerprint.clone(),
                 plane: crate::events::Plane::Gamestream,
                 preset: None,
+                profile: None,
             };
             crate::events::emit(crate::events::EventKind::ClientConnected {
                 client: event_client.clone(),
@@ -308,6 +310,7 @@ fn run(
             fingerprint: life.fingerprint.clone(),
             plane: crate::events::Plane::Gamestream,
             preset: None,
+            profile: None,
         };
         // The entry's own `apps.json` prep, then its library entry's. `PF_APP_TITLE` and the
         // `PF_STREAM_*` names the native plane's prep env and the marker file use.
@@ -753,7 +756,7 @@ fn open_gs_virtual_source(
         // No per-session injector on this plane: input always takes the shared backend.
         crate::compositor_route::resolve_compositor(
             punktfunk_core::config::CompositorPref::Auto,
-            crate::vdisplay::wants_dedicated_game_session(has_launch, None),
+            crate::vdisplay::wants_dedicated_game_session(has_launch, None, false),
             false,
             revive,
         )?

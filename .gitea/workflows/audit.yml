@@ -2,7 +2,7 @@
 # license-allowlist gate (CRA Annex I Part II: know your components; catch a bad dep the moment
 # it lands).
 #   * cargo-audit → the (network-facing, crypto-heavy) Rust tree, against the RustSec advisory DB.
-#                   ⚠ ALL FIVE Rust lockfiles, each named with its own `--file`: a bare `cargo audit`
+#                   ⚠ ALL SIX Rust lockfiles, each named with its own `--file`: a bare `cargo audit`
 #                   reads only the root one, which is how the drivers lock went unscanned for so
 #                   long despite already being in this job's `paths:` filter.
 #   * bun audit   → each Bun-managed tree that ships or publishes: web (the mgmt console BFF —
@@ -14,7 +14,7 @@
 #                   three ignores for the same reasons.
 #   * vendored-inventory → every `vendor/` tree has a CVE-watch row in
 #                   compliance/vendored-components.md.
-#   * cargo-about → license-allowlist gate over the host + driver workspaces (about.toml `accepted`);
+#   * cargo-about → license-allowlist gate over the host, driver and seat-keeper workspaces (about.toml `accepted`);
 #                   fails if any crate carries a license outside the allowlist. Android dependencies
 #                   are locked and checksum-verified by Gradle in android.yml.
 #   * miri        → NON-BLOCKING interpretation of the few FFI-free leaf crates, one of them
@@ -52,6 +52,7 @@ on:
       - 'packaging/windows/pf-vkhdr-layer/Cargo.lock'
       - 'tools/win-input-matrix/Cargo.lock'
       - 'tools/hid-descriptor-dump/Cargo.lock'
+      - 'crates/pf-seat-keeper/Cargo.lock'
       - 'web/bun.lock'
       - 'docs-site/bun.lock'
       - 'sdk/bun.lock'
@@ -97,6 +98,7 @@ jobs:
           cargo audit --deny unsound --file packaging/windows/pf-vkhdr-layer/Cargo.lock
           cargo audit --deny unsound --file tools/win-input-matrix/Cargo.lock
           cargo audit --deny unsound --file tools/hid-descriptor-dump/Cargo.lock
+          cargo audit --deny unsound --file crates/pf-seat-keeper/Cargo.lock
 
   # cargo-audit matches registry crates by name and version, so a vendored tree has no feed but
   # its row in compliance/vendored-components.md. Every `vendor/<tree>` needs one.
@@ -214,7 +216,7 @@ jobs:
           npm install -g pnpm@10
           pnpm audit --prod
 
-  # The regression guard about.toml documents: fail if any crate in either Rust workspace carries
+  # The regression guard about.toml documents: fail if any crate in a shipped Rust workspace carries
   # a license outside the `accepted` allowlist (e.g. a copyleft dep silently entering the linked
   # set). cargo-about is version-pinned: the config uses the per-crate `accepted` syntax
   # validated against exactly this version.
@@ -232,12 +234,13 @@ jobs:
             /usr/local/cargo/registry
           key: cargo-about-0.9.1
           restore-keys: cargo-about-
-      - name: cargo about license gate (host + driver workspaces)
+      - name: cargo about license gate (host, driver and seat-keeper workspaces)
         run: |
           git config --global --add safe.directory "$PWD"
           command -v cargo-about >/dev/null 2>&1 || cargo install --locked cargo-about --version 0.9.1 --features cli
           cargo about generate about.hbs --fail -o /dev/null
           cargo about generate -m packaging/windows/drivers/Cargo.toml -c about.toml about.hbs --fail -o /dev/null
+          cargo about generate -m crates/pf-seat-keeper/Cargo.toml -c about.toml about.hbs --fail -o /dev/null
 
   # ── Miri ─────────────────────────────────────────────────────────────────────────────────────
   # WHAT THIS BUYS, precisely — one thing, and it is worth having:

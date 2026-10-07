@@ -63,6 +63,8 @@ struct HomeView: View {
     @State private var sendLogsResult: (ok: Bool, message: String)?
     /// What each paired host says this device may do to it (`design/host-actions.md` §7).
     @StateObject private var hostPower = HostPowerStore.shared
+    /// "Switch profile…": the picker, opened from a card's menu.
+    @StateObject private var profileSwitch = ProfileSwitch()
     /// What each paired host is playing right now — refreshed on the same beat below.
     @StateObject private var nowPlaying = NowPlayingStore.shared
     /// A destructive host action awaiting its confirmation.
@@ -265,6 +267,7 @@ struct HomeView: View {
         .frame(minWidth: 480, minHeight: 360)
         #endif
         .tvPushSlide()
+        .sheet(item: $profileSwitch.ask) { ProfilePickerView(ask: $0) }
         #if !os(tvOS)
         .sheet(isPresented: $showAddHost) {
             AddHostSheet { store.add($0) }
@@ -351,7 +354,8 @@ struct HomeView: View {
                 sendLogs: { Task { sendLogsResult = await SendLogs.toHost(host) } },
                 wake: { wake(host) },
                 showDetails: { showDetails(host) },
-                runPower: { hostAction($0, on: host) }))
+                runPower: { hostAction($0, on: host) },
+                switchProfile: { profileSwitch.start(host, store: store) }))
     }
 
     /// The host page: its own window on the Mac, a sheet of sections on the iPad, pushed on the

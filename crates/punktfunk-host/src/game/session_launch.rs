@@ -15,6 +15,8 @@ pub(crate) struct LaunchOwner {
     pub fingerprint: Option<String>,
     pub plane: Plane,
     pub preset: Option<PresetRef>,
+    /// The session's profile, credited in play stats beside the title. `None` on GameStream.
+    pub profile: Option<String>,
 }
 
 /// A claimed, prepped launch.
@@ -282,7 +284,7 @@ pub(crate) fn spawn(
         if out.now {
             c.launched();
             if let Some(id) = c.credits() {
-                crate::library::record_launch(id);
+                crate::library::record_launch(id, owner.profile.as_deref());
             }
         } else if c.must_spawn() {
             c.abandon();
@@ -328,6 +330,7 @@ pub(crate) fn lease(
             fingerprint: owner.fingerprint.clone(),
             preset: owner.preset.clone(),
             plane: owner.plane,
+            profile: owner.profile.clone(),
             spec: target.detect.clone(),
             nested: extras.nested,
             scope_pid: extras.scope_pid,

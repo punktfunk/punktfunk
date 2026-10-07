@@ -19,10 +19,10 @@ use pf_client_core::gamepad::is_steam_deck;
 use pf_client_core::orchestrate::{
     self, emit, exit, SessionLine, WakeOutcome, WAKE_RESEND_SECS, WAKE_TIMEOUT_SECS,
 };
-use pf_client_core::{discovery, library, start, trust, wol};
+use pf_client_core::{discovery, library, profiles, start, trust, wol};
 use pf_console_ui::{
     ConsoleCmd, ConsoleEntry, ConsoleHandles, ConsoleOptions, ConsoleShared, HostRow, LibraryGame,
-    LibraryPhase, LibraryShared, PairPhase, SkiaOverlay, SpeedPhase, WakeStatus,
+    LibraryPhase, LibraryShared, PairPhase, ProfilesAnswer, SkiaOverlay, SpeedPhase, WakeStatus,
 };
 use pf_presenter::overlay::OverlayAction;
 use pf_presenter::ActionOutcome;
@@ -234,6 +234,7 @@ pub fn run(target: Option<&str>) -> u8 {
                     title,
                     request_access,
                     preset,
+                    profile,
                 } => {
                     let Some(pin) = trust::parse_hex32(&fp_hex) else {
                         // Connect (and request-access) pin the host's advertised fingerprint;
@@ -277,6 +278,7 @@ pub fn run(target: Option<&str>) -> u8 {
                     // desktop mouse mode — so it follows the latched mode, not this launch's
                     // preset. Otherwise the host composites no cursor and the stream shows none.
                     params.cursor_forward = latched_mouse == trust::MouseMode::Desktop;
+                    params.profile = profile;
                     if request_access {
                         // The host PARKS the connect until the operator approves — outlast its
                         // approval window (host `PENDING_APPROVAL_WAIT`), matching the desktop
@@ -316,6 +318,7 @@ pub fn run(target: Option<&str>) -> u8 {
                 emit(SessionLine::Error {
                     msg: &format!("{e:#}"),
                     trust_rejected: Some(false),
+                    refused: None,
                 });
             }
             eprintln!("console: {e:#}");
@@ -381,6 +384,7 @@ fn seed_row(k: Option<&trust::KnownHost>, addr: &str, port: u16) -> HostRow {
         bound_preset: None,
         running: String::new(),
         game_presets: Default::default(),
+        profile: k.and_then(|h| h.profile.clone()),
     }
 }
 
@@ -527,6 +531,16 @@ impl ServiceState {
             ConsoleCmd::RefreshRunning { addr, mgmt, fp_hex } => {
                 self.refresh_running(addr, mgmt, fp_hex)
             }
+            ConsoleCmd::FetchProfiles { addr, mgmt, fp_hex } => {
+                self.fetch_profiles(addr, mgmt, fp_hex)
+            }
+            ConsoleCmd::WakeProfile {
+                addr,
+                mgmt,
+                fp_hex,
+                id,
+            } => self.wake_profile(addr, mgmt, fp_hex, id),
+            ConsoleCmd::SetProfile { key, profile } => self.set_profile(key, profile),
             ConsoleCmd::SendLogs {
                 addr,
                 mgmt,
@@ -691,6 +705,41 @@ impl ServiceState {
                 if shared.fetch_epoch() == epoch {
                     shared.set_downloads(&status.downloads, status.grants);
                     shared.set_running(&status.games);
+                }
+            })
+            .ok();
+    }
+
+    /// The box's profiles for the picker, off the service thread like every fetch here.
+    fn fetch_profiles(&self, addr: String, mgmt: u16, fp_hex: String) {
+        let console = self.console.clone();
+        let identity = self.identity.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-profiles".into())
+            .spawn(move || {
+                let answer = match profiles::fetch_enumerate(&addr, mgmt, &identity, pin) {
+                    Ok(Some(listed)) => ProfilesAnswer::Listed(listed),
+                    Ok(None) => ProfilesAnswer::NoProfiles,
+                    Err(e) => {
+                        tracing::info!(%addr, error = %e, "profile list did not load");
+                        ProfilesAnswer::Failed(e.to_string())
+                    }
+                };
+                console.set_profiles(&fp_hex, answer);
+            })
+            .ok();
+    }
+
+    /// Starts a profile's stopped seat. The shell polls the list for `ready` itself.
+    fn wake_profile(&self, addr: String, mgmt: u16, fp_hex: String, id: String) {
+        let identity = self.identity.clone();
+        let pin = trust::parse_hex32(&fp_hex);
+        std::thread::Builder::new()
+            .name("punktfunk-wake-seat".into())
+            .spawn(move || {
+                if let Err(e) = profiles::wake(&addr, mgmt, &identity, pin, &id) {
+                    tracing::info!(%addr, error = %e, "profile seat did not wake");
                 }
             })
             .ok();
@@ -1082,6 +1131,21 @@ impl ServiceState {
         }
     }
 
+    /// The profile this device plays as on a saved host (`KnownHost::profile`). Same store
+    /// discipline as `set_pin`; the next rows carry it to the card.
+    fn set_profile(&self, key: String, profile: Option<profiles::ProfilePick>) {
+        let mut known = trust::KnownHosts::load();
+        let idx = index_for_key(&known, &key);
+        let Some(h) = idx.and_then(|i| known.hosts.get_mut(i)) else {
+            tracing::warn!(%key, "profile pick for an unknown host — ignoring");
+            return;
+        };
+        if h.profile != profile {
+            h.profile = profile;
+            self.save_known(&known);
+        }
+    }
+
     fn set_clipboard(&self, key: String, on: bool) {
         // Per-host clipboard trust (`KnownHost::clipboard_sync`) — the host
         // menu's toggle. Same store discipline as `set_pin`.
@@ -1260,6 +1324,7 @@ impl ServiceState {
                     // Ids straight through, dangling ones included: the bind screen only
                     // compares, and a deleted preset falls back at resolve, not here.
                     game_presets: h.game_presets.clone(),
+                    profile: h.profile.clone(),
                 };
                 // A pinned card shares the primary tile's live state; its own key lets
                 // cursor-follow and the wake path address the card itself.
@@ -1312,6 +1377,7 @@ impl ServiceState {
                     bound_preset: None,
                     running: String::new(),
                     game_presets: Default::default(),
+                    profile: None,
                 }
             })
             .collect();

@@ -139,19 +139,25 @@ impl Scanner {
 /// ([`super::running_hint`]). Steam also sets it during updates and DLC installs,
 /// and can leave it stale after a crash, so it is never a primary signal.
 ///
-/// Reads every loaded hive under `HKEY_USERS`. Do not resolve the interactive SID
-/// via `WTSQueryUserToken`: loaded hives are the logged-in set.
+/// Reads the hive of the user signed in to this host's session: on a box with seats every seat's
+/// user is signed in, and one person's Steam must not hold another's game. A host that can't
+/// name that user (not SYSTEM) reads every loaded hive.
 pub fn steam_running_hint(appid: u32) -> Option<bool> {
     use winreg::enums::{HKEY_USERS, KEY_READ};
     use winreg::RegKey;
 
     let users = RegKey::predef(HKEY_USERS);
-    let mut saw_key = false;
-    for sid in users.enum_keys().flatten() {
+    let sids: Vec<String> = match crate::windows::theme::session_sid() {
+        Some(sid) => vec![sid],
         // The `…_Classes` companion hives hold no Steam state.
-        if sid.ends_with("_Classes") {
-            continue;
-        }
+        None => users
+            .enum_keys()
+            .flatten()
+            .filter(|sid| !sid.ends_with("_Classes"))
+            .collect(),
+    };
+    let mut saw_key = false;
+    for sid in sids {
         let path = format!("{sid}\\Software\\Valve\\Steam\\Apps\\{appid}");
         let Ok(app) = users.open_subkey_with_flags(&path, KEY_READ) else {
             continue;

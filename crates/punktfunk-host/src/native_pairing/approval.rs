@@ -35,6 +35,8 @@ struct Pending {
     /// bumps it so a stale parked waiter resolves [`PairingDecision::Superseded`]
     /// — one Approve admits exactly one session.
     knock_seq: u32,
+    /// The profile the knock asked for, as sent. Untrusted.
+    profile: Option<String>,
 }
 
 #[derive(Default)]
@@ -141,6 +143,8 @@ pub struct PendingRequest {
     pub age_secs: u64,
     /// Where the knock arrived from. A bare approve is refused for [`KnockSource::Wan`].
     pub source: KnockSource,
+    /// The profile id the knock named, unchecked.
+    pub profile: Option<String>,
 }
 
 /// Outcome of a `wait_for_decision` park on an unpaired knock.
@@ -246,7 +250,13 @@ impl ApprovalQueue {
     /// Record an unpaired knock. Same fingerprint refreshes in place and bumps
     /// generation so older parked waiters resolve `Superseded`. Bounded by
     /// [`MAX_PENDING_PER_IP`] then [`PENDING_CAP`]; the name is untrusted.
-    pub(super) fn note_pending(&self, name: &str, fp_hex: &str, src_ip: Option<IpAddr>) -> u32 {
+    pub(super) fn note_pending(
+        &self,
+        name: &str,
+        fp_hex: &str,
+        src_ip: Option<IpAddr>,
+        profile: Option<&str>,
+    ) -> u32 {
         let name = super::sanitize_device_name(name, fp_hex);
         let source = classify_source(src_ip);
         let mut pending = self.pending.lock().unwrap();
@@ -263,6 +273,7 @@ impl ApprovalQueue {
             // bare approve would admit it.
             p.src_ip = src_ip;
             p.source = source;
+            p.profile = profile.map(str::to_string);
             p.knock_seq = p.knock_seq.wrapping_add(1);
             let seq = p.knock_seq;
             drop(pending);
@@ -304,6 +315,7 @@ impl ApprovalQueue {
             source,
             parked: false,
             knock_seq: 0,
+            profile: profile.map(str::to_string),
         });
         0
     }
@@ -350,6 +362,7 @@ impl ApprovalQueue {
                 fingerprint: p.fp_hex.clone(),
                 age_secs: p.requested_at.elapsed().as_secs(),
                 source: p.source,
+                profile: p.profile.clone(),
             })
             .collect()
     }

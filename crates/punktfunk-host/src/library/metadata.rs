@@ -146,16 +146,16 @@ struct Picks {
 }
 
 fn settings_path() -> PathBuf {
-    pf_paths::config_dir().join("library-metadata.json")
+    pf_paths::seat::library_dir().join("library-metadata.json")
 }
 
 fn picks_path() -> PathBuf {
-    pf_paths::config_dir().join("library-picks.json")
+    pf_paths::seat::library_dir().join("library-picks.json")
 }
 
 /// The source id passed [`validate_provider_name`], so it is a safe file name.
 fn overlay_path(source: &str) -> PathBuf {
-    pf_paths::config_dir()
+    pf_paths::seat::library_dir()
         .join("library-metadata")
         .join(format!("{source}.json"))
 }

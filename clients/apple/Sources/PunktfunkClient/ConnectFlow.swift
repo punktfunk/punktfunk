@@ -29,6 +29,18 @@ struct ConnectFlow {
     /// A delegated-approval connect is in flight (host parks it until the operator approves):
     /// drives the cancelable "Waiting for approval" prompt and the pin-as-paired on success.
     @Binding var awaitingApproval: ApprovalRequest?
+    /// The profile picker a connect is waiting on.
+    @Binding var profileAsk: ProfileAsk?
+    /// The wait for the picked profile's seat to come up.
+    @Binding var seatWait: SeatWait?
+
+    /// Which profile a connect plays as.
+    enum ProfileChoice {
+        /// Ask the paired host first; `link` is a link's `as=`, which wins for this connect.
+        case ask(link: String? = nil)
+        /// Already decided (the console's own picker): dial with this id, nil sends none.
+        case send(String?)
+    }
 
     /// `preset` is this connect's one-off pick ("Connect with ▸", a pinned card, a link's
     /// `preset=`). `.inherit` — the default, and what a plain card tap passes — falls through to
@@ -37,7 +49,7 @@ struct ConnectFlow {
     func connect(
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit, allowTofu: Bool? = nil,
-        fromLibrary: Bool = false
+        fromLibrary: Bool = false, profile: ProfileChoice = .ask()
     ) {
         // A pinned host dials on its stored fingerprint. An unpinned one may TOFU only when the
         // caller says so, or when its live advert says `pair=optional` (rule 3a); any other gets
@@ -54,9 +66,122 @@ struct ConnectFlow {
                 return
             }
         }
-        startSession(
-            host, launchID: launchID, preset: preset, allowTofu: host.pinnedSHA256 == nil,
-            fromLibrary: fromLibrary)
+        let allowTofu = host.pinnedSHA256 == nil
+        switch profile {
+        case .send(let id):
+            startSession(
+                host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                fromLibrary: fromLibrary, profileID: id)
+        case .ask(let link):
+            // An unpinned host can't be asked (no paired identity), and the demo host has no
+            // management API.
+            guard !allowTofu, !DemoMode.isDemo(host) else {
+                startSession(
+                    host, launchID: launchID, preset: preset, allowTofu: allowTofu,
+                    fromLibrary: fromLibrary)
+                return
+            }
+            askProfile(host, link: link) { id in
+                startSession(
+                    host, launchID: launchID, preset: preset, allowTofu: false,
+                    fromLibrary: fromLibrary, profileID: id)
+            }
+        }
+    }
+
+    /// Ask the host who is playing, then run `go` with the id to dial as. A box without profiles,
+    /// a failed answer and a late one dial as before, with the saved pick.
+    private func askProfile(
+        _ host: StoredHost, link: String?, go: @escaping @MainActor (String?) -> Void
+    ) {
+        let saved = (store.hosts.first { $0.id == host.id } ?? host).pickedProfile
+        Task { @MainActor in
+            let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+            guard case .listed(let rows) = answer else {
+                go(link ?? saved?.id)
+                return
+            }
+            let d = HostProfiles.pickerDecision(listed: rows, remembered: saved, link: link)
+            guard d.picker, let rows else {
+                store.setProfile(host.id, d.remember)
+                settleSeat(host, rows: rows, id: d.send, go: go)
+                return
+            }
+            profileAsk = ProfileAsk(
+                hostName: host.displayName,
+                content: .choose(rows, saved: rows.first { $0.id == saved?.id }?.id, gone: d.gone),
+                pick: { pick in
+                    store.setProfile(host.id, pick)
+                    settleSeat(host, rows: rows, id: pick.id, afterSheet: true, go: go)
+                })
+        }
+    }
+
+    /// Run `go` with `id` once its seat can take the connect: now for a profile without a seat
+    /// or one that is up, after a wake and a wait for one that is not, never for one that
+    /// can't play. `afterSheet`: the picker is still closing, so a sheet or alert waits for it.
+    private func settleSeat(
+        _ host: StoredHost, rows: [ListedProfile]?, id: String?, afterSheet: Bool = false,
+        go: @escaping @MainActor (String?) -> Void
+    ) {
+        guard let id, let row = rows?.first(where: { $0.id == id }) else {
+            go(id)
+            return
+        }
+        let gate = HostProfiles.seatGate(row)
+        if gate == .dial {
+            go(id)
+            return
+        }
+        Task { @MainActor in
+            if afterSheet { try? await Task.sleep(nanoseconds: 400_000_000) }
+            switch gate {
+            case .dial: go(id)
+            case .refuse(let line): model.errorMessage = line
+            case .wake, .wait: waitForSeat(host, row, wake: gate == .wake, go: go)
+            }
+        }
+    }
+
+    /// The sheet while a seat comes up: wake it when stopped, then read the list every 2 s.
+    /// Closing the sheet cancels; there is no timeout.
+    private func waitForSeat(
+        _ host: StoredHost, _ first: ListedProfile, wake: Bool,
+        go: @escaping @MainActor (String?) -> Void
+    ) {
+        var detail: String?
+        if case .wait(let line) = HostProfiles.seatGate(first) { detail = line }
+        let wait = SeatWait(title: HostProfiles.wakingLine(first.displayName), detail: detail)
+        seatWait = wait
+        wait.task = Task { @MainActor in
+            if wake, !(await ProfileFetch.wake(host, id: first.id)) {
+                seatWait = nil
+                model.errorMessage =
+                    "Couldn't wake \(first.displayName)'s desk. Try again in a moment."
+                return
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+                // The sheet closed meanwhile: that is Cancel.
+                guard !Task.isCancelled, seatWait === wait else { return }
+                // A failed read keeps waiting. A profile the list dropped is the host's to refuse.
+                guard case .listed(let rows) = answer else { continue }
+                let row = rows?.first { $0.id == first.id }
+                switch row.map(HostProfiles.seatGate) ?? .dial {
+                case .dial:
+                    seatWait = nil
+                    go(first.id)
+                    return
+                case .refuse(let line):
+                    seatWait = nil
+                    model.errorMessage = line
+                    return
+                case .wait(let line): wait.detail = line
+                case .wake: wait.detail = nil
+                }
+            }
+        }
     }
 
     /// Resolve the stream mode + input prefs and hand off to the session model. The gamepad-type
@@ -67,7 +192,7 @@ struct ConnectFlow {
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false
+        fromLibrary: Bool = false, profileID: String? = nil
     ) {
         // Dial the record as it stands NOW: a host that came back on a new DHCP lease was re-keyed
         // by the reachability check while we waited, and the value captured here is then stale.
@@ -76,7 +201,7 @@ struct ConnectFlow {
                 store.hosts.first { $0.id == host.id } ?? host,
                 launchID: launchID, preset: preset, allowTofu: allowTofu,
                 requestAccess: requestAccess, approvalReq: approvalReq,
-                fromLibrary: fromLibrary)
+                fromLibrary: fromLibrary, profileID: profileID)
         }
         // A host the probe calls down still gets the dial first: a routed host (VPN, another
         // subnet) answers without advertising. `prepareWake` already sent the magic packet, so
@@ -87,6 +212,7 @@ struct ConnectFlow {
             startSessionDirect(
                 host, launchID: launchID, preset: preset, allowTofu: allowTofu,
                 requestAccess: requestAccess, approvalReq: approvalReq, fromLibrary: fromLibrary,
+                profileID: profileID,
                 onUnreachable: {
                     waker.start(
                         host: host, connectsAfter: true, macs: host.wakeMacs, lastIP: host.address,
@@ -106,7 +232,7 @@ struct ConnectFlow {
         _ host: StoredHost, launchID: String? = nil,
         preset: PresetSelection = .inherit,
         allowTofu: Bool, requestAccess: Bool = false, approvalReq: ApprovalRequest? = nil,
-        fromLibrary: Bool = false,
+        fromLibrary: Bool = false, profileID: String? = nil, redialed: Bool = false,
         onUnreachable: (@MainActor () -> Void)? = nil
     ) {
         prepareWake(for: host)
@@ -125,6 +251,7 @@ struct ConnectFlow {
                 setting: PunktfunkConnection.GamepadType(
                     rawValue: UInt32(clamping: effective.gamepadType)) ?? .auto),
             launchID: launchID,
+            profileID: profileID,
             // Where this session goes back to when it ends: the shelf it started from — the
             // host's own, or the pinned card whose preset it is using. nil for a connect that
             // did NOT come off a shelf, which is what keeps a plain host-list connect ending on
@@ -133,6 +260,33 @@ struct ConnectFlow {
                 ? LibraryTarget(host: host, preset: preset) : nil,
             allowTofu: allowTofu,
             requestAccess: requestAccess,
+            onProfileUnknown: {
+                // One re-dial when the list still has the profile: a seat host refused a stale
+                // seat. Otherwise forget the pick, so the next connect asks.
+                guard !redialed, let profileID else {
+                    store.setProfile(host.id, nil)
+                    return false
+                }
+                Task { @MainActor in
+                    let answer = await ProfileFetch.list(host, within: ProfileFetch.wait)
+                    guard case .listed(let rows?) = answer,
+                          rows.contains(where: { $0.id == profileID }) else {
+                        store.setProfile(host.id, nil)
+                        model.errorMessage =
+                            "\(host.displayName): \(HostRejection.profileUnknown.userMessage)"
+                        return
+                    }
+                    settleSeat(host, rows: rows, id: profileID) { id in
+                        startSessionDirect(
+                            store.hosts.first { $0.id == host.id } ?? host,
+                            launchID: launchID, preset: preset, allowTofu: allowTofu,
+                            requestAccess: requestAccess, approvalReq: approvalReq,
+                            fromLibrary: fromLibrary, profileID: id, redialed: true,
+                            onUnreachable: onUnreachable)
+                    }
+                }
+                return true
+            },
             onUnreachable: onUnreachable)
     }
 

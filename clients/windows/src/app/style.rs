@@ -195,6 +195,28 @@ pub(crate) fn avatar(name: &str, os: &str) -> Border {
         .height(SIZE)
 }
 
+/// A circle of `size` carrying `text`: a profile's initials on its accent, or on the app accent
+/// when `fill` is `None`.
+pub(crate) fn monogram(text: &str, size: f64, fill: Option<Color>) -> Border {
+    let label = text_block(text)
+        .font_size(size * 0.38)
+        .semibold()
+        .horizontal_alignment(HorizontalAlignment::Center)
+        .vertical_alignment(VerticalAlignment::Center);
+    let disc = match fill {
+        Some(c) => border(label.foreground(Color {
+            a: 255,
+            r: 255,
+            g: 255,
+            b: 255,
+        }))
+        .background(c),
+        None => border(label.foreground(ThemeRef::custom("TextOnAccentFillColorPrimaryBrush")))
+            .background(ThemeRef::Accent),
+    };
+    disc.corner_radius(size / 2.0).width(size).height(size)
+}
+
 /// Pill chip colour intent.
 #[derive(Clone, Copy)]
 pub(crate) enum Pill {

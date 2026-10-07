@@ -326,6 +326,14 @@ final class HostStore: ObservableObject {
         hosts[i].presetID = presetID
     }
 
+    /// Save the host profile this device plays as on this host, or forget it (nil). No-op when
+    /// unchanged, so an unchanged pick doesn't churn UserDefaults.
+    func setProfile(_ hostID: UUID, _ pick: ProfilePick?) {
+        guard let i = hosts.firstIndex(where: { $0.id == hostID }),
+              hosts[i].pickedProfile != pick else { return }
+        hosts[i].pickedProfile = pick
+    }
+
     /// Pin or unpin a host+preset combo as its own card (§5.2a). Presentation only: it never
     /// touches the default binding or the preset itself. nil stays out of the saved JSON when
     /// nothing is pinned, so the widget contract sees no new key for the common case.

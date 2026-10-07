@@ -1,0 +1,11 @@
+# Turn on "Reachable without logging in" for the user named by the instance, as a root oneshot.
+# Started, never enabled, by that user's own host (`systemctl start punktfunk-door-on@<user>`),
+# which 49-punktfunk-door.rules allows for members of the `punktfunk-update` group. The helper
+# refuses any user who isn't one. systemd runs one at a time and the journal keeps the account.
+[Unit]
+Description=punktfunk door: turn on for %i (root helper)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/punktfunk/door-helper on %i
+TimeoutStartSec=180

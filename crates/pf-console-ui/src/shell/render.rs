@@ -194,6 +194,7 @@ impl Shell {
             // A modal owns B/A while up — do not also show the screen's legend.
             show_hints: self.connecting.is_none()
                 && self.launching.is_none()
+                && self.seat_wait.is_none()
                 && self.wake.is_none(),
             cheap: false,
             root_targets: None,

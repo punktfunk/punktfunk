@@ -8,6 +8,7 @@
 mod connect;
 pub mod gate;
 mod host_ops;
+mod profile;
 pub mod spawn;
 
 use crate::hosts::{self, ConnectRequest, HostsMsg, HostsOutput, HostsPage, Phase};
@@ -17,12 +18,15 @@ use crate::trust;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use pf_client_core::orchestrate::{trust_route, ConnectOutcome, TrustRoute};
+use pf_client_core::profiles::{ListedProfile as ProfileRow, ProfilePick};
 use pf_client_core::settings::GamepadUi;
 use pf_client_core::start;
 use relm4::prelude::*;
 use spawn::{CancelHandle, SpawnOpts};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub const APP_ID: &str = "io.unom.Punktfunk";
 
@@ -67,6 +71,11 @@ pub struct AppModel {
     /// once on the child's exit: without it, EVERY signal death read as "we meant that" and
     /// an OOM-killed or crashed stream vanished with no message at all.
     session_cancelled: bool,
+    /// The profile id the running session dialed, unless that dial is already the retry. A
+    /// `PROFILE_UNKNOWN` refusal at its exit reads the list again and dials once more.
+    retry_profile: Option<String>,
+    /// The dialog waiting for a profile's seat to come up.
+    seat_wait: Option<profile::SeatWait>,
     /// Controllers attached at the last poll — the edge Controller-optimized UI opens on.
     pads: usize,
     /// Fullscreen Always put the window there, so turning it off may take it back out.
@@ -93,6 +102,38 @@ pub enum AppMsg {
     SpeedTest(ConnectRequest),
     /// The Library on this host's shelf.
     OpenLibrary(ConnectRequest),
+    /// "Switch profile…": the picker without a connect.
+    SwitchProfile(ConnectRequest),
+    /// The profile list came back (`None`: the ask failed or ran late).
+    ProfileAsked {
+        req: ConnectRequest,
+        fp_hex: String,
+        switch: bool,
+        listed: Option<Option<Vec<ProfileRow>>>,
+    },
+    /// A circle in the picker was chosen.
+    ProfilePicked {
+        req: ConnectRequest,
+        fp_hex: String,
+        row: ProfileRow,
+        connect: bool,
+    },
+    /// The host refused the dialed profile as unknown; its list came back (`None`: the read
+    /// failed or ran late). `msg` is the refusal, shown when the profile is gone.
+    ProfileReasked {
+        req: ConnectRequest,
+        fp_hex: String,
+        id: String,
+        msg: String,
+        listed: Option<Option<Vec<ProfileRow>>>,
+    },
+    /// A seat poll's row, or the line that ends the wait. `stop` names the wait it belongs to.
+    SeatPolled {
+        stop: Arc<AtomicBool>,
+        row: Result<ProfileRow, String>,
+    },
+    /// The seat dialog closed by Cancel or Escape.
+    SeatCancelled(Arc<AtomicBool>),
     /// Show a destination by its view name.
     ShowView(&'static str),
     Find,
@@ -119,7 +160,7 @@ pub enum AppMsg {
     SessionExited {
         req: ConnectRequest,
         code: i32,
-        error: Option<(String, bool)>,
+        error: Option<pf_client_core::orchestrate::SessionError>,
         ended: Option<String>,
         tofu: bool,
     },
@@ -319,6 +360,7 @@ impl SimpleComponent for AppModel {
                 HostsOutput::Pair(req) => AppMsg::Pair(req),
                 HostsOutput::SpeedTest(req) => AppMsg::SpeedTest(req),
                 HostsOutput::Library(req) => AppMsg::OpenLibrary(req),
+                HostsOutput::SwitchProfile(req) => AppMsg::SwitchProfile(req),
                 HostsOutput::SendLogs(req, mgmt) => AppMsg::SendLogs(req, mgmt),
                 HostsOutput::HostAction {
                     req,
@@ -389,6 +431,8 @@ impl SimpleComponent for AppModel {
             wake_fallback: None,
             waiting: Rc::new(RefCell::new(None)),
             session_cancelled: false,
+            retry_profile: None,
+            seat_wait: None,
             pads: 0,
             session: None,
             streaming,
@@ -506,6 +550,32 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::SpeedTest(req) => self.speed_test(req, &sender),
+            AppMsg::SwitchProfile(req) => {
+                if let Some(fp_hex) = req.fp_hex.clone() {
+                    self.ask_profile(req, fp_hex, true, &sender);
+                }
+            }
+            AppMsg::ProfileAsked {
+                req,
+                fp_hex,
+                switch,
+                listed,
+            } => self.profile_asked(req, fp_hex, switch, listed, &sender),
+            AppMsg::ProfilePicked {
+                req,
+                fp_hex,
+                row,
+                connect,
+            } => self.profile_picked(req, fp_hex, row, connect, &sender),
+            AppMsg::ProfileReasked {
+                req,
+                fp_hex,
+                id,
+                msg,
+                listed,
+            } => self.profile_reasked(req, fp_hex, id, msg, listed, &sender),
+            AppMsg::SeatPolled { stop, row } => self.seat_polled(stop, row, &sender),
+            AppMsg::SeatCancelled(stop) => self.seat_cancelled(&stop),
             AppMsg::SendLogs(req, mgmt_port) => self.send_logs(req, mgmt_port, &sender),
             AppMsg::HostAction {
                 req,

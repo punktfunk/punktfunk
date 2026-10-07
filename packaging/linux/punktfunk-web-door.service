@@ -1,0 +1,38 @@
+# punktfunk management web console for the door: the user unit of the same name
+# (scripts/punktfunk-web.service) as a system service, pointed at the door's files and port.
+#
+# The user's own console stands down while this runs: the runtime directory below is what its
+# ConditionPathExists= looks for. Same port, same certificate, same password.
+[Unit]
+Description=punktfunk management web console (the door's)
+After=punktfunk-door.service
+Wants=punktfunk-door.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=punktfunk
+Group=punktfunk
+RuntimeDirectory=punktfunk-web-door
+Environment=PUNKTFUNK_CONFIG_DIR=/var/lib/punktfunk
+Environment=PORT=47992
+Environment=PUNKTFUNK_UI_TLS_CERT=/var/lib/punktfunk/cert.pem
+Environment=PUNKTFUNK_UI_TLS_KEY=/var/lib/punktfunk/key.pem
+Environment=PUNKTFUNK_UI_SECURE=1
+# The door writes these on its first start; the console can't serve without them, so wait.
+ExecStartPre=/bin/sh -c 'until [ -s /var/lib/punktfunk/mgmt-token ] && [ -s /var/lib/punktfunk/native-key.pem ]; do sleep 1; done'
+EnvironmentFile=-/var/lib/punktfunk/mgmt-token
+EnvironmentFile=-/var/lib/punktfunk/web-password
+EnvironmentFile=-/var/lib/punktfunk/mgmt-endpoint
+ExecStart=/usr/bin/punktfunk-web-server
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

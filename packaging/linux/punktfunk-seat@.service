@@ -1,0 +1,28 @@
+# punktfunk seat: one user's headless desktop and stock host, started by punktfunk-seats.
+#
+# The instance is the seat's Linux account (`punktfunk-seat@pf-seat-1`). The supervisor writes
+# /run/punktfunk/seats/<user>.env and a drop-in with the BindPaths for this seat's private
+# compatdata, shadercache and downloading before each start; start the unit through
+# `punktfunk-seats start <id>`, not by hand.
+[Unit]
+Description=punktfunk seat %i
+After=systemd-logind.service systemd-user-sessions.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=%i
+PAMName=login
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_SESSION_CLASS=user
+EnvironmentFile=/run/punktfunk/seats/%i.env
+# Holds the session id for seat-reap.
+RuntimeDirectory=punktfunk-seat-%i
+ExecStart=/usr/libexec/punktfunk/seat-session
+# pam_systemd moves the session's processes out of this unit, so stopping it reaches only the
+# runner. The runner kills its children on SIGTERM; this kills the session for anything it missed.
+ExecStopPost=+/usr/libexec/punktfunk/seat-reap %i
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20

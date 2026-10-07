@@ -92,6 +92,10 @@
 // [`PunktfunkPenSample::tilt_deg`] sentinel: no tilt reading.
 #define PUNKTFUNK_PEN_TILT_UNKNOWN 255
 
+// Longest profile id, in bytes, that [`PunktfunkConnectOpts::profile_id`] sends and
+// [`punktfunk_connection_profile`] writes (before the NUL).
+#define PUNKTFUNK_PROFILE_ID_MAX 64
+
 // [`PunktfunkPenSample::azimuth_deg`] / `roll_deg` sentinel: no reading.
 #define PUNKTFUNK_PEN_ANGLE_UNKNOWN 65535
 
@@ -370,7 +374,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 45
+#define PUNKTFUNK_ABI_VERSION 46
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -1238,6 +1242,18 @@
 // session. `design/host-actions.md`.
 #define PUNKTFUNK_HOST_POWER_CLOSE_CODE 107
 
+// `ClientHello.profile` names no profile on this host, or another seat's.
+#define PROFILE_UNKNOWN_CLOSE_CODE 108
+
+// Every seat is taken. Reason bytes name the occupants.
+#define NO_SEAT_CLOSE_CODE 109
+
+// The profile's seat is in use by another device.
+#define SEAT_OCCUPIED_CLOSE_CODE 110
+
+// The profile's seat can't run: removed, or its host would not start.
+#define SEAT_UNAVAILABLE_CLOSE_CODE 111
+
 // Under-render floor; presenter upscales.
 #define PUNKTFUNK_MIN_SCALE 0.5
 
@@ -1289,6 +1305,10 @@ enum PunktfunkStatus
     PUNKTFUNK_STATUS_REJECTED_ACCESS_EXPIRED = -30,
     PUNKTFUNK_STATUS_REJECTED_LAUNCH_NOT_PERMITTED = -31,
     PUNKTFUNK_STATUS_REJECTED_HOST_POWER = -32,
+    PUNKTFUNK_STATUS_REJECTED_PROFILE_UNKNOWN = -33,
+    PUNKTFUNK_STATUS_REJECTED_NO_SEAT = -34,
+    PUNKTFUNK_STATUS_REJECTED_SEAT_OCCUPIED = -35,
+    PUNKTFUNK_STATUS_REJECTED_SEAT_UNAVAILABLE = -36,
     PUNKTFUNK_STATUS_PANIC = -99,
 };
 #ifndef __cplusplus
@@ -1640,8 +1660,11 @@ typedef struct {
     uint8_t delivery_profile;
     // See `delivery_profile`.
     uint8_t delivery_flags;
-    // Always `0`. Fills what would otherwise be tail padding, as `reserved0` does.
+    // Always `0`. Fills what would otherwise be padding, as `reserved0` does.
     uint8_t reserved2[6];
+    // The profile to play as: a host profile id (at most 64 bytes), or null to let the host
+    // choose. [`punktfunk_connection_profile`] reads which it resolved.
+    const char *profile_id;
 } PunktfunkConnectOpts;
 #endif
 
@@ -3186,6 +3209,18 @@ PunktfunkStatus punktfunk_connection_access_expires_in(const PunktfunkConnection
 PunktfunkStatus punktfunk_connection_end_reject_said(const PunktfunkConnection *c,
                                                      char *out,
                                                      uintptr_t cap);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The profile the host resolved this session to, NUL-terminated, into the caller's buffer;
+// empty from a host without profiles. A buffer of [`PUNKTFUNK_PROFILE_ID_MAX`] + 1 bytes fits
+// every id.
+//
+// # Safety
+// `c` is a valid connection handle; `out` is writable for `cap` bytes.
+PunktfunkStatus punktfunk_connection_profile(const PunktfunkConnection *c,
+                                             char *out,
+                                             uintptr_t cap);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

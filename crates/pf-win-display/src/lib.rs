@@ -49,7 +49,7 @@ pub mod topology_churn;
 #[cfg(target_os = "windows")]
 pub mod win_display;
 
-/// Whether the machine-level seats add-on marker reserves connector slots.
+/// Whether the machine-level seats marker reserves connector slots.
 /// Key existence is the signal; HKLM keeps an unprivileged seat process from
 /// enabling cross-process driver management through its own environment.
 #[cfg(target_os = "windows")]

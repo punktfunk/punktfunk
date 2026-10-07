@@ -2827,7 +2827,7 @@
           "library"
         ],
         "summary": "List every title this host knows, sorted by title.",
-        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
+        "description": "Plugin-synced entries plus custom ones. Art the host can serve is rewritten to this API's\nart proxy, local paths and remote URLs alike; a URL the proxy already refused passes\nthrough. `?provider=` / `?platform=` (case-insensitive) narrow. `?as=` names the\nasking device's profile: each title it has launched carries its own numbers in `stats.mine`.\n\nThe operator lane sees hidden titles (`hidden: true`) so the console can un-hide them.\nEvery other lane is filtered upstream and cannot tell they exist.",
         "operationId": "getLibrary",
         "parameters": [
           {
@@ -2843,6 +2843,15 @@
             "name": "platform",
             "in": "query",
             "description": "Only entries on this platform (case-insensitive, e.g. `PS2`)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id whose own play stats fill `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -3818,7 +3827,7 @@
           "library"
         ],
         "summary": "One page of the library.",
-        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them.",
+        "description": "Title order, `limit` titles a page (60 when absent, 200 at most). `next_cursor` names the\nlast title sent; pass it back as `cursor` for the next page. It is a place in the order, not\nan offset: a title added or removed between two pages neither repeats nor skips one.\n`q` matches inside the title, any case. `provider`, `platform`, `role` (`game`,\n`launcher`) and `install` (`installed`, `missing`) narrow, and `id` names one title, for a\ncaller that needs only that entry. Lanes see what `GET /library` shows them, `as`\nincluded.",
         "operationId": "getLibraryPage",
         "parameters": [
           {
@@ -3890,6 +3899,15 @@
             "name": "install",
             "in": "query",
             "description": "`installed` (on this host) or `missing` (not installed)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "description": "Profile id whose own play stats fill `stats.mine`",
             "required": false,
             "schema": {
               "type": "string"
@@ -4435,7 +4453,7 @@
           "host"
         ],
         "summary": "Loopback tray summary",
-        "description": "Bearer: `<config>/tray-token`, which every local account may read; loopback only.",
+        "description": "Bearer: `<config>/tray-token`, which every local account but a seat's may read; loopback only.",
         "operationId": "getLocalSummary",
         "responses": {
           "200": {
@@ -4865,6 +4883,16 @@
           },
           "401": {
             "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A seat host: devices pair with the box",
             "content": {
               "application/json": {
                 "schema": {
@@ -5729,6 +5757,1034 @@
           },
           "404": {
             "description": "No live plugin with that id, or it serves no UI",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List the profiles with what the console manages",
+        "operationId": "listProfiles",
+        "responses": {
+          "200": {
+            "description": "The profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileAdmin"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This host has no profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Add a profile",
+        "description": "A seat profile (the default) plays in a seat of its own; one with `seat: false` plays the\nbox's own session under its own name. On Windows a seat is a desktop of its own: its account\nis made here, and seats must be on. On Linux a seat is a Steam of its own in the owner's\nsession, or with `desktop` a desktop of its own, which needs the door.",
+        "operationId": "createProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or an accent that is not #RRGGBB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another profile has that name, seats are off (Windows), or the door is off (a Linux desktop)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The box already has eight profiles, or four seats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/default": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Where a device that names no profile lands",
+        "operationId": "setDefaultProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/doctor": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Check the seats",
+        "description": "The supervisor's own report: the ledger, Windows, Remote Desktop, the certificate pin and\neach seat's account, session and ports. Admin lane only.",
+        "operationId": "getSeatsDoctor",
+        "responses": {
+          "200": {
+            "description": "The report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatsDoctor"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This host has no seats to check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/door": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Turn Reachable without logging in on or off",
+        "description": "Linux. On moves the box's host to a system service that runs from boot, places every connect\non a seat of the box and keeps the box's files in `/var/lib/punktfunk`; the owner plays on a\nseat of their own. Off puts the files and the host back. The answer is 202 once the switch is\nqueued: the console reloads and polls `GET /host`, whose `door` says which host answers. The\nowner's user must be in the `punktfunk-update` group. Admin lane only.",
+        "operationId": "setDoor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoorChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The switch is under way; poll `GET /host` for `door`"
+          },
+          "204": {
+            "description": "The host is already so"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The owner's user isn't in the punktfunk-update group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not a Linux host, or this install lacks the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "systemd didn't take the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/enumerate": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List the profiles a device can pick",
+        "description": "Every profile on the box, the owner first. A client shows this as its picker.",
+        "operationId": "enumerateProfiles",
+        "responses": {
+          "200": {
+            "description": "The profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfilePublic"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This host has no profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/seating": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Whether seats are on",
+        "description": "Windows reports whether the box's seats are on and what turning them on needs: Windows\nServer, the Remote Desktop Session Host role, licensing and a graphics card. A Linux door\nreports its supervisor's checks with `platform: linux`. Other hosts answer `enabled: false`\nwith `platform: other`. Admin lane only.",
+        "operationId": "getSeating",
+        "responses": {
+          "200": {
+            "description": "Seats now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seating"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Turn seats on or off",
+        "description": "On runs the checks, installs the seat display driver, turns Remote Desktop on for this\nmachine and records its certificate. A check that fails changes nothing: the answer is 200\nwith `enabled: false` and the failed check as an `error`. The driver replaces the display of\nevery Remote Desktop session on the machine. Off stops every seat, keeps their accounts\nand restores what on changed. Admin lane only.",
+        "operationId": "setSeating",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatingChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Seats as they are after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seating"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This host has no seats to turn on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}": {
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Rename, recolour or rehome a profile",
+        "operationId": "updateProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty name, or an accent that is not #RRGGBB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another profile has that name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Remove a profile",
+        "description": "Sessions playing as it end with `SEAT_UNAVAILABLE`. With `erase`, its Steam home and picture\ngo too; without, the home stays. A Windows seat's account goes with its profile, so removing\none needs `erase`.",
+        "operationId": "deleteProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "erase",
+            "in": "query",
+            "description": "Also delete its Steam home and picture.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The owner profile can't be removed, or a Windows seat's without `erase`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer (Windows)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/avatar": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "A profile's picture",
+        "description": "The stored image with an `ETag` of its bytes; a request whose `If-None-Match` names that tag\ngets 304 with no body.",
+        "operationId": "getProfileAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "An `ETag` from an earlier response",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "304": {
+            "description": "The tag in `If-None-Match` is current"
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No picture for that profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Set a profile's picture",
+        "description": "PNG, JPEG or WebP, at most 1 MiB. The console crops it square first.",
+        "operationId": "setProfileAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored"
+          },
+          "400": {
+            "description": "Not a PNG, JPEG or WebP image, or over 1 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Remove a profile's picture",
+        "operationId": "deleteProfileAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/end": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "End the session on a profile's seat",
+        "description": "Disconnects whoever plays there and keeps the seat running for the next connect.",
+        "operationId": "endProfileSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat free",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat's host didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/start": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Start a profile's seat",
+        "description": "The console's **Start**: as `wake`, from the console.",
+        "operationId": "startProfileSeat",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat `starting`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/stop": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Stop a profile's seat",
+        "description": "Logs the seat off; whoever plays there is disconnected. The next pick starts it again.",
+        "operationId": "stopProfileSeat",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileAdmin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The profile has no seat of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The seat supervisor didn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/profiles/{id}/wake": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Get a profile's seat ready",
+        "description": "Starts a stopped seat so the next connect lands in it, and answers at once with the seat\n`starting`; poll `enumerate` until it is `ready`. A light seat starts with its first\nconnect, so on Linux this only answers the row.",
+        "operationId": "wakeProfile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile, its seat as it is now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfilePublic"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No profile with that id",
             "content": {
               "application/json": {
                 "schema": {
@@ -8676,6 +9732,15 @@
           }
         }
       },
+      "CheckLevel": {
+        "type": "string",
+        "description": "What a seat check found. An `error` stops seats from turning on.",
+        "enum": [
+          "info",
+          "warning",
+          "error"
+        ]
+      },
       "CheckSource": {
         "type": "string",
         "description": "Origin of a verdict. `Event` is for live feeds (push on transition); v1 emits `Startup` and\n`Refresh` only.",
@@ -8847,6 +9912,17 @@
               {
                 "$ref": "#/components/schemas/PresetRef",
                 "description": "The preset the client dialled with. Absent for plain settings and on GameStream."
+              }
+            ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile the session plays as. Absent on GameStream."
               }
             ]
           }
@@ -9159,6 +10235,19 @@
           "deny",
           "forget"
         ]
+      },
+      "DefaultProfile": {
+        "type": "object",
+        "description": "`PUT /profiles/default`.",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` is the owner."
+          }
+        }
       },
       "DetectHint": {
         "type": "object",
@@ -9477,6 +10566,19 @@
             "items": {
               "$ref": "#/components/schemas/ApiDisplayInfo"
             }
+          }
+        }
+      },
+      "DoorChange": {
+        "type": "object",
+        "description": "`PUT /profiles/door`.",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "description": "`true` makes the box reachable without anyone logging in; `false` hands it back."
           }
         }
       },
@@ -9827,6 +10929,29 @@
             "minimum": 0
           }
         }
+      },
+      "EntryStats": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GameStats"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mine": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GameStats"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One title on `GET /library`: the host-wide numbers, plus `mine` for the profile the\nrequest named (`?as=`) once that profile has launched the title."
       },
       "EnvMarker": {
         "type": "object",
@@ -10715,7 +11840,7 @@
                     "type": "null"
                   },
                   {
-                    "$ref": "#/components/schemas/GameStats",
+                    "$ref": "#/components/schemas/EntryStats",
                     "description": "Play stats, once this host has launched the title (`stats.rs`). Joined at read\ntime from `library-stats.json`, never stored on the entry."
                   }
                 ]
@@ -11094,6 +12219,13 @@
           }
         }
       },
+      "Home": {
+        "type": "string",
+        "enum": [
+          "desktop",
+          "bigpicture"
+        ]
+      },
       "HookEntry": {
         "type": "object",
         "description": "One hook: `run` and/or `webhook` when `on` (+ `filter`) matches.",
@@ -11344,6 +12476,7 @@
           "os_name",
           "codecs",
           "gamestream",
+          "door",
           "ports"
         ],
         "properties": {
@@ -11363,6 +12496,10 @@
               "$ref": "#/components/schemas/ApiCodec"
             },
             "description": "Codecs this host can encode (`host_wire_caps`, not the compile-time list)."
+          },
+          "door": {
+            "type": "boolean",
+            "description": "This host is the door (Linux, **Reachable without logging in**): a system service that\nplaces every connect on a seat and streams nothing itself."
           },
           "fingerprint": {
             "type": [
@@ -12848,6 +13985,17 @@
             "description": "Client's own name, else fingerprint-derived.",
             "example": "Enrico's MacBook"
           },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile the device asked to play as. Absent when it named none this host knows."
+              }
+            ]
+          },
           "source": {
             "type": "string",
             "description": "Where the knock came from: `\"lan\"` or `\"wan\"`. A `\"wan\"` device cannot be admitted by\napprove — arm a PIN bound to its fingerprint instead.",
@@ -13400,6 +14548,179 @@
           }
         }
       },
+      "ProfileAdmin": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ProfilePublic"
+          },
+          {
+            "type": "object",
+            "required": [
+              "default"
+            ],
+            "properties": {
+              "default": {
+                "type": "boolean",
+                "description": "Where a device that names no profile lands."
+              },
+              "legacy_device": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The device whose seat became this profile, lowercase hex."
+              }
+            }
+          }
+        ],
+        "description": "One profile as the console manages it."
+      },
+      "ProfileCreate": {
+        "type": "object",
+        "description": "What a new profile starts as.",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "desktop": {
+            "type": "boolean",
+            "description": "With `seat`, a desktop of its own: a full seat. A Windows seat always is; on Linux it\nneeds the door, and without it a seat is a Steam of its own in the owner's session."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "home": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Home",
+                "description": "Defaults to `bigpicture` for a seat on Linux and to `desktop` otherwise: a Windows seat is\na desktop of its own."
+              }
+            ]
+          },
+          "seat": {
+            "type": "boolean",
+            "description": "A seat of its own (the default), or the box's own session under another name."
+          }
+        }
+      },
+      "ProfilePublic": {
+        "type": "object",
+        "description": "One profile as a client's picker shows it.",
+        "required": [
+          "id",
+          "display_name",
+          "owner",
+          "home",
+          "last_used_unix"
+        ],
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB` behind the initials when there is no picture."
+          },
+          "avatar": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Host-relative URL of the picture."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "home": {
+            "$ref": "#/components/schemas/Home",
+            "description": "What a bare connect opens."
+          },
+          "id": {
+            "type": "string",
+            "example": "9a3f1c2b7e40"
+          },
+          "last_used_unix": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When a session last played as it; `0`: never.",
+            "minimum": 0
+          },
+          "legacy_seat": {
+            "type": "boolean",
+            "description": "The asking device's old seat became this profile. A client takes it without a picker."
+          },
+          "owner": {
+            "type": "boolean",
+            "description": "The box's own session."
+          },
+          "seat": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SeatPublic",
+                "description": "Its own seat; absent when it plays on the box's own session."
+              }
+            ]
+          }
+        }
+      },
+      "ProfileRef": {
+        "type": "object",
+        "description": "A profile as events, status and hooks name it.",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProfileUpdate": {
+        "type": "object",
+        "description": "A change to a profile; absent fields stay.",
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "home": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Home"
+              }
+            ]
+          }
+        }
+      },
       "ProviderEntryInput": {
         "allOf": [
           {
@@ -13942,6 +15263,181 @@
           }
         }
       },
+      "SeatCheck": {
+        "type": "object",
+        "description": "One thing the seat checks found.",
+        "required": [
+          "level",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable id such as `rds_role`.",
+            "example": "rds_role"
+          },
+          "level": {
+            "$ref": "#/components/schemas/CheckLevel"
+          },
+          "message": {
+            "type": "string",
+            "description": "One plain sentence for the operator."
+          },
+          "seat_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The seat it is about; absent when it is about the box."
+          }
+        }
+      },
+      "SeatKind": {
+        "type": "string",
+        "description": "What a profile's seat is. A door places every profile on a seat, so a profile on the box's own\nsession has one too: the owner's.",
+        "enum": [
+          "shared",
+          "steam",
+          "desktop"
+        ]
+      },
+      "SeatPublic": {
+        "type": "object",
+        "description": "A profile's seat right now.",
+        "required": [
+          "state",
+          "port",
+          "kind"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The progress line while `starting`, or why while `unavailable`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SeatKind",
+            "description": "Which kind of seat it is."
+          },
+          "occupant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device playing on it while `occupied`."
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The certificate fingerprint of the host at `port`, hex, when it is a seat's own: a\nclient dialing `port` directly pins it. Absent: the pin of this host."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The port to dial for this profile.",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/SeatState"
+          },
+          "steam_sign_in": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Its Steam has no account yet: the first connect shows Steam's sign-in. `null` where the\nhost can't tell."
+          }
+        }
+      },
+      "SeatState": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "starting",
+          "stopped",
+          "occupied",
+          "unavailable"
+        ]
+      },
+      "Seating": {
+        "type": "object",
+        "description": "Whether this box runs its profiles in seats of their own, with what turning that on needs.",
+        "required": [
+          "enabled",
+          "platform",
+          "checks",
+          "allow_rdp_from_network"
+        ],
+        "properties": {
+          "allow_rdp_from_network": {
+            "type": "boolean",
+            "description": "Windows: seats are on and the network may reach Remote Desktop. Off elsewhere."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatCheck"
+            },
+            "description": "The prerequisites, one each. Empty on `other`."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SeatingPlatform",
+            "description": "`other` has no seats to turn on; `linux` has them while the door is on."
+          }
+        }
+      },
+      "SeatingChange": {
+        "type": "object",
+        "description": "`PUT /profiles/seating`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "allow_rdp_from_network": {
+            "type": "boolean",
+            "description": "Leave Remote Desktop reachable from the network. Off keeps it on this machine."
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SeatingPlatform": {
+        "type": "string",
+        "enum": [
+          "windows",
+          "linux",
+          "other"
+        ]
+      },
+      "SeatsDoctor": {
+        "type": "object",
+        "description": "The seat supervisor's own checks.",
+        "required": [
+          "healthy",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatCheck"
+            }
+          },
+          "healthy": {
+            "type": "boolean",
+            "description": "No check is an `error`."
+          }
+        }
+      },
       "SessionAccess": {
         "type": "object",
         "required": [
@@ -14221,6 +15717,17 @@
               "null"
             ],
             "description": "Name of the settings preset the client dialled with. Absent for plain settings."
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile the session plays as. Blank, like `client_name`, for another device's\nsession on the cert lane."
+              }
+            ]
           },
           "shared_path_with": {
             "type": "array",
@@ -15527,6 +17034,10 @@
     {
       "name": "library",
       "description": "Game library: the titles each installed library plugin syncs, plus user-curated custom entries"
+    },
+    {
+      "name": "profiles",
+      "description": "The people on this box: the list a client's picker shows, their pictures, and the console's edits"
     },
     {
       "name": "stats",

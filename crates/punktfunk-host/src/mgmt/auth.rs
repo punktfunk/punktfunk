@@ -471,6 +471,17 @@ pub(crate) fn cert_may_access(method: &Method, path: &str) -> bool {
     if method == Method::POST && path_matches("/api/v1/library/install/{}/pause", path) {
         return true;
     }
+    // A client's picker: the list, a picture, and getting a seat ready. Editing stays the
+    // console's.
+    if method == Method::GET
+        && (path == "/api/v1/profiles/enumerate"
+            || path_matches("/api/v1/profiles/{}/avatar", path))
+    {
+        return true;
+    }
+    if method == Method::POST && path_matches("/api/v1/profiles/{}/wake", path) {
+        return true;
+    }
     method == Method::GET
         && (matches!(
             path,

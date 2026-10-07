@@ -17,7 +17,9 @@
 use crate::gamestream::tls::serve_https_with_plain;
 use crate::host::AppState;
 use anyhow::{Context, Result};
+use axum::extract::Request;
 use axum::http::StatusCode;
+use axum::middleware::Next;
 use axum::{middleware, routing::get, Json, Router};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -45,6 +47,7 @@ mod native;
 pub(crate) mod pipes;
 mod plugin_access;
 pub(crate) mod plugins;
+mod profiles;
 mod session;
 mod settings;
 pub(crate) mod shared;
@@ -256,6 +259,7 @@ pub async fn run(
         gamestream_enabled,
         identity_fingerprint,
         browser_plane,
+        pf_paths::seat::box_library_dir().is_some(),
     );
     // The plane's `/mgmt` tunnel dispatches into this very router. A second `app()` would mint
     // its own `DeviceAuth`, and a token earned on one would be refused by the other.
@@ -317,6 +321,9 @@ fn app(
     // Whether the WebTransport plane is running. State only for `cors::enabled`, so it is not
     // on `MgmtState` — no handler asks.
     browser_plane: bool,
+    // A seat host reading the box's library, which answers every library write 409. Passed in
+    // rather than read per request, so a test's environment never reaches another test's app.
+    box_library: bool,
 ) -> Router {
     let shared = Arc::new(MgmtState {
         app: state,
@@ -337,10 +344,15 @@ fn app(
         config_dir,
     });
     let (api_routes, api) = api_router_parts();
-    let routed = api_routes.route_layer(middleware::from_fn_with_state(
-        shared.clone(),
-        auth::require_auth,
-    ));
+    // Auth wraps the library guard: a caller without a credential gets 401, never the 409.
+    let routed = api_routes
+        .route_layer(middleware::from_fn(move |req: Request, next: Next| {
+            library::box_library_is_read_only(box_library, req, next)
+        }))
+        .route_layer(middleware::from_fn_with_state(
+            shared.clone(),
+            auth::require_auth,
+        ));
     // Outside the auth gate, because a CORS preflight carries no credential and must be
     // answered rather than refused. Absent entirely on a host that serves no browsers, so a
     // plane nobody enabled cannot widen what a page may read. See `mgmt::cors`.
@@ -545,14 +557,36 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(store::list_sources))
         .routes(routes!(store::put_source, store::delete_source))
         .routes(routes!(store::get_runtime, store::set_runtime))
+        .routes(routes!(profiles::enumerate_profiles))
+        .routes(routes!(profiles::get_seating, profiles::put_seating))
+        .routes(routes!(profiles::get_seats_doctor))
+        .routes(routes!(profiles::put_door))
+        .routes(routes!(profiles::list_profiles, profiles::create_profile))
+        .routes(routes!(profiles::set_default_profile))
+        .routes(routes!(profiles::update_profile, profiles::delete_profile))
+        .routes(routes!(
+            profiles::get_profile_avatar,
+            profiles::set_profile_avatar,
+            profiles::delete_profile_avatar
+        ))
+        .routes(routes!(profiles::wake_profile))
+        .routes(routes!(profiles::start_profile_seat))
+        .routes(routes!(profiles::stop_profile_seat))
+        .routes(routes!(profiles::end_profile_session))
         .routes(routes!(update::get_update_status))
         .routes(routes!(update::force_update_check))
         .routes(routes!(update::apply_update))
         .routes(routes!(actions::list_actions))
         .routes(routes!(actions::invoke_action));
-    OpenApiRouter::with_openapi(ApiDoc::openapi())
+    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1", api_v1)
-        .split_for_parts()
+        .split_for_parts();
+    // Any method passes through to the seat's host, so the spec has no one shape to document.
+    let router = router.route(
+        "/api/v1/profiles/{id}/proxy/{*rest}",
+        axum::routing::any(profiles::proxy_profile_seat),
+    );
+    (router, api)
 }
 
 /// `punktfunk-host openapi`; checked in at `api/openapi.json`.
@@ -584,6 +618,7 @@ pub fn openapi_json() -> String {
         (name = "native", description = "Native punktfunk/1 pairing: arm a window, display the host PIN, manage paired devices"),
         (name = "session", description = "Active streaming session control"),
         (name = "library", description = "Game library: the titles each installed library plugin syncs, plus user-curated custom entries"),
+        (name = "profiles", description = "The people on this box: the list a client's picker shows, their pictures, and the console's edits"),
         (name = "stats", description = "Streaming performance-stats capture: arm/stop a recording, read the live + saved time-series for graphing"),
         (name = "logs", description = "Host log stream: the newest in-memory log entries, cursor-paged for live following"),
         (name = "events", description = "Host lifecycle events: an SSE stream (client/session/stream lifecycle, pairing, displays, library, host) with Last-Event-ID resume and server-side kind filters"),

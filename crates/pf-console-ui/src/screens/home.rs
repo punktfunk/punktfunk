@@ -575,7 +575,10 @@ impl HomeScreen {
         }
         let say = |(title, sub): (&str, &str)| format!("{title}, {sub}");
         Some(match self.slot(hosts) {
-            Slot::Host(h) => format!("{}, {}", h.name, status(h).0),
+            Slot::Host(h) => match &h.profile {
+                Some(p) => format!("{}, {}, as {}", h.name, status(h).0, p.display_name),
+                None => format!("{}, {}", h.name, status(h).0),
+            },
             Slot::AddHost => say(action_text(ActionTile::AddHost)),
             Slot::Rescan => say(action_text(ActionTile::Rescan)),
         })
@@ -908,8 +911,8 @@ impl TileLook {
     }
 }
 
-/// A card: the badge, then what the host is doing over its name, and a lock while OK would
-/// pair first.
+/// A card: the badge, then what the host is doing over its name, a lock while OK would
+/// pair first, and the face of the profile it plays as.
 fn draw_host_tile(canvas: &Canvas, fonts: &Fonts, h: &HostRow, rect: Rect, k: f64) {
     let stroke = if h.saved {
         PanelStroke::Plain(0.08)
@@ -935,6 +938,12 @@ fn draw_host_tile(canvas: &Canvas, fonts: &Fonts, h: &HostRow, rect: Rect, k: f6
     if !h.paired {
         draw_lock(canvas, right - 11.0 * k, cy - 9.0 * k, k);
         right -= 23.0 * k;
+    }
+    if let Some(pick) = &h.profile {
+        let r = 17.0 * k;
+        let cx = (right - r) as f32;
+        super::profiles::draw_pick(canvas, fonts, pick, cx, cy as f32, r);
+        right -= 2.0 * r + 10.0 * k;
     }
     let max_w = right - tx;
     let (line, ink) = status(h);

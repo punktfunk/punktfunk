@@ -94,6 +94,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         ctrl_recv,
         negotiated,
         host_caps,
+        landed_at,
     } = hs;
     let WorkerArgs {
         params,
@@ -189,7 +190,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     // Normalized scroll only toward HOST_CAP2_SCROLL; an older host gets each
     // event converted once at the outbound seam instead.
     let normalized_scroll = negotiated.host_caps2 & crate::quic::HOST_CAP2_SCROLL != 0;
-    let _ = ready_tx.send(Ok(negotiated));
+    let _ = ready_tx.send(Ok(negotiated.clone()));
 
     // Snapshots only toward GAMEPAD_STATE. Flags 8/9 only toward PAD_AUDIO — an
     // older host reads the whole flags word as the pad index.
@@ -309,11 +310,11 @@ pub(super) async fn run_pump(args: WorkerArgs) {
     ));
 
     // Connection close: classify, then shutdown. A lost `punktfunk/2` session is kept for the
-    // next dial's resume.
+    // next dial's resume, under the host that ran it.
     {
         let shared = shared.clone();
         let conn = conn.clone();
-        let (host, port) = (params.host.clone(), params.port);
+        let (host, port) = landed_at;
         tokio::spawn(async move {
             let why = conn.closed().await;
             // Reason before `shutdown`: different threads observe the two; the flag must not win.

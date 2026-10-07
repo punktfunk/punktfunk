@@ -125,6 +125,8 @@ pub struct SessionControls {
     pub fingerprint: Option<String>,
     /// The settings preset the client dialled with, when it named one.
     pub preset: Option<crate::events::PresetRef>,
+    /// The profile the session plays as. `None` on GameStream.
+    pub profile: Option<crate::events::ProfileRef>,
     /// This device's key in [`crate::inject::pad_pool`]. A reservation and a
     /// reconnect are keyed by it, so both follow the pairing, never the address.
     pub pad_owner: u64,
@@ -162,6 +164,7 @@ impl SessionControls {
             pad_slots: Arc::new(AtomicU16::new(0)),
             fingerprint: None,
             preset: None,
+            profile: None,
             pad_owner: crate::inject::pad_pool::owner_key(None),
             preferred_pad_slot: Arc::new(AtomicU8::new(NO_PAD_SLOT)),
             pads: Arc::new(crate::pad_feed::PadFeed::new()),
@@ -507,6 +510,8 @@ pub struct SessionSnapshot {
     pub client_name: Option<String>,
     /// Name of the preset the client dialled with, if any.
     pub preset_name: Option<String>,
+    /// The profile it plays as.
+    pub profile: Option<crate::events::ProfileRef>,
     /// Which plane serves it.
     pub plane: crate::events::Plane,
     /// The capturer's live health, if it classifies.
@@ -1087,6 +1092,7 @@ pub fn snapshot() -> Vec<SessionSnapshot> {
                 codec: s.codec,
                 client_name: s.client_name.clone(),
                 preset_name: s.controls.preset.as_ref().map(|p| p.name.clone()),
+                profile: s.controls.profile.clone(),
                 plane: s.plane,
                 capture_health: s
                     .capture_health
@@ -2015,6 +2021,7 @@ pub(crate) mod tests {
                 fingerprint: None,
                 preset: None,
                 plane: crate::events::Plane::Gamestream,
+                profile: None,
                 // No signals: inert lease, so no watcher thread races the assertions.
                 spec: crate::library::DetectSpec::default(),
                 nested: false,

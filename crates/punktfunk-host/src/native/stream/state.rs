@@ -681,8 +681,8 @@ impl StreamState {
             },
         );
         let spawned_now = spawned.now;
-        // A Steam launch that ran under this seat's own home: remember what it streamed at, so
-        // the host can have that Steam up before this device's next connect. `vd`'s own values,
+        // A Steam launch that ran under a seat profile's home: remember what it streamed at, so
+        // the host can have that Steam up before the profile's next connect. `vd`'s own values,
         // not the request, because they are the registry's reuse keys.
         #[cfg(target_os = "linux")]
         if spawned_now
@@ -690,12 +690,13 @@ impl StreamState {
                 .as_deref()
                 .is_some_and(crate::vdisplay::launch_is_steam)
         {
-            if let Some(fp) = isolation
+            if let Some(profile) = isolation
                 .as_ref()
-                .filter(|i| i.steam_home.is_some())
-                .and_then(|_| conn.peer_fingerprint())
+                .and_then(|i| i.steam_home.as_deref())
+                .and_then(|h| h.file_name())
+                .and_then(|n| n.to_str())
             {
-                crate::native::prewarm::record(&hex::encode(fp), mode, vd.hdr(), vd.hw_cursor());
+                crate::native::prewarm::record(profile, mode, vd.hdr(), vd.hw_cursor());
             }
         }
         // This seat's Steam has no account, so the stream shows its sign-in screen and not the

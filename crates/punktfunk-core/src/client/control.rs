@@ -48,7 +48,7 @@ pub(crate) enum CtrlRequest {
 
 /// Handshake snapshot the worker reports to [`NativeClient::connect`]. Field-for-field copy onto
 /// the public `NativeClient` of the same names.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Negotiated {
     pub(crate) mode: Mode,
     /// Chunk-aligned parse window for wire shards.
@@ -102,4 +102,6 @@ pub(crate) struct Negotiated {
     /// Seconds until access expires; `0` = permanent. Connect-time seed for the live deadline,
     /// same as `grants`.
     pub(crate) expires_in_secs: u32,
+    /// The profile the host resolved this session to; `None` from a host without profiles.
+    pub(crate) profile: Option<String>,
 }

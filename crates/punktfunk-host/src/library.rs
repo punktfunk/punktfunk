@@ -267,7 +267,7 @@ pub struct GameEntry {
     /// Play stats, once this host has launched the title (`stats.rs`). Joined at read
     /// time from `library-stats.json`, never stored on the entry.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stats: Option<GameStats>,
+    pub stats: Option<EntryStats>,
     /// Catalog ids a metadata source matches on (`steam`, `gog`, `libretro`, `sgdb` → value),
     /// set by the plugin that lists the entry. Not sent to paired clients.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -386,12 +386,18 @@ type Inputs = (
     Vec<(std::ffi::OsString, Option<SystemTime>, u64)>,
 );
 
-/// Every file the list is built from is named `library*` in the config dir, or sits in
-/// its `library-metadata` folder. A file outside that rule would leave a stale list.
+/// Every file the list is built from is named `library*` in the library dir, or sits in its
+/// `library-metadata` folder; a seat that reads the box's library adds its own play stats. A
+/// file outside that rule would leave a stale list.
 fn inputs() -> Inputs {
-    let dir = pf_paths::config_dir();
+    let dir = pf_paths::seat::library_dir();
+    let own = pf_paths::config_dir();
+    let mut folders = vec![(dir.clone(), "library"), (dir.join("library-metadata"), "")];
+    if own != dir {
+        folders.push((own, "library-stats"));
+    }
     let mut stamps = Vec::new();
-    for (folder, prefix) in [(dir.clone(), "library"), (dir.join("library-metadata"), "")] {
+    for (folder, prefix) in folders {
         for e in std::fs::read_dir(folder).into_iter().flatten().flatten() {
             let name = e.file_name();
             if !name.to_string_lossy().starts_with(prefix) {
@@ -432,14 +438,14 @@ fn collect_games() -> Vec<GameEntry> {
     let off = disabled_scanners();
     let stats = game_stats();
     let fills = Fills::load();
-    // Manual entries always contribute; a provider's follow the operator's source toggle.
+    // Manual entries always contribute; a provider's follow its toggle and [`source_off`].
     let mut games: Vec<GameEntry> = load_custom()
         .into_iter()
-        .filter(|e| !source_id_for(e).is_some_and(|src| off.contains(src)))
+        .filter(|e| !source_off(e, &off))
         .map(GameEntry::from)
         .collect();
     for g in &mut games {
-        g.stats = stats.get(&g.id).copied();
+        g.stats = stats.get(&g.id).map(|t| t.entry(None));
         fills.apply(g);
     }
     games.sort_by_cached_key(sort_key);

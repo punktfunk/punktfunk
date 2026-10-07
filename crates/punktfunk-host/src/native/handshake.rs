@@ -3,7 +3,8 @@
 //! Pairing stays in `serve_session`: the delegated-approval wait must outlive this handshake
 //! timeout and must release the session permit. This module then admits the client, negotiates
 //! encode / audio / cursor, binds the data-plane UDP socket, and returns the values
-//! `serve_session` needs to stand the session up.
+//! `serve_session` needs to stand the session up. On `punktfunk/2` a client can instead be
+//! sent to another host of the box before any `Welcome` ([`redirect`]).
 //!
 //! Evidence: `design/hi-res-audio.md`, `design/remote-desktop-sweep.md`.
 
@@ -329,6 +330,27 @@ pub(super) struct Negotiated {
     pub(super) joined: Option<(crate::vdisplay::admission::LiveDisplay, (u32, u32))>,
     /// Native feature bits in force ([`ServerHello::features`]).
     pub(super) features: punktfunk_core::quic::v2::features::FeatureSet,
+    /// The profile this session plays as; `ServerHello` echoed its id.
+    pub(super) resolved: crate::profiles::Resolved,
+}
+
+/// How long the host holds the connection after a `Redirect` for the client to read it and
+/// leave. A close first could outrun the frame.
+const REDIRECT_LINGER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Send the client to another host of this box instead of a `ServerHello`: the frame, then the
+/// client's close, then ours. Placement by profile is the caller.
+pub(crate) async fn redirect(
+    conn: &super::link::SessionLink,
+    send: &mut super::link::CtlSend,
+    to: &punktfunk_core::quic::v2::msg::Redirect,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    punktfunk_core::quic::v2::io::send(send, to).await?;
+    send.flush().await?;
+    let _ = tokio::time::timeout(REDIRECT_LINGER, conn.closed()).await;
+    conn.close(punktfunk_core::quic::QUIT_CLOSE_CODE, b"redirected");
+    Ok(())
 }
 
 /// `ClientHello` → `ServerHello` → `Ready`. Borrows the control streams; the caller keeps them
@@ -350,6 +372,7 @@ pub(super) async fn negotiate(
     // Effective grant mask and seconds until expiry (`0` = permanent), resolved at admission.
     grants: u32,
     expires_in_secs: u32,
+    resolved: crate::profiles::Resolved,
 ) -> Result<Negotiated> {
     let mut hello = first.hello.clone();
     // Pairing ran before this future: a client here is paired, or the host is `--open`.
@@ -496,7 +519,7 @@ pub(super) async fn negotiate(
     crate::encode::validate_refresh(hello.mode.refresh_hz).context("client-requested mode")?;
 
     let (mut compositor, mut gamescope_route) =
-        negotiate_compositor(source, &hello, conn.peer_fingerprint()).await?;
+        negotiate_compositor(source, &hello, conn.peer_fingerprint(), &resolved).await?;
     // A joiner streams the owner's display, so it runs on the owner's compositor and route.
     if let Some((d, _)) = joined.as_ref().filter(|(d, _)| d.compositor.is_some()) {
         compositor = d.compositor;
@@ -737,7 +760,8 @@ pub(super) async fn negotiate(
     let features = first.features.intersect(
         punktfunk_core::quic::v2::features::FeatureSet::default()
             .with(punktfunk_core::quic::v2::registry::FEATURE_STREAM_CONFIG)
-            .with(punktfunk_core::quic::v2::registry::FEATURE_PAD_WRITES),
+            .with(punktfunk_core::quic::v2::registry::FEATURE_PAD_WRITES)
+            .with(punktfunk_core::quic::v2::registry::FEATURE_PROFILES),
     );
     let server_hello = ServerHello {
         welcome,
@@ -745,6 +769,7 @@ pub(super) async fn negotiate(
         clock_origin_ns: session.clock.origin_ns(),
         suite,
         features,
+        profile: Some(resolved.id.clone()),
     };
     punktfunk_core::quic::v2::io::send(send, &server_hello).await?;
     bringup.mark("welcome");
@@ -856,6 +881,7 @@ pub(super) async fn negotiate(
         prep,
         joined,
         features,
+        resolved,
     })
 }
 
@@ -873,6 +899,7 @@ async fn negotiate_compositor(
     source: Punktfunk1Source,
     hello: &Hello,
     client: Option<[u8; 32]>,
+    profile: &crate::profiles::Resolved,
 ) -> Result<(
     Option<crate::vdisplay::Compositor>,
     Option<crate::vdisplay::GamescopeRoute>,
@@ -885,12 +912,19 @@ async fn negotiate_compositor(
             // Dedicated gamescope only if the launch id resolves to a command; an unknown id
             // must not spawn a blank "sleep infinity" gamescope. `launch_is_resolvable`, not
             // `resolve_launch`: a plugin command is loopback I/O and this is the async path.
+            // A seat profile's bare connect opens its home, which is a launch too.
             let has_resolvable_launch = hello
                 .launch
                 .as_deref()
-                .is_some_and(crate::library::launch_is_resolvable);
-            let dedicated =
-                crate::vdisplay::wants_dedicated_game_session(has_resolvable_launch, client);
+                .is_some_and(crate::library::launch_is_resolvable)
+                || (hello.launch.is_none() && super::opens_big_picture(profile));
+            let seat_profile =
+                matches!(profile.os_account, crate::profiles::OsAccount::Seat { .. });
+            let dedicated = crate::vdisplay::wants_dedicated_game_session(
+                has_resolvable_launch,
+                client,
+                seat_profile,
+            );
             Some(
                 tokio::task::spawn_blocking(move || {
                     resolve_compositor(pref, dedicated, true, true)

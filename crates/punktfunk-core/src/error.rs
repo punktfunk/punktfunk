@@ -66,6 +66,10 @@ pub enum PunktfunkStatus {
     RejectedAccessExpired = -30,
     RejectedLaunchNotPermitted = -31,
     RejectedHostPower = -32,
+    RejectedProfileUnknown = -33,
+    RejectedNoSeat = -34,
+    RejectedSeatOccupied = -35,
+    RejectedSeatUnavailable = -36,
     Panic = -99,
 }
 
@@ -97,6 +101,10 @@ impl PunktfunkError {
                     R::AccessExpired => PunktfunkStatus::RejectedAccessExpired,
                     R::LaunchNotPermitted => PunktfunkStatus::RejectedLaunchNotPermitted,
                     R::HostPower => PunktfunkStatus::RejectedHostPower,
+                    R::ProfileUnknown => PunktfunkStatus::RejectedProfileUnknown,
+                    R::NoSeat => PunktfunkStatus::RejectedNoSeat,
+                    R::SeatOccupied => PunktfunkStatus::RejectedSeatOccupied,
+                    R::SeatUnavailable => PunktfunkStatus::RejectedSeatUnavailable,
                 }
             }
         }

@@ -54,6 +54,7 @@ data class PendingLinkConnect(
     val host: KnownHost,
     val preset: String? = null,
     val launch: String? = null,
+    val asProfile: String? = null,
 )
 
 /**

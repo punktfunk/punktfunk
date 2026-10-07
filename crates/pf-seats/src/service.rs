@@ -1,0 +1,377 @@
+//! Serialized command dispatch over a validated ledger and platform backend.
+//!
+//! Each mutation is applied to a clone, persisted with a new generation, then
+//! published in memory. Provisioning precedes the create commit, but a failed
+//! commit never deletes an account: only an explicit Delete command may do so.
+//! Runtime observations, including backend failures, are persisted. Startup
+//! reconciliation starts autostart seats and refreshes the rest. One mutex
+//! serializes lifecycle calls because four seats do not need rollback races; the
+//! ledger's own lock is never held across a start or stop, so `List` answers while
+//! a seat takes its tens of seconds to come up.
+
+use crate::backend::{BackendError, PlatformBackend};
+use crate::ipc::{
+    ApiError, Command, CommandResult, Diagnostic, DiagnosticLevel, DoctorReport, ErrorCode,
+    SeatingStatus,
+};
+use crate::model::{CreateSeat, Ledger, RuntimeState, RuntimeStatus, Seat, SeatId};
+use crate::persistence::{LedgerStore, StoreError};
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
+
+pub struct SeatService<B> {
+    backend: B,
+    store: LedgerStore,
+    ledger: Mutex<Ledger>,
+    /// Held across every create, start, stop and delete.
+    ops: Mutex<()>,
+    /// The seat a start or stop is changing; `List` reports its published state meanwhile.
+    changing: Mutex<Option<SeatId>>,
+}
+
+impl<B: PlatformBackend> SeatService<B> {
+    pub fn open(root: impl AsRef<Path>, backend: B) -> Result<Self, StoreError> {
+        let store = LedgerStore::open(root)?;
+        let ledger = store.load()?;
+        Ok(Self {
+            backend,
+            store,
+            ledger: Mutex::new(ledger),
+            ops: Mutex::new(()),
+            changing: Mutex::new(None),
+        })
+    }
+
+    pub fn store(&self) -> &LedgerStore {
+        &self.store
+    }
+
+    pub fn ledger(&self) -> Ledger {
+        self.lock().clone()
+    }
+
+    pub fn dispatch(&self, command: Command) -> Result<CommandResult, ApiError> {
+        match command {
+            Command::List => self.list(),
+            Command::Create(request) => self.create(request),
+            Command::Start { id } => self.start(&id),
+            Command::Stop { id } => self.stop(&id),
+            Command::Delete { id } => self.delete(&id),
+            Command::Doctor => Ok(self.doctor()),
+            Command::Seating => self.seating(|backend| backend.seating()),
+            Command::Enable {
+                allow_rdp_from_network,
+            } => {
+                let _serialized = self.lock();
+                self.seating(|backend| backend.enable(allow_rdp_from_network))
+            }
+            Command::Disable { keep_accounts } => self.disable(keep_accounts),
+            Command::AdoptOwner { account } => self.adopt_owner(&account),
+        }
+    }
+
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    /// Records the pin of `seat`'s host while it runs. A host that hasn't written its identity
+    /// yet leaves the last pin known.
+    fn learn_pin(&self, seat: &mut Seat) {
+        if seat.runtime.state != RuntimeState::Running {
+            return;
+        }
+        let dir = self.backend.host_config_dir(seat);
+        if let Some(pin) = dir.and_then(|dir| host_fingerprint(&dir)) {
+            seat.fingerprint = Some(pin);
+        }
+    }
+
+    pub fn reconcile_startup(&self) -> Result<(), ApiError> {
+        let mut current = self.lock();
+        let mut next = current.clone();
+        for seat in &mut next.seats {
+            let result = if seat.autostart {
+                self.backend.start(seat)
+            } else {
+                self.backend.status(seat)
+            };
+            seat.runtime = result.unwrap_or_else(|error| RuntimeStatus::failed(error.to_string()));
+            self.learn_pin(seat);
+        }
+        if next != *current {
+            self.commit(&mut current, next)?;
+        }
+        Ok(())
+    }
+
+    fn list(&self) -> Result<CommandResult, ApiError> {
+        let changing = self
+            .changing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut current = self.lock();
+        let mut next = current.clone();
+        for seat in &mut next.seats {
+            if changing.as_ref() == Some(&seat.id) {
+                continue;
+            }
+            seat.runtime = self
+                .backend
+                .status(seat)
+                .unwrap_or_else(|error| RuntimeStatus::failed(error.to_string()));
+            self.learn_pin(seat);
+        }
+        if next != *current {
+            self.commit(&mut current, next)?;
+        }
+        Ok(CommandResult::List {
+            seats: current.seats.clone(),
+        })
+    }
+
+    fn create(&self, request: CreateSeat) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
+        let mut current = self.lock();
+        let mut next = current.clone();
+        let seat = next.allocate(request).map_err(ApiError::from)?;
+        self.backend.provision(&seat).map_err(ApiError::from)?;
+        if let Err(error) = self.commit(&mut current, next) {
+            // The account exists but no ledger row does, so delete could never reach it.
+            let _ = self.backend.remove(&seat);
+            return Err(error);
+        }
+        Ok(CommandResult::Created { seat })
+    }
+
+    /// The owner's row: the one that exists when it names `account`, else a new one the backend
+    /// has checked. A second account is refused, since the box has one owner.
+    fn adopt_owner(&self, account: &str) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
+        let mut current = self.lock();
+        if let Some(owner) = current.owner() {
+            return if owner.account == account {
+                Ok(CommandResult::Created {
+                    seat: owner.clone(),
+                })
+            } else {
+                Err(ApiError::new(
+                    ErrorCode::Conflict,
+                    format!("the box owner is already {}", owner.account),
+                ))
+            };
+        }
+        let mut next = current.clone();
+        let seat = next.allocate_owner(account).map_err(ApiError::from)?;
+        self.backend.adopt(&seat).map_err(ApiError::from)?;
+        if let Err(error) = self.commit(&mut current, next) {
+            // Releasing the row removes what adopting prepared and never the account.
+            let _ = self.backend.remove(&seat);
+            return Err(error);
+        }
+        Ok(CommandResult::Created { seat })
+    }
+
+    fn start(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
+        self.change_runtime(id, true)
+    }
+
+    fn stop(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
+        self.change_runtime(id, false)
+    }
+
+    fn change_runtime(&self, id: &SeatId, start: bool) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
+        let original = self.lock().seat(id).cloned().ok_or_else(|| not_found(id))?;
+        // Marked before the publish: a `List` in between would read the backend's old state.
+        *self.changing.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
+        if start {
+            let published = self.publish_runtime(
+                id,
+                RuntimeStatus {
+                    state: RuntimeState::Starting,
+                    detail: None,
+                },
+            );
+            if let Err(error) = published {
+                *self.changing.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return Err(error);
+            }
+        }
+        let result = if start {
+            self.backend.start(&original)
+        } else {
+            self.backend.stop(&original)
+        };
+        *self.changing.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let mut current = self.lock();
+        let mut next = current.clone();
+        let seat = next
+            .seats
+            .iter_mut()
+            .find(|seat| &seat.id == id)
+            .expect("cloned ledger retains the selected seat");
+        match result {
+            Ok(status) => {
+                seat.runtime = status;
+                self.learn_pin(seat);
+            }
+            Err(error) => {
+                seat.runtime = RuntimeStatus::failed(error.to_string());
+                self.commit(&mut current, next)?;
+                return Err(ApiError::from(error));
+            }
+        }
+        let changed = seat.clone();
+        self.commit(&mut current, next)?;
+        if start {
+            Ok(CommandResult::Started { seat: changed })
+        } else {
+            Ok(CommandResult::Stopped { seat: changed })
+        }
+    }
+
+    fn delete(&self, id: &SeatId) -> Result<CommandResult, ApiError> {
+        let _op = self.op();
+        let mut current = self.lock();
+        let seat = current.seat(id).cloned().ok_or_else(|| not_found(id))?;
+        self.backend.remove(&seat).map_err(ApiError::from)?;
+        let mut next = current.clone();
+        next.remove(id)
+            .expect("cloned ledger retains the selected seat");
+        self.commit(&mut current, next)?;
+        Ok(CommandResult::Deleted { id: id.clone() })
+    }
+
+    fn seating(
+        &self,
+        run: impl FnOnce(&B) -> Result<SeatingStatus, BackendError>,
+    ) -> Result<CommandResult, ApiError> {
+        run(&self.backend)
+            .map(|status| CommandResult::Seating { status })
+            .map_err(ApiError::from)
+    }
+
+    /// Stops every seat before the backend turns seats off, so none runs without its display
+    /// driver.
+    fn disable(&self, keep_accounts: bool) -> Result<CommandResult, ApiError> {
+        if !keep_accounts {
+            return Err(ApiError::new(
+                ErrorCode::InvalidRequest,
+                "seat accounts are removed with their profile, not when seats go off",
+            ));
+        }
+        let ids: Vec<SeatId> = self.lock().seats.iter().map(|s| s.id.clone()).collect();
+        for id in &ids {
+            self.change_runtime(id, false)?;
+        }
+        let _serialized = self.lock();
+        self.seating(|backend| backend.disable(keep_accounts))
+    }
+
+    fn doctor(&self) -> CommandResult {
+        let current = self.lock();
+        let mut diagnostics = vec![Diagnostic::info(
+            "ledger",
+            format!(
+                "schema {} generation {} contains {} of 4 seats",
+                current.schema_version,
+                current.generation,
+                current.seats.len()
+            ),
+        )];
+        match self.backend.doctor(&current) {
+            Ok(mut backend) => diagnostics.append(&mut backend),
+            Err(error) => diagnostics.push(Diagnostic::error("backend", error.to_string())),
+        }
+        for seat in &current.seats {
+            if seat.runtime.state == RuntimeState::Failed {
+                diagnostics.push(Diagnostic {
+                    level: DiagnosticLevel::Error,
+                    code: "runtime_failed".into(),
+                    message: seat
+                        .runtime
+                        .detail
+                        .clone()
+                        .unwrap_or_else(|| "seat runtime failed".into()),
+                    seat_id: Some(seat.id.clone()),
+                });
+            }
+        }
+        let healthy = diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.level != DiagnosticLevel::Error);
+        CommandResult::Doctor {
+            report: DoctorReport {
+                healthy,
+                diagnostics,
+            },
+        }
+    }
+
+    fn commit(&self, current: &mut Ledger, mut next: Ledger) -> Result<(), ApiError> {
+        next.generation = current.generation.checked_add(1).ok_or_else(|| {
+            ApiError::new(ErrorCode::Persistence, "ledger generation is exhausted")
+        })?;
+        self.store.save(&next).map_err(ApiError::from)?;
+        *current = next;
+        Ok(())
+    }
+
+    /// Persists `status` as `id`'s runtime so `List` shows it before a long backend call.
+    fn publish_runtime(&self, id: &SeatId, status: RuntimeStatus) -> Result<(), ApiError> {
+        let mut current = self.lock();
+        let mut next = current.clone();
+        if let Some(seat) = next.seats.iter_mut().find(|seat| &seat.id == id) {
+            seat.runtime = status;
+        }
+        self.commit(&mut current, next)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Ledger> {
+        self.ledger
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn op(&self) -> MutexGuard<'_, ()> {
+        self.ops.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+impl From<crate::model::ValidationError> for ApiError {
+    fn from(error: crate::model::ValidationError) -> Self {
+        use crate::model::ValidationError::{Duplicate, NoAllocation, TooManySeats};
+        let code = match &error {
+            TooManySeats(_) | NoAllocation(_) => ErrorCode::Capacity,
+            Duplicate { .. } => ErrorCode::Conflict,
+            _ => ErrorCode::InvalidRequest,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl From<BackendError> for ApiError {
+    fn from(error: BackendError) -> Self {
+        Self::new(ErrorCode::Backend, error.to_string())
+    }
+}
+
+impl From<StoreError> for ApiError {
+    fn from(error: StoreError) -> Self {
+        Self::new(ErrorCode::Persistence, error.to_string())
+    }
+}
+
+fn not_found(id: &SeatId) -> ApiError {
+    ApiError::new(ErrorCode::NotFound, format!("seat {id} does not exist"))
+}
+
+/// SHA-256 of the certificate DER in `dir`'s `native-cert.pem`, lowercase hex: the pin a client
+/// dials that host with.
+fn host_fingerprint(dir: &Path) -> Option<String> {
+    use rustls::pki_types::{pem::PemObject as _, CertificateDer};
+    let der = CertificateDer::from_pem_file(dir.join("native-cert.pem")).ok()?;
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, der.as_ref());
+    Some(hex::encode(digest.as_ref()))
+}

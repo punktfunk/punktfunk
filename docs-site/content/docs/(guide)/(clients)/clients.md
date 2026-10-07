@@ -25,7 +25,8 @@ Every Punktfunk app finds hosts on your network, [pairs](/docs/pairing) once and
 own, browses the host's [game library](/docs/game-library), and has a controller interface for the
 couch. They share [presets and `punktfunk://` links](/docs/presets-and-links), the
 [in-stream keys](/docs/input#getting-your-input-back) and the settings on
-[Client settings](/docs/client-settings).
+[Client settings](/docs/client-settings). The Apple, Android, Linux and Windows apps also ask which
+[profile](/docs/profiles#how-players-pick) plays.
 
 ## Apple app (Mac, iPhone, iPad, Apple TV)
 
@@ -102,6 +103,8 @@ punktfunk pair <host>[:port] --pin -          # pair this device; PIN on stdin
 punktfunk hosts list --probe                  # saved hosts, each checked live
 punktfunk library <host-ref> --json           # the host's games
 punktfunk launch <host-ref> --game <id>       # stream, waking the host first
+punktfunk profiles <host-ref>                 # who plays on the host; --pick saves one
+punktfunk launch <host-ref> --as <profile>    # stream as that profile, this time only
 punktfunk end-game <host-ref> --game <id>     # close a game this device launched
 punktfunk open 'punktfunk://connect/<host-ref>'
 punktfunk speed-test <host-ref>               # what the link carries, loss at a rate it holds

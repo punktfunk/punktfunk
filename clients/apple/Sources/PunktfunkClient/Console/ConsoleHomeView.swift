@@ -27,11 +27,12 @@ struct ConsoleHomeView: View {
     /// The console could not be built (no Metal device, or the shell refused).
     let onFailed: () -> Void
     let onPaired: (StoredHost, Data) -> Void
-    let connect: (StoredHost, PresetSelection) -> Void
+    /// The last argument is the profile id the console's own picker chose, nil for none.
+    let connect: (StoredHost, PresetSelection, String?) -> Void
     let connectDiscovered: (DiscoveredHost) -> Void
     let requestAccess: (StoredHost) -> Void
     let requestAccessDiscovered: (DiscoveredHost) -> Void
-    let launchTitle: (LibraryTarget, String) -> Void
+    let launchTitle: (LibraryTarget, String, String?) -> Void
     let connectShelf: (LibraryTarget) -> Void
     let wakeOnly: (StoredHost) -> Void
     /// A Back the console did not take. On a TV the press is the system's, so nothing is bound

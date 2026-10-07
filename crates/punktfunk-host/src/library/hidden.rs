@@ -21,7 +21,7 @@ struct HiddenSettings {
 }
 
 fn settings_path() -> PathBuf {
-    pf_paths::config_dir().join("library-hidden.json")
+    pf_paths::seat::library_dir().join("library-hidden.json")
 }
 
 /// Malformed or absent file → nothing hidden. A bad parse must show too much,

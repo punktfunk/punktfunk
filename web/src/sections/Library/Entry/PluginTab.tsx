@@ -5,6 +5,7 @@ import { ExternalLink } from "lucide-react";
 import { type FC, useState } from "react";
 import type { PluginSummary } from "@/api/gen/model";
 import { gamePlugins, usePlugins } from "@/api/plugins";
+import { useSeat } from "@/api/seat";
 import {
 	type JsonObject,
 	type JsonSchemaDoc,
@@ -65,7 +66,9 @@ async function loadSection(plugin: string, entry: string): Promise<Loaded> {
 /** A tab per plugin with a section for this entry. A plugin that answers "none" adds no tab. */
 export function usePluginTabs(entryId: string | null): PluginTabSpec[] {
 	const { data } = usePlugins();
-	const plugins = entryId ? gamePlugins(data) : [];
+	const seat = useSeat();
+	// A plugin's section is read from the box's own plugin runner.
+	const plugins = entryId && !seat ? gamePlugins(data) : [];
 	const results = useQueries({
 		queries: plugins.map((p) => ({
 			queryKey: sectionKey(p.id, entryId ?? ""),
