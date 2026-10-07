@@ -1511,7 +1511,12 @@ mod tests {
 
         let own = dir.join("seat.json");
         let seat = DisplayPolicyStore::load_from(own.clone()).with_box_overlays(Some(box_file));
-        assert!(seat.get().overlay_for(Some("aa")).is_some());
+        // Unconfigured, the seat still answers the box's overlay: admission reads `get()`.
+        assert!(seat.configured().is_none());
+        assert_eq!(
+            seat.get().effective_for(Some("aa")).mode_conflict,
+            ModeConflict::Join
+        );
         seat.set(DisplayPolicy::default()).unwrap();
         assert!(seat.configured().unwrap().overlay_for(Some("aa")).is_some());
         let stored: DisplayPolicy = serde_json::from_slice(&std::fs::read(&own).unwrap()).unwrap();

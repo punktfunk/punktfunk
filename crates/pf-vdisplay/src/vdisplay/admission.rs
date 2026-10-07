@@ -110,12 +110,14 @@ pub fn decide(
 ///
 /// Every platform means the same `separate`: on Windows each identity gets its own
 /// monitor slot and sealed ring (`design/windows-parallel-virtual-displays.md`).
-/// Shared by the native and GameStream admission paths.
+/// Shared by the native and GameStream admission paths. Reads `get()`, not `configured()`: a
+/// seat host with no policy of its own still answers the box's per-device overlays, as its
+/// placement does.
 pub fn effective_conflict(fp: Option<[u8; 32]>) -> ModeConflict {
     policy::prefs()
-        .configured()
-        .map(|p| p.effective_for(policy::fp_hex(fp).as_deref()).mode_conflict)
-        .unwrap_or(ModeConflict::Separate)
+        .get()
+        .effective_for(policy::fp_hex(fp).as_deref())
+        .mode_conflict
 }
 
 /// [`effective_conflict`] + [`decide`] against the live set. When
