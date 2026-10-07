@@ -134,10 +134,10 @@ taffy = { version = "0.14", default-features = false, features = ["std", "taffy_
 # Linux links the system SDL3; Windows builds it from source (same choice as the rest
 # of the workspace's Windows SDL consumers).
 [target.'cfg(target_os = "linux")'.dependencies]
-sdl3 = { version = "0.18", features = ["hidapi", "ash"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi", "ash"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-sdl3 = { version = "0.18", features = ["hidapi", "ash", "build-from-source"], optional = true }
+sdl3 = { version = "0.20", features = ["hidapi", "ash", "build-from-source"], optional = true }
 
 # The shared console parity vectors (`clients/shared/console-vectors.json`) are read by tests
 # here — the tab names and the transition motion — and the library

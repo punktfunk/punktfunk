@@ -59,7 +59,6 @@ thiserror = "2"
 # `log`: tracing events are mirrored as `log` records when no tracing subscriber is installed, so
 # a `log` backend (the C ABI's log callback, Android's logcat bridge) hears core's lines.
 tracing = { version = "0.1", default-features = false, features = ["std", "log"] }
-rand = "0.9"
 zeroize = "1"
 # Interface enumeration for Wake-on-LAN: computes each NIC's subnet-directed broadcast so a
 # magic packet reaches the host's L2 segment on multi-homed clients (VPN/docker/multiple LANs),

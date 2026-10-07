@@ -99,8 +99,8 @@ opus = "0.3"
 # ecosystem-wide one: https://github.com/unom-io/usbfs-iso
 # Pinned by revision rather than floating: this is a transport under a real-time deadline and it
 # should move when we choose to. Becomes a plain version dependency once the crates are published.
-uac-host = { git = "https://github.com/unom-io/usbfs-iso", rev = "f3de1fd62cec271d07f45664dc464f23e423e721" }
-usbfs-iso = { git = "https://github.com/unom-io/usbfs-iso", rev = "f3de1fd62cec271d07f45664dc464f23e423e721" }
+uac-host = { git = "https://github.com/unom-io/usbfs-iso", rev = "ff5468ac68cea3de64ecc4a1e16b4dbdba2f8b39" }
+usbfs-iso = { git = "https://github.com/unom-io/usbfs-iso", rev = "ff5468ac68cea3de64ecc4a1e16b4dbdba2f8b39" }
 
 # The Skia console UI (design/android-skia-console-port.md): the SAME `pf-console-ui` shell the
 # Linux/Windows session binary shows, drawn here through Skia's GL backend on an EGL surface

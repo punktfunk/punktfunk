@@ -120,7 +120,7 @@ cbc = { version = "0.2", features = ["alloc"] }
 # it transitively through `num-bigint-dig`, so 0.8 only disappears from the native-only host
 # (`--no-default-features`, where `rsa` is absent). What it does buy everywhere is that OUR calls
 # all speak one rand major.
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
 # Cover-art delivery in the game library: encode Lutris's local JPEGs into `data:` URLs and decode
 # the Epic launcher's base64 `catcache.bin`. Cross-platform (Linux Lutris art + Windows Epic art).

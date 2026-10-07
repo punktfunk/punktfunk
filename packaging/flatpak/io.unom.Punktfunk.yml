@@ -159,8 +159,8 @@ modules:
   # ---------------------------------------------------------------------------------------
   # SDL3 — NOT provided as a linkable libSDL3.so.0 by org.gnome.Platform/freedesktop-sdk
   # 25.08, and there is no SDL3 recipe in flathub/shared-modules. Build it from source.
-  # Pinned to 3.4.10 to match the crate exactly: sdl3-sys is `0.6.6+SDL-3.4.10`, i.e. its
-  # bindings target SDL 3.4.10 — building an older SDL risks missing symbols at link time.
+  # Pinned to 3.4.18 to match the crate exactly: sdl3-sys is `0.7.2+SDL-3.4.18`, i.e. its
+  # bindings target SDL 3.4.18 — building an older SDL risks missing symbols at link time.
   # HIDAPI is enabled (DualSense touchpad/motion/triggers/lightbar over hidraw).
   # ---------------------------------------------------------------------------------------
   - name: sdl3
@@ -174,9 +174,9 @@ modules:
       - -DSDL_EXAMPLES=OFF
     sources:
       - type: archive
-        url: https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz
-        # `sha256sum SDL3-3.4.10.tar.gz` (verified 2026-06-15). Bump url + sha together.
-        sha256: 12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785
+        url: https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
+        # `sha256sum SDL3-3.4.18.tar.gz` (verified 2026-10-07). Bump url + sha together.
+        sha256: 9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
         x-checker-data:
           type: anitya
           project-id: 4974

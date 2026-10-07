@@ -4,7 +4,7 @@
 
 use aes::cipher::{Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use aes::Aes128;
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 pub fn random<const N: usize>() -> [u8; N] {

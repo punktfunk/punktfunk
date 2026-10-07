@@ -29,7 +29,7 @@ tracing = "0.1"
 # The xdg ScreenCast + RemoteDesktop portals, and the PipeWire consumer for the capture frames.
 ashpd = { version = "0.13", features = ["screencast", "remote_desktop"] }
 # `v0_3_49` (as pf-client-core): `Stream::is_driving`/`trigger_process` for the lazy driver.
-pipewire = { version = "0.9", features = ["v0_3_49"] }
+pipewire = { version = "0.10", features = ["v0_3_49"] }
 libc = "0.2"
 # The dmabuf read-ready fence wait before a frame is handed on.
 pf-dmabuf = { path = "../pf-dmabuf" }

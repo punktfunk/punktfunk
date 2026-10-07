@@ -95,7 +95,7 @@ pub(crate) struct V2Session {
 impl V2Session {
     pub(crate) fn new() -> V2Session {
         let mut session_id = [0u8; 16];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut session_id);
+        rand::Rng::fill_bytes(&mut rand::rng(), &mut session_id);
         V2Session {
             session_id,
             clock: Arc::new(SessionClock::new()),

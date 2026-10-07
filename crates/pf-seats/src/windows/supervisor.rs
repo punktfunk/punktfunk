@@ -17,7 +17,7 @@ use crate::windows::process::{self, ChildProcess, Job};
 use crate::windows::rdp;
 use crate::windows::util::{backend_error, io_error, port_open, udp_port_owners, WinResult};
 use crate::windows::wts;
-use rand::RngCore as _;
+use rand::Rng as _;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

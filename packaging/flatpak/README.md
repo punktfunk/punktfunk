@@ -117,7 +117,7 @@ needed by bindgen in sdl3-sys / pyrowave-sys). **No libavcodec at any layer** â€
 FFmpeg since M10, so neither the SDK's stripped build nor the runtime's `codecs-extra` shadow of it
 is involved; HEVC decodes on the GPU's own driver, and there is deliberately no software HEVC
 rung (see the manifest header). A bundled
-**SDL3 3.4.10** module (pinned to match `sdl3-sys 0.6.6+SDL-3.4.10`), and finish-args for Wayland +
+**SDL3 3.4.18** module (pinned to match `sdl3-sys 0.7.2+SDL-3.4.18`), and finish-args for Wayland +
 `--device=all` (GPU/VAAPI render node + evdev + the hidraw char-devices SDL3 needs for DualSense)
 + `--socket=pulseaudio` (PipeWire-pulse: playback + mic) + `--share=network`. Alongside it:
 `io.unom.Punktfunk.desktop`, `io.unom.Punktfunk.metainfo.xml`, `io.unom.Punktfunk.svg` (all

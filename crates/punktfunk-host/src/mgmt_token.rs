@@ -17,7 +17,7 @@
 //!   start, readable by every local account ([`mint_tray_token`]).
 
 use anyhow::{Context, Result};
-use rand::RngCore;
+use rand::Rng;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
