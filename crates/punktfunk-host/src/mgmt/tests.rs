@@ -2193,6 +2193,89 @@ async fn plugin_lane_cannot_set_command_execution_fields() {
     assert!(!crate::mgmt::auth::AuthLane::Cert.may_set_privileged_fields());
 }
 
+/// A page's root and its paths both reach the channel relay: a route miss would be an empty 404.
+#[tokio::test]
+async fn the_relay_takes_a_page_root_and_its_paths() {
+    let app = test_app(test_state(), None);
+    for path in ["/api/v1/plugins/demo/ui/", "/api/v1/plugins/demo/ui/app.js"] {
+        let (status, json) = send(&app, get_req(path)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            json["error"], "no live plugin UI channel with that id",
+            "{path}"
+        );
+    }
+}
+
+/// A plugin on its own pipe parks a connection with an upgrade; a request for its page goes down
+/// that connection as plain HTTP carrying the plugin's secret, and its answer comes back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plugin_page_is_reached_over_its_parked_channel() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let app = test_app(test_state(), None);
+    let (mut plugin, host_io) = tokio::io::duplex(1 << 16);
+    let served = tokio::spawn(crate::gamestream::tls::serve_conn(
+        host_io,
+        app,
+        PeerCertFingerprint(None),
+        PeerAddr("127.0.0.1:1".parse().unwrap()),
+        None,
+        Some(crate::gamestream::tls::PipePlugin("demo".into())),
+    ));
+    plugin
+        .write_all(
+            b"GET /api/v1/plugins/demo/ui/attach HTTP/1.1\r\nhost: punktfunk.host\r\n\
+              connection: upgrade\r\nupgrade: punktfunk-ui\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = plugin.read(&mut buf).await.unwrap();
+    let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+
+    let sent = tokio::spawn(async move {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-prefix", "/plugin-ui/demo".parse().unwrap());
+        super::plugin_channel::send(
+            "demo",
+            "s3cret",
+            axum::http::Method::GET,
+            "/__health",
+            &headers,
+            Body::empty(),
+        )
+        .await
+    });
+    let mut request = Vec::new();
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = plugin.read(&mut buf).await.unwrap();
+        assert!(n > 0, "the channel closed before a request came down it");
+        request.extend_from_slice(&buf[..n]);
+    }
+    let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+    assert!(text.starts_with("get /__health http/1.1\r\n"), "{text}");
+    assert!(text.contains("authorization: bearer s3cret"), "{text}");
+    assert!(
+        text.contains("x-forwarded-prefix: /plugin-ui/demo"),
+        "{text}"
+    );
+    assert!(!text.contains("upgrade:"), "{text}");
+    plugin
+        .write_all(
+            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\
+              connection: close\r\n\r\n{\"ok\":true}",
+        )
+        .await
+        .unwrap();
+    let resp = sent.await.unwrap().expect("the page answered");
+    assert_eq!(resp.status(), 200);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"{\"ok\":true}");
+    drop(plugin);
+    let _ = served.await;
+}
+
 /// Every live route has an explicit plugin/cert classification. A new route fails until a
 /// row is added here; a removed route must not leave a stale row. The gates are allowlists:
 /// unclassified means denied.
@@ -2394,6 +2477,8 @@ fn every_route_is_classified_for_the_plugin_and_cert_lanes() {
         ("PUT", "/api/v1/plugins/{id}", true, false),
         ("DELETE", "/api/v1/plugins/{id}", true, false),
         ("GET", "/api/v1/plugins/{id}/ui-credential", false, false),
+        // A plugin parks a connection for its own page; the handler checks the identity is its own.
+        ("GET", "/api/v1/plugins/{id}/ui/attach", true, false),
         // A plugin asks for a folder and reads its own rows (its own token, not the shared
         // runner's — the handler 403s without a PluginIdentity). Deciding is operator-only,
         // so the overview and decide routes admit neither lane.

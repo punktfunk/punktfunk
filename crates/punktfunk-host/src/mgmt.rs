@@ -46,6 +46,7 @@ mod native;
 #[cfg(windows)]
 pub(crate) mod pipes;
 mod plugin_access;
+pub(crate) mod plugin_channel;
 pub(crate) mod plugins;
 mod profiles;
 mod session;
@@ -212,6 +213,7 @@ pub async fn run(
     // Close a leftover apply-intent from the previous boot (`update/jobs.rs`).
     // Once per process, before serving.
     crate::update::reconcile_at_boot();
+    plugin_channel::remember_runtime();
     // The tray has no supervisor — HKLM `Run` is a sign-in trigger — so
     // `StopTrays` and a crash leave no icon until the next logon.
     #[cfg(target_os = "windows")]
@@ -526,6 +528,7 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(plugins::list_plugins))
         .routes(routes!(plugins::register_plugin, plugins::delete_plugin))
         .routes(routes!(plugins::get_ui_credential))
+        .routes(routes!(plugin_channel::attach))
         .routes(routes!(plugins::ingest_plugin_logs))
         // GET and POST share the path — one `routes!` (same-path merge). The plugin lane
         // reaches these two only; the overview and the decision stay admin by allowlist.
@@ -586,6 +589,17 @@ fn api_router_parts() -> (Router<Arc<MgmtState>>, utoipa::openapi::OpenApi) {
         "/api/v1/profiles/{id}/proxy/{*rest}",
         axum::routing::any(profiles::proxy_profile_seat),
     );
+    // A plugin page's root and paths, any method: the channel proxy (a wildcard never matches an
+    // empty rest). Not an API, so not in the document; admin-lane, as no plugin allowlist names it.
+    let router = router
+        .route(
+            "/api/v1/plugins/{id}/ui/",
+            axum::routing::any(plugin_channel::proxy),
+        )
+        .route(
+            "/api/v1/plugins/{id}/ui/{*rest}",
+            axum::routing::any(plugin_channel::proxy),
+        );
     (router, api)
 }
 

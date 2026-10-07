@@ -167,8 +167,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc
 # once for both carriers instead of branching. It is the same quinn this crate already
 # resolves, so the feature adds no dependency.
 wtransport = { version = "0.7", default-features = false, features = ["aws-lc-rs", "self-signed", "quinn"] }
-hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio", "service"] }
+http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 # Stream combinators for the mgmt API's SSE event feed (`GET /api/v1/events`) — already in the
 # tree transitively (axum/hyper) and as a Linux target dep; control plane only.

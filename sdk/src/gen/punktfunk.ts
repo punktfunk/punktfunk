@@ -1194,6 +1194,12 @@ export type GetPluginUiCredential401 = ApiError
 export const GetPluginUiCredential401 = ApiError
 export type GetPluginUiCredential404 = ApiError
 export const GetPluginUiCredential404 = ApiError
+export type AttachPluginUi400 = ApiError
+export const AttachPluginUi400 = ApiError
+export type AttachPluginUi401 = ApiError
+export const AttachPluginUi401 = ApiError
+export type AttachPluginUi403 = ApiError
+export const AttachPluginUi403 = ApiError
 export type ListProfiles200 = ReadonlyArray<ProfileAdmin>
 export const ListProfiles200 = Schema.Array(ProfileAdmin)
 export type ListProfiles401 = ApiError
@@ -2542,6 +2548,15 @@ export const make = (
       orElse: unexpectedStatus
     }))
   ),
+    "attachPluginUi": (id, options) => HttpClientRequest.get(`/api/v1/plugins/${id}/ui/attach`).pipe(
+    withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "400": decodeError("AttachPluginUi400", AttachPluginUi400),
+      "401": decodeError("AttachPluginUi401", AttachPluginUi401),
+      "403": decodeError("AttachPluginUi403", AttachPluginUi403),
+      "101": () => Effect.void,
+      orElse: unexpectedStatus
+    }))
+  ),
     "listProfiles": (options) => HttpClientRequest.get(`/api/v1/profiles`).pipe(
     withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(ListProfiles200),
@@ -3537,6 +3552,11 @@ readonly "deregisterPlugin": <Config extends OperationConfig>(id: string, option
 * browser.
 */
 readonly "getPluginUiCredential": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof GetPluginUiCredential200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetPluginUiCredential401", typeof GetPluginUiCredential401.Type> | PunktfunkError<"GetPluginUiCredential404", typeof GetPluginUiCredential404.Type>>
+  /**
+* `Upgrade: punktfunk-ui` from the plugin, on its own pipe. The connection is kept for the
+* console's next request to the plugin's page, which the host sends down it as plain HTTP.
+*/
+readonly "attachPluginUi": <Config extends OperationConfig>(id: string, options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<void, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"AttachPluginUi400", typeof AttachPluginUi400.Type> | PunktfunkError<"AttachPluginUi401", typeof AttachPluginUi401.Type> | PunktfunkError<"AttachPluginUi403", typeof AttachPluginUi403.Type>>
   /**
 * List the profiles with what the console manages
 */

@@ -590,22 +590,31 @@ pub fn call(provider: &str, app: &str, external_id: &str, action: Action) -> Res
         "external_id": external_id,
         "action": action.as_str(),
     });
-    let mut res = agent
-        .post(&format!("http://127.0.0.1:{}/__install", cred.port))
-        .header("Authorization", &format!("Bearer {}", cred.secret))
-        .header("Content-Type", "application/json")
-        .send(body.to_string())
-        .map_err(|e| Refusal::Unreachable(e.to_string()))?;
-    let status = res.status().as_u16();
+    // A plugin on the host's channel (port 0) is reached through it instead of a port.
+    let (status, text) = if cred.port == 0 {
+        crate::mgmt::plugin_channel::request_blocking(
+            provider,
+            "/__install",
+            &body.to_string(),
+            action.timeout(),
+        )
+        .map_err(|e| Refusal::Unreachable(e.to_string()))?
+    } else {
+        let mut res = agent
+            .post(&format!("http://127.0.0.1:{}/__install", cred.port))
+            .header("Authorization", &format!("Bearer {}", cred.secret))
+            .header("Content-Type", "application/json")
+            .send(body.to_string())
+            .map_err(|e| Refusal::Unreachable(e.to_string()))?;
+        let status = res.status().as_u16();
+        (status, res.body_mut().read_to_string().unwrap_or_default())
+    };
     match status {
         200..=299 => Ok(()),
         404 => Err(Refusal::NotMine),
         409 => {
-            let said = res
-                .body_mut()
-                .read_to_string()
+            let said = serde_json::from_str::<serde_json::Value>(&text)
                 .ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|v| v.get("message")?.as_str().map(str::to_string));
             Err(Refusal::Said(
                 clean(said.as_deref(), ERROR_MAX)

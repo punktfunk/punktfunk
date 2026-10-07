@@ -34,6 +34,17 @@ export interface UiCredential {
 	secret: string;
 }
 
+/**
+ * Port 0: the plugin has no listener (a Windows AppContainer can bind nothing), and the host
+ * relays to it over the plugin's own channel. The request goes to the management API under
+ * `/plugins/<id>/ui/`, and the host adds the plugin's secret itself.
+ */
+export const viaHost = (cred: UiCredential): boolean => cred.port === 0;
+
+/** Where the management API relays a request for this plugin's page. */
+export const hostRelayPath = (id: string, pathAndQuery: string): string =>
+	`/api/v1/plugins/${id}/ui${pathAndQuery}`;
+
 const TTL_MS = 15_000;
 const cache = new Map<string, { cred: UiCredential | null; at: number }>();
 
@@ -89,7 +100,7 @@ export async function fetchUiCredential(
 		// A port we refuse to dial is treated exactly like "no UI registered" — the callers already
 		// render that as offline, and the negative is cached so a planted entry can't be used to make
 		// us re-ask the host on every asset request.
-		if (!isDialablePort(cred.port)) {
+		if (!viaHost(cred) && !isDialablePort(cred.port)) {
 			cache.set(id, { cred: null, at: now });
 			return null;
 		}
@@ -121,13 +132,19 @@ export async function callPlugin(
 	const attempt = async (bustCache: boolean): Promise<Response | null> => {
 		const cred = await fetchUiCredential(id, { bustCache });
 		if (!cred) return null;
+		const headers: Record<string, string> =
+			method !== "GET" ? { "content-type": "application/json" } : {};
 		try {
+			if (viaHost(cred)) {
+				return await mgmtFetch(hostRelayPath(id, path), {
+					method,
+					headers,
+					body: body as BodyInit | undefined,
+				});
+			}
 			return await fetch(`http://127.0.0.1:${cred.port}${path}`, {
 				method,
-				headers: {
-					authorization: `Bearer ${cred.secret}`,
-					...(method !== "GET" ? { "content-type": "application/json" } : {}),
-				},
+				headers: { authorization: `Bearer ${cred.secret}`, ...headers },
 				body: body as BodyInit | undefined,
 			});
 		} catch {

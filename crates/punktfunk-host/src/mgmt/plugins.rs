@@ -377,7 +377,9 @@ fn log_target(source: &str) -> String {
     format!("plugin:{s}")
 }
 
-fn validate(reg: PluginRegistration) -> Result<Valid, String> {
+/// `over_pipe`: the registration came in on the plugin's own pipe, which is what lets it serve
+/// its page through the host (`ui.port` 0) instead of on a port.
+fn validate(reg: PluginRegistration, over_pipe: bool) -> Result<Valid, String> {
     let title = sanitize(&reg.title);
     if title.is_empty() {
         return Err("title must not be empty".into());
@@ -396,7 +398,7 @@ fn validate(reg: PluginRegistration) -> Result<Valid, String> {
         None => None,
     };
     let ui = match reg.ui {
-        Some(u) => Some(validate_ui(u)?),
+        Some(u) => Some(validate_ui(u, over_pipe)?),
         None => None,
     };
     // Closed charset, open vocabulary: an unknown category is stored and matches no console rule,
@@ -445,8 +447,13 @@ fn validate(reg: PluginRegistration) -> Result<Valid, String> {
     })
 }
 
-fn validate_ui(u: PluginUi) -> Result<StoredUi, String> {
-    if u.port < 1024 {
+fn validate_ui(u: PluginUi, over_pipe: bool) -> Result<StoredUi, String> {
+    // Port 0: the page comes through the host's channel (`plugin_channel`), which only a
+    // plugin on its own pipe can attach — anyone else naming it would register a dead UI.
+    if u.port == 0 && !over_pipe {
+        return Err("ui.port 0 names the pipe channel, which needs the plugin's own pipe".into());
+    }
+    if u.port != 0 && u.port < 1024 {
         return Err("ui.port must be a non-privileged port (>= 1024)".into());
     }
     let n = u.secret.len();
@@ -499,9 +506,10 @@ fn validate_ui(u: PluginUi) -> Result<StoredUi, String> {
 )]
 pub(crate) async fn register_plugin(
     OwnedId(id, _): OwnedId<PluginId>,
+    pipe: Option<axum::Extension<crate::gamestream::tls::PipePlugin>>,
     ApiJson(reg): ApiJson<PluginRegistration>,
 ) -> Response {
-    let valid = match validate(reg) {
+    let valid = match validate(reg, pipe.is_some()) {
         Ok(v) => v,
         Err(e) => return api_error(StatusCode::BAD_REQUEST, &e),
     };
@@ -653,8 +661,16 @@ mod tests {
 
     const SECRET: &str = "abcdefghijklmnop0123";
 
+    /// A registration over the port, as every test but the channel one sends.
+    fn validate(reg: PluginRegistration) -> Result<Valid, String> {
+        super::validate(reg, false)
+    }
+
     #[test]
     fn registration_validation() {
+        // Port 0 is the host's channel: only a registration from the plugin's own pipe may say so.
+        assert!(super::validate(reg("x", 0, SECRET), false).is_err());
+        assert!(super::validate(reg("x", 0, SECRET), true).is_ok());
         assert!(validate(reg("ROM Manager", 49321, SECRET)).is_ok());
         let v = validate(PluginRegistration {
             title: "Ro\u{7}\u{202E}m\n".into(),
