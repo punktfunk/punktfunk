@@ -81,6 +81,19 @@ const TableCell = React.forwardRef<
 ));
 TableCell.displayName = "TableCell";
 
+/**
+ * A table on a phone is a list: a column only a wide screen has room for takes `WIDE`, and its
+ * value rides the first cell's `RowDetails` line instead. Nothing scrolls sideways.
+ */
+const WIDE = "hidden md:table-cell";
+
+/** The details line under a row's first cell, below `md`: what the `WIDE` columns carry. */
+const RowDetails = ({ children }: { children: React.ReactNode }) => (
+	<span className="block truncate text-xs font-normal text-muted-foreground md:hidden">
+		{children}
+	</span>
+);
+
 /** For a body whose rows stagger in: `staggerProps` on the body, `ROW` on each row. */
 const MotionTableBody = motion.create(TableBody);
 const MotionTableRow = motion.create(TableRow);
@@ -88,10 +101,12 @@ const MotionTableRow = motion.create(TableRow);
 export {
 	MotionTableBody,
 	MotionTableRow,
+	RowDetails,
 	Table,
 	TableBody,
 	TableCell,
 	TableHead,
 	TableHeader,
 	TableRow,
+	WIDE,
 };

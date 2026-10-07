@@ -59,21 +59,21 @@ covers access levels and removing devices.
 
 ## The pages
 
-The sidebar holds five pages, then a **Manage** group. On a phone, **More** holds the rest.
+The sidebar holds six pages, then a **Manage** group. On a phone the bar holds Home, Profiles,
+Devices and Library; **More** holds the rest. Each page's address is its place in the sidebar:
+**Devices** is `/devices`, **Diagnostics → Performance** is `/diagnostics/performance`.
 
 ![Live status during a stream: video and audio streaming, the running game, the session's codec, resolution, frame rate and bitrate](/img/console-live-status.png)
 
 | Page | What you do there |
 |---|---|
 | **Home** | Health warnings, live status, the running game and the last session. The **Sessions** card has one row per connected device: change its [access level](/docs/access-levels) or player number, mute it, request a keyframe, or stop it. A Moonlight row offers only keyframe and stop. With more than one profile, a row starts with the player's picture and name. |
+| **Profiles** | Who plays on this host: one card per profile with where it plays and when it last did. Add a profile that shares your desktop or, on Linux, has its own Steam. Rename, change the picture, or remove one; removing asks for the console password. |
 | **Devices** | Arm a PIN, approve or deny waiting devices, edit a device's access or display settings, unpair. Approving shows the profile a device asks to play as. A second PIN box for [Moonlight](/docs/moonlight) appears when GameStream is on. |
 | **Displays** | What happens to your screens when a device connects. See [Virtual displays](/docs/virtual-displays). |
 | **Library** | Turn game sources on or off, add or edit a custom title. See [Your game library](/docs/game-library). |
 | **Host** | Address and deep link for a new device, identity, codecs, ports, GPU choice, [updates](/docs/updating), [host power](/docs/host-power), and **Settings** ([Configuration](/docs/configuration#settings-in-the-web-console)). A setting pinned in `host.env` shows as locked. |
-| **Profiles** | Who plays on this host: one card per profile with where it plays and when it last did. Add a profile that shares your desktop or, on Linux, has its own Steam. Rename, change the picture, or remove one; removing asks for the console password. |
-| **Controllers** | The controllers the host holds for a live session, lit by what it receives. |
-| **Performance** | Record a capture and read per-stage latency, throughput and drops. See [Recording a capture](/docs/stats#recording-a-capture-for-a-bug-report). |
-| **Troubleshooting** | Health checks above the live log of the host, your plugins and the logs clients sent. **Export all** saves one file for a [bug report](/docs/report-an-issue). |
+| **Diagnostics** | Three tools for when something is off. **Troubleshooting**: health checks above the live log of the host, your plugins and the logs clients sent; **Export all** saves one file for a [bug report](/docs/report-an-issue). **Performance**: record a capture and read per-stage latency, throughput and drops ([Recording a capture](/docs/stats#recording-a-capture-for-a-bug-report)). **Controllers**: the controllers the host holds for a live session, lit by what it receives. |
 | **Automation** | Run a command or call a webhook when the host does something. See [Events & hooks](/docs/automation). |
 | **Plugins** | **Browse**, **Installed** and **Sources**, plus the plugin runner switch. See [Plugins](/docs/plugins). |
 | **Settings** | Language, appearance, sign out, and which plugin pages get their own sidebar entry. |

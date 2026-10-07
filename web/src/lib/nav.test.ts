@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	MANAGE,
 	NAV,
+	PHONE_BAR,
+	PHONE_SHEET,
 	type PinnablePlugin,
 	PRIMARY,
 	pluginPin,
@@ -12,16 +14,33 @@ import {
 const plugin = (id: string): PinnablePlugin => ({ id, title: id });
 
 describe("nav table", () => {
-	test("five primary destinations, the rest under Manage", () => {
-		expect(PRIMARY).toHaveLength(5);
+	test("six primary destinations, the rest under Manage", () => {
 		expect(PRIMARY.map((n) => n.to)).toEqual([
 			"/",
-			"/pairing",
+			"/profiles",
+			"/devices",
 			"/displays",
 			"/library",
 			"/host",
 		]);
+		expect(MANAGE.map((n) => n.to)).toEqual([
+			"/diagnostics",
+			"/automation",
+			"/plugins",
+			"/settings",
+		]);
 		expect(PRIMARY.length + MANAGE.length).toBe(NAV.length);
+	});
+
+	// Pairing is a phone-in-hand act; the Displays map wants width.
+	test("the phone bar holds four, Displays and Host open from More", () => {
+		expect(PHONE_BAR.map((n) => n.to)).toEqual([
+			"/",
+			"/profiles",
+			"/devices",
+			"/library",
+		]);
+		expect(PHONE_SHEET.map((n) => n.to)).toEqual(["/displays", "/host"]);
 	});
 
 	// "/" matches every path as a prefix, and "/plugins" sits above "/plugins/<id>" — a plugin's
@@ -56,16 +75,18 @@ describe("resolvePins", () => {
 		expect(resolved.map((p) => p.id)).toEqual(["a", "b"]);
 	});
 
-	// A plugin id is not a route. Without the prefix a plugin called "logs" would resolve to
-	// Troubleshooting, and a raw route id would match a plugin of the same name.
+	// A plugin id is not a route. Without the prefix a plugin called "diagnostics" would resolve
+	// to Diagnostics, and a raw route id would match a plugin of the same name.
 	test("a plugin id does not resolve as a route", () => {
-		expect(resolvePins(["logs"], [plugin("logs")])).toEqual([]);
-		expect(resolvePins([pluginPin("logs")], [plugin("logs")])).toHaveLength(1);
+		expect(resolvePins(["diagnostics"], [plugin("diagnostics")])).toEqual([]);
+		expect(
+			resolvePins([pluginPin("diagnostics")], [plugin("diagnostics")]),
+		).toHaveLength(1);
 	});
 
 	// The sidebar lists every page already; a pinned route only listed it a second time.
 	test("a route never resolves", () => {
-		expect(resolvePins(["/stats", "/host"], [])).toEqual([]);
+		expect(resolvePins(["/diagnostics", "/host"], [])).toEqual([]);
 	});
 });
 

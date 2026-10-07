@@ -11,6 +11,8 @@ import { changeLocale, type Locale, locales, useLocale } from "@/lib/i18n";
 import {
 	MANAGE,
 	type NavEntry,
+	PHONE_BAR,
+	PHONE_SHEET,
 	PRIMARY,
 	pluginPin,
 	resolvePins,
@@ -120,7 +122,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 	);
 }
 
-/** The sidebar's three groups: the primary five, Manage, then the plugin pages the operator pinned. */
+/** The sidebar's three groups: the primary pages, Manage, then the plugin pages the operator pinned. */
 function Sidebar() {
 	const [pins] = usePins();
 	const { data } = usePlugins();
@@ -236,7 +238,7 @@ function PluginLink({
 }
 
 /**
- * Mobile bottom navigation (< sm): the primary five minus one, plus "More".
+ * Mobile bottom navigation (< sm): four primary pages, plus "More".
  *
  * "More" opens a LIST — icon, label, one line of what the page is for — grouped Manage /
  * Pinned / Plugins. It was a 4-column icon grid with 10 px labels, which is unreadable and
@@ -251,13 +253,10 @@ function MobileNav() {
 	const [pins] = usePins();
 	const { data } = usePlugins();
 	const plugins = uiPlugins(data);
-	// The bar takes four; the rest of the primary five open the sheet above Manage, because a
-	// five-tab bar plus More is six and 400 px does not hold six legible tabs. They keep their
-	// own unlabelled group — a primary destination filed under "Manage" is a lie about what it
-	// is.
-	const bar = PRIMARY.slice(0, 4);
-	const spill = PRIMARY.slice(4);
-	const overflow = [...spill, ...MANAGE];
+	// 400 px holds four legible tabs and More. The other primary pages open the sheet above
+	// Manage, in their own unlabelled group — a primary destination filed under "Manage" is a lie
+	// about what it is.
+	const overflow = [...PHONE_SHEET, ...MANAGE];
 	const pinnedPlugins = plugins.filter((p) => pins.includes(pluginPin(p.id)));
 	const rest = plugins.filter((p) => !pins.includes(pluginPin(p.id)));
 	// Highlight "More" when the current route lives in the sheet — plugins included.
@@ -273,7 +272,8 @@ function MobileNav() {
 	const on = (to: string, exact?: boolean) =>
 		pathname === to || (!exact && pathname.startsWith(`${to}/`));
 	const activeTo =
-		bar.find((n) => on(n.to, n.exact))?.to ?? (overflowActive ? "more" : null);
+		PHONE_BAR.find((n) => on(n.to, n.exact))?.to ??
+		(overflowActive ? "more" : null);
 	return (
 		<>
 			{/* Tap-outside backdrop, under the bar (z-50) but over the page. */}
@@ -308,9 +308,9 @@ function MobileNav() {
 							variants={SHEET}
 							className="absolute inset-x-0 bottom-full max-h-[70vh] overflow-y-auto border-t bg-card/95 backdrop-blur"
 						>
-							{spill.length > 0 && (
+							{PHONE_SHEET.length > 0 && (
 								<MoreGroup>
-									{spill.map((n) => (
+									{PHONE_SHEET.map((n) => (
 										<MoreRow key={n.to} entry={n} onNavigate={close} />
 									))}
 								</MoreGroup>
@@ -338,7 +338,7 @@ function MobileNav() {
 					)}
 				</AnimatePresence>
 				<div className="flex border-t bg-card/95 backdrop-blur">
-					{bar.map(({ to, icon: Icon, label, exact }) => (
+					{PHONE_BAR.map(({ to, icon: Icon, label, exact }) => (
 						<MLink
 							key={to}
 							to={to}

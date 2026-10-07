@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-// The page moved to `/diagnostics/logs`. Kept for one release so bookmarks land; then delete.
-export const Route = createFileRoute("/logs")({
+// Diagnostics has no page of its own: it opens on its first segment.
+export const Route = createFileRoute("/diagnostics/")({
 	beforeLoad: () => {
 		throw redirect({ to: "/diagnostics/logs", replace: true });
 	},

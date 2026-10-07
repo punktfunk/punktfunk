@@ -1,17 +1,13 @@
-// The console's destinations, in one table (design/web-console-overhaul.md §4).
+// The console's destinations, in one table (design/web-console-structure-2026-10.md §4).
 //
-// Ten top-level entries plus one per UI plugin did not fit a phone, and did not fit a head
-// either. Five primary destinations carry the work; everything else is Manage, one level in.
-// Routes do not change — bookmarks, deep links, the tray and the Omarchy menu all point at
-// them, so only labels, order and grouping move.
+// Six primary destinations carry the work; everything else is Manage, one level in. The URL is
+// the structure: a page's path is its place here, a segment is a child path, and a renamed page
+// moves (its old path redirects for one release, `routes/*.tsx`).
 //
 // This table is the single source: the sidebar, the phone bar and the phone "More" list all
-// read it. They used to read three (`NAV`, `MOBILE_PRIMARY`, `MOBILE_OVERFLOW`), which is how
-// the phone bar and the sidebar drifted apart.
+// read it.
 import {
 	Activity,
-	Gamepad2,
-	GaugeCircle,
 	LibraryBig,
 	type LucideIcon,
 	MonitorPlay,
@@ -35,6 +31,8 @@ export interface NavEntry {
 	/** One line for the phone's More list — what the page is for, not what it contains. */
 	hint: () => string;
 	group: NavGroup;
+	/** A primary page the phone bar has no room for: it opens from More, above Manage. */
+	sheet?: boolean;
 	/**
 	 * Active only on an exact path match. `/` would otherwise match everything, and `/plugins`
 	 * is the store's index route sitting under `/plugins/<id>`, a plugin's own UI.
@@ -52,18 +50,27 @@ export const NAV: readonly NavEntry[] = [
 		exact: true,
 	},
 	{
-		to: "/pairing",
+		to: "/profiles",
+		icon: UsersRound,
+		label: () => m.nav_profiles(),
+		hint: () => m.nav_profiles_hint(),
+		group: "primary",
+	},
+	{
+		to: "/devices",
 		icon: Smartphone,
 		label: () => m.nav_devices(),
 		hint: () => m.nav_devices_hint(),
 		group: "primary",
 	},
+	// The map wants width, so on a phone Displays and Host open from More.
 	{
 		to: "/displays",
 		icon: MonitorPlay,
 		label: () => m.nav_displays(),
 		hint: () => m.nav_displays_hint(),
 		group: "primary",
+		sheet: true,
 	},
 	{
 		to: "/library",
@@ -78,35 +85,14 @@ export const NAV: readonly NavEntry[] = [
 		label: () => m.nav_host(),
 		hint: () => m.nav_host_hint(),
 		group: "primary",
+		sheet: true,
 	},
+	// Lands on the first segment; every `/diagnostics/*` path lights it.
 	{
-		to: "/profiles",
-		icon: UsersRound,
-		label: () => m.nav_profiles(),
-		hint: () => m.nav_profiles_hint(),
-		group: "manage",
-	},
-	{
-		to: "/controllers",
-		icon: Gamepad2,
-		label: () => m.nav_controllers(),
-		hint: () => m.nav_controllers_hint(),
-		group: "manage",
-	},
-	{
-		to: "/stats",
-		icon: GaugeCircle,
-		label: () => m.nav_stats(),
-		hint: () => m.nav_stats_hint(),
-		group: "manage",
-	},
-	// The page is the troubleshooting home — health checks above the log stream. The ROUTE
-	// stays `/logs`: bookmarks and deep links outlive a label.
-	{
-		to: "/logs",
+		to: "/diagnostics",
 		icon: Stethoscope,
-		label: () => m.nav_troubleshooting(),
-		hint: () => m.nav_troubleshooting_hint(),
+		label: () => m.nav_diagnostics(),
+		hint: () => m.nav_diagnostics_hint(),
 		group: "manage",
 	},
 	{
@@ -135,13 +121,16 @@ export const NAV: readonly NavEntry[] = [
 
 export const PRIMARY = NAV.filter((n) => n.group === "primary");
 export const MANAGE = NAV.filter((n) => n.group === "manage");
+/** The phone bar's four; the rest of the primary pages open from More. */
+export const PHONE_BAR = PRIMARY.filter((n) => !n.sheet);
+export const PHONE_SHEET = PRIMARY.filter((n) => n.sheet);
 
 /**
  * A pin id: a plugin (`plugin:rom-manager`). A plugin's page is the only destination the
  * sidebar does not already list, so it is the only thing a pin can add.
  *
  * The prefix keeps a plugin id apart from a route — its page is `/plugins/<id>/`, and a plugin
- * called "logs" must not match Troubleshooting. Route pins an older console stored no longer
+ * called "diagnostics" must not match Diagnostics. Route pins an older console stored no longer
  * resolve.
  */
 export const PLUGIN_PIN = "plugin:";

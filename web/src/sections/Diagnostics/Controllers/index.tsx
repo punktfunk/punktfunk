@@ -1,4 +1,4 @@
-// `/controllers` — the pad the host holds, lit by what it actually receives.
+// `/diagnostics/controllers` — the pad the host holds, lit by what it actually receives.
 //
 // The point of the page is that it is the HOST's copy: every light here is a state the host
 // applied to the virtual controller, so a question like "does Guide ever reach the host from
@@ -7,8 +7,7 @@
 // Read-only, and open only while it is on screen — the host publishes nothing with nobody
 // attached (`crates/punktfunk-host/src/pad_feed.rs`).
 
-import Section from "@unom/ui/section";
-import { Copy, Gamepad2, Pause, Play } from "lucide-react";
+import { Copy, Pause, Play } from "lucide-react";
 import { type FC, useEffect, useState } from "react";
 import { useGetStatus } from "@/api/gen/host/host";
 import type { PadFrame } from "@/api/gen/model/padFrame";
@@ -39,36 +38,26 @@ export const SectionControllers: FC = () => {
 		(s): s is SessionRow & { id: number } => typeof s.id === "number",
 	);
 	return (
-		<Section maxWidth={false}>
-			<div className="flex flex-col gap-card">
-				<div>
-					<h1 className="flex items-center gap-2 text-2xl font-semibold">
-						<Gamepad2 className="size-6" />
-						{m.nav_controllers()}
-					</h1>
-					<p className="mt-1 text-sm text-muted-foreground">
-						{m.controllers_intro()}
-					</p>
-				</div>
-				<QueryState
-					isLoading={status.isLoading}
-					error={status.error}
-					refetch={status.refetch}
-				>
-					{sessions.length === 0 ? (
-						<Card>
-							<CardContent>
-								<p className="text-sm text-muted-foreground">
-									{m.controllers_no_session()}
-								</p>
-							</CardContent>
-						</Card>
-					) : (
-						<SessionPads sessions={sessions} />
-					)}
-				</QueryState>
-			</div>
-		</Section>
+		<div className="flex flex-col gap-card">
+			<p className="text-sm text-muted-foreground">{m.controllers_intro()}</p>
+			<QueryState
+				isLoading={status.isLoading}
+				error={status.error}
+				refetch={status.refetch}
+			>
+				{sessions.length === 0 ? (
+					<Card>
+						<CardContent>
+							<p className="text-sm text-muted-foreground">
+								{m.controllers_no_session()}
+							</p>
+						</CardContent>
+					</Card>
+				) : (
+					<SessionPads sessions={sessions} />
+				)}
+			</QueryState>
+		</div>
 	);
 };
 

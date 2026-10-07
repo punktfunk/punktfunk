@@ -254,9 +254,7 @@
 	--radius-main: calc(var(--radius) * 2);
 
 	--spacing-input-height: 3rem;
-	--spacing-padding-card: 1.25rem;
 	--spacing-card: 1.5rem;
-	--spacing-main: 15px;
 
 	--font-sans: var(--font-sans);
 	--font-display: var(--font-display);
@@ -293,6 +291,34 @@
 	--color-neutral-highlight: var(--neutral-highlight);
 	--color-highlight: var(--highlight);
 	--color-error: var(--error);
+}
+
+/* Not inline: a phone narrows both, so the utilities read the variable. */
+@theme {
+	--spacing-padding-card: 1.25rem;
+	--spacing-main: 15px;
+}
+
+/* A phone spends its width on content (design/web-console-structure-2026-10.md §6): the page
+   section drops its own inset beside the shell's 16 px gutter, and a card insets 1 rem. */
+@media (width < 40rem) {
+	:root {
+		--spacing-padding-card: 1rem;
+		--spacing-main: 0px;
+	}
+
+	/* D-F A/B, `?density=flush`: a page-level card meets the screen edges, a list rather than a
+	   tile. A nested card and a grid tile keep their shape. Deleted with the pick. */
+	:root[data-density="flush"]
+		main
+		.pf-card:not(.pf-card .pf-card):not(.grid > .pf-card) {
+		margin-inline: -1rem;
+		/* The card's inline radius is computed from these. */
+		--radius-card: 0px;
+		--radius-card-min: 0px;
+		box-shadow: none;
+		border-block: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+	}
 }
 
 /* Accordion / collapsible keyframes @unom/ui's interactive surfaces animate to. */

@@ -12,7 +12,7 @@ import { PairingView } from "./view";
 // queries + mutations (in its own file, next to its presentational card). The arrangement lives in
 // PairingView so the live page (these containers) and the Storybook story (pure cards + mock state)
 // fill the same slots — the layout is defined once and can't drift.
-export const SectionPairing: FC = () => {
+export const SectionDevices: FC = () => {
 	useLocale();
 	// A knock from the internet cannot be approved by name, so its row hands the fingerprint to
 	// the arm card and the operator reads the PIN out. Held here because the two cards are

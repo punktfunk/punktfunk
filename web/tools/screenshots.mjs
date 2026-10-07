@@ -10,7 +10,8 @@
 //
 // Env knobs: OUT (output dir), STORYBOOK_STATIC (input dir), SETTLE (ms after the
 // page looks ready, default 600), WIDTH/HEIGHT/SCALE (viewport, default 1440x900@2x),
-// ONLY (comma-separated story-id substring filter).
+// ONLY (comma-separated story-id substring filter), GLOBALS (Storybook globals,
+// `density:flush`; also suffixes the file name), FULL=1 (the whole page, not the viewport).
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
@@ -24,6 +25,8 @@ const SETTLE = Number(process.env.SETTLE ?? 600);
 const WIDTH = Number(process.env.WIDTH ?? 1440);
 const HEIGHT = Number(process.env.HEIGHT ?? 900);
 const SCALE = Number(process.env.SCALE ?? 2);
+const GLOBALS = process.env.GLOBALS ?? "";
+const FULL = process.env.FULL === "1";
 const ONLY = (process.env.ONLY ?? "")
 	.split(",")
 	.map((s) => s.trim())
@@ -117,7 +120,7 @@ async function main() {
 		const page = await context.newPage();
 		const url = `http://127.0.0.1:${port}/iframe.html?id=${encodeURIComponent(
 			story.id,
-		)}&viewMode=story`;
+		)}&viewMode=story${GLOBALS ? `&globals=${encodeURIComponent(GLOBALS)}` : ""}`;
 		try {
 			await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 			// Story root mounted with real content.
@@ -131,8 +134,9 @@ async function main() {
 				.waitFor({ timeout: 4_000 })
 				.catch(() => {});
 			await page.waitForTimeout(SETTLE);
-			const file = join(OUT, `${story.id}.png`);
-			await page.screenshot({ path: file });
+			const suffix = GLOBALS ? `--${GLOBALS.replace(/[^a-z0-9]+/gi, "-")}` : "";
+			const file = join(OUT, `${story.id}${suffix}.png`);
+			await page.screenshot({ path: file, fullPage: FULL });
 			console.log(`✓ ${story.id} → ${file}`);
 			ok++;
 		} catch (e) {

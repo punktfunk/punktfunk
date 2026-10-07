@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { CaptureControlCard } from "@/sections/Stats/CaptureControl";
-import { DetailCard } from "@/sections/Stats/Detail";
-import { RecordingsCard } from "@/sections/Stats/Recordings";
-import { StatsView } from "@/sections/Stats/view";
+import { CaptureControlCard } from "@/sections/Diagnostics/Performance/CaptureControl";
+import { DetailCard } from "@/sections/Diagnostics/Performance/Detail";
+import { RecordingsCard } from "@/sections/Diagnostics/Performance/Recordings";
+import { StatsView } from "@/sections/Diagnostics/Performance/view";
 import {
 	captureDetail,
 	captureDetailDriver,

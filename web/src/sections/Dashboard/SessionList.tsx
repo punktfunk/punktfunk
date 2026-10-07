@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { fmtClockDuration } from "@/lib/format";
 import { m } from "@/paraglide/messages";
-import { levelLabel } from "@/sections/Pairing/access";
+import { levelLabel } from "@/sections/Devices/access";
 
 /**
  * Every live session, one row each — the host admits several at once and the card below this

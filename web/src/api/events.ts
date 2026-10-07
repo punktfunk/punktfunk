@@ -375,7 +375,7 @@ function announceKnock(entry: ActivityEntry | null): void {
 		description: name ? m.pairing_knock_desc({ name }) : undefined,
 		action: {
 			label: m.pairing_knock_action(),
-			onClick: () => window.location.assign("/pairing"),
+			onClick: () => window.location.assign("/devices"),
 		},
 	});
 }

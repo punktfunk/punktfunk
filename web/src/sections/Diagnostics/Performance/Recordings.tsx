@@ -15,16 +15,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+	RowDetails,
 	Table,
 	TableBody,
 	TableCell,
 	TableHead,
 	TableHeader,
 	TableRow,
+	WIDE,
 } from "@/components/ui/table";
 import { apiErrorMessage } from "@/lib/errors";
 import { fmtClockDuration } from "@/lib/format";
 import type { Loadable } from "@/lib/query";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { fmtTimestamp, kindLabel } from "./helpers";
 
@@ -144,13 +147,17 @@ export const RecordingsCard: FC<{
 								<TableRow>
 									<TableHead>{m.stats_col_time()}</TableHead>
 									<TableHead>{m.stats_col_kind()}</TableHead>
-									<TableHead>{m.stats_col_resolution()}</TableHead>
-									<TableHead>{m.stats_col_codec()}</TableHead>
-									<TableHead>{m.stats_col_encoder()}</TableHead>
-									<TableHead className="text-right">
+									<TableHead className={WIDE}>
+										{m.stats_col_resolution()}
+									</TableHead>
+									<TableHead className={WIDE}>{m.stats_col_codec()}</TableHead>
+									<TableHead className={WIDE}>
+										{m.stats_col_encoder()}
+									</TableHead>
+									<TableHead className={cn(WIDE, "text-right")}>
 										{m.stats_col_duration()}
 									</TableHead>
-									<TableHead className="text-right">
+									<TableHead className={cn(WIDE, "text-right")}>
 										{m.stats_col_samples()}
 									</TableHead>
 									<TableHead className="w-32" />
@@ -164,6 +171,11 @@ export const RecordingsCard: FC<{
 									>
 										<TableCell className="whitespace-nowrap font-medium">
 											{fmtTimestamp(r.started_unix_ms)}
+											<RowDetails>
+												{r.width}×{r.height}@{r.fps} · {r.codec.toUpperCase()} ·{" "}
+												{r.encoder_backend || "—"} ·{" "}
+												{fmtClockDuration(r.duration_ms / 1000)}
+											</RowDetails>
 										</TableCell>
 										<TableCell>
 											<Badge
@@ -174,24 +186,31 @@ export const RecordingsCard: FC<{
 												{kindLabel(r.kind)}
 											</Badge>
 										</TableCell>
-										<TableCell className="tabular-nums text-muted-foreground">
+										<TableCell
+											className={cn(WIDE, "tabular-nums text-muted-foreground")}
+										>
 											{r.width}×{r.height}@{r.fps}
 										</TableCell>
-										<TableCell className="uppercase text-muted-foreground">
+										<TableCell
+											className={cn(WIDE, "uppercase text-muted-foreground")}
+										>
 											{r.codec}
 										</TableCell>
 										{/* The stage names and their meaning follow the backend: `driver-*`
 										    records the Windows driver's stages. */}
 										<TableCell
-											className="max-w-48 truncate text-muted-foreground"
+											className={cn(
+												WIDE,
+												"max-w-48 truncate text-muted-foreground",
+											)}
 											title={r.gpu || undefined}
 										>
 											{r.encoder_backend || "—"}
 										</TableCell>
-										<TableCell className="text-right tabular-nums">
+										<TableCell className={cn(WIDE, "text-right tabular-nums")}>
 											{fmtClockDuration(r.duration_ms / 1000)}
 										</TableCell>
-										<TableCell className="text-right tabular-nums">
+										<TableCell className={cn(WIDE, "text-right tabular-nums")}>
 											{r.sample_count}
 										</TableCell>
 										<TableCell>

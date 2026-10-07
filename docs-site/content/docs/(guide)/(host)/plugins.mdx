@@ -33,7 +33,7 @@ covers and details for all of them ([Art & Metadata](/docs/game-library#filling-
 | **Libretro** | Linux, Windows | Box art, developer, publisher, year and genres for ROM Manager's games. |
 | **IGDB** | Linux, Windows | Description, developer, publisher, year, genres and player count for every game. Needs a free Twitch app. |
 | **Play history** | Linux, Windows | How long each game was played and on which device, on the game's page. |
-| **Stats black box** | Linux, Windows | Records the streaming stats of every stream and keeps the last twenty, under **Performance**. |
+| **Stats black box** | Linux, Windows | Records the streaming stats of every stream and keeps the last twenty, under **Diagnostics** → **Performance**. |
 | **VirtualHere** | Linux, Windows | Hands a USB device on the couch to the host while you play ([below](#virtualhere-usb-passthrough)). |
 
 ## Install from the console
@@ -271,7 +271,7 @@ none of it.
 4. Start the stream, then the game. A game that was already running keeps the limit it started
    with.
 
-Nothing capped? Open **Troubleshooting** and pick the `plugin:rtss` source: each missing step is a
+Nothing capped? Open **Diagnostics** → **Troubleshooting** and pick the `plugin:rtss` source: each missing step is a
 `FAIL` line with the command that fixes it, and each stream start logs `rtss: 120 fps for …`. A
 per-game profile in RTSS overrides the cap. Details and the `doctor` command:
 [the plugin's repository](https://git.unom.io/unom/punktfunk-plugin-rtss).

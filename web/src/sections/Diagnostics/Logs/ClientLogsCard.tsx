@@ -22,7 +22,7 @@ import {
 import { apiErrorMessage } from "@/lib/errors";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
-import { fmtTimestamp } from "../Stats/helpers";
+import { fmtTimestamp } from "../Performance/helpers";
 
 /** `123.4 KB` — bundles are ≤1 MiB, so two units cover the whole range. */
 const fmtSize = (bytes: number): string =>

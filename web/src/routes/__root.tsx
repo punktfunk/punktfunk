@@ -16,6 +16,7 @@ import { useUiConfig } from "@/api/uiConfig";
 import { AppShell } from "@/components/app-shell";
 import { DialogsProvider } from "@/components/dialogs";
 import { currentAppearance } from "@/lib/appearanceRequest";
+import { useDensity } from "@/lib/density";
 import { adoptStoredLocale, useLocale } from "@/lib/i18n";
 import appCss from "@/styles.css?url";
 
@@ -96,6 +97,7 @@ function RootComponent() {
 	const accentChosen = appearance.accent !== "system";
 	const surfaces =
 		!modeOverridden && theme?.background && theme.foreground ? theme : null;
+	const density = useDensity();
 	const vars: Record<string, string> = {};
 	if (accent) vars["--pf-accent"] = accent;
 	if (surfaces) {
@@ -108,6 +110,7 @@ function RootComponent() {
 			className={mode === "light" ? undefined : "dark"}
 			data-accent={accent ? (accentChosen ? "custom" : "") : undefined}
 			data-omarchy={surfaces ? "" : undefined}
+			data-density={density}
 			style={Object.keys(vars).length > 0 ? (vars as CSSProperties) : undefined}
 		>
 			<head>

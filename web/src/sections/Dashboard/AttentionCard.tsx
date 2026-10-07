@@ -75,7 +75,7 @@ export const AttentionStrip: FC<{ checks: HostCheck[] }> = ({ checks }) => {
 					</ul>
 					<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
 						<Link
-							to="/logs"
+							to="/diagnostics/logs"
 							className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
 						>
 							{m.diag_attention_link()}

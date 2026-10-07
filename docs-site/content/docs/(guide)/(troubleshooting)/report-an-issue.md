@@ -30,7 +30,7 @@ blocked — see [Ports](/docs/ports), or grab the log [by hand](#logs-without-th
 
 ## 3. Export everything from the web console
 
-Open the [web console](/docs/web-console), pick **Troubleshooting** in the sidebar, and press
+In the [web console](/docs/web-console), open **Diagnostics** → **Troubleshooting** and press
 **Export all**. You get one text file, `punktfunk-diagnostics-YYYYMMDD-HHMMSS.txt`, with the health
 checks, the host and plugin log, and every client log the host holds.
 

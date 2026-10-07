@@ -10,10 +10,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
 	MotionTableBody,
 	MotionTableRow,
+	RowDetails,
 	Table,
 	TableCell,
+	WIDE,
 } from "@/components/ui/table";
 import type { Loadable } from "@/lib/query";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import {
 	type AccessDecision,
@@ -160,6 +163,12 @@ export const InstalledList: FC<{
 											<div className="font-mono text-xs text-muted-foreground">
 												{p.pkg}
 											</div>
+											<RowDetails>
+												<TierBadge tier={p.tier} className="mr-2" />
+												{p.version
+													? `v${p.version}`
+													: m.store_version_unknown()}
+											</RowDetails>
 											{p.blocked != null && (
 												<p className="mt-2 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">
 													<Ban className="mt-px size-3.5 shrink-0" />
@@ -173,7 +182,7 @@ export const InstalledList: FC<{
 												onDecision={onAccessDecision}
 											/>
 										</TableCell>
-										<TableCell className="py-4">
+										<TableCell className={cn(WIDE, "py-4")}>
 											<div className="flex flex-col items-start gap-1">
 												<TierBadge tier={p.tier} />
 												{p.tier === "external" && p.source && (
@@ -181,7 +190,12 @@ export const InstalledList: FC<{
 												)}
 											</div>
 										</TableCell>
-										<TableCell className="py-4 text-sm tabular-nums text-muted-foreground">
+										<TableCell
+											className={cn(
+												WIDE,
+												"py-4 text-sm tabular-nums text-muted-foreground",
+											)}
+										>
 											{p.version ? `v${p.version}` : m.store_version_unknown()}
 										</TableCell>
 										<TableCell className="py-4">

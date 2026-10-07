@@ -34,12 +34,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
 	MotionTableBody,
 	MotionTableRow,
+	RowDetails,
 	Table,
 	TableCell,
 	TableHead,
 	TableHeader,
 	TableRow,
+	WIDE,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import {
 	ClientPolicySheet,
@@ -390,12 +393,16 @@ export const PairedDevices: FC<{
 						<TableHeader>
 							<TableRow>
 								<TableHead>{m.clients_name()}</TableHead>
-								<TableHead>{m.pairing_protocol()}</TableHead>
+								<TableHead className={WIDE}>{m.pairing_protocol()}</TableHead>
 								<TableHead>{m.pairing_access()}</TableHead>
 								{perDevice && (
-									<TableHead>{m.display_device_column()}</TableHead>
+									<TableHead className={WIDE}>
+										{m.display_device_column()}
+									</TableHead>
 								)}
-								<TableHead>{m.clients_fingerprint()}</TableHead>
+								<TableHead className={WIDE}>
+									{m.clients_fingerprint()}
+								</TableHead>
 								<TableHead className="w-20" />
 							</TableRow>
 						</TableHeader>
@@ -405,8 +412,19 @@ export const PairedDevices: FC<{
 									key={`${r.protocol}:${r.fingerprint}`}
 									variants={ROW}
 								>
-									<TableCell className="font-medium">{r.name || "—"}</TableCell>
-									<TableCell>
+									<TableCell className="font-medium">
+										{r.name || "—"}
+										<RowDetails>
+											{r.protocol === "native"
+												? m.pairing_protocol_native()
+												: m.pairing_protocol_moonlight()}{" "}
+											·{" "}
+											<span className="font-mono">
+												{r.fingerprint.slice(0, 16)}…
+											</span>
+										</RowDetails>
+									</TableCell>
+									<TableCell className={WIDE}>
 										<Badge
 											variant={
 												r.protocol === "native" ? "default" : "secondary"
@@ -442,7 +460,12 @@ export const PairedDevices: FC<{
 										)}
 									</TableCell>
 									{perDevice && (
-										<TableCell className="max-w-[22rem] text-sm text-muted-foreground">
+										<TableCell
+											className={cn(
+												WIDE,
+												"max-w-[22rem] text-sm text-muted-foreground",
+											)}
+										>
 											{/* Only a native device has an overlay: the map is keyed by
 											    the pairing fingerprint the native plane presents, and a
 											    GameStream client's cert is not that. */}
@@ -455,7 +478,12 @@ export const PairedDevices: FC<{
 											)}
 										</TableCell>
 									)}
-									<TableCell className="font-mono text-xs text-muted-foreground">
+									<TableCell
+										className={cn(
+											WIDE,
+											"font-mono text-xs text-muted-foreground",
+										)}
+									>
 										{r.fingerprint.slice(0, 16)}…
 									</TableCell>
 									<TableCell>

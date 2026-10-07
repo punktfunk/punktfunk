@@ -1,4 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { SectionStats } from "@/sections/Stats";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/stats")({ component: SectionStats });
+// The page moved to `/diagnostics/performance`. Kept for one release so bookmarks land; then delete.
+export const Route = createFileRoute("/stats")({
+	beforeLoad: () => {
+		throw redirect({ to: "/diagnostics/performance", replace: true });
+	},
+});

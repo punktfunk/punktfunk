@@ -174,7 +174,7 @@ screen, and `stats-json:` carries every figure as JSON. Parse the JSON; the text
 
 ## Recording a capture for a bug report
 
-The overlay only shows the last second. To record a whole run, use the **Performance** page in the
+The overlay only shows the last second. To record a whole run, use **Diagnostics** → **Performance** in the
 [web console](/docs/web-console):
 
 1. Press **Start capture**. Arming it costs the stream nothing.

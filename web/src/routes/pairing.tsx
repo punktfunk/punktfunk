@@ -1,4 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { SectionPairing } from "@/sections/Pairing";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/pairing")({ component: SectionPairing });
+// The page moved to `/devices`. Kept for one release so bookmarks land; then delete.
+export const Route = createFileRoute("/pairing")({
+	beforeLoad: () => {
+		throw redirect({ to: "/devices", replace: true });
+	},
+});
