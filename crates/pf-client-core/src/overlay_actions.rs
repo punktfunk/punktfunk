@@ -10,6 +10,7 @@
 //! Swift (`OverlayActions.swift`) and Kotlin (`OverlayActions.kt`) mirror this
 //! file; the tests here are the contract they port.
 
+use punktfunk_core::config::GamepadPref;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -36,6 +37,8 @@ pub enum SlotId {
     Qam,
     /// Controller mouse: the pad drives the host pointer instead of its virtual pad.
     PadMouse,
+    /// Step the controller type the host emulates, live ([`next_pad_type`]).
+    PadType,
     /// Silence this client's speakers. Local: the host keeps playing for anyone joined to it.
     StreamMute,
     /// A dual-screen handheld's two screens trade the picture and the companion panel.
@@ -60,6 +63,7 @@ impl SlotId {
             SlotId::Guide => "guide".into(),
             SlotId::Qam => "qam".into(),
             SlotId::PadMouse => "pad_mouse".into(),
+            SlotId::PadType => "pad_type".into(),
             SlotId::StreamMute => "stream_mute".into(),
             SlotId::SwapScreens => "swap_screens".into(),
             SlotId::Host(id) => format!("host:{id}"),
@@ -82,6 +86,7 @@ impl SlotId {
             "guide" => SlotId::Guide,
             "qam" => SlotId::Qam,
             "pad_mouse" => SlotId::PadMouse,
+            "pad_type" => SlotId::PadType,
             "stream_mute" => SlotId::StreamMute,
             "swap_screens" => SlotId::SwapScreens,
             _ => {
@@ -484,6 +489,7 @@ pub fn catalogue(cfg: &OverlayConfig, platform: RingPlatform) -> Vec<CatalogueGr
                     "Only where the host's pad is Steam-shaped",
                 ),
                 e("pad_mouse", "Controller mouse", ""),
+                e("pad_type", "Controller type", "For this stream"),
             ],
         },
         CatalogueGroup {
@@ -552,6 +558,7 @@ pub fn slot_icon(id: &str, state: &str) -> Option<&'static str> {
         "guide" => "house",
         "qam" => "panel-right",
         "pad_mouse" => "mouse",
+        "pad_type" => "gamepad-2",
         "stream_mute" => "volume-2",
         "swap_screens" => "arrow-up-down",
         "more" => "ellipsis",
@@ -560,6 +567,38 @@ pub fn slot_icon(id: &str, state: &str) -> Option<&'static str> {
         "host:power.shutdown" => "power",
         _ => return None,
     })
+}
+
+/// What the Controller type slot steps through: Automatic, then the pads every host builds.
+pub const PAD_TYPE_CYCLE: [GamepadPref; 6] = [
+    GamepadPref::Auto,
+    GamepadPref::Xbox360,
+    GamepadPref::XboxOne,
+    GamepadPref::DualSense,
+    GamepadPref::DualShock4,
+    GamepadPref::SteamDeck,
+];
+
+/// The type after `current` in [`PAD_TYPE_CYCLE`]. A type outside it, picked in Settings,
+/// steps back to Automatic.
+pub fn next_pad_type(current: GamepadPref) -> GamepadPref {
+    let at = PAD_TYPE_CYCLE.iter().position(|&p| p == current);
+    at.map_or(GamepadPref::Auto, |i| {
+        PAD_TYPE_CYCLE[(i + 1) % PAD_TYPE_CYCLE.len()]
+    })
+}
+
+/// `(name, short)` for the Controller type slot: the sheet's value and the dial's face.
+pub fn pad_type_label(pref: GamepadPref) -> (&'static str, &'static str) {
+    match pref {
+        GamepadPref::Auto => ("Automatic", "Pad type"),
+        GamepadPref::Xbox360 => ("Xbox 360", "Xbox 360"),
+        GamepadPref::XboxOne => ("Xbox One", "Xbox One"),
+        GamepadPref::DualSense => ("DualSense", "DualSense"),
+        GamepadPref::DualShock4 => ("DualShock 4", "DS4"),
+        GamepadPref::SteamDeck => ("Steam Deck", "Deck"),
+        other => (other.as_str(), other.as_str()),
+    }
 }
 
 #[cfg(test)]
@@ -792,6 +831,7 @@ mod tests {
             "guide",
             "qam",
             "pad_mouse",
+            "pad_type",
             "stream_mute",
             "swap_screens",
             "host:power.reboot",
@@ -799,6 +839,25 @@ mod tests {
         ] {
             assert_eq!(SlotId::parse(id).unwrap().id(), id);
         }
+    }
+
+    #[test]
+    fn the_pad_type_cycle_wraps_and_a_settings_only_type_steps_to_automatic() {
+        let mut seen = vec![GamepadPref::Auto];
+        let mut p = next_pad_type(GamepadPref::Auto);
+        while p != GamepadPref::Auto {
+            seen.push(p);
+            p = next_pad_type(p);
+        }
+        assert_eq!(seen, PAD_TYPE_CYCLE);
+        assert_eq!(
+            next_pad_type(GamepadPref::SteamController2),
+            GamepadPref::Auto
+        );
+        assert_eq!(
+            pad_type_label(GamepadPref::DualShock4),
+            ("DualShock 4", "DS4")
+        );
     }
 
     #[test]

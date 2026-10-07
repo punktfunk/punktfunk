@@ -48,6 +48,9 @@ pub enum RingCommand {
     /// Step [`RingFacts::pad_mouse_target`] to the next controller-mouse mode: off, touchpad,
     /// full.
     CyclePadMouse,
+    /// Emulate the next controller type for the rest of this stream
+    /// ([`crate::overlay_actions::next_pad_type`]); each pad re-plugs as it.
+    CyclePadType,
     /// Flip this client's own speakers ([`punktfunk_core::client::AUDIO_MUTE_LOCAL`]). Never
     /// reaches the host, so a session joined to the same display keeps hearing the game.
     ToggleStreamMute,
@@ -116,6 +119,8 @@ pub struct RingFacts {
     pub pad_mouse: punktfunk_core::input::PadMouseMode,
     /// The host grants pointer input; controller mouse needs it.
     pub pointer_granted: bool,
+    /// The controller type the host emulates; `Auto` = each pad as itself.
+    pub pad_type: punktfunk_core::config::GamepadPref,
     /// Live `(w, h, hz)`. `native_mode` is the Welcome native.
     pub mode: (u32, u32, u32),
     pub native_mode: (u32, u32, u32),

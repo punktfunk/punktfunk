@@ -37,6 +37,8 @@ let builtinGroups: [SlotGroup] = [
               note: "Only where the host's pad is Steam-shaped"),
         .init(id: "pad_mouse", label: "Controller mouse",
               note: "Your controller moves the host's pointer"),
+        .init(id: "pad_type", label: "Controller type",
+              note: "The controller the host emulates, for this stream"),
     ]),
     .init(id: "View", options: [.init(id: "stats", label: "Statistics")]),
     .init(id: "Audio", options: [.init(id: "mic", label: "Microphone", note: micNote)]),
@@ -122,5 +124,6 @@ var previewRingActions: RingActions {
         sendShortcut: { _ in },
         padAvailable: { true }, padShown: { false }, togglePad: {}, tapPadButton: { _ in },
         pointerGranted: { true }, padMouseTarget: { 1 }, padMouseMode: { .off }, cyclePadMouse: {},
-        currentMode: { (1920, 1080, 60) }, requestMode: { _, _, _ in })
+        currentMode: { (1920, 1080, 60) }, requestMode: { _, _, _ in },
+        padTypeAvailable: { true })
 }

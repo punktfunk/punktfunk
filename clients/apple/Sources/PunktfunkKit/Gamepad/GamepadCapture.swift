@@ -345,6 +345,27 @@ public final class GamepadCapture {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    /// The controller type every forwarded pad declares (`.auto` = each pad as itself).
+    public var padType: PunktfunkConnection.GamepadType { manager.typeSetting }
+
+    /// Whether any physical controller holds a slot.
+    public var hasForwardedPads: Bool { !slots.isEmpty }
+
+    /// Emulate `type` for the rest of this stream. The host builds a pad from its arrival and
+    /// never swaps a built one, so each slot whose declared kind moves is closed and reopened.
+    /// The SC2 passthrough declares its own kind and is left alone.
+    public func setPadType(_ type: PunktfunkConnection.GamepadType) {
+        manager.typeSetting = type
+        for slot in slots {
+            guard let dc = manager.forwarded.first(where: { $0.controller === slot.controller }),
+                  manager.declaredKind(for: dc) != slot.pref else { continue }
+            closeSlot(slot)
+            openSlot(dc)
+        }
+        updateEscapeChord()
+        updateDeviceGyro()
+    }
+
     /// Bring `slots` in line with the forwarded set: close any slot no longer wanted (flushing its
     /// held wire state and sending GamepadRemove first) and open any newly-forwarded controller into
     /// its assigned wire index. A controller that stays forwarded on its index keeps its slot

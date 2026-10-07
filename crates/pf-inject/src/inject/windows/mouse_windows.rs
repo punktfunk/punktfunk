@@ -125,6 +125,7 @@ impl VirtualMouse {
             bluetooth: false,
             description: "Punktfunk Virtual Mouse",
             enumerator: "punktfunk",
+            property: None,
         }) {
             Ok((sw, id)) => (Some(sw), id),
             // Without a devnode the sealed channel refuses the mailbox pid, so the mouse would
@@ -527,6 +528,7 @@ pub fn channel_proof_probe() -> Result<()> {
         bluetooth: false,
         description: "Punktfunk Virtual Mouse (channel-proof probe)",
         enumerator: "punktfunk",
+        property: None,
     })?;
     let Some(instance_id) = instance_id else {
         anyhow::bail!("SwDeviceCreate reported no instance id to look the devnode up by");

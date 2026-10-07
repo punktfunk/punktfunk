@@ -90,13 +90,11 @@ pub trait AudioCapturer: Send {
         true
     }
 
-    /// Drop buffered chunks on reuse so a new stream does not hear idle capture. Linux
-    /// stream-sink also re-claims the default sink here (pair: [`idle`](Self::idle)). Default: no-op.
+    /// Drop buffered chunks on reuse so a new stream does not hear idle capture. Default: no-op.
     fn drain(&mut self) {}
 
-    /// Session parked: drop routing side effects, keep the backend. Linux stream-sink
-    /// restores the user's default sink; the claim returns on the next [`drain`](Self::drain)
-    /// or a fresh open. Default: no-op.
+    /// Session over: drop routing side effects, keep the backend. Linux stream-sink
+    /// restores the user's default sink. Default: no-op.
     fn idle(&mut self) {}
 }
 
@@ -173,15 +171,16 @@ pub fn per_session_sink_possible() -> bool {
     plat::per_session_sink_possible()
 }
 
-/// Park a capturer at session end. Linux: persist so the next session reuses the
-/// PipeWire thread. Windows: drop — that restores the operator's default playback
-/// device (parked on the loopback sink for the stream) and the next open re-runs
-/// the wiring plan against then-current endpoints.
+/// Park a capturer at session end so the next session reuses its PipeWire thread.
+/// A capturer that owns a sink is dropped instead: WirePlumber elects a live sink
+/// from its default history whenever the restored output is missing. Windows drops
+/// every capturer, which restores the operator's default playback device and re-runs
+/// the wiring plan at the next open.
 pub fn park_audio_capture(
     slot: &std::sync::Mutex<Option<Box<dyn AudioCapturer>>>,
     cap: Box<dyn AudioCapturer>,
 ) {
-    if cfg!(target_os = "windows") {
+    if cfg!(target_os = "windows") || cap.sink_name().is_some() {
         drop(cap);
     } else {
         *slot.lock().unwrap() = Some(cap);
@@ -528,5 +527,23 @@ mod tests {
         *slot.lock().unwrap() = Some(Box::new(Parked(SAMPLE_RATE)));
         assert!(take_parked_capture(&slot, 2, SAMPLE_RATE).is_some());
         assert!(take_parked_capture(&slot, 2, SAMPLE_RATE).is_none());
+    }
+
+    struct WithSink;
+    impl AudioCapturer for WithSink {
+        fn next_chunk(&mut self) -> Result<Vec<f32>> {
+            Ok(Vec::new())
+        }
+        fn sink_name(&self) -> Option<&str> {
+            Some("punktfunk-speaker-1-0")
+        }
+    }
+
+    /// A parked sink would stay electable as the default output between sessions.
+    #[test]
+    fn a_capturer_that_owns_a_sink_is_not_parked() {
+        let slot = std::sync::Mutex::new(None);
+        park_audio_capture(&slot, Box::new(WithSink));
+        assert!(slot.lock().unwrap().is_none());
     }
 }

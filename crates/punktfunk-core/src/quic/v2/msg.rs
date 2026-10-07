@@ -214,6 +214,14 @@ v2_message!(ShardPayloadChanged = reg::MSG_SHARD_PAYLOAD_CHANGED, { 1 => shard_p
 v2_message!(ShardPayloadAck = reg::MSG_SHARD_PAYLOAD_ACK, { 1 => shard_payload });
 v2_message!(ClockProbe = reg::MSG_CLOCK_PROBE, { 1 => t1_ns });
 v2_message!(ClockEcho = reg::MSG_CLOCK_ECHO, { 1 => t1_ns, 2 => t2_ns, 3 => t3_ns });
+v2_message!(PadIdentity = reg::MSG_PAD_IDENTITY,
+    { 1 => pad, 2 => serial, 3 => replies, 4 => slot },
+    check |m| m.slot < 4
+        && m.serial.len() <= PAD_IDENTITY_SERIAL_MAX
+        && m.replies.len() <= PAD_IDENTITY_REPLIES_MAX
+        && unpack_identity_replies(&m.replies).is_some());
+v2_message!(PadFeature = reg::MSG_PAD_FEATURE, { 1 => pad, 2 => data },
+    check |m| !m.data.is_empty() && m.data.len() <= crate::quic::HID_REPORT_MAX);
 
 /// No fields: the frame is the ask.
 impl V2Message for RequestKeyframe {
@@ -442,6 +450,23 @@ mod tests {
     }
 
     #[test]
+    fn a_pad_identity_out_of_bounds_does_not_decode() {
+        let long = PadIdentity {
+            serial: "S".repeat(PAD_IDENTITY_SERIAL_MAX + 1),
+            ..Default::default()
+        };
+        let torn = PadIdentity {
+            replies: vec![4, 1, 2],
+            ..Default::default()
+        };
+        for bad in [long, torn] {
+            let wire = bad.encode_v2();
+            let (ty, body, _) = split_frame(&wire, reg::max_body).unwrap().unwrap();
+            assert!(decode::<PadIdentity>(ty, body).is_err());
+        }
+    }
+
+    #[test]
     fn every_message_round_trips() {
         let mode = Mode {
             width: 3840,
@@ -458,6 +483,16 @@ mod tests {
             confirm: [4; 32],
         });
         round_trip(PairProof { confirm: [5; 32] });
+        round_trip(PadIdentity {
+            pad: 3,
+            serial: "FXA0000000001".into(),
+            replies: pack_identity_replies([(&[0x01, 0x83, 0x00][..], &[0x01, 0x83, 0x1E][..])]),
+            slot: 2,
+        });
+        round_trip(PadFeature {
+            pad: 1,
+            data: vec![0x01, 0x87, 0x03, 0x08, 0x07, 0x00],
+        });
         round_trip(PairResult { ok: true });
         round_trip(AuthChallenge { nonce: [6; 32] });
         round_trip(AuthResponse {

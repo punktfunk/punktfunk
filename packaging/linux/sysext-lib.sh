@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Sourced by packaging/{arch,bazzite}/build-sysext.sh: the capability seal and the HDR gamescope
-# check, run on the staging tree before mksquashfs. The matrix itself is
+# Sourced by packaging/{arch,bazzite}/build-sysext.sh: the capability seal, the HDR gamescope
+# check and the boot-time sysctl unit, run on the staging tree before mksquashfs. The matrix itself is
 # scripts/ci/assert-cap-matrix.sh, the same code CI runs on the finished image.
 #
 # Why the worker is capped here: a sysext's /usr is a read-only squashfs, no package scriptlet
@@ -61,4 +61,32 @@ pf_verify_gamescope() {
            usr/lib/punktfunk/vulkan/implicit_layer.d/punktfunk_gamescope_wsi.json; do
     [ -f "$root/$f" ] || { err "$what has no $f — no game HDR without it"; return 1; }
   done
+}
+
+# pf_stage_sysctl_unit <stage>: systemd-sysctl runs before systemd-sysext merges the image, so the
+# staged sysctl.d files never apply at boot. This unit applies them after the merge. sysinit.target
+# Upholds it because a Wants= that arrives with the post-merge reload never starts anything.
+pf_stage_sysctl_unit() {
+  local units="$1/usr/lib/systemd/system" files="" f
+  for f in "$1"/usr/lib/sysctl.d/99-punktfunk*.conf; do
+    [ -f "$f" ] && files="$files ${f##*/}"
+  done
+  [ -n "$files" ] || return 0
+  install -d "$units/sysinit.target.d"
+  cat > "$units/punktfunk-sysctl.service" <<UNIT
+[Unit]
+Description=punktfunk UDP socket buffer limits
+DefaultDependencies=no
+After=systemd-sysext.service systemd-sysctl.service
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionPathIsReadWrite=/proc/sys/net/
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/systemd/systemd-sysctl$files
+UNIT
+  printf '[Unit]\nUpholds=punktfunk-sysctl.service\n' \
+    > "$units/sysinit.target.d/50-punktfunk-sysctl.conf"
 }

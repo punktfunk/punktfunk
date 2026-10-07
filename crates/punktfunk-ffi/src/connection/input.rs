@@ -148,6 +148,90 @@ pub unsafe extern "C" fn punktfunk_connection_send_hid_report(
     })
 }
 
+/// Gate what of a Steam Controller 2's raw reports on `pad` reaches the host: an OR of
+/// `PUNKTFUNK_SC2_GATE_*`. Call when the client's overlay takes or returns the pad and when its
+/// system-button policy changes. Latest wins; unknown bits are ignored; `pad` masks to 16.
+///
+/// # Safety
+/// `c` is a valid connection handle. Callable from any thread.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_set_sc2_gate(
+    c: *mut PunktfunkConnection,
+    pad: u8,
+    gate: u32,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        c.inner.set_sc2_gate(pad & 0xF, punktfunk_core::client::Sc2Gate::from_bits(gate));
+        PunktfunkStatus::Ok
+    })
+}
+
+/// The `index`-th feature query a client reads off a Steam Controller 2 for
+/// [`punktfunk_connection_send_pad_identity`], id first, copied into `out`. Returns its length;
+/// 0 past the last one or when `cap` is short. `puck` adds a Puck slot's queries.
+///
+/// # Safety
+/// `out` points to `cap` writable bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_sc2_identity_request(
+    puck: bool,
+    index: u32,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    let Some(req) = punktfunk_core::client::sc2::identity_requests(puck).nth(index as usize) else {
+        return 0;
+    };
+    if out.is_null() || cap < req.len() {
+        return 0;
+    }
+    // SAFETY: the caller grants `cap` writable bytes at `out`; `req` fits.
+    unsafe { std::ptr::copy_nonoverlapping(req.as_ptr(), out, req.len()) };
+    req.len()
+}
+
+/// Tell the host who the Steam Controller 2 on `pad` is, before its arrival: `serial` is its USB
+/// serial (UTF-8, NUL-terminated), `replies` the `(request, reply)` pairs packed as
+/// `[len][request][len][reply]…`, each part at most 64 bytes. `slot` is a Puck pad's slot (its USB
+/// interface less 2), else 0. Too long, torn or a slot past 3 is `InvalidArg`.
+///
+/// # Safety
+/// `c` is a valid connection handle; `serial` is NUL-terminated; `replies` points to `len` bytes.
+#[cfg(feature = "quic")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn punktfunk_connection_send_pad_identity(
+    c: *mut PunktfunkConnection,
+    pad: u8,
+    slot: u8,
+    serial: *const std::ffi::c_char,
+    replies: *const u8,
+    len: usize,
+) -> PunktfunkStatus {
+    with_conn!(c => {
+        if serial.is_null() || (replies.is_null() && len > 0) {
+            return PunktfunkStatus::NullPointer;
+        }
+        // SAFETY: caller-provided NUL-terminated string, borrowed for this call.
+        let Ok(serial) = unsafe { std::ffi::CStr::from_ptr(serial) }.to_str() else {
+            return PunktfunkStatus::InvalidArg;
+        };
+        let replies = if len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: caller pointer/length, copied before returning.
+            unsafe { std::slice::from_raw_parts(replies, len) }.to_vec()
+        };
+        status_of(c.inner.send_pad_identity(punktfunk_core::quic::PadIdentity {
+            pad: pad & 0xF,
+            serial: serial.to_string(),
+            replies,
+            slot,
+        }))
+    })
+}
+
 /// Send one stylus sample batch — `count` (`1..=PUNKTFUNK_PEN_BATCH_MAX`)
 /// [`PunktfunkPenSample`]s, oldest first — as one `0xCC/0x05` pen datagram
 /// (`design/pen-tablet-input.md`). Split longer runs. Gate on

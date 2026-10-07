@@ -43,7 +43,7 @@ impl SecretRoot {
             std::env::current_dir()?.join(requested)
         };
         reject_links_in_path(&root)?;
-        pf_paths::create_secret_dir(&root)?;
+        pf_paths::create_private_dir(&root)?;
         reject_links_in_path(&root)?;
         if !std::fs::metadata(&root)?.is_dir() {
             return Err(io::Error::new(

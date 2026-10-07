@@ -1,5 +1,6 @@
 package io.unom.punktfunk
 
+import io.unom.punktfunk.kit.Gamepad
 import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -112,10 +113,23 @@ class OverlayActionsTest {
     fun slotIdsAreStableStrings() {
         for (id in listOf(
             "end_stream", "end_game", "disconnect_linger", "touch_mode", "keyboard", "stats", "mic", "pad",
-            "send_text", "guide", "qam", "pad_mouse", "stream_mute", "swap_screens", "host:power.reboot",
-            "shortcut:s2",
+            "send_text", "guide", "qam", "pad_mouse", "pad_type", "stream_mute", "swap_screens",
+            "host:power.reboot", "shortcut:s2",
         )) {
             assertEquals(id, SlotId.parse(id)!!.id)
         }
+    }
+
+    @Test
+    fun padTypeCycleWrapsAndASettingsOnlyTypeStepsToAutomatic() {
+        val seen = mutableListOf(Gamepad.PREF_AUTO)
+        var p = nextPadType(Gamepad.PREF_AUTO)
+        while (p != Gamepad.PREF_AUTO) {
+            seen += p
+            p = nextPadType(p)
+        }
+        assertEquals(PAD_TYPE_CYCLE.toList(), seen)
+        assertEquals(Gamepad.PREF_AUTO, nextPadType(Gamepad.PREF_STEAMCONTROLLER2))
+        assertEquals("DualShock 4", padTypeLabel(Gamepad.PREF_DUALSHOCK4))
     }
 }

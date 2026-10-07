@@ -14,51 +14,26 @@ import org.junit.Test
  * client (`Sc2Device.swift`) and the host (`triton_proto.rs` / `pf_driver_proto::triton`).
  * Run: `./gradlew :kit:testDebugUnitTest`.
  *
- * **Why this file exists: the drift tripwire only pointed one way.** The Apple client's
- * `Sc2DeviceTests.testWireMapMatchesAndroidPairForPair` transcribes THIS file's [Sc2Device]
- * table as a literal, so it catches a Swift-side edit and is blind to a Kotlin-side one — the
- * same asymmetry `pf_driver_proto::triton::out_report_len` warns about in its own doc comment.
- * A `WIRE_MAP` edit here therefore used to leave every existing test green while the two clients
- * silently disagreed about which SC2 bit is `MISC1`, and the host would mirror one client's idea
- * of the pad. The failure is invisible on-glass until someone's paddle presses the wrong thing.
- *
- * So the expectations below are transcribed from the SWIFT side, deliberately, the way the Swift
- * test transcribes this one. Two hand-mirrored tables that must agree; either edit alone goes red.
+ * The tables the three share are pinned by `clients/shared/sc2-vectors.json`, so an edit on one
+ * side alone goes red.
  */
 class Sc2DeviceTest {
 
-    /**
-     * The full SC2-bit → `Gamepad.BTN_*` table, pair for pair with `Sc2Device.swift`'s `wireMap`
-     * (which is itself pinned against this file). Paddles R4/L4/R5/L5 = PADDLE1..4, QAM = MISC1,
-     * right-pad click = the touchpad wire bit — the inverse of the host's typed-fallback mapping
-     * in `triton_proto::from_gamepad`.
-     */
-    private val expected = listOf(
-        Sc2Device.A to Gamepad.BTN_A,
-        Sc2Device.B to Gamepad.BTN_B,
-        Sc2Device.X to Gamepad.BTN_X,
-        Sc2Device.Y to Gamepad.BTN_Y,
-        Sc2Device.LB to Gamepad.BTN_LB,
-        Sc2Device.RB to Gamepad.BTN_RB,
-        Sc2Device.VIEW to Gamepad.BTN_BACK,
-        Sc2Device.MENU to Gamepad.BTN_START,
-        Sc2Device.STEAM to Gamepad.BTN_GUIDE,
-        Sc2Device.L3 to Gamepad.BTN_LS_CLICK,
-        Sc2Device.R3 to Gamepad.BTN_RS_CLICK,
-        Sc2Device.DPAD_UP to Gamepad.BTN_DPAD_UP,
-        Sc2Device.DPAD_DOWN to Gamepad.BTN_DPAD_DOWN,
-        Sc2Device.DPAD_LEFT to Gamepad.BTN_DPAD_LEFT,
-        Sc2Device.DPAD_RIGHT to Gamepad.BTN_DPAD_RIGHT,
-        Sc2Device.QAM to Gamepad.BTN_MISC1,
-        Sc2Device.R4 to Gamepad.BTN_PADDLE1,
-        Sc2Device.L4 to Gamepad.BTN_PADDLE2,
-        Sc2Device.R5 to Gamepad.BTN_PADDLE3,
-        Sc2Device.L5 to Gamepad.BTN_PADDLE4,
-        Sc2Device.RPAD_CLICK to Gamepad.BTN_TOUCHPAD,
-    )
+    /** One section of `clients/shared/sc2-vectors.json`. */
+    private fun shared(key: String): org.json.JSONArray {
+        val file = File("../../shared/sc2-vectors.json")
+        assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
+        return JSONObject(file.readText()).getJSONArray(key)
+    }
+
+    /** SC2 bit → `Gamepad.BTN_*`, the rows Swift's `wireMap` and the host's fallback replay. */
+    private val expected: List<Pair<Int, Int>> by lazy {
+        val rows = shared("buttons")
+        (0 until rows.length()).map { rows.getJSONObject(it).run { getInt("sc2") to getInt("wire") } }
+    }
 
     @Test
-    fun `wire map matches the Apple client pair for pair`() {
+    fun `wire map matches the shared vectors`() {
         for ((sc2, wire) in expected) {
             assertEquals("sc2 bit 0x${Integer.toHexString(sc2)}", wire, Sc2Device.wireButtons(sc2))
         }
@@ -70,7 +45,7 @@ class Sc2DeviceTest {
         val allWire = expected.fold(0) { acc, (_, wire) -> acc or wire }
         assertEquals(allWire, Sc2Device.wireButtons(allSc2))
         // Unmapped SC2 bits (trackpad touch, trigger clicks, the left-pad bits) translate to
-        // nothing — a new mapping must be added on BOTH clients, so it must fail here first.
+        // nothing.
         assertEquals(0, Sc2Device.wireButtons(allSc2.inv()))
         assertEquals(0, Sc2Device.wireButtons(0))
     }
@@ -294,9 +269,7 @@ class Sc2DeviceTest {
     /** `clients/shared/sc2-vectors.json`: the host's id-included lengths, one byte longer. */
     @Test
     fun `output lengths match the shared vectors`() {
-        val file = File("../../shared/sc2-vectors.json")
-        assertTrue("the shared vector file must be reachable at ${file.absolutePath}", file.isFile)
-        val rows = JSONObject(file.readText()).getJSONArray("out_report_len")
+        val rows = shared("out_report_len")
         for (i in 0 until rows.length()) {
             val row = rows.getJSONObject(i)
             val id = row.getInt("id")

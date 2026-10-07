@@ -48,9 +48,9 @@ pub(super) fn run_apply(
     stage: &dyn Fn(&'static str),
 ) -> Result<(), (&'static str, String)> {
     let dir = staging_dir();
-    // Secret-dir, not `create_dir_all`: the installer runs from here as SYSTEM, and a
-    // pre-planted `updates\` keeps whoever made it as owner until it is re-owned.
-    pf_paths::create_secret_dir(&dir)
+    // Not `create_dir_all`: the installer runs from here as SYSTEM, and a pre-planted
+    // `updates\` keeps whoever made it as owner until it is re-owned.
+    pf_paths::create_private_dir(&dir)
         .map_err(|e| ("downloading", format!("create staging dir: {e}")))?;
 
     let final_path = dir.join(format!("punktfunk-host-setup-{target_version}.exe"));

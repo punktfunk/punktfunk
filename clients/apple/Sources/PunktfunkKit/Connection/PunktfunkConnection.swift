@@ -1920,6 +1920,73 @@ public final class PunktfunkConnection: @unchecked Sendable {
         }
     }
 
+    /// A Steam Controller 2's identity for the host's virtual pad: its USB serial and its replies
+    /// to the feature queries `sc2IdentityRequests` lists, both id-first.
+    public struct PadIdentity: Equatable, Sendable {
+        public var serial: String
+        public var replies: [Reply]
+        /// A Puck pad's slot, 0–3 (its USB interface less 2); 0 on a cable or Bluetooth.
+        public var slot: UInt8 = 0
+
+        public struct Reply: Equatable, Sendable {
+            public var request: [UInt8]
+            public var reply: [UInt8]
+        }
+
+        /// `[len][request][len][reply]…`, each part cut at 64 bytes — core's
+        /// `pack_identity_replies`.
+        var packedReplies: [UInt8] {
+            var out: [UInt8] = []
+            for r in replies {
+                for part in [r.request, r.reply] {
+                    let cut = part.prefix(64)
+                    out.append(UInt8(cut.count))
+                    out.append(contentsOf: cut)
+                }
+            }
+            return out
+        }
+    }
+
+    /// The feature queries to read off a pad for `sendPadIdentity`, from core
+    /// (`punktfunk_sc2_identity_request`). `puck` adds a Puck slot's.
+    public static func sc2IdentityRequests(puck: Bool) -> [[UInt8]] {
+        var out: [[UInt8]] = []
+        var buf = [UInt8](repeating: 0, count: 64)
+        while true {
+            let n = buf.withUnsafeMutableBufferPointer { p in
+                punktfunk_sc2_identity_request(puck, UInt32(out.count), p.baseAddress, UInt(p.count))
+            }
+            guard n > 0 else { return out }
+            out.append(Array(buf[..<Int(n)]))
+        }
+    }
+
+    /// Tell the host who the Steam Controller 2 on `pad` is, before its arrival
+    /// (`punktfunk_connection_send_pad_identity`): its virtual pad then answers Steam as this one.
+    public func sendPadIdentity(pad: UInt8, _ identity: PadIdentity) {
+        let packed = identity.packedReplies
+        withLiveHandle(or: ()) { h in
+            guard granted(Self.grantGamepad, handle: h) else { return }
+            _ = packed.withUnsafeBufferPointer { buf in
+                punktfunk_connection_send_pad_identity(
+                    h, pad, identity.slot, identity.serial, buf.baseAddress, UInt(buf.count))
+            }
+        }
+    }
+
+    /// What core holds back of a Steam Controller 2's raw reports on `pad`
+    /// (`punktfunk_connection_set_sc2_gate`): everything while the client's overlay owns the pad,
+    /// Steam and QAM when they stay local, and the ring's own Select+A. Latest wins.
+    public func setSc2Gate(pad: UInt8, masked: Bool, systemLocal: Bool, chords: Bool) {
+        let gate = (masked ? UInt32(PUNKTFUNK_SC2_GATE_MASKED) : 0)
+            | (systemLocal ? UInt32(PUNKTFUNK_SC2_GATE_SYSTEM_LOCAL) : 0)
+            | (chords ? UInt32(PUNKTFUNK_SC2_GATE_CHORDS) : 0)
+        withLiveHandle(or: ()) { h in
+            _ = punktfunk_connection_set_sc2_gate(h, pad, gate)
+        }
+    }
+
     // MARK: - Shared clipboard (design/clipboard-and-file-transfer.md §5)
 
     /// One advertised clipboard format in a lazy offer — the format list crosses the wire,

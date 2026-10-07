@@ -1094,6 +1094,43 @@ pub fn schedule_restore_tv_session() {
     }
 }
 
+/// A takeover the host still holds, as the console lists it.
+pub struct HeldTakeover {
+    /// The managed session's `(width, height, refresh_hz)`, when one is tracked.
+    pub mode: Option<(u32, u32, u32)>,
+    /// Time left before the hand-back runs; `None` = held until released.
+    pub restore_in: Option<Duration>,
+}
+
+/// What is held now. Also `Some` mid-session; the caller knows whether one is live.
+pub fn held_takeover() -> Option<HeldTakeover> {
+    let mode = {
+        let t = takeover();
+        if !t.live() {
+            return None;
+        }
+        t.managed
+            .as_ref()
+            .map(|s| (s.width, s.height, s.refresh_hz))
+    };
+    let restore_in = PENDING_RESTORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(|at| at.saturating_duration_since(Instant::now()));
+    Some(HeldTakeover { mode, restore_in })
+}
+
+/// Console Release: hand the box's own session back now, whatever the keep-alive. The restore
+/// worker runs it, so a reconnect still cancels it. `false` = nothing held.
+pub fn release_takeover() -> bool {
+    if !takeover_live() {
+        return false;
+    }
+    *PENDING_RESTORE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    tracing::info!("gamescope: released from the console — handing the box's own session back");
+    true
+}
+
 /// True while anything taken over is still ours to hand back.
 fn takeover_live() -> bool {
     takeover().live()
