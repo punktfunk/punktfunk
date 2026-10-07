@@ -362,8 +362,10 @@ export const PairedRowView: FC<{
 				<Unlink className="size-4" />
 			</Button>
 		</div>
-		<div className="order-3 col-span-1 flex flex-wrap items-center gap-2 md:contents">
-			<div className="md:order-2">
+		{/* On a phone the heading row is hidden: each value names its own column. */}
+		<div className="order-3 col-span-1 flex flex-wrap items-end gap-x-6 gap-y-2 md:contents">
+			<div className="flex flex-col items-start gap-1 md:order-2 md:block">
+				<CellLabel>{m.devices_col_access()}</CellLabel>
 				{r.protocol === "moonlight" ? (
 					<Badge
 						variant="outline"
@@ -389,7 +391,10 @@ export const PairedRowView: FC<{
 					<span className="text-muted-foreground">—</span>
 				)}
 			</div>
-			<div className="min-w-0 md:order-3">
+			<div className="flex min-w-0 flex-col items-start gap-1 md:order-3 md:block">
+				{(onDisplaySettings || display) && (
+					<CellLabel>{m.devices_col_display()}</CellLabel>
+				)}
 				{onDisplaySettings ? (
 					<Setting
 						label={m.display_device_settings()}
@@ -415,6 +420,13 @@ export const PairedRowView: FC<{
 			</div>
 		</div>
 	</motion.li>
+);
+
+/** A value's column name, over it on a phone; the heading row names it from `md` up. */
+const CellLabel: FC<{ children: ReactNode }> = ({ children }) => (
+	<span className="text-[11px] text-muted-foreground md:hidden">
+		{children}
+	</span>
 );
 
 /** A value that opens its own editor on a click; a pencil says so. */
