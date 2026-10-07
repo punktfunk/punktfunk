@@ -6,9 +6,16 @@
 //
 // One persistence model: every pick saves. The host applies at the next connect either way.
 
-import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import {
+	Check,
+	Pencil,
+	Plus,
+	RefreshCw,
+	SlidersHorizontal,
+	Trash2,
+} from "lucide-react";
 import { motion } from "motion/react";
-import type { FC } from "react";
+import type { FC, ReactNode } from "react";
 import type {
 	CustomPreset,
 	DisplayPolicy,
@@ -64,7 +71,7 @@ export interface BehaviourPickerProps {
 	onPreview?: (fields: EffectivePolicy | undefined) => void;
 }
 
-/** The presets, in the open: one pill each. */
+/** The presets, in the open: one card each, its summary under its name. */
 export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 	policy,
 	presets,
@@ -87,29 +94,33 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 		onBlur: () => onPreview?.(undefined),
 	});
 	return (
-		<Stagger gap={ROW_GAP} className="flex flex-wrap items-center gap-2">
-			{PRESET_ORDER.map((id) => {
-				const p = presets.find((x) => x.id === id);
-				if (!p) return null;
-				return (
-					<Pill
-						key={id}
-						selected={current === id}
-						busy={busy}
-						title={describePolicy(p.fields)}
-						onClick={() => onApply({ ...policy, preset: id })}
-						{...preview(p.fields)}
-					>
-						{presetLabel(id)}
-					</Pill>
-				);
-			})}
-			{customPresets.map((p) => (
-				<span key={p.id} className="flex items-center">
-					<Pill
+		<div className="space-y-3">
+			<Stagger
+				gap={ROW_GAP}
+				className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+			>
+				{PRESET_ORDER.map((id) => {
+					const p = presets.find((x) => x.id === id);
+					if (!p) return null;
+					return (
+						<PresetCard
+							key={id}
+							title={presetLabel(id)}
+							summary={p.summary}
+							selected={current === id}
+							busy={busy}
+							onClick={() => onApply({ ...policy, preset: id })}
+							{...preview(p.fields)}
+						/>
+					);
+				})}
+				{customPresets.map((p) => (
+					<PresetCard
+						key={p.id}
+						title={p.name}
+						summary={describePolicy(p.fields)}
 						selected={false}
 						busy={busy}
-						title={describePolicy(p.fields)}
 						onClick={() =>
 							onApply({
 								...policy,
@@ -118,45 +129,45 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 								game_session: p.game_session ?? policy.game_session ?? "auto",
 							})
 						}
+						actions={
+							<RowActions
+								disabled={busy}
+								actions={[
+									{
+										label: m.display_preset_edit(),
+										icon: <Pencil />,
+										iconOnly: true,
+										onSelect: () => onRenamePreset(p),
+									},
+									{
+										label: m.display_preset_update(),
+										icon: <RefreshCw />,
+										iconOnly: true,
+										onSelect: () => onUpdatePreset(p),
+									},
+									{
+										label: m.display_preset_delete(),
+										icon: <Trash2 />,
+										iconOnly: true,
+										destructive: true,
+										onSelect: () => onDeletePreset(p),
+									},
+								]}
+							/>
+						}
 						{...preview(p.fields)}
-					>
-						{p.name}
-					</Pill>
-					<RowActions
-						disabled={busy}
-						actions={[
-							{
-								label: m.display_preset_edit(),
-								icon: <Pencil />,
-								iconOnly: true,
-								onSelect: () => onRenamePreset(p),
-							},
-							{
-								label: m.display_preset_update(),
-								icon: <RefreshCw />,
-								iconOnly: true,
-								onSelect: () => onUpdatePreset(p),
-							},
-							{
-								label: m.display_preset_delete(),
-								icon: <Trash2 />,
-								iconOnly: true,
-								destructive: true,
-								onSelect: () => onDeletePreset(p),
-							},
-						]}
 					/>
-				</span>
-			))}
-			<Pill
-				selected={current === "custom"}
-				busy={busy}
-				title={m.display_customise_desc()}
-				onClick={onCustomise}
-			>
-				{m.display_customise()}
-			</Pill>
-			<motion.span variants={ROW} className="ml-auto">
+				))}
+				<PresetCard
+					title={m.display_customise()}
+					summary={m.display_customise_desc()}
+					selected={current === "custom"}
+					busy={busy}
+					icon={<SlidersHorizontal className="size-4" />}
+					onClick={onCustomise}
+				/>
+			</Stagger>
+			<div className="flex justify-end">
 				<Button
 					variant="ghost"
 					size="sm"
@@ -166,31 +177,60 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 					<Plus className="size-4" />
 					{m.display_preset_save_as()}
 				</Button>
-			</motion.span>
-		</Stagger>
+			</div>
+		</div>
 	);
 };
 
-/** One preset; the pills come in one after another, like the cards they replaced. */
-const Pill: FC<ButtonProps & { selected: boolean; busy?: boolean }> = ({
+/**
+ * One preset as a card: its name, what it does in a sentence, a tick while it is the policy. A
+ * custom preset's own actions sit beside the card's button, never inside it.
+ */
+const PresetCard: FC<
+	ButtonProps & {
+		title: string;
+		summary: string;
+		selected: boolean;
+		busy?: boolean;
+		icon?: ReactNode;
+		actions?: ReactNode;
+	}
+> = ({
+	title,
+	summary,
 	selected,
 	busy,
+	icon,
+	actions,
 	className,
-	children,
 	...props
 }) => (
-	<motion.span variants={ROW} className="inline-flex">
-		<Button
-			size="sm"
-			variant="outline"
+	<motion.div variants={ROW} className="relative">
+		<button
+			type="button"
 			aria-pressed={selected}
 			disabled={busy}
-			className={cn(selected && "ring-2 ring-primary", className)}
+			className={cn(
+				"flex h-full w-full flex-col items-start gap-1 rounded-lg border p-3 text-left outline-none transition-colors hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50",
+				selected && "border-primary bg-primary/10",
+				actions && "pr-24",
+				className,
+			)}
 			{...props}
 		>
-			{children}
-		</Button>
-	</motion.span>
+			<span className="flex w-full items-center gap-2 pr-6 text-sm font-medium">
+				{icon}
+				<span className="truncate">{title}</span>
+			</span>
+			<span className="text-xs text-muted-foreground">{summary}</span>
+		</button>
+		{selected && (
+			<Check className="pointer-events-none absolute top-3 right-3 size-4 text-primary" />
+		)}
+		{actions && (
+			<div className="absolute top-1.5 right-1.5 flex">{actions}</div>
+		)}
+	</motion.div>
 );
 
 /** The questions, in the one place on this page that asks for attention. */

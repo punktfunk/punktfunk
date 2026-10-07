@@ -229,7 +229,8 @@ export function snap(
 
 /** Below this a box is too small to read or grab, so the map steps aside for the rows. */
 const MIN_BOX_PX = 44;
-/** The map's height at most: one 16:9 screen no longer fills a desktop's width. */
+/** The map's box, 18 rem on a desk (`--map-h` below): a preview may change the map's width,
+ * never the page's height, or every hovered preset would make the page jump. */
 const MAX_MAP_PX = 288;
 
 /** The element's rendered width, kept current. */
@@ -347,14 +348,20 @@ export const DesktopMap: FC<{
 	};
 
 	return (
-		<div ref={measure} className="w-full">
+		<div
+			ref={measure}
+			className={cn(
+				"w-full [--map-h:12rem] sm:[--map-h:18rem]",
+				readable && "flex h-[var(--map-h)] items-center justify-center",
+			)}
+		>
 			{readable && (
 				<div
-					// The desktop's own proportions, as wide as the card or MAX_MAP_PX tall.
-					className="relative mx-auto overflow-hidden rounded-lg border bg-muted/30"
+					// The desktop's own proportions, as wide as the card or as tall as the box.
+					className="relative overflow-hidden rounded-lg border bg-muted/30"
 					style={{
 						aspectRatio: `${box.w} / ${box.h}`,
-						width: `min(100%, ${(MAX_MAP_PX * box.w) / box.h}px)`,
+						width: `min(100%, calc(var(--map-h) * ${box.w} / ${box.h}))`,
 					}}
 					role="img"
 					aria-label={m.display_map_label()}
