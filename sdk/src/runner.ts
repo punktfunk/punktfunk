@@ -22,7 +22,7 @@ import {
 	Fiber,
 	Schedule,
 } from "effect";
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -63,6 +63,12 @@ export interface RunnerOptions {
 	restartBase?: Duration.Input;
 	/** `"off"` runs plugins in-process. Default: `PUNKTFUNK_PLUGIN_SANDBOX` on Linux, off elsewhere. */
 	sandbox?: "on" | "off";
+	/**
+	 * With the sandbox off, still give each plugin that declared a manifest a process of its
+	 * own. Default: on Windows, where no sandbox exists yet and a plugin's crash must not take
+	 * the others down. The Linux sandbox is already a process.
+	 */
+	ownProcess?: boolean;
 	/** The pinned fetch the sandbox proxy forwards with (test seam). */
 	sandboxFetch?: typeof globalThis.fetch;
 	/** Config root holding plugin grants, tokens, and state. Default `configDir()`. */
@@ -294,11 +300,7 @@ const runSandboxed = (
 		});
 		// stderr still reaches the journal; its tail also names why the sandbox exited, since
 		// bwrap's own errors come before the plugin can ship a log line.
-		let stderrTail = "";
-		child.stderr?.on("data", (chunk: Buffer) => {
-			process.stderr.write(chunk);
-			stderrTail = (stderrTail + chunk.toString()).slice(-2000);
-		});
+		const lastLines = tailStderr(child);
 		// A bwrap that dies before reading surfaces through `exit`, not an EPIPE here.
 		(child.stdio[3] as Writable).on("error", () => {}).end(filter);
 		child.on("error", (e) => {
@@ -307,25 +309,72 @@ const runSandboxed = (
 		});
 		child.on("exit", (code, signal) => {
 			release();
-			if (code === 0) {
-				resume(Effect.succeed("plugin" as const));
-				return;
-			}
-			const last = stderrTail
-				.split("\n")
-				.filter((line) => line.trim() !== "")
-				.slice(-3)
-				.join(" | ");
-			const how = signal ? `on ${signal}` : `with ${code}`;
-			resume(
-				Effect.fail(new Error(`sandboxed plugin exited ${how}${last ? ` — ${last}` : ""}`)),
-			);
+			resume(exitOutcome("sandboxed plugin", code, signal, lastLines()));
 		});
 		return Effect.sync(() => {
 			// Interruption (shutdown): SIGTERM lets the plugin's finalizers run; `--die-with-parent`
 			// is the backstop if this runner is killed outright.
 			child.kill("SIGTERM");
 			release();
+		});
+	});
+
+/** Mirror a child's stderr to ours and keep its last lines for the failure message. */
+const tailStderr = (child: ChildProcess): (() => string) => {
+	let tail = "";
+	child.stderr?.on("data", (chunk: Buffer) => {
+		process.stderr.write(chunk);
+		tail = (tail + chunk.toString()).slice(-2000);
+	});
+	return () =>
+		tail
+			.split("\n")
+			.filter((line) => line.trim() !== "")
+			.slice(-3)
+			.join(" | ");
+};
+
+/** A child's exit as the unit's outcome: 0 completes it, anything else fails it with the cause. */
+const exitOutcome = (
+	what: string,
+	code: number | null,
+	signal: NodeJS.Signals | null,
+	last: string,
+): Effect.Effect<"plugin", Error> =>
+	code === 0
+		? Effect.succeed("plugin" as const)
+		: Effect.fail(
+				new Error(`${what} exited ${signal ? `on ${signal}` : `with ${code}`}${last ? ` — ${last}` : ""}`),
+			);
+
+/**
+ * Run one plugin in a process of its own with nothing around it: the Windows shape until the
+ * AppContainer lands. The child re-execs this runner in `--run-unit` mode and resolves its own
+ * token and host URL from the config dir, so nothing secret rides in its environment or argv.
+ * A crash is an exit code, and the supervisor restarts this plugin alone.
+ */
+const runInOwnProcess = (unit: Unit, options: RunnerOptions): Effect.Effect<"plugin", unknown> =>
+	Effect.callback<"plugin", unknown>((resume) => {
+		const child = spawn(
+			process.execPath,
+			[runnerEntry(), "--run-unit", unit.file, "--unit-name", unit.name],
+			{
+				env: {
+					...process.env,
+					...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
+				},
+				stdio: ["ignore", "inherit", "pipe"],
+				windowsHide: true,
+			},
+		);
+		const lastLines = tailStderr(child);
+		child.on("error", (e) => resume(Effect.fail(e)));
+		child.on("exit", (code, signal) =>
+			resume(exitOutcome("plugin process", code, signal, lastLines())),
+		);
+		// Interruption (shutdown): the child's own signal handler runs its finalizers.
+		return Effect.sync(() => {
+			child.kill("SIGTERM");
 		});
 	});
 
@@ -353,6 +402,9 @@ const attemptUnit = (
 		if (unit.manifest && options.sandbox !== "off") {
 			const run = options.sandboxRun ?? runSandboxed;
 			return yield* run(unit, unit.manifest, options, log);
+		}
+		if (unit.manifest && (options.ownProcess ?? process.platform === "win32")) {
+			return yield* runInOwnProcess(unit, options);
 		}
 		const mod = (yield* Effect.tryPromise(
 			() => import(`${pathToFileURL(unit.file).href}?attempt=${attempt}`),

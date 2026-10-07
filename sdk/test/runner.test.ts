@@ -441,6 +441,59 @@ describe("supervision", () => {
 		}
 	});
 
+	test("a plugin with a manifest gets a process of its own when asked (the Windows shape)", async () => {
+		const d = mkdirs("own-process");
+		const pkg = path.join(d.pluginsDir, "node_modules", "punktfunk-plugin-lonely");
+		const counter = path.join(d.dir, "count.txt");
+		write(
+			path.join(pkg, "package.json"),
+			JSON.stringify({
+				name: "punktfunk-plugin-lonely",
+				main: "index.ts",
+				punktfunk: { schema: 1, id: "lonely" },
+			}),
+		);
+		// Each run is a fresh process: a module-level counter would start at zero every time.
+		write(
+			path.join(pkg, "index.ts"),
+			`import * as fs from "node:fs";
+			const n = fs.existsSync(${JSON.stringify(counter)}) ? Number(fs.readFileSync(${JSON.stringify(counter)}, "utf8")) : 0;
+			fs.writeFileSync(${JSON.stringify(counter)}, String(n + 1));
+			console.error("lonely run " + n + " pid " + process.pid);
+			process.exit(3);`,
+		);
+		const logs: string[] = [];
+		// The child re-execs the runner bundle; here that is the CLI source, which bun runs as is.
+		const entry = process.env.PUNKTFUNK_RUNNER_ENTRY;
+		process.env.PUNKTFUNK_RUNNER_ENTRY = path.join(import.meta.dir, "..", "src", "runner-cli.ts");
+		try {
+			const fiber = Effect.runFork(
+				runner({
+					...d,
+					configDir: d.dir,
+					ownProcess: true,
+					restartBase: "20 millis",
+					log: (l) => logs.push(l),
+				}),
+			);
+			await waitFor(() => {
+				try {
+					return Number(fs.readFileSync(counter, "utf8")) >= 2;
+				} catch {
+					return false;
+				}
+			}, 20000);
+			await Effect.runPromise(Fiber.interrupt(fiber));
+		} finally {
+			if (entry === undefined) delete process.env.PUNKTFUNK_RUNNER_ENTRY;
+			else process.env.PUNKTFUNK_RUNNER_ENTRY = entry;
+		}
+		const failed = logs.find((l) => l.includes("[punktfunk-plugin-lonely] failed: "));
+		expect(failed).toContain("plugin process exited with 3");
+		expect(failed).toContain("lonely run 0 pid");
+		expect(logs.some((l) => l.includes("restarting (attempt 2)"))).toBe(true);
+	});
+
 	test("a grants change restarts only the affected sandboxed plugin", async () => {
 		const d = mkdirs("grant-restart");
 		const packages = ["one", "two"];
