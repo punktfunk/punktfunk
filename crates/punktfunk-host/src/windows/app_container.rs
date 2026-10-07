@@ -5,7 +5,7 @@
 //! The spawned process inherits this one's stdio and dies with it: the job is kill-on-close
 //! and this process holds the only handle, so a runner that kills the helper kills the plugin.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use windows::core::{Owned, PCWSTR, PWSTR};
@@ -21,17 +21,16 @@ use windows::Win32::Security::{
     SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::Pipes::GetNamedPipeClientProcessId;
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, OpenProcess, OpenProcessToken, ResumeThread,
-    UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    InitializeProcThreadAttributeList, OpenProcess, OpenProcessToken, UpdateProcThreadAttribute,
+    WaitForSingleObject, CREATE_NO_WINDOW, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
     STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
@@ -120,15 +119,20 @@ pub(crate) fn spawn(id: &str, network: bool, program: &Path, args: &[String]) ->
         Reserved: 0,
     };
 
+    // In the job from creation, so this helper dying at any point (a runner restart's Ctrl+C)
+    // takes the plugin with it: an orphan would hold the runner's log open.
+    let job = kill_on_close_job()?;
+    let jobs = [HANDLE(job.as_raw_handle())];
     let mut bytes = 0usize;
     // SAFETY: the sizing call; it reports the bytes needed through `bytes` and fails by design.
-    let _ = unsafe { InitializeProcThreadAttributeList(None, 1, None, &mut bytes) };
+    let _ = unsafe { InitializeProcThreadAttributeList(None, 2, None, &mut bytes) };
     let mut list_buf = vec![0u8; bytes];
     let list = LPPROC_THREAD_ATTRIBUTE_LIST(list_buf.as_mut_ptr().cast());
     // SAFETY: `list_buf` is `bytes` long, as the sizing call asked, and outlives the list.
-    unsafe { InitializeProcThreadAttributeList(Some(list), 1, None, &mut bytes) }
+    unsafe { InitializeProcThreadAttributeList(Some(list), 2, None, &mut bytes) }
         .context("InitializeProcThreadAttributeList")?;
-    // SAFETY: `list` is initialised; `sc` and the SIDs it points at outlive the process creation.
+    // SAFETY: `list` is initialised; `sc`, the SIDs it points at and `jobs` outlive the
+    // process creation.
     let listed = unsafe {
         UpdateProcThreadAttribute(
             list,
@@ -139,6 +143,17 @@ pub(crate) fn spawn(id: &str, network: bool, program: &Path, args: &[String]) ->
             None,
             None,
         )
+        .and_then(|()| {
+            UpdateProcThreadAttribute(
+                list,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                Some(jobs.as_ptr().cast()),
+                std::mem::size_of_val(&jobs),
+                None,
+                None,
+            )
+        })
     };
 
     // Our own stdio, marked inheritable: what the runner gave this helper, the plugin gets.
@@ -169,7 +184,7 @@ pub(crate) fn spawn(id: &str, network: bool, program: &Path, args: &[String]) ->
             None,
             None,
             true,
-            CREATE_NO_WINDOW | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
             None,
             PCWSTR::null(),
             &si.StartupInfo,
@@ -180,23 +195,12 @@ pub(crate) fn spawn(id: &str, network: bool, program: &Path, args: &[String]) ->
     unsafe { DeleteProcThreadAttributeList(list) };
     created.with_context(|| format!("start {} in the container of {id}", program.display()))?;
     // SAFETY: the launch succeeded, so both handles in `pi` are this frame's alone.
-    let (process, thread) = unsafe {
+    let (process, _thread) = unsafe {
         (
             OwnedHandle::from_raw_handle(pi.hProcess.0),
             OwnedHandle::from_raw_handle(pi.hThread.0),
         )
     };
-    // Into the job before it runs: a plugin that outlives this helper is a plugin nobody kills.
-    let job = kill_on_close_job()?;
-    // SAFETY: both are live handles this frame owns.
-    unsafe {
-        AssignProcessToJobObject(HANDLE(job.as_raw_handle()), HANDLE(process.as_raw_handle()))
-    }
-    .context("AssignProcessToJobObject")?;
-    // SAFETY: the primary thread of the suspended process.
-    if unsafe { ResumeThread(HANDLE(thread.as_raw_handle())) } == u32::MAX {
-        bail!("resume the plugin process");
-    }
     // SAFETY: a live process handle; INFINITE waits for its exit.
     unsafe { WaitForSingleObject(HANDLE(process.as_raw_handle()), INFINITE) };
     let mut code = 0u32;

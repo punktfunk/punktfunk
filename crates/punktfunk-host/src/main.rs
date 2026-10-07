@@ -713,8 +713,20 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
         opts.plugin_tokens = crate::mgmt_token::load_or_generate_per_plugin()?;
         // An upgrade or a hand-edited grants file may have changed what the runner must see.
         #[cfg(windows)]
-        crate::plugins::publish_sandbox_override();
+        {
+            crate::plugins::publish_sandbox_override();
+            crate::plugins::recheck_runner_roots();
+        }
         crate::plugins::converge_runner_roots();
+        // A launcher installed after the host started brings a declared folder with no ACE; the
+        // converge places it within a minute, while the plugin keeps running.
+        #[cfg(windows)]
+        let _ = std::thread::Builder::new()
+            .name("plugin-roots".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                crate::plugins::converge_runner_roots();
+            });
         crate::plugins::converge_runner_acls(&runner);
         crate::plugins::converge_seat_denies();
     }

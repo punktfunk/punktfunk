@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use windows::core::{Owned, PCWSTR, PWSTR};
-use windows::Win32::Foundation::HLOCAL;
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HLOCAL};
 use windows::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW,
     ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS,
@@ -18,6 +18,14 @@ use windows::Win32::System::Registry::KEY_READ;
 /// `sid` (`S-1-…`) may read `key` and every key under it.
 pub(crate) fn grant_read(key: &str, sid: &str) -> Result<()> {
     edit(key, sid, GRANT_ACCESS)
+}
+
+/// The edit failed because the key does not exist: its launcher is not installed yet.
+pub(crate) fn is_absent(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<windows::core::Error>()
+            .is_some_and(|w| w.code() == ERROR_FILE_NOT_FOUND.to_hresult())
+    })
 }
 
 /// Every ACE `sid` holds on `key` goes.

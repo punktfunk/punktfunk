@@ -15,11 +15,11 @@ use hyper::upgrade::Upgraded;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::io::AsyncReadExt;
+use tokio::sync::{oneshot, Notify};
 
 /// Parked connections per plugin, oldest first. Each serves one request.
-static PARKED: LazyLock<Mutex<HashMap<String, VecDeque<Upgraded>>>> =
-    LazyLock::new(Default::default);
+static PARKED: LazyLock<Mutex<HashMap<String, VecDeque<Parked>>>> = LazyLock::new(Default::default);
 /// Woken when a connection is parked, for a request that found none.
 static ARRIVED: Notify = Notify::const_new();
 /// The management runtime, for a hold or an install made from a thread of its own.
@@ -236,18 +236,38 @@ pub(crate) fn request_blocking(
     }
 }
 
+/// One parked connection, held by a task until a request claims it or the plugin hangs up.
+struct Parked {
+    claim: oneshot::Sender<()>,
+    back: oneshot::Receiver<Upgraded>,
+}
+
 fn park(id: &str, upgraded: Upgraded) {
+    let (claim, claimed) = oneshot::channel();
+    let (hand, back) = oneshot::channel();
+    // The plugin speaks only after a request, so a read that ends here means it is gone: a
+    // restarted plugin's connections stay parked otherwise, and each would answer one 502.
+    tokio::spawn(async move {
+        let mut io = hyper_util::rt::TokioIo::new(upgraded);
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            biased;
+            _ = io.read(&mut probe) => {}
+            _ = claimed => { let _ = hand.send(io.into_inner()); }
+        }
+    });
     let mut all = PARKED.lock().unwrap_or_else(|p| p.into_inner());
     let queue = all.entry(id.to_string()).or_default();
+    queue.retain(|p| !p.claim.is_closed());
     if queue.len() >= MAX_PARKED {
         queue.pop_front();
     }
-    queue.push_back(upgraded);
+    queue.push_back(Parked { claim, back });
     drop(all);
     ARRIVED.notify_waiters();
 }
 
-/// The oldest parked connection for `id`, waiting [`ATTACH_WAIT`] for one to arrive.
+/// The oldest live parked connection for `id`, waiting [`ATTACH_WAIT`] for one to arrive.
 async fn take(id: &str) -> Option<Upgraded> {
     let deadline = tokio::time::Instant::now() + ATTACH_WAIT;
     loop {
@@ -259,8 +279,14 @@ async fn take(id: &str) -> Option<Upgraded> {
             .unwrap_or_else(|p| p.into_inner())
             .get_mut(id)
             .and_then(|q| q.pop_front());
-        if let Some(upgraded) = taken {
-            return Some(upgraded);
+        if let Some(Parked { claim, back }) = taken {
+            // A connection whose plugin hung up has no task left to hand it back.
+            if claim.send(()).is_ok() {
+                if let Ok(upgraded) = back.await {
+                    return Some(upgraded);
+                }
+            }
+            continue;
         }
         if tokio::time::timeout_at(deadline, notified).await.is_err() {
             return None;

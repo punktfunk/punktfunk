@@ -119,8 +119,10 @@ A bare name installs the first-party package from Punktfunk's registry: `playnit
 On **Linux** each plugin runs in its own sandbox: no network unless it declared one, and only the
 folders it declared plus the ones you allowed. It can change only its own library entries. The
 sandbox needs `bubblewrap`, which the packages install, and unprivileged user namespaces. On
-**Windows** the runner runs as the low-privilege `NT AUTHORITY\LocalService` account, shared by all
-plugins.
+**Windows** each plugin runs in an AppContainer of its own, under the low-privilege
+`NT AUTHORITY\LocalService` account: no network unless it declared one, and only the folders it
+declared plus the ones you allowed. Program Files stays readable to it; user profiles and other
+drives do not.
 
 Each plugin also declares the programs the host may start for it. The host builds every command
 line itself, and nothing a running plugin sends can widen that list. Still, a plugin is code on
@@ -264,9 +266,10 @@ none of it.
 3. Let the plugin write RTSS's profiles. Once, from an elevated PowerShell:
 
    ```powershell
-   icacls "C:\Program Files (x86)\RivaTuner Statistics Server\Profiles" /grant "*S-1-5-19:(OI)(CI)M"
+   icacls "C:\Program Files (x86)\RivaTuner Statistics Server\Profiles" /grant "*S-1-5-19:(OI)(CI)M" "*S-1-15-2-1251237843-3372458582-2949526732-893382375-1396029850-1946794802-2851191480:(OI)(CI)M"
    ```
 
+   The first SID is the runner's account, the second the plugin's own sandbox; a write needs both.
    The console can't do this step: it never gives a plugin write access inside Program Files.
 4. Start the stream, then the game. A game that was already running keeps the limit it started
    with.

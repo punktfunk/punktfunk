@@ -227,13 +227,16 @@ fn plugin_homes() -> Vec<PathBuf> {
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
+    // The service's profile on Windows, whoever runs this: an elevated `plugins grant` from the
+    // operator's prompt must resolve roots as the service does, or its converge drops a grant
+    // in the operator's own profile.
     #[cfg(windows)]
-    let key = "USERPROFILE";
+    let home = std::env::var_os("SystemRoot")
+        .filter(|s| !s.is_empty())
+        .map(|root| PathBuf::from(root).join(r"System32\config\systemprofile"));
     #[cfg(not(windows))]
-    let key = "HOME";
-    std::env::var_os(key)
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    home.filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Does `value` match `kind`? Length is capped here too: every value ends up as one argv element.

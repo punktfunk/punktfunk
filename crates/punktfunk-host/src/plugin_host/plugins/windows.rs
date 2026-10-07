@@ -706,6 +706,9 @@ enum Ace {
     Code,
     /// `(M)`: a declared write, a write grant, or the plugin's own state.
     Modify,
+    /// `(RX)` on this folder alone: the names in it, none of what they hold. `(RD)` alone
+    /// does not open the folder for a listing.
+    List,
 }
 
 impl Ace {
@@ -714,6 +717,7 @@ impl Ace {
             Ace::Read => "(OI)(CI)(RX)",
             Ace::Code => "(OI)(CI)(RX,WA)",
             Ace::Modify => "(OI)(CI)(M)",
+            Ace::List => "(RX)",
         }
     }
 }
@@ -738,35 +742,45 @@ struct Placed {
 /// Under `plugin-run`, beside the grants it mirrors.
 const RUNNER_ACES_FILE: &str = "runner-aces.json";
 
-/// Every directory a plugin declared or was granted carries an ACE for the account it runs as,
-/// read or Modify, every `HKLM` key it declared its read, and its package the code, state and
-/// inbox it needs; what a gone plugin placed is stripped. With the sandbox off the grantee is
-/// the runner's account for everything. A root under the host's own profile is nobody's `~`
-/// and gets nothing; a directory that does not exist yet waits for the next start.
+static RECHECK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The next converge places every ACE again, not only the changed ones. The service asks at start:
+/// it runs as SYSTEM, which may edit a folder like `WindowsApps` that an admin's CLI may not.
+pub(super) fn recheck_next() {
+    RECHECK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Every directory a plugin declared or was granted carries an ACE for the runner's account,
+/// read or Modify, and every `HKLM` key it declared a read; what a gone plugin placed is
+/// stripped. With the sandbox on, the plugin's package gets the same plus its code, state and
+/// inbox: a container passes only an ACE its account and its package both hold, so a root in a
+/// user profile needs both. A root under the host's own profile is nobody's `~` and gets
+/// nothing; a directory that does not exist yet waits for the next start. After
+/// [`recheck_next`] it places every ACE again: an installer that rewrites a folder or key drops
+/// the ACE while the file still lists it.
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
     manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let want = if runner_sandbox_off() {
-        PlacedAces {
-            grantees: [(
-                LOCAL_SERVICE_SID.trim_start_matches('*').to_string(),
-                Placed {
-                    paths: root_aces(roots, &home),
-                    keys: manifests
-                        .values()
-                        .flat_map(|m| m.registry.iter())
-                        .filter_map(|k| named_key(k))
-                        .collect(),
-                },
-            )]
-            .into(),
-        }
-    } else {
+    let runner = Placed {
+        paths: root_aces(roots, &home),
+        keys: manifests
+            .values()
+            .flat_map(|m| m.registry.iter())
+            .filter_map(|k| named_key(k))
+            .collect(),
+    };
+    let mut want = PlacedAces {
+        grantees: [(
+            LOCAL_SERVICE_SID.trim_start_matches('*').to_string(),
+            runner,
+        )]
+        .into(),
+    };
+    if !runner_sandbox_off() {
         let store = access::AccessStore::open(pf_paths::config_dir());
-        let mut want = PlacedAces::default();
         for (id, m) in manifests {
             let sid = match crate::windows::app_container::package_sid(id) {
                 Ok(sid) => sid,
@@ -777,11 +791,13 @@ pub(super) fn converge_runner_roots(
             };
             let mut paths = root_aces(&store.plugin_roots(id, m), &home);
             paths.extend(package_dirs(id));
+            if m.per_account() {
+                paths.extend(profiles_root());
+            }
             let keys = m.registry.iter().filter_map(|k| named_key(k)).collect();
             want.grantees.insert(sid, Placed { paths, keys });
         }
-        want
-    };
+    }
     let file = pf_paths::config_dir()
         .join(RUNNER_DATA_DIR)
         .join(RUNNER_ACES_FILE);
@@ -789,7 +805,8 @@ pub(super) fn converge_runner_roots(
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
-    if want == had {
+    let recheck = RECHECK.swap(false, std::sync::atomic::Ordering::Relaxed);
+    if want == had && !recheck {
         return Ok(false);
     }
     let mut placed = had.clone();
@@ -831,7 +848,7 @@ pub(super) fn converge_runner_roots(
         let old = had.grantees.get(sid).unwrap_or(&empty);
         let icacls_sid = format!("*{sid}");
         for (path, ace) in &new.paths {
-            if old.paths.get(path) == Some(ace) {
+            if !recheck && old.paths.get(path) == Some(ace) {
                 continue;
             }
             match grant_ace(&icacls_sid, std::path::Path::new(path), *ace) {
@@ -846,7 +863,12 @@ pub(super) fn converge_runner_roots(
                 Err(e) => tracing::warn!(%sid, %path, error = %e, "runner ACE not placed"),
             }
         }
-        for key in new.keys.difference(&old.keys) {
+        let keys: Vec<&String> = if recheck {
+            new.keys.iter().collect()
+        } else {
+            new.keys.difference(&old.keys).collect()
+        };
+        for key in keys {
             match crate::windows::registry_ace::grant_read(key, sid) {
                 Ok(()) => {
                     placed
@@ -855,6 +877,10 @@ pub(super) fn converge_runner_roots(
                         .or_default()
                         .keys
                         .insert(key.clone());
+                }
+                // Not recorded either way, so the next converge tries a key that appeared since.
+                Err(e) if crate::windows::registry_ace::is_absent(&e) => {
+                    tracing::debug!(%sid, %key, "key ACE waits for its key")
                 }
                 Err(e) => {
                     tracing::warn!(%sid, %key, error = %format!("{e:#}"), "key ACE not placed")
@@ -914,6 +940,16 @@ fn package_dirs(id: &str) -> std::collections::BTreeMap<String, Ace> {
         dirs.insert(inbox.to_string_lossy().into_owned(), Ace::Read);
     }
     dirs
+}
+
+/// `%SystemDrive%\Users`, list only: a per-account source finds each profile's folder there
+/// and asks for the one it reads, as the runner's account could before the container.
+fn profiles_root() -> Option<(String, Ace)> {
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    let users = std::path::PathBuf::from(format!(r"{drive}\Users"));
+    users
+        .is_dir()
+        .then(|| (users.to_string_lossy().into_owned(), Ace::List))
 }
 
 /// `HKLM\SOFTWARE\…` as `SetNamedSecurityInfoW` names it: `MACHINE\SOFTWARE\…`. An `HKCU` key
