@@ -873,15 +873,15 @@
 			repositoryURL = "https://github.com/davdroman/swiftui-navigation-transitions";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.18.0;
+				minimumVersion = 0.19.0;
 			};
 		};
 		EE0000000000000000000001 /* XCRemoteSwiftPackageReference "Glur" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/joogps/Glur.git";
 			requirement = {
-				kind = revision;
-				revision = ba4f05d3c9a608ec773b9305f2af6089390de68a;
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
