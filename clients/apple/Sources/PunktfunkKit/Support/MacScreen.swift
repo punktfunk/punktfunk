@@ -29,6 +29,12 @@ extension NSScreen {
         return (panel.pixelWidth, panel.pixelHeight)
     }
 
+    /// Panel pixels per point: what turns a view's bounds into pixels the screen really shows.
+    /// Below `backingScaleFactor` in a scaled mode (about 1.5 on a "More Space" Air, not 2).
+    public var panelScale: Double {
+        Double(panelPixelSize.height) / max(Double(frame.height), 1)
+    }
+
     /// The panel shortened to clear the camera housing — the mode a full-screen stream shows whole.
     /// Equal to [`panelPixelSize`] on a screen with no housing, which is what lets callers treat
     /// "the two agree" as "there is no notch here".
@@ -38,7 +44,7 @@ extension NSScreen {
         return SafeDisplay.mode(
             nativeWidth: panel.width, nativeHeight: panel.height,
             topInsetPoints: Double(safeAreaInsets.top),
-            scale: Double(panel.height) / max(Double(frame.height), 1))
+            scale: panelScale)
     }
 }
 #endif
