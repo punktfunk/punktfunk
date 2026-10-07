@@ -18,7 +18,8 @@ use crate::windows::util::{
 use rand::RngCore as _;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_ALIAS_EXISTS, ERROR_FILE_NOT_FOUND, HANDLE, HLOCAL, NTSTATUS,
+    CloseHandle, LocalFree, ERROR_ALIAS_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_MEMBER_IN_ALIAS,
+    HANDLE, HLOCAL, NTSTATUS,
 };
 use windows::Win32::NetworkManagement::NetManagement::{
     NERR_GroupExists, NERR_Success, NERR_UserExists, NERR_UserInGroup, NERR_UserNotFound,
@@ -395,7 +396,8 @@ pub(super) fn sid_string(account: &str) -> Option<String> {
     out
 }
 
-/// Adds `account` to the local `group`. Already a member is success.
+/// Adds `account` to the local `group`. Already a member is success: a local group answers
+/// `ERROR_MEMBER_IN_ALIAS` for it, not `NERR_UserInGroup`.
 fn add_member(group: &str, account: &str) -> WinResult<()> {
     let qualified = format!("{}\\{account}", computer_name()?);
     let mut group_w = wide(group, "local group")?;
@@ -413,7 +415,7 @@ fn add_member(group: &str, account: &str) -> WinResult<()> {
             1,
         )
     };
-    if status == NERR_Success || status == NERR_UserInGroup {
+    if status == NERR_Success || status == NERR_UserInGroup || status == ERROR_MEMBER_IN_ALIAS.0 {
         Ok(())
     } else {
         Err(status_error(
