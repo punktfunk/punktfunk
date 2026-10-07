@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { inSeat } from "@/api/fetcher";
 import {
 	clientLogsGet,
+	logsGet,
 	useClientLogsList,
 	useLogsGet,
 } from "@/api/gen/logs/logs";
 import type { ClientLogMeta } from "@/api/gen/model/clientLogMeta";
 import type { LogEntry } from "@/api/gen/model/logEntry";
 import type { Loadable } from "@/lib/query";
-import { bundleRows, type Row } from "./rows";
+import { bundleRows, type Row, seatSource } from "./rows";
 
 const KEEP = 5_000; // accumulated entries (client memory bound)
 
@@ -101,6 +103,82 @@ export const useHostLog = () => {
 		isLoading: query.isLoading,
 		refetch: query.refetch,
 	};
+};
+
+/** A seat host the box can reach, and the tag its lines carry. */
+export interface SeatSource {
+	id: string;
+	label: string;
+}
+
+/** How often a selected seat's ring is read. */
+const SEAT_POLL_MS = 2_000;
+
+/**
+ * Each selected seat's own log ring, read through the box's seat proxy (`/profiles/{id}/proxy/
+ * logs`) on the same cursor scheme as the host's. Only a selected seat is polled; a seat that
+ * stops answering keeps the lines it gave, and one whose ring restarted is re-read from the start.
+ */
+export const useSeatLogs = (seats: SeatSource[], selected: Set<string>) => {
+	const [rings, setRings] = useState<Record<string, LogEntry[]>>({});
+	// Read by the poll, never rendered: a cursor in state would restart the poll on every page.
+	const cursors = useRef<Record<string, number>>({});
+	const key = seats
+		.filter((s) => selected.has(seatSource(s.id)))
+		.map((s) => s.id)
+		.join(",");
+	useEffect(() => {
+		const ids = key ? key.split(",") : [];
+		if (ids.length === 0) return;
+		let live = true;
+		const poll = async () => {
+			for (const id of ids) {
+				const after = cursors.current[id];
+				const page = await inSeat(id, () =>
+					logsGet(after ? { after } : undefined),
+				).catch(() => null);
+				// A restarted seat answers a stale cursor with empty pages forever, and a restart
+				// always fails a poll first: after a failure, re-read the ring from its start.
+				if (!page) cursors.current[id] = 0;
+				if (!live || !page) continue;
+				cursors.current[id] = page.next;
+				setRings((prev) => {
+					const held = prev[id] ?? [];
+					const last = held.at(-1)?.seq ?? -1;
+					const newest = page.entries.at(-1)?.seq ?? -1;
+					const next =
+						newest < last
+							? page.entries
+							: [...held, ...page.entries.filter((e) => e.seq > last)];
+					return { ...prev, [id]: next.slice(-KEEP) };
+				});
+			}
+		};
+		void poll();
+		const timer = setInterval(poll, SEAT_POLL_MS);
+		return () => {
+			live = false;
+			clearInterval(timer);
+		};
+	}, [key]);
+
+	return useMemo(
+		() =>
+			seats.flatMap((s) =>
+				selected.has(seatSource(s.id))
+					? (rings[s.id] ?? []).map((e) => ({
+							key: `${seatSource(s.id)}:${e.seq}`,
+							ts: e.ts_ms,
+							level: e.level,
+							target: e.target,
+							msg: e.msg,
+							source: seatSource(s.id),
+							device: s.label,
+						}))
+					: [],
+			),
+		[seats, selected, rings],
+	);
 };
 
 /** A bundle plus whatever this page has managed to fetch of it. */

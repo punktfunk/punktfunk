@@ -82,6 +82,9 @@ pub struct HookFilter {
     /// The dialled settings preset, by id or name (`client.*`, `session.*`, `stream.*`, `game.*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// The profile played as, by id (`client.*`, `session.*`, `stream.*`, `game.*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl HookFilter {
@@ -111,6 +114,11 @@ impl HookFilter {
             match kind.preset() {
                 Some(p) if p.id == *want || p.name.eq_ignore_ascii_case(want) => {}
                 _ => return false,
+            }
+        }
+        if let Some(want) = &self.profile {
+            if kind.profile().is_none_or(|p| p.id != *want) {
+                return false;
             }
         }
         true
@@ -1085,6 +1093,7 @@ mod tests {
                     app: Some("steam:570".into()),
                     plane: Plane::Native,
                     preset: None,
+                    profile: None,
                 },
             },
         }
@@ -1309,6 +1318,27 @@ mod tests {
         // It rides the event JSON, so a hook's env names it.
         let json = serde_json::to_value(&docked).unwrap();
         assert_eq!(json["client"]["preset"]["name"], "Docked");
+    }
+
+    /// One list of hooks for the box: a profile filter fires for that profile's events only, on
+    /// every event that names one.
+    #[test]
+    fn a_profile_filter_matches_that_profiles_events() {
+        let kid = crate::events::ProfileRef {
+            id: "9a3f1c2b7e40".into(),
+            display_name: "Kid".into(),
+        };
+        let mut started = sample_event().kind;
+        if let EventKind::StreamStarted { stream } = &mut started {
+            stream.profile = Some(kid.clone());
+        }
+        let by = |want: &str| HookFilter {
+            profile: Some(want.into()),
+            ..Default::default()
+        };
+        assert!(by("9a3f1c2b7e40").matches(&started));
+        assert!(!by("4f1c3a9b0e27").matches(&started));
+        assert!(!by("9a3f1c2b7e40").matches(&sample_event().kind));
     }
 
     #[test]

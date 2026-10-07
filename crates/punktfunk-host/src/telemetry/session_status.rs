@@ -562,6 +562,7 @@ fn session_ref(s: &LiveSession) -> crate::events::SessionRef {
         mode: crate::events::mode_str(width, height, fps),
         hdr: s.hdr,
         preset: s.controls.preset.clone(),
+        profile: s.controls.profile.clone(),
     }
 }
 

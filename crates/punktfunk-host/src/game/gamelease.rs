@@ -143,8 +143,8 @@ pub struct LeaseShared {
     /// The launching session's preset, on the game events.
     pub preset: Option<crate::events::PresetRef>,
     pub plane: crate::events::Plane,
-    /// The launching session's profile: play time is credited to it.
-    pub profile: Option<String>,
+    /// The launching session's profile: play time is credited to it, the game events name it.
+    pub profile: Option<crate::events::ProfileRef>,
     kind: LeaseKind,
     state: AtomicU8,
     /// Watcher stop: session ended, or the lease was terminated.
@@ -182,6 +182,11 @@ pub struct LeaseShared {
 }
 
 impl LeaseShared {
+    /// The profile play time is credited to.
+    fn profile_id(&self) -> Option<String> {
+        self.profile.as_ref().map(|p| p.id.clone())
+    }
+
     pub fn state(&self) -> GameState {
         GameState::from_u8(self.state.load(Ordering::Relaxed))
     }
@@ -298,7 +303,7 @@ pub struct LeaseRequest {
     pub preset: Option<crate::events::PresetRef>,
     pub plane: crate::events::Plane,
     /// The launching session's profile, credited in play stats.
-    pub profile: Option<String>,
+    pub profile: Option<crate::events::ProfileRef>,
     pub spec: DetectSpec,
     /// `true` when a bare-spawn gamescope owns the game.
     pub nested: bool,
@@ -952,7 +957,7 @@ impl Watcher {
                 let run = self
                     .credit
                     .clone()
-                    .map(|id| RunClock::since(id, self.shared.profile.clone(), self.spawned_at));
+                    .map(|id| RunClock::since(id, self.shared.profile_id(), self.spawned_at));
                 finish(
                     &self.shared,
                     &self.on_exit,
@@ -1069,7 +1074,7 @@ impl Watcher {
         let mut run = self
             .credit
             .take()
-            .map(|id| RunClock::since(id, self.shared.profile.clone(), Instant::now()));
+            .map(|id| RunClock::since(id, self.shared.profile_id(), Instant::now()));
         let mut gone_since: Option<Instant> = None;
         let mut vetoed = false;
         let shared = self.shared.clone();
@@ -1268,6 +1273,7 @@ pub fn game_event_ref(shared: &LeaseShared) -> crate::events::GameRefPayload {
         fingerprint: shared.fingerprint.clone(),
         plane: shared.plane,
         preset: shared.preset.clone(),
+        profile: shared.profile.clone(),
     }
 }
 
@@ -1798,6 +1804,7 @@ pub fn end_detached(d: crate::launchreg::Detached, why: &'static str) {
                     fingerprint: Some(d.fingerprint.clone()),
                     plane: d.plane,
                     preset: None,
+                    profile: None,
                 },
                 reason: crate::events::GameEndReason::Terminated,
             });

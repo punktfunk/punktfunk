@@ -12043,6 +12043,17 @@
               }
             ]
           },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "The profile of the session that launched it. See [`ClientRef::profile`]."
+              }
+            ]
+          },
           "store": {
             "type": [
               "string",
@@ -12388,6 +12399,13 @@
               "null"
             ],
             "description": "The dialled settings preset, by id or name (`client.*`, `session.*`, `stream.*`, `game.*`)."
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile played as, by id (`client.*`, `session.*`, `stream.*`, `game.*`)."
           }
         }
       },
@@ -15686,6 +15704,17 @@
                 "description": "See [`ClientRef::preset`]."
               }
             ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "See [`ClientRef::profile`]."
+              }
+            ]
           }
         }
       },
@@ -16557,6 +16586,17 @@
               {
                 "$ref": "#/components/schemas/PresetRef",
                 "description": "See [`ClientRef::preset`]."
+              }
+            ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRef",
+                "description": "See [`ClientRef::profile`]."
               }
             ]
           }

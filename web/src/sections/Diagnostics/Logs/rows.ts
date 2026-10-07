@@ -18,6 +18,8 @@ import type { LogEntry } from "@/api/gen/model/logEntry";
 export const HOST_SOURCE = "host";
 export const PLUGINS_SOURCE = "plugins";
 export const deviceSource = (bundleId: string): string => `device:${bundleId}`;
+/** A running seat host's own ring, by profile id. */
+export const seatSource = (profileId: string): string => `seat:${profileId}`;
 
 /** The target prefix the host stamps on every runner-shipped line. */
 const PLUGIN_TARGET_PREFIX = "plugin:";

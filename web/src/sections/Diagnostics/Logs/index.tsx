@@ -3,6 +3,9 @@ import { Download } from "lucide-react";
 import { type FC, useEffect, useMemo, useState } from "react";
 import { ApiError } from "@/api/fetcher";
 import { useGetDiagnostics } from "@/api/gen/diagnostics/diagnostics";
+import { useGetHostInfo } from "@/api/gen/host/host";
+import { useListProfiles } from "@/api/gen/profiles/profiles";
+import { isFullSeat } from "@/api/seat";
 import { Button } from "@/components/ui/button";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
@@ -25,8 +28,14 @@ import {
 	hostRows,
 	mergeRows,
 	PLUGINS_SOURCE,
+	seatSource,
 } from "./rows";
-import { useDeviceLogs, useHostLog } from "./useLogSources";
+import {
+	type SeatSource,
+	useDeviceLogs,
+	useHostLog,
+	useSeatLogs,
+} from "./useLogSources";
 import { LogsView } from "./view";
 
 /** `12:04` — a chip has room for when a bundle landed, not for the date it landed on. */
@@ -48,6 +57,25 @@ export const SectionLogs: FC = () => {
 
 	const host = useHostLog();
 	const devices = useDeviceLogs();
+	// Every seat whose own host runs: its log is a source like the box's, one chip each.
+	const profiles = useListProfiles({ query: { retry: false } });
+	const info = useGetHostInfo();
+	const seats = useMemo<SeatSource[]>(
+		() =>
+			(profiles.data ?? [])
+				.filter(
+					(p) =>
+						isFullSeat(p, info.data?.os, info.data?.door === true) &&
+						(p.seat?.state === "occupied" ||
+							p.seat?.state === "ready" ||
+							p.seat?.state === "starting"),
+				)
+				.map((p) => ({
+					id: p.id,
+					label: m.logs_source_seat({ name: p.display_name }),
+				})),
+		[profiles.data, info.data],
+	);
 
 	// Host and plugins on by default — the page's previous "All", and still the right opening
 	// state: a device bundle is a deliberate act of correlation, not something to be opted out of.
@@ -72,6 +100,7 @@ export const SectionLogs: FC = () => {
 		diagnostics.error instanceof ApiError && diagnostics.error.status === 404;
 
 	const fromHost = useMemo(() => hostRows(host.entries), [host.entries]);
+	const fromSeats = useSeatLogs(seats, selected);
 
 	// Only SELECTED device bundles reach the merge. An export loads every bundle as a side effect,
 	// and without this the pool would silently grow by a few thousand rows per device that nobody
@@ -80,11 +109,12 @@ export const SectionLogs: FC = () => {
 		() =>
 			mergeRows([
 				fromHost,
+				fromSeats,
 				...devices.bundles
 					.filter((b) => selected.has(deviceSource(b.meta.id)))
 					.map((b) => b.rows),
 			]),
-		[fromHost, devices.bundles, selected],
+		[fromHost, fromSeats, devices.bundles, selected],
 	);
 
 	const sources = useMemo<SourceChoice[]>(
@@ -99,6 +129,11 @@ export const SectionLogs: FC = () => {
 				label: m.logs_source_plugins(),
 				selected: selected.has(PLUGINS_SOURCE),
 			},
+			...seats.map((seat) => ({
+				id: seatSource(seat.id),
+				label: seat.label,
+				selected: selected.has(seatSource(seat.id)),
+			})),
 			...devices.bundles.map((b) => ({
 				id: deviceSource(b.meta.id),
 				label: b.meta.device_name,
@@ -112,7 +147,7 @@ export const SectionLogs: FC = () => {
 							: undefined,
 			})),
 		],
-		[devices.bundles, selected],
+		[seats, devices.bundles, selected],
 	);
 
 	const onToggleSource = (id: string) => {

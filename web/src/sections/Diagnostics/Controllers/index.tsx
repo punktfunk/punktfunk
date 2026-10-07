@@ -85,7 +85,10 @@ const SessionPads: FC<{ sessions: (SessionRow & { id: number })[] }> = ({
 					<SelectContent>
 						{sessions.map((s) => (
 							<SelectItem key={s.id} value={String(s.id)}>
-								{s.client_name ?? s.client}
+								{/* Whose session, where several people play. */}
+								{s.profile
+									? `${s.profile.display_name} · ${s.client_name ?? s.client}`
+									: (s.client_name ?? s.client)}
 							</SelectItem>
 						))}
 					</SelectContent>

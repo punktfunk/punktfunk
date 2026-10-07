@@ -15,8 +15,9 @@ pub(crate) struct LaunchOwner {
     pub fingerprint: Option<String>,
     pub plane: Plane,
     pub preset: Option<PresetRef>,
-    /// The session's profile, credited in play stats beside the title. `None` on GameStream.
-    pub profile: Option<String>,
+    /// The session's profile, credited in play stats beside the title and named on the game
+    /// events. `None` on GameStream.
+    pub profile: Option<crate::events::ProfileRef>,
 }
 
 /// A claimed, prepped launch.
@@ -91,6 +92,7 @@ pub(crate) fn prepare(
             fingerprint: owner.fingerprint.clone(),
             plane: owner.plane,
             preset: owner.preset.clone(),
+            profile: owner.profile.clone(),
         });
         // After the holds: they stage the firmware this places.
         if let Some(id) = t.game.id.as_deref() {
@@ -284,7 +286,7 @@ pub(crate) fn spawn(
         if out.now {
             c.launched();
             if let Some(id) = c.credits() {
-                crate::library::record_launch(id, owner.profile.as_deref());
+                crate::library::record_launch(id, owner.profile.as_ref().map(|p| p.id.as_str()));
             }
         } else if c.must_spawn() {
             c.abandon();

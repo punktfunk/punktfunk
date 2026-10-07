@@ -126,6 +126,7 @@ mod tests {
                     fingerprint: Some("ab12".into()),
                     plane: crate::events::Plane::Native,
                     preset: None,
+                    profile: None,
                 },
             },
         }
