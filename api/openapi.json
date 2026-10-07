@@ -8958,7 +8958,7 @@
           },
           "managed": {
             "type": "boolean",
-            "description": "Best-effort: one of our virtual displays, not a real head. Reliable on KWin only."
+            "description": "One of our virtual displays, not a real head. Best-effort on Sway, whose\n`HEADLESS-N` may be the operator's own."
           },
           "mode": {
             "type": "string",

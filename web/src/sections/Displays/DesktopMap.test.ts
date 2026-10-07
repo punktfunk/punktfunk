@@ -145,3 +145,66 @@ describe("toBoxes keepLit", () => {
 		expect(boxes.map((b) => b.dimmed)).toEqual([false, true]);
 	});
 });
+
+describe("toBoxes groups", () => {
+	const at = (bs: ReturnType<typeof toBoxes>) =>
+		bs.map((b) => [b.key, b.x, b.y] as const);
+
+	test("kept screens of separate devices never stack at the origin", () => {
+		const boxes = toBoxes(
+			[],
+			[
+				disp({
+					slot: 1,
+					group: 0,
+					x: 0,
+					topology: "exclusive",
+					state: "lingering",
+				}),
+				disp({
+					slot: 2,
+					group: 1,
+					x: 0,
+					topology: "exclusive",
+					state: "active",
+				}),
+				disp({
+					slot: 3,
+					group: 2,
+					x: 0,
+					topology: "exclusive",
+					state: "lingering",
+				}),
+			],
+		);
+		// The live one first at its spot; each kept one right of the last, past a gap.
+		expect(at(boxes)).toEqual([
+			["slot-2", 0, 0],
+			["slot-1", 3840 + 192, 0],
+			["slot-3", 2 * (3840 + 192), 0],
+		]);
+	});
+
+	test("the live screen-taking group stays over the monitors", () => {
+		const boxes = toBoxes(
+			[mon({ primary: true })],
+			[disp({ x: 0, topology: "exclusive" })],
+		);
+		expect(at(boxes)).toEqual([
+			["mon-DP-1", 0, 0],
+			["slot-1", 0, 0],
+		]);
+	});
+
+	test("an extension reported over a monitor moves flush beside it", () => {
+		const boxes = toBoxes([mon({})], [disp({ x: 0 })]);
+		expect(at(boxes)[1]).toEqual(["slot-1", 2560, 0]);
+		expect(boxes[1].shift).toEqual({ x: 2560, y: 0 });
+	});
+
+	test("a group already beside the monitors stays where it was reported", () => {
+		const boxes = toBoxes([mon({})], [disp({ x: 2560 })]);
+		expect(at(boxes)[1]).toEqual(["slot-1", 2560, 0]);
+		expect(boxes[1].shift).toEqual({ x: 0, y: 0 });
+	});
+});

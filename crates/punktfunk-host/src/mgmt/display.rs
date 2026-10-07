@@ -538,7 +538,8 @@ pub(crate) struct ApiMonitorInfo {
     primary: bool,
     /// Driven right now. Disabled heads stay listed so they are not missing from the picker.
     enabled: bool,
-    /// Best-effort: one of our virtual displays, not a real head. Reliable on KWin only.
+    /// One of our virtual displays, not a real head. Best-effort on Sway, whose
+    /// `HEADLESS-N` may be the operator's own.
     managed: bool,
     /// True when `PUNKTFUNK_CAPTURE_MONITOR` currently names this monitor.
     selected: bool,

@@ -47,6 +47,8 @@ export interface MapBox {
 	connector?: string;
 	/** This device pins something of its own, so its box is not the host's policy. */
 	overlaid?: boolean;
+	/** How far the map moved this box off its reported spot; a drag commits without it. */
+	shift?: { x: number; y: number };
 	/** Dimmed: this monitor turns off while streaming under the previewed topology. */
 	dimmed?: boolean;
 	draggable?: boolean;
@@ -88,29 +90,59 @@ export function toBoxes(
 				!mon.enabled,
 		});
 	}
-	for (const d of displays) {
-		const size = parseMode(d.mode);
-		if (!size) continue;
-		boxes.push({
-			key: `slot-${d.slot}`,
-			kind: "virtual",
-			x: d.x,
-			y: d.y,
-			w: size.w,
-			h: size.h,
-			title: d.client ?? m.display_map_unnamed(),
-			detail: d.mode,
-			state: d.state,
-			expiresInMs: d.expires_in_ms,
-			slot: d.slot,
-			// By NAME: `/display/state` identifies a device the way the box labels it,
-			// while overlays are keyed by fingerprint. The page resolves one to the
-			// other through the paired-device list, which is the only place both live.
-			overlaid: d.client != null && opts.overlaid?.includes(d.client),
-			// Only a display with a stable identity slot has a manual-layout key; an anonymous
-			// one has nowhere to store a position, so it cannot be arranged.
-			draggable: d.identity_slot != null,
+	// Each group reports positions in its own space, from (0, 0). A group that would land on
+	// something drawn moves right of it all: a separate desktop past a gap, an extension flush.
+	// Only the live group that takes the screen stays over the monitors: that overlap is the point.
+	const groups = new Map<number, ApiDisplayInfo[]>();
+	for (const d of displays)
+		groups.set(d.group, [...(groups.get(d.group) ?? []), d]);
+	const live = (g: ApiDisplayInfo[]) =>
+		g.some((d) => d.state === "active") ? 0 : 1;
+	let overlaid = false;
+	for (const [, group] of [...groups.entries()].sort(
+		([ga, a], [gb, b]) => live(a) - live(b) || ga - gb,
+	)) {
+		const sized = group.flatMap((d) => {
+			const size = parseMode(d.mode);
+			return size ? [{ d, ...size }] : [];
 		});
+		if (sized.length === 0) continue;
+		const rect = bounds(sized.map(({ d, w, h }) => ({ x: d.x, y: d.y, w, h })));
+		const hit = boxes.filter((b) => meets(b, rect));
+		const extend = group.every((d) => d.topology === "extend");
+		const over = !extend && !overlaid && hit.every((b) => b.kind === "monitor");
+		let shift = { x: 0, y: 0 };
+		if (hit.length > 0 && !over) {
+			const all = bounds(boxes);
+			const gap = extend ? 0 : Math.round(rect.w / 20);
+			shift = {
+				x: all.minX + all.w + gap - rect.minX,
+				y: all.minY - rect.minY,
+			};
+		}
+		if (!extend && hit.length > 0 && over) overlaid = true;
+		for (const { d, w, h } of sized)
+			boxes.push({
+				key: `slot-${d.slot}`,
+				kind: "virtual",
+				x: d.x + shift.x,
+				y: d.y + shift.y,
+				w,
+				h,
+				shift,
+				title: d.client ?? m.display_map_unnamed(),
+				detail: d.mode,
+				state: d.state,
+				expiresInMs: d.expires_in_ms,
+				slot: d.slot,
+				// By NAME: `/display/state` identifies a device the way the box labels it,
+				// while overlays are keyed by fingerprint. The page resolves one to the
+				// other through the paired-device list, which is the only place both live.
+				overlaid: d.client != null && opts.overlaid?.includes(d.client),
+				// Only a display with a stable identity slot has a manual-layout key; an anonymous
+				// one has nowhere to store a position, so it cannot be arranged.
+				draggable: d.identity_slot != null,
+			});
 	}
 	return boxes;
 }
@@ -146,8 +178,23 @@ export function ghostBox(
 	return { ...base, x: main.x, y: main.y };
 }
 
+/** Do two rects share a pixel? Edge to edge is not overlap. */
+function meets(
+	a: { x: number; y: number; w: number; h: number },
+	b: { minX: number; minY: number; w: number; h: number },
+) {
+	return (
+		a.x < b.minX + b.w &&
+		b.minX < a.x + a.w &&
+		a.y < b.minY + b.h &&
+		b.minY < a.y + a.h
+	);
+}
+
 /** Bounding box over every drawn box, in desktop pixels. */
-export function bounds(boxes: readonly MapBox[]) {
+export function bounds(
+	boxes: readonly { x: number; y: number; w: number; h: number }[],
+) {
 	const minX = Math.min(...boxes.map((b) => b.x));
 	const minY = Math.min(...boxes.map((b) => b.y));
 	const maxX = Math.max(...boxes.map((b) => b.x + b.w));
@@ -182,6 +229,8 @@ export function snap(
 
 /** Below this a box is too small to read or grab, so the map steps aside for the rows. */
 const MIN_BOX_PX = 44;
+/** The map's height at most: one 16:9 screen no longer fills a desktop's width. */
+const MAX_MAP_PX = 288;
 
 /** The element's rendered width, kept current. */
 function useWidth() {
@@ -241,9 +290,10 @@ export const DesktopMap: FC<{
 	);
 	const box = bounds(placed);
 	const smallest = Math.min(...placed.map((b) => b.w));
+	const mapWidth = Math.min(width, (MAX_MAP_PX * box.w) / box.h);
 	const readable =
 		placed.length > 0 &&
-		(width === 0 || (smallest / box.w) * width >= MIN_BOX_PX);
+		(width === 0 || (smallest / box.w) * mapWidth >= MIN_BOX_PX);
 	const pct = (v: number, span: number) => `${(v / span) * 100}%`;
 
 	const onPointerDown = (b: MapBox) => (e: ReactPointerEvent<HTMLElement>) => {
@@ -287,7 +337,7 @@ export const DesktopMap: FC<{
 			// stale one.
 			setDrag((d) => {
 				if (d && d.slot === b.slot && (d.x !== b.x || d.y !== b.y)) {
-					onMove(d.slot, d.x, d.y);
+					onMove(d.slot, d.x - (b.shift?.x ?? 0), d.y - (b.shift?.y ?? 0));
 				}
 				return null;
 			});
@@ -300,9 +350,12 @@ export const DesktopMap: FC<{
 		<div ref={measure} className="w-full">
 			{readable && (
 				<div
-					// The desktop's own proportions, at whatever width there is: height follows width.
-					className="relative w-full overflow-hidden rounded-lg border bg-muted/30"
-					style={{ aspectRatio: `${box.w} / ${box.h}` }}
+					// The desktop's own proportions, as wide as the card or MAX_MAP_PX tall.
+					className="relative mx-auto overflow-hidden rounded-lg border bg-muted/30"
+					style={{
+						aspectRatio: `${box.w} / ${box.h}`,
+						width: `min(100%, ${(MAX_MAP_PX * box.w) / box.h}px)`,
+					}}
 					role="img"
 					aria-label={m.display_map_label()}
 				>
@@ -315,7 +368,7 @@ export const DesktopMap: FC<{
 							className={cn(
 								"absolute flex flex-col justify-between gap-1 overflow-hidden rounded-md border p-1.5 text-[10px] leading-tight sm:p-2 sm:text-xs",
 								b.kind === "virtual"
-									? "border-dashed border-primary/70 bg-primary/10"
+									? "border-dashed border-primary/70 bg-[color-mix(in_oklab,var(--primary)_12%,var(--card))]"
 									: b.kind === "ghost"
 										? "border-dashed border-muted-foreground/60 bg-transparent text-muted-foreground"
 										: "border-border bg-card",

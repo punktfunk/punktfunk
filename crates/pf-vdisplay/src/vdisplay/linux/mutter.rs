@@ -1212,9 +1212,8 @@ pub(crate) fn list_monitors() -> Result<Vec<crate::monitors::PhysicalMonitor>> {
                 scale: logical.map(|l| l.2).filter(|s| *s > 0.0).unwrap_or(1.0),
                 primary: logical.map(|l| l.4).unwrap_or(false),
                 enabled: logical.is_some(),
-                // RecordVirtual monitors are indistinguishable from
-                // physicals — no prefix, connector minted per session.
-                managed: false,
+                // Our RecordVirtual outputs are `Meta-N`; the console draws each once.
+                managed: is_virtual_connector(connector),
             }
         })
         .collect();

@@ -134,6 +134,48 @@ export const KeptAndActive: Story = {
 	},
 };
 
+/**
+ * Workstation on a box three devices used in the last minutes: each got an exclusive screen of
+ * its own, and every group reports itself at (0, 0). The live one sits over the desk; the kept
+ * ones stand apart instead of stacking on it.
+ */
+export const SeparateDesktops: Story = {
+	args: {
+		monitors: [mon({ primary: true })],
+		displays: [
+			disp({
+				slot: 1,
+				group: 0,
+				client: "Enrico's iPad",
+				mode: "2560x1600@120",
+				state: "lingering",
+				expires_in_ms: 120_000,
+				topology: "exclusive",
+				x: 0,
+			}),
+			disp({
+				slot: 2,
+				group: 1,
+				client: "Mac Studio",
+				mode: "2560x1440@120",
+				topology: "exclusive",
+				x: 0,
+			}),
+			disp({
+				slot: 3,
+				group: 2,
+				client: "Steam Deck",
+				mode: "1280x800@90",
+				state: "lingering",
+				expires_in_ms: 240_000,
+				topology: "exclusive",
+				x: 0,
+			}),
+		],
+		dimMonitors: true,
+	},
+};
+
 /** Hovering the Exclusive preset: the physical monitors dim, which IS the preview (§5.3). */
 export const ExclusivePreview: Story = {
 	args: {
