@@ -471,18 +471,25 @@ describe("supervision", () => {
 				runner({
 					...d,
 					configDir: d.dir,
+					// The Windows shape: no sandbox, a process each. Linux would default to bwrap.
+					sandbox: "off",
 					ownProcess: true,
 					restartBase: "20 millis",
 					log: (l) => logs.push(l),
 				}),
 			);
-			await waitFor(() => {
-				try {
-					return Number(fs.readFileSync(counter, "utf8")) >= 2;
-				} catch {
-					return false;
-				}
-			}, 20000);
+			try {
+				await waitFor(() => {
+					try {
+						return Number(fs.readFileSync(counter, "utf8")) >= 2;
+					} catch {
+						return false;
+					}
+				}, 20000);
+			} catch (e) {
+				// The supervisor's own lines say why the child never ran.
+				throw new Error(`${e}\nrunner said:\n${logs.join("\n")}`);
+			}
 			await Effect.runPromise(Fiber.interrupt(fiber));
 		} finally {
 			if (entry === undefined) delete process.env.PUNKTFUNK_RUNNER_ENTRY;
