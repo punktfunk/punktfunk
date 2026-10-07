@@ -321,125 +321,132 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 			...(download ? { download } : {}),
 		};
 	};
-	const empty = !games.isLoading && shown.length === 0;
+	const empty = shown.length === 0;
 	return (
-		<div className="flex flex-col gap-card">
-			{/* Search and the view on one line at every width; the filters and the count below. */}
-			<div className="flex items-center gap-2">
-				<div className="relative min-w-0 flex-1 sm:max-w-sm">
-					<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						type="search"
-						className="pl-9"
-						aria-label={m.library_search_placeholder()}
-						placeholder={m.library_search_placeholder()}
-						value={query}
-						onChange={(e) => onQuery(e.target.value)}
-					/>
-				</div>
-				<p
-					className="hidden text-sm text-muted-foreground sm:ml-auto sm:block"
-					aria-live="polite"
+		<QueryState
+			isLoading={games.isLoading}
+			error={games.error}
+			refetch={games.refetch}
+		>
+			{/* Mounts with the first page: its cascade runs over the toolbar, the launchers and the
+			    covers together, never over a spinner. Its own clock: the page's ran during loading. */}
+			<Stagger root className="flex flex-col gap-card">
+				{/* Search and the view on one line at every width; the filters and the count below. */}
+				<motion.div variants={ROW} className="flex items-center gap-2">
+					<div className="relative min-w-0 flex-1 sm:max-w-sm">
+						<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							type="search"
+							className="pl-9"
+							aria-label={m.library_search_placeholder()}
+							placeholder={m.library_search_placeholder()}
+							value={query}
+							onChange={(e) => onQuery(e.target.value)}
+						/>
+					</div>
+					<p
+						className="hidden text-sm text-muted-foreground sm:ml-auto sm:block"
+						aria-live="polite"
+					>
+						{shown.length < total
+							? m.library_count_shown({ shown: shown.length, count: total })
+							: m.library_count({ count: total })}
+					</p>
+					<div className="flex shrink-0 gap-1">
+						<Button
+							size="icon"
+							variant={view === "grid" ? "default" : "outline"}
+							aria-pressed={view === "grid"}
+							aria-label={m.library_view_grid()}
+							title={m.library_view_grid()}
+							onClick={() => onView("grid")}
+						>
+							<LayoutGrid className="size-4" />
+						</Button>
+						<Button
+							size="icon"
+							variant={view === "rows" ? "default" : "outline"}
+							aria-pressed={view === "rows"}
+							aria-label={m.library_view_rows()}
+							title={m.library_view_rows()}
+							onClick={() => onView("rows")}
+						>
+							<Rows3 className="size-4" />
+						</Button>
+					</div>
+				</motion.div>
+				<motion.div
+					variants={ROW}
+					className="-mt-2 flex flex-wrap items-center gap-2 empty:hidden"
 				>
-					{shown.length < total
-						? m.library_count_shown({ shown: shown.length, count: total })
-						: m.library_count({ count: total })}
-				</p>
-				<div className="flex shrink-0 gap-1">
-					<Button
-						size="icon"
-						variant={view === "grid" ? "default" : "outline"}
-						aria-pressed={view === "grid"}
-						aria-label={m.library_view_grid()}
-						title={m.library_view_grid()}
-						onClick={() => onView("grid")}
-					>
-						<LayoutGrid className="size-4" />
-					</Button>
-					<Button
-						size="icon"
-						variant={view === "rows" ? "default" : "outline"}
-						aria-pressed={view === "rows"}
-						aria-label={m.library_view_rows()}
-						title={m.library_view_rows()}
-						onClick={() => onView("rows")}
-					>
-						<Rows3 className="size-4" />
-					</Button>
-				</div>
-			</div>
-			<div className="-mt-2 flex flex-wrap items-center gap-2 empty:hidden">
-				{(platforms.length > 1 || platform !== null) && (
-					<div className="min-w-0 flex-1 sm:w-56 sm:flex-none">
-						<Select
-							value={platform ?? ALL}
-							onValueChange={(v) => onPlatform(v === ALL ? null : v)}
-						>
-							<SelectTrigger aria-label={m.library_platform_label()}>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value={ALL}>{m.library_platform_all()}</SelectItem>
-								{platforms.map((p) => (
-									<SelectItem key={p.platform} value={p.platform}>
-										{m.library_platform_option({
-											platform: p.platform,
-											count: p.count,
-										})}
+					{(platforms.length > 1 || platform !== null) && (
+						<div className="min-w-0 flex-1 sm:w-56 sm:flex-none">
+							<Select
+								value={platform ?? ALL}
+								onValueChange={(v) => onPlatform(v === ALL ? null : v)}
+							>
+								<SelectTrigger aria-label={m.library_platform_label()}>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={ALL}>
+										{m.library_platform_all()}
 									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</div>
-				)}
-				{onInstall && (notInstalled > 0 || install !== null) && (
-					<div className="min-w-0 flex-1 sm:w-48 sm:flex-none">
-						<Select
-							value={install ?? ALL}
-							onValueChange={(v) =>
-								onInstall(v === ALL ? null : (v as InstallFilter))
-							}
+									{platforms.map((p) => (
+										<SelectItem key={p.platform} value={p.platform}>
+											{m.library_platform_option({
+												platform: p.platform,
+												count: p.count,
+											})}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					)}
+					{onInstall && (notInstalled > 0 || install !== null) && (
+						<div className="min-w-0 flex-1 sm:w-48 sm:flex-none">
+							<Select
+								value={install ?? ALL}
+								onValueChange={(v) =>
+									onInstall(v === ALL ? null : (v as InstallFilter))
+								}
+							>
+								<SelectTrigger aria-label={m.library_install_filter_label()}>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={ALL}>
+										{m.library_install_filter_all()}
+									</SelectItem>
+									<SelectItem value="installed">
+										{m.library_install_filter_installed()}
+									</SelectItem>
+									<SelectItem value="missing">
+										{m.library_install_filter_missing({ count: notInstalled })}
+									</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					)}
+					{source && (
+						<Button
+							size="sm"
+							variant="secondary"
+							title={m.library_filter_clear()}
+							onClick={source.onClear}
 						>
-							<SelectTrigger aria-label={m.library_install_filter_label()}>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value={ALL}>
-									{m.library_install_filter_all()}
-								</SelectItem>
-								<SelectItem value="installed">
-									{m.library_install_filter_installed()}
-								</SelectItem>
-								<SelectItem value="missing">
-									{m.library_install_filter_missing({ count: notInstalled })}
-								</SelectItem>
-							</SelectContent>
-						</Select>
-					</div>
-				)}
-				{source && (
-					<Button
-						size="sm"
-						variant="secondary"
-						title={m.library_filter_clear()}
-						onClick={source.onClear}
-					>
-						{m.library_filter_source({ source: source.label })}
-						<X className="size-3.5" />
-					</Button>
-				)}
-				<p className="basis-full text-sm text-muted-foreground sm:hidden">
-					{shown.length < total
-						? m.library_count_shown({ shown: shown.length, count: total })
-						: m.library_count({ count: total })}
-				</p>
-			</div>
+							{m.library_filter_source({ source: source.label })}
+							<X className="size-3.5" />
+						</Button>
+					)}
+					<p className="basis-full text-sm text-muted-foreground sm:hidden">
+						{shown.length < total
+							? m.library_count_shown({ shown: shown.length, count: total })
+							: m.library_count({ count: total })}
+					</p>
+				</motion.div>
 
-			<QueryState
-				isLoading={games.isLoading}
-				error={games.error}
-				refetch={games.refetch}
-			>
 				{/* A launcher is a door, not a game: one chip each, not a poster. */}
 				{launchers.length > 0 && (
 					<Stagger gap={ROW_GAP} className="flex flex-wrap items-center gap-2">
@@ -506,7 +513,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 						</Button>
 					</div>
 				)}
-			</QueryState>
-		</div>
+			</Stagger>
+		</QueryState>
 	);
 };

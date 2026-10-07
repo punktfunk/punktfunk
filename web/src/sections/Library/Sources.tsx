@@ -153,8 +153,10 @@ export const SourcesSection: FC<{
 			(r): r is { source: ScannerInfo; entry: CatalogEntry } => !!r.entry,
 		);
 
+	// A tab panel that mounts once the sources answer: the page's cascade is long over, so it
+	// runs its own (stagger.tsx, `root`).
 	return (
-		<>
+		<Stagger root className="flex flex-col gap-card">
 			{migratable.length > 0 && (
 				<MigrationBanner
 					rows={migratable}
@@ -190,7 +192,7 @@ export const SourcesSection: FC<{
 					onClose={() => setSettingsFor(null)}
 				/>
 			)}
-		</>
+		</Stagger>
 	);
 };
 
