@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
 import type { GameCardProps } from "./GameCard";
-import { isOperatorOwned, storeLabel } from "./helpers";
+import { isOperatorOwned, sourceLabel } from "./helpers";
 import { InstallBadge } from "./Install";
 
 /**
@@ -66,17 +66,10 @@ export const GameRow: FC<GameCardProps> = ({
 					</p>
 					<div className="mt-1 flex flex-wrap gap-1">
 						<Badge variant={isCustom ? "secondary" : "outline"}>
-							{storeLabel(game.store, nameOf)}
+							{sourceLabel(game, nameOf)}
 						</Badge>
 						{game.platform && game.platform.toUpperCase() !== "PC" && (
 							<Badge variant="outline">{game.platform}</Badge>
-						)}
-						{game.provider && game.provider !== game.store && (
-							<Badge variant="outline">
-								{m.library_owned_by({
-									provider: nameOf?.(game.provider) ?? game.provider,
-								})}
-							</Badge>
 						)}
 						{hidden && (
 							<Badge variant="secondary">{m.library_hidden_badge()}</Badge>

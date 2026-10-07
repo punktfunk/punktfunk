@@ -3,8 +3,10 @@ import {
 	useInfiniteQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { toast } from "@unom/ui/toast";
 import { LayoutGrid, Rows3, Search, X } from "lucide-react";
+import { motion } from "motion/react";
 import { type FC, useEffect, useRef, useState } from "react";
 import { useDownloads } from "@/api/downloads";
 import {
@@ -18,8 +20,9 @@ import type { Download } from "@/api/gen/model/download";
 import type { OperatorGameEntry } from "@/api/gen/model/operatorGameEntry";
 import type { PlatformCount } from "@/api/gen/model/platformCount";
 import { useDialogs } from "@/components/dialogs";
+import { LauncherIcon } from "@/components/launcher-icon";
 import { QueryState } from "@/components/query-state";
-import { Stagger } from "@/components/stagger";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,6 +38,7 @@ import { apiErrorMessage } from "@/lib/errors";
 import { useLocalPref } from "@/lib/prefs";
 import type { Loadable } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
@@ -229,6 +233,26 @@ export interface LibraryGridProps {
 	nameOf?: (id: string) => string | undefined;
 }
 
+/** A launcher, as a chip that opens its page: its mark and its name. Dimmed while hidden. */
+const LauncherChip: FC<{ game: OperatorGameEntry }> = ({ game }) => (
+	<motion.span variants={ROW}>
+		<Link
+			to="/library/$gameId"
+			params={{ gameId: game.id }}
+			title={game.hidden ? m.library_hidden_badge() : undefined}
+			className={cn(
+				"inline-flex h-8 items-center gap-2 rounded-full border bg-card px-3 text-sm font-medium transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+				game.hidden && "opacity-50",
+			)}
+		>
+			<span className="size-4 shrink-0 text-muted-foreground [&>svg]:size-full">
+				<LauncherIcon icon={game.icon} />
+			</span>
+			{game.title}
+		</Link>
+	</motion.span>
+);
+
 /** Calls `onSeen` while the element is within a screen of the viewport. */
 const Sentinel: FC<{ onSeen: () => void; active: boolean }> = ({
 	onSeen,
@@ -252,10 +276,11 @@ const Sentinel: FC<{ onSeen: () => void; active: boolean }> = ({
 	return <div ref={ref} aria-hidden className="h-px" />;
 };
 
+/** Three posters across a phone, up to seven across a wide desk. */
 const GRID =
-	"grid grid-cols-1 gap-card @sm:grid-cols-2 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4 @4xl:grid-cols-5 @6xl:grid-cols-6";
+	"grid grid-cols-3 gap-3 @md:grid-cols-4 @md:gap-4 @2xl:grid-cols-5 @4xl:grid-cols-6 @6xl:grid-cols-7";
 
-/** The library: a toolbar, the launcher rail, and the titles as covers or as a list. */
+/** The library: a toolbar, the launchers as chips, and the titles as covers or as a list. */
 export const LibraryGrid: FC<LibraryGridProps> = ({
 	games,
 	launchers,
@@ -299,8 +324,9 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 	const empty = !games.isLoading && shown.length === 0;
 	return (
 		<div className="flex flex-col gap-card">
-			<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-				<div className="relative sm:max-w-xs sm:flex-1">
+			{/* Search and the view on one line at every width; the filters and the count below. */}
+			<div className="flex items-center gap-2">
+				<div className="relative min-w-0 flex-1 sm:max-w-sm">
 					<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 					<Input
 						type="search"
@@ -311,8 +337,40 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 						onChange={(e) => onQuery(e.target.value)}
 					/>
 				</div>
+				<p
+					className="hidden text-sm text-muted-foreground sm:ml-auto sm:block"
+					aria-live="polite"
+				>
+					{shown.length < total
+						? m.library_count_shown({ shown: shown.length, count: total })
+						: m.library_count({ count: total })}
+				</p>
+				<div className="flex shrink-0 gap-1">
+					<Button
+						size="icon"
+						variant={view === "grid" ? "default" : "outline"}
+						aria-pressed={view === "grid"}
+						aria-label={m.library_view_grid()}
+						title={m.library_view_grid()}
+						onClick={() => onView("grid")}
+					>
+						<LayoutGrid className="size-4" />
+					</Button>
+					<Button
+						size="icon"
+						variant={view === "rows" ? "default" : "outline"}
+						aria-pressed={view === "rows"}
+						aria-label={m.library_view_rows()}
+						title={m.library_view_rows()}
+						onClick={() => onView("rows")}
+					>
+						<Rows3 className="size-4" />
+					</Button>
+				</div>
+			</div>
+			<div className="-mt-2 flex flex-wrap items-center gap-2 empty:hidden">
 				{(platforms.length > 1 || platform !== null) && (
-					<div className="sm:w-56">
+					<div className="min-w-0 flex-1 sm:w-56 sm:flex-none">
 						<Select
 							value={platform ?? ALL}
 							onValueChange={(v) => onPlatform(v === ALL ? null : v)}
@@ -335,7 +393,7 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 					</div>
 				)}
 				{onInstall && (notInstalled > 0 || install !== null) && (
-					<div className="sm:w-48">
+					<div className="min-w-0 flex-1 sm:w-48 sm:flex-none">
 						<Select
 							value={install ?? ALL}
 							onValueChange={(v) =>
@@ -370,36 +428,11 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 						<X className="size-3.5" />
 					</Button>
 				)}
-				<p
-					className="text-sm text-muted-foreground sm:ml-auto"
-					aria-live="polite"
-				>
+				<p className="basis-full text-sm text-muted-foreground sm:hidden">
 					{shown.length < total
 						? m.library_count_shown({ shown: shown.length, count: total })
 						: m.library_count({ count: total })}
 				</p>
-				<div className="flex gap-1">
-					<Button
-						size="icon"
-						variant={view === "grid" ? "default" : "outline"}
-						aria-pressed={view === "grid"}
-						aria-label={m.library_view_grid()}
-						title={m.library_view_grid()}
-						onClick={() => onView("grid")}
-					>
-						<LayoutGrid className="size-4" />
-					</Button>
-					<Button
-						size="icon"
-						variant={view === "rows" ? "default" : "outline"}
-						aria-pressed={view === "rows"}
-						aria-label={m.library_view_rows()}
-						title={m.library_view_rows()}
-						onClick={() => onView("rows")}
-					>
-						<Rows3 className="size-4" />
-					</Button>
-				</div>
 			</div>
 
 			<QueryState
@@ -407,17 +440,16 @@ export const LibraryGrid: FC<LibraryGridProps> = ({
 				error={games.error}
 				refetch={games.refetch}
 			>
+				{/* A launcher is a door, not a game: one chip each, not a poster. */}
 				{launchers.length > 0 && (
-					<div className="@container">
-						<p className="pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground/70">
+					<Stagger gap={ROW_GAP} className="flex flex-wrap items-center gap-2">
+						<span className="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground/70">
 							{m.library_launchers_title()}
-						</p>
-						<Stagger className={GRID}>
-							{launchers.map((g) => (
-								<GameCard key={g.id} {...props(g)} />
-							))}
-						</Stagger>
-					</div>
+						</span>
+						{launchers.map((g) => (
+							<LauncherChip key={g.id} game={g} />
+						))}
+					</Stagger>
 				)}
 				{empty && launchers.length === 0 && !filtered ? (
 					<Card>

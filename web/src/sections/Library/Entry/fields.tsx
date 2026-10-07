@@ -72,17 +72,19 @@ export const ReadRow: FC<{ label: string; value: ReactNode }> = ({
 		</div>
 	);
 
-/** A titled card: one group of a tab. */
+/** One group of a tab, as a card. Untitled when it is the tab's whole content. */
 export const Group: FC<{
-	title: string;
+	title?: string;
 	help?: string;
 	children: ReactNode;
 }> = ({ title, help, children }) => (
 	<Card>
-		<CardHeader>
-			<CardTitle>{title}</CardTitle>
-			{help && <p className="text-sm text-muted-foreground">{help}</p>}
-		</CardHeader>
+		{title && (
+			<CardHeader>
+				<CardTitle>{title}</CardTitle>
+				{help && <p className="text-sm text-muted-foreground">{help}</p>}
+			</CardHeader>
+		)}
 		<CardContent className="@container space-y-4">{children}</CardContent>
 	</Card>
 );

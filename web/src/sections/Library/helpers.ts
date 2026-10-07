@@ -37,6 +37,16 @@ export function storeLabel(
 	}
 }
 
+/** Who an entry is from, as one name: its plugin, else its store. */
+export function sourceLabel(
+	entry: GameEntry,
+	nameOf?: (id: string) => string | undefined,
+): string {
+	if (entry.provider && entry.provider !== entry.store)
+		return nameOf?.(entry.provider) ?? entry.provider;
+	return storeLabel(entry.store, nameOf);
+}
+
 /**
  * The library changed: every view of it asks again. The whole list and its pages are two
  * queries with two keys, and a change that refreshed one left the other showing the old title.

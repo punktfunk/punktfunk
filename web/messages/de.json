@@ -1171,7 +1171,7 @@
 	"profiles_colour_custom": "Andere Farbe",
 	"profiles_picture_set": "Bild wählen",
 	"profiles_picture_remove": "Bild entfernen",
-	"profiles_picture_optional": "Klicken oder Bild ablegen",
+	"profiles_picture_optional": "Bild hinzufügen",
 	"profiles_picture_failed": "Das Bild konnte nicht gespeichert werden. Nimm ein PNG oder JPEG unter 1 MB.",
 	"profiles_rename_title": "Profil umbenennen",
 	"profiles_rename_failed": "Das Profil konnte nicht umbenannt werden.",
@@ -1227,5 +1227,10 @@
 	"profiles_outcome_desktop_hint_linux": "Ein eigener Benutzer mit eigenem Steam und eigenen Anmeldungen.",
 	"profiles_remove_linux": "Auch das Benutzerkonto von {name} und seine Dateien werden entfernt.",
 	"emulators_show_absent": "{count} nicht installierte anzeigen",
-	"emulators_hide_absent": "Nicht installierte ausblenden"
+	"emulators_hide_absent": "Nicht installierte ausblenden",
+	"library_entry_role": "Rolle",
+	"library_entry_launched_once": "Einmal gestartet",
+	"library_entry_launches": "{count}-mal gestartet",
+	"library_entry_play_time": "{time} gespielt",
+	"library_entry_last_played": "zuletzt {ago}"
 }
