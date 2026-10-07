@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { ApiDisplayInfo, ApiMonitorInfo } from "@/api/gen/model";
-import { DesktopMap } from "@/sections/Displays/DesktopMap";
+import { DesktopMap, ghostBox } from "@/sections/Displays/DesktopMap";
 import { describePolicy } from "@/sections/Displays/describePolicy";
+import { ScreenRows } from "@/sections/Displays/ScreenRows";
 import { displayEffective } from "./lib/fixtures";
 
 /**
@@ -70,8 +71,23 @@ const Harness = ({
 			monitors={monitors}
 			displays={displays}
 			dimMonitors={dimMonitors}
-			onRelease={() => {}}
+			// The idle map's ghost: where the next device's screen lands under Extend.
+			ghost={ghostBox(monitors, dimMonitors ? "exclusive" : "extend", false)}
 			onMove={() => {}}
+		/>
+		<ScreenRows
+			monitors={monitors}
+			displays={displays}
+			pinned={null}
+			pinSupported
+			effective={{
+				...displayEffective,
+				topology: dimMonitors ? "exclusive" : "extend",
+			}}
+			overlaid={[]}
+			onPick={() => {}}
+			onKeepLit={() => {}}
+			onRelease={() => {}}
 		/>
 		<p className="text-sm">{describePolicy(displayEffective, { live })}</p>
 	</div>
@@ -85,7 +101,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** An idle host: only the physical monitors, and the sentence in the future tense. */
+/** An idle host: the monitors, the ghost where the next device lands, and the sentence. */
 export const Idle: Story = {};
 
 /** One device streaming beside the desk — the shape the default preset produces. */
@@ -97,8 +113,8 @@ export const Streaming: Story = {
 };
 
 /**
- * A kept screen carries its own Release; an active one does not — tearing that down is session
- * control, not display management.
+ * A kept screen's row carries Release; an active one does not — tearing that down is session
+ * control, not display management. The map only shows state.
  */
 export const KeptAndActive: Story = {
 	args: {

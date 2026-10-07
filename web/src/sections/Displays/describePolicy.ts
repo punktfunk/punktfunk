@@ -1,13 +1,10 @@
-// The Displays page's one plain sentence (design/web-console-overhaul.md D5, §5.2).
-//
-// The page's problem was never that the policy was hard to set — it was that six axes, a badge
-// row and 2 kB of help text never answered the only question an operator actually has: what
-// happens to my screens when a device connects. This says it in one sentence, and the same
-// function captions every preset card, so picking a preset means reading what it will do.
+// The Displays page's one plain sentence: what happens to my screens when a device connects. The
+// same function captions every preset, so picking one means reading what it will do. It says
+// what the page shows: a mirror pin and dedicated game sessions change the answer.
 //
 // Clauses are whole messages, not glued fragments: German puts the verb somewhere English does
 // not, and a sentence assembled from four half-phrases cannot be translated.
-import type { EffectivePolicy, KeepAlive } from "@/api/gen/model";
+import type { EffectivePolicy, GameSession, KeepAlive } from "@/api/gen/model";
 import { m } from "@/paraglide/messages";
 
 export interface DescribeOptions {
@@ -19,9 +16,12 @@ export interface DescribeOptions {
 	live?: boolean;
 	/** Name the device instead of "each device" — the per-device sheet (§6.2). */
 	deviceName?: string;
+	/** A monitor every device mirrors instead of getting a screen of its own. */
+	mirror?: string | null;
+	gameSession?: GameSession;
 }
 
-/** `{who} gets {screen}, {kept}. {monitors}. [Applies to the next connection.]` */
+/** `{who} gets {screen}, {kept}. {second device}. [Games…] [Applies to the next connection.]` */
 export function describePolicy(
 	policy: EffectivePolicy,
 	opts: DescribeOptions = {},
@@ -30,11 +30,21 @@ export function describePolicy(
 		firstSentence(policy, opts),
 		secondDevice(policy.mode_conflict),
 	];
+	if (opts.gameSession === "dedicated")
+		parts.push(m.display_says_game_dedicated());
 	if (opts.live) parts.push(m.display_says_next_connect());
 	return parts.join(" ");
 }
 
 function firstSentence(policy: EffectivePolicy, opts: DescribeOptions): string {
+	// A mirrored monitor is the screen: no screen of its own is made, so nothing is kept.
+	if (opts.mirror)
+		return opts.deviceName
+			? m.display_says_mirror_device({
+					name: opts.deviceName,
+					connector: opts.mirror,
+				})
+			: m.display_says_mirror({ connector: opts.mirror });
 	const kept = keptClause(policy.keep_alive);
 	// A named device is one device, so it never reads as "each"; an idle host has no device yet,
 	// so it speaks about the next one.

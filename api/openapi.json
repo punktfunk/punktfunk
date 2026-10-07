@@ -10554,6 +10554,7 @@
           "settings",
           "configured",
           "effective",
+          "auto_topology",
           "presets",
           "custom_presets",
           "enforced",
@@ -10561,6 +10562,10 @@
           "clients"
         ],
         "properties": {
+          "auto_topology": {
+            "$ref": "#/components/schemas/Topology",
+            "description": "What `topology: auto` resolves to on this host, never `auto` (`effective_topology`)."
+          },
           "client_enforced": {
             "type": "array",
             "items": {

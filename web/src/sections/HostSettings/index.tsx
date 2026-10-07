@@ -16,6 +16,7 @@ import { m } from "@/paraglide/messages";
 import { ConfirmDialog } from "../Host/PowerCard";
 import { labelOf } from "./controls";
 import { RestartBanner } from "./RestartBanner";
+import { SessionGameRows } from "./SessionGameRows";
 import { HostSettingsView } from "./view";
 
 /** How long a restart may take before the page stops waiting and says so. */
@@ -99,6 +100,7 @@ export const SectionHostSettings: FC = () => {
 				pending={pending}
 				onSet={onSet}
 				playingApps={apps.data?.apps}
+				extra={{ session: <SessionGameRows /> }}
 				banner={
 					<RestartBanner
 						names={waiting}

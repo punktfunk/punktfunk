@@ -1,16 +1,17 @@
-// The two disclosures at the foot of the Displays page (design §5.1).
+// **Advanced**, at the foot of the Displays page: the monitor levers a host acts on, the screen
+// cap, and the way back from a manual arrangement.
 //
-// `<details>` rather than a state-driven accordion: the browser already ships the open/close,
-// the keyboard handling and the aria wiring, and a closed section costs one row of height
-// instead of the card each of these used to own.
+// `<details>` rather than a state-driven accordion: the browser ships the open/close, the keyboard
+// handling and the aria wiring, and a closed section costs one row.
 import type { FC, ReactNode } from "react";
-import type { DisplayPolicy, GameSession } from "@/api/gen/model";
+import type { DisplayPolicy, EffectivePolicy } from "@/api/gen/model";
 import { usePlatform } from "@/api/platform";
 import { DocsLink } from "@/components/docs-link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { InputNumber } from "@/components/ui/input-number";
+import { Segmented } from "@/components/ui/segmented";
 import { m } from "@/paraglide/messages";
-import { SessionGameCard } from "./SessionGameCard";
 
 const Disclosure: FC<{ label: string; children: ReactNode }> = ({
 	label,
@@ -31,94 +32,31 @@ const Disclosure: FC<{ label: string; children: ReactNode }> = ({
 	</Card>
 );
 
-/** Two-value toggle rows share this shape; each writes one field and saves on change. */
-const Toggle: FC<{
-	label: string;
-	help: string;
-	docs: string;
-	value: boolean;
-	busy?: boolean;
-	onSet: (on: boolean) => void;
-}> = ({ label, help, docs, value, busy, onSet }) => (
+const Field: FC<{ label: string; help?: ReactNode; children: ReactNode }> = ({
+	label,
+	help,
+	children,
+}) => (
 	<fieldset className="space-y-2">
 		<legend className="text-sm font-medium">{label}</legend>
-		<div className="flex flex-wrap gap-2">
-			{([false, true] as const).map((on) => (
-				<Button
-					key={String(on)}
-					size="sm"
-					variant={value === on ? "default" : "outline"}
-					aria-pressed={value === on}
-					disabled={busy}
-					onClick={() => onSet(on)}
-				>
-					{on ? m.common_on() : m.common_off()}
-				</Button>
-			))}
-		</div>
-		<p className="max-w-prose text-xs text-muted-foreground">
-			{help} <DocsLink path={docs} />
-		</p>
+		{children}
+		{help && (
+			<p className="max-w-prose text-xs text-muted-foreground">{help}</p>
+		)}
 	</fieldset>
 );
 
-/**
- * Dedicated game sessions, plus the session⇄game lifetime it interacts with: keep-alive decides
- * how long a *display* outlives a disconnect, these decide whether the *game* does.
- */
-export const GameSessionDisclosure: FC<{
-	policy?: DisplayPolicy;
-	busy?: boolean;
-	onSet: (patch: Partial<DisplayPolicy>) => void;
-}> = ({ policy, busy, onSet }) => {
-	const { acts, actsAny } = usePlatform();
-	const axis = acts("display", "game_session");
-	// Nothing to disclose: this host neither routes launches nor ties a game to its session.
-	if (!axis && !actsAny("session")) return null;
-	return (
-		<Disclosure label={m.display_game_session()}>
-			{axis && (
-				<fieldset className="space-y-2">
-					<legend className="text-sm font-medium">
-						{m.display_game_session()}
-					</legend>
-					<div className="flex flex-wrap gap-2">
-						{(["auto", "dedicated"] as const).map((v) => (
-							<Button
-								key={v}
-								size="sm"
-								variant={
-									(policy?.game_session ?? "auto") === v ? "default" : "outline"
-								}
-								aria-pressed={(policy?.game_session ?? "auto") === v}
-								disabled={busy}
-								onClick={() => onSet({ game_session: v as GameSession })}
-							>
-								{v === "auto"
-									? m.display_game_session_auto()
-									: m.display_game_session_dedicated()}
-							</Button>
-						))}
-					</div>
-					<p className="max-w-prose text-xs text-muted-foreground">
-						{m.display_game_session_help()}{" "}
-						<DocsLink path="virtual-displays#dedicated-game-sessions" />
-					</p>
-				</fieldset>
-			)}
-			<SessionGameCard />
-		</Disclosure>
-	);
-};
-
-/** The Windows exclusive-isolate levers. Rendered only where the host acts on one (D1). */
+/** The Windows exclusive-isolate levers render only where the host acts on one (D1). */
 export const AdvancedDisclosure: FC<{
 	policy?: DisplayPolicy;
+	effective?: EffectivePolicy;
 	busy?: boolean;
 	onSet: (patch: Partial<DisplayPolicy>) => void;
-}> = ({ policy, busy, onSet }) => {
+	/** Writes a preset field: switches the policy to Custom first. */
+	onSetField: (patch: Partial<DisplayPolicy>) => void;
+}> = ({ policy, effective, busy, onSet, onSetField }) => {
 	const { acts } = usePlatform();
-	const fields = (
+	const levers = (
 		[
 			[
 				"ddc_power_off",
@@ -140,20 +78,61 @@ export const AdvancedDisclosure: FC<{
 			],
 		] as const
 	).filter(([field]) => acts("display", field));
-	if (fields.length === 0) return null;
+	const manual = effective?.layout.mode === "manual";
 	return (
 		<Disclosure label={m.display_advanced()}>
-			{fields.map(([field, label, help, docs]) => (
-				<Toggle
+			{levers.map(([field, label, help, docs]) => (
+				<Field
 					key={field}
 					label={label}
-					help={help}
-					docs={docs}
-					value={policy?.[field] ?? false}
-					busy={busy}
-					onSet={(on) => onSet({ [field]: on })}
-				/>
+					help={
+						<>
+							{help} <DocsLink path={docs} />
+						</>
+					}
+				>
+					<Segmented
+						busy={busy}
+						value={policy?.[field] ?? false}
+						options={[
+							[false, m.common_off()],
+							[true, m.common_on()],
+						]}
+						onPick={(on) => onSet({ [field]: on })}
+					/>
+				</Field>
 			))}
+			{effective && (
+				// 1..=16 is the host's own clamp on write.
+				<Field label={m.display_q_max()}>
+					<InputNumber
+						min={1}
+						max={16}
+						className="w-24"
+						aria-label={m.display_q_max()}
+						value={effective.max_displays}
+						disabled={busy}
+						onChange={(max_displays) => onSetField({ max_displays })}
+					/>
+				</Field>
+			)}
+			{manual && (
+				<Field label={m.display_arranged_by_you()}>
+					<Button
+						size="sm"
+						variant="outline"
+						className="self-start"
+						disabled={busy}
+						onClick={() =>
+							onSet({
+								layout: { ...policy?.layout, mode: "auto-row" },
+							})
+						}
+					>
+						{m.display_arrange_auto()}
+					</Button>
+				</Field>
+			)}
 		</Disclosure>
 	);
 };

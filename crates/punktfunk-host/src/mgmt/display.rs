@@ -27,6 +27,8 @@ pub(crate) struct DisplaySettingsState {
     /// True once `display-settings.json` exists.
     configured: bool,
     effective: crate::vdisplay::policy::EffectivePolicy,
+    /// What `topology: auto` resolves to on this host, never `auto` (`effective_topology`).
+    auto_topology: crate::vdisplay::policy::Topology,
     presets: Vec<PresetInfo>,
     /// Saved custom presets (`display-presets.json`). Apply via a `Custom` policy of their fields.
     custom_presets: Vec<crate::vdisplay::policy::CustomPreset>,
@@ -210,6 +212,12 @@ pub(crate) fn display_settings_state() -> DisplaySettingsState {
     let clients = std::mem::take(&mut settings.clients);
     DisplaySettingsState {
         effective: settings.effective(),
+        // Unconfigured, `effective_topology` honours the legacy `*_VIRTUAL_PRIMARY` pins first.
+        auto_topology: if configured {
+            crate::vdisplay::resolve_topology(policy::Topology::Auto)
+        } else {
+            crate::vdisplay::effective_topology(None)
+        },
         clients,
         client_enforced,
         settings,

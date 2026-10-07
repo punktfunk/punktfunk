@@ -7,10 +7,10 @@ import { Link } from "@tanstack/react-router";
 import Section from "@unom/ui/section";
 import { Lock, RotateCcw, Search } from "lucide-react";
 import { type FC, type ReactNode, useEffect, useMemo, useState } from "react";
-import type {
-	HostSettingsState,
+import {
+	type HostSettingsState,
 	SettingGroup,
-	SettingState,
+	type SettingState,
 } from "@/api/gen/model";
 import { DocsLink } from "@/components/docs-link";
 import { QueryState } from "@/components/query-state";
@@ -151,7 +151,9 @@ export const HostSettingsView: FC<{
 	playingApps?: string[];
 	/** Above the groups: what waits for a restart. */
 	banner?: ReactNode;
-}> = ({ state, pending, onSet, playingApps, banner }) => {
+	/** Rows another plane serves, at the end of their group (Session's game rows). */
+	extra?: Partial<Record<SettingGroup, ReactNode>>;
+}> = ({ state, pending, onSet, playingApps, banner, extra = {} }) => {
 	const [query, setQuery] = useState("");
 	const [advanced, setAdvanced] = useAdvanced();
 	const q = query.trim().toLowerCase();
@@ -165,8 +167,13 @@ export const HostSettingsView: FC<{
 			if (g) g.rows.push(row);
 			else out.push({ group: row.group, rows: [row] });
 		}
-		return out;
-	}, [state.data, q, advanced]);
+		// A search narrows to registry rows; otherwise a group with only extra rows still shows.
+		if (!q)
+			for (const group of Object.keys(extra) as SettingGroup[])
+				if (!out.some((g) => g.group === group)) out.push({ group, rows: [] });
+		const order = Object.values(SettingGroup);
+		return out.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
+	}, [state.data, q, advanced, extra]);
 
 	const jump = (group: SettingGroup) =>
 		document
@@ -276,6 +283,7 @@ export const HostSettingsView: FC<{
 														}
 													/>
 												))}
+												{!q && extra[group]}
 											</ul>
 										</CardContent>
 									</Card>
