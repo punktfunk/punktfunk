@@ -823,22 +823,23 @@ pub(crate) fn apply_topology(
             config.set_primary_output(proxy);
             if mgmt_version >= 3 {
                 config.set_priority(proxy, 1);
-                // Remaining enabled outputs, existing order, from 2. Skip ones this apply
-                // disables — a disabled output's priority is meaningless.
+                // Every other output from 2: lit ones in existing order, then dark ones. KWin
+                // 6.0–6.5 fails an order that misses any output, dark included ("doesn't
+                // contain all outputs"), and drops the dark entries itself.
                 let disabling: Vec<ObjectId> = to_disable.iter().map(|(p, _, _)| p.id()).collect();
+                let dark = |d: &DeviceState| {
+                    !d.enabled
+                        || d.proxy
+                            .as_ref()
+                            .is_some_and(|p| disabling.contains(&p.id()))
+                };
                 let mut others: Vec<&DeviceState> = sess
                     .state
                     .devices
                     .values()
-                    .filter(|d| {
-                        d.enabled
-                            && d.proxy.as_ref().map(|p| p.id()) != our_id
-                            && d.proxy
-                                .as_ref()
-                                .is_some_and(|p| !disabling.contains(&p.id()))
-                    })
+                    .filter(|d| d.proxy.is_some() && d.proxy.as_ref().map(|p| p.id()) != our_id)
                     .collect();
-                others.sort_by_key(|d| d.priority.unwrap_or(u32::MAX));
+                others.sort_by_key(|d| (dark(d), d.priority.unwrap_or(u32::MAX)));
                 for (i, d) in others.iter().enumerate() {
                     if let Some(proxy) = d.proxy.as_ref() {
                         config.set_priority(proxy, 2 + i as u32);
