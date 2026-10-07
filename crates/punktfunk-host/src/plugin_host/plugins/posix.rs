@@ -248,6 +248,7 @@ const ROOTS_DROPIN: &str = "50-plugin-roots.conf";
 pub(super) fn converge_runner_roots(
     roots: &[access::RunnerRoot],
     home: &std::path::Path,
+    _manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -324,6 +325,7 @@ fn render_roots(roots: &[access::RunnerRoot], hidden: &[std::path::PathBuf]) -> 
 pub(super) fn converge_runner_roots(
     _roots: &[access::RunnerRoot],
     _home: &std::path::Path,
+    _manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
     Ok(false)
 }
