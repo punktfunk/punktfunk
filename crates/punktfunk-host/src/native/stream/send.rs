@@ -4,6 +4,7 @@
 //! the per-second [`SendStats`] line. The encode loop hands it [`FrameMsg`]s and never blocks
 //! on a write.
 
+use super::recovery::ResendRing;
 use super::*;
 
 /// The AU-level fields of one encoded AU: the same on its whole-AU message and on every
@@ -38,10 +39,12 @@ pub(super) struct FrameMsg {
     pub(super) meta: AuMeta,
 }
 
-/// Whole AU, or one slice-boundary chunk of a streamed AU (seal/pace while the encoder still runs).
+/// Whole AU, one slice-boundary chunk of a streamed AU (seal/pace while the encoder still
+/// runs), or shards a client asked for again.
 pub(super) enum SendMsg {
     Frame(FrameMsg),
     Chunk(ChunkMsg),
+    Resend { frame: u32, shards: Vec<u16> },
 }
 
 /// One encoder chunk of a streamed AU. Splits matter on `last`.
@@ -60,6 +63,7 @@ fn handle_chunk(
     c: ChunkMsg,
     slice_wire: bool,
     pacer: &mut crate::send_pacing::Pacer,
+    ring: &mut ResendRing,
 ) -> Result<Option<(AuMeta, PaceStat)>> {
     let m = c.meta;
     if c.first {
@@ -87,6 +91,8 @@ fn handle_chunk(
                 .map_err(|e| anyhow!("begin_streamed_frame: {e:?}"))?,
         );
         pacer.begin(0);
+        session.drain_plaintext(|_| {});
+        ring.begin(m.frame_index);
     }
     let Some(au) = open.as_mut() else {
         return Err(anyhow!(
@@ -97,6 +103,7 @@ fn handle_chunk(
     let wires = session
         .seal_streamed_chunk(au, &c.data, true)
         .map_err(|e| anyhow!("seal_streamed_chunk: {e:?}"))?;
+    session.drain_plaintext(|p| ring.note(p));
     if !wires.is_empty() {
         pace_sealed(session, wires, pacer)?;
     }
@@ -107,6 +114,7 @@ fn handle_chunk(
     let tail = session
         .seal_streamed_finish(au)
         .map_err(|e| anyhow!("seal_streamed_finish: {e:?}"))?;
+    session.drain_plaintext(|p| ring.note(p));
     pace_sealed(session, tail, pacer)?;
     let (stat, sock_ns) = pacer.finish();
     session.note_sock_ns(sock_ns);
@@ -279,6 +287,8 @@ pub(super) fn send_loop(
 ) {
     boost_thread_priority(false);
     let wire = WireLine::new(stats.wire_sock.take());
+    let mut session = session;
+    session.tap_plaintext(true);
     let mut lp = SendLoop {
         session,
         probe_rx,
@@ -292,6 +302,7 @@ pub(super) fn send_loop(
         timing_conn,
         probe_seq,
         pacer: crate::send_pacing::Pacer::new(stats.ports, crate::send_pacing::forced()),
+        ring: ResendRing::default(),
         link: None,
         link_gso: false,
         streamed: None,
@@ -348,6 +359,8 @@ struct SendLoop {
     timing_conn: Option<crate::native::link::SessionLink>,
     probe_seq: bool,
     pacer: crate::send_pacing::Pacer,
+    /// The last frames' plaintext, for a client's NACK.
+    ring: ResendRing,
     /// The `L` last paced at, logged when it moves.
     link: Option<crate::send_pacing::LinkRate>,
     /// GSO is on: the frame paces above the stream's own rate.
@@ -414,6 +427,10 @@ impl SendLoop {
     /// failed and the stream ends.
     fn step(&mut self, send_msg: SendMsg) -> bool {
         use crate::send_pacing as sp;
+        if let SendMsg::Resend { frame, shards } = send_msg {
+            self.resend(frame, &shards);
+            return true;
+        }
         let stats = &self.stats;
         let bitrate_kbps = stats.bitrate_kbps.load(Ordering::Relaxed);
         let reported = stats.link_kbps.load(Ordering::Relaxed);
@@ -455,7 +472,7 @@ impl SendLoop {
         match &send_msg {
             SendMsg::Frame(f) => self.session.set_epoch(f.meta.epoch),
             SendMsg::Chunk(c) if c.first => self.session.set_epoch(c.meta.epoch),
-            SendMsg::Chunk(_) => {}
+            SendMsg::Chunk(_) | SendMsg::Resend { .. } => {}
         }
         let outcome = match send_msg {
             SendMsg::Frame(FrameMsg { data, meta: m }) => paced_submit(
@@ -471,6 +488,7 @@ impl SendLoop {
                     },
                 m.frame_index,
                 &mut self.pacer,
+                &mut self.ring,
             )
             .map(|stat| Some((m, stat))),
             SendMsg::Chunk(c) => handle_chunk(
@@ -479,7 +497,9 @@ impl SendLoop {
                 c,
                 self.slice_wire,
                 &mut self.pacer,
+                &mut self.ring,
             ),
+            SendMsg::Resend { .. } => Ok(None),
         };
         match outcome {
             Ok(None) => {}
@@ -490,6 +510,27 @@ impl SendLoop {
             }
         }
         true
+    }
+
+    /// A client's NACK: the packets it names, resealed from the ring and sent at once,
+    /// outside the clock. A frame the ring no longer holds is left to the client's RFI.
+    fn resend(&mut self, frame: u32, shards: &[u16]) {
+        let Some((plain, age_ms)) = self.ring.pick(frame, shards) else {
+            tracing::debug!(frame, "nack for a frame no longer held");
+            return;
+        };
+        let sealed: Vec<Vec<u8>> = plain
+            .iter()
+            .filter_map(|p| self.session.reseal(p).ok())
+            .collect();
+        let refs: Vec<&[u8]> = sealed.iter().map(Vec::as_slice).collect();
+        match self.session.send_sealed(&refs) {
+            Ok(sent) => {
+                self.stats.counters.link.note_resent(sent as u32);
+                tracing::info!(frame, ?shards, age_ms, sent, "nack");
+            }
+            Err(e) => tracing::warn!(frame, error = ?e, "nack resend"),
+        }
     }
 
     /// An AU is on the wire: the bring-up mark, host timing, the spread EWMA and the windows.
@@ -688,7 +729,135 @@ impl PerfLine {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuMeta, PaceStat, PerfWindow};
+    use super::{send_loop, AuMeta, FrameMsg, PaceStat, PerfWindow, SendMsg, SendStats};
+
+    /// A client's NACK on the send thread: the frame went out whole, then the shards the
+    /// client names leave again under fresh packet numbers, outside the clock, and the
+    /// host's link line counts them. A frame the ring never held sends nothing.
+    #[test]
+    fn a_resend_sends_the_named_shards_again() {
+        use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+        use punktfunk_core::transport::Transport;
+        use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
+        use std::sync::Arc;
+        let cfg = Config {
+            role: Role::Host,
+            fec: FecConfig {
+                scheme: FecScheme::Gf16,
+                fec_percent: 25,
+                max_data_per_block: 32,
+            },
+            shard_payload: 1024,
+            max_frame_bytes: 1 << 20,
+            loopback_drop_period: 0,
+        };
+        let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
+        let media = punktfunk_core::session::MediaV2 {
+            clock_origin_ns: 0,
+            keys: None,
+            clock: None,
+        };
+        let session = punktfunk_core::session::Session::new(cfg, media, Box::new(host_tp)).unwrap();
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(3);
+        let (_probe_tx, probe_rx) = std::sync::mpsc::channel();
+        let (probe_result_tx, _probe_result_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_shard_tx, shard_rx) = std::sync::mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let counters = Arc::new(crate::session_status::SessionCounters::default());
+        let dir = std::env::temp_dir().join("pf-resend-test");
+        let stats = SendStats {
+            rec: crate::stats_recorder::StatsRecorder::new(dir),
+            mode: Arc::new(AtomicU64::new(0)),
+            codec: "test",
+            client: "test".into(),
+            plane: crate::events::Plane::Native,
+            bitrate_kbps: Arc::new(AtomicU32::new(20_000)),
+            link_kbps: Arc::new(AtomicU32::new(0)),
+            ports: Default::default(),
+            link_paced: false,
+            shape: Arc::new(AtomicU8::new(0)),
+            bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
+            wire_sock: None,
+            driver_dropped: Arc::new(AtomicU64::new(0)),
+            counters: counters.clone(),
+        };
+        let thread = std::thread::spawn({
+            let stop = stop.clone();
+            move || {
+                send_loop(
+                    session,
+                    frame_rx,
+                    probe_rx,
+                    probe_result_tx,
+                    stop,
+                    false,
+                    Arc::new(AtomicU32::new(0)),
+                    Arc::new(AtomicU32::new(0)),
+                    false,
+                    Arc::new(AtomicU8::new(25)),
+                    shard_rx,
+                    stats,
+                    None,
+                    true,
+                )
+            }
+        });
+        let meta = AuMeta {
+            capture_ns: 0,
+            epoch: 0,
+            flags: 0,
+            frame_index: 7,
+            encode_us: 0,
+            queue_us: 0,
+            cap_us: 0,
+            submit_us: 0,
+            wait_us: 0,
+            repeat: false,
+            was_measured: false,
+            driver: None,
+        };
+        frame_tx
+            .send(SendMsg::Frame(FrameMsg {
+                data: vec![3u8; 8 * 1024],
+                meta,
+            }))
+            .unwrap();
+        frame_tx
+            .send(SendMsg::Resend {
+                frame: 7,
+                shards: vec![1, 9],
+            })
+            .unwrap();
+        frame_tx
+            .send(SendMsg::Resend {
+                frame: 99,
+                shards: vec![0],
+            })
+            .unwrap();
+        let mut got = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while got.len() < 12 && std::time::Instant::now() < deadline {
+            match client_tp.recv().unwrap() {
+                Some(p) => got.push(p),
+                None => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        while let Some(p) = client_tp.recv().unwrap() {
+            got.push(p);
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(frame_tx);
+        thread.join().unwrap();
+        // 8 data + 2 parity, then data shard 1 and parity shard 1 again.
+        assert_eq!(got.len(), 12);
+        let shard = |p: &[u8]| u16::from_le_bytes([p[22], p[23]]);
+        assert_eq!((shard(&got[10]), shard(&got[11])), (1, 9));
+        assert_ne!(&got[10][1..5], &got[1][1..5], "a fresh packet number");
+        let mut m = crate::link_health::LinkMinute::default();
+        counters.link.take(&mut m);
+        assert_eq!(m.resend_pkts, 2);
+    }
 
     /// A host AU feeds the host stages and a driver AU the driver's. A repeat never counts
     /// toward the queue stage, and a probe never toward capture → sent.

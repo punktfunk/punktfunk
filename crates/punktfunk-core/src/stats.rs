@@ -55,6 +55,10 @@ pub struct Stats {
     pub probe_gap_buckets: [u32; PROBE_GAP_BUCKETS],
     /// Probe packets that arrived behind a later one.
     pub probe_reorders: u32,
+    /// Short frames that asked the host for their missing shards, and those the resend
+    /// completed in time. Not mirrored into the C-ABI `PunktfunkStats`.
+    pub nack_sent: u64,
+    pub nack_filled: u64,
 }
 
 /// Thirty-two buckets of 100 µs: a percentile to a tenth of a millisecond, and an array
@@ -111,6 +115,8 @@ pub struct StatsCounters {
     /// `(frame_index << 16 | shard_index) + 1` of the last probe packet; `0` = none.
     pub probe_last_key: AtomicU64,
     pub probe_reorders: AtomicU64,
+    pub nack_sent: AtomicU64,
+    pub nack_filled: AtomicU64,
 }
 
 impl StatsCounters {
@@ -140,6 +146,8 @@ impl StatsCounters {
             probe_last_arrival_ns: self.probe_last_arrival_ns.load(l),
             probe_gap_buckets: std::array::from_fn(|i| self.probe_gap_buckets[i].load(l)),
             probe_reorders: self.probe_reorders.load(l).min(u64::from(u32::MAX)) as u32,
+            nack_sent: self.nack_sent.load(l),
+            nack_filled: self.nack_filled.load(l),
         }
     }
 }

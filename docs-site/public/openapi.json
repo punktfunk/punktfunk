@@ -13194,6 +13194,7 @@
           "egress_kbps",
           "link_kbps",
           "shape",
+          "resend_pkts",
           "loss_head",
           "loss_mid",
           "loss_tail",
@@ -13296,6 +13297,12 @@
             "type": "integer",
             "format": "int32",
             "description": "Of `windows`, those that reported any loss.",
+            "minimum": 0
+          },
+          "resend_pkts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Packets resent on a client's NACK.",
             "minimum": 0
           },
           "retargets": {

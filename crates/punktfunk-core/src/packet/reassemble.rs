@@ -684,6 +684,11 @@ impl Reassembler {
     /// what its parity can rebuild, and the parity shards it carries. A block with no
     /// shard in yet counts all its data as missing. `None` when no shard of the frame
     /// is in flight, or a streamed frame has not pinned its size.
+    /// Video frame `frame_index` is still being reassembled: neither emitted nor abandoned.
+    pub fn frame_in_flight(&self, frame_index: u32) -> bool {
+        self.video.frames.contains_key(&frame_index)
+    }
+
     /// The shards an in-flight video frame still lacks, at most `max`: its missing data
     /// shards by AU index, then its missing parity, numbered after all the data in block
     /// order. `None` for a frame not in flight, or when a block never showed a shard (its

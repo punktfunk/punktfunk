@@ -449,8 +449,11 @@ fn paced_submit(
     flags: u32,
     frame_index: u32,
     pacer: &mut crate::send_pacing::Pacer,
+    ring: &mut recovery::ResendRing,
 ) -> Result<PaceStat> {
     pacer.begin(session.frame_wire_len(data.len()));
+    session.drain_plaintext(|_| {});
+    ring.begin(frame_index);
     let sealed =
         session.seal_frame_chunks_at(data, pts_ns, flags, frame_index, &mut |chunk, send| {
             let mut refs: Vec<&[u8]> = chunk.iter().map(|w| w.as_slice()).collect();
@@ -459,6 +462,7 @@ fn paced_submit(
         });
     let (stat, sock_ns) = pacer.finish();
     session.note_sock_ns(sock_ns);
+    session.drain_plaintext(|p| ring.note(p));
     sealed.map_err(|e| anyhow!("seal_frame: {e:?}"))?;
     Ok(stat)
 }

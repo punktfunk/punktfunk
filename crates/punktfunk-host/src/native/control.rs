@@ -371,6 +371,7 @@ pub(super) async fn run(task: Task) {
                 link_kbps,
                 shape,
                 ports,
+                resend,
                 ramp_open,
                 cursor_client_draws,
             },
@@ -480,6 +481,15 @@ pub(super) async fn run(task: Task) {
                         link.note_rfi();
                         if rfi_tx.send((first, last)).is_err() {
                             break;
+                        }
+                    } else if let Some(n) = fb.nack {
+                        let queued = resend
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_ref()
+                            .is_some_and(|send| send(n.frame, n.shards().to_vec()));
+                        if !queued {
+                            tracing::debug!(frame = n.frame, "nack dropped: the send queue is full");
                         }
                     }
                 }

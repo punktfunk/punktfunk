@@ -123,6 +123,27 @@ pub struct Session {
     /// Reused Vecs for the lane hand-off. The worker's half round-trips here, so
     /// steady-state two-lane frames move `n/2` headers with no allocation.
     lane_scratch: Vec<Vec<u8>>,
+    /// Copies of each packet's plaintext as it is staged, for [`Self::reseal`]. `None` off.
+    plain_tap: Option<PlainTap>,
+}
+
+/// Staged plaintext since the last [`Session::drain_plaintext`]; buffers are reused.
+#[derive(Default)]
+struct PlainTap {
+    wires: Vec<Vec<u8>>,
+    used: usize,
+}
+
+impl PlainTap {
+    fn copy(&mut self, wire: &[u8]) {
+        if self.used == self.wires.len() {
+            self.wires.push(Vec::new());
+        }
+        let slot = &mut self.wires[self.used];
+        slot.clear();
+        slot.extend_from_slice(wire);
+        self.used += 1;
+    }
 }
 
 /// Stamp [`Frame::received_ns`] as the frame leaves [`Session::poll_frame`]. Completed
@@ -224,6 +245,7 @@ impl Session {
                 .map(|v| v != "1")
                 .unwrap_or(true),
             lane_scratch: Vec::new(),
+            plain_tap: None,
             config,
         })
     }
@@ -401,6 +423,7 @@ impl Session {
             transport,
             stats,
             seal_perf,
+            plain_tap,
             ..
         } = self;
         let c = crypto.as_ref().expect("pipelined seal needs crypto");
@@ -459,6 +482,9 @@ impl Session {
             let wire = &mut wires[used];
             used += 1;
             stage_wire(wire, &stamp, clock.as_deref(), *next_seq, true, hdr, body);
+            if let Some(t) = plain_tap.as_mut() {
+                t.copy(wire);
+            }
             *next_seq = next_seq.wrapping_add(1);
             bytes += wire.len() as u64;
             if is_data && used - chunk_start >= SEAL_CHUNK_SHARDS {
@@ -625,6 +651,7 @@ impl Session {
             wire_pool,
             seal_lane,
             lane_scratch,
+            plain_tap,
             ..
         } = self;
         // TimedCoder shims FEC into SealPerf; the seal phase times itself.
@@ -662,6 +689,9 @@ impl Session {
                     hdr,
                     body,
                 );
+                if let Some(t) = plain_tap.as_mut() {
+                    t.copy(wire);
+                }
                 *next_seq = next_seq.wrapping_add(1);
                 Ok(())
             };
@@ -763,6 +793,44 @@ impl Session {
 
     /// Host: send one chunk of already-sealed packets as one batch. Returns how many the
     /// kernel accepted; the rest are send-buffer drops. Whole frame, or per paced chunk.
+    /// Host: keep a copy of every packet's plaintext as it is staged, for [`Self::reseal`].
+    pub fn tap_plaintext(&mut self, on: bool) {
+        self.plain_tap = on.then(PlainTap::default);
+    }
+
+    /// Host: the plaintext staged since the last call, in emission order.
+    pub fn drain_plaintext(&mut self, mut f: impl FnMut(&[u8])) {
+        if let Some(t) = self.plain_tap.as_mut() {
+            t.wires[..t.used].iter().for_each(|w| f(w));
+            t.used = 0;
+        }
+    }
+
+    /// Host: a tapped packet ([`Self::tap_plaintext`]) sealed again under a fresh packet
+    /// number, so a client's replay window takes it; its reassembler places it by its
+    /// header. The caller sends it.
+    pub fn reseal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        use crate::packet::{V2_CLEAR_LEN, V2_HEADER_LEN};
+        if plaintext.len() < V2_HEADER_LEN {
+            return Err(PunktfunkError::BadPacket);
+        }
+        let mut buf = plaintext.to_vec();
+        let seq = self.next_seq;
+        self.next_seq = seq.wrapping_add(1);
+        buf[1..V2_CLEAR_LEN].copy_from_slice(&(seq as u32).to_le_bytes());
+        if let Some(c) = &self.crypto {
+            let (aad, rest) = buf.split_at_mut(V2_CLEAR_LEN);
+            c.seal_media(seq, aad, rest)?;
+        }
+        Ok(buf)
+    }
+
+    /// Client: a NACK went out, or one was answered in time.
+    pub fn note_nack(&self, filled: bool) {
+        let c = &self.stats;
+        StatsCounters::add(if filled { &c.nack_filled } else { &c.nack_sent }, 1);
+    }
+
     pub fn send_sealed(&self, packets: &[&[u8]]) -> Result<usize> {
         // GSO where the transport has it, else a batch — same short-count drop contract.
         let sent = self.transport.send_gso(packets)?;
@@ -883,6 +951,11 @@ impl Session {
     /// See [`Reassembler::take_loss_positions`].
     pub fn take_loss_positions(&mut self) -> crate::packet::LossPositions {
         self.reassembler.take_loss_positions()
+    }
+
+    /// Client: frame `frame_index` is still being reassembled.
+    pub fn frame_in_flight(&self, frame_index: u32) -> bool {
+        self.reassembler.frame_in_flight(frame_index)
     }
 
     /// See [`Reassembler::missing_shards`].
@@ -1622,6 +1695,46 @@ mod wire_equivalence_tests {
         let f = client.poll_frame().unwrap();
         assert_eq!((f.frame_index, f.data.len()), (3, src.len()));
         assert_eq!(f.data, src);
+    }
+
+    /// A frame short more than its parity completes once the host reseals the packets it
+    /// lacks from their tapped plaintext: fresh numbers pass the client's replay window,
+    /// which has seen the originals' neighbours, and the reassembler places them by header.
+    #[test]
+    fn a_resealed_packet_completes_a_short_frame() {
+        use crate::crypto::MediaSuite;
+        for suite in [MediaSuite::Aes128Gcm, MediaSuite::ChaCha20Poly1305] {
+            let (mut host, mut client) = v2_pair_keyed(0, Some(media_keys(suite)));
+            host.tap_plaintext(true);
+            let src = pattern(40 * 512 + 9);
+            let wires = host.seal_frame(&src, 1_700_000_000_000_000_000, 0).unwrap();
+            let mut plain = Vec::new();
+            host.drain_plaintext(|p| plain.push(p.to_vec()));
+            assert_eq!(plain.len(), wires.len());
+            let kept: Vec<&[u8]> = wires
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !(3..6).contains(i))
+                .map(|(_, w)| w.as_slice())
+                .collect();
+            host.send_sealed(&kept).unwrap();
+            assert!(matches!(client.poll_frame(), Err(PunktfunkError::NoFrame)));
+            assert_eq!(client.missing_shards(0, 16), Some(vec![3, 4, 5]));
+            assert!(client.frame_in_flight(0));
+            let resent: Vec<Vec<u8>> = (3..6).map(|i| host.reseal(&plain[i]).unwrap()).collect();
+            let refs: Vec<&[u8]> = resent.iter().map(Vec::as_slice).collect();
+            host.send_sealed(&refs).unwrap();
+            let f = client.poll_frame().expect("the resend completes the frame");
+            assert_eq!(f.data, src, "{suite:?}");
+            assert!(!client.frame_in_flight(0), "a completed frame asks nothing");
+            // Parity covered two of the three; the rest land after the frame and are late.
+            assert!(client.poll_frame().is_err());
+            // The original sealing replayed is refused: its number was seen.
+            host.send_sealed(&[wires[0].as_slice()]).unwrap();
+            let before = client.stats().packets_dropped;
+            assert!(client.poll_frame().is_err());
+            assert_eq!(client.stats().packets_dropped, before + 1);
+        }
     }
 
     /// Sealed v2 media crosses under both suites, and every packet is 16 bytes longer than the

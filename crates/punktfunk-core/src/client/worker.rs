@@ -191,6 +191,12 @@ impl ClientShared {
         self.send_feedback(&fb);
     }
 
+    /// Ask the host to send a frame's missing shards again.
+    pub(crate) fn ask_nack(&self, nack: crate::quic::v2::dgram::Nack) {
+        let ask = self.feedback.lock().unwrap().nack(nack, Instant::now());
+        self.send_feedback(&ask);
+    }
+
     /// Ask the host to stop referencing frames `first..=last`.
     pub(crate) fn ask_rfi(&self, first: u32, last: u32) {
         self.recent_rfis.lock().unwrap().note(Instant::now());

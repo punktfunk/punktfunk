@@ -367,6 +367,7 @@ pub(super) async fn run_pump(args: WorkerArgs) {
         audio_reserved_kbps,
         stream_cap_kbps,
         refresh_hz,
+        nack: !params.frame_parts,
     };
     let _ = tokio::task::spawn_blocking(move || pump.run()).await;
 

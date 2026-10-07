@@ -78,6 +78,8 @@ pub struct LinkMinute {
     pub link_kbps: u32,
     /// The shape the client asked for.
     pub shape: LinkShape,
+    /// Packets resent on a client's NACK.
+    pub resend_pkts: u32,
     /// Shards the client never got, by where in their frame they fell: the first twelve
     /// data shards, the middle, and the last twelve with all parity.
     pub loss_head: u32,
@@ -129,6 +131,7 @@ pub fn emit(m: &LinkMinute, peer: std::net::IpAddr) {
                 egress_mbps = %format!("{:.1}", f64::from(m.egress_kbps) / 1000.0),
                 link_mbps = m.link_kbps / 1000,
                 shape = ?m.shape,
+                resend_pkts = m.resend_pkts,
                 loss_head = m.loss_head,
                 loss_mid = m.loss_mid,
                 loss_tail = m.loss_tail,
@@ -158,6 +161,7 @@ pub struct LinkCounters {
     rfi_declined: AtomicU32,
     idr: AtomicU32,
     retargets: AtomicU32,
+    resend_pkts: AtomicU32,
     /// Session-cumulative sealed wire bytes, republished by the send thread every ~2 s. The
     /// control task keeps the previous read and diffs; nothing here resets.
     egress_bytes: AtomicU64,
@@ -192,6 +196,11 @@ impl LinkCounters {
         self.rfi_declined.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Packets the send thread resent on a NACK.
+    pub fn note_resent(&self, n: u32) {
+        self.resend_pkts.fetch_add(n, Ordering::Relaxed);
+    }
+
     /// One IDR actually forced, past the coalescing cooldown.
     pub fn note_idr(&self) {
         self.idr.fetch_add(1, Ordering::Relaxed);
@@ -223,6 +232,7 @@ impl LinkCounters {
         m.rfi_declined = self.rfi_declined.swap(0, Ordering::Relaxed);
         m.idr = self.idr.swap(0, Ordering::Relaxed);
         m.retargets = self.retargets.swap(0, Ordering::Relaxed);
+        m.resend_pkts = self.resend_pkts.swap(0, Ordering::Relaxed);
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(m.clone());
     }
 

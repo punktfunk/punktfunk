@@ -29,7 +29,7 @@ pub(crate) struct RfiRecovery {
 }
 
 /// `a` is ahead of `b` in half-space wrap order.
-fn ahead_of(a: u32, b: u32) -> bool {
+pub(crate) fn ahead_of(a: u32, b: u32) -> bool {
     a != b && a.wrapping_sub(b) < u32::MAX / 2
 }
 
@@ -263,6 +263,7 @@ impl Default for FeedbackOut {
 struct OpenAsk {
     invalidate: Option<(u32, u32)>,
     keyframe: bool,
+    nack: Option<crate::quic::v2::dgram::Nack>,
     /// The newest frame when the ask went out.
     after: Option<u32>,
     next: Instant,
@@ -305,10 +306,27 @@ impl FeedbackOut {
         keyframe: bool,
         now: Instant,
     ) -> Feedback {
+        self.open(invalidate, keyframe, None, now)
+    }
+
+    /// Shards of one frame to send again, as a new ask. Only that frame arriving whole
+    /// answers it.
+    pub(crate) fn nack(&mut self, nack: crate::quic::v2::dgram::Nack, now: Instant) -> Feedback {
+        self.open(None, false, Some(nack), now)
+    }
+
+    fn open(
+        &mut self,
+        invalidate: Option<(u32, u32)>,
+        keyframe: bool,
+        nack: Option<crate::quic::v2::dgram::Nack>,
+        now: Instant,
+    ) -> Feedback {
         self.ask = self.ask.wrapping_add(1).max(1);
         self.open = Some(OpenAsk {
             invalidate,
             keyframe,
+            nack,
             after: self.newest,
             next: now + self.interval,
             until: now + ASK_GIVE_UP,
@@ -323,6 +341,12 @@ impl FeedbackOut {
             self.newest = Some(index);
         }
         let Some(o) = &self.open else { return };
+        if let Some(n) = o.nack {
+            if index == n.frame {
+                self.open = None;
+            }
+            return;
+        }
         let key = flags & u32::from(crate::packet::FLAG_SOF) != 0;
         let anchor = flags
             & (crate::packet::USER_FLAG_RECOVERY_ANCHOR | crate::packet::USER_FLAG_RECOVERY_POINT)
@@ -355,6 +379,7 @@ impl FeedbackOut {
             fb.ask = self.ask;
             fb.invalidate = o.invalidate;
             fb.keyframe = o.keyframe;
+            fb.nack = o.nack;
         }
         fb
     }
@@ -707,6 +732,32 @@ mod feedback_out_tests {
         assert_eq!(
             (w.window, w.ask, w.loss_ppm, w.link_kbps),
             (1, 0, 300, 940_000)
+        );
+    }
+
+    /// A NACK repeats like any ask until its own frame arrives; frames after it answer
+    /// nothing. The RFI after it replaces it whole.
+    #[test]
+    fn a_nack_repeats_until_its_frame_arrives() {
+        let t0 = Instant::now();
+        let mut out = FeedbackOut::default();
+        let n = crate::quic::v2::dgram::Nack::new(40, &[5, 6]).unwrap();
+        let first = out.nack(n, t0);
+        assert_eq!(
+            (first.ask, first.nack, first.invalidate),
+            (1, Some(n), None)
+        );
+        out.on_frame(41, u32::from(FLAG_SOF));
+        let copy = out
+            .resend(ms(t0, 17))
+            .expect("a later keyframe answers nothing");
+        assert_eq!(copy.nack, Some(n));
+        out.on_frame(40, FLAG_PIC.into());
+        assert_eq!(out.resend(ms(t0, 34)), None, "its frame arrived");
+        let rfi = out.ask(Some((40, 40)), false, ms(t0, 40));
+        assert_eq!(
+            (rfi.ask, rfi.nack, rfi.invalidate),
+            (2, None, Some((40, 40)))
         );
     }
 

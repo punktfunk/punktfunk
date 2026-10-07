@@ -54,7 +54,14 @@ pub(super) struct DataPump {
     pub(super) stream_cap_kbps: u32,
     /// Negotiated refresh, not the request still sitting in `shared.mode`.
     pub(super) refresh_hz: u32,
+    /// A short frame may ask for its missing shards: whole AUs only, so not under
+    /// slice-progressive delivery.
+    pub(super) nack: bool,
 }
+
+/// Most shards past its parity a frame may lack and still ask for them; more is
+/// congestion, which a resend would feed.
+const NACK_SHORT: u32 = 2;
 
 /// Closed windows held for an embedder that has not read them. Forty-eight
 /// seconds at the report cadence: enough that a client polling once a second
@@ -204,9 +211,16 @@ impl DataPump {
             }
             let polled = self.session.poll_frame();
             self.ask_for_short_tails();
-            let resend = self.shared.feedback.lock().unwrap().resend(Instant::now());
+            let now = Instant::now();
+            let resend = self.shared.feedback.lock().unwrap().resend(now);
             if let Some(fb) = resend {
                 self.shared.send_feedback(&fb);
+            }
+            if self.shared.frames.expire_hold(now) {
+                tracing::debug!("nack expired: the frames after it go, and their gap asks");
+            }
+            for _ in 0..self.shared.frames.take_filled() {
+                self.session.note_nack(true);
             }
             match polled {
                 Ok(frame) => self.on_frame(&mut lp, frame, clock_offset_ns, probe_active),
@@ -629,8 +643,11 @@ impl DataPump {
 
     /// Ask for recovery the moment a frame's last shard lands short of what its parity can
     /// rebuild, a frame interval before the next frame shows the gap, so the host's next
-    /// encode is the anchor. The decode side's gap still arms the freeze. All-intra frames
-    /// reference nothing, and a stream nobody decodes yet starts on an IDR: neither asks.
+    /// encode is the anchor. A frame at most [`NACK_SHORT`] shards past its parity, on a
+    /// round trip inside a frame interval, asks for its missing shards instead, and the
+    /// frames after it wait for them. One that completed meanwhile asks nothing. The decode
+    /// side's gap still arms the freeze. All-intra frames reference nothing, and a stream
+    /// nobody decodes yet starts on an IDR: neither asks.
     fn ask_for_short_tails(&mut self) {
         let tails: Vec<u32> = self.session.take_short_tails().collect();
         if tails.is_empty()
@@ -641,16 +658,51 @@ impl DataPump {
         }
         let now = Instant::now();
         for idx in tails {
+            if !self.session.frame_in_flight(idx) {
+                continue;
+            }
             if let Some((missing, recovery)) = self.session.missing_beyond_parity(idx) {
                 self.shared
                     .short_frames
                     .lock()
                     .unwrap()
                     .note(idx, missing, recovery);
+                if missing <= NACK_SHORT && self.ask_nack(idx, now) {
+                    continue;
+                }
             }
             let ask = self.shared.rfi.lock().unwrap().tail_short(idx, now);
             super::super::send_recovery(&self.shared, ask);
         }
+    }
+
+    /// Ask for frame `idx`'s missing shards when the round trip fits a frame interval, and
+    /// hold the frames after it `min(1.5 × rtt, frame interval)`: past that a resend costs
+    /// more than an RFI. `false` when it asked nothing.
+    fn ask_nack(&mut self, idx: u32, now: Instant) -> bool {
+        use crate::quic::v2::dgram::{Nack, NACK_MAX};
+        let rtt = Duration::from_micros(u64::from(self.shared.rtt_us.load(Ordering::Relaxed)));
+        let period = Duration::from_micros(1_000_000 / u64::from(self.refresh_hz.max(1)));
+        if !self.nack || rtt.is_zero() || rtt > period {
+            return false;
+        }
+        let Some(nack) = self
+            .session
+            .missing_shards(idx, NACK_MAX)
+            .and_then(|s| Nack::new(idx, &s))
+        else {
+            return false;
+        };
+        if !self
+            .shared
+            .frames
+            .hold(idx, now + (rtt * 3 / 2).min(period))
+        {
+            return false;
+        }
+        self.shared.ask_nack(nack);
+        self.session.note_nack(false);
+        true
     }
 
     /// One polled frame. Probe filler is skipped, a frame with no decoder
@@ -910,6 +962,7 @@ mod tests {
             audio_reserved_kbps: 256,
             stream_cap_kbps: 100_000,
             refresh_hz: 60,
+            nack: false,
         };
         (pump, ctrl_rx, fb_rx)
     }
@@ -976,6 +1029,89 @@ mod tests {
 
             shared.shutdown.store(true, Ordering::SeqCst);
             pump_thread.join().unwrap();
+        }
+    }
+
+    /// Frames short of their parity on a round trip inside a frame interval ask for their
+    /// missing shards, and the host's resend completes them in order: every 50th frame loses
+    /// three data shards, every frame arrives, none is dropped, no RFI goes out. Six lost is
+    /// congestion: an RFI, as without NACK. A frame that completed before its tail was read
+    /// asks nothing.
+    #[test]
+    fn short_frames_ask_for_their_shards_and_complete_in_order() {
+        use crate::transport::Transport;
+        let mode = crate::config::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        for (lost, expect_rfi) in [(3usize, false), (6, true)] {
+            let origin = crate::quic::wall_clock_ns();
+            let (host_tp, session) = idle_client_session(origin);
+            let shared = Arc::new(ClientShared::new(mode));
+            let _ = shared.frames.pop(Duration::ZERO); // a decoder is attached
+            shared.rtt_us.store(10_000, Ordering::Relaxed);
+            let (mut pump, _ctrl_rx, fb_rx) =
+                test_pump(session, shared.clone(), crate::quic::CODEC_HEVC);
+            pump.nack = true;
+            let pump_thread = std::thread::spawn(move || pump.run());
+
+            let (spare, _) = crate::transport::loopback_pair(0, 0);
+            let mut host = Session::new(
+                loopback_config(crate::config::Role::Host),
+                loopback_media(origin),
+                Box::new(spare),
+            )
+            .unwrap();
+            host.tap_plaintext(true);
+            // 8 KiB in 1 KiB shards: one block of 8 data and 2 parity, in wire order.
+            let frame = vec![7u8; 8 * 1024];
+            let (mut nacks, mut rfis, mut got) = (0, 0, Vec::new());
+            for i in 0..100u32 {
+                let wires = host
+                    .seal_frame(&frame, crate::quic::wall_clock_ns(), 0)
+                    .unwrap();
+                let mut plain = Vec::new();
+                host.drain_plaintext(|p| plain.push(p.to_vec()));
+                let short = i % 50 == 49;
+                for (k, w) in wires.iter().enumerate() {
+                    if !(short && k < lost) {
+                        host_tp.send(w).unwrap();
+                    }
+                }
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while got.last() != Some(&i) && Instant::now() < deadline {
+                    while let Ok(fb) = fb_rx.try_recv() {
+                        if let Some(n) = fb.nack.filter(|n| n.frame == i) {
+                            nacks += 1;
+                            for &s in n.shards() {
+                                host_tp
+                                    .send(&host.reseal(&plain[usize::from(s)]).unwrap())
+                                    .unwrap();
+                            }
+                        }
+                        rfis += usize::from(fb.ask != 0 && fb.invalidate.is_some());
+                    }
+                    if let FramePop::Frame(f) = shared.frames.pop(Duration::from_millis(1)) {
+                        got.push(f.frame_index);
+                    }
+                    if short && expect_rfi && rfis > 0 {
+                        break;
+                    }
+                }
+            }
+            shared.shutdown.store(true, Ordering::SeqCst);
+            pump_thread.join().unwrap();
+            if expect_rfi {
+                assert!(
+                    rfis > 0 && nacks == 0,
+                    "{lost} lost: {rfis} RFIs, {nacks} NACKs"
+                );
+            } else {
+                assert_eq!(got, (0..100).collect::<Vec<u32>>(), "every frame, in order");
+                assert_eq!((nacks > 0, rfis), (true, 0));
+                assert_eq!(shared.frames_dropped.load(Ordering::Relaxed), 0);
+            }
         }
     }
 

@@ -104,7 +104,9 @@ pub(super) struct StreamState {
     _watcher: Option<std::thread::JoinHandle<()>>,
     pub(super) live_session: crate::session_status::LiveSessionGuard,
     // ---- the send thread ----
-    pub(super) frame_tx: std::sync::mpsc::SyncSender<SendMsg>,
+    /// The one strong handle: a client's NACK reaches the send thread through a weak one,
+    /// so dropping this still ends the thread.
+    pub(super) frame_tx: Arc<std::sync::mpsc::SyncSender<SendMsg>>,
     pub(super) send_thread: std::thread::JoinHandle<()>,
     pub(super) send_spread_us: Arc<AtomicU32>,
     pub(super) wire_rekeys: Arc<AtomicU32>,
@@ -438,6 +440,7 @@ impl StreamState {
                             link_kbps,
                             shape,
                             ports,
+                            resend,
                             ramp_open,
                             cursor_client_draws,
                         },
@@ -844,6 +847,13 @@ impl StreamState {
 
         // Depth 3: encode blocks if send falls behind, rather than drop a frame (infinite GOP freeze).
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<SendMsg>(3);
+        let frame_tx = Arc::new(frame_tx);
+        let nack_tx = Arc::downgrade(&frame_tx);
+        *resend.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(move |frame, shards| {
+            nack_tx
+                .upgrade()
+                .is_some_and(|tx| tx.try_send(SendMsg::Resend { frame, shards }).is_ok())
+        }));
         // Stats slot only — an ordinary connect is not owed a corrective Reconfigured.
         let delivered = delivered_mode(frame.width, frame.height, interval);
         let live_mode = Arc::new(AtomicU64::new(pack_mode(
