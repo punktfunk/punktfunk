@@ -1220,6 +1220,8 @@
 	"setting_update_check_hint": "Asks the update server about new versions.",
 	"setting_update_apply": "Console updates",
 	"setting_update_apply_hint": "Lets the console install updates. Off still shows them.",
+	"setting_tray_autostart": "Tray autostart",
+	"setting_tray_autostart_hint": "Starts the status icon next to the clock at sign-in.",
 	"library_search_placeholder": "Search games",
 	"library_platform_all": "All platforms",
 	"library_platform_label": "Platform",

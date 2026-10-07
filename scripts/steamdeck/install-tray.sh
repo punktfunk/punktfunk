@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # punktfunk — build and install the host's status tray on SteamOS (called by install.sh and
 # update.sh; safe to run by hand). User-scoped, where the packages use /usr: the binary in
-# ~/.local/bin, an XDG autostart entry, the launcher, and the hicolor status icons.
+# ~/.local/bin, the launcher, and the hicolor status icons. The host writes the autostart entry
+# from its Tray autostart setting, so an update never undoes the user's choice.
 #
 # Best-effort: a failure warns and exits 0. The host runs the same without a tray.
 set -euo pipefail
@@ -28,9 +29,7 @@ if { ldd "$BUILT" 2>/dev/null || true; } | grep -q 'not found'; then
 fi
 
 install -Dm0755 "$BUILT" "$TRAY"
-# `Exec=` expands no variables, so both entries name this install's absolute path.
-sed "s|/usr/bin/punktfunk-tray|$TRAY|" "$LINUX/io.unom.Punktfunk.Tray.desktop" \
-    | install -Dm0644 /dev/stdin "$HOME/.config/autostart/io.unom.Punktfunk.Tray.desktop"
+# `Exec=` expands no variables, so the launcher names this install's absolute path.
 sed "s|/usr/bin/punktfunk-tray|$TRAY|" "$LINUX/io.unom.Punktfunk.StartHost.desktop" \
     | install -Dm0644 /dev/stdin "$HOME/.local/share/applications/io.unom.Punktfunk.StartHost.desktop"
 for png in "$LINUX"/icons/hicolor/*/apps/punktfunk-tray*.png; do

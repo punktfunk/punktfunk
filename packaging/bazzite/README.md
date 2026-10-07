@@ -56,9 +56,9 @@ that's the walkthrough to hand a user. Packager-side facts:
 - SELinux labels are baked into the image at build time (squashfs pseudo-xattrs computed from the
   targeted policy) — without them udev couldn't read the gamepad rule under enforcing. Validated
   live on Bazzite 43.
-- Install also applies what the RPM scriptlets would have (udev reload, sysctl) and seeds the two
-  `/etc` files a sysext can't carry (the gamescope-session drop-in, the tray autostart entry),
-  staged under `/usr/share/punktfunk/etc/`.
+- Install also applies what the RPM scriptlets would have (udev reload, sysctl) and seeds the
+  `/etc` file a sysext can't carry (the gamescope-session drop-in), staged under
+  `/usr/share/punktfunk/etc/`.
 
 ### Path B — bootc image (`FROM bazzite-nvidia`)
 

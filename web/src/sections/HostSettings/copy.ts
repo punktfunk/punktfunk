@@ -279,6 +279,10 @@ export const SETTING_COPY: Record<string, Copy> = {
 		label: m.setting_update_apply,
 		hint: m.setting_update_apply_hint,
 	},
+	tray_autostart: {
+		label: m.setting_tray_autostart,
+		hint: m.setting_tray_autostart_hint,
+	},
 };
 
 export const GROUP_LABEL: Record<SettingGroup, () => string> = {

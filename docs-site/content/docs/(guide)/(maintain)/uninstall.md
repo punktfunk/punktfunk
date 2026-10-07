@@ -37,11 +37,12 @@ pacman and the Bazzite sysext: `sh install.sh --uninstall` (fetch it with
    | Steam Deck on-device build | [See below](#steamos--steam-deck-host-on-device-build) |
    | NixOS | [See below](#nixos) |
 
-3. Clear what stays behind — the config directory, the two groups the packages create, lingering
-   and the unit drop-ins:
+3. Clear what stays behind — the config directory, the tray's autostart entry, the two groups the
+   packages create, lingering and the unit drop-ins:
 
    ```sh
    rm -rf ~/.config/punktfunk ~/.config/systemd/user/punktfunk-*.service.d
+   rm -f ~/.config/autostart/io.unom.Punktfunk.Tray.desktop
    sudo groupdel punktfunk-update
    sudo gpasswd -d "$USER" punktfunk; sudo groupdel punktfunk
    sudo loginctl disable-linger "$USER"      # only if nothing else needs it
@@ -70,8 +71,8 @@ sudo punktfunk-sysext remove
 sudo rm -f /etc/modules-load.d/punktfunk.conf /etc/udev/rules.d/60-punktfunk.rules
 ```
 
-`remove` deletes the image, `/etc/punktfunk-sysext.conf`, the tray autostart and the gamescope
-session drop-in unless you edited it. The two files above it leaves. On a Bazzite with Steam's
+`remove` deletes the image, `/etc/punktfunk-sysext.conf` and the gamescope session drop-in
+unless you edited it. The two files above it leaves. On a Bazzite with Steam's
 session manager it may also have added an SELinux module: `sudo semodule -r punktfunk-ds-inhibit`.
 Then do steps 3 and 4.
 

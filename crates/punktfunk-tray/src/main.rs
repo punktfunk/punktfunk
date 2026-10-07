@@ -29,7 +29,8 @@ mod win_theme;
 pub struct Args {
     /// Windows uninstaller: ask this session's instance to exit.
     pub quit: bool,
-    /// Autostart: exit silently when this user is not a host (Linux installs it for every user).
+    /// Started by the autostart entry: wait for the desktop's status-notifier watcher, and exit
+    /// quietly when none comes (Linux).
     pub autostart: bool,
     /// Start-menu launcher: start a stopped host once — behind one UAC prompt on
     /// Windows, with its web console and plugin runner on Linux.

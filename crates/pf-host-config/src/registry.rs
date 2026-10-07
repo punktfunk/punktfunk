@@ -543,6 +543,7 @@ pub static SETTINGS: &[Setting] = &[
     // --- System
     row("update_check", "PUNKTFUNK_UPDATE_CHECK", Kind::Bool, D::Bool(true), System, Now, "Check for updates", "updating"),
     row("update_apply", "PUNKTFUNK_UPDATE_APPLY", Kind::Bool, D::Bool(true), System, Now, "Console updates", "updating").advanced(),
+    row("tray_autostart", "PUNKTFUNK_TRAY_AUTOSTART", Kind::Bool, D::Bool(true), System, Now, "Tray autostart", "configuration").only(LINUX_WINDOWS),
 ];
 
 #[cfg(test)]

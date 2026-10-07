@@ -3286,7 +3286,8 @@ readonly "getPlayingApps": <Config extends OperationConfig>(options: { readonly 
 readonly "getHostSettings": <Config extends OperationConfig>(options: { readonly config?: Config | undefined } | undefined) => Effect.Effect<WithOptionalResponse<typeof GetHostSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"GetHostSettings401", typeof GetHostSettings401.Type>>
   /**
 * Partial: only the named settings change, and `null` resets one. Every value is checked
-* before anything is written. Applies per setting's `apply`: the next session, or a restart.
+* before anything is written. Applies per setting's `apply`: at once, the next session, or a
+* restart. `tray_autostart` rewrites the tray's autostart entry here.
 */
 readonly "patchHostSettings": <Config extends OperationConfig>(options: { readonly payload: typeof PatchHostSettingsRequestJson.Encoded; readonly config?: Config | undefined }) => Effect.Effect<WithOptionalResponse<typeof PatchHostSettings200.Type, Config>, HttpClientError.HttpClientError | SchemaError | PunktfunkError<"PatchHostSettings400", typeof PatchHostSettings400.Type> | PunktfunkError<"PatchHostSettings401", typeof PatchHostSettings401.Type> | PunktfunkError<"PatchHostSettings500", typeof PatchHostSettings500.Type>>
   /**

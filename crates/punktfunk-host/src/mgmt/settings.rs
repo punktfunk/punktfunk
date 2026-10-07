@@ -247,7 +247,8 @@ pub(crate) async fn get_host_settings() -> Json<HostSettingsState> {
 /// Change host settings
 ///
 /// Partial: only the named settings change, and `null` resets one. Every value is checked
-/// before anything is written. Applies per setting's `apply`: the next session, or a restart.
+/// before anything is written. Applies per setting's `apply`: at once, the next session, or a
+/// restart. `tray_autostart` rewrites the tray's autostart entry here.
 #[utoipa::path(
     patch,
     path = "/host/settings",
@@ -282,6 +283,9 @@ pub(crate) async fn patch_host_settings(ApiJson(patch): ApiJson<HostSettingsPatc
             );
         }
         Err(e) => return api_error(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+    if patch.contains_key("tray_autostart") {
+        crate::tray_autostart::apply();
     }
     let ids: Vec<String> = patch.keys().cloned().collect();
     tracing::info!(settings = ?ids, "management API: host settings updated");

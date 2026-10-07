@@ -504,23 +504,19 @@ plugin_known() {
   done
   return 1
 }
-tray_override() { printf '%s/autostart/io.unom.Punktfunk.Tray.desktop' "${XDG_CONFIG_HOME:-$HOME/.config}"; }
-
 # The widget carries status, pairing and the console, so the tray would be a second punktfunk
-# mark in the same bar. A user entry of the same name shadows the package's autostart file;
-# deleting /etc/xdg/autostart would return on the next upgrade and hit every user on the box.
+# mark in the same bar. The host's tray_autostart setting owns the tray's autostart entry.
 hide_tray() {
-  local f; f="$(tray_override)"
-  mkdir -p "${f%/*}"
-  printf '[Desktop Entry]\nType=Application\nName=punktfunk host status\nHidden=true\n' >"$f"
-  ok "tray hidden — the bar widget replaces it"
+  if punktfunk-host settings set tray_autostart false >/dev/null 2>&1; then
+    ok "tray hidden — the bar widget replaces it"
+  else
+    warn "could not turn the tray off — set Tray autostart off in the console"
+  fi
 }
 
 restore_tray() {
-  local f; f="$(tray_override)"
-  [[ -f "$f" ]] || return 0
-  rm -f "$f"
-  ok "tray restored"
+  punktfunk-host settings set tray_autostart null >/dev/null 2>&1 && ok "tray restored"
+  return 0
 }
 
 setup_plugin() {

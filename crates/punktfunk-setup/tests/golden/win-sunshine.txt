@@ -13,7 +13,7 @@
 ==> Register the uninstaller
   ok would register 'Punktfunk Host' in Add/Remove Programs (HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7C9E6A52-1F4B-4E8D-A3C7-2B5D8F1E0A93}_is1)
 ==> Registry
-  + reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run /v PunktfunkTray /t REG_SZ /d ""C:\Program Files\punktfunk\punktfunk-tray.exe"" /f
+  + "C:\Program Files\punktfunk\punktfunk-host.exe" settings set tray_autostart true
   + reg add HKLM\SOFTWARE\Classes\AppUserModelId\unom.punktfunk.tray /v DisplayName /t REG_SZ /d Punktfunk /f
   + reg add HKLM\SOFTWARE\Classes\AppUserModelId\unom.punktfunk.tray /v IconUri /t REG_SZ /d "C:\Program Files\punktfunk\punktfunk.ico" /f
   + reg add HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers /v "C:\Program Files\punktfunk\vklayer\pf_vkhdr_layer.json" /t REG_DWORD /d 0 /f

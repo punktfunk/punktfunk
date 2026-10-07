@@ -10,12 +10,15 @@
 //! [`replace_users_readable_file`] are the one temp-and-rename writer for stores; the last
 //! is for the two files every local account may read, `mgmt-endpoint` and `tray-token`.
 //! [`system32`] is how a privileged process names a Windows system tool; [`remove_device`]
-//! runs one. [`seat`] is the Windows multi-seat marker.
+//! runs one. [`seat`] is the Windows multi-seat marker. [`tray_autostart`] is the tray's
+//! per-user autostart entry on Linux.
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
 
 pub mod seat;
+#[cfg(not(windows))]
+pub mod tray_autostart;
 
 /// `$XDG_RUNTIME_DIR/punktfunk-gamescope-ei` (per-user 0700), or `/tmp/…`
 /// when the runtime dir is unset. `pf-vdisplay` writes it under the session

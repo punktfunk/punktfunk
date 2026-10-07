@@ -80,6 +80,7 @@ restart*.
 | Disconnect timeout | `PUNKTFUNK_IDLE_TIMEOUT_MS` | 1000–120000 ms | `8000` | after a restart |
 | Check for updates | `PUNKTFUNK_UPDATE_CHECK` | `on` · `off` | `on` | at once |
 | Console updates | `PUNKTFUNK_UPDATE_APPLY` | `on` · `off` | `on` | at once |
+| Tray autostart (Linux, Windows) | `PUNKTFUNK_TRAY_AUTOSTART` | `on` · `off` | `on` | at once |
 
 The table shows the Linux values. On Windows, **Encoder** takes `auto` · `nvenc` · `amf` · `qsv` ·
 `mf`, and **Default gamepad** takes `auto` · `xbox360` · `xboxone` · `xboxelite` · `dualsense` ·

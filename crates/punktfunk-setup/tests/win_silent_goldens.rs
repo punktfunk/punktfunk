@@ -173,7 +173,7 @@ fn golden_silent_mergetasks_reconfigures_an_upgrade() {
     assert_eq!(outcome, Ok(()));
     golden("win-silent-reconfigure", &text);
     assert!(text.contains("--allow-public-network=on"));
-    assert!(text.contains("reg delete") && text.contains("PunktfunkTray"));
+    assert!(text.contains("settings set tray_autostart false"));
     assert!(text.contains("/DIR ignored"));
 }
 

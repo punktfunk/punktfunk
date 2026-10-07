@@ -138,11 +138,9 @@ sed -i 's#%h/punktfunk/scripts/headless/run-headless-kde.sh#/usr/share/punktfunk
 # connect, so it has to be present before the host ever connects. See the file's header comment.
 install -Dm0644 packaging/linux/io.unom.Punktfunk.Host.desktop \
     "$STAGE/usr/share/applications/io.unom.Punktfunk.Host.desktop"
-# Status tray: the per-user SNI icon + its XDG autostart entry (self-gating: --autostart exits
-# silently for users who don't run a host) + the hicolor status icons it names.
+# Status tray: the per-user SNI icon + the hicolor status icons it names. Its autostart entry is
+# per user, written by the host from the tray_autostart setting.
 install -Dm0755 "$TRAY_BIN"                        "$STAGE/usr/bin/punktfunk-tray"
-install -Dm0644 packaging/linux/io.unom.Punktfunk.Tray.desktop \
-    "$STAGE/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop"
 install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
     "$STAGE/usr/share/applications/io.unom.Punktfunk.StartHost.desktop"
 for sz in 22x22 48x48; do

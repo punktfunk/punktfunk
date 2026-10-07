@@ -458,11 +458,9 @@ install -Dm0644 packaging/linux/io.unom.Punktfunk.Host.desktop \
 install -Dm0644 packaging/linux/50-punktfunk-nice.conf \
                 %{buildroot}%{_unitdir}/user@.service.d/50-punktfunk-nice.conf
 
-# Status tray: the per-user SNI icon + its XDG autostart entry (self-gating: --autostart exits
-# silently for users who don't run a host) + the hicolor status icons it names.
+# Status tray: the per-user SNI icon + the hicolor status icons it names. Its autostart entry is
+# per user, written by the host from the tray_autostart setting.
 install -Dm0755 target/release/punktfunk-tray %{buildroot}%{_bindir}/punktfunk-tray
-install -Dm0644 packaging/linux/io.unom.Punktfunk.Tray.desktop \
-                %{buildroot}%{_sysconfdir}/xdg/autostart/io.unom.Punktfunk.Tray.desktop
 install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
                 %{buildroot}%{_datadir}/applications/io.unom.Punktfunk.StartHost.desktop
 for sz in 22x22 48x48; do
@@ -687,7 +685,6 @@ install -Dm0755 "$(command -v bun)" %{buildroot}%{_libexecdir}/punktfunk-bun/bun
 %{_userunitdir}/punktfunk-host.service
 %{_userunitdir}/punktfunk-kde-session.service
 %{_datadir}/applications/io.unom.Punktfunk.Host.desktop
-%{_sysconfdir}/xdg/autostart/io.unom.Punktfunk.Tray.desktop
 %{_datadir}/applications/io.unom.Punktfunk.StartHost.desktop
 %{_datadir}/icons/hicolor/*/apps/punktfunk-tray*.png
 %dir /etc/gamescope-session-plus

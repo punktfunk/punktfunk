@@ -277,11 +277,9 @@ package_punktfunk-host() {
   # connect). See the file's header comment.
   install -Dm0644 "$R/packaging/linux/io.unom.Punktfunk.Host.desktop" \
     "$pkgdir/usr/share/applications/io.unom.Punktfunk.Host.desktop"
-  # Status tray: per-user SNI icon + XDG autostart entry (self-gating: --autostart exits silently
-  # for users who don't run a host) + the hicolor status icons it names.
+  # Status tray: per-user SNI icon + the hicolor status icons it names. Its autostart entry is per
+  # user, written by the host from the tray_autostart setting.
   install -Dm0755 "$T/punktfunk-tray" "$pkgdir/usr/bin/punktfunk-tray"
-  install -Dm0644 "$R/packaging/linux/io.unom.Punktfunk.Tray.desktop" \
-    "$pkgdir/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop"
   install -Dm0644 "$R/packaging/linux/io.unom.Punktfunk.StartHost.desktop" \
     "$pkgdir/usr/share/applications/io.unom.Punktfunk.StartHost.desktop"
   local sz png

@@ -200,11 +200,7 @@ in
         substituteInPlace "$out/share/applications/io.unom.Punktfunk.Host.desktop" \
           --replace-fail "/usr/bin/punktfunk-host" "$out/bin/punktfunk-host"
 
-        # Status-tray autostart entry + its hicolor status icons.
-        install -Dm0644 packaging/linux/io.unom.Punktfunk.Tray.desktop \
-          "$out/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop"
-        substituteInPlace "$out/etc/xdg/autostart/io.unom.Punktfunk.Tray.desktop" \
-          --replace-fail "/usr/bin/punktfunk-tray" "$out/bin/punktfunk-tray"
+        # The tray's launcher + hicolor status icons. The host writes its per-user autostart entry.
         install -Dm0644 packaging/linux/io.unom.Punktfunk.StartHost.desktop \
           "$out/share/applications/io.unom.Punktfunk.StartHost.desktop"
         substituteInPlace "$out/share/applications/io.unom.Punktfunk.StartHost.desktop" \
