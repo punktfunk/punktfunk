@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { ArrowDown, ArrowUp, Check, Images, Settings2 } from "lucide-react";
-import { motion } from "motion/react";
+import { ArrowDown, ArrowUp, Images } from "lucide-react";
 import { type FC, useState } from "react";
 import {
 	getListLibraryMetadataQueryKey,
@@ -14,13 +13,13 @@ import { useGetPluginCatalog } from "@/api/gen/store/store";
 import { useSourceStatus } from "@/api/metadata";
 import { METADATA_CATEGORY, usePlugins } from "@/api/plugins";
 import { useInstallPlugin } from "@/api/store";
-import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
-import { Badge } from "@/components/ui/badge";
+import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MenuCheck, MenuItem, RowMenu } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
-import { AddSourceRail, SourceGroup } from "./AddSource";
+import { AddSourceRail, SourceGroup, SourceItem } from "./AddSource";
 import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 import { useSourceNames } from "./Sources";
@@ -127,23 +126,16 @@ export const MetadataSourcesSection: FC = () => {
 							/>
 						))}
 						{silent.map((entry) => (
-							<motion.div
+							<SourceItem
 								key={entry.pkg}
-								variants={ROW}
-								className="flex flex-wrap items-center gap-3 py-3"
-							>
-								<span className="text-sm font-medium">{entry.title}</span>
-								<Badge
-									variant={running.has(entry.id) ? "secondary" : "outline"}
-								>
-									{running.has(entry.id)
+								title={entry.title}
+								meta={`${
+									running.has(entry.id)
 										? m.library_source_running()
-										: m.library_source_stopped()}
-								</Badge>
-								<span className="text-sm text-muted-foreground">
-									{m.library_metadata_silent()}
-								</span>
-							</motion.div>
+										: m.library_source_stopped()
+								} · ${m.library_metadata_silent()}`}
+								hint={m.library_metadata_silent()}
+							/>
 						))}
 					</Stagger>
 					<p className="max-w-prose text-xs text-muted-foreground">
@@ -192,78 +184,81 @@ const MetadataSourceRow: FC<{
 	onSettings,
 }) => {
 	const status = useSourceStatus(source.id, running);
-	const replaceId = `metadata-replace-${source.id}`;
+	const found =
+		running && status.data
+			? status.data.ready
+				? m.library_metadata_found({
+						found: status.data.found,
+						wanted: status.data.wanted,
+					})
+				: status.data.reason
+			: null;
 	return (
-		<motion.div
-			variants={ROW}
-			className="flex flex-wrap items-center gap-3 py-3"
-		>
-			<Button
-				size="sm"
-				variant={source.enabled ? "default" : "outline"}
-				aria-pressed={source.enabled}
-				disabled={busy}
-				onClick={onToggle}
-			>
-				{source.enabled && <Check className="size-4" />}
-				{label}
-			</Button>
-			<Badge variant={running ? "secondary" : "outline"}>
-				{running ? m.library_source_running() : m.library_source_stopped()}
-			</Badge>
-			{running && status.data && (
-				<span
-					className={`text-sm ${status.data.ready ? "text-muted-foreground" : "text-amber-600 dark:text-amber-500"}`}
-				>
-					{status.data.ready
-						? m.library_metadata_found({
-								found: status.data.found,
-								wanted: status.data.wanted,
-							})
-						: status.data.reason}
-				</span>
-			)}
-			<div className="ml-auto flex flex-wrap items-center gap-2">
-				<label
-					htmlFor={replaceId}
-					className="flex items-center gap-2 text-sm"
-					title={m.library_metadata_replace_help()}
-				>
-					<Checkbox
-						id={replaceId}
-						checked={source.replace}
-						disabled={busy}
-						onCheckedChange={(v) => onReplace(v === true)}
-					/>
-					{m.library_metadata_replace()}
-				</label>
-				<Button
-					size="sm"
-					variant="outline"
-					aria-label={m.library_metadata_up()}
-					disabled={busy || first}
-					onClick={onUp}
-				>
-					<ArrowUp className="size-4" />
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					aria-label={m.library_metadata_down()}
-					disabled={busy || last}
-					onClick={onDown}
-				>
-					<ArrowDown className="size-4" />
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					aria-label={m.library_source_settings()}
-					onClick={onSettings}
-				>
-					<Settings2 className="size-4" />
-				</Button>
-			</div>
-		</motion.div>
+		<SourceItem
+			lead={
+				<Checkbox
+					checked={source.enabled}
+					disabled={busy}
+					aria-label={label}
+					onCheckedChange={onToggle}
+				/>
+			}
+			title={label}
+			meta={
+				<>
+					{running ? m.library_source_running() : m.library_source_stopped()}
+					{found && (
+						<span
+							className={
+								status.data?.ready
+									? undefined
+									: "text-amber-600 dark:text-amber-500"
+							}
+						>
+							{" "}
+							· {found}
+						</span>
+					)}
+				</>
+			}
+			actions={
+				<>
+					<Button
+						size="icon"
+						variant="ghost"
+						aria-label={m.library_metadata_up()}
+						title={m.library_metadata_up()}
+						disabled={busy || first}
+						onClick={onUp}
+					>
+						<ArrowUp className="size-4" />
+					</Button>
+					<Button
+						size="icon"
+						variant="ghost"
+						aria-label={m.library_metadata_down()}
+						title={m.library_metadata_down()}
+						disabled={busy || last}
+						onClick={onDown}
+					>
+						<ArrowDown className="size-4" />
+					</Button>
+					<RowMenu label={m.common_more_actions()}>
+						<MenuCheck
+							checked={source.replace}
+							disabled={busy}
+							onChange={onReplace}
+						>
+							<span title={m.library_metadata_replace_help()}>
+								{m.library_metadata_replace()}
+							</span>
+						</MenuCheck>
+						<MenuItem onSelect={onSettings}>
+							{m.library_source_settings()}
+						</MenuItem>
+					</RowMenu>
+				</>
+			}
+		/>
 	);
 };

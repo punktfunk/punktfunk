@@ -14,6 +14,7 @@ import { QueryState } from "@/components/query-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import {
 	RowDetails,
 	Table,
@@ -146,7 +147,7 @@ export const RecordingsCard: FC<{
 							<TableHeader>
 								<TableRow>
 									<TableHead>{m.stats_col_time()}</TableHead>
-									<TableHead>{m.stats_col_kind()}</TableHead>
+									<TableHead className={WIDE}>{m.stats_col_kind()}</TableHead>
 									<TableHead className={WIDE}>
 										{m.stats_col_resolution()}
 									</TableHead>
@@ -160,7 +161,7 @@ export const RecordingsCard: FC<{
 									<TableHead className={cn(WIDE, "text-right")}>
 										{m.stats_col_samples()}
 									</TableHead>
-									<TableHead className="w-32" />
+									<TableHead className="w-24" />
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -172,12 +173,18 @@ export const RecordingsCard: FC<{
 										<TableCell className="whitespace-nowrap font-medium">
 											{fmtTimestamp(r.started_unix_ms)}
 											<RowDetails>
-												{r.width}×{r.height}@{r.fps} · {r.codec.toUpperCase()} ·{" "}
-												{r.encoder_backend || "—"} ·{" "}
-												{fmtClockDuration(r.duration_ms / 1000)}
+												{[
+													kindLabel(r.kind),
+													`${r.width}×${r.height}@${r.fps}`,
+													r.codec.toUpperCase(),
+													r.encoder_backend,
+													fmtClockDuration(r.duration_ms / 1000),
+												]
+													.filter(Boolean)
+													.join(" · ")}
 											</RowDetails>
 										</TableCell>
-										<TableCell>
+										<TableCell className={WIDE}>
 											<Badge
 												variant={
 													r.kind === "gamestream" ? "secondary" : "default"
@@ -226,25 +233,21 @@ export const RecordingsCard: FC<{
 												>
 													<Eye className="size-4" />
 												</Button>
-												<Button
-													variant="ghost"
-													size="icon"
-													aria-label={m.stats_download()}
-													title={m.stats_download()}
-													onClick={() => onDownload(r.id)}
-												>
-													<Download className="size-4" />
-												</Button>
-												<Button
-													variant="ghost"
-													size="icon"
-													aria-label={m.stats_delete()}
-													title={m.stats_delete()}
-													disabled={isDeleting}
-													onClick={() => onDelete(r.id)}
-												>
-													<Trash2 className="size-4 text-destructive" />
-												</Button>
+												<RowMenu label={m.common_more_actions()}>
+													<MenuItem onSelect={() => onDownload(r.id)}>
+														<Download />
+														{m.stats_download()}
+													</MenuItem>
+													<MenuSeparator />
+													<MenuItem
+														destructive
+														disabled={isDeleting}
+														onSelect={() => onDelete(r.id)}
+													>
+														<Trash2 />
+														{m.stats_delete()}
+													</MenuItem>
+												</RowMenu>
 											</div>
 										</TableCell>
 									</TableRow>

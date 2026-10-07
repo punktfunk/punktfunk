@@ -1,6 +1,8 @@
 import { Download } from "lucide-react";
+import { motion } from "motion/react";
 import { type FC, type ReactNode, useState } from "react";
 import type { CatalogEntry } from "@/api/gen/model";
+import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
@@ -52,6 +54,41 @@ export const AddSourceRail: FC<{
 		</div>
 	);
 };
+
+/**
+ * One row of a Sources section: an optional leading control, the name over up to two muted
+ * lines, then the row's actions. Each line truncates, so a long name or path never widens the
+ * row. `children` is what the row opens below itself.
+ */
+export const SourceItem: FC<{
+	lead?: ReactNode;
+	title: ReactNode;
+	meta?: ReactNode;
+	detail?: ReactNode;
+	/** The full text of a truncated line, on hover. */
+	hint?: string;
+	actions?: ReactNode;
+	children?: ReactNode;
+}> = ({ lead, title, meta, detail, hint, actions, children }) => (
+	<motion.div variants={ROW} className="py-3">
+		<div className="flex items-center gap-3">
+			{lead}
+			<div className="min-w-0 flex-1" title={hint}>
+				<div className="truncate font-medium">{title}</div>
+				{meta && (
+					<div className="truncate text-xs text-muted-foreground">{meta}</div>
+				)}
+				{detail && (
+					<div className="truncate text-xs text-muted-foreground">{detail}</div>
+				)}
+			</div>
+			{actions && (
+				<div className="flex shrink-0 items-center gap-1">{actions}</div>
+			)}
+		</div>
+		{children}
+	</motion.div>
+);
 
 /** One section of the Sources tab: a heading, then its rows. */
 export const SourceGroup: FC<{

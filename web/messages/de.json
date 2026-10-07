@@ -375,7 +375,7 @@
 	"library_source_running": "Läuft",
 	"library_source_stopped": "Gestoppt",
 	"library_source_access_pending": "{title} kann auf {count} Ordner nicht zugreifen",
-	"plugin_access_title": "Zugriff",
+	"plugin_access_folders": "Ordnerzugriff ({count})",
 	"plugin_access_read_only": "Nur Lesen",
 	"plugin_access_read_write": "Lesen und Schreiben",
 	"plugin_access_allow": "Erlauben",
@@ -520,6 +520,7 @@
 	"logs_pause": "Pause",
 	"logs_clear": "Leeren",
 	"logs_search": "Logs durchsuchen…",
+	"logs_level": "Niedrigste angezeigte Stufe",
 	"logs_empty": "Keine passenden Logeinträge — Filter anpassen oder auf Host-Aktivität warten.",
 	"logs_dropped": "Einige Einträge wurden verdrängt, bevor sie abgeholt werden konnten",
 	"logs_download": "Logs herunterladen",
@@ -656,6 +657,7 @@
 	"store_stopped": "Läuft nicht",
 	"store_version_unknown": "Version unbekannt",
 	"store_uninstall": "Deinstallieren",
+	"store_open_page": "Seite öffnen",
 	"store_uninstall_confirm": "{title} deinstallieren?",
 	"store_uninstall_body": "Du kannst es jederzeit wieder aus dem Katalog installieren.",
 	"store_uninstall_failed": "Die Deinstallation konnte nicht gestartet werden",
@@ -1221,5 +1223,7 @@
 	"profiles_door_slow": "Schaltet noch um. Lade diese Seite in einer Minute neu.",
 	"profiles_outcome_door_off": "Schalte zuerst „Ohne Anmeldung erreichbar“ ein",
 	"profiles_outcome_desktop_hint_linux": "Ein eigener Benutzer mit eigenem Steam und eigenen Anmeldungen.",
-	"profiles_remove_linux": "Auch das Benutzerkonto von {name} und seine Dateien werden entfernt."
+	"profiles_remove_linux": "Auch das Benutzerkonto von {name} und seine Dateien werden entfernt.",
+	"emulators_show_absent": "{count} nicht installierte anzeigen",
+	"emulators_hide_absent": "Nicht installierte ausblenden"
 }

@@ -17,10 +17,17 @@ import {
 	useState,
 } from "react";
 import { DocsLink } from "@/components/docs-link";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
@@ -168,14 +175,54 @@ export const LogsCard: FC<{
 			    unless something precedes it. This card used to restore it by hand at both
 			    breakpoints. */}
 			<CardContent className="flex flex-col gap-3">
-				{/* The page heading says "Troubleshooting" now, so this card names itself — otherwise
-				    the log stream is the only section on the page with no label. */}
-				<CardTitle>
-					<h2 className="flex items-center gap-2">
-						<ScrollText className="size-4" />
-						{m.logs_title()}
-					</h2>
-				</CardTitle>
+				{/* The card names itself under the page's "Troubleshooting" heading. Follow sits
+				    beside it; the rest of what acts on the whole log is in ⋯. */}
+				<div className="flex items-center gap-2">
+					<CardTitle className="mr-auto">
+						<h2 className="flex items-center gap-2">
+							<ScrollText className="size-4" />
+							{m.logs_title()}
+						</h2>
+					</CardTitle>
+					<Button
+						size="sm"
+						variant={follow ? "secondary" : "outline"}
+						aria-label={follow ? m.logs_pause() : m.logs_follow()}
+						onClick={() => onFollow(!follow)}
+					>
+						{follow ? (
+							<Pause className="size-3.5" />
+						) : (
+							<Play className="size-3.5" />
+						)}
+						<span className="hidden sm:inline">
+							{follow ? m.logs_pause() : m.logs_follow()}
+						</span>
+					</Button>
+					<RowMenu label={m.common_more_actions()}>
+						<MenuItem
+							disabled={matched.length === 0}
+							onSelect={() => onDownload(matched)}
+						>
+							<Download />
+							{m.logs_download()}
+						</MenuItem>
+						{shareMode && (
+							<MenuItem
+								disabled={matched.length === 0}
+								onSelect={() => onShare(matched)}
+							>
+								{shareMode === "share" ? <Share2 /> : <Copy />}
+								{shareLabel}
+							</MenuItem>
+						)}
+						<MenuSeparator />
+						<MenuItem onSelect={onClear}>
+							<Trash2 />
+							{m.logs_clear()}
+						</MenuItem>
+					</RowMenu>
+				</div>
 
 				<div className="flex flex-wrap items-center gap-2">
 					<span className="text-xs text-muted-foreground">
@@ -202,82 +249,46 @@ export const LogsCard: FC<{
 							)}
 						</Button>
 					))}
-					{/* The bundle list used to vanish entirely when empty, which meant the one place
-					    that could teach "your devices can send their logs here" showed nothing to
-					    anyone who had never already used it. One line is not the noise a whole empty
-					    card was. */}
-					{devicesEmpty && (
-						<span className="text-xs text-muted-foreground">
-							{m.logs_devices_empty()}
-						</span>
-					)}
 				</div>
+				{/* The one place that teaches "your devices can send their logs here". */}
+				{devicesEmpty && (
+					<p className="-mt-1 text-xs text-muted-foreground">
+						{m.logs_devices_empty()}
+					</p>
+				)}
 
-				<div className="flex flex-wrap items-center gap-2">
-					<div className="flex items-center gap-1">
-						{LEVELS.map((l) => (
-							<Button
-								key={l}
-								size="sm"
-								variant={minLevel === l ? "secondary" : "ghost"}
-								onClick={() => setMinLevel(l)}
-							>
-								{l}
-							</Button>
-						))}
-					</div>
+				<div className="flex items-center gap-2">
 					<Input
 						value={search}
 						onChange={(e) => setSearch(e.target.value)}
 						placeholder={m.logs_search()}
-						className="max-w-xs"
+						aria-label={m.logs_search()}
+						className="min-w-0 flex-1 sm:max-w-xs"
 					/>
-					<div className="ml-auto flex items-center gap-2">
-						{dropped && <Badge variant="secondary">{m.logs_dropped()}</Badge>}
-						<Button
-							size="icon"
-							variant="ghost"
-							disabled={matched.length === 0}
-							title={m.logs_download()}
-							aria-label={m.logs_download()}
-							onClick={() => onDownload(matched)}
+					<Select
+						value={minLevel}
+						onValueChange={(v) => setMinLevel(v as MinLevel)}
+					>
+						<SelectTrigger
+							aria-label={m.logs_level()}
+							className="w-auto shrink-0"
 						>
-							<Download className="size-4" />
-						</Button>
-						{shareMode && (
-							<Button
-								size="icon"
-								variant="ghost"
-								disabled={matched.length === 0}
-								title={shareLabel}
-								aria-label={shareLabel}
-								onClick={() => onShare(matched)}
-							>
-								{shareMode === "share" ? (
-									<Share2 className="size-4" />
-								) : (
-									<Copy className="size-4" />
-								)}
-							</Button>
-						)}
-						<Button
-							size="sm"
-							variant={follow ? "secondary" : "outline"}
-							onClick={() => onFollow(!follow)}
-						>
-							{follow ? (
-								<Pause className="mr-1 size-3.5" />
-							) : (
-								<Play className="mr-1 size-3.5" />
-							)}
-							{follow ? m.logs_pause() : m.logs_follow()}
-						</Button>
-						<Button size="sm" variant="ghost" onClick={onClear}>
-							<Trash2 className="mr-1 size-3.5" />
-							{m.logs_clear()}
-						</Button>
-					</div>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{LEVELS.map((l) => (
+								<SelectItem key={l} value={l}>
+									{l}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
 				</div>
+				{dropped && (
+					<p role="status" className="text-xs text-muted-foreground">
+						{m.logs_dropped()}
+					</p>
+				)}
 
 				{/* A failing poll while lines are already on screen keeps them there — during a host
 				    restart the last lines before it went away are the interesting ones — but says so,

@@ -1,14 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import {
-	Boxes,
-	Check,
-	Download,
-	PackagePlus,
-	Settings2,
-	Trash2,
-} from "lucide-react";
-import { motion } from "motion/react";
+import { Boxes, Download, PackagePlus } from "lucide-react";
 import { type FC, type ReactNode, useMemo, useState } from "react";
 import {
 	getListLibraryScannersQueryKey,
@@ -24,15 +16,16 @@ import { usePlugins } from "@/api/plugins";
 import { useSeat } from "@/api/seat";
 import { useInstallPlugin } from "@/api/store";
 import { useDialogs } from "@/components/dialogs";
-import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
-import { Badge } from "@/components/ui/badge";
+import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { EmulatorsCard } from "@/sections/Library/Emulators";
 import { PendingAccess, usePluginAccess } from "@/sections/PluginAccess";
-import { AddSourceRail, SourceGroup } from "./AddSource";
+import { AddSourceRail, SourceGroup, SourceItem } from "./AddSource";
 import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 
@@ -331,7 +324,10 @@ export const SourcesCard: FC<{
 	</SourceGroup>
 );
 
-/** One source row with its controls and the expandable folder requests that explain missing games. */
+/**
+ * One source: on/off, its name over what it is doing, the rest in ⋯. The folder requests that
+ * explain missing games open below it.
+ */
 const SourceRow: FC<{
 	source: ScannerInfo;
 	/** The plugin backing this source is currently registered (its lease is live). */
@@ -367,68 +363,50 @@ const SourceRow: FC<{
 	const isPlugin = source.origin === "plugin";
 	const seat = useSeat();
 	const [accessOpen, setAccessOpen] = useState(accessInitiallyOpen);
+	const meta = [
+		isPlugin &&
+			(running ? m.library_source_running() : m.library_source_stopped()),
+		source.entries != null &&
+			m.library_provider_count({ count: source.entries }),
+	]
+		.filter(Boolean)
+		.join(" · ");
 	return (
-		<motion.div
-			variants={ROW}
-			className="flex flex-wrap items-center gap-3 py-3"
-		>
-			<Button
-				size="sm"
-				variant={source.enabled ? "default" : "outline"}
-				aria-pressed={source.enabled}
-				disabled={busy}
-				onClick={onToggle}
-			>
-				{source.enabled && <Check className="size-4" />}
-				{source.label}
-			</Button>
-			{isPlugin && (
-				<Badge variant={running ? "secondary" : "outline"}>
-					{running ? m.library_source_running() : m.library_source_stopped()}
-				</Badge>
-			)}
-			{source.entries != null && (
-				<Badge variant="secondary">
-					{m.library_provider_count({ count: source.entries })}
-				</Badge>
-			)}
-			<div className="ml-auto flex gap-2">
-				{isPlugin && (
-					<>
-						<Button
-							size="sm"
-							variant={filtered ? "default" : "outline"}
-							aria-pressed={filtered}
-							onClick={onFilter}
-						>
+		<SourceItem
+			lead={
+				<Checkbox
+					checked={source.enabled}
+					disabled={busy}
+					aria-label={source.label}
+					onCheckedChange={onToggle}
+				/>
+			}
+			title={source.label}
+			meta={meta || undefined}
+			actions={
+				isPlugin && (
+					<RowMenu label={m.common_more_actions()}>
+						<MenuItem onSelect={onFilter}>
 							{filtered
 								? m.library_provider_show_all()
 								: m.library_provider_filter()}
-						</Button>
+						</MenuItem>
 						{/* The form is the box's plugin; a seat has none to open. */}
 						{!seat && (
-							<Button
-								size="sm"
-								variant="outline"
-								aria-label={m.library_source_settings()}
-								onClick={onSettings}
-							>
-								<Settings2 className="size-4" />
-							</Button>
+							<MenuItem onSelect={onSettings}>
+								{m.library_source_settings()}
+							</MenuItem>
 						)}
-						<Button
-							size="sm"
-							variant="outline"
-							aria-label={m.library_provider_purge()}
-							onClick={onPurge}
-						>
-							<Trash2 className="size-4 text-destructive" />
-						</Button>
-					</>
-				)}
-			</div>
+						<MenuSeparator />
+						<MenuItem destructive onSelect={onPurge}>
+							{m.library_provider_purge()}
+						</MenuItem>
+					</RowMenu>
+				)
+			}
+		>
 			{access && access.pending.length > 0 && (
-				<div className="basis-full border-t pt-2">
+				<div className="mt-2 pl-7">
 					<button
 						type="button"
 						className="text-left text-sm font-medium text-amber-600 hover:underline dark:text-amber-500"
@@ -450,7 +428,7 @@ const SourceRow: FC<{
 					)}
 				</div>
 			)}
-		</motion.div>
+		</SourceItem>
 	);
 };
 

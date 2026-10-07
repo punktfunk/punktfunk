@@ -74,7 +74,7 @@ export const HostStrip: FC<{
 						)}
 					</div>
 				</div>
-				<div className="grid gap-3 md:grid-cols-2">
+				<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
 					<CopyRow label={m.connect_address()} value={h.local_ip} />
 					<CopyRow label={m.connect_link()} value={deepLink} />
 				</div>

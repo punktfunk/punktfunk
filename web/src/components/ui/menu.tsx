@@ -90,3 +90,24 @@ export function MenuChoice<V extends string>({
 		</M.Sub>
 	);
 }
+
+/** An on/off setting kept in the menu: ticked while on. The menu stays open on a tap. */
+export const MenuCheck: FC<{
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+	disabled?: boolean;
+	children: ReactNode;
+}> = ({ checked, onChange, disabled, children }) => (
+	<M.CheckboxItem
+		checked={checked}
+		disabled={disabled}
+		onCheckedChange={(v) => onChange(v === true)}
+		onSelect={(e) => e.preventDefault()}
+		className={cn(ITEM, "pl-8")}
+	>
+		<M.ItemIndicator className="absolute left-2 flex items-center">
+			<Check />
+		</M.ItemIndicator>
+		{children}
+	</M.CheckboxItem>
+);

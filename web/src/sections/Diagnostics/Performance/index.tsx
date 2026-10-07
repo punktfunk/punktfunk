@@ -1,4 +1,4 @@
-import { type FC, useState } from "react";
+import { type FC, useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { CaptureControlSection } from "./CaptureControl";
 import { DetailSection } from "./Detail";
@@ -13,6 +13,16 @@ import { StatsView } from "./view";
 export const SectionStats: FC = () => {
 	useLocale();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	// The detail card renders under the list: bring it into view, or a phone never sees it open.
+	const detailRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!selectedId) return;
+		const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+		detailRef.current?.scrollIntoView({
+			behavior: still ? "auto" : "smooth",
+			block: "start",
+		});
+	}, [selectedId]);
 
 	return (
 		<StatsView
@@ -23,7 +33,12 @@ export const SectionStats: FC = () => {
 			}
 			detail={
 				selectedId ? (
-					<DetailSection id={selectedId} onClose={() => setSelectedId(null)} />
+					<div ref={detailRef} className="scroll-mt-20">
+						<DetailSection
+							id={selectedId}
+							onClose={() => setSelectedId(null)}
+						/>
+					</div>
 				) : null
 			}
 		/>
