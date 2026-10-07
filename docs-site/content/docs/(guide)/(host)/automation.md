@@ -20,7 +20,7 @@ run in the streaming path. The one exception is a launch: a hook with `hold` set
 
 | Kind | Fires when | Carries |
 |---|---|---|
-| `client.connected` / `client.disconnected` | a device connects / goes away | name, fingerprint, plane (`native`, `gamestream`, or `web` for a browser); disconnect adds `reason`: `quit`, `timeout` or `error` |
+| `client.connected` / `client.disconnected` | a device connects / goes away | name, fingerprint, plane (`native`, `gamestream`, or `web` for a browser), the `profile` it plays as (`id`, `display_name`; not on `gamestream`); disconnect adds `reason`: `quit`, `timeout` or `error` |
 | `session.started` / `session.ended` | a session starts / ends | session id, client, fingerprint, plane, mode (`3840x2160@120`), HDR. `session.ended` adds a `summary` (duration, codec, bitrate span, frames, bring-up time, and `ended`: `local`, `game_exited`, `host_ended`, `host_error`, `lost` or `stopped_by_operator`), the same shape as `GET /api/v1/session/last` |
 | `stream.started` / `stream.stopped` | video starts / stops | mode, HDR, client, fingerprint, launched app, plane |
 | `game.launching` | the host is about to start a launched game; not when it picks up one still running | app id, title, store, client, fingerprint, plane, preset |

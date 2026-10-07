@@ -82,6 +82,8 @@ internal fun ConnectGrid(
     onSpeedTest: (KnownHost) -> Unit,
     /** Upload this device's recent log to the host — see the menu row's gate below. */
     onSendLogs: (KnownHost) -> Unit,
+    /** Open the profile picker for this host; offered once it has a saved pick. */
+    onSwitchProfile: (KnownHost) -> Unit,
     /** What each paired host last said this device may do TO it, by fingerprint
      *  (`design/host-actions.md` §7). Absent = no rows. */
     hostActions: Map<String, List<HostActions.Action>>,
@@ -134,6 +136,9 @@ internal fun ConnectGrid(
                 val label = if (a.available) a.label else "${a.label} (unavailable)"
                 add(HostMenuItem(label) { onHostAction(kh, a) })
             }
+        }
+        if (pin == null && kh.paired && kh.asProfile != null) {
+            add(HostMenuItem("Switch profile\u2026") { onSwitchProfile(kh) })
         }
         add(HostMenuItem("Copy link") { onCopyLink(kh, pin) })
         // Which host the app opens on. Needs a pairing to point at — the start screen skips an
@@ -243,6 +248,7 @@ internal fun ConnectGrid(
                         presetProminent = pin != null,
                         accent = accentColor(pin?.accent ?: bound?.accent),
                         menuItems = hostMenu(kh, pin),
+                        profileName = if (pin == null) kh.asProfile?.displayName else null,
                         reservePresetSlot = anyPresetChip,
                     )
                 }

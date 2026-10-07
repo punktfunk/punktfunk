@@ -903,6 +903,12 @@ object NativeBridge {
      */
     external fun nativeConsoleAdvanceSpeed(handle: Long, key: String, json: String)
 
+    /**
+     * The answer to `FetchProfiles` for the host pinned to [fpHex]: `{"Listed": [rows]}`,
+     * `"NoProfiles"` or `{"Failed": "why"}`.
+     */
+    external fun nativeConsoleSetProfiles(handle: Long, fpHex: String, json: String)
+
     /** A one-shot toast from a service worker. */
     external fun nativeConsoleNotice(handle: Long, text: String)
 

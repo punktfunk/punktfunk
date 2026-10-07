@@ -292,9 +292,13 @@ fn art_path_is_confined(path: &Path) -> bool {
 
 /// Containment half of [`art_path_is_confined`] on an already-resolved path (`canonicalize` or
 /// [`final_path_of`]). The read path must judge the object it opened, not the path it was asked.
+/// Both config dirs are refused: this host's, and on a seat the box's, which holds its secrets.
 fn resolved_art_path_is_confined(real: &Path) -> bool {
-    if let Ok(config) = pf_paths::config_dir().canonicalize() {
-        if real.starts_with(&config) {
+    for config in [pf_paths::config_dir(), pf_paths::seat::library_dir()] {
+        if config
+            .canonicalize()
+            .is_ok_and(|config| real.starts_with(config))
+        {
             return false;
         }
     }

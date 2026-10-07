@@ -900,6 +900,8 @@ export interface LaunchOpts {
    * store-qualified id (`steam:570`). The host resolves it; the Deck only names it.
    */
   gameId?: string;
+  /** Play as this profile, for this stream only (PF_AS → `--as`), by its id. */
+  profileId?: string;
   /**
    * Ask the host's operator to admit this Deck rather than typing a PIN (PF_REQUEST_ACCESS).
    * The connect PARKS until somebody approves it, and the launch runs SUPERVISED — see the
@@ -979,6 +981,9 @@ function validateLaunch(ref: string, opts: LaunchOpts): void {
   if (opts.gameId && !isSafeLaunchId(opts.gameId)) {
     throw new Error(`unsupported game id: ${opts.gameId}`);
   }
+  if (opts.profileId && !isSafeLaunchId(opts.profileId)) {
+    throw new Error(`unsupported profile id: ${opts.profileId}`);
+  }
 }
 
 function runShortcut(appId: number, options: string): void {
@@ -1006,6 +1011,9 @@ function launchOptions(ref: string, runner: string, clientBin: string, opts: Lau
   }
   if (opts.gameId) {
     env.push(`PF_GAME=${opts.gameId}`);
+  }
+  if (opts.profileId) {
+    env.push(`PF_AS=${opts.profileId}`);
   }
   if (opts.requestAccess) {
     env.push("PF_REQUEST_ACCESS=1");

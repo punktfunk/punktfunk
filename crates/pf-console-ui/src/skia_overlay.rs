@@ -409,6 +409,12 @@ impl Overlay for SkiaOverlay {
         }
     }
 
+    fn profile_gone(&mut self) {
+        if let Some(shell) = &mut self.shell {
+            shell.profile_gone();
+        }
+    }
+
     fn frame(&mut self, ctx: &FrameCtx) -> Result<Option<OverlayFrame>> {
         // Full-screen and opaque; the aurora animates every frame. Idle, the slot on glass
         // is handed back until `IDLE_FRAME` passes, and the presenter skips its present.

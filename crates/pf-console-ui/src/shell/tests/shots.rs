@@ -387,6 +387,109 @@ fn dump_console_screens() {
     dump(&mut s, 40, 8, "11b-settings-remote", false);
 }
 
+/// The profile picker and the saved pick's face on the host card.
+/// `PF_CONSOLE_DUMP=<dir> cargo test -p pf-console-ui -- --ignored dump_profiles`.
+#[test]
+#[ignore]
+fn dump_profiles() {
+    let dir = std::env::var("PF_CONSOLE_DUMP").expect("set PF_CONSOLE_DUMP to an output dir");
+    let fonts = crate::theme::build_fonts().unwrap();
+    let (w, h) = (1280, 800);
+    let library = LibraryShared::default();
+    let dump = |shell: &mut Shell, frames: usize, name: &str| {
+        shell.fake_clock = Some((shell.fake_clock.map_or(0.0, |(t, _)| t), 0.012));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).unwrap();
+        for _ in 0..frames {
+            let pad = Some("Xbox Wireless Controller");
+            let pref = Some(GamepadPref::Xbox360);
+            shell.render(surface.canvas(), w as u32, h as u32, &fonts, pad, pref, &[]);
+        }
+        let png = surface
+            .image_snapshot()
+            .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
+            .unwrap();
+        std::fs::write(format!("{dir}/{name}.png"), png.as_bytes()).unwrap();
+    };
+    // Who plays: the saved pick's face on the card, then the picker its connect raises
+    // because the box no longer lists it.
+    {
+        use crate::model::ProfilesAnswer;
+        use pf_client_core::profiles::{ListedProfile, ProfilePick, Seat, SeatState};
+        let console8 = ConsoleShared::default();
+        let mut rows = hosts();
+        rows[0].profile = Some(ProfilePick {
+            id: "theo".into(),
+            display_name: "Theo".into(),
+        });
+        console8.set_hosts(rows.clone());
+        let mut opts = test_options();
+        opts.profiles = true;
+        let home = vec![Screen::Home(HomeScreen::new())];
+        let mut s8 = Shell::new(
+            console8.clone(),
+            library.clone(),
+            ConsoleBus::default(),
+            opts,
+            home,
+        )
+        .unwrap();
+        dump(&mut s8, 40, "01i-home-profile");
+        let seat = |state, detail: Option<&str>, occupant: Option<&str>, steam| {
+            Some(Seat {
+                state,
+                detail: detail.map(Into::into),
+                occupant: occupant.map(Into::into),
+                steam_sign_in: steam,
+            })
+        };
+        let p = |id: &str, name: &str, accent: Option<&str>, seat| ListedProfile {
+            id: id.into(),
+            display_name: name.into(),
+            accent: accent.map(Into::into),
+            seat,
+            ..Default::default()
+        };
+        let listed = vec![
+            p("own", "Ben", Some("#4F7DF2"), None),
+            p(
+                "mia",
+                "Mia Rossi",
+                Some("#F2A65A"),
+                seat(SeatState::Ready, None, None, Some(true)),
+            ),
+            p(
+                "kid",
+                "Kid",
+                Some("#5AC18E"),
+                seat(SeatState::Occupied, None, Some("Ben's Apple TV"), None),
+            ),
+            p(
+                "guest",
+                "Guest",
+                None,
+                seat(SeatState::Starting, None, None, None),
+            ),
+            p(
+                "ana",
+                "Ana",
+                Some("#E9E2D0"),
+                seat(
+                    SeatState::Unavailable,
+                    Some("Needs seats turned on"),
+                    None,
+                    None,
+                ),
+            ),
+        ];
+        s8.start_connect(crate::screens::ConnectIntent::to_host(&rows[0], None));
+        console8.set_profiles("aa11", ProfilesAnswer::Listed(listed));
+        dump(&mut s8, 40, "12-profiles");
+        s8.handle_menu(MenuEvent::Move(MenuDir::Right));
+        s8.handle_menu(MenuEvent::Move(MenuDir::Right));
+        dump(&mut s8, 40, "12b-profiles-focus");
+    }
+}
+
 /// A 2:3 poster, PNG-encoded, colour from `seed`. Real bytes: `LibraryScreen` feeds
 /// these to `Image::from_encoded`, and a decode miss looks like a tile with no cover.
 fn poster_png(seed: usize) -> Vec<u8> {

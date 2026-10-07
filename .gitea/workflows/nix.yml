@@ -83,6 +83,9 @@ on:
       - "flake.lock"
       - "packaging/nix/**"
       - "packaging/linux/restart-user-units.sh"
+      - "packaging/linux/punktfunk-seat*"
+      - "packaging/linux/seat-*"
+      - "packaging/linux/*door*"
       - "**/bun.lock"
       - "**/bun.nix"
       - "**/package.json"
@@ -97,6 +100,9 @@ on:
       - "flake.lock"
       - "packaging/nix/**"
       - "packaging/linux/restart-user-units.sh"
+      - "packaging/linux/punktfunk-seat*"
+      - "packaging/linux/seat-*"
+      - "packaging/linux/*door*"
       - "**/bun.lock"
       - "**/bun.nix"
       - "**/package.json"
@@ -332,7 +338,7 @@ jobs:
           build() {
             "$NIX" build --print-build-logs \
               .#punktfunk-host .#punktfunk-client .#punktfunk-tray \
-              .#punktfunk-web .#punktfunk-scripting .#punktfunk-gamescope
+              .#punktfunk-web .#punktfunk-scripting .#punktfunk-seats .#punktfunk-gamescope
           }
           # A bump that does not build (nixpkgs' gamescope moving past our patches) still publishes
           # main on the current lock, unless nix-canary already holds it; the last step then fails.
@@ -364,7 +370,7 @@ jobs:
           # "Illegal option". The two places below where a pipeline's LEFT side must be able to fail
           # the step are written as redirects instead, so nothing depends on pipefail.
           set -eu
-          PKGS=".#punktfunk-host .#punktfunk-client .#punktfunk-tray .#punktfunk-web .#punktfunk-scripting .#punktfunk-gamescope"
+          PKGS=".#punktfunk-host .#punktfunk-client .#punktfunk-tray .#punktfunk-web .#punktfunk-scripting .#punktfunk-seats .#punktfunk-gamescope"
 
           # 1) Pick what to publish. PUBLISH ONLY OUR OWN PATHS — this is the difference between
           #    ~300 MB and several GB per run, and it is not a corner cut: a runtime closure here
@@ -489,7 +495,7 @@ jobs:
       - name: Build the Rust packages (dispatch opt-in)
         if: ${{ github.event.inputs.build-rust == 'true' || github.event.inputs.build-rust == true }}
         run: |
-          "$NIX" build --print-build-logs .#punktfunk-host .#punktfunk-client
+          "$NIX" build --print-build-logs .#punktfunk-host .#punktfunk-client .#punktfunk-seats
 
       # The patched compositor. Separate from build-rust because its failure mode is different: it
       # tracks nixpkgs' gamescope, not our Rust, so it wants a run after a flake.lock bump rather

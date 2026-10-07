@@ -94,6 +94,15 @@ impl Shell {
                         vec![Hint::new(HintKey::Back, "Cancel")],
                     ))
                 }
+            } else if let Some(sw) = &mut self.seat_wait {
+                sw.appear = approach(sw.appear, 1.0, dt, 0.07);
+                Some((
+                    sw.appear,
+                    true,
+                    pf_client_core::profiles::waking_line(&sw.name),
+                    sw.detail.clone().unwrap_or_default(),
+                    vec![Hint::new(HintKey::Back, "Cancel")],
+                ))
             } else if let Some(wk) = &self.wake {
                 // Service-driven: already settled, no fade-in.
                 if wk.timed_out {
@@ -197,9 +206,13 @@ impl Shell {
                 self.draw_speed(canvas, (w, h), k, t, fonts, sp, (&title, &body), &hints);
             }
             (Some((appear, spinner, title, body, hints)), _) => {
-                self.draw_takeover(
+                let rects = self.draw_takeover(
                     canvas, w, h, k, appear, t, fonts, spinner, &title, &body, &hints,
                 );
+                // The seat wait's Cancel takes a click; the other takeovers' legends do not.
+                if self.seat_wait.is_some() {
+                    self.hint_rects = rects;
+                }
             }
             (None, _) => {}
         }
@@ -294,7 +307,7 @@ impl Shell {
         title: &str,
         body: &str,
         hints: &[Hint],
-    ) {
+    ) -> Vec<(HintKey, Rect)> {
         let cx = w / 2.0;
         // Only while it is arriving: an unbounded layer is a full-screen offscreen per frame,
         // and `appear` is at 1.0 within half a second of a hold that runs for many.
@@ -331,8 +344,9 @@ impl Shell {
                 w * 0.66,
             );
         }
-        self.draw_takeover_hints(canvas, w, h, k, fonts, hints);
+        let rects = self.draw_takeover_hints(canvas, w, h, k, fonts, hints);
         canvas.restore();
+        rects
     }
 
     /// The speed test while it measures and once it has: the live figure, the burst's
@@ -436,7 +450,8 @@ impl Shell {
         canvas.restore();
     }
 
-    /// The takeover's legend, centered where every console screen's sits.
+    /// The takeover's legend, centered where every console screen's sits. Returns what each
+    /// hint's box covers.
     fn draw_takeover_hints(
         &self,
         canvas: &Canvas,
@@ -445,9 +460,9 @@ impl Shell {
         k: f64,
         fonts: &Fonts,
         hints: &[Hint],
-    ) {
+    ) -> Vec<(HintKey, Rect)> {
         if hints.is_empty() {
-            return;
+            return Vec::new();
         }
         let probe = hint_bar(canvas, fonts, hints, self.glyphs, -10_000.0, -10_000.0, k);
         hint_bar(
@@ -458,7 +473,8 @@ impl Shell {
             w / 2.0 - probe.size.0 / 2.0,
             h - 34.0 * k,
             k,
-        );
+        )
+        .rects
     }
 
     /// The launch hold: the title's poster on the takeover field, its name and store

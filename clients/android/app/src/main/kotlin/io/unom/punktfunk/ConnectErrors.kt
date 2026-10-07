@@ -52,6 +52,10 @@ object ConnectErrors {
             "A newer request from this device replaced this one — approve the latest request " +
                 "on the host."
         "wire-version" -> "Client and host versions don't match — update both to the same release."
+        "profile-unknown" -> "That profile is gone from this host. Pick another one."
+        "no-seat" -> "All seats are taken."
+        "seat-occupied" -> "Someone is already playing as that profile."
+        "seat-unavailable" -> "That profile can't play on this host right now."
         "busy" -> "The host is busy with another session."
         "access-expired" ->
             "Your access to this host has expired — ask the host's owner to grant it again."

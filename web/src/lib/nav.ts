@@ -20,6 +20,7 @@ import {
 	Settings,
 	Smartphone,
 	Stethoscope,
+	UsersRound,
 	Workflow,
 } from "lucide-react";
 import { isStringArray, useLocalPref } from "@/lib/prefs";
@@ -77,6 +78,13 @@ export const NAV: readonly NavEntry[] = [
 		label: () => m.nav_host(),
 		hint: () => m.nav_host_hint(),
 		group: "primary",
+	},
+	{
+		to: "/profiles",
+		icon: UsersRound,
+		label: () => m.nav_profiles(),
+		hint: () => m.nav_profiles_hint(),
+		group: "manage",
 	},
 	{
 		to: "/controllers",

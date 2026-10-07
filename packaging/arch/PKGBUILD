@@ -26,7 +26,7 @@ pkgbase=punktfunk
 if [ "${CARCH:-x86_64}" = 'aarch64' ]; then
   pkgname=('punktfunk-client' 'punktfunk-icons')
 else
-  pkgname=('punktfunk-host' 'punktfunk-client' 'punktfunk-icons')
+  pkgname=('punktfunk-host' 'punktfunk-client' 'punktfunk-icons' 'punktfunk-seats')
 fi
 # CI (.gitea/workflows/arch.yml) drives the version: stable tags -> X.Y.Z-1, main pushes ->
 # X.Y.Z-0.<run#> in the separate punktfunk-canary repo (mirrors the RPM's 0.ciN release; pkgrel
@@ -113,10 +113,12 @@ build() {
   # and fall back to the in-process encoder on any mismatch. Co-built here on purpose: v1 accepts
   # that the worker shares the host's dependency graph (same package, same sonames, no new break
   # class), so cargo's feature unification across this one invocation is harmless.
+  # `-p pf-seats` is the seat supervisor's binary. punktfunk-host already links its library, so
+  # this adds the one executable and no feature unification.
   cargo build --release --locked --features punktfunk-host/nvenc,punktfunk-host/vulkan-encode \
     -p punktfunk-host -p punktfunk-encode-worker \
     -p punktfunk-client-linux -p punktfunk-client-session -p punktfunk-cli \
-    -p pf-update
+    -p pf-update -p pf-seats
   # The status tray in its OWN cargo invocation — load-bearing, not tidiness. Cargo unifies features
   # across everything in one build, so co-building the tray with the host pulls the host's
   # ashpd -> zbus/tokio onto the tray's shared zbus; the tray (ksni async-io + blocking, no tokio
@@ -184,7 +186,8 @@ package_punktfunk-host() {
               'xdg-desktop-portal-kde: portal for the headless KDE session helper'
               'xdg-desktop-portal-wlr: portal for the headless Sway session helper'
               'punktfunk-web: browser management console (device pairing + status)'
-              'punktfunk-scripting: plugin/script runner for host automation (bun)')
+              'punktfunk-scripting: plugin/script runner for host automation (bun)'
+              'punktfunk-seats: a user, a session and a host per profile (root supervisor, ships disabled)')
   install=punktfunk-host.install
   # User-editable config: the headless game-mode drop-in (see below) — don't clobber local edits.
   backup=('etc/gamescope-session-plus/sessions.d/steam')
@@ -409,6 +412,36 @@ package_punktfunk-client() {
     install -Dm0644 /dev/stdin "$pkgdir/usr/share/punktfunk-client/install-kind"
   install -Dm0644 "$R/LICENSE-MIT"    "$pkgdir/usr/share/licenses/punktfunk-client/LICENSE-MIT"
   install -Dm0644 "$R/LICENSE-APACHE" "$pkgdir/usr/share/licenses/punktfunk-client/LICENSE-APACHE"
+}
+
+package_punktfunk-seats() {
+  pkgdesc="punktfunk seat supervisor and door — a user, a logind session and a host per profile (root daemon, ships disabled)"
+  # The host is pinned: the supervisor and the host it starts per seat speak one socket protocol.
+  # The rest is what the supervisor and the door helper run: useradd/groupadd/usermod, runuser and
+  # setpriv, setfacl, loginctl/systemctl, pkill.
+  depends=("punktfunk-host=${pkgver}-${pkgrel}" 'shadow' 'util-linux' 'acl' 'systemd' 'procps-ng')
+  install=punktfunk-seats.install
+  local R; R="$(_repo)"; local T="$srcdir/target/release"
+
+  # /usr/libexec, not the /usr/lib/punktfunk the host's helpers use: the seat units and
+  # `punktfunk-seats doctor` name this path, so it is the same on every distro.
+  install -Dm0755 "$T/punktfunk-seats" "$pkgdir/usr/libexec/punktfunk/punktfunk-seats"
+  local f
+  for f in seat-session seat-reap; do
+    install -Dm0755 "$R/packaging/linux/$f" "$pkgdir/usr/libexec/punktfunk/$f"
+  done
+  for f in punktfunk-seats.service punktfunk-seat@.service; do
+    install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
+  done
+  install -Dm0644 "$R/packaging/linux/punktfunk-seats.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/punktfunk-seats.conf"
+  # The door: the box's host as a system service, and the root helper the console turns it on with.
+  install -Dm0755 "$R/packaging/linux/door-helper" "$pkgdir/usr/libexec/punktfunk/door-helper"
+  for f in punktfunk-door.service punktfunk-web-door.service punktfunk-door-on@.service punktfunk-door-off@.service; do
+    install -Dm0644 "$R/packaging/linux/$f" "$pkgdir/usr/lib/systemd/system/$f"
+  done
+  install -Dm0644 "$R/packaging/linux/49-punktfunk-door.rules" "$pkgdir/usr/share/polkit-1/rules.d/49-punktfunk-door.rules"
+  install -Dm0644 "$R/LICENSE-MIT"    "$pkgdir/usr/share/licenses/punktfunk-seats/LICENSE-MIT"
+  install -Dm0644 "$R/LICENSE-APACHE" "$pkgdir/usr/share/licenses/punktfunk-seats/LICENSE-APACHE"
 }
 
 # The brand mark both the host's and the client's desktop entries name (`Icon=io.unom.Punktfunk`).

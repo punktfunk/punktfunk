@@ -388,6 +388,9 @@ struct ConnectRequest {
     /// That preset's name.
     #[serde(default)]
     preset_name: Option<String>,
+    /// The host profile to play as; rides the Hello as `profile`.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 /// `NativeBridge.nativeConnect(requestJson): Long` — see [`ConnectRequest`]. Returns an opaque
@@ -452,6 +455,7 @@ fn connect(req: ConnectRequest) -> jlong {
         dialer,
         preset_id,
         preset_name,
+        profile,
     } = req;
     // Which shell asked, for the host's `handshake complete` line. Set before the dial: core reads
     // it once the host says it parses the block.
@@ -460,6 +464,7 @@ fn connect(req: ConnectRequest) -> jlong {
         punktfunk_core::quic::SessionPreset::new(id, preset_name.as_deref().unwrap_or(""))
     });
     let launch = launch.filter(|s| !s.is_empty());
+    let profile = profile.filter(|s| !s.is_empty());
     let device_name = device_name
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -591,6 +596,7 @@ fn connect(req: ConnectRequest) -> jlong {
         pin,    // Some → Crypto on host-fp mismatch
         identity, // owned (cert, key) PEM, or None (anonymous)
         preset,
+        profile,
         // Handshake budget from Kotlin: ~10 s for a normal connect, ~185 s for "request access"
         // (the host parks the connection until the operator approves the device — see ConnectScreen).
         // No `cancel`: Kotlin drops the result (`Dial.cancelled`) rather than abort the dial — its

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { FC } from "react";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
+import { type AvatarProfile, ProfileAvatar } from "@/components/profile-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +42,8 @@ import { levelLabel } from "@/sections/Pairing/access";
  * most likely one network path, and each adapts its bitrate alone.
  *
  * One column is still absent: who owns the audio device (#1093). It has no field on `SessionRow`.
+ *
+ * With more than one profile on the box, a row leads with the profile's picture and name.
  */
 export const SessionList: FC<{
 	sessions: SessionRow[];
@@ -51,8 +54,23 @@ export const SessionList: FC<{
 	/** `null` hands the session back to the host's first-free claim. */
 	onPlayer: (row: SessionRow, slot: number | null) => void;
 	busy: boolean;
-}> = ({ sessions, onStop, onIdr, onMute, onAccess, onPlayer, busy }) => {
+	/** The box's profiles, for the pictures. One or none hides the profile on every row. */
+	profiles?: AvatarProfile[];
+}> = ({
+	sessions,
+	onStop,
+	onIdr,
+	onMute,
+	onAccess,
+	onPlayer,
+	busy,
+	profiles = [],
+}) => {
 	if (sessions.length === 0) return null;
+	const playingAs = (s: SessionRow): AvatarProfile | undefined => {
+		if (profiles.length < 2 || !s.profile) return undefined;
+		return profiles.find((p) => p.id === s.profile?.id) ?? s.profile;
+	};
 	return (
 		<Card>
 			<CardHeader>
@@ -66,6 +84,7 @@ export const SessionList: FC<{
 					<Row
 						key={`${s.plane}:${s.id ?? "compat"}:${i}`}
 						row={s}
+						profile={playingAs(s)}
 						onStop={() => onStop(s)}
 						onIdr={() => onIdr(s)}
 						onMute={() => onMute(s, !s.muted)}
@@ -85,6 +104,7 @@ export const SessionList: FC<{
 
 const Row: FC<{
 	row: SessionRow;
+	profile?: AvatarProfile;
 	onStop: () => void;
 	onIdr: () => void;
 	onMute: () => void;
@@ -93,7 +113,17 @@ const Row: FC<{
 	/** Names of the other sessions on this row's client address. */
 	sharedWith: string[];
 	busy: boolean;
-}> = ({ row, onStop, onIdr, onMute, onAccess, onPlayer, sharedWith, busy }) => {
+}> = ({
+	row,
+	profile,
+	onStop,
+	onIdr,
+	onMute,
+	onAccess,
+	onPlayer,
+	sharedWith,
+	busy,
+}) => {
 	// Every registered session has an id, so stop and keyframe always reach exactly this one.
 	const perSession = row.id != null;
 	// Mute and the player slot ride native-only lanes: the compat plane's audio has no
@@ -115,10 +145,24 @@ const Row: FC<{
 		<div className="flex flex-col gap-3 border-b pb-4 last:border-0 last:pb-0 sm:flex-row sm:items-center">
 			<div className="min-w-0 flex-1">
 				<div className="flex flex-wrap items-center gap-2">
-					<MonitorPlay className="size-4 shrink-0 text-muted-foreground" />
-					<span className="truncate font-medium">
-						{row.client_name || row.client}
-					</span>
+					{profile ? (
+						<>
+							<ProfileAvatar profile={profile} className="size-6 text-xs" />
+							<span className="truncate font-medium">
+								{profile.display_name}
+							</span>
+							<span className="truncate text-muted-foreground">
+								{row.client_name || row.client}
+							</span>
+						</>
+					) : (
+						<>
+							<MonitorPlay className="size-4 shrink-0 text-muted-foreground" />
+							<span className="truncate font-medium">
+								{row.client_name || row.client}
+							</span>
+						</>
+					)}
 					{row.preset_name && (
 						<span className="truncate text-sm text-muted-foreground">
 							· {row.preset_name}

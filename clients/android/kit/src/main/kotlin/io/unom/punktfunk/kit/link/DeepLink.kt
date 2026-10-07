@@ -13,7 +13,7 @@ import java.nio.charset.StandardCharsets
  *
  * ```text
  * punktfunk://connect/<host-ref>[?fp=<64-hex>][&host=<addr[:port]>][&launch=<id>]
- *                               [&preset=<ref>][&name=<label>]
+ *                               [&preset=<ref>][&as=<profile>][&name=<label>]
  * ```
  *
  * The invariant the grammar exists to keep: **a URL may only ever do what a click on an existing
@@ -33,6 +33,7 @@ object DeepLinks {
     const val MAX_LAUNCH_LEN = 128
     const val MAX_PRESET_LEN = 64
     const val MAX_NAME_LEN = 64
+    const val MAX_AS_LEN = 64
 
     /** The default native port, as everywhere else in the clients. */
     const val DEFAULT_PORT = 9777
@@ -100,6 +101,7 @@ object DeepLinks {
         var launch: String? = null
         var preset: String? = null
         var legacyPreset: String? = null
+        var asProfile: String? = null
         var name: String? = null
         for (pair in query.split('&')) {
             if (pair.isEmpty()) continue
@@ -149,6 +151,12 @@ object DeepLinks {
                     }
                     legacyPreset = value
                 }
+                key == "as" && asProfile == null -> {
+                    if (scalarCount(value) > MAX_AS_LEN) {
+                        return DeepLinkResult.Refused(LinkError.PARAM_TOO_LONG, "as")
+                    }
+                    asProfile = value
+                }
                 key == "name" && name == null -> {
                     if (scalarCount(value) > MAX_NAME_LEN) {
                         return DeepLinkResult.Refused(LinkError.PARAM_TOO_LONG, "name")
@@ -157,7 +165,7 @@ object DeepLinks {
                 }
             }
         }
-        return DeepLinkResult.Parsed(DeepLink(route, hostRef, fp, host, launch, preset ?: legacyPreset, name))
+        return DeepLinkResult.Parsed(DeepLink(route, hostRef, fp, host, launch, preset ?: legacyPreset, name, asProfile))
     }
 
     /**
@@ -390,6 +398,8 @@ data class DeepLink(
     val preset: String? = null,
     /** Display label for the unknown-host confirmation sheet (external emitters). */
     val name: String? = null,
+    /** The profile on the host to play as: an id or a name. Wins for this connect, never saved. */
+    val asProfile: String? = null,
 ) {
     /** The canonical URL for this link — always `punktfunk://`, never the `pf://` alias. */
     fun toUrl(): String {
@@ -416,6 +426,7 @@ data class DeepLink(
             push("preset", it)
             push("profile", it)
         }
+        asProfile?.let { push("as", it) }
         name?.let { push("name", it) }
         return sb.toString()
     }

@@ -156,6 +156,14 @@ mod ctl;
 mod native;
 #[forbid(unsafe_code)]
 mod native_pairing;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the handshake and the management routes read it")
+)]
+mod profiles;
+// Reachable without logging in: the host as a system service on Linux.
+mod door;
+mod seats;
 // Live per-session pad tap the console's Controllers page streams.
 mod emulators;
 mod pad_feed;
@@ -408,8 +416,9 @@ fn startup(args: &[String]) {
         );
     }
 
+    // The door never opens a display: it has no monitors to anchor and no GPU to profile.
     #[cfg(target_os = "linux")]
-    if !management_cli {
+    if !management_cli && !pf_paths::seat::is_door() {
         refresh_capture_monitor_anchor("startup");
     }
 
@@ -442,10 +451,12 @@ fn startup(args: &[String]) {
     // P2-cap driver profile only. Clock pin is per live client (`gpuclocks::session_pin`), not
     // host-lifetime, so idle clocks stay down. No-op off NVIDIA.
     #[cfg(target_os = "linux")]
-    if matches!(
-        args.first().map(String::as_str),
-        Some("serve") | Some("punktfunk1-host")
-    ) {
+    if !pf_paths::seat::is_door()
+        && matches!(
+            args.first().map(String::as_str),
+            Some("serve") | Some("punktfunk1-host")
+        )
+    {
         gpuclocks::on_host_start();
     }
 }
@@ -469,6 +480,10 @@ fn real_main() -> Result<()> {
         return Ok(());
     }
 
+    // Before `startup`: it skips the display and GPU work for the door.
+    if args.first().map(String::as_str) == Some("serve") && args.iter().any(|a| a == "--door") {
+        pf_paths::seat::set_door();
+    }
     startup(&args);
 
     match args.first().map(String::as_str) {
@@ -651,6 +666,8 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
                 webtransport_bind_explicit = true;
             }
             "--open" => open = true,
+            // Read by `real_main` before startup; accepted here so it parses.
+            "--door" => {}
             // Bridged Docker / CI netns: multicast never arrives.
             "--no-mdns" => no_mdns = true,
             "-h" | "--help" => {
@@ -683,7 +700,8 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
     // Mint only if the runner is installed — otherwise a second admin-adjacent credential sits
     // on disk for a subsystem that is not running. Scope: `plugin_may_access`, not pairing/hooks.
     let runner = crate::plugins::runtime_status();
-    if runner.installed {
+    // The plugin runner is the owner's: the door has none to hand a token to.
+    if runner.installed && !pf_paths::seat::is_door() {
         opts.plugin_token = Some(crate::mgmt_token::load_or_generate_plugin()?);
         // One token per installed plugin, so the API can tell them apart: a plugin may write its
         // own registration and its own provider, and no other's.
@@ -691,6 +709,7 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
         // An upgrade or a hand-edited grants file may have changed what the runner must see.
         crate::plugins::converge_runner_roots();
         crate::plugins::converge_runner_acls(&runner);
+        crate::plugins::converge_seat_denies();
     }
     // Default all-interfaces so paired clients browse over mTLS. Admin stays loopback in
     // `require_auth`. Packaged units ship a fixed ExecStart — `host.env` is the upgrade-safe pin;
@@ -759,7 +778,8 @@ fn parse_serve(args: &[String]) -> Result<(mgmt::Options, native::NativeServe, b
             serde_json::Value::Bool(true),
         );
     }
-    let gamestream = pf_host_config::config().gamestream;
+    // The door places connects and streams nothing, and stock Moonlight has no redirect to follow.
+    let gamestream = pf_host_config::config().gamestream && !pf_paths::seat::is_door();
     let native = native::NativeServe {
         webtransport_bind: pf_host_config::config()
             .webtransport
@@ -1051,6 +1071,9 @@ SERVE OPTIONS:
     --no-mdns                    skip the mDNS adverts (native + GameStream) — for multicast-dead
                                  environments (bridged Docker, CI); clients connect via a manually
                                  added host. Also PUNKTFUNK_MDNS=0
+    --door                       the box's host as a system service (Linux): advertise, pair,
+                                 serve the console and place every connect on a seat of the
+                                 seat supervisor, and never open a display. Also PUNKTFUNK_DOOR=1
 
 PUNKTFUNK1-HOST OPTIONS:
     --port <N>                   QUIC listen port (default: 9777)

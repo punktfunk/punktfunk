@@ -75,6 +75,10 @@ pub struct KnownHost {
     /// and moves there only when the pin answers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prev_addrs: Vec<String>,
+    /// The profile this device plays as on this box ([`crate::profiles::picker_decision`]).
+    /// Not `profile_id`: that key is the pre-rename spelling of `preset_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::profiles::ProfilePick>,
 }
 
 /// Pre-rename binding keys (`design/preset-rename.md`): read when the new key is absent,
@@ -141,6 +145,7 @@ impl Default for KnownHost {
             game_presets: BTreeMap::new(),
             id: Some(crate::presets::new_record_uuid()),
             prev_addrs: Vec::new(),
+            profile: None,
         }
     }
 }
@@ -459,7 +464,7 @@ impl KnownHosts {
                 h.mgmt_port = entry.mgmt_port;
             }
             // User-set fields a refresh never carries: clipboard, preset, pins,
-            // per-game bindings, id. Only an upsert carrying a value moves one.
+            // per-game bindings, profile, id. Only an upsert carrying a value moves one.
             if entry.clipboard_sync {
                 h.clipboard_sync = true;
             }
@@ -471,6 +476,9 @@ impl KnownHosts {
             }
             if !entry.game_presets.is_empty() {
                 h.game_presets = entry.game_presets;
+            }
+            if entry.profile.is_some() {
+                h.profile = entry.profile;
             }
             if h.id.as_deref().is_none_or(str::is_empty) {
                 h.id = entry.id;
@@ -564,6 +572,9 @@ impl KnownHosts {
             }
             if h.game_presets.is_empty() {
                 h.game_presets = old.game_presets;
+            }
+            if h.profile.is_none() {
+                h.profile = old.profile;
             }
             if h.last_used.is_none() {
                 h.last_used = old.last_used;
@@ -893,6 +904,10 @@ mod tests {
                 game_presets: [("halo".to_string(), "cccccccccccc".to_string())].into(),
                 id: Some("11111111-2222-4333-8444-555555555555".into()),
                 prev_addrs: vec![],
+                profile: Some(crate::profiles::ProfilePick {
+                    id: "9a3f1c2b7e40".into(),
+                    display_name: "Kid".into(),
+                }),
             }],
         };
         // What `persist_host` builds: a trust decision, nothing else.
@@ -913,6 +928,10 @@ mod tests {
         assert_eq!(h.os, "linux/fedora/bazzite");
         // Reconnect must not reset mgmt port to None — the library would 404 on 47990.
         assert_eq!(h.mgmt_port, Some(47991));
+        assert_eq!(
+            h.profile.as_ref().map(|p| p.id.as_str()),
+            Some("9a3f1c2b7e40")
+        );
         assert!(h.clipboard_sync);
         assert_eq!(h.preset_id.as_deref(), Some("aaaaaaaaaaaa"));
         assert_eq!(h.pinned_presets, vec!["bbbbbbbbbbbb".to_string()]);
@@ -1021,6 +1040,10 @@ mod tests {
                 game_presets: [("halo".to_string(), "cccccccccccc".to_string())].into(),
                 id: Some("11111111-2222-4333-8444-555555555555".into()),
                 prev_addrs: vec![],
+                profile: Some(crate::profiles::ProfilePick {
+                    id: "9a3f1c2b7e40".into(),
+                    display_name: "Kid".into(),
+                }),
             }],
         };
         // The other OS on that box: same address, a certificate the client has never seen.
@@ -1039,6 +1062,10 @@ mod tests {
         assert_eq!(kept.preset_id.as_deref(), Some("aaaaaaaaaaaa"));
         assert_eq!(kept.pinned_presets, vec!["bbbbbbbbbbbb".to_string()]);
         assert_eq!(kept.preset_for_game("halo"), Some("cccccccccccc"));
+        assert_eq!(
+            kept.profile.as_ref().map(|p| p.display_name.as_str()),
+            Some("Kid")
+        );
         assert!(kept.clipboard_sync);
         assert_eq!(
             kept.id.as_deref(),

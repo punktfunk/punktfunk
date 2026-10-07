@@ -5,7 +5,7 @@
 >
 > | | Ubuntu 24.04 | Ubuntu 26.04 | Debian 13 | Debian 12 |
 > |---|---|---|---|---|
-> | `punktfunk-host` | ✅ | ✅ | ✅ | ❌ glibc 2.36 < 2.39 |
+> | `punktfunk-host` / `punktfunk-seats` | ✅ | ✅ | ✅ | ❌ glibc 2.36 < 2.39 |
 > | `punktfunk-web` / `punktfunk-scripting` | ✅ | ✅ | ✅ | ✅ |
 > | `punktfunk-gamescope` | ❌ wayland 1.22 | ✅ | ✅ | ❌ |
 > | `punktfunk-client` | ❌ `libc6 >= 2.43` | ✅ | ❌ `libc6 >= 2.43` | ❌ |
@@ -29,6 +29,11 @@ udev/sysctl bits) unless you've disabled weak deps; `punktfunk-client` is indepe
 on the box you stream *to*. (`punktfunk-probe` is the headless reference/test tool, not packaged
 here.) `punktfunk-web` and `punktfunk-scripting` both depend on **`punktfunk-bun`**, the one pinned
 bun they run on, at `/usr/lib/punktfunk-bun/bun`, never on PATH.
+
+**`punktfunk-seats`** (`build-seats-deb.sh`) is the root supervisor behind profile seats. The host
+job builds it beside the host, and `punktfunk-host` Recommends it. It ships disabled: the console
+turns seats on. It pins `punktfunk-host` to its own version. It also carries the door's units, its
+root helper and its polkit rule (Reachable without logging in), disabled the same way.
 
 Package layout mirrors the Fedora RPM (`../rpm/punktfunk.spec`): the host binary, the `/dev/uinput`
 udev rule, the systemd **user** unit, headless session helpers, the example config, and the OpenAPI

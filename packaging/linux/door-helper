@@ -1,0 +1,157 @@
+#!/bin/bash
+# punktfunk door helper (root): turns "Reachable without logging in" on or off for one user.
+#
+#   door-helper on  <user>   the box's host runs as the punktfunk system user from boot
+#   door-helper off <user>   the user's own host serves the box again
+#
+# Started by punktfunk-door-on@<user>.service and punktfunk-door-off@<user>.service, which
+# 49-punktfunk-door.rules lets members of `punktfunk-update` start. The instance name is data, not
+# a command: the user must be an ordinary account in that group.
+#
+# Both directions are idempotent, and a run that stopped halfway converges on the next. The box's
+# files move once: `on` copies the user's into /var/lib/punktfunk and records that in
+# $BOX/door-on, so a repeat never overwrites what the door has changed since; `off` copies the
+# door's back to the user and clears it.
+#
+# Every read and write that touches a user's home runs as that user, so a link the user plants
+# there can't make root read or overwrite anything the user couldn't.
+set -eu
+
+BOX=/var/lib/punktfunk
+MARK="$BOX/door-on"
+SEATS=/usr/libexec/punktfunk/punktfunk-seats
+GROUP=punktfunk-update
+# What the box's host keeps: identity, id, pairings, profiles, display and hook settings, and the
+# console's password hash. `profiles/` holds the avatars.
+FILES="native-cert.pem native-key.pem uniqueid punktfunk1-paired.json profiles.json display-settings.json hooks.json web-password"
+
+die() {
+    echo "door-helper: $*" >&2
+    exit 1
+}
+
+verb=${1:-}
+user=${2:-}
+case $verb in on | off) ;; *) die "usage: door-helper on|off <user>" ;; esac
+[ "$(id -u)" = 0 ] || die "run as root"
+case $user in
+'' | *[!a-z0-9_.-]* | [!a-z_]*) die "'$user' is not a user name" ;;
+esac
+
+passwd_row=$(getent passwd "$user") || die "no user '$user'"
+uid=$(printf '%s' "$passwd_row" | cut -d: -f3)
+home=$(printf '%s' "$passwd_row" | cut -d: -f6)
+{ [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ]; } || die "'$user' is not an ordinary account"
+id -nG "$user" | tr ' ' '\n' | grep -qx "$GROUP" || die "'$user' is not in the $GROUP group"
+OWN="$home/.config/punktfunk"
+
+exec 9>/run/punktfunk-door.lock
+flock 9
+
+as_user() { runuser -u "$user" -- "$@"; }
+as_door() { runuser -u punktfunk -- "$@"; }
+
+# The user's systemd manager, when they have one. A user with no login and no linger has none, and
+# then there is nothing running to change.
+user_ctl() { runuser -u "$user" -- env "XDG_RUNTIME_DIR=/run/user/$uid" systemctl --user "$@" 2>/dev/null; }
+
+# $1 a file name under $OWN, copied to $BOX for the door.
+take() {
+    as_user test -f "$OWN/$1" || return 0
+    tmp=$(mktemp "$BOX/.door.XXXXXX")
+    as_user cat -- "$OWN/$1" >"$tmp"
+    chown punktfunk:punktfunk "$tmp"
+    chmod 0600 "$tmp"
+    mv -f "$tmp" "$BOX/$1"
+}
+
+# $1 a file name under $BOX, copied back to the user. Read as the door, written as the user, so
+# neither side's links lead anywhere that user couldn't go.
+give() {
+    as_door test -f "$BOX/$1" || return 0
+    # shellcheck disable=SC2016 # the inner shell expands $1, not this one
+    as_door cat -- "$BOX/$1" | as_user sh -c 'umask 077; mkdir -p "$(dirname "$1")"; cat >"$1.tmp" && mv -f "$1.tmp" "$1"' sh "$OWN/$1"
+}
+
+safe_name() {
+    case $1 in '' | . | .. | *[!A-Za-z0-9._-]*) return 1 ;; esac
+}
+
+take_avatars() {
+    install -d -m 0700 -o punktfunk -g punktfunk "$BOX/profiles"
+    for name in $(as_user ls -1 -- "$OWN/profiles" 2>/dev/null); do
+        safe_name "$name" && take "profiles/$name"
+    done
+}
+
+give_avatars() {
+    for name in $(as_door ls -1 -- "$BOX/profiles" 2>/dev/null); do
+        safe_name "$name" && give "profiles/$name"
+    done
+}
+
+wait_for_socket() {
+    for _ in $(seq 1 30); do
+        [ -S /run/punktfunk/seats.sock ] && return 0
+        sleep 0.5
+    done
+    die "the seat supervisor did not start"
+}
+
+door_on() {
+    getent group punktfunk >/dev/null || groupadd --system punktfunk
+    if ! getent passwd punktfunk >/dev/null; then
+        shell=$(command -v nologin || echo /usr/sbin/nologin)
+        useradd --system --no-user-group --gid punktfunk --home-dir "$BOX" --shell "$shell" punktfunk
+    fi
+    install -d -m 0711 -o punktfunk -g punktfunk "$BOX"
+    # The shared games folder's group; the owner's Steam moves games into it at their next login.
+    getent group punktfunk-games >/dev/null || groupadd --system punktfunk-games
+    usermod -aG punktfunk-games "$user"
+    if [ ! -e "$MARK" ]; then
+        for f in $FILES; do take "$f"; done
+        take_avatars
+        : >"$MARK"
+    fi
+    systemctl enable --now punktfunk-seats.service
+    wait_for_socket
+    "$SEATS" adopt-owner "$user" >/dev/null
+    # The box's ports are the door's from here, so the user's console and host leave them first.
+    # The host restarts on the owner row's contract: its own ports, and the box's identity.
+    user_ctl stop punktfunk-web.service || true
+    user_ctl try-restart punktfunk-host.service || true
+    systemctl enable punktfunk-door.service punktfunk-web-door.service
+    systemctl restart punktfunk-door.service punktfunk-web-door.service
+    echo "door on for $user"
+}
+
+# `list` prints id, state, account, ports, `owner=true|false`, then the name.
+owner_row() {
+    "$SEATS" list | awk '$6 == "owner=true" { print $1; exit }'
+}
+
+door_off() {
+    systemctl stop punktfunk-web-door.service punktfunk-door.service || true
+    if [ -e "$MARK" ]; then
+        for f in $FILES; do give "$f"; done
+        give_avatars
+    fi
+    if systemctl is-active --quiet punktfunk-seats.service; then
+        # Seats the door placed stop with it; their accounts and profiles stay for the next time.
+        "$SEATS" list | awk '$2 == "Running" || $2 == "Starting" { print $1 }' | while read -r id; do
+            "$SEATS" stop "$id" >/dev/null || true
+        done
+        row=$(owner_row)
+        [ -z "$row" ] || "$SEATS" delete "$row" >/dev/null
+    fi
+    rm -f "$MARK"
+    systemctl disable --now punktfunk-web-door.service punktfunk-door.service punktfunk-seats.service
+    user_ctl try-restart punktfunk-host.service || true
+    # Their console comes back only if it was theirs to begin with.
+    if user_ctl is-enabled --quiet punktfunk-web.service; then
+        user_ctl start punktfunk-web.service || true
+    fi
+    echo "door off for $user"
+}
+
+if [ "$verb" = on ]; then door_on; else door_off; fi

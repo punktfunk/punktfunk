@@ -16,6 +16,8 @@ what changed, the [release notes](https://git.unom.io/unom/punktfunk/releases).
 - **Finishing the clipboard.** The Linux client's side of the bridge, and file transfer, which no
   client offers yet. See [Shared clipboard](/docs/clipboard).
 - **Console parity with the apps.** A speed test and a bitrate setting in the web console.
+- **A desktop per person.** Windows Server seats behind [profiles](/docs/profiles): each person
+  streams a signed-in desktop of their own while someone else plays.
 - **Closing unverified cells.** The matrix's
   [What is not verified](/docs/support-matrix#what-is-not-verified) list.
 
@@ -25,8 +27,8 @@ what changed, the [release notes](https://git.unom.io/unom/punktfunk/releases).
   connection migration so a client roams between Wi-Fi and cellular without dropping the stream.
   Until then, reaching a host from outside takes a VPN, a tunnel or a forwarded port — see
   [Friends over the internet](/docs/friends-over-the-internet).
-- **Per-user sessions.** A connecting client picks an identity that maps to an account on the host,
-  and that person lands in their own signed-in desktop.
+- **Per-user sessions on Linux.** A profile that maps to a user account on the host, so that person
+  lands in their own signed-in desktop.
 - **Remote work.** The host's monitors as separate client windows, the client's camera as a webcam
   on the host, and approving a new device from an already-paired device's app.
 - **Picture and sound.** End-to-end variable refresh, latency measured to the client's screen

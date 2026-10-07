@@ -113,10 +113,10 @@ async fn read() -> HostTheme {
 
 #[cfg(target_os = "windows")]
 fn read_registry() -> HostTheme {
-    use crate::windows::theme::{console_session_sid, read_dword};
-    let Some(sid) = console_session_sid() else {
-        // Locked, signed out, or no console session: there is no user hive to read, and
-        // saying nothing is correct.
+    use crate::windows::theme::{read_dword, session_sid};
+    let Some(sid) = session_sid() else {
+        // Nobody signed in to the host's session: there is no user hive to read, and saying
+        // nothing is correct.
         return HostTheme::default();
     };
     let mode = read_dword(

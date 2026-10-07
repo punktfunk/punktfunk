@@ -13,7 +13,9 @@ import type { NativePairStatus } from "@/api/gen/model/nativePairStatus";
 import type { PairedClient } from "@/api/gen/model/pairedClient";
 import type { PairingStatus } from "@/api/gen/model/pairingStatus";
 import type { PendingDevice } from "@/api/gen/model/pendingDevice";
+import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
+import type { Seating } from "@/api/gen/model/seating";
 import type { StatsSample } from "@/api/gen/model/statsSample";
 import type { StatsStatus } from "@/api/gen/model/statsStatus";
 
@@ -21,6 +23,7 @@ export const hostInfo: HostInfo = {
 	abi_version: 2,
 	app_version: "7.1.450.0",
 	codecs: ["h264", "hevc", "av1"],
+	door: false,
 	gamestream: true,
 	gfe_version: "3.23.0.74",
 	hostname: "ENRICOS-DESKTOP",
@@ -61,6 +64,7 @@ export const statusActive: RuntimeStatus = {
 			plane: "native",
 			client: "aabbccddeeff",
 			client_name: "Living room TV",
+			profile: { id: "9a3f1c2b7e40", display_name: "Kid" },
 			mode: "5120x1440@240",
 			hdr: true,
 			join: false,
@@ -76,6 +80,7 @@ export const statusActive: RuntimeStatus = {
 			plane: "native",
 			client: "112233445566",
 			client_name: "Enrico's phone",
+			profile: { id: "4f1c3a9b0e27", display_name: "Enrico" },
 			mode: "5120x1440@240",
 			hdr: false,
 			join: true,
@@ -540,4 +545,304 @@ export const displayPolicy: DisplayPolicy = {
 	preset: "default",
 	game_session: "auto",
 	version: 1,
+};
+
+/** A box with one person: the owner card alone, and the page's only control is Add profile. */
+export const profilesOne: ProfileAdmin[] = [
+	{
+		id: "4f1c3a9b0e27",
+		display_name: "Enrico",
+		accent: "#3b82f6",
+		owner: true,
+		home: "desktop",
+		last_used_unix: accessNowUnix - 3600,
+		default: true,
+	},
+];
+
+/** Every card state on Linux: the owner, a desktop sharer, and a light seat in each seat state. */
+export const profilesEvery: ProfileAdmin[] = [
+	...profilesOne,
+	{
+		id: "0b7d5e2a91c4",
+		display_name: "Anna",
+		accent: "#ec4899",
+		owner: false,
+		home: "desktop",
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "9a3f1c2b7e40",
+		display_name: "Kid",
+		accent: "#f97316",
+		owner: false,
+		home: "bigpicture",
+		seat: {
+			state: "ready",
+			port: 9777,
+			steam_sign_in: false,
+			kind: "steam",
+		},
+		last_used_unix: accessNowUnix - 600,
+		default: false,
+		legacy_device: "ab12cd34",
+	},
+	{
+		id: "2c4e6a8b0d1f",
+		display_name: "Guest",
+		owner: false,
+		home: "bigpicture",
+		seat: { state: "ready", port: 9777, steam_sign_in: true, kind: "steam" },
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		accent: "#22c55e",
+		owner: false,
+		home: "bigpicture",
+		seat: {
+			state: "occupied",
+			port: 9777,
+			occupant: "Leon's Deck",
+			kind: "steam",
+		},
+		last_used_unix: accessNowUnix - 60,
+		default: false,
+	},
+	{
+		id: "5a7c9e1b3d5f",
+		display_name: "Mia",
+		accent: "#a855f7",
+		owner: false,
+		home: "bigpicture",
+		seat: {
+			state: "starting",
+			port: 9777,
+			detail: "Starting Steam",
+			kind: "steam",
+		},
+		last_used_unix: accessNowUnix - 86_400,
+		default: false,
+	},
+	{
+		id: "3d5f7b9a1c3e",
+		display_name: "Oma",
+		accent: "#14b8a6",
+		owner: false,
+		home: "desktop",
+		seat: { state: "stopped", port: 9777, kind: "steam" },
+		last_used_unix: accessNowUnix - 7 * 86_400,
+		default: false,
+	},
+	{
+		id: "8b0d2f4a6c8e",
+		display_name: "Alice",
+		accent: "#eab308",
+		owner: false,
+		home: "desktop",
+		seat: {
+			kind: "steam",
+			state: "unavailable",
+			port: 9777,
+			detail: "This profile signs in to an account this host can't start yet.",
+		},
+		last_used_unix: 0,
+		default: false,
+	},
+];
+
+/** A Windows Server host: the owner, a desktop sharer and a seat in each seat state. */
+export const profilesWindows: ProfileAdmin[] = [
+	...profilesOne,
+	{
+		id: "0b7d5e2a91c4",
+		display_name: "Anna",
+		accent: "#ec4899",
+		owner: false,
+		home: "desktop",
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "9a3f1c2b7e40",
+		display_name: "Kid",
+		accent: "#f97316",
+		owner: false,
+		home: "desktop",
+		seat: { state: "ready", port: 9777, kind: "desktop" },
+		last_used_unix: accessNowUnix - 600,
+		default: false,
+	},
+	{
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		accent: "#22c55e",
+		owner: false,
+		home: "desktop",
+		seat: {
+			state: "occupied",
+			port: 9777,
+			occupant: "Leon's Deck",
+			kind: "desktop",
+		},
+		last_used_unix: accessNowUnix - 60,
+		default: false,
+	},
+	{
+		id: "5a7c9e1b3d5f",
+		display_name: "Mia",
+		accent: "#a855f7",
+		owner: false,
+		home: "desktop",
+		seat: { state: "starting", port: 9777, kind: "desktop" },
+		last_used_unix: accessNowUnix - 86_400,
+		default: false,
+	},
+	{
+		id: "3d5f7b9a1c3e",
+		display_name: "Oma",
+		accent: "#14b8a6",
+		owner: false,
+		home: "desktop",
+		seat: { state: "stopped", port: 9777, kind: "desktop" },
+		last_used_unix: accessNowUnix - 7 * 86_400,
+		default: false,
+	},
+	{
+		id: "8b0d2f4a6c8e",
+		display_name: "Alice",
+		accent: "#eab308",
+		owner: false,
+		home: "desktop",
+		seat: {
+			kind: "desktop",
+			state: "unavailable",
+			port: 9777,
+			detail: "Remote Desktop licensing has run out for this server.",
+		},
+		last_used_unix: 0,
+		default: false,
+	},
+];
+
+/**
+ * A Linux door: every profile has the owner's seat or one of its own. The owner's own seat is
+ * stopped until a device connects (nobody is logged in), a desktop sharer rides on it, and two
+ * seats of their own are ready and in use.
+ */
+export const profilesDoor: ProfileAdmin[] = [
+	{
+		id: "4f1c3a9b0e27",
+		display_name: "Enrico",
+		accent: "#3b82f6",
+		owner: true,
+		home: "desktop",
+		seat: { state: "stopped", port: 9778, kind: "shared" },
+		last_used_unix: accessNowUnix - 3600,
+		default: true,
+	},
+	{
+		id: "0b7d5e2a91c4",
+		display_name: "Anna",
+		accent: "#ec4899",
+		owner: false,
+		home: "desktop",
+		seat: { state: "stopped", port: 9778, kind: "shared" },
+		last_used_unix: 0,
+		default: false,
+	},
+	{
+		id: "9a3f1c2b7e40",
+		display_name: "Kid",
+		accent: "#f97316",
+		owner: false,
+		home: "bigpicture",
+		seat: { state: "stopped", port: 9778, kind: "steam" },
+		last_used_unix: accessNowUnix - 600,
+		default: false,
+	},
+	{
+		id: "7e1f3b5d9a2c",
+		display_name: "Leon",
+		accent: "#22c55e",
+		owner: false,
+		home: "desktop",
+		seat: {
+			state: "occupied",
+			port: 9779,
+			occupant: "Leon's Deck",
+			kind: "desktop",
+		},
+		last_used_unix: accessNowUnix - 60,
+		default: false,
+	},
+	{
+		id: "3d5f7b9a1c3e",
+		display_name: "Oma",
+		accent: "#14b8a6",
+		owner: false,
+		home: "desktop",
+		seat: { state: "ready", port: 9780, kind: "desktop" },
+		last_used_unix: accessNowUnix - 7 * 86_400,
+		default: false,
+	},
+];
+
+/** Seats on, every check passing. */
+export const seatingOn: Seating = {
+	enabled: true,
+	platform: "windows",
+	allow_rdp_from_network: false,
+	checks: [
+		{
+			level: "info",
+			code: "windows_build",
+			message: "Windows build 26100 meets the 22621 minimum",
+		},
+		{
+			level: "info",
+			code: "rds_role",
+			message: "The Remote Desktop Session Host role is installed",
+		},
+	],
+};
+
+/** A turn-on the checks refused: still off, the failing lines first. */
+export const seatingRefused: Seating = {
+	enabled: false,
+	platform: "windows",
+	allow_rdp_from_network: false,
+	checks: [
+		{
+			level: "info",
+			code: "windows_build",
+			message: "Windows build 26100 meets the 22621 minimum",
+		},
+		{
+			level: "error",
+			code: "rds_role",
+			message: "Install the Remote Desktop Session Host role, then try again.",
+		},
+		{
+			level: "warning",
+			code: "rds_licensing",
+			message:
+				"Remote Desktop licensing isn't set up. Seats stop after the grace period.",
+		},
+	],
+};
+
+/** A knock from a device that asked to play as a profile. */
+export const pendingWithProfile: PendingDevice = {
+	id: 5,
+	name: "Kid's iPad",
+	fingerprint:
+		"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+	age_secs: 5,
+	source: "lan",
+	until_disconnect: false,
+	profile: { id: "9a3f1c2b7e40", display_name: "Kid" },
 };

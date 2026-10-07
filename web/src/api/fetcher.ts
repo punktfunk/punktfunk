@@ -20,6 +20,32 @@ export class ApiError extends Error {
 	}
 }
 
+const V1 = "/api/v1/";
+
+/** The profile whose seat the call being started belongs to; `null` is this box. */
+let seat: string | null = null;
+
+/** `/api/v1/x` as the box forwards it to a seat's own host; any other URL is the box's. */
+export function seatUrl(url: string, id: string | null): string {
+	if (!id || !url.startsWith(V1)) return url;
+	return `${V1}profiles/${encodeURIComponent(id)}/proxy/${url.slice(V1.length)}`;
+}
+
+/**
+ * Runs `fn` with each `apiFetch` it starts aimed at seat `id` (`null`: the box).
+ *
+ * The seat is read as `apiFetch` begins, so the call must start before `fn`'s first await.
+ */
+export function inSeat<T>(id: string | null, fn: () => T): T {
+	const outer = seat;
+	seat = id;
+	try {
+		return fn();
+	} finally {
+		seat = outer;
+	}
+}
+
 export async function apiFetch<T>(
 	url: string,
 	options?: RequestInit,
@@ -27,7 +53,7 @@ export async function apiFetch<T>(
 	const headers = new Headers(options?.headers);
 	headers.set("Accept", "application/json");
 
-	const res = await fetch(url, {
+	const res = await fetch(seatUrl(url, seat), {
 		...options,
 		headers,
 		credentials: "same-origin",

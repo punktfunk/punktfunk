@@ -37,6 +37,14 @@ pub const LAUNCH_NOT_PERMITTED_CLOSE_CODE: u32 = 0x6A;
 /// Host power action (`power.sleep` / `reboot` / `shutdown`) is ending every
 /// session. `design/host-actions.md`.
 pub const HOST_POWER_CLOSE_CODE: u32 = 0x6B;
+/// `ClientHello.profile` names no profile on this host, or another seat's.
+pub const PROFILE_UNKNOWN_CLOSE_CODE: u32 = 0x6C;
+/// Every seat is taken. Reason bytes name the occupants.
+pub const NO_SEAT_CLOSE_CODE: u32 = 0x6D;
+/// The profile's seat is in use by another device.
+pub const SEAT_OCCUPIED_CLOSE_CODE: u32 = 0x6E;
+/// The profile's seat can't run: removed, or its host would not start.
+pub const SEAT_UNAVAILABLE_CLOSE_CODE: u32 = 0x6F;
 
 /// One row per [`RejectReason`]: variant, close code, FFI token, sentence. Every
 /// table below comes from these rows, so a new reason cannot miss one.
@@ -74,6 +82,14 @@ macro_rules! reject_reasons {
             pub fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $token,)*
+                }
+            }
+
+            /// Inverse of [`Self::as_str`]. `None` for a token this build doesn't know.
+            pub fn from_token(token: &str) -> Option<Self> {
+                match token {
+                    $($token => Some(Self::$variant),)*
+                    _ => None,
                 }
             }
         }
@@ -115,6 +131,14 @@ reject_reasons! {
         "this device is not permitted to launch games on the host";
     HostPower = HOST_POWER_CLOSE_CODE, "host-power",
         "the host is going to sleep or shutting down";
+    ProfileUnknown = PROFILE_UNKNOWN_CLOSE_CODE, "profile-unknown",
+        "that profile is gone from this host — pick another one";
+    NoSeat = NO_SEAT_CLOSE_CODE, "no-seat",
+        "all seats are taken";
+    SeatOccupied = SEAT_OCCUPIED_CLOSE_CODE, "seat-occupied",
+        "someone is already playing as that profile";
+    SeatUnavailable = SEAT_UNAVAILABLE_CLOSE_CODE, "seat-unavailable",
+        "that profile's seat isn't available on this host";
 }
 
 #[cfg(test)]
@@ -125,7 +149,9 @@ mod tests {
     fn close_codes_round_trip() {
         for &r in RejectReason::ALL {
             assert_eq!(RejectReason::from_close_code(r.close_code()), Some(r));
+            assert_eq!(RejectReason::from_token(r.as_str()), Some(r));
         }
+        assert_eq!(RejectReason::from_token("from-a-newer-host"), None);
     }
 
     #[test]
@@ -139,8 +165,8 @@ mod tests {
     #[test]
     fn foreign_codes_stay_untyped() {
         // Bare closes, pair-done, and 0x51/0x52 (deliberate-end) must never
-        // decode as a rejection. 0x6C is the next free id in the 0x60 block.
-        for code in [0u32, 1, 0x41, 0x51, 0x52, 0x5f, 0x6C, 0x70, u32::MAX] {
+        // decode as a rejection. The 0x60 block is full; 0x70 is the clipboard's.
+        for code in [0u32, 1, 0x41, 0x51, 0x52, 0x5f, 0x70, u32::MAX] {
             assert_eq!(RejectReason::from_close_code(code), None);
         }
     }

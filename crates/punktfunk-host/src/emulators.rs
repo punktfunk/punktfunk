@@ -26,8 +26,43 @@ pub fn home_of(id: &str) -> PathBuf {
 pub fn open() -> hermir::Result<Hermir> {
     Hermir::open(Options {
         prefix: Some(prefix()),
+        #[cfg(windows)]
+        runner: Box::new(AsPlayer),
         ..Options::default()
     })
+}
+
+/// Runs an emulator's own installer (RPCS3's firmware, a `.pkg`) as the player signed in to the
+/// host's session. Every player can write the emulator's folder, so SYSTEM never starts what is
+/// in it. The exit code is all that comes back.
+#[cfg(windows)]
+struct AsPlayer;
+
+#[cfg(windows)]
+impl hermir::Runner for AsPlayer {
+    fn run(&self, program: &str, args: &[&str]) -> hermir::Result<hermir::Output> {
+        /// Past this the installer keeps running on its own, and the step reads its marker.
+        const LIMIT: std::time::Duration = std::time::Duration::from_secs(4 * 3600);
+        let cmdline = std::iter::once(program)
+            .chain(args.iter().copied())
+            .map(crate::library::win_quote)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let code = crate::interactive::run_hidden_as_current_session_user(&cmdline, LIMIT)
+            .map_err(|e| hermir::Error::Place {
+                what: program.into(),
+                why: format!("{e:#}"),
+            })?;
+        Ok(hermir::Output {
+            ok: code == 0,
+            stdout: String::new(),
+            stderr: if code == 0 {
+                String::new()
+            } else {
+                format!("exited with code {code}")
+            },
+        })
+    }
 }
 
 /// Whether this OS has an install channel for `id`; `NotInCatalog` for an unknown id.

@@ -80,6 +80,8 @@ pub struct SessionParams {
     pub decoder: String,
     /// Library id for the host to launch (`"steam:570"`); `None` = desktop session.
     pub launch: Option<String>,
+    /// The profile id the `ClientHello` names ([`crate::profiles::picker_decision`]).
+    pub profile: Option<String>,
     /// Presenter's shared Vulkan device, when it can run Vulkan Video (decode lands as
     /// VkImages the presenter samples).
     pub vulkan: Option<crate::video::VulkanDecodeDevice>,
@@ -150,6 +152,8 @@ pub struct Dial {
     pub port: u16,
     pub pin: [u8; 32],
     pub launch: Option<String>,
+    /// The profile to play as; `None` names none and the host picks.
+    pub profile: Option<String>,
     pub connect_timeout: Duration,
 }
 
@@ -262,6 +266,7 @@ impl SessionParams {
             cursor_forward: settings.mouse_mode() == crate::trust::MouseMode::Desktop,
             decoder: settings.decoder.clone(),
             launch: dial.launch,
+            profile: dial.profile,
             vulkan: probes.vulkan,
             pin: Some(dial.pin),
             identity: probes.identity,
@@ -313,10 +318,11 @@ pub enum SessionEvent {
     },
     /// `trust_rejected` is set on a TLS trust failure (`Crypto`): for a pinned connect
     /// this is the fingerprint-changed signal, so the UI can offer re-pair rather than
-    /// a dead-end error.
+    /// a dead-end error. `refused` is the host's typed refusal: it answered, so no wake.
     Failed {
         msg: String,
         trust_rejected: bool,
+        refused: Option<punktfunk_core::reject::RejectReason>,
     },
     Ended(Option<String>),
     /// The host answered but couldn't start the stream, before any frame, while
@@ -675,6 +681,7 @@ fn dial(
         // Slice-progressive delivery: off — every rung here is fed whole AUs.
         frame_parts: false,
         launch: params.launch.clone(),
+        profile: params.profile.clone(),
         // Host's trust-store label. Without it every no-PIN "request access" knock
         // showed as the fingerprint placeholder "device abcd1234".
         name: Some(crate::trust::device_name()),
@@ -700,6 +707,10 @@ fn dial(
     .map(Arc::new)
     .map_err(|e| {
         let trust_rejected = matches!(e, PunktfunkError::Crypto);
+        let refused = match e {
+            PunktfunkError::Rejected(reason) => Some(reason),
+            _ => None,
+        };
         let not_ready = params.waking()
             && matches!(
                 e,
@@ -725,6 +736,7 @@ fn dial(
         SessionEvent::Failed {
             msg,
             trust_rejected,
+            refused,
         }
     })
 }

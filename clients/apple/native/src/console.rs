@@ -13,8 +13,8 @@ use pf_console_ui::bridge::{
 use pf_console_ui::console::FrameCost;
 use pf_console_ui::{
     Console, ConsoleEntry, ConsoleHandles, HostRow, InputSource, Insets, LibraryGame, LibraryPhase,
-    LicenseSection, PadTestState, PairPhase, Platform, Prompt, SnapshotStore, SpeedPhase, Viewport,
-    WakeStatus,
+    LicenseSection, PadTestState, PairPhase, Platform, ProfilesAnswer, Prompt, SnapshotStore,
+    SpeedPhase, Viewport, WakeStatus,
 };
 use skia_safe::gpu::{self, mtl, DirectContext, SurfaceOrigin};
 use skia_safe::ColorType;
@@ -83,6 +83,9 @@ pub const PUNKTFUNK_CONSOLE_PUSH_PROMPT: u8 = 16;
 pub const PUNKTFUNK_CONSOLE_PUSH_LICENSES: u8 = 17;
 /// `{"held": [..], "axes": [[name, v]]}` — the pad's reading while the `PadTest` command is on.
 pub const PUNKTFUNK_CONSOLE_PUSH_PAD_TEST: u8 = 18;
+/// `{"fp_hex": "…", "answer": ProfilesAnswer}` — the answer to the `FetchProfiles` command:
+/// `{"Listed": [rows]}`, `"NoProfiles"` or `{"Failed": "why"}`.
+pub const PUNKTFUNK_CONSOLE_PUSH_PROFILES: u8 = 20;
 
 /// One console. Opaque to C.
 pub struct PunktfunkConsole {
@@ -541,6 +544,12 @@ struct SpeedJson {
     phase: SpeedPhase,
 }
 
+#[derive(serde::Deserialize)]
+struct ProfilesJson {
+    fp_hex: String,
+    answer: ProfilesAnswer,
+}
+
 /// Hand the console a model update; `kind` is a `PUNKTFUNK_CONSOLE_PUSH_*`. A bad kind or bad
 /// JSON is a logged no-op.
 ///
@@ -569,6 +578,9 @@ pub unsafe extern "C" fn punktfunk_console_push(
             PUNKTFUNK_CONSOLE_PUSH_NOTICE => json::<String>(text).map(|v| console.set_notice(v)),
             PUNKTFUNK_CONSOLE_PUSH_SPEED => {
                 json::<SpeedJson>(text).map(|v| console.advance_speed(&v.key, v.phase))
+            }
+            PUNKTFUNK_CONSOLE_PUSH_PROFILES => {
+                json::<ProfilesJson>(text).map(|v| console.set_profiles(&v.fp_hex, v.answer))
             }
             PUNKTFUNK_CONSOLE_PUSH_LIBRARY_BEGIN => {
                 library.begin_fetch();

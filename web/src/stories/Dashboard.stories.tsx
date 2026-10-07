@@ -2,7 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { HostCheck } from "@/api/gen/model/hostCheck";
 import { AttentionStrip } from "@/sections/Dashboard/AttentionCard";
 import { DashboardView } from "@/sections/Dashboard/view";
-import { statusActive, statusGrace, statusIdle } from "./lib/fixtures";
+import {
+	profilesEvery,
+	statusActive,
+	statusGrace,
+	statusIdle,
+} from "./lib/fixtures";
 
 const meta = {
 	title: "Pages/Dashboard",
@@ -28,6 +33,14 @@ type Story = StoryObj<typeof meta>;
 
 export const ActiveSession: Story = {
 	args: { status: { data: statusActive, isLoading: false, error: null } },
+};
+
+/** A box with profiles: each session row leads with its player's picture and name. */
+export const SessionsWithProfiles: Story = {
+	args: {
+		status: { data: statusActive, isLoading: false, error: null },
+		profiles: profilesEvery,
+	},
 };
 
 export const Idle: Story = {

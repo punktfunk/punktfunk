@@ -12,6 +12,7 @@ import type { FC, ReactNode } from "react";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
 import type { AudioWiring } from "@/api/gen/model/audioWiring";
 import type { GameEntry } from "@/api/gen/model/gameEntry";
+import type { ProfilePublic } from "@/api/gen/model/profilePublic";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import type { SessionRow } from "@/api/gen/model/sessionRow";
 import { QueryState } from "@/components/query-state";
@@ -30,6 +31,8 @@ import { SessionList } from "./SessionList";
 export const DashboardView: FC<{
 	status: Loadable<RuntimeStatus>;
 	library?: GameEntry[];
+	/** The box's profiles; with more than one, a session row names its player. */
+	profiles?: ProfilePublic[];
 	/** Host health warnings — renders nothing when the host is healthy (see `AttentionCard.tsx`).
 	 * Sits above the status query on purpose: a host whose `/status` is failing is exactly when
 	 * its health checks are worth reading. */
@@ -51,6 +54,7 @@ export const DashboardView: FC<{
 }> = ({
 	status,
 	library,
+	profiles,
 	attention,
 	onStopSession,
 	onRequestIdr,
@@ -148,6 +152,7 @@ export const DashboardView: FC<{
 								onAccess={onAccessOne}
 								onPlayer={onPlayerOne}
 								busy={isChangingSession}
+								profiles={profiles}
 							/>
 
 							<Card>

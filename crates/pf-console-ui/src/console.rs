@@ -252,6 +252,11 @@ impl Console {
         self.shell.session_phase(phase);
     }
 
+    /// The host refused the connect as `profile-unknown`; call before its failed phase.
+    pub fn profile_gone(&mut self) {
+        self.shell.profile_gone();
+    }
+
     /// Drain after every input and every frame.
     pub fn take_action(&mut self) -> Option<OverlayAction> {
         self.shell.take_action()
@@ -335,6 +340,9 @@ fn stream_intent(entry: &ConsoleEntry) -> Option<crate::screens::ConnectIntent> 
         title: host.name.clone(),
         request_access: false,
         preset: None,
+        profile: host.profile.as_ref().map(|p| p.id.clone()),
+        ask: crate::screens::ProfileAsk::of(host),
+        seat: None,
     })
 }
 

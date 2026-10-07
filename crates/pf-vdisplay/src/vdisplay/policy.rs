@@ -696,6 +696,37 @@ pub struct DisplayPolicyStore {
     /// `cur`. Without it two concurrent PUTs can rename in one order and
     /// publish in the other. Held *around* `cur` so `get` never waits on disk.
     write: Mutex<()>,
+    /// A seat host's per-device overlays: the box's, never its own file's.
+    box_overlays: Option<BoxOverlays>,
+}
+
+/// The box's `clients` map on a seat host. The box console writes it; the seat re-reads the
+/// box's file when its mtime moves, so an overlay edited there applies to the seat's next
+/// connect.
+struct BoxOverlays {
+    path: PathBuf,
+    cache: Mutex<(
+        Option<std::time::SystemTime>,
+        BTreeMap<String, ClientOverlay>,
+    )>,
+}
+
+impl BoxOverlays {
+    fn current(&self) -> BTreeMap<String, ClientOverlay> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let stamp = std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .ok();
+        if stamp != cache.0 {
+            cache.1 = std::fs::read(&self.path)
+                .ok()
+                .and_then(|bytes| DisplayPolicyStore::parse(&self.path, &bytes))
+                .map(|p| p.clients)
+                .unwrap_or_default();
+            cache.0 = stamp;
+        }
+        cache.1.clone()
+    }
 }
 
 impl DisplayPolicyStore {
@@ -718,7 +749,24 @@ impl DisplayPolicyStore {
             path,
             cur: Mutex::new(cur),
             write: Mutex::new(()),
+            box_overlays: None,
         }
+    }
+
+    /// Per-device overlays come from `box_file` instead of this store's own file.
+    fn with_box_overlays(mut self, box_file: Option<PathBuf>) -> Self {
+        self.box_overlays = box_file.map(|path| BoxOverlays {
+            path,
+            cache: Mutex::new((None, BTreeMap::new())),
+        });
+        self
+    }
+
+    fn with_box_clients(&self, mut policy: DisplayPolicy) -> DisplayPolicy {
+        if let Some(b) = &self.box_overlays {
+            policy.clients = b.current();
+        }
+        policy
     }
 
     /// Parse with salvage. Split from [`Self::load_from`] so recovery is unit-tested.
@@ -836,13 +884,14 @@ impl DisplayPolicyStore {
 
     /// Stored policy, or [`DisplayPolicy::default`] when unconfigured (mgmt GET).
     pub fn get(&self) -> DisplayPolicy {
-        self.cur.lock().unwrap().clone().unwrap_or_default()
+        self.with_box_clients(self.cur.lock().unwrap().clone().unwrap_or_default())
     }
 
     /// Console-configured policy, or `None` if no file. `None` ⇒ leave
     /// historical env/default behavior.
     pub fn configured(&self) -> Option<DisplayPolicy> {
-        self.cur.lock().unwrap().clone()
+        let policy = self.cur.lock().unwrap().clone()?;
+        Some(self.with_box_clients(policy))
     }
 
     pub fn configured_effective(&self) -> Option<EffectivePolicy> {
@@ -898,7 +947,11 @@ impl DisplayPolicyStore {
 
     /// The write under [`Self::write`], which the caller holds.
     fn store(&self, policy: DisplayPolicy) -> Result<()> {
-        let policy = policy.sanitized();
+        let mut policy = policy.sanitized();
+        // A seat's own file never carries the box's overlays it reads.
+        if self.box_overlays.is_some() {
+            policy.clients.clear();
+        }
         pf_paths::replace_secret_file(&self.path, &serde_json::to_vec_pretty(&policy)?)?;
         *self.cur.lock().unwrap() = Some(policy);
         Ok(())
@@ -912,6 +965,9 @@ pub fn prefs() -> &'static DisplayPolicyStore {
     static STORE: OnceLock<DisplayPolicyStore> = OnceLock::new();
     STORE.get_or_init(|| {
         DisplayPolicyStore::load_from(pf_paths::config_dir().join("display-settings.json"))
+            .with_box_overlays(
+                pf_paths::seat::trust_dir().map(|dir| dir.join("display-settings.json")),
+            )
     })
 }
 
@@ -1433,6 +1489,40 @@ mod tests {
             !DisplayPolicyStore::parse(path, v2)
                 .unwrap()
                 .pnp_disable_monitors
+        );
+    }
+
+    /// A seat's lookups see the box's device overlays; its own file never stores them.
+    #[test]
+    fn a_seat_takes_the_box_overlays_and_keeps_them_out_of_its_own_file() {
+        let dir = std::env::temp_dir().join(format!("pf-disp-seat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let box_file = dir.join("box.json");
+        let mut boxed = DisplayPolicy::default();
+        boxed.clients.insert(
+            "aa".into(),
+            ClientOverlay {
+                mode_conflict: Some(ModeConflict::Join),
+                ..ClientOverlay::default()
+            },
+        );
+        std::fs::write(&box_file, serde_json::to_vec(&boxed).unwrap()).unwrap();
+
+        let own = dir.join("seat.json");
+        let seat = DisplayPolicyStore::load_from(own.clone()).with_box_overlays(Some(box_file));
+        // Unconfigured, the seat still answers the box's overlay: admission reads `get()`.
+        assert!(seat.configured().is_none());
+        assert_eq!(
+            seat.get().effective_for(Some("aa")).mode_conflict,
+            ModeConflict::Join
+        );
+        seat.set(DisplayPolicy::default()).unwrap();
+        assert!(seat.configured().unwrap().overlay_for(Some("aa")).is_some());
+        let stored: DisplayPolicy = serde_json::from_slice(&std::fs::read(&own).unwrap()).unwrap();
+        assert!(
+            stored.clients.is_empty(),
+            "the box's overlays stay the box's"
         );
     }
 

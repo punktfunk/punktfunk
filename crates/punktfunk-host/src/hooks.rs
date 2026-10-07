@@ -1273,6 +1273,7 @@ mod tests {
                 fingerprint: Some("AB12CD".into()),
                 plane: Plane::Native,
                 preset: None,
+                profile: None,
             },
         };
         let f = HookFilter {
@@ -1293,6 +1294,7 @@ mod tests {
                     id: "3f9a0c11e2b4".into(),
                     name: "Docked".into(),
                 }),
+                profile: None,
             },
         };
         let by = |want: &str| HookFilter {

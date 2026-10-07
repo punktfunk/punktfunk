@@ -528,7 +528,7 @@ pub static SETTINGS: &[Setting] = &[
     row("gamescope_grab_cursor", "PUNKTFUNK_GAMESCOPE_GRAB_CURSOR", Kind::Bool, D::Bool(false), GameMode, NextSession, "Grab the cursor", "gamescope").advanced().only(LINUX),
     row("steam_seat_home", "PUNKTFUNK_STEAM_SEAT_HOME", Kind::Bool, D::Bool(false), GameMode, NextSession, "Steam per seat", "gamescope").advanced().only(LINUX),
     row("steam_seat_sandbox", "PUNKTFUNK_STEAM_SEAT_SANDBOX", Kind::Bool, D::Bool(false), GameMode, NextSession, "Pads per seat", "gamescope").advanced().only(LINUX),
-    row("steam_prewarm", "PUNKTFUNK_STEAM_PREWARM", Kind::Int { min: 0, max: 8, unit: "seats" }, D::Int(1), GameMode, Restart, "Seats kept warm", "gamescope").advanced().only(LINUX),
+    row("steam_prewarm", "PUNKTFUNK_STEAM_PREWARM", Kind::Int { min: 0, max: 8, unit: "seats" }, D::Int(1), GameMode, Restart, "Seats kept warm", "profiles").advanced().only(LINUX_WINDOWS),
     row("gamescope_bind", "PUNKTFUNK_GAMESCOPE_BIND", TRI, D::Str("auto"), GameMode, NextSession, "Bind patched gamescope", "gamescope")
         .advanced()
         .only(LINUX)

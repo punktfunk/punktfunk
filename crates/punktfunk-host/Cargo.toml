@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 # Managed emulators: install, detect, remove. Pinned to a commit until it is on crates.io.
-hermir = { git = "https://github.com/unom-io/hermir", rev = "a7659cfab40398047db76e437e62ec34e85f8956" }
+hermir = { git = "https://github.com/unom-io/hermir", rev = "b2c13da454c817c2e7ab892326b6e33cb06800d1" }
 # `ureq-tls` is for `ctl`: ureq's own `TlsConfig` has no hook for a custom certificate verifier,
 # so the pinned operator client hands rustls a `ClientConfig` through core's shared glue — the same
 # path the tray and the desktop client already take. `quic` brings `tls` (and `PinVerify`) with it.
@@ -22,6 +22,8 @@ libloading = "0.9"
 pf-update-check = { path = "../pf-update-check" }
 # Config-dir + owner-private file helpers (moved out of the gamestream junk drawer, plan §W6).
 pf-paths = { path = "../pf-paths" }
+# The seat supervisor's ledger and pipe frames: the service runs it, placement reads it.
+pf-seats = { path = "../pf-seats" }
 # Windows owner/DACL checks (planted secrets, admin-only staging dirs).
 pf-paths-win = { path = "../pf-paths-win" }
 # Process-wide host config global, extracted to a leaf crate (plan §W6).

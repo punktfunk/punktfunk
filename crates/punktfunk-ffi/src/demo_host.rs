@@ -306,6 +306,8 @@ async fn serve(
         clock_origin_ns: clock.origin_ns(),
         suite: Some(suite),
         features: Default::default(),
+        // A demo has one desktop: whatever profile the client asks for is the one it gets.
+        profile: client.profile.clone(),
     };
     v2io::send(&mut send, &server).await?;
     let (ty, body) = recv.read_frame().await?;
@@ -592,6 +594,7 @@ mod tests {
                 video_codecs: quic::CODEC_H264 | quic::CODEC_HEVC,
                 launch: Some("custom:aurora".into()),
                 pin: Some(host.fingerprint()),
+                profile: Some("9a3f1c2b7e40".into()),
                 ..punktfunk_core::client::ConnectParams::new(
                     "127.0.0.1",
                     host.port(),
@@ -604,6 +607,7 @@ mod tests {
         assert_eq!(session.codec, quic::CODEC_H264);
         assert_eq!(session.launch.as_deref(), Some("custom:aurora"));
         assert_eq!((session.mode.width, session.mode.height), (1280, 720));
+        assert_eq!(client.profile(), Some("9a3f1c2b7e40"));
 
         // Media opens after the clock handshake; resend until a frame arrives.
         let au = vec![0x5a; 30_000];

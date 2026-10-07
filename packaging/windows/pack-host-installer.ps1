@@ -71,6 +71,9 @@ $exe = Join-Path $TargetDir 'punktfunk-host.exe'
 if (-not (Test-Path $exe)) { throw "missing build artifact 'punktfunk-host.exe' in $TargetDir (did 'cargo build --release -p punktfunk-host --features nvenc' run?)" }
 $trayExe = Join-Path $TargetDir 'punktfunk-tray.exe'
 if (-not (Test-Path $trayExe)) { throw "missing build artifact 'punktfunk-tray.exe' in $TargetDir (did 'cargo build --release -p punktfunk-tray' run?)" }
+# The seat keeper builds in its own workspace (crates/pf-seat-keeper) into the same target dir.
+$keeperExe = Join-Path $TargetDir 'punktfunk-seat-keeper.exe'
+if (-not (Test-Path $keeperExe)) { throw "missing build artifact 'punktfunk-seat-keeper.exe' in $TargetDir (did 'cargo build --release --manifest-path crates/pf-seat-keeper/Cargo.toml' run?)" }
 # The host starts this beside itself to capture a monitor it did not create (a pinned monitor, a
 # shared screen). Without it those sessions fail; everything else streams.
 $workerExe = Join-Path $TargetDir 'punktfunk-capture-worker.exe'
@@ -224,6 +227,7 @@ function Sign-File([string]$Path) {
 # --- sign the inner exes before they're packed -------------------------------------------------
 Sign-File $exe
 Sign-File $trayExe
+Sign-File $keeperExe
 Sign-File $workerExe
 
 # --- resolve + validate the installer's source files ------------------------------------------
@@ -231,7 +235,7 @@ $repoRoot = (Resolve-Path (Join-Path $here '..\..')).Path
 $hostEnvSrc = Join-Path $repoRoot 'scripts\windows\host.env.example'
 $readmeSrc = Join-Path $here 'README.md'
 $brandIco = Join-Path $here 'branding\punktfunk.ico'
-foreach ($p in @($exe, $trayExe, $workerExe, $hostEnvSrc, $readmeSrc, $brandIco)) {
+foreach ($p in @($exe, $trayExe, $keeperExe, $workerExe, $hostEnvSrc, $readmeSrc, $brandIco)) {
     if (-not (Test-Path -LiteralPath $p)) { throw "installer source file missing: $p" }
 }
 
@@ -389,7 +393,7 @@ $packer = if ($Arch -eq 'x64') { Join-Path $wizRel 'punktfunk-setup-pack.exe' } 
 $appStage = Join-Path $OutDir 'app'
 if (Test-Path $appStage) { Remove-Item $appStage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $appStage | Out-Null
-Copy-Item $exe, $trayExe, $workerExe, $hostEnvSrc -Destination $appStage -Force
+Copy-Item $exe, $trayExe, $keeperExe, $workerExe, $hostEnvSrc -Destination $appStage -Force
 Copy-Item $readmeSrc -Destination (Join-Path $appStage 'README.txt') -Force
 Copy-Item $brandIco -Destination $appStage -Force
 Copy-Item $licStage -Destination (Join-Path $appStage 'licenses') -Recurse -Force
@@ -400,6 +404,13 @@ if ($wantWeb -or $wantScripting) {
 if ($wantWeb) { Copy-Item $webStage -Destination (Join-Path $appStage 'web\.output') -Recurse -Force }
 if ($wantScripting) { Copy-Item $scrStage -Destination (Join-Path $appStage 'scripting') -Recurse -Force }
 if ($layerStage -and (Test-Path $layerStage)) { Copy-Item $layerStage -Destination (Join-Path $appStage 'vklayer') -Recurse -Force }
+# The seats display driver stays on disk beside the host, since the extracted staging tree below is
+# deleted after setup. Setup never installs it: the console does, when the operator turns seats on.
+if (-not $NoDriver) {
+    $seatsDir = Join-Path $appStage 'staging\pfvdisplay'
+    New-Item -ItemType Directory -Force -Path $seatsDir | Out-Null
+    foreach ($f in 'pf_vdisplay_seats.inf', 'pf_vdisplay_seats.cat', 'pf_vdisplay.dll') { Copy-Item (Join-Path $stage $f) -Destination $seatsDir -Force }
+}
 # Driver payloads: extracted beside the wizard, handed to `driver install --dir <staging>\...`.
 $stagingRoot = Join-Path $OutDir 'staging'
 if (Test-Path $stagingRoot) { Remove-Item $stagingRoot -Recurse -Force }

@@ -139,6 +139,7 @@ HDR over the virtual display.
 | `crates/pf-driver-proto` | Host↔driver contract |
 | `crates/pyrowave-sys`, `libvpl-sys` | Vendored PyroWave and Intel VPL, built from source |
 | `crates/punktfunk-tray` | Tray status icon |
+| `crates/pf-seats`, `pf-seat-keeper` | Windows seat supervisor, run inside the service; the RDP keeper, its own workspace for IronRDP's lockfile |
 | `crates/punktfunk-setup`, `punktfunk-setup-win` | Guided Linux installer (`install.sh` fetches it); Windows installer wizard |
 | `crates/pf-client-core` | Client plumbing: session pump, decode ladder, audio, gamepads, trust, discovery |
 | `crates/pf-bitstream` | Access-unit parsing and decode plans for H.264, HEVC and AV1 |

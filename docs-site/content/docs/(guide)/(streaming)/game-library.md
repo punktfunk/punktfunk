@@ -150,6 +150,9 @@ Each launch from Punktfunk records the time and adds one to the title's launch c
 grows while the host sees the game running with a session attached. A launcher tile, or a custom
 entry with no **Process** hint, gets no play time.
 
+A Punktfunk session also credits its profile: the title's numbers count every launch, and each
+profile keeps its own beside them. A Moonlight session counts toward the title only.
+
 The Apple apps sort by **Recent** and **Most played** and keep a **Recently Played** row.
 
 The numbers live in `library-stats.json` in the host config directory. Delete a title's line to
