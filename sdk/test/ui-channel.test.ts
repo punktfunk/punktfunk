@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { attachOverPipe } from "../src/ui.js";
+import { redirectUiServeToChannel } from "../src/ui-forward.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-ui-"));
 const sock = path.join(dir, "host.sock");
@@ -86,23 +86,38 @@ const waitFor = async (ready: () => boolean, ms = 3000): Promise<void> => {
 	}
 };
 
-describe("attachOverPipe", () => {
-	test("parks connections at the host and answers one request down each", async () => {
+describe("redirectUiServeToChannel", () => {
+	test("a plugin's loopback page is served down connections parked at the host", async () => {
+		const serve = Bun.serve;
+		redirectUiServeToChannel(sock, "demo");
 		const seen: string[] = [];
-		const server = attachOverPipe(sock, "demo", async (req) => {
-			seen.push(`${req.method} ${new URL(req.url).pathname} ${req.headers.get("authorization")}`);
-			const text = req.method === "POST" ? await req.text() : "";
-			return new Response(`hello ${text}`, { status: 200, headers: { "x-plugin": "demo" } });
+		// What `servePluginUi` calls, in any SDK copy a plugin tree holds.
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(req) {
+				seen.push(`${req.method} ${new URL(req.url).pathname} ${req.headers.get("authorization")}`);
+				const text = req.method === "POST" ? await req.text() : "";
+				return new Response(`hello ${text}`, { status: 200, headers: { "x-plugin": "demo" } });
+			},
 		});
-		expect(server.port).toBe(0);
-		await waitFor(() => parked.length >= 4);
-		const first = await down(parked.shift() as net.Socket, "GET", "/__health");
-		expect(first).toEqual({ status: 200, text: "hello " });
-		const second = await down(parked.shift() as net.Socket, "POST", "/api/save", "{\"a\":1}");
-		expect(second.text).toBe('hello {"a":1}');
-		expect(seen).toEqual(["GET /__health Bearer s3cret", "POST /api/save Bearer s3cret"]);
-		// Two used, two dialed again: the plugin keeps four parked.
-		await waitFor(() => parked.length >= 4);
-		server.stop(true);
+		// A second one is the plugin's own business and keeps its real port.
+		const other = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("x") });
+		(Bun as { serve: typeof Bun.serve }).serve = serve;
+		try {
+			expect(server.port).toBe(0);
+			expect(other.port).toBeGreaterThan(0);
+			await waitFor(() => parked.length >= 4);
+			const first = await down(parked.shift() as net.Socket, "GET", "/__health");
+			expect(first).toEqual({ status: 200, text: "hello " });
+			const second = await down(parked.shift() as net.Socket, "POST", "/api/save", "{\"a\":1}");
+			expect(second.text).toBe('hello {"a":1}');
+			expect(seen).toEqual(["GET /__health Bearer s3cret", "POST /api/save Bearer s3cret"]);
+			// Two used, two dialed again: the plugin keeps four parked.
+			await waitFor(() => parked.length >= 4);
+		} finally {
+			server.stop(true);
+			other.stop(true);
+		}
 	});
 });

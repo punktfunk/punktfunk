@@ -400,6 +400,7 @@ const runInContainer = (
 		const id = manifest.id ?? unit.name;
 		const config = options.configDir ?? configDir();
 		adoptNestedState(path.join(config, "plugin-state", id), id, log);
+		const pipe = pipeEnv(unit);
 		const child = spawn(
 			hostExe(),
 			[
@@ -419,7 +420,9 @@ const runInContainer = (
 				env: {
 					...process.env,
 					...(options.configDir ? { PUNKTFUNK_CONFIG_DIR: options.configDir } : {}),
-					...pipeEnv(unit),
+					...pipe,
+					// The container can bind nothing the console dials: its page goes over the pipe.
+					...(pipe.PUNKTFUNK_MGMT_UNIX ? { PUNKTFUNK_UI_CHANNEL: id } : {}),
 				},
 				stdio: ["ignore", "inherit", "pipe"],
 				windowsHide: true,
