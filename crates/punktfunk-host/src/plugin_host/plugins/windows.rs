@@ -209,15 +209,20 @@ fn grant_runner_secret_reads() {
 
 /// Deny the seats group ([`pf_seats::windows::SEATS_GROUP`]) on the ingest inbox. A seat account
 /// is in `BUILTIN\Users`, whose Modify grant would let it replace the owner's Playnite titles; an
-/// explicit deny on the same object outranks that allow. Idempotent, and a box that never
-/// provisioned a seat has no group and nothing to deny.
+/// explicit deny on the same object outranks that allow. A deny already there is left alone:
+/// `icacls /deny` adds another ACE on every call. A box that never provisioned a seat has no group.
 pub(super) fn deny_seats_on_ingest() {
     let Some(sid) = pf_seats::windows::seats_group_sid() else {
         return;
     };
+    let ace = format!("\\{}:(OI)(CI)(DENY)(M)", pf_seats::windows::SEATS_GROUP);
     let cfg = pf_paths::config_dir();
     for dir in RUNNER_INGEST_DIRS.map(|name| cfg.join(name)) {
         if !dir.is_dir() {
+            continue;
+        }
+        let listed = Command::new(icacls_path()).arg(&dir).output();
+        if listed.is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(&ace)) {
             continue;
         }
         let ok = Command::new(icacls_path())
