@@ -904,6 +904,8 @@ pub struct QsvEncoder {
     next_ltr_slot: usize,
     ltr_mark_interval: i64,
     pending_force: Option<usize>,
+    /// The newest frame the client confirmed, while the host holds confirmed references.
+    reference_floor: Option<i64>,
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface fetch would.
     #[cfg(test)]
@@ -982,6 +984,7 @@ impl QsvEncoder {
             next_ltr_slot: 0,
             ltr_mark_interval: ltr_mark_interval(fps),
             pending_force: None,
+            reference_floor: None,
             ltr_test_force_at: ltr_test_force_at(),
             #[cfg(test)]
             fail_submit_at: None,
@@ -1351,6 +1354,30 @@ impl QsvEncoder {
                 .filter(|_| !self.ltr_tainted[slot])
                 .map(|idx| (slot, idx));
         }
+        // Confirmed references, AVC and HEVC only: AV1 rejects nothing, so a hint it ignored
+        // would tag a frame that still leans on a loss.
+        let floor = self.reference_floor.filter(|_| self.codec != Codec::Av1);
+        if let Some(floor) = floor.filter(|_| step.force.is_none() && !forced) {
+            let view: [Option<i64>; NUM_LTR_SLOTS] =
+                std::array::from_fn(|s| self.ltr_slots[s].filter(|_| !self.ltr_tainted[s]));
+            let (mark, force) =
+                super::rfi::ltr_acked_step(&view, floor, cur_idx, self.next_ltr_slot);
+            // A force rejects every other mark, so the slot it frees takes this frame.
+            let mark = match force {
+                Some((f, _)) => Some((f + 1) % NUM_LTR_SLOTS),
+                None => mark,
+            };
+            if let Some(m) = mark {
+                self.ltr_slots[m] = Some(cur_idx);
+                self.ltr_tainted[m] = false;
+                self.next_ltr_slot = (m + 1) % NUM_LTR_SLOTS;
+            }
+            return LtrStep {
+                mark_slot: mark,
+                force,
+                acked: true,
+            };
+        }
         if step.force.is_none() && (forced || cur_idx % self.ltr_mark_interval == 0) {
             let trusted: [bool; NUM_LTR_SLOTS] =
                 std::array::from_fn(|s| self.ltr_slots[s].is_some() && !self.ltr_tainted[s]);
@@ -1372,6 +1399,8 @@ struct LtrStep {
     mark_slot: Option<usize>,
     /// Re-reference `(slot, wire index)`; the AU is a recovery anchor.
     force: Option<(usize, i64)>,
+    /// The force follows the client's confirmations, not an RFI.
+    acked: bool,
 }
 
 /// The encode control for an IDR, an LTR mark or an LTR force; `None` for a plain P. A force
@@ -1410,7 +1439,7 @@ fn frame_ctrl(
         if reject_ok {
             let mut rej = 0;
             let mut reject = |idx: i64| {
-                if idx >= 0 && idx != ltr_frame {
+                if idx >= 0 && idx != ltr_frame && idx != cur_idx {
                     c.reflist.RejectedRefList[rej].FrameOrder = idx as u32;
                     c.reflist.RejectedRefList[rej].PicStruct =
                         vpl::MFX_PICSTRUCT_PROGRESSIVE as u16;
@@ -1429,12 +1458,14 @@ fn frame_ctrl(
             c.reflist.NumRefIdxL0Active = 1;
         }
         use_reflist = true;
-        tracing::info!(
-            slot,
-            ltr_frame,
-            frame = cur_idx,
-            "QSV LTR-RFI: re-referencing known-good LTR (clean recovery, no IDR)"
-        );
+        if !ltr.acked {
+            tracing::info!(
+                slot,
+                ltr_frame,
+                frame = cur_idx,
+                "QSV LTR-RFI: re-referencing known-good LTR (clean recovery, no IDR)"
+            );
+        }
     }
     if use_reflist {
         c.attach_reflist();
@@ -1720,7 +1751,7 @@ impl Encoder for QsvEncoder {
             .filter(|&(slot, _)| !self.ltr_tainted[slot])
             .filter_map(|(s, m)| m.map(|w| (s, w)))
             .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first, None);
+        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor);
         for (slot, tainted) in self.ltr_tainted.iter_mut().enumerate() {
             if plan.tainted & (1 << slot) != 0 {
                 *tainted = true;
@@ -1757,6 +1788,10 @@ impl Encoder for QsvEncoder {
     /// tracks the hardware DPB and RejectedRefList only names `Some` slots.
     /// Taint clears on IDR flush or re-mark. Drop `pending_force` so an unconsumed
     /// force cannot re-reference a slot this call just distrusted.
+    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
+        self.reference_floor = acked_wire;
+    }
+
     fn distrust_references(&mut self) {
         let live = self
             .ltr_slots
@@ -2163,7 +2198,7 @@ mod tests {
             step,
             LtrStep {
                 mark_slot: Some(0),
-                force: None
+                ..LtrStep::default()
             }
         );
         assert_eq!(enc.ltr_slots, [Some(9), None]);
@@ -2182,8 +2217,8 @@ mod tests {
         assert_eq!(
             enc.ltr_step(false, 16),
             LtrStep {
-                mark_slot: None,
-                force: Some((0, 0))
+                force: Some((0, 0)),
+                ..LtrStep::default()
             }
         );
         assert_eq!(enc.pending_force, None, "a force is consumed");
@@ -2191,6 +2226,33 @@ mod tests {
         enc.pending_force = Some(0);
         assert_eq!(enc.ltr_step(false, 17), LtrStep::default());
         assert_eq!(enc.pending_force, None);
+    }
+
+    /// Under confirmed references every frame forces the newest confirmed slot and marks the
+    /// other; the frame's own mark is never rejected. AV1 keeps the interval.
+    #[test]
+    fn confirmed_references_force_the_newest_confirmed_slot() {
+        let mut enc = ltr_encoder();
+        enc.ltr_slots = [Some(9), Some(10)];
+        enc.reference_floor = Some(10);
+        let step = enc.ltr_step(false, 11);
+        assert_eq!(
+            step,
+            LtrStep {
+                mark_slot: Some(0),
+                force: Some((1, 10)),
+                acked: true
+            }
+        );
+        assert_eq!(enc.ltr_slots, [Some(11), Some(10)]);
+        let c = frame_ctrl(false, step, 11, &enc.ltr_slots, true).expect("ctrl");
+        let rejected: Vec<u32> = c.reflist.RejectedRefList[..2]
+            .iter()
+            .map(|e| e.FrameOrder)
+            .collect();
+        assert_eq!(rejected, [9, vpl::MFX_FRAMEORDER_UNKNOWN as u32]);
+        enc.codec = Codec::Av1;
+        assert_eq!(enc.ltr_step(false, 12), LtrStep::default());
     }
 
     /// Marks land on the interval, first on a slot holding no trusted picture.
@@ -2215,8 +2277,8 @@ mod tests {
     #[test]
     fn a_forced_ltr_rejects_every_other_reference() {
         let ltr = LtrStep {
-            mark_slot: None,
             force: Some((0, 4)),
+            ..LtrStep::default()
         };
         let slots = [Some(4), Some(8)];
         let c = frame_ctrl(false, ltr, 20, &slots, true).expect("ctrl");

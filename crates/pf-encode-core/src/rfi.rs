@@ -83,6 +83,38 @@ pub fn pick_anchor(refs: &[(usize, i64)], loss_first: i64) -> Option<(usize, i64
     best
 }
 
+/// Frames back a confirmed long-term reference may reach on a two-slot LTR backend (AMF,
+/// QSV): Vulkan Video's DPB depth. Past it the frame takes the chain.
+pub const LTR_ACKED_REACH: i64 = 8;
+
+/// One frame's long-term step while the encoder holds confirmed references: force the newest
+/// slot the client confirmed within [`LTR_ACKED_REACH`], and mark this frame into a free slot,
+/// round robin from `next`, so a later frame has a newer candidate once the client confirms
+/// it. A slot is free when empty, out of reach, or confirmed and older than the forced one; a
+/// frame still awaiting its confirmation keeps its slot. `slots` holds each slot's wire, `None`
+/// when empty or tainted. Returns the slot to mark and the `(slot, wire)` to force.
+pub fn ltr_acked_step(
+    slots: &[Option<i64>],
+    floor: i64,
+    cur: i64,
+    next: usize,
+) -> (Option<usize>, Option<(usize, i64)>) {
+    let reach = |w: i64| cur - w <= LTR_ACKED_REACH;
+    let refs: Vec<(usize, i64)> = slots
+        .iter()
+        .enumerate()
+        .filter_map(|(s, w)| w.filter(|&w| reach(w)).map(|w| (s, w)))
+        .collect();
+    let force = pick_acked(&refs, floor);
+    let free = |s: usize| match slots[s] {
+        None => true,
+        Some(w) => !reach(w) || (w <= floor && force.is_none_or(|(f, _)| f != s)),
+    };
+    let n = slots.len();
+    let mark = (0..n).map(|k| (next + k) % n).find(|&s| free(s));
+    (mark, force)
+}
+
 /// Slot for the next LTR mark: the first one holding no trusted picture, else `next`, the
 /// round robin. Marking over a slot a loss emptied keeps the last clean LTR for the next loss.
 pub fn mark_slot(trusted: &[bool], next: usize) -> usize {
@@ -207,7 +239,9 @@ pub fn pinned_cycle() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mark_slot, pick_acked, pick_anchor, plan_slot_recovery, wave_cycle, Wave};
+    use super::{
+        ltr_acked_step, mark_slot, pick_acked, pick_anchor, plan_slot_recovery, wave_cycle, Wave,
+    };
 
     /// Two LTR slots marked at 840 and 870. A loss at 869 anchors on 840 and empties 870's
     /// slot, so the mark at 900 lands there and a loss at 900 still anchors on 840.
@@ -335,6 +369,48 @@ mod tests {
             plan_slot_recovery(&view(&wires), 19, Some(25)).anchor,
             Some((3, 18))
         );
+    }
+
+    /// Under confirmed references a frame forces the newest confirmed slot in reach and marks
+    /// only a free slot: a frame still awaiting its confirmation keeps its own.
+    #[test]
+    fn a_confirmed_ltr_is_forced_and_a_pending_one_is_kept() {
+        assert_eq!(
+            ltr_acked_step(&[Some(9), Some(10)], 9, 11, 0),
+            (None, Some((0, 9))),
+            "10 awaits its confirmation"
+        );
+        assert_eq!(
+            ltr_acked_step(&[Some(9), Some(10)], 10, 11, 1),
+            (Some(0), Some((1, 10)))
+        );
+        assert_eq!(
+            ltr_acked_step(&[Some(9), None], 9, 18, 0),
+            (Some(0), None),
+            "past the reach: the chain"
+        );
+        assert_eq!(
+            ltr_acked_step(&[Some(12), Some(13)], 9, 14, 1),
+            (None, None)
+        );
+    }
+
+    /// Two slots, confirmations two frames behind: once warm, every frame references one the
+    /// client confirmed, two or three frames back.
+    #[test]
+    fn two_slots_hold_a_two_frame_round_trip() {
+        let (mut slots, mut next) = ([None; 2], 0);
+        for i in 0..40i64 {
+            let (mark, force) = ltr_acked_step(&slots, i - 2, i, next);
+            if i >= 6 {
+                let (_, w) = force.expect("a confirmed slot in reach");
+                assert!((2..=3).contains(&(i - w)), "frame {i} reaches {}", i - w);
+            }
+            if let Some(m) = mark {
+                slots[m] = Some(i);
+                next = (m + 1) % 2;
+            }
+        }
     }
 
     #[test]
