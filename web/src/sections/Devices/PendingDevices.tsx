@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Globe, KeyRound, X } from "lucide-react";
+import { motion } from "motion/react";
 import { type FC, type ReactNode, useState } from "react";
 import type { ApprovePending } from "@/api/gen/model/approvePending";
 import type { PendingDevice } from "@/api/gen/model/pendingDevice";
@@ -11,6 +12,7 @@ import {
 } from "@/api/gen/native/native";
 import { useApprovePendingDevice } from "@/api/pairing";
 import { usePasswordFailure } from "@/components/password-confirm";
+import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { fmtAge } from "@/lib/utils";
@@ -79,7 +81,7 @@ export const WaitingRow: FC<{
 	details?: ReactNode;
 	actions: ReactNode;
 }> = ({ lead, title, details, actions }) => (
-	<li className="flex items-center gap-3 py-3">
+	<motion.li variants={ROW} className="flex items-center gap-3 py-3">
 		<div className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">
 			{lead}
 		</div>
@@ -92,7 +94,7 @@ export const WaitingRow: FC<{
 			)}
 		</div>
 		<div className="flex shrink-0 items-center gap-1">{actions}</div>
-	</li>
+	</motion.li>
 );
 
 /**

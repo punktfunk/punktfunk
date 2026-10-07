@@ -657,7 +657,6 @@
 	"store_stopped": "Läuft nicht",
 	"store_version_unknown": "Version unbekannt",
 	"store_uninstall": "Deinstallieren",
-	"store_open_page": "Seite öffnen",
 	"store_uninstall_confirm": "{title} deinstallieren?",
 	"store_uninstall_body": "Du kannst es jederzeit wieder aus dem Katalog installieren.",
 	"store_uninstall_failed": "Die Deinstallation konnte nicht gestartet werden",

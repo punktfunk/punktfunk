@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowUpCircle, BadgeCheck, Ban, Circle, Package } from "lucide-react";
+import {
+	ArrowUpCircle,
+	BadgeCheck,
+	Ban,
+	Circle,
+	Package,
+	Trash2,
+} from "lucide-react";
 import { motion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import type { InstalledView } from "@/api/gen/model";
@@ -10,7 +17,7 @@ import { QueryState } from "@/components/query-state";
 import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
 import {
@@ -243,24 +250,18 @@ const InstalledRow: FC<{
 						<span className="sm:hidden">{p.update_available}</span>
 					</Button>
 				)}
-				<RowMenu label={m.common_more_actions()} disabled={busy}>
-					{page && p.plugin_id && (
-						<>
-							<MenuItem asChild>
-								<Link
-									to="/plugins/$pluginId/$"
-									params={{ pluginId: p.plugin_id, _splat: "" }}
-								>
-									{m.store_open_page()}
-								</Link>
-							</MenuItem>
-							<MenuSeparator />
-						</>
-					)}
-					<MenuItem destructive onSelect={onUninstall}>
-						{m.store_uninstall()}
-					</MenuItem>
-				</RowMenu>
+				<RowActions
+					disabled={busy}
+					actions={[
+						{
+							label: m.store_uninstall(),
+							icon: <Trash2 />,
+							iconOnly: true,
+							destructive: true,
+							onSelect: onUninstall,
+						},
+					]}
+				/>
 			</div>
 			{p.blocked != null && (
 				<p className="mt-2 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive">

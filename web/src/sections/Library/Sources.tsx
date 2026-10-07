@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { Boxes, Download, PackagePlus } from "lucide-react";
+import { Boxes, Download, PackagePlus, Settings2, Trash2 } from "lucide-react";
 import { type FC, type ReactNode, useMemo, useState } from "react";
 import {
 	getListLibraryScannersQueryKey,
@@ -20,7 +20,7 @@ import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { EmulatorsCard } from "@/sections/Library/Emulators";
@@ -385,23 +385,30 @@ const SourceRow: FC<{
 			meta={meta || undefined}
 			actions={
 				isPlugin && (
-					<RowMenu label={m.common_more_actions()}>
-						<MenuItem onSelect={onFilter}>
-							{filtered
-								? m.library_provider_show_all()
-								: m.library_provider_filter()}
-						</MenuItem>
-						{/* The form is the box's plugin; a seat has none to open. */}
-						{!seat && (
-							<MenuItem onSelect={onSettings}>
-								{m.library_source_settings()}
-							</MenuItem>
-						)}
-						<MenuSeparator />
-						<MenuItem destructive onSelect={onPurge}>
-							{m.library_provider_purge()}
-						</MenuItem>
-					</RowMenu>
+					<RowActions
+						actions={[
+							{
+								label: filtered
+									? m.library_provider_show_all()
+									: m.library_provider_filter(),
+								onSelect: onFilter,
+							},
+							// The form is the box's plugin; a seat has none to open.
+							!seat && {
+								label: m.library_source_settings(),
+								icon: <Settings2 />,
+								iconOnly: true,
+								onSelect: onSettings,
+							},
+							{
+								label: m.library_provider_purge(),
+								icon: <Trash2 />,
+								iconOnly: true,
+								destructive: true,
+								onSelect: onPurge,
+							},
+						]}
+					/>
 				)
 			}
 		>

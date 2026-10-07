@@ -1,10 +1,12 @@
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowRight } from "lucide-react";
+import { motion } from "motion/react";
 import type { FC } from "react";
 import { useGetDiagnostics } from "@/api/gen/diagnostics/diagnostics";
 import type { AudioWiring } from "@/api/gen/model/audioWiring";
 import type { HostCheck } from "@/api/gen/model/hostCheck";
 import { useListPendingDevices } from "@/api/gen/native/native";
+import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -65,7 +67,10 @@ export const AttentionStrip: FC<{
 					<p className="text-sm font-medium text-amber-600 dark:text-amber-500">
 						{m.diag_attention_title()}
 					</p>
-					<ul className="flex flex-col gap-2 text-sm">
+					<motion.ul
+						{...staggerProps(ROW_GAP)}
+						className="flex flex-col gap-2 text-sm"
+					>
 						{waiting.length > 0 && (
 							<Line to="/devices" link={m.nav_devices()}>
 								{m.home_attention_pending({ names: waiting.join(", ") })}
@@ -82,7 +87,8 @@ export const AttentionStrip: FC<{
 							</Line>
 						)}
 						{shown.map((check) => (
-							<li
+							<motion.li
+								variants={ROW}
 								key={check.id}
 								className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
 							>
@@ -94,9 +100,9 @@ export const AttentionStrip: FC<{
 								<span className="min-w-0 text-muted-foreground">
 									{check.summary}
 								</span>
-							</li>
+							</motion.li>
 						))}
-					</ul>
+					</motion.ul>
 					{shown.length > 0 && (
 						<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
 							<Link
@@ -124,7 +130,10 @@ const Line: FC<{
 	link: string;
 	children: string;
 }> = ({ to, link, children }) => (
-	<li className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+	<motion.li
+		variants={ROW}
+		className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
+	>
 		<span className="min-w-0 font-medium">{children}</span>
 		<Link
 			to={to}
@@ -133,5 +142,5 @@ const Line: FC<{
 			{link}
 			<ArrowRight className="size-3.5" />
 		</Link>
-	</li>
+	</motion.li>
 );

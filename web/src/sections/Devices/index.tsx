@@ -3,7 +3,7 @@ import { type FC, useCallback, useState } from "react";
 import { useGetHostInfo, useGetStatus } from "@/api/gen/host/host";
 import { useGetPairingStatus } from "@/api/gen/pairing/pairing";
 import { Button } from "@/components/ui/button";
-import { MenuItem, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { fmtClockDuration } from "@/lib/format";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
@@ -102,14 +102,16 @@ export const SectionDevices: FC = () => {
 							{m.pairing_native_title()}
 						</Button>
 						{paired.rows.length > 0 && (
-							<RowMenu
-								label={m.common_more_actions()}
+							<RowActions
 								disabled={paired.isUnpairingAll}
-							>
-								<MenuItem destructive onSelect={paired.onUnpairAll}>
-									{m.action_unpair_all()}
-								</MenuItem>
-							</RowMenu>
+								actions={[
+									{
+										label: m.action_unpair_all(),
+										destructive: true,
+										onSelect: paired.onUnpairAll,
+									},
+								]}
+							/>
 						)}
 					</>
 				}

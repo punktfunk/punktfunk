@@ -1,5 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
+import { Monitor, Pencil, ShieldCheck, Unlink } from "lucide-react";
+import { motion } from "motion/react";
 import { type FC, useState } from "react";
 import {
 	getListPairedClientsQueryKey,
@@ -18,8 +20,9 @@ import {
 	useUpdateNativeClientAccess,
 } from "@/api/gen/native/native";
 import { useDialogs } from "@/components/dialogs";
+import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { m } from "@/paraglide/messages";
 import {
 	ClientPolicySheet,
@@ -305,7 +308,7 @@ export function usePairedDevices() {
 }
 /**
  * One paired device. Its protocol and fingerprint ride the details line; Access, Display and the
- * session it is streaming sit beside it; Access · Display · Rename · Unpair live in ⋯ (R6).
+ * session it is streaming sit beside it, then Access · Display · Rename · Unpair (⋯ on a phone).
  *
  * A Moonlight device has full control and says so: the GameStream plane is not governed by
  * grants. Rename is a Moonlight verb — its certificate carries nothing that names the device.
@@ -332,7 +335,10 @@ export const PairedRowView: FC<{
 	onRename,
 	onUnpair,
 }) => (
-	<li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 py-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,0.6fr)_auto]">
+	<motion.li
+		variants={ROW}
+		className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 py-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,0.6fr)_auto]"
+	>
 		<div className="order-1 min-w-0">
 			<div className="truncate font-medium">{r.name || "—"}</div>
 			<div className="truncate text-xs text-muted-foreground">
@@ -343,23 +349,33 @@ export const PairedRowView: FC<{
 			</div>
 		</div>
 		<div className="order-2 justify-self-end md:order-5">
-			<RowMenu label={m.common_more_actions()} disabled={busy}>
-				{onEditAccess && (
-					<MenuItem onSelect={onEditAccess}>{m.access_edit_title()}</MenuItem>
-				)}
-				{onDisplaySettings && (
-					<MenuItem onSelect={onDisplaySettings}>
-						{m.display_device_settings()}
-					</MenuItem>
-				)}
-				{onRename && (
-					<MenuItem onSelect={onRename}>{m.action_rename()}</MenuItem>
-				)}
-				{(onEditAccess || onDisplaySettings || onRename) && <MenuSeparator />}
-				<MenuItem destructive onSelect={onUnpair}>
-					{m.action_unpair()}
-				</MenuItem>
-			</RowMenu>
+			<RowActions
+				disabled={busy}
+				labelsFrom="xl"
+				actions={[
+					onEditAccess && {
+						label: m.access_edit_title(),
+						icon: <ShieldCheck />,
+						onSelect: onEditAccess,
+					},
+					onDisplaySettings && {
+						label: m.display_device_settings(),
+						icon: <Monitor />,
+						onSelect: onDisplaySettings,
+					},
+					onRename && {
+						label: m.action_rename(),
+						icon: <Pencil />,
+						onSelect: onRename,
+					},
+					{
+						label: m.action_unpair(),
+						icon: <Unlink />,
+						destructive: true,
+						onSelect: onUnpair,
+					},
+				]}
+			/>
 		</div>
 		<div className="order-3 col-span-1 flex flex-wrap items-center gap-2 md:contents">
 			<div className="md:order-2">
@@ -389,5 +405,5 @@ export const PairedRowView: FC<{
 				{streaming && <Badge variant="success">{m.devices_streaming()}</Badge>}
 			</div>
 		</div>
-	</li>
+	</motion.li>
 );

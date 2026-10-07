@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { ArrowDown, ArrowUp, Images } from "lucide-react";
+import { ArrowDown, ArrowUp, Images, Settings2 } from "lucide-react";
 import { type FC, useState } from "react";
 import {
 	getListLibraryMetadataQueryKey,
@@ -16,7 +16,7 @@ import { useInstallPlugin } from "@/api/store";
 import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MenuCheck, MenuItem, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { AddSourceRail, SourceGroup, SourceItem } from "./AddSource";
@@ -243,20 +243,24 @@ const MetadataSourceRow: FC<{
 					>
 						<ArrowDown className="size-4" />
 					</Button>
-					<RowMenu label={m.common_more_actions()}>
-						<MenuCheck
-							checked={source.replace}
-							disabled={busy}
-							onChange={onReplace}
-						>
-							<span title={m.library_metadata_replace_help()}>
-								{m.library_metadata_replace()}
-							</span>
-						</MenuCheck>
-						<MenuItem onSelect={onSettings}>
-							{m.library_source_settings()}
-						</MenuItem>
-					</RowMenu>
+					<RowActions
+						actions={[
+							{
+								kind: "check",
+								label: m.library_metadata_replace(),
+								hint: m.library_metadata_replace_help(),
+								checked: source.replace,
+								disabled: busy,
+								onChange: onReplace,
+							},
+							{
+								label: m.library_source_settings(),
+								icon: <Settings2 />,
+								iconOnly: true,
+								onSelect: onSettings,
+							},
+						]}
+					/>
 				</>
 			}
 		/>

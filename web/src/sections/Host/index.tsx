@@ -1,6 +1,7 @@
 import type { FC } from "react";
 import { useGetHostInfo, useListCompositors } from "@/api/gen/host/host";
 import { QueryState } from "@/components/query-state";
+import { Stagger } from "@/components/stagger";
 import { useLocale } from "@/lib/i18n";
 import { HostSettings } from "@/sections/HostSettings";
 import { AudioWiringSection } from "./AudioWiring";
@@ -28,13 +29,16 @@ export const SectionHost: FC = () => {
 						error={host.error}
 						refetch={host.refetch}
 					>
+						{/* Mounts once the host answers, after the page animated: it brings its own. */}
 						{host.data && (
-							<HostStrip
-								host={host.data}
-								compositors={compositors.data}
-								update={update}
-								audio={<AudioWiringSection />}
-							/>
+							<Stagger>
+								<HostStrip
+									host={host.data}
+									compositors={compositors.data}
+									update={update}
+									audio={<AudioWiringSection />}
+								/>
+							</Stagger>
 						)}
 					</QueryState>
 					{updateNeedsCard(update) && <UpdateCard {...update} />}

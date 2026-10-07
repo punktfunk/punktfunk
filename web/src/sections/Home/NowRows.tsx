@@ -2,11 +2,15 @@ import {
 	Check,
 	Clipboard,
 	Gamepad2,
+	ImageUp,
 	Loader2,
 	MonitorPlay,
+	Volume2,
+	VolumeX,
 	XCircle,
 	ZapOff,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { type FC, type ReactNode, useState } from "react";
 import type { ActiveGame } from "@/api/gen/model/activeGame";
 import type { SessionInfo } from "@/api/gen/model/sessionInfo";
@@ -14,14 +18,10 @@ import type { SessionRow } from "@/api/gen/model/sessionRow";
 import type { SessionSummary } from "@/api/gen/model/sessionSummary";
 import type { StreamInfo } from "@/api/gen/model/streamInfo";
 import { type AvatarProfile, ProfileAvatar } from "@/components/profile-avatar";
+import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	MenuChoice,
-	MenuItem,
-	MenuSeparator,
-	RowMenu,
-} from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { fmtAgo, fmtClockDuration, fmtNumber, fmtSpan } from "@/lib/format";
 import { m } from "@/paraglide/messages";
 import { levelLabel } from "@/sections/Devices/access";
@@ -31,7 +31,7 @@ import { levelLabel } from "@/sections/Devices/access";
  * running without a stream. The shapes are shared by the box's rows and a seat's (`index.tsx`).
  */
 
-/** The row frame: who, what, the facts line, then at most two actions (R6). */
+/** The row frame: who, what, the facts line, then its actions. Rows rise in one after another. */
 const Frame: FC<{
 	lead: ReactNode;
 	title: ReactNode;
@@ -39,7 +39,10 @@ const Frame: FC<{
 	details?: ReactNode;
 	actions: ReactNode;
 }> = ({ lead, title, facts, details, actions }) => (
-	<li className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+	<motion.li
+		variants={ROW}
+		className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"
+	>
 		<div className="flex h-8 w-8 shrink-0 items-center justify-center">
 			{lead}
 		</div>
@@ -49,7 +52,7 @@ const Frame: FC<{
 			{details}
 		</div>
 		<div className="flex shrink-0 items-center gap-1">{actions}</div>
-	</li>
+	</motion.li>
 );
 
 /** A row button's words: a phone keeps the icon and leaves the width to the row. */
@@ -231,35 +234,29 @@ export const SessionRowView: FC<
 			}
 			actions={
 				<>
-					<Button
-						variant="destructive"
-						size="sm"
-						disabled={busy || (!end && !perSession)}
-						onClick={end ? end.onEnd : () => onStop(row)}
-					>
-						<ZapOff className="size-3.5" />
-						<Label>{end ? end.label : m.action_stop_session()}</Label>
-					</Button>
-					<RowMenu label={m.common_more_actions()} disabled={!perSession}>
-						<MenuItem disabled={busy} onSelect={() => onIdr(row)}>
-							{m.action_request_idr()}
-						</MenuItem>
-						{nativeLanes && (
-							<MenuItem
-								disabled={busy}
-								onSelect={() => onMute(row, !row.muted)}
-							>
-								{row.muted ? m.action_unmute() : m.action_mute()}
-							</MenuItem>
-						)}
-						{(row.access_level || nativeLanes) && <MenuSeparator />}
-						{row.access_level && (
-							<MenuChoice
-								label={m.access_level_label()}
-								value={row.access_level}
-								disabled={busy}
-								onChange={(level) => onAccess(row, level)}
-								options={[
+					<RowActions
+						disabled={!perSession}
+						labelsFrom="xl"
+						actions={[
+							{
+								label: m.action_request_idr(),
+								icon: <ImageUp />,
+								disabled: busy,
+								onSelect: () => onIdr(row),
+							},
+							nativeLanes && {
+								label: row.muted ? m.action_unmute() : m.action_mute(),
+								icon: row.muted ? <Volume2 /> : <VolumeX />,
+								disabled: busy,
+								onSelect: () => onMute(row, !row.muted),
+							},
+							row.access_level && {
+								kind: "choice",
+								label: m.access_level_label(),
+								value: row.access_level,
+								disabled: busy,
+								onChange: (level) => onAccess(row, level),
+								options: [
 									{ value: "full", label: m.access_level_full() },
 									{ value: "controller", label: m.access_level_controller() },
 									{ value: "view", label: m.access_level_view() },
@@ -273,28 +270,35 @@ export const SessionRowView: FC<
 												},
 											]
 										: []),
-								]}
-							/>
-						)}
-						{/* Four, not the host's sixteen slots: local co-op seats four. */}
-						{nativeLanes && (
-							<MenuChoice
-								label={m.sessions_player()}
-								value={row.preferred_pad_slot?.toString() ?? AUTO_PLAYER}
-								disabled={busy}
-								onChange={(v) =>
-									onPlayer(row, v === AUTO_PLAYER ? null : Number(v))
-								}
-								options={[
+								],
+							},
+							// Four, not the host's sixteen slots: local co-op seats four.
+							nativeLanes && {
+								kind: "choice",
+								label: m.sessions_player(),
+								value: row.preferred_pad_slot?.toString() ?? AUTO_PLAYER,
+								disabled: busy,
+								onChange: (v) =>
+									onPlayer(row, v === AUTO_PLAYER ? null : Number(v)),
+								options: [
 									{ value: AUTO_PLAYER, label: m.sessions_player_auto() },
 									...[0, 1, 2, 3].map((slot) => ({
 										value: slot.toString(),
 										label: m.sessions_player_n({ n: slot + 1 }),
 									})),
-								]}
-							/>
-						)}
-					</RowMenu>
+								],
+							},
+						]}
+					/>
+					<Button
+						variant="destructive"
+						size="sm"
+						disabled={busy || (!end && !perSession)}
+						onClick={end ? end.onEnd : () => onStop(row)}
+					>
+						<ZapOff className="size-3.5" />
+						<Label>{end ? end.label : m.action_stop_session()}</Label>
+					</Button>
 				</>
 			}
 		/>

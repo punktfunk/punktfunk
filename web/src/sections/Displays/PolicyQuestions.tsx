@@ -1,6 +1,7 @@
 // The display questions, asked one way: Customise asks them of the host, a device's sheet asks
 // them of one device with **Follow host** first. Only the axes the host acts on are asked
 // (`enforced` / `client_enforced`), so a question here always does something.
+import { motion } from "motion/react";
 import { type FC, type ReactNode, useState } from "react";
 import type {
 	GameSession,
@@ -9,6 +10,7 @@ import type {
 	ModeConflict,
 	Topology,
 } from "@/api/gen/model";
+import { Stagger } from "@/components/stagger";
 import { Input } from "@/components/ui/input";
 import { InputNumber } from "@/components/ui/input-number";
 import { Segmented } from "@/components/ui/segmented";
@@ -70,16 +72,19 @@ const gameSessionLabel = (v: string): string =>
 		? m.display_game_session_dedicated()
 		: m.display_game_session_auto();
 
+/** One question after another as the dialog opens. */
+const QUESTION = { from: { opacity: 0, y: 8 }, enter: { opacity: 1, y: 0 } };
+
 const Question: FC<{ label: string; help?: string; children: ReactNode }> = ({
 	label,
 	help,
 	children,
 }) => (
-	<fieldset className="space-y-2">
+	<motion.fieldset variants={QUESTION} className="space-y-2">
 		<legend className="text-sm font-medium">{label}</legend>
 		<div className="flex flex-wrap items-center gap-2">{children}</div>
 		{help && <p className="text-xs text-muted-foreground">{help}</p>}
-	</fieldset>
+	</motion.fieldset>
 );
 
 export const PolicyQuestions: FC<{
@@ -91,7 +96,9 @@ export const PolicyQuestions: FC<{
 	/** A device's sheet: the host's answers, each offered first as **Follow host**. */
 	inherited?: PolicyValues;
 	busy?: boolean;
-}> = ({ value, axes, onSet, inherited, busy }) => {
+	/** Shown last, in the same stagger: Customise's sentence. */
+	footer?: ReactNode;
+}> = ({ value, axes, onSet, inherited, busy, footer }) => {
 	const keep = value.keep_alive;
 	// Kept across Off / Keep so switching back restores the operator's number.
 	const [seconds, setSeconds] = useState(
@@ -135,7 +142,7 @@ export const PolicyQuestions: FC<{
 	);
 
 	return (
-		<div className="space-y-5">
+		<Stagger className="space-y-5">
 			{axes.includes("keep_alive") && (
 				<Question label={m.display_q_keep()}>
 					<Segmented<string>
@@ -258,6 +265,7 @@ export const PolicyQuestions: FC<{
 					/>
 				</Question>
 			)}
-		</div>
+			{footer && <motion.div variants={QUESTION}>{footer}</motion.div>}
+		</Stagger>
 	);
 };

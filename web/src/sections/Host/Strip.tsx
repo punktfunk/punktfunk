@@ -9,7 +9,7 @@ import { OsIcon } from "@/components/os-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { MenuItem, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { m } from "@/paraglide/messages";
 import { CopyRow } from "./CopyRow";
 import { actionTitle, ConfirmDialog } from "./PowerCard";
@@ -59,18 +59,15 @@ export const HostStrip: FC<{
 							</Button>
 						)}
 						{list.length > 0 && (
-							<RowMenu label={m.host_power_menu()}>
-								{list.map((a) => (
-									<MenuItem
-										key={a.id}
-										destructive={a.danger}
-										disabled={!a.available}
-										onSelect={() => setConfirming(a)}
-									>
-										{actionTitle(a)}
-									</MenuItem>
-								))}
-							</RowMenu>
+							<RowActions
+								label={m.host_power_menu()}
+								actions={list.map((a) => ({
+									label: actionTitle(a),
+									destructive: a.danger,
+									disabled: !a.available,
+									onSelect: () => setConfirming(a),
+								}))}
+							/>
 						)}
 					</div>
 				</div>

@@ -20,7 +20,7 @@ import { DocsLink } from "@/components/docs-link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import {
 	Select,
 	SelectContent,
@@ -199,29 +199,25 @@ export const LogsCard: FC<{
 							{follow ? m.logs_pause() : m.logs_follow()}
 						</span>
 					</Button>
-					<RowMenu label={m.common_more_actions()}>
-						<MenuItem
-							disabled={matched.length === 0}
-							onSelect={() => onDownload(matched)}
-						>
-							<Download />
-							{m.logs_download()}
-						</MenuItem>
-						{shareMode && (
-							<MenuItem
-								disabled={matched.length === 0}
-								onSelect={() => onShare(matched)}
-							>
-								{shareMode === "share" ? <Share2 /> : <Copy />}
-								{shareLabel}
-							</MenuItem>
-						)}
-						<MenuSeparator />
-						<MenuItem onSelect={onClear}>
-							<Trash2 />
-							{m.logs_clear()}
-						</MenuItem>
-					</RowMenu>
+					<RowActions
+						actions={[
+							{
+								label: m.logs_download(),
+								icon: <Download />,
+								iconOnly: true,
+								disabled: matched.length === 0,
+								onSelect: () => onDownload(matched),
+							},
+							shareMode && {
+								label: shareLabel,
+								icon: shareMode === "share" ? <Share2 /> : <Copy />,
+								iconOnly: true,
+								disabled: matched.length === 0,
+								onSelect: () => onShare(matched),
+							},
+							{ label: m.logs_clear(), icon: <Trash2 />, onSelect: onClear },
+						]}
+					/>
 				</div>
 
 				<div className="flex flex-wrap items-center gap-2">

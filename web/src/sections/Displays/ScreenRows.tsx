@@ -2,6 +2,7 @@
 // draws; the rows act. A monitor row carries its own settings (stream it, stays on); a streamed
 // row carries its state and **Release**, which has no other home.
 import { Monitor, MonitorPlay, Settings2 } from "lucide-react";
+import { motion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import type {
 	ApiDisplayInfo,
@@ -9,6 +10,7 @@ import type {
 	DisplayPolicy,
 	EffectivePolicy,
 } from "@/api/gen/model";
+import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
@@ -90,7 +92,7 @@ export const ScreenRows: FC<{
 						{m.display_map_empty()}
 					</p>
 				) : (
-					<ul className="divide-y">
+					<motion.ul {...staggerProps(ROW_GAP)} className="divide-y">
 						{danglingPin && (
 							<Row
 								icon={<Monitor className="size-4" />}
@@ -207,7 +209,7 @@ export const ScreenRows: FC<{
 								}
 							/>
 						))}
-					</ul>
+					</motion.ul>
 				)}
 			</CardContent>
 		</Card>
@@ -221,7 +223,10 @@ const Row: FC<{
 	badges?: ReactNode;
 	actions?: ReactNode;
 }> = ({ icon, title, detail, badges, actions }) => (
-	<li className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
+	<motion.li
+		variants={ROW}
+		className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3"
+	>
 		<span className="text-muted-foreground">{icon}</span>
 		<div className="min-w-0 flex-1 basis-48">
 			<div className="flex flex-wrap items-center gap-2 font-medium">
@@ -231,5 +236,5 @@ const Row: FC<{
 			<div className="truncate text-xs text-muted-foreground">{detail}</div>
 		</div>
 		<div className="flex flex-wrap items-center gap-2">{actions}</div>
-	</li>
+	</motion.li>
 );

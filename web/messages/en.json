@@ -736,7 +736,6 @@
 	"store_stopped": "Not running",
 	"store_version_unknown": "version unknown",
 	"store_uninstall": "Uninstall",
-	"store_open_page": "Open its page",
 	"store_uninstall_confirm": "Uninstall {title}?",
 	"store_uninstall_body": "You can install it again from the catalog.",
 	"store_uninstall_failed": "Couldn't start the removal",

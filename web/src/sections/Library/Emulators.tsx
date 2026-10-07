@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { ChevronDown, Cpu, Download } from "lucide-react";
+import { ChevronDown, Cpu, Download, FolderSearch, Trash2 } from "lucide-react";
 import { type FC, type FormEvent, useState } from "react";
 import {
 	getGetEmulatorsQueryKey,
@@ -10,9 +10,10 @@ import {
 	useRemoveEmulator,
 } from "@/api/gen/emulators/emulators";
 import type { EmulatorStatus } from "@/api/gen/model/emulatorStatus";
+import { ROW_GAP, Stagger } from "@/components/stagger";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { SourceGroup, SourceItem } from "./AddSource";
@@ -104,7 +105,7 @@ export const EmulatorsCard: FC = () => {
 			title={m.emulators_title()}
 			description={m.emulators_description()}
 		>
-			<div className="divide-y">
+			<Stagger gap={ROW_GAP} className="divide-y">
 				{shown.map((e) => (
 					<SourceItem
 						key={e.id}
@@ -124,35 +125,32 @@ export const EmulatorsCard: FC = () => {
 										{m.emulators_install()}
 									</Button>
 								)}
-								<RowMenu label={m.common_more_actions()} disabled={busy}>
-									{here(e) && e.offered && (
-										<MenuItem onSelect={() => install.mutate({ id: e.id })}>
-											{e.managed
-												? m.emulators_reinstall()
-												: m.emulators_install()}
-										</MenuItem>
-									)}
-									<MenuItem
-										onSelect={() =>
-											setAdopting(adopting === e.id ? undefined : e.id)
-										}
-									>
-										{m.emulators_adopt()}
-									</MenuItem>
-									{e.managed && (
-										<>
-											<MenuSeparator />
-											<MenuItem
-												destructive
-												onSelect={() =>
-													remove.mutate({ id: e.id, data: { purge: false } })
-												}
-											>
-												{m.emulators_remove()}
-											</MenuItem>
-										</>
-									)}
-								</RowMenu>
+								<RowActions
+									disabled={busy}
+									actions={[
+										here(e) &&
+											e.offered && {
+												label: e.managed
+													? m.emulators_reinstall()
+													: m.emulators_install(),
+												icon: <Download />,
+												onSelect: () => install.mutate({ id: e.id }),
+											},
+										{
+											label: m.emulators_adopt(),
+											icon: <FolderSearch />,
+											onSelect: () =>
+												setAdopting(adopting === e.id ? undefined : e.id),
+										},
+										e.managed && {
+											label: m.emulators_remove(),
+											icon: <Trash2 />,
+											destructive: true,
+											onSelect: () =>
+												remove.mutate({ id: e.id, data: { purge: false } }),
+										},
+									]}
+								/>
 							</>
 						}
 					>
@@ -169,7 +167,7 @@ export const EmulatorsCard: FC = () => {
 						)}
 					</SourceItem>
 				))}
-			</div>
+			</Stagger>
 			{present.length > 0 && absent.length > 0 && (
 				<Button
 					variant="ghost"

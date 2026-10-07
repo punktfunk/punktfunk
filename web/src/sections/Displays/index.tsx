@@ -38,7 +38,7 @@ import { DocsLink } from "@/components/docs-link";
 import { QueryState } from "@/components/query-state";
 import { Stagger } from "@/components/stagger";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
-import { MenuItem, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { apiErrorMessage } from "@/lib/errors";
 import { useLocale } from "@/lib/i18n";
 import { m } from "@/paraglide/messages";
@@ -221,14 +221,15 @@ export const SectionDisplays: FC = () => {
 					<DocsLink path="virtual-displays" className="text-sm" />
 					{kept.length > 0 && (
 						<div className="ml-auto">
-							<RowMenu
-								label={m.common_more_actions()}
+							<RowActions
 								disabled={release.isPending}
-							>
-								<MenuItem onSelect={() => doRelease()}>
-									{m.display_release_all()}
-								</MenuItem>
-							</RowMenu>
+								actions={[
+									{
+										label: m.display_release_all(),
+										onSelect: () => doRelease(),
+									},
+								]}
+							/>
 						</div>
 					)}
 				</div>

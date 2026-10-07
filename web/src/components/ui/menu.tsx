@@ -1,10 +1,19 @@
-// A row's ⋯: a row shows at most two actions, the rest live here (design/web-console-structure-
-// 2026-10.md R6). Radix's dropdown menu in the console's tokens, like the Select wrapper.
+// A row's actions: buttons in the row on a wide screen, folded into ⋯ on a phone. Radix's
+// dropdown menu in the console's tokens, like the Select wrapper.
 import { Check, ChevronRight, MoreHorizontal } from "lucide-react";
 import { DropdownMenu as M } from "radix-ui";
-import type { ComponentProps, FC, ReactNode } from "react";
+import { type ComponentProps, type FC, Fragment, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { m } from "@/paraglide/messages";
 
 const CONTENT =
 	"z-50 min-w-48 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0";
@@ -111,3 +120,177 @@ export const MenuCheck: FC<{
 		{children}
 	</M.CheckboxItem>
 );
+
+type Choice = { value: string; label: string; disabled?: boolean };
+
+/** One thing a row can do: a button, an on/off setting, or one of a few values. */
+export type RowAction =
+	| {
+			kind?: "action";
+			label: string;
+			onSelect: () => void;
+			icon?: ReactNode;
+			/** In the row as its icon alone, named by its tooltip: for a dense row. */
+			iconOnly?: boolean;
+			destructive?: boolean;
+			disabled?: boolean;
+	  }
+	| {
+			kind: "check";
+			label: string;
+			checked: boolean;
+			onChange: (checked: boolean) => void;
+			hint?: string;
+			disabled?: boolean;
+	  }
+	| {
+			kind: "choice";
+			label: string;
+			value: string;
+			options: Choice[];
+			onChange: (value: string) => void;
+			disabled?: boolean;
+	  };
+
+/**
+ * A row's actions, listed once: buttons in the row from `md` up, the same list in ⋯ below it. A
+ * lone action stays a button at every width. Falsy entries are skipped, so a caller writes each
+ * action's condition in place. A destructive action gets a separator above it in the menu.
+ * `labelsFrom="xl"` shows an action's icon alone until `xl`, for a row with four of them.
+ */
+export const RowActions: FC<{
+	actions: (RowAction | false | null | undefined | "")[];
+	label?: string;
+	disabled?: boolean;
+	labelsFrom?: "xl";
+}> = ({ actions, label = m.common_more_actions(), disabled, labelsFrom }) => {
+	const list = actions.filter((a): a is RowAction => !!a);
+	if (list.length === 0) return null;
+	const inline = list.map((a) => (
+		<InlineAction
+			key={a.label}
+			action={a}
+			disabled={disabled}
+			short={labelsFrom === "xl"}
+		/>
+	));
+	if (list.length === 1)
+		return <div className="flex items-center gap-1">{inline}</div>;
+	const danger = list.findIndex((a) => isAction(a) && a.destructive);
+	return (
+		<>
+			<div className="hidden items-center gap-1 md:flex">{inline}</div>
+			<div className="md:hidden">
+				<RowMenu label={label} disabled={disabled}>
+					{list.map((a, i) => (
+						<Fragment key={a.label}>
+							{i === danger && i > 0 && <MenuSeparator />}
+							<MenuAction action={a} />
+						</Fragment>
+					))}
+				</RowMenu>
+			</div>
+		</>
+	);
+};
+
+const isAction = (
+	a: RowAction,
+): a is Extract<RowAction, { onSelect: () => void }> =>
+	(a.kind ?? "action") === "action";
+
+const InlineAction: FC<{
+	action: RowAction;
+	disabled?: boolean;
+	/** The label shows from `xl`; the icon carries it below. */
+	short?: boolean;
+}> = ({ action: a, disabled, short }) => {
+	if (a.kind === "check")
+		return (
+			// biome-ignore lint/a11y/noLabelWithoutControl: the Checkbox inside is the control.
+			<label className="flex items-center gap-2 px-2 text-sm" title={a.hint}>
+				<Checkbox
+					checked={a.checked}
+					disabled={disabled || a.disabled}
+					onCheckedChange={(v) => a.onChange(v === true)}
+				/>
+				{a.label}
+			</label>
+		);
+	if (a.kind === "choice")
+		return (
+			<Select
+				value={a.value}
+				disabled={disabled || a.disabled}
+				onValueChange={a.onChange}
+			>
+				<SelectTrigger
+					aria-label={a.label}
+					title={a.label}
+					className="h-8 w-auto gap-1 text-sm"
+				>
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					{a.options.map((o) => (
+						<SelectItem key={o.value} value={o.value} disabled={o.disabled}>
+							{o.label}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+		);
+	const named = a.iconOnly || (short && a.icon);
+	return (
+		<Button
+			variant="ghost"
+			size={a.iconOnly ? "icon" : "sm"}
+			aria-label={named ? a.label : undefined}
+			title={named ? a.label : undefined}
+			disabled={disabled || a.disabled}
+			className={cn(a.destructive && "text-destructive hover:text-destructive")}
+			onClick={a.onSelect}
+		>
+			{a.icon}
+			{!a.iconOnly &&
+				(short && a.icon ? (
+					<span className="hidden xl:inline">{a.label}</span>
+				) : (
+					a.label
+				))}
+		</Button>
+	);
+};
+
+const MenuAction: FC<{ action: RowAction }> = ({ action: a }) => {
+	if (a.kind === "check")
+		return (
+			<MenuCheck
+				checked={a.checked}
+				disabled={a.disabled}
+				onChange={a.onChange}
+			>
+				<span title={a.hint}>{a.label}</span>
+			</MenuCheck>
+		);
+	if (a.kind === "choice")
+		return (
+			<MenuChoice
+				label={a.label}
+				value={a.value}
+				options={a.options}
+				disabled={a.disabled}
+				onChange={a.onChange}
+			/>
+		);
+	return (
+		<MenuItem
+			destructive={a.destructive}
+			disabled={a.disabled}
+			onSelect={a.onSelect}
+		>
+			{a.icon}
+			{a.label}
+		</MenuItem>
+	);
+};

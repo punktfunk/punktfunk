@@ -2,6 +2,7 @@
 // policy — the seat contract (one virtual screen, never a real monitor) is the one line above
 // the rows — so a row is state, not settings. Absent while no seat has a desktop of its own (R9).
 import { useQueryClient } from "@tanstack/react-query";
+import { motion } from "motion/react";
 import type { FC } from "react";
 import { useGetDisplayState } from "@/api/gen/display/display";
 import { useGetHostInfo } from "@/api/gen/host/host";
@@ -9,6 +10,7 @@ import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import { useListProfiles } from "@/api/gen/profiles/profiles";
 import { isFullSeat, seatClient } from "@/api/seat";
 import { ProfileAvatar } from "@/components/profile-avatar";
+import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { m } from "@/paraglide/messages";
 
@@ -31,11 +33,11 @@ export const OtherDesktops: FC = () => {
 				<p className="text-sm text-muted-foreground">
 					{m.display_seats_contract({ owner })}
 				</p>
-				<ul className="divide-y">
+				<motion.ul {...staggerProps(ROW_GAP)} className="divide-y">
 					{seats.map((p) => (
 						<DesktopRow key={p.id} profile={p} />
 					))}
-				</ul>
+				</motion.ul>
 			</CardContent>
 		</Card>
 	);
@@ -69,7 +71,10 @@ const DesktopRow: FC<{ profile: ProfileAdmin }> = ({ profile }) => {
 		? state.data?.displays?.find((d) => d.state === "active")?.mode
 		: undefined;
 	return (
-		<li className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3">
+		<motion.li
+			variants={ROW}
+			className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3"
+		>
 			<ProfileAvatar profile={profile} className="size-7 text-xs" />
 			<div className="min-w-0 flex-1 basis-40">
 				<div className="truncate font-medium">
@@ -82,6 +87,6 @@ const DesktopRow: FC<{ profile: ProfileAdmin }> = ({ profile }) => {
 			<span className="text-sm text-muted-foreground">
 				{seatState(profile)}
 			</span>
-		</li>
+		</motion.li>
 	);
 };

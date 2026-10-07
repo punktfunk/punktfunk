@@ -1,6 +1,8 @@
 import Section from "@unom/ui/section";
+import { motion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import { QueryState } from "@/components/query-state";
+import { ROW_GAP, staggerProps } from "@/components/stagger";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
@@ -27,7 +29,9 @@ export const DevicesView: FC<{
 				<CardContent className="space-y-5">
 					{waiting.length > 0 && (
 						<Group label={m.pairing_pending_title()}>
-							<ul className="divide-y">{waiting}</ul>
+							<motion.ul {...staggerProps(ROW_GAP)} className="divide-y">
+								{waiting}
+							</motion.ul>
 						</Group>
 					)}
 					<Group label={m.pairing_native_devices()}>
@@ -41,7 +45,9 @@ export const DevicesView: FC<{
 									{m.pairing_native_empty()}
 								</p>
 							) : (
-								<ul className="divide-y">{paired}</ul>
+								<motion.ul {...staggerProps(ROW_GAP)} className="divide-y">
+									{paired}
+								</motion.ul>
 							)}
 						</QueryState>
 					</Group>

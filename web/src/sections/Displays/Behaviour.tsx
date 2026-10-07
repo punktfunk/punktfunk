@@ -6,13 +6,15 @@
 //
 // One persistence model: every pick saves. The host applies at the next connect either way.
 
-import { Plus } from "lucide-react";
+import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { motion } from "motion/react";
 import type { FC } from "react";
 import type {
 	CustomPreset,
 	DisplayPolicy,
 	EffectivePolicy,
 } from "@/api/gen/model";
+import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import {
 	Dialog,
@@ -20,7 +22,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { describePolicy } from "./describePolicy";
@@ -85,7 +87,7 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 		onBlur: () => onPreview?.(undefined),
 	});
 	return (
-		<div className="flex flex-wrap items-center gap-2">
+		<Stagger gap={ROW_GAP} className="flex flex-wrap items-center gap-2">
 			{PRESET_ORDER.map((id) => {
 				const p = presets.find((x) => x.id === id);
 				if (!p) return null;
@@ -120,18 +122,30 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 					>
 						{p.name}
 					</Pill>
-					<RowMenu label={m.common_more_actions()} disabled={busy}>
-						<MenuItem onSelect={() => onRenamePreset(p)}>
-							{m.display_preset_edit()}
-						</MenuItem>
-						<MenuItem onSelect={() => onUpdatePreset(p)}>
-							{m.display_preset_update()}
-						</MenuItem>
-						<MenuSeparator />
-						<MenuItem destructive onSelect={() => onDeletePreset(p)}>
-							{m.display_preset_delete()}
-						</MenuItem>
-					</RowMenu>
+					<RowActions
+						disabled={busy}
+						actions={[
+							{
+								label: m.display_preset_edit(),
+								icon: <Pencil />,
+								iconOnly: true,
+								onSelect: () => onRenamePreset(p),
+							},
+							{
+								label: m.display_preset_update(),
+								icon: <RefreshCw />,
+								iconOnly: true,
+								onSelect: () => onUpdatePreset(p),
+							},
+							{
+								label: m.display_preset_delete(),
+								icon: <Trash2 />,
+								iconOnly: true,
+								destructive: true,
+								onSelect: () => onDeletePreset(p),
+							},
+						]}
+					/>
 				</span>
 			))}
 			<Pill
@@ -142,20 +156,22 @@ export const BehaviourPicker: FC<BehaviourPickerProps> = ({
 			>
 				{m.display_customise()}
 			</Pill>
-			<Button
-				variant="ghost"
-				size="sm"
-				className="ml-auto"
-				disabled={busy}
-				onClick={onSavePreset}
-			>
-				<Plus className="size-4" />
-				{m.display_preset_save_as()}
-			</Button>
-		</div>
+			<motion.span variants={ROW} className="ml-auto">
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={busy}
+					onClick={onSavePreset}
+				>
+					<Plus className="size-4" />
+					{m.display_preset_save_as()}
+				</Button>
+			</motion.span>
+		</Stagger>
 	);
 };
 
+/** One preset; the pills come in one after another, like the cards they replaced. */
 const Pill: FC<ButtonProps & { selected: boolean; busy?: boolean }> = ({
 	selected,
 	busy,
@@ -163,16 +179,18 @@ const Pill: FC<ButtonProps & { selected: boolean; busy?: boolean }> = ({
 	children,
 	...props
 }) => (
-	<Button
-		size="sm"
-		variant="outline"
-		aria-pressed={selected}
-		disabled={busy}
-		className={cn(selected && "ring-2 ring-primary", className)}
-		{...props}
-	>
-		{children}
-	</Button>
+	<motion.span variants={ROW} className="inline-flex">
+		<Button
+			size="sm"
+			variant="outline"
+			aria-pressed={selected}
+			disabled={busy}
+			className={cn(selected && "ring-2 ring-primary", className)}
+			{...props}
+		>
+			{children}
+		</Button>
+	</motion.span>
 );
 
 /** The questions, in the one place on this page that asks for attention. */
@@ -217,12 +235,14 @@ export const CustomiseDialog: FC<{
 					axes={HOST_AXES.filter((a) => enforced.includes(a))}
 					onSet={set}
 					busy={busy}
+					// Updates on every change: a mid-edit policy cannot touch a live session, and
+					// the answer is on screen before the next connect.
+					footer={
+						<p className="rounded-md border bg-muted/40 p-3 text-sm">
+							{describePolicy(effective, { gameSession: policy.game_session })}
+						</p>
+					}
 				/>
-				{/* Updates on every change: a mid-edit policy cannot touch a live session, and the
-				    answer is on screen before the next connect. */}
-				<p className="rounded-md border bg-muted/40 p-3 text-sm">
-					{describePolicy(effective, { gameSession: policy.game_session })}
-				</p>
 				<div className="flex justify-end border-t pt-4">
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
 						{m.common_done()}

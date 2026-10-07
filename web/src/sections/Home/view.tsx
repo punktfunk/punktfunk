@@ -1,7 +1,9 @@
 import Section from "@unom/ui/section";
+import { motion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import type { RuntimeStatus } from "@/api/gen/model/runtimeStatus";
 import { QueryState } from "@/components/query-state";
+import { ROW_GAP, staggerProps } from "@/components/stagger";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Loadable } from "@/lib/query";
 import { m } from "@/paraglide/messages";
@@ -35,7 +37,17 @@ export const HomeView: FC<{
 						error={status.error}
 						refetch={status.refetch}
 					>
-						{live ? <ul className="flex flex-col divide-y">{now}</ul> : last}
+						{/* Rows mount once /status answers: their own container staggers them. */}
+						{live ? (
+							<motion.ul
+								{...staggerProps(ROW_GAP)}
+								className="flex flex-col divide-y"
+							>
+								{now}
+							</motion.ul>
+						) : (
+							last
+						)}
 					</QueryState>
 				</CardContent>
 			</Card>

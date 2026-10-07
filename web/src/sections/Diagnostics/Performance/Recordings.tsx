@@ -14,7 +14,7 @@ import { QueryState } from "@/components/query-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MenuItem, MenuSeparator, RowMenu } from "@/components/ui/menu";
+import { RowActions } from "@/components/ui/menu";
 import {
 	RowDetails,
 	Table,
@@ -161,7 +161,7 @@ export const RecordingsCard: FC<{
 									<TableHead className={cn(WIDE, "text-right")}>
 										{m.stats_col_samples()}
 									</TableHead>
-									<TableHead className="w-24" />
+									<TableHead className="w-24 md:w-32" />
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -233,21 +233,24 @@ export const RecordingsCard: FC<{
 												>
 													<Eye className="size-4" />
 												</Button>
-												<RowMenu label={m.common_more_actions()}>
-													<MenuItem onSelect={() => onDownload(r.id)}>
-														<Download />
-														{m.stats_download()}
-													</MenuItem>
-													<MenuSeparator />
-													<MenuItem
-														destructive
-														disabled={isDeleting}
-														onSelect={() => onDelete(r.id)}
-													>
-														<Trash2 />
-														{m.stats_delete()}
-													</MenuItem>
-												</RowMenu>
+												<RowActions
+													actions={[
+														{
+															label: m.stats_download(),
+															icon: <Download />,
+															iconOnly: true,
+															onSelect: () => onDownload(r.id),
+														},
+														{
+															label: m.stats_delete(),
+															icon: <Trash2 />,
+															iconOnly: true,
+															destructive: true,
+															disabled: isDeleting,
+															onSelect: () => onDelete(r.id),
+														},
+													]}
+												/>
 											</div>
 										</TableCell>
 									</TableRow>
