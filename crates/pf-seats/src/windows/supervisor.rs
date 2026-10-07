@@ -456,7 +456,8 @@ fn run_cycle(
             .open_child_dir("temp")
             .and_then(|temp| temp.open_child_dir(seat.id.as_str()))
             .map_err(|error| io_error("seat_root", "open per-seat temporary root", error))?;
-        let environment = process::seat_environment(host_root.path(), seat, steam.as_deref())?;
+        let environment =
+            process::seat_environment(host_root.path(), seat, steam.as_deref(), true)?;
         let workdir = host_path.parent().ok_or_else(|| {
             backend_error(
                 "host_missing",
@@ -469,13 +470,15 @@ fn run_cycle(
             .map_err(|error| io_error("seat_log", "resolve the seat log", error))?;
 
         if !*quality_done {
+            let gate_environment =
+                process::seat_environment(host_root.path(), seat, steam.as_deref(), false)?;
             run_quality_gate(
                 runtime,
                 &keeper,
                 session.id,
                 host_path,
                 workdir,
-                &environment,
+                &gate_environment,
                 &temp_root,
                 seat,
                 &log,

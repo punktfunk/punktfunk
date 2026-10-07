@@ -436,10 +436,13 @@ fn session_system_token(session_id: u32) -> WinResult<OwnedHandle> {
 }
 
 /// `steam` is the seat's own `steam.exe` ([`super::steam::seat_exe`]), set when the box has Steam.
+/// `isolate` false extends the virtual display instead: the quality gate exits inside its linger,
+/// so an isolate it made is never restored and leaves the session with no lit display.
 pub(super) fn seat_environment(
     host_root: &Path,
     seat: &Seat,
     steam: Option<&Path>,
+    isolate: bool,
 ) -> WinResult<Vec<u16>> {
     let mut entries: BTreeMap<String, OsString> = BTreeMap::new();
     for name in [
@@ -504,6 +507,9 @@ pub(super) fn seat_environment(
     }
     if let Some(exe) = steam {
         entries.insert("PUNKTFUNK_SEAT_STEAM".into(), exe.as_os_str().to_owned());
+    }
+    if !isolate {
+        entries.insert("PUNKTFUNK_NO_ISOLATE".into(), OsString::from("1"));
     }
     let mut block = Vec::new();
     for (name, value) in entries {
