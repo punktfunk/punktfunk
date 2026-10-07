@@ -3,6 +3,7 @@ import { useGetStatus } from "@/api/gen/host/host";
 import type { AudioWiring } from "@/api/gen/model/audioWiring";
 import { Badge } from "@/components/ui/badge";
 import { m } from "@/paraglide/messages";
+import { Facts } from "./Strip";
 
 /** Windows hosts report which endpoints carry game audio and the microphone; others report none. */
 export const AudioWiringSection: FC = () => {
@@ -34,20 +35,23 @@ export const AudioWiringFacts: FC<{ audio: AudioWiring }> = ({ audio }) => {
 		audio.narrowing,
 	].filter((n): n is string => !!n);
 	return (
-		<div className="space-y-1.5">
-			<p className="flex items-center gap-2 text-muted-foreground">
-				{m.audio_wiring_title()}
-				<Badge variant={badge.variant}>{badge.text}</Badge>
-			</p>
-			<p>
+		<Facts
+			label={
+				<span className="inline-flex items-center gap-2">
+					{m.audio_wiring_title()}
+					<Badge variant={badge.variant}>{badge.text}</Badge>
+				</span>
+			}
+		>
+			<span className="text-sm font-medium">
 				{m.audio_output()}: {audio.loopback ?? m.audio_unavailable()} ·{" "}
 				{m.audio_microphone()}: {audio.mic ?? m.audio_unavailable()}
-			</p>
+			</span>
 			{notes.map((n) => (
-				<p key={n} className="text-xs text-muted-foreground">
+				<span key={n} className="basis-full text-xs text-muted-foreground">
 					{n}
-				</p>
+				</span>
 			))}
-		</div>
+		</Facts>
 	);
 };

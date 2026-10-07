@@ -3,6 +3,8 @@
 // The host sends every setting it acts on, in order; this page groups them, filters them, and
 // renders one row each. A setting that host.env or a command-line flag pins is shown locked with
 // its source named, never as a control that saves and does nothing.
+
+import { useNavigate } from "@tanstack/react-router";
 import Section from "@unom/ui/section";
 import { Lock, RotateCcw, Search } from "lucide-react";
 import {
@@ -190,11 +192,18 @@ export const HostSettingsView: FC<{
 	const active = groups.some((g) => g.group === tab)
 		? tab
 		: (groups[0]?.group ?? "");
+	const navigate = useNavigate();
 	const pick = (group: string) => {
 		setTab(group);
-		window.history.replaceState(window.history.state, "", `#${group}`);
+		navigate({
+			to: ".",
+			hash: group,
+			replace: true,
+			resetScroll: false,
+			hashScrollIntoView: false,
+		});
 	};
-	// On a phone the strip scrolls: keep the open tab in sight, a deep link's too.
+	// On a phone the strip scrolls: keep the open tab in sight. A deep link lands on the tabs.
 	const strip = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		if (!active) return;
@@ -202,9 +211,15 @@ export const HostSettingsView: FC<{
 			?.querySelector('[data-state="active"]')
 			?.scrollIntoView({ block: "nearest", inline: "nearest" });
 	}, [active]);
+	const linked = useRef(Boolean(window.location.hash));
+	useEffect(() => {
+		if (!linked.current || !active) return;
+		linked.current = false;
+		strip.current?.scrollIntoView({ block: "start" });
+	}, [active]);
 	// The tab names the group; a search stacks several, so then each card does.
 	const card = ({ group, rows }: (typeof groups)[number]) => (
-		<Card key={group} id={group}>
+		<Card key={group}>
 			<CardContent className="space-y-2">
 				{q && (
 					<CardTitle>
@@ -304,7 +319,13 @@ export const HostSettingsView: FC<{
 								</TabsList>
 							</div>
 							{groups.map((g) => (
-								<TabsContent key={g.group} value={g.group}>
+								// As tall as the viewport at least: a shorter panel would pull the page
+								// up when the strip sits at the top, and the tabs would jump.
+								<TabsContent
+									key={g.group}
+									value={g.group}
+									className="min-h-[calc(100dvh-9rem)]"
+								>
 									{/* A panel mounts after the page animated: it runs its own. */}
 									<Stagger root>{card(g)}</Stagger>
 								</TabsContent>

@@ -167,6 +167,7 @@
 	"host_os": "Betriebssystem",
 	"host_local_ip": "Lokale IP",
 	"host_version": "Version",
+	"host_gamestream_version": "GameStream-Version",
 	"host_abi": "ABI-Version",
 	"host_codecs": "Codecs",
 	"host_ports": "Ports",
