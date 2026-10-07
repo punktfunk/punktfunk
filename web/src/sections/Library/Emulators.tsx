@@ -129,17 +129,6 @@ export const EmulatorsCard: FC = () => {
 										{m.emulators_install()}
 									</Button>
 								)}
-
-								{!here(e) && e.offered && (
-									<Button
-										size="sm"
-										disabled={busy}
-										onClick={() => install.mutate({ id: e.id })}
-									>
-										<Download className="size-3.5" />
-										{m.emulators_install()}
-									</Button>
-								)}
 								<RowMenu label={m.common_more_actions()} disabled={busy}>
 									{here(e) && e.offered && (
 										<MenuItem onSelect={() => install.mutate({ id: e.id })}>
