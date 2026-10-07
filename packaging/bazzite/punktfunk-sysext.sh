@@ -216,6 +216,9 @@ post_merge() {
   for f in /usr/lib/sysctl.d/99-punktfunk-net.conf /usr/lib/sysctl.d/99-punktfunk-client-net.conf; do
     [ -f "$f" ] && sysctl -q -p "$f" 2>/dev/null || :
   done
+  # polkitd keeps the rules it read at boot and misses a merge swapping /usr under it, so a rule
+  # an update adds (the door switch's) refuses until reboot. Restarting it rereads them.
+  systemctl try-restart polkit.service 2>/dev/null || :
   # vhci-hcd: the usbip transport that makes the virtual Steam Deck pad a real USB device Steam
   # Input adopts. Without it the pad falls back to plain UHID hid-steam, which Steam Input won't
   # promote (Interface: -1) — so on a host in Game Mode the controller never appears and you can't
