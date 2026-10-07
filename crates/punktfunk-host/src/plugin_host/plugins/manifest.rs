@@ -70,12 +70,30 @@ pub struct PluginManifest {
     /// Whether it needs to reach the network at all.
     #[serde(default)]
     pub network: bool,
+    /// Windows registry keys it reads, `HKLM\…` or `HKCU\…`. An ACE per key once the plugin
+    /// runs in its own AppContainer; a Linux sandbox has nothing to bind for them.
+    #[serde(default)]
+    pub registry: Vec<String>,
     /// Templates the host may run, by name.
     #[serde(default)]
     pub exec: BTreeMap<String, ExecTemplate>,
 }
 
 impl PluginManifest {
+    /// Whether what it lists belongs to one account: a path under `~` or a key under `HKCU`.
+    /// Such a source answers for whoever the runner is, so a seat reading the box's catalog
+    /// leaves it out.
+    pub fn per_account(&self) -> bool {
+        self.reads
+            .iter()
+            .chain(self.writes.iter())
+            .any(|p| p == "~" || p.starts_with("~/") || p.starts_with("~\\"))
+            || self
+                .registry
+                .iter()
+                .any(|k| k.to_ascii_uppercase().starts_with("HKCU\\"))
+    }
+
     /// What the manifest itself declares: expanded `reads` + `writes`, without operator grants.
     pub fn declared_roots(&self) -> Vec<PathBuf> {
         self.reads
@@ -152,12 +170,31 @@ fn canonical_prefix(p: &Path) -> Option<PathBuf> {
     })
 }
 
-/// `~/x` under every home it may mean ([`plugin_homes`]); any other path as written.
+/// `~/x` under every home it may mean ([`plugin_homes`]); `%ProgramData%/x` and the other
+/// machine-wide Windows roots through their variable; any other path as written.
 fn expand_home(p: &str) -> Vec<PathBuf> {
-    match p.strip_prefix("~/") {
-        Some(rest) => plugin_homes().into_iter().map(|h| h.join(rest)).collect(),
-        None => vec![PathBuf::from(p)],
+    if let Some(rest) = p.strip_prefix("~/") {
+        return plugin_homes().into_iter().map(|h| h.join(rest)).collect();
     }
+    vec![expand_env_prefix(p)]
+}
+
+/// `%NAME%/rest` with the variable's value, when the name is one of the machine-wide roots a
+/// Windows launcher installs under. Anything else, or an unset variable, stays as written.
+fn expand_env_prefix(p: &str) -> PathBuf {
+    const ROOTS: [&str; 4] = [
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "SystemDrive",
+    ];
+    let expanded = p.strip_prefix('%').and_then(|after| {
+        let (name, rest) = after.split_once('%')?;
+        let name = ROOTS.iter().find(|r| r.eq_ignore_ascii_case(name))?;
+        let value = std::env::var(name).ok()?;
+        Some(format!("{value}{rest}"))
+    });
+    PathBuf::from(expanded.unwrap_or_else(|| p.to_string()))
 }
 
 /// The homes a manifest's `~` names. The Windows host is a service whose own profile is
@@ -485,6 +522,44 @@ mod manifest_tests {
         assert_eq!(m.root_of(&linked.join("snes/y.sfc")), Some(linked.clone()));
         assert_eq!(m.root_of(&roms.join("x.sfc")), Some(roms.clone()));
         assert_eq!(m.root_of(&root.join("home/u/other/y.sfc")), None);
+    }
+
+    #[test]
+    fn per_account_is_a_home_path_or_an_hkcu_key() {
+        assert!(!manifest(&["C:\\ProgramData\\Epic"]).per_account());
+        assert!(manifest(&["~/AppData/Local/itch"]).per_account());
+        let mut m = manifest(&["C:\\ProgramData\\Epic"]);
+        m.registry = vec!["HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam".into()];
+        assert!(!m.per_account());
+        m.registry.push("hkcu\\System\\GameConfigStore".into());
+        assert!(m.per_account(), "the hive is read case-insensitively");
+    }
+
+    #[test]
+    fn a_machine_root_variable_expands_only_when_it_is_one_of_the_known_roots() {
+        // `ProgramData` is unset off Windows; the one variable every test host carries is PATH,
+        // which is not a root, so both stay as written there.
+        assert_eq!(
+            expand_env_prefix("%PATH%/x"),
+            PathBuf::from("%PATH%/x"),
+            "only the launcher roots expand"
+        );
+        assert_eq!(
+            expand_env_prefix("%NoSuchRoot%/x"),
+            PathBuf::from("%NoSuchRoot%/x")
+        );
+        assert_eq!(expand_env_prefix("/plain"), PathBuf::from("/plain"));
+        if let Ok(pd) = std::env::var("ProgramData") {
+            assert_eq!(
+                expand_env_prefix("%ProgramData%/Epic"),
+                PathBuf::from(format!("{pd}/Epic"))
+            );
+            assert_eq!(
+                expand_env_prefix("%programdata%/Epic"),
+                PathBuf::from(format!("{pd}/Epic")),
+                "the name is case-insensitive, as the variable is"
+            );
+        }
     }
 
     #[test]

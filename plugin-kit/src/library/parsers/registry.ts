@@ -1,12 +1,13 @@
 // Windows registry reads by spawning `reg.exe query` — dependency-free, and (the part that
 // matters) it works from the scripting runner's LocalService account.
 //
-// **HKLM only, by design.** The runner runs as `NT AUTHORITY\LocalService` on Windows, which has no
-// user profile: HKCU is not the operator's hive there, it is LocalService's own — so a plugin that
-// read HKCU would silently see an empty registry rather than the user's launcher config. Every
-// launcher fact a scanner needs (Steam's InstallPath, GOG's game list) lives under HKLM
-// `WOW6432Node` anyway. Asking for HKCU is a bug, so this refuses it outright.
+// **HKLM always; HKCU only under a user's profile.** The box runner is `NT AUTHORITY\LocalService`,
+// whose HKCU is its own empty hive, not the operator's — a plugin reading it there would see no
+// launcher config and report nothing. A runner started as a signed-in user (a seat's) reads that
+// user's hive, which is what a per-account source declares in its manifest's `registry`. The
+// profile path tells the two apart, so an HKCU read is refused exactly where it would lie.
 import { spawnSync } from "node:child_process";
+import * as os from "node:os";
 
 /** One `reg.exe query` value row. */
 export interface RegValue {
@@ -17,10 +18,22 @@ export interface RegValue {
 }
 
 const HKLM = "HKLM\\";
+const HKCU = "HKCU\\";
 
-/** Is this a key path this module will touch? See the module docs on why HKLM only. */
-export const validRegKey = (key: string): boolean =>
-	key.startsWith(HKLM) &&
+/** A service account's home: `C:\Windows\ServiceProfiles\<name>` or `system32\config\systemprofile`. */
+export const underServiceProfile = (home: string): boolean =>
+	/\\(serviceprofiles|config\\systemprofile)(\\|$)/i.test(home);
+
+/**
+ * Is this a key path this module will touch? `HKLM\…` always; `HKCU\…` only when this process
+ * has a user's profile, since a service account's HKCU is nobody's launcher config.
+ */
+export const validRegKey = (
+	key: string,
+	home: string = os.homedir(),
+): boolean =>
+	(key.startsWith(HKLM) ||
+		(key.startsWith(HKCU) && !underServiceProfile(home))) &&
 	key.length > HKLM.length &&
 	key.length <= 260 &&
 	!key.includes("..") &&
@@ -80,6 +93,15 @@ export const regQueryValue = (key: string, name: string): string | undefined =>
  * given: query `HKLM\SOFTWARE\…` and every line comes back `HKEY_LOCAL_MACHINE\SOFTWARE\…`.
  */
 const HKLM_FULL = "HKEY_LOCAL_MACHINE\\";
+const HKCU_FULL = "HKEY_CURRENT_USER\\";
+
+/** The key as `reg.exe` prints it: the hive spelled out. */
+const fullHive = (key: string): string => {
+	const upper = key.toUpperCase();
+	if (upper.startsWith(HKLM)) return HKLM_FULL + key.slice(HKLM.length);
+	if (upper.startsWith(HKCU)) return HKCU_FULL + key.slice(HKCU.length);
+	return key;
+};
 
 /**
  * Parse `reg.exe query <key>` output into the immediate subkey NAMES under `key`.
@@ -94,9 +116,7 @@ const HKLM_FULL = "HKEY_LOCAL_MACHINE\\";
  * the product id that becomes the entry's `external_id`.
  */
 export const parseRegSubKeys = (stdout: string, key: string): string[] => {
-	const full = key.toUpperCase().startsWith(HKLM)
-		? HKLM_FULL + key.slice(HKLM.length)
-		: key;
+	const full = fullHive(key);
 	const prefix = `${full.toLowerCase()}\\`;
 	return (
 		stdout

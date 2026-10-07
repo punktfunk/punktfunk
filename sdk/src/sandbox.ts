@@ -21,6 +21,8 @@ export interface PluginManifest {
 	reads?: string[];
 	writes?: string[];
 	network?: boolean;
+	/** Windows registry keys it reads (`HKLM\…`, `HKCU\…`). Nothing to bind here on Linux. */
+	registry?: string[];
 }
 
 /** An id names the plugin's state dir and socket: one lowercase path component. */
