@@ -16,6 +16,7 @@ pub(crate) mod game_term;
 pub(crate) mod install;
 pub(crate) mod interactive;
 pub(crate) mod plugin_pipe;
+pub(crate) mod registry_ace;
 pub(crate) mod service;
 // The console user's theme values, read for `mgmt::theme` — which forbids the `unsafe` they need.
 pub(crate) mod theme;
