@@ -494,7 +494,6 @@ pub(super) fn seat_environment(
         ),
         ("PUNKTFUNK_HOST_NAME", OsString::from(&seat.name)),
         ("PUNKTFUNK_GAMESTREAM", OsString::from("0")),
-        ("PUNKTFUNK_NO_ISOLATE", OsString::from("1")),
         (
             "PUNKTFUNK_AUDIO_OUTPUT_MODE",
             OsString::from("follow_default"),

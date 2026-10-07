@@ -99,7 +99,6 @@ presents its own certificate and honours the box's pairings and grants.
 | `PUNKTFUNK_NATIVE_PORT` | a per-seat port |
 | `PUNKTFUNK_HOST_NAME` | the seat's name |
 | `PUNKTFUNK_GAMESTREAM` | `0` |
-| `PUNKTFUNK_NO_ISOLATE` | `1`: extend the desktop, never turn other displays off |
 | `PUNKTFUNK_AUDIO_OUTPUT_MODE` | `follow_default` |
 
 The supervisor must keep each seat's RDP session active. A seat host runs outside the console
@@ -216,7 +215,7 @@ system-range user, `pf-seat-<n>`, with a logind session of its own, a headless c
   account whose comment matches exactly. The home is `seats/<id>/home`. It joins `render` and
   `punktfunk-games`, the shared games folder's group, which the owner joins too. Never `punktfunk`,
   which may power the box off, nor `input`, which reads every input device on the box.
-- **The environment.** The variables in the tables above, minus the display slot and `NO_ISOLATE`,
+- **The environment.** The variables in the tables above, minus the display slot,
   go into `/run/punktfunk/seats/<user>.env` (root `0600`), which systemd reads as root.
   `PUNKTFUNK_CONFIG_DIR` is `<home>/.config/punktfunk`. Each start adds a fresh
   `PUNKTFUNK_MGMT_TOKEN` and writes the same line to `seats/hosts/<id>/mgmt-token`, owned by the
