@@ -291,6 +291,19 @@ final class SessionModel: ObservableObject {
         gamepadCapture?.tapButton(bit)
     }
 
+    /// The ring's Controller type slot: what every forwarded pad declares, whether one is
+    /// forwarded, and the step to the next type. This stream only; the next starts from Settings.
+    var padType: PunktfunkConnection.GamepadType { gamepadCapture?.padType ?? .auto }
+
+    var padTypeAvailable: Bool {
+        virtualPadAvailable && gamepadCapture?.hasForwardedPads == true
+    }
+
+    func cyclePadType() {
+        guard let capture = gamepadCapture else { return }
+        capture.setPadType(capture.padType.nextInRing)
+    }
+
     /// The virtual on-screen controller (design/touch-client-overlay.md §4): shown from the
     /// ring's `pad` slot, per session. While up it holds one wire pad, so the host sees one
     /// controller arrive and, on hide, one leave (§9). Never toggled by the ring's own open and
@@ -1241,6 +1254,9 @@ final class SessionModel: ObservableObject {
         // System-button routing: whether raw guide/share presses ride the wire, and whether
         // hold-Select arms as the alternate guide route (auto = on everywhere but macOS —
         // iOS reserves the physical Home press, tvOS never delivers it).
+        if settings.sc2Capture, settings.gamepadForwarding, conn.canSendGamepad {
+            Sc2Capture.holdTwins(manager: .shared)
+        }
         let capture = GamepadCapture(
             connection: conn, manager: .shared, forwarding: settings.gamepadForwarding,
             systemForward: settings.systemButtonsForward,

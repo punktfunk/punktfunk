@@ -235,8 +235,7 @@ impl HostBridge {
                 .is_some_and(|(_, m)| m.upcast_ref().id() == id)
     }
 
-    /// Destroyed on the server: a dropped proxy leaves the link up until the connection ends,
-    /// and a parked capturer's connection lives on.
+    /// Destroyed on the server: a dropped proxy leaves the link up until the connection ends.
     fn drop_links(&mut self, core: &pw::core::CoreRc) {
         for (.., link, _) in self.links.drain(..) {
             let _ = core.destroy_object(link);

@@ -331,6 +331,7 @@ pub(super) fn ring_facts(
     stats: StatsVerbosity,
     mic_muted: bool,
     ring_opener: Option<u8>,
+    pad_type: punktfunk_core::config::GamepadPref,
 ) -> RingFacts {
     let c = st.connector.as_ref().expect("filtered on connector");
     let m = c.mode();
@@ -354,6 +355,7 @@ pub(super) fn ring_facts(
         pad_mouse: c.pad_mouse_mode(target),
         audio_mute: c.audio_mute(),
         pointer_granted: c.access_grants() & punktfunk_core::quic::GRANT_POINTER != 0,
+        pad_type,
         mode: (m.width, m.height, m.refresh_hz),
         native_mode: st.native_mode,
         addr: st.params.host.clone(),
@@ -390,9 +392,9 @@ pub(super) fn cycle_pad_mouse(c: &NativeClient, ring_opener: Option<u8>) {
 }
 
 impl Shell {
-    /// Drain the pump's session events. A browse stream ending or a codec fallback
-    /// replaces `stream` mid-drain, so each event re-borrows it and a terminal one stops
-    /// the drain. `Break` is a single-mode stream ending the loop.
+    /// Drain the pump's session events. A browse stream ending, a codec fallback or a
+    /// not-ready host replaces `stream` mid-drain, so each event re-borrows it and a
+    /// terminal one stops the drain. `Break` is a single-mode stream ending the loop.
     pub(super) fn drain_session_events(
         &mut self,
         stream: &mut Option<StreamState>,
@@ -470,6 +472,30 @@ impl Shell {
                     let phase =
                         SessionPhase::Ended(if st.canceled { None } else { reason.as_deref() });
                     self.end_stream(stream, phase);
+                    break;
+                }
+                // A woken host that answered before it could stream: dial it again. The
+                // window opens at the first refusal; past it the pump ends as usual.
+                SessionEvent::HostNotReady(said) => {
+                    tracing::info!(host_said = %said, "host not ready to stream — dialing again");
+                    self.release_stream(st);
+                    if st.canceled {
+                        self.end_stream(stream, SessionPhase::Ended(None));
+                        break;
+                    }
+                    let mut params = st.params.clone();
+                    params
+                        .settle_until
+                        .get_or_insert_with(|| Instant::now() + session::WAKE_SETTLE);
+                    let force_software = Arc::new(AtomicBool::new(false));
+                    params.force_software = force_software.clone();
+                    self.end_stream(
+                        stream,
+                        SessionPhase::Reconnecting(
+                            "The host isn't ready to stream yet — trying again.",
+                        ),
+                    );
+                    *stream = Some(self.start_stream(params, force_software));
                     break;
                 }
                 // The negotiated codec ran out of decode rungs: re-dial the same host
@@ -765,8 +791,8 @@ impl Shell {
         }
     }
 
-    /// The ring's commands this pass. Stats tier, keyboard, pad mouse, stream mute and
-    /// system buttons are the loop's; the rest go to [`Shell::ring_command`].
+    /// The ring's commands this pass. Stats tier, keyboard, pad mouse, controller type, stream
+    /// mute and system buttons are the loop's; the rest go to [`Shell::ring_command`].
     pub(super) fn ring_tick(&mut self, stream: &mut Option<StreamState>) {
         let mut ring_cmds = Vec::new();
         if let (Some(o), true) = (self.overlay.as_mut(), stream.is_some()) {
@@ -795,6 +821,13 @@ impl Shell {
                 // The pad worker owns the wire index and the owed release, so this one is
                 // the service's, not `ring_command`'s.
                 RingCommand::TapButton(bit) => self.gamepad.tap_button(bit),
+                // This stream only: the next connect reads the saved setting again.
+                RingCommand::CyclePadType => {
+                    let next = pf_client_core::overlay_actions::next_pad_type(
+                        self.gamepad.kind_override(),
+                    );
+                    self.gamepad.set_kind_override(next);
+                }
                 other => {
                     if let Some(st) = stream.as_mut() {
                         self.ring_command(other, st);
@@ -806,8 +839,8 @@ impl Shell {
 }
 
 impl Shell {
-    /// Run one ring command against the live session (stats tier, keyboard, system buttons
-    /// and controller mouse are the loop's own and are handled at the call site).
+    /// Run one ring command against the live session (stats tier, keyboard, system buttons,
+    /// controller mouse and controller type are the loop's own, handled at the call site).
     pub(super) fn ring_command(&mut self, cmd: RingCommand, st: &mut StreamState) {
         match cmd {
             RingCommand::EndStream => {
@@ -903,6 +936,7 @@ impl Shell {
             | RingCommand::Keyboard
             | RingCommand::TapButton(_)
             | RingCommand::CyclePadMouse
+            | RingCommand::CyclePadType
             | RingCommand::ToggleStreamMute => {}
         }
     }

@@ -20,7 +20,7 @@
 
 use super::gamepad_raii::SwDeviceProfile;
 use super::pad_shm::ShmPad;
-use crate::triton_proto::{parse_triton_rumble, triton_serial, TritonState};
+use crate::triton_proto::{parse_triton_rumble, triton_serial, Sc2Identity, TritonState};
 use crate::uhid_manager::{PadFeedback, PadProto, UhidManager};
 use anyhow::Result;
 use pf_driver_proto::gamepad::DEVTYPE_TRITON;
@@ -36,10 +36,19 @@ pub struct TritonWinPad {
     /// Synth-mode sequence only. The raw path mirrors the physical pad's
     /// bytes, its own sequence byte included.
     seq: u8,
+    /// A sparse report (battery, status) owns the one input slot until then.
+    hold_until: Option<std::time::Instant>,
 }
 
+/// Longer than two of the driver's 2 ms samples, so a sparse report is served before the next
+/// state report replaces it in the slot.
+const SPARSE_HOLD: std::time::Duration = std::time::Duration::from_millis(5);
+
 impl TritonWinPad {
-    fn open(index: u8) -> Result<TritonWinPad> {
+    /// The devnode always carries an identity property: it outlives the pad, and a pad without
+    /// an identity must not answer with the last one's.
+    fn open(index: u8, identity: Option<&Sc2Identity>) -> Result<TritonWinPad> {
+        let blob = identity.map_or_else(|| vec![0], Sc2Identity::blob);
         let shm = ShmPad::open(
             index,
             DEVTYPE_TRITON,
@@ -55,15 +64,36 @@ impl TritonWinPad {
                 usb_mi: None,
                 bluetooth: false,
                 description: "Punktfunk Virtual Steam Controller",
-                enumerator: "punktfunk",
+                // Steam merges a pad's HID views by the VID/PID token in the instance path.
+                enumerator: "VID_28DE&PID_1302",
+                property: Some((
+                    pf_driver_proto::triton::IDENTITY_PROPKEY_FMTID,
+                    pf_driver_proto::triton::IDENTITY_PROPKEY_PID,
+                    &blob,
+                )),
             },
         )?;
-        Ok(TritonWinPad { shm, seq: 0 })
+        Ok(TritonWinPad {
+            shm,
+            seq: 0,
+            hold_until: None,
+        })
     }
 
+    /// The whole 64-byte slot: the driver trims to the report id's declared length. An id the
+    /// descriptor lacks never reaches Steam, so it is not published over an unread state; a
+    /// state report waits out a sparse report's hold and the next one carries the newest.
     fn write_state(&mut self, st: &TritonState) {
-        // The whole 64-byte slot: the driver trims to the report id's declared length.
         let (r, _) = st.report(&mut self.seq);
+        if pf_driver_proto::triton::input_len(r[0]).is_none() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let sparse = !matches!(r[0], 0x42 | 0x45);
+        if !sparse && self.hold_until.is_some_and(|t| now < t) {
+            return;
+        }
+        self.hold_until = sparse.then(|| now + SPARSE_HOLD);
         self.shm.publish(&r);
     }
 
@@ -88,6 +118,8 @@ impl TritonWinPad {
                 if let Some(r) = parse_triton_rumble(bytes) {
                     rumble = Some(r);
                 }
+            } else if !pf_driver_proto::triton::forwards_to_pad(bytes) {
+                return;
             }
             hidout.push(HidOutput::HidRaw {
                 pad: idx,
@@ -127,11 +159,13 @@ impl PadProto for TritonWinProto {
         " (install/repair: punktfunk-host.exe driver install --gamepad)";
 
     fn open(&mut self, idx: u8) -> Result<TritonWinPad> {
-        let p = TritonWinPad::open(idx)?;
+        let identity = crate::triton_proto::identity_for(idx);
+        let p = TritonWinPad::open(idx, identity.as_deref())?;
+        let serial = identity.as_ref().and_then(|i| i.serial.clone());
         tracing::info!(
             index = idx,
-            // Serial the driver answers GET_REPORT with, derived from idx.
-            serial = %triton_serial(idx),
+            serial = serial.unwrap_or_else(|| triton_serial(idx)),
+            replies = identity.as_ref().map_or(0, |i| i.replies.len()),
             "virtual Steam Controller 2 created (Windows UMDF shm channel, as-is raw passthrough)"
         );
         Ok(p)

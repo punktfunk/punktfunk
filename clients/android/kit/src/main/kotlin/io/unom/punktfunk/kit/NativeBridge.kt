@@ -714,12 +714,31 @@ object NativeBridge {
     external fun nativePadMotionReaches(handle: Long, declaredPref: Int): Boolean
 
     /**
+     * The console's outline for a GamepadPref wire byte's pad family, as 24-unit SVG path data,
+     * stroked at 1.5. Empty for Automatic, which keeps its generic gamepad icon.
+     */
+    external fun nativePadMark(pref: Int): String
+
+    /**
      * One raw HID input report from a client-captured controller (the as-is Steam Controller 2
      * passthrough), forwarded verbatim on the rich-input plane. [buf] is a DIRECT ByteBuffer whose
      * first [len] bytes are the report, id byte first (0x42/0x45/0x47 state, 0x43 battery, …);
      * len is clamped to 64. Called from the capture thread at the controller's own report rate.
      */
     external fun nativeSendPadHidReport(handle: Long, pad: Int, buf: java.nio.ByteBuffer, len: Int)
+
+    /** What core holds back of a Steam Controller 2's raw reports on [pad]: an OR of
+     *  [GamepadRouter.SC2_GATE_MASKED] and its siblings, latest wins. */
+    external fun nativeSetSc2Gate(handle: Long, pad: Int, gate: Int)
+
+    /** The [index]th feature query a Steam Controller 2's identity is read with; null past the
+     *  last. [puck] adds the dongle's own queries. */
+    external fun nativeSc2IdentityRequest(puck: Boolean, index: Int): ByteArray?
+
+    /** A captured Steam Controller 2's identity for wire pad [pad]: its Puck [slot] (0 off a
+     *  Puck), its USB serial and its replies, packed `[len][request][len][reply]…`. The host
+     *  builds the virtual pad from it. */
+    external fun nativeSendPadIdentity(handle: Long, pad: Int, slot: Int, serial: String, replies: ByteArray)
 
     /**
      * One touchpad contact from a client-captured controller (the Sony USB capture), forwarded on

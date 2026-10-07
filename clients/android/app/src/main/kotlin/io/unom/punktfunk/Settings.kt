@@ -273,15 +273,6 @@ data class Settings(
     val gyroOnPhone: Boolean = false,
 
     /**
-     * Capture a Steam Controller 2 (wired / Puck dongle over USB, or an already-paired BLE pad)
-     * and pass it through AS-IS: the host presents a real `28DE:1302` that its Steam drives
-     * directly (Linux hosts). ON by default — it engages only when such a controller is actually
-     * present at stream start, so it costs nothing otherwise; the toggle exists for the rare
-     * setup where the OS-level pad (lizard mode) is preferred.
-     */
-    val sc2Capture: Boolean = true,
-
-    /**
      * Capture a USB-connected Sony controller (DualSense / DualSense Edge / DualShock 4) and
      * drive it directly: the app claims the pad's HID interface and renders the host's feedback
      * by writing USB output reports — rumble works on every phone (no kernel force-feedback

@@ -478,7 +478,7 @@ pub(crate) struct StreamInfo {
 }
 
 /// Tray snapshot for loopback: counts, booleans, and `client_name`.
-/// Unauthenticated; `require_auth` admits loopback only (the tray cannot read the bearer file).
+/// `require_auth` admits the tray token from loopback; nothing here is a secret.
 #[derive(Serialize, ToSchema)]
 pub(crate) struct LocalSummary {
     /// Host version (mirrors `/health`).
@@ -811,17 +811,18 @@ pub(crate) async fn get_status(
 
 /// Loopback tray summary
 ///
-/// Unauthenticated; `require_auth` admits loopback only.
+/// Bearer: `<config>/tray-token`, which every local account may read; loopback only.
 #[utoipa::path(
     get,
     path = "/local/summary",
     tag = "host",
     operation_id = "getLocalSummary",
-    // Override the document-global bearerAuth: loopback peers are exempt in `require_auth`.
+    // Override the document-global bearerAuth: the tray token is its own credential.
     security(()),
     responses(
         (status = OK, description = "Non-sensitive local host status (loopback peers only)", body = LocalSummary),
-        (status = UNAUTHORIZED, description = "Non-loopback peer", body = ApiError),
+        (status = UNAUTHORIZED, description = "Non-loopback peer, or not the tray token", body = ApiError),
+        (status = NOT_FOUND, description = "This host minted no tray token (a seat host)", body = ApiError),
     )
 )]
 pub(crate) async fn get_local_summary(State(st): State<Arc<MgmtState>>) -> Json<LocalSummary> {

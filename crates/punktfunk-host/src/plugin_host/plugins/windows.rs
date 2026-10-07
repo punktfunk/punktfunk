@@ -34,18 +34,55 @@ const RUNNER_UNIT_DIRS: [&str; 2] = ["plugins", "scripts"];
 
 /// Writable state: `<config_dir>\plugin-state`. Plugins persist under
 /// `plugin-state\<name>`, so LocalService needs Modify here — code dirs are
-/// (RX,WA), secrets are (R). Inheritable onto per-plugin subdirs. Users stay
-/// read-only (config-dir default).
+/// (RX,WA), secrets are (R). Inheritable onto per-plugin subdirs. A plugin keeps
+/// its settings here, so no other account holds an ACE.
 const RUNNER_STATE_DIRS: [&str; 1] = ["plugin-state"];
 
 /// Ingest inbox: `<config_dir>\ingest`. Inverse of `plugin-state`: `BUILTIN\Users`
 /// gets Modify so an interactive-user app can drop `ingest\<plugin>\…` for the
-/// LocalService runner to read. The rest of the config tree stays Users-read-only.
-/// Any local user can drop a file here (trusted-single-user; the reader is LocalService).
+/// LocalService runner to read. The one place in the config tree a local account
+/// may write (trusted-single-user; the reader is LocalService).
 const RUNNER_INGEST_DIRS: [&str; 1] = ["ingest"];
 
 /// `BUILTIN\Users` (S-1-5-32-545) in icacls SID form — the ingest inbox's writer.
 const USERS_SID: &str = "*S-1-5-32-545";
+
+/// Present once [`strip_users_read_once`] has run on this install.
+const USERS_STRIP_MARKER: &str = "users-read-stripped";
+
+/// Installs before 0.44 made every config subdirectory with an explicit, inheritable
+/// `Users:(RX)`; the root's own re-ACL at start does not reach a protected child. Walk the
+/// children once. `ingest` keeps its `Users:(M)`, and `emulators\<id>` keeps the Modify the
+/// player's session runs on, so that one is not walked.
+pub(super) fn strip_users_read_once() {
+    let cfg = pf_paths::config_dir();
+    let marker = cfg.join(USERS_STRIP_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&cfg) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !entry.path().is_dir() || name == "ingest" {
+            continue;
+        }
+        let mut cmd = Command::new(icacls_path());
+        cmd.arg(entry.path()).args(["/remove:g", USERS_SID]);
+        if name != "emulators" {
+            cmd.arg("/T");
+        }
+        let _ = cmd
+            .args(["/C", "/Q"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    if let Err(e) = std::fs::write(&marker, b"") {
+        tracing::warn!(path = %marker.display(), error = %e, "users-read strip marker not written");
+    }
+}
 
 pub(super) fn enable() -> Result<()> {
     // Converge the principal before start: an older task may still be SYSTEM.
@@ -318,7 +355,8 @@ fn revoke_runner_secret_reads() {
             .status();
     }
     // Ingest was granted to Users, not LocalService. Removing that ACE leaves
-    // the inherited Users:RX, so the dir reverts to read-only. The seats deny goes with it.
+    // SYSTEM/Administrators alone: nothing drops into the inbox until `enable`. The seats deny
+    // goes with it.
     let seats = pf_seats::windows::seats_group_sid().map(|sid| format!("*{sid}"));
     for name in RUNNER_INGEST_DIRS {
         let path = cfg.join(name);

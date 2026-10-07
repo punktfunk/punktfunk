@@ -1249,7 +1249,7 @@ fn migrate_grants(config_dir: &Path, runner_dir: &Path) -> io::Result<()> {
 
 /// Harden the runner directory, then hand the Windows runner its read ACE back.
 fn prepare_runner_dir(dir: &Path) -> io::Result<()> {
-    pf_paths::create_secret_dir(dir)?;
+    pf_paths::create_private_dir(dir)?;
     crate::plugins::converge_runner_data_dir(dir).map_err(to_io)
 }
 

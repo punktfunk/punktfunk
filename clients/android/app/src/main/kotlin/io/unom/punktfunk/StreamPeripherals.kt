@@ -265,7 +265,7 @@ internal class StreamPeripherals(
         // The menu-time capture (UI navigation) must let go before the stream-mode capture can
         // claim the interfaces; it resumes in onDispose once the stream releases them.
         activity?.stopSc2MenuNav()
-        val sc2 = if (settings.sc2Capture && settings.gamepadForwarding) {
+        val sc2 = if (settings.gamepadForwarding) {
             Sc2Capture(context, router)
         } else {
             null

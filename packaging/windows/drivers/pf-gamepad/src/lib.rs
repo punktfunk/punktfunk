@@ -701,6 +701,20 @@ extern "C" fn evt_device_add(_driver: WDFDRIVER, mut device_init: PWDFDEVICE_INI
         }
     }
 
+    if PNP_DEVTYPE.load(Ordering::Relaxed) == pf_driver_proto::gamepad::DEVTYPE_TRITON as u32 {
+        // SAFETY: `device` is the live device just created — the exact contract this fn requires.
+        let blob = unsafe {
+            wdf::query_binary_property(
+                device,
+                pf_driver_proto::triton::IDENTITY_PROPKEY_FMTID,
+                pf_driver_proto::triton::IDENTITY_PROPKEY_PID,
+            )
+        };
+        if let Ok(mut g) = TRITON_IDENTITY.lock() {
+            *g = blob.unwrap_or_default();
+        }
+    }
+
     // Default parallel queue handling all IOCTLs.
     // SAFETY: `device` is the live device just created.
     if let Err(st) = unsafe { skeleton::create_default_queue(device, Some(evt_io_device_control)) }
@@ -941,6 +955,28 @@ static LAST_SET_FEATURE: std::sync::Mutex<[u8; 64]> = std::sync::Mutex::new([0; 
 /// its own WUDFHost (see [`INPUT_REPORT`]).
 static TRITON_LAST_SET: std::sync::Mutex<([u8; 64], usize)> = std::sync::Mutex::new(([0; 64], 0));
 
+/// The client's identity the host stored on this devnode (`triton::identity_blob`), read at
+/// `EvtDeviceAdd`. Empty when the host set none.
+static TRITON_IDENTITY: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// The engraved serial of the pad this one mirrors, else the per-index one.
+fn triton_serial() -> String {
+    let blob = TRITON_IDENTITY
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    match pf_driver_proto::triton::Identity::parse(&blob) {
+        Some(id) if !id.serial.is_empty() => id.serial.into(),
+        _ => pad_serial(pf_driver_proto::gamepad::DEVTYPE_TRITON, pad_index()),
+    }
+}
+
+/// The mirrored pad's own reply to `last_set`, when its client recorded one.
+fn triton_recorded_reply(last_set: &[u8]) -> Option<[u8; 64]> {
+    let blob = TRITON_IDENTITY.lock().ok()?;
+    pf_driver_proto::triton::Identity::parse(&blob)?.reply(last_set)
+}
+
 /// Whether a latched Triton SET_FEATURE frame is the host's channel-proof command — the SAME
 /// two-byte [`pf_driver_proto::gamepad::DECK_PROOF_CMD`] the Deck identity answers, riding the
 /// same SET→GET feature contract. The `[0x00, cmd, …]` shape is the Deck/UNNUMBERED-report
@@ -1051,15 +1087,14 @@ fn on_get_feature(request: &Request) -> NTSTATUS {
         let is_proof = triton_proof_requested(&last[..len]);
         let mut reply = if is_proof {
             proof_reply()
+        } else if let Some(recorded) = triton_recorded_reply(&last[..len]) {
+            recorded
         } else {
             // The query dance (0x83 attributes / 0xAE string / 0xF2 firmware) + echo fallback —
             // and feature report 2 rides the SAME machine (mirror semantics, no special table).
-            let mut serial = [0u8; 13];
-            pf_driver_proto::triton::serial(pad_index(), &mut serial);
             pf_driver_proto::triton::feature_reply(
                 &last[..len],
-                // `triton::serial` writes 13 ASCII bytes, so the conversion is infallible.
-                core::str::from_utf8(&serial).unwrap_or(""),
+                &triton_serial(),
                 pf_driver_proto::triton::unit_id(pad_index()),
             )
         };
@@ -1162,6 +1197,7 @@ fn on_get_string(request: &Request) -> NTSTATUS {
         // Per-pad serials: SDL reads this via HidD_GetSerialNumberString and Steam dedups pads
         // by it. The PS serials end in the pairing MAC's low octet (`on_get_feature`); the Deck
         // and Triton serials match their 0xAE answers. Steam reads both.
+        2 | 0x0010 if devtype == pf_driver_proto::gamepad::DEVTYPE_TRITON => triton_serial(),
         2 | 0x0010 => pad_serial(devtype, pad_index()),
         _ => match devtype {
             1 => "Wireless Controller".into(),

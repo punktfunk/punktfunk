@@ -56,6 +56,17 @@
 // send via [`punktfunk_connection_send_hid_report`], never by building the datagram.
 #define PUNKTFUNK_RICH_HID_REPORT 4
 
+// [`punktfunk_connection_set_sc2_gate`] bit: the client's overlay owns the pad. Its raw state
+// goes out neutral, and a button held now stays off the wire until it is released.
+#define PUNKTFUNK_SC2_GATE_MASKED 1
+
+// [`punktfunk_connection_set_sc2_gate`] bit: Steam and QAM stay with the client.
+#define PUNKTFUNK_SC2_GATE_SYSTEM_LOCAL 2
+
+// [`punktfunk_connection_set_sc2_gate`] bit: the client opens its ring on Select then A, so
+// that chord stays off the wire.
+#define PUNKTFUNK_SC2_GATE_CHORDS 4
+
 // [`PunktfunkPenSample::state`] bit: the pen hovers in range (implied by `TOUCHING`).
 #define PUNKTFUNK_PEN_IN_RANGE 1
 
@@ -363,7 +374,7 @@
 //
 // The wire is versioned by ALPN, not by this. Pin the integer in `punktfunk-ffi`
 // (`abi_version_is_pinned`). Per-bump notes live in `CHANGELOG.md`.
-#define PUNKTFUNK_ABI_VERSION 44
+#define PUNKTFUNK_ABI_VERSION 45
 
 // This client silenced its own speakers (`client::NativeClient::set_audio_muted`). The host
 // keeps sending, so a session joined to the same sink still hears the game.
@@ -923,6 +934,12 @@
 // Per-side pixel cap. A 0.43 client re-frames a shape behind a `u16` length,
 // so 120² RGBA (57.6 KiB) is the largest it takes. Host downscales anything larger.
 #define PUNKTFUNK_CURSOR_SHAPE_MAX_SIDE 120
+
+// Longest [`PadIdentity::serial`] in bytes.
+#define PUNKTFUNK_PAD_IDENTITY_SERIAL_MAX 32
+
+// Longest [`PadIdentity::replies`] in bytes: room for every query with margin.
+#define PUNKTFUNK_PAD_IDENTITY_REPLIES_MAX 4096
 
 // Longest [`LaunchOutcome::message`] in UTF-8 bytes. One sentence plus a cause;
 // a host cannot make the client hold more than this.
@@ -3052,6 +3069,44 @@ PunktfunkStatus punktfunk_connection_send_hid_report(PunktfunkConnection *c,
                                                      uint8_t pad,
                                                      const uint8_t *data,
                                                      uintptr_t len);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Gate what of a Steam Controller 2's raw reports on `pad` reaches the host: an OR of
+// `PUNKTFUNK_SC2_GATE_*`. Call when the client's overlay takes or returns the pad and when its
+// system-button policy changes. Latest wins; unknown bits are ignored; `pad` masks to 16.
+//
+// # Safety
+// `c` is a valid connection handle. Callable from any thread.
+PunktfunkStatus punktfunk_connection_set_sc2_gate(PunktfunkConnection *c,
+                                                  uint8_t pad,
+                                                  uint32_t gate);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// The `index`-th feature query a client reads off a Steam Controller 2 for
+// [`punktfunk_connection_send_pad_identity`], id first, copied into `out`. Returns its length;
+// 0 past the last one or when `cap` is short. `puck` adds a Puck slot's queries.
+//
+// # Safety
+// `out` points to `cap` writable bytes.
+uintptr_t punktfunk_sc2_identity_request(bool puck, uint32_t index, uint8_t *out, uintptr_t cap);
+#endif
+
+#if defined(PUNKTFUNK_FEATURE_QUIC)
+// Tell the host who the Steam Controller 2 on `pad` is, before its arrival: `serial` is its USB
+// serial (UTF-8, NUL-terminated), `replies` the `(request, reply)` pairs packed as
+// `[len][request][len][reply]…`, each part at most 64 bytes. `slot` is a Puck pad's slot (its USB
+// interface less 2), else 0. Too long, torn or a slot past 3 is `InvalidArg`.
+//
+// # Safety
+// `c` is a valid connection handle; `serial` is NUL-terminated; `replies` points to `len` bytes.
+PunktfunkStatus punktfunk_connection_send_pad_identity(PunktfunkConnection *c,
+                                                       uint8_t pad,
+                                                       uint8_t slot,
+                                                       const char *serial,
+                                                       const uint8_t *replies,
+                                                       uintptr_t len);
 #endif
 
 #if defined(PUNKTFUNK_FEATURE_QUIC)

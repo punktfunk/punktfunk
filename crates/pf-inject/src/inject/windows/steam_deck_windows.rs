@@ -50,6 +50,7 @@ impl DeckWinPad {
                 bluetooth: false,
                 description: "Punktfunk Virtual Steam Deck",
                 enumerator: "punktfunk",
+                property: None,
             },
         )?;
         Ok(DeckWinPad {

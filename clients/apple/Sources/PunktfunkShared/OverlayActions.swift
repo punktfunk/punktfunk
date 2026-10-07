@@ -18,6 +18,8 @@ public enum SlotId: Equatable, Sendable {
     case guide, qam
     /// Controller mouse: the pad drives the host pointer instead of its virtual pad.
     case padMouse
+    /// Step the controller type the host emulates, live, for this stream.
+    case padType
     case host(String)
     case shortcut(String)
 
@@ -36,6 +38,7 @@ public enum SlotId: Equatable, Sendable {
         case .guide: return "guide"
         case .qam: return "qam"
         case .padMouse: return "pad_mouse"
+        case .padType: return "pad_type"
         case .host(let id): return "host:\(id)"
         case .shortcut(let id): return "shortcut:\(id)"
         }
@@ -56,6 +59,7 @@ public enum SlotId: Equatable, Sendable {
         case "guide": return .guide
         case "qam": return .qam
         case "pad_mouse": return .padMouse
+        case "pad_type": return .padType
         default:
             if s.hasPrefix("host:"), s.count > 5 { return .host(String(s.dropFirst(5))) }
             if s.hasPrefix("shortcut:"), s.count > 9 { return .shortcut(String(s.dropFirst(9))) }

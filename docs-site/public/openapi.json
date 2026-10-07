@@ -4453,7 +4453,7 @@
           "host"
         ],
         "summary": "Loopback tray summary",
-        "description": "Unauthenticated; `require_auth` admits loopback only.",
+        "description": "Bearer: `<config>/tray-token`, which every local account may read; loopback only.",
         "operationId": "getLocalSummary",
         "responses": {
           "200": {
@@ -4467,7 +4467,17 @@
             }
           },
           "401": {
-            "description": "Non-loopback peer",
+            "description": "Non-loopback peer, or not the tray token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This host minted no tray token (a seat host)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13226,7 +13236,7 @@
       },
       "LocalSummary": {
         "type": "object",
-        "description": "Tray snapshot for loopback: counts, booleans, and `client_name`.\nUnauthenticated; `require_auth` admits loopback only (the tray cannot read the bearer file).",
+        "description": "Tray snapshot for loopback: counts, booleans, and `client_name`.\n`require_auth` admits the tray token from loopback; nothing here is a secret.",
         "required": [
           "version",
           "video_streaming",

@@ -393,6 +393,13 @@ pub(crate) fn converge_seat_denies() {
     plat::deny_seats_on_ingest();
 }
 
+/// Windows: installs before 0.44 granted `BUILTIN\Users` read on every config subdirectory.
+/// `serve` strips it once per install. POSIX dirs are 0700 from birth.
+#[cfg(windows)]
+pub(crate) fn converge_config_dir_acls() {
+    plat::strip_users_read_once();
+}
+
 /// Keep a rewritten runner credential readable by the enabled Windows service. POSIX runners
 /// inherit access from the operator and need no ACL adjustment.
 pub(crate) fn converge_runner_credential(path: &std::path::Path) -> Result<()> {

@@ -197,8 +197,8 @@ pub struct PwAudioCapturer {
     sink_name: Option<String>,
     claimed: bool,
     /// Shared with the PipeWire thread so drop counting can tell "encode fell
-    /// behind" from "nobody is reading". The capturer is host-lifetime and
-    /// parked by [`idle`](AudioCapturer::idle); without this, a full hand-off
+    /// behind" from "nobody is reading". A parked capturer outlives its
+    /// session after [`idle`](AudioCapturer::idle); without this, a full hand-off
     /// channel reports 100 % drop with no stream. Distinct from `claimed`.
     active: Arc<AtomicBool>,
     /// Graph-negotiated rate, written by the format callback, read by
@@ -373,13 +373,6 @@ impl AudioCapturer for PwAudioCapturer {
 
     fn drain(&mut self) {
         while self.chunks.try_recv().is_ok() {}
-        // Reused parked capturer = new session: re-claim the default sink. The
-        // operator may have changed outputs meanwhile, so the bridge hears again.
-        if let (Some(name), false) = (&self.sink_name, self.claimed) {
-            stream_sink::claim(name);
-            let _ = self.host.send(stream_sink::host_sink());
-            self.claimed = true;
-        }
         // After the backlog drain, so the producer never counts a drop against
         // a channel this call is still emptying.
         self.active.store(true, Ordering::Relaxed);
@@ -392,7 +385,7 @@ impl AudioCapturer for PwAudioCapturer {
             self.claimed = false;
             stream_sink::release(name);
         }
-        // No session to route for: pins and playthrough links come down until `drain`.
+        // No session to route for: pins and playthrough links come down.
         let _ = self.host.send(None);
     }
 }
@@ -420,7 +413,7 @@ fn spa_position_names(channels: u32) -> String {
 ///   smallest follower `node.latency`, then rounded down to a power of two.
 ///   A 240-frame (5 ms) ask is served as 128 on stock Linux. This key skips
 ///   that rounding and, driving only its own group, forces nothing else.
-/// * `priority.session = 50`: parked sink must not win automatic default
+/// * `priority.session = 50`: an unclaimed sink must not win automatic default
 ///   election; routing is the [`stream_sink`] claim.
 /// * **No `priority.driver`**: never elected to clock someone else's group.
 /// * `session.suspend-timeout-seconds = 0`: suspend/resume is a hole in a

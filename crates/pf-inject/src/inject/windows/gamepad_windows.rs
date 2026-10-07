@@ -87,6 +87,7 @@ impl XusbWinPad {
             bluetooth: false,
             description: "Punktfunk Virtual Xbox 360 (XUSB)",
             enumerator: "punktfunk",
+            property: None,
         })?;
         channel.bind_devnode(index as u32, instance_id.clone(), ProofTransport::XusbIoctl);
         // 1500 ms: EvtDeviceAdd publishes the pid immediately; miss and `service` keeps pumping.

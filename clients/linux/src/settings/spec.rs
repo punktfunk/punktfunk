@@ -241,7 +241,7 @@ mod tests {
         ("cursor_gestures", "a TV remote's missing second button"),
         ("rumble_on_phone", "a phone's own hardware"),
         ("gyro_on_phone", "a phone's own hardware"),
-        ("sc2_capture", "Android and Apple only"),
+        ("sc2_capture", "Apple only"),
         ("ds_capture", "Android and webOS only"),
     ];
 

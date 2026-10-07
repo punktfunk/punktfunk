@@ -189,6 +189,7 @@ impl XboxWinPad {
                 // The HID child becomes `HID\VID_045E&PID_…&IG_00`: Steam merges a pad's views by
                 // the VID/PID in its path, and under `punktfunk` it listed one Xbox pad twice.
                 enumerator: id.usb_vid_pid,
+                property: None,
             },
         )?;
         Ok(XboxWinPad {

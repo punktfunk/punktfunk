@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import io.unom.punktfunk.kit.Gamepad
 import io.unom.punktfunk.kit.GamepadRouter
 import io.unom.punktfunk.kit.NativeBridge
 import io.unom.punktfunk.kit.security.IdentityLoad
@@ -536,6 +537,12 @@ fun StreamScreen(session: ActiveSession, onSessionEnded: (SessionEndReason) -> U
         screenLayouts = { layoutsOffered },
         screenLayout = { layout },
         cycleScreens = ::cycleScreens,
+        padType = { activity?.gamepadRouter?.padType ?: Gamepad.PREF_AUTO },
+        padTypeAvailable = {
+            activity?.gamepadRouter?.let { it.sendsEnabled() && it.forwardedDevices().isNotEmpty() } == true
+        },
+        // This stream only: the next one starts from the Controller type setting.
+        cyclePadType = { activity?.gamepadRouter?.let { it.setPadType(nextPadType(it.padType)) } },
     )
     // The summon rides a pointer gesture but TYPES, so it also needs the KEYBOARD grant
     // (dismissing is always allowed).
