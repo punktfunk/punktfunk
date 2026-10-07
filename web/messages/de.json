@@ -492,7 +492,7 @@
 	"diag_hide_inapplicable": "Die hier nicht zutreffenden ausblenden",
 	"diag_impact_label": "Was dadurch nicht funktioniert",
 	"diag_remedy_label": "So wird es behoben",
-	"diag_relogin_required": "Danach ab- und wieder anmelden",
+	"diag_relogin_required": "Danach den Rechner neu starten",
 	"diag_copy": "Befehl kopieren",
 	"diag_copied": "Befehl kopiert.",
 	"diag_copy_failed": "Der Befehl konnte nicht kopiert werden",

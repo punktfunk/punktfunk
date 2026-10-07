@@ -99,6 +99,9 @@ hand, in this order.
    rm -rf ~/.local/lib/punktfunk-scripting ~/.local/share/punktfunk-scripting
    rm -f  ~/.local/share/punktfunk/gamescope.stamp
    rm -f  ~/.local/share/applications/io.unom.Punktfunk.Host.desktop
+   rm -f  ~/.local/bin/punktfunk-tray ~/.config/autostart/io.unom.Punktfunk.Tray.desktop
+   rm -f  ~/.local/share/applications/io.unom.Punktfunk.StartHost.desktop
+   rm -f  ~/.local/share/icons/hicolor/*/apps/punktfunk-tray*.png
    rm -rf ~/punktfunk                        # the source checkout and its build
    ```
 

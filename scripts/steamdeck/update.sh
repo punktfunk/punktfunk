@@ -103,6 +103,10 @@ sed 's|^ExecStart=.*|ExecStart=%h/.local/bin/punktfunk-scripting|' \
 systemctl --user daemon-reload
 ok "plugin runner rebuilt (opt-in service: systemctl --user enable --now punktfunk-scripting)"
 
+# Status tray: rebuilt with the host, and retrofitted onto installs that predate it.
+log "Rebuilding the status tray"
+PUNKTFUNK_SRC="$SRC" PUNKTFUNK_BOX="$BOX" bash "$SRC/scripts/steamdeck/install-tray.sh"
+
 # HDR gamescope (punktfunk-gamescope): rebuild when the packaging tree changed or the installed
 # binary stopped working — also RETROFITS it onto older installs that predate it (fast no-op
 # otherwise). Best-effort; on failure the host streams SDR (see build-gamescope.sh).
@@ -193,7 +197,7 @@ if [ "$SUDO_OK" = 1 ]; then
     fi
     if id -nG "$USER" | grep -qw input; then :; else
         sudo usermod -aG input "$USER"
-        warn "added $USER to the 'input' group — REBOOT (or log out/in) for it to apply"
+        warn "added $USER to the 'input' group — REBOOT for it to apply"
     fi
     # 'punktfunk' owns the usbip vhci attach/detach nodes (60-punktfunk.rules), deliberately NOT
     # 'input' — writing 'attach' materialises an arbitrary emulated USB device, a root-only kernel
@@ -207,7 +211,7 @@ if [ "$SUDO_OK" = 1 ]; then
         if id -nG "$USER" | grep -qw punktfunk; then :; else
             sudo usermod -aG punktfunk "$USER"
             warn "added $USER to the 'punktfunk' group (usbip vhci — the native Steam Deck pad needs it)"
-            warn "  — REBOOT (or log out/in) for it to apply. That group can emulate arbitrary USB"
+            warn "  — REBOOT for it to apply. That group can emulate arbitrary USB"
             warn "  devices; 'sudo gpasswd -d $USER punktfunk' drops it if you do not want the native pad."
         fi
     else
@@ -253,7 +257,7 @@ else
 fi
 echo
 warn "If the controller still shows as an Xbox 360 pad, REBOOT the Deck once — the 'input' group and the"
-warn "vhci-hcd module only become live for the host service on a fresh login."
+warn "vhci-hcd module only become live for the host service after a reboot."
 GRANT_SRC="$SRC/scripts/headless/kde-authorized"
 GRANT_DST="$HOME/.local/share/flatpak/db/kde-authorized"
 if [ ! -s "$GRANT_DST" ] && [ -s "$GRANT_SRC" ]; then
