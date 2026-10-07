@@ -1,7 +1,7 @@
 // sseRoute: frame format + integration with the toWebHandler pipeline.
 import { describe, expect, test } from "bun:test";
 import { Layer, Schedule, Stream } from "effect";
-import { HttpRouter } from "effect/unstable/http";
+import { HttpRouter } from "effect/http";
 import { httpApiEnv, sseRoute } from "../src/index.js";
 
 describe("sseRoute", () => {

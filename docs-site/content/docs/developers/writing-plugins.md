@@ -93,7 +93,7 @@ the console settings form and the CLI. Four files:
   "dependencies": {
     "@punktfunk/host": "^0.3.0",
     "@punktfunk/plugin-kit": "^0.9.0",
-    "effect": "4.0.0-beta.99"
+    "effect": "4.0.1"
   },
   "punktfunk": {
     "schema": 1,

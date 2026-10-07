@@ -5,7 +5,7 @@
 import { type PluginUiHandle, servePluginUi } from "@punktfunk/host";
 import { decodeHostEvent, type GameRef } from "@punktfunk/host/core";
 import { Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect";
-import { Etag, HttpPlatform, HttpRouter } from "effect/unstable/http";
+import { Etag, HttpPlatform, HttpRouter } from "effect/http";
 import type { ConfigService } from "./config.js";
 import { makeInstallHandler, type ServeUiInstall } from "./downloads.js";
 import { UiServeError } from "./errors.js";
@@ -30,7 +30,7 @@ export const httpApiEnv = Layer.provideMerge(
  * Returns `null` when derivation isn't possible, which the console reads as "render the raw JSON
  * editor instead" — the fallback that bounds this whole feature's risk.
  *
- * Authoring rules, verified against effect 4.0.0-beta.99 and pinned by
+ * Authoring rules, verified against effect 4.0.1 and pinned by
  * `test/library-config.test.ts` — if an effect upgrade changes any of them, that test fails:
  *
  * * Use `Schema.Finite` / `Schema.Int`, **never `Schema.Number`** — Number's *encoded* form admits
@@ -41,8 +41,8 @@ export const httpApiEnv = Layer.provideMerge(
  *   time with "Not a valid effect" — deriving is not evidence that the schema works.
  * * Annotate every field: `.annotate({ title, description, default })`. The derivation does NOT
  *   infer `default` from `withDecodingDefaultKey`, so an un-annotated field shows no placeholder.
- * * A *checked* schema (`Schema.Int`, or anything with `.check(...)`) nests its annotations and
- *   constraints under `allOf`, so a form must merge those branches, not read only the top level.
+ * * A *checked* schema (`Schema.Int`, or anything with `.check(...)`) keeps its annotations and
+ *   constraints on the property itself; a form still merges `allOf` branches when one appears.
  * * `Schema.Literals([...])` derives a clean `enum` — prefer it over a union of strings. A union of
  *   non-literals derives an `anyOf`, which is the JSON-editor fallback case.
  * * Fields carrying `withDecodingDefaultKey(..., { encodingStrategy: "omit" })` correctly drop out

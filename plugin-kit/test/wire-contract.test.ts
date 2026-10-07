@@ -13,8 +13,16 @@ import type {
 	ProviderEntry,
 } from "../src/wire.js";
 
-type SameKeys<A, B> = [keyof A] extends [keyof B]
-	? [keyof B] extends [keyof A]
+/** The named keys: the generated types also carry a `[x: string]` index for unknown fields. */
+type Known<T> = keyof {
+	[K in keyof T as string extends K
+		? never
+		: number extends K
+			? never
+			: K]: T[K];
+};
+type SameKeys<A, B> = [Known<A>] extends [Known<B>]
+	? [Known<B>] extends [Known<A>]
 		? true
 		: false
 	: false;
