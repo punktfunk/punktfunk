@@ -1,14 +1,18 @@
 import Section from "@unom/ui/section";
 import {
+	AppWindow,
 	Check,
 	CircleX,
+	Gamepad2,
 	ImageMinus,
 	ImagePlus,
 	Pencil,
 	Plus,
 	Trash2,
 	TriangleAlert,
+	Users,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { type FC, useEffect, useRef, useState } from "react";
 import type { ProfileAdmin } from "@/api/gen/model/profileAdmin";
 import type { ProfileCreate } from "@/api/gen/model/profileCreate";
@@ -21,6 +25,7 @@ import {
 } from "@/components/password-confirm";
 import { ProfileAvatar } from "@/components/profile-avatar";
 import { QueryState } from "@/components/query-state";
+import { ROW, Stagger } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,6 +45,12 @@ import { fmtDateTimeSecs } from "@/lib/format";
 import type { Loadable } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+import {
+	AccentPicker,
+	type Choice,
+	ChoiceCards,
+	PicturePicker,
+} from "./pickers";
 
 /** The colours **Add profile** offers. The host takes any `#RRGGBB`. */
 export const ACCENTS = [
@@ -439,8 +450,8 @@ const ProfileRow: FC<{
 type Outcome = "shared" | "steam" | "seats";
 
 /**
- * **Add profile**: a name, a colour, a picture, then one question answered as outcomes. The home
- * follows the answer on the host.
+ * **Add profile**: the picture beside a name and a colour, then one question answered as
+ * outcomes. The home follows the answer on the host.
  */
 export const AddProfileDialog: FC<{
 	open: boolean;
@@ -492,20 +503,17 @@ export const AddProfileDialog: FC<{
 			picture,
 		);
 	};
-	const outcomes: {
-		id: Outcome;
-		label: string;
-		hint: string;
-		disabled: boolean;
-	}[] = [
+	const outcomes: Choice<Outcome>[] = [
 		{
 			id: "shared",
+			icon: <Users />,
 			label: m.profiles_outcome_shared({ owner: ownerName }),
 			hint: m.profiles_outcome_shared_hint(),
 			disabled: false,
 		},
 		{
 			id: "steam",
+			icon: <Gamepad2 />,
 			label: m.profiles_plays_steam(),
 			hint: !linux
 				? m.profiles_outcome_needs_linux()
@@ -518,6 +526,7 @@ export const AddProfileDialog: FC<{
 		},
 		{
 			id: "seats",
+			icon: <AppWindow />,
 			label: m.profiles_outcome_desktop(),
 			hint: windows
 				? seatsOn
@@ -533,108 +542,65 @@ export const AddProfileDialog: FC<{
 	];
 	return (
 		<Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-			<DialogContent className="max-w-md">
+			<DialogContent className="max-w-md sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>{m.profiles_add()}</DialogTitle>
 				</DialogHeader>
 				<form
-					className="flex flex-col gap-4"
 					onSubmit={(e) => {
 						e.preventDefault();
 						if (!isPending) submit();
 					}}
 				>
-					<div className="space-y-2">
-						<Label htmlFor="profile-name">{m.profiles_name()}</Label>
-						<Input
-							id="profile-name"
-							autoFocus
-							autoComplete="off"
-							maxLength={32}
-							value={name}
-							onChange={(e) => setName(e.target.value)}
-						/>
-					</div>
-					<div className="flex items-center gap-4">
-						<ProfileAvatar
-							profile={{
-								id: "new",
-								display_name: name || "?",
-								accent,
-							}}
-							className="size-11"
-						/>
-						<fieldset className="flex flex-wrap gap-2">
-							<legend className="sr-only">{m.profiles_colour()}</legend>
-							{ACCENTS.map((c) => (
-								<button
-									key={c}
-									type="button"
-									aria-label={c}
-									aria-pressed={accent === c}
-									onClick={() => setAccent(c)}
-									className={cn(
-										"size-6 rounded-full ring-offset-2 ring-offset-background",
-										accent === c && "ring-2 ring-foreground",
-									)}
-									style={{ backgroundColor: c }}
+					<Stagger className="flex flex-col gap-5">
+						<motion.div variants={ROW} className="flex items-start gap-4">
+							<PicturePicker
+								name={name}
+								accent={accent}
+								picture={picture}
+								onPick={setPicture}
+							/>
+							<div className="min-w-0 flex-1 space-y-4">
+								<div className="space-y-2">
+									<Label htmlFor="profile-name">{m.profiles_name()}</Label>
+									<Input
+										id="profile-name"
+										autoFocus
+										autoComplete="off"
+										maxLength={32}
+										value={name}
+										onChange={(e) => setName(e.target.value)}
+									/>
+								</div>
+								<AccentPicker
+									colours={ACCENTS}
+									value={accent}
+									onChange={setAccent}
 								/>
-							))}
-						</fieldset>
-					</div>
-					<div className="space-y-2">
-						<Label htmlFor="profile-picture">{m.profiles_picture_set()}</Label>
-						<Input
-							id="profile-picture"
-							type="file"
-							accept="image/png,image/jpeg"
-							onChange={(e) => setPicture(e.target.files?.[0] ?? null)}
-						/>
-					</div>
-					<fieldset className="flex flex-col gap-2">
-						<legend className="mb-2 text-sm font-medium">
-							{m.profiles_plays_question()}
-						</legend>
-						{outcomes.map((o) => (
-							<label
-								key={o.id}
-								className={cn(
-									"flex cursor-pointer gap-3 rounded-md border p-3",
-									outcome === o.id && "border-primary bg-primary/5",
-									o.disabled && "cursor-not-allowed opacity-50",
-								)}
+							</div>
+						</motion.div>
+						<motion.div variants={ROW}>
+							<ChoiceCards
+								label={m.profiles_plays_question()}
+								value={outcome}
+								choices={outcomes}
+								onChange={setOutcome}
+							/>
+						</motion.div>
+						<DialogFooter>
+							<Button
+								type="button"
+								variant="outline"
+								onClick={onCancel}
+								disabled={isPending}
 							>
-								<input
-									type="radio"
-									name="profile-outcome"
-									className="mt-1"
-									value={o.id}
-									checked={outcome === o.id}
-									disabled={o.disabled}
-									onChange={() => setOutcome(o.id)}
-								/>
-								<span>
-									<span className="block text-sm font-medium">{o.label}</span>
-									<span className="block text-xs text-muted-foreground">
-										{o.hint}
-									</span>
-								</span>
-							</label>
-						))}
-					</fieldset>
-					<DialogFooter>
-						<Button
-							type="button"
-							variant="outline"
-							onClick={onCancel}
-							disabled={isPending}
-						>
-							{m.common_cancel()}
-						</Button>
-						<Button type="submit" disabled={isPending || !name.trim()}>
-							{m.profiles_add()}
-						</Button>
-					</DialogFooter>
+								{m.common_cancel()}
+							</Button>
+							<Button type="submit" disabled={isPending || !name.trim()}>
+								{m.profiles_add()}
+							</Button>
+						</DialogFooter>
+					</Stagger>
 				</form>
 			</DialogContent>
 		</Dialog>
