@@ -343,7 +343,7 @@ windows-service = "0.8"
 winreg = "0.56"
 # The pad-audio capture thread's COM init and the `pad-endpoint reshape` devtest's sample types;
 # capture itself lives in pf-audio.
-wasapi = "0.24"
+wasapi = "0.25"
 # Shared host<->driver wire contract for the pf-vdisplay IddCx virtual-display backend: the
 # control-plane IOCTL codes + `#[repr(C)] Pod` request/reply structs, defined ONCE so host<->driver
 # ABI drift is a compile error (used from `capture.rs`). The `bytemuck` that serializes those

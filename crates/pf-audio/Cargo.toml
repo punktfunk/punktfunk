@@ -41,7 +41,7 @@ pf-paths = { path = "../pf-paths" }
 # `multi_sz` for the minted devnodes' hardware id.
 pf-win-display = { path = "../pf-win-display" }
 # WASAPI loopback capture and the virtual-mic render.
-wasapi = "0.24"
+wasapi = "0.25"
 # Device-parameter reads and the uninstall sweep of minted devnodes.
 winreg = "0.56"
 # The seat marker on minted devnodes is a SHA-256 of the seat id (minted.rs).

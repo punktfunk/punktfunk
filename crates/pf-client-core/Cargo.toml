@@ -195,7 +195,7 @@ x11rb = { version = "0.14", default-features = false, optional = true }
 socket2 = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-wasapi = { version = "0.24", optional = true }
+wasapi = { version = "0.25", optional = true }
 # Native D3D11VA decode (M5 of the native-decode program): the hand-declared DXVA buffer
 # layouts and the AuPlan → picparams/qmatrix/slice-control conversion that video_d3d11_native
 # submits. Windows-only because the rung is; the crate itself is cross-platform CPU code so
