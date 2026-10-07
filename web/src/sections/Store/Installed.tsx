@@ -1,7 +1,9 @@
+import { Link } from "@tanstack/react-router";
 import { ArrowUpCircle, Ban, Circle, Package, Trash2 } from "lucide-react";
 import type { FC } from "react";
 import type { InstalledView } from "@/api/gen/model";
 import type { PluginAccessSnapshot } from "@/api/gen/model/pluginAccessSnapshot";
+import { uiPlugins, usePlugins } from "@/api/plugins";
 import { useInstalledPlugins } from "@/api/store";
 import { QueryState } from "@/components/query-state";
 import { ROW, ROW_GAP, staggerProps } from "@/components/stagger";
@@ -50,6 +52,7 @@ export const InstalledTab: FC<{
 }) => {
 	const installed = useInstalledPlugins();
 	const access = usePluginAccess();
+	const plugins = usePlugins();
 	return (
 		<div className="flex flex-col gap-card">
 			<RunnerCardSection />
@@ -64,6 +67,7 @@ export const InstalledTab: FC<{
 				access={access.access.data}
 				accessBusy={access.busy}
 				onAccessDecision={access.onDecide}
+				pages={new Set(uiPlugins(plugins.data).map((p) => p.id))}
 			/>
 		</div>
 	);
@@ -110,6 +114,8 @@ export const InstalledList: FC<{
 		paths: string[],
 		decision: AccessDecision,
 	) => void;
+	/** Plugin ids with a page of their own; their row's title opens it. */
+	pages?: Set<string>;
 }> = ({
 	installed,
 	onUpdate,
@@ -121,6 +127,7 @@ export const InstalledList: FC<{
 	access = [],
 	accessBusy = false,
 	onAccessDecision = () => {},
+	pages = new Set(),
 }) => {
 	const rows = installed.data ?? [];
 	return (
@@ -159,7 +166,17 @@ export const InstalledList: FC<{
 										className="align-top"
 									>
 										<TableCell className="py-4">
-											<div className="font-medium">{p.title ?? p.pkg}</div>
+											{p.plugin_id && pages.has(p.plugin_id) ? (
+												<Link
+													to="/plugins/$pluginId/$"
+													params={{ pluginId: p.plugin_id, _splat: "" }}
+													className="font-medium hover:underline"
+												>
+													{p.title ?? p.pkg}
+												</Link>
+											) : (
+												<div className="font-medium">{p.title ?? p.pkg}</div>
+											)}
 											<div className="font-mono text-xs text-muted-foreground">
 												{p.pkg}
 											</div>

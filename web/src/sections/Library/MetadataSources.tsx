@@ -1,13 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import {
-	ArrowDown,
-	ArrowUp,
-	Check,
-	Download,
-	Images,
-	Settings2,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Images, Settings2 } from "lucide-react";
 import { motion } from "motion/react";
 import { type FC, useState } from "react";
 import {
@@ -24,10 +17,10 @@ import { useInstallPlugin } from "@/api/store";
 import { ROW, ROW_GAP, Stagger } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
+import { AddSourceRail, SourceGroup } from "./AddSource";
 import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 import { useSourceNames } from "./Sources";
@@ -111,15 +104,12 @@ export const MetadataSourcesSection: FC = () => {
 	const labelOf = (id: string) => nameOf(id) ?? id;
 	return (
 		<>
-			<Card>
-				<CardHeader className="pb-3">
-					<CardTitle className="flex items-center gap-2">
-						<Images className="size-4" />
-						{m.library_metadata_title()}
-					</CardTitle>
-				</CardHeader>
-				<CardContent className="space-y-4">
-					<Stagger gap={ROW_GAP} className="flex flex-col gap-2">
+			<SourceGroup
+				icon={<Images className="size-4" />}
+				title={m.library_metadata_title()}
+			>
+				<div className="space-y-4">
+					<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
 						{sources.map((source, i) => (
 							<MetadataSourceRow
 								key={source.id}
@@ -140,7 +130,7 @@ export const MetadataSourcesSection: FC = () => {
 							<motion.div
 								key={entry.pkg}
 								variants={ROW}
-								className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+								className="flex flex-wrap items-center gap-3 py-3"
 							>
 								<span className="text-sm font-medium">{entry.title}</span>
 								<Badge
@@ -159,28 +149,13 @@ export const MetadataSourcesSection: FC = () => {
 					<p className="max-w-prose text-xs text-muted-foreground">
 						{m.library_metadata_help()}
 					</p>
-					{available.length > 0 && (
-						<div className="space-y-2 border-t pt-4">
-							<p className="text-sm font-medium">{m.library_add_source()}</p>
-							<div className="flex flex-wrap gap-2">
-								{available.map((entry) => (
-									<Button
-										key={entry.pkg}
-										size="sm"
-										variant="outline"
-										disabled={catalog.data?.busy === true || install.isPending}
-										title={entry.description}
-										onClick={() => onInstall(entry)}
-									>
-										<Download className="size-4" />
-										{entry.title}
-									</Button>
-								))}
-							</div>
-						</div>
-					)}
-				</CardContent>
-			</Card>
+					<AddSourceRail
+						entries={available}
+						busy={catalog.data?.busy === true || install.isPending}
+						onInstall={onInstall}
+					/>
+				</div>
+			</SourceGroup>
 			{settingsFor && (
 				<SourceSettingsDialog
 					source={{ id: settingsFor, label: labelOf(settingsFor) }}
@@ -221,7 +196,7 @@ const MetadataSourceRow: FC<{
 	return (
 		<motion.div
 			variants={ROW}
-			className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+			className="flex flex-wrap items-center gap-3 py-3"
 		>
 			<Button
 				size="sm"

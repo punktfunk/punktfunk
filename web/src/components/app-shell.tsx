@@ -7,7 +7,7 @@ import { pluginIcon, uiPlugins, usePlugins } from "@/api/plugins";
 import { BrandMark } from "@/components/brand-mark";
 import { ROW, Stagger, staggerProps } from "@/components/stagger";
 import { Wordmark } from "@/components/wordmark";
-import { changeLocale, type Locale, locales, useLocale } from "@/lib/i18n";
+import { useLocale } from "@/lib/i18n";
 import {
 	MANAGE,
 	type NavEntry,
@@ -95,14 +95,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 					<Wordmark className="hidden h-4 lg:block" />
 				</Link>
 				<Sidebar />
-				<div className="mt-auto hidden pt-4 lg:block">
-					<LanguageSwitcher />
-				</div>
 			</aside>
 
 			<div className="flex flex-1 flex-col overflow-x-hidden">
-				{/* Mobile top bar (< sm): brand only. The language switch is a set-once control,
-				    so on a phone it lives in Settings rather than in every screen's chrome. */}
+				{/* Mobile top bar (< sm): brand only. Language is set once, in Settings. */}
 				<header className="flex items-center gap-2 border-b bg-card/40 px-4 py-3 sm:hidden">
 					<BrandMark className="size-6" />
 					<Wordmark className="h-3.5" />
@@ -472,29 +468,5 @@ function MorePluginRow({
 				</span>
 			</Link>
 		</motion.li>
-	);
-}
-
-export function LanguageSwitcher() {
-	const current = useLocale();
-	return (
-		// biome-ignore lint/a11y/useSemanticElements: an aria-labelled role="group" is the right pattern for this small control cluster — no single semantic element fits.
-		<div className="flex gap-1" role="group" aria-label={m.settings_language()}>
-			{locales.map((l: Locale) => (
-				<button
-					key={l}
-					type="button"
-					onClick={() => changeLocale(l)}
-					className={cn(
-						"rounded px-2 py-1 text-xs uppercase transition-colors",
-						l === current
-							? "bg-primary/20 text-foreground font-medium"
-							: "text-muted-foreground hover:text-foreground",
-					)}
-				>
-					{l}
-				</button>
-			))}
-		</div>
 	);
 }

@@ -11,9 +11,9 @@ import {
 } from "@/api/gen/emulators/emulators";
 import type { EmulatorStatus } from "@/api/gen/model/emulatorStatus";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { m } from "@/paraglide/messages";
+import { SourceGroup } from "./AddSource";
 
 /** One line on where the emulator is, or why it is not. */
 const Where: FC<{ e: EmulatorStatus }> = ({ e }) => {
@@ -96,21 +96,16 @@ export const EmulatorsCard: FC = () => {
 	const list = rows.data ?? [];
 	if (list.length === 0) return null;
 	return (
-		<Card>
-			<CardHeader className="pb-3">
-				<CardTitle className="flex items-center gap-2">
-					<Cpu className="size-4" />
-					{m.emulators_title()}
-				</CardTitle>
-				<p className="text-sm text-muted-foreground">
-					{m.emulators_description()}
-				</p>
-			</CardHeader>
-			<CardContent className="space-y-2">
+		<SourceGroup
+			icon={<Cpu className="size-4" />}
+			title={m.emulators_title()}
+			description={m.emulators_description()}
+		>
+			<div className="divide-y">
 				{list.map((e) => (
 					<div
 						key={e.id}
-						className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border p-3"
+						className="flex flex-wrap items-center gap-x-3 gap-y-1 py-3"
 					>
 						<div className="min-w-0 flex-1">
 							<div className="text-sm font-medium">{e.name}</div>
@@ -166,7 +161,7 @@ export const EmulatorsCard: FC = () => {
 						)}
 					</div>
 				))}
-			</CardContent>
-		</Card>
+			</div>
+		</SourceGroup>
 	);
 };

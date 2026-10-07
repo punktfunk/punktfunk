@@ -64,8 +64,8 @@ Every seat shares one set of **Seats** settings on **Host**, shown while seats a
 - **End a seat's stream when its game exits**: off keeps streaming the seat's desktop.
 - **Highest mode per seat**, such as `2560x1440@120`: a device's own cap outranks it.
 
-**Library**, **Game sources** and **Plugins** are per seat: once a seat exists, a chip (**Whose
-library**, **Whose plugins**) switches the page to that seat's own.
+**Library**, **Game sources** and **Plugins** are per seat: once a seat exists, the page's title
+(**Anna's library ▾**) switches it to another seat's own.
 
 ## On Linux
 
@@ -91,7 +91,7 @@ What turning it on does:
   runs the host from then on. Paired clients keep working: the fingerprint is the same.
 - **You become a seat.** Your own `punktfunk-host` moves to the first seat's ports and serves
   your library, plugins and Steam from your own home. The console reaches it from **Library**,
-  **Game sources** and **Plugins**; a chip, **Whose library**, picks another seat's.
+  **Game sources** and **Plugins**; the page's title, **Anna's library ▾**, picks another seat's.
 - **The monitor wins.** When you log in at the machine, the background session ends within a few
   seconds and your own session hosts you. Streams on the background session end, and the client
   reconnects. Nothing on your monitor is closed.

@@ -9,7 +9,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { type FC, useMemo, useState } from "react";
+import { type FC, type ReactNode, useMemo, useState } from "react";
 import {
 	getListLibraryScannersQueryKey,
 	useDeleteProviderEntries,
@@ -32,20 +32,23 @@ import { apiErrorMessage } from "@/lib/errors";
 import { m } from "@/paraglide/messages";
 import { EmulatorsCard } from "@/sections/Library/Emulators";
 import { PendingAccess, usePluginAccess } from "@/sections/PluginAccess";
+import { AddSourceRail, SourceGroup } from "./AddSource";
 import { refreshLibrary } from "./helpers";
 import { SourceSettingsDialog } from "./SourceSettings";
 
 /**
- * Game sources: enablement, liveness, counts, actions, and pending folder access in one list.
- * A pending request appears here because this is where missing games are visible; decisions update
- * the shared access snapshot. N-1 hosts may still report built-in scanners, so migration controls
- * remain beside plugin sources until those hosts age out.
+ * The Sources tab: one card of sections — Game sources, Emulators, Art & metadata — with the
+ * migration banner above it. Game sources: enablement, liveness, counts, actions, and pending
+ * folder access in one list, because this is where missing games are visible. N-1 hosts may
+ * still report built-in scanners, so migration stays until those hosts age out.
  */
 export const SourcesSection: FC<{
 	/** The provider currently filtered to in the grid, or null for "everything". */
 	activeFilter: string | null;
 	onFilter: (provider: string | null) => void;
-}> = ({ activeFilter, onFilter }) => {
+	/** Art & metadata: the box's, absent on a seat. */
+	metadata?: ReactNode;
+}> = ({ activeFilter, onFilter, metadata }) => {
 	const qc = useQueryClient();
 	const { confirm } = useDialogs();
 	const scanners = useListLibraryScanners();
@@ -166,23 +169,28 @@ export const SourcesSection: FC<{
 					onInstall={onInstall}
 				/>
 			)}
-			<SourcesCard
-				sources={sources}
-				available={available}
-				running={running}
-				busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
-				installBusy={catalog.data?.busy === true || install.isPending}
-				activeFilter={activeFilter}
-				onToggle={onToggle}
-				onFilter={onFilter}
-				onSettings={setSettingsFor}
-				onPurge={onPurge}
-				onInstall={onInstall}
-				access={access.access.data}
-				accessBusy={access.busy}
-				onAccessDecision={access.onDecide}
-			/>
-			<EmulatorsCard />
+			<Card>
+				<CardContent className="space-y-8">
+					<SourcesCard
+						sources={sources}
+						available={available}
+						running={running}
+						busyId={toggle.isPending ? (toggle.variables?.id ?? null) : null}
+						installBusy={catalog.data?.busy === true || install.isPending}
+						activeFilter={activeFilter}
+						onToggle={onToggle}
+						onFilter={onFilter}
+						onSettings={setSettingsFor}
+						onPurge={onPurge}
+						onInstall={onInstall}
+						access={access.access.data}
+						accessBusy={access.busy}
+						onAccessDecision={access.onDecide}
+					/>
+					<EmulatorsCard />
+					{metadata}
+				</CardContent>
+			</Card>
 			{settingsFor && (
 				<SourceSettingsDialog
 					source={settingsFor}
@@ -236,7 +244,8 @@ export const MigrationBanner: FC<{
 	</Card>
 );
 
-/** Presentational source list, including deterministic pending-access states for Storybook. */
+/** Presentational source list, including deterministic pending-access states for Storybook. A
+ * section of the Sources card, not a card of its own. */
 export const SourcesCard: FC<{
 	sources: ScannerInfo[];
 	/** Catalog rows offering a library source that isn't installed yet. */
@@ -277,15 +286,12 @@ export const SourcesCard: FC<{
 	accessInitiallyOpen = false,
 	onAccessDecision = () => {},
 }) => (
-	<Card>
-		<CardHeader className="pb-3">
-			<CardTitle className="flex items-center gap-2">
-				<Boxes className="size-4" />
-				{m.library_sources_title()}
-			</CardTitle>
-		</CardHeader>
-		<CardContent className="space-y-4">
-			<Stagger gap={ROW_GAP} className="flex flex-col gap-2">
+	<SourceGroup
+		icon={<Boxes className="size-4" />}
+		title={m.library_sources_title()}
+	>
+		<div className="space-y-4">
+			<Stagger gap={ROW_GAP} className="flex flex-col divide-y">
 				{sources.map((source) => (
 					<SourceRow
 						key={source.id}
@@ -316,36 +322,13 @@ export const SourcesCard: FC<{
 				{m.library_sources_help()}
 			</p>
 
-			{available.length > 0 && (
-				<div className="space-y-2 border-t pt-4">
-					<p className="text-sm font-medium">{m.library_add_source()}</p>
-					<Stagger gap={ROW_GAP} className="flex flex-wrap gap-2">
-						{available.map((entry) => (
-							<Button
-								key={entry.pkg}
-								size="sm"
-								variant="outline"
-								disabled={installBusy}
-								title={entry.description}
-								onClick={() => onInstall(entry)}
-							>
-								<Download className="size-4" />
-								{entry.title}
-								{/* `detected` is tri-state: only badge a POSITIVE probe. An entry with
-								    no probes for this platform is "unknown", and labelling that "not
-								    installed" would be a lie. */}
-								{entry.detected === true && (
-									<Badge variant="secondary">
-										{m.library_source_detected()}
-									</Badge>
-								)}
-							</Button>
-						))}
-					</Stagger>
-				</div>
-			)}
-		</CardContent>
-	</Card>
+			<AddSourceRail
+				entries={available}
+				busy={installBusy}
+				onInstall={onInstall}
+			/>
+		</div>
+	</SourceGroup>
 );
 
 /** One source row with its controls and the expandable folder requests that explain missing games. */
@@ -387,7 +370,7 @@ const SourceRow: FC<{
 	return (
 		<motion.div
 			variants={ROW}
-			className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+			className="flex flex-wrap items-center gap-3 py-3"
 		>
 			<Button
 				size="sm"

@@ -1,6 +1,7 @@
-// The **Whose library** chip: Library, Game sources and Plugins are per seat, so on a host with a
-// seat of its own they show the box's by default and a seat's on request. Nothing else follows it.
-// A door has no library of its own: its pages show the owner's seat unless another is picked.
+// Whose library: Library, Game sources and Plugins are per seat, so on a host with a seat of its
+// own they show the box's by default and a seat's on request; the pick is the page's title
+// (R10). Nothing else follows it. A door has no library of its own: its pages show the owner's
+// seat unless another is picked.
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { type FC, type ReactNode, useContext } from "react";
 import { useGetHostInfo } from "@/api/gen/host/host";
@@ -97,32 +98,49 @@ export const SeatScopeView: FC<SeatScopeValue & { children: ReactNode }> = ({
 	);
 };
 
-/** The pick. Absent while no seat has a host of its own. */
-export const SeatChip: FC = () => {
+/**
+ * The page's title, which is also the pick: **Anna's library ▾**. Plain `title` while no seat has
+ * a host of its own, or a door has only the owner's.
+ */
+export const SeatTitle: FC<{ title: string }> = ({ title }) => {
 	const scope = useContext(SeatScopeContext);
-	if (!scope || scope.seats.length === 0) return null;
-	// A door with only the owner's seat has nothing to choose.
-	if (scope.door && scope.seats.length < 2) return null;
+	const heading = "text-2xl font-semibold";
+	if (
+		!scope ||
+		scope.seats.length === 0 ||
+		(scope.door && scope.seats.length < 2)
+	)
+		return <h1 className={heading}>{title}</h1>;
+	const of = (name: string) =>
+		scope.page === "plugins"
+			? m.seat_plugins_of({ name })
+			: m.seat_library_of({ name });
 	const label =
 		scope.page === "plugins" ? m.seat_whose_plugins() : m.seat_whose_library();
 	return (
-		<Select
-			value={scope.seat?.id ?? BOX}
-			onValueChange={(v) => scope.pick(v === BOX ? null : v)}
-		>
-			<SelectTrigger aria-label={label} className="w-auto gap-2">
-				<span className="text-muted-foreground">{label}</span>
-				<SelectValue />
-			</SelectTrigger>
-			<SelectContent>
-				{!scope.door && <SelectItem value={BOX}>{scope.ownerName}</SelectItem>}
-				{scope.seats.map((s: SeatChoice) => (
-					<SelectItem key={s.id} value={s.id}>
-						{s.name}
-					</SelectItem>
-				))}
-			</SelectContent>
-		</Select>
+		<h1 className={heading}>
+			<Select
+				value={scope.seat?.id ?? BOX}
+				onValueChange={(v) => scope.pick(v === BOX ? null : v)}
+			>
+				<SelectTrigger
+					aria-label={label}
+					className="h-auto w-auto gap-2 border-0 bg-transparent p-0 text-2xl font-semibold shadow-none dark:bg-transparent"
+				>
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					{!scope.door && (
+						<SelectItem value={BOX}>{of(scope.ownerName)}</SelectItem>
+					)}
+					{scope.seats.map((s: SeatChoice) => (
+						<SelectItem key={s.id} value={s.id}>
+							{of(s.name)}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+		</h1>
 	);
 };
 
