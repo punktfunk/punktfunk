@@ -181,7 +181,7 @@ fn expand_home(p: &str) -> Vec<PathBuf> {
 
 /// `%NAME%/rest` with the variable's value, when the name is one of the machine-wide roots a
 /// Windows launcher installs under. Anything else, or an unset variable, stays as written.
-fn expand_env_prefix(p: &str) -> PathBuf {
+pub(super) fn expand_env_prefix(p: &str) -> PathBuf {
     const ROOTS: [&str; 4] = [
         "ProgramData",
         "ProgramFiles",

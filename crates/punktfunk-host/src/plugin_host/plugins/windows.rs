@@ -535,16 +535,17 @@ fn grant_permission(write: bool) -> &'static str {
     }
 }
 
-/// Grant the runner access to one directory the operator owns, via `icacls /grant:r` so an
-/// existing ACE is replaced rather than stacked.
-///
-/// The Windows runner is `NT AUTHORITY\LocalService`, which holds no ACE anywhere inside a user
-/// profile — so a launcher installed there is invisible to every scanner plugin, and reads exactly
-/// like one that is not installed. This is that grant, without the operator hand-writing a SID.
-///
-/// It stays one directory: every service account holds "bypass traverse checking", so the locked
-/// parents above the target are never access-checked and the rest of the profile stays shut.
+/// The runner's account may reach one directory the operator owns. LocalService holds no ACE
+/// inside a user profile, so without this a launcher installed there reads as not installed.
 pub(super) fn grant(dir: &std::path::Path, write: bool) -> Result<()> {
+    grant_to(LOCAL_SERVICE_SID, dir, write)
+}
+
+/// One grantee's ACE on one directory, `icacls /grant:r` so an earlier one is replaced, never
+/// stacked. The grantee is the runner's account today and a plugin's package SID once each
+/// runs in its own AppContainer. One directory only: a service account bypasses traverse
+/// checks, so the locked parents above it stay shut.
+pub(super) fn grant_to(sid: &str, dir: &std::path::Path, write: bool) -> Result<()> {
     // A typo must not report success — the ACE would land on a name nothing ever reads.
     if !dir.is_dir() {
         bail!(
@@ -554,10 +555,7 @@ pub(super) fn grant(dir: &std::path::Path, write: bool) -> Result<()> {
     }
     let ok = Command::new(icacls_path())
         .arg(dir)
-        .args([
-            "/grant:r",
-            &format!("{LOCAL_SERVICE_SID}:{}", grant_permission(write)),
-        ])
+        .args(["/grant:r", &format!("{sid}:{}", grant_permission(write))])
         .status()
         .context("run icacls")?
         .success();
@@ -572,15 +570,19 @@ pub(super) fn grant(dir: &std::path::Path, write: bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove the runner's ACE from one directory: the inverse of [`grant`]. A folder that is gone
-/// has nothing left to remove.
+/// The inverse of [`grant`].
 pub(super) fn revoke(dir: &std::path::Path) -> Result<()> {
+    revoke_from(LOCAL_SERVICE_SID, dir)
+}
+
+/// Remove one grantee's ACE from one directory. A folder that is gone has nothing to remove.
+pub(super) fn revoke_from(sid: &str, dir: &std::path::Path) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
     let ok = Command::new(icacls_path())
         .arg(dir)
-        .args(["/remove:g", LOCAL_SERVICE_SID])
+        .args(["/remove:g", sid])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -599,6 +601,29 @@ mod tests {
     fn grant_permission_splits_read_from_write() {
         assert_eq!(super::grant_permission(false), "(OI)(CI)(RX)");
         assert_eq!(super::grant_permission(true), "(OI)(CI)(M)");
+    }
+
+    /// Only an `HKLM` key becomes a named key; `HKCU` and anything malformed name nothing.
+    #[test]
+    fn named_key_takes_hklm_only() {
+        assert_eq!(
+            super::named_key(r"HKLM\SOFTWARE\Valve\Steam").as_deref(),
+            Some(r"MACHINE\SOFTWARE\Valve\Steam")
+        );
+        assert_eq!(
+            super::named_key(r"hklm\SOFTWARE\WOW6432Node\Ubisoft").as_deref(),
+            Some(r"MACHINE\SOFTWARE\WOW6432Node\Ubisoft")
+        );
+        for bad in [
+            r"HKCU\Software\Valve\Steam",
+            r"HKLM\",
+            r"HKLM\SOFTWARE\\Valve",
+            r"HKLM\SOFTWARE\..\SAM",
+            "HKLM\\SOFTWARE\\a\u{7}b",
+            r"SOFTWARE\Valve",
+        ] {
+            assert_eq!(super::named_key(bad), None, "{bad}");
+        }
     }
 }
 
@@ -636,12 +661,113 @@ pub(super) fn runner_sandbox_off() -> bool {
     false
 }
 
-/// Nothing to converge: the task sees the whole disk, and a grant is an ACL ([`grant`]).
+/// What this host placed for the runner's account: directories with their write bit, and
+/// registry keys as `SetNamedSecurityInfoW` spells them. A strip reads this, never a manifest
+/// that may have changed since the ACE was placed.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PlacedAces {
+    #[serde(default)]
+    paths: std::collections::BTreeMap<String, bool>,
+    #[serde(default)]
+    keys: std::collections::BTreeSet<String>,
+}
+
+/// Under `plugin-run`, beside the grants it mirrors.
+const RUNNER_ACES_FILE: &str = "runner-aces.json";
+
+/// Every directory a plugin declared or was granted carries the runner's ACE, read or Modify,
+/// and every `HKLM` key it declared its read; what a gone plugin placed is stripped. A root
+/// under the host's own profile is nobody's `~` and gets nothing, and a directory that does
+/// not exist yet waits for the next start. Returns whether anything moved.
 pub(super) fn converge_runner_roots(
-    _roots: &[super::access::RunnerRoot],
-    _home: &std::path::Path,
+    roots: &[access::RunnerRoot],
+    home: &std::path::Path,
+    manifests: &std::collections::BTreeMap<String, manifest::PluginManifest>,
 ) -> Result<bool> {
-    Ok(false)
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let want = PlacedAces {
+        paths: roots
+            .iter()
+            .filter(|r| !r.path.starts_with(&home) && r.path.is_dir())
+            .map(|r| (r.path.to_string_lossy().into_owned(), r.write))
+            .collect(),
+        keys: manifests
+            .values()
+            .flat_map(|m| m.registry.iter())
+            .filter_map(|k| named_key(k))
+            .collect(),
+    };
+    let file = pf_paths::config_dir()
+        .join(RUNNER_DATA_DIR)
+        .join(RUNNER_ACES_FILE);
+    let had: PlacedAces = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    if want == had {
+        return Ok(false);
+    }
+    let sid = LOCAL_SERVICE_SID;
+    let bare_sid = sid.trim_start_matches('*');
+    let mut placed = had.clone();
+    // Stale first: an ACE that outlives its plugin is the leak this file exists to close.
+    for path in had.paths.keys().filter(|p| !want.paths.contains_key(*p)) {
+        match revoke_from(sid, std::path::Path::new(path)) {
+            Ok(()) => {
+                placed.paths.remove(path);
+            }
+            Err(e) => tracing::warn!(%path, error = %e, "runner ACE not removed"),
+        }
+    }
+    for key in had.keys.difference(&want.keys) {
+        match crate::windows::registry_ace::revoke(key, bare_sid) {
+            Ok(()) => {
+                placed.keys.remove(key);
+            }
+            Err(e) => tracing::warn!(%key, error = %format!("{e:#}"), "runner key ACE not removed"),
+        }
+    }
+    for (path, write) in &want.paths {
+        if had.paths.get(path) == Some(write) {
+            continue;
+        }
+        match grant_to(sid, std::path::Path::new(path), *write) {
+            Ok(()) => {
+                placed.paths.insert(path.clone(), *write);
+            }
+            Err(e) => tracing::warn!(%path, error = %e, "runner ACE not placed"),
+        }
+    }
+    for key in want.keys.difference(&had.keys) {
+        match crate::windows::registry_ace::grant_read(key, bare_sid) {
+            Ok(()) => {
+                placed.keys.insert(key.clone());
+            }
+            Err(e) => tracing::warn!(%key, error = %format!("{e:#}"), "runner key ACE not placed"),
+        }
+    }
+    if placed == had {
+        return Ok(false);
+    }
+    pf_paths::replace_file(&file, serde_json::to_string_pretty(&placed)?.as_bytes())
+        .with_context(|| format!("replace {}", file.display()))?;
+    Ok(true)
+}
+
+/// `HKLM\SOFTWARE\…` as `SetNamedSecurityInfoW` names it: `MACHINE\SOFTWARE\…`. An `HKCU` key
+/// is one account's and gets no ACE for the service; anything else is not a key.
+fn named_key(declared: &str) -> Option<String> {
+    let rest = declared
+        .get(..5)
+        .filter(|p| p.eq_ignore_ascii_case("HKLM\\"))
+        .map(|_| &declared[5..])?;
+    let clean = !rest.is_empty()
+        && rest.len() <= 255
+        && !rest.chars().any(char::is_control)
+        && rest
+            .split('\\')
+            .all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains(['/', '*', '?']));
+    clean.then(|| format!("MACHINE\\{rest}"))
 }
 
 /// Stop then start: there is no `Restart-ScheduledTask`, and Start on a running task is a no-op.

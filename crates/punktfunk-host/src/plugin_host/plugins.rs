@@ -471,12 +471,13 @@ pub(crate) fn restart_runtime() -> Result<bool> {
     Ok(true)
 }
 
-/// Give the runner's unit every root a sandbox binds, restarting the runner when that set
-/// changed. bwrap binds from the runner's own view, and the unit empties the home, so a grant
-/// or manifest read missing from the unit never reaches the plugin.
+/// Give the runner every root a plugin declared or was granted: on Linux the unit's drop-in,
+/// which bwrap binds from and whose empty home hides the rest, restarting the runner when the
+/// set changed; on Windows an ACE per root for the runner's account, stripped when its plugin
+/// goes.
 pub(crate) fn converge_runner_roots() {
-    // Tests never write the operator's systemd config; only a Linux unit hides the home.
-    if cfg!(test) || !cfg!(target_os = "linux") || !runtime_status().installed {
+    // Tests never touch the operator's systemd config or a folder's ACL; macOS has no runner.
+    if cfg!(test) || !(cfg!(target_os = "linux") || cfg!(windows)) || !runtime_status().installed {
         return;
     }
     // Two quick decisions must not race: the later one reads the grants the earlier wrote.
@@ -485,9 +486,9 @@ pub(crate) fn converge_runner_roots() {
     let Some(home) = manifest::home_dir() else {
         return;
     };
-    let roots =
-        access::AccessStore::open(pf_paths::config_dir()).runner_roots(&manifest::installed());
-    match plat::converge_runner_roots(&roots, &home) {
+    let manifests = manifest::installed();
+    let roots = access::AccessStore::open(pf_paths::config_dir()).runner_roots(&manifests);
+    match plat::converge_runner_roots(&roots, &home, &manifests) {
         Ok(true) => tracing::info!(roots = roots.len(), "plugin runner roots updated"),
         Ok(false) => {}
         Err(e) => tracing::warn!(error = %format!("{e:#}"), "plugin runner roots not updated"),

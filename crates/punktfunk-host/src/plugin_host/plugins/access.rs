@@ -250,11 +250,12 @@ fn rel_after(path: &Path, base: &Path) -> Option<String> {
     }
 }
 
-/// A grant or manifest path: `~/x` expands against the policy home, anything else is as stored.
+/// A grant or manifest path: `~/x` expands against the policy home, a `%ProgramData%`-style
+/// prefix against the machine's root it names, anything else is as stored.
 fn home_path(p: &str, policy: &PathPolicy) -> PathBuf {
     match p.strip_prefix("~/") {
         Some(rest) if !policy.home.as_os_str().is_empty() => policy.home.join(rest),
-        _ => PathBuf::from(p),
+        _ => super::manifest::expand_env_prefix(p),
     }
 }
 
