@@ -25,9 +25,9 @@
 # the target triple (SDL3 + libopus build-from-source cross-compile fine). The one thing the aarch64
 # build can't do is *run* on the x64 host, so fmt + test run only for x64.
 #
-# ARM64 note: rust-skia publishes no aarch64-pc-windows-msvc prebuilt binaries, so the session builds
-# --no-default-features there (no Skia console UI; streaming is unaffected) — flip when
-# skia-binaries adds the target.
+# ARM64 note: the session builds --no-default-features there (no Skia console UI; streaming is
+# unaffected). rust-skia 0.153.3 publishes aarch64-pc-windows-msvc archives, so the
+# flag can go once the console is wanted on ARM64.
 #
 # NO FFmpeg here since M10 (design/client-native-decode.md §6): the client decodes with
 # pf-vkdecode / pf-dxvadec / openh264+rav1d and links no libav* at all, so this workflow sets
@@ -219,9 +219,8 @@ jobs:
           - arch: arm64
             target: aarch64-pc-windows-msvc
             td: C:\t-a64
-            # No skia-binaries prebuilt for aarch64-pc-windows-msvc: the session ships
-            # without the Skia console UI on ARM64 (streaming unaffected) — flip when
-            # rust-skia adds the target.
+            # The session ships without the Skia console UI on ARM64 (streaming unaffected).
+            # rust-skia 0.153.3 publishes the aarch64-pc-windows-msvc archive.
             session_flags: '--no-default-features'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

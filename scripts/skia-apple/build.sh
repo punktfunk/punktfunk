@@ -1,13 +1,13 @@
 #!/bin/bash
 # Build the Apple Skia archives rust-skia does not publish (tvOS and visionOS, device and arm64
-# simulator), for the skia-bindings version pf-console-ui pins. Its build script has neither
-# platform; the patch beside this adds both. Upload the archives to
+# simulator), for the skia-bindings version pf-console-ui pins. Its build script knows visionOS
+# but not tvOS; the patch beside this adds tvOS. Upload the archives to
 # git.unom.io/unom/skia-binaries under the same tag, then pin their SHA-256s in
 # scripts/build-xcframework.sh.
 # usage: scripts/skia-apple/build.sh <work-dir> [target...]   (about 6 GB; Skia builds in minutes)
 set -euo pipefail
-VER=0.99.0
-HASH=a25a0fdb7d90429aa2d1
+VER=0.153.3
+HASH=b7f043e0b1e2a850e702
 HERE=$(cd "$(dirname "$0")" && pwd)
 NIGHTLY=$(sed -n 's/^NIGHTLY=//p' "$HERE/../build-xcframework.sh")
 mkdir -p "$1"
@@ -36,7 +36,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-skia-safe = { version = "=$VER", features = ["metal", "textlayout"] }
+skia-safe = { version = "=$VER", features = ["metal", "ganesh", "textlayout"] }
 
 [patch.crates-io]
 skia-bindings = { path = "../skia-bindings" }
@@ -51,7 +51,7 @@ for T in "${TARGETS[@]}"; do
         -Z build-std=std,panic_abort --target "$T")
     LIBS=$(find "$WORK/target/$T/release/build" -path '*skia-bindings*' -name libskia.a)
     OUT=$(dirname "$(ls -t $LIBS | head -1)")
-    KEY="$HASH-$T-jpegd-jpege-metal-pdf-textlayout"
+    KEY="$HASH-$T-ganesh-jpegd-jpege-metal-pdf-textlayout"
     STAGE="$WORK/stage/$T/skia-binaries"
     rm -rf "$WORK/stage/$T"
     mkdir -p "$STAGE"

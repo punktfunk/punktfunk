@@ -15,8 +15,8 @@ use skia_safe::textlayout::{
     TypefaceFontProvider,
 };
 use skia_safe::{
-    gradient, Canvas, Color4f, Font, FontMgr, FontStyle, MaskFilter, Paint, PathEffect, Point,
-    RRect, Rect, TileMode, Typeface,
+    gradient, Canvas, Color4f, Data, Font, FontMgr, FontStyle, MaskFilter, Paint, PathEffect,
+    Point, RRect, Rect, TileMode, Typeface,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -748,7 +748,7 @@ const GEIST_BOLD: &[u8] = include_bytes!("../assets/fonts/Geist-Bold.otf");
 pub fn build_fonts() -> Result<Fonts> {
     let mgr = FontMgr::new();
     let load = |bytes: &[u8], which: &str| {
-        mgr.new_from_data(bytes, None)
+        mgr.new_from_data(Data::new_copy(bytes), None)
             .ok_or_else(|| anyhow!("embedded Geist face rejected: {which}"))
     };
     let regular = load(GEIST_REGULAR, "Regular")?;

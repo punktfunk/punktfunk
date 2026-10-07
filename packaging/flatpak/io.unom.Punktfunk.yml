@@ -329,7 +329,7 @@ modules:
       # One cargo invocation for both binaries: the shell and the Vulkan session binary it
       # execs for --connect/--browse. Building them together keeps skia-bindings' feature
       # unification identical to a workspace build (the pinned skia-binaries archive's
-      # `pdf-textlayout-vulkan` key must match the resolved feature set).
+      # `ganesh-…-pdf-textlayout-vulkan` key must match the resolved feature set).
       - cargo --offline build --release -p punktfunk-client-linux -p punktfunk-client-session
           -p punktfunk-cli
       - install -Dm0755 target/release/punktfunk-client ${FLATPAK_DEST}/bin/punktfunk-client
@@ -364,7 +364,7 @@ modules:
         path: ../..
       # Generated offline crate cache (see the comment block above). Remove for --share=network.
       - cargo-sources.json
-      # Prebuilt Skia for skia-bindings 0.99.0 (SKIA_BINARIES_URL above). The key encodes the
+      # Prebuilt Skia for skia-bindings 0.153.3 (SKIA_BINARIES_URL above). The key encodes the
       # crate's pinned skia commit + target + resolved features — when bumping skia-safe, build
       # the workspace once locally and take the new name from
       # target/release/build/skia-bindings-*/out/.cache/, then update url + sha256 together.
@@ -386,11 +386,11 @@ modules:
       # is exactly how the 0.87 → 0.99 bump (#193) left it behind.
       - type: file
         only-arches: [x86_64]
-        url: https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-x86_64-unknown-linux-gnu-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
-        sha256: 158407a4b5ce8738431bb76498be3a44fda770e51d61aac18a0e0e97becdc1de
+        url: https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/skia-binaries-b7f043e0b1e2a850e702-x86_64-unknown-linux-gnu-ganesh-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+        sha256: 1620241c6f2247b6df21c6d201d5668693d2cf214f73dff06d66f40aa40f52b5
         dest-filename: skia-binaries.tar.gz
       - type: file
         only-arches: [aarch64]
-        url: https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-aarch64-unknown-linux-gnu-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
-        sha256: cf5469d1d963f704cc997f9b3342d11c49b917002361947e5c7bf7dcc3f13534
+        url: https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/skia-binaries-b7f043e0b1e2a850e702-aarch64-unknown-linux-gnu-ganesh-jpegd-jpege-pdf-textlayout-vulkan.tar.gz
+        sha256: cae319203264a497291c34b66831e0af724acecaaa407e2f45b6635daeca6f64
         dest-filename: skia-binaries.tar.gz

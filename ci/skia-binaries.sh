@@ -12,9 +12,9 @@
 # Usage: sh ci/skia-binaries.sh <target-triple>...
 set -e
 
-VERSION=0.99.0
-KEY=a25a0fdb7d90429aa2d1
-FEATURES=jpegd-jpege-pdf-textlayout-vulkan
+VERSION=0.153.3
+KEY=b7f043e0b1e2a850e702
+FEATURES=ganesh-jpegd-jpege-pdf-textlayout-vulkan
 DEST=/opt/skia-binaries
 
 # A newer skia-bindings wants archives nobody pinned; stop before cargo falls back to a source build.
@@ -28,13 +28,13 @@ for triple in "$@"; do
   features=$FEATURES
   url=https://github.com/rust-skia/skia-binaries/releases/download/$VERSION
   case $triple in
-    x86_64-unknown-linux-gnu) sha=158407a4b5ce8738431bb76498be3a44fda770e51d61aac18a0e0e97becdc1de ;;
-    aarch64-unknown-linux-gnu) sha=cf5469d1d963f704cc997f9b3342d11c49b917002361947e5c7bf7dcc3f13534 ;;
+    x86_64-unknown-linux-gnu) sha=1620241c6f2247b6df21c6d201d5668693d2cf214f73dff06d66f40aa40f52b5 ;;
+    aarch64-unknown-linux-gnu) sha=cae319203264a497291c34b66831e0af724acecaaa407e2f45b6635daeca6f64 ;;
     # rust-skia's wasm archive uses emscripten exceptions, which Rust's wasm std cannot link.
     # This one is built with -fwasm-exceptions by punktfunk/client-web's build.sh.
     wasm32-unknown-emscripten)
-      sha=b60b81d31578f96ad13892d6b94510a7092e2928e9da6c45170f2ad18f44acdf
-      features=gl-jpegd-jpege-pdf-textlayout
+      sha=e7d8c13c829b041089ec35afecec611556ab9c79b68ce2ecf41a2a2611ec5832
+      features=ganesh-gl-jpegd-jpege-pdf-textlayout
       url=https://git.unom.io/api/packages/unom/generic/skia-binaries/$VERSION ;;
     *) echo "no Skia pin for $triple" >&2; exit 1 ;;
   esac

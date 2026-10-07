@@ -111,9 +111,9 @@ usbfs-iso = { git = "https://github.com/unom-io/usbfs-iso", rev = "ff5468ac68cea
 # C++/Vulkan codec into the `.so` on the 64-bit ABIs (arm64-v8a, x86_64) and nothing at all on
 # armeabi-v7a, where pyrowave-sys stubs itself out — see its build.rs.
 #
-# All three shipping ABIs. rust-skia publishes prebuilt Skia archives for aarch64/x86_64/
-# i686-linux-android but NOT armv7-linux-androideabi (the 32-bit TV boxes) — that one comes from
-# OUR mirror through `SKIA_BINARIES_URL` (kit/build.gradle.kts forwards it; the CI variable of
+# All three shipping ABIs. rust-skia publishes prebuilt Skia archives for aarch64/x86_64 but NOT
+# armv7-linux-androideabi (the 32-bit TV boxes) — that one comes from OUR mirror
+# through `SKIA_BINARIES_URL` (kit/build.gradle.kts forwards it; the CI variable of
 # the same name; sha256 table beside it), built once with skia-bindings itself (design
 # android-skia-console-port.md WP6). 🛑 skia-bindings does not fail when no archive matches — it
 # silently builds Skia from source — so an armeabi-v7a build WITHOUT the mirror url is a
@@ -128,9 +128,9 @@ pf-client-core = { path = "../../../crates/pf-client-core", default-features = f
 # linking it, which is what keeps the `.so` loading on a device with no Vulkan at all — there
 # the probe simply answers no and the client never advertises the codec.
 ash = { workspace = true, features = ["loaded"] }
-# `gl` + `textlayout` = the prebuilt key `gl-jpegd-jpege-pdf-textlayout` (verify
+# `gl` (implies `ganesh`) + `textlayout` = the key `ganesh-gl-jpegd-jpege-pdf-textlayout` (verify
 # `DOWNLOAD AND INSTALL SUCCEEDED` in the build log on every bump — see pf-console-ui/Cargo.toml).
-skia-safe = { version = "0.99", features = ["gl", "textlayout"] }
+skia-safe = { version = "0.153", features = ["gl", "textlayout"] }
 anyhow = "1"
 
 [lints]

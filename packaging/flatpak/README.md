@@ -82,10 +82,11 @@ are now expressed properly rather than hardcoded:
 * **The prebuilt Skia archive** is per-target and pinned by sha256. There are now two `type: file`
   sources discriminated by `only-arches`, both landing on the same `dest-filename`, so
   `SKIA_BINARIES_URL` stays one literal path. Upstream publishes the aarch64 archive under the
-  same skia commit hash and the same resolved-feature key (at 0.99:
-  `jpegd-jpege-pdf-textlayout-vulkan`), so on a skia-safe bump update both URLs and both hashes
-  together. The feature key is **not** stable across bumps — 0.87 was `pdf-textlayout-vulkan`;
-  `jpeg` entering skia-safe's defaults at 0.99 renamed it.
+  same skia commit hash and the same resolved-feature key (at 0.153:
+  `ganesh-jpegd-jpege-pdf-textlayout-vulkan`), so on a skia-safe bump update both URLs and both
+  hashes together. The feature key is **not** stable across bumps — 0.87 was
+  `pdf-textlayout-vulkan`, `jpeg` entering skia-safe's defaults at 0.99 renamed it, and the
+  `ganesh` engine feature joining it at 0.153 renamed it again.
 
 ```sh
 ARCH=aarch64 bash packaging/flatpak/build-flatpak.sh
