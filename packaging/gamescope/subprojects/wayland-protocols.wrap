@@ -1,7 +1,7 @@
 [wrap-git]
 url = https://gitlab.freedesktop.org/wayland/wayland-protocols.git
-# 1.47
-revision = 88223018d1b578d0d8869866da66d9608e05f928
+# 1.49
+revision = ee78491a237eaff9389a0ccf8680521d074407d3
 depth = 1
 
 [provide]
