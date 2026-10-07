@@ -45,6 +45,7 @@ nothing the plugin does at runtime widens it. Without it, a plugin does not star
 | `reads` | Paths the plugin reads. Absolute or `~/`-rooted. A missing path is skipped. |
 | `writes` | Paths it also writes. |
 | `network` | `true` to reach the network. |
+| `registry` | Windows registry keys it reads, as `HKLM\…` or `HKCU\…`. A key under `HKCU`, like a path under `~/`, marks a source that belongs to one account. |
 | `exec` | Named argv templates the host may run for this plugin's titles. |
 
 The sandbox never binds `/`, the home directory or its parents, `/proc`, `/sys`, `/dev`, `/run`
