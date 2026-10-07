@@ -1,8 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@unom/ui/toast";
-import { Monitor, Pencil, ShieldCheck, Unlink } from "lucide-react";
+import { Pencil, Unlink } from "lucide-react";
 import { motion } from "motion/react";
-import { type FC, useState } from "react";
+import { type FC, type ReactNode, useState } from "react";
 import {
 	getListPairedClientsQueryKey,
 	useListPairedClients,
@@ -22,7 +22,7 @@ import {
 import { useDialogs } from "@/components/dialogs";
 import { ROW } from "@/components/stagger";
 import { Badge } from "@/components/ui/badge";
-import { RowActions } from "@/components/ui/menu";
+import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
 import {
 	ClientPolicySheet,
@@ -307,11 +307,10 @@ export function usePairedDevices() {
 	};
 }
 /**
- * One paired device. Its protocol and fingerprint ride the details line; Access, Display and the
- * session it is streaming sit beside it, then Access · Display · Rename · Unpair (⋯ on a phone).
- *
- * A Moonlight device has full control and says so: the GameStream plane is not governed by
- * grants. Rename is a Moonlight verb — its certificate carries nothing that names the device.
+ * One paired device. Its protocol and fingerprint ride the details line. What can be changed is
+ * what you click, each with a pencil: the name (a Moonlight device's, whose certificate carries
+ * none), the access chip, the display line. Unpair is the row's one button. A Moonlight device
+ * has full control and says so: the GameStream plane is not governed by grants.
  */
 export const PairedRowView: FC<{
 	row: PairedRow;
@@ -340,7 +339,9 @@ export const PairedRowView: FC<{
 		className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 py-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,0.6fr)_auto]"
 	>
 		<div className="order-1 min-w-0">
-			<div className="truncate font-medium">{r.name || "—"}</div>
+			<Setting label={m.action_rename()} disabled={busy} onClick={onRename}>
+				<span className="truncate font-medium">{r.name || "—"}</span>
+			</Setting>
 			<div className="truncate text-xs text-muted-foreground">
 				{r.protocol === "native"
 					? m.pairing_protocol_native()
@@ -349,33 +350,17 @@ export const PairedRowView: FC<{
 			</div>
 		</div>
 		<div className="order-2 justify-self-end md:order-5">
-			<RowActions
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label={m.action_unpair()}
+				title={m.action_unpair()}
 				disabled={busy}
-				labelsFrom="xl"
-				actions={[
-					onEditAccess && {
-						label: m.access_edit_title(),
-						icon: <ShieldCheck />,
-						onSelect: onEditAccess,
-					},
-					onDisplaySettings && {
-						label: m.display_device_settings(),
-						icon: <Monitor />,
-						onSelect: onDisplaySettings,
-					},
-					onRename && {
-						label: m.action_rename(),
-						icon: <Pencil />,
-						onSelect: onRename,
-					},
-					{
-						label: m.action_unpair(),
-						icon: <Unlink />,
-						destructive: true,
-						onSelect: onUnpair,
-					},
-				]}
-			/>
+				className="text-muted-foreground hover:text-destructive"
+				onClick={onUnpair}
+			>
+				<Unlink className="size-4" />
+			</Button>
 		</div>
 		<div className="order-3 col-span-1 flex flex-wrap items-center gap-2 md:contents">
 			<div className="md:order-2">
@@ -387,19 +372,39 @@ export const PairedRowView: FC<{
 						{m.access_ungoverned()}
 					</Badge>
 				) : hasAccess(r) ? (
-					<AccessChip
-						grants={r.grants}
-						expiresUnix={r.expiresUnix}
-						untilDisconnect={r.untilDisconnect}
-						nowUnix={nowUnix}
-					/>
+					<Setting
+						label={m.access_edit_title()}
+						disabled={busy}
+						onClick={onEditAccess}
+					>
+						<AccessChip
+							grants={r.grants}
+							expiresUnix={r.expiresUnix}
+							untilDisconnect={r.untilDisconnect}
+							nowUnix={nowUnix}
+						/>
+					</Setting>
 				) : (
 					// A host older than per-client access reports nothing; say nothing.
 					<span className="text-muted-foreground">—</span>
 				)}
 			</div>
-			<div className="truncate text-sm text-muted-foreground md:order-3">
-				{display}
+			<div className="min-w-0 md:order-3">
+				{onDisplaySettings ? (
+					<Setting
+						label={m.display_device_settings()}
+						disabled={busy}
+						onClick={onDisplaySettings}
+					>
+						<span className="truncate text-sm text-muted-foreground">
+							{display ?? m.display_device_settings()}
+						</span>
+					</Setting>
+				) : (
+					<div className="truncate text-sm text-muted-foreground">
+						{display}
+					</div>
+				)}
 			</div>
 			<div className="md:order-4">
 				{streaming && <Badge variant="success">{m.devices_streaming()}</Badge>}
@@ -407,3 +412,26 @@ export const PairedRowView: FC<{
 		</div>
 	</motion.li>
 );
+
+/** A value that opens its own editor on a click; a pencil says so. */
+const Setting: FC<{
+	label: string;
+	disabled?: boolean;
+	onClick?: () => void;
+	children: ReactNode;
+}> = ({ label, disabled, onClick, children }) =>
+	onClick ? (
+		<button
+			type="button"
+			title={label}
+			aria-label={label}
+			disabled={disabled}
+			onClick={onClick}
+			className="group/setting inline-flex max-w-full items-center gap-1.5 rounded-full outline-none ring-offset-2 ring-offset-background focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+		>
+			{children}
+			<Pencil className="size-3 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover/setting:opacity-100 group-focus-visible/setting:opacity-100" />
+		</button>
+	) : (
+		children
+	);
