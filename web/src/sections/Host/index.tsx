@@ -1,6 +1,7 @@
 import type { FC } from "react";
 import { useGetHostInfo, useListCompositors } from "@/api/gen/host/host";
 import { useLocale } from "@/lib/i18n";
+import { AudioWiringSection } from "./AudioWiring";
 import { ConflictsCard } from "./ConflictsCard";
 import { GpuSection } from "./GpuCard";
 import { PowerSection } from "./PowerCard";
@@ -20,6 +21,7 @@ export const SectionHost: FC = () => {
 			gpu={<GpuSection />}
 			update={<UpdateSection />}
 			power={<PowerSection />}
+			audio={<AudioWiringSection />}
 		/>
 	);
 };

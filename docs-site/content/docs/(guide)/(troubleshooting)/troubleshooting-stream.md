@@ -65,7 +65,7 @@ page shows it under **Video encoder sharing**.
 ### The picture freezes for a moment, over and over (Windows)
 
 A freeze on a steady rhythm is a display or driver disturbance, not bandwidth. While it happens,
-**Home** → **Live status** → **Capture health** reads `stalled`.
+the session's row on **Home** → **Details** → **Capture health** reads `stalled`.
 
 Search the log on the console's **Troubleshooting** page for `METRONOMIC`. The line names the cause
 and its cures:

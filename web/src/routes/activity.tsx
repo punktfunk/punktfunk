@@ -1,6 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { SectionActivity } from "@/sections/Activity";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
+// The ring moved onto Home, where Show all expands it. Kept for one release; then delete.
 export const Route = createFileRoute("/activity")({
-	component: SectionActivity,
+	beforeLoad: () => {
+		throw redirect({ to: "/", replace: true });
+	},
 });

@@ -75,7 +75,7 @@ On gamescope the game keeps running as long as its screen does.
 - **Gets its own screen**.
 - **Takes over**: the first device's stream ends.
 - **Shares the screen**: it joins the live screen at that screen's resolution. Both hear the same
-  audio; mute one from the **Sessions** card on **Home**.
+  audio; mute one from its row's **⋯** under **Now** on **Home**.
 - **Is told it's busy**.
 
 On a Windows host a device that shares the screen sees the pointer as part of the picture. It

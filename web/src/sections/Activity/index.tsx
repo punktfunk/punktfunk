@@ -7,15 +7,12 @@
 // In-memory and bounded, so it starts empty on a page load and fills as things happen. That is the
 // honest shape for a live tail — pretending to be a durable log would need the host to keep one.
 //
-// Two surfaces, one list: the dashboard card shows the newest handful, and `/activity` shows the
-// whole ring. The card used to render all 200, which pushed everything below it off the page on a
-// busy host.
+// Home's *Recent*: the newest handful, and Show all expands the whole ring in place. All 200 at
+// once pushed everything below off the page on a busy host.
 
-import { Link } from "@tanstack/react-router";
-import Section from "@unom/ui/section";
-import { Activity as ActivityIcon, ArrowRight } from "lucide-react";
+import { Activity as ActivityIcon, ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import type { FC } from "react";
+import { type FC, useState } from "react";
 import {
 	type ActivityEntry,
 	useActivity,
@@ -28,8 +25,8 @@ import { eventKindLabel } from "@/lib/event-kinds";
 import { fmtDateTime } from "@/lib/format";
 import { m } from "@/paraglide/messages";
 
-/** How many rows the dashboard card keeps. The rest are a click away, not gone. */
-const CARD_MAX = 12;
+/** How many rows the card shows folded. The rest are a click away, not gone. */
+const CARD_MAX = 6;
 
 /** Tighter than the house 0.1 s: a dozen short rows at 0.1 s took over a second to arrive. */
 const ROW_GAP = 0.035;
@@ -110,7 +107,7 @@ export const ActivityList: FC<{ entries: ActivityEntry[] }> = ({ entries }) => (
 	</motion.ul>
 );
 
-/** The dashboard's card: the newest few, with the way to the rest. */
+/** Home's card: the newest few, with the rest folded under Show all. */
 export const ActivityCard: FC = () => {
 	const entries = useActivity();
 	const ready = useActivityReady();
@@ -125,6 +122,7 @@ export const ActivityCard: FC = () => {
 export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 	entries,
 }) => {
+	const [all, setAll] = useState(false);
 	return (
 		<Card>
 			<CardHeader>
@@ -138,56 +136,32 @@ export const ActivityCardView: FC<{ entries: ActivityEntry[] }> = ({
 					<p className="text-sm text-muted-foreground">{m.activity_empty()}</p>
 				) : (
 					<>
-						<ActivityList entries={entries.slice(0, CARD_MAX)} />
-						<div className="flex justify-end border-t pt-3">
-							<Button asChild variant="ghost" size="sm">
-								<Link to="/activity">
-									{m.activity_show_all()}
-									<ArrowRight className="size-4" />
-								</Link>
-							</Button>
-						</div>
+						<ActivityList
+							entries={all ? entries : entries.slice(0, CARD_MAX)}
+						/>
+						{all ? (
+							// The ring is per page load; a reader at its bottom has earned that fact.
+							<p className="border-t pt-3 text-xs text-muted-foreground">
+								{m.activity_ring_note()}
+							</p>
+						) : (
+							entries.length > CARD_MAX && (
+								<div className="flex justify-end border-t pt-3">
+									<Button
+										variant="ghost"
+										size="sm"
+										onClick={() => setAll(true)}
+									>
+										{m.activity_show_all()}
+										<ChevronDown className="size-4" />
+									</Button>
+								</div>
+							)
+						)}
 					</>
 				)}
 			</CardContent>
 		</Card>
-	);
-};
-
-/** `/activity`: the whole ring, which is everything since this page was loaded. */
-export const SectionActivity: FC = () => (
-	<ActivityPage entries={useActivity()} ready={useActivityReady()} />
-);
-
-export const ActivityPage: FC<{
-	entries: ActivityEntry[];
-	ready?: boolean;
-}> = ({ entries, ready = true }) => {
-	return (
-		<Section maxWidth={false}>
-			<div className="flex flex-col gap-card">
-				<h1 className="text-2xl font-semibold">{m.activity_title()}</h1>
-				{/* The card waits for a settled feed, for the same reason the dashboard's does. */}
-				{ready && (
-					<Card>
-						<CardContent>
-							{entries.length === 0 ? (
-								<p className="text-sm text-muted-foreground">
-									{m.activity_empty()}
-								</p>
-							) : (
-								<ActivityList entries={entries} />
-							)}
-						</CardContent>
-					</Card>
-				)}
-				{/* The ring is per page load, and a reader who scrolled to the bottom of it has
-				    earned that fact rather than wondering where last week went. */}
-				<p className="text-xs text-muted-foreground">
-					{m.activity_ring_note()}
-				</p>
-			</div>
-		</Section>
 	);
 };
 

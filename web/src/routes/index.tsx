@@ -1,4 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { SectionDashboard } from "@/sections/Dashboard";
+import { SectionHome } from "@/sections/Home";
 
-export const Route = createFileRoute("/")({ component: SectionDashboard });
+export const Route = createFileRoute("/")({ component: SectionHome });

@@ -65,18 +65,18 @@ To add a second player to the game you're streaming:
 1. Pair the guest's device **Controller only**.
 2. In its **Display settings…**, set **A second device connects** to **Shares the screen**
    ([Per-device settings](/docs/virtual-displays#per-device-settings)).
-3. The guest connects. The **Sessions** card on **Home** lists them as **Joined another session**,
-   and their pads arrive as extra controllers on your desktop. On a host with
+3. The guest connects. **Now** on **Home** lists them; the row's **Details** say **Joined another
+   session**, and their pads arrive as extra controllers on your desktop. On a host with
    [profiles](/docs/profiles), the guest picks theirs on connect and the row shows it.
 
-The **Sessions** card picks **Player 1–4** for each session, and the device keeps that player on
-its next connect. A pad that is already plugged in keeps its slot until it reconnects. A slot
+A row's **⋯** under **Now** picks **Player 1–4** for each session, and the device keeps that
+player on its next connect. A pad that is already plugged in keeps its slot until it reconnects. A slot
 another live session asked for first stays theirs. Clients show *player 2* in the
 [stats overlay](/docs/stats).
 
 ## Changing a live session
 
-The **Sessions** card on **Home** also has an access picker per session: hand a view-only friend
+A row's **⋯** on **Home** also has an access picker per session: hand a view-only friend
 the controller, take it back when your turn comes. It changes that session only, never beyond
 what the device is paired for, and ends with the session. Resolution, bitrate and keyframe
 requests are never restricted; they shape only that device's own stream.

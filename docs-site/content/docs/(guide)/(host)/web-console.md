@@ -67,7 +67,7 @@ Devices and Library; **More** holds the rest. Each page's address is its place i
 
 | Page | What you do there |
 |---|---|
-| **Home** | Health warnings, live status, the running game and the last session. The **Sessions** card has one row per connected device: change its [access level](/docs/access-levels) or player number, mute it, request a keyframe, or stop it. A Moonlight row offers only keyframe and stop. With more than one profile, a row starts with the player's picture and name. |
+| **Home** | Three sections. **Attention**: health warnings, devices waiting for approval, an audio endpoint that isn't ready. **Now**: one row per session on every desktop, a seat that is starting, and a game left running without a stream; **Stop** ends a session, **⋯** requests a keyframe, mutes it, or changes its [access level](/docs/access-levels) or player number, and **Details** holds the stream's numbers. With nothing live, the last session in one line. **Recent**: what the host did lately; **Show all** expands it. With more than one profile, a row starts with the player's picture and name. |
 | **Profiles** | Who plays on this host: one card per profile with where it plays and when it last did. Add a profile that shares your desktop or, on Linux, has its own Steam. Rename, change the picture, or remove one; removing asks for the console password. |
 | **Devices** | Arm a PIN, approve or deny waiting devices, edit a device's access or display settings, unpair. Approving shows the profile a device asks to play as. A second PIN box for [Moonlight](/docs/moonlight) appears when GameStream is on. |
 | **Displays** | What happens to your screens when a device connects. See [Virtual displays](/docs/virtual-displays). |

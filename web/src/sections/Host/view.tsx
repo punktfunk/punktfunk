@@ -34,7 +34,9 @@ export const HostView: FC<{
 	/** Warning about other Moonlight-compatible servers on this machine — renders nothing when
 	 * there are none (see `ConflictsCard.tsx`). Sits at the top: it explains "nothing can connect". */
 	conflicts?: ReactNode;
-}> = ({ host, compositors, gpu, update, power, conflicts }) => {
+	/** Which endpoints carry game audio and the microphone (Windows; see `AudioWiring.tsx`). */
+	audio?: ReactNode;
+}> = ({ host, compositors, gpu, update, power, conflicts, audio }) => {
 	const h = host.data;
 	return (
 		<Section maxWidth={false}>
@@ -140,6 +142,8 @@ export const HostView: FC<{
 						</Stagger>
 					)}
 				</QueryState>
+
+				{audio}
 
 				{update}
 
