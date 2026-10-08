@@ -19,6 +19,7 @@
 #   CHANNEL              stable | canary                                   (required)
 #   VERSION              the announced host version string                 (required)
 #   CI_RUN               CI run number                                     (required for canary)
+#   COMMIT               full commit SHA of the build                      (optional; canary)
 #   WINDOWS_URL          immutable per-version installer URL               (required for stable)
 #   WINDOWS_SHA256       hex sha256 of that installer                      (paired with WINDOWS_URL)
 #   WINDOWS_ARM64_URL    the ARM64 installer's immutable URL               (optional; same pins/subject)
@@ -52,6 +53,9 @@ if [ "$CHANNEL" = stable ] && [ -z "${AUTHENTICODE_SUBJECT:-}" ]; then
 fi
 if [ "$CHANNEL" = stable ] && [ -z "${AUTHENTICODE_SHA256:-}" ]; then
   echo "stable manifests need AUTHENTICODE_SHA256 for existing clients" >&2; exit 1
+fi
+if [ -n "${COMMIT:-}" ] && ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "COMMIT must be a full 40-hex commit SHA" >&2; exit 1
 fi
 if [ -n "${WINDOWS_URL:-}" ] && ! printf '%s' "${WINDOWS_SHA256:-}" | grep -Eq '^[0-9a-f]{64}$'; then
   echo "WINDOWS_SHA256 must be 64 hex chars when WINDOWS_URL is set" >&2; exit 1
@@ -122,10 +126,12 @@ jq -n \
   --argjson auth "$AUTH_JSON" \
   --arg auth_subject "${AUTHENTICODE_SUBJECT:-}" \
   --arg ci_run "${CI_RUN:-}" \
+  --arg commit "${COMMIT:-}" \
   '
   {schema: 1, channel: $channel, serial: $serial, published_at: $published_at, version: $version}
   + (if $notes_url != "" then {notes_url: $notes_url} else {} end)
   + (if $ci_run != "" then {ci_run: ($ci_run | tonumber)} else {} end)
+  + (if $commit != "" then {commit: $commit} else {} end)
   + (if $win_url != "" then {windows_host: ({url: $win_url, sha256: $win_sha, authenticode_sha256: $auth}
       + (if $auth_subject != "" then {authenticode_subject: $auth_subject} else {} end))} else {} end)
   + (if $a64_url != "" then {windows_host_arm64: ({url: $a64_url, sha256: $a64_sha, authenticode_sha256: $auth}

@@ -1,8 +1,11 @@
 //! Channel and "is the manifest newer than this install?"
 //!
-//! Canary packaging spells one CI build many ways (`~ciN` deb, `-0.ciN` rpm,
+//! Canary packaging spells a build many ways (`~ciN.gSHA` deb, `-0.ciN.gSHA` rpm,
 //! `M.m.N` Windows). String compare is meaningless; canary uses `(major, minor)`
 //! then the CI run number. Stable uses the plain triple.
+//!
+//! Each workflow numbers its own run, so one commit ships under several run
+//! numbers. A canary install on the manifest's commit is never behind it.
 //!
 //! Unparseable pairs never flag an update. The UI may still show both strings.
 
@@ -57,10 +60,18 @@ pub fn canary_run(version: &str) -> Option<u64> {
     }
 }
 
-/// Canary compares run numbers, not patch fields; see module docs.
+/// Short commit a package version ends in: the hex after the last `.g`
+/// (`0.44.0~ci36279.g013e2b1d` → `013e2b1d`).
+pub fn commit_of(version: &str) -> Option<&str> {
+    let (_, sha) = version.rsplit_once(".g")?;
+    (sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+}
+
+/// Canary compares run numbers, not patch fields, unless both sides name a commit; see module docs.
 pub fn is_newer(
     manifest_version: &str,
     manifest_ci_run: Option<u64>,
+    manifest_commit: Option<&str>,
     current: &str,
     channel: Channel,
 ) -> bool {
@@ -70,6 +81,11 @@ pub fn is_newer(
     match channel {
         Channel::Stable => m > c,
         Channel::Canary => {
+            if let (Some(full), Some(short)) = (manifest_commit, commit_of(current)) {
+                if full.starts_with(short) {
+                    return false;
+                }
+            }
             if (m.0, m.1) != (c.0, c.1) {
                 return (m.0, m.1) > (c.0, c.1);
             }
@@ -138,6 +154,7 @@ mod tests {
         assert!(!is_newer(
             "0.35.0~ci412.gdeadbeef",
             Some(412),
+            None,
             "0.35.0+gad2aee123",
             Channel::Canary
         ));
@@ -145,10 +162,16 @@ mod tests {
 
     #[test]
     fn newer_stable() {
-        assert!(is_newer("0.23.0", None, "0.22.2", Channel::Stable));
-        assert!(!is_newer("0.22.2", None, "0.22.2", Channel::Stable));
-        assert!(!is_newer("0.22.1", None, "0.22.2", Channel::Stable));
-        assert!(!is_newer("not-a-version", None, "0.22.2", Channel::Stable));
+        assert!(is_newer("0.23.0", None, None, "0.22.2", Channel::Stable));
+        assert!(!is_newer("0.22.2", None, None, "0.22.2", Channel::Stable));
+        assert!(!is_newer("0.22.1", None, None, "0.22.2", Channel::Stable));
+        assert!(!is_newer(
+            "not-a-version",
+            None,
+            None,
+            "0.22.2",
+            Channel::Stable
+        ));
     }
 
     #[test]
@@ -157,23 +180,65 @@ mod tests {
         assert!(!is_newer(
             "0.23.10250",
             Some(10250),
+            None,
             "0.23.0~ci10250.gab12cd34",
             Channel::Canary
         ));
         assert!(is_newer(
             "0.23.10251",
             Some(10251),
+            None,
             "0.23.0~ci10250.gab12cd34",
             Channel::Canary
         ));
         assert!(is_newer(
             "0.24.100",
             Some(100),
+            None,
             "0.23.0~ci10250.g12",
             Channel::Canary
         ));
         // Missing run on either side: never guess.
-        assert!(!is_newer("0.23.10250", None, "0.23.0", Channel::Canary));
+        assert!(!is_newer(
+            "0.23.10250",
+            None,
+            None,
+            "0.23.0",
+            Channel::Canary
+        ));
+    }
+
+    #[test]
+    fn a_canary_on_the_manifest_commit_is_current() {
+        // One push of 013e2b1d: deb run 36279, rpm 36281, windows-host 36287 publishes the manifest.
+        let sha = Some("013e2b1d7e0baafccb13607711d7fbf5cc3b3e38");
+        let deb = "0.44.0~ci36279.g013e2b1d";
+        let rpm = "0.44.0-0.ci36281.g013e2b1d";
+        assert!(!is_newer(
+            "0.44.36287",
+            Some(36287),
+            sha,
+            deb,
+            Channel::Canary
+        ));
+        assert!(!is_newer(
+            "0.44.36287",
+            Some(36287),
+            sha,
+            rpm,
+            Channel::Canary
+        ));
+        let next = Some("4c1037f3a1cf21fe41dd1e142fc376a750a25506");
+        assert!(is_newer(
+            "0.44.36300",
+            Some(36300),
+            next,
+            deb,
+            Channel::Canary
+        ));
+        assert_eq!(commit_of(deb), Some("013e2b1d"));
+        assert_eq!(commit_of("0.35.0+gad2aee123"), None);
+        assert_eq!(commit_of("0.44.36287"), None);
     }
 
     #[test]

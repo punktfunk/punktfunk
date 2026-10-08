@@ -270,7 +270,13 @@ pub fn check(current: &str) -> Status {
 
     status.latest = manifest.version.clone();
     status.notes_url = manifest.notes_url.clone();
-    status.update_available = is_newer(&manifest.version, manifest.ci_run, &current, channel);
+    status.update_available = is_newer(
+        &manifest.version,
+        manifest.ci_run,
+        manifest.commit.as_deref(),
+        &current,
+        channel,
+    );
     status
 }
 
