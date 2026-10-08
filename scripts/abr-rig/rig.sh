@@ -5,6 +5,9 @@
 #   rig.sh <profile> [seconds]
 #
 # Everything it needs is in the container; run.sh is the wrapper that starts it.
+#
+# `lost` counts frames the client saw a shard of; a frame lost as one GSO train
+# shows only in `unrec`.
 set -euo pipefail
 
 PROFILE=${1:?usage: rig.sh <profile> [seconds]}
@@ -214,16 +217,35 @@ wait $(jobs -p | grep -v "${HOST_PID}" | grep -v "${WANDER_PID:-x}") 2>/dev/null
 # ---- the summary, beside the simulator's row --------------------------------
 echo
 echo "== $PROFILE: ${SECONDS_RUN}s on a ${RATE_KBIT}kbit/${DELAY_MS}ms/${BUFFER_MS}ms path =="
-head -1 /w/crates/punktfunk-core/src/abr/sim/baseline.tsv
+# The host's columns sum its whole-minute `link health` lines for that probe's session.
+printf '%s\tunrec_10min\trfi_10min\tidr_10min\tkf_req_10min\n' \
+  "$(head -1 /w/crates/punktfunk-core/src/abr/sim/baseline.tsv)"
 grep -h "^$PROFILE	" /w/crates/punktfunk-core/src/abr/sim/baseline.tsv \
   | sed 's/^/sim  /' || true
+clean() { sed 's/\x1b\[[0-9;]*m//g' "$@"; }
+# Host session ids rise in open order, so the k-th probe to open owns the k-th id.
+mapfile -t SIDS < <(clean "$OUT/$PROFILE-host.log" \
+  | grep -o 'link health session=[0-9]*' | cut -d= -f2 | sort -nu)
+declare -A SID
+k=0
+for n in $(for n in $(seq "$PROBES"); do
+             echo "$(clean "$OUT/$PROFILE-$n.log" | grep -m1 'trajectory session open' | cut -c1-27) $n"
+           done | sort | awk '{print $NF}'); do
+  SID[$n]=${SIDS[$k]:-none}; k=$(( k + 1 ))
+done
 for n in $(seq "$PROBES"); do
-  tail -1 "$OUT/$PROFILE-$n.jsonl" | tr -d '{}"' | awk -F'[:,]' -v p="$PROFILE" '
+  host=$(clean "$OUT/$PROFILE-host.log" | awk -v sid="${SID[$n]}" '
+    /link health/ && / secs=60 / && index($0, " session=" sid " ") {
+      for (i = 1; i <= NF; i++) { split($i, kv, "="); s[kv[1]] += kv[2] } }
+    END { print s["unrecovered"] + 0, s["rfi"] + 0, s["idr"] + 0, s["keyframe_req"] + 0 }')
+  tail -1 "$OUT/$PROFILE-$n.jsonl" | tr -d '{}"' | awk -F'[:,]' -v p="$PROFILE" -v h="$host" '
     { for (i = 1; i <= NF; i += 2) v[$i] = $(i+1) }
-    END { printf "rig  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p,
+    END { split(h, d, " "); f = 600000 / (v["duration_ms"] > 0 ? v["duration_ms"] : 1)
+          printf "rig  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\n", p,
           v["under5_pct"], v["to90_s"], v["cuts_per_10min"], v["lost_per_10min"],
           v["queue_p95_ms"], v["over_cap_kb_10s"], v["blip_recover_s"],
-          v["fairness_x1000"], v["decisions_fnv1a"] }'
+          v["fairness_x1000"], v["decisions_fnv1a"],
+          d[1] * f, d[2] * f, d[3] * f, d[4] * f }'
 done
 echo "trajectories: $OUT/$PROFILE-*.jsonl   host log: $OUT/$PROFILE-host.log"
 

@@ -11,6 +11,9 @@
 # TRACE is "<at_s>:<kbit> …" applied while the run goes on; WANDER_PCT/WANDER_S
 # re-draw the rate around it. MODE and ACHIEVABLE_KBPS are what the client asks
 # for and what the summary scores against.
+#
+# `lost` counts frames the client saw a shard of; a frame lost as one GSO train
+# shows only in `unrec`.
 
 profile() {
   # Defaults; a profile overrides what it cares about.
