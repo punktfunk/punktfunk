@@ -786,11 +786,6 @@ impl Session {
         self.wire_pool = wires;
     }
 
-    /// Host: GSO on this session's transport where the platform has it.
-    pub fn set_gso(&self, on: bool) {
-        self.transport.set_gso(on);
-    }
-
     /// Host: send one chunk of already-sealed packets as one batch. Returns how many the
     /// kernel accepted; the rest are send-buffer drops. Whole frame, or per paced chunk.
     /// Host: keep a copy of every packet's plaintext as it is staged, for [`Self::reseal`].

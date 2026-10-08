@@ -304,7 +304,6 @@ pub(super) fn send_loop(
         pacer: crate::send_pacing::Pacer::new(stats.ports, crate::send_pacing::forced()),
         ring: ResendRing::default(),
         link: None,
-        link_gso: None,
         streamed: None,
         burst: None,
         perf_line: PerfLine::new(&stats),
@@ -363,9 +362,6 @@ struct SendLoop {
     ring: ResendRing,
     /// The `L` last paced at, logged when it moves.
     link: Option<crate::send_pacing::LinkRate>,
-    /// What the session was last told about GSO; `None` before the first frame, since the
-    /// transport's own default may be on.
-    link_gso: Option<bool>,
     streamed: Option<punktfunk_core::packet::StreamedAu>,
     burst: Option<ProbeBurst>,
     perf_line: PerfLine,
@@ -459,15 +455,6 @@ impl SendLoop {
                 rate_kbps = rate / 1_000,
                 "pacing at the link rate"
             );
-        }
-        // Past the stream's own pace a group is a super-buffer train: GSO cuts its sends 3×.
-        // At the stream's pace it is a few packets, and a lossy path that drops a train
-        // whole takes the frame with it.
-        let stream_bps = (f64::from(bitrate_kbps) * 1_000.0 * sp::pace_factor()) as u64;
-        let gso = rate > stream_bps;
-        if self.link_gso != Some(gso) {
-            self.link_gso = Some(gso);
-            self.session.set_gso(gso);
         }
         // A new epoch takes effect at the AU that carries it, never mid-AU.
         match &send_msg {
@@ -733,7 +720,7 @@ mod tests {
     use super::{send_loop, AuMeta, FrameMsg, PaceStat, PerfWindow, SendMsg, SendStats};
     use punktfunk_core::transport::Transport;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     /// A send thread on `transport` at 20 Mbit/s in `shape`: its frame channel, its stop
     /// flag, the counters it reports into and the thread.
@@ -877,45 +864,6 @@ mod tests {
         let mut m = crate::link_health::LinkMinute::default();
         counters.link.take(&mut m);
         assert_eq!(m.resend_pkts, 2);
-    }
-
-    /// Each GSO switch (`Some`) and each packet sent (`None`), in order.
-    #[derive(Clone, Default)]
-    struct GsoLog(Arc<Mutex<Vec<Option<bool>>>>);
-
-    impl Transport for GsoLog {
-        fn send(&self, _: &[u8]) -> std::io::Result<bool> {
-            self.0.lock().unwrap().push(None);
-            Ok(true)
-        }
-        fn set_gso(&self, on: bool) {
-            self.0.lock().unwrap().push(Some(on));
-        }
-        fn recv(&self) -> std::io::Result<Option<Vec<u8>>> {
-            Ok(None)
-        }
-    }
-
-    /// A session paced at the stream's own rate has GSO off before its first packet, whatever
-    /// the transport defaults to, and is told once.
-    #[test]
-    fn gso_is_off_before_the_first_frame_at_the_stream_rate() {
-        let log = GsoLog::default();
-        let (frame_tx, stop, _, thread) =
-            spawn_loop(Box::new(log.clone()), crate::send_pacing::Shape::Smooth);
-        frame_tx.send(frame(0)).unwrap();
-        frame_tx.send(frame(1)).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while log.0.lock().unwrap().len() < 21 && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        drop(frame_tx);
-        thread.join().unwrap();
-        let events = log.0.lock().unwrap();
-        assert_eq!(events.first(), Some(&Some(false)), "{events:?}");
-        // 8 data + 2 parity per frame.
-        assert_eq!(events[1..], [None; 20]);
     }
 
     /// A host AU feeds the host stages and a driver AU the driver's. A repeat never counts
