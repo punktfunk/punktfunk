@@ -282,7 +282,7 @@ Read by the Linux and Windows clients, the Decky plugin and the `punktfunk` CLI 
 | `PUNKTFUNK_V4L2_DEVICE` | path, e.g. `/dev/video0` | Linux: the decoder node V4L2 decodes on. Unset: the first `/dev/video*` node that takes the codec. |
 | `PUNKTFUNK_VK_ADAPTER` | name substring | The GPU the client presents on. Unset prefers a discrete GPU. |
 | `PUNKTFUNK_PREFER_PYROWAVE` | `1` | Ask for [PyroWave](/docs/pyrowave) where the client's own setting isn't reachable, such as a headless launch. |
-| `PUNKTFUNK_PAD_SPEAKER_PATH` · `PUNKTFUNK_PAD_SPEAKER_VOLUME` | byte (default `0x20` / `0x7F`) | Which DualSense output [controller audio](/docs/controller-audio) plays to, and how loud. Change them only if the pad's speaker stays silent. |
+| `PUNKTFUNK_PAD_SPEAKER_PATH` · `PUNKTFUNK_PAD_SPEAKER_VOLUME` | byte (default `0x20` / `0x64`) | Which DualSense output [controller audio](/docs/controller-audio) plays to, and how loud. Change them only if the pad's speaker stays silent. |
 | `PUNKTFUNK_PAD_AUDIO_PROFILE` | `0` | Linux: don't switch a wired DualSense's sound card to **Pro Audio** while streaming controller audio. Without it the voice coils fold into the speaker pair. |
 | `PUNKTFUNK_OSD_SCALE` | multiplier (default `1`) | Size of the in-stream overlay on top of display scaling, from 0.5 to 4. |
 | `PUNKTFUNK_CONFIG_DIR` | path | Where this client keeps its identity, saved hosts and settings (default `~/.config/punktfunk`, `%APPDATA%\punktfunk` on Windows). Empty is ignored. Moving it moves that identity, so paired hosts need pairing again. The Flatpak only sees `~/.config/punktfunk`. The private key is readable only by the account that created it. |
