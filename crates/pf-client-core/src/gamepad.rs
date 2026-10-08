@@ -686,6 +686,8 @@ impl Ds5Feedback {
     const PAD_LIGHTS: usize = 44 - Self::REPORT_ID_LEN;
     /// `ucMicLightMode`: USB report byte 9.
     const MIC_LED: usize = 9 - Self::REPORT_ID_LEN;
+    /// Audio-control-2 (speaker preamp gain in bits 0..2): USB report byte 38.
+    const AUDIO2: usize = 38 - Self::REPORT_ID_LEN;
     const LED_RGB: usize = 45 - Self::REPORT_ID_LEN;
     /// Mode byte plus 10 parameters: the wire's trigger-effect clamp.
     const TRIGGER_LEN: usize = punktfunk_core::quic::TRIGGER_EFFECT_MAX;
@@ -733,8 +735,10 @@ impl Ds5Feedback {
     }
 
     /// Point channel 1 (shared headphone-R / mono speaker) at the speaker. Power-on is
-    /// the jack, so PCM to the speaker pair is silent until `ucAudioEnableBits` bit 5
-    /// (`0x20`) is set. Ship `0x20` not `0x30`: bit 4's headphone effect is unmeasured.
+    /// the jack, so the speaker pair is silent until the output path selects it: `0x20`
+    /// (L-L R) keeps a headphone copy, `0x30` (X-X R) mutes the jack.
+    /// Volume `0x64` and preamp `+6 dB` (`2`) are Linux `hid-playstation`'s speaker
+    /// route; the pad's speaker volume range is `0x3D..=0x64`.
     /// Bits 0/1 stay clear (rumble-emulation / disable-audio-haptics mute the coils).
     /// The select persists across USB-audio restart; a later [`HidOutput::AudioCtl`]
     /// still overrides. `PUNKTFUNK_PAD_SPEAKER_PATH` / `_VOLUME` override per run.
@@ -742,8 +746,10 @@ impl Ds5Feedback {
         let mut p = [0u8; 47];
         // bit5 = ucSpeakerVolume valid, bit7 = audio-control byte valid.
         p[0] = 0x20 | 0x80;
+        p[1] = 0x80; // audio-control-2 valid
         p[Self::AUDIO + 1] = volume;
         p[Self::AUDIO + 3] = path;
+        p[Self::AUDIO2] = 0x02;
         p
     }
 
@@ -1278,7 +1284,7 @@ impl Worker {
                     if slot.audio_caps & 0x02 != 0 {
                         // Channel 1 powers up on the headphone jack; see `speaker_enable_packet`.
                         let path = env_u8("PUNKTFUNK_PAD_SPEAKER_PATH").unwrap_or(0x20);
-                        let volume = env_u8("PUNKTFUNK_PAD_SPEAKER_VOLUME").unwrap_or(0x7F);
+                        let volume = env_u8("PUNKTFUNK_PAD_SPEAKER_VOLUME").unwrap_or(0x64);
                         if let Err(e) = slot
                             .pad
                             .send_effect(&Ds5Feedback::speaker_enable_packet(volume, path))
@@ -2812,7 +2818,7 @@ mod slot_tests {
     /// Bits 0/1 of `ucEnableBits1` stay clear: asserting either mutes the 0xD1 coils.
     #[test]
     fn speaker_enable_sets_volume_and_path_without_touching_the_haptics_bits() {
-        let p = Ds5Feedback::speaker_enable_packet(0x7F, 0x20);
+        let p = Ds5Feedback::speaker_enable_packet(0x64, 0x20);
         assert_eq!(
             p[0] & 0x03,
             0,
@@ -2823,10 +2829,12 @@ mod slot_tests {
             0x20 | 0x80,
             "speaker-volume + audio-control validity bits"
         );
-        assert_eq!(p[5], 0x7F);
+        assert_eq!(p[1], 0x80, "audio-control-2 validity bit");
+        assert_eq!(p[5], 0x64);
         assert_eq!(p[7], 0x20);
+        assert_eq!(p[37], 0x02, "speaker preamp +6 dB");
         for (i, b) in p.iter().enumerate() {
-            if !matches!(i, 0 | 5 | 7) {
+            if !matches!(i, 0 | 1 | 5 | 7 | 37) {
                 assert_eq!(*b, 0, "byte {i} should be untouched");
             }
         }
@@ -2883,6 +2891,7 @@ mod ds5_feedback_tests {
             (44, Ds5Feedback::PAD_LIGHTS),
             (45, Ds5Feedback::LED_RGB),
             (9, Ds5Feedback::MIC_LED),
+            (38, Ds5Feedback::AUDIO2),
         ] {
             assert_eq!(payload, usb - 1, "payload offset for USB byte {usb}");
         }
