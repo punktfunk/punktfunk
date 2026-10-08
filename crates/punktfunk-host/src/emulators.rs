@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use hermir::progress::Quiet;
 use hermir::{Hermir, Installed, Options};
+use punktfunk_core::config::GamepadPref;
 
 /// Where managed emulators live. `%ProgramData%\punktfunk\emulators` on Windows, so the SYSTEM
 /// service installs and the player's session runs. The data dir on POSIX: a plugin is granted
@@ -119,17 +120,16 @@ pub fn has_core(dir: &Path, core: &str) -> bool {
 }
 
 /// The pads this host made for its players, in the order they appeared: seat 1 is the first.
-/// Linux reads them off `/proc/bus/input/devices` — a virtual device with a vendor the host's
-/// pad backends present is one of ours. With none up yet (the client's pad frames arrive
-/// after the launch), seat 1 is the pad the host will make, keyed by identity and index 0.
-pub fn session_players() -> Vec<hermir::Player> {
+/// Linux reads them off `/proc/bus/input/devices`. With none up yet (the client's pad frames
+/// arrive after the launch), seat 1 is the first pad a session of `kind` makes, at index 0.
+pub fn session_players(kind: GamepadPref) -> Vec<hermir::Player> {
     let mut pads = Vec::new();
     #[cfg(target_os = "linux")]
     if let Ok(text) = std::fs::read_to_string("/proc/bus/input/devices") {
         pads = virtual_pads(&text);
     }
     if pads.is_empty() {
-        pads.push(hermir::PadRef::xbox360(0));
+        pads.push(first_pad(kind));
     }
     pads.into_iter()
         .zip(1u8..)
@@ -137,10 +137,60 @@ pub fn session_players() -> Vec<hermir::Player> {
         .collect()
 }
 
-/// Microsoft and Sony: the identities the host's uinput and uhid pads carry.
-const PAD_VENDORS: [u16; 2] = [0x045e, 0x054c];
+/// Microsoft, Sony and Nintendo: the identities the host's uinput, uhid and usbip pads carry.
+const PAD_VENDORS: [u16; 3] = [0x045e, 0x054c, 0x057e];
 
-/// The virtual pads in a `/proc/bus/input/devices` listing, in event-node order.
+/// SDL 3's name for a pad its HIDAPI driver renames by USB id. `None` for the Xbox pads, which
+/// hermir names itself, and anything else.
+fn sdl_name(vendor: u16, product: u16) -> Option<&'static str> {
+    Some(match (vendor, product) {
+        (0x054c, 0x0ce6) => "DualSense Wireless Controller",
+        (0x054c, 0x0df2) => "DualSense Edge Wireless Controller",
+        (0x054c, 0x09cc) => "PS4 Controller",
+        (0x057e, 0x2009) => "Nintendo Switch Pro Controller",
+        _ => return None,
+    })
+}
+
+/// The pad a session of `kind` makes first, as the kernel and SDL name it. The kinds without
+/// a row seat as an Xbox 360 pad.
+fn first_pad(kind: GamepadPref) -> hermir::PadRef {
+    #[cfg(target_os = "linux")]
+    let usbip = pf_inject::dualsense_usbip::usbip_preferred();
+    #[cfg(not(target_os = "linux"))]
+    let usbip = false;
+    // hid-playstation sets 0x8000 on the version of the devices it drives.
+    let (vendor, product, version, name) = match kind {
+        GamepadPref::XboxOne => (0x045e, 0x02ea, 0x0408, "Microsoft X-Box One S pad"),
+        GamepadPref::XboxElite => (0x045e, 0x0b00, 0x0511, "Microsoft X-Box One Elite 2 pad"),
+        GamepadPref::DualSense if usbip => (
+            0x054c,
+            0x0ce6,
+            0x8111,
+            "Sony Interactive Entertainment DualSense Wireless Controller",
+        ),
+        GamepadPref::DualSense => (0x054c, 0x0ce6, 0x8100, "Punktfunk DualSense 0"),
+        GamepadPref::DualSenseEdge => (0x054c, 0x0df2, 0x8100, "Punktfunk DualSense Edge 0"),
+        GamepadPref::DualShock4 => (0x054c, 0x09cc, 0x8100, "Punktfunk DualShock 4 0"),
+        GamepadPref::SwitchPro => (0x057e, 0x2009, 0x0200, "Nintendo Switch Pro Controller"),
+        _ => return hermir::PadRef::xbox360(0),
+    };
+    hermir::PadRef {
+        name: name.into(),
+        bus: 3,
+        vendor,
+        product,
+        version,
+        index: 0,
+        evdev: None,
+        guid: None,
+        gamepad_name: sdl_name(vendor, product).map(Into::into),
+    }
+}
+
+/// The host's pads in a `/proc/bus/input/devices` listing, in event-node order: a virtual or
+/// usbip-attached device of a pad vendor with a joystick node. A pad's motion sensors get one
+/// too; the accelerometer property (bit 6) tells them apart.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
     let mut out: Vec<(u32, hermir::PadRef)> = Vec::new();
@@ -165,8 +215,16 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
         ) else {
             continue;
         };
+        let handlers = field("H: Handlers=").unwrap_or("");
+        let ours = field("S: Sysfs=")
+            .is_some_and(|s| s.starts_with("/devices/virtual/") || s.contains("/vhci_hcd."));
+        let sensors = field("B: PROP=")
+            .and_then(|p| u64::from_str_radix(p, 16).ok())
+            .is_some_and(|p| p & 1 << 6 != 0);
         if !PAD_VENDORS.contains(&vendor)
-            || !field("S: Sysfs=").is_some_and(|s| s.starts_with("/devices/virtual/"))
+            || !ours
+            || sensors
+            || !handlers.split_whitespace().any(|h| h.starts_with("js"))
         {
             continue;
         }
@@ -174,11 +232,9 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
             .unwrap_or("")
             .trim_matches('"')
             .to_string();
-        let event = field("H: Handlers=")
-            .and_then(|h| {
-                h.split_whitespace()
-                    .find_map(|w| w.strip_prefix("event")?.parse::<u32>().ok())
-            })
+        let event = handlers
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("event")?.parse::<u32>().ok())
             .unwrap_or(u32::MAX);
         out.push((
             event,
@@ -192,7 +248,7 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
                 evdev: (event != u32::MAX)
                     .then(|| PathBuf::from(format!("/dev/input/event{event}"))),
                 guid: None,
-                gamepad_name: None,
+                gamepad_name: sdl_name(vendor, product).map(Into::into),
             },
         ));
     }
@@ -231,13 +287,14 @@ fn revert_with(h: &Hermir) {
 
 /// Every copy of `id` answers its first-run questions, gets `platform`'s firmware from
 /// `firmware_dir` (the regular files in it, not below), and has the session's pads written
-/// in seat order (steps of kind `players`; reverted after the game). `platform` is a catalog
-/// id or any of its aliases (RomM slug, ES-DE folder, libretro name). Blocking: an installer
-/// may run.
+/// in seat order (steps of kind `players`; reverted after the game), `pad` the kind they are.
+/// `platform` is a catalog id or any of its aliases (RomM slug, ES-DE folder, libretro name).
+/// Blocking: an installer may run.
 pub fn prepare(
     id: &str,
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
+    pad: GamepadPref,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
     let h = open()?;
     // A game that ended without a lease reporting it (its session took the nested gamescope
@@ -266,7 +323,7 @@ pub fn prepare(
             .collect(),
     };
     let players = hermir::Patch {
-        players: Some(session_players()),
+        players: Some(session_players(pad)),
         ..Default::default()
     };
     emulator
@@ -430,9 +487,9 @@ pub fn in_catalog(id: &str) -> bool {
 }
 
 /// Before an `emulator` entry starts: every copy past its first-run questions, the platform's
-/// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads.
-/// What it did goes to the log; a launch never waits on it to succeed.
-pub fn prepare_launch(library_id: &str) {
+/// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads
+/// (`pad` the kind they are). What it did goes to the log; a launch never waits on it to succeed.
+pub fn prepare_launch(library_id: &str, pad: GamepadPref) {
     let Some(entry) = crate::library::entry_for_library_id(library_id) else {
         return;
     };
@@ -450,7 +507,7 @@ pub fn prepare_launch(library_id: &str) {
         .as_deref()
         .zip(platform)
         .and_then(|(provider, platform)| staged_firmware(provider, platform));
-    match prepare(&spec.value, platform, staged.as_deref()) {
+    match prepare(&spec.value, platform, staged.as_deref(), pad) {
         Ok(copies) => {
             for (exe, prepared) in copies {
                 for s in prepared.steps {
@@ -516,6 +573,43 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         );
         assert_eq!(pads[0].sdl_guid(true), "030081b85e0400008e02000010010000");
         assert!(virtual_pads("").is_empty());
+    }
+
+    #[test]
+    fn a_usbip_dualsense_is_one_pad_under_sdls_name() {
+        // Read off a host with the usbip DualSense up: the pad, then its sensors, touchpad, jack.
+        let dev =
+            "S: Sysfs=/devices/platform/vhci_hcd.0/usb9/9-1/9-1:1.3/0003:054C:0CE6.0015/input";
+        let ds = "I: Bus=0003 Vendor=054c Product=0ce6 Version=8111\nN: Name=\"Sony Interactive Entertainment DualSense Wireless Controller";
+        let text = format!(
+            "{ds}\"\n{dev}/input78\nH: Handlers=event10 js1 \nB: PROP=0\n\n\
+             {ds} Motion Sensors\"\n{dev}/input79\nH: Handlers=event11 js2 \nB: PROP=40\n\n\
+             {ds} Touchpad\"\n{dev}/input80\nH: Handlers=event12 mouse3 \nB: PROP=5\n\n\
+             {ds} Headset Jack\"\n{dev}/input81\nH: Handlers=event13 \nB: PROP=0\n"
+        );
+        let pads = virtual_pads(&text);
+        assert_eq!(pads.len(), 1, "{pads:?}");
+        assert_eq!(
+            pads[0].evdev.as_deref(),
+            Some(Path::new("/dev/input/event10"))
+        );
+        // RPCS3 binds `<SDL name> <n>`.
+        assert_eq!(pads[0].sdl_name(), "DualSense Wireless Controller");
+    }
+
+    #[test]
+    fn a_session_with_no_pad_up_yet_seats_the_kind_it_will_make() {
+        let seat = |kind| first_pad(kind).sdl_name();
+        assert_eq!(
+            seat(GamepadPref::DualSense),
+            "DualSense Wireless Controller"
+        );
+        assert_eq!(
+            seat(GamepadPref::SwitchPro),
+            "Nintendo Switch Pro Controller"
+        );
+        assert_eq!(seat(GamepadPref::Xbox360), "Xbox 360 Controller");
+        assert_eq!(seat(GamepadPref::SteamDeck), "Xbox 360 Controller");
     }
 
     #[test]

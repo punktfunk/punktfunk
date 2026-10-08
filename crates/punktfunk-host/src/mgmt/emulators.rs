@@ -274,8 +274,11 @@ pub(crate) async fn prepare_emulator(
         },
     };
     let platform = req.platform;
+    // No session here: pads not up yet are taken as the default Xbox 360.
+    let pad = punktfunk_core::config::GamepadPref::Xbox360;
     let prepared =
-        blocking(move || crate::emulators::prepare(&id, platform.as_deref(), dir.as_deref())).await;
+        blocking(move || crate::emulators::prepare(&id, platform.as_deref(), dir.as_deref(), pad))
+            .await;
     match prepared {
         Ok(Ok(copies)) => Json(
             copies
