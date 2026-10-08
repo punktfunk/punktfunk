@@ -725,6 +725,10 @@ impl Encoder for NvencD3d11Encoder {
         self.s.distrusted = true;
     }
 
+    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
+        self.s.reference_floor = acked_wire;
+    }
+
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {
         self.s.invalidate_ref_frames(first, last)
     }
@@ -1348,6 +1352,52 @@ mod tests {
                 full.len()
             );
         }
+    }
+
+    /// Losses on hardware, shaped and dumped by [`crate::smoke_pattern::Soak`]: RFI anchors,
+    /// or with `PF_WAVE_ACKED=1` the long-term references the client's confirmations drive.
+    ///
+    /// `cargo test -p pf-encode-win --features nvenc --lib nvenc_ltr_soak -- --ignored --nocapture`
+    #[test]
+    #[ignore = "requires an NVIDIA GPU + driver — run manually on the RTX box (.173)"]
+    fn nvenc_ltr_soak() {
+        use crate::{smoke_d3d11::nv12_scroll_frame, smoke_pattern::Soak};
+        // SAFETY: DXGI factory creation borrows nothing and has no preconditions.
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.expect("DXGI factory");
+        let adapter = (0..)
+            // SAFETY: `factory` outlives this closure and the call takes no lasting alias.
+            .map_while(|i| unsafe { factory.EnumAdapters1(i) }.ok())
+            // SAFETY: `a` is a live adapter the enumeration above just returned.
+            .find(|a| unsafe { a.GetDesc1() }.is_ok_and(|d| d.VendorId == 0x10de))
+            .expect("NVIDIA adapter");
+        // SAFETY: `adapter` is live for the call, and `make_device` keeps no alias to it.
+        let (device, _) = unsafe { pf_frame::dxgi::make_device(&adapter) }.expect("make_device");
+        let soak = Soak::from_env();
+        let mut enc = NvencD3d11Encoder::open(
+            soak.codec,
+            PixelFormat::Nv12,
+            soak.w,
+            soak.h,
+            soak.fps,
+            soak.mbps * 1_000_000,
+            8,
+            ChromaFormat::Yuv420,
+            1,
+            None,
+        )
+        .expect("NVENC open");
+        enc.prepare_d3d11(&device, PixelFormat::Nv12, soak.w, soak.h)
+            .expect("prepare");
+        assert!(
+            enc.caps().supports_rfi,
+            "the RTX box invalidates references"
+        );
+        println!("nvenc_ltr_soak: {} long-term slots", enc.s.ltr_frames);
+        let (w, h) = (soak.w, soak.h);
+        let bind = D3D11_BIND_RENDER_TARGET.0 as u32;
+        soak.run("nvenc", &mut enc, |i| {
+            nv12_scroll_frame(&device, w, h, i, bind)
+        });
     }
 
     /// Many waves in a row, each answering a frame lost two ahead of its start
