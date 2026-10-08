@@ -517,7 +517,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex 2.0.1",
- "syn 3.0.6",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -699,9 +699,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.6.0"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f74872d07caf508b30a21f6836e7d7016a2eaf7d9ff4f48deaa58cd8a0407630"
+checksum = "5d262e149917187838d5b42777c8253bcb64500067342904e7d429499a6f277e"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
