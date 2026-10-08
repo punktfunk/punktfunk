@@ -31,9 +31,12 @@ pub(super) const BLIP_CLEAN_WINDOWS: u32 = 8;
 /// Lone dead frames a flat link may lose as blips in a minute, in percent of the frames
 /// it carried: 36 at 60 Hz, a frame every two seconds.
 pub(super) const LONE_DEAD_PER_MIN_PCT: u64 = 1;
-/// Tail loss in a window with no lost frame that takes a notch off `L` when two windows run.
-/// Parity leaves last, so a queue overflowing on the path drops it first.
-pub(super) const TAIL_MARK_MIN: u32 = 2;
+/// Tail loss that names a filling queue: at least this many shards from the frames' tails
+/// and their parity…
+pub(super) const TAIL_MIN: u32 = 4;
+/// …this many times the heads and middles lost. Parity leaves last, so an overflowing queue
+/// drops it first; random loss puts at most two thirds there, even at 50 % parity.
+pub(super) const TAIL_RATIO: u32 = 3;
 /// Head loss that names a waking receiver: at least this many shards from the frames'
 /// heads…
 pub(super) const HEAD_MIN: u32 = 4;
@@ -118,10 +121,14 @@ pub(super) fn link_signature(w: &WindowSample) -> bool {
     w.sock_drops > 0
 }
 
-/// Parity going missing at the frames' tails while every frame still decodes: the queue
-/// is close to full, and a mark can go in before the picture breaks.
+/// Loss at the frames' tails, well past the rest, while every frame still decodes: the
+/// queue is close to full, and a mark can go in before the picture breaks.
 pub(super) fn tail_mark(w: &WindowSample) -> bool {
-    w.tail >= TAIL_MARK_MIN && w.dropped == 0
+    tails(w.head, w.mid, w.tail) && w.dropped == 0
+}
+
+fn tails(head: u32, mid: u32, tail: u32) -> bool {
+    tail >= TAIL_MIN && tail >= TAIL_RATIO.saturating_mul(head.saturating_add(mid))
 }
 
 /// Loss at the frames' heads, well past the rest, with the socket dropping nothing: a
@@ -140,7 +147,7 @@ fn heads(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
 /// a filling queue. A host that sees one keeps its encoder on the frames the client
 /// confirmed.
 pub fn shows_loss_shape(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
-    heads(head, mid, tail, sock_drops) || tail >= TAIL_MARK_MIN
+    heads(head, mid, tail, sock_drops) || tails(head, mid, tail)
 }
 
 /// Rolling-min baselines for the three relative signals.
@@ -169,7 +176,7 @@ impl Baselines {
     /// A lone dead frame on a flat link, within the minute's budget: frames lost over the
     /// last minute, this one included, stay under [`LONE_DEAD_PER_MIN_PCT`] of the frames
     /// the minute carries at this refresh. Not in the window right after a blip, and not
-    /// one that died at its tail.
+    /// in a window whose loss has a filling queue's shape.
     fn lone_dead(&self, w: &WindowSample, dropped: u64, frame_budget_us: Option<i64>) -> bool {
         let Some(budget_us) = frame_budget_us.filter(|&b| b > 0) else {
             return false;
@@ -184,7 +191,7 @@ impl Baselines {
         let frames = minute.as_micros() as u64 / budget_us as u64;
         dropped == 1
             && !self.last_blip
-            && w.tail < TAIL_MARK_MIN
+            && !tails(w.head, w.mid, w.tail)
             && w.delay
                 .is_some_and(|d| d.rise_us < super::controller::DRAIN_FALL_US)
             && (recent + 1) * 100 < frames * LONE_DEAD_PER_MIN_PCT
@@ -447,7 +454,7 @@ mod tests {
     use std::time::Instant;
 
     /// Where a window's shards went missing names its cause: the socket's own drops a
-    /// receiver that could not drain, tail loss with every frame whole a filling queue, the
+    /// receiver that could not drain, the tails well past the rest a filling queue, the
     /// heads well past the rest a receiver waking late; a socket that drops vetoes the last.
     #[test]
     fn loss_positions_name_their_signature() {
@@ -467,13 +474,19 @@ mod tests {
         );
         assert!(!head_signature(&w(9, 0, 0, 3)), "the socket dropped");
         assert!(!head_signature(&w(3, 0, 0, 0)), "too few at the heads");
-        assert!(tail_mark(&w(0, 0, 2, 0)));
+        assert!(tail_mark(&w(0, 0, 4, 0)));
+        assert!(!tail_mark(&w(0, 0, 3, 0)), "too few at the tails");
+        assert!(!tail_mark(&w(1, 2, 6, 0)), "the rest lost half as much");
         assert!(!tail_mark(&WindowSample {
             dropped: 1,
-            ..w(0, 0, 2, 0)
+            ..w(0, 0, 4, 0)
         }));
-        assert!(shows_loss_shape(6, 1, 1, 0) && shows_loss_shape(0, 0, 2, 0));
+        assert!(shows_loss_shape(6, 1, 1, 0) && shows_loss_shape(0, 0, 4, 0));
         assert!(!shows_loss_shape(0, 9, 1, 0), "mid-frame loss is neither");
+        assert!(
+            !shows_loss_shape(24, 93, 38, 0),
+            "a minute of 0.7 % random loss is neither"
+        );
     }
 
     /// A lone dead frame on a flat link is a blip while the minute's dead frames stay
@@ -522,7 +535,7 @@ mod tests {
         assert_eq!(c.on_window(&flat(0, 1, 0)), None);
         assert_eq!(c.on_window(&flat(1, 0, 0)), None);
         assert!(
-            c.on_window(&flat(2, 1, TAIL_MARK_MIN)).is_some(),
+            c.on_window(&flat(2, 1, TAIL_MIN)).is_some(),
             "a frame dying at its tail"
         );
 

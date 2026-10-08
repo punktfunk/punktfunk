@@ -1021,23 +1021,29 @@ mod tests {
         assert!(d.wake());
     }
 
-    /// Parity going missing at the frames' tails while every frame decodes takes `L` down a
-    /// notch every two windows, before a single frame is lost; the bitrate is not touched.
+    /// Loss at the frames' tails, well past the rest, while every frame decodes takes `L`
+    /// down a notch every two windows, before a single frame is lost; the bitrate is not
+    /// touched. Random loss, which reaches the tails too, leaves `L` alone.
     #[test]
     fn tail_loss_without_a_lost_frame_lowers_the_link_rate() {
         use crate::transport::IFACE_KIND_ETHERNET as ETH;
         let at = Instant::now();
-        let mut d = quiet_driver(at);
-        let f = |kind, mbps| crate::quic::LinkFacts { kind, mbps };
-        d.set_ports(f(ETH, 1_000), f(ETH, 1_000));
-        let acts = drive(&mut d, at, 8, [0, 0, 3]);
-        let told: Vec<u32> = acts
-            .iter()
-            .filter_map(|a| match a {
-                Action::LinkRate(k) => Some(*k),
-                _ => None,
-            })
-            .collect();
+        let run = |loss| {
+            let mut d = quiet_driver(at);
+            let f = |kind, mbps| crate::quic::LinkFacts { kind, mbps };
+            d.set_ports(f(ETH, 1_000), f(ETH, 1_000));
+            let acts = drive(&mut d, at, 8, loss);
+            let told: Vec<u32> = acts
+                .iter()
+                .filter_map(|a| match a {
+                    Action::LinkRate(k) => Some(*k),
+                    _ => None,
+                })
+                .collect();
+            (d, acts, told)
+        };
+        assert_eq!(run([2, 4, 6]).2, [1_000_000], "random loss");
+        let (d, acts, told) = run([0, 0, 6]);
         assert_eq!(told[..3], [1_000_000, 875_000, 765_625]);
         assert_eq!(d.link().1, LinkSource::Measured);
         let cut = acts

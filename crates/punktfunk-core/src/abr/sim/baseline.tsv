@@ -44,7 +44,7 @@ wan_ramp_reads_low	0	195	3	0	37	0	0	1000	4506c956
 wan_lift_overshoot	0	104	3	0	37	0	0	1000	0b8cc93a
 wifi_content_bound	0	3	3	0	4	0	0	1000	3320c9a6
 wan_shallow_wall	0	49	9	123	6	0	0	1000	a86df0bc
-wan_lone_loss	0	3	4	16	38	0	0	1000	78de393d
+wan_lone_loss	0	3	3	17	38	0	0	1000	7bc5fc3f
 wifi_tv_legacy	0	20	0	0	3	0	0	1000	a510e60b
 wifi_good_legacy	0	1	0	8	2	0	0	1000	811c9dc5
 slow_start_spent_legacy	0	19	0	2	5	0	0	1000	a2d3b9e4
@@ -60,6 +60,6 @@ pyrowave_pin_fit	0	1	0	0	5	0	0	1000	811c9dc5
 pyrowave_pin_holds	0	1	0	0	1	0	0	1000	811c9dc5
 calm_desktop_lossy	0	3	0	15	5	0	0	1000	ea6b71af
 wan_lone_loss_nack	0	3	5	17	40	0	0	1000	23629498
-wan_lone_loss_ack	0	3	4	16	38	0	0	1000	78de393d
+wan_lone_loss_ack	0	3	3	17	38	0	0	1000	7bc5fc3f
 wan_wg_12_nack	0	3	0	0	31	0	0	1000	6edcf0ca
 wan_wg_12_ack	0	3	0	0	31	0	0	1000	6edcf0ca
