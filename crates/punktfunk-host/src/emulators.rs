@@ -2,9 +2,12 @@
 //! on the operator's click and lands under `<prefix>/<id>/app`, the folder the plugin
 //! is then granted, so its launch templates may point inside it.
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::{Duration, Instant};
 
 use hermir::progress::Quiet;
 use hermir::{Hermir, Installed, Options};
+use punktfunk_core::config::GamepadPref;
 
 /// Where managed emulators live. `%ProgramData%\punktfunk\emulators` on Windows, so the SYSTEM
 /// service installs and the player's session runs. The data dir on POSIX: a plugin is granted
@@ -118,18 +121,45 @@ pub fn has_core(dir: &Path, core: &str) -> bool {
     .is_file()
 }
 
+/// How long a launch waits for the client's first pad, and for every pad it claimed to be
+/// built. A usbip DualSense takes about 0.4 s to enumerate.
+const SETTLE_FIRST: Duration = Duration::from_millis(500);
+const SETTLE_ALL: Duration = Duration::from_millis(1500);
+
 /// The pads this host made for its players, in the order they appeared: seat 1 is the first.
-/// Linux reads them off `/proc/bus/input/devices` — a virtual device with a vendor the host's
-/// pad backends present is one of ours. With none up yet (the client's pad frames arrive
-/// after the launch), seat 1 is the pad the host will make, keyed by identity and index 0.
-pub fn session_players() -> Vec<hermir::Player> {
+/// The client's pads land just after the handshake, so this waits for the ones its session
+/// claimed (`slots`, one bit each) to show up; Linux reads them off `/proc/bus/input/devices`.
+/// A pad claimed but not built yet, or none at all, seats as the pad a session of `kind` makes.
+pub fn session_players(kind: GamepadPref, slots: Option<&AtomicU16>) -> Vec<hermir::Player> {
+    let claimed = || slots.map_or(0, |s| s.load(Ordering::Relaxed).count_ones() as usize);
+    let start = Instant::now();
     let mut pads = Vec::new();
-    #[cfg(target_os = "linux")]
-    if let Ok(text) = std::fs::read_to_string("/proc/bus/input/devices") {
-        pads = virtual_pads(&text);
+    loop {
+        #[cfg(target_os = "linux")]
+        if let Ok(text) = std::fs::read_to_string("/proc/bus/input/devices") {
+            pads = virtual_pads(&text, Path::new("/sys"));
+        }
+        // Nothing to read the built pads from: the claim is all there is.
+        #[cfg(not(target_os = "linux"))]
+        let pads_len = claimed();
+        #[cfg(target_os = "linux")]
+        let pads_len = pads.len();
+        let (want, waited) = (claimed(), start.elapsed());
+        if slots.is_none()
+            || (want > 0 && pads_len >= want)
+            || (want == 0 && waited >= SETTLE_FIRST)
+            || waited >= SETTLE_ALL
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
-    if pads.is_empty() {
-        pads.push(hermir::PadRef::xbox360(0));
+    while pads.len() < claimed().max(1) {
+        let index = u32::try_from(pads.len()).unwrap_or(u32::MAX);
+        pads.push(hermir::PadRef {
+            index,
+            ..first_pad(kind)
+        });
     }
     pads.into_iter()
         .zip(1u8..)
@@ -137,12 +167,166 @@ pub fn session_players() -> Vec<hermir::Player> {
         .collect()
 }
 
-/// Microsoft and Sony: the identities the host's uinput and uhid pads carry.
-const PAD_VENDORS: [u16; 2] = [0x045e, 0x054c];
+/// Microsoft, Sony and Nintendo: the identities the host's uinput, uhid and usbip pads carry.
+const PAD_VENDORS: [u16; 3] = [0x045e, 0x054c, 0x057e];
 
-/// The virtual pads in a `/proc/bus/input/devices` listing, in event-node order.
+/// SDL 3's name for a pad its HIDAPI driver renames by USB id. `None` for the Xbox pads, which
+/// hermir names itself, and anything else.
+fn sdl_name(vendor: u16, product: u16) -> Option<&'static str> {
+    Some(match (vendor, product) {
+        (0x054c, 0x0ce6) => "DualSense Wireless Controller",
+        (0x054c, 0x0df2) => "DualSense Edge Wireless Controller",
+        (0x054c, 0x09cc) => "PS4 Controller",
+        (0x057e, 0x2009) => "Nintendo Switch Pro Controller",
+        _ => return None,
+    })
+}
+
+/// What hidapi reads off a HID pad, which SDL builds the pad's GUID from: the USB device's
+/// strings and `bcdDevice` over usbip; for uhid, which has no USB parent, the HID name and 0.
+#[derive(Debug, PartialEq)]
+struct Hid {
+    manufacturer: String,
+    product: String,
+    release: u16,
+}
+
+/// SDL's GUID for a pad its HIDAPI driver drives: USB bus, a CRC, the USB ids, hidapi's
+/// release, then `h`. A Sony pad's CRC is of the name SDL renames it to; a Switch Pro is
+/// renamed, then its GUID re-derived from hidapi's strings.
+fn hidapi_guid(vendor: u16, product: u16, hid: &Hid) -> Option<String> {
+    let name = sdl_name(vendor, product)?;
+    let crc = match (vendor, hid.manufacturer.as_str()) {
+        (0x054c, _) => crc16(name.as_bytes()),
+        (_, "") => crc16(hid.product.as_bytes()),
+        (_, m) => crc16(format!("{m} {}", hid.product).as_bytes()),
+    };
+    let words = [3, crc, vendor, 0, product, 0, hid.release];
+    let mut guid: String = words
+        .iter()
+        .map(|w| format!("{:02x}{:02x}", w & 0xff, w >> 8))
+        .collect();
+    guid.push_str("6800");
+    Some(guid)
+}
+
+/// CRC-16/ARC, what `SDL_crc16` computes.
+fn crc16(data: &[u8]) -> u16 {
+    data.iter().fold(0u16, |crc, &b| {
+        (0..8).fold(crc ^ u16::from(b), |c, _| {
+            if c & 1 == 1 {
+                (c >> 1) ^ 0xA001
+            } else {
+                c >> 1
+            }
+        })
+    })
+}
+
+/// What hidapi reads for the HID device under the input node at `sysfs`, `sys` being `/sys`:
+/// `None` for a pad with no HID device, a uinput one SDL reads through evdev.
+fn hid_of(sys: &Path, sysfs: &str) -> Option<Hid> {
+    // <hid>/input/inputN; a usbip pad's USB device is two up from <hid>: interface, device.
+    let hid = sys
+        .join(sysfs.trim_start_matches('/'))
+        .parent()?
+        .parent()?
+        .to_path_buf();
+    let uevent = std::fs::read_to_string(hid.join("uevent")).ok()?;
+    let name = uevent.lines().find_map(|l| l.strip_prefix("HID_NAME="))?;
+    let usb = hid.parent()?.parent()?;
+    let attr = |a: &str| {
+        std::fs::read_to_string(usb.join(a))
+            .map(|s| s.trim_end().to_string())
+            .ok()
+    };
+    Some(match attr("bcdDevice") {
+        Some(bcd) => Hid {
+            manufacturer: attr("manufacturer").unwrap_or_default(),
+            product: attr("product").unwrap_or_default(),
+            release: u16::from_str_radix(&bcd, 16).unwrap_or(0),
+        },
+        None => Hid {
+            manufacturer: String::new(),
+            product: name.to_string(),
+            release: 0,
+        },
+    })
+}
+
+/// The pad a session of `kind` makes first, as the kernel, hidapi and SDL name it. The kinds
+/// without a row seat as an Xbox 360 pad.
+fn first_pad(kind: GamepadPref) -> hermir::PadRef {
+    #[cfg(target_os = "linux")]
+    let usbip = pf_inject::dualsense_usbip::usbip_preferred();
+    #[cfg(not(target_os = "linux"))]
+    let usbip = false;
+    let uhid = |name: &str| Hid {
+        manufacturer: String::new(),
+        product: name.into(),
+        release: 0,
+    };
+    // hid-playstation sets 0x8000 on the version of the devices it drives.
+    let (vendor, product, version, name, hid) = match kind {
+        GamepadPref::XboxOne => (0x045e, 0x02ea, 0x0408, "Microsoft X-Box One S pad", None),
+        GamepadPref::XboxElite => (
+            0x045e,
+            0x0b00,
+            0x0511,
+            "Microsoft X-Box One Elite 2 pad",
+            None,
+        ),
+        GamepadPref::DualSense if usbip => (
+            0x054c,
+            0x0ce6,
+            0x8111,
+            "Sony Interactive Entertainment DualSense Wireless Controller",
+            Some(Hid {
+                manufacturer: "Sony Interactive Entertainment".into(),
+                product: "DualSense Wireless Controller".into(),
+                release: 0x0100,
+            }),
+        ),
+        GamepadPref::DualSense => {
+            let n = "Punktfunk DualSense 0";
+            (0x054c, 0x0ce6, 0x8100, n, Some(uhid(n)))
+        }
+        GamepadPref::DualSenseEdge => {
+            let n = "Punktfunk DualSense Edge 0";
+            (0x054c, 0x0df2, 0x8100, n, Some(uhid(n)))
+        }
+        GamepadPref::DualShock4 => {
+            let n = "Punktfunk DualShock 4 0";
+            (0x054c, 0x09cc, 0x8100, n, Some(uhid(n)))
+        }
+        GamepadPref::SwitchPro => (
+            0x057e,
+            0x2009,
+            0x0200,
+            "Nintendo Switch Pro Controller",
+            Some(uhid("Punktfunk Switch Pro Controller 0")),
+        ),
+        _ => return hermir::PadRef::xbox360(0),
+    };
+    hermir::PadRef {
+        name: name.into(),
+        bus: 3,
+        vendor,
+        product,
+        version,
+        index: 0,
+        evdev: None,
+        guid: hid.and_then(|h| hidapi_guid(vendor, product, &h)),
+        gamepad_name: sdl_name(vendor, product).map(Into::into),
+    }
+}
+
+/// The host's pads in a `/proc/bus/input/devices` listing, in event-node order: a virtual or
+/// usbip-attached device of a pad vendor with a joystick node. A pad's motion sensors get one
+/// too; the accelerometer property (bit 6) tells them apart.
+/// `sys` is `/sys`, where each HID pad's hidapi strings are read.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
+fn virtual_pads(text: &str, sys: &Path) -> Vec<hermir::PadRef> {
     let mut out: Vec<(u32, hermir::PadRef)> = Vec::new();
     for block in text.split("\n\n") {
         let field = |tag: &str| {
@@ -165,8 +349,16 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
         ) else {
             continue;
         };
+        let handlers = field("H: Handlers=").unwrap_or("");
+        let sysfs = field("S: Sysfs=").unwrap_or("");
+        let ours = sysfs.starts_with("/devices/virtual/") || sysfs.contains("/vhci_hcd.");
+        let sensors = field("B: PROP=")
+            .and_then(|p| u64::from_str_radix(p, 16).ok())
+            .is_some_and(|p| p & 1 << 6 != 0);
         if !PAD_VENDORS.contains(&vendor)
-            || !field("S: Sysfs=").is_some_and(|s| s.starts_with("/devices/virtual/"))
+            || !ours
+            || sensors
+            || !handlers.split_whitespace().any(|h| h.starts_with("js"))
         {
             continue;
         }
@@ -174,11 +366,9 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
             .unwrap_or("")
             .trim_matches('"')
             .to_string();
-        let event = field("H: Handlers=")
-            .and_then(|h| {
-                h.split_whitespace()
-                    .find_map(|w| w.strip_prefix("event")?.parse::<u32>().ok())
-            })
+        let event = handlers
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("event")?.parse::<u32>().ok())
             .unwrap_or(u32::MAX);
         out.push((
             event,
@@ -191,8 +381,8 @@ fn virtual_pads(text: &str) -> Vec<hermir::PadRef> {
                 index: 0,
                 evdev: (event != u32::MAX)
                     .then(|| PathBuf::from(format!("/dev/input/event{event}"))),
-                guid: None,
-                gamepad_name: None,
+                guid: hid_of(sys, sysfs).and_then(|h| hidapi_guid(vendor, product, &h)),
+                gamepad_name: sdl_name(vendor, product).map(Into::into),
             },
         ));
     }
@@ -231,13 +421,15 @@ fn revert_with(h: &Hermir) {
 
 /// Every copy of `id` answers its first-run questions, gets `platform`'s firmware from
 /// `firmware_dir` (the regular files in it, not below), and has the session's pads written
-/// in seat order (steps of kind `players`; reverted after the game). `platform` is a catalog
-/// id or any of its aliases (RomM slug, ES-DE folder, libretro name). Blocking: an installer
-/// may run.
+/// in seat order (steps of kind `players`; reverted after the game): see [`session_players`]
+/// for `pad` and `slots`. `platform` is a catalog id or any of its aliases (RomM slug, ES-DE
+/// folder, libretro name). Blocking: an installer may run.
 pub fn prepare(
     id: &str,
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
+    pad: GamepadPref,
+    slots: Option<&AtomicU16>,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
     let h = open()?;
     // A game that ended without a lease reporting it (its session took the nested gamescope
@@ -266,7 +458,7 @@ pub fn prepare(
             .collect(),
     };
     let players = hermir::Patch {
-        players: Some(session_players()),
+        players: Some(session_players(pad, slots)),
         ..Default::default()
     };
     emulator
@@ -431,8 +623,9 @@ pub fn in_catalog(id: &str) -> bool {
 
 /// Before an `emulator` entry starts: every copy past its first-run questions, the platform's
 /// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads.
-/// What it did goes to the log; a launch never waits on it to succeed.
-pub fn prepare_launch(library_id: &str) {
+/// What it did goes to the log. A launch waits for the client's pads, at most [`SETTLE_ALL`],
+/// and never on the rest to succeed.
+pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU16>) {
     let Some(entry) = crate::library::entry_for_library_id(library_id) else {
         return;
     };
@@ -450,7 +643,7 @@ pub fn prepare_launch(library_id: &str) {
         .as_deref()
         .zip(platform)
         .and_then(|(provider, platform)| staged_firmware(provider, platform));
-    match prepare(&spec.value, platform, staged.as_deref()) {
+    match prepare(&spec.value, platform, staged.as_deref(), pad, slots) {
         Ok(copies) => {
             for (exe, prepared) in copies {
                 for s in prepared.steps {
@@ -503,7 +696,7 @@ mod tests {
 I: Bus=0003 Vendor=045e Product=028e Version=0110\nN: Name=\"Microsoft X-Box 360 pad\"\nS: Sysfs=/devices/virtual/input/input29\nH: Handlers=event11 js0\n\n\
 I: Bus=0003 Vendor=045e Product=028e Version=0114\nN: Name=\"Microsoft X-Box 360 pad\"\nS: Sysfs=/devices/pci0000:00/0000:00:14.0/usb1/1-3/input/input8\nH: Handlers=event4 js2\n\n\
 I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2 keyboard\"\nS: Sysfs=/devices/platform/i8042/serio0/input/input1\nH: Handlers=kbd event1\n";
-        let pads = virtual_pads(text);
+        let pads = virtual_pads(text, Path::new("/nonexistent"));
         assert_eq!(pads.len(), 2);
         assert_eq!(pads[0].index, 0);
         assert_eq!(
@@ -515,7 +708,97 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
             Some(Path::new("/dev/input/event12"))
         );
         assert_eq!(pads[0].sdl_guid(true), "030081b85e0400008e02000010010000");
-        assert!(virtual_pads("").is_empty());
+        assert!(virtual_pads("", Path::new("/nonexistent")).is_empty());
+    }
+
+    #[test]
+    fn a_usbip_dualsense_is_one_pad_under_sdls_name() {
+        // Read off a host with the usbip DualSense up: the pad, then its sensors, touchpad, jack.
+        let dev =
+            "S: Sysfs=/devices/platform/vhci_hcd.0/usb9/9-1/9-1:1.3/0003:054C:0CE6.0015/input";
+        let ds = "I: Bus=0003 Vendor=054c Product=0ce6 Version=8111\nN: Name=\"Sony Interactive Entertainment DualSense Wireless Controller";
+        let text = format!(
+            "{ds}\"\n{dev}/input78\nH: Handlers=event10 js1 \nB: PROP=0\n\n\
+             {ds} Motion Sensors\"\n{dev}/input79\nH: Handlers=event11 js2 \nB: PROP=40\n\n\
+             {ds} Touchpad\"\n{dev}/input80\nH: Handlers=event12 mouse3 \nB: PROP=5\n\n\
+             {ds} Headset Jack\"\n{dev}/input81\nH: Handlers=event13 \nB: PROP=0\n"
+        );
+        let sys = tempfile::tempdir().unwrap();
+        let usb = sys.path().join("devices/platform/vhci_hcd.0/usb9/9-1");
+        let hid = usb.join("9-1:1.3/0003:054C:0CE6.0015");
+        std::fs::create_dir_all(&hid).unwrap();
+        std::fs::write(
+            hid.join("uevent"),
+            "HID_NAME=Sony Interactive Entertainment DualSense Wireless Controller\n",
+        )
+        .unwrap();
+        std::fs::write(usb.join("bcdDevice"), "0100\n").unwrap();
+        std::fs::write(usb.join("manufacturer"), "Sony Interactive Entertainment\n").unwrap();
+        std::fs::write(usb.join("product"), "DualSense Wireless Controller\n").unwrap();
+        let pads = virtual_pads(&text, sys.path());
+        assert_eq!(pads.len(), 1, "{pads:?}");
+        assert_eq!(
+            pads[0].evdev.as_deref(),
+            Some(Path::new("/dev/input/event10"))
+        );
+        // RPCS3 binds `<SDL name> <n>`; the GUID is what SDL 3.4 reported for this pad.
+        assert_eq!(pads[0].sdl_name(), "DualSense Wireless Controller");
+        assert_eq!(pads[0].sdl_guid(true), "030057564c050000e60c000000016800");
+        assert_eq!(pads[0].sdl_guid(false), "030000004c050000e60c000000016800");
+    }
+
+    #[test]
+    fn a_uhid_pad_has_no_usb_parent_so_hidapi_reads_its_hid_name_and_release_0() {
+        let sys = tempfile::tempdir().unwrap();
+        let hid = sys
+            .path()
+            .join("devices/virtual/misc/uhid/0003:057E:2009.0009");
+        std::fs::create_dir_all(&hid).unwrap();
+        std::fs::write(
+            hid.join("uevent"),
+            "HID_NAME=Punktfunk Switch Pro Controller 0\n",
+        )
+        .unwrap();
+        let got = hid_of(
+            sys.path(),
+            "/devices/virtual/misc/uhid/0003:057E:2009.0009/input/input9",
+        );
+        let want = Hid {
+            manufacturer: String::new(),
+            product: "Punktfunk Switch Pro Controller 0".into(),
+            release: 0,
+        };
+        assert_eq!(got.as_ref(), Some(&want));
+        // A Switch Pro's CRC is of hidapi's product string, not of SDL's name for it.
+        let crc = crc16(b"Punktfunk Switch Pro Controller 0");
+        let guid = hidapi_guid(0x057e, 0x2009, &want).unwrap();
+        assert_eq!(&guid[4..8], format!("{:02x}{:02x}", crc & 0xff, crc >> 8));
+        assert_eq!(first_pad(GamepadPref::SwitchPro).guid, Some(guid));
+        assert_eq!(hid_of(sys.path(), "/devices/virtual/input/input3"), None);
+    }
+
+    #[test]
+    fn every_pad_the_session_claimed_gets_a_seat() {
+        // No pad is built on a test box: both seats are the session's kind, in claim order.
+        let seats = session_players(GamepadPref::DualSense, Some(&AtomicU16::new(0b101)));
+        let got: Vec<_> = seats.iter().map(|p| (p.seat, p.pad.index)).collect();
+        assert_eq!(got, [(1, 0), (2, 1)]);
+        assert_eq!(seats[1].pad.sdl_name(), "DualSense Wireless Controller");
+    }
+
+    #[test]
+    fn a_session_with_no_pad_up_yet_seats_the_kind_it_will_make() {
+        let seat = |kind| first_pad(kind).sdl_name();
+        assert_eq!(
+            seat(GamepadPref::DualSense),
+            "DualSense Wireless Controller"
+        );
+        assert_eq!(
+            seat(GamepadPref::SwitchPro),
+            "Nintendo Switch Pro Controller"
+        );
+        assert_eq!(seat(GamepadPref::Xbox360), "Xbox 360 Controller");
+        assert_eq!(seat(GamepadPref::SteamDeck), "Xbox 360 Controller");
     }
 
     #[test]

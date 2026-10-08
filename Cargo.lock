@@ -2011,7 +2011,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hermir"
 version = "0.1.0"
-source = "git+https://github.com/unom-io/hermir?rev=b2c13da454c817c2e7ab892326b6e33cb06800d1#b2c13da454c817c2e7ab892326b6e33cb06800d1"
+source = "git+https://github.com/unom-io/hermir?rev=6fdf0fa7bbef8b23e78ac1b967cba3c2db0f8b6e#6fdf0fa7bbef8b23e78ac1b967cba3c2db0f8b6e"
 dependencies = [
  "flate2",
  "md-5",
@@ -5501,7 +5501,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

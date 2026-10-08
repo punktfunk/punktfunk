@@ -18,6 +18,11 @@ pub(crate) struct LaunchOwner {
     /// The session's profile, credited in play stats beside the title and named on the game
     /// events. `None` on GameStream.
     pub profile: Option<crate::events::ProfileRef>,
+    /// The kind this session's pads start as: an emulator's bindings name it before it exists.
+    pub pad: punktfunk_core::config::GamepadPref,
+    /// The OS slots this session's input thread has claimed, one bit per pad. `None` on
+    /// GameStream, whose pads have no slot map.
+    pub pad_slots: Option<std::sync::Arc<std::sync::atomic::AtomicU16>>,
 }
 
 /// A claimed, prepped launch.
@@ -96,7 +101,7 @@ pub(crate) fn prepare(
         });
         // After the holds: they stage the firmware this places.
         if let Some(id) = t.game.id.as_deref() {
-            crate::emulators::prepare_launch(id);
+            crate::emulators::prepare_launch(id, owner.pad, owner.pad_slots.as_deref());
         }
     }
     Prepared {
