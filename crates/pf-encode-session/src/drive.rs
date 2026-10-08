@@ -313,6 +313,13 @@ impl Drive<'_> {
                     self.want_republish = true;
                 }
                 Ctl::DistrustReferences => self.enc.distrust_references(),
+                Ctl::SetReferenceFloor(floor) => {
+                    self.enc
+                        .set_reference_floor(floor.map(|(last, mask)| pf_encode_win::Acked {
+                            last: i64::from(last),
+                            mask,
+                        }));
+                }
                 Ctl::ReconfigureBitrate(kbps) => {
                     if self.enc.reconfigure_bitrate(u64::from(kbps) * 1000) {
                         // A backend that tracks its own clamp reports it; the rest took the ask.

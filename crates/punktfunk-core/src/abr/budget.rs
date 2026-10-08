@@ -88,7 +88,7 @@ pub fn budget_kbps_for_encoder(
     u32::try_from(wire.saturating_add(audio_kbps as u64)).unwrap_or(u32::MAX)
 }
 
-/// Loss ppm ([`crate::quic::LossReport`]) → recovery %. FEC must exceed the
+/// Loss ppm (a feedback window's `loss_ppm`) → recovery %. FEC must exceed the
 /// loss it covers, so the target is `loss × 1.4 + 1`, clamped to the band.
 /// Clean (≈0 ppm) lands on [`FEC_MIN`].
 ///

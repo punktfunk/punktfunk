@@ -1014,13 +1014,15 @@ fn declare_pad(
 
 /// The session's one `read_datagram` loop (two would race): 0xCB mic, 0xCC rich and pen, 0xC8
 /// input, magics disjoint. Each is tested against the live grant mask before it is offered, and a
-/// full queue drops rather than block the mic and this reader. Ends with the connection.
+/// full queue drops rather than block the mic and this reader. The client's feedback goes to the
+/// control task. Ends with the connection.
 pub(super) fn spawn_datagram_reader(
     conn: super::link::SessionLink,
     grants: Arc<AtomicU32>,
     counters: Arc<crate::session_status::SessionCounters>,
     mic_tx: std::sync::mpsc::SyncSender<crate::audio::MicFrame>,
     input_tx: std::sync::mpsc::SyncSender<ClientInput>,
+    feedback_tx: tokio::sync::mpsc::UnboundedSender<punktfunk_core::quic::v2::dgram::Feedback>,
 ) {
     tokio::spawn(async move {
         // Shared, not local: this task ends with the connection, which closes after the session
@@ -1039,7 +1041,14 @@ pub(super) fn spawn_datagram_reader(
             }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
         };
-        while let Ok(d) = conn.read_datagram().await {
+        while let Ok(incoming) = conn.read_datagram().await {
+            let d = match incoming {
+                super::link::Incoming::Plain(d) => d,
+                super::link::Incoming::Feedback(fb) => {
+                    let _ = feedback_tx.send(fb);
+                    continue;
+                }
+            };
             // One relaxed load per datagram; test before offering. Mic/rich/pen by plane tag;
             // 0xC8 through `classify`.
             let mask = grants.load(Ordering::Relaxed);

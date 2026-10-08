@@ -20,8 +20,7 @@ use punktfunk_core::quic::v2::hello::{ClientHello, Ready, ServerHello};
 use punktfunk_core::quic::v2::msg::decode;
 use punktfunk_core::quic::v2::{dgram, io as v2io, registry};
 use punktfunk_core::quic::{
-    self, endpoint, wall_clock_ns, ClockEcho, ClockProbe, Reconfigure, Reconfigured,
-    RequestKeyframe, RfiRequest, Welcome,
+    self, endpoint, wall_clock_ns, ClockEcho, ClockProbe, Reconfigure, Reconfigured, Welcome,
 };
 use punktfunk_core::session::{MediaV2, Session};
 use punktfunk_core::transport::shared::MediaSender;
@@ -377,14 +376,20 @@ impl Dgrams<'_> {
         self.conn.send_datagram(w.into()).is_ok()
     }
 
-    async fn recv(&self) -> Option<Vec<u8>> {
+    /// The next audio, input or event datagram. A recovery ask on the client's feedback
+    /// raises the keyframe flag: a demo answers every RFI with an IDR.
+    async fn recv(&self, shared: &Shared) -> Option<Vec<u8>> {
         use dgram::Dgram;
         loop {
             let b = self.conn.read_datagram().await.ok()?;
-            if let Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) =
-                dgram::decode(&b)
-            {
-                return Some(p.to_vec());
+            match dgram::decode(&b) {
+                Some(Dgram::Audio(p) | Dgram::InputState(p) | Dgram::HostEvent(p)) => {
+                    return Some(p.to_vec());
+                }
+                Some(Dgram::Feedback(fb)) if fb.keyframe || fb.invalidate.is_some() => {
+                    shared.keyframe.store(true, Ordering::SeqCst);
+                }
+                _ => {}
             }
         }
     }
@@ -421,10 +426,6 @@ async fn control_loop(
                 t3_ns: clock.to_wire(wall_clock_ns()),
             };
             v2io::send(&mut send, &echo).await?;
-        } else if decode::<RequestKeyframe>(ty, &body).is_ok()
-            || decode::<RfiRequest>(ty, &body).is_ok()
-        {
-            shared.keyframe.store(true, Ordering::SeqCst);
         } else if let Ok(asked) = decode::<Reconfigure>(ty, &body) {
             let mode = demo_mode(asked.mode);
             if let Some((owner, s)) = shared.session.lock().unwrap().as_mut() {
@@ -446,7 +447,7 @@ async fn control_loop(
 
 async fn input_loop(dgrams: &Dgrams<'_>, shared: &Shared) {
     let mut pad_buttons = [0u32; 16];
-    while let Some(dg) = dgrams.recv().await {
+    while let Some(dg) = dgrams.recv(shared).await {
         if dg.first() != Some(&INPUT_MAGIC) {
             continue;
         }

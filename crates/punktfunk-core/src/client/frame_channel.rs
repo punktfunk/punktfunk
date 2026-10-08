@@ -63,12 +63,12 @@ pub const FLUSH_COOLDOWN: Duration = Duration::from_secs(2);
 /// Keyframe re-ask spacing while no video has arrived — the opposite of
 /// [`FLUSH_COOLDOWN`] (nothing vs too much). Public and 2600 ms (not 2000) so
 /// the host recovery-cadence detector can tell the two faults apart; embedders
-/// own this timer and must use this constant. [`crate::quic::LossReport`]
-/// delivery counts settle it for clients new enough to send one.
+/// own this timer and must use this constant. The delivery count in each feedback
+/// window settles it.
 pub const NO_VIDEO_RETRY: Duration = Duration::from_millis(2600);
 
 /// One adaptive-FEC / ABR report window. A window the client discards (probe
-/// tail, host pipeline gap) sends no [`crate::quic::LossReport`], so the host
+/// tail, host pipeline gap) sends no report, so the host
 /// reads a report later than this by a window as a discard, not jitter.
 pub const ADAPT_REPORT_INTERVAL: Duration = crate::abr::WINDOW;
 
@@ -420,6 +420,18 @@ struct FrameQueue {
     skipped_total: u64,
     /// The same skips over the whole session.
     skipped_ever: u64,
+    /// A NACK in flight: frames after this one wait until it completes or `until`.
+    hold: Option<Hold>,
+    /// Holds released by their frame completing, since the last [`FrameChannel::take_filled`].
+    filled: u32,
+}
+
+/// [`FrameChannel::hold`]: the frame a NACK is out for, how long it may take, and the
+/// frames after it in arrival order.
+struct Hold {
+    frame: u32,
+    until: Instant,
+    after: Vec<Frame>,
 }
 
 /// [`FrameChannel::pop`] result. `next_frame` maps Timeout/Closed as-is.
@@ -438,6 +450,8 @@ impl FrameChannel {
                 all_intra: false,
                 skipped_total: 0,
                 skipped_ever: 0,
+                hold: None,
+                filled: 0,
             }),
             ready: Condvar::new(),
             consumer_seen: AtomicBool::new(false),
@@ -481,8 +495,57 @@ impl FrameChannel {
         self.inner.lock().unwrap().skipped_ever
     }
 
+    /// Hold every frame after `frame` until it completes or `until` passes: a NACK is out
+    /// for its missing shards, and the decoder must see it before them. One at a time.
+    pub(crate) fn hold(&self, frame: u32, until: Instant) -> bool {
+        let mut st = self.inner.lock().unwrap();
+        if st.hold.is_some() || st.all_intra {
+            return false;
+        }
+        st.hold = Some(Hold {
+            frame,
+            until,
+            after: Vec::new(),
+        });
+        true
+    }
+
+    /// Let the held frames go once their hold expired: the decoder then sees the gap, and
+    /// its gap path asks for recovery. `true` when one expired.
+    pub(crate) fn expire_hold(&self, now: Instant) -> bool {
+        let mut st = self.inner.lock().unwrap();
+        if st.hold.as_ref().is_none_or(|h| now < h.until) {
+            return false;
+        }
+        let h = st.hold.take().expect("checked");
+        st.q.extend(h.after);
+        drop(st);
+        self.ready.notify_one();
+        true
+    }
+
+    /// Holds their frame released by completing in time, since the last call.
+    pub(crate) fn take_filled(&self) -> u32 {
+        std::mem::take(&mut self.inner.lock().unwrap().filled)
+    }
+
     pub(crate) fn push(&self, frame: Frame) {
         let mut st = self.inner.lock().unwrap();
+        if let Some(h) = st.hold.as_mut() {
+            if frame.frame_index == h.frame && frame.complete {
+                let h = st.hold.take().expect("checked");
+                st.filled += 1;
+                st.q.push_back(frame);
+                st.q.extend(h.after);
+                drop(st);
+                self.ready.notify_one();
+                return;
+            }
+            if super::recovery::ahead_of(frame.frame_index, h.frame) {
+                h.after.push(frame);
+                return;
+            }
+        }
         st.q.push_back(frame);
         while st.q.len() > FRAME_QUEUE_HARD_CAP {
             st.q.pop_front();
@@ -506,7 +569,8 @@ impl FrameChannel {
 
     pub(crate) fn clear(&self) -> usize {
         let mut st = self.inner.lock().unwrap();
-        let n = st.q.len();
+        let held = st.hold.take().map_or(0, |h| h.after.len());
+        let n = st.q.len() + held;
         st.q.clear();
         n
     }
@@ -961,5 +1025,65 @@ mod jump_to_live_tests {
         assert_eq!(j.after_flush(both, 0, 0), Shed::Real { sheds: 3 });
         // The real shed broke the no-op run: the next no-op is a first again.
         assert_eq!(j.after_flush(clock, 0, 0), Shed::Noop { disarmed: false });
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    fn frame(index: u32, complete: bool) -> Frame {
+        Frame {
+            data: Vec::new(),
+            frame_index: index,
+            pts_ns: 0,
+            flags: 0,
+            epoch: 0,
+            complete,
+            part: None,
+            received_ns: 0,
+        }
+    }
+
+    fn drain(c: &FrameChannel) -> Vec<u32> {
+        let mut out = Vec::new();
+        while let FramePop::Frame(f) = c.pop(Duration::ZERO) {
+            out.push(f.frame_index);
+        }
+        out
+    }
+
+    /// Frames after a held one wait; it completing lets them all go, in order, and counts
+    /// as filled. One hold at a time.
+    #[test]
+    fn a_hold_releases_when_its_frame_completes() {
+        let c = FrameChannel::new();
+        let until = Instant::now() + Duration::from_secs(1);
+        assert!(c.hold(5, until));
+        assert!(!c.hold(9, until), "one at a time");
+        c.push(frame(4, true));
+        c.push(frame(6, true));
+        c.push(frame(7, true));
+        assert_eq!(drain(&c), [4]);
+        c.push(frame(5, true));
+        assert_eq!(drain(&c), [5, 6, 7]);
+        assert_eq!(c.take_filled(), 1);
+        assert!(c.hold(9, until), "free again");
+    }
+
+    /// A hold that runs out lets the frames after it go without it, and counts nothing.
+    #[test]
+    fn a_hold_releases_when_it_expires() {
+        let c = FrameChannel::new();
+        let t0 = Instant::now();
+        assert!(c.hold(5, t0 + Duration::from_millis(10)));
+        c.push(frame(6, true));
+        assert!(!c.expire_hold(t0));
+        assert_eq!(drain(&c), Vec::<u32>::new());
+        assert!(c.expire_hold(t0 + Duration::from_millis(10)));
+        assert_eq!(drain(&c), [6]);
+        assert_eq!(c.take_filled(), 0);
+        c.set_all_intra(true);
+        assert!(!c.hold(7, t0), "an all-intra stream holds nothing");
     }
 }

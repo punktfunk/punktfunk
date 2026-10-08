@@ -1057,20 +1057,18 @@ fn spawn_packetizer(
     Ok(())
 }
 
-/// Paced send thread. A normal-size frame leaves whole via
-/// [`auto_burst_bytes`](crate::send_pacing::auto_burst_bytes); only IDR / scene-change overflow
-/// spreads at ~3× stream rate, bounded to ~2 frame intervals. Chunking is ≤ 12 steps, chunk ≥
-/// 16: every paced step ends in `thread::sleep` whose overshoot must stay bitrate-independent.
-/// Moonlight cannot ask for a delivery profile, so `PUNKTFUNK_DELIVERY` is the only way to
-/// one here. Send failure ends the whole session via `on_lost` — audio would otherwise keep
-/// streaming at the dead endpoint.
+/// Paced send thread: every frame on one [`Pacer`](crate::send_pacing::Pacer) at the link
+/// rate, bounded to ~2 frame intervals. Moonlight says nothing about its link, so `L` is
+/// this host's port under the 800 Mbit/s floor, and `PUNKTFUNK_DELIVERY` the only other
+/// way to shape it. Send failure ends the whole session via `on_lost` — audio would
+/// otherwise keep streaming at the dead endpoint.
 #[allow(clippy::too_many_arguments)]
 fn spawn_sender(
     sock: UdpSocket,
     rx: std::sync::mpsc::Receiver<PacketBatch>,
     frame_interval: Duration,
-    // ~3× the derived encoder rate, live. `0` = `PUNKTFUNK_PACE_FACTOR=0` (legacy spread).
-    pace_rate_bps: Arc<std::sync::atomic::AtomicU64>,
+    // The derived encoder rate, live.
+    stream_bps: Arc<std::sync::atomic::AtomicU64>,
     pool_tx: std::sync::mpsc::SyncSender<PacketBatch>,
     spread_us: Arc<std::sync::Mutex<Vec<u32>>>,
     running: Arc<AtomicBool>,
@@ -1082,45 +1080,32 @@ fn spawn_sender(
             crate::native::boost_thread_priority(false);
             let mut sent: u64 = 0;
             let mut dropped: u64 = 0;
-            let profile = crate::send_pacing::forced_delivery().unwrap_or_default();
-            let mut pacing = crate::send_pacing::Pacing::new(None);
+            use crate::send_pacing as sp;
+            let host = crate::telemetry::net_health::host_link(
+                sock.local_addr().ok().map(|a| a.ip()),
+                Some(&sock),
+            );
+            let ports = sp::Ports::of((host.iface_kind, host.link_mbps), (0, 0));
+            let mut pacer = sp::Pacer::new(ports, sp::forced());
+            let link = pacer.link();
+            tracing::info!(link_kbps = link.kbps, source = ?link.source, "video: pacing at the link rate");
             while let Ok(mut batch) = rx.recv() {
-                dropped += crate::send_pacing::inject_video_drop(&mut batch);
+                dropped += sp::inject_video_drop(&mut batch);
                 if batch.is_empty() {
                     continue;
                 }
                 let wire_bytes: usize = batch.iter().map(|p| p.len()).sum();
-                let pace_rate = pace_rate_bps.load(Ordering::Relaxed);
-                pacing.update(pace_rate, frame_interval * 2, profile);
-                let burst_bytes = pacing.burst_bytes(wire_bytes);
-                let cfg = crate::send_pacing::PaceCfg {
-                    burst_bytes: Some(burst_bytes),
-                    chunk: crate::send_pacing::ChunkPolicy::Bounded {
-                        min_chunk: 16,
-                        max_steps: 12,
-                    },
-                    sleep_floor: Duration::from_micros(500),
-                };
-                let overflow_bytes = wire_bytes.saturating_sub(burst_bytes) as u64;
-                let budget = crate::send_pacing::native_budget(
-                    Instant::now() + frame_interval,
-                    pace_rate,
-                    overflow_bytes,
-                    frame_interval * 2,
-                );
-                let r = crate::send_pacing::pace_frame(
-                    &batch,
-                    budget,
-                    &cfg,
-                    pacing.clock.as_mut(),
-                    |chunk| {
-                        sendmmsg_all(&sock, chunk)?;
-                        sent += chunk.len() as u64;
-                        Ok::<(), std::io::Error>(())
-                    },
-                );
+                let stream_kbps = (stream_bps.load(Ordering::Relaxed) / 1_000) as u32;
+                pacer.update(stream_kbps, 0, None, sp::Shape::Auto, frame_interval * 2);
+                pacer.begin(wire_bytes);
+                let r = pacer.send(&batch, |chunk| {
+                    sendmmsg_all(&sock, chunk)?;
+                    sent += chunk.len() as u64;
+                    Ok::<(), std::io::Error>(())
+                });
+                let (stat, _) = pacer.finish();
                 match r {
-                    Ok(stat) => {
+                    Ok(()) => {
                         // A stalled reader must not grow this unbounded.
                         let mut v = spread_us.lock().unwrap_or_else(|p| p.into_inner());
                         if v.len() < 1024 {
@@ -1296,22 +1281,13 @@ fn stream_body(
     // Depth 4 > the two depth-2 queues combined, so a batch always has a return slot.
     let (pool_tx, pool_rx) = std::sync::mpsc::sync_channel::<PacketBatch>(4);
     let spread_us = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
-    // 3× default: the link carries 1× sustained, so a bounded 3× excursion is safe.
-    // `PUNKTFUNK_PACE_FACTOR=0` restores the legacy deadline-fraction spread.
-    let pace_factor: f64 = std::env::var("PUNKTFUNK_PACE_FACTOR")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|f: &f64| f.is_finite() && *f >= 0.0)
-        .unwrap_or(3.0);
-    let pace_rate_bps = Arc::new(std::sync::atomic::AtomicU64::new(
-        (enc_bps as f64 * pace_factor) as u64,
-    ));
+    let stream_bps = Arc::new(std::sync::atomic::AtomicU64::new(enc_bps));
     let fec_pct_live = Arc::new(std::sync::atomic::AtomicU8::new(fec_pct));
     spawn_sender(
         sock.try_clone().context("clone video socket")?,
         batch_rx,
         Duration::from_secs_f64(1.0 / target_fps as f64),
-        pace_rate_bps.clone(),
+        stream_bps.clone(),
         pool_tx,
         spread_us.clone(),
         running.clone(),
@@ -1771,10 +1747,7 @@ fn stream_body(
                     if enc.reconfigure_bitrate(new_enc) {
                         enc_bps = new_enc;
                         fec_pct_live.store(adapt.fec_pct, std::sync::atomic::Ordering::Relaxed);
-                        pace_rate_bps.store(
-                            (new_enc as f64 * pace_factor) as u64,
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
+                        stream_bps.store(new_enc, std::sync::atomic::Ordering::Relaxed);
                         tracing::info!(
                             lost = lost_delta,
                             fec_pct = adapt.fec_pct,

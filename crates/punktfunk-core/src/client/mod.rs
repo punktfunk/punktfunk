@@ -19,7 +19,7 @@ use crate::error::{PunktfunkError, Result};
 use crate::input::{InputEvent, InputKind, PadMouseMode};
 use crate::quic::{
     endpoint, ClipControl, ClipKind, ClipOffer, ColorInfo, HdrMeta, HidOutput, PadAudioFrame,
-    ProbeRequest, RfiRequest, RichInput,
+    ProbeRequest, RichInput,
 };
 use crate::session::Frame;
 use std::sync::atomic::{
@@ -376,7 +376,7 @@ impl NativeClient {
 /// workers feed. Default-QoS producers invert priority. Android uses nice −8; no-op
 /// elsewhere (no QoS scheduler).
 #[cfg(target_vendor = "apple")]
-fn pin_thread_user_interactive() {
+pub(crate) fn pin_thread_user_interactive() {
     // SAFETY: sets only the current thread's QoS class — always valid to call.
     unsafe {
         libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
@@ -386,7 +386,7 @@ fn pin_thread_user_interactive() {
 /// delay overflows the socket recv buffer → wire loss the link never saw. Below decode's
 /// −10 so the display path still wins. Best-effort.
 #[cfg(target_os = "android")]
-fn pin_thread_user_interactive() {
+pub(crate) fn pin_thread_user_interactive() {
     // SAFETY: `gettid`/`setpriority` on the calling thread are always-safe syscalls; a refusal is
     // reported via the return value (ignored — a missed boost, not an error on the data path).
     unsafe {
@@ -397,7 +397,7 @@ fn pin_thread_user_interactive() {
 /// Desktop has no QoS class of its own; the embedder installs one with
 /// [`set_thread_boost`] (nice via rtkit, MMCSS on Windows).
 #[cfg(not(any(target_vendor = "apple", target_os = "android")))]
-fn pin_thread_user_interactive() {
+pub(crate) fn pin_thread_user_interactive() {
     if let Some(boost) = THREAD_BOOST.get() {
         boost();
     }
@@ -444,21 +444,11 @@ fn register_hot_tid(reg: &Mutex<Vec<i32>>) {
     }
 }
 
-/// Queue an RFI and log it at info, the most Android keeps. `missing_shards` is what
+/// Send an RFI and log it at info, the most Android keeps. `missing_shards` is what
 /// `first_frame` lacked past its parity when its tail arrived or a later frame overtook
 /// it; absent when none of it arrived.
-fn send_rfi(
-    shared: &ClientShared,
-    ctrl_tx: &tokio::sync::mpsc::Sender<CtrlRequest>,
-    first_frame: u32,
-    last_frame: u32,
-) -> Result<()> {
-    ctrl_tx
-        .try_send(CtrlRequest::Rfi(RfiRequest {
-            first_frame,
-            last_frame,
-        }))
-        .map_err(|_| PunktfunkError::Closed)?;
+fn send_rfi(shared: &ClientShared, first_frame: u32, last_frame: u32) -> Result<()> {
+    shared.ask_rfi(first_frame, last_frame);
     let short = shared.short_frames.lock().unwrap().get(first_frame);
     tracing::info!(
         first = first_frame,
@@ -470,31 +460,22 @@ fn send_rfi(
     Ok(())
 }
 
-/// Queue an IDR ask and drop the lost range an RFI still owes; the IDR repairs it.
-fn send_keyframe(
-    shared: &ClientShared,
-    ctrl_tx: &tokio::sync::mpsc::Sender<CtrlRequest>,
-) -> Result<()> {
-    ctrl_tx
-        .try_send(CtrlRequest::Keyframe)
-        .map_err(|_| PunktfunkError::Closed)?;
+/// Send an IDR ask and drop the lost range an RFI still owes; the IDR repairs it.
+fn send_keyframe(shared: &ClientShared) -> Result<()> {
+    shared.ask_keyframe();
     shared.rfi.lock().unwrap().keyframe_requested();
     Ok(())
 }
 
 /// Fire a recovery ask. Call with the `rfi` lock released.
-fn send_recovery(
-    shared: &ClientShared,
-    ctrl_tx: &tokio::sync::mpsc::Sender<CtrlRequest>,
-    ask: RecoveryAsk,
-) {
+fn send_recovery(shared: &ClientShared, ask: RecoveryAsk) {
     match ask {
         RecoveryAsk::Rfi(first, last) => {
-            let _ = send_rfi(shared, ctrl_tx, first, last);
+            let _ = send_rfi(shared, first, last);
         }
         // Wider than RFI_MAX_RANGE: RFI cannot repair it; resync on a keyframe.
         RecoveryAsk::Keyframe => {
-            let _ = send_keyframe(shared, ctrl_tx);
+            let _ = send_keyframe(shared);
         }
         RecoveryAsk::None => {}
     }
@@ -619,10 +600,9 @@ pub struct ConnectParams {
     /// Settings preset this dial names ([`crate::quic::EXT_TAG_PRESET`]); the host shows it and
     /// hands it to hooks, the stream is unchanged. `None` names none.
     pub preset: Option<crate::quic::SessionPreset>,
-    /// The delivery profile to stream under and what to ask besides
-    /// ([`crate::quic::EXT_TAG_DELIVERY`]); `None` asks nothing. A host that reads it answers
-    /// in [`NativeClient::delivery`].
-    pub delivery: Option<crate::quic::DeliveryAsk>,
+    /// A diagnostic session ([`crate::quic::EXT_DELIVERY_PROBE_ONLY`]): the host serves probes
+    /// from the punched data plane and never builds a pipeline.
+    pub probe_only: bool,
     /// The profile to play as: a host profile id. `None` lets the host choose
     /// ([`NativeClient::profile`] says which it did).
     pub profile: Option<String>,
@@ -659,7 +639,7 @@ impl ConnectParams {
             pin: None,
             identity: None,
             preset: None,
-            delivery: None,
+            probe_only: false,
             profile: None,
             timeout,
             cancel: None,
@@ -702,7 +682,9 @@ impl NativeClient {
             std::sync::mpsc::sync_channel::<crate::quic::AccessUpdate>(ACCESS_QUEUE);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Negotiated>>();
         let shared = Arc::new(ClientShared::new(params.mode));
-        *shared.delivery_ask.lock().unwrap() = params.delivery;
+        shared
+            .probe_only
+            .store(params.probe_only, Ordering::Relaxed);
 
         let cancel = params.cancel.take();
         let (timeout, bitrate_kbps, requested_gamepad) =
@@ -711,7 +693,7 @@ impl NativeClient {
         params.client_caps =
             advertised_client_caps(params.client_caps, params.audio_rate_hz, params.audio_bits);
         let shared_w = shared.clone();
-        let ctrl_tx_pump = ctrl_tx.clone(); // pump sends adaptive-FEC LossReports
+        let ctrl_tx_pump = ctrl_tx.clone(); // pump sends its report windows
         let worker = std::thread::Builder::new()
             .name("punktfunk-client".into())
             .spawn(move || {
@@ -912,7 +894,7 @@ impl NativeClient {
     /// requests flood the control stream. Drops the lost range an RFI still owes; the
     /// IDR repairs it.
     pub fn request_keyframe(&self) -> Result<()> {
-        send_keyframe(&self.shared, &self.ctrl_tx)
+        send_keyframe(&self.shared)
     }
 
     /// Recover `[first_frame, last_frame]` by RFI instead of a full IDR. Capable hosts emit a
@@ -922,7 +904,7 @@ impl NativeClient {
     ///
     /// Every RFI a client sends is logged at info with what its first frame lacked.
     pub fn request_rfi(&self, first_frame: u32, last_frame: u32) -> Result<()> {
-        send_rfi(&self.shared, &self.ctrl_tx, first_frame, last_frame)
+        send_rfi(&self.shared, first_frame, last_frame)
     }
 
     /// Feed each received AU's `frame_index` (receive order). A forward gap fires a throttled
@@ -944,7 +926,7 @@ impl NativeClient {
             .lock()
             .unwrap()
             .observe(frame_index, Instant::now());
-        send_recovery(&self.shared, &self.ctrl_tx, ask);
+        send_recovery(&self.shared, ask);
         order
     }
 
@@ -954,7 +936,7 @@ impl NativeClient {
     /// there too.
     pub fn flush_frame_recovery(&self) {
         let ask = self.shared.rfi.lock().unwrap().flush(Instant::now());
-        send_recovery(&self.shared, &self.ctrl_tx, ask);
+        send_recovery(&self.shared, ask);
     }
 
     /// [`observe_frame_index`](Self::observe_frame_index) as the gap width, `0` when none.
@@ -1157,7 +1139,32 @@ impl NativeClient {
         s.audio_rate_hz = self.audio_sample_rate_hz;
         s.audio_bits = self.audio_bits;
         s.audio_channels = self.audio_channels;
+        s.extras.push(crate::hud::Extra {
+            role: crate::hud::Role::Muted,
+            ..crate::hud::Extra::detail(self.link_line())
+        });
         s
+    }
+
+    /// The link every frame is paced at and why, as the overlay shows it.
+    pub fn link_line(&self) -> String {
+        let host = self.shared.host_link.lock().unwrap().facts();
+        // The buffer is named while the socket drops packets and it is under what a 4K
+        // frame needs.
+        let small_buffer_kb = Some(self.recv_buffer_kb())
+            .filter(|&kb| kb > 0 && kb < 8 * 1024 && self.shared.draining.load(Ordering::Relaxed));
+        let shape = if self.shared.wake_shape.load(Ordering::Relaxed) {
+            crate::abr::Shape::Wake
+        } else {
+            crate::abr::Shape::Auto
+        };
+        crate::hud::link_line(
+            host,
+            *self.shared.client_link.lock().unwrap(),
+            *self.shared.link.lock().unwrap(),
+            shape,
+            small_buffer_kb,
+        )
     }
 
     pub fn audio_buffer_ms(&self) -> u32 {
@@ -1224,12 +1231,8 @@ impl NativeClient {
     }
 
     /// A shaped burst ([`crate::quic::ProbeShaped`]): frame-sized bursts at line rate, or
-    /// capped groups, at the same average rate. Same polling as [`Self::request_probe`].
-    /// Refused toward a host that never answered the delivery tag ([`Self::delivery`]).
+    /// paced groups, at the same average rate. Same polling as [`Self::request_probe`].
     pub fn request_probe_shaped(&self, shape: crate::quic::ProbeShaped) -> Result<()> {
-        self.delivery().ok_or(PunktfunkError::Unsupported(
-            "host does not read delivery messages",
-        ))?;
         self.send_probe(shape.duration_ms, CtrlRequest::ProbeShaped(shape))
     }
 
@@ -1251,33 +1254,10 @@ impl NativeClient {
         sent
     }
 
-    /// Stream under `profile` (`0` burst, `1` capped, `2` smooth) from the next frame; the
-    /// host's answer lands in [`Self::delivery`]. Refused toward a host that never answered
-    /// the delivery tag.
-    pub fn set_delivery(&self, profile: u8) -> Result<()> {
-        self.delivery().ok_or(PunktfunkError::Unsupported(
-            "host does not read delivery messages",
-        ))?;
-        self.ctrl_tx
-            .try_send(CtrlRequest::SetDelivery(profile))
-            .map_err(|_| PunktfunkError::Closed)
-    }
-
-    /// The profile this session streams under, as the host last said, and whether the host
-    /// pins one for every session. `None` until the host answers — for ever, from one that
-    /// does not read the tag, or when the dial asked nothing.
-    pub fn delivery(&self) -> Option<crate::quic::DeliveryChanged> {
-        *self.shared.delivery.lock().unwrap()
-    }
-
-    /// What the host said about its end of the path, when the dial asked for it.
-    pub fn host_facts(&self) -> Option<crate::quic::HostFacts> {
-        *self.shared.host_facts.lock().unwrap()
-    }
-
-    /// This dial's delivery ask ([`ConnectParams::delivery`]).
-    pub fn delivery_ask(&self) -> Option<crate::quic::DeliveryAsk> {
-        *self.shared.delivery_ask.lock().unwrap()
+    /// What the host said about its end of the path in its `ServerHello`; zeros before the
+    /// handshake, and where its OS did not say.
+    pub fn host_link(&self) -> crate::quic::HostLink {
+        *self.shared.host_link.lock().unwrap()
     }
 
     /// A diagnostic session: the dial asked for probes only, so no video ever comes.
@@ -1380,6 +1360,8 @@ impl NativeClient {
                 let completes_au = f.part.as_ref().is_none_or(|p| p.last);
                 self.hud
                     .note_received(f.pts_ns, f.received_ns, f.data.len(), completes_au);
+                self.shared
+                    .decoder_took(f.frame_index, f.flags, completes_au && f.complete);
                 Ok(f)
             }
             FramePop::Timeout => Err(PunktfunkError::NoFrame),

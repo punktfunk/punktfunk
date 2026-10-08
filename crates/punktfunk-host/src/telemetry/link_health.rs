@@ -24,6 +24,16 @@ pub const WARN_INTRA_REFRESH: u32 = 10;
 /// three distinct asks is a client that is not being repaired.
 pub const WARN_KEYFRAME_REQ: u32 = 3;
 
+/// How the client asked for its frames: paced, or the wake shape (a small first group and a
+/// gap on every frame).
+#[derive(Serialize, Deserialize, ToSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkShape {
+    #[default]
+    Auto,
+    Wake,
+}
+
 /// One minute of link health for one session. Every field is a delta for the window except
 /// the bands, which are min..max over it.
 #[derive(Serialize, Deserialize, ToSchema, Clone, Debug, Default, PartialEq, Eq)]
@@ -48,6 +58,8 @@ pub struct LinkMinute {
     /// wave that recodes the picture over ~0.5 s.
     pub anchor_p: u32,
     pub intra_refresh: u32,
+    /// Frames encoded against one the client confirmed, while the link showed loss.
+    pub acked_p: u32,
     /// Client decode-recovery asks, and the IDRs actually forced (the cooldown coalesces).
     pub keyframe_req: u32,
     pub idr: u32,
@@ -64,6 +76,19 @@ pub struct LinkMinute {
     pub gaps: u32,
     /// Sealed wire throughput over the window.
     pub egress_kbps: u32,
+    /// The link rate the client last reported, which every frame is paced at. `0` = none.
+    pub link_kbps: u32,
+    /// The shape the client asked for.
+    pub shape: LinkShape,
+    /// Packets resent on a client's NACK.
+    pub resend_pkts: u32,
+    /// Shards the client never got, by where in their frame they fell: the first twelve
+    /// data shards, the middle, and the last twelve with all parity.
+    pub loss_head: u32,
+    pub loss_mid: u32,
+    pub loss_tail: u32,
+    /// Packets the client's own receive buffer dropped.
+    pub sock_drops: u32,
 }
 
 impl LinkMinute {
@@ -98,6 +123,7 @@ pub fn emit(m: &LinkMinute, peer: std::net::IpAddr) {
                 rfi_declined = m.rfi_declined,
                 anchor_p = m.anchor_p,
                 intra_refresh = m.intra_refresh,
+                acked_p = m.acked_p,
                 keyframe_req = m.keyframe_req,
                 idr = m.idr,
                 fec_pct = %format!("{}..{}", m.fec_min_pct, m.fec_max_pct),
@@ -106,6 +132,13 @@ pub fn emit(m: &LinkMinute, peer: std::net::IpAddr) {
                 retargets = m.retargets,
                 gaps = m.gaps,
                 egress_mbps = %format!("{:.1}", f64::from(m.egress_kbps) / 1000.0),
+                link_mbps = m.link_kbps / 1000,
+                shape = ?m.shape,
+                resend_pkts = m.resend_pkts,
+                loss_head = m.loss_head,
+                loss_mid = m.loss_mid,
+                loss_tail = m.loss_tail,
+                sock_drops = m.sock_drops,
                 "link health"
             )
         };
@@ -128,9 +161,11 @@ pub struct LinkCounters {
     session_id: AtomicU64,
     anchor_p: AtomicU32,
     intra_refresh: AtomicU32,
+    acked_p: AtomicU32,
     rfi_declined: AtomicU32,
     idr: AtomicU32,
     retargets: AtomicU32,
+    resend_pkts: AtomicU32,
     /// Session-cumulative sealed wire bytes, republished by the send thread every ~2 s. The
     /// control task keeps the previous read and diffs; nothing here resets.
     egress_bytes: AtomicU64,
@@ -149,12 +184,15 @@ impl LinkCounters {
         self.session_id.load(Ordering::Relaxed)
     }
 
-    /// One recovery AU the encoder produced for an RFI: a clean anchor P, or the start of an
-    /// intra refresh wave. Called from [`crate::native::stream::encode`] per AU.
-    pub fn note_recovery_au(&self, anchor_p: bool, wave_start: bool) {
-        if anchor_p {
-            self.anchor_p.fetch_add(1, Ordering::Relaxed);
-        }
+    /// One recovery AU the encoder produced: a clean anchor P, or the start of an intra
+    /// refresh wave. An anchor while the encoder holds `acked` references counts there, not
+    /// as an RFI's answer. Called from [`crate::native::stream::encode`] per AU.
+    pub fn note_recovery_au(&self, anchor_p: bool, acked: bool, wave_start: bool) {
+        match (anchor_p, acked) {
+            (true, true) => self.acked_p.fetch_add(1, Ordering::Relaxed),
+            (true, false) => self.anchor_p.fetch_add(1, Ordering::Relaxed),
+            _ => 0,
+        };
         if wave_start {
             self.intra_refresh.fetch_add(1, Ordering::Relaxed);
         }
@@ -163,6 +201,11 @@ impl LinkCounters {
     /// An RFI the encoder refused, so recovery costs an IDR.
     pub fn note_rfi_declined(&self) {
         self.rfi_declined.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Packets the send thread resent on a NACK.
+    pub fn note_resent(&self, n: u32) {
+        self.resend_pkts.fetch_add(n, Ordering::Relaxed);
     }
 
     /// One IDR actually forced, past the coalescing cooldown.
@@ -193,9 +236,11 @@ impl LinkCounters {
         m.session_id = self.session_id.load(Ordering::Relaxed);
         m.anchor_p = self.anchor_p.swap(0, Ordering::Relaxed);
         m.intra_refresh = self.intra_refresh.swap(0, Ordering::Relaxed);
+        m.acked_p = self.acked_p.swap(0, Ordering::Relaxed);
         m.rfi_declined = self.rfi_declined.swap(0, Ordering::Relaxed);
         m.idr = self.idr.swap(0, Ordering::Relaxed);
         m.retargets = self.retargets.swap(0, Ordering::Relaxed);
+        m.resend_pkts = self.resend_pkts.swap(0, Ordering::Relaxed);
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(m.clone());
     }
 
@@ -225,6 +270,11 @@ pub struct LinkWindow {
     /// `None` until the first band sample, so a real 0 % never reads as "unset".
     fec: Option<(u8, u8)>,
     abr: Option<(u32, u32)>,
+    /// The client's link rate and shape as last reported; they carry across minutes.
+    link_kbps: u32,
+    shape: LinkShape,
+    /// `[head, mid, tail, socket]` loss over the minute.
+    positions: [u32; 4],
 }
 
 impl LinkWindow {
@@ -243,6 +293,28 @@ impl LinkWindow {
             gaps: 0,
             fec: None,
             abr: None,
+            link_kbps: 0,
+            shape: LinkShape::Auto,
+            positions: [0; 4],
+        }
+    }
+
+    /// One feedback datagram's levels: the link rate the pacer runs at and the shape.
+    pub fn note_link(&mut self, link_kbps: u32, wake: bool) {
+        if link_kbps != 0 {
+            self.link_kbps = link_kbps;
+        }
+        self.shape = if wake {
+            LinkShape::Wake
+        } else {
+            LinkShape::Auto
+        };
+    }
+
+    /// One report window's loss by position, and the client socket's own drops.
+    pub fn note_positions(&mut self, head: u32, mid: u32, tail: u32, sock_drops: u32) {
+        for (sum, n) in self.positions.iter_mut().zip([head, mid, tail, sock_drops]) {
+            *sum = sum.saturating_add(n);
         }
     }
 
@@ -313,10 +385,18 @@ impl LinkWindow {
             abr_min_kbps,
             abr_max_kbps,
             egress_kbps: (bytes as f64 * 8.0 / 1000.0 / elapsed) as u32,
+            link_kbps: self.link_kbps,
+            shape: self.shape,
+            loss_head: self.positions[0],
+            loss_mid: self.positions[1],
+            loss_tail: self.positions[2],
+            sock_drops: self.positions[3],
             ..LinkMinute::default()
         };
         counters.take(&mut m);
+        let (link_kbps, shape) = (self.link_kbps, self.shape);
         *self = LinkWindow::new(counters);
+        (self.link_kbps, self.shape) = (link_kbps, shape);
         m
     }
 }
@@ -372,8 +452,8 @@ mod tests {
     fn counters_reset_per_minute() {
         let c = LinkCounters::default();
         c.set_session_id(10);
-        c.note_recovery_au(true, false);
-        c.note_recovery_au(false, true);
+        c.note_recovery_au(true, false, false);
+        c.note_recovery_au(false, false, true);
         c.note_rfi_declined();
         c.note_idr();
         c.note_retarget();

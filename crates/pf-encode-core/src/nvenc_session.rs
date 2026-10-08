@@ -453,6 +453,13 @@ pub struct NvSession {
     /// `distrust_references` latched: a resident reference may predict from a hole the
     /// client decoded against, so RFI declines until an IDR flushes the DPB.
     pub distrusted: bool,
+    /// Long-term slots the session opened with (`0` = none: AV1, or no GPU support).
+    pub ltr_frames: u32,
+    /// Wire index each long-term slot holds; an IDR or an invalidation empties it.
+    ltr_slots: Vec<Option<i64>>,
+    ltr_next: usize,
+    /// The newest frame the client confirmed, while the host holds confirmed references.
+    pub reference_floor: Option<crate::codec::Acked>,
 }
 
 impl NvSession {
@@ -516,6 +523,10 @@ impl NvSession {
             async_rt: None,
             last_rfi_range: None,
             distrusted: false,
+            ltr_frames: 0,
+            ltr_slots: Vec::new(),
+            ltr_next: 0,
+            reference_floor: None,
         }
     }
 
@@ -632,6 +643,7 @@ impl NvSession {
         // Probe the split ceiling, don't infer it from rejection: the driver accepts a split
         // wider than the hardware and silently encodes narrower (`max_forced_split_mode`).
         let engines = cap(C::NV_ENC_CAPS_NUM_ENCODER_ENGINES);
+        let max_ltr = cap(C::NV_ENC_CAPS_NUM_MAX_LTR_FRAMES);
         // SAFETY: the probe session opened above; this is its only destroy.
         let _ = unsafe { (self.api.destroy_encoder)(enc) };
 
@@ -653,8 +665,15 @@ impl NvSession {
         self.custom_vbv = custom_vbv != 0;
         self.subframe_cap = subframe != 0;
         self.encoder_engines = engines.max(0) as u32;
+        let ltr_codec = matches!(self.codec, Codec::H264 | Codec::H265);
+        self.ltr_frames = if self.rfi_supported && ltr_codec {
+            (max_ltr.max(0) as u32).min(super::nvenc_core::LTR_FRAMES)
+        } else {
+            0
+        };
         tracing::info!(
             rfi = self.rfi_supported,
+            ltr_frames = self.ltr_frames,
             custom_vbv = self.custom_vbv,
             yuv444 = self.yuv444_supported,
             async_encode,
@@ -748,6 +767,7 @@ impl NvSession {
                 rfi_supported: self.rfi_supported,
                 intra_refresh_cnt: self.wave_cycle(),
                 slices: self.slices,
+                ltr_frames: self.ltr_frames,
             },
         );
         Ok(cfg)
@@ -1115,6 +1135,8 @@ impl NvSession {
         // P-only + infinite GOP: IDRs are forced, or the opening frame NVENC emits as one.
         // Chunked poll flags early chunks from this before the driver reports `pictureType`.
         let idr = flags != 0 || opening;
+        let ltr = self.ltr_step(pts as i64, idr, wave.is_some());
+        let anchor = anchor || ltr.is_some_and(|(_, force)| force.is_some());
         let mut pic = nv::NV_ENC_PIC_PARAMS {
             version: nv::NV_ENC_PIC_PARAMS_VER,
             inputWidth: self.width,
@@ -1177,6 +1199,29 @@ impl NvSession {
             }
             Codec::PyroWave => unreachable!("PyroWave never opens the direct-NVENC backend"),
         }
+        if let Some((mark, force)) = ltr {
+            let bitmap = force.map_or(0, |(slot, _)| 1u32 << slot);
+            let (mark, mark_idx) = mark.map_or((0, 0), |m| (1, m as u32));
+            match self.codec {
+                // SAFETY: H.264 session: `h264PicParams` is the active arm.
+                Codec::H264 => unsafe {
+                    let p = &mut pic.codecPicParams.h264PicParams;
+                    p.set_ltrMarkFrame(mark);
+                    p.ltrMarkFrameIdx = mark_idx;
+                    p.set_ltrUseFrames(u32::from(bitmap != 0));
+                    p.ltrUseFrameBitmap = bitmap;
+                },
+                // SAFETY: HEVC session: `hevcPicParams` is the active arm.
+                Codec::H265 => unsafe {
+                    let p = &mut pic.codecPicParams.hevcPicParams;
+                    p.set_ltrMarkFrame(mark);
+                    p.ltrMarkFrameIdx = mark_idx;
+                    p.set_ltrUseFrames(u32::from(bitmap != 0));
+                    p.ltrUseFrameBitmap = bitmap;
+                },
+                Codec::Av1 | Codec::PyroWave => {}
+            }
+        }
         if !sei.is_empty() {
             match self.codec {
                 Codec::H265 => {
@@ -1230,6 +1275,24 @@ impl NvSession {
             map: t_map,
             pic: t_pic,
         })
+    }
+
+    /// This frame's long-term step while the host holds confirmed references: mark it into a
+    /// slot and force the newest one the client confirmed ([`crate::rfi::ltr_acked_step`]).
+    /// `None` without a floor, on an IDR (which empties the slots) and during a wave.
+    fn ltr_step(&mut self, ts: i64, idr: bool, wave: bool) -> Option<LtrStep> {
+        let n = self.ltr_frames as usize;
+        if self.ltr_slots.len() != n || idr {
+            self.ltr_slots = vec![None; n];
+            self.ltr_next = 0;
+        }
+        let acked = self.reference_floor.filter(|_| n > 0 && !idr && !wave)?;
+        let (mark, force) = crate::rfi::ltr_acked_step(&self.ltr_slots, &acked, ts, self.ltr_next);
+        if let Some(m) = mark {
+            self.ltr_slots[m] = Some(ts);
+            self.ltr_next = (m + 1) % n;
+        }
+        Some((mark, force))
     }
 
     /// Unmap one retired input.
@@ -1524,6 +1587,11 @@ impl NvSession {
                 }
                 self.last_rfi_range = Some((first, last));
                 self.pending_anchor = true;
+                for slot in &mut self.ltr_slots {
+                    if slot.is_some_and(|w| (first..=last).contains(&w)) {
+                        *slot = None;
+                    }
+                }
                 true
             }
         }
@@ -1633,8 +1701,12 @@ impl NvSession {
         self.wave_span = None;
         self.wave_spoiled = false;
         self.wave_queued = false;
+        self.ltr_slots.clear();
     }
 }
+
+/// One frame's long-term step: the slot this frame marks, and the `(slot, wire)` it uses.
+type LtrStep = (Option<usize>, Option<(usize, i64)>);
 
 /// Session-side calls need an open session; a backend that skipped its open fails here.
 fn ensure_open(enc: *mut c_void) -> Result<()> {

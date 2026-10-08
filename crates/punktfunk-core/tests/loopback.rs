@@ -211,3 +211,119 @@ proptest! {
         }
     }
 }
+
+/// A host streaming 64-shard frames at 60 fps through `pair`, its client's loss feeding an
+/// ABR driver window by window. Every action the driver raised, and the client's stats.
+fn drive_edge_loss(
+    pair: (
+        punktfunk_core::transport::LoopbackTransport,
+        punktfunk_core::transport::LoopbackTransport,
+    ),
+    seconds: u64,
+) -> (Vec<punktfunk_core::abr::Action>, punktfunk_core::Stats) {
+    use punktfunk_core::abr::{Driver, DriverConfig};
+    let (host_tp, client_tp) = pair;
+    let mut host = Session::new(
+        config(Role::Host, FecScheme::Gf16, 0),
+        media(None),
+        Box::new(host_tp),
+    )
+    .unwrap();
+    let mut client = Session::new(
+        config(Role::Client, FecScheme::Gf16, 0),
+        media(None),
+        Box::new(client_tp),
+    )
+    .unwrap();
+    let t0 = std::time::Instant::now();
+    let mut d = Driver::new(
+        DriverConfig {
+            start_kbps: 20_000,
+            ceiling_cap_kbps: None,
+            stream_cap_kbps: 200_000,
+            refresh_hz: 60,
+            codec: punktfunk_core::quic::CODEC_HEVC,
+            bit_depth: 8,
+            chroma_format: punktfunk_core::quic::CHROMA_IDC_420,
+            audio_reserved_kbps: 0,
+            marks_repeats: true,
+            probe: false,
+            probe_target_kbps: None,
+            ramp: false,
+            probe_only: false,
+            pin_kbps: None,
+        },
+        t0,
+    );
+    let eth = punktfunk_core::quic::LinkFacts {
+        kind: punktfunk_core::transport::IFACE_KIND_ETHERNET,
+        mbps: 1_000,
+    };
+    d.set_ports(eth, eth);
+    let frame: Vec<u8> = (0..64 * 1024).map(|b| (b * 7) as u8).collect();
+    let mut actions = Vec::new();
+    for i in 0..seconds * 60 {
+        let at = t0 + std::time::Duration::from_micros(i * 16_667);
+        host.submit_frame(&frame, i * 16_667_000, 0).unwrap();
+        while let Ok(f) = client.poll_frame() {
+            assert_eq!(f.data, frame);
+            d.on_au(false);
+        }
+        d.on_stats(&client.stats());
+        d.on_loss_positions(client.take_loss_positions());
+        actions.extend(d.tick(at).actions);
+    }
+    (actions, client.stats())
+}
+
+/// A receiver that loses the first packets of every frame gets the wake shape within two
+/// report windows of the loss being counted, and the HUD says so; no frame is lost.
+#[test]
+fn head_drops_wake_the_shape_within_two_windows() {
+    use punktfunk_core::abr::{Action, LinkSource, Shape};
+    let (actions, st) = drive_edge_loss(punktfunk_core::transport::loopback_drop_head(4), 4);
+    assert_eq!(st.frames_dropped, 0);
+    let reports: Vec<usize> = actions
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(a, Action::Report { head, .. } if *head > 0))
+        .map(|(i, _)| i)
+        .collect();
+    let wake = actions
+        .iter()
+        .position(|a| *a == Action::Shape(Shape::Wake as u8))
+        .expect("the wake shape");
+    assert!(
+        reports.len() >= 2 && wake > reports[1] && wake < reports[1] + 4,
+        "{reports:?} {wake}"
+    );
+    let eth = punktfunk_core::quic::LinkFacts {
+        kind: punktfunk_core::transport::IFACE_KIND_ETHERNET,
+        mbps: 1_000,
+    };
+    assert_eq!(
+        punktfunk_core::hud::link_line(eth, eth, (1_000_000, LinkSource::Ports), Shape::Wake, None),
+        "Link 1 Gbit/s \u{2014} host 1 GbE, this device 1 GbE \u{00b7} paced for a receiver \
+         that loses frame heads"
+    );
+}
+
+/// A queue that drops the last packets of every frame costs parity, not a frame: the link
+/// rate comes down a notch before anything is lost, and the bitrate stands.
+#[test]
+fn tail_drops_mark_the_link_without_a_lost_frame() {
+    use punktfunk_core::abr::Action;
+    let (actions, st) = drive_edge_loss(punktfunk_core::transport::loopback_drop_tail(2), 4);
+    assert_eq!(st.frames_dropped, 0);
+    let told: Vec<u32> = actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::LinkRate(k) => Some(*k),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told[..2], [1_000_000, 875_000], "{told:?}");
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, Action::SetBitrate(k) if *k < 20_000)));
+}

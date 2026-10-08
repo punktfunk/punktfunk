@@ -82,6 +82,14 @@ export function fmtSpan(secs: number): string {
 }
 
 /** A number with the console locale's separators — never a hand-rolled `toFixed`. */
+/** A link rate in kbps as a player reads it: `940 Mbit/s`, `2.5 Gbit/s`. */
+export function fmtLinkRate(kbps: number): string {
+	if (kbps >= 1_000_000) {
+		return `${fmtNumber(kbps / 1_000_000, kbps % 1_000_000 === 0 ? 0 : 1)} Gbit/s`;
+	}
+	return `${fmtNumber(kbps / 1_000)} Mbit/s`;
+}
+
 export function fmtNumber(value: number, digits = 0): string {
 	return new Intl.NumberFormat(getLocale(), {
 		minimumFractionDigits: digits,

@@ -135,8 +135,7 @@ suspend fun connectToHost(
     dialer: String,
     timeoutMs: Int = CONNECT_TIMEOUT_MS,
     preset: StreamPreset? = null,
-    // What a network check asks besides the profile on the host's record ([DELIVERY_FACTS],
-    // [DELIVERY_PROBE_ONLY]); a plain connect asks nothing besides.
+    // [DELIVERY_PROBE_ONLY] for a network check; a plain connect streams.
     deliveryFlags: Int = 0,
     // The host profile to play as (its id); `null` sends none.
     profile: String? = null,
@@ -264,9 +263,6 @@ private suspend fun dial(
             dialer = "android ${appVersion(context)} $dialer",
             presetId = preset?.id,
             presetName = preset?.name,
-            // The profile a network check left on this host's record; a host that does not read
-            // the ask streams as it always has.
-            deliveryProfile = if (pinHex.isEmpty()) 0 else KnownHostStore(context).getByFp(pinHex)?.delivery ?: 0,
             deliveryFlags = deliveryFlags,
             profile = profile,
         )

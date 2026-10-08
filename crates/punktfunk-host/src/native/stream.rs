@@ -6,8 +6,8 @@
 //! The virtual-display loop itself is [`state::StreamState`]: bring-up in `new`, the tick loop
 //! in `run`, one file per concern under `stream/`.
 //!
-//! Pin `PUNKTFUNK_IDD_ADAPTIVE=0`, `PUNKTFUNK_PACE_FACTOR=0`, `PUNKTFUNK_STREAMED_AU=0` for the
-//! rebuild-free A/B levers. Evidence: `design/midstream-resolution-resize.md`.
+//! Pin `PUNKTFUNK_IDD_ADAPTIVE=0`, `PUNKTFUNK_DELIVERY=burst`, `PUNKTFUNK_STREAMED_AU=0` for
+//! the rebuild-free A/B levers. Evidence: `design/midstream-resolution-resize.md`.
 
 use super::wiring::{SessionShared, StreamEnds};
 use super::*;
@@ -186,9 +186,8 @@ struct ProbeBurst {
     burst_hz: u16,
     /// Bytes one pump may release of a shaped burst (`u64::MAX` = the whole backlog).
     group_bytes: u64,
-    /// Clock the groups leave on; `0` = line rate.
-    group_rate_bps: u64,
-    group_next: std::time::Instant,
+    /// The clock a shaped burst's groups leave on; `None` = line rate.
+    clock: Option<crate::send_pacing::GroupClock>,
 }
 
 impl ProbeBurst {
@@ -229,8 +228,9 @@ impl ProbeBurst {
                 0 => u64::MAX,
                 b => u64::from(b),
             },
-            group_rate_bps: u64::from(req.group_rate_kbps) * 1_000,
-            group_next: start,
+            clock: (req.burst_hz > 0 && req.group_rate_kbps > 0).then(|| {
+                crate::send_pacing::GroupClock::new(u64::from(req.group_rate_kbps) * 1_000, start)
+            }),
         })
     }
 
@@ -256,12 +256,11 @@ impl ProbeBurst {
     /// loop for an AU. A clocked group waits for its instant and leaves whole.
     fn pump(&mut self, session: &mut Session) {
         let now = std::time::Instant::now();
-        let clocked = self.burst_hz > 0 && self.group_rate_bps > 0;
-        if clocked && now < self.group_next {
+        if self.clock.as_ref().is_some_and(|c| !c.ahead(now).is_zero()) {
             return;
         }
         let mut budget = self.allowed_bytes().min(self.bytes_sent + PROBE_PUMP_BYTES);
-        if clocked {
+        if self.clock.is_some() {
             budget = budget.min(self.bytes_sent.saturating_add(self.group_bytes));
         }
         let before = self.bytes_sent;
@@ -274,11 +273,8 @@ impl ProbeBurst {
             self.bytes_sent += self.filler.len() as u64;
             self.packets_sent += 1;
         }
-        if clocked && self.bytes_sent > before {
-            self.group_next = now
-                + std::time::Duration::from_nanos(
-                    (self.bytes_sent - before).saturating_mul(8_000_000_000) / self.group_rate_bps,
-                );
+        if let Some(c) = self.clock.as_mut() {
+            c.advance((self.bytes_sent - before) as usize, now);
         }
     }
 
@@ -299,11 +295,10 @@ impl ProbeBurst {
                     self.bytes_sent as f64 / self.bytes_per_sec as f64,
                 )
         } else if self.bytes_sent < self.allowed_bytes() {
-            if self.group_rate_bps > 0 {
-                self.group_next
-            } else {
-                now
-            }
+            now + self
+                .clock
+                .as_ref()
+                .map_or(std::time::Duration::ZERO, |c| c.ahead(now))
         } else {
             let elapsed = now.saturating_duration_since(self.start);
             let periods = (elapsed.as_secs_f64() / self.period().as_secs_f64()).floor() as u32 + 1;
@@ -444,219 +439,46 @@ fn service_probes(
     }
 }
 
-/// Seal one AU and send it under [`send_pacing`](crate::send_pacing): the profile's
-/// allowance leaves first (`Burst`/`Capped`: 10 ms at the pace rate, clamped to
-/// [16 KiB, 256 KiB]; `Smooth`: one super-packet; `PUNKTFUNK_PACE_BURST_KB` pins it),
-/// `Capped` on its clock; overflow spreads at the pace rate in groups of up to 64 packets.
-/// An unpaced line-rate burst overruns the kernel tx buffer → EAGAIN → freeze until the
-/// next keyframe.
-///
-/// The pace rate is ~3× the live encoder bitrate, or the link rate the client's ramp proved
-/// for a pinned stream — the overflow's wire time at that rate is the budget
-/// ([`crate::send_pacing::native_budget`], [`MAX_PACE_SPREAD`]-bounded). `0` = deadline-only
-/// spread (`PUNKTFUNK_PACE_FACTOR=0`, or bitrate not yet known).
+/// Seal one AU and send it on the session's [`Pacer`](crate::send_pacing::Pacer): every
+/// group on the clock at the link rate. Chunks go out as they are sealed, so the first
+/// packet leaves after one chunk, not the frame.
 fn paced_submit(
     session: &mut Session,
     data: &[u8],
     pts_ns: u64,
     flags: u32,
     frame_index: u32,
-    deadline: std::time::Instant,
-    pacing: &mut crate::send_pacing::Pacing,
+    pacer: &mut crate::send_pacing::Pacer,
+    ring: &mut recovery::ResendRing,
 ) -> Result<PaceStat> {
-    if pacing.pace_rate_bps == 0 {
-        // The deadline-only spread is sized on the whole frame.
-        let wires = session
-            .seal_frame_at(data, pts_ns, flags, frame_index)
-            .map_err(|e| anyhow!("seal_frame: {e:?}"))?;
-        return pace_sealed(session, wires, deadline, pacing.burst_cap, pacing);
-    }
-    // Chunks go out as they are sealed; the first packet leaves after one chunk, not the frame.
-    let total = session.frame_wire_len(data.len()).max(1);
-    let burst = pacing.burst_bytes(total);
-    let mut pace = FramePace::new(total, burst, pacing);
+    pacer.begin(session.frame_wire_len(data.len()));
+    session.drain_plaintext(|_| {});
+    ring.begin(frame_index);
     let sealed =
         session.seal_frame_chunks_at(data, pts_ns, flags, frame_index, &mut |chunk, send| {
-            pace.chunk(chunk, send)
+            let mut refs: Vec<&[u8]> = chunk.iter().map(|w| w.as_slice()).collect();
+            crate::send_pacing::inject_video_drop(&mut refs);
+            pacer.send(&refs, |g| send(g).map(|_| ()))
         });
-    let sock_ns = pace.sock_ns;
-    let stat = pace.stat();
+    let (stat, sock_ns) = pacer.finish();
     session.note_sock_ns(sock_ns);
+    session.drain_plaintext(|p| ring.note(p));
     sealed.map_err(|e| anyhow!("seal_frame: {e:?}"))?;
     Ok(stat)
 }
 
-/// One frame's pacing across the chunks [`Session::seal_frame_chunks_at`] hands over:
-/// one microburst (on `Capped`'s clock when there is one), then groups of up to 64
-/// packets — or `group_bytes`, whichever binds — released on a schedule at the pace rate
-/// from the first paced group. A sub-floor wait is skipped and caught up by a later
-/// group, so the rate holds in ~half-millisecond steps however small the chunks are.
-struct FramePace<'a> {
-    /// bits/s past the burst. The spread cap is folded in as a floor on the rate.
-    rate_bps: u64,
-    burst_left: usize,
-    group_bytes: usize,
-    clock: Option<&'a mut crate::send_pacing::GroupClock>,
-    paced_bytes: u64,
-    pace_start: Option<std::time::Instant>,
-    started: Option<std::time::Instant>,
-    paced: bool,
-    sock_ns: u64,
-}
-
-/// Packets of the next group: at least one, at most [`FramePace::GROUP`], no more than
-/// `max_bytes` past the first.
-fn group_len(pkts: &[&[u8]], max_bytes: usize) -> usize {
-    let mut cum = 0usize;
-    let mut n = 0usize;
-    for p in pkts.iter().take(FramePace::GROUP) {
-        if n > 0 && cum.saturating_add(p.len()) > max_bytes {
-            break;
-        }
-        cum += p.len();
-        n += 1;
-    }
-    n
-}
-
-impl<'a> FramePace<'a> {
-    const GROUP: usize = 64;
-    const SLEEP_FLOOR: std::time::Duration = std::time::Duration::from_micros(500);
-
-    fn new(total: usize, burst: usize, pacing: &'a mut crate::send_pacing::Pacing) -> Self {
-        let overflow = total.saturating_sub(burst) as u64;
-        let cap_ns = pacing
-            .max_spread
-            .min(crate::send_pacing::MAX_PACE_SPREAD)
-            .as_nanos()
-            .max(1) as u64;
-        let floor_bps = overflow.saturating_mul(8_000_000_000) / cap_ns;
-        FramePace {
-            rate_bps: pacing.pace_rate_bps.max(floor_bps).max(1),
-            burst_left: burst,
-            group_bytes: pacing.group_bytes(),
-            clock: pacing.clock.as_mut(),
-            paced_bytes: 0,
-            pace_start: None,
-            started: None,
-            paced: false,
-            sock_ns: 0,
-        }
-    }
-
-    fn chunk(
-        &mut self,
-        chunk: &[Vec<u8>],
-        send: &mut dyn FnMut(&[&[u8]]) -> punktfunk_core::Result<usize>,
-    ) -> punktfunk_core::Result<()> {
-        self.started.get_or_insert_with(std::time::Instant::now);
-        let mut refs: Vec<&[u8]> = chunk.iter().map(|w| w.as_slice()).collect();
-        crate::send_pacing::inject_video_drop(&mut refs);
-        let mut rest: &[&[u8]] = &refs;
-        while !rest.is_empty() {
-            let (group, tail) = rest.split_at(group_len(rest, self.group_bytes));
-            rest = tail;
-            let bytes: usize = group.iter().map(|p| p.len()).sum();
-            if self.burst_left > 0 {
-                // The group that crosses the cap still bursts, as `pace_frame` does.
-                self.burst_left = self.burst_left.saturating_sub(bytes);
-                if let Some(clock) = self.clock.as_deref_mut() {
-                    let ahead = clock.wait(bytes, std::time::Instant::now());
-                    if ahead >= Self::SLEEP_FLOOR {
-                        std::thread::sleep(ahead);
-                    }
-                }
-            } else {
-                self.paced = true;
-                let start = *self.pace_start.get_or_insert_with(std::time::Instant::now);
-                let due = start
-                    + std::time::Duration::from_nanos(
-                        self.paced_bytes.saturating_mul(8_000_000_000) / self.rate_bps,
-                    );
-                if let Some(ahead) = due.checked_duration_since(std::time::Instant::now()) {
-                    if ahead >= Self::SLEEP_FLOOR {
-                        std::thread::sleep(ahead);
-                    }
-                }
-                self.paced_bytes += bytes as u64;
-            }
-            let t0 = std::time::Instant::now();
-            send(group)?;
-            self.sock_ns += t0.elapsed().as_nanos() as u64;
-        }
-        Ok(())
-    }
-
-    /// First packet → last packet, seal gaps included.
-    fn stat(&self) -> PaceStat {
-        PaceStat {
-            spread_us: self
-                .started
-                .map(|s| s.elapsed().as_micros() as u32)
-                .unwrap_or(0),
-            paced: self.paced,
-        }
-    }
-}
-
-/// Pace already-sealed wires. Shared with the streamed-AU path ([`handle_chunk`]), whose
-/// `burst` is what is left of the AU's allowance; `None` takes the profile's.
+/// Send already-sealed wires on the pacer: one flush of a streamed AU ([`handle_chunk`]).
 fn pace_sealed(
     session: &mut Session,
     wires: Vec<Vec<u8>>,
-    deadline: std::time::Instant,
-    burst: Option<usize>,
-    pacing: &mut crate::send_pacing::Pacing,
-) -> Result<PaceStat> {
+    pacer: &mut crate::send_pacing::Pacer,
+) -> Result<()> {
     let mut refs: Vec<&[u8]> = wires.iter().map(|w| w.as_slice()).collect();
     crate::send_pacing::inject_video_drop(&mut refs);
-    let result = pace_wires(&refs, deadline, burst, pacing, &mut |chunk| {
-        session.send_sealed(chunk)
-    });
+    let result = pacer.send(&refs, |g| session.send_sealed(g).map(|_| ()));
     drop(refs);
     session.reclaim_wires(wires);
-    match result {
-        Ok((stat, sock_ns)) => {
-            session.note_sock_ns(sock_ns);
-            Ok(stat)
-        }
-        Err(e) => Err(anyhow!("send_sealed: {e:?}")),
-    }
-}
-
-/// Burst then pace `refs` through `send` ([`crate::send_pacing`]). `burst` `None` = the
-/// profile's allowance. Returns the spread and the time spent inside `send`: sleeps between
-/// chunks stay excluded, so `sock_ns` is pure send_gso/sendmmsg time.
-fn pace_wires(
-    refs: &[&[u8]],
-    deadline: std::time::Instant,
-    burst: Option<usize>,
-    pacing: &mut crate::send_pacing::Pacing,
-    send: &mut dyn FnMut(&[&[u8]]) -> punktfunk_core::Result<usize>,
-) -> punktfunk_core::Result<(PaceStat, u64)> {
-    let wire_bytes: usize = refs.iter().map(|p| p.len()).sum();
-    let burst_bytes = burst.unwrap_or_else(|| pacing.burst_bytes(wire_bytes));
-    let cfg = crate::send_pacing::PaceCfg {
-        burst_bytes: Some(burst_bytes),
-        chunk: crate::send_pacing::ChunkPolicy::Adaptive { base: 16, max: 64 },
-        sleep_floor: std::time::Duration::from_micros(500),
-    };
-    let overflow_bytes = wire_bytes.saturating_sub(burst_bytes) as u64;
-    let budget = crate::send_pacing::native_budget(
-        deadline,
-        pacing.pace_rate_bps,
-        overflow_bytes,
-        pacing.max_spread,
-    );
-    let mut sock_ns = 0u64;
-    let stat =
-        crate::send_pacing::pace_frame(refs, budget, &cfg, pacing.clock.as_mut(), |chunk| {
-            let t0 = std::time::Instant::now();
-            let r = send(chunk).map(|_| ());
-            sock_ns += t0.elapsed().as_nanos() as u64;
-            r
-        })?;
-    Ok((stat, sock_ns))
+    result.map_err(|e| anyhow!("send_sealed: {e:?}"))
 }
 
 /// What every stream source takes from its session: the punched session, its schedule, the

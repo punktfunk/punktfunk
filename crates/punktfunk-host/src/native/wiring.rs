@@ -27,20 +27,32 @@ pub(crate) struct SessionShared {
     pub(crate) cadence_degraded: Arc<AtomicBool>,
     /// Behind-cadence score for the climb-refusal log (the flag alone has no evidence).
     pub(crate) cadence_behind_score: Arc<AtomicU32>,
-    /// Client-received packet count, `u32::MAX` until a `DeliveryReport` (an old client never
-    /// sends one). Tells a clean link from a dead one: `loss_ppm = 0` means both.
+    /// Client-received packet count, `u32::MAX` until the first feedback window. Tells a clean
+    /// link from a dead one: `loss_ppm = 0` means both.
     pub(crate) client_packets_received: Arc<AtomicU32>,
     /// FEC in force: what the packetizer runs. Only the stream loop writes it.
     pub(crate) fec_target: Arc<AtomicU8>,
     /// Adaptive-FEC proposals, published to `fec_target` only once the encoder accepts the
     /// matching rate.
     pub(crate) fec_requested: Arc<AtomicU8>,
-    /// The client's proven link rate (kbps), `0` until its `LinkReport`. The send loop paces a
-    /// pinned stream against it.
+    /// The client's link rate (kbps) from its feedback, `0` until its ramp proved one. The
+    /// send loop paces a pinned stream against it.
     pub(crate) link_kbps: Arc<AtomicU32>,
-    /// The delivery profile the client asked for (`DeliveryProfile as u8`), written by the
-    /// control task and read per frame by the send loop. `PUNKTFUNK_DELIVERY` overrides it.
-    pub(crate) delivery: Arc<AtomicU8>,
+    /// The shape the client asked for (`Shape as u8`), read per frame by the send loop.
+    /// `PUNKTFUNK_DELIVERY` overrides it.
+    pub(crate) shape: Arc<AtomicU8>,
+    /// Both ends' ports, from the handshake: the pacer's floor and hard ceiling, and the
+    /// bound on every probe.
+    pub(crate) ports: crate::send_pacing::Ports,
+    /// Queues a resend of `(frame, shards)` beside the frames on the send thread; `false`
+    /// when its queue is full. `None` until the send thread exists.
+    pub(crate) resend: Arc<std::sync::Mutex<Option<ResendFn>>>,
+    /// The newest frame the client confirmed it decoded and the sixteen before it,
+    /// `last << 16 | mask`; [`NONE_ACKED`] until the first.
+    pub(crate) acked: Arc<AtomicU64>,
+    /// A report window showed loss. The stream loop takes it and holds the encoder on
+    /// confirmed references until ten seconds past the last.
+    pub(crate) lossy_window: Arc<AtomicBool>,
     /// The bring-up ramp's window: probe requests are served on the punched data plane without
     /// the control task's spacing until the send thread takes the session (`stream::ramp`).
     /// Open from the handshake, because the client asks as soon as it has punched.
@@ -49,6 +61,12 @@ pub(crate) struct SessionShared {
     /// Stays `true`, and inert, for a session without the cursor cap.
     pub(crate) cursor_client_draws: Arc<AtomicBool>,
 }
+
+/// [`SessionShared::acked`] before the client confirmed a frame.
+pub(crate) const NONE_ACKED: u64 = u64::MAX;
+
+/// [`SessionShared::resend`].
+pub(crate) type ResendFn = Box<dyn Fn(u32, Vec<u16>) -> bool + Send>;
 
 /// The control task's halves.
 pub(crate) struct ControlEnds {
@@ -114,7 +132,11 @@ impl SessionWiring {
     /// Seeded from what Welcome promised. Synthetic-abr aliases `fec_requested` to
     /// `fec_target`: it re-derives frame bytes from FEC every frame and has no retarget to
     /// coordinate.
-    pub(crate) fn new(welcome: &Welcome, source: Punktfunk1Source) -> SessionWiring {
+    pub(crate) fn new(
+        welcome: &Welcome,
+        source: Punktfunk1Source,
+        ports: crate::send_pacing::Ports,
+    ) -> SessionWiring {
         let (reconfig_tx, reconfig) = std::sync::mpsc::channel();
         let (keyframe_tx, keyframe) = std::sync::mpsc::channel();
         let (rfi_tx, rfi) = std::sync::mpsc::channel();
@@ -175,7 +197,11 @@ impl SessionWiring {
                 fec_target,
                 fec_requested,
                 link_kbps: Arc::new(AtomicU32::new(0)),
-                delivery: Arc::new(AtomicU8::new(0)),
+                shape: Arc::new(AtomicU8::new(0)),
+                ports,
+                resend: Arc::default(),
+                acked: Arc::new(AtomicU64::new(NONE_ACKED)),
+                lossy_window: Arc::default(),
                 ramp_open: Arc::new(AtomicBool::new(
                     welcome.host_caps2 & punktfunk_core::quic::HOST_CAP2_RAMP != 0,
                 )),

@@ -253,6 +253,9 @@ impl Encoder for TrackedEncoder {
     fn distrust_references(&mut self) {
         self.inner.distrust_references()
     }
+    fn set_reference_floor(&mut self, acked: Option<Acked>) {
+        self.inner.set_reference_floor(acked)
+    }
     fn set_pipelined(&mut self, on: bool) -> bool {
         self.inner.set_pipelined(on)
     }

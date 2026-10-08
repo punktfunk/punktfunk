@@ -4,6 +4,7 @@
 //! the per-second [`SendStats`] line. The encode loop hands it [`FrameMsg`]s and never blocks
 //! on a write.
 
+use super::recovery::ResendRing;
 use super::*;
 
 /// The AU-level fields of one encoded AU: the same on its whole-AU message and on every
@@ -16,8 +17,6 @@ pub(super) struct AuMeta {
     pub(super) epoch: u8,
     /// Predicted at submit as `au_seq + inflight`; stamped on the wire so RFI stays 1:1 across rebuilds.
     pub(super) frame_index: u32,
-    /// Next frame's due time. Past = send immediately (catch up).
-    pub(super) deadline: std::time::Instant,
     pub(super) encode_us: u32,
     /// Delivery→submit age (µs). 0 for repeats/tail. Wire pts anchors at the same delivery stamp.
     pub(super) queue_us: u32,
@@ -40,10 +39,12 @@ pub(super) struct FrameMsg {
     pub(super) meta: AuMeta,
 }
 
-/// Whole AU, or one slice-boundary chunk of a streamed AU (seal/pace while the encoder still runs).
+/// Whole AU, one slice-boundary chunk of a streamed AU (seal/pace while the encoder still
+/// runs), or shards a client asked for again.
 pub(super) enum SendMsg {
     Frame(FrameMsg),
     Chunk(ChunkMsg),
+    Resend { frame: u32, shards: Vec<u16> },
 }
 
 /// One encoder chunk of a streamed AU. Splits matter on `last`.
@@ -54,23 +55,15 @@ pub(super) struct ChunkMsg {
     pub(super) meta: AuMeta,
 }
 
-/// Open streamed AU: incremental sealer plus pace aggregation across per-chunk flushes.
-struct StreamedOpen {
-    au: punktfunk_core::packet::StreamedAu,
-    spread_us: u32,
-    paced: bool,
-    /// One microburst budget per AU, consumed across flushes. Per-flush auto granted each block
-    /// its own 128 KiB. `None` = pacing off (`PUNKTFUNK_PACE_FACTOR=0`, no burst pin).
-    burst_left: Option<usize>,
-}
-
-/// Open at `first`, seal+pace completed FEC blocks, close at `last`. `None` mid-AU.
+/// Open at `first`, seal+pace completed FEC blocks, close at `last`. `None` mid-AU. One
+/// frame on the pacer from the first chunk to the last.
 fn handle_chunk(
     session: &mut Session,
-    open: &mut Option<StreamedOpen>,
+    open: &mut Option<punktfunk_core::packet::StreamedAu>,
     c: ChunkMsg,
     slice_wire: bool,
-    pacing: &mut crate::send_pacing::Pacing,
+    pacer: &mut crate::send_pacing::Pacer,
+    ring: &mut ResendRing,
 ) -> Result<Option<(AuMeta, PaceStat)>> {
     let m = c.meta;
     if c.first {
@@ -92,70 +85,45 @@ fn handle_chunk(
             } else {
                 0
             };
-        *open = Some(StreamedOpen {
-            au: session
+        *open = Some(
+            session
                 .begin_streamed_frame_at(m.capture_ns, flags, m.frame_index)
                 .map_err(|e| anyhow!("begin_streamed_frame: {e:?}"))?,
-            spread_us: 0,
-            paced: false,
-            burst_left: if pacing.pace_rate_bps == 0 && pacing.burst_cap.is_none() {
-                None
-            } else {
-                Some(pacing.burst_bytes(0))
-            },
-        });
+        );
+        pacer.begin(0);
+        session.drain_plaintext(|_| {});
+        ring.begin(m.frame_index);
     }
-    let Some(s) = open.as_mut() else {
+    let Some(au) = open.as_mut() else {
         return Err(anyhow!(
             "streamed chunk without an open AU (encode-loop bug)"
         ));
     };
     // Chunked poll returns per-slice; the AU's flag gates whether the sealer cuts a block there.
     let wires = session
-        .seal_streamed_chunk(&mut s.au, &c.data, true)
+        .seal_streamed_chunk(au, &c.data, true)
         .map_err(|e| anyhow!("seal_streamed_chunk: {e:?}"))?;
+    session.drain_plaintext(|p| ring.note(p));
     if !wires.is_empty() {
-        // Charge the flush's full wire size. Over-count paces later blocks sooner (the safe direction).
-        let flush_bytes: usize = wires.iter().map(|w| w.len()).sum();
-        let stat = pace_sealed(
-            session,
-            wires,
-            m.deadline,
-            s.burst_left.or(pacing.burst_cap),
-            pacing,
-        )?;
-        if let Some(left) = s.burst_left.as_mut() {
-            *left = left.saturating_sub(flush_bytes);
-        }
-        s.spread_us = s.spread_us.saturating_add(stat.spread_us);
-        s.paced |= stat.paced;
+        pace_sealed(session, wires, pacer)?;
     }
     if !c.last {
         return Ok(None);
     }
-    let s = open.take().expect("checked above");
+    let au = open.take().expect("checked above");
     let tail = session
-        .seal_streamed_finish(s.au)
+        .seal_streamed_finish(au)
         .map_err(|e| anyhow!("seal_streamed_finish: {e:?}"))?;
-    let stat = pace_sealed(
-        session,
-        tail,
-        m.deadline,
-        s.burst_left.or(pacing.burst_cap),
-        pacing,
-    )?;
-    Ok(Some((
-        m,
-        PaceStat {
-            spread_us: s.spread_us.saturating_add(stat.spread_us),
-            paced: s.paced || stat.paced,
-        },
-    )))
+    session.drain_plaintext(|p| ring.note(p));
+    pace_sealed(session, tail, pacer)?;
+    let (stat, sock_ns) = pacer.finish();
+    session.note_sock_ns(sock_ns);
+    Ok(Some((m, stat)))
 }
 
 /// One 2 s window of per-AU send timings, read by the perf line and the stats recorder.
 #[derive(Default)]
-struct SendWindow {
+struct PerfWindow {
     encode_us: Vec<u32>,
     pace_us: Vec<u32>,
     /// Capture → fully sent; probes excluded.
@@ -171,7 +139,7 @@ struct SendWindow {
     repeats: u64,
 }
 
-impl SendWindow {
+impl PerfWindow {
     fn record(&mut self, m: &AuMeta, stat: &PaceStat, host_us: Option<u32>) {
         self.encode_us.push(m.encode_us);
         self.pace_us.push(stat.spread_us);
@@ -263,14 +231,15 @@ pub(super) struct SendStats {
     pub(super) client: String,
     pub(super) plane: crate::events::Plane,
     pub(super) bitrate_kbps: Arc<AtomicU32>,
-    /// What the client's ramp proved the link carries (kbps); `0` = no report yet.
+    /// The link rate the client reports (kbps); `0` = no report yet.
     pub(super) link_kbps: Arc<AtomicU32>,
-    /// A pinned stream (PyroWave) is paced against `link_kbps`: its rate says
-    /// nothing about the link. An adaptive stream keeps the factor.
+    /// Both ends' ports: the floor under a silent client and the hard ceiling.
+    pub(super) ports: crate::send_pacing::Ports,
+    /// A pinned stream (PyroWave): its rate says nothing about the link, so the link the
+    /// client proved is a hard ceiling too ([`crate::send_pacing::pinned_wall`]).
     pub(super) link_paced: bool,
-    /// The profile this session streams under (`DeliveryProfile as u8`): what the
-    /// client asked for. `PUNKTFUNK_DELIVERY` overrides it.
-    pub(super) delivery: Arc<std::sync::atomic::AtomicU8>,
+    /// The shape the client asked for (`Shape as u8`). `PUNKTFUNK_DELIVERY` overrides it.
+    pub(super) shape: Arc<std::sync::atomic::AtomicU8>,
     pub(super) bringup: Arc<crate::bringup::Trace>,
     /// Data-socket clone for the kernel-queue probe behind the `wire egress` line.
     pub(super) wire_sock: Option<std::net::UdpSocket>,
@@ -280,24 +249,6 @@ pub(super) struct SendStats {
     /// Sealed wire bytes go here each aggregation tick; the control task diffs them into the
     /// per-minute `link health` line's `egress_mbps`.
     pub(super) counters: Arc<crate::session_status::SessionCounters>,
-}
-
-/// Pace rate for one frame, bits/s: the stream rate times the factor. A stream paced
-/// against the link takes the rate the client's ramp proved instead, whether that is
-/// above the factor or below it, once the stream fits in 70 % of it — the share of a
-/// measured wall the ramp licenses. Past the proof a frame queues at the slowest port
-/// on the path: a 1 MB PyroWave frame at 3× its rate overflows a 2.5 GbE client port
-/// behind a 10 GbE host. `factor` 0 keeps the deadline-only spread whatever the link.
-fn pace_rate_bps(bitrate_kbps: u32, factor: f64, link_kbps: Option<u32>) -> u64 {
-    if factor == 0.0 {
-        return 0;
-    }
-    let stream = u64::from(bitrate_kbps) * 1000;
-    let by_link = link_kbps.map_or(0, |k| u64::from(k) * 1000);
-    if by_link > 0 && by_link * 7 >= stream * 10 {
-        return by_link;
-    }
-    (stream as f64 * factor) as u64
 }
 
 /// Whether this session may accept a mid-stream `Reconfigure`.
@@ -316,7 +267,7 @@ pub(crate) fn reconfig_allowed(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn send_loop(
-    mut session: Session,
+    session: Session,
     frame_rx: std::sync::mpsc::Receiver<SendMsg>,
     probe_rx: std::sync::mpsc::Receiver<ProbeShaped>,
     probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
@@ -327,64 +278,136 @@ pub(super) fn send_loop(
     send_spread_us: Arc<AtomicU32>,
     wire_rekeys: Arc<AtomicU32>,
     slice_wire: bool,
-    burst_cap: Option<usize>,
     fec_target: Arc<AtomicU8>,
     // Applied between AUs only — a streamed AU's tiling is derived from the size it began with.
     shard_rx: std::sync::mpsc::Receiver<usize>,
-    stats: SendStats,
+    mut stats: SendStats,
     timing_conn: Option<crate::native::link::SessionLink>,
     probe_seq: bool,
 ) {
     boost_thread_priority(false);
+    let wire = WireLine::new(stats.wire_sock.take());
+    let mut session = session;
+    session.tap_plaintext(true);
+    let mut lp = SendLoop {
+        session,
+        probe_rx,
+        probe_result_tx,
+        perf,
+        send_spread_us,
+        wire_rekeys,
+        slice_wire,
+        fec_target,
+        shard_rx,
+        timing_conn,
+        probe_seq,
+        pacer: crate::send_pacing::Pacer::new(stats.ports, crate::send_pacing::forced()),
+        ring: ResendRing::default(),
+        link: None,
+        link_gso: None,
+        streamed: None,
+        burst: None,
+        perf_line: PerfLine::new(&stats),
+        wire,
+        stats,
+    };
     // Idle tick: with no AU in hand the loop still revisits `stop`, the FEC target and the
     // 2 s stats window.
     const IDLE_TICK: std::time::Duration = std::time::Duration::from_millis(50);
-    // 3× default: the link carries 1× sustained, so a bounded 3× excursion is safe (WebRTC uses 2.5×).
-    // `PUNKTFUNK_PACE_FACTOR=0` restores deadline-only spread.
-    let pace_factor: f64 = std::env::var("PUNKTFUNK_PACE_FACTOR")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|f: &f64| f.is_finite() && *f >= 0.0)
-        .unwrap_or(3.0);
-    let mut last_perf = std::time::Instant::now();
-    let mut last_bytes = 0u64;
-    // The layer under this thread. Always on: a stall there leaves every other line clean.
-    let mut wire = crate::net_health::WireProbe::new(stats.wire_sock);
-    let mut last_wire = std::time::Instant::now();
-    let (mut wire_sent, mut wire_dropped) = (0u64, 0u64);
-    let mut last_send_dropped = 0u64;
-    let mut win = SendWindow::default();
-    let mut sid: Option<(u64, u32)> = None;
-    let mut last_driver_dropped = stats.driver_dropped.load(Ordering::Relaxed);
-    let mut streamed: Option<StreamedOpen> = None;
-    let mut burst: Option<ProbeBurst> = None;
-    let mut link_gso = false;
-    let forced = crate::send_pacing::forced_delivery();
-    let mut pacing = crate::send_pacing::Pacing::new(burst_cap);
+    apply_fec_target(&mut lp.session, &lp.fec_target);
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
         }
+        lp.service_probe();
+        // Wake when the burst's next filler is due, so its rate holds while video shares the
+        // loop. Mid-AU it cannot be pumped, so the idle tick stands.
+        let wait = match lp.burst.as_ref() {
+            Some(b) if lp.streamed.is_none() => b.next_due().min(IDLE_TICK),
+            _ => IDLE_TICK,
+        };
+        match frame_rx.recv_timeout(wait) {
+            Ok(send_msg) => {
+                if !lp.step(send_msg) {
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        lp.housekeeping();
+    }
+    // Stop, teardown, or a dead channel mid-burst: report what went out, leave nothing armed.
+    if let Some(b) = lp.burst {
+        let _ = lp.probe_result_tx.send(b.finish());
+    }
+}
+
+/// The send thread's state across AUs: the session, the pacing inputs, the open streamed AU,
+/// the live probe burst and the two periodic log lines.
+struct SendLoop {
+    session: Session,
+    probe_rx: std::sync::mpsc::Receiver<ProbeShaped>,
+    probe_result_tx: tokio::sync::mpsc::UnboundedSender<ProbeResult>,
+    perf: bool,
+    send_spread_us: Arc<AtomicU32>,
+    wire_rekeys: Arc<AtomicU32>,
+    slice_wire: bool,
+    fec_target: Arc<AtomicU8>,
+    shard_rx: std::sync::mpsc::Receiver<usize>,
+    stats: SendStats,
+    timing_conn: Option<crate::native::link::SessionLink>,
+    probe_seq: bool,
+    pacer: crate::send_pacing::Pacer,
+    /// The last frames' plaintext, for a client's NACK.
+    ring: ResendRing,
+    /// The `L` last paced at, logged when it moves.
+    link: Option<crate::send_pacing::LinkRate>,
+    /// What the session was last told about GSO; `None` before the first frame, since the
+    /// transport's own default may be on.
+    link_gso: Option<bool>,
+    streamed: Option<punktfunk_core::packet::StreamedAu>,
+    burst: Option<ProbeBurst>,
+    perf_line: PerfLine,
+    wire: WireLine,
+}
+
+impl SendLoop {
+    /// Between AUs: the probe burst's next filler, or a new burst the client asked for.
+    fn service_probe(&mut self) {
         // Never mid-AU: a burst spliced between streamed chunks would push the tail past its deadline.
-        if streamed.is_none() {
+        if self.streamed.is_none() {
             service_burst(
-                &mut session,
-                &mut burst,
-                &probe_rx,
-                &probe_result_tx,
-                probe_seq,
+                &mut self.session,
+                &mut self.burst,
+                &self.probe_rx,
+                &self.probe_result_tx,
+                self.probe_seq,
             );
         }
-        apply_fec_target(&mut session, &fec_target);
-        if streamed.is_none() {
+    }
+
+    /// After every turn: egress for the governor, the FEC target and a pending shard re-key
+    /// for the next AU, then the two periodic lines.
+    fn housekeeping(&mut self) {
+        // The share window closes on a client delivery report, one per 750 ms
+        // report window. A counter published on a 2 s clock gives that window
+        // nothing twice and then 2 s of bytes, which reads as a path refusing
+        // everything it was offered ([`crate::session_status::share_for`]).
+        self.stats
+            .counters
+            .link
+            .publish_egress_bytes(self.session.stats().bytes_sent);
+        apply_fec_target(&mut self.session, &self.fec_target);
+        if self.streamed.is_none() {
             let mut want_shard = None;
-            while let Ok(s) = shard_rx.try_recv() {
+            while let Ok(s) = self.shard_rx.try_recv() {
                 want_shard = Some(s);
             }
             if let Some(s) = want_shard {
-                match session.set_shard_payload(s) {
+                match self.session.set_shard_payload(s) {
                     Ok(()) => {
-                        wire_rekeys.fetch_add(1, Ordering::Relaxed);
+                        self.wire_rekeys.fetch_add(1, Ordering::Relaxed);
                         tracing::info!(shard_payload = s, "wire shard payload re-keyed");
                     }
                     Err(e) => tracing::warn!(shard_payload = s, error = ?e,
@@ -392,243 +415,518 @@ pub(super) fn send_loop(
                 }
             }
         }
-        // Wake when the burst's next filler is due, so its rate holds while video shares the
-        // loop. Mid-AU it cannot be pumped, so the idle tick stands.
-        let wait = match burst.as_ref() {
-            Some(b) if streamed.is_none() => b.next_due().min(IDLE_TICK),
-            _ => IDLE_TICK,
+        self.wire.maybe_log(&self.session);
+        self.perf_line.maybe_log(
+            &mut self.session,
+            &self.stats,
+            self.timing_conn.as_ref(),
+            self.perf,
+        );
+    }
+
+    /// One message off the encode loop: pace it out and account for it. `false` when a send
+    /// failed and the stream ends.
+    fn step(&mut self, send_msg: SendMsg) -> bool {
+        use crate::send_pacing as sp;
+        if let SendMsg::Resend { frame, shards } = send_msg {
+            self.resend(frame, &shards);
+            return true;
+        }
+        let stats = &self.stats;
+        let bitrate_kbps = stats.bitrate_kbps.load(Ordering::Relaxed);
+        let reported = stats.link_kbps.load(Ordering::Relaxed);
+        let shape = sp::Shape::from_u8(stats.shape.load(Ordering::Relaxed));
+        let wall = sp::pinned_wall(stats.link_paced, reported, bitrate_kbps);
+        // Bound one frame's spread to ~2 intervals so a big IDR cannot back the channel
+        // into `cadence_degraded`. hz 0 = not yet known → the absolute ceiling alone.
+        let (_, _, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
+        let max_spread = if hz > 0 {
+            std::time::Duration::from_secs_f64(2.0 / hz as f64)
+        } else {
+            crate::send_pacing::MAX_PACE_SPREAD
         };
-        match frame_rx.recv_timeout(wait) {
-            Ok(send_msg) => {
-                let bitrate_kbps = stats.bitrate_kbps.load(Ordering::Relaxed);
-                let link_kbps = stats.link_kbps.load(Ordering::Relaxed);
-                let pace_rate = pace_rate_bps(
-                    bitrate_kbps,
-                    pace_factor,
-                    stats.link_paced.then_some(link_kbps),
-                );
-                // A link-rate burst is a super-buffer train: GSO cuts its send calls 3×.
-                if !link_gso && pace_rate > pace_rate_bps(bitrate_kbps, pace_factor, None) {
-                    link_gso = true;
-                    session.set_gso(true);
-                    tracing::info!(link_kbps, "pacing at the client's proven link rate, GSO on");
-                }
-                // Bound one frame's spread to ~2 intervals so a big IDR cannot back the channel
-                // into `cadence_degraded`. hz 0 = not yet known → the absolute ceiling alone.
-                let (_, _, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
-                let max_spread = if hz > 0 {
-                    std::time::Duration::from_secs_f64(2.0 / hz as f64)
-                } else {
-                    crate::send_pacing::MAX_PACE_SPREAD
-                };
-                let profile = forced.unwrap_or_else(|| {
-                    crate::send_pacing::DeliveryProfile::from_u8(
-                        stats.delivery.load(Ordering::Relaxed),
-                    )
-                });
-                pacing.update(pace_rate, max_spread, profile);
-                // A new epoch takes effect at the AU that carries it, never mid-AU.
-                match &send_msg {
-                    SendMsg::Frame(f) => session.set_epoch(f.meta.epoch),
-                    SendMsg::Chunk(c) if c.first => session.set_epoch(c.meta.epoch),
-                    SendMsg::Chunk(_) => {}
-                }
-                let outcome = match send_msg {
-                    SendMsg::Frame(FrameMsg { data, meta: m }) => paced_submit(
-                        &mut session,
-                        &data,
-                        m.capture_ns,
-                        // HOST_CAP2_REPEAT_MARK makes the bit's absence mean "new content".
-                        m.flags
-                            | if m.repeat {
-                                punktfunk_core::packet::USER_FLAG_REPEAT
-                            } else {
-                                0
-                            },
-                        m.frame_index,
-                        m.deadline,
-                        &mut pacing,
-                    )
-                    .map(|stat| Some((m, stat))),
-                    SendMsg::Chunk(c) => {
-                        handle_chunk(&mut session, &mut streamed, c, slice_wire, &mut pacing)
-                    }
-                };
-                match outcome {
-                    Ok(None) => {}
-                    Ok(Some((m, stat))) => {
-                        let probe = m.flags & FLAG_PROBE as u32 != 0;
-                        if !probe {
-                            stats.bringup.finish("first_packet");
-                        }
-                        let host_us = (now_ns().saturating_sub(m.capture_ns) / 1000)
-                            .min(u32::MAX as u64) as u32;
-                        if let Some(tc) = timing_conn.as_ref().filter(|_| !probe) {
-                            send_host_timing(tc, &m, &stat, host_us);
-                        }
-                        // EWMA (3:1): a single AU's spread must not flip the split-arbiter verdict.
-                        {
-                            let prev = send_spread_us.load(Ordering::Relaxed);
-                            let next = if prev == 0 {
-                                stat.spread_us
-                            } else {
-                                ((prev as u64 * 3 + stat.spread_us as u64) / 4) as u32
-                            };
-                            send_spread_us.store(next, Ordering::Relaxed);
-                        }
-                        if perf || stats.rec.is_armed() {
-                            win.record(&m, &stat, (!probe).then_some(host_us));
-                            wire.sample();
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %format!("{e:#}"), "send failed — stopping stream");
-                        break;
-                    }
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        // The share window closes on a client delivery report, one per 750 ms
-        // report window. A counter published on a 2 s clock gives that window
-        // nothing twice and then 2 s of bytes, which reads as a path refusing
-        // everything it was offered ([`crate::session_status::share_for`]).
-        stats
-            .counters
-            .link
-            .publish_egress_bytes(session.stats().bytes_sent);
-        if last_wire.elapsed() >= std::time::Duration::from_secs(30) {
-            let s = session.stats();
-            let w = wire.window();
+        let rate = self
+            .pacer
+            .update(bitrate_kbps, reported, wall, shape, max_spread);
+        let link = self.pacer.link();
+        if self.link != Some(link) {
+            self.link = Some(link);
             tracing::info!(
-                sent = s.packets_sent - wire_sent,
-                send_dropped = s.packets_send_dropped - wire_dropped,
-                outq_max_kb = w.outq_max_kb,
-                tx_dropped = w.tx_dropped,
-                tx_errors = w.tx_errors,
-                carrier_changes = w.carrier_changes,
-                udp_sndbuf_errors = w.udp_sndbuf_errors,
-                iface = wire.iface.as_deref().unwrap_or("?"),
-                "wire egress"
+                link_kbps = link.kbps,
+                source = ?link.source,
+                hard_kbps = link.hard_kbps,
+                wall_kbps = wall.unwrap_or(0),
+                rate_kbps = rate / 1_000,
+                "pacing at the link rate"
             );
-            wire_sent = s.packets_sent;
-            wire_dropped = s.packets_send_dropped;
-            last_wire = std::time::Instant::now();
         }
-        if last_perf.elapsed() >= std::time::Duration::from_secs(2) {
-            let s = session.stats();
-            let secs = last_perf.elapsed().as_secs_f64();
-            let tx_mbps = (s.bytes_sent - last_bytes) as f64 * 8.0 / secs / 1_000_000.0;
-            // One window of seal timing feeds both the perf line and the recorder. It runs only
-            // while one of them reads it.
-            let seal_perf = session.take_seal_perf();
-            session.set_seal_perf(perf || stats.rec.is_armed());
-            if perf {
-                let sp = seal_perf.unwrap_or_default();
-                tracing::info!(
-                    tx_mbps = format!("{tx_mbps:.0}"),
-                    send_dropped = s.packets_send_dropped - last_send_dropped,
-                    send_dropped_total = s.packets_send_dropped,
-                    encode_us_p50 = percentile(&mut win.encode_us, 0.50),
-                    encode_us_p99 = percentile(&mut win.encode_us, 0.99),
-                    pace_us_p50 = percentile(&mut win.pace_us, 0.50),
-                    pace_us_p99 = percentile(&mut win.pace_us, 0.99),
-                    pace_us_max = win.pace_us.last().copied().unwrap_or(0),
-                    immediate_frames = win.immediate,
-                    paced_frames = win.paced,
-                    window_ms = format!("{:.0}", secs * 1000.0),
-                    fec_ms = format!("{:.2}", sp.fec_ns as f64 / 1e6),
-                    seal_ms = format!("{:.2}", sp.seal_ns as f64 / 1e6),
-                    sock_ms = format!("{:.2}", sp.sock_ns as f64 / 1e6),
-                    fec_ns_pp = sp.fec_ns.checked_div(sp.packets).unwrap_or(0),
-                    seal_ns_pp = sp.seal_ns.checked_div(sp.packets).unwrap_or(0),
-                    sock_ns_pp = sp.sock_ns.checked_div(sp.packets).unwrap_or(0),
-                    sealed_pkts = sp.packets,
-                    "perf"
-                );
+        // Past the stream's own pace a group is a super-buffer train: GSO cuts its sends 3×.
+        // At the stream's pace it is a few packets, and a lossy path that drops a train
+        // whole takes the frame with it.
+        let stream_bps = (f64::from(bitrate_kbps) * 1_000.0 * sp::pace_factor()) as u64;
+        let gso = rate > stream_bps;
+        if self.link_gso != Some(gso) {
+            self.link_gso = Some(gso);
+            self.session.set_gso(gso);
+        }
+        // A new epoch takes effect at the AU that carries it, never mid-AU.
+        match &send_msg {
+            SendMsg::Frame(f) => self.session.set_epoch(f.meta.epoch),
+            SendMsg::Chunk(c) if c.first => self.session.set_epoch(c.meta.epoch),
+            SendMsg::Chunk(_) | SendMsg::Resend { .. } => {}
+        }
+        let outcome = match send_msg {
+            SendMsg::Frame(FrameMsg { data, meta: m }) => paced_submit(
+                &mut self.session,
+                &data,
+                m.capture_ns,
+                // HOST_CAP2_REPEAT_MARK makes the bit's absence mean "new content".
+                m.flags
+                    | if m.repeat {
+                        punktfunk_core::packet::USER_FLAG_REPEAT
+                    } else {
+                        0
+                    },
+                m.frame_index,
+                &mut self.pacer,
+                &mut self.ring,
+            )
+            .map(|stat| Some((m, stat))),
+            SendMsg::Chunk(c) => handle_chunk(
+                &mut self.session,
+                &mut self.streamed,
+                c,
+                self.slice_wire,
+                &mut self.pacer,
+                &mut self.ring,
+            ),
+            SendMsg::Resend { .. } => Ok(None),
+        };
+        match outcome {
+            Ok(None) => {}
+            Ok(Some((m, stat))) => self.sent(&m, &stat),
+            Err(e) => {
+                tracing::error!(error = %format!("{e:#}"), "send failed — stopping stream");
+                return false;
             }
-            let driver_dropped = stats.driver_dropped.load(Ordering::Relaxed);
-            if stats.rec.is_armed() {
-                let session_id = stats.rec.session_id(&mut sid, || {
-                    let (w, h, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
-                    stats.rec.register_session(
-                        stats.plane.as_str(),
-                        w,
-                        h,
-                        hz,
-                        stats.codec,
-                        &stats.client,
-                    )
-                });
-                let stages = win.stages();
-                let host = win.host();
-                let (fec_us, seal_us, sock_us) = match seal_perf.filter(|p| p.frames > 0) {
-                    Some(p) => {
-                        let per_frame = |ns: u64| Some(ns as f32 / p.frames as f32 / 1000.0);
-                        (
-                            per_frame(p.fec_ns),
-                            per_frame(p.seal_ns),
-                            per_frame(p.sock_ns),
-                        )
-                    }
-                    None => (None, None, None),
-                };
-                let sample = crate::stats_recorder::StatsSample {
-                    t_ms: 0,
-                    session_id,
-                    stages,
-                    fec_us,
-                    seal_us,
-                    sock_us,
-                    fps: (win.new as f64 / secs) as f32,
-                    repeat_fps: (win.repeats as f64 / secs) as f32,
-                    mbps: tx_mbps as f32,
-                    bitrate_kbps: stats.bitrate_kbps.load(Ordering::Relaxed),
-                    frames_dropped: win
-                        .driver
-                        .active()
-                        .then(|| driver_dropped.saturating_sub(last_driver_dropped) as u32),
-                    packets_dropped: None,
-                    send_dropped: Some(
-                        s.packets_send_dropped.saturating_sub(last_send_dropped) as u32
-                    ),
-                    fec_recovered: None,
-                    host_p50_us: host.map(|h| h.0),
-                    host_p99_us: host.map(|h| h.1),
-                    rtt_us: timing_conn
-                        .as_ref()
-                        .map(|c| c.rtt().as_micros().min(u128::from(u32::MAX)) as u32),
-                };
-                stats.rec.push_sample(session_id, sample);
+        }
+        true
+    }
+
+    /// A client's NACK: the packets it names, resealed from the ring and sent at once,
+    /// outside the clock. A frame the ring no longer holds is left to the client's RFI.
+    fn resend(&mut self, frame: u32, shards: &[u16]) {
+        let Some((plain, age_ms)) = self.ring.pick(frame, shards) else {
+            tracing::debug!(frame, "nack for a frame no longer held");
+            return;
+        };
+        let sealed: Vec<Vec<u8>> = plain
+            .iter()
+            .filter_map(|p| self.session.reseal(p).ok())
+            .collect();
+        let refs: Vec<&[u8]> = sealed.iter().map(Vec::as_slice).collect();
+        match self.session.send_sealed(&refs) {
+            Ok(sent) => {
+                self.stats.counters.link.note_resent(sent as u32);
+                tracing::info!(frame, ?shards, age_ms, sent, "nack");
             }
-            last_driver_dropped = driver_dropped;
-            win = SendWindow::default();
-            last_perf = std::time::Instant::now();
-            last_bytes = s.bytes_sent;
-            last_send_dropped = s.packets_send_dropped;
+            Err(e) => tracing::warn!(frame, error = ?e, "nack resend"),
         }
     }
-    // Stop, teardown, or a dead channel mid-burst: report what went out, leave nothing armed.
-    if let Some(b) = burst {
-        let _ = probe_result_tx.send(b.finish());
+
+    /// An AU is on the wire: the bring-up mark, host timing, the spread EWMA and the windows.
+    fn sent(&mut self, m: &AuMeta, stat: &PaceStat) {
+        let probe = m.flags & FLAG_PROBE as u32 != 0;
+        if !probe {
+            self.stats.bringup.finish("first_packet");
+        }
+        let host_us = (now_ns().saturating_sub(m.capture_ns) / 1000).min(u32::MAX as u64) as u32;
+        if let Some(tc) = self.timing_conn.as_ref().filter(|_| !probe) {
+            send_host_timing(tc, m, stat, host_us);
+        }
+        // EWMA (3:1): a single AU's spread must not flip the split-arbiter verdict.
+        let prev = self.send_spread_us.load(Ordering::Relaxed);
+        let next = if prev == 0 {
+            stat.spread_us
+        } else {
+            ((prev as u64 * 3 + stat.spread_us as u64) / 4) as u32
+        };
+        self.send_spread_us.store(next, Ordering::Relaxed);
+        if self.perf || self.stats.rec.is_armed() {
+            self.perf_line
+                .win
+                .record(m, stat, (!probe).then_some(host_us));
+            self.wire.probe.sample();
+        }
+    }
+}
+
+/// The 30 s `wire egress` line: the layer under this thread. Always on: a stall there leaves
+/// every other line clean.
+struct WireLine {
+    probe: crate::net_health::WireProbe,
+    last: std::time::Instant,
+    sent: u64,
+    dropped: u64,
+}
+
+impl WireLine {
+    fn new(sock: Option<std::net::UdpSocket>) -> Self {
+        WireLine {
+            probe: crate::net_health::WireProbe::new(sock),
+            last: std::time::Instant::now(),
+            sent: 0,
+            dropped: 0,
+        }
+    }
+
+    fn maybe_log(&mut self, session: &Session) {
+        if self.last.elapsed() < std::time::Duration::from_secs(30) {
+            return;
+        }
+        let s = session.stats();
+        let w = self.probe.window();
+        tracing::info!(
+            sent = s.packets_sent - self.sent,
+            send_dropped = s.packets_send_dropped - self.dropped,
+            outq_max_kb = w.outq_max_kb,
+            tx_dropped = w.tx_dropped,
+            tx_errors = w.tx_errors,
+            carrier_changes = w.carrier_changes,
+            udp_sndbuf_errors = w.udp_sndbuf_errors,
+            iface = self.probe.iface.as_deref().unwrap_or("?"),
+            "wire egress"
+        );
+        self.sent = s.packets_sent;
+        self.dropped = s.packets_send_dropped;
+        self.last = std::time::Instant::now();
+    }
+}
+
+/// The 2 s window: the `PUNKTFUNK_PERF` line and the stats recorder's sample.
+struct PerfLine {
+    win: PerfWindow,
+    last: std::time::Instant,
+    last_bytes: u64,
+    last_send_dropped: u64,
+    last_driver_dropped: u64,
+    sid: Option<(u64, u32)>,
+}
+
+impl PerfLine {
+    fn new(stats: &SendStats) -> Self {
+        PerfLine {
+            win: PerfWindow::default(),
+            last: std::time::Instant::now(),
+            last_bytes: 0,
+            last_send_dropped: 0,
+            last_driver_dropped: stats.driver_dropped.load(Ordering::Relaxed),
+            sid: None,
+        }
+    }
+
+    fn maybe_log(
+        &mut self,
+        session: &mut Session,
+        stats: &SendStats,
+        timing_conn: Option<&crate::native::link::SessionLink>,
+        perf: bool,
+    ) {
+        if self.last.elapsed() < std::time::Duration::from_secs(2) {
+            return;
+        }
+        let win = &mut self.win;
+        let s = session.stats();
+        let secs = self.last.elapsed().as_secs_f64();
+        let tx_mbps = (s.bytes_sent - self.last_bytes) as f64 * 8.0 / secs / 1_000_000.0;
+        // One window of seal timing feeds both the perf line and the recorder. It runs only
+        // while one of them reads it.
+        let seal_perf = session.take_seal_perf();
+        session.set_seal_perf(perf || stats.rec.is_armed());
+        if perf {
+            let sp = seal_perf.unwrap_or_default();
+            tracing::info!(
+                tx_mbps = format!("{tx_mbps:.0}"),
+                send_dropped = s.packets_send_dropped - self.last_send_dropped,
+                send_dropped_total = s.packets_send_dropped,
+                encode_us_p50 = percentile(&mut win.encode_us, 0.50),
+                encode_us_p99 = percentile(&mut win.encode_us, 0.99),
+                pace_us_p50 = percentile(&mut win.pace_us, 0.50),
+                pace_us_p99 = percentile(&mut win.pace_us, 0.99),
+                pace_us_max = win.pace_us.last().copied().unwrap_or(0),
+                immediate_frames = win.immediate,
+                paced_frames = win.paced,
+                window_ms = format!("{:.0}", secs * 1000.0),
+                fec_ms = format!("{:.2}", sp.fec_ns as f64 / 1e6),
+                seal_ms = format!("{:.2}", sp.seal_ns as f64 / 1e6),
+                sock_ms = format!("{:.2}", sp.sock_ns as f64 / 1e6),
+                fec_ns_pp = sp.fec_ns.checked_div(sp.packets).unwrap_or(0),
+                seal_ns_pp = sp.seal_ns.checked_div(sp.packets).unwrap_or(0),
+                sock_ns_pp = sp.sock_ns.checked_div(sp.packets).unwrap_or(0),
+                sealed_pkts = sp.packets,
+                "perf"
+            );
+        }
+        let driver_dropped = stats.driver_dropped.load(Ordering::Relaxed);
+        if stats.rec.is_armed() {
+            let session_id = stats.rec.session_id(&mut self.sid, || {
+                let (w, h, hz) = unpack_mode(stats.mode.load(Ordering::Relaxed));
+                stats.rec.register_session(
+                    stats.plane.as_str(),
+                    w,
+                    h,
+                    hz,
+                    stats.codec,
+                    &stats.client,
+                )
+            });
+            let stages = win.stages();
+            let host = win.host();
+            let (fec_us, seal_us, sock_us) = match seal_perf.filter(|p| p.frames > 0) {
+                Some(p) => {
+                    let per_frame = |ns: u64| Some(ns as f32 / p.frames as f32 / 1000.0);
+                    (
+                        per_frame(p.fec_ns),
+                        per_frame(p.seal_ns),
+                        per_frame(p.sock_ns),
+                    )
+                }
+                None => (None, None, None),
+            };
+            let sample = crate::stats_recorder::StatsSample {
+                t_ms: 0,
+                session_id,
+                stages,
+                fec_us,
+                seal_us,
+                sock_us,
+                fps: (win.new as f64 / secs) as f32,
+                repeat_fps: (win.repeats as f64 / secs) as f32,
+                mbps: tx_mbps as f32,
+                bitrate_kbps: stats.bitrate_kbps.load(Ordering::Relaxed),
+                frames_dropped: win
+                    .driver
+                    .active()
+                    .then(|| driver_dropped.saturating_sub(self.last_driver_dropped) as u32),
+                packets_dropped: None,
+                send_dropped: Some(
+                    s.packets_send_dropped
+                        .saturating_sub(self.last_send_dropped) as u32,
+                ),
+                fec_recovered: None,
+                host_p50_us: host.map(|h| h.0),
+                host_p99_us: host.map(|h| h.1),
+                rtt_us: timing_conn.map(|c| c.rtt().as_micros().min(u128::from(u32::MAX)) as u32),
+            };
+            stats.rec.push_sample(session_id, sample);
+        }
+        self.last_driver_dropped = driver_dropped;
+        self.win = PerfWindow::default();
+        self.last = std::time::Instant::now();
+        self.last_bytes = s.bytes_sent;
+        self.last_send_dropped = s.packets_send_dropped;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{pace_rate_bps, AuMeta, PaceStat, SendWindow};
+    use super::{send_loop, AuMeta, FrameMsg, PaceStat, PerfWindow, SendMsg, SendStats};
+    use punktfunk_core::transport::Transport;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
+    use std::sync::{Arc, Mutex};
+
+    /// A send thread on `transport` at 20 Mbit/s in `shape`: its frame channel, its stop
+    /// flag, the counters it reports into and the thread.
+    fn spawn_loop(
+        transport: Box<dyn Transport>,
+        shape: crate::send_pacing::Shape,
+    ) -> (
+        std::sync::mpsc::SyncSender<SendMsg>,
+        Arc<AtomicBool>,
+        Arc<crate::session_status::SessionCounters>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
+        let cfg = Config {
+            role: Role::Host,
+            fec: FecConfig {
+                scheme: FecScheme::Gf16,
+                fec_percent: 25,
+                max_data_per_block: 32,
+            },
+            shard_payload: 1024,
+            max_frame_bytes: 1 << 20,
+            loopback_drop_period: 0,
+        };
+        let media = punktfunk_core::session::MediaV2 {
+            clock_origin_ns: 0,
+            keys: None,
+            clock: None,
+        };
+        let session = punktfunk_core::session::Session::new(cfg, media, transport).unwrap();
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(3);
+        let (_, probe_rx) = std::sync::mpsc::channel();
+        let (probe_result_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (_, shard_rx) = std::sync::mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let counters = Arc::new(crate::session_status::SessionCounters::default());
+        let stats = SendStats {
+            rec: crate::stats_recorder::StatsRecorder::new(
+                std::env::temp_dir().join("pf-send-test"),
+            ),
+            mode: Arc::new(AtomicU64::new(0)),
+            codec: "test",
+            client: "test".into(),
+            plane: crate::events::Plane::Native,
+            bitrate_kbps: Arc::new(AtomicU32::new(20_000)),
+            link_kbps: Arc::new(AtomicU32::new(0)),
+            ports: Default::default(),
+            link_paced: false,
+            shape: Arc::new(AtomicU8::new(shape as u8)),
+            bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
+            wire_sock: None,
+            driver_dropped: Arc::new(AtomicU64::new(0)),
+            counters: counters.clone(),
+        };
+        let thread = std::thread::spawn({
+            let stop = stop.clone();
+            move || {
+                send_loop(
+                    session,
+                    frame_rx,
+                    probe_rx,
+                    probe_result_tx,
+                    stop,
+                    false,
+                    Arc::new(AtomicU32::new(0)),
+                    Arc::new(AtomicU32::new(0)),
+                    false,
+                    Arc::new(AtomicU8::new(25)),
+                    shard_rx,
+                    stats,
+                    None,
+                    true,
+                )
+            }
+        });
+        (frame_tx, stop, counters, thread)
+    }
+
+    /// One whole 8 KiB AU as frame `index`.
+    fn frame(index: u32) -> SendMsg {
+        SendMsg::Frame(FrameMsg {
+            data: vec![3u8; 8 * 1024],
+            meta: AuMeta {
+                capture_ns: 0,
+                epoch: 0,
+                flags: 0,
+                frame_index: index,
+                encode_us: 0,
+                queue_us: 0,
+                cap_us: 0,
+                submit_us: 0,
+                wait_us: 0,
+                repeat: false,
+                was_measured: false,
+                driver: None,
+            },
+        })
+    }
+
+    /// A client's NACK on the send thread: the frame went out whole, then the shards the
+    /// client names leave again under fresh packet numbers, outside the clock, and the
+    /// host's link line counts them. A frame the ring never held sends nothing.
+    #[test]
+    fn a_resend_sends_the_named_shards_again() {
+        let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
+        let (frame_tx, stop, counters, thread) =
+            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto);
+        frame_tx.send(frame(7)).unwrap();
+        frame_tx
+            .send(SendMsg::Resend {
+                frame: 7,
+                shards: vec![1, 9],
+            })
+            .unwrap();
+        frame_tx
+            .send(SendMsg::Resend {
+                frame: 99,
+                shards: vec![0],
+            })
+            .unwrap();
+        let mut got = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while got.len() < 12 && std::time::Instant::now() < deadline {
+            match client_tp.recv().unwrap() {
+                Some(p) => got.push(p),
+                None => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        while let Some(p) = client_tp.recv().unwrap() {
+            got.push(p);
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(frame_tx);
+        thread.join().unwrap();
+        // 8 data + 2 parity, then data shard 1 and parity shard 1 again.
+        assert_eq!(got.len(), 12);
+        let shard = |p: &[u8]| u16::from_le_bytes([p[22], p[23]]);
+        assert_eq!((shard(&got[10]), shard(&got[11])), (1, 9));
+        assert_ne!(&got[10][1..5], &got[1][1..5], "a fresh packet number");
+        let mut m = crate::link_health::LinkMinute::default();
+        counters.link.take(&mut m);
+        assert_eq!(m.resend_pkts, 2);
+    }
+
+    /// Each GSO switch (`Some`) and each packet sent (`None`), in order.
+    #[derive(Clone, Default)]
+    struct GsoLog(Arc<Mutex<Vec<Option<bool>>>>);
+
+    impl Transport for GsoLog {
+        fn send(&self, _: &[u8]) -> std::io::Result<bool> {
+            self.0.lock().unwrap().push(None);
+            Ok(true)
+        }
+        fn set_gso(&self, on: bool) {
+            self.0.lock().unwrap().push(Some(on));
+        }
+        fn recv(&self) -> std::io::Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+
+    /// A session paced at the stream's own rate has GSO off before its first packet, whatever
+    /// the transport defaults to, and is told once.
+    #[test]
+    fn gso_is_off_before_the_first_frame_at_the_stream_rate() {
+        let log = GsoLog::default();
+        let (frame_tx, stop, _, thread) =
+            spawn_loop(Box::new(log.clone()), crate::send_pacing::Shape::Smooth);
+        frame_tx.send(frame(0)).unwrap();
+        frame_tx.send(frame(1)).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while log.0.lock().unwrap().len() < 21 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(frame_tx);
+        thread.join().unwrap();
+        let events = log.0.lock().unwrap();
+        assert_eq!(events.first(), Some(&Some(false)), "{events:?}");
+        // 8 data + 2 parity per frame.
+        assert_eq!(events[1..], [None; 20]);
+    }
 
     /// A host AU feeds the host stages and a driver AU the driver's. A repeat never counts
     /// toward the queue stage, and a probe never toward capture → sent.
     #[test]
-    fn a_send_window_files_each_au_under_its_own_stages() {
+    fn a_perf_window_files_each_au_under_its_own_stages() {
         let meta = AuMeta {
             capture_ns: 0,
             epoch: 0,
             flags: 0,
             frame_index: 0,
-            deadline: std::time::Instant::now(),
             encode_us: 900,
             queue_us: 300,
             cap_us: 100,
@@ -642,10 +940,10 @@ mod tests {
             spread_us: 50,
             paced: true,
         };
-        let names = |w: &mut SendWindow| -> Vec<String> {
+        let names = |w: &mut PerfWindow| -> Vec<String> {
             w.stages().into_iter().map(|s| s.name).collect()
         };
-        let mut w = SendWindow::default();
+        let mut w = PerfWindow::default();
         w.record(&meta, &stat, Some(1_000));
         let repeat = AuMeta {
             repeat: true,
@@ -676,7 +974,7 @@ mod tests {
             ["queue", "capture", "submit", "encode", "send"]
         );
 
-        let mut d = SendWindow::default();
+        let mut d = PerfWindow::default();
         let lump = crate::stats_recorder::DriverSample::Lump(Some(700));
         d.record(
             &AuMeta {
@@ -688,21 +986,5 @@ mod tests {
         );
         assert!(d.cap_us.is_empty() && d.host().is_none());
         assert_eq!(names(&mut d), ["driver", "copy", "send"]);
-    }
-
-    #[test]
-    fn a_pinned_stream_paces_at_the_proven_link_rate() {
-        assert_eq!(pace_rate_bps(778_000, 3.0, None), 2_334_000_000);
-        // Above the factor: a 10 GbE path spends no time it does not need.
-        assert_eq!(pace_rate_bps(778_000, 3.0, Some(8_900_000)), 8_900_000_000);
-        // Under the factor: a 2.5 GbE client behind a 10 GbE host is sent its own rate.
-        assert_eq!(
-            pace_rate_bps(1_427_000, 3.0, Some(2_450_000)),
-            2_450_000_000
-        );
-        // A proof the stream does not fit under is no pace: the factor stands.
-        assert_eq!(pace_rate_bps(778_000, 3.0, Some(1_000_000)), 2_334_000_000);
-        assert_eq!(pace_rate_bps(778_000, 3.0, Some(0)), 2_334_000_000);
-        assert_eq!(pace_rate_bps(778_000, 0.0, Some(8_900_000)), 0);
     }
 }

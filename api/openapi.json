@@ -13182,6 +13182,7 @@
           "rfi_declined",
           "anchor_p",
           "intra_refresh",
+          "acked_p",
           "keyframe_req",
           "idr",
           "fec_min_pct",
@@ -13191,7 +13192,14 @@
           "abr_backoffs",
           "retargets",
           "gaps",
-          "egress_kbps"
+          "egress_kbps",
+          "link_kbps",
+          "shape",
+          "resend_pkts",
+          "loss_head",
+          "loss_mid",
+          "loss_tail",
+          "sock_drops"
         ],
         "properties": {
           "abr_backoffs": {
@@ -13208,6 +13216,12 @@
           "abr_min_kbps": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "acked_p": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Frames encoded against one the client confirmed, while the link showed loss.",
             "minimum": 0
           },
           "anchor_p": {
@@ -13254,6 +13268,18 @@
             "description": "Client decode-recovery asks, and the IDRs actually forced (the cooldown coalesces).",
             "minimum": 0
           },
+          "link_kbps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The link rate the client last reported, which every frame is paced at. `0` = none.",
+            "minimum": 0
+          },
+          "loss_head": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Shards the client never got, by where in their frame they fell: the first twelve\ndata shards, the middle, and the last twelve with all parity.",
+            "minimum": 0
+          },
           "loss_max_ppm": {
             "type": "integer",
             "format": "int32",
@@ -13264,10 +13290,26 @@
             "format": "int32",
             "minimum": 0
           },
+          "loss_mid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "loss_tail": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
           "loss_windows": {
             "type": "integer",
             "format": "int32",
             "description": "Of `windows`, those that reported any loss.",
+            "minimum": 0
+          },
+          "resend_pkts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Packets resent on a client's NACK.",
             "minimum": 0
           },
           "retargets": {
@@ -13299,6 +13341,16 @@
             "description": "The `/status` session id, so a line ties to a row.",
             "minimum": 0
           },
+          "shape": {
+            "$ref": "#/components/schemas/LinkShape",
+            "description": "The shape the client asked for."
+          },
+          "sock_drops": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Packets the client's own receive buffer dropped.",
+            "minimum": 0
+          },
           "unrecovered": {
             "type": "integer",
             "format": "int32",
@@ -13312,6 +13364,14 @@
             "minimum": 0
           }
         }
+      },
+      "LinkShape": {
+        "type": "string",
+        "description": "How the client asked for its frames: paced, or the wake shape (a small first group and a\ngap on every frame).",
+        "enum": [
+          "auto",
+          "wake"
+        ]
       },
       "LocalSummary": {
         "type": "object",

@@ -145,9 +145,13 @@ pub fn client_socket(bind: SocketAddr) -> std::io::Result<(Arc<ClientSocket>, Cl
         media: tx,
         stats: stats.clone(),
     };
+    // As urgent as the pump it feeds: a descheduled reader is socket drops the link never had.
     std::thread::Builder::new()
         .name("punktfunk-demux".into())
-        .spawn(move || reader.run())?;
+        .spawn(move || {
+            crate::client::pin_thread_user_interactive();
+            reader.run()
+        })?;
     Ok((
         Arc::new(ClientSocket {
             socket: socket.clone(),
@@ -352,6 +356,18 @@ impl Transport for ClientMedia {
     }
 }
 
+/// `PUNKTFUNK_GSO=0`: the operator's hard off. [`Transport::set_gso`] cannot turn it back on.
+fn gso_allowed() -> bool {
+    static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALLOWED.get_or_init(|| {
+        let off = std::env::var_os("PUNKTFUNK_GSO").is_some_and(|v| v == "0");
+        if off {
+            tracing::info!("PUNKTFUNK_GSO=0: media leaves one packet per send");
+        }
+        !off
+    })
+}
+
 /// The host's media sender on a connection's shared socket.
 pub struct MediaSender {
     socket: UdpSocket,
@@ -435,10 +451,11 @@ impl Transport for MediaSender {
     /// Runs of equal-size packets leave as one offloaded send, each run within the platform's
     /// segment limit and under the UDP payload bound of either IP family; the last packet of a
     /// run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
+    /// With GSO switched off, or `PUNKTFUNK_GSO=0`, packets leave one by one.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
-        if !self.gso.load(Ordering::Relaxed) || max <= 1 {
+        if !self.gso.load(Ordering::Relaxed) || !gso_allowed() || max <= 1 {
             return self.send_batch(packets);
         }
         let (to, from) = self.path();

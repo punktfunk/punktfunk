@@ -2,12 +2,20 @@
 //! directly — no async runtime is involved.
 
 /// Interface kinds, as [`ifinfo`] reads them and the wire carries them
-/// ([`crate::quic::HostFacts`]).
+/// ([`crate::quic::HostLink`], [`crate::quic::LinkFacts`]).
 pub const IFACE_KIND_UNKNOWN: u8 = 0;
 pub const IFACE_KIND_ETHERNET: u8 = 1;
 pub const IFACE_KIND_WIFI: u8 = 2;
 /// Loopback, a tunnel, a bridge: a link with no wire of its own.
 pub const IFACE_KIND_OTHER: u8 = 3;
+
+/// One end's interface as its OS reports it: an `IFACE_KIND_*` and a speed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkFacts {
+    pub kind: u8,
+    /// `0` = not sampled.
+    pub mbps: u32,
+}
 
 #[cfg(not(target_family = "wasm"))]
 pub mod ifinfo;
@@ -23,7 +31,7 @@ pub mod shared;
 pub mod sockstat;
 mod udp;
 
-pub use loopback::{loopback_pair, LoopbackTransport};
+pub use loopback::{loopback_drop_head, loopback_drop_tail, loopback_pair, LoopbackTransport};
 pub use qos::{grow_socket_buffers, set_dscp_default, set_media_qos, MediaClass, QosFlow};
 /// Windows-only USO batch send for a caller that owns its connected socket (GameStream video).
 #[cfg(target_os = "windows")]

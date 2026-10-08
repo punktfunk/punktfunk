@@ -53,9 +53,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeSpeedTest(
 /// thread. `null` on a `0` handle or when the check could not run.
 ///
 /// Layout: `[ceilingKbps, wall, hasClean, cleanRateKbps, cleanLossPct, cleanJitterUs,
-/// clientIfaceKind, clientLinkMbps, clientRcvbufKb, hasHost, hostIfaceKind, hostLinkMbps,
-/// hostSndbufKb, nLegs, burstsLossPct, cappedLossPct, nFindings]` then six per finding:
-/// `[id, severity, profile, n0, n1, n2]` (`profile` 0 = none, 1 capped, 2 smooth).
+/// clientIfaceKind, clientLinkMbps, clientRcvbufKb, hostIfaceKind, hostLinkMbps,
+/// hostSndbufKb, nLegs, burstsLossPct, cappedLossPct, nFindings]` then five per finding:
+/// `[id, severity, n0, n1, n2]`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNetworkCheck<'local>(
     mut env: EnvUnowned<'local>,
@@ -92,10 +92,9 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNetworkChec
             f64::from(r.client.link.kind),
             f64::from(r.client.link.mbps),
             f64::from(r.client.rcvbuf_kb),
-            f64::from(u8::from(host.is_some())),
-            host.map_or(0.0, |h| f64::from(h.iface_kind)),
-            host.map_or(0.0, |h| f64::from(h.link_mbps)),
-            host.map_or(0.0, |h| f64::from(h.sndbuf_kb)),
+            f64::from(host.iface_kind),
+            f64::from(host.link_mbps),
+            f64::from(host.sndbuf_kb),
             r.legs.len() as f64,
             leg(LegShape::FrameBursts),
             leg(LegShape::Capped),
@@ -105,7 +104,6 @@ pub extern "system" fn Java_io_unom_punktfunk_kit_NativeBridge_nativeNetworkChec
             values.extend([
                 f64::from(f.id as u8),
                 f64::from(f.severity as u8),
-                f64::from(f.profile.unwrap_or(0)),
                 f64::from(f.numbers[0]),
                 f64::from(f.numbers[1]),
                 f64::from(f.numbers[2]),

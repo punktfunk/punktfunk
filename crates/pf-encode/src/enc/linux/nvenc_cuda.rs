@@ -1684,6 +1684,10 @@ impl Encoder for NvencCudaEncoder {
         self.s.distrusted = true;
     }
 
+    fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
+        self.s.reference_floor = acked;
+    }
+
     fn invalidate_ref_frames(&mut self, first: i64, last: i64) -> bool {
         self.s.invalidate_ref_frames(first, last)
     }

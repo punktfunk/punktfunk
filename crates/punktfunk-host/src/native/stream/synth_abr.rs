@@ -261,8 +261,11 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                     SessionShared {
                         live_bitrate,
                         fec_target,
-                        delivery,
+                        shape,
+                        ports,
                         ramp_open,
+                        resend,
+                        link_kbps,
                         ..
                     },
                 bitrate_kbps,
@@ -318,6 +321,14 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
 
     // Depth 3, as the virtual path: encode blocks on a slow send rather than dropping a frame.
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<SendMsg>(3);
+    // A client's NACK reaches the send thread through a weak handle, as on the virtual path.
+    let frame_tx = Arc::new(frame_tx);
+    let nack_tx = Arc::downgrade(&frame_tx);
+    *resend.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(move |frame, shards| {
+        nack_tx
+            .upgrade()
+            .is_some_and(|tx| tx.try_send(SendMsg::Resend { frame, shards }).is_ok())
+    }));
     let live_mode = Arc::new(AtomicU64::new(pack_mode(mode.width, mode.height, fps)));
     let send_stats = SendStats {
         rec: stats,
@@ -326,10 +337,10 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
         client: client_label.clone(),
         plane,
         bitrate_kbps: live_bitrate.clone(),
-        // No client ramp reaches the synthetic source; the factor paces it.
-        link_kbps: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        link_kbps,
+        ports,
         link_paced: false,
-        delivery,
+        shape,
         bringup: bringup.clone(),
         wire_sock,
         driver_dropped: Arc::new(AtomicU64::new(0)),
@@ -351,10 +362,6 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                     Arc::new(AtomicU32::new(0)),
                     Arc::new(AtomicU32::new(0)),
                     false,
-                    std::env::var("PUNKTFUNK_PACE_BURST_KB")
-                        .ok()
-                        .and_then(|s| s.parse::<usize>().ok())
-                        .map(|kb| kb * 1024),
                     fec_target,
                     shard_rx,
                     send_stats,
@@ -491,7 +498,6 @@ pub(crate) fn synthetic_abr_stream(ctx: SynthAbrContext) -> Result<()> {
                     epoch: 0,
                     flags,
                     frame_index: au_seq,
-                    deadline: due + interval,
                     // A plausible encode: half a frame budget, which is what a GPU that is not
                     // the bottleneck reads. The client's encode-stage detector needs a number
                     // in the right decade, not a model.

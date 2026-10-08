@@ -497,7 +497,7 @@ impl Host {
         self.budget_kbps
     }
 
-    /// A client [`crate::quic::DeliveryReport`] arrived. Its boundary closes the
+    /// A client's report window arrived. Its boundary closes the
     /// share window, so what this session offered and what reached the client
     /// cover one stretch of link (`native/control.rs`).
     pub(super) fn on_delivery_report(&mut self, now: Instant, packets_received: u64) {

@@ -590,7 +590,6 @@ impl ServiceState {
                 addr,
                 port,
             } => self.update_host(key, name, addr, port),
-            ConsoleCmd::SetHostDelivery { key, profile } => self.set_host_delivery(key, profile),
             ConsoleCmd::ForgetHost { key } => self.forget_host(key),
             ConsoleCmd::UnpairHost { key } => self.unpair_host(key),
             ConsoleCmd::Wake { key, then_connect } => self.wake(key, then_connect),
@@ -810,7 +809,6 @@ impl ServiceState {
                                         id: f.id as u8,
                                         severity: f.severity as u8,
                                         numbers: f.numbers,
-                                        profile: f.profile,
                                     })
                                     .collect(),
                             },
@@ -998,18 +996,6 @@ impl ServiceState {
         h.move_to(&addr, port);
         self.save_known(&known);
         self.last_probe = Instant::now() - Duration::from_secs(60); // the address moved
-    }
-
-    /// The profile a network check offered, remembered on the host's record; `0` clears it.
-    /// The next connect to this host asks for it (`pf_client_core::session::dial`).
-    fn set_host_delivery(&mut self, key: String, profile: u8) {
-        let mut known = trust::KnownHosts::load();
-        let Some(h) = index_for_key(&known, &key).and_then(|i| known.hosts.get_mut(i)) else {
-            tracing::warn!(%key, "delivery profile for an unknown host — ignoring");
-            return;
-        };
-        h.delivery = (profile != 0).then_some(profile);
-        self.save_known(&known);
     }
 
     fn forget_host(&mut self, key: String) {

@@ -66,6 +66,11 @@ impl Fields {
         self.bytes(tag, &v.to_le_bytes())
     }
 
+    /// One field per value, all under `tag`: a repeated field.
+    pub fn u16s(self, tag: u64, vs: &[u16]) -> Fields {
+        vs.iter().fold(self, |f, &v| f.u16(tag, v))
+    }
+
     pub fn u64(self, tag: u64, v: u64) -> Fields {
         self.bytes(tag, &v.to_le_bytes())
     }
@@ -204,6 +209,15 @@ pub fn set_once<T>(slot: &mut Option<T>, v: T) -> Result<()> {
         return Err(PunktfunkError::InvalidArg("repeated field"));
     }
     *slot = Some(v);
+    Ok(())
+}
+
+/// One more value of a repeated field; past `max` the message is refused.
+pub fn push_bounded<T>(list: &mut Vec<T>, v: T, max: usize) -> Result<()> {
+    if list.len() == max {
+        return Err(PunktfunkError::InvalidArg("repeated field past its bound"));
+    }
+    list.push(v);
     Ok(())
 }
 

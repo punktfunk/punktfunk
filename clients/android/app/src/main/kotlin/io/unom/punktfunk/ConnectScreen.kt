@@ -1054,14 +1054,6 @@ fun ConnectScreen(
             speedTest = null
         },
         onDismissSpeedTest = { speedTest = null },
-        onUsePacedDelivery = { profile ->
-            speedTest?.let { entry ->
-                knownHostStore.save(entry.host.copy(delivery = profile))
-                savedHosts = knownHostStore.all()
-                notice = "Paced delivery set for ${entry.host.name} — it applies from the next connect"
-            }
-            speedTest = null
-        },
         editTarget = editTarget,
         editSuggestedMacs = editSuggestedMacs,
         onSaveHost = { updated ->

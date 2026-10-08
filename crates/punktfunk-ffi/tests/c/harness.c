@@ -38,11 +38,11 @@ int main(void) {
 #ifdef PUNKTFUNK_FEATURE_QUIC
     if (sizeof(PunktfunkConnectOpts) != (sizeof(void *) == 8 ? 136u : 96u)
         || offsetof(PunktfunkConnectOpts, video_fit) != (sizeof(void *) == 8 ? 100u : 72u)
-        || offsetof(PunktfunkConnectOpts, delivery_profile) != (sizeof(void *) == 8 ? 120u : 84u)
+        || offsetof(PunktfunkConnectOpts, delivery_flags) != (sizeof(void *) == 8 ? 121u : 85u)
         || offsetof(PunktfunkConnectOpts, profile_id) != (sizeof(void *) == 8 ? 128u : 92u)) {
-        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_profile at %zu, profile_id at %zu\n",
+        fprintf(stderr, "FAIL: PunktfunkConnectOpts is %zu bytes, video_fit at %zu, delivery_flags at %zu, profile_id at %zu\n",
                 sizeof(PunktfunkConnectOpts), offsetof(PunktfunkConnectOpts, video_fit),
-                offsetof(PunktfunkConnectOpts, delivery_profile),
+                offsetof(PunktfunkConnectOpts, delivery_flags),
                 offsetof(PunktfunkConnectOpts, profile_id));
         return 1;
     }

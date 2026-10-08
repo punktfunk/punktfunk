@@ -63,24 +63,12 @@ pub const MSG_SET_BITRATE: u64 = 0x24;
 pub const MSG_BITRATE_CHANGED: u64 = 0x25;
 /// `host → client`: the host rebuilt its pipeline and nothing flowed for a while.
 pub const MSG_PIPELINE_GAP: u64 = 0x26;
-/// `client → host`: the rate the bring-up ramp proved.
-pub const MSG_LINK_REPORT: u64 = 0x27;
-/// `client → host`: stream under this delivery profile.
-pub const MSG_SET_DELIVERY: u64 = 0x28;
-/// `host → client`: the delivery profile in force.
-pub const MSG_DELIVERY_CHANGED: u64 = 0x29;
-/// `host → client`: what the host knows about its end of the path.
-pub const MSG_HOST_FACTS: u64 = 0x2A;
 /// `client → host`: a bandwidth probe, smooth or shaped.
 pub const MSG_PROBE_REQUEST: u64 = 0x2B;
 /// `host → client`: the probe's counts.
 pub const MSG_PROBE_RESULT: u64 = 0x2C;
 /// `client → host`, retired: an older client's display-latch report. Hosts skip it.
 pub const MSG_PHASE_REPORT: u64 = 0x2D;
-/// `client → host`: shard loss parity repaired over a report window (`LossReport`).
-pub const MSG_LOSS_REPORT: u64 = 0x2E;
-/// `client → host`: media packets received this session (`DeliveryReport`).
-pub const MSG_DELIVERY_REPORT: u64 = 0x2F;
 /// `host → client`: the pointer bitmap changed.
 pub const MSG_CURSOR_SHAPE: u64 = 0x30;
 /// `host → client`: who draws the cursor.
@@ -93,10 +81,6 @@ pub const MSG_AUDIO_STATE: u64 = 0x33;
 pub const MSG_LAUNCH_OUTCOME: u64 = 0x34;
 /// `host → client`: the OS pad slots this session holds.
 pub const MSG_PAD_SLOTS: u64 = 0x35;
-/// `client → host`: invalidate a frame range instead of a keyframe (`RfiRequest`).
-pub const MSG_RFI_REQUEST: u64 = 0x36;
-/// `client → host`: the next frame as a keyframe (`RequestKeyframe`).
-pub const MSG_REQUEST_KEYFRAME: u64 = 0x37;
 /// `host → client`: the sealed shard size changes (`ShardPayloadChanged`).
 pub const MSG_SHARD_PAYLOAD_CHANGED: u64 = 0x38;
 /// `client → host`: the answer to a shard size change (`ShardPayloadAck`).
@@ -148,23 +132,15 @@ pub const FRAMES: &[(&str, u64, usize)] = &[
     ("MSG_SET_BITRATE", MSG_SET_BITRATE, 256),
     ("MSG_BITRATE_CHANGED", MSG_BITRATE_CHANGED, 256),
     ("MSG_PIPELINE_GAP", MSG_PIPELINE_GAP, 256),
-    ("MSG_LINK_REPORT", MSG_LINK_REPORT, 256),
-    ("MSG_SET_DELIVERY", MSG_SET_DELIVERY, 256),
-    ("MSG_DELIVERY_CHANGED", MSG_DELIVERY_CHANGED, 256),
-    ("MSG_HOST_FACTS", MSG_HOST_FACTS, 256),
     ("MSG_PROBE_REQUEST", MSG_PROBE_REQUEST, 256),
     ("MSG_PROBE_RESULT", MSG_PROBE_RESULT, 256),
     ("MSG_PHASE_REPORT", MSG_PHASE_REPORT, 256),
-    ("MSG_LOSS_REPORT", MSG_LOSS_REPORT, 256),
-    ("MSG_DELIVERY_REPORT", MSG_DELIVERY_REPORT, 256),
     ("MSG_CURSOR_SHAPE", MSG_CURSOR_SHAPE, 128 * 1024),
     ("MSG_CURSOR_RENDER", MSG_CURSOR_RENDER, 256),
     ("MSG_ACCESS_UPDATE", MSG_ACCESS_UPDATE, 256),
     ("MSG_AUDIO_STATE", MSG_AUDIO_STATE, 256),
     ("MSG_LAUNCH_OUTCOME", MSG_LAUNCH_OUTCOME, 1024),
     ("MSG_PAD_SLOTS", MSG_PAD_SLOTS, 256),
-    ("MSG_RFI_REQUEST", MSG_RFI_REQUEST, 256),
-    ("MSG_REQUEST_KEYFRAME", MSG_REQUEST_KEYFRAME, 256),
     ("MSG_SHARD_PAYLOAD_CHANGED", MSG_SHARD_PAYLOAD_CHANGED, 256),
     ("MSG_SHARD_PAYLOAD_ACK", MSG_SHARD_PAYLOAD_ACK, 256),
     ("MSG_CLOCK_PROBE", MSG_CLOCK_PROBE, 256),
@@ -209,7 +185,7 @@ pub const DGRAM_MEDIA: u64 = 0x00;
 pub const DGRAM_AUDIO: u64 = 0x01;
 /// Client → host input state: motion, sticks, scroll, pen, touch moves. Newest wins by `seq`.
 pub const DGRAM_INPUT_STATE: u64 = 0x02;
-/// Client → host receive state, repeated until cleared.
+/// Client → host receive state: each report window, and an open ask repeated a few times.
 pub const DGRAM_FEEDBACK: u64 = 0x03;
 /// Clock probe and echo.
 pub const DGRAM_CLOCK: u64 = 0x04;

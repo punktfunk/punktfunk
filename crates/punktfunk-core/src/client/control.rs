@@ -1,29 +1,14 @@
 //! Worker-side `CtrlRequest` (one outbound `select!` writer) and `Negotiated` (handshake snapshot for [`NativeClient`]).
 
 use crate::config::{CompositorPref, GamepadPref, Mode};
-use crate::quic::{
-    ClipControl, ClipOffer, ColorInfo, DeliveryReport, LossReport, ProbeRequest, RfiRequest,
-};
+use crate::quic::{ClipControl, ClipOffer, ColorInfo, ProbeRequest};
 
 /// One outbound enum so the worker's `select!` has a single writer — two `&mut ctrl_send`
 /// borrows across branches do not compile.
 pub(crate) enum CtrlRequest {
     Mode(Mode),
     Probe(ProbeRequest),
-    /// Toward a host that answered the delivery tag; see [`crate::quic::ProbeShaped`].
     ProbeShaped(crate::quic::ProbeShaped),
-    /// Toward a host that answered the delivery tag; see [`crate::quic::SetDelivery`].
-    SetDelivery(u8),
-    Keyframe,
-    /// Client saw a `frame_index` gap; an RFI-capable host re-references a known-good picture
-    /// instead of a full IDR.
-    Rfi(RfiRequest),
-    Loss(LossReport),
-    /// Follows every [`CtrlRequest::Loss`]. `loss_ppm` is 0 for both no loss and no packets;
-    /// this count is what separates them.
-    Delivery(DeliveryReport),
-    /// Once, after the bring-up ramp: the rate it proved the link carries (kbps).
-    LinkRate(u32),
     /// The pump's [`BitrateController`] sends this (kbps) when bitrate is Automatic.
     SetBitrate(u32),
     /// Pump sends this after the first no-op clock flush; the control task also fires one every

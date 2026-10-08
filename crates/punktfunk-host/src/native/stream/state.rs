@@ -18,8 +18,8 @@ use super::cursor::settle_portal_cursor;
 use super::pipeline::{build_pipeline_with_retry, Pipeline};
 use super::*;
 
-/// (capture_ns, submit_ns, send deadline) per frame handed to the encoder and not yet polled.
-pub(super) type Inflight = std::collections::VecDeque<(u64, u64, std::time::Instant)>;
+/// (capture_ns, submit_ns) per frame handed to the encoder and not yet polled.
+pub(super) type Inflight = std::collections::VecDeque<(u64, u64)>;
 
 /// What one tick's capture phase hands to its encode phase.
 #[derive(Clone, Copy)]
@@ -71,6 +71,10 @@ pub(super) struct StreamState {
     pub(super) last_forced_idr: Option<std::time::Instant>,
     /// Never re-anchors the IDR cooldown: sustained loss + RFI would swallow IDR pleas forever.
     pub(super) last_rfi: Option<std::time::Instant>,
+    pub(super) loss_mode: super::recovery::LossMode,
+    /// [`crate::native::wiring::SessionShared::acked`] and `lossy_window`.
+    pub(super) acked: Arc<AtomicU64>,
+    pub(super) lossy_window: Arc<AtomicBool>,
     pub(super) kf_gate: super::recovery::KeyframeGate,
     pub(super) recovery_cadence: pf_frame::metronome::Metronome,
     pub(super) ir_wave_pos: u32,
@@ -104,7 +108,9 @@ pub(super) struct StreamState {
     _watcher: Option<std::thread::JoinHandle<()>>,
     pub(super) live_session: crate::session_status::LiveSessionGuard,
     // ---- the send thread ----
-    pub(super) frame_tx: std::sync::mpsc::SyncSender<SendMsg>,
+    /// The one strong handle: a client's NACK reaches the send thread through a weak one,
+    /// so dropping this still ends the thread.
+    pub(super) frame_tx: Arc<std::sync::mpsc::SyncSender<SendMsg>>,
     pub(super) send_thread: std::thread::JoinHandle<()>,
     pub(super) send_spread_us: Arc<AtomicU32>,
     pub(super) wire_rekeys: Arc<AtomicU32>,
@@ -436,7 +442,11 @@ impl StreamState {
                             fec_target,
                             fec_requested,
                             link_kbps,
-                            delivery,
+                            shape,
+                            ports,
+                            resend,
+                            acked,
+                            lossy_window,
                             ramp_open,
                             cursor_client_draws,
                         },
@@ -840,13 +850,16 @@ impl StreamState {
         });
 
         let perf = pf_host_config::config().perf;
-        let burst_cap: Option<usize> = std::env::var("PUNKTFUNK_PACE_BURST_KB")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .map(|kb| kb * 1024);
 
         // Depth 3: encode blocks if send falls behind, rather than drop a frame (infinite GOP freeze).
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<SendMsg>(3);
+        let frame_tx = Arc::new(frame_tx);
+        let nack_tx = Arc::downgrade(&frame_tx);
+        *resend.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(move |frame, shards| {
+            nack_tx
+                .upgrade()
+                .is_some_and(|tx| tx.try_send(SendMsg::Resend { frame, shards }).is_ok())
+        }));
         // Stats slot only — an ordinary connect is not owed a corrective Reconfigured.
         let delivered = delivered_mode(frame.width, frame.height, interval);
         let live_mode = Arc::new(AtomicU64::new(pack_mode(
@@ -868,8 +881,9 @@ impl StreamState {
             plane: conn.plane(),
             bitrate_kbps: live_bitrate.clone(),
             link_kbps,
+            ports,
             link_paced: budget_identity,
-            delivery,
+            shape,
             bringup: bringup.clone(),
             wire_sock,
             driver_dropped: driver_dropped.clone(),
@@ -894,7 +908,6 @@ impl StreamState {
                         send_spread_send,
                         wire_rekeys_send,
                         slice_wire,
-                        burst_cap,
                         fec_target_send,
                         shard_rx,
                         send_stats,
@@ -1046,6 +1059,9 @@ impl StreamState {
             // Pipeline opened on an IDR — start the clock so the cold-GOP keyframe storm coalesces.
             last_forced_idr: Some(now),
             last_rfi: None,
+            loss_mode: Default::default(),
+            acked,
+            lossy_window,
             kf_gate: super::recovery::KeyframeGate::default(),
             recovery_cadence: pf_frame::metronome::Metronome::new(),
             ir_wave_pos: 0,

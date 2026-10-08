@@ -184,11 +184,6 @@ v2_message!(Reconfigure = reg::MSG_RECONFIGURE, { 1 => mode });
 v2_message!(Reconfigured = reg::MSG_RECONFIGURED, { 1 => accepted, 2 => mode });
 v2_message!(SetBitrate = reg::MSG_SET_BITRATE, { 1 => bitrate_kbps });
 v2_message!(PipelineGap = reg::MSG_PIPELINE_GAP, { 1 => gap_ms });
-v2_message!(LinkReport = reg::MSG_LINK_REPORT, { 1 => proven_kbps });
-v2_message!(SetDelivery = reg::MSG_SET_DELIVERY, { 1 => profile });
-v2_message!(DeliveryChanged = reg::MSG_DELIVERY_CHANGED, { 1 => profile, 2 => forced });
-v2_message!(HostFacts = reg::MSG_HOST_FACTS,
-    { 1 => iface_kind, 2 => link_mbps, 3 => sndbuf_kb, 4 => forced_profile });
 v2_message!(ProbeShaped = reg::MSG_PROBE_REQUEST,
     { 1 => target_kbps, 2 => duration_ms, 3 => burst_hz, 4 => group_bytes, 5 => group_rate_kbps });
 v2_message!(ProbeResult = reg::MSG_PROBE_RESULT,
@@ -204,9 +199,6 @@ v2_message!(AudioState = reg::MSG_AUDIO_STATE, { 1 => muted });
 v2_message!(LaunchOutcome = reg::MSG_LAUNCH_OUTCOME, { 1 => kind, 2 => message },
     check |m| m.message.len() <= LAUNCH_MESSAGE_MAX);
 v2_message!(PadSlots = reg::MSG_PAD_SLOTS, { 1 => slots });
-v2_message!(LossReport = reg::MSG_LOSS_REPORT, { 1 => loss_ppm });
-v2_message!(DeliveryReport = reg::MSG_DELIVERY_REPORT, { 1 => packets_received });
-v2_message!(RfiRequest = reg::MSG_RFI_REQUEST, { 1 => first_frame, 2 => last_frame });
 v2_message!(ShardPayloadChanged = reg::MSG_SHARD_PAYLOAD_CHANGED, { 1 => shard_payload });
 v2_message!(ShardPayloadAck = reg::MSG_SHARD_PAYLOAD_ACK, { 1 => shard_payload });
 v2_message!(ClockProbe = reg::MSG_CLOCK_PROBE, { 1 => t1_ns });
@@ -220,20 +212,6 @@ v2_message!(PadIdentity = reg::MSG_PAD_IDENTITY,
 v2_message!(PadFeature = reg::MSG_PAD_FEATURE, { 1 => pad, 2 => data },
     check |m| !m.data.is_empty() && m.data.len() <= crate::quic::HID_REPORT_MAX);
 
-/// No fields: the frame is the ask.
-impl V2Message for RequestKeyframe {
-    const TYPE: u64 = reg::MSG_REQUEST_KEYFRAME;
-
-    fn fields(&self) -> Fields {
-        Fields::new()
-    }
-
-    fn from_body(body: &[u8]) -> Result<Self> {
-        let mut r = FieldReader::new(body);
-        while r.next_field()?.is_some() {}
-        Ok(RequestKeyframe)
-    }
-}
 /// `host → client`, before `ServerHello`, repeating: the host is still deciding, such as a
 /// console approval of this device. `punktfunk/2` only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -368,8 +346,10 @@ impl V2Message for ClipOffer {
     }
 }
 
-/// `host → client`, before the first packet of epoch `epoch`: what the video stream is from
-/// there on. The receiver holds frames of an epoch it has no config for.
+/// `host → client`, at the session's start and before the first packet of epoch `epoch`:
+/// what the video stream is from there on, and the host's end of the path. The receiver
+/// holds frames of an epoch it has no config for. A host fact of `0` means its OS did not
+/// say.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StreamConfig {
     pub epoch: u8,
@@ -380,10 +360,19 @@ pub struct StreamConfig {
     /// CICP `[primaries, transfer, matrix, full_range]`.
     pub color: [u8; 4],
     pub chroma_format: u8,
+    /// `IFACE_KIND_*` of the host's interface.
+    pub host_iface_kind: u8,
+    pub host_link_mbps: u32,
+    /// The host data socket's granted send buffer.
+    pub host_sndbuf_kb: u32,
+    /// What the host's operator pinned with `PUNKTFUNK_DELIVERY`: `0` nothing, then auto,
+    /// wake, burst, smooth, capped.
+    pub host_forced_shape: u8,
 }
 
 v2_message!(StreamConfig = reg::MSG_STREAM_CONFIG,
-    { 1 => epoch, 2 => mode, 3 => codec, 4 => bit_depth, 5 => color, 6 => chroma_format });
+    { 1 => epoch, 2 => mode, 3 => codec, 4 => bit_depth, 5 => color, 6 => chroma_format,
+      7 => host_iface_kind, 8 => host_link_mbps, 9 => host_sndbuf_kb, 10 => host_forced_shape });
 
 /// `host → client`, before the first datagram of epoch `epoch` on audio stream `stream`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -524,18 +513,6 @@ mod tests {
             });
         }
         round_trip(PipelineGap { gap_ms: 401 });
-        round_trip(LinkReport { proven_kbps: 9 });
-        round_trip(SetDelivery { profile: 2 });
-        round_trip(DeliveryChanged {
-            profile: 1,
-            forced: true,
-        });
-        round_trip(HostFacts {
-            iface_kind: 2,
-            link_mbps: 1200,
-            sndbuf_kb: 4096,
-            forced_profile: FORCED_PROFILE_NONE,
-        });
         round_trip(ProbeShaped {
             target_kbps: 100_000,
             duration_ms: 500,
@@ -607,6 +584,10 @@ mod tests {
             bit_depth: 10,
             color: [9, 16, 9, 0],
             chroma_format: CHROMA_IDC_420,
+            host_iface_kind: IFACE_KIND_ETHERNET,
+            host_link_mbps: 2_500,
+            host_sndbuf_kb: 4_096,
+            host_forced_shape: 2,
         });
         round_trip(AudioConfig {
             stream: 0,
@@ -722,7 +703,7 @@ mod tests {
         .fields();
         let many = (0..=CLIP_MAX_KINDS).fold(many, |f, _| f.bytes(2, &[0; 8]));
         assert!(ClipOffer::from_body(&many.into_body()).is_err());
-        assert!(decode::<SetBitrate>(reg::MSG_LINK_REPORT, &[]).is_err());
+        assert!(decode::<SetBitrate>(reg::MSG_PIPELINE_GAP, &[]).is_err());
     }
 
     #[test]

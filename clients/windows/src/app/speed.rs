@@ -23,8 +23,8 @@ pub(crate) enum SpeedState {
         /// host without a ramp, which gets no loss line.
         clean: Option<(f64, f32, f64)>,
         recommended_kbps: u32,
-        /// What the check found: `(id, figures, offered profile)` per finding.
-        findings: Vec<(u8, [u32; 3], Option<u8>)>,
+        /// What the check found: `(id, figures)` per finding.
+        findings: Vec<(u8, [u32; 3])>,
     },
 }
 
@@ -83,11 +83,7 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                             recommended_kbps: pf_client_core::speed::recommended_kbps(
                                 r.speed.ceiling_kbps,
                             ),
-                            findings: r
-                                .findings
-                                .iter()
-                                .map(|f| (f.id as u8, f.numbers, f.profile))
-                                .collect(),
+                            findings: r.findings.iter().map(|f| (f.id as u8, f.numbers)).collect(),
                         },
                         Err(msg) => SpeedState::Failed(msg),
                     });
@@ -221,33 +217,6 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
                     );
                 }
             }
-            // The profile a finding offered goes on this host's record; the next connect asks
-            // for it. Only a saved host has a record.
-            if let (Some(profile), Some(fp)) = (
-                findings.iter().find_map(|(_, _, p)| *p),
-                target.fp_hex.clone(),
-            ) {
-                let ss = set_screen.clone();
-                buttons.push(
-                    button(format!(
-                        "Use paced delivery ({})",
-                        pf_client_core::findings::profile_name(profile)
-                    ))
-                    .icon(lucide::icon("check"))
-                    .on_click(move || {
-                        let mut known = KnownHosts::load();
-                        if let Some(h) = known.hosts.iter_mut().find(|h| h.fp_hex == fp) {
-                            h.delivery = Some(profile);
-                            if let Err(e) = known.save() {
-                                tracing::warn!(error = %format!("{e:#}"),
-                                    "saving the host's delivery profile");
-                            }
-                        }
-                        ss.call(Screen::Hosts);
-                    })
-                    .into(),
-                );
-            }
             buttons.push({
                 let ss = set_screen.clone();
                 button("Close")
@@ -257,7 +226,7 @@ pub(crate) fn speed_page(props: &SpeedProps, cx: &mut RenderCx) -> Element {
             });
             let finding_lines: Vec<Element> = findings
                 .iter()
-                .map(|(id, numbers, _)| {
+                .map(|(id, numbers)| {
                     text_block(pf_client_core::findings::text(*id, *numbers))
                         .font_size(12.0)
                         .foreground(ThemeRef::SecondaryText)

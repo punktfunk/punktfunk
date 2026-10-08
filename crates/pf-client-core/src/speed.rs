@@ -44,13 +44,12 @@ pub fn run_speed_probe_with(
     identity: (String, String),
     progress: impl FnMut(u32),
 ) -> Result<SpeedReport, String> {
-    let c = connect_for_probe(addr, port, fp_hex, identity, None)?;
+    let c = connect_for_probe(addr, port, fp_hex, identity, false)?;
     health::speed_test(&c, progress).map_err(speed_error)
 }
 
 /// The whole network check ([`punktfunk_core::client::health::health_check`]) over a
-/// diagnostic session: probes only, the host's facts asked for. A host that does not read
-/// the ask serves the speed test as before and the report carries no legs.
+/// diagnostic session: probes only.
 pub fn run_network_check_with(
     addr: &str,
     port: u16,
@@ -58,12 +57,7 @@ pub fn run_network_check_with(
     identity: (String, String),
     progress: impl FnMut(u32),
 ) -> Result<health::HealthReport, String> {
-    use punktfunk_core::quic::{DeliveryAsk, EXT_DELIVERY_FACTS, EXT_DELIVERY_PROBE_ONLY};
-    let ask = DeliveryAsk {
-        profile: 0,
-        flags: EXT_DELIVERY_FACTS | EXT_DELIVERY_PROBE_ONLY,
-    };
-    let c = connect_for_probe(addr, port, fp_hex, identity, Some(ask))?;
+    let c = connect_for_probe(addr, port, fp_hex, identity, true)?;
     health::health_check(&c, progress).map_err(speed_error)
 }
 
@@ -75,7 +69,7 @@ fn connect_for_probe(
     port: u16,
     fp_hex: Option<&str>,
     identity: (String, String),
-    delivery: Option<punktfunk_core::quic::DeliveryAsk>,
+    probe_only: bool,
 ) -> Result<NativeClient, String> {
     // Pin the saved/advertised fingerprint when we have one; a manual host measures over TOFU.
     let pin = fp_hex.and_then(crate::trust::parse_hex32);
@@ -93,7 +87,7 @@ fn connect_for_probe(
         name: Some(punktfunk_core::client::device_name()),
         pin,
         identity: Some(identity),
-        delivery,
+        probe_only,
         ..ConnectParams::new(addr, port, mode, Duration::from_secs(15))
     })
     .map_err(|e| {

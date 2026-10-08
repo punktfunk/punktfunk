@@ -897,7 +897,39 @@ mod tests {
             rfi_supported: false,
             intra_refresh_cnt: 0,
             slices: 0,
+            ltr_frames: 0,
         }
+    }
+
+    /// Long-term slots open only on an RFI-capable AVC or HEVC session.
+    #[test]
+    fn long_term_slots_open_with_rfi_on_avc_and_hevc() {
+        let open = |codec, rfi_supported| {
+            let mut cfg = nv::NV_ENC_CONFIG {
+                version: nv::NV_ENC_CONFIG_VER,
+                ..seed_config()
+            };
+            apply_low_latency_config(
+                &mut cfg,
+                LowLatencyConfig {
+                    rfi_supported,
+                    ltr_frames: LTR_FRAMES,
+                    ..low_latency_cfg(codec, false, 8)
+                },
+            );
+            cfg
+        };
+        let hevc = open(Codec::H265, true);
+        // SAFETY: an HEVC session's union arm is `hevcConfig` — the one this path wrote.
+        let h = unsafe { hevc.encodeCodecConfig.hevcConfig };
+        assert_eq!((h.enableLTR(), h.ltrNumFrames), (1, LTR_FRAMES));
+        let avc = open(Codec::H264, true);
+        // SAFETY: an H.264 session's union arm is `h264Config`.
+        let h = unsafe { avc.encodeCodecConfig.h264Config };
+        assert_eq!((h.enableLTR(), h.ltrNumFrames), (1, LTR_FRAMES));
+        let off = open(Codec::H265, false);
+        // SAFETY: same HEVC arm.
+        assert_eq!(unsafe { off.encodeCodecConfig.hevcConfig }.enableLTR(), 0);
     }
 
     #[test]
@@ -1403,7 +1435,14 @@ pub struct LowLatencyConfig {
     pub intra_refresh_cnt: u32,
     /// [`resolve_slices`] result. ≤ 1 leaves the preset's single slice.
     pub slices: u32,
+    /// Long-term slots for confirmed references (AVC, HEVC), inside the RFI DPB. 0 leaves
+    /// long-term references off.
+    pub ltr_frames: u32,
 }
+
+/// Long-term slots a session asks for, under `NV_ENC_CAPS_NUM_MAX_LTR_FRAMES`: three keep a
+/// confirmed reference within reach of a round trip about two frames long.
+pub const LTR_FRAMES: u32 = 3;
 
 /// A periodic wave that never comes: only the forced one runs.
 const INTRA_REFRESH_NEVER: u32 = 1 << 30;
@@ -1644,6 +1683,25 @@ pub fn apply_low_latency_config(cfg: &mut nv::NV_ENC_CONFIG, c: LowLatencyConfig
                 cfg.encodeCodecConfig.av1Config.maxNumRefFramesInDPB = RFI_DPB;
             }
             Codec::PyroWave => unreachable!("PyroWave never opens the direct-NVENC backend"),
+        }
+    }
+    // Confirmed references: long-term slots the session marks and forces while the link loses
+    // packets (`NvSession::encode`).
+    if c.rfi_supported && c.ltr_frames > 0 {
+        match c.codec {
+            // SAFETY: H.264 session (matched on `c.codec`): `h264Config` is the active arm.
+            Codec::H264 => unsafe {
+                let h = &mut cfg.encodeCodecConfig.h264Config;
+                h.set_enableLTR(1);
+                h.ltrNumFrames = c.ltr_frames;
+            },
+            // SAFETY: HEVC session (matched on `c.codec`): `hevcConfig` is the active arm.
+            Codec::H265 => unsafe {
+                let h = &mut cfg.encodeCodecConfig.hevcConfig;
+                h.set_enableLTR(1);
+                h.ltrNumFrames = c.ltr_frames;
+            },
+            Codec::Av1 | Codec::PyroWave => {}
         }
     }
     // On-demand intra refresh: the mode on, the timer never, the recovery-point SEI where the

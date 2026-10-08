@@ -72,9 +72,6 @@ sealed interface SpeedTestPhase {
     ) : SpeedTestPhase {
         val measuredMbps: Double get() = throughputKbps / 1000.0
         val recommendedMbps: Double get() = recommendedKbps / 1000.0
-
-        /** The delivery profile the first finding that names one offers, else null. */
-        val offeredProfile: Int? get() = findings.firstOrNull { it.profile != 0 }?.profile
     }
 }
 
@@ -83,25 +80,23 @@ data class CleanRound(val rateKbps: Int, val lossPct: Double, val jitterUs: Int)
 
 /**
  * One finding of the network check, by id (the Rust `FindingId` as a byte): the words are
- * [findingText]'s; [profile] is the delivery profile that helps (`1` capped, `2` smooth, `0`
- * none).
+ * [findingText]'s.
  */
-data class Finding(val id: Int, val severity: Int, val numbers: List<Int>, val profile: Int)
+data class Finding(val id: Int, val severity: Int, val numbers: List<Int>)
 
 /** The network check's flat report ([NativeBridge.nativeNetworkCheck]) as a [SpeedTestPhase.Done]. */
 fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
-    if (v.size < 17) return null
+    if (v.size < 16) return null
     val ceilingKbps = v[0].toInt()
     val clean = if (v[2] != 0.0) CleanRound(v[3].toInt(), v[4], v[5].toInt()) else null
-    val n = v[16].toInt()
-    if (v.size < 17 + n * 6) return null
+    val n = v[15].toInt()
+    if (v.size < 16 + n * 5) return null
     val findings = (0 until n).map { i ->
-        val base = 17 + i * 6
+        val base = 16 + i * 5
         Finding(
             id = v[base].toInt(),
             severity = v[base + 1].toInt(),
-            profile = v[base + 2].toInt(),
-            numbers = listOf(v[base + 3].toInt(), v[base + 4].toInt(), v[base + 5].toInt()),
+            numbers = listOf(v[base + 2].toInt(), v[base + 3].toInt(), v[base + 4].toInt()),
         )
     }
     return SpeedTestPhase.Done(
@@ -118,7 +113,7 @@ fun parseNetworkCheck(v: DoubleArray): SpeedTestPhase.Done? {
 
 /**
  * A finding in words — what did not happen, then the next move — the same sentences every
- * shell shows. The offered profile is the dialog's button, not a sentence here.
+ * shell shows.
  */
 fun findingText(id: Int, numbers: List<Int>): String {
     val a = numbers.getOrElse(0) { 0 }
@@ -152,13 +147,6 @@ fun findingText(id: Int, numbers: List<Int>): String {
     }
 }
 
-/** What an offered profile is called on a button. */
-fun profileName(profile: Int): String = when (profile) {
-    1 -> "capped"
-    2 -> "smooth"
-    else -> "none"
-}
-
 /**
  * Connect to [host]:[port] as a diagnostic session, run the network check, and report. Suspends
  * on IO — call from a coroutine; [onPhase] is invoked as it progresses so the dialog can narrate.
@@ -190,7 +178,7 @@ suspend fun runSpeedTest(
     val handle = connectToHost(
         context, probeSettings, identity, host, port, pinHex,
         launch = null, dialer = "speed-test", timeoutMs = SPEED_TEST_CONNECT_TIMEOUT_MS,
-        deliveryFlags = DELIVERY_FACTS or DELIVERY_PROBE_ONLY,
+        deliveryFlags = DELIVERY_PROBE_ONLY,
     )
     if (handle == 0L) {
         onPhase(
@@ -209,9 +197,6 @@ suspend fun runSpeedTest(
         withContext(Dispatchers.IO) { NativeBridge.nativeClose(handle) }
     }
 }
-
-/** `EXT_DELIVERY_FACTS`: ask the host for its own network facts. */
-const val DELIVERY_FACTS = 1
 
 /** `EXT_DELIVERY_PROBE_ONLY`: a diagnostic session that builds no pipeline. */
 const val DELIVERY_PROBE_ONLY = 2

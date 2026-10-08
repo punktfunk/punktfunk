@@ -62,8 +62,8 @@ impl ShareClocks {
     }
 }
 
-/// What a client's [`punktfunk_core::quic::DeliveryReport`] leaves this session:
-/// the share of the path it is on, if the governor has one to send.
+/// What a client's report window leaves this session: the share of the path it is on, if
+/// the governor has one to send.
 ///
 /// The report is the boundary both figures are read over, so closing the window
 /// and asking are one step ([`crate::session_status::share_for`]). A group of
@@ -94,24 +94,38 @@ fn delivery_share(
         .flatten()
 }
 
-/// The profile this session streams under from the next frame: the client's ask, unless
-/// `PUNKTFUNK_DELIVERY` pins one for every session. Stored for the send loop and answered.
-fn apply_delivery(
-    delivery: &std::sync::atomic::AtomicU8,
-    asked: u8,
-) -> punktfunk_core::quic::DeliveryChanged {
-    let forced = crate::send_pacing::forced_delivery();
-    let profile = forced.unwrap_or_else(|| crate::send_pacing::DeliveryProfile::from_u8(asked));
-    delivery.store(profile as u8, Ordering::Relaxed);
-    tracing::info!(
-        asked,
-        profile = ?profile,
-        forced = forced.is_some(),
-        "delivery profile set"
-    );
-    punktfunk_core::quic::DeliveryChanged {
-        profile: profile as u8,
-        forced: forced.is_some(),
+/// Whether feedback number `n` is one this task has not acted on: ahead of `last` in wrap
+/// order over `0..=max`. Moves `last` when it is. `0` carries nothing.
+fn take_newer(n: u32, last: &mut u32, max: u32) -> bool {
+    let ahead = n.wrapping_sub(*last) & max;
+    if n == 0 || ahead == 0 || ahead > max / 2 {
+        return false;
+    }
+    *last = n;
+    true
+}
+
+/// The client's shape, for the send loop; logged when it moves. A client asks for the
+/// wake shape or nothing: line rate and the smooth spread are the operator's. Returns
+/// whether the wake shape is on.
+fn apply_shape(slot: &std::sync::atomic::AtomicU8, asked: u8) -> bool {
+    use crate::send_pacing::Shape;
+    let shape = match Shape::from_u8(asked) {
+        Shape::Wake => Shape::Wake,
+        _ => Shape::Auto,
+    };
+    if slot.swap(shape as u8, Ordering::Relaxed) != shape as u8 {
+        tracing::info!(?shape, "client changed the delivery shape");
+    }
+    shape == Shape::Wake
+}
+
+/// A probe's target, the bring-up ramp's steps included, under 0.9 `L_hard` when a port is
+/// known. The result reports what was offered, so a bounded round says so itself.
+fn probe_bound(target_kbps: u32, ports: crate::send_pacing::Ports) -> u32 {
+    match ports.hard_kbps() {
+        0 => target_kbps,
+        p => target_kbps.min(p / 10 * 9),
     }
 }
 
@@ -214,9 +228,11 @@ pub(super) struct Task {
     /// control stream lands in the same order-preserving line as the pointer.
     pub(super) input_tx: std::sync::mpsc::SyncSender<super::input::ClientInput>,
     pub(super) initial_mode: punktfunk_core::Mode,
-    /// The last `StreamConfig` the client holds, epoch 0 from the `ServerHello`. `None`: the
-    /// client takes no configs and is corrected with a second `Reconfigured`.
-    pub(super) stream_config: Option<v2msg::StreamConfig>,
+    /// Epoch 0's `StreamConfig` with this host's link facts, sent as the task starts.
+    pub(super) stream_config: v2msg::StreamConfig,
+    /// The client moves its mode on configs (`FEATURE_STREAM_CONFIG`). Otherwise a switch is
+    /// corrected with a second `Reconfigured`.
+    pub(super) anchored: bool,
     pub(super) codec: crate::encode::Codec,
     pub(super) live_reconfig_ok: bool,
     pub(super) adaptive_fec: bool,
@@ -239,10 +255,9 @@ pub(super) struct Task {
     /// may carry the reason byte. Clear for every shipped client, which rejects
     /// a longer ack, and for every client behind a host without `HOST_CAP2_EXT`.
     pub(super) ack_reason: bool,
-    /// `EXT_TAG_DELIVERY` on the client's `Start`: answered once this task runs.
-    pub(super) delivery_ask: Option<punktfunk_core::quic::DeliveryAsk>,
-    /// Sent after the answer when the ask set `EXT_DELIVERY_FACTS`.
-    pub(super) host_facts: Option<punktfunk_core::quic::HostFacts>,
+    /// The client's feedback datagrams, from the session's datagram reader.
+    pub(super) feedback_rx:
+        tokio::sync::mpsc::UnboundedReceiver<punktfunk_core::quic::v2::dgram::Feedback>,
     /// A diagnostic session (`EXT_DELIVERY_PROBE_ONLY`): every probe is served, with no
     /// spacing. The session holds no pipeline, and the stream thread bounds what it costs.
     pub(super) probe_only: bool,
@@ -316,7 +331,8 @@ pub(super) async fn run(task: Task) {
         clock,
         input_tx,
         initial_mode,
-        mut stream_config,
+        stream_config: initial_config,
+        anchored,
         codec,
         live_reconfig_ok,
         adaptive_fec,
@@ -326,8 +342,7 @@ pub(super) async fn run(task: Task) {
         wire_bytes,
         audio_kbps,
         ack_reason,
-        delivery_ask,
-        host_facts,
+        mut feedback_rx,
         probe_only,
         ends:
             super::wiring::ControlEnds {
@@ -354,7 +369,11 @@ pub(super) async fn run(task: Task) {
                 fec_target,
                 fec_requested,
                 link_kbps,
-                delivery,
+                shape,
+                ports,
+                resend,
+                acked,
+                lossy_window,
                 ramp_open,
                 cursor_client_draws,
             },
@@ -406,7 +425,7 @@ pub(super) async fn run(task: Task) {
     const MIN_SWITCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
     let mut last_accepted_switch: Option<std::time::Instant> = None;
     let mut probe_spacing = ProbeSpacing::default();
-    // An RFI ask is a frame parity could not repair; the LossReport that
+    // An RFI ask is a frame parity could not repair; the report that
     // closes the window carries only what parity did repair.
     let mut unrecovered = UnrecoveredRun::default();
     // The link's loss over a horizon one report window cannot see, which is
@@ -424,21 +443,146 @@ pub(super) async fn run(task: Task) {
     link_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // `interval` fires immediately; the first tick would close an empty window at 0 s.
     link_tick.tick().await;
-    // Answer the Start tag: what this session streams under, then the host's facts when
-    // asked. The answer is also how the client learns this host reads delivery at all.
-    if let Some(ask) = delivery_ask {
-        let ack = apply_delivery(&delivery, ask.profile);
-        if v2io::send(&mut ctrl_send, &ack).await.is_err() {
-            return;
-        }
-        if let Some(facts) = host_facts {
-            if v2io::send(&mut ctrl_send, &facts).await.is_err() {
-                return;
-            }
-        }
+    // Feedback numbers acted on so far; a repeat or a reordered older copy is skipped.
+    let (mut last_window, mut last_ask) = (0u32, 0u32);
+    // The client reads this host's link facts off the first config, anchored or not.
+    if v2io::send(&mut ctrl_send, &initial_config).await.is_err() {
+        return;
     }
+    // What the client holds; `None` for a client that takes no configs.
+    let mut stream_config = anchored.then_some(initial_config);
     loop {
         tokio::select! {
+            fb = feedback_rx.recv() => {
+                // The datagram reader ends with the connection.
+                let Some(fb) = fb else { break };
+                if fb.link_kbps != 0 && link_kbps.swap(fb.link_kbps, Ordering::Relaxed) != fb.link_kbps {
+                    tracing::info!(link_kbps = fb.link_kbps, "client's link rate");
+                }
+                if let Some((last, mask)) = fb.acked {
+                    acked.store(u64::from(last) << 16 | u64::from(mask), Ordering::Relaxed);
+                }
+                let wake = apply_shape(&shape, fb.shape);
+                link.note_link(fb.link_kbps, wake);
+                // The ask before the window: an RFI raised in a window counts in its report.
+                if take_newer(u32::from(fb.ask), &mut last_ask, u16::MAX.into()) {
+                    if fb.keyframe {
+                        // Encode loop coalesces: a wedge fires several requests
+                        // before the IDR lands.
+                        tracing::debug!("client requested keyframe (decode recovery)");
+                        link.note_keyframe_req();
+                        if keyframe_tx.send(()).is_err() {
+                            break;
+                        }
+                    } else if let Some((first, last)) = fb.invalidate {
+                        // Encode loop falls back to a coalesced IDR when the range
+                        // is too old or the encoder has no RFI.
+                        tracing::debug!(
+                            first,
+                            last,
+                            "client requested reference-frame invalidation (loss recovery)"
+                        );
+                        unrecovered.rfi();
+                        link.note_rfi();
+                        if rfi_tx.send((first, last)).is_err() {
+                            break;
+                        }
+                    } else if let Some(n) = fb.nack {
+                        let queued = resend
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_ref()
+                            .is_some_and(|send| send(n.frame, n.shards().to_vec()));
+                        if !queued {
+                            tracing::debug!(frame = n.frame, "nack dropped: the send queue is full");
+                        }
+                    }
+                }
+                if take_newer(fb.window, &mut last_window, u32::MAX) {
+                    let unrecovered_run = unrecovered.report(std::time::Instant::now());
+                    if unrecovered_run > 0
+                        || punktfunk_core::abr::shows_loss_shape(fb.head, fb.mid, fb.tail, fb.sock_drops)
+                    {
+                        lossy_window.store(true, Ordering::Relaxed);
+                    }
+                    link.note_loss(fb.loss_ppm, unrecovered_run);
+                    link.note_positions(fb.head, fb.mid, fb.tail, fb.sock_drops);
+                    link.sample_bands(
+                        fec_target.load(Ordering::Relaxed),
+                        live_bitrate.load(Ordering::Relaxed),
+                    );
+                    // The proposal lands on `fec_requested`; the stream loop
+                    // publishes it to `fec_target` (what the send loop reads per
+                    // frame) once the encoder accepts the matching rate.
+                    // No-op when FEC is pinned (`PUNKTFUNK_FEC_PCT`).
+                    if adaptive_fec {
+                        let prev = fec_target.load(Ordering::Relaxed);
+                        let target = punktfunk_core::abr::budget::fec_target(
+                            fb.loss_ppm,
+                            prev,
+                            unrecovered_run,
+                            punktfunk_core::abr::budget::FrameBudget {
+                                budget_kbps: live_bitrate.load(Ordering::Relaxed),
+                                audio_kbps,
+                                shard_payload: wire_bytes
+                                    .saturating_sub(
+                                        punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
+                                    )
+                                    .try_into()
+                                    .unwrap_or(u16::MAX),
+                                fps: active.refresh_hz,
+                            },
+                            &mut fec_horizon,
+                        );
+                        fec_requested.store(target, Ordering::Release);
+                        if prev != target {
+                            tracing::debug!(
+                                loss_ppm = fb.loss_ppm,
+                                unrecovered_run,
+                                fec_pct = target,
+                                prev_fec_pct = prev,
+                                "adaptive FEC adjusted"
+                            );
+                        }
+                    }
+                    // Unconditional: stall diagnosis needs `loss_ppm = 0` even
+                    // when FEC is pinned or adaptive FEC is off. Saturate into
+                    // the u32 bridge; the value only matters near zero.
+                    client_packets_received.store(
+                        fb.packets_received.min(u32::MAX as u64 - 1) as u32,
+                        Ordering::Relaxed,
+                    );
+                    if let Some(share) = delivery_share(
+                        std::time::Instant::now(),
+                        fb.packets_received,
+                        &counters,
+                        &mut window,
+                        &mut share_clocks,
+                        bitrate_automatic,
+                        wire_bytes,
+                    ) {
+                        // A share under the live rate is a retarget the encoder
+                        // takes now; one above it is a ceiling the client still
+                        // has to earn. A hand-back binds nothing: the path goes
+                        // as a ceiling, and the release follows it.
+                        let binds = counters.share.share_kbps() > 0;
+                        let live = live_bitrate.load(Ordering::Relaxed);
+                        if binds && live > share && bitrate_tx.send(share).is_err() {
+                            break;
+                        }
+                        let ack = bitrate_ack(share, AckReason::Governor, ack_reason);
+                        if v2io::send(&mut ctrl_send, &ack).await.is_err() {
+                            break;
+                        }
+                        if !binds && ack_reason {
+                            let release = bitrate_ack(NO_SHARE_KBPS, AckReason::Governor, true);
+                            if v2io::send(&mut ctrl_send, &release).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             // `select!` drops this future whenever a sibling fires; the reader keeps a partial
             // frame for the next call.
             frame = ctrl_recv.read_frame() => {
@@ -489,116 +633,6 @@ pub(super) async fn run(task: Task) {
                         && input_tx.try_send(super::input::ClientInput::PadIdentity(id)).is_err()
                     {
                         tracing::warn!("pad identity dropped: input queue full");
-                    }
-                } else if v2msg::decode::<RequestKeyframe>(ty, &body).is_ok() {
-                    // Encode loop coalesces: a wedge fires several requests
-                    // before the IDR lands.
-                    tracing::debug!("client requested keyframe (decode recovery)");
-                    link.note_keyframe_req();
-                    if keyframe_tx.send(()).is_err() {
-                        break;
-                    }
-                } else if let Ok(req) = v2msg::decode::<RfiRequest>(ty, &body) {
-                    // Encode loop falls back to a coalesced IDR when the range
-                    // is too old or the encoder has no RFI.
-                    tracing::debug!(
-                        first = req.first_frame,
-                        last = req.last_frame,
-                        "client requested reference-frame invalidation (loss recovery)"
-                    );
-                    unrecovered.rfi();
-                    link.note_rfi();
-                    if rfi_tx.send((req.first_frame, req.last_frame)).is_err() {
-                        break;
-                    }
-                } else if let Ok(rep) = v2msg::decode::<punktfunk_core::quic::DeliveryReport>(ty, &body) {
-                    // Unconditional: stall diagnosis needs `loss_ppm = 0` even
-                    // when FEC is pinned or adaptive FEC is off. Saturate into
-                    // the u32 bridge; the value only matters near zero.
-                    client_packets_received.store(
-                        rep.packets_received.min(u32::MAX as u64 - 1) as u32,
-                        Ordering::Relaxed,
-                    );
-                    if let Some(share) = delivery_share(
-                        std::time::Instant::now(),
-                        rep.packets_received,
-                        &counters,
-                        &mut window,
-                        &mut share_clocks,
-                        bitrate_automatic,
-                        wire_bytes,
-                    ) {
-                        // A share under the live rate is a retarget the encoder
-                        // takes now; one above it is a ceiling the client still
-                        // has to earn. A hand-back binds nothing: the path goes
-                        // as a ceiling, and the release follows it.
-                        let binds = counters.share.share_kbps() > 0;
-                        let live = live_bitrate.load(Ordering::Relaxed);
-                        if binds && live > share && bitrate_tx.send(share).is_err() {
-                            break;
-                        }
-                        let ack = bitrate_ack(share, AckReason::Governor, ack_reason);
-                        if v2io::send(&mut ctrl_send, &ack).await.is_err() {
-                            break;
-                        }
-                        if !binds && ack_reason {
-                            let release = bitrate_ack(NO_SHARE_KBPS, AckReason::Governor, true);
-                            if v2io::send(&mut ctrl_send, &release).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                } else if let Ok(req) = v2msg::decode::<punktfunk_core::quic::SetDelivery>(ty, &body) {
-                    let ack = apply_delivery(&delivery, req.profile);
-                    if v2io::send(&mut ctrl_send, &ack).await.is_err() {
-                        break;
-                    }
-                } else if let Ok(rep) = v2msg::decode::<LinkReport>(ty, &body) {
-                    link_kbps.store(rep.proven_kbps, Ordering::Relaxed);
-                    tracing::info!(
-                        proven_kbps = rep.proven_kbps,
-                        "client's ramp proved the link rate"
-                    );
-                } else if let Ok(rep) = v2msg::decode::<LossReport>(ty, &body) {
-                    let unrecovered_run = unrecovered.report(std::time::Instant::now());
-                    link.note_loss(rep.loss_ppm, unrecovered_run);
-                    link.sample_bands(
-                        fec_target.load(Ordering::Relaxed),
-                        live_bitrate.load(Ordering::Relaxed),
-                    );
-                    // The proposal lands on `fec_requested`; the stream loop
-                    // publishes it to `fec_target` (what the send loop reads per
-                    // frame) once the encoder accepts the matching rate.
-                    // No-op when FEC is pinned (`PUNKTFUNK_FEC_PCT`).
-                    if adaptive_fec {
-                        let prev = fec_target.load(Ordering::Relaxed);
-                        let target = punktfunk_core::abr::budget::fec_target(
-                            rep.loss_ppm,
-                            prev,
-                            unrecovered_run,
-                            punktfunk_core::abr::budget::FrameBudget {
-                                budget_kbps: live_bitrate.load(Ordering::Relaxed),
-                                audio_kbps,
-                                shard_payload: wire_bytes
-                                    .saturating_sub(
-                                        punktfunk_core::abr::budget::SHARD_WIRE_OVERHEAD,
-                                    )
-                                    .try_into()
-                                    .unwrap_or(u16::MAX),
-                                fps: active.refresh_hz,
-                            },
-                            &mut fec_horizon,
-                        );
-                        fec_requested.store(target, Ordering::Release);
-                        if prev != target {
-                            tracing::debug!(
-                                loss_ppm = rep.loss_ppm,
-                                unrecovered_run,
-                                fec_pct = target,
-                                prev_fec_pct = prev,
-                                "adaptive FEC adjusted"
-                            );
-                        }
                     }
                 } else if let Ok(req) = v2msg::decode::<SetBitrate>(ty, &body) {
                     link.note_bitrate_ask(
@@ -690,7 +724,9 @@ pub(super) async fn run(task: Task) {
                         "client acked shard-payload change"
                     );
                     let _ = shard_ack_tx.send(ack.shard_payload);
-                } else if let Ok(req) = v2msg::decode::<ProbeShaped>(ty, &body) {
+                } else if let Ok(mut req) = v2msg::decode::<ProbeShaped>(ty, &body) {
+                    // Nothing a port cannot carry: what the burst learns past it is loss.
+                    req.target_kbps = probe_bound(req.target_kbps, ports);
                     let open = ramp_open.load(Ordering::SeqCst);
                     if !probe_only
                         && !probe_spacing.admit(std::time::Instant::now(), is_ramp_length(&req), open)
@@ -1059,6 +1095,49 @@ mod tests {
         CLIP_REASON_POLICY_DISABLED, GRANT_ALL, GRANT_CLIPBOARD,
     };
 
+    /// A probe into a 1 GbE port is served at 900 Mbit/s at most; unknown ports bound nothing.
+    #[test]
+    fn a_probe_never_asks_more_than_the_ports_carry() {
+        let eth = punktfunk_core::transport::IFACE_KIND_ETHERNET;
+        let gbe = crate::send_pacing::Ports::of((eth, 2_500), (eth, 1_000));
+        assert_eq!(probe_bound(1_200_000, gbe), 900_000);
+        assert_eq!(probe_bound(50_000, gbe), 50_000);
+        assert_eq!(probe_bound(1_200_000, Default::default()), 1_200_000);
+    }
+
+    /// A client gets the wake shape or the default, never the operator's line rate.
+    #[test]
+    fn a_client_asks_for_the_wake_shape_or_nothing() {
+        let slot = std::sync::atomic::AtomicU8::new(0);
+        assert!(apply_shape(&slot, 1));
+        assert!(!apply_shape(&slot, 2));
+        assert_eq!(
+            slot.load(Ordering::Relaxed),
+            0,
+            "burst is not the client's to ask"
+        );
+    }
+
+    /// A window or ask number is acted on once: a repeat, an older reordered copy and `0` are
+    /// skipped, and the client's wrap past the top (which skips `0`) still reads as newer.
+    #[test]
+    fn each_feedback_number_is_taken_once() {
+        let mut last = 0;
+        assert!(!take_newer(0, &mut last, u16::MAX.into()), "0 asks nothing");
+        assert!(take_newer(1, &mut last, u16::MAX.into()));
+        assert!(!take_newer(1, &mut last, u16::MAX.into()), "a copy");
+        assert!(take_newer(3, &mut last, u16::MAX.into()), "one copy lost");
+        assert!(
+            !take_newer(2, &mut last, u16::MAX.into()),
+            "an older copy, reordered"
+        );
+        last = 65_535;
+        assert!(take_newer(1, &mut last, u16::MAX.into()), "past the wrap");
+        let mut w = u32::MAX;
+        assert!(take_newer(1, &mut w, u32::MAX));
+        assert!(!take_newer(u32::MAX, &mut w, u32::MAX));
+    }
+
     /// A client that takes configs hears each new epoch once; one that does not hears only
     /// the corrections.
     #[test]
@@ -1125,12 +1204,7 @@ mod tests {
         _live: crate::session_status::LiveSessionGuard,
     }
 
-    fn peer(
-        name: &str,
-        at: std::net::IpAddr,
-        base: std::time::Instant,
-        reads_delivery: bool,
-    ) -> Peer {
+    fn peer(name: &str, at: std::net::IpAddr, base: std::time::Instant) -> Peer {
         let (live, counters, rate) =
             crate::session_status::tests::fake_member(name, at, START_KBPS);
         Peer {
@@ -1145,7 +1219,6 @@ mod tests {
                     chroma_format: punktfunk_core::quic::CHROMA_IDC_420,
                     audio_reserved_kbps: 256,
                     marks_repeats: true,
-                    reads_delivery,
                     probe: false,
                     probe_target_kbps: None,
                     ramp: false,
@@ -1185,10 +1258,12 @@ mod tests {
             self.abr.on_stats(&self.stats);
             for action in self.abr.tick(at).actions {
                 match action {
-                    punktfunk_core::abr::Action::Delivery(packets) => {
+                    punktfunk_core::abr::Action::Report {
+                        packets_received, ..
+                    } => {
                         let Some(share) = delivery_share(
                             at,
-                            packets,
+                            packets_received,
                             &self.counters,
                             &mut self.window,
                             &mut self.clocks,
@@ -1239,19 +1314,17 @@ mod tests {
     /// two sessions at one address over a path that falls twice under them.
     ///
     /// Each is told a share again at every fall, because the driver closes the
-    /// host's share window every report window. A client that reports once
-    /// leaves the host one reading of the path and no way to take another, and
-    /// this is the test that fails on it. The third session is alone at its own
-    /// address and is never told anything.
+    /// host's share window every report window. The third session is alone at
+    /// its own address and is never told anything.
     #[test]
     fn a_real_clients_reports_keep_dividing_a_shared_path() {
         let _registry = crate::session_status::tests::registry_lock();
         let base = std::time::Instant::now();
         let shared: std::net::IpAddr = "203.0.113.41".parse().unwrap();
         let mut peers = [
-            peer("phone", shared, base, true),
-            peer("pc", shared, base, true),
-            peer("tv", "203.0.113.42".parse().unwrap(), base, true),
+            peer("phone", shared, base),
+            peer("pc", shared, base),
+            peer("tv", "203.0.113.42".parse().unwrap(), base),
         ];
         falls_twice(&mut peers, base);
         for p in &peers[..2] {
@@ -1272,28 +1345,6 @@ mod tests {
             "a session alone at its address was told {:?}",
             peers[2].told
         );
-    }
-
-    /// New host, old client: a client that does not stream its count leaves the
-    /// host one reading of the path, so the pair is divided at most once and in
-    /// the first window — today's behaviour, reached by never being told.
-    #[test]
-    fn a_client_that_reports_once_is_governed_at_most_once() {
-        let _registry = crate::session_status::tests::registry_lock();
-        let base = std::time::Instant::now();
-        let shared: std::net::IpAddr = "203.0.113.43".parse().unwrap();
-        let mut peers = [
-            peer("phone", shared, base, false),
-            peer("pc", shared, base, false),
-        ];
-        falls_twice(&mut peers, base);
-        for p in &peers {
-            assert!(
-                p.told.len() <= 1 && p.told.iter().all(|&(ms, _)| ms < 2_000),
-                "an old client was governed past its first window: {:?}",
-                p.told
-            );
-        }
     }
 
     /// A client whose `ClientHello` carried no `EXT_TAG_ABR` gets an ack without a reason,

@@ -1,6 +1,8 @@
 //! Client-side loss asks (`RfiRecovery`: the decoder's gaps and the pump's short tails),
-//! the recent-RFI count, and what the short frames an RFI names still lacked.
+//! the recent-RFI count, what the short frames an RFI names still lacked, and the numbering
+//! of the feedback datagram that carries asks and reports (`FeedbackOut`).
 
+use crate::quic::v2::dgram::Feedback;
 use std::time::{Duration, Instant};
 
 /// One RFI ask per window so a burst of gaps cannot storm the control stream.
@@ -24,10 +26,13 @@ pub(crate) struct RfiRecovery {
     pending: Option<(u32, u32)>,
     /// Frames already asked for at their tail, newest last.
     asked: std::collections::VecDeque<u32>,
+    /// The newest anchor the decoder took. It references only frames this client holds, so
+    /// the gap it ends asks nothing.
+    anchored: Option<u32>,
 }
 
 /// `a` is ahead of `b` in half-space wrap order.
-fn ahead_of(a: u32, b: u32) -> bool {
+pub(crate) fn ahead_of(a: u32, b: u32) -> bool {
     a != b && a.wrapping_sub(b) < u32::MAX / 2
 }
 
@@ -70,7 +75,8 @@ impl RfiRecovery {
                     // Advance past this frame so the same gap cannot re-fire. The oldest
                     // unsent loss stays `first`: the host invalidates everything since it.
                     self.next_expected = Some(frame_index.wrapping_add(1));
-                    if let Some(lost) = self.unasked(exp, frame_index.wrapping_sub(1)) {
+                    let lost = self.unasked(exp, frame_index.wrapping_sub(1));
+                    if let Some(lost) = lost.filter(|_| self.anchored != Some(frame_index)) {
                         self.widen(lost);
                     }
                     FrameOrder::Gap(ahead)
@@ -131,6 +137,11 @@ impl RfiRecovery {
         });
     }
 
+    /// The decoder took `frame_index`, an anchor: the gap it ends needs no ask.
+    pub(crate) fn anchored(&mut self, frame_index: u32) {
+        self.anchored = Some(frame_index);
+    }
+
     /// An IDR was asked for: it repairs every frame the pending range names. The RFI
     /// throttle keeps its own window; an IDR ask does not hold back the next RFI.
     pub(crate) fn keyframe_requested(&mut self) {
@@ -152,6 +163,41 @@ impl RfiRecovery {
         } else {
             RecoveryAsk::Rfi(first, last)
         }
+    }
+}
+
+/// The frames the decoder took clean, in its order: an IDR, an anchor, or the frame right
+/// after a clean one. The newest and the sixteen before it ride
+/// [`Feedback::acked`]; while its link loses packets the host references only these.
+#[derive(Default)]
+pub(crate) struct AckChain {
+    prev: Option<u32>,
+    clean: bool,
+    last: Option<u32>,
+    mask: u16,
+}
+
+impl AckChain {
+    /// Fold one whole AU as the decoder takes it; `Some` when it decodes clean.
+    pub(crate) fn decoded(&mut self, index: u32, flags: u32) -> Option<(u32, u16)> {
+        if self.prev.is_some_and(|p| !ahead_of(index, p)) {
+            return None;
+        }
+        let follows = self.prev.is_some_and(|p| p.wrapping_add(1) == index);
+        self.prev = Some(index);
+        let fresh = flags
+            & (u32::from(crate::packet::FLAG_SOF) | crate::packet::USER_FLAG_RECOVERY_ANCHOR)
+            != 0;
+        self.clean = fresh || (follows && self.clean);
+        if !self.clean {
+            return None;
+        }
+        self.mask = match self.last.map(|l| index.wrapping_sub(l)) {
+            Some(d @ 1..=16) => ((u32::from(self.mask) << d) | 1 << (d - 1)) as u16,
+            _ => 0,
+        };
+        self.last = Some(index);
+        Some((index, self.mask))
     }
 }
 
@@ -222,6 +268,189 @@ pub(crate) fn first_skipped(last: &mut Option<u32>, idx: u32) -> Option<u32> {
         return None;
     }
     (ahead > 1).then(|| prev.wrapping_add(1))
+}
+
+/// How long an unanswered ask repeats. The answer costs a round trip and an encode; past
+/// this the decoder's own backstop asks again under a new number.
+pub(crate) const ASK_GIVE_UP: Duration = Duration::from_millis(500);
+
+/// The client's feedback datagrams: a window number per report, an ask number per recovery
+/// ask. Every datagram carries the levels: the last closed window with its fields, the link
+/// rate and the shape, so a lost report reaches the host with the next ack or ask copy. An
+/// ask repeats a frame interval apart until the frame that answers it arrives. A host acts
+/// on each window and ask number once however many copies arrive.
+pub(crate) struct FeedbackOut {
+    /// The last closed window: its number (`0` before the first) and fields.
+    report: Feedback,
+    ask: u16,
+    open: Option<OpenAsk>,
+    link_kbps: u32,
+    /// The shape every datagram asks for (`Feedback::shape`).
+    shape: u8,
+    /// The newest frame handed on. An answer is a frame after the one the ask saw.
+    newest: Option<u32>,
+    interval: Duration,
+    acks: AckChain,
+}
+
+impl Default for FeedbackOut {
+    fn default() -> Self {
+        FeedbackOut {
+            report: Feedback::default(),
+            ask: 0,
+            open: None,
+            link_kbps: 0,
+            shape: 0,
+            newest: None,
+            interval: Duration::from_micros(1_000_000 / 60),
+            acks: AckChain::default(),
+        }
+    }
+}
+
+struct OpenAsk {
+    invalidate: Option<(u32, u32)>,
+    keyframe: bool,
+    nack: Option<crate::quic::v2::dgram::Nack>,
+    /// The newest frame when the ask went out.
+    after: Option<u32>,
+    next: Instant,
+    until: Instant,
+}
+
+impl FeedbackOut {
+    /// The stream's refresh: an open ask repeats once per frame.
+    pub(crate) fn set_refresh(&mut self, hz: u32) {
+        self.interval = Duration::from_micros(1_000_000 / u64::from(hz.clamp(30, 240)));
+    }
+
+    /// One report window, numbered: `report` holds only the window's fields. It is the level
+    /// every datagram carries until the next window closes.
+    pub(crate) fn window(&mut self, report: Feedback) -> Feedback {
+        self.report = Feedback {
+            window: self.report.window.wrapping_add(1).max(1),
+            ..report
+        };
+        self.stamp()
+    }
+
+    /// The link rate, a level every datagram carries. `Some` when it changed: one datagram
+    /// tells the host at once.
+    pub(crate) fn link(&mut self, kbps: u32) -> Option<Feedback> {
+        (self.link_kbps != kbps).then(|| {
+            self.link_kbps = kbps;
+            self.stamp()
+        })
+    }
+
+    /// The shape the client asks for, a level the next datagram carries.
+    pub(crate) fn shape(&mut self, shape: u8) {
+        self.shape = shape;
+    }
+
+    /// A new ask under a new number. It replaces the open one.
+    pub(crate) fn ask(
+        &mut self,
+        invalidate: Option<(u32, u32)>,
+        keyframe: bool,
+        now: Instant,
+    ) -> Feedback {
+        self.open(invalidate, keyframe, None, now)
+    }
+
+    /// Shards of one frame to send again, as a new ask. Only that frame arriving whole
+    /// answers it.
+    pub(crate) fn nack(&mut self, nack: crate::quic::v2::dgram::Nack, now: Instant) -> Feedback {
+        self.open(None, false, Some(nack), now)
+    }
+
+    fn open(
+        &mut self,
+        invalidate: Option<(u32, u32)>,
+        keyframe: bool,
+        nack: Option<crate::quic::v2::dgram::Nack>,
+        now: Instant,
+    ) -> Feedback {
+        self.ask = self.ask.wrapping_add(1).max(1);
+        self.open = Some(OpenAsk {
+            invalidate,
+            keyframe,
+            nack,
+            after: self.newest,
+            next: now + self.interval,
+            until: now + ASK_GIVE_UP,
+        });
+        self.stamp()
+    }
+
+    /// A frame was handed on. A keyframe answers any ask; a recovery anchor or point
+    /// answers an RFI. Either only when it came after the ask.
+    pub(crate) fn on_frame(&mut self, index: u32, flags: u32) {
+        if self.newest.is_none_or(|n| ahead_of(index, n)) {
+            self.newest = Some(index);
+        }
+        let Some(o) = &self.open else { return };
+        if let Some(n) = o.nack {
+            if index == n.frame {
+                self.open = None;
+            }
+            return;
+        }
+        let key = flags & u32::from(crate::packet::FLAG_SOF) != 0;
+        let anchor = flags
+            & (crate::packet::USER_FLAG_RECOVERY_ANCHOR | crate::packet::USER_FLAG_RECOVERY_POINT)
+            != 0;
+        let after = o.after.is_none_or(|a| ahead_of(index, a));
+        if after && (key || (anchor && !o.keyframe)) {
+            self.open = None;
+        }
+    }
+
+    /// The decoder took a whole AU: its acknowledgement when it decodes clean
+    /// ([`AckChain`]). Carries the levels, the last window among them, never an ask.
+    pub(crate) fn decoded(&mut self, index: u32, flags: u32) -> Option<Feedback> {
+        let acked = self.acks.decoded(index, flags)?;
+        Some(Feedback {
+            acked: Some(acked),
+            ..self.levels()
+        })
+    }
+
+    /// The open ask's next copy, when one is due. An ask nothing answered closes at
+    /// [`ASK_GIVE_UP`].
+    pub(crate) fn resend(&mut self, now: Instant) -> Option<Feedback> {
+        let o = self.open.as_mut()?;
+        if now >= o.until {
+            self.open = None;
+            return None;
+        }
+        if now < o.next {
+            return None;
+        }
+        o.next = now + self.interval;
+        Some(self.stamp())
+    }
+
+    /// The last closed window, the link rate and the shape.
+    fn levels(&self) -> Feedback {
+        Feedback {
+            link_kbps: self.link_kbps,
+            shape: self.shape,
+            ..self.report
+        }
+    }
+
+    /// The levels and the open ask.
+    fn stamp(&self) -> Feedback {
+        let mut fb = self.levels();
+        if let Some(o) = &self.open {
+            fb.ask = self.ask;
+            fb.invalidate = o.invalidate;
+            fb.keyframe = o.keyframe;
+            fb.nack = o.nack;
+        }
+        fb
+    }
 }
 
 #[cfg(test)]
@@ -394,6 +623,21 @@ mod rfi_recovery_tests {
         assert_eq!(r.next_expected, Some(2));
     }
 
+    /// A gap an anchor ends asks nothing: the anchor references only frames this client
+    /// holds. The same gap ended by a plain frame asks as before.
+    #[test]
+    fn a_gap_an_anchor_ends_asks_nothing() {
+        let mut r = RfiRecovery::default();
+        let t = base();
+        r.observe(10, t);
+        r.anchored(12);
+        assert_eq!(r.observe(12, t), (Gap(1), RecoveryAsk::None));
+        assert_eq!(
+            r.observe(15, t + Duration::from_millis(200)),
+            (Gap(2), RecoveryAsk::Rfi(13, 14))
+        );
+    }
+
     #[test]
     fn huge_gap_resyncs_via_keyframe_not_rfi() {
         let mut r = RfiRecovery::default();
@@ -515,5 +759,184 @@ mod rfi_recovery_tests {
         r.note(at(61));
         assert_eq!(r.count(at(89)), 2);
         assert_eq!(r.count(at(121)), 0);
+    }
+}
+
+#[cfg(test)]
+mod feedback_out_tests {
+    use super::*;
+    use crate::packet::{FLAG_PIC, FLAG_SOF, USER_FLAG_RECOVERY_ANCHOR};
+
+    fn ms(t0: Instant, n: u64) -> Instant {
+        t0 + Duration::from_millis(n)
+    }
+
+    /// An RFI repeats once a frame interval under one number while frames go by unanswered,
+    /// and falls silent when the anchor after it arrives. A window carries the open ask and
+    /// the link rate, and no ask once it closed.
+    #[test]
+    fn an_ask_repeats_each_frame_until_its_anchor_arrives() {
+        let t0 = Instant::now();
+        let mut out = FeedbackOut::default();
+        out.set_refresh(60);
+        out.link(940_000).expect("a new level goes out");
+        assert_eq!(out.link(940_000), None, "an unchanged one does not");
+        out.on_frame(10, FLAG_PIC.into());
+        let first = out.ask(Some((7, 9)), false, t0);
+        assert_eq!(
+            (first.ask, first.invalidate, first.window),
+            (1, Some((7, 9)), 0)
+        );
+        assert_eq!(out.resend(ms(t0, 10)), None, "not inside the interval");
+        let mut copies = 0;
+        for f in 11..15u32 {
+            out.on_frame(f, FLAG_PIC.into());
+            let c = out
+                .resend(ms(t0, 17 * u64::from(f - 10)))
+                .expect("a copy per frame");
+            assert_eq!(
+                (c.ask, c.invalidate, c.link_kbps),
+                (1, Some((7, 9)), 940_000)
+            );
+            copies += 1;
+        }
+        assert_eq!(copies, 4);
+        out.on_frame(15, FLAG_PIC as u32 | USER_FLAG_RECOVERY_ANCHOR);
+        assert_eq!(
+            out.resend(ms(t0, 120)),
+            None,
+            "silent once the anchor arrived"
+        );
+        let w = out.window(Feedback {
+            loss_ppm: 300,
+            packets_received: 9,
+            ..Default::default()
+        });
+        assert_eq!(
+            (w.window, w.ask, w.loss_ppm, w.link_kbps),
+            (1, 0, 300, 940_000)
+        );
+    }
+
+    /// A NACK repeats like any ask until its own frame arrives; frames after it answer
+    /// nothing. The RFI after it replaces it whole.
+    /// The decoder's clean frames are acknowledged with the sixteen before them; a gap
+    /// stops them until an anchor or an IDR, and a straggler never counts.
+    #[test]
+    fn a_clean_chain_is_acknowledged_and_a_gap_breaks_it_until_an_anchor() {
+        use crate::packet::FLAG_SOF;
+        let mut out = FeedbackOut::default();
+        let mut acked = |i, f| out.decoded(i, f).and_then(|fb| fb.acked);
+        assert_eq!(acked(5, 0), None, "nothing clean before an IDR");
+        assert_eq!(acked(6, FLAG_SOF as u32), Some((6, 0)));
+        assert_eq!(acked(7, 0), Some((7, 0b1)));
+        assert_eq!(acked(8, 0), Some((8, 0b11)));
+        assert_eq!(acked(10, 0), None, "9 never came");
+        assert_eq!(acked(9, 0), None, "a straggler");
+        assert_eq!(acked(11, 0), None, "still on the broken chain");
+        assert_eq!(acked(13, USER_FLAG_RECOVERY_ANCHOR), Some((13, 0b111_0000)));
+        assert_eq!(acked(14, 0), Some((14, 0b1110_0001)));
+        assert_eq!(acked(40, USER_FLAG_RECOVERY_ANCHOR), Some((40, 0)));
+    }
+
+    #[test]
+    fn a_nack_repeats_until_its_frame_arrives() {
+        let t0 = Instant::now();
+        let mut out = FeedbackOut::default();
+        let n = crate::quic::v2::dgram::Nack::new(40, &[5, 6]).unwrap();
+        let first = out.nack(n, t0);
+        assert_eq!(
+            (first.ask, first.nack, first.invalidate),
+            (1, Some(n), None)
+        );
+        out.on_frame(41, u32::from(FLAG_SOF));
+        let copy = out
+            .resend(ms(t0, 17))
+            .expect("a later keyframe answers nothing");
+        assert_eq!(copy.nack, Some(n));
+        out.on_frame(40, FLAG_PIC.into());
+        assert_eq!(out.resend(ms(t0, 34)), None, "its frame arrived");
+        let rfi = out.ask(Some((40, 40)), false, ms(t0, 40));
+        assert_eq!(
+            (rfi.ask, rfi.nack, rfi.invalidate),
+            (2, None, Some((40, 40)))
+        );
+    }
+
+    /// Every other datagram lost: the copy one interval later still carries the ask. A
+    /// keyframe ask ignores an anchor and closes on the keyframe; one nothing answers stops
+    /// at the bound. A newer ask takes over under the next number.
+    #[test]
+    fn a_lost_copy_is_covered_within_an_interval_and_the_cadence_stops() {
+        let t0 = Instant::now();
+        let mut out = FeedbackOut::default();
+        out.set_refresh(120);
+        let _lost = out.ask(None, true, t0);
+        let next = out
+            .resend(ms(t0, 9))
+            .expect("a second copy one interval on");
+        assert!(next.keyframe && next.ask == 1);
+        out.on_frame(1, USER_FLAG_RECOVERY_ANCHOR);
+        assert!(
+            out.resend(ms(t0, 18)).is_some(),
+            "an anchor does not answer a keyframe ask"
+        );
+        out.on_frame(2, u32::from(FLAG_SOF));
+        assert_eq!(out.resend(ms(t0, 27)), None);
+
+        let rfi = out.ask(Some((40, 40)), false, ms(t0, 30));
+        assert_eq!(
+            (rfi.ask, rfi.keyframe, rfi.invalidate),
+            (2, false, Some((40, 40)))
+        );
+        out.on_frame(1, u32::from(FLAG_SOF));
+        assert!(
+            out.resend(ms(t0, 40)).is_some(),
+            "a frame from before the ask answers nothing"
+        );
+        assert_eq!(
+            out.resend(ms(t0, 30) + ASK_GIVE_UP),
+            None,
+            "the cadence stops"
+        );
+        assert_eq!(out.window(Feedback::default()).ask, 0);
+    }
+
+    /// The last closed window rides every datagram until the next one closes: acks, ask
+    /// copies and link changes repeat it, so a lost report costs one datagram.
+    #[test]
+    fn every_datagram_carries_the_last_window() {
+        let t0 = Instant::now();
+        let mut out = FeedbackOut::default();
+        let fields = |f: Feedback| {
+            let positions = (f.head, f.mid, f.tail, f.sock_drops);
+            (f.window, f.loss_ppm, f.packets_received, positions)
+        };
+        let first = out.decoded(1, u32::from(FLAG_SOF)).expect("an IDR");
+        assert_eq!(fields(first), fields(Feedback::default()), "no window yet");
+        for n in 1..=2u32 {
+            let report = Feedback {
+                loss_ppm: 300 * n,
+                packets_received: 9 * u64::from(n),
+                head: n,
+                mid: n + 1,
+                tail: n + 2,
+                sock_drops: n + 3,
+                ..Default::default()
+            };
+            let level = fields(Feedback {
+                window: n,
+                ..report
+            });
+            assert_eq!(fields(out.window(report)), level);
+            let ack = out.decoded(1 + n, 0).expect("the next clean frame");
+            assert_eq!(fields(ack), level, "an ack");
+            let t = ms(t0, 100 * u64::from(n));
+            out.ask(Some((5, 5)), false, t);
+            let copy = out.resend(ms(t, 20)).expect("a copy");
+            assert_eq!((fields(copy), copy.ask), (level, n as u16), "an ask copy");
+            let link = out.link(1_000 * n).expect("a new rate");
+            assert_eq!(fields(link), level, "a link change");
+        }
     }
 }

@@ -182,9 +182,6 @@ impl Shell {
                                 hints.push(Hint::new(HintKey::Confirm, "Set as the default"));
                             }
                         }
-                        if findings.iter().any(|f| f.profile.is_some()) {
-                            hints.push(Hint::new(HintKey::Secondary, "Use paced delivery"));
-                        }
                         hints.push(close);
                         (1.0, false, measured, lines.join("\n"), hints)
                     }
@@ -793,8 +790,7 @@ fn speed_headline(
     }
 }
 
-/// One finding in words ([`pf_client_core::findings::text`]). The offered profile is the
-/// Secondary hint, not a sentence here.
+/// One finding in words ([`pf_client_core::findings::text`]).
 pub(crate) fn finding_text(f: &crate::model::FindingRow) -> String {
     pf_client_core::findings::text(f.id, f.numbers)
 }

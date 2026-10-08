@@ -48,6 +48,12 @@ pub(super) struct LinkCfg {
     pub hiccups: Vec<(u64, u64)>,
     /// Foreign CBR traffic into the same queue.
     pub cross_kbps: u32,
+    /// The first `head_shards` of every `head_every`-th frame go missing: a receiver whose
+    /// adapter wakes late. `0` = never.
+    pub head_every: u32,
+    pub head_shards: u32,
+    /// The last `tail_shards` of every frame go missing: a queue that tail-drops parity.
+    pub tail_shards: u32,
 }
 
 impl Default for LinkCfg {
@@ -66,17 +72,22 @@ impl Default for LinkCfg {
             stall_ms: 0,
             hiccups: Vec::new(),
             cross_kbps: 0,
+            head_every: 0,
+            head_shards: 0,
+            tail_shards: 0,
         }
     }
 }
 
-/// Shards one frame loses: `random` spread over the whole frame, plus one
-/// contiguous run of `burst_len` from `burst_at`.
+/// Shards one frame loses: `random` spread over the whole frame, one contiguous run of
+/// `burst_len` from `burst_at`, and the first `head` and last `tail`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct LossDraw {
     pub random: u32,
     pub burst_at: u32,
     pub burst_len: u32,
+    pub head: u32,
+    pub tail: u32,
 }
 
 struct Chunk {
@@ -100,6 +111,8 @@ pub(super) struct Link {
     ge_bad: bool,
     /// The last [`Self::nominal_kbps`], so a read of the round trip draws nothing.
     nominal_now_kbps: u32,
+    /// Frames drawn so far, for the head process.
+    frames: u64,
 }
 
 impl Link {
@@ -115,6 +128,7 @@ impl Link {
             wander_until_ms: 0,
             ge_bad: false,
             nominal_now_kbps: 1,
+            frames: 0,
         }
     }
 
@@ -258,10 +272,16 @@ impl Link {
         } else {
             (0, 0)
         };
+        // Deterministic and drawn from no generator, so the other processes keep their
+        // sequence.
+        self.frames += 1;
+        let head_due = self.cfg.head_every > 0 && self.frames % u64::from(self.cfg.head_every) == 0;
         LossDraw {
             random: random.min(shards),
             burst_at,
             burst_len,
+            head: if head_due { self.cfg.head_shards } else { 0 },
+            tail: self.cfg.tail_shards,
         }
     }
 }

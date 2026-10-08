@@ -98,6 +98,9 @@ struct Run {
     /// window close never saw (the ramp's opening rate, the pin's verdict).
     pub asks: Vec<Vec<(u64, u32)>>,
     pub repair: RepairTally,
+    /// Every link rate and shape each session told its host, when.
+    pub links: Vec<Vec<(u64, u32)>>,
+    pub shapes: Vec<Vec<(u64, u8)>>,
 }
 
 /// Session 0's loss repair over a run: recovery frames the host sent in
@@ -407,8 +410,11 @@ fn run(sc: &Scenario) -> Run {
     let mut windows = Vec::new();
     let mut ramps = Vec::new();
     let mut asks = Vec::new();
+    let (mut links, mut shapes) = (Vec::new(), Vec::new());
     for s in sessions {
         let c = s.client;
+        links.push(c.links);
+        shapes.push(c.shapes);
         windows.push(c.windows);
         ramps.push(RampTrace {
             asks: c.ramp_asks,
@@ -422,6 +428,8 @@ fn run(sc: &Scenario) -> Run {
         ramps,
         asks,
         repair,
+        links,
+        shapes,
     }
 }
 

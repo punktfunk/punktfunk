@@ -17,6 +17,9 @@ open line's `start_kbps` is the rate the host acked it, and that is its series.
 A probe killed before it wrote its file leaves only its log, which carries
 `wire ingress` lines; a run with neither falls back to the host's per-minute
 `link health` lines.
+
+`lost` counts frames the client saw a shard of; a frame lost as one GSO train
+shows only in `unrec`, which the host's whole-minute `link health` lines carry.
 """
 import json, re, sys, os, statistics, datetime
 
@@ -143,7 +146,29 @@ def read_client(tag, n):
     return None, [], 'absent'
 
 
-def per_client(ws, kind, divided):
+# The host's field, and the column it lands in.
+HOST_DEAD = (('unrecovered', 'unrec_10min'), ('rfi', 'rfi_10min'), ('idr', 'idr_10min'),
+             ('keyframe_req', 'kf_req_10min'))
+
+
+def host_dead(tag):
+    """The host's dead-frame counters per session, in session-id order, which is open order."""
+    by_sid = {}
+    for _, ln in log_lines(f'{OUT}/{tag}-host.log'):
+        if 'link health' not in ln:
+            continue
+        sid = re.search(r'session=(\d+)', ln)
+        secs = re.search(r'secs=(\d+)', ln)
+        if not (sid and secs) or int(secs.group(1)) != 60:
+            continue
+        row = by_sid.setdefault(int(sid.group(1)), {k: 0 for k, _ in HOST_DEAD})
+        for k, _ in HOST_DEAD:
+            m = re.search(rf'\b{k}=(\d+)', ln)
+            row[k] += int(m.group(1)) if m else 0
+    return [by_sid[k] for k in sorted(by_sid)]
+
+
+def per_client(ws, kind, divided, host):
     if not ws:
         return None
     rates = [w['target_kbps'] for w in ws]
@@ -168,6 +193,7 @@ def per_client(ws, kind, divided):
         'lost_10min': sum(w['lost_frames'] for w in ws) * 600 / span_s,
         'delay_p95_us': (sorted(delays)[int(len(delays) * 0.95)] if delays else None),
         'span_s': span_s,
+        **{col: (host[k] * 600 / span_s if host else None) for k, col in HOST_DEAD},
     }
 
 
@@ -228,17 +254,23 @@ def main():
           f'handed it back {count_lines(host, HOST_ALONE)}x '
           f'(0 and 0 = the governor never ran)')
 
-    s1 = per_client(w1, k1, count_lines(probe_files(tag, 1)[1], CLIENT_SHARE))
-    s2 = per_client(w2, k2, count_lines(probe_files(tag, 2)[1], CLIENT_SHARE))
+    dead = host_dead(tag)
+    opened = sorted((o, n) for n, o in ((1, o1), (2, o2)) if o is not None)
+    hd = {n: (dead[i] if i < len(dead) else None) for i, (_, n) in enumerate(opened)}
+    s1 = per_client(w1, k1, count_lines(probe_files(tag, 1)[1], CLIENT_SHARE), hd.get(1))
+    s2 = per_client(w2, k2, count_lines(probe_files(tag, 2)[1], CLIENT_SHARE), hd.get(2))
     print(f'   {"client":<8}{"kind":<18}{"win":>5}{"rate":>8}{"got":>8}{"under5%":>9}'
-          f'{"cuts":>6}{"casc":>6}{"shares":>8}{"lost/10m":>10}{"delay_p95":>11}')
+          f'{"cuts":>6}{"casc":>6}{"shares":>8}{"lost/10m":>10}{"delay_p95":>11}'
+          + ''.join(f'{col:>{len(col) + 2}}' for _, col in HOST_DEAD))
     for name, s in (('p1', s1), ('p2', s2)):
         if not s:
             print(f'   {name:<8}absent'); continue
         d = f'{s["delay_p95_us"]/1000:.1f} ms' if s['delay_p95_us'] else '-'
         print(f'   {name:<8}{s["kind"]:<18}{s["n"]:>5}{s["mean"]:>8.0f}{s["got"]:>8.0f}'
               f'{s["under5_pct"]:>9.1f}{s["cuts"]:>6}{s["cascades"]:>6}{s["divided"]:>8}'
-              f'{s["lost_10min"]:>10.1f}{d:>11}')
+              f'{s["lost_10min"]:>10.1f}{d:>11}'
+              + ''.join(f'{(f"{s[c]:.1f}" if s[c] is not None else "-"):>{len(c) + 2}}'
+                        for _, c in HOST_DEAD))
 
     g1 = grid(w1, t0, span_s)
     g2 = grid(w2, t0, span_s)

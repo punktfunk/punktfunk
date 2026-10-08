@@ -134,43 +134,45 @@ pub const EXT_ABR_ACK_REASON: u8 = 0x01;
 /// nothing about the stream. Absent when the client streams with its plain settings.
 pub const EXT_TAG_PRESET: u16 = 4;
 
-/// Entry `5` in `ClientHello`: `[profile, flags]` — the delivery profile this client
-/// asks the host to stream under (`0` burst, `1` capped, `2` smooth) and what it wants
-/// besides ([`EXT_DELIVERY_FACTS`], [`EXT_DELIVERY_PROBE_ONLY`]). A host that reads the tag
-/// answers it with [`DeliveryChanged`](super::control::DeliveryChanged), and that answer is
-/// the client's licence to send anything else about delivery; a host that skips it answers
-/// nothing and streams as it always has. Absent = asks nothing.
-pub const EXT_TAG_DELIVERY: u16 = 5;
+/// Entry `5` in `ClientHello`: `kind ‖ mbps u32`, what this client's OS says about its end
+/// of the path ([`LinkFacts`]). Every dial sends it; a short value reads the missing fields
+/// as zero.
+pub const EXT_TAG_LINK_FACTS: u16 = 5;
 
-/// [`EXT_TAG_DELIVERY`] flag bit 0: send [`HostFacts`](super::control::HostFacts) once.
-pub const EXT_DELIVERY_FACTS: u8 = 0x01;
-
-/// [`EXT_TAG_DELIVERY`] flag bit 1: a diagnostic session — serve probes from the punched
+/// Entry `6` in `ClientHello`, on a diagnostic session only: serve probes from the punched
 /// data plane and never build a pipeline.
+pub const EXT_TAG_PROBE_ONLY: u16 = 6;
+
+/// The connect-options bit that dials a diagnostic session ([`EXT_TAG_PROBE_ONLY`]): the FFI
+/// `delivery_flags` and the JNI dial carry it.
 pub const EXT_DELIVERY_PROBE_ONLY: u8 = 0x02;
 
-/// What a client asks about delivery ([`EXT_TAG_DELIVERY`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DeliveryAsk {
-    /// `0` burst, `1` capped, `2` smooth; the host maps anything else to burst.
-    pub profile: u8,
-    pub flags: u8,
-}
+pub use crate::transport::LinkFacts;
 
-impl DeliveryAsk {
-    pub fn encode(&self) -> [u8; 2] {
-        [self.profile, self.flags]
+impl LinkFacts {
+    /// [`EXT_TAG_LINK_FACTS`]'s value.
+    pub fn encode(&self) -> [u8; 5] {
+        let m = self.mbps.to_le_bytes();
+        [self.kind, m[0], m[1], m[2], m[3]]
     }
 
-    /// The ask among `entries`; `None` when the tag is absent or empty. A one-byte value asks
-    /// for a profile and nothing else.
-    pub fn from_ext(entries: &[(u16, &[u8])]) -> Option<DeliveryAsk> {
-        let (_, v) = entries.iter().find(|(tag, _)| *tag == EXT_TAG_DELIVERY)?;
-        Some(DeliveryAsk {
-            profile: *v.first()?,
-            flags: v.get(1).copied().unwrap_or(0),
+    /// The client's facts among `entries`; `None` when the tag is absent or empty.
+    pub fn from_ext(entries: &[(u16, &[u8])]) -> Option<LinkFacts> {
+        let (_, v) = entries.iter().find(|(tag, _)| *tag == EXT_TAG_LINK_FACTS)?;
+        let mut mbps = [0u8; 4];
+        for (d, s) in mbps.iter_mut().zip(v.iter().skip(1)) {
+            *d = *s;
+        }
+        Some(LinkFacts {
+            kind: *v.first()?,
+            mbps: u32::from_le_bytes(mbps),
         })
     }
+}
+
+/// Whether `entries` dial a diagnostic session ([`EXT_TAG_PROBE_ONLY`]).
+pub fn ext_probe_only(entries: &[(u16, &[u8])]) -> bool {
+    entries.iter().any(|(tag, _)| *tag == EXT_TAG_PROBE_ONLY)
 }
 
 /// Longest [`SessionPreset::id`], printable ASCII.
@@ -227,16 +229,18 @@ impl SessionPreset {
     }
 }
 
-/// The entries a client adds to its `ClientHello`: label, ABR features, the preset, then the
-/// delivery ask. An empty label, preset or ask is left out rather than sent empty.
+/// The entries a client adds to its `ClientHello`: label, ABR features, the preset, its link
+/// facts and the probes-only mark. An empty label or preset is left out rather than sent
+/// empty.
 #[cfg(any(feature = "quic", test))]
 pub(crate) fn start_ext<'a>(
     label: &'a str,
     abr: &'a [u8],
     preset: &'a [u8],
-    delivery: &'a [u8],
+    link: &'a [u8],
+    probe_only: bool,
 ) -> Vec<(u16, &'a [u8])> {
-    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(4);
+    let mut out: Vec<(u16, &[u8])> = Vec::with_capacity(5);
     if !label.is_empty() {
         out.push((EXT_TAG_CLIENT, label.as_bytes()));
     }
@@ -244,8 +248,9 @@ pub(crate) fn start_ext<'a>(
     if !preset.is_empty() {
         out.push((EXT_TAG_PRESET, preset));
     }
-    if !delivery.is_empty() {
-        out.push((EXT_TAG_DELIVERY, delivery));
+    out.push((EXT_TAG_LINK_FACTS, link));
+    if probe_only {
+        out.push((EXT_TAG_PROBE_ONLY, &[1]));
     }
     out
 }
@@ -428,15 +433,31 @@ mod tests {
         assert_eq!(AUDIO_CODEC_PCM, 2);
     }
 
-    /// The label comes first, the ABR byte always rides, and nothing empty is sent.
+    /// The label comes first, the ABR byte and the link facts always ride, the probes-only
+    /// mark only on a diagnostic dial, and nothing empty is sent.
     #[test]
     fn start_entries_skip_what_is_empty() {
         let abr = [EXT_ABR_ACK_REASON];
-        let ext = start_ext("android 0.38.0", &abr, &[], &[]);
-        assert_eq!(ext.len(), 2);
+        let facts = LinkFacts {
+            kind: 1,
+            mbps: 1_000,
+        }
+        .encode();
+        let ext = start_ext("android 0.38.0", &abr, &[], &facts, false);
+        assert_eq!(ext.len(), 3);
         assert_eq!(ext[0].0, EXT_TAG_CLIENT);
         assert_eq!(ext_abr_features(&ext), EXT_ABR_ACK_REASON);
-        assert_eq!(start_ext("", &abr, &[], &[]), vec![(EXT_TAG_ABR, &abr[..])]);
+        assert_eq!(
+            LinkFacts::from_ext(&ext),
+            Some(LinkFacts {
+                kind: 1,
+                mbps: 1_000
+            })
+        );
+        assert!(!ext_probe_only(&ext));
+        let probe = start_ext("", &abr, &[], &facts, true);
+        assert_eq!(probe.len(), 3);
+        assert!(ext_probe_only(&probe));
     }
 
     #[test]
@@ -444,10 +465,10 @@ mod tests {
         let preset = SessionPreset::new("3f9a0c11e2b4", "Docked").unwrap();
         let bytes = preset.encode();
         let abr = [EXT_ABR_ACK_REASON];
-        let got = start_ext("deck", &abr, &bytes, &[]);
+        let got = start_ext("deck", &abr, &bytes, &[], false);
         assert_eq!(SessionPreset::from_ext(&got), Some(preset));
         assert_eq!(
-            SessionPreset::from_ext(&start_ext("", &abr, &[], &[])),
+            SessionPreset::from_ext(&start_ext("", &abr, &[], &[], false)),
             None
         );
         // A hostile value is bounded, never a failed handshake.

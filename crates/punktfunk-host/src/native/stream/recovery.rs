@@ -670,6 +670,203 @@ pub(super) enum KeyframeVerdict {
     },
 }
 
+/// How long the encoder stays on confirmed references past the last window that showed loss.
+const LOSS_MODE_HOLD: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `PUNKTFUNK_ACKED_REFS`: `on` holds confirmed references all session, `off` never takes
+/// them, unset follows the link.
+fn acked_refs_forced() -> Option<bool> {
+    crate::send_pacing::env_once!(
+        Option<bool>,
+        match std::env::var("PUNKTFUNK_ACKED_REFS").as_deref() {
+            Ok("on") => Some(true),
+            Ok("off") => Some(false),
+            _ => None,
+        }
+    )
+}
+
+/// While the link loses packets the encoder references only frames the client confirmed
+/// ([`crate::encode::Encoder::set_reference_floor`]), so a lost frame is skipped, not
+/// repaired. On with a lossy report window, off [`LOSS_MODE_HOLD`] past the last. Each
+/// switch is logged, with the mean reference distance on the way off.
+#[derive(Default)]
+pub(super) struct LossMode {
+    seen: Option<std::time::Instant>,
+    on: bool,
+    frames: u64,
+    distance: u64,
+}
+
+impl LossMode {
+    pub(super) fn is_on(&self) -> bool {
+        self.on
+    }
+
+    /// The confirmed frames frame `wire` may reference, given whether a lossy window arrived
+    /// since the last frame and what the client confirmed (`last << 16 | mask`).
+    pub(super) fn floor(
+        &mut self,
+        lossy: bool,
+        acked: u64,
+        wire: u32,
+        now: std::time::Instant,
+    ) -> Option<crate::encode::Acked> {
+        if lossy {
+            self.seen = Some(now);
+        }
+        let on = acked_refs_forced().unwrap_or_else(|| {
+            self.seen
+                .is_some_and(|t| now.duration_since(t) < LOSS_MODE_HOLD)
+        });
+        if on != self.on {
+            self.on = on;
+            if on {
+                tracing::info!("acked references engaged: the link shows loss");
+            } else {
+                tracing::info!(
+                    frames = self.frames,
+                    mean_distance = self.distance.checked_div(self.frames),
+                    "acked references released"
+                );
+                (self.frames, self.distance) = (0, 0);
+            }
+        }
+        if !on || acked == crate::native::wiring::NONE_ACKED {
+            return None;
+        }
+        let last = (acked >> 16) as u32;
+        self.frames += 1;
+        self.distance += u64::from(wire.wrapping_sub(last));
+        Some(crate::encode::Acked {
+            last: i64::from(last),
+            mask: acked as u16,
+        })
+    }
+}
+
+/// Frames whose plaintext a NACK can still reach.
+const RESEND_FRAMES: usize = 3;
+/// Bytes the ring holds at most; the oldest frames go first, never the one in progress.
+const RESEND_BYTES: usize = 4 << 20;
+
+/// The plaintext of the last few frames' packets, as the session staged them
+/// ([`punktfunk_core::session::Session::tap_plaintext`]), for a client that names the shards
+/// one of them lacks. Buffers are reused frame to frame.
+#[derive(Default)]
+pub(super) struct ResendRing {
+    frames: std::collections::VecDeque<RingFrame>,
+    bytes: usize,
+}
+
+#[derive(Default)]
+struct RingFrame {
+    index: u32,
+    sent: Option<std::time::Instant>,
+    wires: Vec<Vec<u8>>,
+    used: usize,
+}
+
+impl RingFrame {
+    fn bytes(&self) -> usize {
+        self.wires[..self.used].iter().map(Vec::len).sum()
+    }
+}
+
+/// A plaintext packet's place in its block, from its `punktfunk/2` header.
+#[derive(Clone, Copy)]
+struct Place {
+    base: u32,
+    shard: u16,
+    k: u16,
+    m: u16,
+}
+
+/// Where a plaintext packet of video frame `index` sits; `None` for any other packet.
+fn place(p: &[u8], index: u32) -> Option<Place> {
+    let u16_at = |o: usize| Some(u16::from_le_bytes(p.get(o..o + 2)?.try_into().ok()?));
+    let u32_at = |o: usize| Some(u32::from_le_bytes(p.get(o..o + 4)?.try_into().ok()?));
+    let video = *p.first()? == punktfunk_core::packet::V2_STREAM_VIDEO;
+    (video && u32_at(8)? == index).then_some(())?;
+    Some(Place {
+        base: u32_at(18)?,
+        shard: u16_at(22)?,
+        k: u16_at(24)?,
+        m: u16_at(26)?,
+    })
+}
+
+impl ResendRing {
+    /// Frame `index` starts; its packets follow through [`Self::note`].
+    pub(super) fn begin(&mut self, index: u32) {
+        let mut f = if self.frames.len() >= RESEND_FRAMES {
+            self.frames.pop_front().unwrap_or_default()
+        } else {
+            RingFrame::default()
+        };
+        self.bytes -= f.bytes();
+        (f.index, f.sent, f.used) = (index, Some(std::time::Instant::now()), 0);
+        self.frames.push_back(f);
+    }
+
+    /// A copy of one packet the current frame staged.
+    pub(super) fn note(&mut self, plaintext: &[u8]) {
+        while self.bytes > RESEND_BYTES && self.frames.len() > 1 {
+            let old = self.frames.pop_front().expect("more than one");
+            self.bytes -= old.bytes();
+        }
+        let Some(f) = self.frames.back_mut() else {
+            return;
+        };
+        if f.used == f.wires.len() {
+            f.wires.push(Vec::new());
+        }
+        let slot = &mut f.wires[f.used];
+        slot.clear();
+        slot.extend_from_slice(plaintext);
+        f.used += 1;
+        self.bytes += plaintext.len();
+    }
+
+    /// Frame `index`'s packets the client named, and how long ago the frame went out;
+    /// `None` when the ring no longer holds it. A name is a data shard's index in the AU,
+    /// or a parity shard's numbered after all the data in block order, as the client's
+    /// reassembler counts them.
+    pub(super) fn pick(&self, index: u32, shards: &[u16]) -> Option<(Vec<&[u8]>, u64)> {
+        let f = self.frames.iter().find(|f| f.index == index)?;
+        let video: Vec<(&[u8], Place)> = f.wires[..f.used]
+            .iter()
+            .filter_map(|w| Some((w.as_slice(), place(w, index)?)))
+            .collect();
+        let total_data = video.iter().map(|(_, p)| p.base + u32::from(p.k)).max()?;
+        let mut blocks: Vec<(u32, u16)> = video.iter().map(|(_, p)| (p.base, p.m)).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        let parity_at = |base: u32| {
+            total_data
+                + blocks
+                    .iter()
+                    .take_while(|(b, _)| *b < base)
+                    .map(|(_, m)| u32::from(*m))
+                    .sum::<u32>()
+        };
+        let name = |p: &Place| {
+            if p.shard < p.k {
+                p.base + u32::from(p.shard)
+            } else {
+                parity_at(p.base) + u32::from(p.shard - p.k)
+            }
+        };
+        let picked = video
+            .iter()
+            .filter(|(_, p)| shards.contains(&(name(p) as u16)))
+            .map(|(w, _)| *w)
+            .collect();
+        let age = f.sent.map_or(0, |t| t.elapsed().as_millis() as u64);
+        Some((picked, age))
+    }
+}
+
 /// Episode state behind [`StreamState::force_keyframe`]: which requests coalesce, and how far
 /// the IDR cooldown has backed off. A request past the last IDR's [`RECOVERY_FLIGHT`] means
 /// that IDR landed and did not heal; each such IDR doubles the cooldown ([`idr_cooldown`]);
@@ -1085,5 +1282,101 @@ mod tests {
         // A real periodic disturbance still reaches that branch.
         assert!(!matches_client_recovery_cooldown(flush * 3));
         assert!(!matches_client_recovery_cooldown(std::time::Duration::ZERO));
+    }
+}
+
+#[cfg(test)]
+mod loss_mode_tests {
+    use super::*;
+
+    /// A lossy window turns confirmed references on, with the newest confirmed frame as the
+    /// floor once there is one, and they hold ten seconds past the last such window.
+    #[test]
+    fn loss_mode_holds_ten_seconds_past_the_last_lossy_window() {
+        let t0 = std::time::Instant::now();
+        let s = std::time::Duration::from_secs;
+        let acked = 40u64 << 16 | 0b11;
+        let mut m = LossMode::default();
+        assert_eq!(
+            m.floor(false, acked, 42, t0),
+            None,
+            "a clean link keeps the chain"
+        );
+        let none = crate::native::wiring::NONE_ACKED;
+        assert_eq!(m.floor(true, none, 42, t0), None, "nothing confirmed yet");
+        assert!(m.is_on());
+        let want = crate::encode::Acked {
+            last: 40,
+            mask: 0b11,
+        };
+        assert_eq!(m.floor(false, acked, 43, t0 + s(9)), Some(want));
+        assert_eq!(m.floor(false, acked, 44, t0 + s(10)), None);
+        assert!(!m.is_on());
+    }
+}
+
+#[cfg(test)]
+mod resend_ring_tests {
+    use super::ResendRing;
+
+    /// A plaintext packet whose header says where it sits; the rest is filler.
+    fn packet(frame: u32, base: u32, shard: u16, k: u16, m: u16, len: usize) -> Vec<u8> {
+        let mut p = vec![0u8; len.max(30)];
+        p[8..12].copy_from_slice(&frame.to_le_bytes());
+        p[18..22].copy_from_slice(&base.to_le_bytes());
+        p[22..24].copy_from_slice(&shard.to_le_bytes());
+        p[24..26].copy_from_slice(&k.to_le_bytes());
+        p[26..28].copy_from_slice(&m.to_le_bytes());
+        p
+    }
+
+    fn frame(r: &mut ResendRing, index: u32, packets: usize, len: usize) {
+        r.begin(index);
+        for s in 0..packets as u16 {
+            r.note(&packet(index, 0, s, packets as u16, 0, len));
+        }
+    }
+
+    /// The ring keeps the last three frames and gives up the oldest first when the bytes
+    /// run over, never the frame in progress.
+    #[test]
+    fn the_ring_holds_the_last_frames_and_sheds_the_oldest() {
+        let mut r = ResendRing::default();
+        for f in 0..5u32 {
+            frame(&mut r, f, 2, 1000);
+        }
+        assert!(r.pick(1, &[0]).is_none());
+        assert_eq!(r.pick(4, &[0, 1]).unwrap().0.len(), 2);
+        frame(&mut r, 9, 80, 64 * 1024);
+        r.note(&packet(9, 0, 80, 81, 0, 10));
+        assert!(
+            r.pick(3, &[0]).is_none() && r.pick(4, &[0]).is_none(),
+            "over the cap"
+        );
+        assert_eq!(
+            r.pick(9, &[80]).unwrap().0.len(),
+            1,
+            "never the frame in progress"
+        );
+    }
+
+    /// A name picks the packet the client's reassembler means: data by its index in the AU,
+    /// parity numbered after all the data in block order. Another frame's packets never.
+    #[test]
+    fn a_name_picks_the_shard_the_client_means() {
+        let mut r = ResendRing::default();
+        r.begin(7);
+        // Block 0: 4 data + 2 parity; block 1 at base 4: 3 data + 2 parity. 7 data in all.
+        for s in 0..6 {
+            r.note(&packet(7, 0, s, 4, 2, 40));
+        }
+        for s in 0..5 {
+            r.note(&packet(7, 4, s, 3, 2, 40));
+        }
+        r.note(&packet(8, 0, 2, 4, 2, 40));
+        let (picked, _) = r.pick(7, &[2, 8, 9]).unwrap();
+        let at = |p: &[u8]| (p[18], p[22]);
+        let got: Vec<(u8, u8)> = picked.iter().map(|p| at(p)).collect();
+        assert_eq!(got, [(0, 2), (0, 5), (4, 3)]);
     }
 }

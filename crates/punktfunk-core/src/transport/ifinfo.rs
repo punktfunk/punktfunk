@@ -6,14 +6,8 @@
 // owns, on Apple platforms; nothing here interprets network bytes.
 #![allow(unsafe_code)]
 
+pub use super::LinkFacts;
 use std::net::IpAddr;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LinkFacts {
-    pub kind: u8,
-    /// `0` = not sampled.
-    pub mbps: u32,
-}
 
 /// The interface holding `ip`, by name; `None` when no interface has it.
 pub fn iface_for(ip: IpAddr) -> Option<String> {

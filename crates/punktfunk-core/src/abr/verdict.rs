@@ -28,6 +28,20 @@ pub(super) const RECOVERY_KF_SEVERE: u32 = 4;
 /// as a blip. 8 × 750 ms = 6 s: long enough that the rate it held is proven,
 /// short enough that a link dropping a frame every few seconds still cuts.
 pub(super) const BLIP_CLEAN_WINDOWS: u32 = 8;
+/// Lone dead frames a flat link may lose as blips in a minute, in percent of the frames
+/// it carried: 36 at 60 Hz, a frame every two seconds.
+pub(super) const LONE_DEAD_PER_MIN_PCT: u64 = 1;
+/// Tail loss that names a filling queue: at least this many shards from the frames' tails
+/// and their parity…
+pub(super) const TAIL_MIN: u32 = 4;
+/// …this many times the heads and middles lost. Parity leaves last, so an overflowing queue
+/// drops it first; random loss puts at most two thirds there, even at 50 % parity.
+pub(super) const TAIL_RATIO: u32 = 3;
+/// Head loss that names a waking receiver: at least this many shards from the frames'
+/// heads…
+pub(super) const HEAD_MIN: u32 = 4;
+/// …this many times everything else lost, with the socket dropping nothing.
+pub(super) const HEAD_RATIO: u32 = 3;
 /// One-way-delay rise above the rolling baseline that counts as queue growth.
 /// 25 ms is far beyond jitter at any streamable frame rate.
 const OWD_RISE_US: i64 = 25_000;
@@ -101,12 +115,51 @@ pub(crate) struct Verdict {
     pub reason: Reason,
 }
 
+/// This device's own socket dropped packets: the receiver could not drain the rate. The
+/// window is the link's whatever `loss_ppm` says.
+pub(super) fn link_signature(w: &WindowSample) -> bool {
+    w.sock_drops > 0
+}
+
+/// Loss at the frames' tails, well past the rest, while every frame still decodes: the
+/// queue is close to full, and a mark can go in before the picture breaks.
+pub(super) fn tail_mark(w: &WindowSample) -> bool {
+    tails(w.head, w.mid, w.tail) && w.dropped == 0
+}
+
+fn tails(head: u32, mid: u32, tail: u32) -> bool {
+    tail >= TAIL_MIN && tail >= TAIL_RATIO.saturating_mul(head.saturating_add(mid))
+}
+
+/// Loss at the frames' heads, well past the rest, with the socket dropping nothing: a
+/// receiver whose adapter wakes late. The wake shape answers it, not the rate.
+pub(crate) fn head_signature(w: &WindowSample) -> bool {
+    heads(w.head, w.mid, w.tail, w.sock_drops)
+}
+
+fn heads(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
+    head >= HEAD_MIN
+        && head >= HEAD_RATIO.saturating_mul(mid.saturating_add(tail))
+        && sock_drops == 0
+}
+
+/// A report window's lost shards fell at its frames' heads or tails: a waking receiver or
+/// a filling queue. A host that sees one keeps its encoder on the frames the client
+/// confirmed.
+pub fn shows_loss_shape(head: u32, mid: u32, tail: u32, sock_drops: u32) -> bool {
+    heads(head, mid, tail, sock_drops) || tails(head, mid, tail)
+}
+
 /// Rolling-min baselines for the three relative signals.
 #[derive(Debug)]
 pub(crate) struct Baselines {
     owd: VecDeque<i64>,
     decode: VecDeque<i64>,
     encode: VecDeque<i64>,
+    /// Windows of the last minute that lost frames: when, and how many.
+    dead: VecDeque<(std::time::Instant, u64)>,
+    /// The last window was a blip: the next one is judged without the lone-frame rule.
+    last_blip: bool,
 }
 
 impl Baselines {
@@ -115,7 +168,33 @@ impl Baselines {
             owd: VecDeque::with_capacity(BASELINE_WINDOWS),
             decode: VecDeque::with_capacity(BASELINE_WINDOWS),
             encode: VecDeque::with_capacity(BASELINE_WINDOWS),
+            dead: VecDeque::new(),
+            last_blip: false,
         }
+    }
+
+    /// A lone dead frame on a flat link, within the minute's budget: frames lost over the
+    /// last minute, this one included, stay under [`LONE_DEAD_PER_MIN_PCT`] of the frames
+    /// the minute carries at this refresh. Not in the window right after a blip, and not
+    /// in a window whose loss has a filling queue's shape.
+    fn lone_dead(&self, w: &WindowSample, dropped: u64, frame_budget_us: Option<i64>) -> bool {
+        let Some(budget_us) = frame_budget_us.filter(|&b| b > 0) else {
+            return false;
+        };
+        let minute = std::time::Duration::from_secs(60);
+        let recent: u64 = self
+            .dead
+            .iter()
+            .filter(|(t, _)| w.now.duration_since(*t) < minute)
+            .map(|(_, n)| n)
+            .sum();
+        let frames = minute.as_micros() as u64 / budget_us as u64;
+        dropped == 1
+            && !self.last_blip
+            && !tails(w.head, w.mid, w.tail)
+            && w.delay
+                .is_some_and(|d| d.rise_us < super::controller::DRAIN_FALL_US)
+            && (recent + 1) * 100 < frames * LONE_DEAD_PER_MIN_PCT
     }
 
     /// Every signal is a property of the mode that produced it.
@@ -214,13 +293,17 @@ impl Baselines {
         let path_noise = still && !owd_bad;
         let loss_ppm = if path_noise { 0 } else { w.loss_ppm };
         let dropped = if path_noise { 0 } else { w.dropped };
-        // A lost frame and nothing else: the recovery plane's business (RFI,
-        // FEC), not the rate's. A long clean run at this rate says so, and so
-        // does a window whose wire and delay show a link with room — which a
-        // session still climbing has instead of a run.
+        let link_sig = !path_noise && link_signature(w);
+        // A lost frame and nothing else is the recovery plane's, not the rate's:
+        // after a long clean run, on a wire and delay with room, or lone on a flat
+        // link within the minute's budget. Frames dying at their heads are a waking
+        // receiver's, which the wake shape answers, however heavy.
+        let head = head_signature(w);
+        let lone = self.lone_dead(w, dropped, frame_budget_us);
         let blip = dropped > 0
-            && (clean_run >= BLIP_CLEAN_WINDOWS || link_vouches)
-            && loss_ppm < HEAVY_LOSS_PPM
+            && (clean_run >= BLIP_CLEAN_WINDOWS || link_vouches || lone || head)
+            && !link_sig
+            && (loss_ppm < HEAVY_LOSS_PPM || head)
             && !w.flushed
             && !owd_bad
             && !decode_bad
@@ -237,6 +320,7 @@ impl Baselines {
         let bad = severe
             || (!blip
                 && (loss_ppm >= HEAVY_LOSS_PPM
+                    || link_sig
                     || owd_bad
                     || decode_bad
                     || encode_bad
@@ -264,6 +348,17 @@ impl Baselines {
             };
             reason(&seen, owd_bad, &v)
         };
+        self.last_blip = blip;
+        if dropped > 0 {
+            self.dead.push_back((w.now, dropped));
+        }
+        while self
+            .dead
+            .front()
+            .is_some_and(|(t, _)| w.now.duration_since(*t) >= std::time::Duration::from_secs(60))
+        {
+            self.dead.pop_front();
+        }
         v
     }
 }
@@ -290,7 +385,7 @@ fn reason(w: &WindowSample, owd_bad: bool, v: &Verdict) -> Reason {
         Reason::Encode
     } else if w.recovery_kf >= RECOVERY_KF_SEVERE {
         Reason::KeyframeAsks
-    } else if w.loss_ppm >= HEAVY_LOSS_PPM {
+    } else if w.loss_ppm >= HEAVY_LOSS_PPM || link_signature(w) {
         Reason::Loss
     } else if owd_bad {
         Reason::Owd
@@ -357,6 +452,102 @@ mod tests {
     use super::super::sample::WindowActivity;
     use super::*;
     use std::time::Instant;
+
+    /// Where a window's shards went missing names its cause: the socket's own drops a
+    /// receiver that could not drain, the tails well past the rest a filling queue, the
+    /// heads well past the rest a receiver waking late; a socket that drops vetoes the last.
+    #[test]
+    fn loss_positions_name_their_signature() {
+        let w = |head, mid, tail, sock_drops| WindowSample {
+            head,
+            mid,
+            tail,
+            sock_drops,
+            ..WindowSample::at(Instant::now())
+        };
+        assert!(link_signature(&w(0, 0, 0, 1)));
+        assert!(!link_signature(&w(0, 3, 9, 0)));
+        assert!(head_signature(&w(6, 1, 1, 0)));
+        assert!(
+            !head_signature(&w(6, 2, 1, 0)),
+            "the rest lost a third as much"
+        );
+        assert!(!head_signature(&w(9, 0, 0, 3)), "the socket dropped");
+        assert!(!head_signature(&w(3, 0, 0, 0)), "too few at the heads");
+        assert!(tail_mark(&w(0, 0, 4, 0)));
+        assert!(!tail_mark(&w(0, 0, 3, 0)), "too few at the tails");
+        assert!(!tail_mark(&w(1, 2, 6, 0)), "the rest lost half as much");
+        assert!(!tail_mark(&WindowSample {
+            dropped: 1,
+            ..w(0, 0, 4, 0)
+        }));
+        assert!(shows_loss_shape(6, 1, 1, 0) && shows_loss_shape(0, 0, 4, 0));
+        assert!(!shows_loss_shape(0, 9, 1, 0), "mid-frame loss is neither");
+        assert!(
+            !shows_loss_shape(24, 93, 38, 0),
+            "a minute of 0.7 % random loss is neither"
+        );
+    }
+
+    /// A lone dead frame on a flat link is a blip while the minute's dead frames stay
+    /// under [`LONE_DEAD_PER_MIN_PCT`] of the refresh. Two windows running, a frame dying at
+    /// its tail, or the budget spent is damage the rate answers; frames dying at their
+    /// heads are a waking receiver's, however heavy.
+    #[test]
+    fn lone_dead_frames_are_blips_within_the_minutes_budget() {
+        let start = Instant::now();
+        let level = crate::abr::DelayTrend {
+            samples: 20,
+            mean_us: 10_000,
+            rise_us: 0,
+            last_us: 10_000,
+        };
+        let flat = |at: u32, dropped: u64, tail: u32| WindowSample {
+            owd_mean_us: Some(10_000),
+            delay: Some(level),
+            dropped,
+            tail,
+            actual_kbps: 20_000,
+            ..WindowSample::at(ticks(start, at))
+        };
+        let fresh = || {
+            let mut c = BitrateController::new(20_000, None);
+            c.set_frame_budget(60);
+            c
+        };
+        // One every other window: 40 a minute against the 36 allowed at 60 Hz.
+        let mut c = fresh();
+        for n in 0..35u32 {
+            assert_eq!(c.on_window(&flat(2 * n, 1, 0)), None, "dead frame {n}");
+            assert_eq!(c.last_reason(), Reason::Blip);
+            assert_eq!(c.on_window(&flat(2 * n + 1, 0, 0)), None);
+        }
+        assert!(
+            c.on_window(&flat(70, 1, 0)).is_some(),
+            "the budget is spent"
+        );
+
+        let mut c = fresh();
+        assert_eq!(c.on_window(&flat(0, 1, 0)), None);
+        assert!(c.on_window(&flat(1, 1, 0)).is_some(), "two windows running");
+
+        let mut c = fresh();
+        assert_eq!(c.on_window(&flat(0, 1, 0)), None);
+        assert_eq!(c.on_window(&flat(1, 0, 0)), None);
+        assert!(
+            c.on_window(&flat(2, 1, TAIL_MIN)).is_some(),
+            "a frame dying at its tail"
+        );
+
+        let mut c = fresh();
+        let heads = WindowSample {
+            head: 10,
+            loss_ppm: 30_000,
+            ..flat(0, 3, 0)
+        };
+        assert_eq!(c.on_window(&heads), None);
+        assert_eq!(c.last_reason(), Reason::Blip);
+    }
 
     #[test]
     fn owd_rise_alone_is_a_congestion_signal() {

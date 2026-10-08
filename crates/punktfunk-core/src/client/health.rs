@@ -7,13 +7,12 @@
 //! shell shows it.
 //!
 //! The network check builds on it: the facts of both ends, two shaped legs at the clean
-//! round's rate (what video does, and what a capped profile would), a slow round when the
-//! clean one lost anything, and [`judge`], which names what the link does and which
-//! delivery profile, if any, helps. Ids and numbers cross every ABI; the words are each
-//! shell's.
+//! round's rate (what video does, and what a paced clock would), a slow round when the
+//! clean one lost anything, and [`judge`], which names what the link does. Ids and numbers
+//! cross every ABI; the words are each shell's.
 
 use super::{NativeClient, ProbeOutcome};
-use crate::quic::{HostFacts, ProbeShaped, HOST_CAP2_RAMP};
+use crate::quic::{HostLink, ProbeShaped, HOST_CAP2_RAMP};
 use crate::transport::ifinfo::LinkFacts;
 use crate::transport::IFACE_KIND_WIFI;
 use std::time::{Duration, Instant};
@@ -204,7 +203,7 @@ pub struct ClientFacts {
 pub enum LegShape {
     /// Sixty bursts a second at line rate: what video does.
     FrameBursts,
-    /// Sixty bursts a second in 64 KiB groups at 0.8 Gbit/s: the capped profile.
+    /// Sixty bursts a second in 64 KiB groups at 0.8 Gbit/s: a paced clock.
     Capped,
 }
 
@@ -221,7 +220,7 @@ pub struct Leg {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FindingId {
-    /// The host's port is faster than this device's; a capped burst stops the loss.
+    /// The host's port is faster than this device's; a paced burst stops the loss.
     SpeedMismatch = 1,
     /// This device loses the head of a line-rate burst, capped or not, and nothing smooth.
     BurstIntolerant = 2,
@@ -251,16 +250,14 @@ pub struct Finding {
     pub severity: Severity,
     /// The figures behind the finding, in the order the id's text names them.
     pub numbers: [u32; 3],
-    /// The delivery profile that helps (`1` capped, `2` smooth), when one does.
-    pub profile: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct HealthReport {
     pub speed: SpeedReport,
     pub client: ClientFacts,
-    pub host: Option<HostFacts>,
-    /// Empty toward a host that did not answer the delivery tag, or without a clean round.
+    pub host: HostLink,
+    /// Empty without a clean round.
     pub legs: Vec<Leg>,
     /// The slow round, run when the clean round lost anything.
     pub slow: Option<ProbeOutcome>,
@@ -298,9 +295,9 @@ pub fn health_check(
             .map_or_else(LinkFacts::default, crate::transport::ifinfo::link_facts),
         rcvbuf_kb: c.recv_buffer_kb(),
     };
-    let host = c.host_facts();
+    let host = c.host_link();
     let mut legs = Vec::new();
-    if let (Some(clean), Some(_)) = (speed.clean, c.delivery()) {
+    if let Some(clean) = speed.clean {
         for shape in [LegShape::FrameBursts, LegShape::Capped] {
             let (group_bytes, group_rate_kbps) = match shape {
                 LegShape::FrameBursts => (0, 0),
@@ -334,7 +331,7 @@ pub fn health_check(
         }
         _ => None,
     };
-    let findings = judge(&speed, &client, host.as_ref(), &legs, slow.as_ref());
+    let findings = judge(&speed, &client, &host, &legs, slow.as_ref());
     Ok(HealthReport {
         speed,
         client,
@@ -358,7 +355,7 @@ fn jitter_of(o: &ProbeOutcome) -> u32 {
 pub fn judge(
     speed: &SpeedReport,
     client: &ClientFacts,
-    host: Option<&HostFacts>,
+    host: &HostLink,
     legs: &[Leg],
     slow: Option<&ProbeOutcome>,
 ) -> Vec<Finding> {
@@ -368,7 +365,7 @@ pub fn judge(
     let capped = legs.iter().find(|l| l.shape == LegShape::Capped);
     let bursts_loss = bursts.map(|l| l.outcome.loss_pct);
     let capped_loss = capped.map(|l| l.outcome.loss_pct);
-    let host_mbps = host.map_or(0, |h| h.link_mbps);
+    let host_mbps = host.link_mbps;
     let client_mbps = client.link.mbps;
     let ports_differ = host_mbps > 0 && client_mbps > 0 && host_mbps > client_mbps;
     let drops_in_bursts = bursts.and_then(|l| l.socket_drops);
@@ -382,7 +379,6 @@ pub fn judge(
             id: FindingId::SpeedMismatch,
             severity: Severity::Bad,
             numbers: [host_mbps, client_mbps, pct_x100(bursts_loss.unwrap_or(0.0))],
-            profile: Some(1),
         });
     }
     // Loss in this device's own buffer, or a buffer the OS keeps small.
@@ -397,7 +393,6 @@ pub fn judge(
                 Severity::Warn
             },
             numbers: [drops.min(u64::from(u32::MAX)) as u32, client.rcvbuf_kb, 0],
-            profile: Some(2),
         });
     }
     // Bursts lose, capped bursts lose about as much, smooth does not, and the loss was not
@@ -414,7 +409,6 @@ pub fn judge(
                     Severity::Warn
                 },
                 numbers: [pct_x100(b), pct_x100(cp), pct_x100(cl)],
-                profile: Some(2),
             });
         }
     }
@@ -428,7 +422,6 @@ pub fn judge(
                 id: FindingId::LinkFault,
                 severity: Severity::Bad,
                 numbers: [pct_x100(s.loss_pct), jitter, 0],
-                profile: None,
             });
         }
     }
@@ -438,7 +431,6 @@ pub fn judge(
                 id: FindingId::QueueBuildUp,
                 severity: Severity::Warn,
                 numbers: [cl.jitter_us, cl.rate_kbps, 0],
-                profile: None,
             });
         }
     }
@@ -447,13 +439,12 @@ pub fn judge(
         .map(|l| l.outcome.send_dropped)
         .sum::<u32>()
         .saturating_add(speed.clean.map_or(0, |c| c.outcome.send_dropped));
-    let sndbuf_kb = host.map_or(0, |h| h.sndbuf_kb);
+    let sndbuf_kb = host.sndbuf_kb;
     if send_dropped > 0 || (sndbuf_kb > 0 && sndbuf_kb < BUFFER_WANT_KB) {
         out.push(Finding {
             id: FindingId::HostSendBuffer,
             severity: Severity::Warn,
             numbers: [send_dropped, sndbuf_kb, 0],
-            profile: None,
         });
     }
     if client.link.kind == IFACE_KIND_WIFI {
@@ -466,7 +457,6 @@ pub fn judge(
                 Severity::Note
             },
             numbers: [pct_x100(bursts_loss.unwrap_or(0.0)), client_mbps, 0],
-            profile: lossy.then_some(2),
         });
     }
     out
@@ -562,12 +552,12 @@ mod tests {
         }
     }
 
-    fn host(link_mbps: u32, sndbuf_kb: u32) -> HostFacts {
-        HostFacts {
+    fn host(link_mbps: u32, sndbuf_kb: u32) -> HostLink {
+        HostLink {
             iface_kind: crate::transport::IFACE_KIND_ETHERNET,
             link_mbps,
             sndbuf_kb,
-            forced_profile: crate::quic::FORCED_PROFILE_NONE,
+            ..HostLink::default()
         }
     }
 
@@ -580,7 +570,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 32_768),
-            Some(&host(1000, 32_768)),
+            &host(1000, 32_768),
             &legs(0.0, 0.0, Some(0)),
             None,
         );
@@ -593,12 +583,11 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(0, 32_768),
-            None,
+            &HostLink::default(),
             &legs(2.0, 0.1, Some(0)),
             None,
         );
         assert_eq!(ids(&f), vec![FindingId::SpeedMismatch]);
-        assert_eq!(f[0].profile, Some(1));
         assert_eq!(f[0].numbers[2], 200);
     }
 
@@ -608,7 +597,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 32_768),
-            Some(&host(2500, 32_768)),
+            &host(2500, 32_768),
             &legs(1.0, 0.6, Some(0)),
             None,
         );
@@ -618,7 +607,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 32_768),
-            Some(&host(1000, 32_768)),
+            &host(1000, 32_768),
             &legs(1.0, 0.6, Some(0)),
             None,
         );
@@ -631,12 +620,12 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 32_768),
-            Some(&host(1000, 32_768)),
+            &host(1000, 32_768),
             &legs(1.0, 0.9, Some(0)),
             None,
         );
         assert_eq!(ids(&f), vec![FindingId::BurstIntolerant]);
-        assert_eq!((f[0].severity, f[0].profile), (Severity::Bad, Some(2)));
+        assert_eq!(f[0].severity, Severity::Bad);
     }
 
     /// Drops this socket counted explain the loss: the buffer, not the adapter.
@@ -645,7 +634,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 32_768),
-            Some(&host(1000, 32_768)),
+            &host(1000, 32_768),
             &legs(1.0, 0.9, Some(40)),
             None,
         );
@@ -655,7 +644,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 208),
-            None,
+            &HostLink::default(),
             &legs(0.0, 0.0, Some(0)),
             None,
         );
@@ -669,7 +658,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 300),
             &wired(1000, 32_768),
-            None,
+            &HostLink::default(),
             &legs(1.0, 0.9, None),
             None,
         );
@@ -684,7 +673,7 @@ mod tests {
         let f = judge(
             &speed(0.4, 300),
             &wired(1000, 32_768),
-            None,
+            &HostLink::default(),
             &[],
             Some(&slow),
         );
@@ -696,7 +685,13 @@ mod tests {
             },
             rcvbuf_kb: 32_768,
         };
-        let f = judge(&speed(0.4, 300), &wifi, None, &[], Some(&slow));
+        let f = judge(
+            &speed(0.4, 300),
+            &wifi,
+            &HostLink::default(),
+            &[],
+            Some(&slow),
+        );
         assert_eq!(ids(&f), vec![FindingId::Wifi]);
     }
 
@@ -705,7 +700,7 @@ mod tests {
         let f = judge(
             &speed(0.0, 25_000),
             &wired(1000, 32_768),
-            Some(&host(1000, 208)),
+            &host(1000, 208),
             &[],
             None,
         );
@@ -716,7 +711,7 @@ mod tests {
         assert_eq!(f[1].numbers, [0, 208, 0]);
     }
 
-    /// Wi-Fi is a note until bursts lose, then the smooth profile is offered.
+    /// Wi-Fi is a note until bursts lose, then a warning.
     #[test]
     fn f7_wifi() {
         let wifi = ClientFacts {
@@ -726,11 +721,23 @@ mod tests {
             },
             rcvbuf_kb: 32_768,
         };
-        let f = judge(&speed(0.0, 300), &wifi, None, &legs(0.0, 0.0, None), None);
+        let f = judge(
+            &speed(0.0, 300),
+            &wifi,
+            &HostLink::default(),
+            &legs(0.0, 0.0, None),
+            None,
+        );
         assert_eq!(ids(&f), vec![FindingId::Wifi]);
-        assert_eq!((f[0].severity, f[0].profile), (Severity::Note, None));
-        let f = judge(&speed(0.0, 300), &wifi, None, &legs(3.0, 2.9, None), None);
+        assert_eq!(f[0].severity, Severity::Note);
+        let f = judge(
+            &speed(0.0, 300),
+            &wifi,
+            &HostLink::default(),
+            &legs(3.0, 2.9, None),
+            None,
+        );
         let w = f.iter().find(|x| x.id == FindingId::Wifi).unwrap();
-        assert_eq!((w.severity, w.profile), (Severity::Warn, Some(2)));
+        assert_eq!(w.severity, Severity::Warn);
     }
 }

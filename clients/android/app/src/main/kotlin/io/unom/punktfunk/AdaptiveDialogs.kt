@@ -273,9 +273,6 @@ fun SpeedTestPrompt(
     phase: SpeedTestPhase,
     onApply: (toPreset: Boolean) -> Unit,
     onDismiss: () -> Unit,
-    // The profile a finding offered: remembered on this host's record, asked for from the
-    // next connect. Absent when nothing was offered.
-    onUsePacedDelivery: (profile: Int) -> Unit = {},
 ) {
     val done = phase as? SpeedTestPhase.Done
     PunktfunkDialog(
@@ -297,9 +294,6 @@ fun SpeedTestPrompt(
                 )
                 if (target is SpeedTestTarget.Ask) {
                     add(DialogAction("Set as default") { onApply(false) })
-                }
-                done.offeredProfile?.let { profile ->
-                    add(DialogAction("Use paced delivery (${profileName(profile)})") { onUsePacedDelivery(profile) })
                 }
             }
             add(DialogAction("Close", primary = done == null, onClick = onDismiss))

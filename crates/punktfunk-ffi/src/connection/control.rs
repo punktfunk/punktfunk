@@ -527,14 +527,12 @@ pub unsafe extern "C" fn punktfunk_connection_probe_result(
 }
 
 /// One finding of the network check: the id names the text the app shows
-/// ([`punktfunk_core::client::health::FindingId`] as a byte), `numbers` are its figures,
-/// `profile` is the delivery profile that helps (`1` capped, `2` smooth, `0` none).
+/// ([`punktfunk_core::client::health::FindingId`] as a byte), `numbers` are its figures.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PunktfunkHealthFinding {
     pub id: u8,
     pub severity: u8,
-    pub profile: u8,
     pub numbers: [u32; 3],
 }
 
@@ -542,8 +540,8 @@ pub struct PunktfunkHealthFinding {
 pub const PUNKTFUNK_HEALTH_FINDINGS_MAX: usize = 8;
 
 /// The network check's report ([`punktfunk_core::client::health::HealthReport`]), flat.
-/// `has_clean` 0 = a host without a ramp (no loss figure is honest); `has_host` 0 = the
-/// host sent no facts; a leg or fact that was not sampled reads `0`.
+/// `has_clean` 0 = a host without a ramp (no loss figure is honest); a leg or fact that was
+/// not sampled reads `0`.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PunktfunkHealthReport {
@@ -556,7 +554,6 @@ pub struct PunktfunkHealthReport {
     pub client_iface_kind: u8,
     pub client_link_mbps: u32,
     pub client_rcvbuf_kb: u32,
-    pub has_host: u8,
     pub host_iface_kind: u8,
     pub host_link_mbps: u32,
     pub host_sndbuf_kb: u32,
@@ -569,9 +566,8 @@ pub struct PunktfunkHealthReport {
 
 /// Run the network check over this connection and write its report into `*out`. Blocking
 /// for ten to twenty seconds — call it off the main thread. The connection should have been
-/// dialled with a delivery ask of probes only and facts; without one the check is the speed
-/// test alone. Errors: `Unsupported` when the host declined, `Timeout` when a round never
-/// reported.
+/// dialled for probes only (`delivery_flags` `2`). Errors: `Unsupported` when the host
+/// declined, `Timeout` when a round never reported.
 ///
 /// # Safety
 /// `c` is a valid connection handle; `out` is writable for one `PunktfunkHealthReport`
@@ -599,6 +595,9 @@ pub unsafe extern "C" fn punktfunk_connection_network_check(
             client_iface_kind: r.client.link.kind,
             client_link_mbps: r.client.link.mbps,
             client_rcvbuf_kb: r.client.rcvbuf_kb,
+            host_iface_kind: r.host.iface_kind,
+            host_link_mbps: r.host.link_mbps,
+            host_sndbuf_kb: r.host.sndbuf_kb,
             ..Default::default()
         };
         if let Some(cl) = r.speed.clean {
@@ -606,12 +605,6 @@ pub unsafe extern "C" fn punktfunk_connection_network_check(
             rep.clean_rate_kbps = cl.rate_kbps;
             rep.clean_loss_pct = cl.loss_pct;
             rep.clean_jitter_us = cl.jitter_us;
-        }
-        if let Some(h) = r.host {
-            rep.has_host = 1;
-            rep.host_iface_kind = h.iface_kind;
-            rep.host_link_mbps = h.link_mbps;
-            rep.host_sndbuf_kb = h.sndbuf_kb;
         }
         for leg in &r.legs {
             let slot = match leg.shape {
@@ -625,7 +618,6 @@ pub unsafe extern "C" fn punktfunk_connection_network_check(
             rep.findings[slot] = PunktfunkHealthFinding {
                 id: f.id as u8,
                 severity: f.severity as u8,
-                profile: f.profile.unwrap_or(0),
                 numbers: f.numbers,
             };
             rep.n_findings = slot as u8 + 1;

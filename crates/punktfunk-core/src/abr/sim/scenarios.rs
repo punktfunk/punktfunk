@@ -667,6 +667,46 @@ pub(super) fn lan_1g() -> Scenario {
     lan("lan_1g", 1_000_000, 120)
 }
 
+/// 1 GbE to a receiver that loses the first three packets of every fiftieth frame: an
+/// adapter waking from its power state. Nothing on the path is full.
+pub(super) fn lan_head_loss() -> Scenario {
+    let mut s = lan("lan_head_loss", 1_000_000, 120);
+    s.link.head_every = 50;
+    s.link.head_shards = 3;
+    s.blip_at_ms = None;
+    s
+}
+
+/// 1 GbE through a queue that drops the last two packets of every frame: parity, so every
+/// frame still decodes while the link says it is full.
+pub(super) fn lan_tail_parity_loss() -> Scenario {
+    let mut s = lan("lan_tail_parity_loss", 1_000_000, 120);
+    s.link.tail_shards = 2;
+    s.blip_at_ms = None;
+    s
+}
+
+/// 1 GbE that loses one whole frame every two seconds and nothing else: no queue, no
+/// tail, flat delay. Each is the recovery plane's to answer, not the rate's.
+pub(super) fn lan_lone_dead_frame() -> Scenario {
+    let mut s = lan("lan_lone_dead_frame", 1_000_000, 120);
+    s.sessions[0].client.dead_every_ms = 2_000;
+    s.blip_at_ms = Some(2_000);
+    s
+}
+
+/// 1 GbE at both ports under a 1080p60 stream: the ramp stops at what the stream needs,
+/// and the ports say the link is 1 Gbit/s before and after it.
+pub(super) fn lan_1g_two_ports() -> Scenario {
+    let mut s = lan("lan_1g_two_ports", 1_000_000, 60);
+    let cap = stream_ceiling_kbps(1920, 1080, 60, CODEC_HEVC, 8, 0);
+    let c = &mut s.sessions[0].client;
+    c.stream_cap_kbps = cap;
+    c.ports = Some((1_000, 1_000));
+    s.achievable_kbps = wall_respecting_kbps(1_000_000, 1, cap);
+    s
+}
+
 /// A cell that moves between 2 and 50 Mbps with handover stalls.
 pub(super) fn lte_variable() -> Scenario {
     let mut s = wg_session();
@@ -1393,6 +1433,10 @@ pub(super) fn all() -> Vec<Scenario> {
     let mut table: Vec<Scenario> = vec![
         lan_10g(),
         lan_1g(),
+        lan_head_loss(),
+        lan_tail_parity_loss(),
+        lan_1g_two_ports(),
+        lan_lone_dead_frame(),
         wifi_good(),
         wifi_tv(),
         wan_wg_12(0x7A_5500, 180_000),
@@ -1496,6 +1540,34 @@ mod tests {
         25_247, 35_059, 41_852, 48_443, 56_240, 65_434, 74_038, 88_523, 103_536, 131_763, 166_388,
         171_294,
     ];
+
+    /// The three rows that read loss positions and port facts: head loss wakes the shape
+    /// and costs no cut; tail parity loss takes `L` down a notch with no frame lost; two
+    /// 1 GbE ports set `L` at 1 Gbit/s before anything is measured, and a ramp the stream
+    /// bounded leaves it there.
+    #[test]
+    fn head_loss_wakes_tail_loss_notches_and_ports_set_the_link() {
+        let r = run(&with_ramp(lan_head_loss()));
+        let wake = r.shapes[0]
+            .iter()
+            .find(|(_, s)| *s == crate::abr::Shape::Wake as u8)
+            .map(|&(t, _)| t);
+        let heads = |w: &[WindowRec]| w.iter().all(|w| w.head >= crate::abr::verdict::HEAD_MIN);
+        let second = r.windows[0]
+            .windows(2)
+            .find(|pair| heads(pair))
+            .map(|pair| pair[1].t_ms);
+        assert_eq!(wake, second, "awake at the second window of head loss");
+        assert_eq!(r.metrics.cuts_per_10min, 0);
+
+        let r = run(&with_ramp(lan_tail_parity_loss()));
+        let ramped = r.links[0][1].1;
+        assert_eq!(r.links[0][2].1, ramped - ramped / 8, "{:?}", r.links[0]);
+        assert_eq!((r.repair.lost, r.metrics.cuts_per_10min), (0, 0));
+
+        let r = run(&with_ramp(lan_1g_two_ports()));
+        assert_eq!(r.links[0], [(0, 1_000_000)]);
+    }
 
     /// The startup burst measures the link and nothing else: the ceiling it
     /// leaves is 0.7 × what the client received, bounded by the stream shape.
@@ -2400,6 +2472,7 @@ mod tests {
             "wave" => host_rebuild_wave(),
             "weak" => encoder_weak(),
             "calm" => calm_desktop_lossy(),
+            "lone" => lan_lone_dead_frame(),
             _ => wifi_tv(),
         };
         // As the table has it. `SIM_LEGACY=1` reads the calibration instead.
