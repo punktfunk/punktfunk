@@ -275,11 +275,13 @@ pub(crate) fn first_skipped(last: &mut Option<u32>, idx: u32) -> Option<u32> {
 pub(crate) const ASK_GIVE_UP: Duration = Duration::from_millis(500);
 
 /// The client's feedback datagrams: a window number per report, an ask number per recovery
-/// ask, and the levels every datagram carries. An ask repeats a frame interval apart until
-/// the frame that answers it arrives: a datagram can be lost, and a host acts on an ask
-/// number once however many copies arrive. A window report is one more copy of the ask.
+/// ask. Every datagram carries the levels: the last closed window with its fields, the link
+/// rate and the shape, so a lost report reaches the host with the next ack or ask copy. An
+/// ask repeats a frame interval apart until the frame that answers it arrives. A host acts
+/// on each window and ask number once however many copies arrive.
 pub(crate) struct FeedbackOut {
-    window: u32,
+    /// The last closed window: its number (`0` before the first) and fields.
+    report: Feedback,
     ask: u16,
     open: Option<OpenAsk>,
     link_kbps: u32,
@@ -294,7 +296,7 @@ pub(crate) struct FeedbackOut {
 impl Default for FeedbackOut {
     fn default() -> Self {
         FeedbackOut {
-            window: 0,
+            report: Feedback::default(),
             ask: 0,
             open: None,
             link_kbps: 0,
@@ -322,13 +324,14 @@ impl FeedbackOut {
         self.interval = Duration::from_micros(1_000_000 / u64::from(hz.clamp(30, 240)));
     }
 
-    /// One report window, numbered.
+    /// One report window, numbered: `report` holds only the window's fields. It is the level
+    /// every datagram carries until the next window closes.
     pub(crate) fn window(&mut self, report: Feedback) -> Feedback {
-        self.window = self.window.wrapping_add(1).max(1);
-        self.stamp(Feedback {
-            window: self.window,
+        self.report = Feedback {
+            window: self.report.window.wrapping_add(1).max(1),
             ..report
-        })
+        };
+        self.stamp()
     }
 
     /// The link rate, a level every datagram carries. `Some` when it changed: one datagram
@@ -336,7 +339,7 @@ impl FeedbackOut {
     pub(crate) fn link(&mut self, kbps: u32) -> Option<Feedback> {
         (self.link_kbps != kbps).then(|| {
             self.link_kbps = kbps;
-            self.stamp(Feedback::default())
+            self.stamp()
         })
     }
 
@@ -377,7 +380,7 @@ impl FeedbackOut {
             next: now + self.interval,
             until: now + ASK_GIVE_UP,
         });
-        self.stamp(Feedback::default())
+        self.stamp()
     }
 
     /// A frame was handed on. A keyframe answers any ask; a recovery anchor or point
@@ -404,14 +407,12 @@ impl FeedbackOut {
     }
 
     /// The decoder took a whole AU: its acknowledgement when it decodes clean
-    /// ([`AckChain`]). Carries the levels, never a window or an ask.
+    /// ([`AckChain`]). Carries the levels, the last window among them, never an ask.
     pub(crate) fn decoded(&mut self, index: u32, flags: u32) -> Option<Feedback> {
         let acked = self.acks.decoded(index, flags)?;
         Some(Feedback {
             acked: Some(acked),
-            link_kbps: self.link_kbps,
-            shape: self.shape,
-            ..Feedback::default()
+            ..self.levels()
         })
     }
 
@@ -427,12 +428,21 @@ impl FeedbackOut {
             return None;
         }
         o.next = now + self.interval;
-        Some(self.stamp(Feedback::default()))
+        Some(self.stamp())
     }
 
-    fn stamp(&self, mut fb: Feedback) -> Feedback {
-        fb.link_kbps = self.link_kbps;
-        fb.shape = self.shape;
+    /// The last closed window, the link rate and the shape.
+    fn levels(&self) -> Feedback {
+        Feedback {
+            link_kbps: self.link_kbps,
+            shape: self.shape,
+            ..self.report
+        }
+    }
+
+    /// The levels and the open ask.
+    fn stamp(&self) -> Feedback {
+        let mut fb = self.levels();
         if let Some(o) = &self.open {
             fb.ask = self.ask;
             fb.invalidate = o.invalidate;
@@ -890,5 +900,43 @@ mod feedback_out_tests {
             "the cadence stops"
         );
         assert_eq!(out.window(Feedback::default()).ask, 0);
+    }
+
+    /// The last closed window rides every datagram until the next one closes: acks, ask
+    /// copies and link changes repeat it, so a lost report costs one datagram.
+    #[test]
+    fn every_datagram_carries_the_last_window() {
+        let t0 = Instant::now();
+        let mut out = FeedbackOut::default();
+        let fields = |f: Feedback| {
+            let positions = (f.head, f.mid, f.tail, f.sock_drops);
+            (f.window, f.loss_ppm, f.packets_received, positions)
+        };
+        let first = out.decoded(1, u32::from(FLAG_SOF)).expect("an IDR");
+        assert_eq!(fields(first), fields(Feedback::default()), "no window yet");
+        for n in 1..=2u32 {
+            let report = Feedback {
+                loss_ppm: 300 * n,
+                packets_received: 9 * u64::from(n),
+                head: n,
+                mid: n + 1,
+                tail: n + 2,
+                sock_drops: n + 3,
+                ..Default::default()
+            };
+            let level = fields(Feedback {
+                window: n,
+                ..report
+            });
+            assert_eq!(fields(out.window(report)), level);
+            let ack = out.decoded(1 + n, 0).expect("the next clean frame");
+            assert_eq!(fields(ack), level, "an ack");
+            let t = ms(t0, 100 * u64::from(n));
+            out.ask(Some((5, 5)), false, t);
+            let copy = out.resend(ms(t, 20)).expect("a copy");
+            assert_eq!((fields(copy), copy.ask), (level, n as u16), "an ask copy");
+            let link = out.link(1_000 * n).expect("a new rate");
+            assert_eq!(fields(link), level, "a link change");
+        }
     }
 }

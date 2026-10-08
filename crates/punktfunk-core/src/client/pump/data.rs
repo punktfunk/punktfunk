@@ -1126,6 +1126,54 @@ mod tests {
         }
     }
 
+    /// Every report lost, and every other datagram after it: the acks a 60 Hz decoder sends
+    /// still bring each window to the host, gap-free and in order.
+    #[test]
+    fn a_lost_report_rides_the_next_ack() {
+        let mode = crate::config::Mode {
+            width: 1920,
+            height: 1080,
+            refresh_hz: 60,
+        };
+        let (_host_tp, session) = idle_client_session(crate::quic::wall_clock_ns());
+        let shared = Arc::new(ClientShared::new(mode));
+        // The lossy link goes in first; `test_pump`'s own sender is then refused.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let link = Mutex::new((0u32, 0u32));
+        let _ = shared.feedback_tx.set(Box::new(move |fb| {
+            let (last, n) = &mut *link.lock().unwrap();
+            let lost = if fb.window != *last {
+                *last = fb.window;
+                true
+            } else {
+                *n += 1;
+                *n % 2 == 1
+            };
+            if !lost {
+                let _ = tx.send(fb.window);
+            }
+        }));
+        let (pump, _ctrl_rx, _) = test_pump(session, shared.clone(), crate::quic::CODEC_HEVC);
+        let pump_thread = std::thread::spawn(move || pump.run());
+        let (mut seen, mut index) = (Vec::new(), 0u32);
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while seen.last() != Some(&3) && Instant::now() < deadline {
+            let idr = if index == 0 {
+                crate::packet::FLAG_SOF
+            } else {
+                0
+            };
+            shared.decoder_took(index, idr.into(), true);
+            index += 1;
+            std::thread::sleep(Duration::from_millis(16));
+            seen.extend(rx.try_iter().filter(|&w| w != 0));
+            seen.dedup();
+        }
+        shared.shutdown.store(true, Ordering::SeqCst);
+        pump_thread.join().unwrap();
+        assert_eq!(seen, [1, 2, 3]);
+    }
+
     /// Host-rebuild repair, end to end: a real [`PipelineGap`] on a real
     /// control stream, the control task parks it, the pump discards the
     /// window it landed in.

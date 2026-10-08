@@ -56,8 +56,8 @@ impl ClientConn {
         }
     }
 
-    /// One feedback datagram. A send that fails is lost like any datagram; the window after
-    /// it, or the ask's next copy, says it again.
+    /// One feedback datagram. A send that fails is lost like any datagram; the next one
+    /// repeats its window, the ask's next copy its ask.
     pub(super) fn send_feedback(&self, fb: &crate::quic::v2::dgram::Feedback) {
         if let Err(e) = self.conn.send_datagram(fb.encode().into()) {
             tracing::debug!(error = %e, "feedback datagram not sent");

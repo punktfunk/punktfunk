@@ -130,12 +130,13 @@ impl Nack {
     }
 }
 
-/// `client → host` receive state. Sent at the end of each report window, on every frame
-/// interval while an ask is open until the frame that answers it arrives, and after each
-/// completed frame while the host wants acks.
+/// `client → host` receive state. Sent when a report window closes, on every frame interval
+/// while an ask is open until the frame that answers it arrives, and after each frame the
+/// decoder takes clean. Every one repeats the last closed window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Feedback {
-    /// Report window number from 1; `0` carries no window. A host reads each window once.
+    /// The last closed report window's number, from 1; `0` before the first. It and its
+    /// fields ride every datagram until the next window closes. A host reads each once.
     pub window: u32,
     /// Shards parity repaired over the window, ppm.
     pub loss_ppm: u32,
@@ -163,7 +164,7 @@ pub struct Feedback {
     /// Shards to send again.
     pub nack: Option<Nack>,
     /// The newest frame the client completed, and the sixteen before it as bits (bit `i`
-    /// is frame `last − 1 − i`). Rides on its own, without a window or an ask.
+    /// is frame `last − 1 − i`). Rides with the levels, without an ask.
     pub acked: Option<(u32, u16)>,
 }
 
@@ -347,6 +348,16 @@ mod tests {
             },
             Feedback {
                 acked: Some((7_000, 0b1011)),
+                ..Default::default()
+            },
+            Feedback {
+                window: 6,
+                loss_ppm: 40,
+                packets_received: 90_000,
+                tail: 2,
+                link_kbps: 940_000,
+                shape: 1,
+                acked: Some((7_001, 0b1)),
                 ..Default::default()
             },
         ] {
