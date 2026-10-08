@@ -2,8 +2,8 @@
 //!
 //! Keys live in the consuming binary and are checked by [`crate::sig`]. TLS and
 //! the serving registry are transport, never trust. Host and Linux client share
-//! `version`/`ci_run`; ignore a payload leg you do not need (`windows_host` today,
-//! `windows_host_arm64` for an ARM64 host).
+//! `version`/`ci_run`/`commit`; ignore a payload leg you do not need
+//! (`windows_host` today, `windows_host_arm64` for an ARM64 host).
 //!
 //! Fail closed: signature over the exact bytes, then strict JSON — HTML stubs
 //! never parse. `channel` must match the URL we fetched (canary cannot replay
@@ -39,6 +39,10 @@ pub struct Manifest {
     /// Canary "newer" axis. Packaging channels spell the same build differently.
     #[serde(default)]
     pub ci_run: Option<u64>,
+    /// Full commit SHA of the build. Each workflow numbers its own run, so a canary package
+    /// on this commit carries a different `ci_run` and is still current.
+    #[serde(default)]
+    pub commit: Option<String>,
     /// Other consumers ignore this leg.
     #[serde(default)]
     pub windows_host: Option<WindowsHostAsset>,

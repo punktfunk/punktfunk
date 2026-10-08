@@ -835,7 +835,7 @@ jobs:
           else
             echo "no arm64 installer for ${VER} - publishing the x64 leg only"; A64_URL=""; A64_SHA=""
           fi
-          CHANNEL=canary VERSION="$VER" CI_RUN="${GITHUB_RUN_NUMBER}" \
+          CHANNEL=canary VERSION="$VER" CI_RUN="${GITHUB_RUN_NUMBER}" COMMIT="${GITHUB_SHA}" \
             WINDOWS_URL="$URL" WINDOWS_SHA256="$SHA" \
             WINDOWS_ARM64_URL="$A64_URL" WINDOWS_ARM64_SHA256="$A64_SHA" \
             NOTES_URL="https://git.unom.io/unom/punktfunk/releases" \

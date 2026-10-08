@@ -214,7 +214,13 @@ pub(crate) fn offers_update(
     if kind == detect::InstallKind::SteamosSource {
         source_newer(source_behind)
     } else {
-        detect::is_newer(&manifest.version, manifest.ci_run, current, channel)
+        detect::is_newer(
+            &manifest.version,
+            manifest.ci_run,
+            manifest.commit.as_deref(),
+            current,
+            channel,
+        )
     }
 }
 
