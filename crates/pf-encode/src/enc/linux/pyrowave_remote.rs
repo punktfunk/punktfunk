@@ -655,7 +655,7 @@ impl Encoder for RemotePyroWave {
         // The trait-coverage test below exists to catch that. The no-op is a visible decision.
     }
 
-    fn set_reference_floor(&mut self, _acked_wire: Option<i64>) {
+    fn set_reference_floor(&mut self, _acked: Option<crate::Acked>) {
         // Intra-only: no frame references another.
     }
 

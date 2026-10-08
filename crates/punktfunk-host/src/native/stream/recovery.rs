@@ -703,15 +703,15 @@ impl LossMode {
         self.on
     }
 
-    /// The reference floor for frame `wire`, given whether a lossy window arrived since the
-    /// last frame and the client's newest confirmed frame (`last << 16 | mask`).
+    /// The confirmed frames frame `wire` may reference, given whether a lossy window arrived
+    /// since the last frame and what the client confirmed (`last << 16 | mask`).
     pub(super) fn floor(
         &mut self,
         lossy: bool,
         acked: u64,
         wire: u32,
         now: std::time::Instant,
-    ) -> Option<i64> {
+    ) -> Option<crate::encode::Acked> {
         if lossy {
             self.seen = Some(now);
         }
@@ -738,7 +738,10 @@ impl LossMode {
         let last = (acked >> 16) as u32;
         self.frames += 1;
         self.distance += u64::from(wire.wrapping_sub(last));
-        Some(i64::from(last))
+        Some(crate::encode::Acked {
+            last: i64::from(last),
+            mask: acked as u16,
+        })
     }
 }
 
@@ -1302,7 +1305,11 @@ mod loss_mode_tests {
         let none = crate::native::wiring::NONE_ACKED;
         assert_eq!(m.floor(true, none, 42, t0), None, "nothing confirmed yet");
         assert!(m.is_on());
-        assert_eq!(m.floor(false, acked, 43, t0 + s(9)), Some(40));
+        let want = crate::encode::Acked {
+            last: 40,
+            mask: 0b11,
+        };
+        assert_eq!(m.floor(false, acked, 43, t0 + s(9)), Some(want));
         assert_eq!(m.floor(false, acked, 44, t0 + s(10)), None);
         assert!(!m.is_on());
     }

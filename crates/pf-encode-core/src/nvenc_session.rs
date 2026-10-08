@@ -459,7 +459,7 @@ pub struct NvSession {
     ltr_slots: Vec<Option<i64>>,
     ltr_next: usize,
     /// The newest frame the client confirmed, while the host holds confirmed references.
-    pub reference_floor: Option<i64>,
+    pub reference_floor: Option<crate::codec::Acked>,
 }
 
 impl NvSession {
@@ -1286,8 +1286,8 @@ impl NvSession {
             self.ltr_slots = vec![None; n];
             self.ltr_next = 0;
         }
-        let floor = self.reference_floor.filter(|_| n > 0 && !idr && !wave)?;
-        let (mark, force) = crate::rfi::ltr_acked_step(&self.ltr_slots, floor, ts, self.ltr_next);
+        let acked = self.reference_floor.filter(|_| n > 0 && !idr && !wave)?;
+        let (mark, force) = crate::rfi::ltr_acked_step(&self.ltr_slots, &acked, ts, self.ltr_next);
         if let Some(m) = mark {
             self.ltr_slots[m] = Some(ts);
             self.ltr_next = (m + 1) % n;

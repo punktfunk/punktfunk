@@ -41,7 +41,7 @@ pub struct NativeVaapiEncoder {
     /// A loss plan's anchor, consumed by the next submit.
     anchor: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
-    reference_floor: Option<i64>,
+    reference_floor: Option<crate::Acked>,
     /// Intra refresh wave in flight: the rung a loss with no anchor takes instead of the
     /// IDR. An anchor or a forced IDR abandons it; a loss reported while it runs spoils it
     /// and queues a fresh one behind it, never a restart: iHD tracks each reference's
@@ -420,13 +420,13 @@ impl Encoder for NativeVaapiEncoder {
         };
         // The link loses packets: the newest picture the client confirmed, as an anchor.
         // None resident keeps the chain.
-        if let Some(floor) = self.reference_floor.filter(|_| self.anchor.is_none()) {
+        if let Some(acked) = self.reference_floor.filter(|_| self.anchor.is_none()) {
             let refs: Vec<(usize, i64)> = session
                 .slots()
                 .into_iter()
                 .map(|(slot, wire)| (slot, wire + self.wire_offset))
                 .collect();
-            self.anchor = rfi::pick_acked(&refs, floor).map(|(slot, _)| slot);
+            self.anchor = rfi::pick_acked(&refs, &acked).map(|(slot, _)| slot);
         }
         if self.force_kf || self.anchor.is_some() {
             self.wave = None;
@@ -521,7 +521,7 @@ impl Encoder for NativeVaapiEncoder {
             .into_iter()
             .map(|(slot, wire)| (slot, wire + self.wire_offset))
             .collect();
-        let plan = plan_slot_recovery(&refs, first, self.reference_floor);
+        let plan = plan_slot_recovery(&refs, first, self.reference_floor.as_ref());
         session.distrust(plan.tainted);
         self.anchor = plan.anchor.map(|(slot, _)| slot);
         if self.anchor.is_some() {
@@ -563,8 +563,8 @@ impl Encoder for NativeVaapiEncoder {
         false
     }
 
-    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
-        self.reference_floor = acked_wire;
+    fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
+        self.reference_floor = acked;
     }
 
     fn distrust_references(&mut self) {

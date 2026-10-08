@@ -23,20 +23,29 @@ pub struct SlotPlan {
     pub anchor: Option<(usize, i64)>,
 }
 
-/// The newest trusted `(slot, wire)` at or below `floor`, the newest frame the client
-/// confirmed: what a frame references while the link loses packets
-/// ([`crate::codec::Encoder::set_reference_floor`]). `None` when none is resident; the
-/// caller keeps its ordinary chain, never an IDR.
-pub fn pick_acked(refs: &[(usize, i64)], floor: i64) -> Option<(usize, i64)> {
-    pick_anchor(refs, floor.saturating_add(1))
+/// The newest trusted `(slot, wire)` the client confirmed: what a frame references while the
+/// link loses packets ([`crate::codec::Encoder::set_reference_floor`]). `None` when none is
+/// resident; the caller keeps its ordinary chain, never an IDR.
+pub fn pick_acked(refs: &[(usize, i64)], acked: &crate::codec::Acked) -> Option<(usize, i64)> {
+    let mut best: Option<(usize, i64)> = None;
+    for &(slot, wire) in refs {
+        if acked.contains(wire) && best.is_none_or(|(_, b)| wire > b) {
+            best = Some((slot, wire));
+        }
+    }
+    best
 }
 
 /// Taint and pick from one snapshot of currently-trusted `(slot, wire)` pairs
 /// (caller already dropped previously-distrusted entries). `wire >= loss_first`
 /// taints; `wire < loss_first` is the only eligible anchor, so this call cannot
-/// pick a slot it just tainted. A `floor` also bounds the anchor to `wire <= floor`,
-/// the frames the client confirmed; the taint still covers every slot from the loss on.
-pub fn plan_slot_recovery(refs: &[(usize, i64)], loss_first: i64, floor: Option<i64>) -> SlotPlan {
+/// pick a slot it just tainted. `acked` also bounds the anchor to the frames the client
+/// confirmed; the taint still covers every slot from the loss on.
+pub fn plan_slot_recovery(
+    refs: &[(usize, i64)],
+    loss_first: i64,
+    acked: Option<&crate::codec::Acked>,
+) -> SlotPlan {
     // Callers gate `first < 0` before they get here; `-1`/`None` sentinels are
     // "untrusted". Plain `assert`: `--release` lint runs, and a compiled-out
     // check would drop taints instead of failing.
@@ -53,21 +62,28 @@ pub fn plan_slot_recovery(refs: &[(usize, i64)], loss_first: i64, floor: Option<
     }
     SlotPlan {
         tainted,
-        anchor: pick_recovery(refs, loss_first, floor),
+        anchor: pick_recovery(refs, loss_first, acked),
     }
 }
 
-/// The anchor for a loss from `loss_first`: the newest trusted frame before it, and at or
-/// below `floor` while the encoder holds confirmed references.
+/// The anchor for a loss from `loss_first`: the newest trusted frame before it, and one the
+/// client confirmed while the encoder holds confirmed references.
 pub fn pick_recovery(
     refs: &[(usize, i64)],
     loss_first: i64,
-    floor: Option<i64>,
+    acked: Option<&crate::codec::Acked>,
 ) -> Option<(usize, i64)> {
-    pick_anchor(
-        refs,
-        floor.map_or(loss_first, |f| loss_first.min(f.saturating_add(1))),
-    )
+    match acked {
+        Some(a) => {
+            let confirmed: Vec<(usize, i64)> = refs
+                .iter()
+                .copied()
+                .filter(|&(_, w)| a.contains(w))
+                .collect();
+            pick_anchor(&confirmed, loss_first)
+        }
+        None => pick_anchor(refs, loss_first),
+    }
 }
 
 /// Newest trusted `wire` strictly older than the loss. Ties keep the first
@@ -90,12 +106,13 @@ pub const LTR_ACKED_REACH: i64 = 8;
 /// One frame's long-term step while the encoder holds confirmed references: force the newest
 /// slot the client confirmed within [`LTR_ACKED_REACH`], and mark this frame into a free slot,
 /// round robin from `next`, so a later frame has a newer candidate once the client confirms
-/// it. A slot is free when empty, out of reach, or confirmed and older than the forced one; a
-/// frame still awaiting its confirmation keeps its slot. `slots` holds each slot's wire, `None`
-/// when empty or tainted. Returns the slot to mark and the `(slot, wire)` to force.
+/// it. A slot is free when empty, out of reach, or at or below the newest confirmed frame
+/// and not the forced one: superseded, or lost. A frame still awaiting its confirmation keeps
+/// its slot. `slots` holds each slot's wire, `None` when empty or tainted. Returns the slot to
+/// mark and the `(slot, wire)` to force.
 pub fn ltr_acked_step(
     slots: &[Option<i64>],
-    floor: i64,
+    acked: &crate::codec::Acked,
     cur: i64,
     next: usize,
 ) -> (Option<usize>, Option<(usize, i64)>) {
@@ -105,10 +122,10 @@ pub fn ltr_acked_step(
         .enumerate()
         .filter_map(|(s, w)| w.filter(|&w| reach(w)).map(|w| (s, w)))
         .collect();
-    let force = pick_acked(&refs, floor);
+    let force = pick_acked(&refs, acked);
     let free = |s: usize| match slots[s] {
         None => true,
-        Some(w) => !reach(w) || (w <= floor && force.is_none_or(|(f, _)| f != s)),
+        Some(w) => !reach(w) || (w <= acked.last && force.is_none_or(|(f, _)| f != s)),
     };
     let n = slots.len();
     let mark = (0..n).map(|k| (next + k) % n).find(|&s| free(s));
@@ -344,54 +361,64 @@ mod tests {
         }
     }
 
-    /// Under a floor the reference is the newest resident frame the client confirmed,
-    /// and a loss's anchor is one too, while the taint still covers the loss.
+    fn acked(last: i64, mask: u16) -> crate::codec::Acked {
+        crate::codec::Acked { last, mask }
+    }
+
+    /// The reference is the newest resident frame the client confirmed, never a lost one
+    /// below it, and a loss's anchor is one too, while the taint still covers the loss.
     #[test]
-    fn a_floor_picks_the_newest_confirmed_frame() {
-        // Slots hold 15..=22; 21 and 22 are in flight, 20 is the newest confirmed.
+    fn the_newest_confirmed_resident_frame_is_the_reference() {
+        // Slots hold 15..=22; 21 and 22 are in flight, 20 is the newest confirmed and 18 lost.
+        let a = acked(20, 0b1101);
+        assert!(a.contains(20) && a.contains(19) && a.contains(17) && !a.contains(18));
         let wires = [15i64, 16, 17, 18, 19, 20, 21, 22];
-        assert_eq!(pick_acked(&view(&wires), 20), Some((5, 20)));
-        let tainted = [15i64, 16, 17, 18, 19, -1, 21, 22];
-        assert_eq!(pick_acked(&view(&tainted), 20), Some((4, 19)));
+        assert_eq!(pick_acked(&view(&wires), &a), Some((5, 20)));
+        let gone = [15i64, 16, 17, 18, 19, -1, 21, 22];
+        assert_eq!(pick_acked(&view(&gone), &a), Some((4, 19)));
+        let sparse = [15i64, 16, 17, 18, -1, -1, 21, 22];
+        assert_eq!(pick_acked(&view(&sparse), &a), Some((2, 17)), "18 was lost");
         assert_eq!(
-            pick_acked(&view(&[30, 31]), 20),
+            pick_acked(&view(&[30, 31]), &a),
             None,
             "nothing confirmed resident"
         );
-        let plan = plan_slot_recovery(&view(&wires), 19, Some(17));
+        let plan = plan_slot_recovery(&view(&wires), 19, Some(&a));
         assert_eq!(
             plan.anchor,
             Some((2, 17)),
             "older than the loss and confirmed"
         );
         assert_eq!(plan.tainted, 0b1111_0000);
-        assert_eq!(
-            plan_slot_recovery(&view(&wires), 19, Some(25)).anchor,
-            Some((3, 18))
-        );
     }
 
     /// Under confirmed references a frame forces the newest confirmed slot in reach and marks
     /// only a free slot: a frame still awaiting its confirmation keeps its own.
     #[test]
     fn a_confirmed_ltr_is_forced_and_a_pending_one_is_kept() {
+        let all = |last| acked(last, 0xffff);
         assert_eq!(
-            ltr_acked_step(&[Some(9), Some(10)], 9, 11, 0),
+            ltr_acked_step(&[Some(9), Some(10)], &all(9), 11, 0),
             (None, Some((0, 9))),
             "10 awaits its confirmation"
         );
         assert_eq!(
-            ltr_acked_step(&[Some(9), Some(10)], 10, 11, 1),
+            ltr_acked_step(&[Some(9), Some(10)], &all(10), 11, 1),
             (Some(0), Some((1, 10)))
         );
         assert_eq!(
-            ltr_acked_step(&[Some(9), None], 9, 18, 0),
+            ltr_acked_step(&[Some(9), None], &all(9), 18, 0),
             (Some(0), None),
             "past the reach: the chain"
         );
         assert_eq!(
-            ltr_acked_step(&[Some(12), Some(13)], 9, 14, 1),
+            ltr_acked_step(&[Some(12), Some(13)], &all(9), 14, 1),
             (None, None)
+        );
+        assert_eq!(
+            ltr_acked_step(&[Some(9), Some(10)], &acked(11, 0b10), 12, 0),
+            (Some(1), Some((0, 9))),
+            "10 was lost: never forced, and its slot is free"
         );
     }
 
@@ -401,7 +428,7 @@ mod tests {
     fn two_slots_hold_a_two_frame_round_trip() {
         let (mut slots, mut next) = ([None; 2], 0);
         for i in 0..40i64 {
-            let (mark, force) = ltr_acked_step(&slots, i - 2, i, next);
+            let (mark, force) = ltr_acked_step(&slots, &acked(i - 2, 0xffff), i, next);
             if i >= 6 {
                 let (_, w) = force.expect("a confirmed slot in reach");
                 assert!((2..=3).contains(&(i - w)), "frame {i} reaches {}", i - w);

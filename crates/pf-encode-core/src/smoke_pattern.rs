@@ -172,10 +172,16 @@ impl Soak {
         let last = last + skip * gap;
         for i in 0..=last {
             if self.acked {
-                let floor = i
+                let last = i
                     .checked_sub(lag)
                     .and_then(|top| (0..=top).rev().find(|&j| !lost_at(j)));
-                enc.set_reference_floor(floor.map(|j| j as i64));
+                let acked = last.map(|last| crate::codec::Acked {
+                    last: last as i64,
+                    mask: (0..16)
+                        .filter(|&k| last > k && !lost_at(last - 1 - k))
+                        .fold(0u16, |m, k| m | 1 << k),
+                });
+                enc.set_reference_floor(acked);
                 if lost_at(i) {
                     lost.push(i);
                 }
@@ -200,18 +206,6 @@ impl Soak {
         }
         aus.sort_by_key(|a| a.pts_ns);
         assert_eq!(aus.len(), last + 1, "one AU per frame");
-        if self.acked {
-            // The frame after each loss must lean on a confirmed one; the decode judges it.
-            anchors = (0..=last).filter(|&i| aus[i].recovery_anchor).collect();
-            for &l in &lost {
-                assert!(
-                    aus[l + 1].recovery_anchor,
-                    "AU {}: a confirmed reference",
-                    l + 1
-                );
-            }
-            assert!(aus[1..].iter().all(|a| !a.keyframe), "no IDR under acks");
-        }
         for (i, au) in aus.iter().enumerate().filter(|_| !self.acked) {
             assert_eq!(
                 au.recovery_anchor,
@@ -222,6 +216,9 @@ impl Soak {
                 !idrs.contains(&i) || au.keyframe,
                 "AU {i}: a declined ask is an IDR"
             );
+        }
+        if self.acked {
+            anchors = (0..=last).filter(|&i| aus[i].recovery_anchor).collect();
         }
         let csv = |v: &[usize]| {
             v.iter()
@@ -241,6 +238,17 @@ impl Soak {
             csv(&anchors),
             csv(&idrs)
         );
+        if self.acked {
+            // The frame after each loss must lean on a confirmed one; the decode judges it.
+            for &l in &lost {
+                assert!(
+                    aus[l + 1].recovery_anchor,
+                    "AU {}: a confirmed reference",
+                    l + 1
+                );
+            }
+            assert!(aus[1..].iter().all(|a| !a.keyframe), "no IDR under acks");
+        }
         if let Ok(dir) = std::env::var("PUNKTFUNK_SMOKE_DIR") {
             let ext = match self.codec {
                 crate::Codec::H264 => "h264",

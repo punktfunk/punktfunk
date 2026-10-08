@@ -544,8 +544,9 @@ pub const ENCODE_CTL_FLUSH: u32 = 7;
 /// generation that is not the live one is a stale proxy and a no-op, so a dropped
 /// predecessor never stops its successor.
 pub const ENCODE_CTL_CLOSE: u32 = 8;
-/// Reference only frames at or below wire index `arg0` while `arg1` is 1; `arg1` 0 restores
-/// the chain. A driver without it answers `STATUS_INVALID_PARAMETER`.
+/// Reference only frames the client confirmed: the newest at wire index `arg0`, the sixteen
+/// before it in `arg1 >> 1`, while `arg1 & 1`; `arg1` 0 restores the chain. A driver without
+/// it answers `STATUS_INVALID_PARAMETER`.
 pub const ENCODE_CTL_SET_REFERENCE_FLOOR: u32 = 9;
 
 /// `SET_ENCODE` completed with fewer reply bytes than [`SetEncodeReply`]. The IOCTL itself

@@ -327,6 +327,8 @@ struct LtrProps {
     mark_ltr_index: &'static HSTRING,
     /// `ForceLTRReferenceBitfield` — reference only LTR slots in the bitfield (`1<<N`).
     force_ltr_bitfield: &'static HSTRING,
+    /// `LTRMode` — `1` keeps the slots a force leaves out; `0`, the default, empties them.
+    ltr_mode: &'static HSTRING,
 }
 
 enum AmfVariantKind {
@@ -382,6 +384,7 @@ fn codec_props(codec: Codec) -> CodecProps {
                 max_num_ref_frames: h!("MaxNumRefFrames"),
                 mark_ltr_index: h!("MarkCurrentWithLTRIndex"),
                 force_ltr_bitfield: h!("ForceLTRReferenceBitfield"),
+                ltr_mode: h!("LTRMode"),
             }),
         },
         Codec::H265 => CodecProps {
@@ -421,6 +424,7 @@ fn codec_props(codec: Codec) -> CodecProps {
                 max_num_ref_frames: h!("HevcMaxNumRefFrames"),
                 mark_ltr_index: h!("HevcMarkCurrentWithLTRIndex"),
                 force_ltr_bitfield: h!("HevcForceLTRReferenceBitfield"),
+                ltr_mode: h!("HevcLTRMode"),
             }),
         },
         Codec::Av1 => CodecProps {
@@ -460,6 +464,7 @@ fn codec_props(codec: Codec) -> CodecProps {
                 max_num_ref_frames: h!("Av1MaxNumRefFrames"),
                 mark_ltr_index: h!("Av1MarkCurrentWithLTRIndex"),
                 force_ltr_bitfield: h!("Av1ForceLTRReferenceBitfield"),
+                ltr_mode: h!("Av1LTRMode"),
             }),
         },
         Codec::PyroWave => unreachable!("PyroWave never opens the AMF backend"),
@@ -1059,6 +1064,9 @@ pub struct AmfEncoder {
     ir_active: bool,
     /// Driver accepted LTR at open. Mutually exclusive with intra-refresh; LTR wins.
     ltr_active: bool,
+    /// The driver keeps the slots a force leaves out (`LTRMode` 1): a mark awaiting the
+    /// client's confirmation survives the forces before it.
+    ltr_keep: bool,
     /// Wire `frame_idx` in each LTR slot (`None` = never marked). Newest pre-loss slot is forced.
     ltr_slots: [Option<i64>; NUM_LTR_SLOTS],
     /// Next LTR mark slot (round-robin).
@@ -1067,7 +1075,7 @@ pub struct AmfEncoder {
     /// LTR slot the next submit must force-reference. Consumed on that submit.
     pending_force: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
-    reference_floor: Option<i64>,
+    reference_floor: Option<crate::Acked>,
     /// `PUNKTFUNK_LTR_FORCE_AT=N`: self-trigger [`Encoder::invalidate_ref_frames`] at that index.
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface creation would.
@@ -1151,6 +1159,7 @@ impl AmfEncoder {
             hdr_meta: None,
             ir_active: false,
             ltr_active: false,
+            ltr_keep: false,
             ltr_slots: [None; NUM_LTR_SLOTS],
             next_ltr_slot: 0,
             ltr_mark_interval: ltr_mark_interval(fps),
@@ -1177,9 +1186,9 @@ impl AmfEncoder {
     }
 
     /// Static encoder config, before `Init` and again on `reset()` re-`Init` (Terminate does not
-    /// keep properties on every driver). Returns `(ir_active, ltr_active)` as requested AND
-    /// accepted. Mutually exclusive — see [`Self::ltr_wanted`].
-    fn apply_static_props(&self, comp: &Component) -> Result<(bool, bool)> {
+    /// keep properties on every driver). Returns `(ir_active, ltr_active, ltr_keep)` as
+    /// requested AND accepted. The first two are mutually exclusive — see [`Self::ltr_wanted`].
+    fn apply_static_props(&self, comp: &Component) -> Result<(bool, bool, bool)> {
         let p = &self.props;
         // Usage first: it fully configures the parameter set; everything after is an override.
         comp.set_prop(
@@ -1226,6 +1235,7 @@ impl AmfEncoder {
         // Intra-refresh: per-slot units = ceil(total blocks / period). Optional; gates `caps()`.
         let mut ir_active = false;
         let mut ltr_active = false;
+        let mut ltr_keep = false;
         if let Some(ltr) = p.ltr.as_ref().filter(|_| self.ltr_wanted()) {
             // LTR needs >1 ref frames and is mutually exclusive with intra-refresh.
             let ref_ok = comp.set_prop(
@@ -1239,9 +1249,11 @@ impl AmfEncoder {
                 false,
             )?;
             ltr_active = ref_ok && ltr_ok;
+            ltr_keep = ltr_active && comp.set_prop(ltr.ltr_mode, AmfVariant::from_i64(1), false)?;
             if ltr_active {
                 tracing::info!(
                     slots = NUM_LTR_SLOTS,
+                    keep_unforced = ltr_keep,
                     mark_interval = self.ltr_mark_interval,
                     "AMF LTR-RFI recovery enabled (loss recovery re-references a known-good LTR, not a full IDR)"
                 );
@@ -1376,7 +1388,7 @@ impl AmfEncoder {
             comp.set_prop(p.in_transfer, AmfVariant::from_i64(TRANSFER_LINEAR), false)?;
             comp.set_prop(p.in_primaries, AmfVariant::from_i64(PRIMARIES_BT709), false)?;
         }
-        Ok((ir_active, ltr_active))
+        Ok((ir_active, ltr_active, ltr_keep))
     }
 
     /// Build or rebuild the AMF context + component on the capturer's device.
@@ -1411,7 +1423,7 @@ impl AmfEncoder {
         let r = unsafe { ctx.init_dx11(Some(device)) };
         amf_ok(r, "AMF InitDX11 (capturer device)")?;
         let mut comp = lib.create_component(&ctx, self.props.component)?;
-        let (ir_active, ltr_active) = self.apply_static_props(&comp)?;
+        let (ir_active, ltr_active, ltr_keep) = self.apply_static_props(&comp)?;
         let blocking = set_query_timeout(&comp, self.props.query_timeout);
         let (fmt, _) = input_formats(self.input).context("AMF input format")?;
         amf_ok(
@@ -1421,6 +1433,7 @@ impl AmfEncoder {
         self.ir_active = ir_active;
         // Rebuilt component has no reference history; drop prior LTR marks.
         self.ltr_active = ltr_active;
+        self.ltr_keep = ltr_keep;
         if ltr_active {
             self.ltr_slots = [None; NUM_LTR_SLOTS];
             self.next_ltr_slot = 0;
@@ -1709,6 +1722,7 @@ impl AmfEncoder {
                 cur_idx,
                 self.ltr_mark_interval,
                 self.reference_floor,
+                self.ltr_keep,
             )
         } else {
             LtrStep::default()
@@ -1823,12 +1837,14 @@ impl AmfEncoder {
             }
             if let Some(slot) = force_slot {
                 let r = surf.set_property(force_name, AmfVariant::from_i64(1_i64 << slot));
-                if r == sys::AMF_OK && !acked {
-                    tracing::info!(
-                        slot,
-                        frame = cur_idx,
-                        "AMF LTR-RFI: re-referencing known-good LTR (clean recovery, no IDR)"
-                    );
+                if r == sys::AMF_OK {
+                    if !acked {
+                        tracing::info!(
+                            slot,
+                            frame = cur_idx,
+                            "AMF LTR-RFI: re-referencing known-good LTR (clean recovery, no IDR)"
+                        );
+                    }
                 } else {
                     tracing::warn!(
                         slot,
@@ -1894,8 +1910,9 @@ struct LtrStep {
 /// whose tainted mark the hardware still holds, and forcing it would re-reference the loss. A
 /// force clears every other slot (`LTR_MODE_RESET_UNUSED`, the default: referencing one slot
 /// discards the rest) and takes the frame's mark, which would overwrite it. Under a `floor`
-/// each frame forces the newest confirmed slot and marks into the one the force
-/// cleared ([`super::rfi::ltr_acked_step`]).
+/// each frame forces the newest confirmed slot ([`super::rfi::ltr_acked_step`]); with `keep`
+/// the driver keeps the other slots and the frame marks a free one, else it marks the one
+/// the force cleared.
 #[allow(clippy::too_many_arguments)]
 fn ltr_step(
     slots: &mut [Option<i64>; NUM_LTR_SLOTS],
@@ -1904,7 +1921,8 @@ fn ltr_step(
     forced: bool,
     cur_idx: i64,
     mark_interval: i64,
-    floor: Option<i64>,
+    floor: Option<crate::Acked>,
+    keep: bool,
 ) -> LtrStep {
     let mut step = LtrStep::default();
     if forced {
@@ -1923,9 +1941,10 @@ fn ltr_step(
         }
     }
     if let Some(floor) = floor.filter(|_| step.force_slot.is_none() && !forced) {
-        let (mark, force) = super::rfi::ltr_acked_step(slots, floor, cur_idx, *next_slot);
+        let (mark, force) = super::rfi::ltr_acked_step(slots, &floor, cur_idx, *next_slot);
         // A force clears every other slot, so the slot it frees takes this frame.
         let mark = match force {
+            Some(_) if keep => mark,
             Some((f, _)) => {
                 for (s, marked) in slots.iter_mut().enumerate() {
                     if s != f {
@@ -1998,7 +2017,7 @@ impl Encoder for AmfEncoder {
             .enumerate()
             .filter_map(|(s, m)| m.map(|w| (s, w)))
             .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor);
+        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor.as_ref());
         for (slot, marked) in self.ltr_slots.iter_mut().enumerate() {
             if plan.tainted & (1 << slot) != 0 {
                 *marked = None;
@@ -2031,8 +2050,8 @@ impl Encoder for AmfEncoder {
     }
 
     /// Clear every LTR mirror slot and any queued force (would otherwise re-reference the taint).
-    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
-        self.reference_floor = acked_wire;
+    fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
+        self.reference_floor = acked;
     }
 
     fn distrust_references(&mut self) {
@@ -2153,10 +2172,11 @@ impl Encoder for AmfEncoder {
                 // VCN may read an input surface until Terminate returns; only then can they go.
                 inner.held.clear();
                 match (self.apply_static_props(comp), fmt) {
-                    (Ok((ir, ltr)), Some(fmt)) => {
+                    (Ok((ir, ltr, keep)), Some(fmt)) => {
                         self.ir_active = ir;
                         // Re-Init voids reference history; drop prior LTR marks.
                         self.ltr_active = ltr;
+                        self.ltr_keep = keep;
                         self.ltr_slots = [None; NUM_LTR_SLOTS];
                         self.next_ltr_slot = 0;
                         self.pending_force = None;
@@ -2290,7 +2310,7 @@ mod tests {
     #[test]
     fn an_idr_resets_the_ltr_mirror_and_marks_slot_zero() {
         let (mut slots, mut next, mut pending) = ([Some(3), Some(5)], 1, Some(1));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, true, 9, 8, None);
+        let step = ltr_step(&mut slots, &mut next, &mut pending, true, 9, 8, None, false);
         assert_eq!(
             step,
             LtrStep {
@@ -2306,7 +2326,16 @@ mod tests {
     #[test]
     fn a_queued_force_needs_a_marked_slot() {
         let (mut slots, mut next, mut pending) = ([Some(0), Some(8)], 0, Some(0));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 16, 8, None);
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            16,
+            8,
+            None,
+            false,
+        );
         assert_eq!(
             step,
             LtrStep {
@@ -2316,7 +2345,16 @@ mod tests {
         );
         assert_eq!((slots, pending), ([Some(0), None], None));
         let (mut slots, mut pending) = ([None, Some(8)], Some(0));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 17, 8, None);
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            17,
+            8,
+            None,
+            false,
+        );
         assert_eq!(step, LtrStep::default());
         assert_eq!(pending, None, "a force is consumed either way");
     }
@@ -2326,7 +2364,19 @@ mod tests {
     #[test]
     fn confirmed_references_force_the_newest_confirmed_slot() {
         let (mut slots, mut next, mut pending) = ([Some(9), Some(10)], 0, None);
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 11, 8, Some(10));
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            11,
+            8,
+            Some(crate::Acked {
+                last: 10,
+                mask: 0xffff,
+            }),
+            false,
+        );
         assert_eq!(
             step,
             LtrStep {
@@ -2336,19 +2386,95 @@ mod tests {
             }
         );
         assert_eq!((slots, next), ([Some(11), Some(10)], 1));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 12, 8, Some(9));
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            12,
+            8,
+            Some(crate::Acked {
+                last: 9,
+                mask: 0xffff,
+            }),
+            false,
+        );
         assert_eq!((step.mark_slot, step.force_slot), (None, None));
+    }
+
+    /// A driver that keeps unforced slots keeps a mark awaiting confirmation: the frame
+    /// marks only a free slot, and the next one forces the newer confirmed frame.
+    #[test]
+    fn kept_slots_hold_a_mark_until_it_is_confirmed() {
+        let (mut slots, mut next, mut pending) = ([Some(9), Some(10)], 0, None);
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            11,
+            8,
+            Some(crate::Acked {
+                last: 9,
+                mask: 0xffff,
+            }),
+            true,
+        );
+        assert_eq!((step.mark_slot, step.force_slot), (None, Some(0)));
+        assert_eq!(slots, [Some(9), Some(10)], "10 awaits its confirmation");
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            12,
+            8,
+            Some(crate::Acked {
+                last: 10,
+                mask: 0xffff,
+            }),
+            true,
+        );
+        assert_eq!((step.mark_slot, step.force_slot), (Some(0), Some(1)));
+        assert_eq!(slots, [Some(12), Some(10)]);
     }
 
     /// Marks land on the interval, first on an empty slot, else round robin.
     #[test]
     fn a_mark_prefers_an_empty_slot() {
         let (mut slots, mut next, mut pending) = ([Some(0), None], 0, None);
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 15, 8, None);
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            15,
+            8,
+            None,
+            false,
+        );
         assert_eq!(step, LtrStep::default(), "off the interval");
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 16, 8, None);
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            16,
+            8,
+            None,
+            false,
+        );
         assert_eq!(step.mark_slot, Some(1));
-        let step = ltr_step(&mut slots, &mut next, &mut pending, false, 24, 8, None);
+        let step = ltr_step(
+            &mut slots,
+            &mut next,
+            &mut pending,
+            false,
+            24,
+            8,
+            None,
+            false,
+        );
         assert_eq!(step.mark_slot, Some(0), "both marked: the round robin");
         assert_eq!(slots, [Some(24), Some(16)]);
     }
@@ -3152,6 +3278,7 @@ mod tests {
     #[ignore = "requires an AMD GPU with AMF — run manually on an AMD Windows box (.173)"]
     fn amf_ltr_anchor_soak() {
         use crate::{smoke_d3d11::nv12_scroll_frame, smoke_pattern::Soak};
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         try_factory().expect("AMF runtime");
         let device = amd_d3d11_device().expect("an AMD adapter");
         let soak = Soak::from_env();
@@ -3174,8 +3301,8 @@ mod tests {
             "the driver declined LTR: nothing to soak"
         );
         println!(
-            "amf_ltr_anchor_soak: LTR mark interval {}",
-            enc.ltr_mark_interval
+            "amf_ltr_anchor_soak: LTR mark interval {} keep {}",
+            enc.ltr_mark_interval, enc.ltr_keep
         );
         let (w, h) = (soak.w, soak.h);
         soak.run("amf", &mut enc, |i| {

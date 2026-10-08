@@ -905,7 +905,7 @@ pub struct QsvEncoder {
     ltr_mark_interval: i64,
     pending_force: Option<usize>,
     /// The newest frame the client confirmed, while the host holds confirmed references.
-    reference_floor: Option<i64>,
+    reference_floor: Option<crate::Acked>,
     ltr_test_force_at: Option<i64>,
     /// Refuse this frame after the LTR decision, as a failed surface fetch would.
     #[cfg(test)]
@@ -1356,12 +1356,12 @@ impl QsvEncoder {
         }
         // Confirmed references, AVC and HEVC only: AV1 rejects nothing, so a hint it ignored
         // would tag a frame that still leans on a loss.
-        let floor = self.reference_floor.filter(|_| self.codec != Codec::Av1);
-        if let Some(floor) = floor.filter(|_| step.force.is_none() && !forced) {
+        let acked = self.reference_floor.filter(|_| self.codec != Codec::Av1);
+        if let Some(acked) = acked.filter(|_| step.force.is_none() && !forced) {
             let view: [Option<i64>; NUM_LTR_SLOTS] =
                 std::array::from_fn(|s| self.ltr_slots[s].filter(|_| !self.ltr_tainted[s]));
             let (mark, force) =
-                super::rfi::ltr_acked_step(&view, floor, cur_idx, self.next_ltr_slot);
+                super::rfi::ltr_acked_step(&view, &acked, cur_idx, self.next_ltr_slot);
             // A force rejects every other mark, so the slot it frees takes this frame.
             let mark = match force {
                 Some((f, _)) => Some((f + 1) % NUM_LTR_SLOTS),
@@ -1751,7 +1751,7 @@ impl Encoder for QsvEncoder {
             .filter(|&(slot, _)| !self.ltr_tainted[slot])
             .filter_map(|(s, m)| m.map(|w| (s, w)))
             .collect();
-        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor);
+        let plan = super::rfi::plan_slot_recovery(&view, first, self.reference_floor.as_ref());
         for (slot, tainted) in self.ltr_tainted.iter_mut().enumerate() {
             if plan.tainted & (1 << slot) != 0 {
                 *tainted = true;
@@ -1788,8 +1788,8 @@ impl Encoder for QsvEncoder {
     /// tracks the hardware DPB and RejectedRefList only names `Some` slots.
     /// Taint clears on IDR flush or re-mark. Drop `pending_force` so an unconsumed
     /// force cannot re-reference a slot this call just distrusted.
-    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
-        self.reference_floor = acked_wire;
+    fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
+        self.reference_floor = acked;
     }
 
     fn distrust_references(&mut self) {
@@ -2234,7 +2234,10 @@ mod tests {
     fn confirmed_references_force_the_newest_confirmed_slot() {
         let mut enc = ltr_encoder();
         enc.ltr_slots = [Some(9), Some(10)];
-        enc.reference_floor = Some(10);
+        enc.reference_floor = Some(crate::Acked {
+            last: 10,
+            mask: 0xffff,
+        });
         let step = enc.ltr_step(false, 11);
         assert_eq!(
             step,

@@ -206,6 +206,24 @@ pub struct EncoderCaps {
     pub crops_input: bool,
 }
 
+/// The frames a client confirmed it decoded: the newest, and the sixteen before it as bits
+/// (bit `i` is wire `last - 1 - i`). What [`Encoder::set_reference_floor`] takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Acked {
+    pub last: i64,
+    pub mask: u16,
+}
+
+impl Acked {
+    pub fn contains(&self, wire: i64) -> bool {
+        match self.last - wire {
+            0 => true,
+            d @ 1..=16 => self.mask & (1 << (d - 1)) != 0,
+            _ => false,
+        }
+    }
+}
+
 /// Hardware encoder. One per session, on the encode thread.
 pub trait Encoder: Send {
     /// Submit one captured frame. Keep `frame` and its GPU payload alive until
@@ -252,12 +270,12 @@ pub trait Encoder: Send {
     /// unusable: ordinary prediction uses the backend's slot index. A re-mark
     /// or an IDR that flushes the DPB restores trust. Default: no-op.
     fn distrust_references(&mut self) {}
-    /// Reference only frames at or below `acked_wire`, the newest the client confirmed it
-    /// decoded, while the link loses packets; `None` restores the ordinary chain. A lost
-    /// frame is then never referenced, and the client skips it. A frame that references a
-    /// confirmed one carries `recovery_anchor`. With none resident the backend keeps its
-    /// chain, never an IDR. Set before each submit. Default: no-op.
-    fn set_reference_floor(&mut self, _acked_wire: Option<i64>) {}
+    /// Reference only frames the client confirmed it decoded ([`Acked`]), while the link
+    /// loses packets; `None` restores the ordinary chain. A lost frame is then never
+    /// referenced, and the client skips it. A frame that references a confirmed one carries
+    /// `recovery_anchor`. With none resident the backend keeps its chain, never an IDR. Set
+    /// before each submit. Default: no-op.
+    fn set_reference_floor(&mut self, _acked: Option<Acked>) {}
     /// Escalate to pipelined retrieve under GPU contention: `poll` stops waiting
     /// on the newest in-flight AU (a retrieve thread on NVENC, a completion probe
     /// on Vulkan/VA-API), so AUs may ride ~one loop tick behind their submit.

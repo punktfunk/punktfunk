@@ -782,7 +782,7 @@ pub struct VulkanVideoEncoder {
     slot_poc: Vec<i32>,  // HEVC POC per slot — reference-delta domain
     prev_slot: usize,
     /// The newest frame the client confirmed, while the host holds confirmed references.
-    reference_floor: Option<i64>,
+    reference_floor: Option<crate::Acked>,
 
     csc_pipe: vk::Pipeline,
     csc_layout: vk::PipelineLayout,
@@ -2336,7 +2336,7 @@ impl VulkanVideoEncoder {
             if !is_idr {
                 // Taint sweep already ran in `invalidate_ref_frames`; re-pick against the table now.
                 let refs = trusted_refs(&self.slot_wire);
-                match crate::rfi::pick_recovery(&refs, lf, self.reference_floor) {
+                match crate::rfi::pick_recovery(&refs, lf, self.reference_floor.as_ref()) {
                     Some((s, _)) => {
                         ref_slot = s;
                         recovery = true;
@@ -2373,10 +2373,11 @@ impl VulkanVideoEncoder {
                     },
                 }
             }
-        } else if let Some(floor) = self.reference_floor.filter(|_| !is_idr) {
+        } else if let Some(confirmed) = self.reference_floor.filter(|_| !is_idr) {
             // The link loses packets: the newest frame the client confirmed. None resident
             // keeps the chain.
-            if let Some((s, _)) = crate::rfi::pick_acked(&trusted_refs(&self.slot_wire), floor) {
+            let refs = trusted_refs(&self.slot_wire);
+            if let Some((s, _)) = crate::rfi::pick_acked(&refs, &confirmed) {
                 ref_slot = s;
                 acked = true;
             }
@@ -4066,7 +4067,7 @@ impl Encoder for VulkanVideoEncoder {
         let plan = crate::rfi::plan_slot_recovery(
             &trusted_refs(&self.slot_wire),
             first_frame,
-            self.reference_floor,
+            self.reference_floor.as_ref(),
         );
         for (s, w) in self.slot_wire.iter_mut().enumerate() {
             if plan.tainted & (1 << s) != 0 {
@@ -4099,8 +4100,8 @@ impl Encoder for VulkanVideoEncoder {
         }
     }
 
-    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
-        self.reference_floor = acked_wire;
+    fn set_reference_floor(&mut self, acked: Option<crate::Acked>) {
+        self.reference_floor = acked;
     }
 
     /// Withdraw anchor trust from every resident reference. Blank `slot_wire` only;
