@@ -304,7 +304,7 @@ pub(super) fn send_loop(
         pacer: crate::send_pacing::Pacer::new(stats.ports, crate::send_pacing::forced()),
         ring: ResendRing::default(),
         link: None,
-        link_gso: false,
+        link_gso: None,
         streamed: None,
         burst: None,
         perf_line: PerfLine::new(&stats),
@@ -363,8 +363,9 @@ struct SendLoop {
     ring: ResendRing,
     /// The `L` last paced at, logged when it moves.
     link: Option<crate::send_pacing::LinkRate>,
-    /// GSO is on: the frame paces above the stream's own rate.
-    link_gso: bool,
+    /// What the session was last told about GSO; `None` before the first frame, since the
+    /// transport's own default may be on.
+    link_gso: Option<bool>,
     streamed: Option<punktfunk_core::packet::StreamedAu>,
     burst: Option<ProbeBurst>,
     perf_line: PerfLine,
@@ -464,8 +465,8 @@ impl SendLoop {
         // whole takes the frame with it.
         let stream_bps = (f64::from(bitrate_kbps) * 1_000.0 * sp::pace_factor()) as u64;
         let gso = rate > stream_bps;
-        if gso != self.link_gso {
-            self.link_gso = gso;
+        if self.link_gso != Some(gso) {
+            self.link_gso = Some(gso);
             self.session.set_gso(gso);
         }
         // A new epoch takes effect at the AU that carries it, never mid-AU.
@@ -730,16 +731,22 @@ impl PerfLine {
 #[cfg(test)]
 mod tests {
     use super::{send_loop, AuMeta, FrameMsg, PaceStat, PerfWindow, SendMsg, SendStats};
+    use punktfunk_core::transport::Transport;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
+    use std::sync::{Arc, Mutex};
 
-    /// A client's NACK on the send thread: the frame went out whole, then the shards the
-    /// client names leave again under fresh packet numbers, outside the clock, and the
-    /// host's link line counts them. A frame the ring never held sends nothing.
-    #[test]
-    fn a_resend_sends_the_named_shards_again() {
+    /// A send thread on `transport` at 20 Mbit/s in `shape`: its frame channel, its stop
+    /// flag, the counters it reports into and the thread.
+    fn spawn_loop(
+        transport: Box<dyn Transport>,
+        shape: crate::send_pacing::Shape,
+    ) -> (
+        std::sync::mpsc::SyncSender<SendMsg>,
+        Arc<AtomicBool>,
+        Arc<crate::session_status::SessionCounters>,
+        std::thread::JoinHandle<()>,
+    ) {
         use punktfunk_core::config::{Config, FecConfig, FecScheme, Role};
-        use punktfunk_core::transport::Transport;
-        use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8};
-        use std::sync::Arc;
         let cfg = Config {
             role: Role::Host,
             fec: FecConfig {
@@ -751,22 +758,22 @@ mod tests {
             max_frame_bytes: 1 << 20,
             loopback_drop_period: 0,
         };
-        let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
         let media = punktfunk_core::session::MediaV2 {
             clock_origin_ns: 0,
             keys: None,
             clock: None,
         };
-        let session = punktfunk_core::session::Session::new(cfg, media, Box::new(host_tp)).unwrap();
+        let session = punktfunk_core::session::Session::new(cfg, media, transport).unwrap();
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel(3);
-        let (_probe_tx, probe_rx) = std::sync::mpsc::channel();
-        let (probe_result_tx, _probe_result_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (_shard_tx, shard_rx) = std::sync::mpsc::channel();
+        let (_, probe_rx) = std::sync::mpsc::channel();
+        let (probe_result_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (_, shard_rx) = std::sync::mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(crate::session_status::SessionCounters::default());
-        let dir = std::env::temp_dir().join("pf-resend-test");
         let stats = SendStats {
-            rec: crate::stats_recorder::StatsRecorder::new(dir),
+            rec: crate::stats_recorder::StatsRecorder::new(
+                std::env::temp_dir().join("pf-send-test"),
+            ),
             mode: Arc::new(AtomicU64::new(0)),
             codec: "test",
             client: "test".into(),
@@ -775,7 +782,7 @@ mod tests {
             link_kbps: Arc::new(AtomicU32::new(0)),
             ports: Default::default(),
             link_paced: false,
-            shape: Arc::new(AtomicU8::new(0)),
+            shape: Arc::new(AtomicU8::new(shape as u8)),
             bringup: crate::bringup::Trace::start("test", Arc::new(AtomicU32::new(0))),
             wire_sock: None,
             driver_dropped: Arc::new(AtomicU64::new(0)),
@@ -802,26 +809,39 @@ mod tests {
                 )
             }
         });
-        let meta = AuMeta {
-            capture_ns: 0,
-            epoch: 0,
-            flags: 0,
-            frame_index: 7,
-            encode_us: 0,
-            queue_us: 0,
-            cap_us: 0,
-            submit_us: 0,
-            wait_us: 0,
-            repeat: false,
-            was_measured: false,
-            driver: None,
-        };
-        frame_tx
-            .send(SendMsg::Frame(FrameMsg {
-                data: vec![3u8; 8 * 1024],
-                meta,
-            }))
-            .unwrap();
+        (frame_tx, stop, counters, thread)
+    }
+
+    /// One whole 8 KiB AU as frame `index`.
+    fn frame(index: u32) -> SendMsg {
+        SendMsg::Frame(FrameMsg {
+            data: vec![3u8; 8 * 1024],
+            meta: AuMeta {
+                capture_ns: 0,
+                epoch: 0,
+                flags: 0,
+                frame_index: index,
+                encode_us: 0,
+                queue_us: 0,
+                cap_us: 0,
+                submit_us: 0,
+                wait_us: 0,
+                repeat: false,
+                was_measured: false,
+                driver: None,
+            },
+        })
+    }
+
+    /// A client's NACK on the send thread: the frame went out whole, then the shards the
+    /// client names leave again under fresh packet numbers, outside the clock, and the
+    /// host's link line counts them. A frame the ring never held sends nothing.
+    #[test]
+    fn a_resend_sends_the_named_shards_again() {
+        let (host_tp, client_tp) = punktfunk_core::transport::loopback_pair(0, 0);
+        let (frame_tx, stop, counters, thread) =
+            spawn_loop(Box::new(host_tp), crate::send_pacing::Shape::Auto);
+        frame_tx.send(frame(7)).unwrap();
         frame_tx
             .send(SendMsg::Resend {
                 frame: 7,
@@ -857,6 +877,45 @@ mod tests {
         let mut m = crate::link_health::LinkMinute::default();
         counters.link.take(&mut m);
         assert_eq!(m.resend_pkts, 2);
+    }
+
+    /// Each GSO switch (`Some`) and each packet sent (`None`), in order.
+    #[derive(Clone, Default)]
+    struct GsoLog(Arc<Mutex<Vec<Option<bool>>>>);
+
+    impl Transport for GsoLog {
+        fn send(&self, _: &[u8]) -> std::io::Result<bool> {
+            self.0.lock().unwrap().push(None);
+            Ok(true)
+        }
+        fn set_gso(&self, on: bool) {
+            self.0.lock().unwrap().push(Some(on));
+        }
+        fn recv(&self) -> std::io::Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+
+    /// A session paced at the stream's own rate has GSO off before its first packet, whatever
+    /// the transport defaults to, and is told once.
+    #[test]
+    fn gso_is_off_before_the_first_frame_at_the_stream_rate() {
+        let log = GsoLog::default();
+        let (frame_tx, stop, _, thread) =
+            spawn_loop(Box::new(log.clone()), crate::send_pacing::Shape::Smooth);
+        frame_tx.send(frame(0)).unwrap();
+        frame_tx.send(frame(1)).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while log.0.lock().unwrap().len() < 21 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(frame_tx);
+        thread.join().unwrap();
+        let events = log.0.lock().unwrap();
+        assert_eq!(events.first(), Some(&Some(false)), "{events:?}");
+        // 8 data + 2 parity per frame.
+        assert_eq!(events[1..], [None; 20]);
     }
 
     /// A host AU feeds the host stages and a driver AU the driver's. A repeat never counts
