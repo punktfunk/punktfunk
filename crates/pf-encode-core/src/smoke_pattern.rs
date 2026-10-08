@@ -102,6 +102,10 @@ pub struct Soak {
     losses: usize,
     gap: usize,
     lag: usize,
+    /// `PF_WAVE_ACKED=1`: nothing is asked; before each frame the encoder takes the newest
+    /// frame `lag` or more back that was not lost as its reference floor, as a client's
+    /// confirmations give it.
+    acked: bool,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -134,6 +138,7 @@ impl Soak {
             losses: count("PF_WAVE_SOAK", 12),
             gap: count("PF_WAVE_GAP", 40),
             lag: count("PF_WAVE_LAG", 2),
+            acked: std::env::var("PF_WAVE_ACKED").is_ok_and(|v| v == "1"),
         };
         assert!(
             soak.lag >= 1 && soak.lag < soak.gap,
@@ -143,9 +148,10 @@ impl Soak {
     }
 
     /// Drive `enc` with `frame(i)` for every frame index and check each loss came back as a
-    /// recovery anchor or, declined, as an IDR. The full stream and the view without the lost
-    /// frames land in `PUNKTFUNK_SMOKE_DIR` as `{name}-anchor.*` and `{name}-anchor-dropS.*`,
-    /// with the `.idx` sidecars `gpu_parity`'s field hashers read.
+    /// recovery anchor or, declined, as an IDR; under `acked`, that the frame after each loss
+    /// leans on a confirmed one. The full stream and the view without the lost frames land in
+    /// `PUNKTFUNK_SMOKE_DIR` as `{name}-{anchor,acked}.*` and `…-dropS.*`, with the `.idx`
+    /// sidecars `gpu_parity`'s field hashers read.
     pub fn run(
         &self,
         name: &str,
@@ -158,8 +164,22 @@ impl Soak {
         let last = base + losses * gap;
         let (mut lost, mut anchors, mut idrs) = (Vec::new(), Vec::new(), Vec::new());
         let mut aus: Vec<crate::EncodedFrame> = Vec::new();
+        // Under acks the first loss waits a gap, until a confirmed frame can exist.
+        let skip = usize::from(self.acked);
+        let lost_at = |j: usize| {
+            j >= 1 && (j - 1) % gap == 0 && (skip..losses + skip).contains(&((j - 1) / gap))
+        };
+        let last = last + skip * gap;
         for i in 0..=last {
-            if i >= base && (i - base) % gap == 0 && (i - base) / gap < losses {
+            if self.acked {
+                let floor = i
+                    .checked_sub(lag)
+                    .and_then(|top| (0..=top).rev().find(|&j| !lost_at(j)));
+                enc.set_reference_floor(floor.map(|j| j as i64));
+                if lost_at(i) {
+                    lost.push(i);
+                }
+            } else if i >= base && (i - base) % gap == 0 && (i - base) / gap < losses {
                 let l = (i - lag) as i64;
                 lost.push(i - lag);
                 if enc.invalidate_ref_frames(l, l) {
@@ -180,7 +200,19 @@ impl Soak {
         }
         aus.sort_by_key(|a| a.pts_ns);
         assert_eq!(aus.len(), last + 1, "one AU per frame");
-        for (i, au) in aus.iter().enumerate() {
+        if self.acked {
+            // The frame after each loss must lean on a confirmed one; the decode judges it.
+            anchors = (0..=last).filter(|&i| aus[i].recovery_anchor).collect();
+            for &l in &lost {
+                assert!(
+                    aus[l + 1].recovery_anchor,
+                    "AU {}: a confirmed reference",
+                    l + 1
+                );
+            }
+            assert!(aus[1..].iter().all(|a| !a.keyframe), "no IDR under acks");
+        }
+        for (i, au) in aus.iter().enumerate().filter(|_| !self.acked) {
             assert_eq!(
                 au.recovery_anchor,
                 anchors.contains(&i),
@@ -202,8 +234,9 @@ impl Soak {
         } = self;
         println!(
             "{name}_ltr_anchor_soak: {w}x{h} {fps} fps {mbps} Mbps {:?} lag={lag} gap={gap} \
-             lost={} anchors={} idrs={}",
+             acked={} lost={} anchors={} idrs={}",
             self.codec,
+            self.acked,
             csv(&lost),
             csv(&anchors),
             csv(&idrs)
@@ -221,8 +254,9 @@ impl Soak {
                 .filter(|(i, _)| !lost.contains(i))
                 .map(|(_, a)| a.data.as_slice())
                 .collect();
-            write_capture(&format!("{dir}/{name}-anchor.{ext}"), &full).expect("write");
-            write_capture(&format!("{dir}/{name}-anchor-dropS.{ext}"), &view).expect("write");
+            let mode = if self.acked { "acked" } else { "anchor" };
+            write_capture(&format!("{dir}/{name}-{mode}.{ext}"), &full).expect("write");
+            write_capture(&format!("{dir}/{name}-{mode}-dropS.{ext}"), &view).expect("write");
         }
     }
 }
