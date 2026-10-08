@@ -79,11 +79,17 @@ fn build(manifest: &PluginManifest, spec: &LaunchSpec) -> Result<ExecRecipe, Str
     let a = args(manifest, spec)?;
     let launch = crate::emulators::launch_spec(a.emulator, a.platform, a.file, a.core)
         .map_err(|e| e.to_string())?;
-    // Only an audio patch sets these, and this launch passes none.
+    // hermir's SDL hints for a copy that is no Flatpak; `env` sets them and execs the copy.
+    let mut argv = Vec::new();
     if !launch.env.is_empty() {
-        return Err("the command needs environment variables this launch can't set".into());
+        if cfg!(windows) {
+            return Err("the command needs environment variables this launch can't set".into());
+        }
+        argv.push("env".to_string());
+        argv.extend(launch.env.iter().map(|(k, v)| format!("{k}={v}")));
     }
-    let mut argv = launch.argv().into_iter();
+    argv.extend(launch.argv());
+    let mut argv = argv.into_iter();
     let program = argv.next().ok_or("the command is empty")?;
     Ok(ExecRecipe {
         program,
