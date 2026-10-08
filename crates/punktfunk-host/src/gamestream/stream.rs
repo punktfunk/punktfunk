@@ -312,6 +312,7 @@ fn run(
             preset: None,
             profile: None,
             pad: punktfunk_core::config::GamepadPref::Xbox360,
+            pad_slots: None,
         };
         // The entry's own `apps.json` prep, then its library entry's. `PF_APP_TITLE` and the
         // `PF_STREAM_*` names the native plane's prep env and the marker file use.

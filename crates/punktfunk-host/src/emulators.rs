@@ -2,6 +2,8 @@
 //! on the operator's click and lands under `<prefix>/<id>/app`, the folder the plugin
 //! is then granted, so its launch templates may point inside it.
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::{Duration, Instant};
 
 use hermir::progress::Quiet;
 use hermir::{Hermir, Installed, Options};
@@ -119,17 +121,45 @@ pub fn has_core(dir: &Path, core: &str) -> bool {
     .is_file()
 }
 
+/// How long a launch waits for the client's first pad, and for every pad it claimed to be
+/// built. A usbip DualSense takes about 0.4 s to enumerate.
+const SETTLE_FIRST: Duration = Duration::from_millis(500);
+const SETTLE_ALL: Duration = Duration::from_millis(1500);
+
 /// The pads this host made for its players, in the order they appeared: seat 1 is the first.
-/// Linux reads them off `/proc/bus/input/devices`. With none up yet (the client's pad frames
-/// arrive after the launch), seat 1 is the first pad a session of `kind` makes, at index 0.
-pub fn session_players(kind: GamepadPref) -> Vec<hermir::Player> {
+/// The client's pads land just after the handshake, so this waits for the ones its session
+/// claimed (`slots`, one bit each) to show up; Linux reads them off `/proc/bus/input/devices`.
+/// A pad claimed but not built yet, or none at all, seats as the pad a session of `kind` makes.
+pub fn session_players(kind: GamepadPref, slots: Option<&AtomicU16>) -> Vec<hermir::Player> {
+    let claimed = || slots.map_or(0, |s| s.load(Ordering::Relaxed).count_ones() as usize);
+    let start = Instant::now();
     let mut pads = Vec::new();
-    #[cfg(target_os = "linux")]
-    if let Ok(text) = std::fs::read_to_string("/proc/bus/input/devices") {
-        pads = virtual_pads(&text);
+    loop {
+        #[cfg(target_os = "linux")]
+        if let Ok(text) = std::fs::read_to_string("/proc/bus/input/devices") {
+            pads = virtual_pads(&text);
+        }
+        // Nothing to read the built pads from: the claim is all there is.
+        #[cfg(not(target_os = "linux"))]
+        let pads_len = claimed();
+        #[cfg(target_os = "linux")]
+        let pads_len = pads.len();
+        let (want, waited) = (claimed(), start.elapsed());
+        if slots.is_none()
+            || (want > 0 && pads_len >= want)
+            || (want == 0 && waited >= SETTLE_FIRST)
+            || waited >= SETTLE_ALL
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
-    if pads.is_empty() {
-        pads.push(first_pad(kind));
+    while pads.len() < claimed().max(1) {
+        let index = u32::try_from(pads.len()).unwrap_or(u32::MAX);
+        pads.push(hermir::PadRef {
+            index,
+            ..first_pad(kind)
+        });
     }
     pads.into_iter()
         .zip(1u8..)
@@ -287,14 +317,15 @@ fn revert_with(h: &Hermir) {
 
 /// Every copy of `id` answers its first-run questions, gets `platform`'s firmware from
 /// `firmware_dir` (the regular files in it, not below), and has the session's pads written
-/// in seat order (steps of kind `players`; reverted after the game), `pad` the kind they are.
-/// `platform` is a catalog id or any of its aliases (RomM slug, ES-DE folder, libretro name).
-/// Blocking: an installer may run.
+/// in seat order (steps of kind `players`; reverted after the game): see [`session_players`]
+/// for `pad` and `slots`. `platform` is a catalog id or any of its aliases (RomM slug, ES-DE
+/// folder, libretro name). Blocking: an installer may run.
 pub fn prepare(
     id: &str,
     platform: Option<&str>,
     firmware_dir: Option<&Path>,
     pad: GamepadPref,
+    slots: Option<&AtomicU16>,
 ) -> hermir::Result<Vec<(String, hermir::Prepared)>> {
     let h = open()?;
     // A game that ended without a lease reporting it (its session took the nested gamescope
@@ -323,7 +354,7 @@ pub fn prepare(
             .collect(),
     };
     let players = hermir::Patch {
-        players: Some(session_players(pad)),
+        players: Some(session_players(pad, slots)),
         ..Default::default()
     };
     emulator
@@ -487,9 +518,10 @@ pub fn in_catalog(id: &str) -> bool {
 }
 
 /// Before an `emulator` entry starts: every copy past its first-run questions, the platform's
-/// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads
-/// (`pad` the kind they are). What it did goes to the log; a launch never waits on it to succeed.
-pub fn prepare_launch(library_id: &str, pad: GamepadPref) {
+/// firmware from the plugin's `firmware/<platform>` when it staged some, the session's pads.
+/// What it did goes to the log. A launch waits for the client's pads, at most [`SETTLE_ALL`],
+/// and never on the rest to succeed.
+pub fn prepare_launch(library_id: &str, pad: GamepadPref, slots: Option<&AtomicU16>) {
     let Some(entry) = crate::library::entry_for_library_id(library_id) else {
         return;
     };
@@ -507,7 +539,7 @@ pub fn prepare_launch(library_id: &str, pad: GamepadPref) {
         .as_deref()
         .zip(platform)
         .and_then(|(provider, platform)| staged_firmware(provider, platform));
-    match prepare(&spec.value, platform, staged.as_deref(), pad) {
+    match prepare(&spec.value, platform, staged.as_deref(), pad, slots) {
         Ok(copies) => {
             for (exe, prepared) in copies {
                 for s in prepared.steps {
@@ -595,6 +627,15 @@ I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\nN: Name=\"AT Translated Set 2
         );
         // RPCS3 binds `<SDL name> <n>`.
         assert_eq!(pads[0].sdl_name(), "DualSense Wireless Controller");
+    }
+
+    #[test]
+    fn every_pad_the_session_claimed_gets_a_seat() {
+        // No pad is built on a test box: both seats are the session's kind, in claim order.
+        let seats = session_players(GamepadPref::DualSense, Some(&AtomicU16::new(0b101)));
+        let got: Vec<_> = seats.iter().map(|p| (p.seat, p.pad.index)).collect();
+        assert_eq!(got, [(1, 0), (2, 1)]);
+        assert_eq!(seats[1].pad.sdl_name(), "DualSense Wireless Controller");
     }
 
     #[test]
