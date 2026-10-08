@@ -243,8 +243,9 @@ pub(crate) fn group_bytes(rate_bps: u64) -> usize {
 }
 
 /// Bytes leave on a clock at `rate_bps`, carried across frames so back-to-back frames
-/// cannot add up to a blast. A clock in the past restarts at `now`: a late frame is owed
-/// no catch-up.
+/// cannot add up to a blast. A caller late by up to one group keeps that debt, so sleep
+/// overshoot does not lower the rate; a clock idle longer restarts at `now`, owing no
+/// catch-up, so a frame's head is never two groups.
 #[derive(Debug)]
 pub(crate) struct GroupClock {
     rate_bps: u64,
@@ -264,12 +265,14 @@ impl GroupClock {
     }
 
     /// Book `bytes` on the clock: the wait owed before they may leave. A wait the caller
-    /// skips stays owed, so the rate holds over a few groups.
+    /// skips stays owed, and so does lateness up to this group's own wire time.
     pub(crate) fn advance(&mut self, bytes: usize, now: Instant) -> Duration {
         let ahead = self.next.saturating_duration_since(now);
-        let start = if ahead.is_zero() { now } else { self.next };
-        self.next = start
-            + Duration::from_nanos((bytes as u64).saturating_mul(8_000_000_000) / self.rate_bps);
+        let wire =
+            Duration::from_nanos((bytes as u64).saturating_mul(8_000_000_000) / self.rate_bps);
+        let late = now.saturating_duration_since(self.next);
+        let start = if late <= wire { self.next } else { now };
+        self.next = start + wire;
         ahead
     }
 
@@ -683,16 +686,16 @@ mod tests {
     /// clock: about 1.5 ms end to end instead of one line-rate blast.
     #[test]
     fn a_frame_leaves_in_groups_on_the_clock() {
+        let t0 = Instant::now();
         let mut p = Pacer::new(gbe(), None);
         p.update(80_000, 0, None, Shape::Auto, Duration::from_millis(33));
         p.begin(0);
         let pkts = packets(116, 1_440);
-        let t0 = Instant::now();
         let groups = run(&mut p, &pkts);
         let (stat, _) = p.finish();
         assert!(groups.iter().all(|&(b, _)| b <= 56_250), "{groups:?}");
         assert_eq!(groups.iter().map(|g| g.0).sum::<usize>(), 116 * 1_440);
-        // The last group waits for the wire time of all before it.
+        // The last group waits for the wire time of all before it, from the clock's start.
         let before_last: usize = groups[..groups.len() - 1].iter().map(|g| g.0).sum();
         let owed = Duration::from_nanos(before_last as u64 * 8_000_000_000 / 900_000_000);
         let took = groups.last().unwrap().1 - t0;
@@ -798,6 +801,23 @@ mod tests {
         let much_later = t0 + Duration::from_millis(50);
         c.wake_gap(much_later);
         assert_eq!(c.ahead(much_later), WAKE_GAP);
+    }
+
+    /// 36 kB at 80 Mbit/s is a 3.6 ms group. A caller 2 ms late books one group after the
+    /// last deadline; one 50 ms late restarts at `now`, owing no catch-up.
+    #[test]
+    fn a_late_caller_keeps_at_most_one_group_of_debt() {
+        let group = Duration::from_micros(3_600);
+        let t0 = Instant::now();
+        let mut c = GroupClock::new(80_000_000, t0);
+        c.advance(36_000, t0);
+        let late = t0 + group + Duration::from_millis(2);
+        assert_eq!(c.advance(36_000, late), Duration::ZERO);
+        assert_eq!(c.ahead(late), Duration::from_micros(1_600));
+
+        let idle = late + Duration::from_millis(50);
+        assert_eq!(c.advance(36_000, idle), Duration::ZERO);
+        assert_eq!(c.ahead(idle), group);
     }
 
     /// A wait from the sleep floor up sleeps, one above the spin floor spins, a shorter one
