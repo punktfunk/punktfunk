@@ -214,17 +214,34 @@ impl LinkRate {
     }
 }
 
-/// `R`, bits/s: `min(max(f × B, 0.9 L), 0.9 L_hard)`. `L_hard` is the ports' speed, and for
-/// a pinned stream also the link it proved ([`pinned_wall`]).
+/// `R`, bits/s: `min(max(f × B, 0.9 L), cap)` ([`cap_bps`]).
 pub(crate) fn rate_bps(bitrate_kbps: u32, link: &LinkRate, pinned_wall: Option<u32>) -> u64 {
     let stream = (f64::from(bitrate_kbps) * 1_000.0 * pace_factor()) as u64;
-    let r = stream.max(u64::from(link.kbps) * 900);
+    stream
+        .max(u64::from(link.kbps) * 900)
+        .min(cap_bps(bitrate_kbps, link, pinned_wall))
+        .max(1)
+}
+
+/// The least a measured `L` holds `R` to, as a multiple of the stream's bitrate.
+const CAP_STREAM_FACTOR: u64 = 3;
+const CAP_STREAM_DIV: u64 = 2;
+
+/// The most `R` may be, bits/s: the `L` the client measured, never under 1.5 × B, then
+/// 0.9 `L_hard` (the ports' speed) and 0.9 a pinned stream's proven link ([`pinned_wall`]).
+/// The bottleneck drains at `L` however fast a frame leaves. Paced under its own bitrate,
+/// a stream delivers only what the pacer lets out, and the next wall reads that.
+/// The client reports the shared [`FLOOR_KBPS`] until it knows anything; that caps nothing.
+pub(crate) fn cap_bps(bitrate_kbps: u32, link: &LinkRate, pinned_wall: Option<u32>) -> u64 {
+    let room = u64::from(bitrate_kbps) * 1_000 * CAP_STREAM_FACTOR / CAP_STREAM_DIV;
+    let measured = (link.source == Source::Client && link.kbps != FLOOR_KBPS)
+        .then(|| (u64::from(link.kbps) * 1_000).max(room));
     let hard = [Some(link.hard_kbps), pinned_wall]
         .into_iter()
         .flatten()
         .filter(|&k| k > 0)
-        .min();
-    hard.map_or(r, |h| r.min(u64::from(h) * 900)).max(1)
+        .map(|k| u64::from(k) * 900);
+    measured.into_iter().chain(hard).min().unwrap_or(u64::MAX)
 }
 
 /// The link a pinned stream proved: the client's report, once the stream fits in 70 % of
@@ -331,8 +348,9 @@ pub(crate) struct Pacer {
     max_spread: Duration,
     ports: Ports,
     forced: Option<Forced>,
-    /// `R` from [`Self::update`]; a frame may raise its own.
+    /// `R` from [`Self::update`]; a frame may raise its own, never past `cap_bps`.
     base_bps: u64,
+    cap_bps: u64,
     rate_bps: u64,
     group: usize,
     /// The wake shape's first group of this frame is still to leave.
@@ -352,6 +370,7 @@ impl Pacer {
             ports,
             forced,
             base_bps: 1,
+            cap_bps: u64::MAX,
             rate_bps: 1,
             group: GROUP_MIN,
             wake_first: false,
@@ -363,6 +382,7 @@ impl Pacer {
 
     /// Per AU: the stream rate, the client's link report (`0` = none yet), a pinned
     /// stream's wall, the client's shape, and the spread one frame may take. Returns `R`.
+    /// Every shape stays under [`cap_bps`].
     pub(crate) fn update(
         &mut self,
         bitrate_kbps: u32,
@@ -376,9 +396,10 @@ impl Pacer {
             Some(Forced::Shape(s)) => s,
             _ => shape,
         };
+        self.cap_bps = cap_bps(bitrate_kbps, &self.link, pinned_wall);
         let stream = (f64::from(bitrate_kbps) * 1_000.0 * pace_factor()) as u64;
         self.base_bps = if self.shape == Shape::Smooth && stream > 0 {
-            stream
+            stream.min(self.cap_bps)
         } else {
             rate_bps(bitrate_kbps, &self.link, pinned_wall)
         };
@@ -392,11 +413,12 @@ impl Pacer {
     }
 
     /// A frame of `frame_bytes` on the wire begins; `0` when not yet known (a streamed AU).
-    /// A frame whose wire time at `R` would pass its spread leaves at the rate that fits it.
+    /// A frame whose wire time at `R` would pass its spread leaves at the rate that fits it,
+    /// up to the cap: past the link it would only be lost or queued.
     pub(crate) fn begin(&mut self, frame_bytes: usize) {
         let spread_ns = self.max_spread.min(MAX_PACE_SPREAD).as_nanos().max(1) as u64;
         let floor_bps = (frame_bytes as u64).saturating_mul(8_000_000_000) / spread_ns;
-        self.rate_bps = self.base_bps.max(floor_bps);
+        self.rate_bps = self.base_bps.max(floor_bps).min(self.cap_bps).max(1);
         self.group = match self.shape {
             Shape::Smooth => GROUP_MIN,
             Shape::Burst => usize::MAX,
@@ -634,8 +656,8 @@ mod tests {
 
     /// (a) 1 GbE both ends, 80 Mbit/s: `R` is 0.9 L and a group half a millisecond of it.
     /// (b) a 2.5 GbE host and a 1 GbE client's report: 900 Mbit/s, and the 10 GbE →
-    /// 2.5 GbE desk 2.25 Gbit/s. (c) a 12 Mbit/s tunnel under an 8 Mbit/s stream: 3 × B
-    /// wins and the group is the floor.
+    /// 2.5 GbE desk 2.25 Gbit/s. (c) a measured 12 Mbit/s tunnel under an 8 Mbit/s stream:
+    /// 3 × B stops at `L` and the group is the floor; the client's floor caps nothing.
     #[test]
     fn r_is_the_link_rate_unless_the_stream_needs_more() {
         let one_g = LinkRate::resolve(None, gbe(), None);
@@ -651,8 +673,15 @@ mod tests {
 
         let wan = LinkRate::resolve(Some(12_000), Ports::default(), None);
         let r = rate_bps(8_000, &wan, None);
-        assert_eq!(r, 24_000_000);
+        assert_eq!(r, 12_000_000);
         assert_eq!(group_bytes(r), GROUP_MIN);
+        let lan = LinkRate::resolve(Some(928_000), Ports::default(), None);
+        assert_eq!(rate_bps(400_000, &lan, None), 928_000_000);
+        // A notched or stale `L` under the stream never starves it: 1.5 × B stands.
+        let notched = LinkRate::resolve(Some(10_000), Ports::default(), None);
+        assert_eq!(rate_bps(12_000, &notched, None), 18_000_000);
+        let unknown = LinkRate::resolve(Some(FLOOR_KBPS), Ports::default(), None);
+        assert_eq!(rate_bps(400_000, &unknown, None), 1_200_000_000);
 
         // Smooth ignores the link, until there is no stream rate to pace at.
         let mut p = Pacer::new(gbe(), None);
@@ -676,10 +705,11 @@ mod tests {
         assert_eq!(rate_bps(1_427_000, &link, wall), 2_205_000_000);
         let unknown = LinkRate::resolve(Some(2_450_000), Ports::default(), None);
         assert_eq!(rate_bps(1_427_000, &unknown, wall), 2_205_000_000);
-        // A proof the stream does not fit under, or an adaptive stream, sets no ceiling.
+        // A proof the stream does not fit under, or an adaptive stream, sets no wall; the
+        // measured link still caps the adaptive stream.
         assert_eq!(pinned_wall(true, 1_000_000, 778_000), None);
         assert_eq!(pinned_wall(false, 2_450_000, 1_427_000), None);
-        assert_eq!(rate_bps(1_427_000, &unknown, None), 4_281_000_000);
+        assert_eq!(rate_bps(1_427_000, &unknown, None), 2_450_000_000);
     }
 
     /// (a) A 167 KB frame at 900 Mbit/s leaves in groups of at most `G`, each on the
@@ -739,23 +769,22 @@ mod tests {
     }
 
     /// (e) A frame whose wire time at `R` would pass its spread leaves at the rate that
-    /// fits it: 600 KB at 24 Mbit/s would take 200 ms, it gets 20.
+    /// fits it, up to the cap: 6 MB in 33 ms on a link nobody measured leaves at 1.45
+    /// Gbit/s; 600 KB on a measured 12 Mbit/s tunnel stays at 12, and on 1 GbE ports at 900.
     #[test]
-    fn a_giant_frame_fits_its_spread() {
-        let pkts = packets(417, 1_440);
-        let bytes = 417 * 1_440;
+    fn a_giant_frame_fits_its_spread_under_the_cap() {
+        let spread = Duration::from_millis(33);
         let mut p = Pacer::new(Ports::default(), None);
-        let wan = LinkRate::resolve(Some(12_000), Ports::default(), None);
-        assert_eq!(rate_bps(8_000, &wan, None), 24_000_000);
-        p.update(8_000, 12_000, None, Shape::Auto, Duration::from_millis(20));
-        p.begin(bytes);
-        let t0 = Instant::now();
-        run(&mut p, &pkts);
-        assert!(
-            t0.elapsed() < Duration::from_millis(60),
-            "{:?}",
-            t0.elapsed()
-        );
+        p.update(8_000, FLOOR_KBPS, None, Shape::Auto, spread);
+        p.begin(6_000_000);
+        assert_eq!(p.rate_bps, 6_000_000 * 8_000 / 33);
+        p.update(8_000, 12_000, None, Shape::Auto, spread);
+        p.begin(600_000);
+        assert_eq!(p.rate_bps, 12_000_000);
+        let mut p = Pacer::new(gbe(), None);
+        p.update(80_000, 0, None, Shape::Smooth, spread);
+        p.begin(6_000_000);
+        assert_eq!(p.rate_bps, 900_000_000);
     }
 
     /// (f) `Burst` has no clock: the frame leaves in 64-packet trains, nothing waits.
