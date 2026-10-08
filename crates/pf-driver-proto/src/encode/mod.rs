@@ -544,6 +544,9 @@ pub const ENCODE_CTL_FLUSH: u32 = 7;
 /// generation that is not the live one is a stale proxy and a no-op, so a dropped
 /// predecessor never stops its successor.
 pub const ENCODE_CTL_CLOSE: u32 = 8;
+/// Reference only frames at or below wire index `arg0` while `arg1` is 1; `arg1` 0 restores
+/// the chain. A driver without it answers `STATUS_INVALID_PARAMETER`.
+pub const ENCODE_CTL_SET_REFERENCE_FLOOR: u32 = 9;
 
 /// `SET_ENCODE` completed with fewer reply bytes than [`SetEncodeReply`]. The IOCTL itself
 /// succeeded, so the driver adopted the host's handles: the host must not close them too.
@@ -950,9 +953,10 @@ mod tests {
             ENCODE_CTL_RESET,
             ENCODE_CTL_FLUSH,
             ENCODE_CTL_CLOSE,
+            ENCODE_CTL_SET_REFERENCE_FLOOR,
         ];
         println!("ENCODE_CTL ops: {ops:?}");
-        assert_eq!(ops, [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(ops, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
         // `0` stays unassigned: a zeroed request is not a silent keyframe.
         assert!(!ops.contains(&0));
     }

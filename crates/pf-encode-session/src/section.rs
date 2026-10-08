@@ -172,6 +172,8 @@ pub enum Ctl {
     /// `pf_frame::HdrMeta` as its 28 bytes.
     SetHdrMeta([u8; 28]),
     Flush,
+    /// The newest wire index the client confirmed; `None` restores the chain.
+    SetReferenceFloor(Option<u32>),
 }
 
 impl Ctl {
@@ -185,6 +187,9 @@ impl Ctl {
             wire::ENCODE_CTL_RECONFIGURE_BITRATE => Self::ReconfigureBitrate(req.arg0),
             wire::ENCODE_CTL_SET_HDR_META => Self::SetHdrMeta(req.payload),
             wire::ENCODE_CTL_FLUSH => Self::Flush,
+            wire::ENCODE_CTL_SET_REFERENCE_FLOOR => {
+                Self::SetReferenceFloor((req.arg1 != 0).then_some(req.arg0))
+            }
             _ => return None,
         })
     }

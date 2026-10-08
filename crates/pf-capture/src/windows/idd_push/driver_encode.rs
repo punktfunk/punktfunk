@@ -371,6 +371,8 @@ pub(crate) fn open_remote_encoder(
         applied_bps: u64::from(reply.applied_bitrate_kbps) * 1000,
         retarget_after: 0,
         hdr_meta: params.hdr_meta,
+        reference_floor: None,
+        floor_refused: false,
         wire_chunk: params.wire_chunk_bytes as usize,
         wire_chunk_warned: false,
         last_wire_seq: 0,
@@ -420,6 +422,10 @@ pub struct EncoderProxy {
     /// `published_total` when the last bitrate ctl was queued.
     retarget_after: u64,
     hdr_meta: Option<pf_frame::HdrMeta>,
+    /// The reference floor the driver holds; sent only when it changes.
+    reference_floor: Option<i64>,
+    /// The driver refused the floor op once: it predates it, and the chain stays.
+    floor_refused: bool,
     /// Decided at `SET_ENCODE`; a later `set_wire_chunking` that differs is logged once.
     wire_chunk: usize,
     wire_chunk_warned: bool,
@@ -573,6 +579,24 @@ impl Encoder for EncoderProxy {
                 first_frame as u32,
                 last_frame as u32,
             )
+    }
+
+    fn set_reference_floor(&mut self, acked_wire: Option<i64>) {
+        if self.floor_refused || acked_wire == self.reference_floor {
+            return;
+        }
+        let (floor, on) = acked_wire.map_or((0, 0), |w| (w as u32, 1));
+        match self.ctl(encode::ENCODE_CTL_SET_REFERENCE_FLOOR, floor, on, [0; 28]) {
+            Ok(()) => self.reference_floor = acked_wire,
+            Err(e) => {
+                self.floor_refused = true;
+                tracing::info!(
+                    target_id = self.target_id,
+                    error = %format!("{e:#}"),
+                    "driver encode: this driver takes no reference floor — the chain stays"
+                );
+            }
+        }
     }
 
     fn distrust_references(&mut self) {
