@@ -6,8 +6,8 @@
 #
 # Everything it needs is in the container; run.sh is the wrapper that starts it.
 #
-# `lost` counts frames the client saw a shard of; a frame lost as one GSO train
-# shows only in `unrec`.
+# netem sits before segmentation and drops a GSO train whole, which no wire does,
+# so the host sends one packet per skb here unless PUNKTFUNK_GSO says otherwise.
 set -euo pipefail
 
 PROFILE=${1:?usage: rig.sh <profile> [seconds]}
@@ -18,6 +18,7 @@ HERE=$(dirname "$0")
 . "$HERE/profiles.sh"
 profile "$PROFILE"
 
+export PUNKTFUNK_GSO=${PUNKTFUNK_GSO:-0}
 export CARGO_TARGET_DIR=/target
 export CARGO_HOME=${CARGO_HOME:-/cargohome}
 BIN=$CARGO_TARGET_DIR/release

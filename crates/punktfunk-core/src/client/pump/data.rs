@@ -223,6 +223,7 @@ impl DataPump {
                 tracing::debug!("nack expired: the frames after it go, and their gap asks");
             }
             for _ in 0..self.shared.frames.take_filled() {
+                tracing::debug!("nack filled: the held frames go in order");
                 self.session.note_nack(true);
             }
             match polled {
@@ -683,8 +684,9 @@ impl DataPump {
     }
 
     /// Ask for frame `idx`'s missing shards when the round trip fits a frame interval, and
-    /// hold the frames after it `min(1.5 × rtt, frame interval)`: past that a resend costs
-    /// more than an RFI. `false` when it asked nothing.
+    /// hold the frames after it `rtt + frame interval`: the resend waits out the frame the
+    /// host is pacing, then the round trip. Past two intervals an RFI costs less. `false`
+    /// when it asked nothing.
     fn ask_nack(&mut self, idx: u32, now: Instant) -> bool {
         use crate::quic::v2::dgram::{Nack, NACK_MAX};
         let rtt = Duration::from_micros(u64::from(self.shared.rtt_us.load(Ordering::Relaxed)));
@@ -699,13 +701,10 @@ impl DataPump {
         else {
             return false;
         };
-        if !self
-            .shared
-            .frames
-            .hold(idx, now + (rtt * 3 / 2).min(period))
-        {
+        if !self.shared.frames.hold(idx, now + rtt + period) {
             return false;
         }
+        tracing::debug!(frame = idx, rtt_us = rtt.as_micros() as u64, "nack asked");
         self.shared.ask_nack(nack);
         self.session.note_nack(false);
         true

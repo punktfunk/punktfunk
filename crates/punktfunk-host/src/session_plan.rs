@@ -446,6 +446,7 @@ pub(crate) fn open_encoder_fitted(
 mod tests {
     use super::*;
     use crate::encode::{ChromaFormat, Codec};
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     use pf_vdisplay::Compositor;
 
     #[test]

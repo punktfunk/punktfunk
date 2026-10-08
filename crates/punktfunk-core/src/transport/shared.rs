@@ -356,7 +356,7 @@ impl Transport for ClientMedia {
     }
 }
 
-/// `PUNKTFUNK_GSO=0`: the operator's hard off. [`Transport::set_gso`] cannot turn it back on.
+/// `PUNKTFUNK_GSO=0`: the operator's off switch; GSO is on wherever the path has it.
 fn gso_allowed() -> bool {
     static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ALLOWED.get_or_init(|| {
@@ -374,7 +374,6 @@ pub struct MediaSender {
     state: UdpSocketState,
     conn: quinn::Connection,
     v6_socket: bool,
-    gso: AtomicBool,
     staging: Mutex<Vec<u8>>,
 }
 
@@ -389,7 +388,6 @@ impl MediaSender {
             state,
             conn,
             v6_socket,
-            gso: AtomicBool::new(true),
             staging: Mutex::new(Vec::new()),
         })
     }
@@ -451,11 +449,11 @@ impl Transport for MediaSender {
     /// Runs of equal-size packets leave as one offloaded send, each run within the platform's
     /// segment limit and under the UDP payload bound of either IP family; the last packet of a
     /// run may be shorter. An oversize run is `EMSGSIZE`, which quinn-udp reports as sent.
-    /// With GSO switched off, or `PUNKTFUNK_GSO=0`, packets leave one by one.
+    /// With `PUNKTFUNK_GSO=0` packets leave one by one.
     fn send_gso(&self, packets: &[&[u8]]) -> std::io::Result<usize> {
         const GSO_MAX_PAYLOAD: usize = 65535 - 40 - 8;
         let max = self.state.max_gso_segments();
-        if !self.gso.load(Ordering::Relaxed) || !gso_allowed() || max <= 1 {
+        if !gso_allowed() || max <= 1 {
             return self.send_batch(packets);
         }
         let (to, from) = self.path();
@@ -484,10 +482,6 @@ impl Transport for MediaSender {
             }
         }
         Ok(sent)
-    }
-
-    fn set_gso(&self, on: bool) {
-        self.gso.store(on, Ordering::Relaxed);
     }
 
     fn recv(&self) -> std::io::Result<Option<Vec<u8>>> {

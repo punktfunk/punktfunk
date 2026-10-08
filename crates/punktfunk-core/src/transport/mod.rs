@@ -66,9 +66,6 @@ pub trait Transport: Send + Sync {
         self.send_batch(packets)
     }
 
-    /// Turn GSO on or off for [`send_gso`](Self::send_gso). Default: nothing to switch.
-    fn set_gso(&self, _on: bool) {}
-
     fn recv(&self) -> std::io::Result<Option<Vec<u8>>>;
 
     /// Receive up to `out.len()` datagrams into caller-owned `out[i]` buffers,

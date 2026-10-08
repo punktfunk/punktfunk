@@ -451,13 +451,13 @@ impl Ramp {
             // link would take.
             return Some(Verdict::Sender(delivered_kbps));
         }
-        // Delivered ÷ offered as packets a microsecond on each side. Both
-        // spans are first-to-last: `n` packets paced over the asked window
-        // leave it across `n - 1` gaps, and the arrivals are timed the same
-        // way, so a clean step reads 1.00 instead of 1.04. A queue that
-        // stretches the arrivals and loss that thins them both land here.
+        // Delivered ÷ offered in packets a microsecond, both spans first-to-last
+        // (`n` packets leave across `n - 1` gaps). The send window is the host's
+        // when it ran past the asked one. A queue that stretches the arrivals and
+        // loss that thins them both land here.
+        let sent_us = step.asked_us.max(u64::from(r.host_duration_ms) * 1_000);
         let offered_span =
-            step.asked_us * (u64::from(r.wire_packets_sent) - 1) / u64::from(r.wire_packets_sent);
+            sent_us * (u64::from(r.wire_packets_sent) - 1) / u64::from(r.wire_packets_sent);
         let delivered = r.delivered_packets * offered_span;
         let offered = u64::from(r.wire_packets_sent) * interval;
         if delivered * 100 < offered * RAMP_WALL_PCT {
@@ -1464,6 +1464,48 @@ mod tests {
             panic!("refused twice is a wall")
         };
         assert_eq!(delivered_kbps, 11_924, "not the asked 10 000");
+    }
+
+    /// A step the host sent over 28 ms, every packet arriving across 29 ms:
+    /// the link kept the host's pace. Against the asked 25 ms it read as a
+    /// wall at 16 Mbps on a 245 Mbps link.
+    #[test]
+    fn a_step_sent_late_is_judged_on_the_hosts_window() {
+        let mut rig = Rig::new(1_026_432, None);
+        let report = |packets: u64, bytes: u64, us: u32, host_ms: u32| ProbeReport {
+            delivered_bytes: bytes,
+            delivered_packets: packets,
+            window_ms: us / 1_000,
+            host_duration_ms: host_ms,
+            client_interval_ms: us / 1_000,
+            client_interval_us: us,
+            host_bytes_sent: bytes,
+            wire_packets_sent: packets as u32,
+            send_dropped: 0,
+        };
+        let (first, _) = rig.p.poll(rig.now, 0, 0).expect("the first step");
+        assert_eq!(first, RAMP_START_KBPS);
+        let at = rig.at(20);
+        rig.p.on_result(report(28, 40_264, 20_000, 26), at);
+        let at = rig.at(RAMP_DRAIN_MS + 1);
+        let (second, _) = rig.p.poll(at, 0, 0).expect("the second step");
+        assert_eq!(second, 10_000);
+        let at = rig.at(29);
+        rig.p.on_result(report(42, 60_396, 29_000, 28), at);
+        let at = rig.at(RAMP_DRAIN_MS + 1);
+        let (third, _) = rig.p.poll(at, 0, 0).expect("the link carried it");
+        assert_eq!(third, 20_000);
+        // The same arrivals behind a host that kept the asked window are a refusal.
+        let mut rig = Rig::new(1_026_432, None);
+        rig.p.poll(rig.now, 0, 0);
+        let at = rig.at(20);
+        rig.p.on_result(report(28, 40_264, 20_000, 26), at);
+        let at = rig.at(RAMP_DRAIN_MS + 1);
+        rig.p.poll(at, 0, 0);
+        let at = rig.at(29);
+        rig.p.on_result(report(42, 60_396, 29_000, 25), at);
+        let at = rig.at(RAMP_DRAIN_MS + 1);
+        assert_eq!(rig.p.poll(at, 0, 0).map(|s| s.0), Some(10_000), "re-asked");
     }
 
     /// A ramp cut short by video hands the job to the legacy burst: it leaves
