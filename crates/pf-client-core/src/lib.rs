@@ -40,11 +40,9 @@ pub mod menu_nav;
 // Audio-format vocabulary (`session` re-exports). Split out so the platform-bound modules stay platform-bound.
 #[cfg(portable)]
 pub mod audio_format;
-// Stored decoder-pref migration, compiled from pf-client-video's file: the Skia settings
-// screen reads it on targets that never build that crate. `video` re-exports its own copy.
+// Stored decoder-pref migration, for the Skia settings screen on every target.
 #[cfg(portable)]
-#[path = "../../pf-client-video/src/decoder_pref.rs"]
-pub mod decoder_pref;
+pub use punktfunk_core::decoder_pref;
 // Console actions, pointer input, and session phases. Shared by the Vulkan overlay and the Android GL host.
 #[cfg(portable)]
 pub mod console;
