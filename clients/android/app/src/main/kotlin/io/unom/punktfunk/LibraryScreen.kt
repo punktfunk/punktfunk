@@ -271,8 +271,8 @@ fun LibraryScreen(
     // resolves `launch` = its library id). Shared by both presentations: a tap on a grid tile and A
     // on a centred cover are the same act, and a launch that behaved differently between them would
     // be a bug nobody could see until they switched input device. [link] names the profile to
-    // play as: the one dial a `profile-unknown` refusal of a still-listed profile earns.
-    fun launch(identity: ClientIdentity, game: GameEntry, link: String? = null) {
+    // play as; [redial] marks the one dial a [ProfileRetry] grants.
+    fun launch(identity: ClientIdentity, game: GameEntry, link: String? = null, redial: Boolean = false) {
         if (launching) return
         launching = true
         // The desktop tile is the host, not one of its titles: it streams with no launch id, and
@@ -325,14 +325,13 @@ fun LibraryScreen(
                 )
             } else {
                 val token = NativeBridge.nativeTakeLastError()
-                if (token == "profile-unknown" && link == null && choice.id != null &&
-                    stillListed(identity, host, choice.id)
+                if (ProfileRetry.afterRefusal(token, host, choice, redial, knownHostStore) { h, p ->
+                        stillListed(identity, h, p)
+                    }
                 ) {
-                    // A seat host refused a stale seat: dial the same profile once more.
-                    launch(identity, game, choice.id)
+                    launch(identity, game, choice.id, redial = true)
                     return@launch
                 }
-                if (token == "profile-unknown") HostRecords.savePick(knownHostStore, host, null)
                 Toast.makeText(
                     context,
                     ConnectErrors.connectMessage(token, requestAccess = false),

@@ -347,11 +347,9 @@ fun ConnectScreen(
     fun session(handle: Long, record: KnownHost?, preset: StreamPreset?): ActiveSession =
         SessionFactory.afterDial(handle, record, settings.effectiveFor(preset), preset, knownHostStore)
 
-    // The actual dial (identity already ready). A TOFU dial (no saved record; pinned to the
-    // advertised fingerprint when there is one) saves what the host presented, as an unpaired
-    // known host. [onFailure] takes over an unreachable dial (the wake-wait fallback, discovery
-    // already restarted); [onMismatch] takes over a refused pin. [redial] marks the one dial a
-    // `profile-unknown` refusal of a still-listed profile earns.
+    // The dial itself, identity ready. A TOFU dial saves what the host presented, unpaired.
+    // [onFailure] takes an unreachable dial (the wake wait), [onMismatch] a refused pin;
+    // [redial] marks the one dial a [ProfileRetry] grants.
     fun doConnectDirect(
         targetHost: String,
         targetPort: Int,
@@ -429,11 +427,11 @@ fun ConnectScreen(
                 } else if (onMismatch != null && token == "crypto") {
                     // The saved pin was refused: another identity answers at this address.
                     onMismatch()
-                } else if (token == "profile-unknown" && !redial && record != null && choice.id != null &&
-                    stillListed(id, record, choice.id)
+                } else if (
+                    ProfileRetry.afterRefusal(token, record, choice, redial, knownHostStore) { h, p ->
+                        stillListed(id, h, p)
+                    }
                 ) {
-                    // A seat host refused a stale seat: the profile is still there, so dial it
-                    // once more. The dial reads the seat's state afresh.
                     linkAs = choice.id
                     doConnectDirect(
                         targetHost, targetPort, name, pinHex, preset, launch, onFailure, onMismatch,
@@ -443,10 +441,7 @@ fun ConnectScreen(
                     // A typed host rejection (busy / versions differ / pairing required) means the
                     // host is awake — waking it would be nonsense; show the stated reason instead.
                     status = ConnectErrors.connectMessage(token, requestAccess = false)
-                    if (token == "profile-unknown" && record != null) {
-                        HostRecords.savePick(knownHostStore, record, null)
-                        savedHosts = knownHostStore.all()
-                    }
+                    if (token == "profile-unknown") savedHosts = knownHostStore.all()
                 }
             }
         }
