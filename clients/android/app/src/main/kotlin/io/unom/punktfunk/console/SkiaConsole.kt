@@ -17,8 +17,8 @@ import io.unom.punktfunk.CONNECT_TIMEOUT_MS
 import io.unom.punktfunk.ConnectErrors
 import io.unom.punktfunk.HostActions
 import io.unom.punktfunk.HostProfiles
+import io.unom.punktfunk.HostRecords
 import io.unom.punktfunk.ProfilesAnswer
-import io.unom.punktfunk.savePick
 import io.unom.punktfunk.PresetStore
 import io.unom.punktfunk.REQUEST_ACCESS_TIMEOUT_MS
 import io.unom.punktfunk.SessionFactory
@@ -686,11 +686,14 @@ object SkiaConsole {
         appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
             ?.putString("json", j.toString())?.apply()
         val next = ConsoleJson.applySettings(settings, j)
-        if (next != settings) {
-            settings = next
-            settingsStore.save(next)
-            onSettingsChange?.invoke(next)
-        }
+        if (next != settings) adoptSettings(next)
+    }
+
+    /** Store [next] and hand it to the app, whose [settingsChanged] pushes it back to the console. */
+    private fun adoptSettings(next: Settings) {
+        settings = next
+        settingsStore.save(next)
+        onSettingsChange?.invoke(next)
     }
 
     private fun onAction(action: Any) {
@@ -808,7 +811,7 @@ object SkiaConsole {
                 } else {
                     val token = NativeBridge.nativeTakeLastError()
                     if (token == "profile-unknown" && kh != null) {
-                        knownHostStore.savePick(kh, null)
+                        HostRecords.savePick(knownHostStore, kh, null)
                         pushHosts(); pushKnownHosts()
                     }
                     // 5: the console forgets the pick and asks the box's list once more.
@@ -914,10 +917,14 @@ object SkiaConsole {
         pushHosts(); pushKnownHosts()
     }
 
+    /**
+     * `ConsoleCmd::ForgetHost` — [HostRecords.forget]. A cleared default host is saved the way
+     * the console's own settings edits are.
+     */
     private fun forgetHost(c: JSONObject) {
+        val app = appContext ?: return
         val kh = hostForKey(c.optString("key")) ?: return
-        knownHostStore.remove(kh)
-        appContext?.let { LibraryCache.standard(it.cacheDir).forget(kh.id) }
+        HostRecords.forget(app, knownHostStore, kh, settings)?.let(::adoptSettings)
         pushHosts(); pushKnownHosts()
     }
 
@@ -936,39 +943,28 @@ object SkiaConsole {
         if (handle != 0L) NativeBridge.nativeConsoleSetPresets(handle, ConsoleJson.presets(presetStore.all()))
     }
 
-    /** `ConsoleCmd::UnpairHost`: keep the record, drop its pin, so the next connect pairs again. */
+    /** `ConsoleCmd::UnpairHost` — [HostRecords.unpair]. */
     private fun unpairHost(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
-        knownHostStore.save(kh.copy(fpHex = "", paired = false))
+        HostRecords.unpair(knownHostStore, kh)
         pushHosts(); pushKnownHosts()
     }
 
-    /**
-     * `ConsoleCmd::BindPreset` — the host's default binding (`KnownHost.presetId`), or with
-     * `game`, one title's ([KnownHost.gamePresets]). A null `preset_id` clears either.
-     */
+    /** `ConsoleCmd::BindPreset` — [HostRecords.bindPreset]; a null `preset_id` clears. */
     private fun bindPreset(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
         val pid = c.optString("preset_id")
             .takeIf { c.has("preset_id") && !c.isNull("preset_id") && it.isNotEmpty() }
         val game = c.optString("game")
             .takeIf { c.has("game") && !c.isNull("game") && it.isNotEmpty() }
-        val next = when (game) {
-            // Cleared bindings leave no key behind, so an unbound host stores an empty map.
-            null -> kh.copy(presetId = pid)
-            else -> kh.copy(
-                gamePresets = kh.gamePresets.toMutableMap()
-                    .apply { if (pid == null) remove(game) else put(game, pid) },
-            )
-        }
-        knownHostStore.save(next)
+        HostRecords.bindPreset(knownHostStore, kh, pid, game)
         pushHosts(); pushKnownHosts()
     }
 
-    /** `ConsoleCmd::SetClipboard` — the per-host clipboard trust toggle. */
+    /** `ConsoleCmd::SetClipboard` — [HostRecords.setClipboard]. */
     private fun setClipboard(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
-        knownHostStore.save(kh.copy(clipboardSync = c.optBoolean("on")))
+        HostRecords.setClipboard(knownHostStore, kh, c.optBoolean("on"))
         pushHosts(); pushKnownHosts()
     }
 
@@ -1003,16 +999,14 @@ object SkiaConsole {
     private fun setProfile(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
         val p = c.optJSONObject("profile")
-        knownHostStore.savePick(kh, p?.let { ProfilePick(it.optString("id"), it.optString("display_name")) })
+        HostRecords.savePick(knownHostStore, kh, p?.let { ProfilePick(it.optString("id"), it.optString("display_name")) })
         pushHosts(); pushKnownHosts()
     }
 
+    /** `ConsoleCmd::SetPin` — [HostRecords.setPin]. */
     private fun setPin(c: JSONObject) {
         val kh = hostForKey(c.optString("key")) ?: return
-        val pid = c.optString("preset_id"); val pin = c.optBoolean("pin")
-        val pins = kh.pinnedPresetIds.toMutableList()
-        if (pin && pid !in pins) pins.add(pid) else if (!pin) pins.remove(pid)
-        knownHostStore.save(kh.copy(pinnedPresetIds = pins))
+        HostRecords.setPin(knownHostStore, kh, c.optString("preset_id"), c.optBoolean("pin"))
         pushHosts(); pushKnownHosts()
     }
 

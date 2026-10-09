@@ -332,7 +332,7 @@ fun LibraryScreen(
                     launch(identity, game, choice.id)
                     return@launch
                 }
-                if (token == "profile-unknown") knownHostStore.savePick(host, null)
+                if (token == "profile-unknown") HostRecords.savePick(knownHostStore, host, null)
                 Toast.makeText(
                     context,
                     ConnectErrors.connectMessage(token, requestAccess = false),

@@ -132,12 +132,6 @@ suspend fun stillListed(identity: ClientIdentity, host: KnownHost, id: String): 
         HostProfiles.fetch(identity, host.address, host.effectiveMgmtPort, host.fpHex)
     }.let { it is ProfilesAnswer.Listed && it.rows.any { r -> r.id == id } }
 
-/** Save [pick] as [host]'s profile (or clear it); a no-op when the record is gone. */
-fun KnownHostStore.savePick(host: KnownHost, pick: ProfilePick?) {
-    val h = byId(host.id) ?: return
-    if (h.asProfile != pick) save(h.copy(asProfile = pick))
-}
-
 /**
  * The profile a connect to [host] dials as: asks the host who plays on it, applies
  * [pickerDecision], then [seatGate] to the profile that plays. A failed or late answer dials
@@ -164,13 +158,13 @@ suspend fun chooseProfile(
     }
     val d = pickerDecision(listed, saved, link)
     if (!d.picker) {
-        if (d.remember != saved) store.savePick(host, d.remember)
+        if (d.remember != saved) HostRecords.savePick(store, host, d.remember)
         return gateSeat(d.send, listed, identity, host, wait)
     }
     val asked = ProfileAsk(host, listed.orEmpty(), d.gone)
     ask(asked)
     val pick = asked.answer.await() ?: return ProfileChoice.Cancelled
-    store.savePick(host, pick)
+    HostRecords.savePick(store, host, pick)
     return gateSeat(pick.id, listed, identity, host, wait)
 }
 

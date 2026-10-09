@@ -93,8 +93,8 @@ private class ConnectAttempt(val hostName: String) {
 fun ConnectScreen(
     settings: Settings,
     onConnected: (ActiveSession) -> Unit,
-    // Writes the global defaults back. Only the speed test uses it — that is the one action on this
-    // screen that can land in the defaults layer (design/client-settings-profiles.md §5.3).
+    // Writes the global settings back: a speed test landing in the defaults layer
+    // (design/client-settings-profiles.md §5.3), and the default host set, cleared or forgotten.
     onSettingsChange: (Settings) -> Unit = {},
     // (host, pinned preset id) — a pinned host+preset card opens ITS shelf, and the id is the
     // one-off every launch off that shelf runs with (design §5.2a). Null = the host's own tile.
@@ -444,7 +444,7 @@ fun ConnectScreen(
                     // host is awake — waking it would be nonsense; show the stated reason instead.
                     status = ConnectErrors.connectMessage(token, requestAccess = false)
                     if (token == "profile-unknown" && record != null) {
-                        knownHostStore.savePick(record, null)
+                        HostRecords.savePick(knownHostStore, record, null)
                         savedHosts = knownHostStore.all()
                     }
                 }
@@ -679,15 +679,8 @@ fun ConnectScreen(
         }
     }
 
-    // Toggle a host+preset pin. Presentation only: it never touches the preset itself and never
-    // changes the host's default binding.
     fun togglePin(kh: KnownHost, preset: StreamPreset) {
-        val pins = if (preset.id in kh.pinnedPresetIds) {
-            kh.pinnedPresetIds - preset.id
-        } else {
-            kh.pinnedPresetIds + preset.id
-        }
-        knownHostStore.save(kh.copy(pinnedPresetIds = pins))
+        HostRecords.togglePin(knownHostStore, kh, preset.id)
         savedHosts = knownHostStore.all()
     }
 
@@ -878,17 +871,7 @@ fun ConnectScreen(
     }
 
     fun forgetHost(kh: KnownHost) {
-        knownHostStore.remove(kh)
-        // A forgotten host leaves no list of what somebody plays, and no record of what they were
-        // playing, behind on the device. Its record id is the key both are filed under, so this is
-        // the last moment either can be found.
-        io.unom.punktfunk.kit.library.LibraryCache.standard(context.cacheDir).forget(kh.id)
-        LibraryPosition.forget(context, kh.id)
-        // The resolver already ignores a dangling pointer, so this is hygiene: without it a later
-        // re-pair of a different box would inherit somebody's old choice.
-        if (settings.defaultHost == kh.id) {
-            onSettingsChange(settings.copy(defaultHost = null))
-        }
+        HostRecords.forget(context, knownHostStore, kh, settings)?.let(onSettingsChange)
         savedHosts = knownHostStore.all()
     }
 
@@ -975,7 +958,7 @@ fun ConnectScreen(
             saved = kh.asProfile,
             gone = null,
             onPick = { pick ->
-                knownHostStore.savePick(kh, pick)
+                HostRecords.savePick(knownHostStore, kh, pick)
                 savedHosts = knownHostStore.all()
                 switching = null
             },
