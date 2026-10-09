@@ -15,10 +15,11 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::too_many_arguments)]
 
+use super::vk_csc::{bind_rgb, csc_layout, CursorPlane};
 use super::vk_util::{
     color_range, find_mem_preferring, import_failure_feeds_latch, imported_acquire_barrier,
     imported_release_barrier, make_host_buffer, make_plain_image, make_view, normalize_cpu_rgb,
-    pixel_to_vk, reject_dmabuf,
+    pixel_to_vk, reject_dmabuf, ImportCache,
 };
 use crate::rfi::Wave;
 use crate::{Codec, EncodedFrame, Encoder, EncoderCaps};
@@ -78,9 +79,6 @@ const CSC10_SPV: &[u8] = include_bytes!("rgb2yuv10.spv");
 /// 10-bit SDR twin (`rgb2yuv10_709.comp`): same 10-bit store as [`CSC10_SPV`], BT.709 matrix. For a
 /// Main10 / AV1-10 session that stays SDR — an 8-bit RGB capture widened to a 10-bit 709 stream.
 const CSC10_709_SPV: &[u8] = include_bytes!("rgb2yuv10_709.spv");
-/// Cursor-overlay texture (px). Larger than any pointer; actual `w×h` uploads top-left and the
-/// shader push-constant bounds sampling, so one allocation covers every cursor.
-const CURSOR_MAX: u32 = 256;
 /// DPB ring depth (under RADV `maxDpbSlots=17`); also the RFI recovery window.
 const DPB_SLOTS: u32 = 8;
 /// In-flight captures with GPU work outstanding. 2 overlaps CSC+encode with the next capture;
@@ -694,14 +692,7 @@ struct Frame {
         u32,
     )>,
     cpu_stage: Option<(vk::Buffer, vk::DeviceMemory, u64)>,
-    // Per-slot cursor overlay. Shared would race a prior frame's in-flight CSC read.
-    cursor_img: vk::Image,
-    cursor_mem: vk::DeviceMemory,
-    cursor_view: vk::ImageView,
-    cursor_stage: vk::Buffer,
-    cursor_stage_mem: vk::DeviceMemory,
-    cursor_serial: u64,
-    cursor_ready: bool,
+    cursor: CursorPlane,
     pts_ns: u64,
     keyframe: bool,
     recovery_anchor: bool,
@@ -711,7 +702,7 @@ struct Frame {
     /// "producer must not rewrite" across the async GPU read; the host's clone dies at the
     /// next capture, which with a ring of 2 is before this slot finishes.
     src_hold: Option<pf_frame::FrameHold>,
-    /// The dmabuf this slot reads while it is in flight, by [`CachedImport`] key.
+    /// The dmabuf this slot reads while it is in flight, by [`ImportCache`] key.
     src_key: Option<(u64, u64)>,
 }
 
@@ -789,8 +780,7 @@ pub struct VulkanVideoEncoder {
     csc_dsl: vk::DescriptorSetLayout,
     csc_pool: vk::DescriptorPool,
     sampler: vk::Sampler,
-    // Keyed by (st_dev, st_ino): PipeWire dups a new fd per frame, same inode.
-    import_cache: Vec<CachedImport>,
+    import_cache: ImportCache,
 
     frames: Vec<Frame>,
     ring: usize,                // next slot to record into
@@ -1300,64 +1290,13 @@ impl VulkanVideoEncoder {
             max_quality_levels,
             "vulkan-encode: quality level (0 = fastest preset; PUNKTFUNK_VULKAN_QUALITY overrides)"
         );
-        // VBR (average == max) stops CBR bit-stuffing: Vulkan has no filler-suppression
-        // control, so the mode is the only lever. CBR-only drivers keep the loose (1000, 500)
-        // window — tightening CBR starts stuffing earlier.
-        let vbr_advertised =
-            rate_control_modes.contains(vk::VideoEncodeRateControlModeFlagsKHR::VBR);
-        if !vbr_advertised
-            && !rate_control_modes.contains(vk::VideoEncodeRateControlModeFlagsKHR::CBR)
-        {
-            // A driver with neither CBR nor VBR would need the DEFAULT-mode no-layer shape
-            // this backend does not speak. Keep CBR but say so.
-            tracing::warn!(
-                modes = rate_control_modes.as_raw(),
-                "vulkan-encode: driver advertises neither CBR nor VBR — installing CBR anyway \
-                 (pre-existing behaviour; may fail validation on this driver)"
-            );
-        }
-        // `PUNKTFUNK_VULKAN_RC=cbr|vbr`. `vbr` is honoured only when advertised; anything
-        // else means auto.
-        let vbr = match std::env::var("PUNKTFUNK_VULKAN_RC")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "cbr" => false,
-            _ => vbr_advertised,
-        };
-        let (rc_mode, vbv_ms) = if vbr {
-            (
-                vk::VideoEncodeRateControlModeFlagsKHR::VBR,
-                crate::vbv_window_ms(fps),
-            )
-        } else {
-            (
-                vk::VideoEncodeRateControlModeFlagsKHR::CBR,
-                (1000u32, 500u32),
-            )
-        };
-        tracing::info!(
-            rc_mode = if vbr { "VBR (capped at target)" } else { "CBR" },
-            vbv_window_ms = vbv_ms.0,
-            vbv_initial_ms = vbv_ms.1,
+        let (rc_mode, vbv_ms, bitrate) = rc_plan(
+            rate_control_modes,
+            std::env::var("PUNKTFUNK_VULKAN_RC").ok().as_deref(),
             fps,
+            bitrate,
             hw_max_bitrate,
-            "vulkan-encode: rate control (VBR when the driver offers it — CBR must stuff filler \
-             on calm content; PUNKTFUNK_VULKAN_RC overrides, PUNKTFUNK_VBV_FRAMES scales the VBR \
-             window)"
         );
-        let bitrate = if bitrate > hw_max_bitrate {
-            tracing::warn!(
-                requested = bitrate,
-                cap = hw_max_bitrate,
-                "vulkan-encode: requested bitrate exceeds the driver's maxBitrate — clamping"
-            );
-            hw_max_bitrate
-        } else {
-            bitrate
-        };
         // Enable `VK_EXT_queue_family_foreign` when advertised so dmabuf-acquire FOREIGN src
         // is spec-legal.
         let foreign_ok =
@@ -1642,36 +1581,8 @@ impl VulkanVideoEncoder {
         let shader =
             device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&spv), None)?;
         guard.shader = shader;
-        let sb = |b: u32, t: vk::DescriptorType| {
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(b)
-                .descriptor_type(t)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        };
-        let bindings = [
-            sb(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-            sb(1, vk::DescriptorType::STORAGE_IMAGE),
-            sb(2, vk::DescriptorType::STORAGE_IMAGE),
-            sb(3, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-        ];
-        let csc_dsl = device.create_descriptor_set_layout(
-            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
-            None,
-        )?;
+        let (csc_dsl, csc_layout) = csc_layout(&device)?;
         guard.csc_dsl = csc_dsl;
-        let dsls = [csc_dsl];
-        // Cursor `{ivec2 origin, ivec2 size}` = 16 bytes (`size.x<=0` disables the blend).
-        let pc_ranges = [vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(16)];
-        let csc_layout = device.create_pipeline_layout(
-            &vk::PipelineLayoutCreateInfo::default()
-                .set_layouts(&dsls)
-                .push_constant_ranges(&pc_ranges),
-            None,
-        )?;
         guard.csc_layout = csc_layout;
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
@@ -1806,7 +1717,7 @@ impl VulkanVideoEncoder {
             csc_dsl,
             csc_pool,
             sampler,
-            import_cache: Vec::new(),
+            import_cache: ImportCache::default(),
             frames,
             ring: 0,
             in_flight: VecDeque::new(),
@@ -1848,138 +1759,6 @@ impl VulkanVideoEncoder {
 }
 
 impl VulkanVideoEncoder {
-    unsafe fn bind_rgb(&self, csc_set: vk::DescriptorSet, rgb_view: vk::ImageView) {
-        let ii0 = [vk::DescriptorImageInfo::default()
-            .sampler(self.sampler)
-            .image_view(rgb_view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-        self.device.update_descriptor_sets(
-            &[vk::WriteDescriptorSet::default()
-                .dst_set(csc_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&ii0)],
-            &[],
-        );
-    }
-
-    /// Refresh slot `slot`'s cursor image and return `[origin_x, origin_y, size_w, size_h]`
-    /// (size 0 ⇒ CSC skips the blend). Upload only when `serial` changed. First use always
-    /// transitions to SHADER_READ_ONLY so binding 3 is a valid layout with no cursor.
-    unsafe fn prep_cursor(
-        &mut self,
-        slot: usize,
-        compute_cmd: vk::CommandBuffer,
-        cursor: Option<&pf_frame::CursorOverlay>,
-    ) -> Result<[i32; 4]> {
-        let dev = self.device.clone();
-        let img = self.frames[slot].cursor_img;
-        let ready = self.frames[slot].cursor_ready;
-        let barrier = |old: vk::ImageLayout, new: vk::ImageLayout, ss, sa, ds, da| {
-            vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(ss)
-                .src_access_mask(sa)
-                .dst_stage_mask(ds)
-                .dst_access_mask(da)
-                .old_layout(old)
-                .new_layout(new)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(img)
-                .subresource_range(color_range(0))
-        };
-        match cursor {
-            Some(c) if !c.rgba.is_empty() => {
-                let cw = c.w.min(CURSOR_MAX);
-                let ch = c.h.min(CURSOR_MAX);
-                if self.frames[slot].cursor_serial != c.serial {
-                    // A PQ session blends the cursor re-encoded as PQ, not its sRGB bytes.
-                    let rgba = if self.spec.is_hdr {
-                        c.pq_rgba()
-                    } else {
-                        c.rgba.clone()
-                    };
-                    let stage = self.frames[slot].cursor_stage;
-                    let stage_mem = self.frames[slot].cursor_stage_mem;
-                    let bytes = (cw as usize) * (ch as usize) * 4;
-                    let ptr =
-                        dev.map_memory(stage_mem, 0, bytes as u64, vk::MemoryMapFlags::empty())?;
-                    std::ptr::copy_nonoverlapping(
-                        rgba.as_ptr(),
-                        ptr as *mut u8,
-                        bytes.min(rgba.len()),
-                    );
-                    dev.unmap_memory(stage_mem);
-                    let old = if ready {
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-                    } else {
-                        vk::ImageLayout::UNDEFINED
-                    };
-                    dev.cmd_pipeline_barrier2(
-                        compute_cmd,
-                        &vk::DependencyInfo::default().image_memory_barriers(&[barrier(
-                            old,
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            vk::PipelineStageFlags2::NONE,
-                            vk::AccessFlags2::NONE,
-                            vk::PipelineStageFlags2::ALL_TRANSFER,
-                            vk::AccessFlags2::TRANSFER_WRITE,
-                        )]),
-                    );
-                    dev.cmd_copy_buffer_to_image(
-                        compute_cmd,
-                        stage,
-                        img,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &[vk::BufferImageCopy::default()
-                            .image_subresource(
-                                vk::ImageSubresourceLayers::default()
-                                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                                    .layer_count(1),
-                            )
-                            .image_extent(vk::Extent3D {
-                                width: cw,
-                                height: ch,
-                                depth: 1,
-                            })],
-                    );
-                    dev.cmd_pipeline_barrier2(
-                        compute_cmd,
-                        &vk::DependencyInfo::default().image_memory_barriers(&[barrier(
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            vk::PipelineStageFlags2::ALL_TRANSFER,
-                            vk::AccessFlags2::TRANSFER_WRITE,
-                            vk::PipelineStageFlags2::COMPUTE_SHADER,
-                            vk::AccessFlags2::SHADER_READ,
-                        )]),
-                    );
-                    self.frames[slot].cursor_serial = c.serial;
-                    self.frames[slot].cursor_ready = true;
-                }
-                Ok([c.x, c.y, cw as i32, ch as i32])
-            }
-            _ => {
-                if !ready {
-                    // UNDEFINED→READ_ONLY once so binding 3 is a valid layout for the guarded read.
-                    dev.cmd_pipeline_barrier2(
-                        compute_cmd,
-                        &vk::DependencyInfo::default().image_memory_barriers(&[barrier(
-                            vk::ImageLayout::UNDEFINED,
-                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                            vk::PipelineStageFlags2::NONE,
-                            vk::AccessFlags2::NONE,
-                            vk::PipelineStageFlags2::COMPUTE_SHADER,
-                            vk::AccessFlags2::SHADER_READ,
-                        )]),
-                    );
-                    self.frames[slot].cursor_ready = true;
-                }
-                Ok([0, 0, 0, 0])
-            }
-        }
-    }
-
     /// Import a DMA-BUF with usage/profile matching this session's source mode. Native NV12 and
     /// aligned RGB-direct are profiled `VIDEO_ENCODE_SRC`. Padded RGB-direct is transfer-source only.
     unsafe fn import_dmabuf(
@@ -2051,14 +1830,9 @@ impl VulkanVideoEncoder {
         }
     }
 
-    /// Import a dmabuf, reusing a cached import when the same underlying buffer recurs. Keyed by
-    /// `(st_dev, st_ino)` because each `DmabufFrame` owns a fresh dup (new fd, same inode).
-    /// `fresh` is true only on first import (UNDEFINED old-layout preserves modifier-tiled data).
-    ///
-    /// A miss keeps only the imports that frames in flight read; a repeat hits the newest. Every
-    /// other buffer is back with the producer. RADV lists every resident import in every
-    /// submission, and amdgpu orders that submission against whatever paints any of them: the
-    /// producer's next render into a released buffer waits on this encode, or this encode on it.
+    /// Import a dmabuf through [`ImportCache`]. A deterministic packed import refusal rebuilds
+    /// this capture on its safe offer; transient OOM and native NV12 stay out of that sticky
+    /// verdict.
     unsafe fn import_cached(
         &mut self,
         d: &pf_frame::DmabufFrame,
@@ -2067,66 +1841,33 @@ impl VulkanVideoEncoder {
     ) -> Result<(vk::Image, vk::ImageView, bool)> {
         // fstat failed → uncacheable sentinel; still owned by the cache and freed on evict/Drop.
         let key = pf_zerocopy::fd_identity(d.fd.as_fd()).unwrap_or((u64::MAX, self.enc_count));
-        if let Some(pos) = self.import_cache.iter().position(|e| e.key == key) {
-            if self.import_cache[pos].extent == (cw, ch) {
-                // Most recently used last: eviction takes the front.
-                let e = self.import_cache.remove(pos);
-                let hit = (e.img, e.view, false);
-                self.import_cache.push(e);
-                return Ok(hit);
-            }
-            // Key hit, wrong extent: inode now names a different allocation. Evict rather than
-            // hand out a stale-sized image. In-flight frames may still read the old image, so
-            // idle the device before destroying.
-            let _ = self.device.device_wait_idle();
-            let e = self.import_cache.remove(pos);
-            self.device.destroy_image_view(e.view, None);
-            self.device.destroy_image(e.img, None);
-            self.device.free_memory(e.mem, None);
-        }
-        let t0 = std::time::Instant::now();
-        // A deterministic packed import refusal rebuilds this capture on its safe offer.
-        // Transient OOM and native NV12 stay out of that sticky verdict.
-        let (img, mem, view) = match self.import_dmabuf(d, cw, ch) {
-            Ok(t) => {
-                if !self.spec.native_nv12 {
-                    d.health.note_raw_import_ok();
-                }
-                t
-            }
-            Err(e) => {
-                if !self.spec.native_nv12 && import_failure_feeds_latch(&e) {
-                    reject_dmabuf(d, &format!("{e:#}"));
-                }
-                return Err(e);
-            }
-        };
-        // Least recently used first. The frames in flight are the last ones submitted, so their
-        // imports are the newest entries and none is evicted. Destroying an image the GPU reads
-        // is a use-after-free, so a victim found in flight still idles the device first.
-        while self.import_cache.len() > self.in_flight.len() {
-            let e = self.import_cache.remove(0);
-            let read = |&s: &usize| self.frames[s].src_key == Some(e.key);
-            if self.in_flight.iter().any(read) {
-                let _ = self.device.device_wait_idle();
-            }
-            self.device.destroy_image_view(e.view, None);
-            self.device.destroy_image(e.img, None);
-            self.device.free_memory(e.mem, None);
-        }
-        self.import_cache.push(CachedImport {
+        // Out while `import_dmabuf` borrows `self`. A panic leaks the entries, never frees one.
+        let mut cache = std::mem::take(&mut self.import_cache);
+        let got = cache.get_or_import(
+            &self.device,
             key,
-            extent: (cw, ch),
-            img,
-            mem,
-            view,
-        });
-        tracing::debug!(
-            resident = self.import_cache.len(),
-            miss_us = t0.elapsed().as_micros() as u64,
-            "vulkan-encode: imported a new dmabuf buffer"
+            (cw, ch),
+            || {
+                let packed = !self.spec.native_nv12;
+                let r = self.import_dmabuf(d, cw, ch);
+                match &r {
+                    Ok(_) if packed => d.health.note_raw_import_ok(),
+                    Err(e) if packed && import_failure_feeds_latch(e) => {
+                        reject_dmabuf(d, &format!("{e:#}"))
+                    }
+                    _ => {}
+                }
+                r
+            },
+            |k| {
+                self.in_flight
+                    .iter()
+                    .any(|&s| self.frames[s].src_key == Some(k))
+            },
+            self.in_flight.len(),
         );
-        Ok((img, view, true))
+        self.import_cache = cache;
+        got
     }
 
     /// Per-slot CPU-capture RGB image + staging, recreated on format/size change.
@@ -2454,7 +2195,12 @@ impl VulkanVideoEncoder {
                 self.frames[slot].ts_written = true;
             }
 
-            let cursor_pc = self.prep_cursor(slot, compute_cmd, frame.cursor.as_ref())?;
+            let cursor_pc = self.frames[slot].cursor.prep(
+                &dev,
+                compute_cmd,
+                frame.cursor.as_ref(),
+                self.spec.is_hdr,
+            )?;
 
             let (rgb_view, imported) = match &frame.payload {
                 FramePayload::Dmabuf(d) => {
@@ -2557,8 +2303,7 @@ impl VulkanVideoEncoder {
                 // RECORDING (never submitted yet); pool allows reset. The reset discards any
                 // cursor upload recorded here, so the slot forgets it had one.
                 let _ = dev.reset_command_buffer(compute_cmd, vk::CommandBufferResetFlags::empty());
-                self.frames[slot].cursor_serial = 0;
-                self.frames[slot].cursor_ready = false;
+                self.frames[slot].cursor.forget();
                 return Err(e);
             }
         };
@@ -2572,13 +2317,13 @@ impl VulkanVideoEncoder {
                     slot,
                     self.sampler,
                     rgb_view,
-                    self.frames[slot].cursor_view,
+                    self.frames[slot].cursor.view,
                     cursor_pc,
                 ),
             ),
             None => (cursor_pc, rgb_view),
         };
-        self.bind_rgb(csc_set, rgb_view);
+        bind_rgb(&dev, self.sampler, csc_set, rgb_view);
 
         // GENERAL for the CSC's targets, prior contents discarded: the picture itself when its
         // planes are written directly, else Y/UV scratch plus the picture as the copies' dst.
@@ -4038,7 +3783,7 @@ impl Encoder for VulkanVideoEncoder {
     fn caps(&self) -> EncoderCaps {
         EncoderCaps {
             supports_rfi: true,
-            // Only CSC composites (`prep_cursor`); a switching session reaches it on the first
+            // Only CSC composites (`CursorPlane::prep`); a switching session reaches it on the first
             // cursor. Native NV12 has no blend.
             blends_cursor: (self.rgb.is_none() || self.cursor_switch) && !self.spec.native_nv12,
             // `set_input_crop` moves an EFC session onto the CSC; a producer's NV12 has no RGB stage.
@@ -4197,13 +3942,7 @@ impl Encoder for VulkanVideoEncoder {
         }
         // Only safe point outside teardown to drop the import cache (device idle).
         // SAFETY: device idle (waits above); each entry is owned by the cache, destroyed once.
-        unsafe {
-            for e in std::mem::take(&mut self.import_cache) {
-                self.device.destroy_image_view(e.view, None);
-                self.device.destroy_image(e.img, None);
-                self.device.free_memory(e.mem, None);
-            }
-        }
+        unsafe { self.import_cache.clear(&self.device) };
         self.in_flight.clear();
         self.pending.clear();
         for f in &mut self.frames {
@@ -4315,16 +4054,6 @@ impl Encoder for VulkanVideoEncoder {
     }
 }
 
-/// Cached dmabuf import ([`VulkanVideoEncoder::import_cached`]). Keyed by `(st_dev, st_ino)`;
-/// a key hit must also prove the cached image still matches the caller's extent.
-struct CachedImport {
-    key: (u64, u64),
-    extent: (u32, u32),
-    img: vk::Image,
-    mem: vk::DeviceMemory,
-    view: vk::ImageView,
-}
-
 /// Every destructible Vulkan object, destroyed in dependency order. Both teardown paths run
 /// through it: `open_inner` mirrors objects as created so an early `?` unwinds exactly what was
 /// built; [`VulkanVideoEncoder`]'s `Drop` rebuilds one from its fields. Null handles (a failed
@@ -4334,7 +4063,7 @@ struct VkTeardown {
     // Set together (wrapper constructors after `create_device` are infallible).
     device: Option<ash::Device>,
     vq_dev: Option<ash::khr::video_queue::Device>,
-    import_cache: Vec<CachedImport>,
+    import_cache: ImportCache,
     frames: Vec<Frame>,
     compute_pool: vk::CommandPool,
     cmd_pool: vk::CommandPool,
@@ -4360,7 +4089,7 @@ impl VkTeardown {
             instance: Some(instance),
             device: None,
             vq_dev: None,
-            import_cache: Vec::new(),
+            import_cache: ImportCache::default(),
             frames: Vec::new(),
             compute_pool: vk::CommandPool::null(),
             cmd_pool: vk::CommandPool::null(),
@@ -4388,11 +4117,7 @@ impl Drop for VkTeardown {
         unsafe {
             if let Some(device) = self.device.take() {
                 let _ = device.device_wait_idle();
-                for e in std::mem::take(&mut self.import_cache) {
-                    device.destroy_image_view(e.view, None);
-                    device.destroy_image(e.img, None);
-                    device.free_memory(e.mem, None);
-                }
+                self.import_cache.clear(&device);
                 for f in std::mem::take(&mut self.frames) {
                     device.destroy_semaphore(f.csc_sem, None);
                     device.destroy_fence(f.fence, None);
@@ -4422,11 +4147,7 @@ impl Drop for VkTeardown {
                         device.destroy_buffer(b, None);
                         device.free_memory(m, None);
                     }
-                    device.destroy_image_view(f.cursor_view, None);
-                    device.destroy_image(f.cursor_img, None);
-                    device.free_memory(f.cursor_mem, None);
-                    device.destroy_buffer(f.cursor_stage, None);
-                    device.free_memory(f.cursor_stage_mem, None);
+                    f.cursor.destroy(&device);
                 }
                 device.destroy_command_pool(self.compute_pool, None);
                 device.destroy_command_pool(self.cmd_pool, None);
@@ -4508,7 +4229,7 @@ mod reframe_stage;
 mod build;
 use self::build::{
     align_up, build_parameters_av1, build_parameters_h265, make_frame, make_video_image,
-    probe_rgb_direct, probe_yuv_storage_planes, rgb_model_for,
+    probe_rgb_direct, probe_yuv_storage_planes, rc_plan, rgb_model_for,
 };
 
 #[cfg(test)]

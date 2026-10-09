@@ -3,6 +3,26 @@ use crate::test_frames::{cpu_frame, cpu_frame_24};
 use crate::{Codec, Encoder};
 use pf_frame::{CapturedFrame, FramePayload, PixelFormat};
 
+/// VBR when offered and not refused, CBR's loose window otherwise, the driver's cap on bitrate.
+#[test]
+fn rc_plan_prefers_offered_vbr_and_clamps_to_the_driver() {
+    use super::rc_plan;
+    use ash::vk::VideoEncodeRateControlModeFlagsKHR as Rc;
+    let both = Rc::CBR | Rc::VBR;
+    let vbr = (Rc::VBR, crate::vbv_window_ms(60), 20_000_000);
+    let cbr = (Rc::CBR, (1000, 500), 20_000_000);
+    assert_eq!(rc_plan(both, None, 60, 20_000_000, u64::MAX), vbr);
+    assert_eq!(rc_plan(both, Some("auto"), 60, 20_000_000, u64::MAX), vbr);
+    assert_eq!(rc_plan(both, Some(" CBR "), 60, 20_000_000, u64::MAX), cbr);
+    // `vbr` is honoured only when advertised; a driver with neither still gets CBR.
+    assert_eq!(rc_plan(Rc::CBR, Some("vbr"), 60, 20_000_000, u64::MAX), cbr);
+    assert_eq!(rc_plan(Rc::empty(), None, 60, 20_000_000, u64::MAX), cbr);
+    assert_eq!(
+        rc_plan(both, None, 60, 900_000_000, 400_000_000).2,
+        400_000_000
+    );
+}
+
 /// The profile chain's structure types, head first.
 fn chain_types(p: &ash::vk::VideoProfileInfoKHR) -> Vec<ash::vk::StructureType> {
     let mut out = vec![p.s_type];

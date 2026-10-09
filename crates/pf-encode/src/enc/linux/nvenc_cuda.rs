@@ -780,9 +780,8 @@ impl NvencCudaEncoder {
     fn init_session(&mut self) -> Result<()> {
         // SAFETY: NVENC calls go through `api()` (gated in `open`). `target` names the shared
         // CUDA context, live for the process, and the session is closed (`ensure_session` tore
-        // it down). Register takes the live session and versioned locals that outlive the sync
-        // call. `set_io_cuda_streams` points at a boxed `CUstream` freed once: `teardown` after
-        // destroy, or `Box::from_raw` on the rejection path. Encode thread only.
+        // it down). `enc` is the session just opened, as `build_ring` and `bind_io_streams`
+        // require. Encode thread only.
         unsafe {
             self.cu_ctx = cuda::context().context("shared CUDA context (Linux direct NVENC)")?;
             self.s.gpu = self.cu_ctx as u64;
@@ -804,8 +803,7 @@ impl NvencCudaEncoder {
             let enc = self.s.handle();
             self.s.create_bitstreams()?;
 
-            // Ring: register once, map per submit. Prefer Vulkan-imported slots so the cursor
-            // blend writes the bytes NVENC encodes; any failure falls back to pitched CUDA.
+            // The Vulkan slot blend, tried once per encoder; without it the ring is plain CUDA.
             if !self.cursor_tried && (self.blend_wanted || self.raw_wanted) {
                 self.cursor_tried = true;
                 match VkSlotBlend::new() {
@@ -817,91 +815,8 @@ impl NvencCudaEncoder {
                     ),
                 }
             }
-            let (width, height, buffer_fmt) = (self.s.width, self.s.height, self.s.buffer_fmt);
-            let slot_fmt = slot_fmt_of(buffer_fmt);
-            // Full Vulkan ring, else full CUDA. Never mixed (flickering cursor) or short.
-            'ring: for use_vk in [self.vk_blend.is_some(), false] {
-                if !use_vk && self.reframe.is_some() {
-                    bail!("NVENC (Linux): the reframe needs Vulkan input slots");
-                }
-                if !use_vk && self.vk_blend.is_some() {
-                    // Wholesale Vulkan retire before the CUDA retry.
-                    for s in self.ring.drain(..) {
-                        let _ = (api().unregister_resource)(enc, s.reg);
-                    }
-                    if let Some(vk) = &mut self.vk_blend {
-                        vk.free_slots();
-                    }
-                    self.vk_blend = None;
-                }
-                for _ in 0..POOL {
-                    let surface = if use_vk {
-                        let vk = self.vk_blend.as_mut().expect("use_vk implies Some");
-                        match vk.alloc_slot(slot_fmt, width, height) {
-                            Ok(r) => SlotSurface::Vk(r),
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %format!("{e:#}"),
-                                    "NVENC (Linux): Vulkan slot alloc failed — rebuilding the \
-                                     ring on plain CUDA surfaces (cursor compositing \
-                                     unavailable)"
-                                );
-                                continue 'ring;
-                            }
-                        }
-                    } else {
-                        // P010 is NV12's geometry at two bytes a sample.
-                        use nv::NV_ENC_BUFFER_FORMAT as F;
-                        let (layout, row_px) = match buffer_fmt {
-                            F::NV_ENC_BUFFER_FORMAT_YUV444 => (cuda::PlaneLayout::Yuv444, width),
-                            F::NV_ENC_BUFFER_FORMAT_NV12 => (cuda::PlaneLayout::Nv12, width),
-                            F::NV_ENC_BUFFER_FORMAT_YUV420_10BIT => {
-                                (cuda::PlaneLayout::Nv12, width * 2)
-                            }
-                            _ => (cuda::PlaneLayout::Packed32, width),
-                        };
-                        SlotSurface::Cuda(
-                            InputSurface::alloc(layout, row_px, height)
-                                .context("alloc NVENC input surface")?,
-                        )
-                    };
-                    let mut rr = nv::NV_ENC_REGISTER_RESOURCE {
-                        version: nv::NV_ENC_REGISTER_RESOURCE_VER,
-                        resourceType:
-                            nv::NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR,
-                        width,
-                        height,
-                        pitch: surface.pitch() as u32,
-                        resourceToRegister: surface.ptr() as *mut c_void,
-                        bufferFormat: buffer_fmt,
-                        bufferUsage: nv::NV_ENC_BUFFER_USAGE::NV_ENC_INPUT_IMAGE,
-                        ..Default::default()
-                    };
-                    match (api().register_resource)(enc, &mut rr).nv_ok() {
-                        Ok(()) => {}
-                        Err(e) if use_vk => {
-                            // Import refused — same wholesale CUDA fallback.
-                            tracing::warn!(
-                                error = ?e,
-                                "NVENC (Linux): registering a Vulkan-imported slot failed — \
-                                 rebuilding the ring on plain CUDA surfaces"
-                            );
-                            continue 'ring;
-                        }
-                        Err(e) => {
-                            return Err(nvenc_status::call_err(
-                                "register_resource (CUDADEVICEPTR)",
-                                e,
-                            ));
-                        }
-                    }
-                    self.ring.push(RingSlot {
-                        surface,
-                        reg: rr.registeredResource,
-                    });
-                }
-                break 'ring;
-            }
+            let slot_fmt = slot_fmt_of(self.s.buffer_fmt);
+            self.build_ring(enc, slot_fmt)?;
             if let (Some(r), Some(vk)) = (self.reframe.as_mut(), self.vk_blend.as_mut()) {
                 for _ in 0..POOL {
                     r.staging.push(
@@ -920,40 +835,7 @@ impl NvencCudaEncoder {
                     "NVENC two-thread retrieve enabled (submit thread + blocking-lock thread)"
                 );
             }
-            // Bind IO streams to this thread's copy stream. Same stream both ways so later
-            // copies into a reused slot wait for the encode. Sync retrieve only: two-thread
-            // mode may recycle the captured buffer after `submit` while the stream still
-            // holds the copy.
-            if !self.s.retrieving() && stream_ordered_requested() {
-                let stream = cuda::copy_stream_handle();
-                if !stream.is_null() {
-                    // Driver takes `CUstream` pointers — box; `teardown` frees after destroy.
-                    let holder = Box::into_raw(Box::new(stream));
-                    match (api().set_io_cuda_streams)(
-                        enc,
-                        holder as nv::NV_ENC_CUSTREAM_PTR,
-                        holder as nv::NV_ENC_CUSTREAM_PTR,
-                    )
-                    .nv_ok()
-                    {
-                        Ok(()) => {
-                            self.io_stream = holder;
-                            self.stream_ordered = true;
-                            tracing::info!(
-                                "NVENC stream-ordered submit armed (IO streams bound — no CPU \
-                                 sync in the submit path)"
-                            );
-                        }
-                        Err(e) => {
-                            drop(Box::from_raw(holder));
-                            tracing::debug!(
-                                status = ?e,
-                                "NvEncSetIOCudaStreams rejected — keeping blocking copies"
-                            );
-                        }
-                    }
-                }
-            }
+            self.bind_io_streams(enc);
             let s = &self.s;
             tracing::info!(
                 mode = %format_args!("{}x{}@{}", s.width, s.height, s.fps),
@@ -974,6 +856,141 @@ impl NvencCudaEncoder {
             // `resolve_split_subframe` disarms sub-frame there so the writer and reader agree.
             self.s.finish_open();
             Ok(())
+        }
+    }
+
+    /// Fill the input ring: register once, map per submit. Vulkan-imported slots when the
+    /// blend is up, so the cursor blend writes the bytes NVENC encodes; any Vulkan failure
+    /// retires the whole ring and rebuilds it on pitched CUDA. Never mixed (a flickering cursor)
+    /// or short.
+    ///
+    /// # Safety
+    /// `enc` is this encoder's open session; every slot lands in `self.ring` once registered,
+    /// which `teardown` unregisters.
+    unsafe fn build_ring(&mut self, enc: *mut c_void, slot_fmt: SlotFormat) -> Result<()> {
+        let (width, height, buffer_fmt) = (self.s.width, self.s.height, self.s.buffer_fmt);
+        'ring: for use_vk in [self.vk_blend.is_some(), false] {
+            if !use_vk && self.reframe.is_some() {
+                bail!("NVENC (Linux): the reframe needs Vulkan input slots");
+            }
+            if !use_vk && self.vk_blend.is_some() {
+                // Wholesale Vulkan retire before the CUDA retry.
+                for s in self.ring.drain(..) {
+                    let _ = (api().unregister_resource)(enc, s.reg);
+                }
+                if let Some(vk) = &mut self.vk_blend {
+                    vk.free_slots();
+                }
+                self.vk_blend = None;
+            }
+            for _ in 0..POOL {
+                let surface = if use_vk {
+                    let vk = self.vk_blend.as_mut().expect("use_vk implies Some");
+                    match vk.alloc_slot(slot_fmt, width, height) {
+                        Ok(r) => SlotSurface::Vk(r),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %format!("{e:#}"),
+                                "NVENC (Linux): Vulkan slot alloc failed — rebuilding the \
+                                 ring on plain CUDA surfaces (cursor compositing \
+                                 unavailable)"
+                            );
+                            continue 'ring;
+                        }
+                    }
+                } else {
+                    // P010 is NV12's geometry at two bytes a sample.
+                    use nv::NV_ENC_BUFFER_FORMAT as F;
+                    let (layout, row_px) = match buffer_fmt {
+                        F::NV_ENC_BUFFER_FORMAT_YUV444 => (cuda::PlaneLayout::Yuv444, width),
+                        F::NV_ENC_BUFFER_FORMAT_NV12 => (cuda::PlaneLayout::Nv12, width),
+                        F::NV_ENC_BUFFER_FORMAT_YUV420_10BIT => {
+                            (cuda::PlaneLayout::Nv12, width * 2)
+                        }
+                        _ => (cuda::PlaneLayout::Packed32, width),
+                    };
+                    SlotSurface::Cuda(
+                        InputSurface::alloc(layout, row_px, height)
+                            .context("alloc NVENC input surface")?,
+                    )
+                };
+                let mut rr = nv::NV_ENC_REGISTER_RESOURCE {
+                    version: nv::NV_ENC_REGISTER_RESOURCE_VER,
+                    resourceType:
+                        nv::NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR,
+                    width,
+                    height,
+                    pitch: surface.pitch() as u32,
+                    resourceToRegister: surface.ptr() as *mut c_void,
+                    bufferFormat: buffer_fmt,
+                    bufferUsage: nv::NV_ENC_BUFFER_USAGE::NV_ENC_INPUT_IMAGE,
+                    ..Default::default()
+                };
+                match (api().register_resource)(enc, &mut rr).nv_ok() {
+                    Ok(()) => {}
+                    Err(e) if use_vk => {
+                        // Import refused — same wholesale CUDA fallback.
+                        tracing::warn!(
+                            error = ?e,
+                            "NVENC (Linux): registering a Vulkan-imported slot failed — \
+                             rebuilding the ring on plain CUDA surfaces"
+                        );
+                        continue 'ring;
+                    }
+                    Err(e) => {
+                        return Err(nvenc_status::call_err(
+                            "register_resource (CUDADEVICEPTR)",
+                            e,
+                        ));
+                    }
+                }
+                self.ring.push(RingSlot {
+                    surface,
+                    reg: rr.registeredResource,
+                });
+            }
+            break 'ring;
+        }
+        Ok(())
+    }
+
+    /// Bind the IO streams to this thread's copy stream, the same both ways so a later copy
+    /// into a reused slot waits for the encode. Sync retrieve only: two-thread mode may recycle
+    /// the captured buffer after `submit` while the stream still holds the copy.
+    ///
+    /// # Safety
+    /// `enc` is this encoder's open session. The boxed `CUstream` is freed once: by `teardown`
+    /// after destroy, or here when the driver rejects it.
+    unsafe fn bind_io_streams(&mut self, enc: *mut c_void) {
+        if !self.s.retrieving() && stream_ordered_requested() {
+            let stream = cuda::copy_stream_handle();
+            if !stream.is_null() {
+                // Driver takes `CUstream` pointers — box; `teardown` frees after destroy.
+                let holder = Box::into_raw(Box::new(stream));
+                match (api().set_io_cuda_streams)(
+                    enc,
+                    holder as nv::NV_ENC_CUSTREAM_PTR,
+                    holder as nv::NV_ENC_CUSTREAM_PTR,
+                )
+                .nv_ok()
+                {
+                    Ok(()) => {
+                        self.io_stream = holder;
+                        self.stream_ordered = true;
+                        tracing::info!(
+                            "NVENC stream-ordered submit armed (IO streams bound — no CPU \
+                             sync in the submit path)"
+                        );
+                    }
+                    Err(e) => {
+                        drop(Box::from_raw(holder));
+                        tracing::debug!(
+                            status = ?e,
+                            "NvEncSetIOCudaStreams rejected — keeping blocking copies"
+                        );
+                    }
+                }
+            }
         }
     }
 

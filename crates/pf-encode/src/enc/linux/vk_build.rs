@@ -21,6 +21,55 @@ pub(super) fn align_up(v: u64, a: u64) -> u64 {
     v.div_ceil(a) * a
 }
 
+/// The session's rate control as `(mode, (vbv_window_ms, vbv_initial_ms), bitrate)`. VBR
+/// (average == max) when the driver advertises it and `rc_env` (`PUNKTFUNK_VULKAN_RC`) is not
+/// `cbr`: Vulkan cannot suppress CBR's filler, so the mode is the only lever. CBR keeps the loose
+/// (1000, 500) window, since a tighter one starts stuffing earlier. `bitrate` is clamped to the
+/// driver's `hw_max`.
+pub(super) fn rc_plan(
+    modes: vk::VideoEncodeRateControlModeFlagsKHR,
+    rc_env: Option<&str>,
+    fps: u32,
+    bitrate: u64,
+    hw_max: u64,
+) -> (vk::VideoEncodeRateControlModeFlagsKHR, (u32, u32), u64) {
+    use vk::VideoEncodeRateControlModeFlagsKHR as Rc;
+    let vbr_advertised = modes.contains(Rc::VBR);
+    if !vbr_advertised && !modes.contains(Rc::CBR) {
+        // DEFAULT mode needs a no-layer shape this backend does not speak.
+        tracing::warn!(
+            modes = modes.as_raw(),
+            "vulkan-encode: driver advertises neither CBR nor VBR — installing CBR anyway \
+             (pre-existing behaviour; may fail validation on this driver)"
+        );
+    }
+    // `vbr` is honoured only when advertised; anything but `cbr` means auto.
+    let vbr = vbr_advertised && !rc_env.is_some_and(|v| v.trim().eq_ignore_ascii_case("cbr"));
+    let (mode, vbv_ms) = if vbr {
+        (Rc::VBR, crate::vbv_window_ms(fps))
+    } else {
+        (Rc::CBR, (1000, 500))
+    };
+    tracing::info!(
+        rc_mode = if vbr { "VBR (capped at target)" } else { "CBR" },
+        vbv_window_ms = vbv_ms.0,
+        vbv_initial_ms = vbv_ms.1,
+        fps,
+        hw_max_bitrate = hw_max,
+        "vulkan-encode: rate control (VBR when the driver offers it — CBR must stuff filler \
+         on calm content; PUNKTFUNK_VULKAN_RC overrides, PUNKTFUNK_VBV_FRAMES scales the VBR \
+         window)"
+    );
+    if bitrate > hw_max {
+        tracing::warn!(
+            requested = bitrate,
+            cap = hw_max,
+            "vulkan-encode: requested bitrate exceeds the driver's maxBitrate — clamping"
+        );
+    }
+    (mode, vbv_ms, bitrate.min(hw_max))
+}
+
 /// Probe the RGB-direct encode source (`design/vulkan-rgb-direct-encode.md`): can this device
 /// take the captured RGB dmabuf directly, with the VCN EFC doing the CSC, via
 /// `VK_VALVE_video_encode_rgb_conversion`?
@@ -382,8 +431,6 @@ pub(super) unsafe fn make_frame(
     direct_planes: bool,
     f: &mut Frame,
 ) -> Result<()> {
-    // "no cursor uploaded yet" sentinel — a real serial may be 0 (see `prep_cursor`).
-    f.cursor_serial = u64::MAX;
     // Padded-copy staging: aligned encode-src filled by a transfer blit each frame.
     // TRANSFER_SRC: `record_pad_blit` self-copies the last visible column.
     if let Some(fmt) = pad_fmt {
@@ -513,34 +560,8 @@ unsafe fn make_frame_csc(
             vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
         )?;
     }
-    // Cursor overlay: CURSOR_MAX² RGBA8 + host staging. View/descriptor stay bound;
-    // only the image content changes (`prep_cursor`).
-    (f.cursor_img, f.cursor_mem, f.cursor_view) = make_plain_image(
-        device,
-        mem_props,
-        vk::Format::R8G8B8A8_UNORM,
-        CURSOR_MAX,
-        CURSOR_MAX,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-    )?;
-    f.cursor_stage = device.create_buffer(
-        &vk::BufferCreateInfo::default()
-            .size((CURSOR_MAX * CURSOR_MAX * 4) as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC),
-        None,
-    )?;
-    let cs_req = device.get_buffer_memory_requirements(f.cursor_stage);
-    f.cursor_stage_mem = device.allocate_memory(
-        &vk::MemoryAllocateInfo::default()
-            .allocation_size(cs_req.size)
-            .memory_type_index(find_mem(
-                mem_props,
-                cs_req.memory_type_bits,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?),
-        None,
-    )?;
-    device.bind_buffer_memory(f.cursor_stage, f.cursor_stage_mem, 0)?;
+    // View and descriptor stay bound; only the image content changes.
+    f.cursor = CursorPlane::new(device, mem_props)?;
     // Y/UV storage fixed; binding 0 (RGB) is rewritten per use. Binding 3 is the static cursor
     // (SHADER_READ_ONLY once prepped).
     let dsls = [csc_dsl];
@@ -557,7 +578,7 @@ unsafe fn make_frame_csc(
         .image_layout(vk::ImageLayout::GENERAL)];
     let cur_info = [vk::DescriptorImageInfo::default()
         .sampler(sampler)
-        .image_view(f.cursor_view)
+        .image_view(f.cursor.view)
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
     device.update_descriptor_sets(
         &[
